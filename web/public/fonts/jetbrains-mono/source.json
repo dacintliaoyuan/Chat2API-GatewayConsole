@@ -1,0 +1,14 @@
+{
+  "family": "JetBrains Mono",
+  "license": "SIL Open Font License 1.1 (OFL.txt; no Reserved Font Name)",
+  "repository": "https://github.com/google/fonts/tree/main/ofl/jetbrainsmono",
+  "upstreamCommit": "6e4b84c976cadb3c49a40fd9a1c203e4f7fcf2da",
+  "downloadedAt": "2026-09-30T12:55:00+08:00",
+  "approvedBy": "maintainer, 2026-09-30 (AI-GW-OPENDESIGN-REDESIGN-20260925 PR11)",
+  "fontFilesModified": false,
+  "usage": "Console code, model IDs, ports, paths and keys (src/console-fonts.css); variable weight axis 100-800.",
+  "files": [
+    { "path": "JetBrainsMono-wght.ttf", "source": "https://github.com/google/fonts/raw/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf", "bytes": 187208, "sha256": "48715a42ec242c21e9f02692891e147d022299a52e48d5e413e1a942193ffeda" },
+    { "path": "OFL.txt", "source": "https://github.com/google/fonts/raw/main/ofl/jetbrainsmono/OFL.txt", "bytes": 4399, "sha256": "b2fe5e8987594e9ffd1d2ca52a2f5d73eb8335243893c5d6254b5ad69269591d" }
+  ]
+}

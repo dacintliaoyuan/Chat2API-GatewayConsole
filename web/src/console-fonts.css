@@ -1,0 +1,33 @@
+/* Gateway console typefaces (PR11, maintainer 2026-09-30: 正文 MiSans + 标题得意黑 +
+   数字 / 英文 Manrope + 代码 JetBrains Mono). Loaded by console-entry.ts only; the
+   archive page keeps fonts.css alone. Every file is the upstream release byte for
+   byte (public/fonts/<family>/source.json), so no face here is a Modified Version.
+
+   Manrope carries Basic Latin plus the numeric symbols the console prints next to
+   digits (¥ ≥ ≤ ± × · – — … −). Its unicode-range keeps CJK out, so one stack
+   "Manrope", "MiSans" gives Latin and digits to Manrope and every Han character
+   and CJK punctuation mark to MiSans without per-element font switching. */
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("/fonts/manrope/Manrope-wght.ttf") format("truetype");
+  unicode-range: U+0020-007E, U+00A0, U+00A5, U+00B1, U+00B7, U+00D7, U+2010-2014, U+2026, U+2212, U+2248, U+2260, U+2264-2265;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono/JetBrainsMono-wght.ttf") format("truetype");
+}
+/* Smiley Sans ships one oblique design. It is registered as the normal face so
+   the browser never slants it a second time. */
+@font-face {
+  font-family: "Smiley Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/smiley-sans/SmileySans-Oblique.ttf.woff2") format("woff2");
+}

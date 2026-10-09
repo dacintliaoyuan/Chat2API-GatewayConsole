@@ -1,0 +1,8 @@
+.workbench .wb-brand-mark {
+  background-color: transparent !important;
+  background-image: url("./icon-brand.png?v=1d469bfa08db");
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.workbench .wb-brand-mark > svg { visibility: hidden; }

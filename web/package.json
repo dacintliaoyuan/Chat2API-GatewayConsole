@@ -1,0 +1,21 @@
+{
+  "name": "chat2api-console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc && vite build",
+    "check": "tsc --noEmit",
+    "check:logs": "node --experimental-strip-types --test scripts/check-log-presentation.mjs",
+    "check:logs:browser": "node scripts/check-log-browser.mjs --build dist",
+    "check:scope": "node scripts/check-public-scope.mjs"
+  },
+  "dependencies": {
+    "@kitlangton/rolling-number": "0.4.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1"
+  }
+}

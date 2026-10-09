@@ -1,0 +1,2725 @@
+/* Workbench shell: a sticky top bar and the main workspace on the console ground.
+   Contract: output/ai-gateway-console-redesign-20260925/02-design-contract.md
+   (frozen 2026-09-26, AI-GW-OPENDESIGN-REDESIGN-20260925). Every token name and
+   class name below is copied verbatim from that contract; nothing here renames or
+   aliases them. PR11 (maintainer 2026-09-30, direction「青柠」) re-values the
+   tokens and replaces the sidebar with the top bar; the honesty contract
+   (unknown ≠ 0, lower bounds, state never by hue alone, contrast floors) is
+   unchanged.
+
+   Production entry chain: index.html -> console-entry.ts -> workbench.ts, which is
+   the only importer of this file (workbench.ts:6). src/console/console.css is NOT
+   loaded by the production entry, so this file may not borrow its --r-* / --pill-* /
+   --surface / --border alias families (contract 2.3, 2.4) - see the registry
+   comment below.
+
+   Layering direction (PR11): the ground is a static CSS gradient (section 2,
+   "Console ground"); cards lay the panel tone over it with a little of the ground
+   showing through and lift by one soft shadow; the charcoal surface (.wb-char,
+   section 4b) is the page's second anchor. No canvas, no animation of the ground
+   and NO backdrop-filter. The deeper shadows stay reserved for genuinely floating
+   layers (jump list, notices, modal). */
+
+.workbench { position: absolute; inset: 0; z-index: 5; display: flex; pointer-events: none; color: var(--theme-ink); font-size: var(--wb-fs-5); line-height: 1.55; }
+/* Headings take a ladder tier instead of the browser's 1.17em default: h4
+   sub-titles the body-face card tier (15px), and every component rule below
+   still wins on the same specificity with its own tier. */
+.workbench h3, .workbench h4 { font-size: var(--wb-fs-6); }
+/* PR11: every section / card title (h3) takes the display face at its 16px
+   visual equivalent; h4 sub-titles stay in the body face. */
+.workbench h3 { font-family: var(--wb-font-display); font-size: var(--wb-fs-title); font-weight: 400; letter-spacing: .02em; }
+/* Card titles and chain names keep the body face at weight 600 (fs-6 tier above):
+   Smiley Sans ships one weight, so a 600 heading set in it is a synthesised bold. */
+.workbench :is(.wb-probe-intro, .wb-rate-drill) h3 { font-family: var(--wb-font-body); letter-spacing: 0; }
+.workbench[hidden] { display: none; }
+.workbench [hidden] { display: none !important; }
+[data-workbench="true"][data-workbench-brand="false"]:not([data-mode="boot"]) > .brand,
+[data-workbench="true"][data-workbench-footer="false"]:not([data-mode="boot"]) > .system-footer,
+[data-workbench="true"][data-workbench-settings="false"]:not([data-mode="boot"]) > .system-nav { display: none; }
+/* R9-R45: the "POWERED BY AI GATEWAY" ghost line is part of the watermark
+   the maintainer asked to delete outright; keep the node for the boot chain
+   but never let it sit over the workbench (display also beats the JS
+   inline-opacity write in main.ts). */
+[data-workbench="true"]:not([data-mode="boot"]) > .powered { display: none; }
+[data-workbench] #archive-ui { transition: opacity var(--wb-dur-3) var(--wb-ease), visibility 0s; }
+[data-workbench]:not([data-mode="boot"]) > .powered { transition: opacity var(--wb-dur-3) var(--wb-ease), visibility 0s; }
+[data-workbench="true"]:not([data-mode="boot"]):not([data-mode="detail"]) :is(#archive-ui, .powered, .inspection-overlay) { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity var(--wb-dur-2) var(--wb-ease-out), visibility 0s var(--wb-dur-2); }
+[data-workbench="true"][data-mode="boot"] #archive-ui { opacity: 0; visibility: hidden; }
+[data-workbench="true"] #archive-ui button { pointer-events: none; }
+.reduce-motion[data-workbench] :is(#archive-ui, .powered) { transition: none; }
+[data-workbench="true"][data-mode="archive"] .system-nav > button:not(.settings-button) { display: none; }
+
+/* ==========================================================================
+   1. Tokens - spacing, type, radius, shadow, duration (contract 2.6 - 2.10)
+   Declared here because path 2 of contract 2.1 is "static per theme, declared in
+   workbench.css". Interpolated colours (--theme-*) are written inline by
+   paintTheme (theme-ui.ts:36-46) and are only READ here.
+   ========================================================================== */
+
+:root {
+  /* Spacing scale (Plan-Revision 9, maintainer 2026-09-28): the ladder is
+     4/6/8/12/14/18/22/28 only. The two off-ladder survivors of the
+     previous ten-value scale (10px = sp-4, 34px = sp-10) are converged onto
+     their neighbours instead of kept as zero-scattered values: the icon/word
+     tier (sp-2 = 6), the inline-action tier (sp-3 = 8), the KPI group tier
+     (sp-4 = sp-5 = 12) and the section tier (sp-9 = sp-10 = 28). Every
+     token name survives, so no call site is renamed and the ladder has one
+     declaration site per value. */
+  --wb-sp-1: 4px;
+  --wb-sp-2: 6px;
+  --wb-sp-3: 8px;
+  --wb-sp-4: 12px;
+  --wb-sp-5: 12px;
+  --wb-sp-6: 14px;
+  --wb-sp-7: 18px;
+  --wb-sp-8: 22px;
+  --wb-sp-9: 28px;
+  --wb-sp-10: 28px;
+
+  /* Shell geometry (PR11): no sidebar - the navigation is a track in the sticky
+     top bar - so the content column runs fluid up to 1540px inside a 32px page
+     gutter (24px under 1280px, 16px on phone widths, section 21). */
+  --wb-content-max: 1540px;
+  --wb-gutter: 32px;
+
+  /* Type scale (PR11, maintainer 2026-09-30: 页名 / 裁决 / 服务名 / 区块标题都太大).
+     Body 14 and helper 12.5 stay. fs-6 (card title, chain name, section title in
+     the body face) drops 17 -> 15; the reading tier fs-7 stays 22; the KPI and
+     fee main numbers share fs-8 = fs-9 = 28 and are set in Manrope at 300, so
+     they read large but light. The page title and the section titles take the
+     display face (Smiley Sans), which is narrow: --wb-fs-page 24 and
+     --wb-fs-title 16 are its visual equivalents of 22 and 15 in the body face. */
+  --wb-fs-1: 11px;
+  --wb-fs-2: 12.5px;
+  --wb-fs-3: 12.5px;
+  --wb-fs-4: 14px;
+  --wb-fs-5: 14px;
+  --wb-fs-6: 15px;
+  --wb-fs-7: 22px;
+  --wb-fs-8: 28px;
+  --wb-fs-9: 28px;
+  --wb-fs-page: 24px;
+  --wb-fs-title: 16px;
+
+  /* Typefaces (PR11): body MiSans with Manrope ahead of it for Latin letters,
+     digits and numeric symbols (console-fonts.css limits Manrope's range, so Han
+     characters and CJK punctuation fall through to MiSans); titles in Smiley Sans;
+     code, ports, model IDs and keys in JetBrains Mono. */
+  --wb-font-body: "Manrope", MiSans, "Microsoft YaHei", sans-serif;
+  --wb-font-display: "Smiley Sans", "Manrope", MiSans, "Microsoft YaHei", sans-serif;
+  --wb-font-mono: "JetBrains Mono", ui-monospace, Consolas, MiSans, monospace;
+
+  /* Radius ladder (PR11): pill (every button, chip, the nav track and the head
+     pills) > r-l 20 (cards) > r-m 14 (inner tiles, nested rows, tables) > r-s 10
+     (small nested surfaces and inputs). 50% stays on .wb-dot because it encodes
+     "circle", not a radius tier. */
+  --wb-r-pill: 999px;
+  --wb-r-l: 20px;
+  --wb-r-m: 14px;
+  --wb-r-s: 10px;
+
+  /* Shadows: -1..-3 are the floating layers (jump list, notices, modal); the
+     card lift below is the one shadow a resting card takes. */
+  --wb-shadow-1: 0 10px 30px rgba(20, 30, 60, 0.14);
+  --wb-shadow-2: 0 14px 40px rgba(20, 30, 60, 0.18);
+  --wb-shadow-3: 0 24px 64px rgba(20, 30, 60, 0.32);
+  /* Card lift (PR11): cards float on the vivid ground by a soft cool shadow
+     instead of a hairline edge. */
+  --wb-card-shadow: 0 14px 30px -20px rgba(34, 52, 120, 0.45), 0 2px 6px -3px rgba(34, 52, 120, 0.12);
+
+  /* Duration and easing (contract 2.10): 140/200/260ms replace the previous
+     140/160/180/200/220/240/260/400 spread. The single 400ms survivor is
+     .wb-svc-result-fade, which the contract exempts explicitly. */
+  --wb-dur-1: 140ms;
+  --wb-dur-2: 200ms;
+  --wb-dur-3: 260ms;
+  --wb-ease: ease;
+  --wb-ease-out: ease-out;
+
+  /* Hover surfaces. The light pair is declared by console-entry.css's :root rule and this
+     file repeats the SAME values because it is NOT always loaded together with
+     that file: src/main.ts:1040 builds the same Workbench for the archive page,
+     which never loads console-entry.css, and this file is that page's only hover
+     declaration. Within this file the pair is declared exactly once (the dark pair
+     lives in the [data-dark-surface="true"] block below); the remaining third
+     copy in theme.css was deleted so each token has one site per theme. */
+  --wb-hover: rgba(var(--theme-ink-rgb), .05);
+  --wb-hover-strong: rgba(var(--theme-ink-rgb), .09);
+
+  /* Interactive-control identification edge. The field fill --theme-field is only
+     1.13:1 against --theme-panel, so the edge - not the fill - answers "this is
+     a control here" and is a functional boundary. Contract 8 #6 records the live
+     --theme-line (#aaa59a) at 2.45:1 on the panel / 2.17:1 on the field as an
+     EXISTING state and says this contract adds NO 3:1 requirement; what asks for
+     the check is the maintainer's 2026-09-27 review: control identification
+     edges that carry an interactive boundary are to be contrast-checked and fixed
+     inside the frontend scope. PR11's cool #8591a6 measures 3.3:1 on the white
+     card and 4.9:1 on the dark card, so one value covers both themes. It is used
+     for input / select / textarea / secondary-button edges only; --theme-line
+     stays the decorative hairline (dividers, axes) and is NOT darkened. */
+  --wb-control-line: #8591a6;
+
+  /* Four-state status vocabulary (contract 2.4): ok / warn / err keep their live
+     values, neutral is the fourth state (unknown / annotation). One text hue plus
+     one fill per state - the two are separate jobs and are never swapped.
+     The light neutral alpha is 0.70 (PR11 ink #131820): it composites to about
+     #5a5d63, 6.7:1 on white and above 6:1 on the weakest card surface, so the
+     11px .wb-write-mark and the 14-15px .wb-share-pill / .wb-badge-gated /
+     .wb-svc-result keep contract 6.2's 4.5:1 while reading lighter than ink. */
+  --wb-status-ok: #0b6641;
+  --wb-status-warn: #7a4d00;
+  --wb-status-err: #8f231b;
+  --wb-status-neutral: rgba(var(--theme-ink-rgb), 0.70);
+  --wb-status-ok-bg: #d6f4e5;
+  --wb-status-warn-bg: #fdecc8;
+  --wb-status-err-bg: #fbe0dd;
+  --wb-status-neutral-bg: rgba(var(--theme-ink-rgb), 0.08);
+
+  /* PR11「青柠」 accents. Lemon is a FILL ONLY - the current navigation item,
+     one hero card per page, the fee chart's bars - and always carries ink text
+     (--wb-on-lemon 14.8:1, --wb-on-lemon-2 8.6:1); lemon is never text on a
+     light surface. Dark theme dims the pills (--wb-lemon-fill) and turns the
+     hero into a lemon wash on charcoal whose figures are light lemon - text on
+     a dark tile, not on lemon (section 3, KPI band). The charcoal surface is the
+     page's second anchor (the navigation track and each lane's main list or
+     chart, `.wb-char`). Data hues follow the entity: requests indigo, Token
+     teal, credits violet, fee lemon; each has a soft tile and a text-safe ink
+     (the KPI chips), and the charted ones - Token, credits - a series fill. */
+  --wb-lemon: #d9f84a;
+  /* The selection pills (current nav item, selected tab, jump cursor, checked
+     appearance option) fill with --wb-lemon-fill: the lemon itself in light
+     theme, a dimmed lemon in dark theme (maintainer 2026-10-01: the full lemon is
+     too bright on the dark ground). */
+  --wb-lemon-fill: #d9f84a;
+  --wb-lemon-edge: #a9cc1c;
+  --wb-on-lemon: #131820;
+  --wb-on-lemon-2: #3a4418;
+  --wb-char: #1f2328;
+  --wb-char-2: #2a3441;
+  --wb-char-3: #33404f;
+  --wb-char-ink: #f2f5f9;
+  --wb-char-muted: #aab5c3;
+  --wb-char-line: rgba(255, 255, 255, 0.10);
+  --wb-ent-req-soft: #e1e5ff;
+  --wb-ent-req-ink: #2a35a6;
+  --wb-ent-tok: #0f9ba6;
+  --wb-ent-tok-soft: #d3f2f1;
+  --wb-ent-tok-ink: #0a5b62;
+  --wb-ent-cred: #8b62e6;
+  --wb-ent-cred-soft: #ebe3ff;
+  --wb-ent-cred-ink: #55309f;
+  /* F12-3 model series (validated with the dataviz palette validator, 2026-10-06,
+     light card #fbfcfd): the total line plus four categorical slots in fixed
+     order - adjacent CVD ΔE >= 13.0, normal-vision >= 27.5; slot 3 sits under
+     3:1 on the card, so every drawn series is also named in the legend and the
+     tooltip. A series keeps its slot while it is drawn (identity, not rank). */
+  --wb-chart-total: #0f9ba6;
+  --wb-cat-1: #eb6834;
+  --wb-cat-2: #4a3aa7;
+  --wb-cat-3: #e87ba4;
+  --wb-cat-4: #2a78d6;
+
+  /* No surface carries text on an accent fill any more (2026-09-29: the run
+     verdict takes its status colour), so the console declares no accent-ink
+     token; the accent stays a rule, tint or text colour. */
+
+  /* Chart neutral (contract 2.5), taken from direction A's --gr. Non-semantic
+     layer ONLY: grid, axis, separators, legend rules. It must never stand in
+     for ok/warn/err/neutral, and no fifth green may be introduced - green
+     already means both "ok" and "data" in this console. */
+  --wb-chart-hairline: #c9d3e6;
+  --wb-chart-hairline-rgb: 201, 211, 230;
+
+  /* Card ranks (PR11). Cards lay the panel tone over the vivid ground with a
+     little of the ground showing through (rank 1 focus surfaces 0.82, rank 2 lane
+     sections 0.76) and lift by --wb-card-shadow; rank 3 (nested rows, tiles,
+     detail) is a cool sunk tone inside its card. --wb-card-hi is the near-opaque
+     face of floating controls (the bar's pills, the jump field). Text contrast
+     on these surfaces is checked at the ground's darkest point, not its average. */
+  --wb-rank-1-bg: rgba(var(--theme-panel-rgb), 0.82);
+  --wb-rank-2-bg: rgba(var(--theme-panel-rgb), 0.76);
+  --wb-rank-3-bg: rgba(233, 239, 252, 0.85);
+  --wb-card-hi: rgba(var(--theme-panel-rgb), 0.93);
+  /* Secondary text on the rank-3 (most recessed) surface. The recess is a real
+     lightness step now, and --theme-muted alone would drop below contract 6.2's
+     4.5:1 on it; the nested ink keeps the secondary tier one step above the
+     reading while staying clearly lighter than --theme-ink. Dark needs no change
+     (the dark muted already measures ~8:1 on the dark recess), so it maps to the
+     same value there. */
+  --wb-nested-ink: rgba(var(--theme-ink-rgb), 0.72);
+}
+
+/* Plan-Revision 9 ⑤（维护者 2026-09-28）：字级阶梯是七个角色（页标题 28 / 节标题 17 /
+   正文 14 / 辅助 12.5 / 读数 28 / 费用主数 33 / 11 只给时间与状态短标）。浏览器给裸
+   `<small>` 的 83.33% 既不是阶梯值、也随父级字号变（14px 里 11.67px、12.5px 里
+   10.42px）——同一角色的辅助句因此有两个字号。裸 `<small>` 收敛到辅助档（--wb-fs-2），
+   角色自己的规则（.wb-kpis small、.wb-brand small、.wb-notice-time 等）特异性更高、
+   仍各自生效；句子一个字不减，只是字号回到阶梯上。 */
+.wb-content small { font-size: var(--wb-fs-2); }
+
+/* Names that must stay at 0 hits in production. They are declared only by the
+   non-production src/console/console.css, which the production entry never loads
+   (console.css is imported by src/console/console.ts:1 alone). This file does not
+   reference them and does not create a second alias family - the contract's
+   "single source of truth" rule. Weak borders and tertiary text are expressed
+   with rgba(var(--theme-ink-rgb), ...) and the --wb-fs-* tiers instead.
+   Registry, for later audits only - never write var() around these:
+   --surface, --border, --border-weak, --text-1, --text-2, --text-3,
+   --text-on-accent, --panel-glass, --panel-glass-strong, --glass-blur,
+   --glass-blur-soft, --theme-accent-ink, --pill-ok, --pill-warn, --pill-err,
+   --pill-neutral, --pill-accent, --r-l, --r-m, --r-s. */
+
+/* Dark surface: the only switch is documentElement.dataset.darkSurface, written
+   by paintTheme (theme-ui.ts:38). data-theme has no writer in the production
+   path, so :root[data-theme="dark"] would be a dead block here.
+   .wb-notices and the .console-appearance dialog both live on document.body
+   (workbench.css notice pool / console-entry.ts `settings`), so they are scoped
+   alongside .workbench: they are the only body-level consumers of these tokens,
+   and theme.css no longer restates the dark set for them (contract 2.1 keeps the
+   dark declarations in this block). */
+[data-dark-surface="true"] :is(.workbench, .wb-notices, .console-appearance) {
+  --wb-hover: rgba(238, 242, 247, 0.08);
+  --wb-hover-strong: rgba(238, 242, 247, 0.13);
+  --wb-status-ok: #93f0c4;
+  --wb-status-warn: #f6d38d;
+  --wb-status-err: #ffb8b0;
+  --wb-status-neutral: rgba(var(--theme-ink-rgb), 0.66);
+  --wb-status-ok-bg: rgba(63, 214, 148, 0.14);
+  --wb-status-warn-bg: rgba(240, 180, 60, 0.16);
+  --wb-status-err-bg: rgba(255, 138, 127, 0.16);
+  --wb-status-neutral-bg: rgba(238, 242, 247, 0.10);
+  --wb-lemon: #d4f443;
+  --wb-lemon-fill: #a6bf35;
+  --wb-lemon-edge: #a6bf35;
+  --wb-char: #0b0f15;
+  --wb-char-2: #172131;
+  --wb-char-3: #202d40;
+  --wb-char-ink: #eef2f7;
+  --wb-char-muted: #a3afc0;
+  --wb-char-line: rgba(255, 255, 255, 0.08);
+  --wb-ent-req-soft: rgba(152, 163, 255, 0.16);
+  --wb-ent-req-ink: #c6ccff;
+  --wb-ent-tok: #4fd0d8;
+  --wb-ent-tok-soft: rgba(79, 208, 216, 0.15);
+  --wb-ent-tok-ink: #a6ecf0;
+  --wb-ent-cred: #b99dff;
+  --wb-ent-cred-soft: rgba(185, 157, 255, 0.16);
+  --wb-ent-cred-ink: #d8c9ff;
+  /* Dark steps of the same slots (validated on #1d2226: all inside L 0.48-0.67,
+     all >= 3:1). The total line steps down from the entity teal, whose L 0.79
+     sits above the dark band. */
+  --wb-chart-total: #24a6af;
+  --wb-cat-1: #d95926;
+  --wb-cat-2: #9085e9;
+  --wb-cat-3: #d55181;
+  --wb-cat-4: #3987e5;
+  --wb-chart-hairline: #2c3a4f;
+  --wb-chart-hairline-rgb: 44, 58, 79;
+  --wb-control-line: #8591a6;
+  --wb-card-shadow: 0 18px 36px -22px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  /* Card ranks on the dark surface: translucent dark cards over the night
+     ground, and a deeper sunk tone for nested rows. */
+  --wb-rank-1-bg: rgba(var(--theme-panel-rgb), 0.84);
+  --wb-rank-2-bg: rgba(var(--theme-panel-rgb), 0.80);
+  --wb-rank-3-bg: rgba(15, 21, 31, 0.55);
+  --wb-card-hi: rgba(35, 46, 64, 0.94);
+  --wb-nested-ink: var(--theme-muted);
+}
+
+/* Console ground (PR11, maintainer 2026-09-30: 背景不够鲜明). The console draws
+   no canvas: its ground is a static CSS gradient on the workbench itself, which
+   never scrolls, so the pane scrolls over a fixed picture. console-entry.ts writes
+   the choice as html[data-console-backdrop]: vivid (default) = four soft light
+   pools - lemon top-right, periwinkle top-left, teal bottom-right, a pale blue
+   centre - over a 162° blue-to-mint wash; soft = the same composition,
+   desaturated; solid = one flat tone. No animation, no backdrop-filter, no
+   pointer or clock dependence. The sticky top band paints the same ground with
+   `fixed` attachment, so it shows exactly the picture behind it and content
+   scrolls under an unbroken ground. Text that sits directly on the ground uses
+   --theme-muted or stronger, checked at the ground's darkest point (#aebcf7). */
+.workbench {
+  --wb-ground-vivid:
+    radial-gradient(ellipse 48% 62% at 96% -4%, rgba(217, 248, 74, .46), rgba(217, 248, 74, 0) 70%),
+    radial-gradient(ellipse 58% 62% at -4% 14%, rgba(150, 166, 255, .62), rgba(150, 166, 255, 0) 72%),
+    radial-gradient(ellipse 62% 58% at 78% 104%, rgba(104, 222, 214, .52), rgba(104, 222, 214, 0) 72%),
+    radial-gradient(ellipse 40% 45% at 40% 60%, rgba(196, 214, 255, .55), rgba(196, 214, 255, 0) 70%),
+    linear-gradient(162deg, #d2deff 0%, #dde8ff 36%, #e4f4ff 68%, #d8f4f2 100%);
+  --wb-ground-soft:
+    radial-gradient(ellipse 48% 62% at 96% -4%, rgba(226, 236, 190, .40), rgba(226, 236, 190, 0) 70%),
+    radial-gradient(ellipse 58% 62% at -4% 14%, rgba(206, 212, 236, .60), rgba(206, 212, 236, 0) 72%),
+    radial-gradient(ellipse 62% 58% at 78% 104%, rgba(204, 228, 226, .55), rgba(204, 228, 226, 0) 72%),
+    linear-gradient(162deg, #e3e7f1 0%, #e7ebf2 40%, #e9eef2 70%, #e5ecec 100%);
+  --wb-ground: var(--wb-ground-vivid);
+  background: var(--theme-paper);
+  background-image: var(--wb-ground);
+}
+[data-dark-surface="true"] .workbench {
+  --wb-ground-vivid:
+    radial-gradient(ellipse 46% 58% at 96% -6%, rgba(212, 244, 67, .13), rgba(212, 244, 67, 0) 70%),
+    radial-gradient(ellipse 58% 64% at -6% 16%, rgba(84, 100, 232, .40), rgba(84, 100, 232, 0) 72%),
+    radial-gradient(ellipse 62% 58% at 80% 106%, rgba(18, 162, 172, .34), rgba(18, 162, 172, 0) 72%),
+    linear-gradient(162deg, #111a29 0%, #142033 42%, #0f1f27 100%);
+  --wb-ground-soft:
+    radial-gradient(ellipse 58% 64% at -6% 16%, rgba(72, 82, 130, .30), rgba(72, 82, 130, 0) 72%),
+    radial-gradient(ellipse 62% 58% at 80% 106%, rgba(52, 98, 104, .26), rgba(52, 98, 104, 0) 72%),
+    linear-gradient(162deg, #141a24 0%, #161d28 45%, #141c21 100%);
+}
+html[data-console-backdrop="soft"] .workbench { --wb-ground: var(--wb-ground-soft); }
+html[data-console-backdrop="solid"] .workbench { --wb-ground: none; }
+
+/* ==========================================================================
+   2. Shell - top bar, sticky head and content column (PR11)
+   The sidebar is gone (maintainer 2026-09-30, direction「青柠」): one sticky
+   top region carries the bar - brand, the charcoal navigation track with its
+   three labelled groups (运行 / 数据 / 对外; the current page is the lemon pill),
+   quick jump, appearance and the label toggle - then the 8096 banner and the
+   page head. html[data-console-rail="collapsed"] (the 仅图标 preference, forced
+   under 1180px by console-entry.ts) hides the words and shows each name on its
+   hover / focus plate instead; `aria-label` names every control in both states.
+   ========================================================================== */
+.wb-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  pointer-events: auto;
+  overflow-y: auto;
+  padding: 0 var(--wb-gutter) var(--wb-sp-10);
+}
+.wb-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: 0 calc(-1 * var(--wb-gutter));
+  padding: var(--wb-sp-4) var(--wb-gutter) 0;
+  background-color: var(--theme-paper);
+  background-image: var(--wb-ground);
+  background-attachment: fixed;
+}
+.wb-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--wb-sp-4);
+  max-width: var(--wb-content-max);
+  min-height: 56px;
+  margin-inline: auto;
+}
+.wb-bar > .wb-time { display: none; }
+/* Brand: the console names itself once, at the start of the bar. */
+.wb-brand { display: flex; align-items: center; gap: var(--wb-sp-4); flex: 0 0 auto; min-height: 44px; margin-right: var(--wb-sp-2); }
+.wb-brand-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: var(--wb-char);
+  color: var(--wb-char-ink);
+}
+.workbench .wb-brand-mark > svg { width: 22px; height: 22px; stroke-width: 1.6; }
+.wb-brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.wb-brand-text strong { font-size: var(--wb-fs-6); font-weight: 700; letter-spacing: .01em; white-space: nowrap; }
+.wb-brand-text small { font-size: 12px; color: var(--theme-muted); white-space: nowrap; }
+/* Navigation track: charcoal pill, three labelled groups, lemon current item. */
+.wb-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--wb-sp-1);
+  min-width: 0;
+  padding: 5px;
+  border-radius: var(--wb-r-pill);
+  background: var(--wb-char);
+  box-shadow: 0 10px 24px -16px rgba(19, 24, 32, .7);
+}
+[data-dark-surface="true"] .wb-nav { background: #1a2330; box-shadow: 0 0 0 1px rgba(255, 255, 255, .06); }
+.wb-nav-group { display: flex; align-items: center; gap: 2px; }
+.wb-nav-group + .wb-nav-group { margin-left: var(--wb-sp-1); padding-left: var(--wb-sp-3); border-left: 1px solid var(--wb-char-line); }
+.wb-nav-group-label { padding: 0 var(--wb-sp-2) 0 var(--wb-sp-3); font-size: 12px; letter-spacing: .04em; color: var(--wb-char-muted); white-space: nowrap; }
+/* `.wb-bar .wb-nav` keeps these above theme.css's dark-surface nav colours
+   ([data-dark-surface] :is(.wb-nav button, …) and the pressed-item ink), which
+   load later and would otherwise turn the lemon pill's text light. */
+.workbench .wb-bar .wb-nav button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  height: 44px;
+  padding: 0 15px 0 13px;
+  font-size: var(--wb-fs-5);
+  color: var(--wb-char-ink);
+  white-space: nowrap;
+  background: transparent;
+  border: none;
+  border-radius: var(--wb-r-pill);
+  cursor: pointer;
+  transition: background-color var(--wb-dur-1) var(--wb-ease);
+}
+.workbench .wb-bar .wb-nav button:hover { background: rgba(255, 255, 255, .08); color: var(--wb-char-ink); }
+.workbench .wb-bar .wb-nav button[aria-pressed="true"],
+.workbench .wb-bar .wb-nav button[aria-pressed="true"]:hover { background: var(--wb-lemon-fill); color: var(--wb-on-lemon); font-weight: 600; }
+/* Focus inside the charcoal track: the lemon ring reads on charcoal, and on the
+   lemon pill itself the ring turns ink (--wb-on-lemon, 14.8:1) so it never
+   vanishes into the fill. */
+.workbench .wb-nav button:focus-visible { outline-color: var(--wb-lemon); }
+.workbench .wb-nav button[aria-pressed="true"]:focus-visible { outline-color: var(--wb-on-lemon); outline-offset: -4px; }
+.wb-nav-label { min-width: 0; white-space: nowrap; }
+.workbench .wb-nav button > svg:not(.wb-area):not(.wb-spark) { width: 18px; height: 18px; flex: 0 0 auto; stroke-width: 1.75; }
+/* Tools at the bar's inline end: quick jump, appearance, label toggle. */
+.wb-bar-tools { position: relative; display: flex; align-items: center; gap: var(--wb-sp-3); margin-left: auto; min-width: 0; }
+.workbench .wb-bar-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--wb-sp-3);
+  min-height: 44px;
+  height: 44px;
+  padding: 0 var(--wb-sp-6);
+  font-size: var(--wb-fs-5);
+  color: var(--theme-ink);
+  white-space: nowrap;
+  background: var(--wb-card-hi);
+  border: none;
+  border-radius: var(--wb-r-pill);
+  box-shadow: var(--wb-card-shadow);
+  cursor: pointer;
+}
+.workbench .wb-bar-btn:hover { background: var(--theme-panel); }
+.workbench .wb-bar-btn.wb-bar-icon { width: 44px; padding: 0; justify-content: center; }
+.workbench .wb-bar-btn > svg { width: 18px; height: 18px; flex: 0 0 auto; stroke-width: 1.75; }
+/* The label toggle points the way it folds; collapsed, it points back. */
+.workbench [data-action="rail-toggle"] > svg { transition: transform var(--wb-dur-2) var(--wb-ease-out); }
+html[data-console-rail="collapsed"] .workbench [data-action="rail-toggle"] > svg { transform: scaleX(-1); }
+/* Quick jump (R9-R25): one field filters lanes, service panels and function
+   keywords; growth edits JUMP_INDEX only, never the shell. */
+.wb-jump {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--wb-sp-3);
+  width: 236px;
+  height: 44px;
+  padding: 0 var(--wb-sp-6);
+  color: var(--theme-muted);
+  background: var(--wb-card-hi);
+  border-radius: var(--wb-r-pill);
+  box-shadow: var(--wb-card-shadow);
+}
+.workbench .wb-jump > svg { width: 16px; height: 16px; flex: 0 0 auto; pointer-events: none; }
+.workbench .wb-jump .wb-jump-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  font-size: 13.5px;
+  color: var(--theme-ink);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+.workbench .wb-jump .wb-jump-input::placeholder { color: var(--theme-muted); opacity: 1; }
+.workbench .wb-jump .wb-jump-input:focus-visible { outline: none; }
+.wb-jump:focus-within { outline: 2px solid var(--theme-ink); outline-offset: 2px; }
+.wb-jump-list {
+  position: absolute;
+  left: 0;
+  width: max(100%, 280px);
+  top: calc(100% + var(--wb-sp-2));
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: var(--wb-sp-1);
+  padding: var(--wb-sp-2);
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--theme-line);
+  border-radius: var(--wb-r-m);
+  background: var(--theme-panel);
+  box-shadow: var(--wb-shadow-2);
+}
+.wb-jump-list[hidden] { display: none !important; }
+.wb-jump-list button { display: block; width: 100%; text-align: left; font-size: var(--wb-fs-4); padding: var(--wb-sp-2) var(--wb-sp-4); border: none; border-radius: var(--wb-r-s); background: transparent; color: inherit; cursor: pointer; }
+.wb-jump-list button:hover { background: var(--wb-hover); }
+/* wb-jump-active is the keyboard cursor in the list: the lemon selection fill. */
+.workbench .wb-jump-list button.wb-jump-active,
+.workbench .wb-jump-list button.wb-jump-active:hover { background: var(--wb-lemon-fill); color: var(--wb-on-lemon); }
+/* Name plates in the bar open BELOW their control (the bar is one row, so a
+   plate beside a control would cover its neighbour). Expanded, every nav item
+   and the appearance button show their own word, so only the icon-only label
+   toggle keeps a plate. */
+.workbench .wb-bar button:is(:hover, :focus-visible) > .wb-icon-hint {
+  top: calc(100% + var(--wb-sp-3));
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+.workbench .wb-nav .wb-icon-hint,
+.workbench .wb-bar-btn:not(.wb-bar-icon) .wb-icon-hint { display: none !important; }
+/* Icons only (the 仅图标 preference, and always under 1180px). */
+html[data-console-rail="collapsed"] .wb-bar :is(.wb-nav .wb-nav-label, .wb-nav-group-label, .wb-brand-text) { display: none; }
+html[data-console-rail="collapsed"] .workbench .wb-bar .wb-nav button { width: 44px; padding: 0; justify-content: center; }
+html[data-console-rail="collapsed"] .workbench .wb-nav button:is(:hover, :focus-visible) > .wb-icon-hint { display: inline-block !important; }
+/* Icon geometry inside the workspace (contract 3.13a): 16px beside a control
+   label, 14px inside a card heading, and an icon never stretches with its flex
+   row. The chart surfaces keep their own geometry (.wb-area / .wb-spark). */
+.workbench :is(.wb-btn, .wb-tab) > svg:not(.wb-area):not(.wb-spark) { width: 16px; height: 16px; flex: 0 0 auto; }
+.workbench :is(h3, h4, .wb-queue-head, .wb-ledger-head) > svg:not(.wb-area):not(.wb-spark) { width: 14px; height: 14px; flex: 0 0 auto; }
+.wb-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--wb-sp-3) var(--wb-sp-8);
+  max-width: var(--wb-content-max);
+  min-height: 64px;
+  margin-inline: auto;
+  padding: var(--wb-sp-6) 0 var(--wb-sp-4);
+}
+.wb-head-title { display: flex; align-items: center; gap: var(--wb-sp-2); min-width: 0; }
+/* Page title (PR11): the display face at its 24px visual equivalent of 22. */
+.wb-title { margin: 0; font-family: var(--wb-font-display); font-size: var(--wb-fs-page); font-weight: 400; letter-spacing: .02em; line-height: 1.15; }
+.wb-head-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3) var(--wb-sp-6); margin-left: auto; }
+/* Console-wide run verdict: word + shape on a floating pill, coloured by its
+   real status. */
+.wb-head-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--wb-sp-3);
+  min-height: 32px;
+  padding: 0 var(--wb-sp-6) 0 var(--wb-sp-5);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: var(--wb-r-pill);
+  background: var(--wb-card-hi);
+  box-shadow: var(--wb-card-shadow);
+  color: var(--wb-status-neutral);
+}
+.wb-head-status > .wb-dot { margin-top: 0; }
+.wb-head-status[data-state="run"] { color: var(--wb-status-ok); }
+.wb-head-status[data-state="down"] { color: var(--wb-status-err); border-color: color-mix(in srgb, var(--wb-status-err) 45%, transparent); }
+.wb-head-status[data-state="stale"] { color: var(--wb-status-warn); border-color: color-mix(in srgb, var(--wb-status-warn) 50%, transparent); }
+.wb-head-status[data-state="unknown"] { border-style: dashed; border-color: var(--wb-control-line); }
+.wb-index { font-size: var(--wb-fs-3); color: var(--theme-muted); letter-spacing: .02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* The i glyph carries the lane's metric definition only; the resident note
+   strips (.wb-cost-note: missing days, price-table check) stay separate. Its
+   visible ring is 26px and its hit box 44px. */
+.wb-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  font-size: var(--wb-fs-2);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--theme-muted);
+  background: transparent;
+  border: 1.5px solid var(--wb-control-line);
+  border-radius: var(--wb-r-pill);
+  cursor: help;
+}
+.wb-info::before { content: ""; position: absolute; inset: -9px; }
+.workbench .wb-head .wb-info { min-height: 26px; }
+.wb-info:hover { color: var(--theme-ink); border-color: var(--theme-ink); }
+/* The i glyph's plate carries a whole 口径 sentence (up to ~86 characters), so it
+   wraps and grows towards the content (anchored at the glyph's inline start);
+   it opens below the glyph, inside the sticky head's own stacking layer. */
+.workbench .wb-info > .wb-icon-hint { top: calc(100% + var(--wb-sp-3)); left: 0; right: auto; transform: none; white-space: normal; width: max-content; max-width: min(520px, calc(100vw - 48px)); line-height: 1.7; }
+.wb-content { position: relative; width: 100%; max-width: var(--wb-content-max); margin: var(--wb-sp-3) auto 0; }
+/* Section heads for unframed sections and block footers: a section title with
+   its scope line and one trailing control on one row. */
+.wb-section-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--wb-sp-2) var(--wb-sp-5); margin: 0 0 var(--wb-sp-5); }
+.workbench .wb-section-head h3 { margin: 0; font-family: var(--wb-font-display); font-size: var(--wb-fs-title); line-height: 1.3; font-weight: 400; letter-spacing: .02em; }
+.wb-section-head small { color: var(--theme-muted); }
+.wb-section-head > button { margin-left: auto; align-self: center; }
+.wb-block-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--wb-sp-3); margin-top: var(--wb-sp-5); }
+/* ==========================================================================
+   3. Cards, KPI strip, grids (contract 3.3)
+   Three card ranks (PR11): rank 1 focus surfaces (the verdict strip and the KPI
+   band) and rank 2 lane sections are 20px cards that lay the panel tone over the
+   ground (0.82 / 0.76) and lift by --wb-card-shadow; rank 3 nested rows and
+   detail are the cool sunk tone inside their card. The ranks are declared ONCE
+   here; the per-component rules below carry only what belongs to their own
+   component, so no block restates a rank value.
+   ========================================================================== */
+
+/* Rank 1 - focus surfaces: the lane's headline readings (the KPI band draws
+   its own card, section 3 "KPI band"). */
+.wb-verdict {
+  border: none;
+  border-radius: var(--wb-r-l);
+  background: var(--wb-rank-1-bg);
+  box-shadow: var(--wb-card-shadow);
+}
+/* Rank 2 - lane sections. */
+:is(.wb-block, .wb-chart-card, .wb-empty-card, .wb-ledger, .wb-cred, .wb-table-scroll, .wb-list, .wb-probe-intro, .wb-fee-trend, .wb-share-block, .wb-log-detail) {
+  border: none;
+  border-radius: var(--wb-r-l);
+  background: var(--wb-rank-2-bg);
+  box-shadow: var(--wb-card-shadow);
+}
+/* A rank-2 container inside another card is not a second floating card: tables,
+   lists and charts sit flat on their card, and nested ledgers / credential
+   rows / account cards take the sunk tone instead of a second lift. */
+:is(.wb-block, .wb-chart-card, .wb-share-block, .wb-log-detail, .wb-char) :is(.wb-table-scroll, .wb-list, .wb-chart-card, .wb-fee-trend) { background: transparent; box-shadow: none; border-radius: var(--wb-r-m); }
+:is(.wb-block, .wb-chart-card, .wb-share-block, .wb-log-detail) :is(.wb-ledger, .wb-cred, .wb-probe-intro, .wb-empty-card) { background: var(--wb-rank-3-bg); box-shadow: none; border-radius: var(--wb-r-m); }
+/* Charts and row containers do not nest a second border ring inside the card
+   that already draws one (Plan-Revision 9, maintainer 2026-09-28 ④). The block's
+   own ring frames the section; the chart / list / table / log container keeps its
+   rank-2 radius and surface, so it still reads as a card, but not as a card with
+   its own frame inside another frame. Nothing else changes: no shadow is added, the
+   dashed edge of a pending chart and of an empty card stays (that dash is the
+   "not measured yet" shape, not a second ring), and every rank-1 focus surface
+   keeps its full-strength --theme-line edge. */
+:is(.wb-chart-card, .wb-fee-trend, .wb-table-scroll, .wb-list, .wb-log-detail, .wb-log-rows) { border: none; }
+/* Rank 3 - nested rows and detail: the most recessed surface and the weakest
+   edge, so a row inside a section reads as a well, not as another card. */
+:is(.wb-op-status, .wb-svc-detail, .wb-queue-item, .wb-sync-diff, .wb-model-ops, .wb-log-rows) {
+  border: none;
+  border-radius: var(--wb-r-m);
+  background: var(--wb-rank-3-bg);
+}
+/* The recess is a real lightness step, so the secondary text sitting on it takes
+   the nested ink instead of --theme-muted, which would fall under contract
+   6.2's 4.5:1 there. Everything else on those surfaces (readings, state
+   colours, button labels) keeps its own colour. */
+:is(.wb-op-status, .wb-svc-detail, .wb-queue-item, .wb-sync-diff, .wb-model-ops, .wb-log-rows) :is(small, time, .wb-muted, .wb-log-state, .wb-kv span) { color: var(--wb-nested-ink); }
+
+/* Section card (PR11): 20 / 22px card padding and the --wb-sp-9 (28px) section
+   gap, so the two tiers stay monotone (28 > 22). The first-screen budget is
+   bought from folded explanations, never from a smaller type size. */
+.wb-block { margin-bottom: var(--wb-sp-9); padding: 20px 22px; }
+/* The block title is the display face at --wb-fs-title with a display-tight
+   1.3 leading; it takes no hairline of its own, and its bottom gap is the
+   within-group tier (the title and the block it names are one group). */
+.wb-block > h3 { display: flex; align-items: baseline; gap: var(--wb-sp-2); margin: 0 0 var(--wb-sp-3); font-size: var(--wb-fs-title); line-height: 1.3; font-weight: 400; letter-spacing: .02em; }
+.wb-subhead { margin: var(--wb-sp-7) 0 var(--wb-sp-2); font-size: var(--wb-fs-5); font-weight: 600; color: var(--theme-ink); }
+
+/* Unframed section (2026-09-29 redesign): a section whose children are cards
+   themselves (the KPI strip) takes no frame of its own, so a card never sits
+   inside a second ring. */
+.wb-block.wb-bare { padding: 0; border: none; background: none; box-shadow: none; }
+.wb-block.wb-bare > h3 { margin-bottom: var(--wb-sp-5); }
+
+/* Overview dashboard (2026-09-29 redesign). The first screen keeps the frozen
+   reading order - 运行裁决 → 用量与费用 → 待处理 → 服务明细 - and pairs the last
+   two on one row: services wide on the left, the resident queue on the right
+   (the design contract's first ask for 待处理), so the fourth layer starts
+   where the third does. DOM order is the reading order; only the paint moves. */
+.wb-ov-grid { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(0, 2.45fr); gap: var(--wb-sp-7); align-items: start; margin-bottom: var(--wb-sp-9); }
+.wb-ov-grid > .wb-block { margin-bottom: 0; }
+.wb-ov-grid > .wb-ov-queue { grid-column: 1; grid-row: 1; }
+.wb-ov-grid > .wb-ov-services { grid-column: 2; grid-row: 1; }
+.wb-ov-trends { margin-bottom: var(--wb-sp-9); }
+.wb-ov-trends > .wb-chart-grid { margin-top: 0; }
+
+/* KPI strip: rank 1 readings. The value tier (--wb-fs-7) sits clearly above
+   the label tier (--wb-fs-3), and both stay tabular so the columns line up
+   across lanes. All four cells carry the same reading-only shape: the decorative
+   aria-hidden spark of two cells (workbench.ts:3100 draws seven bars with no
+   axis and no scale) is not rendered, because a graphic in two of four cells left
+   a hole in the other two and carried no scale to read. A sparkline that carries
+   real information needs data labels or an axis in workbench.ts, which this pass
+   does not own; the seven-day series stays readable in the trend charts. */
+/* The KPI strip's cell gap is the group-to-group tier (contract 2.11b): one
+   reading per cell, so the gap between two cells must be clearly wider than the
+   label-to-value gap inside one. Measured: the four cells are 292px wide at
+   1600x900 with a 12px gap, so no value wraps and the row keeps its height.
+   Plan-Revision 7 (OD "问题 4"): the gap steps down to --wb-sp-4 (10px), which
+   is a column gap only on this single-row strip - measured 0.00 of row height - and
+   the strip's bottom gap steps down to --wb-sp-4 (10px) as well. The four cells'
+   own padding steps down to --wb-sp-5 (12px, the same card-padding step as
+   .wb-block; still >= contract 2.11d's --wb-sp-4 floor between a card's content
+   and its edge). Measured: -4.00 for the fourth layer's block, because the
+   tallest cell is the quota cell and the strip's height is its natural height.
+   Plan-Revision 9 (maintainer 2026-09-28 ③/⑤): the cell gap is 12px
+   (--wb-sp-4 and --wb-sp-5 resolve to the same 12px tier now), the reading
+   card's own padding is the card tier 14px (--wb-sp-6), and the reading takes
+   its own role - 28px / 1.15 / 500 (--wb-fs-8). The card's target height is
+   112-136px: the lower bound is declared here, and the upper bound is kept by
+   the cell's own content (label + reading + at most one real status line, the
+   fold workbench.ts owns). Nothing is bought by shrinking the reading. */
+/* KPI band (PR11「青柠」, Rev12 F12-2 three readings): the Token and quota /
+   credits readings share ONE card (drawn by the band's ::before across the first
+   two columns) and the fee reading (.wb-kpi-hero) is the page's lemon hero card
+   beside it. The DOM keeps the reading order (Token, fee, quota / credits); only
+   the grid areas move the fee to the end. The overview (.wb-kpis) and the fee
+   lane (.wb-cost) share the band. */
+:is(.wb-kpis, .wb-cost) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(0, 1.3fr);
+  grid-template-areas: "a d c";
+  gap: 0;
+  margin-bottom: var(--wb-sp-5);
+}
+:is(.wb-kpis, .wb-cost)::before { content: ""; grid-area: 1 / 1 / 2 / 3; border-radius: var(--wb-r-l); background: var(--wb-rank-1-bg); box-shadow: var(--wb-card-shadow); }
+.workbench :is(.wb-kpis, .wb-cost) > div { position: relative; min-width: 0; min-height: 112px; padding: 18px 22px; border: none; border-radius: 0; background: none; box-shadow: none; }
+:is(.wb-kpis, .wb-cost) > div:first-child { grid-area: a; }
+:is(.wb-kpis, .wb-cost) > .wb-kpi-hero { grid-area: c; }
+:is(.wb-kpis, .wb-cost) > div:last-child { grid-area: d; }
+:is(.wb-kpis, .wb-cost) > div:last-child::before { content: ""; position: absolute; left: 0; top: 20px; bottom: 20px; width: 1px; background: rgba(var(--theme-line-rgb), .9); }
+/* Rev14 T1: the overview band carries a fourth reading, 整次平均输出速度 (TPS),
+   between Token and quota; the shared card spans the first three columns. The
+   fee lane (.wb-cost) keeps its three readings. */
+.wb-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.3fr); grid-template-areas: "a b d c"; }
+.wb-kpis::before { grid-area: 1 / 1 / 2 / 4; }
+.wb-kpis > .wb-kpi-rate { grid-area: b; }
+.wb-kpis > .wb-kpi-rate::before { content: ""; position: absolute; left: 0; top: 20px; bottom: 20px; width: 1px; background: rgba(var(--theme-line-rgb), .9); }
+.workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero { margin-left: var(--wb-sp-6); border-radius: var(--wb-r-l); background: var(--wb-lemon); color: var(--wb-on-lemon); box-shadow: 0 18px 34px -22px rgba(96, 120, 10, .75); }
+/* Inside the lemon hero (light theme) every word is ink. */
+.workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero :is(small, .wb-muted, [data-kpi-label]) { color: var(--wb-on-lemon-2); }
+.workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero :is(b, .wb-large, [data-kpi]) { color: var(--wb-on-lemon); }
+.workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero [data-wb-cost-marker] { color: var(--wb-on-lemon-2) !important; font-weight: 600; }
+.workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero :focus-visible { outline-color: var(--wb-on-lemon); }
+/* Dark theme (maintainer 2026-10-01, option C): the full lemon block was too bright
+   on the dark ground, so the hero becomes a charcoal tile with a lemon wash and a
+   faint lemon edge, and its figures turn light lemon (#e3f78c 7.9:1, words
+   #c9d4a8 5.9:1 at the wash's strongest corner). The chip keeps a small lemon
+   fill; change chips use the dark status tones like every other dark card. */
+[data-dark-surface="true"] .workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero {
+  background: linear-gradient(135deg, rgba(212, 244, 67, .20), rgba(212, 244, 67, .07)), var(--wb-char-2);
+  color: var(--wb-char-ink);
+  box-shadow: inset 0 0 0 1px rgba(212, 244, 67, .28), 0 18px 40px -24px rgba(0, 0, 0, .55);
+}
+[data-dark-surface="true"] .workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero :is(small, .wb-muted, [data-kpi-label]) { color: #c9d4a8; }
+[data-dark-surface="true"] .workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero :is(b, .wb-large, [data-kpi]) { color: #e3f78c; }
+[data-dark-surface="true"] .workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero [data-wb-cost-marker] { color: #e3f78c !important; }
+[data-dark-surface="true"] .workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero :focus-visible { outline-color: var(--wb-lemon); }
+[data-dark-surface="true"] .workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero .wb-kchip-cost { background: var(--wb-lemon); color: var(--wb-on-lemon); }
+.wb-kpis small, .wb-cost small { display: block; margin-bottom: var(--wb-sp-2); font-size: var(--wb-fs-3); line-height: 1.45; letter-spacing: .04em; color: var(--theme-muted); }
+/* The reading's label row carries its entity chip; the chip is decoration, the
+   label names the reading. */
+:is(.wb-kpis, .wb-cost) > div > small:first-child { display: flex; align-items: center; gap: var(--wb-sp-3); }
+.wb-kchip { display: inline-grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 9px; }
+.workbench .wb-kchip > svg { width: 16px; height: 16px; stroke-width: 1.75; }
+.wb-kchip-req { background: var(--wb-ent-req-soft); color: var(--wb-ent-req-ink); }
+.wb-kchip-tok { background: var(--wb-ent-tok-soft); color: var(--wb-ent-tok-ink); }
+.wb-kchip-cred { background: var(--wb-ent-cred-soft); color: var(--wb-ent-cred-ink); }
+.wb-kchip-cost { background: rgba(19, 24, 32, 0.10); color: var(--wb-on-lemon); }
+.wb-kpis b { font-size: var(--wb-fs-8); font-weight: 300; line-height: 1.15; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+/* The KPI cell is ONE column, not the contract's "1fr auto" pair: the DOM order
+   is small(label) -> b(value) -> small.wb-muted(window) -> span.wb-delta ->
+   svg.wb-spark -> [button], and auto-placing that order into two columns put the
+   value in the `auto` column, sized that column to the value's max-content
+   (105-141px) and collapsed the 1fr column to 0px: measured 169x841 cells at
+   1600x900 whose label and window note wrapped one character per line (width 0,
+   heights 78 and 472), with the reading itself pushed below the first screen.
+   Every child is placed in the single column explicitly, so the cell no longer
+   depends on auto-placement and keeps the reading order the DOM already has.
+
+   The rows also stay content-sized (align-content: start) instead of taking the
+   inner grid's default `stretch`. All four cells share the outer row's height,
+   which the tallest cell sets - the quota cell carries two notes plus a button and
+   is ~262px tall at 1600x900, while the other three carry a label and a reading.
+   Stretch distributed that leftover over the short cells' auto rows: measured in
+   the candidate at 1600x900 and at 1536x864 (125%), both themes, the label row
+   grew to 117.72px and the value row to 123.66px, so the reading landed at
+   y=902 with its bottom at 927 - past the 900/864 fold, leaving cells 1-3 as
+   near-empty cards with the reading off the first screen. `start` keeps the label
+   row at 19.38px and the reading row at 25.30px and puts the reading at y=803
+   (bottom 829), inside the first screen at every one of the four viewports in
+   both themes; the leftover space now collects under the reading instead of
+   scattering between the rows, and no cell loses content. */
+.wb-kpi {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  align-items: start;
+  justify-items: start;
+  gap: var(--wb-sp-1);
+}
+.wb-kpi > * { grid-column: 1; min-width: 0; }
+.wb-kpi small { margin-bottom: 0; }
+/* A reading and its own window/period note are ONE group (contract 2.11c: label
+   and value adjacent, never equidistant from the next group). The generic
+   .wb-muted margin would add 14px between them, which is the group-to-group
+   tier; the cell's own 4px grid gap keeps the pair together instead.
+   The note keeps its readable line height: the whitespace this pass adds comes
+   from the spacing tiers, never from compressing type (contract 2.11d). */
+.wb-kpi > .wb-muted { margin-top: 0; }
+/* The window/period note and the delta chip are ONE row (Plan-Revision 9,
+   maintainer 2026-09-28 ③: the reading cell is label + reading + at most one
+   real status line). The note's `small` is the cell's own label tier but it is
+   not a block of its own here: it flows inline with the chip inside
+   `.wb-kpi-state`, so the row takes the note's own line count (one line when
+   the workbench shortens the note) instead of one line per block. The note keeps
+   its helper tier and its readable line height - nothing is compressed. */
+.wb-kpi-state { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-1) var(--wb-sp-3); }
+.wb-kpi-state > small { display: inline; margin-bottom: 0; min-width: 0; }
+.wb-kpi-state > .wb-delta { white-space: normal; }
+/* The delta chip can be wider than the cell's content box (141px against 139px at
+   1600x900), so inside the KPI strip it wraps instead of forcing a horizontal
+   scrollbar, and it stays a start-aligned pill. */
+.wb-kpi .wb-delta { white-space: normal; }
+/* The quota cell's refresh control is a button, not a bar: it keeps its own
+   content width instead of stretching over the whole column. */
+.wb-kpi > button { justify-self: start; }
+.wb-kpi .wb-spark { display: none; }
+/* Reading row（维护者 2026-09-28，判据 ⑤）：费用读数与下界标记「已知部分」同排、
+   基线对齐，右距（标记左缘 − 读数右缘）落在 [0,8]px。总览 KPI 费用格与费用页
+   读数格共用这一行；标记仍是读数元素的兄弟节点（不进读数文本），检查脚本按
+   [data-kpi="cost"] 与 [data-wb-cost-marker] 取两者矩形。这一行的容器查询按
+   容器可用内联宽（= 行内容盒宽：总览格 270px、费用格 261.5px @1600x900）切档，
+   档位与阈值按 MiSans 33px/300 实测（PR11 读数改为 Manrope 28px/300，字面更窄，
+   阈值因此偏保守、不会让读数与标记挤到一起）：
+     ≥ 328px：同排，读数 --wb-fs-8（33px）。最宽读数「≥¥1,234,567.890」实测
+       257.47px + 8px 间距 + 标记「已知部分」53px = 318.47px，取 328px 留出
+       字体合成与亚像素余量。
+     243–327.99px：同排，读数降一档到 --wb-fs-7（22px），读数保持完整；
+       22px 下同一读数 171.64px + 8px + 53px = 232.64px，取 243px。
+     < 243px：读数在上、标记在下（标记整行折到第二行），读数保持 --wb-fs-7，
+       ≥ 留在读数文本里；读数自身在 22px 下需要 171.64px，低于它才允许在数字
+       内部换行（overflow-wrap:anywhere）。任何一档都不截断、不隐藏标记。 */
+/* The reading and its lower-bound marker are one group (Plan-Revision 9,
+   maintainer 2026-09-28: 同组标签与读数 4-8px，行内动作 8px). Their gap is
+   --wb-sp-2 (6px) instead of the previous 8px, which sat exactly on the OD
+   criterion's upper bound [0,8]px: 6px keeps the pair together with 2px of
+   sub-pixel slack, and the container thresholds below were measured with the
+   wider gap, so they stay conservative.
+   Plan-Revision 9 ①（维护者 2026-09-28）：读数与下界标记必须同排。此前这里是
+   `flex-wrap: wrap`，注释说「必要时整对折行」，但实测折行的是**标记自己**：
+   总览 KPI 费用格（读数盒 265.5px）在 partial 态下放不下 读数 240px + 标记
+   55px，标记被挤到下一行，① 的判据读到 markerRect.left − valueRect.right
+   = -232.9px（1600x900、浅深两主题）。改为 `nowrap`：先压读数行盒（数字内部
+   换行），标记按 max-content 留在读数右侧——这正是上面注释写的口径。 */
+.wb-reading { display: flex; flex-wrap: nowrap; align-items: baseline; column-gap: var(--wb-sp-2); row-gap: var(--wb-sp-1); min-width: 0; container-type: inline-size; }
+/* 查询容器不能按内容定宽：`.wb-kpi` 的 justify-items:start 会把 inline-size 容器
+   按 fit-content 定到 0（内容被 inline-size 包含后不再参与固有尺寸），所以读数行在
+   KPI 格里显式拉伸到列宽。 */
+.wb-kpi > .wb-reading { justify-self: stretch; }
+/* 同排时先压读数行盒（必要时读数文本在数字内部换行），标记不缩、始终按
+   max-content 留在读数右侧，所以标记不会被挤出这一行。 */
+.wb-reading > [data-kpi] { min-width: 0; overflow-wrap: anywhere; }
+.wb-reading > [data-wb-cost-marker] { flex: 0 0 auto; }
+@container (max-width: 327.99px) {
+  /* Plan-Revision 9 ③（维护者 2026-09-28）：总览 KPI 费用格与费用页读数格共用这一行的窄容器退档。
+     总览格内容盒只有 265.5px，长金额夹具（≥¥1,234,567.836，28px）加下界标记放不下，
+     读数文本会在数字内部折行、卡片高 142.19px > 136px（门禁 ③ 实测，1600x900 双主题 partial 态）。
+     费用页的 `.wb-large` 早已按同一档退到 22px，总览格的 `<b data-kpi="cost">` 此前没有——
+     同一读数、同一容器宽度，两处同档。双主题都走这一档，⑤ 的跨主题同档判据因此成立。 */
+  .wb-reading:has(> [data-wb-cost-marker]) > :is(.wb-large, [data-kpi="cost"]) { font-size: var(--wb-fs-7); }
+}
+/* 读数行现在是 nowrap（见上）：标记不能再按 flex-basis:100% 单独占一行——那会把读数挤到
+   0 宽。窄容器里读数与标记同排，读数文本在数字内部换行（.wb-reading > [data-kpi] 的
+   overflow-wrap 规则，含下面 171.99px 一档）。 */
+@container (max-width: 171.99px) {
+  .wb-reading > [data-kpi] { overflow-wrap: anywhere; }
+}
+/* Where a spark does render (the model lane's week row) it takes a zero
+   baseline, so the bars read against a coordinate instead of floating. */
+.wb-spark { display: block; flex: 0 0 auto; border-bottom: 1px solid rgba(var(--theme-line-rgb), 0.5); }
+
+/* Chart grid: one full-width main chart on its own row, then the secondary
+   narrow card in a narrow left column beside the secondary chart (contract 3.3).
+   No repeat(2, 1fr) equal-weight pair, and no 620px card left in a 1240px row
+   with the rest empty: the narrow card occupies a genuinely narrow column and
+   the chart beside it takes the remaining width, so the row is full. */
+/* Plan-Revision 9 (maintainer 2026-09-28 ③): the two chart cards are 卡间
+   18px apart (--wb-sp-7), the card tier, and each chart card keeps the card
+   padding 14px (--wb-sp-6) on all four sides. */
+.wb-chart-grid { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); gap: var(--wb-sp-7); margin-top: var(--wb-sp-6); align-items: start; }
+.wb-chart-wide { grid-column: 1 / -1; }
+/* Frame, radius and surface come from the rank-2 rule above; the card keeps its
+   own padding and its own clip. Frame steps back one notch from the card rule: the
+   grid is the weak dashed hairline and the data line is the heaviest stroke, so the
+   frame must not compete with either (contract 2.5). */
+.wb-chart-card {
+  min-width: 0;
+  /* Card padding is the proposal's 卡内 14px on all four sides (Plan-Revision 9,
+     maintainer 2026-09-28 ③); the previous 12/14/10 spread is gone. */
+  padding: var(--wb-sp-6);
+  overflow: hidden;
+}
+.wb-chart-grid > .wb-chart-card:not(.wb-chart-wide) { grid-column: 1; max-width: none; }
+/* The secondary chart after the narrow card takes the wide column beside it, so
+   the pair fills its row instead of leaving a hole. */
+.wb-chart-grid > .wb-chart-card:not(.wb-chart-wide) + .wb-chart-wide { grid-column: 2; }
+/* A pending chart card is not a real chart, so its frame drops to the weakest
+   muted edge in the lane - dashed and translucent, below the real chart frame and
+   below the grid. This is the one place where a muted rule, rather than the
+   hairline, is the honest tone: nothing here is a measured layer yet. */
+.wb-chart-card.wb-chart-pending { padding: var(--wb-sp-6); border: 1px dashed rgba(var(--theme-muted-rgb), .5); }
+/* The chart head takes no rule of its own: the card frame and the chart's own
+   axis already separate the title from the plot. */
+.wb-chart-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--wb-sp-2) var(--wb-sp-5); margin-bottom: var(--wb-sp-5); }
+.wb-chart-head h3 { margin: 0; font-size: var(--wb-fs-title); font-weight: 400; }
+.wb-chart-head small { font-size: var(--wb-fs-2); color: var(--theme-muted); text-align: right; }
+.wb-chart-card .wb-area { display: block; width: 100%; height: auto; }
+
+/* An empty card is not a real card, so it keeps the rank-2 frame, radius and
+   surface and only swaps the edge to a dashed one (contract 3.3). */
+.wb-empty-card { margin-top: var(--wb-sp-5); padding: var(--wb-sp-7); border-style: dashed; }
+.wb-empty-card strong { display: block; font-size: var(--wb-fs-6); font-weight: 600; }
+.wb-empty-card small { display: block; margin-top: var(--wb-sp-1); font-size: var(--wb-fs-4); line-height: 1.7; color: var(--theme-muted); }
+.wb-lane-note, .lane-note { margin: 0 0 var(--wb-sp-1); max-width: 88ch; }
+
+/* ==========================================================================
+   4. Service chain board and detail (contract 3.4)
+   ========================================================================== */
+
+
+.wb-port { font-size: var(--wb-fs-2); color: var(--theme-muted); font-variant-numeric: tabular-nums; }
+.wb-issue small { display: block; margin-top: var(--wb-sp-1); font-size: var(--wb-fs-4); color: var(--theme-muted); }
+.wb-svc-ops { flex: 0 0 auto; margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2); min-height: 48px; }
+.wb-svc-ops button { min-height: 40px; padding: var(--wb-sp-2) var(--wb-sp-6); font-size: var(--wb-fs-4); border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-pill); background: transparent; color: inherit; text-align: center; white-space: nowrap; cursor: pointer; }
+.wb-svc-ops button:hover { background: var(--wb-hover); }
+.wb-svc-ops button.wb-confirm { background: var(--theme-ink); border-color: var(--theme-ink); color: var(--theme-paper); }
+.wb-svc-ops button[data-wb-svc-action="stop"] { margin-left: var(--wb-sp-4); border-style: dashed; }
+.wb-svc-ops button:disabled { opacity: .5; cursor: default; }
+
+/* Inline terminal result chip (R9-R46): a state-coloured pill owned by the row
+   that ran the action, so the receipt sits next to its trigger. Long summaries
+   truncate with ellipsis + title; removal fades over 400ms, which is the one
+   duration the contract exempts from the 260ms ceiling. */
+.wb-svc-result {
+  flex: 0 0 auto;
+  max-width: 40%;
+  min-width: 0;
+  padding: 1px var(--wb-sp-4);
+  font-size: var(--wb-fs-3);
+  line-height: 1.6;
+  border: 1px solid rgba(var(--theme-line-rgb), 0.4);
+  border-radius: var(--wb-r-pill);
+  background: var(--wb-status-neutral-bg);
+  color: var(--wb-status-neutral);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-svc-result-ok { border-color: color-mix(in srgb, var(--wb-status-ok) 45%, transparent); background: var(--wb-status-ok-bg); color: var(--wb-status-ok); }
+.wb-svc-result-failed { border-color: color-mix(in srgb, var(--wb-status-err) 45%, transparent); background: var(--wb-status-err-bg); color: var(--wb-status-err); }
+/* Unconfirmed is dashed: the shape says "not settled yet", not just the hue. */
+.wb-svc-result-unconfirmed { border-style: dashed; border-color: color-mix(in srgb, var(--wb-status-warn) 55%, transparent); background: var(--wb-status-warn-bg); color: var(--wb-status-warn); }
+.wb-svc-result-row { display: flex; margin-top: var(--wb-sp-4); }
+.wb-svc-result-fade { animation: wbSvcResultOut 400ms var(--wb-ease) forwards; }
+@keyframes wbSvcResultOut { to { opacity: 0; } }
+
+/* Operation status line: three states (pending / ok / failed), :empty hidden. */
+.wb-op-status { margin-top: var(--wb-sp-6); padding: var(--wb-sp-4) var(--wb-sp-6); font-size: var(--wb-fs-4); line-height: 1.8; overflow-wrap: anywhere; }
+.wb-op-status[data-state="ok"] { border-color: color-mix(in srgb, var(--wb-status-ok) 55%, transparent); color: var(--wb-status-ok); }
+.wb-op-status[data-state="failed"] { border-color: color-mix(in srgb, var(--wb-status-err) 55%, transparent); color: var(--wb-status-err); }
+.wb-op-status:empty { display: none; }
+.wb-op-status .wb-dot { display: inline-block; margin: 0 var(--wb-sp-3) 0 0; vertical-align: -1px; }
+
+.wb-svc-detail { margin-top: var(--wb-sp-6); padding: var(--wb-sp-6) var(--wb-sp-7); }
+.wb-svc-detail[hidden] { display: none !important; }
+.wb-svc-detail h4 { margin: 0 0 var(--wb-sp-4); font-size: var(--wb-fs-6); font-weight: 600; }
+.wb-kv span { display: block; font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-kv b { font-weight: 500; overflow-wrap: anywhere; }
+/* Label and value are one group (contract 2.11c): the column gap is the
+   within-group tier --wb-sp-3 (8px), so a label is never as far from its own
+   value as from the next row's. */
+.wb-kv { display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr); gap: var(--wb-sp-1) var(--wb-sp-3); margin-top: var(--wb-sp-3); font-size: var(--wb-fs-4); }
+
+/* --------------------------------------------------------------------------
+   Disclosure (contract 3.12). The hosts are the native <details>/<summary>
+   pairs the contract names - no custom widget, so keyboard open/close, the
+   summary's own :focus-visible ink ring (section 15) and the browser's own
+   expanded state all come from the element itself.
+   Collapsed, the summary is the ONLY row that occupies height: its margin and
+   padding stay inside the within-group tier (contract 2.11c), so folding a
+   disclosure never leaves a hole where its body used to be. Expanded, the body
+   takes the group-to-group tier above it and a readable measure, and it keeps the
+   full text: contract 3.12c allows no ellipsis and no clipping in a folded body,
+   because a folded body carries the explanation or the failure it was opened for.
+   A blocking failure is never hidden by folding: the six surfaces contract 3.12c
+   names (.wb-banner, .wb-op-status[data-state="failed"], .wb-svc-result-failed,
+   .wb-log-state, .wb-fail-groups, .wb-stale-chip) carry their own colour and
+   shape and none of them lives inside a <details>: the folds this round adds
+   (workbench.ts:4273,4719,5188,5195,5196,6092,6470, measured 2026-09-27 with
+   `grep -n '<details'` on the working tree) carry explanation, filter and
+   drill text only, never one of those six surfaces.
+   -------------------------------------------------------------------------- */
+.wb-secondary-details { margin-top: var(--wb-sp-5); padding: var(--wb-sp-3) 0; border-top: 1px solid var(--theme-line); }
+/* 2026-09-29 redesign: a fold row is a secondary control, so its label takes
+   the body tier in the muted ink (ink on hover / focus / open), not the 17px
+   section-title tier - a closed fold no longer reads like a heading. */
+.wb-secondary-details > summary { cursor: pointer; font-size: var(--wb-fs-5); font-weight: 500; color: var(--theme-muted); }
+.wb-secondary-details > summary:hover,
+.wb-secondary-details[open] > summary { color: var(--theme-ink); }
+/* Fold rows (Plan-Revision 9, maintainer 2026-09-28 ⑥): the whole summary row is
+   the hit target - min-height 44px, 14px left/right padding (--wb-sp-6), and the
+   chevron fixed 16x16 at the row's inline end. The row keeps its pointer cursor
+   and the summary is still the native <details> toggle, so the mouse and the
+   keyboard share one hit area; the mark itself (section 6, .wb-fold-mark) is what
+   flips -45deg closed / +45deg open. The share table's own fold already carries
+   this shape (section 12); this rule gives every other fold the same one. */
+.workbench details > summary { display: flex; align-items: center; gap: var(--wb-sp-2); min-height: 44px; padding: 0 var(--wb-sp-6); box-sizing: border-box; }
+.workbench details > summary::marker { color: var(--theme-muted); }
+.workbench details > :not(summary) { max-width: 88ch; line-height: 1.7; }
+.workbench details[open] > summary { margin-bottom: var(--wb-sp-6); }
+.workbench details:not([open]) > summary { margin-bottom: 0; }
+
+/* Fold rows (Plan-Revision 6). A fold entry has to read as a control, not as
+   a line of text: the whole summary is the hit target (width: 100% + cursor),
+   and the row itself carries the hover and focus feedback instead of only the
+   title text taking a colour. box-sizing keeps the share block's full-row pill
+   inside its cell - its own edge and padding would otherwise add ~14px to a 100%
+   width and the table would grow a horizontal scrollbar. The chevron is the row's
+   marker at its inline-end edge: `margin-inline-start: auto` inside the flex
+   summary pins it there whatever the title's length, and `align-self: center`
+   keeps it on the row's centre line beside a baseline-aligned title.
+   The marker - never the title - is what flips, so the title cannot move when
+   the fold opens. Plan-Revision 7 (OD r7b-decisions.md 决定 3) moved the rotation
+   onto the marker ITSELF and left the drawn chevron unrotated: closed `rotate(-45deg)`
+   reads `›` (可展开), open `rotate(45deg)` reads `⌄` (可收起), net 90deg - the
+   gate inverts the marker's own computed transform (angle difference 90deg, tolerance
+   0.5deg), so a rotation left on the `::before` would leave the marker at `none` in
+   both states and fail it. The marker draws its own chevron while it is empty (two
+   borders of a square, 7x7px, 1.5px like §3.13's stroke-width), and a glyph or an
+   icon the DOM puts inside it is rotated as a whole, so both spellings of the markup
+   flip. The gate reads the marker's computed transform and the summary's cursor
+   (r6-gate-20260927.mjs:165-181) and floors the summary's width at 120px
+   (:43,:151), which the full-row width keeps it above. */
+.workbench details > summary { width: 100%; box-sizing: border-box; cursor: pointer; }
+/* The share table's fold summary keeps its own shape (section 12); the generic
+   fold row above repeats the same 44px / 14px / 16px numbers, and this rule only
+   keeps the summary's grid so the chevron column stays pinned. */
+.workbench details > summary:hover,
+.workbench details > summary:focus-visible { background: var(--wb-hover); }
+/* 问题 3（Plan-Revision 7，OD 决定稿 r7b-fold-row-1.html）：chevron 固定在这一行的
+   行内右端、16×16px（`justify-self: end` 在网格里定位，`margin-inline-start: auto`
+   在其它折叠的 flex 行里仍把它推到行尾），标记 7×7px + `border-right/bottom 1.5px`
+   （线宽与 §3.13 的 `stroke-width: 1.5` 同档）。旋转做在**标记本体**上（不是
+   `::before`），收起 `rotate(-45deg)` 读成 `›`、展开 `rotate(45deg)` 读成 `⌄`，
+   净旋转 90°（容差 ±0.5°）；判据反解的就是标记本体的 `transform`，若把旋转留在
+   `::before` 上，标记本体的 `transform` 恒为 `none`，角差为 0，判据不成立。
+   过渡取 200ms ease-out = --wb-dur-2/--wb-ease-out；reduced-motion 下
+   §17 的 `.reduce-motion .wb-fold-mark { transition: none }` 让终值保留、时长归零。 */
+.wb-fold-mark {
+  flex: 0 0 auto;
+  align-self: center;
+  justify-self: end;
+  margin-inline-start: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--theme-muted);
+  transform: rotate(-45deg);
+  transition: transform var(--wb-dur-2) var(--wb-ease-out);
+}
+.wb-fold-mark:empty::before {
+  content: "";
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+}
+.workbench details[open] > summary .wb-fold-mark { transform: rotate(45deg); }
+
+/* The row's inline action gap is the action tier --wb-sp-3 (8px, Plan-Revision
+   9, maintainer 2026-09-28 ③); the previous 12px was the group tier. */
+.wb-issue { display: flex; align-items: center; justify-content: space-between; gap: var(--wb-sp-3); width: 100%; padding: var(--wb-sp-4) 0; border-top: 1px solid var(--theme-line); }
+.wb-issue strong { display: block; font-size: var(--wb-fs-6); line-height: 1.5; overflow-wrap: anywhere; }
+.wb-issue button, .wb-cost-open { flex: 0 0 auto; padding: var(--wb-sp-3) var(--wb-sp-6); font-size: var(--wb-fs-5); border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-pill); background: transparent; color: inherit; cursor: pointer; }
+.wb-issue button:hover, .wb-cost-open:hover { background: var(--wb-hover); }
+.wb-issue-tag { flex: 0 0 auto; padding: 2px var(--wb-sp-4); font-size: var(--wb-fs-2); white-space: nowrap; border: 1px solid color-mix(in srgb, var(--wb-status-err) 55%, transparent); border-radius: var(--wb-r-pill); background: var(--wb-status-err-bg); color: var(--wb-status-err); }
+
+/* ==========================================================================
+   4b. Charcoal surface and the overview master-detail (PR11)
+   `.wb-char` is the page's second anchor (maintainer 2026-09-30, Q20: each
+   lane's main list or chart sits on it). It is a TOKEN SCOPE, not a skin: it
+   re-declares the theme and workbench tokens for its subtree, so every
+   component inside (text tiers, hairlines, buttons, badges, tables, folds,
+   status words, the armed-confirm inversion) keeps its own rules and reads
+   correctly on charcoal in both themes. The rgb companions are written per
+   theme because the charcoal steps differ between them.
+   ========================================================================== */
+.workbench .wb-char {
+  --theme-ink: var(--wb-char-ink);
+  --theme-ink-rgb: 242, 245, 249;
+  --theme-muted: var(--wb-char-muted);
+  --theme-muted-rgb: 170, 181, 195;
+  --theme-line: #3a4757;
+  --theme-line-rgb: 58, 71, 87;
+  --theme-paper: var(--wb-char);
+  --theme-paper-rgb: 31, 35, 40;
+  --theme-panel: var(--wb-char-2);
+  --theme-panel-rgb: 42, 52, 65;
+  --theme-field: var(--wb-char-3);
+  --theme-field-rgb: 51, 64, 79;
+  --theme-accent: #b9c1ff;
+  --theme-accent-rgb: 185, 193, 255;
+  --wb-hover: rgba(255, 255, 255, 0.06);
+  --wb-hover-strong: rgba(255, 255, 255, 0.10);
+  /* 0.45 keeps the control edge >= 3:1 on char, char-2, char-3 and the detail
+     pane's action bar (0.30 measured 2.4-2.7:1). */
+  --wb-control-line: rgba(255, 255, 255, 0.45);
+  /* Chart series on charcoal take the dark-theme hues: the light credits violet
+     #8b62e6 is 2.99:1 on the char-2 tile. */
+  --wb-ent-tok: #4fd0d8;
+  --wb-ent-cred: #b99dff;
+  --wb-rank-1-bg: var(--wb-char-2);
+  --wb-rank-2-bg: var(--wb-char-2);
+  --wb-rank-3-bg: var(--wb-char-3);
+  --wb-card-hi: var(--wb-char-3);
+  --wb-card-shadow: none;
+  --wb-nested-ink: var(--wb-char-muted);
+  --wb-chart-hairline: #3a4757;
+  --wb-chart-hairline-rgb: 58, 71, 87;
+  --wb-status-ok: #93f0c4;
+  --wb-status-warn: #f6d38d;
+  --wb-status-err: #ffb8b0;
+  --wb-status-neutral: rgba(242, 245, 249, 0.68);
+  --wb-status-ok-bg: rgba(63, 214, 148, 0.14);
+  --wb-status-warn-bg: rgba(240, 180, 60, 0.16);
+  --wb-status-err-bg: rgba(255, 138, 127, 0.16);
+  --wb-status-neutral-bg: rgba(255, 255, 255, 0.08);
+  --wb-ent-req-soft: rgba(152, 163, 255, 0.16);
+  --wb-ent-req-ink: #c6ccff;
+  --wb-ent-tok-soft: rgba(79, 208, 216, 0.15);
+  --wb-ent-tok-ink: #a6ecf0;
+  --wb-ent-cred-soft: rgba(185, 157, 255, 0.16);
+  --wb-ent-cred-ink: #d8c9ff;
+  color: var(--wb-char-ink);
+  background: var(--wb-char);
+  box-shadow: 0 30px 60px -34px rgba(15, 20, 30, 0.85);
+}
+[data-dark-surface="true"] .workbench .wb-char {
+  --theme-ink-rgb: 238, 242, 247;
+  --theme-muted-rgb: 163, 175, 192;
+  --theme-line: #2e3b4f;
+  --theme-line-rgb: 46, 59, 79;
+  --theme-paper-rgb: 11, 15, 21;
+  --theme-panel-rgb: 23, 33, 49;
+  --theme-field-rgb: 32, 45, 64;
+  --wb-chart-hairline: #2e3b4f;
+  --wb-chart-hairline-rgb: 46, 59, 79;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 30px 60px -30px rgba(0, 0, 0, 0.9);
+}
+/* Focus on charcoal: the lemon ring. Light literals that only exist for the
+   light paper (the danger tier's #a4452f) take their dark-surface tone here. */
+.workbench .wb-char :is(button, input, select, textarea, summary, a, [tabindex]):focus-visible { outline-color: var(--wb-lemon); }
+.workbench .wb-char :is(.wb-danger, .wb-btn.wb-danger) { color: var(--wb-status-err); }
+
+/* Overview master-detail (PR11, Q17). The section is the charcoal panel; the
+   list is on its left, the selected chain's detail on its right. */
+.workbench .wb-ov-services.wb-char { padding: 16px; border-radius: 26px; }
+/* Each lane's main list on charcoal (Q20): the account grid becomes one panel
+   whose cards are the lighter charcoal step; section 19's rank-2 pin on
+   .wb-share-block / .wb-log-detail keeps the panel's own base here. */
+.workbench .wb-gw-side.wb-char { padding: 16px; border-radius: 26px; }
+.console-stage .workbench .wb-char:is(.wb-log-detail, .wb-share-block) { background: var(--wb-char); }
+.wb-ov-services > .wb-section-head { margin: 0 0 var(--wb-sp-5); padding: var(--wb-sp-1) var(--wb-sp-2) 0; }
+.wb-md { display: grid; grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); gap: var(--wb-sp-5) var(--wb-sp-6); align-items: stretch; }
+.wb-md-side { display: flex; flex-direction: column; gap: var(--wb-sp-2); min-width: 0; }
+.wb-md-list { display: flex; flex-direction: column; gap: var(--wb-sp-2); }
+.workbench .wb-md-item {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  grid-template-areas: "dot name port" "dot state port" ". result result";
+  align-items: center;
+  gap: 2px var(--wb-sp-4);
+  width: 100%;
+  min-height: 58px;
+  padding: var(--wb-sp-3) var(--wb-sp-6);
+  font: inherit;
+  text-align: left;
+  color: var(--wb-char-ink);
+  background: transparent;
+  border: none;
+  border-radius: 16px;
+  cursor: pointer;
+}
+.workbench .wb-md-item:hover { background: rgba(255, 255, 255, 0.06); color: var(--wb-char-ink); }
+/* Selected (Q16): a 4px lemon rule on the inline start and a lighter charcoal
+   step - the page keeps its one large lemon fill for the hero card. */
+.workbench .wb-md-item[aria-pressed="true"] { background: rgba(255, 255, 255, 0.09); box-shadow: inset 4px 0 0 var(--wb-lemon); }
+.wb-md-item > .wb-dot { grid-area: dot; margin-top: 0; }
+.wb-md-name { grid-area: name; min-width: 0; font-size: var(--wb-fs-6); font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.wb-md-state { grid-area: state; display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-1) var(--wb-sp-3); min-width: 0; font-size: var(--wb-fs-3); color: var(--wb-char-muted); }
+.wb-md-pending { color: var(--wb-status-warn); font-weight: 600; }
+.wb-md-port { grid-area: port; font-family: var(--wb-font-mono); font-size: var(--wb-fs-3); color: var(--wb-char-muted); }
+.wb-md-result { grid-area: result; display: flex; min-width: 0; margin-top: var(--wb-sp-1); }
+.wb-md-result .wb-svc-result { max-width: 100%; }
+.wb-md-side > .wb-secondary-details { margin-top: auto; border-top-color: var(--wb-char-line); }
+/* The pane is resident (not revealed on demand like the inline detail), and the
+   lane repaints on every probe tick, so it carries no reveal animation. */
+.wb-md-detail { display: flex; flex-direction: column; gap: var(--wb-sp-6); min-width: 0; padding: 20px 22px; border-radius: 20px; background: var(--wb-char-2); }
+.wb-md-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3) var(--wb-sp-5); }
+.workbench .wb-md-head h4 { margin: 0; font-size: var(--wb-fs-6); font-weight: 600; }
+.wb-md-head .wb-port { margin-left: auto; font-family: var(--wb-font-mono); font-size: var(--wb-fs-3); color: var(--wb-char-muted); }
+.wb-md-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--wb-sp-3); }
+.wb-md-tiles > div { display: flex; flex-direction: column; gap: var(--wb-sp-2); min-width: 0; padding: 12px 14px; border-radius: var(--wb-r-m); background: var(--wb-char-3); }
+.wb-md-tiles small { font-size: var(--wb-fs-3); color: var(--wb-char-muted); }
+.wb-md-tiles b { font-size: 13.5px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
+.wb-md-detail > .wb-muted { margin: 0; font-size: var(--wb-fs-3); }
+.wb-md-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3); margin-top: auto; padding: var(--wb-sp-3); border-radius: 26px; background: rgba(255, 255, 255, 0.05); }
+.wb-md-actions > .wb-svc-ops { flex: 0 1 auto; min-height: 44px; margin: 0; }
+.wb-md-actions > .wb-svc-power { margin-left: auto; }
+.wb-md-actions > .wb-muted { margin: 0 var(--wb-sp-3); font-size: var(--wb-fs-3); }
+
+/* ==========================================================================
+   5. Status encoding (contract 3.5)
+   Four states, each encoded by shape AND text, never by colour alone.
+   circle = listening, square = not_listening, hollow ring = unknown,
+   half-filled = stale (>90s, amber, never red).
+   ========================================================================== */
+
+.wb-dot { flex: 0 0 auto; width: 9px; height: 9px; margin-top: var(--wb-sp-2); border-radius: 50%; background: var(--wb-status-neutral); }
+.wb-dot-run { background: var(--wb-status-ok); }
+.wb-dot-watch { background: var(--wb-status-warn); }
+/* not_listening is a filled SQUARE - the shape survives on both grounds. */
+.wb-dot-down { background: var(--wb-status-err); border-radius: 1px; }
+/* unknown is a HOLLOW RING: a probe that timed out is not "not listening". */
+.wb-dot-unknown { background: transparent; border: 1.5px solid var(--wb-status-neutral); }
+/* stale is HALF-FILLED amber: freshness only, never a crash verdict. */
+.wb-dot-stale { background: linear-gradient(90deg, var(--wb-status-warn) 0 50%, transparent 50% 100%); border: 1.5px solid var(--wb-status-warn); }
+.wb-table .wb-dot { display: inline-block; margin: 0 var(--wb-sp-2) 0 0; vertical-align: -1px; }
+
+/* The pill fill is the control surface, which the contract assigns to
+   --theme-field ("输入框、select、胶囊底"), not to the panel tone. */
+.wb-badge { display: inline-block; padding: 1px var(--wb-sp-3); font-size: var(--wb-fs-2); line-height: 1.5; white-space: nowrap; border: 1px solid var(--theme-line); border-radius: var(--wb-r-pill); background: rgba(var(--theme-field-rgb), 0.7); color: var(--theme-muted); }
+.wb-badge-ok { border-color: color-mix(in srgb, var(--wb-status-ok) 55%, transparent); background: var(--wb-status-ok-bg); color: var(--wb-status-ok); }
+.wb-badge-warn { border-color: color-mix(in srgb, var(--wb-status-warn) 55%, transparent); background: var(--wb-status-warn-bg); color: var(--wb-status-warn); }
+.wb-badge-danger { border-color: color-mix(in srgb, var(--wb-status-err) 55%, transparent); background: var(--wb-status-err-bg); color: var(--wb-status-err); }
+.wb-badge-idle { border-color: var(--theme-line); color: var(--theme-muted); }
+/* gated = the backend never answered for this capability: dashed edge. */
+.wb-badge-gated { border-style: dashed; background: var(--wb-status-neutral-bg); color: var(--wb-status-neutral); }
+
+.wb-stale-chip { border-color: color-mix(in srgb, var(--wb-status-warn) 55%, transparent); background: var(--wb-status-warn-bg); color: var(--wb-status-warn); }
+.wb-stale-warn { color: var(--wb-status-warn); }
+.wb-count-chip { display: inline-block; margin-right: var(--wb-sp-2); padding: 2px var(--wb-sp-4); font-size: var(--wb-fs-3); font-weight: 400; letter-spacing: 0; font-variant-numeric: tabular-nums; color: var(--theme-muted); border: 1px solid var(--theme-line); border-radius: var(--wb-r-pill); }
+.wb-count-chip b { font-weight: 500; color: var(--theme-ink); }
+
+/* ==========================================================================
+   6. Button tiers (contract 3.6)
+   primary (solid ink, one per workspace) > secondary (.wb-btn) > danger >
+   disabled. .wb-confirm is the armed first-click state of the same button, and
+   .wb-write-mark labels whether a step reads or writes configuration.
+   ========================================================================== */
+
+.workbench button { font: inherit; min-height: 34px; line-height: 1.35; font-size: var(--wb-fs-5); }
+/* Icon and word are one group (Plan-Revision 9, maintainer 2026-09-28 ③): a button
+   that carries its own icon and its own text keeps the 6px icon/word gap
+   (--wb-sp-2), the same tier the nav rail and the icon-hint plates use. The rule
+   is on the button itself, so it holds wherever such a button is written, and it
+   only sets `gap`: a button with a single child is untouched. */
+.workbench button:has(> svg) { gap: var(--wb-sp-2); }
+.workbench button:disabled { cursor: not-allowed; opacity: .5; }
+/* The jump list keeps its own compact row type over the blanket button base. */
+.workbench .wb-jump-list button { font-size: var(--wb-fs-4); }
+
+/* The secondary tier's edge is a control edge, not a decorative hairline: the
+   edge is the only boundary this transparent button has, and it measured 2.45:1 on
+   the panel with --theme-line, below the 3:1 non-text floor. It takes
+   --wb-control-line (3.69:1). The danger tier below keeps its own 72%
+   currentColor edge: it is declared later in this file at equal specificity, so
+   it still wins. */
+.workbench .wb-btn {
+  font: inherit;
+  font-size: var(--wb-fs-5);
+  min-height: 38px;
+  padding: var(--wb-sp-3) var(--wb-sp-7);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--wb-control-line);
+  border-radius: var(--wb-r-pill);
+  background: transparent;
+  color: var(--theme-ink);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--wb-dur-2) var(--wb-ease), border-color var(--wb-dur-2) var(--wb-ease), color var(--wb-dur-2) var(--wb-ease);
+}
+.wb-btn:hover { background: var(--wb-hover); border-color: var(--theme-ink); }
+.workbench .wb-btn-sm { font-size: var(--wb-fs-4); min-height: 34px; padding: var(--wb-sp-1) var(--wb-sp-6); }
+/* Icon-only secondary control: a square of the button height. */
+.workbench .wb-btn.wb-btn-icon { width: 38px; padding: 0; }
+.workbench .wb-btn-sm.wb-btn-icon { width: 34px; }
+.workbench .wb-btn:disabled { opacity: .5; cursor: default; }
+
+/* Solid ink fill is the primary tier, and only one action per workspace may
+   carry it. Both class spellings the DOM uses are covered: the .wb-action-primary
+   modifier and the bare .wb-confirm on a service/account button. */
+.workbench button.wb-action-primary,
+.wb-svc-ops button.wb-confirm,
+.wb-model-ops button.wb-confirm,
+.wb-section-toolbar > button.wb-action-primary {
+  background: var(--theme-ink);
+  border-color: var(--theme-ink);
+  color: var(--theme-paper);
+  font-weight: 600;
+}
+.workbench button.wb-action-primary:hover { opacity: .88; }
+.workbench button.wb-action-primary:disabled { opacity: .5; }
+/* theme.css gives every dark-theme console button an ink label on hover
+   (`[data-dark-surface] .workbench button:hover`, 0-3-1), which on an ink fill
+   is the fill colour itself - the label vanished (measured 1:1). The filled tiers
+   re-assert their paper label on hover at a higher specificity. */
+.workbench :is(button.wb-action-primary, .wb-svc-ops button.wb-confirm, .wb-model-ops button.wb-confirm):hover { color: var(--theme-paper); }
+
+/* Danger tier: a filled, strongly edged destructive button, never a hue swap
+   on a secondary button. The light literal is #a4452f, not the frozen #b4543c:
+   #b4543c measures 4.12:1 on --theme-panel (3.93:1 on --theme-paper), below
+   contract 6.2's 4.5:1, while #a4452f measures 5.07:1 on the panel, 4.99:1 on
+   the weakest content-card surface and 4.72:1 on --theme-field. The tier is
+   carried by form as well as hue: a danger tint at 5% (text still >= 4.55:1) plus
+   a 72% danger edge (3.06:1, above the 3:1 non-text floor) where the secondary
+   tier has a transparent fill and the plain --theme-line hairline. On the dark
+   surface the frozen #b4543c only measures 3.66:1, so the dark scope swaps in
+   the status hue (8.1:1) and keeps the danger identity through the edge tint. */
+/* The tier must out-rank .workbench .wb-btn (:557), which sets background:
+   transparent, border-color: var(--theme-line) and color: var(--theme-ink) and was
+   one class more specific than the bare .wb-danger, so it flattened the tier:
+   measured in the light theme, the danger buttons computed to bg rgba(0,0,0,0),
+   edge rgb(170,165,154) and colour rgb(8,10,8) - byte-identical to the
+   secondary tier - with only the 500 label weight left, and the dark one differed
+   in text hue alone. The selector below is one class above .workbench .wb-btn. */
+.workbench :is(.wb-danger, .wb-btn.wb-danger) {
+  color: #a4452f;
+  border-color: color-mix(in srgb, currentColor 72%, transparent);
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  font-weight: 500;
+}
+/* The dark scope swaps the hue (the frozen #b4543c measures 3.66:1 on the dark
+   panel, the status hue 8.1:1) and keeps the edge/fill derived from
+   currentColor, so the tier stays a filled, strongly edged control. */
+[data-dark-surface="true"] .workbench :is(.wb-danger, .wb-btn.wb-danger) { color: var(--wb-status-err); }
+.workbench .wb-btn.wb-danger:hover { background: color-mix(in srgb, currentColor 7%, transparent); border-color: currentColor; }
+
+/* Write-boundary mark (contract 1.3, adopted from direction B): a step that
+   only reads config vs a step that writes it. Read = neutral hollow, write =
+   amber plus a filled square, because the write face needs a second confirm. */
+.wb-write-mark { display: inline-flex; align-items: center; gap: var(--wb-sp-1); padding: 1px var(--wb-sp-2); font-size: var(--wb-fs-1); letter-spacing: .04em; white-space: nowrap; border: 1px solid var(--theme-line); border-radius: var(--wb-r-s); background: transparent; color: var(--wb-status-neutral); }
+.wb-write-mark::before { content: ""; display: block; width: 6px; height: 6px; flex: 0 0 auto; border-radius: var(--wb-r-pill); background: currentColor; }
+.wb-write-mark-read { color: var(--wb-status-neutral); border-style: solid; }
+.wb-write-mark-read::before { background: transparent; border: 1px solid currentColor; }
+.wb-write-mark-write { color: var(--wb-status-warn); border-color: color-mix(in srgb, var(--wb-status-warn) 50%, transparent); background: var(--wb-status-warn-bg); }
+.wb-write-mark-write::before { border-radius: 1px; }
+
+/* Icon-only controls (Plan-Revision 6). A control that drops the text beside
+   its icon keeps its name in `aria-label` for assistive tech, and the same name
+   also sits in the page as a .wb-icon-hint plate that CSS shows on hover and on
+   keyboard focus, so the name never depends on the browser's own title. The plate
+   is a floating layer (the shadow tier this file reserves for floating layers)
+   and it is anchored to the control's own inline-end edge, so it can only grow
+   towards the start of the row: a plate can never widen the document, which is
+   the horizontal overflow the gate reads (r6-gate-20260927.mjs:202). A control
+   that itself sits at the pane's start edge can therefore have the plate's first
+   characters clipped by that pane's own overflow - the price of never growing the
+   document, and the reason the anchor is not flipped: flipping it would clip the
+   far more common end-of-row controls instead. It takes the hint tier
+   (--wb-fs-3) and never the control's own label tier, so no label shrinks,
+   and it never takes the pointer, so the control underneath stays clickable. */
+.workbench button:has(> .wb-icon-hint) { position: relative; }
+.workbench .wb-icon-hint {
+  display: none;
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: 4;
+  transform: translateY(-50%);
+  padding: 2px var(--wb-sp-3);
+  white-space: nowrap;
+  font-size: var(--wb-fs-3);
+  line-height: 1.5;
+  color: var(--theme-ink);
+  background: var(--theme-panel);
+  border: 1px solid var(--wb-control-line);
+  border-radius: var(--wb-r-s);
+  /* The plate is a floating layer, but its shadow stays tight (Plan-Revision 9,
+     maintainer 2026-09-28 ①): the tier-1 spread (10px down + 30px blur) reached
+     ~35px past the plate's own box, i.e. straight into the main pane's paper band
+     between the head and the body — measured on the 8099 candidate at 1600x900/light
+     with the ⓘ plate shown on keyboard focus: 28/68 head-gap samples read
+     rgb(237, 237, 235) instead of #f7f7f5. The floating edge is the border +
+     panel tone; the shadow only grounds the plate against its own edge. */
+  box-shadow: 0 1px 1px rgba(8, 10, 10, 0.14);
+  pointer-events: none;
+}
+.workbench button:hover > .wb-icon-hint,
+.workbench button:focus-visible > .wb-icon-hint { display: inline-block; }
+
+/* The plate has to stay whole, and the press feedback is what would cut it. The
+   feedback (console-entry.ts `onButtonPress`) puts `.console-click-host` (overflow: hidden,
+   console-entry.css) on the control at the first pointerdown and never removes
+   it, so on a control narrower than its plate every later hover and press would
+   show only the plate's last sliver inside the control - the 41px of a 118px plate
+   the maintainer measured on the row detail button. A content control that hosts a
+   plate therefore drops that clip, and the plate stays whole. The press pulse then
+   paints its faint halo outside the control (measured at its peak on the 42px row
+   controls: 12.6px left / 14.6px right, 0.18 alpha at the centre fading to 0 at
+   72% of a 1.7x diameter), which is the price of the plate staying whole; the
+   plate never widens the document because it still grows towards the start of the
+   row. The top bar (PR11) is the same case: its plates open below the control,
+   wholly outside the box, so every bar control drops the clip too; the bar is not
+   a scroll container, so the pulse halo never adds a scrollbar.
+   The ⓘ glyph in `.wb-head` is the same case (2026-09-28): its plate is up to
+   520px wide inside a 16px control, so it drops the clip too. The pulse is safe
+   here for the same measured reason - the head's controls sit at x≈598 and the
+   pulse spans 48px from the click point (598..646), inside `.wb-main`'s
+   252..1600 scroll box at both accepted widths, so no transient scrollbar. */
+.workbench :is(.wb-content, .wb-head, .wb-bar) button:has(> .wb-icon-hint) { overflow: visible; }
+
+/* ==========================================================================
+   7. Charts (contract 3.7, 2.5)
+   Three flattened layers: surface (0.58 panel) < dashed hairline grid < 2px
+   solid accent data line. The Y axis stays unlabelled: four dashed grid lines,
+   and per-day readings arrive through the tooltip and the keyboard.
+   ========================================================================== */
+
+/* Plan-Revision 9 ⑥（维护者 2026-09-28 逐页落点 · 费用）：趋势图区高 260–300px。
+   viewBox 是 640×260，按宽 100% 缩放后渲染高只有 233.2px（1600x900 实测），低于提案下界。
+   这里给图区一个固定高度，SVG 取 100%（preserveAspectRatio 由 workbench.ts 的 areaSvg
+   给出 xMidYMid meet，不拉伸、不裁切），图区因此始终落在 260–300px。 */
+.wb-area { display: block; width: 100%; height: 280px; overflow: visible; }
+/* Series colour follows the entity (PR11): a chart container sets --wb-series
+   (Token teal, fee lemon on charcoal, credits violet); without one the line takes
+   the accent indigo. */
+[data-wb-series="tok"] { --wb-series: var(--wb-ent-tok); }
+[data-wb-series="cny"] { --wb-series: var(--wb-lemon); }
+[data-wb-series="credits"] { --wb-series: var(--wb-ent-cred); }
+.wb-area-line { fill: none; stroke: var(--wb-series, var(--theme-accent)); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* 含下界日的趋势段（维护者 2026-09-28，OD 决定稿「决定 2」）：`.wb-area-line-partial`
+   原先把 `stroke-width` 留在 `.wb-area-line` 的 2px 上——比同一张图里的完整段还重，
+   与「下界不是更确定的读数」相反。OD 稿明写 1.5px（与 §3.13 图标的 `stroke-width:1.5`
+   同档），所以这里给它自己的线宽；`stroke-dasharray:3 3` 仍由 `workbench.ts` 的
+   `areaSvg()` 在分段 path 上内联写出（那是逐段的取值，不在这里重复）。两主题都只换
+   `stroke`（`--theme-accent`），线宽与主题无关。 */
+.wb-area-line-partial { stroke-width: 1.5; }
+.wb-area-fill { fill: var(--wb-series, var(--theme-accent)); opacity: .12; }
+/* Day points (Plan-Revision 7, OD "问题 3"): a complete day is a plain accent
+   dot with no stroke, and a lower-bound day is the hollow accent-ringed dot whose
+   fill/stroke/r workbench.ts writes inline (fill #ffffff, stroke #8a6236,
+   stroke-width 1.5, r 2.7). The focus dot - the hover/keyboard marker, not a
+   day - keeps its own paper ring. */
+/* 空心下界点的内色（维护者 2026-09-28 PR8 遗留 / Plan-Revision 9 费用页）：内色必须
+   是**当前主题的面板色**，不得写死浅色值——深色主题下写死 #ffffff 会在深色面板上
+   留一个浅色实心点，与「空心」形制自相矛盾。workbench.ts 现在按主题令牌内联写
+   `fill:var(--theme-panel)`；这里再声明同一条 CSS 兜底，让没有内联样式的旧标记也
+   取当前主题的面板色（内联样式优先，两处取值一致）。 */
+.wb-area-partial { fill: var(--theme-panel); }
+.wb-area-single { fill: var(--wb-series, var(--theme-accent)); stroke: none; }
+.wb-area-focus-dot { fill: var(--wb-series, var(--theme-accent)); stroke: var(--theme-paper); stroke-width: 2; }
+.wb-area-focus-dot { opacity: 0; pointer-events: none; }
+.wb-area-hit { fill: transparent; }
+.wb-area-crosshair { stroke: var(--wb-series, var(--theme-accent)); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0; }
+/* Tooltip plate (contract 3.7). Three rules are this file's whole share of the
+   tooltip, and all three are load-bearing: with no .wb-area-tip class the plate
+   stays lit, the SVG default black fill shows and the plate swallows the pointer.
+   The plate's GEOMETRY is not CSS's to set - it is a baked width/height
+   attribute that workbench.ts computes from the tip's own lines (areaTip,
+   workbench.ts:3075-3086) - and a CSS rule cannot size an SVG rect to the text
+   it holds. Measured on the running build (release/candidate, 1600x900, light,
+   2026-09-26): the plate is re-baked correctly by a FRESH render (3 lines ->
+   rect 190x57, widest line ink 180.6, clearance -9.4 user units, i.e. inside),
+   but a series toggle leaves it at the previous single-line plate (rect 82x27 with
+   3 lines rendered, widest line ink 180.6, overflow +98.6; the five-line state
+   reaches +115.91). The containment fix therefore belongs to workbench.ts's render
+   path, not to this file. */
+.wb-area-tip { opacity: 0; pointer-events: none; }
+.wb-area-tip rect { fill: var(--theme-panel); stroke: var(--theme-line); stroke-width: 1; }
+/* The tip text carries NO tabular figures, and that is a measurement, not a
+   preference. The plate's width is computed in workbench.ts (areaTip,
+   workbench.ts:2705-2729) from `ctx.measureText` under
+   `ctx.font = "<weight> <size>px <family>"`. A 2D canvas has no
+   `font-variant-numeric`, so it always measures PROPORTIONAL figures, while this
+   declaration made the SVG render TABULAR ones: measured on the widest live row
+   (`DeepSeek-V4.1-Flash：138.14 Token/s`, 11px MiSans, this session) the
+   rendered advance was 202.797 against a 190.828 measurement, so the plate came
+   out ~12 user units narrower than the text it holds and the ink still spilled
+   0.593-0.693 units past the plate's right edge at every viewport. With the
+   declaration gone the rendered advance is 190.984 against the same 190.828
+   measurement (0.156 units apart), and the worst line keeps ~3.5 units of
+   clearance inside the plate.
+   The contract's tabular-nums list (3.8) names wb-kpis b, wb-fee-num, wb-num,
+   wb-port, wb-evidence, wb-op-time, wb-clock and wb-index - a column that has
+   to line up across rows. The tooltip is a transient single reading, so it is not
+   one of them, and 3.7 asks the plate to be sized by the type as rendered. */
+/* The tip's two text tiers take the helper and body tiers (Plan-Revision 9,
+   maintainer 2026-09-28 ⑤): 12.5px (--wb-fs-3) for the line label and 14px
+   (--wb-fs-4) for the value, not the previous 11 / 12px pair. 11px is the
+   time/status short-mark tier only, and a tip line carries a whole sentence
+   (the date line is short, the value line is not). The plate's geometry is
+   measured from these same classes by the tip probe in workbench.ts, so the plate
+   follows the rendered type instead of being baked against the old size. */
+.wb-area-tip text { fill: var(--theme-muted); font-size: var(--wb-fs-3); }
+.wb-area-tip .wb-area-tip-value { fill: var(--theme-ink); font-size: var(--wb-fs-4); font-weight: 600; }
+.wb-area-hotspot:hover :is(.wb-area-crosshair, .wb-area-tip),
+.wb-area-hotspot:focus-visible :is(.wb-area-crosshair, .wb-area-tip, .wb-area-focus-dot),
+.wb-area-hotspot:hover .wb-area-focus-dot { opacity: 1; }
+/* The hotspot is a real tab stop. Its ring is the accent stroke on the hit rect
+   plus the shared outline (the group is in the [tabindex] list of section 15), so
+   the focus ring is never removed - only reinforced. */
+.wb-area-hotspot:focus-visible .wb-area-hit { stroke: var(--theme-accent); stroke-width: 2; }
+/* The ring keeps the shared 2px outward offset (Plan-Revision 9, maintainer
+   2026-09-28 ⑦); the plot has `overflow: visible` (section 7), so the outward
+   ring is not clipped by the chart's own box. */
+.wb-area-hotspot:focus-visible { outline-offset: 2px; }
+/* F12-3: a point taken with the pointer (workbench.ts sets data-wb-chart-pointer
+   on the workbench root until the next key press) shows the chart's own selected
+   state - a soft accent band with the crosshair, dot and tooltip - instead of the
+   keyboard ring, which Tab still gets. */
+.workbench[data-wb-chart-pointer] .wb-area-hotspot:is(:focus, :focus-visible) { outline: none; }
+.workbench[data-wb-chart-pointer] .wb-area-hotspot:focus .wb-area-hit { fill: color-mix(in srgb, var(--wb-series, var(--theme-accent)) 12%, transparent); stroke: none; }
+.workbench[data-wb-chart-pointer] .wb-area-hotspot:focus :is(.wb-area-crosshair, .wb-area-tip, .wb-area-focus-dot) { opacity: 1; }
+
+/* Grid and axis stay non-semantic neutrals: never a status or series hue. The
+   value labels are drawn after the area fills (gridLabels) and take 0.74 ink,
+   which keeps 4.5:1 on the white card, the charcoal tile and the charcoal tile
+   under a 12% series fill (0.62 measured 4.32:1 there). */
+.wb-gridline { stroke: var(--wb-chart-hairline); stroke-width: 1; stroke-dasharray: 3 3; }
+.wb-gridlabel { font-size: var(--wb-fs-2); fill: rgba(var(--theme-ink-rgb), 0.74); font-variant-numeric: tabular-nums; }
+.wb-axislabel { font-size: var(--wb-fs-2); fill: var(--theme-muted); font-variant-numeric: tabular-nums; }
+.wb-axis-end { text-anchor: end; }
+/* Reference baseline (interval mean/median): heavier and darker than the grid,
+   with a longer dash so it cannot be mistaken for a grid line. */
+.wb-trend-ref { stroke: var(--theme-muted); stroke-width: 1.5; stroke-dasharray: 6 4; fill: none; }
+/* F12-3: a trend's readings sit above the plot (its title area), never on the
+   data: label over value, the unit at the row's end. The baseline swatch in the
+   mean's label is the plot's own dashed line. */
+.wb-chart-stats { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--wb-sp-3) var(--wb-sp-7); margin: var(--wb-sp-2) 0 var(--wb-sp-4); }
+.wb-chart-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wb-chart-stat small { display: inline-flex; align-items: center; gap: var(--wb-sp-2); font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-chart-stat b { font-size: var(--wb-fs-6); font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.wb-chart-unit { margin-left: auto; font-size: var(--wb-fs-3); color: var(--theme-muted); }
+/* Legend (>= 2 series): a line swatch in the series colour, the name in ink. */
+.wb-chart-legend { display: flex; flex-wrap: wrap; gap: var(--wb-sp-2) var(--wb-sp-6); margin: 0 0 var(--wb-sp-3); padding: 0; list-style: none; font-size: var(--wb-fs-3); color: var(--theme-ink); }
+.wb-chart-legend li { display: inline-flex; align-items: center; gap: var(--wb-sp-2); min-width: 0; }
+.wb-chart-legend i { flex: 0 0 auto; width: 18px; height: 3px; border-radius: 2px; background: var(--wb-swatch); }
+/* A14-4 composition ring: segments with a 2px surface gap, the total in the
+   centre, the legend (name + amount, in ink) beside it. */
+/* F12-8 per-key fee comparison: the key chooser chips sit above the chart; a
+   chosen key carries its line colour beside its name. */
+.wb-share-key-chart { margin: 0; }
+.wb-key-chooser { display: flex; flex-wrap: wrap; gap: var(--wb-sp-2); margin-bottom: var(--wb-sp-3); }
+.wb-key-chooser .wb-gw-chip { display: inline-flex; align-items: center; color: var(--theme-ink); }
+.workbench .wb-key-chooser .wb-gw-chip:disabled { opacity: .45; cursor: not-allowed; }
+.wb-key-id { font-family: var(--wb-font-mono); font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-key-masked { display: block; font-family: var(--wb-font-mono); }
+.wb-ring { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-6); margin: var(--wb-sp-2) 0 var(--wb-sp-3); }
+.wb-ring-svg { flex: 0 0 auto; width: 150px; height: 150px; overflow: visible; }
+.wb-ring-arc { fill: none; stroke-width: 18; stroke-linecap: butt; transition: stroke-width var(--wb-dur-1) var(--wb-ease-out); }
+.wb-ring-seg:is(:hover, :focus) .wb-ring-arc { stroke-width: 22; }
+.wb-ring-total { fill: var(--theme-ink); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.wb-ring-sub { fill: var(--theme-muted); font-size: 11px; }
+.wb-ring-legend { flex: 1 1 140px; flex-direction: column; gap: var(--wb-sp-3); margin: 0; }
+.wb-ring-legend li { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: var(--wb-sp-3); }
+.wb-ring-legend b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.wb-chart-subhead { margin-top: var(--wb-sp-6); padding-top: var(--wb-sp-5); border-top: 1px solid rgba(var(--theme-line-rgb), 0.55); }
+.workbench .wb-chart-subhead h4 { margin: 0; font-size: var(--wb-fs-5); font-weight: 600; }
+.reduce-motion .wb-ring-arc { transition: none; }
+.wb-series-swatch { display: inline-block; width: 14px; height: 3px; margin-right: var(--wb-sp-2); border-radius: 2px; vertical-align: middle; background: var(--wb-swatch); }
+
+/* 14-day Token card: the chart on the left, its breakdown table on the right
+   (the table's first column picks what the chart draws); coverage detail folds
+   below. One column under 1100px, chart first. */
+.wb-tok-split { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr); gap: var(--wb-sp-7); align-items: start; margin-top: var(--wb-sp-3); }
+.wb-tok-main, .wb-tok-side { min-width: 0; }
+.wb-tok-days { margin: var(--wb-sp-2) 0 0; font-size: var(--wb-fs-3); }
+.wb-tok-cov { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3); margin: var(--wb-sp-2) 0 0; font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-tok-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3); margin-bottom: var(--wb-sp-3); }
+.wb-tok-tools .wb-section-tabs button { padding: var(--wb-sp-2) var(--wb-sp-6); font-size: var(--wb-fs-4); }
+/* A view switch inside a card, not navigation: the lemon fill stays reserved for
+   the current nav item and the cost hero (gate G7), so the chosen view takes an
+   ink outline on the sunk tone. */
+.workbench .wb-section-tabs.wb-tok-group button[aria-pressed="true"],
+.workbench .wb-section-tabs.wb-tok-group button[aria-pressed="true"]:hover { color: var(--theme-ink); background: var(--wb-rank-3-bg); border-color: var(--theme-ink); font-weight: 600; }
+.wb-tok-tools .wb-trend-q { flex: 1 1 160px; min-width: 0; }
+.wb-tok-side > small { display: block; margin-top: var(--wb-sp-2); font-size: var(--wb-fs-2); }
+/* The table scrolls inside the card at about the chart's height, header pinned. */
+.wb-table-scroll.wb-tok-scroll { max-height: 296px; margin-top: 0; }
+.wb-tok-table thead th { position: sticky; top: 0; z-index: 1; background: var(--wb-rank-2-bg); }
+.wb-tok-table :is(th, td) { padding: var(--wb-sp-2) var(--wb-sp-4); }
+.wb-tok-table td small { display: block; margin-top: 2px; font-size: var(--wb-fs-2); }
+.wb-tok-table tfoot :is(th, td) { font-weight: 600; text-align: left; border-top: 1px solid var(--theme-line); }
+.wb-tok-table tfoot td.wb-fee-num { text-align: right; }
+/* Draw toggle: an empty outlined square when off, the series swatch when on. */
+.wb-tok-draw { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-s); background: transparent; color: inherit; cursor: pointer; }
+.wb-tok-draw .wb-series-swatch { width: 14px; height: 4px; margin: 0; }
+.wb-tok-draw[aria-pressed="true"] { border-color: var(--theme-ink); }
+.wb-tok-draw:hover:not(:disabled) { background: var(--wb-hover); }
+.wb-tok-draw:disabled { cursor: not-allowed; opacity: .45; }
+@media (max-width: 1100px) { .wb-tok-split { grid-template-columns: minmax(0, 1fr); } }
+.wb-trend-q { font: inherit; font-size: var(--wb-fs-4); min-width: 200px; padding: var(--wb-sp-2) var(--wb-sp-4); color: var(--theme-ink); background: var(--theme-field); border: 1px solid var(--theme-line); border-radius: var(--wb-r-s); }
+
+.wb-barlist { display: flex; flex-direction: column; gap: var(--wb-sp-3); margin-top: var(--wb-sp-2); }
+.wb-barlist-row { display: grid; grid-template-columns: minmax(0, 40%) minmax(0, 1fr) auto; align-items: center; gap: var(--wb-sp-4); font-size: var(--wb-fs-4); }
+.wb-barlist-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-barlist-bar { display: block; height: 8px; border-radius: var(--wb-r-s); background: rgba(var(--theme-ink-rgb), 0.06); }
+.wb-barlist-bar i { display: block; height: 100%; border-radius: var(--wb-r-s); background: var(--theme-accent); }
+.wb-barlist-val { text-align: right; color: var(--theme-muted); font-variant-numeric: tabular-nums; }
+.wb-barlist-partial { margin-left: var(--wb-sp-1); font-size: var(--wb-fs-2); color: var(--wb-status-warn); }
+
+.wb-rate-drill { margin-top: var(--wb-sp-6); padding-top: var(--wb-sp-5); border-top: 1px solid var(--theme-line); }
+.wb-rate-drill .wb-chart-head { margin-bottom: var(--wb-sp-3); }
+.wb-rate-drill h3 { font-size: var(--wb-fs-5); font-weight: 600; }
+
+.wb-fee-trends { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: var(--wb-sp-6); margin-top: var(--wb-sp-6); }
+.wb-fee-trends-single { grid-template-columns: minmax(0, 1fr); }
+.wb-fee-trend { min-width: 0; padding: var(--wb-sp-5); }
+.workbench .wb-char .wb-fee-trend { background: var(--wb-char-2); border-radius: var(--wb-r-m); }
+.wb-fee-trend h4 { margin: 0 0 var(--wb-sp-3); font-size: var(--wb-fs-5); font-weight: 600; color: var(--theme-ink); }
+.wb-fee-trend-missing { margin: var(--wb-sp-3) 0 0; }
+
+.wb-stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: var(--wb-sp-5); margin-top: var(--wb-sp-4); }
+.wb-stats-row > div { padding: var(--wb-sp-5) var(--wb-sp-6); border: 1px solid rgba(var(--theme-line-rgb), 0.55); border-radius: var(--wb-r-m); background: var(--theme-panel); }
+.wb-stats-row > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--wb-sp-1) var(--wb-sp-4); min-width: 0; }
+.wb-stats-row small { grid-column: 1; display: block; font-size: var(--wb-fs-3); letter-spacing: .06em; color: var(--theme-muted); }
+.wb-stats-row b { grid-column: 1; font-size: var(--wb-fs-7); font-weight: 500; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.wb-stats-row .wb-spark { grid-column: 2; grid-row: 1 / span 2; margin-bottom: var(--wb-sp-1); }
+
+/* ==========================================================================
+   8. Tables and filter bars (contract 3.8)
+   Hairline rows inside a rounded container, right-aligned tabular numbers,
+   no vertical rules and no cell boxes.
+   ========================================================================== */
+
+.wb-table-scroll { margin-top: var(--wb-sp-4); max-height: 380px; overflow: auto; }
+.wb-table { width: 100%; border-collapse: collapse; font-size: var(--wb-fs-4); }
+.wb-table th { position: sticky; top: 0; padding: var(--wb-sp-3) var(--wb-sp-6) var(--wb-sp-2); text-align: left; font-size: var(--wb-fs-2); font-weight: 500; letter-spacing: .04em; white-space: nowrap; color: var(--theme-muted); background: var(--theme-panel); border-bottom: 1px solid var(--theme-line); }
+.wb-table td { padding: var(--wb-sp-4) var(--wb-sp-6); border-top: 1px solid rgba(var(--theme-line-rgb), 0.35); overflow-wrap: anywhere; }
+.wb-table tbody tr:first-child td { border-top: none; }
+.wb-table td.wb-fee-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* A header sits over its column the way the column's values sit: a number column
+   is right-aligned header and all (digits line up for comparison), a short
+   status / toggle column is centred, text stays left. */
+.wb-table th.wb-fee-num { text-align: right; }
+.wb-table :is(th, td).wb-center { text-align: center; }
+.wb-table td.wb-num { font-variant-numeric: tabular-nums; }
+/* priceTableHtml puts two tables in one scroll container; the second gets its
+   own separator instead of a second frame. */
+.wb-table + .wb-table { margin-top: var(--wb-sp-4); border-top: 1px solid var(--theme-line); }
+.wb-speed-cell { display: inline-block; margin-left: var(--wb-sp-2); font-size: var(--wb-fs-2); color: var(--theme-muted); font-variant-numeric: tabular-nums; }
+.wb-effort-cell { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2); }
+/* F12-5 catalog + detail: the table has fixed column widths (header and rows
+   share the colgroup, `table-layout: fixed`), so a refresh or a long value never
+   re-flows it; a row's details open in the pane beside it, never inside the
+   table. The id cell is the row's selector: a full-cell button, id clamped to
+   two lines (full value in the title and the pane). */
+.wb-model-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); gap: var(--wb-sp-6); align-items: start; }
+.wb-model-table { table-layout: fixed; width: 100%; }
+.wb-model-table .wb-col-src { width: 16%; }
+.wb-model-table .wb-col-id { width: 27%; }
+.wb-model-table .wb-col-name { width: 17%; }
+.wb-model-table .wb-col-ctx { width: 12%; }
+.wb-model-table .wb-col-effort { width: 18%; }
+.wb-model-table .wb-col-pub { width: 10%; }
+.wb-model-table .wb-col-check { width: 7%; }
+.workbench .wb-model-pick { display: block; width: 100%; min-height: 32px; padding: var(--wb-sp-2) var(--wb-sp-3); font: inherit; text-align: left; color: inherit; background: transparent; border: 1px solid transparent; border-radius: var(--wb-r-s); cursor: pointer; }
+.workbench .wb-model-pick:hover { background: var(--wb-hover); }
+.workbench .wb-model-pick[aria-pressed="true"] { border-color: var(--wb-lemon); box-shadow: inset 3px 0 0 var(--wb-lemon); }
+.wb-model-row-on > td { background: rgba(255, 255, 255, 0.05); }
+.wb-model-id { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.wb-model-id-details { display: block; width: 100%; }
+.wb-model-id-details > summary { flex-wrap: wrap; align-items: center; column-gap: var(--wb-sp-2); }
+/* Sticky below the top region and never taller than the space left: a long
+   detail scrolls inside itself instead of hiding its lower part until the end
+   of a long catalog. */
+.wb-model-detail { position: sticky; top: calc(var(--wb-top-h, 0px) + var(--wb-sp-4)); max-height: calc(100vh - var(--wb-top-h, 0px) - 2 * var(--wb-sp-4)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; display: flex; flex-direction: column; gap: var(--wb-sp-5); min-width: 0; padding: var(--wb-sp-6); border-radius: var(--wb-r-m); background: var(--wb-char-2); }
+.wb-model-detail > p { margin: 0; }
+.wb-model-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2) var(--wb-sp-4); }
+.workbench .wb-model-detail-head h4 { margin: 0; font-family: var(--wb-font-mono); font-size: var(--wb-fs-5); font-weight: 600; overflow-wrap: anywhere; }
+.wb-model-facts { display: grid; gap: var(--wb-sp-4); margin: 0; }
+.wb-model-facts dt { font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-model-facts dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.wb-model-facts dd small { display: block; margin-top: 2px; font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-model-detail .wb-svc-detail { margin: 0; }
+.wb-model-speed h5 { margin: 0 0 var(--wb-sp-2); font-size: var(--wb-fs-4); font-weight: 600; }
+/* A14-3 #3 model settings: evidence and configuration as two labelled lists,
+   then the draft form (disabled as a whole while it is 待接入). */
+.wb-model-settings { display: flex; flex-direction: column; gap: var(--wb-sp-3); padding-top: var(--wb-sp-4); border-top: 1px solid rgba(var(--theme-line-rgb), 0.5); }
+.wb-model-settings-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2) var(--wb-sp-4); }
+.wb-model-settings-head h5 { margin: 0; font-size: var(--wb-fs-4); font-weight: 600; }
+.wb-model-settings-head .wb-btn { margin-left: auto; }
+.workbench .wb-model-settings h6 { margin: var(--wb-sp-2) 0 0; font-size: var(--wb-fs-3); font-weight: 600; color: var(--theme-muted); letter-spacing: 0.02em; }
+.wb-model-settings > p { margin: 0; font-size: var(--wb-fs-3); }
+.wb-model-settings-form { display: flex; flex-direction: column; gap: var(--wb-sp-3); min-width: 0; margin: 0; padding: var(--wb-sp-4); border: 1px dashed rgba(var(--theme-line-rgb), 0.7); border-radius: var(--wb-r-s); }
+.wb-model-settings-form > label, .wb-model-settings-ctx { display: grid; gap: var(--wb-sp-1); font-size: var(--wb-fs-4); }
+.wb-model-settings-form > label > span, .wb-model-settings-ctx > span { font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-model-settings-ctx label { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2); }
+.wb-model-settings-ctx input[type="number"] { width: 9rem; }
+.wb-model-settings-form[disabled] { opacity: 0.72; }
+.wb-model-speed > div { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2); margin-bottom: var(--wb-sp-2); }
+@media (max-width: 1360px) {
+  .wb-model-split { grid-template-columns: minmax(0, 1fr); }
+  .wb-model-detail { position: static; max-height: none; overflow: visible; }
+}
+
+/* Shared filter / tool bars: one rhythm for every lane's controls. */
+:is(.wb-model-toolbar, .wb-log-filter, .wb-log-open-row, .wb-log-gen-row, .wb-section-tabs, .wb-log-tabs, .wb-tabs) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3); }
+.wb-model-toolbar { margin: var(--wb-sp-3) 0 var(--wb-sp-4); }
+.wb-model-q { font: inherit; font-size: var(--wb-fs-4); min-width: 240px; padding: var(--wb-sp-3) var(--wb-sp-4); color: var(--theme-ink); background: var(--theme-field); border: 1px solid var(--theme-line); border-radius: var(--wb-r-s); }
+.wb-section-toolbar, .wb-sync-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--wb-sp-6); margin-bottom: var(--wb-sp-7); }
+.wb-section-toolbar p, .wb-sync-toolbar p { margin: var(--wb-sp-1) 0; }
+.wb-sync-toolbar h3 { margin: 0; }
+.wb-section-toolbar > p { flex: 1 1 30ch; min-width: 0; }
+.wb-feed-src { display: inline-flex; align-items: center; gap: var(--wb-sp-2); font-size: var(--wb-fs-2); color: var(--theme-muted); }
+/* Plan-Revision 9 ⑥（维护者 2026-09-28 逐页落点 · 日志）：筛选控件高 36–40px、控件间 gap 8px。
+   此前四个筛选各自散在区块里（块级父容器 gap=normal，靠行内空白分开），控件自身
+   也只有 35px（padding 3px + 19.4 行高 + 边框）。这里给它们一个真正的排（gap 8px =
+   --wb-sp-3），控件高度取提案下界 36px；控件里的「词」间距仍是 --wb-sp-2（6px）。 */
+.wb-log-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3); margin-bottom: var(--wb-sp-3); }
+.wb-feed-src select { font: inherit; font-size: var(--wb-fs-3); min-height: 36px; padding: var(--wb-sp-1) var(--wb-sp-2); color: var(--theme-ink); background: var(--theme-field); border: 1px solid var(--theme-line); border-radius: var(--wb-r-s); }
+.wb-log-req { flex: none; }
+/* F12-6: a run event's Chinese summary is the row's first reading; the raw line
+   stays folded under it. */
+.wb-log-sum { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-1) var(--wb-sp-4); margin: 0; min-width: 0; font-size: var(--wb-fs-4); }
+.wb-log-sum b { font-weight: 600; }
+.wb-log-sum span:not(.wb-badge) { color: var(--theme-muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.wb-log-reqf { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2); }
+.wb-log-reqf code { font-family: var(--wb-font-mono); font-size: var(--wb-fs-3); }
+
+/* Tab rows: the current item is marked with an accent rule plus accent tint,
+   never with the solid ink fill that belongs to the primary action. */
+.wb-tab { display: inline-flex; align-items: center; gap: var(--wb-sp-2); padding: var(--wb-sp-4) var(--wb-sp-4); font-size: var(--wb-fs-6); color: var(--theme-muted); background: transparent; border: 1px solid transparent; border-bottom: 2px solid transparent; border-radius: var(--wb-r-s); cursor: pointer; transition: background-color var(--wb-dur-2) var(--wb-ease), color var(--wb-dur-2) var(--wb-ease), border-color var(--wb-dur-2) var(--wb-ease); }
+.wb-tab:hover { color: var(--theme-ink); background: var(--wb-hover); }
+/* Selection (PR11): the lemon fill with ink text - the same mark as the current
+   navigation item. The hover rule keeps it, so theme.css's dark hover ink can
+   never turn the text light on lemon. */
+.workbench :is(.wb-tab-on, .wb-tab[aria-pressed="true"], .wb-btn.wb-tab-on),
+.workbench :is(.wb-tab-on, .wb-tab[aria-pressed="true"], .wb-btn.wb-tab-on):hover { color: var(--wb-on-lemon); background: var(--wb-lemon-fill); border-color: var(--wb-lemon-edge); font-weight: 600; }
+.wb-log-tabs .wb-tab { padding: var(--wb-sp-2) var(--wb-sp-4); font-size: var(--wb-fs-5); border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-pill); }
+
+
+.wb-section-tabs { margin-bottom: var(--wb-sp-8); padding-bottom: var(--wb-sp-4); border-bottom: 1px solid var(--theme-line); }
+.wb-section-tabs button { padding: var(--wb-sp-3) var(--wb-sp-7); font-size: var(--wb-fs-6); color: var(--theme-muted); background: transparent; border: 1px solid transparent; border-radius: var(--wb-r-pill); }
+.wb-section-tabs button:hover { color: var(--theme-ink); background: var(--wb-hover); }
+.workbench .wb-section-tabs button[aria-pressed="true"],
+.workbench .wb-section-tabs button[aria-pressed="true"]:hover { color: var(--wb-on-lemon); background: var(--wb-lemon-fill); border-color: var(--wb-lemon-edge); font-weight: 600; }
+
+/* ==========================================================================
+   9. Fee workspace (contract 3.9, 4.5)
+   ========================================================================== */
+
+/* The fee lane's three readings take the KPI band above (section 3). The reading
+   itself is the fee main number role - 28px / 1.15 / 300 (--wb-fs-9) - and steps
+   down to 22px only in a genuinely narrow container, the same tier in both themes. */
+
+/* The fee lane's headline readings: 费用主数 28px / 1.15 / 300 (PR11; --wb-fs-9). 带下界标记「已知部分」的读数在窄容器里
+   降一档到 --wb-fs-7 (22px)，好让读数与标记同排（判据 ⑤，见 .wb-reading 那一组），
+   该档位与主题无关——两个主题取同一档，所以金额字号不随主题变。 */
+.wb-large { font-size: var(--wb-fs-9); font-weight: 300; line-height: 1.15; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+/* Resident metric note strip. The contract keeps this strip even though the
+   .wb-info glyph also carries metric definitions.
+   Plan-Revision 7 (OD "问题 4"): the OD's own values keep this strip's top
+   margin at 10px (--wb-sp-4), but the generic .wb-muted rule later in this file
+   declares 14px and used to win, so the strip's effective top gap was 14px and the
+   KPI strip's own 12 -> 10px step was a no-op. The scoped rule below makes the
+   declared 10px effective again (measured -4.00 for the fourth layer on the
+   running candidate) and keeps the gap inside the card tier (10 <= 12px). */
+.workbench .wb-cost-note { margin-top: var(--wb-sp-4); }
+.wb-cost-note { margin: var(--wb-sp-4) 0 0; font-size: var(--wb-fs-4); line-height: 1.7; color: var(--theme-muted); }
+.wb-cost-open { margin-top: var(--wb-sp-6); padding: var(--wb-sp-3) var(--wb-sp-6); border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-pill); background: transparent; color: inherit; cursor: pointer; }
+
+/* Availability verdict: the overview's first focus, so it is rank 1 with the
+   largest radius and the full-strength hairline; its value takes the status
+   colour of the main chain (below).
+   Its vertical padding steps down from --wb-sp-7 to --wb-sp-4 and its bottom
+   margin from --wb-sp-7 to --wb-sp-4 (Plan-Revision 3 first screen, one tier
+   further after the 2026-09-26 density pass): measured at 1600x900 the strip was
+   88.4px tall from 18px of padding alone and pushed the readings down with
+   another 18px of margin; the value pill (38.4px) and the note keep their own
+   spacing, so the verdict still reads as one line and the fourth layer's heading
+   stays inside the first screen.
+   Plan-Revision 7 (OD "问题 4"): both step down one more within-group tier,
+   --wb-sp-4 -> --wb-sp-3 (10 -> 8px each; measured -4.00 for the padding and
+   -2.00 for the margin on the running candidate). The value pill, the note text
+   and the fonts do not move. */
+/* Verdict strip (PR11): a floating pill; the verdict word is a charcoal chip
+   with a lemon check while the main chain is available, and takes its REAL
+   status tones (err / warn, dashed for unknown) otherwise - word + icon shape,
+   never hue alone. */
+.wb-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3) 18px; min-height: 66px; margin-bottom: var(--wb-sp-8); padding: 10px 12px 10px 10px; border-radius: var(--wb-r-pill); }
+.wb-verdict-value { display: inline-flex; align-items: center; gap: 9px; flex: 0 0 auto; min-height: 46px; padding: 0 22px 0 14px; font-size: 16px; font-weight: 600; letter-spacing: .02em; line-height: 1.2; border: none; border-radius: var(--wb-r-pill); background: var(--wb-status-neutral-bg); color: var(--theme-ink); }
+.workbench .wb-verdict-value > svg { width: 20px; height: 20px; flex: 0 0 auto; stroke-width: 1.9; }
+.wb-verdict[data-state="run"] .wb-verdict-value { background: var(--wb-char); color: var(--wb-char-ink); }
+.wb-verdict[data-state="run"] .wb-verdict-value > svg { color: var(--wb-char-ink); }
+[data-dark-surface="true"] .wb-verdict[data-state="run"] .wb-verdict-value { background: #2a3647; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
+.wb-verdict[data-state="down"] .wb-verdict-value { background: var(--wb-status-err-bg); color: var(--wb-status-err); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-status-err) 45%, transparent); }
+.wb-verdict[data-state="stale"] .wb-verdict-value { background: var(--wb-status-warn-bg); color: var(--wb-status-warn); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-status-warn) 50%, transparent); }
+.wb-verdict[data-state="unknown"] .wb-verdict-value { background: transparent; box-shadow: inset 0 0 0 1.5px var(--wb-control-line); }
+.wb-verdict-note { flex: 1 1 24ch; min-width: 0; margin: 0; font-size: var(--wb-fs-5); line-height: 1.55; color: var(--theme-ink); }
+.wb-verdict-note b { color: var(--theme-ink); font-weight: 600; }
+.wb-verdict-ops { display: flex; align-items: center; gap: var(--wb-sp-6); margin-left: auto; }
+.wb-verdict-probe { font-size: var(--wb-fs-3); color: var(--theme-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Two ledgers side by side, equal weight, each with its own scale: credits and
+   CNY never share one axis, and the personal ledger is never merged with the
+   share ledger. */
+.wb-ledger-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--wb-sp-5); margin: var(--wb-sp-5) 0 var(--wb-sp-9); }
+.wb-ledger { min-width: 0; padding: var(--wb-sp-6) var(--wb-sp-7); }
+/* The ledger head keeps its rule: the first row below suppresses its own top
+   border, so this line is the only separator between the head and the rows - the
+   one card-title rule that still carries information. */
+.wb-ledger-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--wb-sp-2) var(--wb-sp-4); margin-bottom: var(--wb-sp-3); padding-bottom: var(--wb-sp-2); border-bottom: 1px solid rgba(var(--theme-line-rgb), 0.35); }
+.wb-ledger-head strong { font-size: var(--wb-fs-6); font-weight: 600; }
+.wb-ledger-scale { font-size: var(--wb-fs-2); color: var(--theme-muted); font-variant-numeric: tabular-nums; }
+
+/* Metric definition and confidence panel: resident on the fee lane. Its left
+   accent rule marks it as a definition surface, not a card in the card grid. */
+/* The definition surface keeps the rank-2 frame, radius and surface; only its
+   left accent rule is its own, because it marks a definition surface rather than
+   a card in the card grid. */
+.wb-cred { padding: var(--wb-sp-6) var(--wb-sp-7); }
+.wb-cred-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--wb-sp-2) var(--wb-sp-4); margin-bottom: var(--wb-sp-4); }
+.wb-cred-head h3 { margin: 0; }
+.wb-cred-row { display: grid; grid-template-columns: minmax(0, 7rem) minmax(0, 1fr); gap: var(--wb-sp-1) var(--wb-sp-3); padding: var(--wb-sp-2) 0; font-size: var(--wb-fs-4); line-height: 1.7; border-top: 1px solid rgba(var(--theme-line-rgb), 0.35); }
+.wb-cred-head + .wb-cred-row { border-top: none; }
+.wb-cred-k { font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-cred-v { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.wb-cred-note { margin: var(--wb-sp-3) 0 0; font-size: var(--wb-fs-3); line-height: 1.7; color: var(--theme-muted); }
+/* Six summary states, all distinguishable: they reuse the badge/dot vocabulary
+   from section 5 - live -> ok, stale -> warn, error -> danger, loading /
+   unauthenticated 401 / forbidden 403 -> gated + idle. Shape and text carry the
+   difference, colour alone never does. */
+.wb-cred-states { display: flex; flex-wrap: wrap; gap: var(--wb-sp-2); margin-top: var(--wb-sp-4); }
+.wb-cred-states > * { flex: 0 0 auto; }
+
+/* Delta chip against the previous period, plus the two-period difference bar.
+   The bar's last segment is the current period (accent), the earlier one is the
+   neutral track. */
+.wb-delta { align-self: center; justify-self: start; padding: 1px var(--wb-sp-3); font-size: var(--wb-fs-2); white-space: nowrap; font-variant-numeric: tabular-nums; border: 1px solid transparent; border-radius: var(--wb-r-pill); }
+.wb-delta.up { color: var(--wb-status-ok); border-color: color-mix(in srgb, var(--wb-status-ok) 45%, transparent); background: var(--wb-status-ok-bg); }
+.wb-delta.down { color: var(--wb-status-warn); border-color: color-mix(in srgb, var(--wb-status-warn) 50%, transparent); background: var(--wb-status-warn-bg); }
+.wb-delta-bar { display: flex; align-items: stretch; gap: 2px; height: 6px; margin-top: var(--wb-sp-2); overflow: hidden; border-radius: var(--wb-r-pill); background: rgba(var(--theme-ink-rgb), 0.06); }
+.wb-delta-bar > * { display: block; height: 100%; border-radius: var(--wb-r-pill); background: var(--wb-chart-hairline); }
+.wb-delta-bar > :last-child { background: var(--theme-accent); }
+
+/* Queue of items needing attention: resident on the right of the overview.
+   The left rule stays neutral - severity is carried by the item's own badge, so a
+   neutral queue never pretends every entry is a warning.
+   Plan-Revision 7 (OD "问题 4"): its title gap steps down one within-group
+   tier, --wb-sp-5 -> --wb-sp-4 (12 -> 10px; the title's own 6px margin is
+   dominated by this 12px one, so the measured step is -2.00 on the running
+   candidate and the three tiers stay monotone). */
+.wb-queue { display: flex; flex-direction: column; gap: var(--wb-sp-3); margin-top: var(--wb-sp-4); }
+/* The queue row keeps the rank-3 surface from section 3 (severity is carried by
+   the item's badge and dot, so the row stays neutral and a neutral queue never
+   pretends every entry is a warning). */
+.wb-queue-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2) var(--wb-sp-4); padding: 14px 16px; }
+/* A clean queue reads calm: the healthy empty row takes the Token teal tile. */
+.wb-queue-item.wb-queue-item-run { background: var(--wb-ent-tok-soft); }
+.wb-queue-item.wb-queue-item-run .wb-queue-ops .wb-muted { color: var(--theme-ink); }
+.wb-queue-head { flex: 1 1 22ch; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--wb-sp-1) var(--wb-sp-3); font-size: var(--wb-fs-5); }
+.wb-queue-ops { flex: 0 1 auto; min-width: 0; margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2); }
+/* The queue's entries (icon-only 详情 / 日志, or the chain-named buttons of the
+   no-evidence row) are outline pills like every other row action; without this
+   they fell back to the browser's own grey button, seen only when a chain is down. */
+.wb-queue-ops button { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; padding: 0 var(--wb-sp-4); border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-pill); background: transparent; color: var(--theme-ink); }
+.wb-queue-ops button[aria-label] { padding: 0; }
+.wb-queue-ops button:hover { background: var(--wb-hover); }
+/* A sentence in the ops slot (the healthy row's boundary note) wraps inside the
+   card instead of pushing past it. */
+.wb-queue-ops > .wb-muted { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+
+/* Simulated-value chip: an annotation, not a status, so it takes the neutral
+   fourth state with a dashed edge. Every simulated value carries its own chip. */
+.wb-sim-chip { display: inline-flex; align-items: center; padding: 0 var(--wb-sp-2); font-size: var(--wb-fs-1); letter-spacing: .06em; white-space: nowrap; border: 1px dashed color-mix(in srgb, var(--wb-status-neutral) 60%, transparent); border-radius: var(--wb-r-s); background: var(--wb-status-neutral-bg); color: var(--wb-status-neutral); }
+
+/* ==========================================================================
+   10. Accounts, operations, logs (contract 3.10, 4.3, 4.4, 4.6)
+   ========================================================================== */
+
+/* Rev17 gateway workspace (lane 1): the gateway list on charcoal at the left -
+   the lane's main list (Q20), styled like the overview's chain list - and the
+   selected entry's detail on the page at the right. Narrow widths show one side
+   at a time: list -> detail -> back (data-wb-gw-view). */
+.wb-gw { display: grid; grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); gap: var(--wb-sp-6); align-items: start; }
+.wb-gw-side { display: flex; flex-direction: column; gap: var(--wb-sp-4); min-width: 0; }
+.wb-gw-side .wb-gw-all { grid-template-columns: 18px minmax(0, 1fr); grid-template-areas: "icon name" "icon state"; }
+.wb-gw-all > svg { grid-area: icon; width: 16px; height: 16px; }
+.wb-gw-filter { display: flex; flex-direction: column; gap: var(--wb-sp-3); padding-top: var(--wb-sp-3); border-top: 1px solid var(--theme-line); }
+.workbench .wb-gw-q { width: 100%; min-height: 36px; padding: 0 var(--wb-sp-5); font: inherit; font-size: var(--wb-fs-4); color: var(--theme-ink); background: var(--theme-field); border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-pill); }
+.workbench .wb-gw-q::placeholder { color: var(--theme-muted); opacity: 1; }
+.wb-gw-chips { display: flex; flex-wrap: wrap; gap: var(--wb-sp-2); }
+.workbench .wb-gw-chip { min-height: 28px; padding: 0 var(--wb-sp-4); font: inherit; font-size: var(--wb-fs-3); color: var(--theme-muted); background: transparent; border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-pill); cursor: pointer; }
+.workbench .wb-gw-chip span { margin-left: 2px; font-family: var(--wb-font-mono); }
+.workbench .wb-gw-chip:hover { color: var(--theme-ink); background: var(--wb-hover); }
+.workbench .wb-gw-chip[aria-pressed="true"] { color: var(--theme-ink); border-color: var(--wb-lemon); box-shadow: inset 0 0 0 1px var(--wb-lemon); }
+.wb-gw-list { display: flex; flex-direction: column; gap: var(--wb-sp-2); max-height: min(62vh, 640px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+/* A row is the item plus a slim reorder column (up / grip / down). The selection
+   and hover surfaces sit on the row, so they cover the reorder column too. */
+.wb-gw-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; border-radius: 16px; }
+.wb-gw-row:hover { background: rgba(255, 255, 255, 0.06); }
+.wb-gw-row.wb-gw-row-on { background: rgba(255, 255, 255, 0.09); box-shadow: inset 4px 0 0 var(--wb-lemon); }
+.workbench .wb-gw-row > .wb-md-item { grid-template-columns: 12px minmax(0, 1fr); grid-template-areas: "dot name" "dot state"; padding-right: var(--wb-sp-2); }
+.workbench .wb-gw-row > .wb-md-item:hover,
+.workbench .wb-gw-row > .wb-md-item[aria-pressed="true"] { background: transparent; box-shadow: none; }
+.wb-gw-row .wb-md-port { margin-left: auto; }
+.wb-gw-move { display: flex; flex-direction: column; align-items: center; padding-right: 4px; }
+.workbench .wb-gw-step { display: inline-grid; place-items: center; width: 24px; height: 20px; padding: 0; color: var(--theme-muted); background: transparent; border: 0; border-radius: 6px; cursor: pointer; opacity: 0; }
+.workbench .wb-gw-step i { width: 7px; height: 7px; margin-top: 3px; border-left: 1.5px solid currentColor; border-top: 1.5px solid currentColor; transform: rotate(45deg); }
+.workbench .wb-gw-step-down i { margin-top: -3px; transform: rotate(-135deg); }
+.workbench .wb-gw-step:hover:not(:disabled) { color: var(--theme-ink); background: var(--wb-hover); }
+.workbench .wb-gw-step:disabled { cursor: default; opacity: 0 !important; }
+.wb-gw-row:is(:hover, :focus-within) .wb-gw-step { opacity: 1; }
+@media (hover: none) { .workbench .wb-gw-step { opacity: 1; } }
+.wb-gw-handle { display: flex; flex-direction: column; justify-content: center; gap: 3px; width: 24px; height: 20px; padding: 0 6px; cursor: grab; touch-action: none; }
+.wb-gw-handle i { display: block; height: 1.5px; border-radius: 1px; background: var(--theme-muted); }
+.wb-gw-sorting, .wb-gw-sorting * { cursor: grabbing !important; user-select: none; }
+.wb-gw-row.wb-gw-dragging { background: rgba(255, 255, 255, 0.10); box-shadow: 0 0 0 1px var(--wb-lemon); }
+.wb-gw-empty { padding: var(--wb-sp-4) var(--wb-sp-6); font-size: var(--wb-fs-4); color: var(--theme-muted); }
+.wb-gw-hint { margin: 0; font-size: var(--wb-fs-3); line-height: 1.45; color: var(--theme-muted); }
+.wb-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.wb-gw-main { min-width: 0; }
+.wb-gw-detail { display: flex; flex-direction: column; gap: var(--wb-sp-6); min-width: 0; }
+.workbench .wb-gw-detail > * { margin-top: 0; margin-bottom: 0; }
+.wb-gw-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3) var(--wb-sp-5); }
+.workbench .wb-gw-head h3 { margin: 0; font-size: var(--wb-fs-7); font-weight: 600; }
+.wb-gw-head h3:focus { outline: none; }
+.wb-gw-head .wb-port { margin-left: auto; font-family: var(--wb-font-mono); font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.workbench .wb-gw-back { display: none; }
+.wb-gw-detail > .wb-section-tabs { margin: 0; }
+.wb-gw-facts { padding: var(--wb-sp-7); }
+/* Rev18 客户端连接: label column + value column; a value wraps anywhere in full
+   (a copied URL or key is never truncated) with its copy button beside it, or
+   under it when the column is narrow. */
+.wb-gw-conn { padding: var(--wb-sp-6) var(--wb-sp-7); }
+.wb-conn-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2) var(--wb-sp-4); }
+.workbench .wb-conn-head h4 { margin: 0; font-size: var(--wb-fs-5); font-weight: 600; }
+.wb-conn-head small { flex: 1 1 100%; font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-conn-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--wb-sp-4) var(--wb-sp-7); margin: var(--wb-sp-5) 0 0; }
+.wb-conn-row { display: contents; }
+.wb-conn-row dt { padding-top: var(--wb-sp-2); font-size: var(--wb-fs-3); letter-spacing: .04em; color: var(--theme-muted); }
+.wb-conn-row dd { margin: 0; min-width: 0; }
+.wb-conn-row dd > small { display: block; margin-top: var(--wb-sp-1); font-size: var(--wb-fs-3); color: var(--theme-muted); overflow-wrap: anywhere; }
+.wb-conn-row dd > small code { font-family: var(--wb-font-mono); font-size: var(--wb-fs-2); }
+.wb-conn-val { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2) var(--wb-sp-4); min-width: 0; }
+.wb-conn-val code { flex: 1 1 24ch; min-width: 0; padding: var(--wb-sp-2) var(--wb-sp-4); font-family: var(--wb-font-mono); font-size: var(--wb-fs-4); line-height: 1.5; color: var(--theme-ink); background: var(--wb-rank-3-bg); border-radius: var(--wb-r-s); overflow-wrap: anywhere; word-break: break-all; user-select: all; }
+.wb-conn-val b { font-size: var(--wb-fs-5); font-weight: 600; }
+.wb-conn-copy { flex: 0 0 auto; }
+.wb-conn-note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3); margin: var(--wb-sp-4) 0 0; font-size: var(--wb-fs-3); }
+.wb-conn-meta { margin: var(--wb-sp-3) 0 0; font-size: var(--wb-fs-2); }
+.wb-conn-feedback { margin: var(--wb-sp-2) 0 0; font-size: var(--wb-fs-3); }
+.wb-conn-feedback:empty { display: none; }
+.wb-conn-ok { color: var(--wb-status-ok); }
+.wb-conn-fail { color: var(--wb-status-err); }
+.wb-conn-demo { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2); margin-top: var(--wb-sp-4); padding: var(--wb-sp-3) var(--wb-sp-4); border: 1px dashed var(--wb-control-line); border-radius: var(--wb-r-m); }
+.wb-conn-demo small { margin: 0 var(--wb-sp-2); font-size: var(--wb-fs-2); color: var(--theme-muted); }
+.wb-conn-demo .wb-btn[aria-pressed="true"] { border-color: var(--theme-ink); font-weight: 600; }
+@media (max-width: 640px) {
+  .wb-conn-list { grid-template-columns: minmax(0, 1fr); gap: var(--wb-sp-1); }
+  .wb-conn-row dd { margin-bottom: var(--wb-sp-4); }
+}
+.workbench .wb-gw-manage.wb-char { padding: 16px; border-radius: 26px; }
+.wb-gw-manage > .wb-md-detail { padding: 4px 6px; background: transparent; }
+.wb-gw-more { padding: var(--wb-sp-2) var(--wb-sp-7); }
+.wb-gw-pending { display: flex; flex-direction: column; gap: var(--wb-sp-4); padding: var(--wb-sp-7); }
+@media (max-width: 900px) {
+  .wb-gw { grid-template-columns: minmax(0, 1fr); }
+  .wb-gw[data-wb-gw-view="detail"] > .wb-gw-side,
+  .wb-gw[data-wb-gw-view="list"] > .wb-gw-main { display: none; }
+  .workbench .wb-gw-back { display: inline-flex; }
+  .wb-gw-list { max-height: none; }
+}
+/* Four short readings in one row (two at narrower widths): value (section-title
+   tier) over one line of time or reason (helper tier); the full sentence is the
+   cell's title and the chain's own fold below. */
+.wb-account-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--wb-sp-6) var(--wb-sp-7); margin: 0; }
+.wb-account-fact { min-width: 0; }
+.wb-account-fact dt { margin-bottom: var(--wb-sp-1); font-size: var(--wb-fs-3); line-height: 1.45; letter-spacing: .04em; color: var(--theme-muted); }
+.wb-account-fact dd { margin: 0; }
+.wb-account-fact dd b { display: block; font-size: var(--wb-fs-6); font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.wb-account-fact dd small { display: block; margin-top: 2px; font-size: var(--wb-fs-3); line-height: 1.45; color: var(--theme-muted); overflow-wrap: anywhere; }
+
+/* Quota surfaces. console-entry.css already lays out .wb-quota / -bucket /
+   -note, so only the properties it does not set are added here. */
+.wb-quota { border-top: 1px solid rgba(var(--theme-line-rgb), 0.35); padding-top: var(--wb-sp-4); margin: var(--wb-sp-5) 0 var(--wb-sp-7); }
+/* console-entry.css's `.console-stage .wb-quota` rule makes .wb-quota a single-column grid, whose default
+   justify-items: stretch stretched its refresh button over the whole column
+   (measured 1202x30 on the account lane's first block and 563x30 on the three
+   nested ones at 1600x900), so the button read as a progress bar instead of a
+   control. The button takes its own content width again; the container's grid is
+   untouched. */
+.workbench .wb-quota > button { justify-self: start; }
+.wb-quota-bucket { padding: var(--wb-sp-2) 0; }
+.wb-quota-note { margin: var(--wb-sp-4) 0; font-size: var(--wb-fs-3); line-height: 1.6; color: var(--theme-muted); }
+/* The groove is a control surface, so it takes the field tone rather than the
+   hairline: an empty track has to read as a recess in both polarities. */
+.wb-quota-track { height: 6px; overflow: hidden; border-radius: var(--wb-r-pill); background: rgba(var(--theme-field-rgb), 0.7); }
+.wb-quota-track i { display: block; height: 100%; border-radius: inherit; background: var(--theme-accent); }
+
+.wb-fail-groups { display: flex; flex-direction: column; gap: var(--wb-sp-2); }
+/* Plan-Revision 9 ⑥（维护者 2026-09-28 逐页落点 · 总览/日志）：待处理行 48–56px、
+   服务摘要行 44–52px、日志数据行 44–52px。此前待处理分组行只有 34px（头部按 8/12 内边距
+   撑开）、服务摘要的按钮行 34px、日志表数据行 38.7px（内边距 8/14），三者都低于提案下界。 */
+.wb-fail-group { min-width: 0; min-height: 48px; }
+/* The group's framed head is the row itself (it was a 34px box inside the 48px
+   row, leaving a gap under every frame), and the lane note keeps a gap above the
+   first group instead of touching its frame. */
+.wb-fail-group > .wb-fail-head { min-height: 48px; }
+.lane-note + .wb-fail-groups { margin-top: var(--wb-sp-3); }
+.wb-svc-ops { flex: 0 0 auto; margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2); min-height: 48px; }
+.wb-fail-head { display: flex; align-items: center; gap: var(--wb-sp-3); width: 100%; padding: var(--wb-sp-2) var(--wb-sp-4); font-size: var(--wb-fs-5); color: var(--theme-muted); text-align: left; background: transparent; border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-s); cursor: pointer; transition: background-color var(--wb-dur-2) var(--wb-ease), color var(--wb-dur-2) var(--wb-ease), border-color var(--wb-dur-2) var(--wb-ease); }
+.wb-fail-head:hover { color: var(--theme-ink); background: var(--wb-hover); }
+.wb-fail-head b { margin-left: auto; font-size: var(--wb-fs-3); color: var(--theme-muted); font-variant-numeric: tabular-nums; }
+.wb-fail-on { color: var(--theme-ink); background: var(--wb-hover-strong); border-color: var(--wb-control-line); }
+.wb-fail-detail { padding: var(--wb-sp-1) 0 var(--wb-sp-2) var(--wb-sp-6); }
+
+.wb-list { margin-top: var(--wb-sp-5); overflow: hidden; }
+.wb-list .wb-op:first-child { border-top: none; }
+.wb-op { display: flex; align-items: baseline; gap: var(--wb-sp-6); padding: var(--wb-sp-4) var(--wb-sp-7); font-size: var(--wb-fs-5); border-top: 1px solid rgba(var(--theme-line-rgb), 0.35); }
+.wb-op-time { flex: 0 0 auto; font-size: var(--wb-fs-4); color: var(--theme-muted); font-variant-numeric: tabular-nums; }
+.wb-op b { flex: 1; min-width: 0; font-weight: 500; overflow-wrap: anywhere; }
+.wb-op i.wb-dot { margin: 0 0 0 auto; align-self: center; }
+.wb-fail-head .wb-dot { margin-top: 0; }
+
+/* Log lane: the stream is a dense, monospaced reading surface. The message
+   takes its own full-width line so the request chip and the fold button never
+   land in an implicit grid row under the timestamp. */
+.wb-log-detail { display: flex; flex-direction: column; gap: var(--wb-sp-3); }
+.wb-log-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-4); }
+.wb-log-head b { font-size: var(--wb-fs-5); font-weight: 600; }
+.wb-log-state { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3); margin: 0; font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-log-resume { color: var(--theme-ink); }
+.wb-log-clear { padding: var(--wb-sp-2) var(--wb-sp-3); font-size: var(--wb-fs-4); color: var(--theme-muted); background: none; border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-pill); cursor: pointer; transition: background-color var(--wb-dur-2) var(--wb-ease), color var(--wb-dur-2) var(--wb-ease); }
+.wb-log-clear:hover { color: var(--theme-ink); background: var(--wb-hover); }
+.wb-log-q { flex: 1 1 18ch; min-width: 140px; }
+.wb-log-date { display: inline-flex; align-items: center; gap: var(--wb-sp-1); color: var(--theme-muted); font-size: var(--wb-fs-3); }
+.wb-log-date input { padding: 3px var(--wb-sp-2); font-size: var(--wb-fs-3); }
+/* The stream is a recessed well inside the card, not a hover surface: the old
+   rule borrowed --wb-hover, which is a hover token and not a surface token, and
+   a bare ink tint could not be told apart from the card it sits in. It now takes
+   the rank-3 recess from section 3, which is one real lightness step below its
+   container in both themes. */
+.wb-log-rows { max-height: 420px; overflow: auto; pointer-events: auto; padding: var(--wb-sp-2) var(--wb-sp-3); }
+/* 旧 `.wb-log-row` / `.wb-lv` div 行布局的样式已删（C4）：行分隔由
+   `.wb-table td` 的 border-top 承担，行级分类色条与 ERROR 原文红字见下方
+   `.wb-log-kind-*` 规则，不再保留永不命中的旧选择器。 */
+.wb-log-msg { flex: 1 1 100%; margin: 0; font-family: var(--wb-font-mono); font-size: var(--wb-fs-3); line-height: 1.5; color: var(--theme-ink); white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+.wb-log-msg.nowrap { white-space: pre; overflow-x: auto; }
+.wb-log-msg mark { padding: 0 1px; border-radius: 2px; background: rgba(var(--theme-accent-rgb), .34); color: inherit; }
+.wb-log-more { margin: 2px 0 0 var(--wb-sp-9); padding: 2px var(--wb-sp-3); font-size: var(--wb-fs-2); color: var(--theme-muted); background: none; border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-pill); cursor: pointer; transition: background-color var(--wb-dur-2) var(--wb-ease), color var(--wb-dur-2) var(--wb-ease); }
+.wb-log-more:hover { color: var(--theme-ink); background: var(--wb-hover); }
+.wb-log-older { margin-top: var(--wb-sp-3); }
+.wb-log-open-row { align-items: center; gap: var(--wb-sp-3); }
+.wb-log-sources .wb-section-head { margin-bottom: var(--wb-sp-4); }
+.wb-log-open-row .wb-muted { align-self: center; font-size: var(--wb-fs-3); }
+
+/* ==========================================================================
+   11. Model catalogue and sync (contract 3.10, 4.7)
+   ========================================================================== */
+
+.wb-probe-intro { margin-bottom: var(--wb-sp-8); padding: var(--wb-sp-8); }
+.wb-probe-intro h3 { margin: 0 0 var(--wb-sp-3); font-size: var(--wb-fs-6); font-weight: 600; }
+.wb-probe-intro p { margin: var(--wb-sp-2) 0 var(--wb-sp-6); }
+.wb-probe-queue { margin: var(--wb-sp-2) 0 var(--wb-sp-4); padding-left: var(--wb-sp-7); font-size: var(--wb-fs-4); line-height: 1.8; }
+.wb-probe-queue li { margin-bottom: var(--wb-sp-1); overflow-wrap: anywhere; }
+
+.wb-model-ops { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3); margin: var(--wb-sp-6) 0 0; padding: var(--wb-sp-2) var(--wb-sp-3); }
+.wb-model-ops button { padding: var(--wb-sp-2) var(--wb-sp-6); font-size: var(--wb-fs-4); border: 1px solid transparent; border-radius: var(--wb-r-pill); background: transparent; color: inherit; white-space: nowrap; cursor: pointer; }
+.wb-model-ops button:hover { background: var(--wb-hover); }
+.wb-model-ops button.wb-confirm { background: var(--theme-ink); border-color: var(--theme-ink); color: var(--theme-paper); }
+.wb-sync-toolbar .wb-model-ops, .wb-section-toolbar .wb-model-ops { margin: 0; border: none; padding: 0; background: transparent; }
+.wb-section-toolbar > button, .wb-model-ops button { padding: var(--wb-sp-3) var(--wb-sp-6); }
+
+.wb-scope-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-3) var(--wb-sp-6); margin: var(--wb-sp-2) 0; }
+.wb-scope-row > small { flex: 0 0 4.5rem; font-size: var(--wb-fs-2); color: var(--theme-muted); }
+.wb-scope-check { display: inline-flex; align-items: center; gap: var(--wb-sp-2); font-size: var(--wb-fs-4); color: var(--theme-ink); }
+.wb-scope-check input { accent-color: var(--theme-accent); }
+
+.wb-sync-diff { margin-top: var(--wb-sp-5); padding: var(--wb-sp-5) var(--wb-sp-6); }
+.wb-sync-diff strong { display: block; font-size: var(--wb-fs-4); font-weight: 600; }
+.wb-sync-diff ul { margin: var(--wb-sp-3) 0 0; padding-left: var(--wb-sp-7); font-size: var(--wb-fs-4); line-height: 1.8; }
+.wb-sync-diff li { overflow-wrap: anywhere; }
+.wb-sync-client { margin: var(--wb-sp-3) 0; padding: var(--wb-sp-4) var(--wb-sp-5); border: 1px solid var(--theme-line); border-radius: var(--wb-r-s); }
+.wb-sync-client b { margin-right: var(--wb-sp-3); font-size: var(--wb-fs-4); }
+.wb-sync-client ul { margin: var(--wb-sp-2) 0 0; padding-left: var(--wb-sp-7); font-size: var(--wb-fs-3); line-height: 1.8; }
+
+/* ==========================================================================
+   12. Share lane and key panel (contract 3.10, 4.8)
+   Three layers: hero open-state + main action, URL and preconditions, then
+   capacity and recent operations. Keys live in the full-width block below.
+   ========================================================================== */
+
+/* Plan-Revision 9（维护者 2026-09-28 ③/⑤）：分享车道的两张卡是工作台的卡
+   （.wb-block 的同一个内距档 --wb-sp-6 = 14px），节标题是卡自己的直系 h3——与其余
+   车道同形，门禁按 .wb-block > h3 读节标题（17px/1.3/600）。卡头只留右侧的刷新
+   动作（标题已上移到卡的直系子节点，同一基线不再需要 flex 头承担标题）。 */
+/* Rev12 F12-4 / F12-7: cards in one row keep their own height (top-aligned) -
+   opening one card's fold, or a long column beside a short one, no longer
+   stretches its neighbour into an empty block. */
+.wb-share-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--wb-sp-7); align-items: start; }
+.wb-share-block { min-width: 0; padding: var(--wb-sp-6); }
+.wb-share-block.wb-share-hero { grid-column: 1 / -1; }
+/* 分享地址与访问密钥 (maintainer 2026-10-07): one full-width card - the address
+   a client opens on top, the keys it presents below, split by a hairline. */
+.wb-share-block.wb-share-access { grid-column: 1 / -1; }
+.wb-share-access-url { padding-bottom: var(--wb-sp-6); margin-bottom: var(--wb-sp-2); border-bottom: 1px solid rgba(var(--theme-line-rgb), 0.35); }
+.wb-share-access .wb-share-access-url > h4 { margin-top: 0; }
+.wb-share-keys { overflow-x: auto; }
+/* Per-key usage in two columns: the daily-fee comparison with capacity under it,
+   and the per-key detail table; each column stacks its own cards so a tall table
+   never stretches the chart card. */
+.wb-share-col { display: flex; flex-direction: column; gap: var(--wb-sp-7); min-width: 0; }
+/* Rev15 A15 layered maintenance: one full-width block, the 8100 and 8110 layers
+   side by side (stacked when narrow), each with its own single-layer actions. */
+.wb-share-block.wb-share-layers { grid-column: 1 / -1; }
+.wb-share-layer-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--wb-sp-6); margin: var(--wb-sp-4) 0; }
+.wb-share-layer { display: flex; flex-direction: column; gap: var(--wb-sp-3); min-width: 0; padding: var(--wb-sp-6); border-radius: var(--wb-r-m); background: var(--wb-rank-3-bg); }
+.workbench .wb-share-layer h4 { margin: 0; font-size: var(--wb-fs-5); font-weight: 600; }
+.wb-share-layer-list { display: flex; flex-direction: column; gap: var(--wb-sp-2); margin: 0; padding: 0; list-style: none; }
+.wb-share-layer-list li { display: grid; grid-template-columns: minmax(7rem, 9rem) auto minmax(0, 1fr); align-items: center; gap: var(--wb-sp-2) var(--wb-sp-4); font-size: var(--wb-fs-4); }
+.wb-share-layer-list small { font-size: var(--wb-fs-3); color: var(--theme-muted); overflow-wrap: anywhere; }
+.wb-share-fault { margin: 0; font-size: var(--wb-fs-3); overflow-wrap: anywhere; }
+.wb-share-layer-acts { display: flex; flex-direction: column; gap: var(--wb-sp-3); margin-top: auto; }
+.wb-share-layer-act { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-2) var(--wb-sp-4); }
+.wb-share-layer-act small { font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-table td.wb-share-tok small { display: block; margin-top: 2px; white-space: normal; font-size: var(--wb-fs-2); }
+/* A failure reason is the reading here: the chip wraps in full instead of the
+   one-line ellipsis it uses in a service row. */
+.wb-share-layer-act .wb-svc-result { flex-basis: 100%; max-width: 100%; white-space: normal; overflow-wrap: anywhere; border-radius: var(--wb-r-s); }
+@media (max-width: 1100px) { .wb-share-layer-grid { grid-template-columns: minmax(0, 1fr); } }
+.wb-share-block h3 { margin: 0 0 var(--wb-sp-5); }
+.wb-share-block h4 { margin: var(--wb-sp-6) 0 var(--wb-sp-2); font-size: var(--wb-fs-5); font-weight: 600; }
+
+/* The open-state pill carries a shape as well as a hue: solid dot = settled,
+   hollow ring = not settled (residue / unconfirmed). */
+.wb-share-pill { display: inline-flex; align-items: center; padding: var(--wb-sp-1) var(--wb-sp-6); font-size: var(--wb-fs-6); font-weight: 600; border: 1px solid var(--theme-line); border-radius: var(--wb-r-pill); background: var(--wb-status-neutral-bg); color: var(--wb-status-neutral); }
+.wb-share-pill::before { content: ""; display: block; width: 7px; height: 7px; margin-right: var(--wb-sp-2); border-radius: var(--wb-r-pill); background: currentColor; }
+.wb-share-closed { background: var(--wb-status-neutral-bg); color: var(--wb-status-neutral); }
+.wb-share-opening { border-color: color-mix(in srgb, var(--wb-status-warn) 50%, transparent); background: var(--wb-status-warn-bg); color: var(--wb-status-warn); }
+.wb-share-open { border-color: color-mix(in srgb, var(--wb-status-ok) 50%, transparent); background: var(--wb-status-ok-bg); color: var(--wb-status-ok); }
+.wb-share-closing { border-color: color-mix(in srgb, var(--wb-status-warn) 50%, transparent); background: var(--wb-status-warn-bg); color: var(--wb-status-warn); }
+/* A finished stop that still has a live layer is a residue, not a clean close:
+   the ring goes hollow and the edge goes dashed. */
+.wb-share-closing-residue { border-style: dashed; border-color: color-mix(in srgb, var(--wb-status-warn) 60%, transparent); background: var(--wb-status-warn-bg); color: var(--wb-status-warn); }
+.wb-share-closing-residue::before { background: transparent; border: 1.5px solid currentColor; }
+.wb-share-unconfirmed { border-style: dashed; border-color: color-mix(in srgb, var(--wb-status-neutral) 60%, transparent); background: var(--wb-status-neutral-bg); color: var(--wb-status-neutral); }
+.wb-share-unconfirmed::before { background: transparent; border: 1.5px solid currentColor; }
+.wb-share-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--wb-sp-2) var(--wb-sp-4); }
+.wb-share-status small { font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-share-evidence { margin: var(--wb-sp-3) 0 0; font-size: var(--wb-fs-4); line-height: 1.65; color: var(--theme-muted); }
+.wb-share-actions { display: flex; flex-wrap: wrap; gap: var(--wb-sp-4); margin-top: var(--wb-sp-6); }
+.wb-share-url-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-sp-4); }
+.wb-share-url { font-family: var(--wb-font-mono); font-size: var(--wb-fs-4); word-break: break-all; }
+.wb-share-url-unavailable { color: var(--theme-muted); font-style: italic; }
+.wb-share-closed-mark { font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-share-preconditions summary { margin-top: var(--wb-sp-4); font-size: var(--wb-fs-4); color: var(--theme-muted); cursor: pointer; }
+.wb-share-preconditions summary:hover { color: var(--theme-ink); }
+/* Collapsed, this disclosure adds no empty row of its own: the summary's own
+   top gap is the group-to-group tier and its bottom gap is zero until it opens
+   (contract 3.12c 折叠态不产生空洞). */
+.wb-share-preconditions:not([open]) > summary { margin-bottom: 0; }
+.wb-share-preconditions[open] > summary { margin-bottom: var(--wb-sp-3); }
+.wb-share-preconditions ul { margin: var(--wb-sp-3) 0 0; padding-left: var(--wb-sp-7); font-size: var(--wb-fs-4); line-height: 1.8; color: var(--theme-muted); }
+
+.wb-share-key-table { width: 100%; min-width: 54rem; border-collapse: collapse; font-size: var(--wb-fs-5); }
+/* Plan-Revision 9 ⑥（维护者 2026-09-28 逐页落点 · 分享）：Key 行高 48px、表头 40px。
+   此前表头按 padding 8/12 撑成 35.9px、数据行按 padding 12 撑成 57.2px（行内动作
+   自己 32.7px + 上下 12px），都不在提案值上。这里把两行的**行高**按提案写死（td 的
+   height 是下限，内容更高时仍会撑开），上下内边距同时收到 --wb-sp-2，好让 48px 真的成立。 */
+.wb-share-key-table th { height: 40px; padding: var(--wb-sp-3) var(--wb-sp-4); text-align: left; font-size: var(--wb-fs-3); font-weight: 500; white-space: nowrap; color: var(--theme-muted); border-bottom: 1px solid var(--theme-line); }
+.wb-share-key-table td { height: 48px; padding: var(--wb-sp-2) var(--wb-sp-4); text-align: left; vertical-align: middle; border-bottom: 1px solid rgba(var(--theme-line-rgb), 0.35); }
+.wb-share-key-table tr:last-child td { border-bottom: none; }
+.wb-share-key-table code { font-family: var(--wb-font-mono); font-size: var(--wb-fs-4); }
+/* Plaintext key cell breaks long tokens inside the narrow column; the legacy
+   (unrecoverable) note stays next to the masked value. */
+.wb-share-key-plain { font-family: var(--wb-font-mono); font-size: var(--wb-fs-3); word-break: break-all; }
+.wb-share-key-legacy-note { font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-share-key-actions { display: flex; flex-wrap: wrap; gap: var(--wb-sp-2); }
+.wb-share-unsync { font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-share-edit { display: flex; flex-direction: column; gap: var(--wb-sp-2); }
+.wb-share-edit input { font-size: var(--wb-fs-4); }
+.wb-share-edit-actions { display: flex; gap: var(--wb-sp-2); }
+.wb-share-key-form-actions { display: flex; gap: var(--wb-sp-4); margin-top: var(--wb-sp-2); }
+.wb-share-error { margin: 0; font-size: var(--wb-fs-4); color: var(--wb-status-err); }
+.wb-share-limits { display: flex; flex-wrap: wrap; gap: var(--wb-sp-9); }
+.wb-share-limits > div { display: flex; flex-direction: column; gap: var(--wb-sp-1); }
+.wb-share-limits small { font-size: var(--wb-fs-3); color: var(--theme-muted); }
+.wb-share-limits b { font-size: var(--wb-fs-7); font-weight: 500; font-variant-numeric: tabular-nums; }
+.wb-share-recent { margin: var(--wb-sp-2) 0 0; padding-left: var(--wb-sp-7); font-size: var(--wb-fs-4); line-height: 1.8; }
+.wb-share-recent small { color: var(--theme-muted); }
+
+/* Share lane, second table: the fold title "每 Key 明细（模型 N / 日 M）" used to be
+   the table's last data column and folded into a 46.7px column of five lines.
+   Plan-Revision 5, question 3 moves it out of the data columns and below the row at
+   full width, and the table returns to six data columns (208/66/80/80/78/53 of its
+   565px width). workbench.ts owns this table's DOM (another writer's file), so the
+   same order is made here: the table becomes a six-column grid, its row groups and
+   rows dissolve into it, the fold's column is dropped, and the fold host spans the
+   whole row under the data cells. Measured at 1536x864 dsf1.25 and 1600x900:
+   columns 207.7/65.9/80.3/80.3/77.9/53, the fold host 565 wide under the data
+   row, its summary a one-line 219x35.3 pill, scrollWidth == clientWidth (no
+   horizontal overflow) and the header stays sticky. */
+.wb-share-block .wb-table-scroll > table.wb-table {
+  display: grid;
+  /* F12-8 (2026-10-06): a seventh data column, Token (输入 / 输出), joins the six. */
+  grid-template-columns: minmax(0, 190fr) 60fr 100fr 76fr 76fr 62fr 52fr;
+}
+.wb-share-block .wb-table-scroll > table.wb-table > thead,
+.wb-share-block .wb-table-scroll > table.wb-table > tbody,
+.wb-share-block .wb-table-scroll > table.wb-table tr { display: contents; }
+/* The "明细" header goes with the column it named: the fold now sits below the
+   row, so that header would label nothing. */
+.wb-share-block .wb-table-scroll > table.wb-table th:last-child { display: none; }
+/* The fold host is the row's last cell, so it becomes its own full-width row
+   under the key's six data cells - both when it holds the fold and when it holds
+   the "无明细" text. The cell's own top rule (35% line, as every other row) is the
+   row's separator, so the host's 100% rule and its group gap are dropped here to
+   avoid two rules inside the same 16px. The "未归属" row's colspan="6" cell is
+   excluded: it spans the six data columns after the row's own first cell. */
+.wb-share-block .wb-table-scroll > table.wb-table td:last-child:not([colspan]) {
+  grid-column: 1 / -1;
+  padding-top: var(--wb-sp-1);
+  padding-bottom: var(--wb-sp-3);
+}
+.wb-share-block .wb-table-scroll > table.wb-table td > details.wb-secondary-details { margin-top: 0; padding: 0; border-top: none; }
+/* The "未归属" row's single cell carries colspan="6", which a grid ignores: it
+   spans the six data columns after the row's own first cell. */
+.wb-share-block .wb-table-scroll > table.wb-table td[colspan] { grid-column: 2 / -1; }
+/* 问题 3（Plan-Revision 7）：整行命中（含 td 左右内边距）。原先折叠宿主的 td 只
+   改了上下内边距（上一行），左右各 14px 留在 td 上，而 summary 是 `inline-flex`
+   + `nowrap`、宽度由文案撑到 543px，所以点胶囊右侧空白不切换：571 − 543 = 28px
+   正是这左右各 14px（`.wb-table td` 的 `padding: 8px 14px`）。这里把 td 的左右
+   内边距归 0、把同一档 14px 移进 summary 的 `padding: 0 var(--wb-sp-6)`，命中盒
+   于是等于宿主 td 的宽度（1600×900 = 571/571、1536×864 dsf1.25 = 565/565），
+   文案距行缘仍是 14px 不贴边。
+   维护者 2026-09-28（③ 折叠行底缘命中）：四边都归 0 还不够——`.wb-secondary-details`
+   自己的 `padding: var(--wb-sp-3) 0`（`:859`）只被下面那条归了 `padding-top`，
+   底部 8px 仍在，于是 td 高 52px、summary 高 44px，td 底缘内 8px 是死区：实测
+   在 td 底缘内 2px 点击不切换（1600×900 与 1536×864 dsf1.25、两主题同值——
+   td 880.75–932.75、summary 880.75–924.75）。下面那条把 `padding-bottom`
+   也归 0：td 高 = summary 高 = 44px，命中盒恒等于宿主 td 的四边（判据 ④ 的
+   44px 单行盒不变）。折叠行与下一行之间的间距因此由下一行自己的 `padding-top`
+   8px 提供，与折叠行上缘原有的一档（上一行 td 的 `padding-bottom` 8px）对称，
+   行高与行距都不变；宿主 td 的原上分隔线（35% 发丝线）与 summary 自己的 1px
+   控件边之间因此只剩这一条 1px 边（本文件那条「同一个 16px 里不要两条规则」的
+   说明仍成立）。选择器比上一行的 `td:last-child:not([colspan])` 多带 `:has(...)`，`padding` 四边
+   因此都能生效（只写 `.wb-table td:has(...)` 时上下会输给那条更具体的规则）。 */
+.wb-share-block .wb-table-scroll > table.wb-table td:last-child:not([colspan]):has(> details.wb-secondary-details[data-wb-share-key-details]) { padding: 0; }
+/* 整行命中（Plan-Revision 7）：summary 从「由文案撑开的胶囊」改成填满行宽的
+   两列网格——第 1 列是文案、第 2 列固定 16px 放 chevron（`.wb-fold-mark` 的
+   `justify-self: end` 因此把它钉在行内右端，距行右缘 = summary 的 14px 内边距，
+   判据 ⑥ 要的正是 `chevronRect.right === summaryRect.right − 14` 且宽 16）。
+   第 1 列取 `minmax(0, 1fr)` 而不是裸 `1fr`：`nowrap` 的文案若比行宽还长，
+   裸 `1fr` 的最小值 auto 会把 16px 的 chevron 列挤出内边距盒，判据 ⑥ 与 ③
+   （`scrollWidth <= clientWidth`）会一起失败。`min-height: 44px` 是单行行的
+   命中高度（判据 ④ 的上限）。
+   hover 用既有 --wb-hover、展开态升一档 --wb-hover-strong，焦点环沿用 §15 的
+   2px ink，只把 offset 收到 -2px，使环贴着整行边缘而不被相邻行裁掉。
+   文字档取 --wb-fs-4 = 13px（与这张表自己的 `.wb-table` 同档、≥ §2.7 的
+   11px 下限；OD 决定 1/判据 ⑤ 明写 13px）：折叠行是这张表的一行，不占
+   `h3` 的 15px 节标题档；这不是「缩字号把文案塞进一行」——行本身已是整行宽、
+   单行 44px 命中盒，没有任何一处靠缩字换空间。 */
+.wb-share-block .wb-table-scroll > table.wb-table td > details.wb-secondary-details > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  align-items: center;
+  column-gap: var(--wb-sp-2);
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--wb-sp-6);
+  box-sizing: border-box;
+  font-size: var(--wb-fs-4);
+  white-space: nowrap;
+  list-style: none;
+  cursor: pointer;
+  border: 1px solid var(--wb-control-line);
+  border-radius: var(--wb-r-s);
+}
+.wb-share-block .wb-table-scroll > table.wb-table td > details.wb-secondary-details { display: block; width: 100%; }
+/* 明细体收进 summary 内（Plan-Revision 9，门禁 ② 折叠宿主 td 的命中盒）：关闭时隐藏，
+   展开时占满整行、按正常空白折行。这样 td 的盒子在展开前后都等于 summary 的盒子，
+   四条边缘的真实点击都落在折叠开关上。 */
+.wb-share-block .wb-table-scroll > table.wb-table td > details.wb-secondary-details > summary > .wb-share-key-detail-body {
+  display: none;
+  grid-column: 1 / -1;
+  white-space: normal;
+}
+.wb-share-block .wb-table-scroll > table.wb-table td > details.wb-secondary-details[open] > summary > .wb-share-key-detail-body { display: block; }
+.wb-share-block .wb-table-scroll > table.wb-table td > details.wb-secondary-details > summary:hover,
+.wb-share-block .wb-table-scroll > table.wb-table td > details.wb-secondary-details > summary:focus-visible { background: var(--wb-hover); }
+.wb-share-block .wb-table-scroll > table.wb-table td > details.wb-secondary-details[open] > summary { background: var(--wb-hover-strong); }
+/* The fold row's focus ring keeps the shared 2px solid / 2px outward shape
+   (Plan-Revision 9, maintainer 2026-09-28 ⑦): the previous -2px offset drew the
+   ring inside the row, which is not the one shape the gate reads for every
+   focusable element. The row still carries its own 1px control edge, so the ring
+   stays visible against both the row and the table behind it. */
+.wb-share-block .wb-table-scroll > table.wb-table td > details.wb-secondary-details > summary:focus-visible { outline-offset: 2px; }
+
+/* Session-scoped plaintext reveal. It keeps the accent edge that marks a
+   secret surface; the value itself is monospaced and selectable as a whole. */
+.wb-share-secret { margin-top: var(--wb-sp-6); padding: var(--wb-sp-6) var(--wb-sp-7); border: 1px solid var(--theme-accent); border-radius: var(--wb-r-m); background: rgba(var(--theme-panel-rgb), 0.90); }
+.wb-share-secret strong { display: block; font-size: var(--wb-fs-5); font-weight: 600; }
+.wb-share-secret-value { display: block; margin: var(--wb-sp-4) 0; padding: var(--wb-sp-4) var(--wb-sp-5); font-family: var(--wb-font-mono); font-size: var(--wb-fs-5); word-break: break-all; user-select: all; background: var(--theme-field); border: 1px solid var(--theme-line); border-radius: var(--wb-r-s); }
+.wb-share-secret-masked { letter-spacing: .2em; }
+.wb-share-secret-actions { display: flex; gap: var(--wb-sp-4); margin-top: var(--wb-sp-4); }
+.wb-share-secret small { display: block; margin-top: var(--wb-sp-4); font-size: var(--wb-fs-3); line-height: 1.7; color: var(--theme-muted); }
+
+/* Key-create modal: one fixed backdrop plus a centred card. The single entrance
+   is a light reveal, fully disabled under reduced motion (see section 17). */
+.wb-share-modal-backdrop { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: var(--wb-sp-8); background: rgba(24, 21, 16, 0.44); animation: wbBackdropIn var(--wb-dur-1) var(--wb-ease-out); }
+.wb-share-modal-backdrop[hidden] { display: none !important; }
+.wb-share-modal { width: min(420px, calc(100vw - 48px)); max-width: 420px; max-height: min(640px, calc(100vh - 48px)); overflow-y: auto; padding: var(--wb-sp-8) var(--wb-sp-8); border: 1px solid var(--theme-line); border-radius: var(--wb-r-l); background: var(--theme-panel); box-shadow: var(--wb-shadow-3); animation: wbModalIn var(--wb-dur-1) var(--wb-ease-out); }
+@keyframes wbModalIn { from { opacity: 0; transform: translateY(6px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes wbBackdropIn { from { opacity: 0; } to { opacity: 1; } }
+.wb-share-modal-title { margin: 0 0 var(--wb-sp-5); font-size: var(--wb-fs-6); font-weight: 600; }
+.wb-share-modal-field { display: flex; flex-direction: column; gap: var(--wb-sp-1); margin-bottom: var(--wb-sp-4); font-size: var(--wb-fs-4); color: var(--theme-muted); }
+.wb-share-modal-note { margin: 0 0 var(--wb-sp-4); font-size: var(--wb-fs-4); line-height: 1.7; color: var(--theme-muted); }
+
+/* ==========================================================================
+   13. Notices, banner, loading bar (contract 3.10, 3.11)
+   ========================================================================== */
+
+/* The notice pool lives on the viewport layer (document.body + position:fixed)
+   so scrolling or switching lanes never moves an in-flight notice out of view.
+   2026-09-29 redesign: it sits at the viewport's bottom-right corner, clear of
+   the sticky head (page name, run verdict, evidence time) and the filter rows at
+   the top of each lane; a pinned failure there stays until its own x closes it.
+   Width and count caps (<= 320px, at most 2) stand. */
+.wb-notices { position: fixed; right: var(--wb-sp-8); bottom: var(--wb-sp-8); z-index: 60; width: min(320px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: var(--wb-sp-3); pointer-events: none; }
+.wb-notices > * { pointer-events: auto; }
+.wb-notices:empty { display: none; }
+/* The notice's own shadow stays a tight one: the floating edge is the border +
+   panel tone + z-index, and a 10/30 spread would paint over the main pane's paper
+   band beside and below the pool (measured on the 8099 candidate: the pool's
+   30px blur reached 30px past its own box, into the band the ① criterion reads). */
+.wb-notice { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: var(--wb-sp-1) var(--wb-sp-4); padding: var(--wb-sp-4) var(--wb-sp-6); font-size: var(--wb-fs-4); line-height: 1.6; border: 1px solid var(--theme-line); border-radius: var(--wb-r-m); background: var(--theme-panel); box-shadow: 0 1px 1px rgba(8, 10, 10, 0.14); overflow-wrap: anywhere; }
+.wb-notice > .wb-dot { margin-top: var(--wb-sp-2); }
+.wb-notice-body { min-width: 0; }
+.wb-notice-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--wb-sp-1) var(--wb-sp-3); }
+.wb-notice-head b { font-weight: 600; }
+.wb-notice-target { font-size: var(--wb-fs-3); color: var(--theme-muted); font-variant-numeric: tabular-nums; }
+.wb-notice-text { overflow-wrap: anywhere; }
+.wb-notice-detail { font-size: var(--wb-fs-3); color: var(--theme-muted); overflow-wrap: anywhere; }
+.wb-notice-side { display: flex; flex-direction: column; align-items: flex-end; gap: var(--wb-sp-1); }
+.wb-notice-time { font-size: var(--wb-fs-1); white-space: nowrap; color: var(--theme-muted); font-variant-numeric: tabular-nums; }
+.wb-notice-close { padding: 1px var(--wb-sp-2); font-size: var(--wb-fs-4); line-height: 1.4; color: var(--theme-muted); background: transparent; border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-s); cursor: pointer; }
+.wb-notice-close:hover { color: var(--theme-ink); background: var(--wb-hover); }
+.wb-notices-compact { padding: var(--wb-sp-1) var(--wb-sp-4); font-size: var(--wb-fs-3); text-align: right; color: var(--theme-muted); border: 1px solid var(--theme-line); border-radius: var(--wb-r-pill); background: rgba(var(--theme-panel-rgb), 0.94); }
+
+/* The 8096-unreachable banner is a warning, so it takes the warn hue instead
+   of the neutral card tone. It is the first row of the sticky top region
+   (workbench.ts shell markup), spanning the pane edge to edge, so it pushes the
+   head down instead of painting over it. */
+.wb-banner { display: flex; align-items: center; gap: var(--wb-sp-5); margin: 0 calc(-1 * var(--wb-gutter)); padding: var(--wb-sp-3) var(--wb-gutter); font-size: var(--wb-fs-4); border-bottom: 1px solid color-mix(in srgb, var(--wb-status-warn) 55%, transparent); background: var(--wb-status-warn-bg); color: var(--wb-status-warn); }
+.wb-banner button { margin-left: auto; padding: 2px var(--wb-sp-4); font-size: var(--wb-fs-3); color: inherit; background: transparent; border: 1px solid currentColor; border-radius: var(--wb-r-s); cursor: pointer; }
+.wb-banner button:hover { background: var(--wb-hover); }
+
+/* Loading bar: a 2px accent sweep while a read is in flight. Under reduced
+   motion it keeps a static translucent strip, so the loading state stays visible
+   instead of collapsing into "nothing is happening". */
+.wb-loadbar { position: absolute; top: calc(-1 * var(--wb-sp-2)); left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent 0%, var(--theme-accent) 40%, var(--theme-accent) 78%, transparent 100%); background-size: 50% 100%; opacity: 0.85; pointer-events: none; animation: wb-loadbar-run 1.2s linear infinite; }
+@keyframes wb-loadbar-run { from { background-position: 0% 0; } to { background-position: 200% 0; } }
+.wb-loadbar-static { animation: none; opacity: 0.22; }
+
+/* ==========================================================================
+   14. Carried-over component styles
+   These predate the contract and are kept as they were; only their type,
+   spacing and radius values are re-tokenised.
+   ========================================================================== */
+
+.wb-rule { height: 2px; margin-top: var(--wb-sp-8); background: var(--theme-line); }
+.wb-rule i { display: block; height: 100%; background: var(--theme-ink); }
+/* Helper text (Plan-Revision 9, maintainer 2026-09-28 ⑤): 12.5px / 1.45
+   (--wb-fs-3). The 13px / 1.7 tier this role carried before is gone; the
+   helper tier is the same in every scope, so the gate reads one pair of numbers
+   for the role wherever the first .wb-muted sits. */
+.wb-muted { margin: var(--wb-sp-6) 0 0; font-size: var(--wb-fs-3); line-height: 1.45; color: var(--theme-muted); }
+.wb-main :is(.wb-muted, .lane-note) { font-size: var(--wb-fs-3); line-height: 1.45; }
+.wb-empty { font-size: var(--wb-fs-7); line-height: 1.6; overflow-wrap: anywhere; }
+.wb-storage { font-size: var(--wb-fs-4); line-height: 1.7; color: var(--theme-accent); }
+.wb-storage:empty { display: none; }
+.wb-ghost { background: transparent; }
+
+/* ==========================================================================
+   15. Form controls, browser surfaces, focus ring (contract 6.1)
+   ========================================================================== */
+
+/* Text fields and selects: the fill alone is not enough to identify a control
+   (--theme-field is 1.13:1 against the panel), so the edge carries it and takes
+   the same --wb-control-line as the secondary tier (the maintainer's 2026-09-27
+   review: control identification edges get the contrast check and the fix inside
+   the frontend scope). */
+.workbench :is(input[type="text"], input[type="number"], input[type="search"], input[type="date"], select, textarea) {
+  font: inherit;
+  font-size: var(--wb-fs-4);
+  padding: var(--wb-sp-2) var(--wb-sp-3);
+  color: var(--theme-ink);
+  background: var(--theme-field);
+  border: 1px solid var(--wb-control-line);
+  border-radius: var(--wb-r-s);
+}
+.workbench :is(input, textarea)::placeholder { color: var(--theme-muted); }
+.workbench :is(input[type="checkbox"], input[type="radio"]) { accent-color: var(--theme-accent); }
+.workbench select { cursor: pointer; }
+
+/* One focus ring for the whole console, and it is the ink one the contract
+   freezes (6.1): focus is not a selection, so it must not reuse the accent that
+   marks the current nav item, the current tab and the current jump item - a ring
+   and a tint in one hue were the only difference between the two states. The ring
+   is never removed, only its colour and offset change.
+   Plan-Revision 9 (maintainer 2026-09-28 ⑦): the ring is 2px solid with a 2px
+   outward offset on every focusable element - the previous 3px offset and the two
+   per-component offsets (0px on the chart hotspot, -2px inside the share table's
+   fold row) are gone, so the gate reads one shape for every element it reaches
+   with real Tab presses. --theme-ink is dark on the light paper and light on the
+   dark panel, so the ring clears 3:1 in both themes. */
+.workbench :is(button, input, select, textarea, summary, a, [tabindex]):focus-visible { outline: 2px solid var(--theme-ink); outline-offset: 2px; }
+
+/* Browser surfaces: thin palette scrollbars and the lemon selection. */
+.wb-main { scrollbar-width: thin; scrollbar-color: rgba(var(--theme-muted-rgb), 0.45) transparent; }
+.wb-main::-webkit-scrollbar { width: 8px; }
+.wb-main::-webkit-scrollbar-thumb { background: rgba(var(--theme-muted-rgb), 0.45); border-radius: var(--wb-r-pill); }
+.wb-main::-webkit-scrollbar-track { background: transparent; }
+.workbench ::selection { background: var(--wb-lemon); color: var(--wb-on-lemon); }
+
+/* ==========================================================================
+   16. Shared classes with the archive page
+   .wb-media and .wb-timer-digits belong to the archive page's own panels
+   (matched by src/workbench-rolling.ts:6,33 and listed in the theme.css /
+   wallpaper-effects.css dark scopes); they have no producer left in src today.
+   Only the shared numeric reading is added here - their layout stays owned by
+   src/style.css, so nothing in this file re-lays-out the archive page.
+   ========================================================================== */
+
+.wb-media small, .wb-timer-digits { font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   17. Console skin and stage layer
+   These classes are declared by src/console-entry.css, which loads AFTER this
+   file (console-entry.ts imports workbench on line 3 and its own stylesheet on
+   line 6). A parallel pass under this same contract has reworked that file, so it
+   now owns the appearance dialog's card rank, its option segments and its focus
+   rings, and the click ripple's colour and duration. Only the invariants that must
+   hold whichever file loads last are stated here: the two decorative layers never
+   take the pointer, the ripple host clips its own ripple, and the status line
+   reads as a tabular figure. One exception, stated in §6 with its measurements:
+   a content control that has to show a `.wb-icon-hint` plate drops the clip,
+   because that file's press feedback would otherwise cut the plate down to the
+   control's own box; the press pulse then paints a faint halo outside the control,
+   which is the price of the plate staying whole. The top bar's controls drop it
+   for the same reason (their plates open below the control). Nothing else below
+   restates a value that file already sets, so the two files cannot fight over one
+   property.
+   ========================================================================== */
+
+.research-bg, .console-click-feedback { pointer-events: none; }
+.console-click-host { position: relative; overflow: hidden; }
+.console-appearance :is(.appearance-hint, .appearance-status) { max-width: 62ch; }
+.console-appearance .appearance-status { font-variant-numeric: tabular-nums; }
+.console-appearance :is(.appearance-close, .appearance-options) { font-size: var(--wb-fs-5); }
+
+/* ==========================================================================
+   18. Motion discipline and reduced motion (contract 6.3)
+   One shared transition token per control; entrance motion is reserved for
+   state-reveal moments (result chip, operation status, service detail, modal).
+   Every animation below is disabled again in the two blocks at the end of this
+   section: the prefers-reduced-motion media query and the stage-level
+   .reduce-motion class.
+   ========================================================================== */
+
+.workbench button { transition: background-color var(--wb-dur-2) var(--wb-ease), color var(--wb-dur-2) var(--wb-ease), border-color var(--wb-dur-2) var(--wb-ease); }
+.workbench :is(.wb-nav button, .wb-bar-btn, .wb-md-item, .wb-svc-ops button, .wb-issue button, .wb-cost-open):active { transform: translateY(1px); }
+.wb-dot { transition: background-color var(--wb-dur-2) var(--wb-ease-out), border-color var(--wb-dur-2) var(--wb-ease-out), border-radius var(--wb-dur-2) var(--wb-ease-out); }
+@keyframes wbRevealIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.wb-op-status { animation: wbRevealIn var(--wb-dur-2) var(--wb-ease-out); }
+.wb-svc-detail { animation: wbRevealIn var(--wb-dur-2) var(--wb-ease-out); }
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench button, .wb-dot, .wb-fold-mark, .workbench [data-action="rail-toggle"] > svg { transition: none !important; }
+  .wb-op-status, .wb-svc-detail, .wb-svc-result-fade, .wb-share-modal-backdrop, .wb-share-modal, .wb-loadbar { animation: none !important; }
+  .workbench :is(.wb-nav button, .wb-bar-btn, .wb-md-item, .wb-svc-ops button, .wb-issue button, .wb-cost-open):active { transform: none; }
+  .wb-loadbar { opacity: 0.5; }
+}
+
+.reduce-motion .workbench button,
+.reduce-motion .workbench [data-action="rail-toggle"] > svg,
+.reduce-motion .wb-dot,
+.reduce-motion .wb-fold-mark { transition: none !important; }
+.reduce-motion .workbench :is(.wb-op-status, .wb-svc-detail, .wb-svc-result-fade, .wb-share-modal-backdrop, .wb-share-modal, .wb-loadbar) { animation: none !important; }
+.reduce-motion .workbench :is(.wb-nav button, .wb-bar-btn, .wb-md-item, .wb-svc-ops button, .wb-issue button, .wb-cost-open):active { transform: none; }
+.reduce-motion .workbench .wb-loadbar { opacity: 0.5; }
+
+/* ==========================================================================
+   19. Console-skin re-assertion
+   src/console-entry.css is evaluated after this file, so its .console-stage
+   .wb-* rules would win on equal specificity. It no longer restates any shell,
+   column, title or card-surface value (its old 0.58 card surface and main-pane
+   glass are gone; the panes take --wb-ground from section 2), so the two rules
+   below only pin, at console-stage specificity, the PR11 page-title tier (the
+   display face at --wb-fs-page) and the rank-2 content-card surface
+   .wb-log-detail / .wb-share-block take from section 3. They name the same tokens those sections declare, so each
+   value still has one source.
+   ========================================================================== */
+
+.console-stage .workbench .wb-title { font-size: var(--wb-fs-page); font-weight: 400; }
+.console-stage .workbench :is(.wb-log-detail, .wb-share-block) { background: var(--wb-rank-2-bg); }
+
+/* ==========================================================================
+   20. Fee-lane first screen (PR11)
+   The three readings are the KPI band (section 3) across the full column, with the
+   resident 口径 strip and the disabled export under it; below them the trend (on
+   charcoal) sits on the left and the lane's context - 口径与可信度, then 本期 vs
+   上期 - in a right column. Both columns live inside ONE child of .wb-content
+   (.wb-cost-top), so the block rhythm below it is a plain single column.
+   ========================================================================== */
+
+.wb-cost-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: var(--wb-sp-7); align-items: start; margin-bottom: var(--wb-sp-9); }
+.wb-cost-main, .wb-cost-side { min-width: 0; }
+.wb-cost-side { display: flex; flex-direction: column; gap: var(--wb-sp-7); }
+.wb-cost-side > .wb-block { margin-bottom: 0; }
+.wb-cost-main > :is(.wb-block, .wb-chart-card) { margin: 0; }
+.wb-cost-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--wb-sp-3) var(--wb-sp-6); margin: 0 0 var(--wb-sp-8); }
+.workbench .wb-cost-foot > .wb-cost-note { flex: 1 1 32ch; margin: 0; }
+.wb-cost-foot > button { margin-left: auto; }
+/* 本期 vs 上期 in the narrow column: label over value, one row per reading. */
+.wb-period .wb-cred-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+.wb-period-rows > .wb-cred-row:first-child { border-top: none; }
+
+/* ==========================================================================
+   21. Responsive
+   ========================================================================== */
+
+/* Top bar widths (PR11). With labels the bar needs ~1230px at a 236px jump
+   field: the field narrows first, then folds to its 44px search icon (it opens
+   over the tools while it has focus), and under 1180px the navigation is icons
+   only (console-entry.ts writes the effective state, so the label toggle hides). */
+@media (max-width: 1440px) {
+  .wb-md-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 1320px) {
+  .wb-jump { width: 180px; }
+}
+@media (max-width: 1280px) {
+  .workbench { --wb-gutter: 24px; }
+  .wb-cost-top { grid-template-columns: minmax(0, 1fr); }
+  .wb-large { font-size: var(--wb-fs-7); }
+}
+@media (max-width: 1240px) {
+  .wb-jump { width: 44px; padding: 0; justify-content: center; }
+  .workbench .wb-jump > svg { position: absolute; left: 14px; }
+  .workbench .wb-jump .wb-jump-input { position: absolute; inset: 0; width: 100%; padding-left: 40px; color: transparent; cursor: pointer; border-radius: var(--wb-r-pill); }
+  .workbench .wb-jump .wb-jump-input::placeholder { color: transparent; }
+  .wb-jump:focus-within { position: absolute; top: 0; right: 0; z-index: 9; width: 280px; background: var(--theme-panel); }
+  .wb-jump:focus-within .wb-jump-input { color: var(--theme-ink); cursor: text; }
+  .wb-jump:focus-within .wb-jump-input::placeholder { color: var(--theme-muted); }
+}
+@media (max-width: 1180px) {
+  .workbench .wb-bar [data-action="rail-toggle"] { display: none; }
+  .wb-ledger-pair { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 1100px) {
+  /* The band folds: the lemon hero takes its own row above the shared card. */
+  :is(.wb-kpis, .wb-cost) { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "c c" "a d"; row-gap: var(--wb-sp-5); }
+  :is(.wb-kpis, .wb-cost)::before { grid-area: 2 / 1 / 3 / 3; }
+  .workbench :is(.wb-kpis, .wb-cost) > .wb-kpi-hero { margin-left: 0; }
+  .wb-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-areas: "c c c" "a b d"; }
+  .wb-kpis::before { grid-area: 2 / 1 / 3 / 4; }
+  .wb-ov-grid { grid-template-columns: minmax(0, 1fr); }
+  .wb-ov-grid > :is(.wb-ov-queue, .wb-ov-services) { grid-column: 1; grid-row: auto; }
+  .wb-md { grid-template-columns: minmax(0, 1fr); }
+  .wb-account-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wb-fee-trends { grid-template-columns: minmax(0, 1fr); }
+  /* Below this width the narrow column and the chart beside it stop reading as
+     a pair, so the chart grid returns to one column and the secondary chart
+     takes the full row again instead of an implicit second column. */
+  .wb-chart-grid { grid-template-columns: minmax(0, 1fr); }
+  .wb-chart-grid > .wb-chart-card:not(.wb-chart-wide) + .wb-chart-wide { grid-column: 1 / -1; }
+}
+
+@media (max-width: 860px) {
+  .wb-share-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 760px) {
+  .workbench { --wb-gutter: 16px; }
+  /* Phone widths: the bar wraps, and the icon-only navigation track takes its
+     own full row under the brand and the tools (six 44px items fit in 343px). */
+  .wb-bar { flex-wrap: wrap; row-gap: var(--wb-sp-3); }
+  .wb-nav { order: 3; flex: 1 0 100%; justify-content: center; }
+  :is(.wb-kpis, .wb-cost) { grid-template-columns: minmax(0, 1fr); grid-template-areas: "c" "a" "d"; }
+  :is(.wb-kpis, .wb-cost)::before { display: none; }
+  .workbench :is(.wb-kpis, .wb-cost) > div:not(.wb-kpi-hero) { border-radius: var(--wb-r-l); background: var(--wb-rank-1-bg); box-shadow: var(--wb-card-shadow); }
+  :is(.wb-kpis, .wb-cost) > div:last-child::before { display: none; }
+  .wb-kpis { grid-template-columns: minmax(0, 1fr); grid-template-areas: "c" "a" "b" "d"; }
+  .wb-kpis > .wb-kpi-rate::before { display: none; }
+  .wb-verdict { border-radius: var(--wb-r-l); }
+  .wb-svc-result { max-width: 100%; }
+  .wb-kv, .wb-cred-row { grid-template-columns: minmax(0, 1fr); }
+  .wb-log-more { margin-left: 0; }
+  /* A button whose label is longer than a phone column wraps inside its pill
+     instead of pushing the page sideways (log source entries, feed source row). */
+  .workbench .wb-btn { max-width: 100%; white-space: normal; }
+  .wb-feed-src { flex-wrap: wrap; max-width: 100%; }
+}
+
+/* Runtime-log overview and independently expandable key usage. */
+.wb-log-overview-filters { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; }
+.wb-log-overview-table { max-height:440px; overflow:auto; }
+.wb-log-overview-table td:last-child { min-width:240px; overflow-wrap:anywhere; }
+.wb-log-kind-error { --wb-log-color:var(--wb-status-err); }
+.wb-log-kind-warning { --wb-log-color:var(--wb-status-warn); }
+.wb-log-kind-success { --wb-log-color:var(--wb-status-ok); }
+.wb-log-kind-info { --wb-log-color:#225a9b; }
+.wb-log-kind-unknown { --wb-log-color:var(--theme-muted); }
+.wb-log-overview-filters button, .wb-log-kind { color:var(--wb-log-color); }
+.wb-log-overview-filters button[aria-pressed="true"] { outline:2px solid currentColor; outline-offset:-2px; }
+/* C4：分类色条长在**新表格行**上（旧 div 行布局已删）：行首单元格的左边框
+   让错误红 / 警告黄 / 通过绿 / 信息蓝 / 未分类灰在浅深两主题下都可见
+   （--wb-log-color 由上面的 .wb-log-kind-* 提供，暗色另有 info 覆盖）。 */
+.wb-log-overview-table tbody tr[class*="wb-log-kind-"] > td:first-child,
+.wb-log-event-table tbody tr[class*="wb-log-kind-"] > td:first-child { border-left: 3px solid var(--wb-log-color); }
+/* C4：ERROR 行的原文保持红字（原 `.wb-log-row.wb-log-err .wb-log-msg`）。 */
+.wb-log-kind-error .wb-log-msg { color: var(--wb-status-err); }
+.wb-chart-baseline-zero { stroke-width:2.5; }
+.wb-chart-baseline-missing { stroke-width:1.5; stroke-dasharray:2 2; opacity:.75; }
+.wb-chart-marker-note { margin:4px 0 12px; font-size:12px; color:var(--theme-muted); }
+.wb-key-summary td { vertical-align:top; padding-top:18px; }
+.wb-key-summary small, .wb-key-breakdown-row small { display:block; font-weight:400; color:var(--theme-muted); margin-top:5px; }
+.wb-key-cost, .wb-key-quality { display:block; margin-bottom:8px; white-space:nowrap; }
+.wb-key-cost strong { font-size:20px; font-variant-numeric:tabular-nums; }
+.wb-key-details-row > td { padding:0 0 16px; border-bottom:2px solid var(--theme-line); }
+.wb-key-details-row summary { padding:12px 16px; }
+.wb-key-breakdown { display:block; padding:16px 0 6px; }
+.wb-key-breakdown-head, .wb-key-breakdown-row { display:grid; grid-template-columns:minmax(180px,1.4fr) minmax(130px,1fr) minmax(85px,.6fr) minmax(85px,.6fr); gap:16px; padding:12px 0; text-align:left; }
+.wb-key-breakdown-head { font-size:12px; color:var(--theme-muted); border-bottom:1px solid currentColor; }
+.wb-key-breakdown-row { border-bottom:1px solid var(--theme-line); font-weight:400; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+@media(max-width:760px) { .wb-key-breakdown-head, .wb-key-breakdown-row { gap:8px; grid-template-columns:minmax(120px,1.2fr) minmax(100px,1fr) 80px 80px; } }
+
+.wb-log-overview-table table { min-width:850px; }
+.wb-log-overview-table td:nth-child(2) button { white-space:nowrap; }
+.wb-log-overview-table td:first-child { white-space:nowrap; }
+.wb-key-summary td:first-child { min-width:150px; }
+
+/* This four-column table supersedes the legacy seven-column grid above. */
+.wb-share-block .wb-table-scroll > table.wb-table.wb-key-usage { display:table; min-width:650px; table-layout:auto; }
+.wb-share-block .wb-table-scroll > table.wb-key-usage > thead { display:table-header-group; }
+.wb-share-block .wb-table-scroll > table.wb-key-usage > tbody { display:table-row-group; }
+.wb-share-block .wb-table-scroll > table.wb-key-usage tr { display:table-row; }
+.wb-share-block .wb-table-scroll > table.wb-key-usage th:last-child { display:table-cell; }
+.wb-share-block .wb-table-scroll > table.wb-key-usage td:last-child:not([colspan]) { grid-column:auto; padding:18px 14px 8px; }
+.wb-share-block .wb-table-scroll > table.wb-key-usage td[colspan] { padding:0; }
+
+:root[data-dark-surface="true"] .wb-log-kind-info { --wb-log-color:#8dc7ff; }
+
+/* Keep an expanded key readable in the page, not clipped by the outer table tail. */
+.wb-key-usage-scroll { max-height:none; }
+.wb-key-usage .wb-share-key-detail-body { max-height:320px; overflow:auto; }
+.workbench .wb-log-overview-filters button[class*="wb-log-kind-"] { color:var(--wb-log-color); }
+
+/* Runtime logs reuse the gateway workspace without sharing order preferences. */
+.wb-log-workspace .wb-gw-main { min-width:0; }
+.wb-log-workspace .wb-md-name { white-space:normal; overflow:visible; text-overflow:clip; }
+.wb-log-workspace .wb-log-source-list .wb-gw-row { position:relative; }
+.wb-log-workspace .wb-gw-handle { position:absolute; right:8px; top:24px; }
+.wb-log-workspace .wb-gw-item { padding-right:40px; }
+/* C4：原文块是 div（按钮 + pre），从不渲染 <summary>，旧的
+   `.wb-log-raw summary` 规则已删。 */
+.wb-log-event-table { max-height:540px; overflow:auto; }
+.wb-log-event-table table { min-width:720px; }
+.wb-log-event-table td:first-child { white-space:nowrap; }
+.wb-log-event-table td:nth-child(3) { min-width:260px; overflow-wrap:anywhere; }
+.wb-log-event-table .wb-log-msg { max-width:100%; white-space:pre-wrap; overflow-wrap:anywhere; }
+.wb-log-event-table .wb-log-msg.nowrap { white-space:pre; overflow-x:auto; }
+.wb-chart-scroll { max-width:100%; min-width:0; overflow-x:auto; padding-bottom:8px; }
+.wb-chart-scroll > .wb-area { display:block; width:100%; height:auto; }
+@media(max-width:900px) { .wb-log-workspace { grid-template-columns:1fr; } .wb-log-workspace .wb-log-source-list { max-height:240px; } }
+
+.wb-log-raw { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.wb-log-raw .wb-log-msg { flex-basis:100%; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+.workbench .wb-log-workspace .wb-gw-handle { border:0; background:transparent; color:var(--theme-muted); border-radius:6px; }
+.workbench .wb-log-workspace .wb-gw-handle:hover { background:var(--wb-hover); }

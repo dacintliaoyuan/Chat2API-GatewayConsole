@@ -1,0 +1,16 @@
+{
+  "family": "Smiley Sans (得意黑)",
+  "license": "SIL Open Font License 1.1 (OFL.txt) with Reserved Font Names <Smiley> and <得意黑>: the release woff2 is shipped byte-for-byte, never subset or converted, so the reserved name stays valid.",
+  "repository": "https://github.com/atelier-anchor/smiley-sans",
+  "release": "v2.0.1 (published 2024-02-07)",
+  "archive": { "url": "https://github.com/atelier-anchor/smiley-sans/releases/download/v2.0.1/smiley-sans-v2.0.1.zip", "bytes": 5781344, "sha256": "299c0be6c960ae37361762eca76f7d0cd516615435bb96c0d4b98a1e70178a07" },
+  "licenseSource": { "url": "https://raw.githubusercontent.com/atelier-anchor/smiley-sans/main/LICENSE", "commit": "21204d2de5384ab80024d2ae8ea94dbbee84313e" },
+  "downloadedAt": "2026-09-30T12:55:00+08:00",
+  "approvedBy": "maintainer, 2026-09-30 (AI-GW-OPENDESIGN-REDESIGN-20260925 PR11)",
+  "fontFilesModified": false,
+  "usage": "Console page titles and section titles only (src/console-fonts.css). Single oblique weight; glyphs outside its set fall back to MiSans.",
+  "files": [
+    { "path": "SmileySans-Oblique.ttf.woff2", "source": "smiley-sans-v2.0.1.zip!/SmileySans-Oblique.ttf.woff2", "bytes": 1150924, "sha256": "731f22973349404b15a88a99ef3b5dd4104c0965c23b7e485c1f11e84fea99e2" },
+    { "path": "OFL.txt", "source": "LICENSE at the commit above", "bytes": 4422, "sha256": "9401f4050f1b66c26b6ccdc8b0e14a3c1cc37aac122eda84386f25854a9bec72" }
+  ]
+}

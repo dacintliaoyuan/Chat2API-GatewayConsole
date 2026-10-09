@@ -1,0 +1,14 @@
+{
+  "family": "Manrope",
+  "license": "SIL Open Font License 1.1 (OFL.txt; no Reserved Font Name)",
+  "repository": "https://github.com/google/fonts/tree/main/ofl/manrope",
+  "upstreamCommit": "b31870aff700ab7a1d74fa0c6887d95beb9e0037",
+  "downloadedAt": "2026-09-30T12:55:00+08:00",
+  "approvedBy": "maintainer, 2026-09-30 (AI-GW-OPENDESIGN-REDESIGN-20260925 PR11)",
+  "fontFilesModified": false,
+  "usage": "Console Latin letters, digits and numeric symbols (src/console-fonts.css, unicode-range limited); variable weight axis 200-800.",
+  "files": [
+    { "path": "Manrope-wght.ttf", "source": "https://github.com/google/fonts/raw/main/ofl/manrope/Manrope%5Bwght%5D.ttf", "bytes": 164700, "sha256": "3ae11c49db0455a3cc33e37d380f20fdb8c7f8b41dc07625c177e3d87a9d6ae6" },
+    { "path": "OFL.txt", "source": "https://github.com/google/fonts/raw/main/ofl/manrope/OFL.txt", "bytes": 4387, "sha256": "58172e0c0fac2cda8a37b348164bb55e44b0e69051e557e92b1d3f6910141f7b" }
+  ]
+}

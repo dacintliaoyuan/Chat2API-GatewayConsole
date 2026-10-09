@@ -1,0 +1,194 @@
+/* Native desktop workspace: no archive stage scaling or cinematic boot.
+   Console skin + appearance dialog. Vocabulary is the frozen design contract
+   (output/ai-gateway-console-redesign-20260925/02-design-contract.md §2-§3):
+   every colour is var(--theme-*) / var(--wb-*); the non-production alias family
+   (--surface / --border / --text-1..3 / --panel-glass / --r-*) is never
+   referenced, and the dark polarity key stays [data-dark-surface="true"] — the
+   :root[data-theme=…] blocks of the non-production console.css do not apply. */
+/* --wb-hover / --wb-hover-strong / --wb-control-line are declared here as well
+   as in workbench.css §1 because this file is loaded only by the console page
+   (index.html → console-entry.ts) while workbench.css is also the archive page's
+   only hover declaration. --wb-control-line is needed at :root because the
+   appearance dialog below is appended to document.body (console-entry.ts `settings`), so it
+   sits OUTSIDE .workbench, where workbench.css declares the token; the dialog's
+   only visible control boundary is the "关闭" button's 1px edge (transparent
+   fill); PR11's cool #8591a6 measures 3.3:1 on the light panel and 4.9:1 on the
+   dark one — the same control-identification edge the workbench's secondary
+   tier and form fields take. */
+:root { font-family: var(--wb-font-body); color: var(--theme-ink); background: var(--theme-paper); --wb-hover: rgba(var(--theme-ink-rgb), .05); --wb-hover-strong: rgba(var(--theme-ink-rgb), .09); --wb-control-line: #8591a6; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .48; }
+[hidden] { display: none !important; }
+/* Plan-Revision 9（维护者 2026-09-28 ⑦）：焦点环是 2px 实线 + 外偏 2px，所有可聚焦件
+   一个形状。此前这里是 3px 外偏，而 workbench.css §19 的同一环是 2px——本文件在
+   workbench.css 之后加载，同特异性下由它胜出，于是通知池的关闭按钮实测读到 3px 外偏。
+   环的几何收敛到 2px：环不消失，只是偏移与提案一致。 */
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--theme-ink); outline-offset: 2px; }
+::selection { background: rgba(var(--theme-accent-rgb), .25); }
+#viewport, #stage { width: 100%; height: 100dvh; min-height: 400px; overflow: hidden; position: relative; }
+/* Background (§6.4; 2026-09-29): the console creates no canvas layer at all. Its
+   ground is the workbench's own --wb-ground (solid paper or the one static
+   gradient, workbench.css "Console ground"), and information stays in
+   .wb-content (§6.2 不得用背景承担信息). */
+.console-stage .workbench { z-index: 1; }
+/* Press feedback: colour rides the accent token in light and the ink token in
+   dark, instead of the hardcoded green/silver literals; duration converges to
+   --wb-dur-3 (§2.10, was 420ms). Hidden under reduce-motion below. */
+.console-click-host { position: relative; overflow: hidden; }
+.console-click-feedback { position: absolute; border-radius: 50%; pointer-events: none; transform: translate(-50%, -50%) scale(.18); background: radial-gradient(circle, rgba(var(--theme-accent-rgb), .18), rgba(var(--theme-accent-rgb), 0) 72%); animation: consoleClick var(--wb-dur-3, 260ms) cubic-bezier(.16, 1, .3, 1) forwards; }
+[data-dark-surface="true"] .console-click-feedback { background: radial-gradient(circle, rgba(var(--theme-ink-rgb), .2), rgba(var(--theme-ink-rgb), 0) 72%); }
+@keyframes consoleClick { to { opacity: 0; transform: translate(-50%, -50%) scale(1); } }
+
+/* ---------- Console skin ---------- */
+/* The shell (workbench.css §2-§3) now owns the head, the title, the eyebrow,
+   the read stamp, the scope note, the ⓘ marker, the top bar, the content
+   column, the table surface, the quota note and the muted / lane-note type — its
+   §19 comment states this file carries the same frozen values for the shell, the
+   column width and the title, so those declarations were dropped here instead of
+   restated. The .58 surface this file used to give .wb-log-detail / .wb-share-block
+   is gone too: workbench.css §19 carries the 0.90 rank for the same selector at
+   higher specificity, so the second declaration never applied (§2.11a). What the
+   shell leaves to this skin is below: the console's own opaque ground and the
+   quota bucket layout the shell's own comment defers to this file.
+   The rail and the main pane paint the console ground (--wb-ground: solid paper
+   or the static gradient) - declared in workbench.css and not restated here, so
+   the setting has one declaration site. */
+.console-stage .wb-quota { display: grid; gap: var(--wb-sp-4, 10px); font-size: var(--wb-fs-4, 13px); }
+.console-stage .wb-quota-bucket { display: grid; gap: var(--wb-sp-2, 6px); }
+.console-stage .wb-quota-bucket > div:first-child { display: flex; flex-wrap: wrap; gap: var(--wb-sp-3, 8px) var(--wb-sp-6, 14px); justify-content: space-between; }
+
+/* ---------- Appearance dialog (§4.9: stays an overlay, never a 7th lane) ---------- */
+/* Card on the frozen modal rank: --wb-r-l, --wb-shadow-3, panel surface.
+   Plan-Revision 9（维护者 2026-09-28 逐页落点 · 设置覆盖层）：宽 min(520px,100vw−48px)、
+   内边距 22px、组间 22px。此前是 600px / calc(100vw−64px) / 28px 内边距，
+   三者都超出提案值；本文件里控制行的间距由下面 .console-appearance 的组间距承担。 */
+.console-appearance { width: min(520px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); overflow: auto; padding: var(--wb-sp-8, 22px); border: 1px solid var(--theme-line); border-radius: var(--wb-r-l, 20px); color: var(--theme-ink); background: var(--theme-panel); box-shadow: var(--wb-shadow-3, 0 24px 64px rgba(8, 10, 8, .30)); }
+.console-appearance::backdrop { background: rgba(8, 10, 8, .44); }
+.console-appearance header { display: flex; align-items: center; gap: var(--wb-sp-8, 22px); justify-content: space-between; }
+.console-appearance h2 { margin: 0; font-family: var(--wb-font-display); font-size: var(--wb-fs-page, 24px); font-weight: 400; letter-spacing: .02em; }
+.console-appearance p { font-size: var(--wb-fs-5, 14px); line-height: 1.7; color: var(--theme-muted); }
+/* Secondary rank of §3.6: transparent + hairline + pill (was 6px radius). The
+   hairline is this button's ONLY visible boundary (no fill of its own), so it is a
+   control-identification edge, not decoration: measured 2.45:1 light / 2.80:1 dark
+   with --theme-line, below the 3:1 non-text floor the maintainer's 2026-09-27
+   review asked for. It takes the same --wb-control-line as the workbench's
+   secondary tier (3.69:1 light / 4.87:1 dark). */
+.appearance-close { padding: var(--wb-sp-3, 8px) var(--wb-sp-6, 14px); border: 1px solid var(--wb-control-line); border-radius: var(--wb-r-pill, 999px); background: transparent; color: var(--theme-ink); cursor: pointer; transition: background-color var(--wb-dur-1, 140ms) var(--wb-ease, ease), border-color var(--wb-dur-1, 140ms) var(--wb-ease, ease); }
+.appearance-close:hover { background: var(--wb-hover); border-color: var(--theme-ink); }
+/* Plan-Revision 6 (3.13b′): the close control drops its visible label and
+   keeps its name in `aria-label` + the `.wb-icon-hint` plate below. The cross is
+   drawn by CSS the way the shell draws its fold chevron (workbench.css
+   `.wb-fold-mark:empty::before`), so the console keeps ONE SVG path map
+   (workbench.ts:69) and the overlay adds no second geometry; 12px of bar at
+   1.5px stays on the icons' stroke tier. The hairline above is now the
+   control's only visible shape at all, so it is what keeps the control's
+   boundary at 3:1. */
+.appearance-close-mark { position: relative; display: block; width: 14px; height: 14px; }
+.appearance-close-mark::before,
+.appearance-close-mark::after { content: ""; position: absolute; left: 1px; top: 50%; width: 12px; height: 1.5px; border-radius: 1px; background: currentColor; }
+.appearance-close-mark::before { transform: translateY(-50%) rotate(45deg); }
+.appearance-close-mark::after { transform: translateY(-50%) rotate(-45deg); }
+/* The plate is the shell's `.wb-icon-hint` plate (workbench.css §6) carried
+   here because this dialog is appended to document.body (console-entry.ts `settings`),
+   OUTSIDE .workbench, where those rules cannot reach. Same anchor (the control's
+   own inline-end edge, so it only grows towards the start of the row and never
+   widens the dialog), same hint tier and same visibility rule (:hover /
+   :focus-visible), so the name never depends on the browser's own title. One
+   difference: the press feedback adds `.console-click-host` (overflow: hidden,
+   `.console-click-host` above) on the first pointerdown and never removes it, which
+   would cut the plate down to the pill for every later hover or press; this
+   control is the dialog's close button, so its click ends the dialog and no
+   press-pulse spill is ever observable - the plate stays whole instead. */
+.console-appearance button:has(> .wb-icon-hint) { position: relative; overflow: visible; }
+.console-appearance .wb-icon-hint {
+  display: none;
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: 4;
+  transform: translateY(-50%);
+  padding: 2px var(--wb-sp-3);
+  white-space: nowrap;
+  font-size: var(--wb-fs-3);
+  line-height: 1.5;
+  color: var(--theme-ink);
+  background: var(--theme-panel);
+  border: 1px solid var(--wb-control-line);
+  border-radius: var(--wb-r-s);
+  box-shadow: var(--wb-shadow-1);
+  pointer-events: none;
+}
+.console-appearance button:hover > .wb-icon-hint,
+.console-appearance button:focus-visible > .wb-icon-hint { display: inline-block; }
+/* Plan-Revision 9（维护者 2026-09-28 逐页落点 · 设置覆盖层）：组间 22px、控件行 ≥44px。
+   三组（配色/背景/动效强度）之间的间距此前是 --wb-sp-9（28px）；legend 字号此前是
+   15px，不在字级阶梯 {11,12.5,14,17,22,28,33} 上，收到正文档（--wb-fs-5 = 14px），
+   权重不变。控件行自身 47.7px（label 的 12px 内边距 + 正文行高 + 边框）≥44px。 */
+.console-appearance fieldset { border: 0; padding: 0; margin: var(--wb-sp-8, 22px) 0; }
+.console-appearance legend { margin-bottom: var(--wb-sp-5, 12px); font-size: var(--wb-fs-5, 14px); font-weight: 600; }
+/* Segmented choice row on the control surface; the checked option takes the
+   console's selection mark (PR11): the lemon fill with ink text, the same as
+   the current navigation item. */
+.appearance-options { display: flex; flex-wrap: wrap; gap: var(--wb-sp-3, 8px); }
+.appearance-options label { display: inline-flex; align-items: center; gap: var(--wb-sp-3, 8px); min-height: 44px; padding: 0 var(--wb-sp-6, 14px); border: 1px solid var(--theme-line); border-radius: var(--wb-r-pill, 999px); background: var(--theme-field); color: var(--theme-muted); cursor: pointer; transition: background-color var(--wb-dur-1, 140ms) var(--wb-ease, ease), border-color var(--wb-dur-1, 140ms) var(--wb-ease, ease), color var(--wb-dur-1, 140ms) var(--wb-ease, ease); }
+.appearance-options label:hover { background: var(--wb-hover); color: var(--theme-ink); }
+.appearance-options label:has(:checked),
+.appearance-options label:has(:checked):hover { border-color: var(--wb-lemon-edge); background: var(--wb-lemon-fill); color: var(--wb-on-lemon); font-weight: 600; }
+.appearance-options label:has(:focus-visible) { outline: 2px solid var(--theme-ink); outline-offset: 2px; }
+.appearance-options input { accent-color: var(--wb-on-lemon); margin: 0; }
+/* The option row carries the one focus ring; the radio inside it does not add a second. */
+.appearance-options input:focus-visible { outline: none; }
+/* Option previews (2026-09-29): what the choice looks like, drawn from the
+   same tokens the console paints with. Motion has no picture, so no swatch. */
+.appearance-swatch { flex: 0 0 auto; width: 22px; height: 16px; border: 1px solid var(--wb-control-line); border-radius: 4px; background: var(--theme-paper); }
+.appearance-swatch[data-swatch^="motion-"] { display: none; }
+.appearance-swatch[data-swatch="theme-light"] { background: linear-gradient(162deg, #d2deff, #d8f4f2); }
+.appearance-swatch[data-swatch="theme-dark"] { background: linear-gradient(162deg, #111a29, #0f1f27); }
+.appearance-swatch[data-swatch="theme-system"] { background: linear-gradient(135deg, #d2deff 0 50%, #111a29 50% 100%); }
+.appearance-swatch[data-swatch="backdrop-vivid"] { background: radial-gradient(circle at 90% 0%, rgba(217, 248, 74, .9), rgba(217, 248, 74, 0) 60%), linear-gradient(162deg, #b8c6ff, #bfeee8); }
+.appearance-swatch[data-swatch="backdrop-soft"] { background: linear-gradient(162deg, #e3e7f1, #e5ecec); }
+.appearance-swatch[data-swatch="backdrop-solid"] { background: var(--theme-paper); }
+/* The backdrop previews follow the theme: dark vivid / soft are navy grounds. */
+[data-dark-surface="true"] .appearance-swatch[data-swatch="backdrop-vivid"] { background: radial-gradient(circle at 0% 20%, rgba(84, 100, 232, .75), rgba(84, 100, 232, 0) 70%), linear-gradient(162deg, #111a29, #0f1f27); }
+[data-dark-surface="true"] .appearance-swatch[data-swatch="backdrop-soft"] { background: linear-gradient(162deg, #141a24, #141c21); }
+/* 导航 previews (PR11): the top bar with its labels (a long strip) or with icons
+   only (short ticks). */
+.appearance-swatch[data-swatch="rail-expanded"] { background: linear-gradient(90deg, rgba(var(--theme-paper-rgb), .9) 0 0) 3px 2px / 13px 2px no-repeat, linear-gradient(180deg, rgba(var(--theme-ink-rgb), .55) 0 6px, var(--theme-paper) 6px 100%); }
+.appearance-swatch[data-swatch="rail-collapsed"] { background: repeating-linear-gradient(90deg, rgba(var(--theme-paper-rgb), .9) 0 2px, transparent 2px 5px) 3px 2px / 13px 2px no-repeat, linear-gradient(180deg, rgba(var(--theme-ink-rgb), .55) 0 6px, var(--theme-paper) 6px 100%); }
+/* A group the page overrides (the navigation below 1180px, motion under the system
+   setting) keeps its stored choice marked and writes its reason right under the
+   options row it explains (§3.6). */
+.console-appearance .appearance-reason { margin: var(--wb-sp-3, 8px) 0 0; font-size: var(--wb-fs-3, 12.5px); line-height: 1.5; }
+/* Fold row (contract §3.12d, maintainer 2026-09-27/28): the one fold this
+   overlay owns — the background/motion explanation — is a full-row summary with a
+   fixed 16px chevron at its inline end. The dialog is appended to
+   document.body (console-entry.ts `settings`), OUTSIDE .workbench, so the shell's own row
+   (.workbench details > summary, workbench.css:1021-1100) cannot reach it and the
+   same shape is carried here, exactly as the .wb-icon-hint plate above is. The
+   mark's own base styles (workbench.css:1073, unprefixed) DO reach this dialog;
+   only the open-state rotation is scoped to .workbench there, so that one rule is
+   repeated. 44px row, 14px inline padding, pointer cursor and the 展开/收起 hint
+   (the summary's title) are the four things the fold criterion measures. */
+.console-appearance .wb-secondary-details { margin-top: var(--wb-sp-5, 12px); padding: var(--wb-sp-3, 8px) 0; border-top: 1px solid var(--theme-line); }
+.console-appearance .wb-secondary-details > summary { display: flex; align-items: center; gap: var(--wb-sp-2, 6px); width: 100%; min-height: 44px; padding: 0 var(--wb-sp-6, 14px); box-sizing: border-box; cursor: pointer; font-size: var(--wb-fs-5, 14px); font-weight: 500; color: var(--theme-muted); }
+.console-appearance .wb-secondary-details > summary:hover,
+.console-appearance .wb-secondary-details > summary:focus-visible { background: var(--wb-hover); color: var(--theme-ink); }
+.console-appearance .wb-secondary-details[open] > summary { margin-bottom: var(--wb-sp-6, 14px); }
+.console-appearance .wb-secondary-details:not([open]) > summary { margin-bottom: 0; }
+.console-appearance .wb-secondary-details[open] > summary .wb-fold-mark { transform: rotate(45deg); }
+.appearance-hint { margin-bottom: 0; }
+.appearance-status { margin: 0; min-height: 1.2em; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; scroll-behavior: auto !important; } .console-click-feedback { display: none; } }
+/* The stage-level .reduce-motion class mirrors this same media query and the
+   「减少动效」 choice (console-entry.ts `reduceMotion`) but lives on #stage, while the
+   dialog is appended to document.body (console-entry.ts `settings`) — reach the
+   dialog's own tree through the root attribute applyAppearance writes next to that
+   class, so both covering paths hold for the fold mark and the option rows too
+   (§6.3): opacity is not inherited, so `:is(.console-appearance, ...)` alone
+   would leave the fold's 200ms rotation running. Not `html:has(.reduce-motion)`:
+   a root-level :has() made every DOM write restyle the whole document (measured
+   2026-10-01: 8ms per chart-tip getBBox, 1.3-2s per lane switch). */
+html[data-console-motion="reduced"] :is(.console-appearance, .console-appearance *, .console-click-feedback) { animation: none !important; transition: none !important; }

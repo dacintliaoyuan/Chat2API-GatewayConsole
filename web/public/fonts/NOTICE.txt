@@ -1,0 +1,28 @@
+MiSans by Xiaomi / 小米科技有限责任公司
+Copyright © 2020-2025 Beijing Xiaomi Mobile Software Co.,Ltd. All Rights Reserved.
+
+Official source: https://hyperos.mi.com/font/download
+Archive: https://hyperos.mi.com/font-download/MiSans.zip
+The application now uses third-party split webfonts from misans-webfont@4.3.1
+(font Version 4.003), distributed with this application for on-demand loading.
+Font shards are copied byte-for-byte from that package. CSS family names,
+weight mappings and URLs are adapted for the existing interface.
+Upstream copyright: Copyright © 2020-2023 Beijing Xiaomi Mobile Software Co.,Ltd. All Rights Reserved.
+Upstream project: https://github.com/mobeicanyue/misans-webfont
+Package source, integrity and file hashes: misans-webfont-4.3.1/source.json
+Upstream README: misans-webfont-4.3.1/UPSTREAM-README.md
+Font license: MiSans-license.pdf (retained separately from upstream tooling license).
+
+Gateway console fonts (2026-09-30, AI-GW-OPENDESIGN-REDESIGN-20260925 PR11)
+Loaded only by the console entry (src/console-fonts.css). Every file below is
+shipped byte-for-byte from its upstream release; provenance, upstream commit,
+byte sizes and sha256 for each file are in the folder's source.json.
+
+Manrope - Copyright 2018 The Manrope Project Authors. SIL Open Font License 1.1.
+  manrope/Manrope-wght.ttf, manrope/OFL.txt (from google/fonts ofl/manrope)
+JetBrains Mono - Copyright 2020 The JetBrains Mono Project Authors. SIL Open Font License 1.1.
+  jetbrains-mono/JetBrainsMono-wght.ttf, jetbrains-mono/OFL.txt (from google/fonts ofl/jetbrainsmono)
+Smiley Sans (得意黑) - Copyright (c) 2022--2024, atelierAnchor, with Reserved Font Name
+  <Smiley> and <得意黑>. SIL Open Font License 1.1. Release woff2 unmodified (no subset),
+  so the reserved name stays valid.
+  smiley-sans/SmileySans-Oblique.ttf.woff2, smiley-sans/OFL.txt (release v2.0.1)
