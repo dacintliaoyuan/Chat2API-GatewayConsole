@@ -421,7 +421,7 @@ class CompareSnapshotTests(unittest.TestCase):
                                 "health": _entry(404, "route_not_shared"),
                                 "whitelist_models": _entry(401, "invalid_api_key")}))
         self.assertEqual(2, result["exit_code"])
-        self.assertEqual("fail", _item(result, "share_entry")["verdict"])
+        self.assertEqual("fail", _item(result, "share_gateway")["verdict"])
 
     def test_share_ledger_row_loss_fails(self):
         result = snapshot_tool.compare_snapshots(_snapshot(), _after(

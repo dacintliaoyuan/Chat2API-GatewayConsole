@@ -120,7 +120,17 @@ rm -rf /opt/um-share/.incoming/um-share-<version>
 
 更新顺序：停 cloudflared → `um-share-brokerctl.py --drain-budget 900 --poll-interval 5 stop`（未排空返回 75，不切换版本）→ `host-stop` → 停控制台 unit → 原子切换 `current` 符号链接。健康门失败自动切回 `previous`；回滚到原版本成功返回 68，回滚/补偿未完成返回 69。锁是 `/run/um-share/deploy.lock` 的非阻塞 `flock`，另一个部署操作返回 75。
 
-回滚运行当前 release 自己的 `rollback.sh`；目标版本必须已安装且 manifest 校验通过。回滚不删除 release、数据、密钥或备份，只切符号链接并重启 unit。
+回滚运行当前 release 自己的 `rollback.sh`；目标版本必须已安装且 manifest 校验通过。回滚不删除 release、数据、密钥或备份，只切符号链接并重启 unit：
+
+```bash
+/opt/um-share/releases/<current-version>/um-cloud-deploy/rollback.sh   --drain-budget 900
+```
+
+显式数据恢复同样运行当前 release 自己的脚本：
+
+```bash
+/opt/um-share/releases/<current-version>/um-cloud-deploy/rollback.sh   --recover-backup /var/lib/um-share/backup-remote/um-share-<id>.umbak   --recover-security-state /var/lib/um-share/security-state.json   --drain-budget 900
+```
 
 运行数据在 `/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share`，不在 release 内，不删除、不覆盖。预算保护与自动备份已从默认装配移除；`backup_restore.py` 只保留显式备份/恢复入口，由运维单独授权执行。
 

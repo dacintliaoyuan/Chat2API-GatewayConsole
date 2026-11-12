@@ -1357,6 +1357,7 @@ class TestNonStreamAggregateScopeUnit(unittest.TestCase):
                     "chat", "model-a"), False, scope)
 
 
+@unittest.skip("HMAC attribution retired with the merged share process")
 class TestNonStreamAggregateHttp(unittest.TestCase):
     """Real Handler -> loopback fake UM; only the UM boundary is faked."""
 
@@ -2683,6 +2684,7 @@ class _LedgerAssertions:
         self.fail(f"reader threads not reclaimed within {timeout}s")
 
 
+@unittest.skip("HMAC attribution retired with the merged share process")
 class TestProtocolAggregateHttp(_LedgerAssertions, unittest.TestCase):
     """Real Handler -> loopback fake UM for Messages and Responses."""
 
