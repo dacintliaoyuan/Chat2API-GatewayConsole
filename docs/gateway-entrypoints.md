@@ -1,11 +1,6 @@
 # 网关入口与产物归属
 
-本文件记录 ai-gateway 的现行入口、构建产物目的地与历史材料归属。端口以
-[PORTS.md](../PORTS.md) 为准，分享链语义见 [SHARING.md](../SHARING.md)，
-云端部署步骤见 [um-cloud-deploy/README.md](../um-cloud-deploy/README.md)。
-
-本文件只记录归属和建议。除文档本身外，本次没有移动、删除、部署或重启任何入口、
-产物或运行数据；表中的“建议”都须另行授权。
+本文件记录本仓库的现行入口、构建产物目的地与历史材料归属。端口以 [PORTS.md](../PORTS.md) 为准，分享链语义见 [SHARING.md](../SHARING.md)，云端部署步骤见 [um-cloud-deploy/README.md](../um-cloud-deploy/README.md)。
 
 ## 1. 本机（local 角色）
 
@@ -64,7 +59,7 @@
 | 前端入口 | `web/index.html` → `web/src/console-entry.ts` | 装入 `src/local/local-console.ts` | 装入 `src/cloud/cloud-console.ts` |
 | 前端外壳与契约 | `web/src/shell/`、`web/src/console/backend/`、`web/src/console/role-gate.ts` | 两侧共用 | 两侧共用 |
 | 分享 Python 核心 | `share_*.py`、`chat2api/`、`console_share_*.py` | Windows 装配 | cloud 角色只装配 UM 分享动作 |
-| 统一验证 | `verify.ps1`、`ai-gateway/tests/` | Python/PowerShell 回归 | Linux 链走 `run-linux-checks.sh` |
+| 统一验证 | `python -m unittest discover -s tests -p "test_*.py"`、`web/` 的 `check:*` | Python/前端回归 | Linux 链走 `run-linux-checks.sh` |
 
 ## 4. 构建产物与目的地
 
@@ -78,59 +73,16 @@
 | 构建身份 | 每次构建自动写入 | 各产物根 `candidate-build.json` | `usagesrv.py` 校验 `role`/`line`/`sourceHash`；`make-manifest.py`／`package-release.sh` 校验 `--web-role` |
 | 云端发布包 | `um-cloud-deploy/package-release.sh` | 默认 `<source>/output/um-share-release/` 的 `um-share-<version>.tar.gz` + `.sha256` | 云端 `install.sh`／`update.sh` |
 
-`web/dist`、`web/dist-cloud`、`web/release/` 都在 `web/.gitignore` 中；`ai-gateway/output/`
-在 `SelfUseAI/.gitignore` 中。`npm run build` 单独运行会被输出守卫拒绝，不会默认覆盖
-`dist/`；`CONSOLE_LOCAL_SHARE_RETIRED=1` 只声明云端已接管分享管理，不改变页面权限。
+`web/dist`、`web/dist-cloud`、`web/release/` 都在 `web/.gitignore` 中；`output/` 在根 `.gitignore` 中。`npm run build` 单独运行会被输出守卫拒绝，不会默认覆盖 `dist/`；`CONSOLE_LOCAL_SHARE_RETIRED=1` 只声明云端已接管分享管理，不改变页面权限。
 
-## 5. 历史材料归属
+## 5. 历史材料
 
-| 路径 | 身份 | 现行消费端 | 处置 |
-|------|------|------------|------|
-| `um-cloud-deploy/` | 现行云端发布/运维材料 | `RELEASE-MANIFEST.json`、`package-release.sh`、`install.sh`／`update.sh`／`rollback.sh`、`verify-release.ps1`、`run-linux-checks.sh` | 保留；当前 manifest 为 `s2-20261107a` |
-| `um-share-deploy/` | 旧 Windows 本机分享链的运维/恢复材料 | `SHARING.md`、`chat2api/SHARING.md`、`tests/install-share-broker.Tests.ps1`、`tests/d4-assembly.Tests.ps1`、`tests/repair-limits.Tests.ps1`、`tests/run-d4-experiment.Tests.ps1`、`tests/watchdog-*.Tests.ps1`、`tests/test_d4_*.py`、`tests/test_share_*.py`、`tests/test_console_share_production.py`、`share_broker_ops.py` 的 `repair-limits.ps1` | 保留；仍有恢复说明和测试消费者，不整目录删除 |
-| `output/` | 本机构建/诊断输出 | 当前 `output/um-share-release-r17/um-share-s2-20261105a.tar.gz` 是新的云端候选包；源 `RELEASE-MANIFEST.json` 的 `web_dist.files` 指向 `web/dist-cloud` | 其余按 §6 处置 |
-| `tmp/` | 本机诊断、提取与日志 | `tmp/r16-hotfix-1/display-full-canvas.png` 被 r17 交接引用；`tmp/s2-20261103e/`、`tmp/um-cloud-*/` 被归档交接引用 | 其余按 §6 处置 |
-| `um-share-deploy/logs/` | 部署/看门狗诊断日志 | `SHARING.md` 的部署/排障说明引用 `deploy-*.log` 与 `canary-*.json` | 保留最近一轮用于追溯；其余可清理 |
+- 迁移前的 `ai-gateway` 树来自外部仓库 SelfUseAI；本仓库从 `7f2b108` 起只保留迁入后的路径。旧 `SelfUseAI/ai-gateway/...` 路径不在本仓库 Git 历史中，不能按本仓库的 `git show` 恢复。
+- `output/`、`tmp/` 是本地构建/诊断产物，不入库；当前发布包、文件数量与哈希以 `um-cloud-deploy/RELEASE-MANIFEST.json` 为准。
+- `um-share-deploy/logs/` 是旧 Windows 链的部署/看门狗诊断日志；按 `SHARING.md` 保留最近一轮用于追溯。
 
-## 6. 无消费者、无独有恢复价值的清单
+## 6. 剩余已知不一致
 
-判定口径：在 Git 跟踪文件、`verify.ps1`、`tests/`、`um-cloud-deploy/`、`SHARING.md`
-和现行交接中都搜不到消费端（§5 明确保留的项除外），且能从源码或 Git 历史重建。
-以下项目本次**没有**移动或删除。
-
-| 路径 | 内容与引用 | 消费端 | 唯一恢复价值 | 移动映射 | 恢复方法 |
-|------|------------|--------|----------------|----------|----------|
-| `output/ai-gw-round18-20260929/`（2 个已跟踪 .md） | round 18 退出记录/监督候选设计；无引用 | 无 | 无（设计已被后续实现取代） | 归档到 `docs/proposals/archive/ai-gateway-round18-20260929/`（跨模块，须单独授权） | `git show ac622902:SelfUseAI/ai-gateway/output/ai-gw-round18-20260929/<file>` |
-| `output/s2-20261103c/` | 2026-11-03 云端候选包、web-dist 与检查脚本；无引用 | 无 | 无（已被 `s2-20261105a` 取代） | 删除（`output/` 不入库） | 按包内 `web-dist/candidate-build.json` 的 `gitHead=54cbf45b` 重建 |
-| `output/um-share-release-r16/um-share-s2-20261104a..g.tar.gz` + `.sha256` | 2026-11-04 的中间候选包；a–h 均已被 `s2-20261105a` 取代；a–g 的 `web/dist/candidate-build.json` 均为 `candidate-cloud`／`gitHead=0d6ff49` | 无 | 无（被 `s2-20261105a` 取代） | 删除 a–g | 按 `gitHead=0d6ff49213e3f2d794ef79648c2e8b01b38fea3f` 重建（a–e 的源码哈希不同，只能重建近似候选） |
-| `output/um-share-release-r17/um-share-s2-20261105a.tar.gz` + `.sha256` | 当前本地候选包；包含 r17 修复 | 现行交接 | 有（尚未部署的唯一候选包） | 保留 | 本机已有 |
-| `output/um-share-release-r16/web-prod-cloud-h/` | 旧 r16 h 候选的 web 源树 | 历史交接 | 无（新 manifest 已改指 `web/dist-cloud`） | 删除 | 从旧 h 包重解压 |
-| `tmp/r14-private/`、`tmp/r14-review/`、`tmp/r14-rework/` | 旧轮次提取、坏包与验证脚本；无外部引用 | 无 | 无（旧轮次已被取代） | 删除（`ai-gateway/tmp/` 不入库） | 从对应 tarball 重解压，或按 `candidate-build.json` 的 `gitHead` 重建 |
-| `tmp/s2-20261103d/`、`tmp/s2-20261103e/` | 旧轮次提取与验证输出；`s2-20261103e` 被归档交接全文快照引用 | 归档交接（历史） | 无（已被 `s2-20261105a` 取代） | 先更新归档引用，再删除 | 从 `output/` 中对应 tarball 重解压 |
-| `tmp/r16-verify/` | 2026-11-04b 候选提取；无引用 | 无 | 无（被 `s2-20261105a` 取代） | 删除 | 从 `output/um-share-release-r16/um-share-s2-20261104b.tar.gz` 重解压 |
-| `tmp/r16-hotfix-1/` | 显示端到端截图与临时 `console_display_proxy.cloud.py`；r17 交接第 178 行引用 `display-full-canvas.png` | 现行交接（显示证据） | 有（真实显示截图） | 保留 | 不可精确重建；按需另存到稳定证据目录后再改引用 |
-| `tmp/um-cloud-console-handoff-20261104/`、`tmp/um-cloud-joint-20261101/` | 复现输出与 sweep JSON；被归档交接全文快照引用 | 归档交接（历史） | 有（当时复现输出） | 先更新归档引用，再删除 | 原始 JSON/日志保留在归档交接中 |
-| `tmp/inst-logs/`、`tmp/inst-logs2/`、`tmp/inst-logs3/`、`tmp/inst-logs4/` | 2026-11-01 安装隔离日志；无引用 | 无 | 无 | 删除 | 重跑安装/隔离测试生成 |
-| `tmp/commit-final*.log`、`tmp/full-python-regression-20261101-final.log`、`tmp/regression-first-failure*.log`、`tmp/fake-um-server-test.log`、`tmp/r16-chat2api-reauth.log` | 测试与提交日志；无引用 | 无 | 无 | 删除 | 重跑对应测试生成 |
-| `tmp/r16-manifest-now.json` | manifest 快照；无引用 | 无 | 无 | 删除 | `python um-cloud-deploy/make-manifest.py ...` 重新生成 |
-| `tmp/r16-a5-readiness.md` | 2026-11-04 加载前门槛记录；无外部引用 | 无 | 无（已被 r17 交接取代） | 删除 | 内容来自 r17 交接与当时只读读数 |
-| `tmp/r16-display-diag/` | RFB 帧与 noVNC 探针；无引用 | 无 | 无（一次性诊断） | 删除 | 重跑 `test_greeting_frames.py`／`ws_probe.py` |
-| `tmp/um-share-backup.service` | 临时 unit 副本；测试只引用 `backup_restore.systemd_units()` 生成的同名 unit | 无 | 无（可由代码生成） | 删除 | 由 `backup_restore.systemd_units()` 重新生成 |
-| `um-share-deploy/run-broker.cmd` | 旧固定路径 broker 包装器；`install-share-broker.ps1` 从参数生成新的 `run-broker.cmd`，`deploy-elevated.ps1:824` 读的是运行目录副本 | 无（只消费运行目录生成物） | 无（旧包装器含过期 `--share-task`，不能重放） | 无移动；`git rm`（须授权），Git 历史保留 | `git show HEAD:SelfUseAI/ai-gateway/um-share-deploy/run-broker.cmd` |
-| `um-share-deploy/uac-probe.ps1` | 一次性 UAC 探针；0 引用 | 无 | 无 | 无移动；`git rm`（须授权），Git 历史保留 | `git show HEAD:SelfUseAI/ai-gateway/um-share-deploy/uac-probe.ps1` |
-| `um-share-deploy/key_lifecycle_20260906.py` | 自声明 SUPERSEDED；仅 `verify_8100.py` 注释提及 | 无 | 无 | 无移动；`git rm`（须授权） | `git show HEAD:SelfUseAI/ai-gateway/um-share-deploy/key_lifecycle_20260906.py`；现行场景在 `share_admin.py` 与 `tests/test_share_management*.py` |
-| `um-share-deploy/tcp_hold.py` | 一次性 TCP 监听测试缝；仅自引用 | 无 | 无 | 无移动；`git rm`（须授权） | `git show HEAD:SelfUseAI/ai-gateway/um-share-deploy/tcp_hold.py` |
-| `um-share-deploy/maintenance-now-elevated.ps1`、`revoke2-elevated.ps1`、`redeploy-elevated.ps1` | 一次性历史动作；仅自引用；归档交接只警告“旧 wrapper 不能盲重放” | 无 | 无（动作已完成，配置已无对应对象） | 无移动；`git rm`（须授权），Git 历史保留 | `git show HEAD:SelfUseAI/ai-gateway/um-share-deploy/<file>` |
-
-不在此清单、必须保留的旧 Windows 入口：`deploy-elevated.ps1`、`watchdog-umshare.ps1`、
-`wfp_helper.ps1`、`install-share-broker*.ps1`、`run-deploy-guarded.ps1`、
-`share_guard.py`、`canary_um.py`、`escape_probe.py`、`repair-limits.ps1`、`verify_8100.py`、
-`verify_redeploy*.py`、`verify_revoke2.py`、`test_stability.py`、`verify-scenarios-elevated.ps1`、
-`verify-scope-live-elevated.ps1`、`udp_receiver.py`、`udp_send.py`、`d4-*.ps1`、`run-d4-experiment.ps1`。
-
-## 7. 剩余已知不一致（本次未改）
-
-- `web/src/console/role-gate.ts` 的 `LOCAL_ONLY_ACTION_PREFIXES` 仍列出 `qoder.`／`cliproxy.`／
-  `model.`；退役来源已删除，云端注册表也不再装配它们。角色判定不因此放宽，本次未改代码。
-- `chat2api/SHARING.md` 第 88 行仍引用已清理的 `tmp/p0-umshare/`；本机分享链的现行入口是
-  `um-share-deploy/` 与 `SHARING.md`，该句只作历史。本次未改 `chat2api/SHARING.md`。
+- `web/src/console/role-gate.ts` 的 `LOCAL_ONLY_ACTION_PREFIXES` 仍列出 `model.`／`qoder.`／`qoderglobal.`／`cliproxy.`；退役来源已删除，云端注册表也不再装配它们。角色判定不因此放宽，本次未改代码。
+- `web/vite.config.ts` 的 `GW_TARGETS` 仍列出 `qoder-cn`／`qoder-global`／`cliproxy` 端口；这些来源已退役，开发代理仍会尝试转发。本次未改代码。
+- `chat2api/SHARING.md` 第 88 行仍引用已清理的 `tmp/p0-umshare/`；本机分享链的现行入口是 `um-share-deploy/` 与 `SHARING.md`，该句只作历史。本次未改 `chat2api/SHARING.md`。
