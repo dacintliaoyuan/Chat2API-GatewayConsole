@@ -29,6 +29,17 @@ async function mountUm(
     import("./um-ui/contract"),
   ]);
   stage.dataset.mode = "um";
+  if (scenario === null && __CONSOLE_CANDIDATE__) {
+    // Candidate builds ship before the B6 wiring: the real console is
+    // honestly unwired and issues no reads. Only a production build mounts
+    // the data controller below.
+    mountUmConsole(stage, unwiredState(), {
+      onEvent: () => {},
+      gate,
+      previewHref: "?um-preview=normal",
+    });
+    return;
+  }
   if (scenario === null) {
     // B6: the real console is fed by the data controller; the console never
     // fetches. The controller is attached before it starts so no read can land
