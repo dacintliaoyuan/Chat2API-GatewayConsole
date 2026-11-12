@@ -36,8 +36,7 @@
 
 ## 4. 分享链边界
 
-- 8100 只由 broker 拉起：`um-share-broker.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`；控制台的 `share.start/stop/estop/retry_stop` 在云端为 `enabled=False`。
-- 8100 合并进程由 broker 唯一拉起；控制台的 `share.backend_restart` 走 broker restart，`share.backend_login` 走 8100 控制令牌端点。云端不安装第二套 watchdog。
+- 8100 合并进程只由 broker 拉起：`um-share-broker.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`；控制台的 `share.start/stop/estop/retry_stop` 在云端为 `enabled=False`，`share.backend_restart` 走 broker restart，`share.backend_login` 走 8100 控制令牌端点。云端不安装第二套 watchdog。
 - 18096 只监听 loopback；公网入口只反代分享白名单到 8100，不反代 18096/5901。
 - 分享 Key 鉴权、每 Key 并发准入与撤销在 8100 进程内完成；撤销 Key 会关闭该 Key 的在途请求。归因直接使用鉴权后的 `key_id`，不再有跨进程 HMAC 标记。
 - 运行数据在 `/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share`，不在 release 内；预算保护与自动备份已从默认装配移除，恢复只走显式 `backup_restore.py`。
