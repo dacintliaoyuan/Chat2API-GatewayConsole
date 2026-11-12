@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Linux-only UM share chain checks. Run inside the isolated WSL distro.
 #
-# The fixture starts REAL product processes on the loopback test ports:
-#   28100 share gateway, 28110 chat2api share backend, 28096 management API,
-#   28999 verification-only fake UM.  All SQLite/Key/profile/ledger paths live
+# The fixture starts the REAL merged 8100 process on loopback test ports:
+#   28100 merged share process, 28999 verification-only fake UM.  All SQLite/Key/profile/ledger paths live
 #   under one private temporary directory; no production data is read or written.
 #
 # Modes:
-#   core      (default) P1 chain: tests/linux_share_chain.py --scenario core
+#   core      (default) single-process chain: tests/linux_share_chain.py
 #   full      core + long-request chain + cloud ops drill (tests.test_cloud_ops)
 #   resource  2 GiB / 4 GiB resource envelope
 #             (tests/linux_resource_envelope.py)
