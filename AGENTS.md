@@ -17,6 +17,9 @@
 | 领域词汇 | [GLOSSARY.md](GLOSSARY.md) |
 | 云端部署与运维 | [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
 | 旧 Windows 分享链（已退役） | Git 历史；当前云端见 [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
+| 分享链旧/新名字与边界 | [docs/share-chain-map.md](docs/share-chain-map.md) |
+| 提交前检查 | [scripts/check.sh](scripts/check.sh)；首次运行 `bash scripts/install-hooks.sh` |
+| Review 判断规则 | [CODING_STANDARDS.md](CODING_STANDARDS.md) |
 | 操作 issue | [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) |
 | 查标签含义 | [docs/agents/triage-labels.md](docs/agents/triage-labels.md) |
 | 领域文档消费规则 | [docs/agents/domain.md](docs/agents/domain.md) |
