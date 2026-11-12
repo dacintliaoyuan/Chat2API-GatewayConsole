@@ -2,9 +2,10 @@
 """Shared backend assembly for the two composition roots (E19-1).
 
 ``cloud/backend/app.py`` and ``local/backend/app.py`` are composition roots: each
-owns its own routes, its own app lifecycle and its own ``build_app``/``main``. What
-they do NOT own separately is the loopback HTTP plumbing and the pid/log/control
-token helpers — those were duplicated verbatim and had already drifted (the cloud
+owns its own product handlers, its own app lifecycle hooks and its own
+``build_app``/``main``. What they do NOT own separately is the loopback HTTP
+plumbing, the route/stopping/auth order, the pid/log/control-token helpers or the
+listener/close lifecycle — those were duplicated and had already drifted (the cloud
 copy passed the same FILETIME twice to ``GetProcessTimes``; the local copy had the
 stale-pid-file rule). This module is the single copy:
 
@@ -15,7 +16,12 @@ stale-pid-file rule). This module is the single copy:
   reader (0600/current-uid gate, never an empty expected value);
 * ``BackendHTTPServer`` (bounded drain) and ``BackendHandler`` (the shared
   plumbing methods). A role subclasses both and adds its own routes; the role keeps
-  its own ``_control_ok`` because the local role also accepts a session cookie.
+  its own ``_control_ok`` because the local role also accepts a session cookie;
+* ``RouteSpec``/``RoleCapabilities``/``RoleProfile``: each role declares its route
+  table, capability table and optional broker once; ``RoleHandler`` executes the
+  table with the exact auth/stopping/body order;
+* ``RoleApp``: the shared start/pid/log/listener/close lifecycle. A role
+  implements only ``_start_role``/``_stop_role`` for its own resources.
 
 Nothing here starts a process, opens a port or writes a file at import time.
 """
@@ -24,8 +30,10 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import sys
 import threading
 import time
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -35,10 +43,12 @@ from share.secret_protection import read_private_secret_path
 __all__ = [
     "LOOPBACK_HOSTS", "PROXY_METADATA_HEADERS", "MAX_BODY_BYTES",
     "PID_IDENTITY_TOLERANCE_S", "PID_FILE_STALE_AFTER_S", "LOG_MAX_BYTES",
+    "SHUTDOWN_DRAIN_TIMEOUT_S",
     "pid_alive", "read_pid_identity", "process_creation_epoch",
     "read_pid_file", "write_pid_file", "remove_pid_file",
     "append_bounded_log", "hostname_of", "has_proxy_metadata",
     "read_control_token", "BackendHTTPServer", "BackendHandler",
+    "RouteSpec", "RoleCapabilities", "RoleProfile", "RoleHandler", "RoleApp",
 ]
 
 LOOPBACK_HOSTS = frozenset(("127.0.0.1", "::1", "localhost"))
@@ -55,6 +65,9 @@ PID_IDENTITY_TOLERANCE_S = 2.0
 PID_FILE_STALE_AFTER_S = 30.0
 # Bounded append log: one 1 MiB file, rotated by truncation.
 LOG_MAX_BYTES = 1024 * 1024
+# D18-10: a stop drains the in-flight requests with a BOUND instead of waiting
+# forever or cutting them off.
+SHUTDOWN_DRAIN_TIMEOUT_S = 10.0
 
 
 def pid_alive(pid, *, pid_file=None):
@@ -418,3 +431,390 @@ class BackendHandler(BaseHTTPRequestHandler):
                                   "field": unknown[0]})
             return True
         return False
+
+
+# --------------------------------------------------------- role assembly
+@dataclass(frozen=True)
+class RouteSpec:
+    """One route in a role's table.
+
+    ``match`` is one of ``exact`` (the whole path equals ``segments``),
+    ``prefix`` (the path starts with ``segments``) or ``length`` (the path has
+    exactly ``length`` segments, starts with ``segments`` and optionally ends with
+    ``tail``). ``mode`` names how the handler is called:
+
+    * ``none`` -> ``handler()``
+    * ``query`` / ``body`` -> ``handler(payload)``
+    * ``segments`` -> ``handler(segments)``
+    * ``segments_query`` / ``segments_body`` -> ``handler(segments, payload)``
+
+    ``auth`` is ``control`` (the admin token, or the role's ``_control_ok``
+    override) or ``public`` (the route validates its own credential). ``stopping``
+    is ``before_auth``, ``after_auth`` or ``allow``. ``body`` is ``read`` or
+    ``none``. The order of the checks is part of the HTTP contract, so it stays
+    data in the table instead of being re-implemented by each role.
+    """
+
+    segments: tuple = ()
+    handler: str = "_send_unknown"
+    mode: str = "none"
+    match: str = "exact"
+    length: int | None = None
+    tail: str | None = None
+    auth: str = "control"
+    stopping: str = "before_auth"
+    body: str = "none"
+    capability: str = ""
+
+
+@dataclass(frozen=True)
+class RoleCapabilities:
+    """The role's declared capabilities.
+
+    ``features`` gates routes; a route naming a capability that is absent is not
+    assembled. ``actions`` is the operation allow-list and
+    ``maintenance_actions`` the UM maintenance table. The values are role facts,
+    not shared defaults: an empty table is a valid (cloud) capability set.
+    """
+
+    features: frozenset = frozenset()
+    actions: tuple = ()
+    maintenance_actions: frozenset = frozenset()
+
+    def has(self, feature):
+        return not feature or feature in self.features
+
+
+@dataclass(frozen=True)
+class RoleProfile:
+    """The complete per-role declaration consumed by the shared assembly."""
+
+    role: str
+    app_class: object
+    handler_class: object
+    get_routes: tuple
+    post_routes: tuple
+    get_fallback: RouteSpec
+    post_fallback: RouteSpec
+    capabilities: RoleCapabilities
+    log_file_name: str
+    get_path_aliases: tuple = ()
+    broker_starter: object = None
+
+
+class RoleHandler(BackendHandler):
+    """Route-table driven HTTP handler shared by both composition roots.
+
+    The role supplies only ``RoleProfile`` data and its handler methods; the
+    request guard, health answer, stopping/auth order, body read and unknown-path
+    answer live here exactly once.
+    """
+
+    @property
+    def profile(self):
+        return self.app.profile
+
+    def _path_segments(self, path, *, apply_aliases=False):
+        segments = [part for part in path.split("/") if part]
+        if apply_aliases:
+            for prefix, replacement in self.profile.get_path_aliases:
+                if tuple(segments[:len(prefix)]) == tuple(prefix):
+                    segments = list(replacement) + segments[len(prefix):]
+                    break
+        return segments
+
+    @staticmethod
+    def _route_matches(route, segments):
+        prefix = list(route.segments)
+        if route.match == "prefix":
+            return segments[:len(prefix)] == prefix
+        if route.match == "length":
+            if route.length is not None and len(segments) != route.length:
+                return False
+            if segments[:len(prefix)] != prefix:
+                return False
+            if route.tail is not None and (
+                    not segments or segments[-1] != route.tail):
+                return False
+            return True
+        return segments == prefix
+
+    def _find_route(self, routes, segments):
+        for route in routes:
+            if not self.profile.capabilities.has(route.capability):
+                continue
+            if self._route_matches(route, segments):
+                return route
+        return None
+
+    def _invoke_route(self, route, segments, payload):
+        handler = getattr(self, route.handler)
+        if route.mode == "none":
+            handler()
+        elif route.mode in ("query", "body"):
+            handler(payload)
+        elif route.mode == "segments":
+            handler(segments)
+        elif route.mode in ("segments_query", "segments_body"):
+            handler(segments, payload)
+        else:
+            raise RuntimeError("unknown route mode: %s" % route.mode)
+
+    def _send_unknown(self):
+        self._send_json(404, {"error": "unknown path"})
+
+    def _shutdown(self):
+        self._send_json(200, {"status": "shutting_down"})
+        threading.Thread(target=self.app.shutdown, daemon=True,
+                         name="%s-shutdown" % self.profile.role).start()
+
+    def do_GET(self):
+        if not self._request_allowed():
+            self.close_connection = True
+            self._send_json(403, {"error": "local-only service"})
+            return
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path == "/health":
+            self._send_json(200, {"status": "ok", "role": self.profile.role,
+                                  "pid": os.getpid()})
+            return
+        # D18-10: once the stop is ordered, every non-health read is refused
+        # BEFORE it can touch the runtime/backend that is being torn down.
+        if self.app.is_stopping():
+            self.close_connection = True
+            self._send_json(503, {"error": "shutting_down"})
+            return
+        if not self._control_ok():
+            self.close_connection = True
+            self._send_json(401, {"error": "control token required"})
+            return
+        segments = self._path_segments(path, apply_aliases=True)
+        route = self._find_route(self.profile.get_routes, segments)
+        if route is None:
+            route = self.profile.get_fallback
+        self._invoke_route(route, segments, parsed.query)
+
+    def do_POST(self):
+        if not self._request_allowed():
+            self.close_connection = True
+            self._send_json(403, {"error": "local-only service"})
+            return
+        path = urlparse(self.path).path
+        # The prefixed alias is a GET contract only; a POST keeps the exact
+        # segments the role's table declares.
+        segments = self._path_segments(path)
+        route = self._find_route(self.profile.post_routes, segments)
+        if route is None:
+            route = self.profile.post_fallback
+        # The check order is per route: the local session bootstrap is public
+        # and the local non-session routes refuse a stop before auth, while the
+        # cloud routes authenticate first.
+        if route.stopping == "before_auth" and self.app.is_stopping():
+            self.close_connection = True
+            self._send_json(503, {"error": "shutting_down"})
+            return
+        if route.auth == "control" and not self._control_ok():
+            self.close_connection = True
+            self._send_json(401, {"error": "control token required"})
+            return
+        if route.stopping == "after_auth" and self.app.is_stopping():
+            self.close_connection = True
+            self._send_json(503, {"error": "shutting_down"})
+            return
+        payload = None
+        if route.body == "read":
+            try:
+                payload = self._read_body()
+            except ValueError as exc:
+                self.close_connection = True
+                self._send_json(400, {"error": str(exc)})
+                return
+        self._invoke_route(route, segments, payload)
+
+
+class RoleApp:
+    """Shared lifecycle for both composition roots.
+
+    The role supplies ``profile`` and implements ``_start_role``/``_stop_role``.
+    Start order, pid/log ownership, the bounded listener drain and the close
+    contract are shared; the role hooks only acquire/release its own resources.
+    """
+
+    profile = None
+
+    def __init__(self, config, *, clock=time.time):
+        self.config = config
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._server = None
+        self._thread = None
+        self._closed = threading.Event()
+        self._close_done = threading.Event()
+        # D18-10: a stop first refuses new work, then drains the in-flight
+        # requests with a bound, and only then stops the role resources.
+        self._stopping = threading.Event()
+        # An exception in the listener thread must reach the entry's exit code.
+        self._failure = None
+
+    @property
+    def role(self):
+        return self.profile.role
+
+    # -------------------------------------------------------------- lifecycle
+    def start(self):
+        with self._lock:
+            if self._server is not None:
+                raise RuntimeError("%s app is already started" % self.role)
+            if self._closed.is_set():
+                raise RuntimeError(
+                    "%s app was closed and cannot be restarted" % self.role)
+            try:
+                os.makedirs(self.config.home_dir, exist_ok=True)
+                os.makedirs(self.config.state_root, exist_ok=True)
+                os.makedirs(self.config.log_dir, exist_ok=True)
+                os.makedirs(self.config.lock_dir, exist_ok=True)
+            except OSError as exc:
+                raise RuntimeError(
+                    "%s state directories are not usable: %s"
+                    % (self.role, exc))
+            if read_control_token(self.config.control_token_file) is None:
+                raise RuntimeError(
+                    "%s control token is missing or unreadable: %s"
+                    % (self.role, self.config.control_token_file))
+            write_pid_file(self.config.pid_file, os.getpid())
+            self._log("start pid=%d port=%d"
+                      % (os.getpid(), self.config.port))
+            try:
+                return self._start_role()
+            except Exception:
+                remove_pid_file(self.config.pid_file, os.getpid())
+                raise
+
+    def _start_role(self):
+        raise NotImplementedError
+
+    def _stop_role(self):
+        raise NotImplementedError
+
+    def _start_server_thread(self, server):
+        """Bind the listener to this app, run it, and roll back on failure."""
+        server.app = self
+        self._server = server
+        self._thread = threading.Thread(
+            target=self._serve, name="%s-console" % self.role, daemon=True)
+        # standards-lifecycle-03: ``Thread.start()`` runs AFTER the socket is
+        # bound and AFTER the role resources started, so a failure here must
+        # roll the listener back. Otherwise ``close()`` blocks forever in
+        # ``server.shutdown()`` waiting for a ``serve_forever`` that never ran.
+        try:
+            self._thread.start()
+        except Exception:
+            self._thread = None
+            self._server = None
+            try:
+                server.server_close()
+            except OSError:
+                pass
+            raise
+        return self
+
+    def _serve(self):
+        """Run the listener loop and RECORD a crash for the entry's exit code."""
+        server = self._server
+        try:
+            server.serve_forever()
+        except BaseException as exc:  # noqa: BLE001 - re-raised in serve_forever
+            self._failure = exc
+            raise
+        finally:
+            # A listener loop that exits while the app was never asked to close
+            # is a crash: the entry must not report success.
+            if not self._closed.is_set() and self._failure is None:
+                self._failure = RuntimeError(
+                    "%s listener loop exited" % self.role)
+
+    def serve_forever(self):
+        thread = self._thread
+        if thread is None:
+            raise RuntimeError("%s app is not started" % self.role)
+        # ``start`` already runs the listener in its own thread; this call only
+        # waits for it so a second serve_forever loop never races the first one
+        # on the same socket.
+        thread.join()
+        if self._failure is not None:
+            raise self._failure
+
+    def is_stopping(self):
+        """True once a stop was requested; the handler refuses new work."""
+        return self._stopping.is_set()
+
+    def shutdown(self):
+        """Request shutdown from a handler thread; safe to call twice."""
+        if not self._claim_close():
+            self._close_done.wait(timeout=60)
+            return
+        self._finish()
+
+    def close(self):
+        """Close after ``serve_forever`` returned (safe no-op shutdown)."""
+        if not self._claim_close():
+            self._close_done.wait(timeout=60)
+            return
+        self._finish()
+
+    @property
+    def address(self):
+        server = self._server
+        if server is None:
+            return (self.config.host, self.config.port)
+        return server.server_address[:2]
+
+    # --------------------------------------------------------------- helpers
+    def _claim_close(self):
+        with self._lock:
+            if self._closed.is_set():
+                return False
+            self._closed.set()
+            # From this instant the app refuses new work: the stop is ordered
+            # BEFORE the role resources are torn down.
+            self._stopping.set()
+            return True
+
+    def _log(self, line):
+        """Bounded append log under ``log_dir`` (never a request line/body)."""
+        append_bounded_log(
+            os.path.join(self.config.log_dir, self.profile.log_file_name),
+            "%s %s" % (time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                       line))
+
+    def _stop_listener(self):
+        server = self._server
+        if server is None:
+            return
+        if self._thread is not None and self._thread.is_alive():
+            server.shutdown()
+        server.server_close()
+        if not server.drain(SHUTDOWN_DRAIN_TIMEOUT_S):
+            print("[%s] in-flight requests did not finish within %.1fs"
+                  % (self.role, SHUTDOWN_DRAIN_TIMEOUT_S), file=sys.stderr)
+
+    def _finish(self):
+        # Stop order (D18-10): refuse new work (already set in
+        # ``_claim_close``), stop the listener so no new request is accepted,
+        # drain the in-flight requests with a BOUND, and only then stop the role
+        # resources. ``shutdown()`` is only safe once the serve loop is running:
+        # a listener thread that crashed before entering ``serve_forever`` would
+        # block it forever.
+        self._stop_listener()
+        failure = None
+        try:
+            self._stop_role()
+        except Exception as stop_exc:  # noqa: BLE001 - raised below
+            failure = stop_exc
+        finally:
+            self._log("stop pid=%d" % os.getpid())
+            remove_pid_file(self.config.pid_file, os.getpid())
+            self._close_done.set()
+        if failure is not None:
+            raise failure

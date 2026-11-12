@@ -21,6 +21,8 @@ AI_GATEWAY = HERE.parents[1]                    # ai-gateway/
 CLOUD_DIRS = ("cloud", "shared")
 
 ROOT_FILES = (
+    "app/__init__.py",
+    "app/console_backend_app.py",
     "console/operations.py",
     "console/share_production.py",
     "share/backend_supervision.py",
