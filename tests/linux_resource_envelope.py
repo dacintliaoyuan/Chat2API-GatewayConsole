@@ -3,7 +3,7 @@
 """Linux resource-envelope measurement for the complete UM share chain.
 
 This fixture starts the REAL product processes on loopback only, exactly like
-``linux_share_chain.py``:
+``linux_share_chain_legacy.py``:
 
     fake UM (verification-only upstream)   127.0.0.1:28999
     chat2api share backend               127.0.0.1:28110
@@ -61,7 +61,7 @@ DEFAULT_REPORT = Path(
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-import linux_share_chain as chain                      # noqa: E402
+import linux_share_chain_legacy as chain                      # noqa: E402
 
 SHARE_PORT = chain.SHARE_PORT
 BACKEND_PORT = chain.BACKEND_PORT

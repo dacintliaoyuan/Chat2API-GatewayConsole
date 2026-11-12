@@ -9,7 +9,7 @@ Runs the REAL cloud package on loopback only:
     cloud/run_cloud.py --config (18096 role, owns the 8110 backend)
 
 The fixture reuses the process/HTTP helpers from
-``tests/linux_share_chain.py`` but replaces every start method that belongs to
+``tests/linux_share_chain_legacy.py`` but replaces every start method that belongs to
 the retired local chain. The broker owns the 8100 process and the cloud
 application owns the 8110 process; the fixture never starts them itself.
 
@@ -38,7 +38,7 @@ for _entry in (str(TESTS), str(AI_GATEWAY)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-import linux_share_chain as chain  # noqa: E402
+import linux_share_chain_legacy as chain  # noqa: E402
 
 PRODUCTION_PORTS = frozenset((8000, 8001, 8100, 8110, 18096, 5901))
 MODEL = "fake-um-model"
