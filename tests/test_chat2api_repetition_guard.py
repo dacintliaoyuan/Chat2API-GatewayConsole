@@ -333,14 +333,14 @@ class TestChat2ApiRepetitionGuard(unittest.TestCase):
             "os.environ['CHAT2API_CONTROL_TOKEN_FILE'] = os.path.join("
             "os.environ['TEMP'], 'unused-token')\n"
             "spec = importlib.util.spec_from_file_location('c2g', "
-            "'D:/git/github/personal_files/SelfUseAI/ai-gateway"
-            "/chat2api/chat2api.py')\n"
+            "sys.argv[1])\n"
             "m = importlib.util.module_from_spec(spec)\n"
             "spec.loader.exec_module(m)\n"
             "print('created', os.path.exists('chat2api.log'))\n"
         )
         proc = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, timeout=60,
+            [sys.executable, "-c", code, str(CHAT2API_PATH)],
+            capture_output=True, timeout=60,
             cwd=tempfile.mkdtemp())
         self.assertEqual(proc.returncode, 0)
         self.assertIn(b"created False", proc.stdout)

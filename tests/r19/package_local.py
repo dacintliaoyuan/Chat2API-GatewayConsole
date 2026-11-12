@@ -29,6 +29,7 @@ COPY_TREES = (
 
 COPY_FILES = (
     "chat2api/chat2api.py",
+    "console_backend_app.py",
     "share_secret_protection.py",
     "console_stats.py",
     "console_operations.py",
