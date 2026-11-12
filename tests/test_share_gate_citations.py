@@ -12,7 +12,7 @@
 * 只读：不写 `data/`、不启动/停止任何进程、不发请求、不碰 git。
 
 `output/` 是 gitignore 的（`SelfUseAI/.gitignore:75`），所以文档本身不在仓库里；
-被引用的 `ai-gateway/*` 与 `ai-gateway/SHARING.md` 在仓库里——本模块钉的是后者。
+被引用的 `chat2api/*` 与 `SHARING.md` 在仓库里——本模块钉的是后者。
 
 运行（工作目录 `ai-gateway/`）：
     python -B -m unittest tests.test_share_gate_citations -q

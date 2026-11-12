@@ -5,7 +5,7 @@
 
 * ``output/ai-gw-round6-20260927/metering-action-gate.md`` §②（生成密钥与 ACL，
   **须提权**）与 §⑤.2（密钥回退判据：回退只动文件、不动目录）；
-* ``ai-gateway/SHARING.md``「生成（维护者本机执行）」段（:51-100 的 PowerShell
+* ``SHARING.md``「生成（维护者本机执行）」段（:51-100 的 PowerShell
   原文）与「轮换」段（:150-170）；
 * ``ai-gateway/console_share_production.py`` 的 ``SHARE_ATTRIBUTION_KEY_NAME``
   （:845）与 ``share_attribution_key_path()``（:864-880）——**唯一的**生产路径解析器。
@@ -33,7 +33,7 @@
 硬边界（本工具的全部承诺）：
 
 * **绝不打印密钥内容**：只打印 ``strip()`` 后的长度与 ``hash_equal`` 这类布尔判据；
-* **绝不写 ``ai-gateway/data/``**（SHARING.md:22-23：该目录对 ``DAICNT\\um_share``
+* **绝不写 ``data/``**（SHARING.md:22-23：该目录对 ``DAICNT\\um_share``
   是显式拒绝 ACE，放那里 8100 读不到 → 静默退化成未启用）；
 * **绝不改 ``C:\\ProgramData\\UMShareRun`` 以外的任何生产路径**：``--apply`` 只允许目标
   落在该 RunRoot 之下，且拒绝 ``RunRoot\\run\\live``（每次部署删除重建，SHARING.md:24-25）；

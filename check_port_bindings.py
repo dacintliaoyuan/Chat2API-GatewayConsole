@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Audit live listening ports against the allocation table (ai-gateway/PORTS.md).
+"""Audit live listening ports against the allocation table (AGENTS.md).
 
 Read-only audit: runs netstat -ano, parses TCP LISTENING and UDP rows, and
 classifies every socket inside the governed ranges this repository owns.
@@ -17,7 +17,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-# Governance scope: segments owned by this repository per PORTS.md, plus the
+# Governance scope: segments owned by this repository per AGENTS.md, plus the
 # individually listed ports that predate the segments.  B0 (2026-11-01): the
 # retired gateways (Qoder CN 8095, Qoder native 8097/8310, CLIProxy 8320,
 # M365 4141) hold no allocation any more, so no row is registered for them;
@@ -111,7 +111,7 @@ def classify(listeners: list[Listener]) -> tuple[list[str], list[str]]:
         allocation = PORT_ALLOCATIONS.get(item.port)
         if allocation is None:
             violations.append(
-                "UNREGISTERED       %s %s:%d  pid=%s  （治理段内未在 PORTS.md 登记）"
+                "UNREGISTERED       %s %s:%d  pid=%s  （治理段内未在 AGENTS.md 登记）"
                 % (item.proto, item.host, item.port, item.pid))
             continue
         label, scope = allocation
@@ -136,7 +136,7 @@ def main() -> int:
         print("结论：无法判定合规性（fail-closed），退出码 2。")
         return 2
     violations, info = classify(listeners)
-    print("== 端口绑定审计（对照 ai-gateway/PORTS.md）==")
+    print("== 端口绑定审计（对照 AGENTS.md）==")
     for line in info:
         print(line)
     for line in violations:

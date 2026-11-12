@@ -633,7 +633,7 @@ function Write-AttributionKeyState {
         Write-Log ("WARN attribution key: NOT FILE READY ($Where) - reason=" +
             $state.reason + " file=" + $path +
             "; the share still starts and every request is recorded " +
-            "unattributed; generation/rotation: ai-gateway/SHARING.md")
+            "unattributed; generation/rotation: SHARING.md")
     }
     return $state
 }

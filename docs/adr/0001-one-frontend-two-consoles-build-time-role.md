@@ -31,8 +31,9 @@ UM 的 API 服务迁往云机后，维护者要同时管理本机自用服务与
 - 本机生产默认入口装入 UM 三页与数据控制器 `web/src/local/um-data-controller.ts`；`?console=workbench` 保留旧工作台作为兼容入口。云端使用独立的五页入口。
 - 本机生产页不含 API Key 与 API 服务管理；云端接管分享管理前发布它可能失去唯一管理入口，因此 `CONSOLE_LOCAL_SHARE_RETIRED=1` 是显式声明而不是默认值。
 
-## 参考
+## 相关实现
 
-- 入口与产物目的地：[docs/gateway-entrypoints.md](../gateway-entrypoints.md)
-- 端口分配：[PORTS.md](../../PORTS.md)
-- 架构与构建守卫：[ARCHITECTURE.md](../../ARCHITECTURE.md)
+- 前端入口：`web/src/console-entry.ts`
+- 构建守卫与产物目录：`web/vite.config.ts`
+- 后端角色校验：`usagesrv.py`
+- 角色门：`web/src/console/role-gate.ts`

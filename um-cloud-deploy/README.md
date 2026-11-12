@@ -47,7 +47,7 @@ cd ..
 
 ## 依赖锁定
 
-目标固定为 Ubuntu 26.04 LTS（resolute）amd64 + CPython 3.14；`bootstrap-wsl.sh` 只用于 WSL 隔离验证，不是云机安装器。Python 直接依赖、传递依赖、Playwright/Chromium 与 apt 包版本见 [DEPENDENCIES.md](DEPENDENCIES.md) 与 `dependencies.lock.json`。
+目标固定为 Ubuntu 26.04 LTS（resolute）amd64 + CPython 3.14；`bootstrap-wsl.sh` 只用于 WSL 隔离验证，不是云机安装器。Python 直接依赖、传递依赖、Playwright/Chromium 与 apt 包版本见 `dependencies.lock.json` 与 `RELEASE-MANIFEST.json`。
 
 离线安装把 wheelhouse 放到 `/opt/um-share/wheelhouse`，脚本用 `--no-index --find-links`，不访问网络。
 
@@ -69,6 +69,18 @@ systemd
 7. **18096 是控制台唯一监听**（`127.0.0.1`）；8110 只由 8100 在 loopback 访问。
 
 **内存边界**：云机只有约 1.7 GB 内存，正常运行时已占用 Xvfb + x11vnc + 8110 的 Chromium + 8100 + 18096。不要在云机上再起第二个浏览器做页面验证；必须在云机验时，先 `um-share-brokerctl.py stop` 排空停链再起。
+
+## 排障读面（只读）
+
+云机上按这个顺序读：
+
+| 读什么 | 命令 | 判据 |
+| --- | --- | --- |
+| 控制台状态 | `curl -s http://127.0.0.1:18096/api/console/share-management/status` | `gateway_running` 缺失 = 未确认（不是 `false`）；`share_url_source=configured` 才说明公网地址已配 |
+| broker 状态 | `sudo -u um-share /opt/um-share/bin/um-share-brokerctl.py status` | 必须以 `um-share` 跑；root 读 0600 的 `broker-control.key` 会报 `control_key_unusable` |
+| 8110 生命周期 | `cat /var/lib/um-share-console/share-backend/backend-lifecycle.log` | 最后一行 `started ... by=console` 才是 8110 当前实例 |
+| 停止意图 | `cat /run/um-share/share-host-desired.json` | `state=stopped, reason=manual` 时普通 start 被拒；只有 `start-explicit` 能清意图 |
+| 端口 | `ss -ltn \| grep -E ':(5901\|8100\|8110\|18096)'` | 8110 不在听 = 专用后端没起；5901 是 VNC，不是 HTTP |
 
 ## 安装、更新、回滚
 

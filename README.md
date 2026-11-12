@@ -7,11 +7,10 @@ Chat2API 网关控制台：同一套前端按构建期角色产出本机与云�
 | 要知道 | 读 |
 |---|---|
 | 项目事实、验证命令、Agent 入口 | [AGENTS.md](AGENTS.md) |
-| 架构、角色、构建守卫与运行契约 | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| 端口分配与入口归属 | [PORTS.md](PORTS.md)、[docs/gateway-entrypoints.md](docs/gateway-entrypoints.md) |
-| 分享链边界与运维 | [SHARING.md](SHARING.md)、[um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
 | 领域词汇 | [GLOSSARY.md](GLOSSARY.md) |
 | 一套前端两个控制台的决策 | [ADR 0001](docs/adr/0001-one-frontend-two-consoles-build-time-role.md) |
+| 云端部署与运维 | [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
+| 旧 Windows 分享链 | [um-share-deploy/README.md](um-share-deploy/README.md)、[SHARING.md](SHARING.md) |
 
 ## 角色与入口
 
@@ -26,7 +25,7 @@ Chat2API 网关控制台：同一套前端按构建期角色产出本机与云�
 
 - `usagesrv.py`、`console_*.py`：本机管理路由、任务队列、统计、日志与分享动作；`usagesrv.py` 在 `UM_SHARE_ROLE=cloud` 时只装配云端分享控制台。
 - `chat2api/`：UM 网关（8000）与分享入口／专用后端（8100／8110）。
-- `share_*.py`、`share_admin.py`：分享存储、管理、运行链与 broker；边界见 [SHARING.md](SHARING.md)。
+- `share_*.py`、`share_admin.py`：分享存储、管理、运行链与 broker；边界见 [AGENTS.md](AGENTS.md) 的分享链边界。
 - `model_sync.py`、`model_sync_core.py`、`model_config_adapters.py`：模型目录镜像、受管合并与客户端适配。
 - `local/`、`cloud/`、`shared/`：两个角色的组合根与双端纯规则；见各自的 README。
 - `web/`：TypeScript/Vite 前端；`tests/`：Python 回归与隔离包。
@@ -47,7 +46,7 @@ Python 回归（仓库根）：
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-构建、候选预览与门禁的完整命令见 [web/README.md](web/README.md) 和 [docs/gateway-entrypoints.md](docs/gateway-entrypoints.md)。
+构建、候选预览与门禁的完整命令见 [web/README.md](web/README.md)。
 
 ## 边界
 

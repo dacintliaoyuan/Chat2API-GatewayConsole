@@ -14,13 +14,39 @@
 
 | 要做什么 | 读 |
 |---|---|
-| 架构、角色、产物与构建守卫 | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | 领域词汇 | [GLOSSARY.md](GLOSSARY.md) |
-| 端口分配与入口归属 | [PORTS.md](PORTS.md)、[docs/gateway-entrypoints.md](docs/gateway-entrypoints.md) |
-| 分享链边界与运维 | [SHARING.md](SHARING.md)、[um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
+| 云端部署与运维 | [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
+| 旧 Windows 分享链 | [um-share-deploy/README.md](um-share-deploy/README.md)、[SHARING.md](SHARING.md) |
 | 操作 issue | [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) |
 | 查标签含义 | [docs/agents/triage-labels.md](docs/agents/triage-labels.md) |
 | 领域文档消费规则 | [docs/agents/domain.md](docs/agents/domain.md) |
+
+## 3. 端口与入口
+
+| 端口 | 服务 | 绑定 |
+|---|---|---|
+| 8000 | chat2api（UM） | 127.0.0.1 |
+| 8001 | usagesrv 本机控制台宿主 | 127.0.0.1 |
+| 8100 | 分享链 um-share 网关 | 127.0.0.1 |
+| 8110 | 分享链专用后端 | 127.0.0.1 |
+| 18096 | usagesrv 云端控制台宿主 | 127.0.0.1 |
+| 5173 | vite 开发服务 | 127.0.0.1 |
+| 8099 | 候选预览（vite preview） | 127.0.0.1 |
+
+`8000-8009` 是会话适配段，`8090-8099` 是控制台/管理段，`8100-8119` 是分享段（唯一允许非 loopback 的段，偏离须登记），`8300-8399` 是协议网关段。新增服务先选段内未占用端口；迁移同步更新本表、服务配置、消费者、测试与文档。`check_port_bindings.py` 对照本表审计治理段内未登记监听。
+
+## 4. 分享链边界
+
+- 8100 只由 broker 拉起：`um-share-broker.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`；控制台的 `share.start/stop/estop/retry_stop` 在云端为 `enabled=False`。
+- 8110 只由控制台 `share.backend_restart` / `share.backend_login` 启停；云端不安装第二套 watchdog。
+- 18096 只监听 loopback；公网入口只反代分享白名单到 8100，不反代 8110/18096/5901。
+- 归因密钥：8100 与 8110 指向同一个 `share-attribution.key`；轮换只重启 8100。密钥缺失或过短是「文件未就绪」状态，分享照常服务、请求记为未归属。
+- 运行数据在 `/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share`，不在 release 内；预算保护与自动备份已从默认装配移除，恢复只走显式 `backup_restore.py`。
+- 旧 Windows 链的部署/恢复与密钥命令见 [um-share-deploy/README.md](um-share-deploy/README.md) 与 [SHARING.md](SHARING.md)。
+
+## 5. 许可
+
+第三方代码与字体的许可证保留在原目录：`chat2api/LICENSE`、`web/LICENSE`、`web/public/fonts/`、`web/public/licenses/`；来源说明见各目录的 README。
 
 ## Agent skills
 

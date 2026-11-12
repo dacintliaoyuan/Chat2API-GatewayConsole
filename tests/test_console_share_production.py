@@ -2198,7 +2198,7 @@ class BackendObserveTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         # 归因密钥是部署事实（默认在 ProgramData 的 RunRoot 下）：测试里把
         # RunRoot 重定向到临时目录，观察缝因此确定性可读，且绝不碰真实部署
-        # 文件（真实密钥文件由维护者按 ai-gateway/SHARING.md 生成）。
+        # 文件（真实密钥文件由维护者按 SHARING.md 生成）。
         env = mock.patch.dict(os.environ, {
             "CONSOLE_SHARE_BACKEND_DIR": self._tmp.name,
             prod.SHARE_RUN_ROOT_ENV: self._tmp.name})
@@ -3108,7 +3108,7 @@ class ShareAttributionWiringTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self._tmp.cleanup)
         # 专用后端目录与 RunRoot 都重定向到临时目录：本类不写真实部署
-        # 文件、不跑真实进程（真实密钥文件由维护者按 ai-gateway/SHARING.md
+        # 文件、不跑真实进程（真实密钥文件由维护者按 SHARING.md
         # 生成、可能已存在）；「两端同一路径」用例只对默认 RunRoot 做路径
         # 核对，并替身化 8100 实例探针，绝不跑真实 netstat/CIM。
         self.backend_dir = os.path.join(self._tmp.name, "backend")

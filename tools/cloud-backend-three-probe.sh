@@ -2,7 +2,7 @@
 # 云端后端三条症状的只读回路（diagnosing-bugs Phase 1）。
 # 每条断言用户看到的具体症状，红了就是复现。
 # 只读：只发 GET，不重启任何服务，不写任何状态。
-# 读面清单与判据见 docs/gateway-entrypoints.md §2.1；不要在云机上再起第二个浏览器
+# 读面清单与判据见 AGENTS.md §4 与 um-cloud-deploy/README.md 的排障读面；不要在云机上再起第二个浏览器
 # （2C2G 内存边界，见 um-cloud-deploy/README.md §4.1）。
 set -u
 

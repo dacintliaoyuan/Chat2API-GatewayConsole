@@ -41,7 +41,7 @@ Each adapter mirrors a REAL local product surface, honestly:
     then a ``serve status`` re-check (:239-245) where rc failure, EMPTY
     output ("cannot confirm mapping state", :243) or a still-present HTTPS
     mapping (:244-245) are each an honest failure;
-  - "on" uses the SHARING.md open command (chat2api/SHARING.md :33:
+  - "on" uses the SHARING.md open command (SHARING.md :33:
     ``funnel --bg --https=443 http://127.0.0.1:8100``) and re-checks the
     mapping IS present via ``serve status``.
   Returns a ``{ok, detail}`` ack whose TRUTHINESS is the ``ok`` field — the
@@ -165,7 +165,7 @@ DEFAULT_TAILSCALE_EXE = r"C:\Program Files\Tailscale\tailscale.exe"  # watchdog 
 DEFAULT_SHARE_TASK = "umshare-live"        # install-share-broker.ps1 :48
 DEFAULT_RUNNER_TIMEOUT_S = 10.0
 FUNNEL_OFF_SETTLE_S = 2.0                  # watchdog Close-Public settle (:238)
-_FUNNEL_UPSTREAM = "http://127.0.0.1:8100"  # chat2api/SHARING.md :33 target
+_FUNNEL_UPSTREAM = "http://127.0.0.1:8100"  # SHARING.md :33 target
 DETAIL_MAX_CHARS = 200
 # The broker's protected status record (watchdog-umshare.ps1 :54 resolves the
 # same default: <RunRoot>\broker\broker-status.json; install-share-broker.ps1
@@ -323,7 +323,7 @@ def _funnel_off(exe_path, runner, sleeper, timeout_s):
 
 def _funnel_on(exe_path, runner, timeout_s):
     """SHARING.md open command + presence re-check: run
-    ``funnel --bg --https=443 http://127.0.0.1:8100`` (chat2api/SHARING.md
+    ``funnel --bg --https=443 http://127.0.0.1:8100`` (SHARING.md
     :33), check the exit code, then ``serve status`` must SHOW an HTTPS
     mapping — an empty or unconfirmable query is never counted as open."""
     rc, _out = _run_tailscale(
@@ -1125,7 +1125,7 @@ def _backend_base_url(config=None):
 # that is a DIFFERENT fact from file readiness and is reported separately
 # (``instance_loaded``, inferred from the gateway process start time vs this
 # file's mtime — see share_gateway_instance_probe). Generation/rotation
-# procedure: ai-gateway/SHARING.md.
+# procedure: SHARING.md.
 DEFAULT_SHARE_RUN_ROOT = r"C:\ProgramData\UMShareRun"  # deploy -RunRoot default
 SHARE_RUN_ROOT_ENV = "CONSOLE_SHARE_RUN_ROOT"
 SHARE_ATTRIBUTION_KEY_NAME = "share-attribution.key"
@@ -1833,7 +1833,7 @@ class _ProductionBackendOps:
             print("[share-backend] 归因密钥文件未就绪（原因=%s，文件=%s）："
                   "专用后端照常启动，8110 读不到密钥的请求记为未归属；"
                   "8100 是否已载入本次未探测；"
-                  "生成/轮换见 ai-gateway/SHARING.md"
+                  "生成/轮换见 SHARING.md"
                   % (reason, paths["attribution_key"]),
                   flush=True)
         for d in (paths["dir"], paths["profile"]):
