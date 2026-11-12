@@ -219,3 +219,13 @@ python -c "import sys;print(len(open(sys.argv[1],encoding='utf-8').read().strip(
   分享照常服务，不报错、不拒绝服务、不降级其他功能。
 - 归因不了的历史请求与绕过入口的请求一律记为**未归属**，绝不均摊或猜测归属。
 - 密钥内容绝不出现在日志、状态读面或错误信息里：读面只给路径、原因码与 `strip()` 后长度。
+
+## 凭据读面的单一 reader 规则
+
+凭据文件不设共享的 Python 读面。每个文件格式只有一个 reader，且 reader 归它的消费者所有：
+
+- `chat2api/token.json`（UM 会话）由 `chat2api/chat2api.py` 自己读；
+- `data/admin-control-token` 由 `lib/gateway-runtime.ps1` 的 `Get-LocalControlHeader` 读（PowerShell 不能 import Python）；
+- 分享归因密钥由 `share_secret_protection.py` 读，接线规则见上面 §1。
+
+只有**两个以上 Python 消费者必须对同一文件格式达成一致**时才新建共享 reader；一个消费者一个 reader，绝不新造第二套路径或第二种读取口径。原来的 `gateway_credentials.py` 就是这条规则的占位，它没有任何代码，已删除。

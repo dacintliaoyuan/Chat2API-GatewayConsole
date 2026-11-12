@@ -8,7 +8,7 @@
 HTTP 410 拒绝（``RETIRED_SERVICES``），绝不读取它们的旧路径或旧 Key 文件。
 上游登录 Token、管理密钥、控制通道密钥与分享 Key 都不在范围内。
 
-硬性纪律（与 ``console_speedtest`` / ``gateway_credentials`` 同一条）：
+硬性纪律（与 ``console_speedtest`` 同一条）：
 
 * 绝不发任何 HTTP 请求（不探测、不触发登录/refresh；``console_speedtest.py:9-16``
   记录过 401 触发真实浏览器登录的副作用）。
@@ -27,8 +27,8 @@ HTTP 410 拒绝（``RETIRED_SERVICES``），绝不读取它们的旧路径或旧
   （实例在进程导入时读自己的环境，``chat2api.py:121/:6407``）；控制台进程环境、
   启动脚本扫描与回环绑定只是 evidence，绝不驱动状态。行时间戳必须不早于该进程的
   创建时间（``Get-CimInstance`` 的 ``CreationDate``，PID 复用守卫），否则按 unknown。
-* 调用 Key 来源复用既有单一 reader（``gateway_credentials``），不新造第二套路径
-  或第二种读取口径。
+* 调用 Key 来源复用既有单一 reader（``chat2api/chat2api.py`` 读 ``chat2api/token.json``），
+  不新造第二套路径或第二种读取口径；凭据读面的单一 reader 规则见 ``SHARING.md``。
 
 纯 stdlib；导入本模块无副作用。
 """
