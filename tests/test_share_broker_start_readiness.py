@@ -400,7 +400,7 @@ class _BudgetProc:
         elif args[0] == "pwsh":
             self.stdout = json.dumps([{
                 "ProcessId": 4242,
-                "CommandLine": "um-share-python.exe share_gateway.py",
+                "CommandLine": "um-share-python.exe chat2api.py",
                 "ExecutablePath": "C:\\share\\um-share-python.exe",
                 "CreationDate": "2026-10-08T09:00:00",
                 "OwnerDomain": "HOST", "OwnerUser": "share"}]) + "\n"
@@ -506,7 +506,7 @@ class _DrainProc:
         elif args[0] == "pwsh":
             self.stdout = json.dumps([] if not running else [{
                 "ProcessId": 4242,
-                "CommandLine": "um-share-python.exe share_gateway.py",
+                "CommandLine": "um-share-python.exe chat2api.py",
                 "ExecutablePath": "C:\\share\\um-share-python.exe",
                 "CreationDate": "2026-10-08T09:00:00",
                 "OwnerDomain": "HOST", "OwnerUser": "share"}]) + "\n"

@@ -59,7 +59,7 @@ DENIED_FILES = [
     r"D:\git\github\personal_files\SelfUseAI\ai-gateway\data\qoder-global-api-token",
     r"D:\git\github\personal_files\SelfUseAI\ai-gateway\data\usage-session-code",
     r"D:\git\github\personal_files\SelfUseAI\ai-gateway\data\qoder-cn-api-token",
-    r"D:\git\github\personal_files\SelfUseAI\ai-gateway\chat2api\share_gateway.py",
+    r"D:\git\github\personal_files\SelfUseAI\ai-gateway\chat2api\share_entry.py",
     r"D:\git\github\personal_files\SelfUseAI\ai-gateway\data\usage-chat2api.jsonl",
 ]
 # Repo-wide write probes (must be denied by the repo-root deny ACE).

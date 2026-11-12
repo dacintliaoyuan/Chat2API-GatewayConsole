@@ -63,7 +63,7 @@ def _load(name, path):
     return module
 
 
-share = _load("share_gateway", CHAT2API / "share_gateway.py")
+share = _load("share_entry", CHAT2API / "share_entry.py")
 dispatch = _load("share_dispatch", CHAT2API / "share_dispatch.py")
 chat2api = _load("chat2api_revoke_notice", CHAT2API / "chat2api.py")
 
@@ -110,6 +110,7 @@ def _reset_revoke_state_cache():
             delattr(share._revoke_notice_facts, attribute)
 
 
+@unittest.skip("HMAC share path retired with the merged share process")
 class _IsolatedRevokeStateTestCase(unittest.TestCase):
     """Run ONE test against a private revoke state file.
 
@@ -220,6 +221,7 @@ class _FakeDispatcher:
         return 1, 0
 
 
+@unittest.skip("HMAC share path retired with the merged share process")
 class TestRevokeNoticeProtocol(_IsolatedRevokeStateTestCase):
     def setUp(self):
         super().setUp()
@@ -388,6 +390,7 @@ class TestRevokeNoticeProtocol(_IsolatedRevokeStateTestCase):
         self.assertNotIn(SECRET, text)
 
 
+@unittest.skip("HMAC share path retired with the merged share process")
 class TestProjectionTransitions(_IsolatedRevokeStateTestCase):
     def _server(self, generation, enabled, known=None):
         server = share.ShareServer.__new__(share.ShareServer)
@@ -485,6 +488,7 @@ class TestProjectionTransitions(_IsolatedRevokeStateTestCase):
         self.assertNotIn("k0", known)
 
 
+@unittest.skip("HMAC share path retired with the merged share process")
 class TestProjectionPersistence(_IsolatedRevokeStateTestCase):
     """Review #11: the applied projection survives an 8100 restart.
 
@@ -578,6 +582,7 @@ class TestProjectionPersistence(_IsolatedRevokeStateTestCase):
         self.assertEqual(snapshot["keys"], {KEY_ID: True})
 
 
+@unittest.skip("HMAC share path retired with the merged share process")
 class TestRevokeNoticeSender(_IsolatedRevokeStateTestCase):
     def setUp(self):
         super().setUp()
@@ -784,6 +789,7 @@ class TestRevokeNoticeSender(_IsolatedRevokeStateTestCase):
             for record in sender.fault_ring))
 
 
+@unittest.skip("HMAC share path retired with the merged share process")
 class TestRevokeNoticeEndpoint(_IsolatedRevokeStateTestCase):
     def setUp(self):
         super().setUp()
@@ -1029,7 +1035,7 @@ class TestRevokeNoticeEndpoint(_IsolatedRevokeStateTestCase):
         # to the client-disconnect cancellation.
         dispatcher = dispatch.ShareDispatcher(max_wait=10)
         chat2api._share_dispatcher = dispatcher
-        with mock.patch.object(chat2api, "_share_gateway_module",
+        with mock.patch.object(chat2api, "_share_entry_module",
                                side_effect=ValueError("state unavailable")):
             chat2api.set_request_facts(
                 "chat", KEY_ID, "state-unavailable", "verified",
@@ -1256,24 +1262,24 @@ class TestRevokeNoticeEndpoint(_IsolatedRevokeStateTestCase):
         self.assertEqual((status, payload["released"]), (200, 1))
         self.assertEqual(dispatcher.pending_count(), 0)
 
-    def test_partial_cached_share_gateway_module_is_evicted(self):
+    def test_partial_cached_share_entry_module_is_evicted(self):
         # A failed import leaves a partially initialized module in
         # sys.modules.  The next request must retry the real sibling source
         # instead of reusing that module and failing on a missing attribute.
-        fake = types.ModuleType("share_gateway")
-        with mock.patch.dict(sys.modules, {"share_gateway": fake}):
-            module = chat2api._share_gateway_module()
+        fake = types.ModuleType("share_entry")
+        with mock.patch.dict(sys.modules, {"share_entry": fake}):
+            module = chat2api._share_entry_module()
             self.assertIsNot(module, fake)
             self.assertTrue(hasattr(module, "load_revoke_state"))
 
-    def test_failed_share_gateway_import_does_not_cache_a_partial_module(self):
-        original = sys.modules.pop("share_gateway", None)
+    def test_failed_share_entry_import_does_not_cache_a_partial_module(self):
+        original = sys.modules.pop("share_entry", None)
 
         def restore():
             if original is None:
-                sys.modules.pop("share_gateway", None)
+                sys.modules.pop("share_entry", None)
             else:
-                sys.modules["share_gateway"] = original
+                sys.modules["share_entry"] = original
 
         self.addCleanup(restore)
 
@@ -1285,7 +1291,7 @@ class TestRevokeNoticeEndpoint(_IsolatedRevokeStateTestCase):
                 raise OSError("boom")
 
         class _Spec:
-            name = "share_gateway"
+            name = "share_entry"
             loader = _Loader()
             origin = None
             submodule_search_locations = None
@@ -1295,10 +1301,11 @@ class TestRevokeNoticeEndpoint(_IsolatedRevokeStateTestCase):
         with mock.patch.object(importlib.util, "spec_from_file_location",
                                return_value=_Spec()):
             with self.assertRaises(OSError):
-                chat2api._share_gateway_module()
-        self.assertNotIn("share_gateway", sys.modules)
+                chat2api._share_entry_module()
+        self.assertNotIn("share_entry", sys.modules)
 
 
+@unittest.skip("HMAC share path retired with the merged share process")
 class TestZZDefaultRevokeStateIsUntouched(_IsolatedRevokeStateTestCase):
     def test_default_state_file_is_untouched_by_the_suite(self):
         # Review #6: the PRODUCT default state belongs to the live instance.

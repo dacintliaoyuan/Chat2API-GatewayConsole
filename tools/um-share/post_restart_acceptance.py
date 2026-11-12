@@ -20,7 +20,7 @@
    **本拓扑下启动行结构性为空**（2026-09-28 执行轮 14 定稿的等价证据口径）：
    8100 由 ``share_guard.py`` 以 ``CreateProcessW(..., False, ...)`` 启动（第 5 参
    bInheritHandles=False，``share_guard.py:488``），且该文件 ``print(`` 计数为 0；
-   「请求归因：」那行由 ``share_gateway.py:1292`` 打印，而
+   「请求归因：」那行由 ``share_entry.py:1292`` 打印，而
    ``deploy-elevated.ps1:536`` 把 guard 的 stdout 重定向到 ``run\\live\\raw.txt``
    ⇒ **该行永远采不到**。这是拓扑事实，**不是窗口失败**，绝不记成 FAIL：
    启动行读不到时本层改用 ``share_attribution_status()`` 的 ``file_ready`` /
@@ -148,9 +148,9 @@ PROBE_PORTS = (CONSOLE_PORT, GATEWAY_PORT, BACKEND_PORT)
 
 WATCHDOG_TASK_NAME = "umshare-watchdog"
 
-# 8100 启动行（share_gateway.py:1290-1295 的 banner）写进 <RunRoot>\run\live\raw.txt
+# 8100 启动行（share_entry.py:1290-1295 的 banner）写进 <RunRoot>\run\live\raw.txt
 # （deploy-elevated.ps1:523-546 的 New-UmCaptureScript + :820 的 $liveRun）。
-# 标记与两种合法实际值逐字取自 share_gateway.py:1293-1294 与 SHARING.md:123-124。
+# 标记与两种合法实际值逐字取自 share_entry.py:1293-1294 与 SHARING.md:123-124。
 STARTUP_MARKER = "请求归因："
 ATTRIBUTION_ENABLED_LABEL = "已启用"
 ATTRIBUTION_DISABLED_LABEL = "未启用"
@@ -169,12 +169,12 @@ ATTRIBUTION_DISABLED_KEY_NOT_READY = "未启用（密钥未就绪）"
 # 「raw.txt 在本拓扑下结构性为空」的代码行依据（写进第 ③ 层 detail，不得记成 FAIL）：
 # 8100 由 share_guard.py 以 CreateProcessW 启动，第 5 参 bInheritHandles=False
 # （share_guard.py:488），且该文件 print( 计数为 0；「请求归因：」那行由
-# share_gateway.py:1292 打印，而 deploy-elevated.ps1:536 把 guard 的 stdout 重定向到
+# share_entry.py:1292 打印，而 deploy-elevated.ps1:536 把 guard 的 stdout 重定向到
 # <RunRoot>\run\live\raw.txt ⇒ 该行永远采不到（拓扑事实，不是窗口失败）。
 STRUCTURAL_EMPTY_NOTE = (
     "raw.txt 在本拓扑下结构性为空：8100 由 share_guard.py 以 CreateProcessW"
     "(..., False, ...) 启动（第 5 参 bInheritHandles=False，share_guard.py:488）"
-    "且该文件 print( 计数为 0；「%s」那行由 share_gateway.py:1292 打印、"
+    "且该文件 print( 计数为 0；「%s」那行由 share_entry.py:1292 打印、"
     "deploy-elevated.ps1:536 把 guard 的 stdout 重定向到 <RunRoot>\\run\\live\\"
     "raw.txt ⇒ 该行永远采不到（拓扑事实，不是窗口失败）" % STARTUP_MARKER)
 

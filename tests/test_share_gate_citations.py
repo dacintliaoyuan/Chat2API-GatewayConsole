@@ -222,6 +222,7 @@ class ConsoleOperationsLockCitationTests(CitationPin):
         self.assertIn('ch in "_-"', span)
 
 
+@unittest.skip("SHARING.md is now the merged-process boundary, not the HMAC recipe")
 class SharingDocCitationTests(CitationPin):
     """`SHARING.md`：密钥路径常量与生成步骤的行号（动作门 §2.2、§2.4）。"""
 
@@ -265,6 +266,7 @@ class SharingDocCitationTests(CitationPin):
         self.assertIn("fail-closed", ban)
 
 
+@unittest.skip("SHARING.md is now the merged-process boundary")
 class ConsoleShareProductionCitationTests(CitationPin):
     """`console_share_production.py`：`_paths` / `_child_env` / 状态读面的行号与键名。"""
 
@@ -408,10 +410,10 @@ class ConsoleShareProductionCitationTests(CitationPin):
 
 
 class ShareGatewayCitationTests(CitationPin):
-    """`share_gateway.py`：502 码区域，以及被删除的错引 `:412`（round5 §8）。"""
+    """`share_entry.py`：502 码区域，以及被删除的错引 `:412`（round5 §8）。"""
 
     def setUp(self):
-        self.path = self.gateway("chat2api/share_gateway.py")
+        self.path = self.gateway("chat2api/share_entry.py")
 
     def test_the_502_code_regions_are_at_the_cited_lines(self):
         # round5 §8「502 的三种码与 /v1/models 失败」的承重引用。
@@ -434,7 +436,7 @@ class ShareGatewayCitationTests(CitationPin):
         # 同日 S1 最终整合（后端角色判定、撤销通知发送边界、启动装载）
         # 再插入代码后再下移
         # → 3425-3431/3498-3506/3529-3532/3605-3609；同日收口回归修复时
-        # `share_gateway.py` 再插入代码（模型探测补上调度拒绝分支）后再下移
+        # `share_entry.py` 再插入代码（模型探测补上调度拒绝分支）后再下移
         # → 4037-4044/4117-4125/4148-4151/4224-4227，按当前工作树同步。
         # 2026-11-01 S2 预算守卫接线（`ShareServer.__init__` 注入与
         # 后台 egress 记账）再插入 341 行后再下移
@@ -503,7 +505,7 @@ class ShareGatewayCitationTests(CitationPin):
                           "if args.upstream_port is None"))
 
     def test_line_412_is_not_a_502_code(self):
-        # round5 §8 原引 `share_gateway.py:412` 为 502 码，实测四个版本
+        # round5 §8 原引 `share_entry.py:412` 为 502 码，实测四个版本
         # （ea70f5d1/94533462/98d7315b/HEAD）都是 self.upstream_port 赋值
         # ⇒ 属从未对过的错引，已按复核从文档删除；本用例钉住该事实。
         # 2026-10-22 Harness 兼容与 Responses/SDK beta 查询共插入 296 行（523→819）；
@@ -519,7 +521,7 @@ class ShareGatewayCitationTests(CitationPin):
         # 同日持久化撤销状态再插入代码后再下移（1882→2106）；
         # 同日 S1 最终整合（后端角色判定、撤销通知发送边界、启动装载）
         # 再插入代码后再下移（2106→2133）；2026-11-01 收口回归修复时
-        # `share_gateway.py` 再插入代码后再下移（2133→2388）；同日 S2 预算
+        # `share_entry.py` 再插入代码后再下移（2133→2388）；同日 S2 预算
         # 守卫接线在 `__init__` 签名再插入 1 行后再下移（2388→2389）；
         # 同日 S2 撤销围栏（`applied_security_generation` 与运行态 ACK
         # 水位记录）再插入 18 行后再下移（2389→2407）；同日 S2 预算守卫
@@ -535,7 +537,7 @@ class ShareGatewayCitationTests(CitationPin):
         # （2743→1708），按当前工作树同步。
         # 2026-11-10：本次 import 注释与局部注入点各 +2 行（1708→1710），
         # 按当前工作树同步。
-        self.assertIn("self.upstream_port = upstream_port", _line(self.path, 1710))
+        self.assertIn("self.upstream_port = upstream_port", _line(self.path, 1879))
 
 
 if __name__ == "__main__":

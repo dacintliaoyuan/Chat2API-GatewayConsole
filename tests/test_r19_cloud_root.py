@@ -815,7 +815,7 @@ class BrokerLaunchTests(unittest.TestCase):
     exits with ``unrecognized arguments``.
     """
 
-    HOST_COMMAND = ("python3", "chat2api/share_gateway.py", "--port", "28100")
+    HOST_COMMAND = ("python3", "chat2api/share_entry.py", "--port", "28100")
 
     def setUp(self):
         self.saved_env = _save_env(PROCESS_ENV_NAMES)

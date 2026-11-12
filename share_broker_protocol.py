@@ -82,7 +82,7 @@ HOST_EVIDENCE_CHECKS = frozenset(("limits", "faults", "watchdog"))
 
 # Component enum: protocol constants; the concrete object is pinned by the
 # broker-side deployment configuration (the TS_SERVICE_NAME pattern).
-COMPONENT_SHARE_GATEWAY = "share_gateway"      # 8100
+COMPONENT_SHARE_GATEWAY = "share_entry"      # 8100
 COMPONENT_SHARE_BACKEND = "share_backend"      # 8110 (no lease this round)
 MAINTENANCE_COMPONENTS = frozenset((COMPONENT_SHARE_GATEWAY,))
 GATEWAY_RESTART_COMPONENTS = frozenset((COMPONENT_SHARE_GATEWAY,))

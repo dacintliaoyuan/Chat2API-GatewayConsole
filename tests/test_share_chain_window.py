@@ -699,7 +699,7 @@ class MaintenanceStateSignalTests(unittest.TestCase):
         self.assertEqual("lease_absent_state_not_exposed", out["state_basis"])
 
     def test_lease_in_force_is_leased(self):
-        lease = {"lease_id": "a" * 32, "component": "share_gateway",
+        lease = {"lease_id": "a" * 32, "component": "share_entry",
                  "instance_id": "i", "round": 7, "created_at": 1,
                  "expires_at": 9}
         out = tool.maintenance_state_signal({
@@ -712,7 +712,7 @@ class MaintenanceStateSignalTests(unittest.TestCase):
         self.assertEqual(lease, out["lease"])
 
     def test_expired_lease_is_not_guessed_as_idle(self):
-        lease = {"lease_id": "b" * 32, "component": "share_gateway",
+        lease = {"lease_id": "b" * 32, "component": "share_entry",
                  "expires_at": 1}
         out = tool.maintenance_state_signal({
             "view": {"checked_at": 7, "lease": lease, "lease_expired": True,

@@ -513,7 +513,7 @@ if __name__ == "__main__":
     main()
 '''
 
-# Test-only share-gateway launcher.  It runs the REAL share_gateway.main()
+# Test-only share-gateway launcher.  It runs the REAL share_entry.main()
 # and only gates the REAL HTTPConnection.request immediately before the
 # 8100->8110 upstream send, so a request that 8100 already admitted can be
 # held there while the management API revokes the Key.  It never fakes an
@@ -525,7 +525,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import share_gateway
+import share_entry
 
 _LOCK = threading.Lock()
 _RELEASE = threading.Event()
@@ -533,7 +533,7 @@ _RELEASE.set()
 _ARMED = False
 _REGISTRATIONS = []
 
-_original_refused = share_gateway.ShareHandler._relay_refused
+_original_refused = share_entry.ShareHandler._relay_refused
 
 
 def gated_relay_refused(self, inflight_ctx):
@@ -619,14 +619,14 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    share_gateway.ShareHandler._relay_refused = gated_relay_refused
+    share_entry.ShareHandler._relay_refused = gated_relay_refused
     server = ThreadingHTTPServer(
         ("127.0.0.1", int(os.environ["CHAIN_TEST_RELAY_GATE_PORT"])),
         _Handler)
     threading.Thread(target=server.serve_forever,
                      kwargs={"poll_interval": 0.05}, daemon=True).start()
-    sys.argv = ["share_gateway.py"] + sys.argv[1:]
-    raise SystemExit(share_gateway.main())
+    sys.argv = ["share_entry.py"] + sys.argv[1:]
+    raise SystemExit(share_entry.main())
 
 
 if __name__ == "__main__":
@@ -1361,7 +1361,7 @@ class ChainFixture:
         requests can be registered before the first grant (rotation) and so a
         pre-registered blocker can hold a real request at the cumulative budget
         (timeout). The share launcher starts the REAL
-        ``share_gateway.main()``; it only holds the upstream send when the relay
+        ``share_entry.main()``; it only holds the upstream send when the relay
         gate is armed, so the R-C5 chain can revoke a Key in the 8100->8110
         window. Neither fakes a grant, commit, release or admission decision.
         """
@@ -2755,8 +2755,8 @@ class ChainFixture:
             # the same request straight to the dedicated backend with a valid
             # attribution marker to observe the exact 429 + Retry-After and to
             # prove the upstream still never saw it.
-            share = _load_module("share_gateway",
-                                  HERE / "chat2api" / "share_gateway.py")
+            share = _load_module("share_entry",
+                                  HERE / "chat2api" / "share_entry.py")
             secret = self.paths["attribution"].read_text(
                 encoding="utf-8").strip()
             direct_headers, direct_request_id = share.build_attribution(
@@ -3031,8 +3031,8 @@ class ChainFixture:
                 "negative without a valid notice: the revoked Key still owns "
                 "its PENDING ticket (pending tickets=%r)" % (
                     before_notice_tickets,))
-            share = _load_module("share_gateway",
-                                  HERE / "chat2api" / "share_gateway.py")
+            share = _load_module("share_entry",
+                                  HERE / "chat2api" / "share_entry.py")
             secret = self.paths["attribution"].read_text(
                 encoding="utf-8").strip()
             forged = share.build_revoke_notice(secret, key["key_id"], 1)
@@ -4599,7 +4599,7 @@ class LongChainFixture(ChainFixture):
         code = (
             "import json\n"
             "import chat2api\n"
-            "import share_gateway\n"
+            "import share_entry\n"
             "print(json.dumps({\n"
             "  'firstByte': chat2api.STREAM_FIRST_BYTE_TIMEOUT_S,\n"
             "  'silence': chat2api.STREAM_SOCKET_TIMEOUT_S,\n"
@@ -4609,7 +4609,7 @@ class LongChainFixture(ChainFixture):
             "  'slowRetries': chat2api.UPSTREAM_SLOW_AUTO_RETRIES,\n"
             "  'slowThreshold': "
             "chat2api.UPSTREAM_SLOW_RETRY_THRESHOLD_S,\n"
-            "  'readCapNominal': share_gateway.NONSTREAM_SOCKET_TIMEOUT_S,\n"
+            "  'readCapNominal': share_entry.NONSTREAM_SOCKET_TIMEOUT_S,\n"
             "}))\n")
         env = {key: value for key, value in os.environ.items()
                if not key.startswith("CHAT2API_")}

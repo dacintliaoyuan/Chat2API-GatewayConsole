@@ -146,7 +146,7 @@ function New-D4ExperimentContract {
         RecoveryStateRel         = 'bootstrap-recovery-<runid>.json'
         BootstrapAccountDefault  = 'um_share_d4'
         ModuleClosure            = @(
-            'chat2api\share_gateway.py', 'um-share-deploy\share_guard.py',
+            'chat2api\share_entry.py', 'um-share-deploy\share_guard.py',
             'share_instance_pipe.py', 'share_broker_server.py',
             'share_broker_host.py', 'share_broker_protocol.py',
             'share_runtime.py', 'share_management.py', 'share_store.py',
@@ -384,7 +384,7 @@ function Get-D4PackageHash {
                        'um-share-deploy\install-share-broker.ps1',
                        'um-share-deploy\d4-account-bootstrap.ps1',
                        'um-share-deploy\share_guard.py',
-                       'chat2api\share_gateway.py')) {
+                       'chat2api\share_entry.py')) {
         $f = Join-Path $SourceRoot $rel
         if (-not (Test-Path -LiteralPath $f -PathType Leaf)) {
             throw ("package file missing: " + $f)

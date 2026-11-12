@@ -45,13 +45,13 @@ sys.modules[SPEC.name] = chat2api
 SPEC.loader.exec_module(chat2api)
 
 SHARE_GATEWAY_PATH = Path(os.path.join(
-    os.path.dirname(_TEST_DIR), "chat2api", "share_gateway.py"))
+    os.path.dirname(_TEST_DIR), "chat2api", "share_entry.py"))
 SHARE_SPEC = importlib.util.spec_from_file_location(
-    "share_gateway_linux_platform", SHARE_GATEWAY_PATH)
-share_gateway = importlib.util.module_from_spec(SHARE_SPEC)
+    "share_entry_linux_platform", SHARE_GATEWAY_PATH)
+share_entry = importlib.util.module_from_spec(SHARE_SPEC)
 assert SHARE_SPEC.loader is not None
-sys.modules[SHARE_SPEC.name] = share_gateway
-SHARE_SPEC.loader.exec_module(share_gateway)
+sys.modules[SHARE_SPEC.name] = share_entry
+SHARE_SPEC.loader.exec_module(share_entry)
 
 
 class _FakeMsvcrt:
@@ -419,10 +419,10 @@ class TestInstancePipePrefixDefault(unittest.TestCase):
 
     def test_explicit_value_wins_and_default_is_not_read(self):
         with mock.patch.object(
-                share_gateway, "_default_instance_pipe_prefix",
+                share_entry, "_default_instance_pipe_prefix",
                 side_effect=AssertionError("default must not be read")):
             self.assertEqual(
-                share_gateway._resolve_instance_pipe_prefix(
+                share_entry._resolve_instance_pipe_prefix(
                     r"\\.\pipe\um-share-instance-exp-"),
                 r"\\.\pipe\um-share-instance-exp-")
 
@@ -431,36 +431,36 @@ class TestInstancePipePrefixDefault(unittest.TestCase):
                          r"\\.\pipe\um-share-instance-"):
             with self.subTest(expected=expected):
                 with mock.patch.object(
-                        share_gateway, "_default_instance_pipe_prefix",
+                        share_entry, "_default_instance_pipe_prefix",
                         return_value=expected) as default:
                     self.assertEqual(
-                        share_gateway._resolve_instance_pipe_prefix(None),
+                        share_entry._resolve_instance_pipe_prefix(None),
                         expected)
                     default.assert_called_once_with()
 
     def test_public_default_seam_reaches_the_resolver(self):
         with mock.patch.object(
-                share_gateway, "default_instance_pipe_prefix",
+                share_entry, "default_instance_pipe_prefix",
                 return_value="/run/um-share/instance-") as default:
             self.assertEqual(
-                share_gateway._resolve_instance_pipe_prefix(None),
+                share_entry._resolve_instance_pipe_prefix(None),
                 "/run/um-share/instance-")
             default.assert_called_once_with()
 
     def test_unavailable_instance_module_yields_none_not_a_guess(self):
         with mock.patch.object(
-                share_gateway, "_default_instance_pipe_prefix",
+                share_entry, "_default_instance_pipe_prefix",
                 side_effect=ImportError("share_instance_pipe unavailable")):
             self.assertIsNone(
-                share_gateway._resolve_instance_pipe_prefix(None))
+                share_entry._resolve_instance_pipe_prefix(None))
 
     def test_parse_args_resolves_an_omitted_prefix(self):
         parser = mock.Mock()
         parser.parse_args.return_value = mock.Mock(instance_pipe_prefix=None)
         with mock.patch.object(
-                share_gateway, "_default_instance_pipe_prefix",
+                share_entry, "_default_instance_pipe_prefix",
                 return_value="/run/um-share/instance-"):
-            args = share_gateway._parse_args(parser, [])
+            args = share_entry._parse_args(parser, [])
         self.assertEqual(args.instance_pipe_prefix,
                          "/run/um-share/instance-")
 
@@ -469,21 +469,21 @@ class TestInstancePipePrefixDefault(unittest.TestCase):
         parser.parse_args.return_value = mock.Mock(
             instance_pipe_prefix=r"\\.\pipe\custom-")
         with mock.patch.object(
-                share_gateway, "_default_instance_pipe_prefix",
+                share_entry, "_default_instance_pipe_prefix",
                 side_effect=AssertionError("default must not be read")):
-            args = share_gateway._parse_args(parser, [])
+            args = share_entry._parse_args(parser, [])
         self.assertEqual(args.instance_pipe_prefix, r"\\.\pipe\custom-")
 
     def test_real_default_matches_the_instance_channel_module(self):
         import share_instance_pipe
         self.assertEqual(
-            share_gateway._default_instance_pipe_prefix(),
+            share_entry._default_instance_pipe_prefix(),
             share_instance_pipe.default_instance_pipe_prefix())
 
     def test_real_omitted_prefix_is_the_platform_default(self):
         import share_instance_pipe
         self.assertEqual(
-            share_gateway._resolve_instance_pipe_prefix(None),
+            share_entry._resolve_instance_pipe_prefix(None),
             share_instance_pipe.default_instance_pipe_prefix())
 
     def test_posix_default_is_the_unix_socket_prefix(self):

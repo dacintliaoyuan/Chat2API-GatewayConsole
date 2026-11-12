@@ -22,8 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import share_broker_protocol as bp  # noqa: E402
 
 _SHARE_GW = importlib.util.spec_from_file_location(
-    "share_gateway_authmode_test",
-    Path(__file__).resolve().parents[1] / "chat2api" / "share_gateway.py")
+    "share_entry_authmode_test",
+    Path(__file__).resolve().parents[1] / "chat2api" / "share_entry.py")
 share_gw = importlib.util.module_from_spec(_SHARE_GW)
 _SHARE_GW.loader.exec_module(share_gw)
 
@@ -209,14 +209,14 @@ class ShareAuthModeTests(unittest.TestCase):
         # 覆盖：--auth-mode 显式转发且在 --config 之后、任意子参数之前。
         # R13-3：上游端口同样必须显式出现在 cmdline 里（无默认值）。
         cmdline = guard.share_child_cmdline(
-            "exe", "share_gateway.py", "cfg.json", 8100, "projection",
+            "exe", "share_entry.py", "cfg.json", 8100, "projection",
             "--instance-key-file key.json --upstream-port 8110", probe=True)
         self.assertIn('--config "cfg.json"', cmdline)
         self.assertIn("--auth-mode projection", cmdline)
         self.assertIn("--upstream-port 8110", cmdline)
         self.assertLess(cmdline.index("--auth-mode"),
                         cmdline.index("--upstream-port 8110"))
-        plain = guard.share_child_cmdline("exe", "share_gateway.py",
+        plain = guard.share_child_cmdline("exe", "share_entry.py",
                                           "cfg.json", 8100, "legacy")
         self.assertIn("--auth-mode legacy", plain)
         self.assertNotIn("--probe", plain)

@@ -2,7 +2,7 @@
 """Linux process identity: the ENTRY SCRIPT, never the last argument.
 
 The production cloud command is
-``[python, share_gateway.py, --port, 28100, --upstream-port, 28110]``. The old
+``[python, chat2api.py, --port, 28100, --upstream-port, 28110]``. The old
 ``LinuxHostOps._identity_ok`` took the LAST element's basename as the entry
 marker, so it looked for a process running ``28110`` and never recognized the
 live share host (the management read judged a running service as "not it").
@@ -159,44 +159,44 @@ class _RealChildCase(unittest.TestCase):
 class LinuxEntryScriptTests(unittest.TestCase):
     def test_production_shape_uses_the_script_not_the_trailing_port(self):
         entry = share_broker_ops.linux_entry_script(
-            [sys.executable, "share_gateway.py", "--port", "28100",
+            [sys.executable, "chat2api.py", "--port", "28100",
              "--upstream-port", "28110"])
-        self.assertEqual(os.path.basename(entry), "share_gateway.py")
+        self.assertEqual(os.path.basename(entry), "chat2api.py")
         self.assertNotEqual(os.path.basename(entry), "28110")
 
     def test_c_argument_is_not_an_entry(self):
         self.assertIsNone(share_broker_ops.linux_entry_script(
-            [sys.executable, "-c", "print(1)", "share_gateway.py",
+            [sys.executable, "-c", "print(1)", "chat2api.py",
              "--port", "28100"]))
 
     def test_option_values_are_skipped(self):
         entry = share_broker_ops.linux_entry_script(
-            [sys.executable, "-u", "-W", "ignore", "share_gateway.py"])
-        self.assertEqual(os.path.basename(entry), "share_gateway.py")
+            [sys.executable, "-u", "-W", "ignore", "chat2api.py"])
+        self.assertEqual(os.path.basename(entry), "chat2api.py")
 
     def test_script_without_py_suffix_falls_back_to_first_positional(self):
         entry = share_broker_ops.linux_entry_script(
-            [sys.executable, "share_gateway", "--port", "28100"])
-        self.assertEqual(os.path.basename(entry), "share_gateway")
+            [sys.executable, "share_entry", "--port", "28100"])
+        self.assertEqual(os.path.basename(entry), "share_entry")
 
 
 class LinuxHostOpsIdentityTests(_RealChildCase):
     def test_production_cloud_command_matches_the_real_cmdline(self):
-        script = _sleep_script(self.root, "share_gateway.py")
+        script = _sleep_script(self.root, "chat2api.py")
         argv = self._production_command(script)
         proc = self._spawn(argv)
         cmdline = self._install_real(proc, argv)
         # The real command line ends with the BACKEND port: the old
         # ``command[-1]`` marker could never be found in it.
         self.assertEqual(cmdline[-1], str(BACKEND_PORT))
-        self.assertNotIn("share_gateway.py", [cmdline[-1]])
+        self.assertNotIn("chat2api.py", [cmdline[-1]])
         spy = _KillSpy()
         ops = self._ops(argv, kill_fn=spy)
         self.assertTrue(ops.verify_running(), ops.last_error)
         self.assertEqual(ops.status()["state"], "running")
 
     def test_other_entry_script_is_rejected(self):
-        expected = _sleep_script(self.root, "share_gateway.py")
+        expected = _sleep_script(self.root, "chat2api.py")
         actual = _sleep_script(self.root, "other_entry.py")
         argv = [sys.executable, str(actual), "--port", str(GATEWAY_PORT),
                 "--upstream-port", str(BACKEND_PORT)]
@@ -208,7 +208,7 @@ class LinuxHostOpsIdentityTests(_RealChildCase):
         self.assertEqual(ops.status()["state"], "conflict")
 
     def test_script_name_as_a_c_argument_is_rejected(self):
-        script = _sleep_script(self.root, "share_gateway.py")
+        script = _sleep_script(self.root, "chat2api.py")
         code = "import time; time.sleep(60)"
         argv = [sys.executable, "-c", code, str(script), "--port",
                 str(GATEWAY_PORT)]
@@ -216,7 +216,7 @@ class LinuxHostOpsIdentityTests(_RealChildCase):
         cmdline = self._install_real(proc, argv)
         # The script name IS on the line (as the -c code's argument) and the
         # --port pair matches: only the entry-script rule can reject this.
-        self.assertIn("share_gateway.py", " ".join(cmdline))
+        self.assertIn("chat2api.py", " ".join(cmdline))
         self.assertEqual(cmdline[-2:], ["--port", str(GATEWAY_PORT)])
         ops = self._ops(self._production_command(script),
                         kill_fn=_KillSpy())
@@ -224,7 +224,7 @@ class LinuxHostOpsIdentityTests(_RealChildCase):
         self.assertEqual(ops.status()["state"], "conflict")
 
     def test_wrong_port_is_rejected(self):
-        script = _sleep_script(self.root, "share_gateway.py")
+        script = _sleep_script(self.root, "chat2api.py")
         argv = self._production_command(script)
         proc = self._spawn(argv)
         self._install_real(proc, argv)
@@ -234,7 +234,7 @@ class LinuxHostOpsIdentityTests(_RealChildCase):
         self.assertEqual(ops.status()["state"], "conflict")
 
     def test_wrong_uid_is_rejected(self):
-        script = _sleep_script(self.root, "share_gateway.py")
+        script = _sleep_script(self.root, "chat2api.py")
         argv = self._production_command(script)
         proc = self._spawn(argv)
         self._install_real(proc, argv)
@@ -245,7 +245,7 @@ class LinuxHostOpsIdentityTests(_RealChildCase):
         self.assertEqual(ops.status()["state"], "conflict")
 
     def test_missing_cmdline_is_rejected_and_never_signalled(self):
-        script = _sleep_script(self.root, "share_gateway.py")
+        script = _sleep_script(self.root, "chat2api.py")
         argv = self._production_command(script)
         proc = self._spawn(argv)
         (self.proc / str(proc.pid)).mkdir(parents=True, exist_ok=True)
@@ -258,7 +258,7 @@ class LinuxHostOpsIdentityTests(_RealChildCase):
                          [])
 
     def test_empty_cmdline_is_rejected_and_never_signalled(self):
-        script = _sleep_script(self.root, "share_gateway.py")
+        script = _sleep_script(self.root, "chat2api.py")
         argv = self._production_command(script)
         proc = self._spawn(argv)
         directory = self.proc / str(proc.pid)

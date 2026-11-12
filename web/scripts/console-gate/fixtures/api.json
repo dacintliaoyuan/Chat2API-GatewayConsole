@@ -3635,7 +3635,7 @@
      "result": {
       "checked_at": 1791329644.1113214,
       "layers": {
-       "share_gateway": {
+       "share_entry": {
         "state": "stopped",
         "verdict": "confirmed",
         "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -3953,7 +3953,7 @@
      "result": {
       "checked_at": 1791329350.1207893,
       "layers": {
-       "share_gateway": {
+       "share_entry": {
         "state": "stopped",
         "verdict": "confirmed",
         "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -4249,7 +4249,7 @@
      "result": {
       "checked_at": 1791329285.052877,
       "layers": {
-       "share_gateway": {
+       "share_entry": {
         "state": "stopped",
         "verdict": "confirmed",
         "source": "broker:host-verify{running}+instance-probe+attribution",

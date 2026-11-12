@@ -12,6 +12,10 @@ User=um-share
 Group=um-share
 WorkingDirectory=/opt/um-share/current
 EnvironmentFile=/etc/um-share/broker.env
+EnvironmentFile=-/etc/um-share/console.env
+Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token
+EnvironmentFile=-/etc/um-share/console.env
+Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token
 # The 8100 gateway persists its revoke state under the state directory, never
 # inside the release: ProtectSystem=strict keeps /opt/um-share/current read-only.
 # install.sh appends
@@ -39,19 +43,16 @@ ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share_broker_ops.p
   --state-dir /run/um-share \
   --expected-uid ${UM_SHARE_UID} \
   --expect-instance-image /opt/um-share/venv/bin/python \
-  --expect-instance-cmdline-marker share_gateway.py \
+  --expect-instance-cmdline-marker chat2api.py \
   --expect-instance-port 8100 \
-  --host-command /opt/um-share/venv/bin/python /opt/um-share/current/chat2api/share_gateway.py \
-    --config /var/lib/um-share/run/share-projection.json \
+  --host-command /opt/um-share/venv/bin/python /opt/um-share/current/chat2api/chat2api.py \
     --port 8100 \
-    --upstream-port 8110 \
+    --share-config /var/lib/um-share/run/share-projection.json \
     --auth-mode projection \
-    --attribution-key-file /etc/um-share/share-attribution.key \
     --instance-key-file /etc/um-share/instance.key \
     --instance-pipe-prefix /run/um-share/instance- \
-    --registration-file /var/lib/um-share/run/instance-registration.json \
-    --fault-log /var/log/um-share/share-faults.jsonl
-# The broker host owns the ONLY Popen that starts share_gateway.py.  The
+    --registration-file /var/lib/um-share/run/instance-registration.json
+# The broker host owns the ONLY Popen that starts chat2api.py.  The
 # console unit is fenced with InaccessiblePaths for the same script, so a
 # console "service.start" can never become a second launcher.
 # The broker creates its AF_UNIX socket asynchronously after ExecStart, so an

@@ -8,7 +8,7 @@
 
 `make-manifest.py` 用 AST 从当前字节冻结闭包，不导入产品模块：
 
-- **静态超集**从 `usagesrv.py`、`chat2api/share_gateway.py`、`chat2api/chat2api.py`、`share_broker_ops.py`、`share_backend_supervision.py` 出发，跟随所有函数体内的 `import`，并补上 4 个 `importlib.util.spec_from_file_location` 目标。
+- **静态超集**从 `usagesrv.py`、`chat2api/chat2api.py`、`chat2api/chat2api.py`、`share_broker_ops.py`、`share_backend_supervision.py` 出发，跟随所有函数体内的 `import`，并补上 4 个 `importlib.util.spec_from_file_location` 目标。
 - **云端动态装配**只列云端角色实际导入的产品模块；manifest 校验 `cloud_runtime ⊆ static_superset`，并列出 `static_only` / `cloud_only`。
 - **部署材料**在 `deployment_files` 单独列出，不与产品闭包混为一谈；`RELEASE-MANIFEST.json`、`SHA256SUMS`、解释器缓存与本地工具状态按规则排除。
 
@@ -55,20 +55,20 @@ cd ..
 
 ```text
 systemd
-├── um-share-broker.service   → share_broker_ops.py → share_gateway.py :8100
-├── um-share-console.service  → usagesrv.py :18096 → chat2api.py :8110
+├── um-share-broker.service   → share_broker_ops.py → chat2api.py :8100
+├── um-share-console.service  → usagesrv.py :18096
 └── um-share-display.service  → Xvfb :99 + x11vnc 127.0.0.1:5901（可选）
 ```
 
 1. **8100 只由 broker 拉起**：`um-share-broker.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`，这是唯一允许的 8100 Popen 路径。
-2. **控制台不直接执行 8100 入口**：`NoExecPaths` 阻止直接执行 `share_gateway.py`，`ReadOnlyPaths` 阻止写停止意图；云端注册表里 `share.start/stop/estop/retry_stop` 是 `enabled=False`。
-3. **云端不安装第二套 watchdog**：8110 只由控制台的 `share.backend_restart` / `share.backend_login` 启停。
+2. **控制台不直接执行 8100 入口**：`NoExecPaths` 阻止直接执行 `chat2api.py`，`ReadOnlyPaths` 阻止写停止意图；云端注册表里 `share.start/stop/estop/retry_stop` 是 `enabled=False`。
+3. **云端不安装第二套 watchdog**：8100 合并进程由 broker 唯一拉起；`share.backend_restart` 走 broker restart，`share.backend_login` 走 8100 控制令牌端点。
 4. **systemd 是最终 cgroup 围栏**：两个 unit 都是 `KillMode=control-group`；`systemctl stop` 不会留下孤儿进程。
 5. **停止意图持久化**：`LinuxHostOps.stop_host()` 在发信号前写 `/run/um-share/share-host-desired.json`；只有 `um-share-brokerctl.py start-explicit` 能清停止意图。
 6. **broker 管理通道**是 `/run/um-share/broker.sock`（目录 0700、socket 0600，HMAC 密钥 `/etc/um-share/broker-control.key`）；8100 入口由 `SO_PEERCRED` 与 `/proc/<pid>/cmdline` 验证。
-7. **18096 是控制台唯一监听**（`127.0.0.1`）；8110 只由 8100 在 loopback 访问。
+7. **18096 是控制台唯一监听**（`127.0.0.1`）；分享 API 与 UM 会话都在 8100 进程内。
 
-**内存边界**：云机只有约 1.7 GB 内存，正常运行时已占用 Xvfb + x11vnc + 8110 的 Chromium + 8100 + 18096。不要在云机上再起第二个浏览器做页面验证；必须在云机验时，先 `um-share-brokerctl.py stop` 排空停链再起。
+**内存边界**：云机只有约 1.7 GB 内存，正常运行时已占用 Xvfb + x11vnc + 8100 的 Chromium + 18096。不要在云机上再起第二个浏览器做页面验证；必须在云机验时，先 `um-share-brokerctl.py stop` 排空停链再起。
 
 ## 排障读面（只读）
 
@@ -78,9 +78,9 @@ systemd
 | --- | --- | --- |
 | 控制台状态 | `curl -s http://127.0.0.1:18096/api/console/share-management/status` | `gateway_running` 缺失 = 未确认（不是 `false`）；`share_url_source=configured` 才说明公网地址已配 |
 | broker 状态 | `sudo -u um-share /opt/um-share/bin/um-share-brokerctl.py status` | 必须以 `um-share` 跑；root 读 0600 的 `broker-control.key` 会报 `control_key_unusable` |
-| 8110 生命周期 | `cat /var/lib/um-share-console/share-backend/backend-lifecycle.log` | 最后一行 `started ... by=console` 才是 8110 当前实例 |
+| 8100 进程 | `cat /run/um-share/share-gateway.pid` 与 `journalctl -u um-share-broker --since "-30 min"` | pid 文件与 broker 日志是 8100 的唯一实例证据 |
 | 停止意图 | `cat /run/um-share/share-host-desired.json` | `state=stopped, reason=manual` 时普通 start 被拒；只有 `start-explicit` 能清意图 |
-| 端口 | `ss -ltn \| grep -E ':(5901\|8100\|8110\|18096)'` | 8110 不在听 = 专用后端没起；5901 是 VNC，不是 HTTP |
+| 端口 | `ss -ltn \| grep -E ':(5901\|8100\|18096)'` | 5901 是 VNC，不是 HTTP |
 
 ## 安装、更新、回滚
 
@@ -153,12 +153,11 @@ rm -rf /opt/um-share/.incoming/um-share-<version>
 | --- | --- | --- | --- |
 | 443/80 | Caddy | 是（仅 443 业务；80 仅 ACME） | 只反代分享白名单到 `127.0.0.1:8100` |
 | 8100 | 127.0.0.1 | 否 | 只由 Caddy 本机反代；安全组不开放 |
-| 8110 | 127.0.0.1 | 否 | 只由 8100 本机访问；不反代、不开放安全组 |
 | 18096 | 127.0.0.1 | 否 | 只经 Tailscale Serve 私网入口；SSH 本地转发仍可用 |
 | 5901 | 127.0.0.1 | 否 | 只经同源 noVNC `/display/`；x11vnc `-localhost` |
 | 22 | 安全组限定的管理源 | 仅 SSH | 不向全网开放 |
 
-Caddy 只公开分享白名单：`GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/messages`、`POST /v1/responses`；其余路径 404，不反代 8110、18096、5901 或 Caddy admin。SSE 用 `flush_interval -1`。
+Caddy 只公开分享白名单：`GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/messages`、`POST /v1/responses`；其余路径 404，不反代 18096、5901 或 Caddy admin。SSE 用 `flush_interval -1`。
 
 管理面只走 Tailscale Serve 或 SSH 转发，不开公网、不加 Caddy 路由、不使用 Funnel。显示与 VNC 的认证和来源边界见 [display/README.md](display/README.md)。
 

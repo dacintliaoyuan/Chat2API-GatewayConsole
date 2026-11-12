@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """M6-A：Anthropic Messages 分享入口的协议与鉴权契约补充用例。
 
-既有 tests/test_share_gateway.py 已钉死的契约不在此重复（x-api-key 仅
+既有 tests/test_share_entry.py 已钉死的契约不在此重复（x-api-key 仅
 Messages、Bearer 同值共存、冲突/重复头 fail-closed、anthropic-version/beta
 窄转发、流式/非流式文本与工具 relay、图片 1 MiB 声明拒绝、每 Key 并发、
 撤销 401、Files/Batches/count_tokens 404）。本文件补齐核对时发现缺失的
@@ -42,8 +42,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 _SPEC = importlib.util.spec_from_file_location(
-    "share_gateway_messages_contract",
-    Path(__file__).resolve().parents[1] / "chat2api" / "share_gateway.py")
+    "share_entry_messages_contract",
+    Path(__file__).resolve().parents[1] / "chat2api" / "share_entry.py")
 share = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(share)
 
@@ -461,7 +461,7 @@ class MessagesContractTests(unittest.TestCase):
 
     def test_exact_one_mib_body_is_accepted(self):
         # 上限语义是 <=：恰好 1048576 字节的 Messages body 必须被接受并
-        # 原样转发（1048577 的拒绝侧由 test_share_gateway 钉死）。
+        # 原样转发（1048577 的拒绝侧由 test_share_entry 钉死）。
         base = {"model": "GLM-5.2-NVFP4", "max_tokens": 16,
                 "messages": [{"role": "user", "content": ""}]}
         base_len = len(json.dumps(base))

@@ -1783,7 +1783,7 @@ $deployEntry.sha256_actual = ''
 Invoke-D4File -Boundary $osA.Boundary -Operation 'WriteText' -Arguments @($ledgerA, ($ledgerObj | ConvertTo-Json -Depth 6))
 Assert-Throws { & $entry -Stage 'Cleanup' @splatA } 'an empty recorded hash is KEPT (never deleted on status alone)' 'cleanup incomplete'
 Assert-True ($osA.State['Files'].ContainsKey(($contract['ExperimentRoot'] + '\deploy-mode.json').ToLowerInvariant())) 'the empty-hash file still EXISTS (zero deletion)'
-Assert-True (-not $osA.State['Files'].ContainsKey(($contract['ExperimentRoot'] + '\share_gateway.py').ToLowerInvariant())) 'the fingerprint-verified objects were removed'
+Assert-True (-not $osA.State['Files'].ContainsKey(($contract['ExperimentRoot'] + '\share_entry.py').ToLowerInvariant())) 'the fingerprint-verified objects were removed'
 $deployEntry.sha256_actual = $origHash
 Invoke-D4File -Boundary $osA.Boundary -Operation 'WriteText' -Arguments @($ledgerA, ($ledgerObj | ConvertTo-Json -Depth 6))
 & $entry -Stage 'Cleanup' @splatA | Out-Null
@@ -1800,9 +1800,9 @@ $splatB = New-D4EntrySplat -RunId $runId -ConfigPath $entryCfgPath -Schtasks $sc
 & $entry -Stage 'S1' @splatB | Out-Null
 # R78-A: the owned copies live in the fake OS's BYTE store - the tamper must
 # replace the actual bytes (a Files-map write is invisible to the byte Hash).
-$osB.State['Binaries'][($contract['ExperimentRoot'] + '\share_gateway.py').ToLowerInvariant()] = [Text.Encoding]::UTF8.GetBytes('REPLACED-BY-SOMEONE-ELSE')
+$osB.State['Binaries'][($contract['ExperimentRoot'] + '\share_entry.py').ToLowerInvariant()] = [Text.Encoding]::UTF8.GetBytes('REPLACED-BY-SOMEONE-ELSE')
 Assert-Throws { & $entry -Stage 'Cleanup' @splatB } 'a replaced object is KEPT and blocks the pass' 'cleanup incomplete'
-Assert-Equal ([Text.Encoding]::UTF8.GetString($osB.State['Binaries'][($contract['ExperimentRoot'] + '\share_gateway.py').ToLowerInvariant()])) 'REPLACED-BY-SOMEONE-ELSE' 'the replaced bytes are UNCHANGED (never taken over)'
+Assert-Equal ([Text.Encoding]::UTF8.GetString($osB.State['Binaries'][($contract['ExperimentRoot'] + '\share_entry.py').ToLowerInvariant()])) 'REPLACED-BY-SOMEONE-ELSE' 'the replaced bytes are UNCHANGED (never taken over)'
 $osB.State['Files'][($contract['ExperimentRoot'] + '\image\stranger.bin').ToLowerInvariant()] = 'FOREIGN'
 Assert-Throws { & $entry -Stage 'Cleanup' @splatB } 'a non-empty dir with unknown content blocks the pass' 'cleanup incomplete'
 Assert-Equal $osB.State['Files'][($contract['ExperimentRoot'] + '\image\stranger.bin').ToLowerInvariant()] 'FOREIGN' 'the unknown content is PRESERVED'
@@ -4102,7 +4102,7 @@ $srcClone = Join-Path $tmpBase ('src-clone-' + [IO.Path]::GetRandomFileName())
 foreach ($rel in (@($contract['ModuleClosure']) + @('um-share-deploy\execute-d4-experiment-lib.ps1',
         'um-share-deploy\execute-d4-experiment.ps1', 'um-share-deploy\install-share-broker-lib.ps1',
         'um-share-deploy\install-share-broker.ps1', 'um-share-deploy\share_guard.py',
-        'chat2api\share_gateway.py'))) {
+        'chat2api\share_entry.py'))) {
     $dst = Join-Path $srcClone $rel
     $dstDir = Split-Path -Parent $dst
     if (-not (Test-Path -LiteralPath $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }

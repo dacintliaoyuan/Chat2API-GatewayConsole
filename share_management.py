@@ -335,7 +335,7 @@ class BrokerClientAdapter:
     # because the console layer maps those codes to its frozen console codes
     # (bad_request -> share_broker_extension_missing, capability_missing ->
     # share_capability_missing, blocked/unconfirmed ->
-    # share_maintenance_refused / share_gateway_restart_failed; for
+    # share_maintenance_refused / share_entry_restart_failed; for
     # ts_service_control: not_installed -> share_broker_unwired,
     # bad_request -> share_broker_extension_missing, unconfirmed with the
     # re-confirmation detail -> share_ts_pending_confirmation). Folding a

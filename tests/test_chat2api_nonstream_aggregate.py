@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(CHAT2API_PATH.parent))
 import _chat2api_http_harness as harness  # noqa: E402
 import nonstream_aggregate  # noqa: E402
-import share_gateway  # noqa: E402
+import share_entry  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location(
     "chat2api_nonstream_aggregate", CHAT2API_PATH)
@@ -92,7 +92,7 @@ def install_attribution_key(test):
 
 
 def marker_headers(key_id=ATTRIBUTION_KEY_ID):
-    headers, _ = share_gateway.build_attribution(ATTRIBUTION_SECRET, key_id)
+    headers, _ = share_entry.build_attribution(ATTRIBUTION_SECRET, key_id)
     return headers
 
 
@@ -107,7 +107,7 @@ def aggregate_scope(*, models, protocols, key_ids=(ATTRIBUTION_KEY_ID,)):
 
 def tampered_marker_headers(key_id=ATTRIBUTION_KEY_ID):
     headers = dict(marker_headers(key_id))
-    headers[share_gateway.X_ATTRIBUTION_SIGNATURE] = "0" * 64
+    headers[share_entry.X_ATTRIBUTION_SIGNATURE] = "0" * 64
     return headers
 
 

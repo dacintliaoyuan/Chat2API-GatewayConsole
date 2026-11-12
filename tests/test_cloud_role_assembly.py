@@ -51,7 +51,7 @@ import share_broker_protocol as bp  # noqa: E402
 import usagesrv  # noqa: E402  (no role env set -> the local default)
 from share_broker_client import BrokerClient  # noqa: E402
 from share_broker_protocol import BrokerResult  # noqa: E402
-from share_gateway import ShareServer  # noqa: E402
+from share_entry import ShareServer  # noqa: E402
 from share_management import BrokerClientAdapter, ShareManager  # noqa: E402
 from console_operations import (  # noqa: E402
     OperationError,
@@ -798,7 +798,7 @@ class LinuxHostOpsTests(unittest.TestCase):
     def _ops(self, **overrides):
         options = dict(
             pid_file=str(self.pid_file),
-            command=[sys.executable, "share_gateway.py", "--port", "8100"],
+            command=[sys.executable, "chat2api.py", "--port", "8100"],
             state_dir=str(self.state),
             expected_port=8100,
             proc_root=str(self.proc),
@@ -934,13 +934,13 @@ class LinuxInstanceIdentityTests(unittest.TestCase):
         self.proc = self.root / "proc"
         self.proc.mkdir()
         _write_proc(self.proc, 7001, [
-            sys.executable, "chat2api/share_gateway.py",
+            sys.executable, "chat2api/chat2api.py",
             "--port", "8100"])
 
     def _verifier(self, **overrides):
         options = dict(proc_root=str(self.proc),
                         expected_image=sys.executable,
-                        expected_cmdline_marker="share_gateway.py",
+                        expected_cmdline_marker="chat2api.py",
                         expected_port=8100,
                         exe_reader=lambda _path: sys.executable)
         options.update(overrides)
@@ -953,7 +953,7 @@ class LinuxInstanceIdentityTests(unittest.TestCase):
         self.assertGreater(evidence["creation_epoch"], 0)
         for overrides in (
                 {"expected_port": 8110},
-                {"expected_cmdline_marker": "chat2api.py"},
+                {"expected_cmdline_marker": "share_entry.py"},
                 {"expected_image": "/usr/bin/other-python"}):
             with self.subTest(overrides=overrides):
                 ok, _evidence = self._verifier(**overrides).verify(7001)
@@ -1012,7 +1012,7 @@ class LinuxBrokerEntryTests(unittest.TestCase):
         self.proc = self.root / "proc"
         self.proc.mkdir()
         _write_proc(self.proc, 7001, [
-            sys.executable, "chat2api/share_gateway.py",
+            sys.executable, "chat2api/chat2api.py",
             "--port", "8100"])
         self.secret_file = self.root / "instance-key"
         self.secret_file.write_text("instance-test-secret", encoding="utf-8")
@@ -1029,7 +1029,7 @@ class LinuxBrokerEntryTests(unittest.TestCase):
             projection_path=str(self.root / "projection.json"),
             broker_dir=str(self.root / "broker"),
             host_pid_file=str(self.root / "share-host.pid"),
-            host_command=[sys.executable, "share_gateway.py",
+            host_command=[sys.executable, "chat2api.py",
                            "--port", "8100"],
         )
         values.update(overrides)
@@ -1067,12 +1067,12 @@ class LinuxBrokerEntryTests(unittest.TestCase):
         _SignedEchoTransport.sent = []
         verifier = share_broker_ops.LinuxInstanceVerifier(
             proc_root=str(self.proc), expected_image=sys.executable,
-            expected_cmdline_marker="share_gateway.py", expected_port=8100,
+            expected_cmdline_marker="chat2api.py", expected_port=8100,
             exe_reader=lambda _path: sys.executable)
         call = share_broker_ops.make_unix_instance_call(
             str(self.secret_file), str(self.root / "run" / "instance-"),
             verifier=verifier, expect_image=sys.executable,
-            expect_cmdline_marker="share_gateway.py", expect_port=8100,
+            expect_cmdline_marker="chat2api.py", expect_port=8100,
             transport_factory=_SignedEchoTransport)
         result = call("instance-status", {}, "inst-1")
         self.assertTrue(result["ok"], result)
@@ -1242,7 +1242,7 @@ class CloudServiceBrokerRoutingTests(unittest.TestCase):
         out = adapter.service_restart("share-gateway", {}, None)
         self.assertEqual(out["status"], "Restarted")
         self.assertEqual(self.broker.calls,
-                         [("gateway_restart", "share_gateway", 120)])
+                         [("gateway_restart", "share_entry", 120)])
 
     def test_snapshot_remains_a_read_only_pid_file_read(self):
         # The read face never goes through the broker mutation verbs: it uses the

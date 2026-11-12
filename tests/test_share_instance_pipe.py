@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 
 import share_broker_protocol as bp  # noqa: E402
 import share_instance_pipe as sip  # noqa: E402
-from share_gateway import ShareServer  # noqa: E402
+from share_entry import ShareServer  # noqa: E402
 
 
 def _projection(generation=1):

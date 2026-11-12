@@ -24,7 +24,7 @@ from pathlib import Path
 
 AI_GATEWAY_ROOT = Path(__file__).resolve().parents[1]
 SHARED_MODULE_PATH = AI_GATEWAY_ROOT / "shared" / "responses_protocol.py"
-SHARE_GATEWAY_PATH = AI_GATEWAY_ROOT / "chat2api" / "share_gateway.py"
+SHARE_GATEWAY_PATH = AI_GATEWAY_ROOT / "chat2api" / "share_entry.py"
 
 sys.path.insert(0, str(AI_GATEWAY_ROOT))
 
@@ -635,7 +635,7 @@ class SSELineTests(unittest.TestCase):
 
 class SharedModuleBoundaryTests(unittest.TestCase):
 
-    def test_importing_shared_protocol_does_not_load_share_gateway(self):
+    def test_importing_shared_protocol_does_not_load_share_entry(self):
         env = {key: value for key, value in os.environ.items()
                if key.upper() != "PYTHONPATH"}
         env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -648,12 +648,12 @@ class SharedModuleBoundaryTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         modules = json.loads(completed.stdout.strip().splitlines()[-1])
         self.assertIn("shared.responses_protocol", modules)
-        self.assertNotIn("share_gateway", modules)
+        self.assertNotIn("share_entry", modules)
         self.assertNotIn("chat2api", modules)
 
-    def test_share_gateway_reexports_the_shared_objects(self):
+    def test_share_entry_reexports_the_shared_objects(self):
         spec = importlib.util.spec_from_file_location(
-            "share_gateway_responses_reexport", SHARE_GATEWAY_PATH)
+            "share_entry_responses_reexport", SHARE_GATEWAY_PATH)
         share = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(share)
         for name in ("RESPONSES_FIELDS", "MESSAGES_FIELDS",

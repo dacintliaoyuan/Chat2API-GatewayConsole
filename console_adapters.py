@@ -408,12 +408,15 @@ def _cloud_host_ops():
     gateway_port = _cloud_gateway_port()
     backend_port = _strict_port(CLOUD_GATEWAY_BACKEND_PORT_ENV,
                                 DEFAULT_CLOUD_BACKEND_PORT)
-    script = os.path.join(HERE, "chat2api", "share_gateway.py")
+    script = os.path.join(HERE, "chat2api", "chat2api.py")
     return LinuxHostOps(
         os.environ.get(CLOUD_GATEWAY_PID_FILE_ENV)
         or DEFAULT_CLOUD_GATEWAY_PID_FILE,
         [sys.executable, script, "--port", str(gateway_port),
-         "--upstream-port", str(backend_port)],
+         "--share-config",
+         os.environ.get("UM_SHARE_PROJECTION_FILE",
+                        "/var/lib/um-share/run/share-projection.json"),
+         "--auth-mode", "projection"],
         state_dir=os.environ.get(CLOUD_GATEWAY_STATE_DIR_ENV)
         or DEFAULT_CLOUD_GATEWAY_STATE_DIR,
         expected_port=gateway_port)
@@ -438,7 +441,7 @@ class _BrokerCloudHostOps:
     The console unit's ``ReadOnlyPaths=/run/um-share`` is a deliberate
     single-authority fence: the console may READ the pid file/status, but the
     broker process OWNS the pid file, the persistent stop intent and the only
-    ``Popen`` of ``share_gateway.py``. Routing ``service.start`` /
+    ``Popen`` of ``chat2api.py``. Routing ``service.start`` /
     ``service.stop`` / ``service.restart`` through the existing restricted
     broker verbs keeps that boundary intact instead of widening the mount or
     spawning a second 8100 from the console.

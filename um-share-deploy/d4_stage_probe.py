@@ -4,7 +4,7 @@ The probe the experiment entry (execute-d4-experiment.ps1) invokes for the
 E1/E2/E3/E4 evidence. The core functions drive the REVIEWED product modules
 (share_broker_protocol, share_broker_client, share_broker_server,
 share_broker_ops, share_store, share_management, share_runtime,
-share_instance_pipe, share_gateway) — no fixture stands in for any product
+share_instance_pipe, share_entry) — no fixture stands in for any product
 rule. ONLY the OS/network/clock edges are injectable:
 
 * ``transport_factory``  — the management-pipe client transport (default:

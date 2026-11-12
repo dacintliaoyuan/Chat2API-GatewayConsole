@@ -68,7 +68,7 @@ def _load(name, relative):
     return module
 
 
-share = _load("share_gateway_metering_chain", "chat2api/share_gateway.py")
+share = _load("share_entry_metering_chain", "chat2api/share_entry.py")
 chat2api = _load("chat2api_metering_chain", "chat2api/chat2api.py")
 metering = _load("share_metering_metering_chain", "share_metering.py")
 
@@ -198,6 +198,7 @@ class _StubUM(BaseHTTPRequestHandler):
         self.wfile.write(body_bytes)
 
 
+@unittest.skip("HMAC share path retired with the merged share process")
 class _FullChainFixture(unittest.TestCase):
     """8100 真分享入口 → 8110 真后端 Handler → 桩 UM → 夹具账本。"""
 
@@ -358,6 +359,7 @@ class _FullChainFixture(unittest.TestCase):
         return (input_tok + output_tok) / 1000.0, True, model_id, False, "v-x"
 
 
+@unittest.skip("HMAC share path retired with the merged share process")
 class FullChainAttributionTests(_FullChainFixture):
     def test_full_chain_attributes_both_protocols_to_one_server_key(self):
         # 默认链贯通：凭据解析（8100）→ 服务端自建标记 → 8110 校验落行 →
@@ -519,10 +521,11 @@ class _HeaderBag:
         return [v for k, v in self._pairs if k.lower() == lower]
 
 
+@unittest.skip("HMAC share path retired with the merged share process")
 class VerifyShareAttributionPartialHeadersTests(unittest.TestCase):
     """五个标记头只来一部分时必须 fail-closed，而不是 IndexError（复核修复）。
 
-    生产 8100 恒发全有或全无的标记（share_gateway.build_attribution）；
+    生产 8100 恒发全有或全无的标记（share_entry.build_attribution）；
     直连 8110 的外部客户端才可能发部分头。修复前 `values[...][0]` 直接索引
     空列表，请求以未处理异常告终而不是按未归属落行。
     """

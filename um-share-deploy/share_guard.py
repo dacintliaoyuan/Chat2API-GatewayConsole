@@ -5,7 +5,7 @@
 Runs as the locked-down ``um_share`` account (batch logon via Task Scheduler,
 which owns the account secret in LSA). It creates a Job Object whose active
 process limit is exactly 1 with kill-on-close, then starts the real share
-gateway (``um-share-python.exe share_gateway.py``) SUSPENDED, assigns it to the
+gateway (``um-share-python.exe share_entry.py``) SUSPENDED, assigns it to the
 job and resumes it. Any child the share attempts to spawn (any image) is
 rejected by the Job's active-process limit, which closes the "different image /
 subprocess" escape that app-id WFP filters alone cannot address.
@@ -17,7 +17,7 @@ Usage (run from the run copy as um_share):
   um-share-python.exe share_guard.py --run-dir <writable dir> \
       --upstream-port <dedicated share-backend port> [--probe] [--port N]
 
-The upstream port is REQUIRED whenever --child is share_gateway.py (the
+The upstream port is REQUIRED whenever --child is share_entry.py (the
 default child): the share child is only ever pointed at the dedicated share
 backend, never at the private chat2api instance.
 """
@@ -396,14 +396,14 @@ def main() -> int:
     parser.add_argument("--run-dir", required=True, help="writable status dir")
     parser.add_argument("--port", type=int, default=8100)
     parser.add_argument("--probe", action="store_true")
-    parser.add_argument("--child", default="share_gateway.py",
+    parser.add_argument("--child", default="share_entry.py",
                         help="script to run inside the job (default: the share gateway)")
     parser.add_argument("--child-args", default="",
                         help="raw arguments appended after --child for test children")
     parser.add_argument("--upstream-port", type=int, default=None,
                         help="dedicated share-backend port forwarded to "
-                             "share_gateway.py (R6-A1/R13-3); REQUIRED when "
-                             "--child is share_gateway.py - there is no "
+                             "share_entry.py (R6-A1/R13-3); REQUIRED when "
+                             "--child is share_entry.py - there is no "
                              "default, so the share can never silently "
                              "forward to the private chat2api 8000")
     parser.add_argument("--experiment-config", default="",
@@ -412,16 +412,16 @@ def main() -> int:
                              "BEFORE any directory write, Job or process creation)")
     args = parser.parse_args()
 
-    if args.child == "share_gateway.py" and args.upstream_port is None:
+    if args.child == "share_entry.py" and args.upstream_port is None:
         # R13-3: the share child's upstream port is REQUIRED and explicit.
         # This is the LOAD-BEARING refusal: the guard appends its own
         # --upstream-port to the child cmdline unconditionally, so a default
-        # here would be handed to share_gateway.py as an explicit value and
+        # here would be handed to share_entry.py as an explicit value and
         # would defeat the gateway's own requirement. Conditional (not
         # unconditional) because the non-gateway children (escape_probe.py)
         # never dial an upstream and must keep working.
         parser.error(
-            "--upstream-port is required when --child is share_gateway.py: "
+            "--upstream-port is required when --child is share_entry.py: "
             "pass the dedicated share-backend port explicitly (production: "
             "8110, from deploy-elevated.ps1 ShareBackendPort). There is no "
             "default - the private chat2api port 8000 is never used "
@@ -456,7 +456,7 @@ def main() -> int:
     here = Path(__file__).resolve().parent
     exe = here / "um-share-python.exe"
     child = here / args.child
-    gateway = here / "share_gateway.py"
+    gateway = here / "share_entry.py"
     # R31-4: the authorization config follows the EXPLICIT deployment mode
     # (same contract as Prep) - a projection-mode deployment never starts
     # from the legacy digest file, and a missing/corrupt mode refuses.
@@ -481,7 +481,7 @@ def main() -> int:
         return 2
 
     argv = (os.environ.get("UM_SHARE_ARGS") or "").strip()
-    if args.child == "share_gateway.py":
+    if args.child == "share_entry.py":
         # R35-2: the deployment mode is forwarded to the child and fixed at
         # instance start - the share cannot re-decide the format from the
         # mere content of the file after a runtime swap.
@@ -533,7 +533,7 @@ def main() -> int:
               "port": args.port, "mode": mode,
               "child": args.child,
               "started": int(time.time())}
-    if args.child == "share_gateway.py":
+    if args.child == "share_entry.py":
         status["upstream_port"] = int(args.upstream_port)
     write_status(run_dir, status)
     kernel32.WaitForSingleObject(pi.hProcess, INFINITE)

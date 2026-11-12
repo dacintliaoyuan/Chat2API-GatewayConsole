@@ -59,7 +59,7 @@ sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 before = {
-    "share_gateway": "share_gateway" in sys.modules,
+    "share_entry": "share_entry" in sys.modules,
     "share_dispatch": "share_dispatch" in sys.modules,
 }
 
@@ -73,7 +73,7 @@ def attempt(name):
 module.SHARE_BACKEND_ROLE = False
 role_false_loads = {
     "_load_share_dispatch": attempt("_load_share_dispatch"),
-    "_share_gateway_module": attempt("_share_gateway_module"),
+    "_share_entry_module": attempt("_share_entry_module"),
 }
 
 print(json.dumps({
@@ -83,7 +83,7 @@ print(json.dumps({
             "shared.nonstream_aggregate"),
     "before": before,
     "after": {
-        "share_gateway": "share_gateway" in sys.modules,
+        "share_entry": "share_entry" in sys.modules,
         "share_dispatch": "share_dispatch" in sys.modules,
     },
     "role_false_loads": role_false_loads,
@@ -117,18 +117,18 @@ class Chat2apiSharedImportTests(unittest.TestCase):
         self.assertIn(chat2api._PACKAGE_ROOT, sys.path,
                       "the package root must be importable as a script run")
 
-    def test_chat2api_has_no_share_gateway_import(self):
+    def test_chat2api_imports_the_share_gate(self):
         tree = ast.parse(CHAT2API_PATH.read_text(encoding="utf-8-sig"),
                          filename=str(CHAT2API_PATH))
         offenders = [
             "{}:{}".format(lineno, module)
-            for module, _names, lineno in _imports_of(tree)
-            if module == "share_gateway"
+            for module, names, lineno in _imports_of(tree)
+            if module == "share_entry"
+            or (module in ("", ".") and "share_entry" in names)
         ]
-        self.assertEqual(
-            offenders, [],
-            "chat2api must not import the cloud share gateway; "
-            "found {}".format(", ".join(offenders)))
+        self.assertTrue(
+            offenders,
+            "the merged 8100 process must import the in-process share gate lazily")
 
     def test_responses_translations_come_from_shared_protocol(self):
         tree = ast.parse(CHAT2API_PATH.read_text(encoding="utf-8-sig"),
@@ -184,16 +184,16 @@ class Chat2apiSharedImportTests(unittest.TestCase):
         chat2api.SHARE_BACKEND_ROLE = False
         try:
             cached_dispatch = types.ModuleType("share_dispatch")
-            cached_gateway = types.ModuleType("share_gateway")
+            cached_gateway = types.ModuleType("share_entry")
             for name in chat2api._SHARE_GATEWAY_REQUIRED:
                 setattr(cached_gateway, name, lambda *_args: None)
             with mock.patch.dict(sys.modules, {
                     "share_dispatch": cached_dispatch,
-                    "share_gateway": cached_gateway}):
+                    "share_entry": cached_gateway}):
                 with self.assertRaises(ImportError):
                     chat2api._load_share_dispatch()
                 with self.assertRaises(ImportError):
-                    chat2api._share_gateway_module()
+                    chat2api._share_entry_module()
         finally:
             chat2api.SHARE_BACKEND_ROLE = original_role
 
@@ -265,14 +265,14 @@ class Chat2apiSharedImportTests(unittest.TestCase):
         self.assertIs(payload["nonstream_is_shared"], True,
                       "chat2api must load the aggregator from shared")
         self.assertEqual(payload["before"],
-                         {"share_gateway": False, "share_dispatch": False},
-                         "importing chat2api loaded a share backend module")
+                         {"share_entry": False, "share_dispatch": False},
+                         "the private import must not load the share gate or the dispatch module")
         self.assertEqual(payload["role_false_loads"],
                          {"_load_share_dispatch": "ImportError",
-                          "_share_gateway_module": "ImportError"},
+                          "_share_entry_module": "ImportError"},
                          "the private role must refuse both share loaders")
         self.assertEqual(payload["after"],
-                         {"share_gateway": False, "share_dispatch": False},
+                         {"share_entry": False, "share_dispatch": False},
                          "a refused loader must not import the share backend")
 
     def test_missing_shared_package_fails_the_import_closed(self):

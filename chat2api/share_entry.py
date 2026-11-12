@@ -19,7 +19,7 @@ from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-# The broker runs this file as a script (``python chat2api/share_gateway.py``),
+# The broker runs this file as a script (``python chat2api/share_entry.py``),
 # so sys.path[0] is ``chat2api/``; the bundled ``shared`` package is a sibling
 # of that directory and needs the package root on the path.
 _PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -1599,6 +1599,20 @@ def load_config(path, auth_mode=None):
     raise ValueError("Unsupported sharing configuration")
 
 
+def valid_chat_request(data):
+    """Shape-only admission for one shared Chat Completions body."""
+    if not isinstance(data, dict) or set(data) - CHAT_FIELDS:
+        return False
+    if not isinstance(data.get("model"), str) or not data["model"]:
+        return False
+    messages = data.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return False
+    if not isinstance(data.get("stream", False), bool):
+        return False
+    return "store" not in data or data["store"] is False
+
+
 def valid_messages_request(data):
     """Decide whether an Anthropic Messages body may enter the shared relay.
 
@@ -1683,6 +1697,161 @@ def resolve_share_credential(headers, allow_api_key):
     if not hmac.compare_digest(bearer.encode(), api_key.encode()):
         return None
     return bearer
+
+
+class ShareGate:
+    """In-process share-key authentication and admission gate.
+
+    The merged 8100 process authenticates the share credential here and then
+    serves the request through the normal chat2api handler. There is no second
+    listener, no loopback forward and no HMAC marker: the key_id installed on
+    the request is the one this gate authenticated.
+    """
+
+    def __init__(self, config_path, auth_mode=None):
+        self.config_path = Path(config_path)
+        self.auth_mode = auth_mode
+        self.guard = threading.Lock()
+        self.state = "running"      # running | draining | stopped
+        self.active = {}
+        self.history = {}
+        self.inflight = {}
+        self._cfg = load_config(self.config_path, auth_mode=auth_mode)
+        self.share_max_concurrency = self._cfg["share_max_concurrency"]
+        self.key_limits = {e["key_id"]: e["max_concurrency"]
+                           for e in self._cfg["entries"]}
+        self.config_generation = self._cfg["config_generation"]
+
+    def snapshot(self):
+        with self.guard:
+            return {
+                "state": self.state,
+                "config_generation": self.config_generation,
+                "share_max_concurrency": self.share_max_concurrency,
+                "active": dict(self.active),
+                "keys": len(self.key_limits),
+            }
+
+    def set_state(self, state):
+        with self.guard:
+            self.state = state
+
+    def authenticate(self, headers, allow_api_key):
+        """Resolve one enabled share entry, or None (fail-closed)."""
+        credential = resolve_share_credential(headers, allow_api_key)
+        if credential is None:
+            return None
+        try:
+            cfg = load_config(self.config_path, auth_mode=self.auth_mode)
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        digest = hashlib.sha256(credential.encode()).hexdigest()
+        entry = next((e for e in cfg["entries"]
+                      if e["enabled"]
+                      and hmac.compare_digest(e["secret_hash"], digest)), None)
+        if entry is None:
+            return None
+        with self.guard:
+            self._cfg = cfg
+            self.share_max_concurrency = cfg["share_max_concurrency"]
+            self.key_limits = {e["key_id"]: e["max_concurrency"]
+                               for e in cfg["entries"]}
+            self.config_generation = cfg["config_generation"]
+        return entry, cfg
+
+    def acquire(self, key_id, generation=None, secret_version=None,
+                reason_out=None):
+        with self.guard:
+            if self.state != "running":
+                if reason_out is not None:
+                    reason_out["reason"] = "state_not_accepting"
+                    reason_out["detail"] = (
+                        "the share is draining or stopped and is not "
+                        "accepting new requests")
+                return False
+            cfg = self._cfg
+            if generation is not None or secret_version is not None:
+                try:
+                    fresh = load_config(self.config_path,
+                                        auth_mode=self.auth_mode)
+                except (OSError, ValueError, KeyError, TypeError):
+                    return False
+                if generation is not None                         and fresh["config_generation"] < generation:
+                    return False
+                entry = next((e for e in fresh["entries"]
+                              if e["key_id"] == key_id), None)
+                if entry is None or not entry["enabled"]:
+                    return False
+                if secret_version is not None                         and entry["secret_version"] != secret_version:
+                    return False
+                key_limit = entry["max_concurrency"]
+                share_max = fresh["share_max_concurrency"]
+                cfg = fresh
+            else:
+                key_limit = self.key_limits.get(
+                    key_id, LEGACY_KEY_MAX_CONCURRENCY)
+                share_max = self.share_max_concurrency
+            now = time.monotonic()
+            self.history = {k: v for k, v in self.history.items()
+                            if v and v[-1] > now - 60}
+            recent = self.history.setdefault(key_id, deque())
+            while recent and recent[0] <= now - 60:
+                recent.popleft()
+            if self.active.get(key_id, 0) >= key_limit:
+                if reason_out is not None:
+                    reason_out["reason"] = "per_key_concurrency"
+                    reason_out["detail"] = (
+                        "per-key concurrency limit reached "
+                        "(max %d in-flight requests for this key)" % key_limit)
+                return False
+            if sum(self.active.values()) >= share_max:
+                if reason_out is not None:
+                    reason_out["reason"] = "share_concurrency"
+                    reason_out["detail"] = (
+                        "global share concurrency limit reached "
+                        "(max %d in-flight requests)" % share_max)
+                return False
+            if len(recent) >= 20:
+                if reason_out is not None:
+                    reason_out["reason"] = "key_rate_limit"
+                    reason_out["detail"] = (
+                        "per-key rate limit reached "
+                        "(max 20 requests per minute)")
+                return False
+            recent.append(now)
+            self.active[key_id] = self.active.get(key_id, 0) + 1
+            return True
+
+    def release(self, key_id):
+        with self.guard:
+            count = self.active.get(key_id, 0)
+            if count <= 1:
+                self.active.pop(key_id, None)
+            else:
+                self.active[key_id] = count - 1
+
+    def register_inflight(self, key_id, ctx):
+        with self.guard:
+            self.inflight.setdefault(key_id, set()).add(ctx)
+
+    def unregister_inflight(self, key_id, ctx):
+        with self.guard:
+            ctxs = self.inflight.get(key_id)
+            if ctxs is not None:
+                ctxs.discard(ctx)
+                if not ctxs:
+                    self.inflight.pop(key_id, None)
+
+    def terminate_key(self, key_id):
+        """Close every live request held by one revoked key."""
+        with self.guard:
+            ctxs = self.inflight.pop(key_id, set())
+            terminated = 0
+            for ctx in ctxs:
+                terminate = getattr(ctx, "terminate", None)
+                if terminate is not None and terminate():
+                    terminated += 1
+            return terminated
 
 
 class ShareServer(ThreadingHTTPServer):

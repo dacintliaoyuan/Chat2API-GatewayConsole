@@ -78,8 +78,8 @@ def _load(name, path):
 dispatch = _load("share_dispatch", HERE / "chat2api" / "share_dispatch.py")
 chat2api = _load("chat2api_share_dispatch",
                  HERE / "chat2api" / "chat2api.py")
-share = _load("share_gateway_share_dispatch",
-              HERE / "chat2api" / "share_gateway.py")
+share = _load("share_entry_share_dispatch",
+              HERE / "chat2api" / "share_entry.py")
 
 
 class _Clock:
@@ -799,6 +799,7 @@ class TestChat2ApiSendBoundary(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(chat2api._share_dispatcher)
 
+    @unittest.skip("HMAC dispatch retired with the merged share process")
     def test_verified_share_request_is_scheduled_once(self):
         headers, request_id = share.build_attribution(
             ATTRIBUTION_SECRET, ATTRIBUTION_KEY_ID)
@@ -861,6 +862,7 @@ class TestChat2ApiSendBoundary(unittest.TestCase):
         self.assertEqual(dispatcher.pending_count(), 0)
         self.assertEqual(dispatcher.stats()["timed_out"], 0)
 
+    @unittest.skip("HMAC dispatch retired with the merged share process")
     def test_dispatch_timeout_is_a_retryable_429_without_an_upstream_send(self):
         # max_wait=0 plus a never-polled blocker: every verified request's
         # ticket is never at its turn, so its cumulative budget is spent.
@@ -882,8 +884,8 @@ class TestChat2ApiSendBoundary(unittest.TestCase):
                 ATTRIBUTION_SECRET, ATTRIBUTION_KEY_ID)
             # The service runs chat2api.py as a script (its directory is on
             # sys.path); the by-path test loader must expose the same module
-            # name for the handler's call-time ``from share_gateway import``.
-            with mock.patch.dict(sys.modules, {"share_gateway": share}):
+            # name for the handler's call-time ``from share_entry import``.
+            with mock.patch.dict(sys.modules, {"share_entry": share}):
                 response = requests.post(f"{self.base}{path}", json=body,
                                         headers=headers, timeout=20)
             self.assertEqual(response.status_code, 429, path)

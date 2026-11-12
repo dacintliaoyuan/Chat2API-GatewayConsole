@@ -138,7 +138,7 @@ SCHEMA_VERSION = 2
 # 分享链上的五个监听端口（动作门 §1.2 实测表）。
 CHAIN_PORTS = (8000, 8096, 8100, 8110, 8320)
 CONSOLE_PORT = 8096          # 控制台网页宿主（usagesrv.py）
-GATEWAY_PORT = 8100          # 分享入口（share_gateway.py）
+GATEWAY_PORT = 8100          # 分享入口（share_entry.py）
 BACKEND_PORT = 8110          # 分享专用后端（chat2api.py）
 
 PROBE_TIMEOUT_S = 10.0

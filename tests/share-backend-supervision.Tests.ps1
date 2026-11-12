@@ -472,7 +472,7 @@ try:
     broker = m._StubBroker()
     broker.status_result = m._StubResult(True, {
         "checked_at": 1000, "lease": {"lease_id": "a" * 32,
-                                     "component": "share_gateway",
+                                     "component": "share_entry",
                                      "expires_at": 2000},
         "lease_expired": False, "instance": None, "last_outcome": None})
     result = check(1000.0, m._StubOps(), broker)
@@ -485,7 +485,7 @@ try:
     # the share:orchestration lock (contract section 7.2 step 2 / 7.3).
     broker.status_result = m._StubResult(True, {
         "checked_at": 1000, "lease": {"lease_id": "b" * 32,
-                                     "component": "share_gateway",
+                                     "component": "share_entry",
                                      "expires_at": 999},
         "lease_expired": True, "instance": None, "last_outcome": None})
     result = check(1000.0, m._StubOps(), broker)

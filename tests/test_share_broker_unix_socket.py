@@ -42,7 +42,7 @@ import share_instance_pipe as sip  # noqa: E402
 from share_broker_client import (BrokerClient, BrokerTransport,  # noqa: E402
                                 UnixSocketBrokerTransport,
                                 validate_unix_socket_path)
-from share_gateway import ShareServer  # noqa: E402
+from share_entry import ShareServer  # noqa: E402
 
 IS_LINUX = sys.platform.startswith("linux")
 LINUX_ONLY = unittest.skipUnless(

@@ -633,7 +633,7 @@ function New-StopScopeProcess {
 # synthetic here so the fixture never depends on this checkout's location.
 $script:stopScopePrivateCmdLine = 'python  chat2api.py --base-url https://chat.example.invalid'
 $script:stopScopeShareCmdLine = 'C:\Python314\python.exe chat2api.py --base-url https://chat.example.invalid --port 8110 --profile C:\share-backend\edge-profile --login-timeout 600'
-$script:stopScopeShareGatewayCmdLine = 'python share_gateway.py --port 8100 --config C:\share\share-gateway.json'
+$script:stopScopeShareGatewayCmdLine = 'python share_entry.py --port 8100 --config C:\share\share-gateway.json'
 $script:stopScopeOtherCheckoutCmdLine = 'python D:\other-checkout\ai-gateway\chat2api\chat2api.py --base-url https://chat.example.invalid'
 $script:stopScopePrivateQualifiedCmdLine = 'python ' + (Join-Path (Get-GatewayRoot) 'chat2api\chat2api.py') + ' --base-url https://chat.example.invalid'
 $script:stopScopePrivateStart = [datetime]'2026-09-29T20:11:25'
@@ -744,7 +744,7 @@ $fullScope = Invoke-StopScopeScenario -Processes @(
 )
 Assert-Equal ($fullScope.Terminated -join ',') '990101' 'private stop selects exactly the verified private instance when 8110, 8100 and another checkout coexist'
 Assert-Equal ($fullScope.Terminated -contains 990102) $false 'share backend (chat2api.py --port 8110) is never selected'
-Assert-Equal ($fullScope.Terminated -contains 990103) $false 'share gateway (share_gateway.py, 8100) is never selected'
+Assert-Equal ($fullScope.Terminated -contains 990103) $false 'share gateway (share_entry.py, 8100) is never selected'
 Assert-Equal ($fullScope.Terminated -contains 990104) $false 'another checkout''s same-named script is never selected'
 Assert-Equal $fullScope.Result.Status 'Stopped' 'private stop still reports Stopped when only the private instance is terminated'
 Assert-Equal ($twoInstances.Requests -join ',') 'http://127.0.0.1:8000/admin/shutdown' 'private stop sends the graceful request to its own 8000 shutdown endpoint'

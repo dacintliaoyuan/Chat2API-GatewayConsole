@@ -21,7 +21,20 @@
 
 ## 跨端公开名
 
-`pricing_rules` 的每个跨模块函数都有公开名；旧私有名保留为同一函数对象的别名（不是包装、不是复制），改名前后行为逐字节一致。本机端 `local/backend/stats_env.py` 与云端 `cloud/backend/summary.py` 使用其中的公开名；完整名单与用途见 `shared/pricing_rules.py` 的导出表。
+`pricing_rules` 的每个跨模块函数都有公开名；旧私有名保留为同一函数对象的别名（不是包装、不是复制），改名前后行为逐字节一致。本机端 `local/backend/stats_env.py` 与云端 `cloud/backend/summary.py` 使用其中的公开名。
+
+| 公开名 | 私有别名 | 用途 |
+|---|---|---|
+| `beijing_weekday` | `_beijing_weekday` | 北京时间日序 → 星期 |
+| `checked_age_days` | `_checked_age_days` | `checkedAt` 距今天数 |
+| `current_version` | `_current_version` | 当前生效的价目表版本段 |
+| `peak_of` | `_peak_of` | 峰谷规则归一化 |
+| `price_version` | `_price_version` | 版本段 → 查找结构 |
+| `rate_of` | `_rate_of` | 汇率兜底 |
+| `strip_id_decor` | `_strip_id_decor` | 去模型 id 的日期快照与版本后缀 |
+| `tiers_of` | `_tiers_of` | 价表扁平成档位 |
+| `tokens_of` | `_tokens_of` | 模型 id 按分隔符切词 |
+| `version_id` | `_version_id` | 版本标识（显式 `versionId` 优先） |
 
 ## 解释器预加载
 

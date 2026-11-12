@@ -498,7 +498,7 @@ def _fixture_restart(**over):
 
 
 def _fixture_lease_begin(**over):
-    out = {"accepted": True, "component": "share_gateway",
+    out = {"accepted": True, "component": "share_entry",
            "lease_id": _SHARE_LEASE_ID, "lease_expires_at": 1790000300,
            "instance_id": _SHARE_INSTANCE_ID, "round": 7,
            "state": "draining", "active_count": 3}
@@ -507,7 +507,7 @@ def _fixture_lease_begin(**over):
 
 
 def _fixture_lease_end(**over):
-    out = {"resumed": True, "component": "share_gateway",
+    out = {"resumed": True, "component": "share_entry",
            "lease_id": _SHARE_LEASE_ID, "instance_id": _SHARE_INSTANCE_ID,
            "round": 7, "state": "running", "active_count": 0}
     out.update(over)
@@ -515,7 +515,7 @@ def _fixture_lease_end(**over):
 
 
 def _fixture_lease(**over):
-    out = {"lease_id": _SHARE_LEASE_ID, "component": "share_gateway",
+    out = {"lease_id": _SHARE_LEASE_ID, "component": "share_entry",
            "instance_id": _SHARE_INSTANCE_ID, "round": 7,
            "created_at": 1790000000, "expires_at": 1790000300,
            "active_count_at_begin": 3}
@@ -696,10 +696,10 @@ def _scenario_normal(registry, clock):
         "_MAINTENANCE_STATUS": _FixtureMaintenance(
             status=_fixture_maint_view(now=clock.time())).status,
         "_DESIRED_STOP_READER": lambda: False,
-        "_share_gateway_probe": lambda: {
+        "_share_entry_probe": lambda: {
             "pid": 54300, "started_at": _SHARE_FIXTURE_EPOCH,
             "reason": "ok"},
-        "_share_gateway_attribution": lambda: {
+        "_share_entry_attribution": lambda: {
             "file_ready": True, "reason": "ok",
             "instance_loaded": {"value": "yes", "basis": "inference"},
             "gateway_pid": 54300,
@@ -715,13 +715,13 @@ def _scenario_normal(registry, clock):
         ["running", "running", "valid", "ok", "ok", "running", "on", "ok", "running"]
     return _scenario_record(
         "normal", operation, result=report,
-        readback=_pair(report["layers"], "share_gateway", "share_backend"),
+        readback=_pair(report["layers"], "share_entry", "share_backend"),
         note=("九层全部 confirmed（只读、无副作用）；维护视图无租约、无 "
               "last_error；观察缝 forget_stale=False（不删 backend.pid）。"))
 
 
 def _scenario_unknown(registry, clock):
-    """2. unknown: share_gateway evidence unavailable + reason; overall returns."""
+    """2. unknown: share_entry evidence unavailable + reason; overall returns."""
     now = clock.time()
     broker = _FixtureBroker(
         verify_error=OperationError(
@@ -739,13 +739,13 @@ def _scenario_unknown(registry, clock):
         "_MAINTENANCE_STATUS": _FixtureMaintenance(
             status=_fixture_maint_view(now=clock.time())).status,
         "_DESIRED_STOP_READER": lambda: False,
-        "_share_gateway_probe": lambda: None,
-        "_share_gateway_attribution": lambda: None,
+        "_share_entry_probe": lambda: None,
+        "_share_entry_attribution": lambda: None,
     }
     operation = _run_console_action(registry, "share.diagnostics", {},
                                      seams=seams)
     report = operation["result"]
-    gateway = report["layers"]["share_gateway"]
+    gateway = report["layers"]["share_entry"]
     assert operation["state"] == "succeeded", operation["error"]
     assert gateway["state"] == "unavailable"
     assert gateway["verdict"] == "unavailable"
@@ -753,8 +753,8 @@ def _scenario_unknown(registry, clock):
     assert gateway["checked_at"] is None and gateway["stale"] is True
     return _scenario_record(
         "unknown", operation, result=report,
-        readback=_pair(report["layers"], "share_gateway", "share_backend"),
-        note=("share_gateway 证据不可得（verdict=unavailable + reason="
+        readback=_pair(report["layers"], "share_entry", "share_backend"),
+        note=("share_entry 证据不可得（verdict=unavailable + reason="
               "share_broker_unwired）；整体仍返回，其余层照常给出证据。"))
 
 
@@ -778,8 +778,8 @@ def _scenario_stale(registry, clock):
         "_MAINTENANCE_STATUS": _FixtureMaintenance(
             status=_fixture_maint_view(now=clock.time())).status,
         "_DESIRED_STOP_READER": lambda: False,
-        "_share_gateway_probe": lambda: {"pid": 54300, "reason": "ok"},
-        "_share_gateway_attribution": lambda: {"file_ready": True,
+        "_share_entry_probe": lambda: {"pid": 54300, "reason": "ok"},
+        "_share_entry_attribution": lambda: {"file_ready": True,
                                                "reason": "ok"},
     }
     operation = _run_console_action(registry, "share.diagnostics", {},
@@ -794,7 +794,7 @@ def _scenario_stale(registry, clock):
         "source_checked_epoch"
     assert layers["upstream"]["evidence"]["timestamp_basis"] == \
         "source_checked_epoch"
-    assert layers["share_gateway"]["stale"] is False
+    assert layers["share_entry"]["stale"] is False
     return _scenario_record(
         "stale", operation, result=report,
         readback=_pair(layers, "backend_auth", "upstream", "security_gate"),
@@ -824,8 +824,8 @@ def _scenario_partial_failure(registry, clock):
         "_MAINTENANCE_STATUS": _FixtureMaintenance(
             status=_fixture_maint_view(now=clock.time())).status,
         "_DESIRED_STOP_READER": lambda: False,
-        "_share_gateway_probe": lambda: {"pid": 54300, "reason": "ok"},
-        "_share_gateway_attribution": lambda: {"file_ready": True,
+        "_share_entry_probe": lambda: {"pid": 54300, "reason": "ok"},
+        "_share_entry_attribution": lambda: {"file_ready": True,
                                                "reason": "ok"},
     }
     operation = _run_console_action(registry, "share.diagnostics", {},
@@ -873,8 +873,8 @@ def _scenario_authenticating(registry, clock):
         "_MAINTENANCE_STATUS": _FixtureMaintenance(
             status=_fixture_maint_view(now=clock.time())).status,
         "_DESIRED_STOP_READER": lambda: False,
-        "_share_gateway_probe": lambda: {"pid": 54300, "reason": "ok"},
-        "_share_gateway_attribution": lambda: {"file_ready": True,
+        "_share_entry_probe": lambda: {"pid": 54300, "reason": "ok"},
+        "_share_entry_attribution": lambda: {"file_ready": True,
                                                "reason": "ok"},
     }
     diag_operation = _run_console_action(registry, "share.diagnostics", {},
@@ -917,8 +917,8 @@ def _scenario_maintenance(registry, clock):
         "_BACKEND_OPS": _FixtureBackendOps(),
         "_MAINTENANCE_STATUS": _FixtureMaintenance(status=view).status,
         "_DESIRED_STOP_READER": lambda: False,
-        "_share_gateway_probe": lambda: {"pid": 54300, "reason": "ok"},
-        "_share_gateway_attribution": lambda: {"file_ready": True,
+        "_share_entry_probe": lambda: {"pid": 54300, "reason": "ok"},
+        "_share_entry_attribution": lambda: {"file_ready": True,
                                                "reason": "ok"},
     }
     diag_operation = _run_console_action(registry, "share.diagnostics", {},
@@ -933,13 +933,13 @@ def _scenario_maintenance(registry, clock):
         "_BACKEND_OPS": _FixtureBackendOps(),
         "_MAINTENANCE_BEGIN": _FixtureMaintenance(begin=OperationError(
             "share_maintenance_refused",
-            "fixture: 已有维护租约在force（component=share_gateway）；"
+            "fixture: 已有维护租约在force（component=share_entry）；"
             "停止优先，拒绝重启（迟到结果不得重开）")).begin,
         "_MAINTENANCE_END": _FixtureMaintenance().end,
         "_MAINTENANCE_STATUS": _FixtureMaintenance(status=view).status,
         "_DESIRED_STOP_READER": lambda: False,
-        "_share_gateway_probe": lambda: {"pid": 54300, "reason": "ok"},
-        "_share_gateway_attribution": lambda: {"file_ready": True,
+        "_share_entry_probe": lambda: {"pid": 54300, "reason": "ok"},
+        "_share_entry_attribution": lambda: {"file_ready": True,
                                                "reason": "ok"},
     }
     operation = _run_console_action(registry, "share.backend_restart", {},
@@ -949,7 +949,7 @@ def _scenario_maintenance(registry, clock):
     assert operation["result"] is None
     return _scenario_record(
         "maintenance", operation, result=None,
-        readback=_pair(report["layers"], "share_gateway", "share_backend"),
+        readback=_pair(report["layers"], "share_entry", "share_backend"),
         last_error=report["last_error"],
         maintenance=report["maintenance"],
         desired_stop_in_force=report["desired_stop_in_force"],
@@ -973,8 +973,8 @@ def _scenario_timeout(registry, clock):
         "_MAINTENANCE_END": maintenance.end,
         "_MAINTENANCE_STATUS": maintenance.status,
         "_DESIRED_STOP_READER": lambda: False,
-        "_share_gateway_probe": lambda: {"pid": 54300, "reason": "ok"},
-        "_share_gateway_attribution": lambda: {"file_ready": True,
+        "_share_entry_probe": lambda: {"pid": 54300, "reason": "ok"},
+        "_share_entry_attribution": lambda: {"file_ready": True,
                                                "reason": "ok"},
     }
     operation = _run_console_action(
@@ -985,7 +985,7 @@ def _scenario_timeout(registry, clock):
     assert error["code"] == "share_backend_drain_timeout"
     assert "drain.resumed=true" in error["message"]
     assert "active_left=3" in error["message"]
-    assert maintenance.end_calls == [("share_gateway", _SHARE_LEASE_ID)]
+    assert maintenance.end_calls == [("share_entry", _SHARE_LEASE_ID)]
     assert maintenance.status_calls >= 1
     assert "restart" not in seams["_BACKEND_OPS"].calls
     drain = {"state": "timed_out", "active_left": 3,
@@ -1010,7 +1010,7 @@ def _scenario_cancelled(registry, clock):
     terminal state ``cancelled`` (never executed)."""
     now = clock.time()
     restart = _BlockingGatewayRestart({
-        "restarted": True, "component": "share_gateway",
+        "restarted": True, "component": "share_entry",
         "stopped_confirmed": True, "running_confirmed": True,
         "elapsed_s": 41.2, "maintenance_state": "idle"})
     broker = _FixtureBroker(
@@ -1028,8 +1028,8 @@ def _scenario_cancelled(registry, clock):
             status=_fixture_maint_view(now=clock.time())).status,
         "_DESIRED_STOP_READER": lambda: False,
         "_GATEWAY_RESTART": restart,
-        "_share_gateway_probe": lambda: {"pid": 54300, "reason": "ok"},
-        "_share_gateway_attribution": lambda: {"file_ready": True,
+        "_share_entry_probe": lambda: {"pid": 54300, "reason": "ok"},
+        "_share_entry_attribution": lambda: {"file_ready": True,
                                                "reason": "ok"},
     }
     operation = _run_gateway_cancel(registry, seams, restart)
@@ -1055,7 +1055,7 @@ def _scenario_cancelled(registry, clock):
     }
     return _scenario_record(
         "cancelled", operation, result=operation["result"],
-        readback=_pair(operation["result"]["after"], "share_gateway",
+        readback=_pair(operation["result"]["after"], "share_entry",
                         "share_backend"),
         before=operation["result"]["before"],
         after=operation["result"]["after"],
@@ -1199,13 +1199,13 @@ def _scenario_budget_exhausted(clock):
 # ---------------------------------------------------------- segment assembly
 
 _SHARE_MAINTENANCE_ACTIONS = (
-    ("share.diagnostics", ["share_gateway", "share_backend"], ["read_only"]),
+    ("share.diagnostics", ["share_entry", "share_backend"], ["read_only"]),
     ("share.backend_reauthenticate", ["share_backend"],
      ["trigger_backend_login"]),
     ("share.backend_restart", ["share_backend"],
      ["pause_gateway_acceptance", "restart_share_backend",
       "resume_gateway_acceptance"]),
-    ("share.gateway_restart", ["share_gateway"], ["restart_share_gateway"]),
+    ("share.gateway_restart", ["share_entry"], ["restart_share_entry"]),
 )
 
 
@@ -1267,8 +1267,8 @@ def generate_share_maintenance(specs):
                            "run_once for the supervision decision; every seam"
                            " value is a private fixture"),
         "components": {
-            "share_gateway": ("8100 分享入口进程（um-share-python.exe + "
-                                "share_gateway.py）"),
+            "share_entry": ("8100 分享入口进程（um-share-python.exe + "
+                                "share_entry.py）"),
             "share_backend": ("8110 专用后端进程（chat2api.py --port 8110 "
                                 "--profile <dir>\\edge-profile）"),
         },

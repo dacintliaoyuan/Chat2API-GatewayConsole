@@ -30,11 +30,11 @@ sys.path.insert(0, str(_repo / "chat2api"))
 import d4_stage_probe as probe  # noqa: E402
 import share_broker_protocol as bp  # noqa: E402
 import share_broker_server as srv  # noqa: E402
-import share_gateway as share_gw  # noqa: E402
+import share_entry as share_gw  # noqa: E402
 import share_instance_pipe as sip  # noqa: E402
 from share_broker_client import BrokerClient, NamedPipeBrokerTransport  # noqa: E402
 from share_broker_host import BrokerHostCoordinator, InstanceRegistry  # noqa: E402
-from share_gateway import ShareServer, X_MODELS_MARKER  # noqa: E402
+from share_entry import ShareServer, X_MODELS_MARKER  # noqa: E402
 from share_management import BrokerClientAdapter, ShareManager  # noqa: E402
 from share_runtime import ProtectedProjectionWriter  # noqa: E402
 

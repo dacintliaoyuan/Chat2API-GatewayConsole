@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 
-import share_gateway as share  # noqa: E402
+import share_entry as share  # noqa: E402
 
 KEY_ID = "ka"
 SECRET = "test-secret"

@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 
 import share_broker_protocol as bp  # noqa: E402
-import share_gateway as share  # noqa: E402
+import share_entry as share  # noqa: E402
 from share_management import ShareManager  # noqa: E402
 from share_store import (KEY_MAX_CONCURRENCY_MAX,  # noqa: E402
                          NEW_KEY_DEFAULT_MAX_CONCURRENCY,

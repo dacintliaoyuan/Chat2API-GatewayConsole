@@ -390,7 +390,7 @@ function Copy-ShareSource {
             -GatewaySrcDir (Join-Path $Root 'ai-gateway') -PythonExe $pythonExe
         Write-Log 'projection mode: skipping legacy um-share.json copy (SQLite is the single authority)'
         # The gateway's instance-control channel needs the FULL share-side
-        # module closure in the run copy (share_gateway imports
+        # module closure in the run copy (share_entry imports
         # share_instance_pipe -> share_broker_server -> share_broker_host ->
         # share_runtime -> share_management -> share_store; the protocol
         # module alone leaves the instance channel ImportError-dead, which
@@ -438,12 +438,12 @@ function Copy-ShareSource {
     }
 
     # 1. refresh the run-copy scripts from the (already reviewed) source.
-    $srcShare = Join-Path $Root 'ai-gateway\chat2api\share_gateway.py'
+    $srcShare = Join-Path $Root 'ai-gateway\chat2api\share_entry.py'
     $pairs = New-Object System.Collections.ArrayList
     [void]$pairs.Add(@((Join-Path $DeployDir 'share_guard.py'), (Join-Path $RunRoot 'share_guard.py')))
     [void]$pairs.Add(@((Join-Path $DeployDir 'canary_um.py'), (Join-Path $RunRoot 'canary_um.py')))
     [void]$pairs.Add(@((Join-Path $DeployDir 'escape_probe.py'), (Join-Path $RunRoot 'escape_probe.py')))
-    [void]$pairs.Add(@($srcShare, (Join-Path $RunRoot 'share_gateway.py')))
+    [void]$pairs.Add(@($srcShare, (Join-Path $RunRoot 'share_entry.py')))
     foreach ($pair in $pairs) {
         Copy-Item -LiteralPath $pair[0] -Destination $pair[1] -Force
         $srcHash = (Get-FileHash -LiteralPath $pair[0] -Algorithm SHA256).Hash
@@ -600,7 +600,7 @@ function Get-AttributionKeyState {
     }
     try {
         # Read the bytes and decode WITHOUT preamble stripping: the runtime reads
-        # this file with open(encoding="utf-8") (share_gateway.load_attribution_key
+        # this file with open(encoding="utf-8") (share_entry.load_attribution_key
         # and chat2api's verifier), where a BOM stays part of the secret and
         # counts toward the minimum length. The text cmdlet that decodes UTF8 would
         # drop the BOM under PowerShell 5.1, so the same file would read
@@ -853,7 +853,7 @@ try {
         icacls $liveRun /grant:r 'DAICNT\um_share:(OI)(CI)M' | Out-Null
         # Instance channel wiring (2026-09-17 production gap): the gateway
         # self-publishes its registration ONLY when launched with the
-        # instance-channel args (chat2api/share_gateway.py:838 — key without
+        # instance-channel args (chat2api/share_entry.py:838 — key without
         # registration is a parser error). Without them the broker sees an
         # absent registration forever and EVERY publish answers unconfirmed,
         # so share.start's keys precondition can never pass. Same reviewed
@@ -873,7 +873,7 @@ try {
         # string character-by-character against the config-derived one
         # (share_guard.py :427-431, tests/test_d4_assembly.py :227), so an extra
         # argument there would make D4 refuse to start. The env var is the
-        # documented channel (share_gateway.py :115, :1208-1212).
+        # documented channel (share_entry.py :115, :1208-1212).
         # The line above is injected on EVERY deploy regardless of the key state;
         # the state line below is what makes "file not ready" visible here.
         [void](Write-AttributionKeyState -Where 'Start')

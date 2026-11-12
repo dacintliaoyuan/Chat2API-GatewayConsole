@@ -242,7 +242,7 @@ def _restart(args) -> int:
 
 def _gateway_restart(args) -> int:
     client = _client(args)
-    result = client.gateway_restart("share_gateway", args.restart_budget)
+    result = client.gateway_restart("share_entry", args.restart_budget)
     _emit(result)
     ok = result.ok and result.result.get("restarted") is True \
         and result.result.get("stopped_confirmed") is True \

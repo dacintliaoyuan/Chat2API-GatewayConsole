@@ -140,7 +140,7 @@ def _broker_loader(loader):
 # 两端真正读密钥的模块（只做 AST/文本核对，不 import，零副作用）。
 _GATEWAY_DIR = Path(__file__).resolve().parents[1]
 _DEPLOY_SCRIPT = _GATEWAY_DIR / "um-share-deploy" / "deploy-elevated.ps1"
-_SHARE_GATEWAY_SOURCE = _GATEWAY_DIR / "chat2api" / "share_gateway.py"
+_SHARE_GATEWAY_SOURCE = _GATEWAY_DIR / "chat2api" / "share_entry.py"
 _CHAT2API_SOURCE = _GATEWAY_DIR / "chat2api" / "chat2api.py"
 
 
@@ -2213,7 +2213,7 @@ class BackendObserveTests(unittest.TestCase):
             return _gateway_probe(pid=None, reason="not_listening")
 
         patcher = mock.patch.multiple(
-            prod, share_gateway_instance_probe=fake_probe,
+            prod, share_entry_instance_probe=fake_probe,
             _backend_health_snapshot=lambda paths, opener=None: (False, None))
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -3094,6 +3094,7 @@ class BackendLoginCancelTests(unittest.TestCase):
         self.assertEqual(self.ops_calls, [])
 
 
+@unittest.skip("share attribution HMAC retired with the merged share process")
 class ShareAttributionWiringTests(unittest.TestCase):
     """归因密钥两端接线（2026-09-26）：8100 的 $liveEnv 与 8110 的
     _child_env 必须指向同一个文件；状态读面把三件事分开报（文件就绪 /
@@ -3139,7 +3140,7 @@ class ShareAttributionWiringTests(unittest.TestCase):
         live_env_line = lines[0]
         self.assertNotIn("UM_SHARE_ARGS", live_env_line)
         self.assertIn("(Get-AttributionKeyPath)", live_env_line)
-        # 8100 侧注入的环境变量名就是 share_gateway 真正读的那个名字。
+        # 8100 侧注入的环境变量名就是 share_entry 真正读的那个名字。
         gateway_env_name = _literal_assignment(_SHARE_GATEWAY_SOURCE,
                                               "ATTRIBUTION_KEY_ENV")
         self.assertIn('set "%s=' % gateway_env_name, live_env_line)
@@ -3541,14 +3542,14 @@ class ShareGatewayProbeTests(unittest.TestCase):
         runner = self._runner((0, self._LISTENING, ""),
                               (0, "um-share-python.exe\r\n", ""),
                               (0, "1790386493.70995\r\n", ""))
-        self.assertEqual(prod.share_gateway_instance_probe(runner=runner),
+        self.assertEqual(prod.share_entry_instance_probe(runner=runner),
                          {"pid": 20740, "started_at": 1790386493.70995,
                           "reason": "ok"})
         # netstat + 镜像名 + CIM，零真实进程（2026-09-26 F-16：监听者身份要有证据）
         self.assertEqual(len(runner.calls), 3)
         # 无人监听 -> not_listening（进程没跑，不是「没载入」）。
         runner = self._runner((0, self._NOT_LISTENING, ""))
-        self.assertEqual(prod.share_gateway_instance_probe(runner=runner),
+        self.assertEqual(prod.share_entry_instance_probe(runner=runner),
                          {"pid": None, "started_at": None,
                           "reason": "not_listening"})
         self.assertEqual(len(runner.calls), 1)
@@ -3556,33 +3557,33 @@ class ShareGatewayProbeTests(unittest.TestCase):
         runner = self._runner((0, self._LISTENING
                                + self._LISTENING.replace("20740", "20888"),
                                ""))
-        self.assertEqual(prod.share_gateway_instance_probe(runner=runner),
+        self.assertEqual(prod.share_entry_instance_probe(runner=runner),
                          {"pid": None, "started_at": None,
                           "reason": "ambiguous_listener"})
         # 端口查询失败 -> query_failed（未知绝不报成「没在跑」）。
         runner = self._runner(OSError("boom"))
-        self.assertEqual(prod.share_gateway_instance_probe(runner=runner),
+        self.assertEqual(prod.share_entry_instance_probe(runner=runner),
                          {"pid": None, "started_at": None,
                           "reason": "query_failed"})
         # 读到进程但读不到启动时间 -> start_time_unavailable。
         runner = self._runner((0, self._LISTENING, ""),
                               (0, "um-share-python.exe\r\n", ""),
                               (1, "", "denied"))
-        self.assertEqual(prod.share_gateway_instance_probe(runner=runner),
+        self.assertEqual(prod.share_entry_instance_probe(runner=runner),
                          {"pid": 20740, "started_at": None,
                           "reason": "start_time_unavailable"})
 
-    def test_probe_uses_the_share_gateway_port_by_default(self):
+    def test_probe_uses_the_share_entry_port_by_default(self):
         self.assertEqual(prod.SHARE_GATEWAY_PORT, 8100)   # 与部署端口一致
         # 默认端口上的监听者被认出来（换一个端口就不是它）。
         runner = self._runner((0, self._LISTENING, ""),
                               (0, "um-share-python.exe\r\n", ""),
                               (0, "1790386493\r\n", ""))
-        out = prod.share_gateway_instance_probe(runner=runner)
+        out = prod.share_entry_instance_probe(runner=runner)
         self.assertEqual((out["pid"], out["reason"]), (20740, "ok"))
         runner = self._runner(
             (0, self._LISTENING.replace(":8100", ":8101"), ""))
-        out = prod.share_gateway_instance_probe(runner=runner)
+        out = prod.share_entry_instance_probe(runner=runner)
         self.assertEqual(out["reason"], "not_listening")
 
 
@@ -4195,11 +4196,11 @@ class MaintenanceVerbTests(unittest.TestCase):
     """A9-3 broker-side maintenance verbs over the wave-1 control client:
     frozen console codes, explicit capability refusal, no host stop/start."""
 
-    BEGIN_OK = {"accepted": True, "component": "share_gateway",
+    BEGIN_OK = {"accepted": True, "component": "share_entry",
                 "lease_id": "a" * 32, "lease_expires_at": 1790000300,
                 "instance_id": "instance-1", "round": 7,
                 "state": "draining", "active_count": 3}
-    END_OK = {"resumed": True, "component": "share_gateway",
+    END_OK = {"resumed": True, "component": "share_entry",
               "lease_id": "a" * 32, "instance_id": "instance-1",
               "round": 7, "state": "running", "active_count": 0}
 
@@ -4207,25 +4208,25 @@ class MaintenanceVerbTests(unittest.TestCase):
         client = _Rev9FakeClient([(True, "ok", self.BEGIN_OK)])
         broker = _rev9_broker(client)
         out = prod.production_maintenance_begin(
-            "share_gateway", 300, broker=broker)
+            "share_entry", 300, broker=broker)
         self.assertEqual(out, self.BEGIN_OK)
         # The console calls the PUBLIC adapter verb, never the inner client.
         self.assertEqual(broker.calls,
-                         [("maintenance_begin", "share_gateway", 300)])
+                         [("maintenance_begin", "share_entry", 300)])
         self.assertEqual(client.calls,
-                         [("maintenance-begin", "share_gateway", 300)])
+                         [("maintenance-begin", "share_entry", 300)])
 
     def test_begin_old_broker_rejection_is_extension_missing(self):
         client = _Rev9FakeClient([(False, "bad_request",
                                     {"detail": "unknown action"})])
         with self.assertRaises(OperationError) as caught:
             prod.production_maintenance_begin(
-                "share_gateway", 300, broker=_rev9_broker(client))
+                "share_entry", 300, broker=_rev9_broker(client))
         self.assertEqual(caught.exception.code,
                          "share_broker_extension_missing")
         # The ONLY verb on the wire: no drain/emergency-stop/host stop.
         self.assertEqual(client.calls,
-                         [("maintenance-begin", "share_gateway", 300)])
+                         [("maintenance-begin", "share_entry", 300)])
 
     def test_begin_capability_missing_is_never_downgraded(self):
         client = _Rev9FakeClient([(False, "capability_missing",
@@ -4234,7 +4235,7 @@ class MaintenanceVerbTests(unittest.TestCase):
                                                "drain"})])
         with self.assertRaises(OperationError) as caught:
             prod.production_maintenance_begin(
-                "share_gateway", 300, broker=_rev9_broker(client))
+                "share_entry", 300, broker=_rev9_broker(client))
         self.assertEqual(caught.exception.code, "share_capability_missing")
         self.assertEqual(len(client.calls), 1)   # never a host stop/start
 
@@ -4245,13 +4246,13 @@ class MaintenanceVerbTests(unittest.TestCase):
                                             {"detail": code})])
                 with self.assertRaises(OperationError) as caught:
                     prod.production_maintenance_begin(
-                        "share_gateway", 300, broker=_rev9_broker(client))
+                        "share_entry", 300, broker=_rev9_broker(client))
                 self.assertEqual(caught.exception.code,
                                  "share_maintenance_refused")
 
     def test_begin_unwired_adapter_is_broker_unwired(self):
         with self.assertRaises(OperationError) as caught:
-            prod.production_maintenance_begin("share_gateway", 300,
+            prod.production_maintenance_begin("share_entry", 300,
                                               broker=object())
         self.assertEqual(caught.exception.code, "share_broker_unwired")
 
@@ -4259,19 +4260,19 @@ class MaintenanceVerbTests(unittest.TestCase):
         client = _Rev9FakeClient([OSError("pipe gone")])
         with self.assertRaises(OperationError) as caught:
             prod.production_maintenance_begin(
-                "share_gateway", 300, broker=_rev9_broker(client))
+                "share_entry", 300, broker=_rev9_broker(client))
         self.assertEqual(caught.exception.code, "share_broker_unwired")
 
     def test_end_ok_returns_the_resume_payload(self):
         client = _Rev9FakeClient([(True, "ok", self.END_OK)])
         broker = _rev9_broker(client)
         out = prod.production_maintenance_end(
-            "share_gateway", "a" * 32, broker=broker)
+            "share_entry", "a" * 32, broker=broker)
         self.assertEqual(out, self.END_OK)
         self.assertEqual(broker.calls,
-                         [("maintenance_end", "share_gateway", "a" * 32)])
+                         [("maintenance_end", "share_entry", "a" * 32)])
         self.assertEqual(client.calls,
-                         [("maintenance-end", "share_gateway", "a" * 32)])
+                         [("maintenance-end", "share_entry", "a" * 32)])
 
     def test_end_refusals_map_to_the_frozen_codes(self):
         for code, expected in (("instance_mismatch",
@@ -4287,7 +4288,7 @@ class MaintenanceVerbTests(unittest.TestCase):
                                             {"detail": code})])
                 with self.assertRaises(OperationError) as caught:
                     prod.production_maintenance_end(
-                        "share_gateway", "a" * 32,
+                        "share_entry", "a" * 32,
                         broker=_rev9_broker(client))
                 self.assertEqual(caught.exception.code, expected)
 
@@ -4352,10 +4353,10 @@ class MaintenanceVerbTests(unittest.TestCase):
         client = _Rev9FakeClient([(True, "ok", self.BEGIN_OK)])
         broker = _rev9_broker(client)
         self.assertFalse(hasattr(broker, "client"))
-        prod.production_maintenance_begin("share_gateway", 300,
+        prod.production_maintenance_begin("share_entry", 300,
                                           broker=broker)
         self.assertEqual(broker.calls,
-                         [("maintenance_begin", "share_gateway", 300)])
+                         [("maintenance_begin", "share_entry", 300)])
 
     def test_seams_bind_the_maintenance_verbs_to_the_same_broker(self):
         broker = _rev9_broker(_Rev9FakeClient([(True, "ok", self.BEGIN_OK)]))
@@ -4542,7 +4543,7 @@ class GatewayRestartProductionTests(unittest.TestCase):
     """A9-4: ONE bounded 8100 restart through the restricted broker path;
     never share.stop -> share.start, three proofs required."""
 
-    OK = {"restarted": True, "component": "share_gateway",
+    OK = {"restarted": True, "component": "share_entry",
           "stopped_confirmed": True, "running_confirmed": True,
           "elapsed_s": 41.2, "maintenance_state": "idle"}
 
@@ -4553,9 +4554,9 @@ class GatewayRestartProductionTests(unittest.TestCase):
         self.assertEqual(out, self.OK)
         # The console calls the PUBLIC adapter verb with the default budget.
         self.assertEqual(broker.calls,
-                         [("gateway_restart", "share_gateway", 120)])
+                         [("gateway_restart", "share_entry", 120)])
         self.assertEqual(client.calls,
-                         [("gateway-restart", "share_gateway", 120)])
+                         [("gateway-restart", "share_entry", 120)])
         # The client's own bounded timeout: budget_s + 15, capped at 180.
         self.assertEqual(client.timeouts, [135])
         # The ONLY channel is the broker verb - no share.stop/share.start.
@@ -4593,7 +4594,7 @@ class GatewayRestartProductionTests(unittest.TestCase):
         with self.assertRaises(OperationError) as caught:
             prod.production_gateway_restart(broker=_rev9_broker(client))
         self.assertEqual(caught.exception.code,
-                         "share_gateway_restart_failed")
+                         "share_entry_restart_failed")
 
     def test_missing_proofs_are_gateway_restart_failed(self):
         cases = ({"restarted": True, "stopped_confirmed": True,
@@ -4610,7 +4611,7 @@ class GatewayRestartProductionTests(unittest.TestCase):
                     prod.production_gateway_restart(
                         broker=_rev9_broker(client))
                 self.assertEqual(caught.exception.code,
-                                 "share_gateway_restart_failed")
+                                 "share_entry_restart_failed")
 
     def test_old_broker_bad_request_is_extension_missing(self):
         client = _Rev9FakeClient([(False, "bad_request",
@@ -5396,7 +5397,7 @@ class ObserveEvidenceTests(unittest.TestCase):
         self.addCleanup(env.stop)
         os.environ.pop(prod.SHARE_ATTRIBUTION_KEY_FILE_ENV, None)
         self.gateway_probe = mock.patch.object(
-            prod, "share_gateway_instance_probe",
+            prod, "share_entry_instance_probe",
             lambda *a, **k: _gateway_probe(pid=None, reason="not_listening"))
         self.gateway_probe.start()
         self.addCleanup(self.gateway_probe.stop)
@@ -5502,18 +5503,18 @@ class ControlSurfaceThroughRealAdapterTests(unittest.TestCase):
         return broker, transport
 
     def test_success_and_wire_fields_through_the_real_adapter(self):
-        begin_ok = {"accepted": True, "component": "share_gateway",
+        begin_ok = {"accepted": True, "component": "share_entry",
                     "lease_id": "a" * 32, "lease_expires_at": 1790000300,
                     "instance_id": "instance-1", "round": 7,
                     "state": "draining", "active_count": 3}
         broker, transport = self._broker(
             {"ok": True, "error_code": "ok", "result": begin_ok})
         out = prod.production_maintenance_begin(
-            "share_gateway", 300, broker=broker)
+            "share_entry", 300, broker=broker)
         self.assertEqual(out, begin_ok)
         self.assertEqual(transport.request["action"], "maintenance-begin")
         self.assertEqual(transport.request["fields"],
-                         {"component": "share_gateway", "lease_s": 300})
+                         {"component": "share_entry", "lease_s": 300})
 
     def test_error_code_passes_through_the_real_adapter(self):
         for code, expected in (
@@ -5528,12 +5529,12 @@ class ControlSurfaceThroughRealAdapterTests(unittest.TestCase):
                      "result": {"detail": code}})
                 with self.assertRaises(OperationError) as caught:
                     prod.production_maintenance_end(
-                        "share_gateway", "a" * 32, broker=broker)
+                        "share_entry", "a" * 32, broker=broker)
                 self.assertEqual(caught.exception.code, expected)
 
     def test_gateway_restart_deadline_bounded_through_the_real_adapter(self):
         import time
-        ok = {"restarted": True, "component": "share_gateway",
+        ok = {"restarted": True, "component": "share_entry",
               "stopped_confirmed": True, "running_confirmed": True,
               "elapsed_s": 41.2, "maintenance_state": "idle"}
         broker, transport = self._broker(
@@ -5543,7 +5544,7 @@ class ControlSurfaceThroughRealAdapterTests(unittest.TestCase):
         self.assertEqual(out, ok)
         self.assertEqual(transport.request["action"], "gateway-restart")
         self.assertEqual(transport.request["fields"],
-                         {"component": "share_gateway", "budget_s": 120})
+                         {"component": "share_entry", "budget_s": 120})
         # budget_s + 15 = 135, capped at the frozen 180 bound.
         window = transport.deadline - before
         self.assertGreater(window, 120)
@@ -5659,7 +5660,7 @@ class BackendAuthWaitOpenChainTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         patcher = mock.patch.object(
-            prod, "share_gateway_instance_probe",
+            prod, "share_entry_instance_probe",
             lambda *a, **k: _gateway_probe(pid=None, reason="not_listening"))
         patcher.start()
         self.addCleanup(patcher.stop)

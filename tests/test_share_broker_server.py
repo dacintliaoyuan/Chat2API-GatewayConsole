@@ -41,7 +41,7 @@ from share_broker_host import (BrokerHostCoordinator,  # noqa: E402
                                InstanceRegistry, MaintenanceLeaseStore,
                                ReplayRegistry)
 from share_broker_ops import WindowsInstanceVerifier  # noqa: E402
-from share_gateway import ShareServer  # noqa: E402
+from share_entry import ShareServer  # noqa: E402
 from share_runtime import ProtectedProjectionWriter  # noqa: E402
 
 
@@ -1768,7 +1768,7 @@ class MaintenanceRecordTests(unittest.TestCase):
         state_dir.mkdir()
         server, _, _ = self._server(state_dir=state_dir)
         record = {"schema_version": 1, "state": "leased",
-                  "component": "share_gateway", "lease_id": "a" * 32,
+                  "component": "share_entry", "lease_id": "a" * 32,
                   "instance_id": "i-1", "round": 1, "created_at": 1000,
                   "expires_at": 1300, "by": "maintenance-begin",
                   "last_outcome": None}
@@ -1798,7 +1798,7 @@ class MaintenanceRecordTests(unittest.TestCase):
         expires_at = int(time.time()) + 300
         (state_dir / "maintenance.json").write_text(json.dumps({
             "schema_version": 1, "state": "leased",
-            "component": "share_gateway", "lease_id": "b" * 32,
+            "component": "share_entry", "lease_id": "b" * 32,
             "instance_id": "i-1", "round": 1, "created_at": 1000,
             "expires_at": expires_at, "by": "maintenance-begin",
             "last_outcome": None}), encoding="utf-8")
@@ -1821,7 +1821,7 @@ class MaintenanceRecordTests(unittest.TestCase):
                                         _MaintenanceInstance())
         server, record, kernel = self._serve(
             coord, bp.build_request("mgmt-k", bp.MAINTENANCE_BEGIN_ACTION,
-                                    {"component": "share_gateway",
+                                    {"component": "share_entry",
                                      "lease_s": 300}), state_dir)
         self.assertTrue(record["ok"], record)
         response = json.loads(bytes(kernel.written))
@@ -1848,7 +1848,7 @@ class MaintenanceRecordTests(unittest.TestCase):
         # 同一个 server 对象跨两个周期（生产只有一个 broker 进程实例）。
         kernel = FakeK32(bp.encode_frame(bp.build_request(
             "mgmt-k", bp.MAINTENANCE_BEGIN_ACTION,
-            {"component": "share_gateway", "lease_s": 300})))
+            {"component": "share_entry", "lease_s": 300})))
         server = srv.ManagementPipeServer(
             coord, r"\\.\pipe\um-share-broker", kernel=(kernel, None),
             deadline_seconds=5.0, state_dir=state_dir)

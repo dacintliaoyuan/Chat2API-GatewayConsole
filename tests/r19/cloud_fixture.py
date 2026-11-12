@@ -5,7 +5,7 @@ Runs the REAL cloud package on loopback only:
 
     fake UM (verification upstream)
     share_broker_ops.py::linux_main (AF_UNIX broker, spawns 8100)
-    chat2api/share_gateway.py (8100 role, spawned by the broker)
+    chat2api/share_entry.py (8100 role, spawned by the broker)
     cloud/run_cloud.py --config (18096 role, owns the 8110 backend)
 
 The fixture reuses the process/HTTP helpers from
@@ -415,7 +415,7 @@ class CloudChainFixture(chain.ChainFixture):
                 self.paths[name].unlink()
         gateway = [
             sys.executable,
-            str(self.package / "chat2api" / "share_gateway.py"),
+            str(self.package / "chat2api" / "share_entry.py"),
             "--port", str(self.share_port),
             "--upstream-port", str(self.backend_port),
             "--config", str(self.paths["projection"]),
@@ -435,7 +435,7 @@ class CloudChainFixture(chain.ChainFixture):
             *broker_argv(self.paths)[1:],
             "--expected-uid", str(os.getuid()),
             "--expect-instance-image", sys.executable,
-            "--expect-instance-cmdline-marker", "share_gateway.py",
+            "--expect-instance-cmdline-marker", "share_entry.py",
             "--expect-instance-port", str(self.share_port),
             "--deadline", "10",
             "--dispatch-deadline", "30",
@@ -739,7 +739,7 @@ class CloudChainFixture(chain.ChainFixture):
         if self.management_process is not None:
             self.management_process.stop()
         gateway_live = self._live_pid(
-            self.paths["host_pid"], "share_gateway.py")
+            self.paths["host_pid"], "share_entry.py")
         if self.broker_client is not None and self.broker is not None \
                 and self.broker.alive() and (
                     gateway_live is not None
@@ -755,7 +755,7 @@ class CloudChainFixture(chain.ChainFixture):
         if self.broker is not None:
             self.broker.stop()
         self._stop_residual(
-            self.paths["host_pid"], "share_gateway.py", self.share_port)
+            self.paths["host_pid"], "share_entry.py", self.share_port)
         self._stop_residual(
             self.paths["backend"] / "backend.pid", "chat2api.py",
             self.backend_port)

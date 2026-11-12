@@ -881,7 +881,7 @@ class MeteringAcceptanceCollectionTests(unittest.TestCase):
         self.private_ledger = os.path.join(self._tmp.name, "private.jsonl")
         # 8100 运行实例探测替身：本套件不跑真实 netstat/CIM。
         probe = mock.patch.object(
-            prod, "share_gateway_instance_probe",
+            prod, "share_entry_instance_probe",
             lambda *a, **k: {"pid": None, "started_at": None,
                             "reason": "not_listening"})
         probe.start()

@@ -115,7 +115,7 @@ Each adapter mirrors a REAL local product surface, honestly:
 * ``share_attribution_key_path()`` / ``share_attribution_status()`` — the
   ONE shared attribution key file BOTH ends must point at (C2 verified
   attribution). The path is a deployment fact, not a second state store:
-  8100 reads the file once at startup (share_gateway.py :1247-1251), 8110
+  8100 reads the file once at startup (chat2api.py :1247-1251), 8110
   re-stats it per request (chat2api.py :1587-1590); the dedicated-backend child env
   and ``_paths()["attribution_key"]`` carry the SAME resolved path. The
   status helper reports THREE DIFFERENT facts under three different names
@@ -1108,7 +1108,7 @@ def _backend_base_url(config=None):
 # BOTH ends must point at ONE key file, and this module is the single place
 # the 8110 side resolves that path:
 #   * 8100 (share gateway) reads the file ONCE at startup through the
-#     SHARE_ATTRIBUTION_KEY_FILE env var (share_gateway.py :115), which the
+#     SHARE_ATTRIBUTION_KEY_FILE env var (chat2api.py :115), which the
 #     deployed run wrapper sets (deploy-elevated.ps1 Start stage, $liveEnv);
 #   * 8110 (dedicated backend) re-stats it PER REQUEST through
 #     CHAT2API_SHARE_ATTRIBUTION_KEY_FILE (chat2api.py :1525-1528),
@@ -1124,13 +1124,13 @@ def _backend_base_url(config=None):
 # gateway started is NOT visible in a running instance until it is restarted:
 # that is a DIFFERENT fact from file readiness and is reported separately
 # (``instance_loaded``, inferred from the gateway process start time vs this
-# file's mtime — see share_gateway_instance_probe). Generation/rotation
+# file's mtime — see share_entry_instance_probe). Generation/rotation
 # procedure: SHARING.md.
 DEFAULT_SHARE_RUN_ROOT = r"C:\ProgramData\UMShareRun"  # deploy -RunRoot default
 SHARE_RUN_ROOT_ENV = "CONSOLE_SHARE_RUN_ROOT"
 SHARE_ATTRIBUTION_KEY_NAME = "share-attribution.key"
 SHARE_ATTRIBUTION_KEY_FILE_ENV = "CONSOLE_SHARE_ATTRIBUTION_KEY_FILE"
-SHARE_ATTRIBUTION_KEY_MIN_BYTES = 32   # = share_gateway/chat2api constant
+SHARE_ATTRIBUTION_KEY_MIN_BYTES = 32   # = share_entry/chat2api constant
 BACKEND_ATTRIBUTION_KEY_ENV = "CHAT2API_SHARE_ATTRIBUTION_KEY_FILE"
 BACKEND_SHARE_SECRET_KEY_ENV = "CHAT2API_SHARE_SECRET_KEY_FILE"
 # standards-config-05: the two identity paths the 8110 child also owns.
@@ -1210,14 +1210,14 @@ def _attribution_file_fact(target):
 
 # ---- running 8100 instance probe (read-only) ---------------------------------
 # 8100 (the share gateway) reads the key file ONCE at startup
-# (share_gateway.py :1247-1251), so "the file is readable now" says NOTHING
+# (chat2api.py :1247-1251), so "the file is readable now" says NOTHING
 # about the process already running: after a create/rotate it may still hold the
 # previous content. The only way to tell the two apart without touching the
 # process is its START TIME vs the key file mtime — an INFERENCE, not a proof
 # (a content change that preserves mtime, or a clock jump, defeats it). That is
 # why the read surface carries the rule and the raw evidence next to the verdict,
 # and why a process that cannot be found is "unknown" — never "loaded".
-SHARE_GATEWAY_PORT = 8100          # share_gateway.py --port default (:1193)
+SHARE_GATEWAY_PORT = 8100          # chat2api.py --port default (:1193)
 # .NET epoch ticks (1970-01-01T00:00:00Z). The conversion runs INSIDE
 # PowerShell because Win32_Process CreationDate prints as a LOCALIZED string
 # ("09/26/2026 09:34:53"), whose Python parse would be locale-dependent
@@ -1302,7 +1302,7 @@ def _process_start_epoch(pid, runner=None):
     return (epoch, "ok")
 
 
-def share_gateway_instance_probe(port=None, runner=None):
+def share_entry_instance_probe(port=None, runner=None):
     """Read-only view of the process serving the share-gateway port.
 
     Returns ``{"pid": int|None, "started_at": float|None, "reason": code}``:
@@ -1435,7 +1435,7 @@ def share_attribution_status(path=None, gateway_probe=None, ledger_path=None):
     file_ready, reason, key_chars, key_mtime = _attribution_file_fact(target)
     probe = None
     if file_ready is True:
-        probe = (gateway_probe or share_gateway_instance_probe)()
+        probe = (gateway_probe or share_entry_instance_probe)()
     value, load_reason = _infer_instance_loaded(file_ready, key_mtime, probe)
     probe = probe if isinstance(probe, dict) else {}
     return {
@@ -2328,74 +2328,6 @@ class _ProductionBackendOps:
             return False
 
 
-# ---------------------------------------------------------------------------
-# Linux restricted dedicated-backend gate (2026-10-30 cloud role)
-# ---------------------------------------------------------------------------
-# The SAME pid file, identity and lifecycle contract as the Windows gate above;
-# only the OS primitives differ. Nothing here calls tasklist, netstat,
-# PowerShell/CIM or taskkill, and no Windows DACL is fabricated:
-#   * liveness is os.kill(pid, 0) (ProcessLookupError = gone; EPERM = exists
-#     but not ours, which is never signalled);
-#   * identity is the REAL /proc/<pid> command line (the expected script
-#     marker plus the exact --port <port> pair) and the /proc/<pid>/exe
-#     symlink, compared with realpath so a symlinked interpreter still
-#     matches;
-#   * the listener fact is the kernel's own /proc/net/tcp{,6} LISTEN table
-#     for 127.0.0.1:<port>;
-#   * the process creation time comes from /proc/<pid>/stat starttime plus
-#     /proc/stat btime (PID reuse detection stays intact);
-#   * a force stop is SIGTERM then SIGKILL, never taskkill.
-# The instance record/pid-file writers and the graceful /admin/shutdown
-# route are inherited byte for byte.
-
-
-def _linux_proc_read(proc_root, pid, name):
-    try:
-        return Path(proc_root, str(int(pid)), name).read_text(
-            encoding="utf-8", errors="replace")
-    except (OSError, ValueError):
-        return None
-
-
-def _linux_proc_root_read(proc_root, *parts):
-    """Read a file directly under the proc root (stat, net/tcp, net/tcp6)."""
-    try:
-        return Path(proc_root, *parts).read_text(
-            encoding="utf-8", errors="replace")
-    except (OSError, ValueError):
-        return None
-
-
-def _linux_proc_creation_epoch(proc_root, pid):
-    """Creation epoch from /proc/<pid>/stat starttime + /proc/stat btime."""
-    stat_text = _linux_proc_read(proc_root, pid, "stat")
-    btime_text = _linux_proc_root_read(proc_root, "stat")
-    if not stat_text or not btime_text:
-        return None
-    try:
-        tail = stat_text[stat_text.rindex(")") + 2:].split()
-        start_ticks = int(tail[19])
-    except (ValueError, IndexError):
-        return None
-    btime = None
-    for line in btime_text.splitlines():
-        if line.startswith("btime "):
-            try:
-                btime = int(line.split()[1])
-            except (ValueError, IndexError):
-                btime = None
-            break
-    if btime is None:
-        return None
-    try:
-        ticks = int(os.sysconf("SC_CLK_TCK"))
-    except (ValueError, OSError, AttributeError):
-        ticks = 100
-    if ticks <= 0:
-        ticks = 100
-    return float(btime) + float(start_ticks) / float(ticks)
-
-
 class _LinuxBackendOps(_ProductionBackendOps):
     """POSIX (Linux) dedicated-backend gate.
 
@@ -2513,6 +2445,103 @@ class _LinuxBackendOps(_ProductionBackendOps):
                 if address.upper() in ("0100007F", "00000000"):
                     return True
         return False
+
+
+class _MergedBackendOps(_LinuxBackendOps):
+    """Cloud merged 8100 process: the console owns no 8110 child.
+
+    The broker is the only launcher; start/stop are no-ops here. Login and
+    restart target the merged 8100 process with the console's own control
+    token, and the broker owns the restart.
+    """
+
+    def _paths(self):
+        paths = super()._paths()
+        paths["port"] = SHARE_GATEWAY_PORT
+        if self._config is not None:
+            paths["control_token"] = self._config.control_token_file
+        else:
+            paths["control_token"] = os.environ.get(
+                "USAGE_CONTROL_TOKEN_FILE",
+                "/etc/um-share/admin-control-token")
+        return paths
+
+    def start(self):
+        return True
+
+    def stop(self):
+        return True
+
+    def restart(self, **kwargs):
+        return production_gateway_restart()
+
+
+# ---------------------------------------------------------------------------
+# Linux restricted dedicated-backend gate (2026-10-30 cloud role)
+# ---------------------------------------------------------------------------
+# The SAME pid file, identity and lifecycle contract as the Windows gate above;
+# only the OS primitives differ. Nothing here calls tasklist, netstat,
+# PowerShell/CIM or taskkill, and no Windows DACL is fabricated:
+#   * liveness is os.kill(pid, 0) (ProcessLookupError = gone; EPERM = exists
+#     but not ours, which is never signalled);
+#   * identity is the REAL /proc/<pid> command line (the expected script
+#     marker plus the exact --port <port> pair) and the /proc/<pid>/exe
+#     symlink, compared with realpath so a symlinked interpreter still
+#     matches;
+#   * the listener fact is the kernel's own /proc/net/tcp{,6} LISTEN table
+#     for 127.0.0.1:<port>;
+#   * the process creation time comes from /proc/<pid>/stat starttime plus
+#     /proc/stat btime (PID reuse detection stays intact);
+#   * a force stop is SIGTERM then SIGKILL, never taskkill.
+# The instance record/pid-file writers and the graceful /admin/shutdown
+# route are inherited byte for byte.
+
+
+def _linux_proc_read(proc_root, pid, name):
+    try:
+        return Path(proc_root, str(int(pid)), name).read_text(
+            encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        return None
+
+
+def _linux_proc_root_read(proc_root, *parts):
+    """Read a file directly under the proc root (stat, net/tcp, net/tcp6)."""
+    try:
+        return Path(proc_root, *parts).read_text(
+            encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        return None
+
+
+def _linux_proc_creation_epoch(proc_root, pid):
+    """Creation epoch from /proc/<pid>/stat starttime + /proc/stat btime."""
+    stat_text = _linux_proc_read(proc_root, pid, "stat")
+    btime_text = _linux_proc_root_read(proc_root, "stat")
+    if not stat_text or not btime_text:
+        return None
+    try:
+        tail = stat_text[stat_text.rindex(")") + 2:].split()
+        start_ticks = int(tail[19])
+    except (ValueError, IndexError):
+        return None
+    btime = None
+    for line in btime_text.splitlines():
+        if line.startswith("btime "):
+            try:
+                btime = int(line.split()[1])
+            except (ValueError, IndexError):
+                btime = None
+            break
+    if btime is None:
+        return None
+    try:
+        ticks = int(os.sysconf("SC_CLK_TCK"))
+    except (ValueError, OSError, AttributeError):
+        ticks = 100
+    if ticks <= 0:
+        ticks = 100
+    return float(btime) + float(start_ticks) / float(ticks)
 
 
 # ---------------------------------------------------------------------------
@@ -2684,9 +2713,9 @@ def production_gateway_restart(budget_s=None, *, broker=None):
 
     The broker reply is authoritative: ``restarted`` + ``stopped_confirmed``
     + ``running_confirmed`` are ALL required, otherwise the action fails
-    honestly (share_gateway_restart_failed). An old broker (bad_request)
+    honestly (share_entry_restart_failed). An old broker (bad_request)
     maps to share_broker_extension_missing; blocked (not running / identity
-    unknown / already stopped) maps to share_gateway_restart_failed — the
+    unknown / already stopped) maps to share_entry_restart_failed — the
     restart never doubles as a way to START a stopped gateway.
 
     ``budget_s=None`` means the protocol default
@@ -2707,13 +2736,13 @@ def production_gateway_restart(budget_s=None, *, broker=None):
         broker,
         lambda adapter: adapter.gateway_restart(COMPONENT_SHARE_GATEWAY,
                                               budget_s),
-        blocked_code="share_gateway_restart_failed",
-        refused_code="share_gateway_restart_failed")
+        blocked_code="share_entry_restart_failed",
+        refused_code="share_entry_restart_failed")
     if not (payload.get("restarted") is True
             and payload.get("stopped_confirmed") is True
             and payload.get("running_confirmed") is True):
         raise OperationError(
-            "share_gateway_restart_failed",
+            "share_entry_restart_failed",
             "8100 重启未三证齐（restarted=%r stopped_confirmed=%r "
             "running_confirmed=%r）：不冒充已重启"
             % (payload.get("restarted"), payload.get("stopped_confirmed"),
@@ -3600,7 +3629,7 @@ def production_backend_ops(config=None):
     else:
         gateway_dir = str((Path(__file__).resolve().parent / "chat2api"))
     if os.name == "posix":
-        return _LinuxBackendOps(gateway_dir=gateway_dir, config=config)
+        return _MergedBackendOps(gateway_dir=gateway_dir, config=config)
     return _ProductionBackendOps(gateway_dir=gateway_dir, config=config)
 
 

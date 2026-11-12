@@ -495,7 +495,6 @@ run_recovery() {
 
 write_if_absent "$UM_BROKER_KEY" 0600 "$UM_BROKER_USER" "$UM_BROKER_GROUP" random_secret
 write_if_absent "$UM_INSTANCE_KEY" 0600 "$UM_BROKER_USER" "$UM_BROKER_GROUP" random_secret
-write_if_absent "$UM_ATTRIBUTION_KEY" 0600 "$UM_BROKER_USER" "$UM_BROKER_GROUP" random_secret
 write_if_absent "$UM_ETC/admin-control-token" 0600 "$UM_BROKER_USER" "$UM_BROKER_GROUP" random_secret
 
 # The share metering price table is deployment configuration, not release

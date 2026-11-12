@@ -429,11 +429,10 @@ class DeploymentTextAssemblyTests(unittest.TestCase):
         self.assertIn("$WebLine = 'production'", verify)
         self.assertIn("web_dist.build.line", verify)
 
-    def test_readme_product_count_matches_the_manifest(self):
-        manifest = json.loads(_read("RELEASE-MANIFEST.json"))
-        count = manifest["closures"]["static_superset"]["count"]
-        self.assertIn("**%d 个产品 Python 文件**" % count,
-                      _read("README.md"))
+    def test_readme_points_to_the_manifest_for_counts(self):
+        readme = _read("README.md")
+        self.assertIn("RELEASE-MANIFEST.json", readme,
+                      "the README must name the manifest as the count source")
 
 
 class DeploymentShareSecretRecoveryTests(unittest.TestCase):

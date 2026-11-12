@@ -18,12 +18,12 @@ from unittest import mock
 import sys
 
 
-# share_broker_protocol is imported lazily by share_gateway.load_config for
+# share_broker_protocol is imported lazily by share_entry.load_config for
 # projection configs; make the ai-gateway directory reachable in ANY invocation
 # mode, not only when another test module happens to add it to sys.path first.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-SPEC = importlib.util.spec_from_file_location("share_gateway", Path(__file__).resolve().parents[1] / "chat2api" / "share_gateway.py")
+SPEC = importlib.util.spec_from_file_location("share_entry", Path(__file__).resolve().parents[1] / "chat2api" / "share_entry.py")
 share = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(share)
 

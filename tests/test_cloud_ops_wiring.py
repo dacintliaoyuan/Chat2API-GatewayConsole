@@ -29,7 +29,7 @@ import usagesrv  # noqa: E402
 from share_store import ShareStore  # noqa: E402
 
 _SPEC = importlib.util.spec_from_file_location(
-    "share_gateway", HERE / "chat2api" / "share_gateway.py")
+    "share_entry", HERE / "chat2api" / "share_entry.py")
 share = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(share)
 
@@ -243,7 +243,7 @@ class CloudOpsReadFaceTests(unittest.TestCase):
         self.assertEqual(payload["unresolved"]["remote_export_confirmed"],
                          "not_checked_here")
 
-    def test_share_gateway_ack_carries_runtime_security_generation(self):
+    def test_share_entry_ack_carries_runtime_security_generation(self):
         config = self.root / "projection.json"
         config.write_text(json.dumps(_projection([_entry()])), encoding="utf-8")
         # The ACK now merges the persisted revoke state, so keep it in a

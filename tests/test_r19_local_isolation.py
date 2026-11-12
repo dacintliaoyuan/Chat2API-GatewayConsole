@@ -11,7 +11,7 @@ temp directories and started from an arbitrary CWD with a polluted
   project directory or the Git root;
 * ``runtime_info.modules`` does not load ``cloud``/``usagesrv``/
   ``console_adapters``/``share_management``/``share_store``/
-  ``share_broker_*``/``share_gateway``/``share_dispatch``;
+  ``share_broker_*``/``share_entry``/``share_dispatch``;
 * every configured path is below the package fixture root and never equal to
   or inside the real state paths (the test does not read or hash real data).
 """
@@ -55,7 +55,7 @@ FORBIDDEN_MODULES = (
     "console_adapters",
     "share_management",
     "share_store",
-    "share_gateway",
+    "share_entry",
     "share_dispatch",
 )
 FORBIDDEN_FILES = (
@@ -65,7 +65,7 @@ FORBIDDEN_FILES = (
     "console_share_production.py",
     "share_management.py",
     "share_store.py",
-    "share_gateway.py",
+    "share_entry.py",
     "share_dispatch.py",
     "share_instance_pipe.py",
     "share_runtime.py",

@@ -37,7 +37,7 @@ GENERATOR = "um-cloud-deploy/make-manifest.py"
 
 STATIC_ROOTS = [
     "usagesrv.py",
-    "chat2api/share_gateway.py",
+    "chat2api/share_entry.py",
     "chat2api/chat2api.py",
     "share_broker_ops.py",
     "share_backend_supervision.py",
@@ -73,7 +73,7 @@ CLOUD_RUNTIME = [
     "share_metering.py",
     "share_secret_protection.py",
     "share_instance_pipe.py",
-    "chat2api/share_gateway.py",
+    "chat2api/share_entry.py",
     "chat2api/chat2api.py",
     "chat2api/nonstream_aggregate.py",
     "chat2api/share_dispatch.py",
@@ -85,10 +85,10 @@ DYNAMIC_MODULES = {
     "chat2api/chat2api": [
         "chat2api/nonstream_aggregate",
         "chat2api/share_dispatch",
-        "chat2api/share_gateway",
+        "chat2api/share_entry",
         "share_secret_protection",
     ],
-    "chat2api/share_gateway": [
+    "chat2api/share_entry": [
         "share_secret_protection",
         "share_instance_pipe",
     ],
@@ -148,7 +148,7 @@ def _resolve(name: str, modules: dict[str, Path]) -> str | None:
     name = name.split(".")[0]
     if name in modules:
         return name
-    if name in ("nonstream_aggregate", "share_dispatch", "share_gateway",
+    if name in ("nonstream_aggregate", "share_dispatch", "share_entry",
                  "share_secret_protection", "share_instance_pipe"):
         candidate = "chat2api/" + name
         if candidate in modules:

@@ -122,7 +122,7 @@ Remove-Item -LiteralPath $maintPath -Force -ErrorAction SilentlyContinue
 Assert-False (Test-MaintenanceInForce) 'missing maintenance.json -> not in force (False)'
 
 Write-Json $maintPath (@{ schema_version = 1; state = 'leased';
-    component = 'share_gateway'; lease_id = ('a' * 32); instance_id = 'i-1';
+    component = 'share_entry'; lease_id = ('a' * 32); instance_id = 'i-1';
     round = 1; created_at = ($now - 10); expires_at = ($now + 300);
     by = 'maintenance-begin'; last_outcome = $null })
 Assert-True (Test-MaintenanceInForce) 'leased, not expired -> in force (True)'

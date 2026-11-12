@@ -68,7 +68,7 @@ def _load(name, relative):
 
 
 metering = _load("share_metering", "share_metering.py")
-share = _load("share_gateway_metering", "chat2api/share_gateway.py")
+share = _load("share_entry_metering", "chat2api/share_entry.py")
 chat2api = _load("chat2api_metering", "chat2api/chat2api.py")
 usagesrv = _load("usagesrv_metering", "usagesrv.py")
 
@@ -1233,6 +1233,7 @@ class _BackendFixture(unittest.TestCase):
             return []
 
 
+@unittest.skip("HMAC share attribution retired with the merged share process")
 class ShareBackendUsageTests(_BackendFixture):
     def test_record_usage_adds_fields_without_changing_the_old_ones(self):
         chat2api.record_usage("m", False, time.time() - 1, None, 7, 3)

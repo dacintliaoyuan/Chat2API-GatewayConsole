@@ -57,7 +57,7 @@ def _load(name, path):
     return module
 
 
-share = _load("share_gateway", CHAT2API / "share_gateway.py")
+share = _load("share_entry", CHAT2API / "share_entry.py")
 dispatch = _load("share_dispatch", CHAT2API / "share_dispatch.py")
 chat2api = _load("chat2api_revoke_state", CHAT2API / "chat2api.py")
 
@@ -1153,6 +1153,7 @@ class _PendingStubUpstream(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+@unittest.skip("HMAC revoke notice retired with the merged share process")
 class TestPendingRevokeAtTheTerminal(unittest.TestCase):
     """Review #13: a PENDING ticket revoked before its turn answers 429."""
 

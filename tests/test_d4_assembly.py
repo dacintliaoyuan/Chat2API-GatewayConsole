@@ -27,7 +27,7 @@ import share_guard as guard
 import share_instance_pipe
 
 _spec = importlib.util.spec_from_file_location(
-    "share_gateway", _repo / "chat2api" / "share_gateway.py")
+    "share_entry", _repo / "chat2api" / "share_entry.py")
 share = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(share)
 
@@ -106,7 +106,7 @@ class ValidateGuardInvocationTests(unittest.TestCase):
 
 
 class GatewaySddlWiringTests(unittest.TestCase):
-    """P2 wiring: share_gateway.main must forward --instance-pipe-sddl into
+    """P2 wiring: share_entry.main must forward --instance-pipe-sddl into
     start_instance_channel (the two-pipe-two-DACL contract)."""
 
     def _run_main(self, extra_argv, recorded):
@@ -159,7 +159,7 @@ class GatewaySddlWiringTests(unittest.TestCase):
 class ImportClosureTests(unittest.TestCase):
     """The P2 copy manifest's share-side closure imports cleanly offline.
 
-    share_gateway lives under chat2api/ and share_guard under
+    share_entry lives under chat2api/ and share_guard under
     um-share-deploy/ (both loaded by their real file paths); the remaining
     five are ai-gateway-root modules imported by name.
     """
@@ -417,7 +417,7 @@ class GuardMainExperimentWiringTests(unittest.TestCase):
             self.assertIn('"upstream_port": 9100', status)
 
     def test_missing_upstream_port_refuses_zero_side_effects(self):
-        # R13-3：child 是 share_gateway.py 时没有显式端口即拒绝，且发生在
+        # R13-3：child 是 chat2api.py 时没有显式端口即拒绝，且发生在
         # 任何目录写入/Job/进程创建之前（argparse 只给退出码，错误文本在
         # stderr）。
         with tempfile.TemporaryDirectory() as td:
@@ -456,10 +456,10 @@ class GuardMainExperimentWiringTests(unittest.TestCase):
 
 
 class GuardChildPortCliTests(unittest.TestCase):
-    """R13-3：guard 的 --upstream-port 只对 share_gateway.py 子进程必填。
+    """R13-3：guard 的 --upstream-port 只对 chat2api.py 子进程必填。
 
     escape_probe.py（escape-job Canary）没有上游后端，必须继续在没有该参数
-    的情况下工作；share_gateway.py 子进程则必须拿到显式端口，且 guard-status
+    的情况下工作；chat2api.py 子进程则必须拿到显式端口，且 guard-status
     记录生效值。
     """
 
@@ -559,7 +559,7 @@ class GuardChildPortCliTests(unittest.TestCase):
                 self.assertFalse(run_dir.exists())
 
     def test_share_child_status_records_effective_upstream_port(self):
-        # share_gateway.py 子进程必须拿到显式端口，且 guard-status 记录
+        # chat2api.py 子进程必须拿到显式端口，且 guard-status 记录
         # 生效值；环境里的 --upstream-port 被剥离。
         with mock.patch.dict(os.environ, {"UM_SHARE_ARGS":
                                           "--instance-key-file k.json "
@@ -615,18 +615,18 @@ class GuardFaultLogWiringTests(unittest.TestCase):
 
     def test_cmdline_fault_log_is_optional(self):
         # fault_log=None 时旧 cmdline 不变：非 gateway 子进程与旧调用不受影响。
-        plain = guard.share_child_cmdline("exe", "share_gateway.py",
+        plain = guard.share_child_cmdline("exe", "chat2api.py",
                                          "cfg.json", 8100, "projection")
         self.assertNotIn("--fault-log", plain)
         with_log = guard.share_child_cmdline(
-            "exe", "share_gateway.py", "cfg.json", 8100, "projection",
+            "exe", "chat2api.py", "cfg.json", 8100, "projection",
             fault_log=r"C:\run\live\share-faults.jsonl")
         self.assertIn('--fault-log "C:\\run\\live\\share-faults.jsonl"',
                       with_log)
         # 显式值排在环境值（UM_SHARE_ARGS）之后：argparse 取最后一个，
         # 环境里的旧 --fault-log 不能把留证改道。
         ordered = guard.share_child_cmdline(
-            "exe", "share_gateway.py", "cfg.json", 8100, "projection",
+            "exe", "chat2api.py", "cfg.json", 8100, "projection",
             "--instance-key-file k.json --fault-log C:\\stale\\old.jsonl",
             fault_log=r"C:\run\live\share-faults.jsonl")
         self.assertLess(ordered.index("--fault-log C:\\stale"),

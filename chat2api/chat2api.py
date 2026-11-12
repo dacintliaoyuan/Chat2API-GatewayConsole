@@ -97,13 +97,32 @@ def _load_nonstream_aggregate():
     return nonstream_aggregate
 
 
+def _load_share_entry():
+    """Load the share gate beside THIS file, only when share mode is used.
+
+    The private 8000 chain and the isolated local package never import it at
+    module load: the import is reached from the share request path and from
+    main() only when ``--share-config`` is present.
+    """
+    try:
+        from . import share_entry
+    except ImportError:
+        import share_entry
+    return share_entry
+
+
 _nonstream_aggregate = _load_nonstream_aggregate()
 _NonStreamAggregateError = _nonstream_aggregate.AggregateError
 _NonStreamChatAggregator = _nonstream_aggregate.ChatCompletionAggregator
 _NonStreamAnthropicAggregator = _nonstream_aggregate.AnthropicMessageAggregator
 
+# The merged 8100 process authenticates the share credential in-process and
+# then serves the request through this same handler. These names are imported
+# from the share gate module, not from a second listener.
+# The share gate is imported lazily: the private 8000/local package must not
+# load the cloud share module at import time.
 # Default Open WebUI endpoint. Override with --base-url.
-BASE_URL = "http://localhost:3000"
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:3000")
 
 CHAT2API_VERSION = "1.0.0"
 # Reviewed baseline revision. The runtime build id is detected from git when
@@ -353,6 +372,13 @@ try:
 except ValueError:
     MAX_REQUEST_BYTES = 32 * 1024 * 1024
 MAX_REQUEST_BYTES = max(1, min(MAX_REQUEST_BYTES, 1024 * 1024 * 1024))
+# The merged share entry keeps the dedicated backend's 32 MiB default and lets a
+# deployment lower/raise it explicitly (clamped to 1 GiB). The private 8000 chain
+# keeps MAX_REQUEST_BYTES unchanged.
+SHARE_MAX_REQUEST_BYTES = max(
+    1, min(int(os.environ.get("CHAT2API_SHARE_MAX_REQUEST_BYTES",
+                              str(32 * 1024 * 1024))),
+           1024 * 1024 * 1024))
 # Total wall-clock budget for ONE chat request's transparent retry loop
 # (reasoning-only phase). Attempt counts alone would let a silent gateway
 # (~120s first-byte budget x 6 attempts) pin an unattended client for ~12
@@ -2562,7 +2588,7 @@ def _ensure_revoke_applied_loaded():
     with _revoke_applied_lock:
         if _revoke_applied_loaded:
             return
-        state = _share_gateway_module().load_revoke_state()
+        state = _share_entry_module().load_revoke_state()
         _revoke_applied_generations.clear()
         _revoke_applied_generations.update(
             state.get("generations") or {})
@@ -2577,7 +2603,7 @@ def _reset_share_revoke_state():
         _revoke_applied_generations.clear()
         _revoke_applied_loaded = False
     try:
-        _share_gateway_module().reset_revoke_state_cache()
+        _share_entry_module().reset_revoke_state_cache()
     except (ImportError, AttributeError):
         pass
 
@@ -2629,8 +2655,8 @@ _SHARE_GATEWAY_REQUIRED = (
 )
 
 
-def _share_gateway_module():
-    """Load share_gateway beside THIS file, independent of sys.path.
+def _share_entry_module():
+    """Load share_entry beside THIS file, independent of sys.path.
 
     Same seam as ``_load_share_dispatch``: the service runs this file as a
     script (its directory is on sys.path), while tests load it by path from
@@ -2648,24 +2674,24 @@ def _share_gateway_module():
     """
     if share_backend_role() is False:
         raise ImportError("share backend module not assembled")
-    module = sys.modules.get("share_gateway")
+    module = sys.modules.get("share_entry")
     if module is not None and all(
             hasattr(module, name) for name in _SHARE_GATEWAY_REQUIRED):
         return module
     if module is not None:
-        sys.modules.pop("share_gateway", None)
+        sys.modules.pop("share_entry", None)
     import importlib.util
-    path = os.path.join(HERE, "share_gateway.py")
-    spec = importlib.util.spec_from_file_location("share_gateway", path)
+    path = os.path.join(HERE, "share_entry.py")
+    spec = importlib.util.spec_from_file_location("share_entry", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules["share_gateway"] = module
+    sys.modules["share_entry"] = module
     try:
         spec.loader.exec_module(module)
     except BaseException:
-        if sys.modules.get("share_gateway") is module:
-            sys.modules.pop("share_gateway", None)
+        if sys.modules.get("share_entry") is module:
+            sys.modules.pop("share_entry", None)
         raise
     return module
 
@@ -2692,7 +2718,7 @@ def apply_share_revoke_notice(body, secret, now=None):
                      "released": 0, "aborted": 0,
                      "detail": "this process is not the dedicated share backend"}
     try:
-        verifier = _share_gateway_module()
+        verifier = _share_entry_module()
         key_id, generation, reason = verifier.verify_revoke_notice(
             body, secret, now=now)
     except (ImportError, AttributeError):
@@ -2704,7 +2730,7 @@ def apply_share_revoke_notice(body, secret, now=None):
         return status, {"ok": False, "error": "share_revoke_rejected",
                         "reason": reason}
     try:
-        action = (_share_gateway_module()._verified_revoke_notice_action()
+        action = (_share_entry_module()._verified_revoke_notice_action()
                   or "revoke")
     except (ImportError, AttributeError):
         action = "revoke"
@@ -2713,7 +2739,7 @@ def apply_share_revoke_notice(body, secret, now=None):
                      "reason": "bad_action", "released": 0,
                      "aborted": 0}
     try:
-        notice_ts = _share_gateway_module()._verified_revoke_notice_ts()
+        notice_ts = _share_entry_module()._verified_revoke_notice_ts()
     except (ImportError, AttributeError):
         notice_ts = None
     applied_at = notice_ts if isinstance(notice_ts, (int, float)) else time.time()
@@ -2743,7 +2769,7 @@ def apply_share_revoke_notice(body, secret, now=None):
                     applied_at = 0
         # Persist BEFORE the ACK so a restart cannot forget this transition; a
         # failed write leaves the ticket state unchanged and asks 8100 to retry.
-        _share_gateway_module().record_revoke_generation(
+        _share_entry_module().record_revoke_generation(
             key_id, generation, applied_at)
     except (ImportError, AttributeError, OSError, ValueError):
         return 503, {"ok": False, "error": "share_revoke_state_unavailable"}
@@ -6738,7 +6764,10 @@ class Handler(BaseHTTPRequestHandler):
             self._error(400, "Invalid Content-Length header",
                         error_type="invalid_request")
             return None
-        if length < 0 or length > MAX_REQUEST_BYTES:
+        limit = (SHARE_MAX_REQUEST_BYTES
+                 if getattr(self.server, "share_gate", None) is not None
+                 else MAX_REQUEST_BYTES)
+        if length < 0 or length > limit:
             self._error(413, "Request body too large",
                         error_type="payload_too_large")
             return None
@@ -6757,18 +6786,28 @@ class Handler(BaseHTTPRequestHandler):
         return body
 
     def handle_one_request(self):
-        """Serve one downstream request, then release its pre-send ticket.
+        """Serve one downstream request, then release its share slot.
 
-        The ticket belongs to exactly ONE downstream request: it is released
-        here whatever path the request took - an early rejection before the send,
-        a cancel, or a normal completion. Releasing twice is a no-op, so the
+        The slot belongs to exactly ONE downstream request: it is released here
+        whatever path the request took - an early rejection before the send, a
+        cancel, or a normal completion. Releasing twice is a no-op, so the
         request-boundary reset in ``set_request_facts`` and the process-exit
-        close stay idempotent too. A process that never assembled a dispatcher
-        (the 8000 main chain) has no ticket and this is a no-op.
+        close stay idempotent too. A process that never assembled a share gate
+        has no slot and this is a no-op.
         """
+        self._share_key_id = None
+        self._share_ctx = None
         try:
             super().handle_one_request()
         finally:
+            gate = getattr(self.server, "share_gate", None)
+            if gate is not None and self._share_key_id is not None:
+                if self._share_ctx is not None:
+                    gate.unregister_inflight(self._share_key_id,
+                                            self._share_ctx)
+                gate.release(self._share_key_id)
+                self._share_key_id = None
+                self._share_ctx = None
             _release_share_dispatch_ticket("request_finished")
 
     def _share_revoke(self):
@@ -6827,6 +6866,57 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _share_gate_admit(self, path, raw_path, allow_api_key):
+        """Authenticate and admit one share request in the merged process.
+
+        Only the four shared routes pass through here; every other route keeps
+        its normal local/admin handling. The key id installed on the request is
+        the one this gate authenticated, never a client-supplied header.
+        """
+        gate = getattr(self.server, "share_gate", None)
+        if gate is None:
+            return True
+        share = _load_share_entry()
+        if path.startswith("/v1/models"):
+            try:
+                share.model_catalog_limit(raw_path)
+            except ValueError:
+                self._error(404, "route_not_shared",
+                            error_type="route_not_shared")
+                return False
+        elif path.startswith("/v1/messages"):
+            try:
+                share.messages_query(raw_path)
+            except ValueError:
+                self._error(404, "route_not_shared",
+                            error_type="route_not_shared")
+                return False
+        elif path not in ("/v1/chat/completions", "/v1/responses"):
+            self._error(404, "route_not_shared",
+                        error_type="route_not_shared")
+            return False
+        auth = gate.authenticate(self.headers, allow_api_key)
+        if auth is None:
+            self._error(401, "invalid_api_key", error_type="invalid_api_key")
+            return False
+        entry, cfg = auth
+        reason = {}
+        if not gate.acquire(entry["key_id"], cfg["config_generation"],
+                            entry["secret_version"], reason_out=reason):
+            self._error(429, "sharing_limit_reached", detail=reason,
+                        error_type="share_gateway_error")
+            return False
+        ctx = share._InflightCtx(self.connection, retryable_refusal=False)
+        gate.register_inflight(entry["key_id"], ctx)
+        self._share_key_id = entry["key_id"]
+        self._share_ctx = ctx
+        protocol = ("chat" if path == "/v1/chat/completions"
+                    else "messages" if path.startswith("/v1/messages")
+                    else "responses")
+        set_request_facts(protocol, entry["key_id"],
+                          secrets.token_hex(16), "verified")
+        return True
+
     # ---------- GET ----------
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
@@ -6834,6 +6924,11 @@ class Handler(BaseHTTPRequestHandler):
         auth_wait_budget = _AuthWaitBudget()
         request_deadline = time.monotonic() + MAX_REQUEST_SECONDS
         cancel_check = lambda: _client_disconnected(self.connection)
+
+        if path.startswith("/v1/"):
+            if not self._share_gate_admit(path, self.path,
+                                          allow_api_key=True):
+                return
 
         if path in ("/", "/health"):
             self._json(200, proxy.health_snapshot())
@@ -6965,6 +7060,12 @@ class Handler(BaseHTTPRequestHandler):
         request_deadline = time.monotonic() + MAX_REQUEST_SECONDS
         cancel_check = lambda: _client_disconnected(self.connection)
 
+        if path.startswith("/v1/"):
+            if not self._share_gate_admit(
+                    path, self.path,
+                    allow_api_key=path.startswith("/v1/messages")):
+                return
+
         # Verified share attribution (C2): verify the share entry point's marker
         # ONCE per request and install the facts for EVERY ledger row this
         # request writes. A direct loopback caller carries no marker and is
@@ -6978,35 +7079,34 @@ class Handler(BaseHTTPRequestHandler):
             protocol = "responses"
         else:
             protocol = None
-        if protocol is not None:
-            key_id, request_id, reason = verify_share_attribution(self.headers)
-            set_request_facts(
-                protocol, key_id, request_id, reason,
-                attribution_ts=getattr(
-                    _request_facts, "verified_attribution_ts", None))
+        if protocol is not None and getattr(self.server, "share_gate",
+                                            None) is None:
+            set_request_facts(protocol, None, None, "absent")
 
         if path == "/admin/share/revoke":
-            # R-C5: loopback-only signed revoke notice from the 8100 share
-            # gateway.  It is not a public share route and never needs the
-            # local control token: the shared attribution HMAC is its gate.
-            # E19-1-02: the private (non-share) role answers 503 HERE,
-            # before entering _share_revoke or loading the share backend. The
-            # loopback gate keeps its 403 precedence for every other caller.
-            if not is_local_control_request(
-                    self.client_address[0],
-                    self.headers.get("Host", ""),
-                    self.headers.get("Origin")):
-                self._error(403, "Share revoke notice denied",
-                            error_type="share_revoke_denied")
-            elif share_backend_role() is False:
+            # Control-token-protected in-process revoke: close every live
+            # request held by one share key. The old signed notice and its
+            # HMAC chain are gone with the separate 8100 process.
+            gate = getattr(self.server, "share_gate", None)
+            if gate is None:
                 self._error(
                     503,
                     "Share revoke endpoint is not assembled in this role",
                     detail={"released": 0,
                              "reason": "share_backend_unassembled"},
                     error_type="share_revoke_unassembled")
-            else:
-                self._share_revoke()
+                return
+            if not self._control_allowed():
+                return
+            body = self._read_body()
+            if body is None:
+                return
+            key_id = body.get("key_id")
+            if not isinstance(key_id, str) or not key_id:
+                self._error(400, "key_id is required",
+                            error_type="invalid_request")
+                return
+            self._json(200, {"released": gate.terminate_key(key_id)})
         elif path == "/admin/auth/login":
             if self._control_allowed():
                 # These admin handlers never read the request body; the 202
@@ -7630,6 +7730,12 @@ class Handler(BaseHTTPRequestHandler):
         body = self._read_body()
         if body is None:
             return
+        if getattr(self.server, "share_gate", None) is not None \
+                and upstream_path == "/api/v1/messages" \
+                and not _load_share_entry().valid_messages_request(body):
+            self._error(400, "unsupported_messages_request",
+                        error_type="unsupported_messages_request")
+            return
         client_stream = allow_stream and bool(body.get("stream"))
         # N2b: stream=false Messages may aggregate only for the selected triple.
         upstream_stream = client_stream or (allow_stream and
@@ -8042,6 +8148,11 @@ class Handler(BaseHTTPRequestHandler):
         proxy: Proxy = self.server.proxy
         body = self._read_body()
         if body is None:
+            return
+        if getattr(self.server, "share_gate", None) is not None \
+                and not _load_share_entry().valid_chat_request(body):
+            self._error(400, "unsupported_chat_request",
+                        error_type="unsupported_chat_request")
             return
         if not body.get("messages"):
             self._error(400, "Request body is missing the messages field")
@@ -9666,6 +9777,89 @@ class Handler(BaseHTTPRequestHandler):
 
 
 
+class _ShareInstanceControl:
+    """Minimal instance-channel handler for the merged 8100 process.
+
+    The broker sends signed load/drain/resume/emergency frames over the
+    instance channel. The gate re-reads the projection file per request, so a
+    load only needs to terminate the one-shot revoked keys; drain/resume flip
+    admission state and emergency clears it.
+    """
+
+    def __init__(self, gate):
+        self.gate = gate
+        self.instance_id = secrets.token_hex(16)
+        self._replay = None
+
+    def handle(self, body, secret, now=None):
+        from share_broker_protocol import (ProtocolError, ReplayRegistry,
+                                          validate_instance_request)
+        if self._replay is None:
+            self._replay = ReplayRegistry()
+        try:
+            request = validate_instance_request(body, secret, now=now)
+        except ProtocolError as exc:
+            return {"v": 2, "request_id": body.get("request_id", ""),
+                    "ok": False, "error_code": exc.code,
+                    "result": {"detail": str(exc)}}
+        request_id = request["request_id"]
+        if request["instance_id"] != self.instance_id:
+            return {"v": 2, "request_id": request_id, "ok": False,
+                    "error_code": "instance_mismatch",
+                    "result": {"detail": "request targets another instance"}}
+        try:
+            self._replay.consume(request_id, request["ts"], now=now)
+        except ProtocolError as exc:
+            return {"v": 2, "request_id": request_id, "ok": False,
+                    "error_code": exc.code,
+                    "result": {"detail": str(exc)}}
+        action = request["action"]
+        result = {}
+        if action == "instance-status":
+            snapshot = self.gate.snapshot()
+            result = {"instance_id": self.instance_id,
+                      "state": snapshot["state"],
+                      "active_count": sum(snapshot["active"].values()),
+                      "last_seen_generation": snapshot["config_generation"]}
+        elif action == "load":
+            fields = request.get("fields") or {}
+            terminate = fields.get("terminate_keys") or ()
+            released = 0
+            for key_id in terminate:
+                if isinstance(key_id, str):
+                    released += self.gate.terminate_key(key_id)
+            result = {"instance_id": self.instance_id,
+                      "state": self.gate.snapshot()["state"],
+                      "released": released}
+        elif action == "drain":
+            self.gate.set_state("draining")
+            result = {"instance_id": self.instance_id,
+                      "state": "draining",
+                      "active_count": sum(
+                          self.gate.snapshot()["active"].values())}
+        elif action == "resume":
+            self.gate.set_state("running")
+            result = {"instance_id": self.instance_id,
+                      "state": "running",
+                      "active_count": sum(
+                          self.gate.snapshot()["active"].values())}
+        elif action == "emergency":
+            snapshot = self.gate.snapshot()
+            cleared = sum(snapshot["active"].values())
+            for key_id in list(snapshot["active"]):
+                self.gate.terminate_key(key_id)
+            self.gate.set_state("stopped")
+            result = {"instance_id": self.instance_id,
+                      "state": "stopped",
+                      "cleared_in_flight": cleared}
+        else:
+            return {"v": 2, "request_id": request_id, "ok": False,
+                    "error_code": "bad_request",
+                    "result": {"detail": "unknown instance action"}}
+        return {"v": 2, "request_id": request_id, "ok": True,
+                "error_code": "ok", "result": result}
+
+
 def main():
     global RUNTIME_BUILD_ID
     RUNTIME_BUILD_ID = _detect_runtime_build_id()
@@ -9705,6 +9899,18 @@ def main():
                     help="Per-request cumulative authentication wait budget "
                          "(default: 180 private/share, 30 generic; "
                          "explicit values clamp to 1..180)")
+    ap.add_argument("--share-config",
+                    help="Serve the in-process share gate from this projection "
+                         "config (merged 8100 process); no second listener")
+    ap.add_argument("--auth-mode", choices=("projection", "legacy"),
+                    default=None,
+                    help="Share config format enforced at every read")
+    # The broker's single-authority host command still names its instance
+    # channel files; the merged process re-reads the projection file itself
+    # and does not need them, so they are accepted and ignored.
+    ap.add_argument("--instance-key-file", help=argparse.SUPPRESS)
+    ap.add_argument("--instance-pipe-prefix", help=argparse.SUPPRESS)
+    ap.add_argument("--registration-file", help=argparse.SUPPRESS)
     args = ap.parse_args()
     # E19-1-S2: an isolated launcher must not put the upstream credential in
     # argv (any same-machine process can read /proc/<pid>/cmdline). The
@@ -9816,7 +10022,53 @@ def main():
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.proxy = proxy
+    server.share_gate = (_load_share_entry().ShareGate(args.share_config,
+                                    auth_mode=args.auth_mode)
+                         if args.share_config else None)
     server.local_api_key = LOCAL_API_KEY
+    server.instance_id = None
+    instance_channel = None
+    if args.instance_key_file and server.share_gate is not None:
+        try:
+            from share_instance_pipe import (start_instance_channel,
+                                             remove_registration)
+            from share_secret_protection import read_private_secret_path
+            instance_secret = read_private_secret_path(
+                args.instance_key_file, max_bytes=128,
+                label="instance key").decode("utf-8").strip()
+            if not instance_secret:
+                raise ValueError("instance key is empty")
+        except ImportError as exc:
+            print(f"实例控制通道模块不可用：{exc}；分享主服务不受影响。",
+                  file=sys.stderr, flush=True)
+            instance_channel = {"ready": False,
+                                "error": f"instance channel module "
+                                         f"unavailable: {exc}"}
+        except (OSError, ValueError) as exc:
+            print(f"实例控制通道未就绪：{type(exc).__name__}: {exc}；"
+                  f"分享主服务不受影响。", file=sys.stderr, flush=True)
+            instance_channel = {"ready": False,
+                                "error": f"instance key unreadable: "
+                                         f"{type(exc).__name__}"}
+        else:
+            control = _ShareInstanceControl(server.share_gate)
+            server.instance_id = control.instance_id
+            server.handle_instance_control = control.handle
+            try:
+                instance_channel = start_instance_channel(
+                    server, instance_secret, args.instance_pipe_prefix,
+                    args.registration_file)
+            except OSError as exc:
+                instance_channel = {"ready": False,
+                                    "error": f"instance channel "
+                                             f"unavailable: "
+                                             f"{type(exc).__name__}"}
+        if instance_channel.get("ready"):
+            print(f"实例控制通道已就绪：{instance_channel['pipe_name']}",
+                  flush=True)
+        else:
+            print(f"实例控制通道未就绪：{instance_channel.get('error')}；"
+                  f"分享主服务不受影响。", file=sys.stderr, flush=True)
     server.require_local_api_key = require_local_api_key
     # Exit record L2: "startup" is written before the bind, so only this line
     # proves that this PID owns the port (startup without it = never bound).
@@ -9877,6 +10129,15 @@ def main():
         _logger.info("exit begin port=%d pid=%d reason=%s",
                      args.port, os.getpid(), exit_reason)
         proxy.shutdown()
+        if instance_channel is not None:
+            channel_server = instance_channel.get("server")
+            if channel_server is not None:
+                channel_server.stop()
+            if instance_channel.get("ready") and args.registration_file:
+                try:
+                    remove_registration(args.registration_file)
+                except OSError:
+                    pass
         server.server_close()
         _logger.info("exit complete port=%d pid=%d", args.port, os.getpid())
 

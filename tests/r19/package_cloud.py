@@ -40,7 +40,7 @@ ROOT_FILES = (
 CHAT2API_FILES = (
     "chat2api.py",
     "share_dispatch.py",
-    "share_gateway.py",
+    "share_entry.py",
 )
 
 FAKE_UM_FILE = "tests/fake_um/fake_um_server.py"

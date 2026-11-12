@@ -15,11 +15,11 @@
    外加 ``--credential-file <path>``（凭据只从文件读）。
 3. **必须先打印四件事再发请求**：请求数、模型、费用上限、完成后入口状态
    （``--post-entry-state``，默认 ``unchanged``）在任何网络动作之前打印。
-4. **只打分享入口 8100 的白名单路由**（``share_gateway.py:21-22`` 的 ``ALLOWED``：
+4. **只打分享入口 8100 的白名单路由**（``share_entry.py:21-22`` 的 ``ALLOWED``：
    ``POST /v1/chat/completions``、``POST /v1/messages``），并且先核对两种门：
    白名单**外**的 ``GET /`` → 404 ``route_not_shared``，白名单**内**的
    ``GET /v1/models``（未带凭据）→ 401 ``invalid_api_key``
-   （``share_gateway.py:922-931``）。门不符 → 拒发。
+   （``share_entry.py:922-931``）。门不符 → 拒发。
 5. **凭据只从 ``--credential-file`` 读**：绝不打印内容（只打印路径与 strip 后
    长度）、绝不放进 argv。
 6. **请求数不得超过 ``--authorized-requests``**：循环上界就是它，超出即停；
@@ -71,11 +71,11 @@ import metering_acceptance  # noqa: E402 — 同目录工具，复用三事实�
 EXIT_OK = 0
 EXIT_REFUSED = 2
 
-GATEWAY_PORT = 8100           # 分享入口（share_gateway.py）
+GATEWAY_PORT = 8100           # 分享入口（share_entry.py）
 CONSOLE_PORT = 8096           # 控制台网页宿主（usagesrv.py）
 CHAT_PATH = "/v1/chat/completions"
 MESSAGES_PATH = "/v1/messages"
-# 白名单内的两条 POST 路由（share_gateway.py:21-22 的 ALLOWED 子集）。
+# 白名单内的两条 POST 路由（share_entry.py:21-22 的 ALLOWED 子集）。
 ROUTES = {"chat": ("POST", CHAT_PATH), "messages": ("POST", MESSAGES_PATH)}
 ENTRY_STATE_CHOICES = ("unchanged", "open", "closed")
 STOP_STATUSES = (429, 401, 403)

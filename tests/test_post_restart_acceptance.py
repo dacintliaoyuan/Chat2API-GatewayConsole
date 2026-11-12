@@ -1057,7 +1057,7 @@ class CollectFactsZeroWriteTests(unittest.TestCase):
                 (tool, "read_watchdog_state",
                  lambda run=None: {"state": None, "query": "stub",
                                   "error": "stub"}),
-                (prod, "share_gateway_instance_probe",
+                (prod, "share_entry_instance_probe",
                  lambda *a, **k: {"pid": None, "started_at": None,
                                  "reason": "not_listening"})):
             patcher = mock.patch.object(owner, name, new=value)

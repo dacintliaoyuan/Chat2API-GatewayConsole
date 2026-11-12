@@ -54,7 +54,7 @@ MAX_OVERVIEW_ROWS = 1200
 # lib/watch-share-backend.ps1 via share_backend_supervision.DEFAULT_WATCH_DIR).
 WATCH_DIR_ENV = "SELFUSEAI_GATEWAY_WATCH_DIR"
 # Fixed SYSTEM deployment root of the share chain (deploy-elevated.ps1:820,
-# run-broker.cmd / install-share-broker.ps1, share_gateway.py:247).
+# run-broker.cmd / install-share-broker.ps1, chat2api.py:247).
 SHARE_RUN_ROOT = Path(r"C:\ProgramData\UMShareRun")
 
 _HERE = Path(__file__).resolve().parent
@@ -770,7 +770,7 @@ def build_registry(ledger_paths: dict[str, str] | None = None) -> dict:
     * share: the 8110 child log/ledger/lifecycle, its watch log, and the
       fixed SYSTEM artifacts of the 8100 share chain + broker (raw.txt,
       share-faults.jsonl, lifecycle.json — deploy-elevated.ps1:820,
-      share_gateway.py:247, share_broker_server.py:817-818).
+      chat2api.py:247, share_broker_server.py:817-818).
 
     A path that cannot be resolved is registered as ``None`` (read_entries
     answers ``unconfigured``); it is never silently dropped and never
@@ -839,7 +839,7 @@ def build_registry(ledger_paths: dict[str, str] | None = None) -> dict:
              {"category": "gateway", "display": "8100 任务输出 raw.txt",
               "path": str(share_run / "run" / "live" / "raw.txt"),
               "rotating": False},
-             # share_gateway.py:247 — the append-only bounded fault log.
+             # chat2api.py:247 — the append-only bounded fault log.
              {"category": "faults", "display": "8100 故障记录 share-faults.jsonl",
               "path": str(share_run / "run" / "live" / "share-faults.jsonl"),
               "rotating": False},

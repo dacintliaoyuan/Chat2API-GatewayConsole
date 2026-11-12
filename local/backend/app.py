@@ -9,7 +9,7 @@ This module assembles ONLY the local application:
 * the loopback HTTP listener with the local routes.
 
 It never imports ``console_adapters``, ``share_management``, ``share_store``,
-``share_gateway``, ``share_dispatch``, ``console_display_proxy`` or
+``share_entry``, ``share_dispatch``, ``console_display_proxy`` or
 ``usagesrv``: the local application owns its own routing, authentication,
 configuration and lifecycle. The only ``share_*`` import is the control-token
 gate helper (``share_secret_protection``), which the isolated local package

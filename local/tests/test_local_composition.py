@@ -12,7 +12,7 @@ The local application is an INDEPENDENT composition root:
   isolated ``HOME``/``USERPROFILE`` and parses ``--config`` /
   ``--check-config`` / ``--print-runtime-info``;
 * the local registry registers ONLY ``model.catalog``; ``app.py`` never imports
-  ``console_adapters`` / ``share_*`` / ``share_gateway`` /
+  ``console_adapters`` / ``share_*`` / ``share_entry`` /
   ``console_display_proxy`` / ``usagesrv``;
 * ``LocalApp`` serves only the local routes, enforces the control token and the
   loopback Host/Origin gates, starts the UM runtime and the OperationManager.
@@ -913,7 +913,7 @@ class RunLocalCliTests(unittest.TestCase):
             "--print-runtime-info").stdout)
         self.assertNotIn("console_adapters", info["modules"])
         self.assertNotIn("share_management", info["modules"])
-        self.assertNotIn("share_gateway", info["modules"])
+        self.assertNotIn("share_entry", info["modules"])
         self.assertNotIn("usagesrv", info["modules"])
 
     def test_the_entry_really_cleans_an_inherited_sys_path(self):
@@ -1400,7 +1400,7 @@ class LocalAppTests(unittest.TestCase):
                 encoding="utf-8")
             for forbidden in ("import usagesrv", "import console_adapters",
                               "import share_management", "import share_store",
-                              "import share_gateway", "import share_dispatch",
+                              "import share_entry", "import share_dispatch",
                               "import console_display_proxy"):
                 self.assertNotIn(forbidden, source, name)
         self.assertNotIn("console_adapters", sys.modules)
@@ -1415,7 +1415,7 @@ class LocalAppTests(unittest.TestCase):
         imports only the composition root.
         """
         forbidden = ("cloud", "usagesrv", "console_adapters",
-                     "share_management", "share_store", "share_gateway",
+                     "share_management", "share_store", "share_entry",
                      "share_dispatch", "share_metering", "share_broker_host",
                      "console_display_proxy")
         # R19-5 retained surface: recorded here so a future change that ADDS a

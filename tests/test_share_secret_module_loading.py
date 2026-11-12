@@ -34,7 +34,7 @@ TEST_DIR = Path(__file__).resolve().parent
 GATEWAY_DIR = TEST_DIR.parent
 CHAT2API_DIR = GATEWAY_DIR / "chat2api"
 CHAT2API_PATH = CHAT2API_DIR / "chat2api.py"
-SHARE_GATEWAY_PATH = CHAT2API_DIR / "share_gateway.py"
+SHARE_GATEWAY_PATH = CHAT2API_DIR / "share_entry.py"
 SECRET_PATH = GATEWAY_DIR / "share_secret_protection.py"
 
 TOKEN = "existing-control-token-value"
@@ -127,7 +127,7 @@ def main():
     else:
         report["plain_import"] = "available"
     chat2api = load("chat2api_secret_loading", chat2api_path, gateway_dir)
-    share = load("share_gateway_secret_loading", share_path, gateway_dir)
+    share = load("share_entry_secret_loading", share_path, gateway_dir)
     report["token"] = chat2api.ensure_control_token(token_path)
     report["key"] = share.load_attribution_key(key_path)
     report["missing_key"] = share.load_attribution_key(missing_key_path)
@@ -208,7 +208,7 @@ class ModuleReuseTests(unittest.TestCase):
 
     def test_loader_reuses_an_already_imported_module(self):
         chat2api = _load("chat2api_secret_reuse", CHAT2API_PATH, GATEWAY_DIR)
-        share = _load("share_gateway_secret_reuse", SHARE_GATEWAY_PATH,
+        share = _load("share_entry_secret_reuse", SHARE_GATEWAY_PATH,
                       GATEWAY_DIR)
         fake = SimpleNamespace(
             read_private_secret_path=lambda *args, **kwargs: b"secret",

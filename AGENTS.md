@@ -40,7 +40,7 @@
 - 8100 只由 broker 拉起：`um-share-broker.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`；控制台的 `share.start/stop/estop/retry_stop` 在云端为 `enabled=False`。
 - 8110 只由控制台 `share.backend_restart` / `share.backend_login` 启停；云端不安装第二套 watchdog。
 - 18096 只监听 loopback；公网入口只反代分享白名单到 8100，不反代 8110/18096/5901。
-- 归因密钥：8100 与 8110 指向同一个 `share-attribution.key`；轮换只重启 8100。密钥缺失或过短是「文件未就绪」状态，分享照常服务、请求记为未归属。
+- 分享 Key 鉴权、每 Key 并发准入与撤销在 8100 进程内完成；撤销 Key 会关闭该 Key 的在途请求。归因直接使用鉴权后的 `key_id`，不再有跨进程 HMAC 标记。
 - 运行数据在 `/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share`，不在 release 内；预算保护与自动备份已从默认装配移除，恢复只走显式 `backup_restore.py`。
 - 旧 Windows 链的部署/恢复与密钥命令见 [um-share-deploy/README.md](um-share-deploy/README.md) 与 [SHARING.md](SHARING.md)。
 

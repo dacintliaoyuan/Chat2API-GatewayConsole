@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 
 import share_broker_protocol as bp  # noqa: E402
-from share_gateway import ShareServer  # noqa: E402
+from share_entry import ShareServer  # noqa: E402
 
 import share_broker_ops  # noqa: E402
 
@@ -65,7 +65,7 @@ class WindowsHostOpsTests(unittest.TestCase):
         return ops, calls
 
     _SHARE_ROW = ('[{"ProcessId": 123, "CommandLine": '
-                  '"C:\\\\run\\\\um-share-python.exe \\"share_gateway.py\\"'
+                  '"C:\\\\run\\\\um-share-python.exe \\"chat2api.py\\"'
                   ' --port 8100", "ExecutablePath": '
                   '"C:\\\\run\\\\um-share-python.exe", '
                   '"CreationDate": "20260908000000.000000+480", '
@@ -171,7 +171,7 @@ class WindowsHostOpsTests(unittest.TestCase):
                     '"ExecutablePath": "C:\\\\run\\\\um-share-python.exe", '
                     '"CreationDate": "20260908000000.000000+480", "OwnerDomain": "MACHINE", "OwnerUser": "dacint"},'
                     ' {"ProcessId": 123, "CommandLine": '
-                    '"exe share_gateway.py --port 8100", '
+                    '"exe chat2api.py --port 8100", '
                     '"ExecutablePath": "C:\\\\run\\\\um-share-python.exe", '
                     '"CreationDate": "20260908000000.000000+480", "OwnerDomain": "MACHINE", "OwnerUser": "dacint"}]')
         ops2, _ = self._ops('"t","x","Ready"', combined, netstat_stdout="")
@@ -189,7 +189,7 @@ class WindowsHostOpsTests(unittest.TestCase):
                             "  TCP    0.0.0.0:8100    x    LISTENING    abc")
         self.assertIsNone(ops3.verify_closed())
         ops4, _ = self._ops('"t","x","Ready"',
-                            '[{"CommandLine": "exe share_gateway.py"}]')
+                            '[{"CommandLine": "exe chat2api.py"}]')
         self.assertIsNone(ops4.verify_closed())
         ops5, _ = self._ops('"t","x","Ready"',
                             '[{"ProcessId": 5, "CommandLine": null}]')
@@ -203,12 +203,12 @@ class WindowsHostOpsTests(unittest.TestCase):
         # 部分信任。
         ops, _ = self._ops('"t","x","Ready"',
                            '[{"ProcessId": 123, "CommandLine": '
-                           '"exe share_gateway.py --port 8100"}]')
+                           '"exe chat2api.py --port 8100"}]')
         self.assertIsNone(ops.verify_closed())
         # 映像路径与查询映像不一致同样不可用。
         ops2, _ = self._ops('"t","x","Ready"',
                             '[{"ProcessId": 123, "CommandLine": '
-                            '"exe share_gateway.py", "ExecutablePath": '
+                            '"exe chat2api.py", "ExecutablePath": '
                             '"C:\\other\\different.exe"}]')
         self.assertIsNone(ops2.verify_closed())
 
@@ -251,7 +251,7 @@ class WindowsHostOpsTests(unittest.TestCase):
         # R49-3：CreationDate 是完整证据契约的一部分——缺失 → None。
         ops, _ = self._ops('"t","x","Ready"',
                            '[{"ProcessId": 123, "CommandLine": '
-                           '"exe share_gateway.py", "ExecutablePath": '
+                           '"exe chat2api.py", "ExecutablePath": '
                            '"C:' + chr(92) * 4 + 'run' + chr(92) * 4 +
                            'um-share-python.exe"}]')
         self.assertIsNone(ops.verify_closed())
@@ -260,12 +260,12 @@ class WindowsHostOpsTests(unittest.TestCase):
         # R49-3：owner 缺失 → 证据失败；owner 不匹配期望 → 行排除（非目标）。
         ops, _ = self._ops('"t","x","Ready"',
                            '[{"ProcessId": 123, "CommandLine": '
-                           '"exe share_gateway.py", "ExecutablePath": '
+                           '"exe chat2api.py", "ExecutablePath": '
                            '"C:\\\\run\\\\um-share-python.exe", '
                            '"CreationDate": "20260909000000.000000+480"}]')
         self.assertIsNone(ops.verify_closed())
         row2 = ('[{"ProcessId": 123, "CommandLine": '
-                '"exe share_gateway.py", "ExecutablePath": '
+                '"exe chat2api.py", "ExecutablePath": '
                 '"C:\\\\run\\\\um-share-python.exe", '
                 '"CreationDate": "20260909000000.000000+480", '
                 '"OwnerDomain": "MACHINE", "OwnerUser": '
@@ -280,7 +280,7 @@ class WindowsHostOpsTests(unittest.TestCase):
     def test_row_image_path_must_match_expected_full_path(self):
         # R49-3：映像路径与期望完整路径不一致 → 行排除（非目标）。
         rows = ('[{"ProcessId": 123, "CommandLine": '
-                '"exe share_gateway.py", "ExecutablePath": '
+                '"exe chat2api.py", "ExecutablePath": '
                 '"C:\\\\other\\\\um-share-python.exe", '
                 '"CreationDate": "20260909000000.000000+480", '
                 '"OwnerDomain": "MACHINE", "OwnerUser": "dacint"}]')
@@ -313,7 +313,7 @@ class WindowsHostOpsTests(unittest.TestCase):
         self.assertIn(_OPS.WindowsHostOps._GUARD_MARKER, script)
         # 候选（share）行缺 owner 仍是证据失败（None），契约不变。
         share_row = ('[{"ProcessId": 123, "CommandLine": '
-                     '"exe share_gateway.py --port 8100", '
+                     '"exe chat2api.py --port 8100", '
                      '"ExecutablePath": "C:\\\\run\\\\um-share-python.exe", '
                      '"CreationDate": "20260908000000.000000+480"}]')
         ops2, _ = self._ops('"t","x","Ready"', share_row, netstat_stdout="")

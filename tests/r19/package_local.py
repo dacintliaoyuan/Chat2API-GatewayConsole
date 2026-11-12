@@ -52,7 +52,7 @@ FORBIDDEN_FILES = (
     "console_share_production.py",
     "share_management.py",
     "share_store.py",
-    "share_gateway.py",
+    "share_entry.py",
     "share_dispatch.py",
     "share_instance_pipe.py",
     "share_runtime.py",

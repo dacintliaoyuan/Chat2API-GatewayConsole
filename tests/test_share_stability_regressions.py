@@ -166,7 +166,7 @@ class MaintenanceReadTests(unittest.TestCase):
         auth = {'state': 'valid', 'verdict': 'confirmed'}
         with mock.patch.object(actions, '_diag_share_backend', return_value=backend), \
                 mock.patch.object(actions, '_diag_backend_auth', return_value=auth), \
-                mock.patch.object(actions, '_diag_share_gateway', return_value={}) as unrelated:
+                mock.patch.object(actions, '_diag_share_entry', return_value={}) as unrelated:
             result = actions._diag_pair()
         self.assertEqual(result, {'share_backend': backend, 'backend_auth': auth})
         unrelated.assert_not_called()

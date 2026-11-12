@@ -85,7 +85,7 @@ from share_broker_protocol import (COMPONENT_SHARE_BACKEND,
 LAYERS = ("share_backend", "ts_service", "connectivity", "backend", "funnel")
 
 # Rev9 (A9-1..A9-4): the single-layer maintenance actions use their OWN
-# component vocabulary (share_gateway = 8100 entry, share_backend = 8110
+# component vocabulary (share_entry = 8100 entry, share_backend = 8110
 # dedicated instance) — the legacy LAYERS keys keep their original meaning
 # untouched (contract §1.1).  Both names are IMPORTED from the protocol
 # module (single source of truth, §2.1) instead of being re-declared as
@@ -188,10 +188,10 @@ _PUBLIC_CANCEL_CLEAR = None     # () -> bool
 # Observation TTLs (contract §3.4, frozen): stale = age_s > ttl_s; a layer
 # whose evidence carries no observation time reads checked_at=None + stale=true
 # ("this process obtained no evidence").
-_DIAG_TTL_S = {"share_gateway": 60, "share_backend": 60, "backend_auth": 300,
+_DIAG_TTL_S = {"share_entry": 60, "share_backend": 60, "backend_auth": 300,
                "connectivity": 300, "upstream": 300, "ts_service": 600,
                "funnel": 600, "security_gate": 600, "watchdog": 60}
-_DIAG_LAYER_KEYS = ("share_gateway", "share_backend", "backend_auth",
+_DIAG_LAYER_KEYS = ("share_entry", "share_backend", "backend_auth",
                     "connectivity", "upstream", "ts_service", "funnel",
                     "security_gate", "watchdog")
 # Rev19 A19-2 监督段 TTL：监督自己的持久状态由 watch 每分钟一轮写入；
@@ -2289,7 +2289,7 @@ def _is_epoch(value):
             and math.isfinite(float(value)) and value > 0)
 
 
-def _share_gateway_probe():
+def _share_entry_probe():
     """Read-only 8100 instance probe (contract §3.2, production function).
 
     Lazy import keeps this module import-light; a missing production module or
@@ -2299,13 +2299,13 @@ def _share_gateway_probe():
         import console_share_production
     except Exception:  # noqa: BLE001
         return None
-    fn = getattr(console_share_production, "share_gateway_instance_probe", None)
+    fn = getattr(console_share_production, "share_entry_instance_probe", None)
     if fn is None:
         return None
     return fn()
 
 
-def _share_gateway_attribution():
+def _share_entry_attribution():
     """Read-only attribution status (contract §3.2, production function)."""
     try:
         import console_share_production
@@ -2421,25 +2421,25 @@ def _diag_layer(layer, state, verdict, source, *, checked_at=None,
             "reason": reason, "evidence": ev}
 
 
-def _diag_share_gateway():
+def _diag_share_entry():
     source = "broker:host-verify{running}+instance-probe+attribution"
     ops = _BROKER_OPS
     if ops is None:
-        return _diag_layer("share_gateway", "unavailable", "unavailable",
+        return _diag_layer("share_entry", "unavailable", "unavailable",
                            source, reason="share_broker_unwired")
     running, reason = _probe(ops.verify_running)
     if reason is not None:
-        return _diag_layer("share_gateway", "unavailable", "unavailable",
+        return _diag_layer("share_entry", "unavailable", "unavailable",
                            source, reason=reason)
     state = {True: "running", False: "stopped"}.get(running, "unconfirmed")
     verdict = "unconfirmed" if running is None else "confirmed"
     evidence = {}
-    probe, probe_reason = _probe(_share_gateway_probe)
+    probe, probe_reason = _probe(_share_entry_probe)
     evidence["instance_probe"] = probe if isinstance(probe, dict) else None
     if not isinstance(probe, dict):
         evidence["instance_probe_reason"] = \
             probe_reason or "probe_unavailable"
-    attribution, attr_reason = _probe(_share_gateway_attribution)
+    attribution, attr_reason = _probe(_share_entry_attribution)
     evidence["attribution"] = attribution \
         if isinstance(attribution, dict) else None
     if not isinstance(attribution, dict):
@@ -2453,7 +2453,7 @@ def _diag_share_gateway():
     if not isinstance(faults, dict):
         # §8.6: no fabricated "no faults" — absent evidence reads absent.
         evidence["faults_reason"] = "fault_log_absent"
-    return _diag_layer("share_gateway", state, verdict, source,
+    return _diag_layer("share_entry", state, verdict, source,
                        checked_at=time.time(), evidence=evidence)
 
 
@@ -2768,7 +2768,7 @@ def diagnostics(target, params, ctx=None):
     now = time.time()
     layers = {}
     _report(ctx, '核验分享入口：受限任务、进程身份和监听')
-    layers["share_gateway"] = _diag_share_gateway()
+    layers["share_entry"] = _diag_share_entry()
     _cancel_point(ctx)
     _report(ctx, '核验独立分享后端 8110')
     layers["share_backend"] = _diag_share_backend()
@@ -2983,7 +2983,7 @@ def backend_restart(target, params, ctx=None):
     """A9-3 restart 8110 only (contract §5).
 
     Identity first (five-evidence strict; never cold-start, never kill a bare
-    PID) -> maintenance lease on share_gateway (8100 stops accepting) ->
+    PID) -> maintenance lease on share_entry (8100 stops accepting) ->
     bounded drain -> re-verify intent/round -> ``_BACKEND_OPS.restart`` ->
     resume acceptance. A drain timeout restores acceptance and fails WITHOUT
     force-stopping the target; a cancel or failure reports the phase, the actual
@@ -3250,18 +3250,18 @@ def gateway_restart(target, params, ctx=None):
     limits_fn = getattr(ops, "host_evidence", None) if ops is not None else None
     if limits_fn is None:
         raise OperationError(
-            "share_gateway_restart_failed",
+            "share_entry_restart_failed",
             "安全门证据不可得（broker host-evidence 未接线/缺席）：拒绝"
             " 8100 重启（硬门）")
     limits, limits_reason = _probe(lambda: limits_fn("limits"))
     if limits_reason is not None:
         raise OperationError(
-            "share_gateway_restart_failed",
+            "share_entry_restart_failed",
             "安全门证据不可裁定（%s）：拒绝 8100 重启（硬门，未知 ≠ 通过）"
             % limits_reason)
     if not isinstance(limits, dict) or limits.get("verdict") is not True:
         raise OperationError(
-            "share_gateway_restart_failed",
+            "share_entry_restart_failed",
             "安全门未通过（verdict=%s）：拒绝 8100 重启"
             % (limits.get("verdict") if isinstance(limits, dict) else limits))
     if _GATEWAY_RESTART is None:
@@ -3284,13 +3284,13 @@ def gateway_restart(target, params, ctx=None):
             "为准" % type(exc).__name__)
     if not isinstance(result, dict):
         raise OperationError(
-            "share_gateway_restart_failed", "8100 重启结果形状不符合契约")
+            "share_entry_restart_failed", "8100 重启结果形状不符合契约")
     restarted = result.get("restarted") is True
     stopped = result.get("stopped_confirmed") is True
     running = result.get("running_confirmed") is True
     if not (restarted and stopped and running):
         raise OperationError(
-            "share_gateway_restart_failed",
+            "share_entry_restart_failed",
             "8100 重启未三证确认（restarted=%s，stopped_confirmed=%s，"
             "running_confirmed=%s）；不伪报成功"
             % (restarted, stopped, running))

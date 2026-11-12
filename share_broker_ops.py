@@ -78,7 +78,7 @@ class WindowsHostOps:
     listener semantics stay L2/D4.
     """
 
-    _SHARE_MARKER = "share_gateway.py"
+    _SHARE_MARKER = "chat2api.py"
     _BROKER_MARKER = "share_broker_server.py"
     _GUARD_MARKER = "share_guard.py"
     WATCHDOG_TASK_NAME = "umshare-watchdog"
@@ -1927,7 +1927,7 @@ class LinuxHostOps:
 
         A missing pid file is not proof of closure: the process may still be
         alive with its pid file removed. The cmdline is the identity signal
-        (share_gateway.py plus the configured port); an unreadable /proc is
+        (chat2api.py plus the configured port); an unreadable /proc is
         unknown, never an empty result.
         """
         root = Path(self.proc_root)
@@ -1945,7 +1945,7 @@ class LinuxHostOps:
                 continue
             args = [part.decode("utf-8", errors="replace")
                     for part in raw.split(b"\0") if part]
-            if not any("share_gateway.py" in arg for arg in args):
+            if not any("chat2api.py" in arg for arg in args):
                 continue
             if self.expected_port is not None:
                 port = str(self.expected_port)

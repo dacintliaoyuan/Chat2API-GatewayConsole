@@ -60,7 +60,7 @@ FORBIDDEN_MODULES = (
     "console_adapters",
     "share_management",
     "share_store",
-    "share_gateway",
+    "share_entry",
     "share_dispatch",
     "console_display_proxy",
     "cloud",
