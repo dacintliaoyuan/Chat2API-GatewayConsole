@@ -62,7 +62,7 @@ export async function runUm(c) {
       } catch {}
     });
     await page.goto(
-      `${c.BASE}${scenario ? `?um-preview=${scenario}` : ""}#${hash}`,
+      `${c.BASE}?console=um${scenario ? `&um-preview=${scenario}` : ""}#${hash}`,
       { waitUntil: "load" }
     );
     await page.waitForSelector(".um-content > .um-page", { timeout: 20000 });
