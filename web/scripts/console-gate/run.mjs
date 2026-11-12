@@ -36,7 +36,7 @@ const stamp = new Date()
   .replace(/\..*$/, "")
   .replace("T", "-");
 const out = resolve(
-  opt("--out", resolve(paths.selfUseAI, "output/console-gate", stamp))
+  opt("--out", resolve(paths.repoRoot, "output/console-gate", stamp))
 );
 const role = opt("--role", null);
 if (role !== null && !Object.hasOwn(ROLE_BUILDS, role)) {

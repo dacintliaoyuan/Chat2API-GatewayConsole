@@ -15,7 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const paths = {
   here,
   console: resolve(here, "../.."),
-  selfUseAI: resolve(here, "../../../.."),
+  repoRoot: resolve(here, "../../.."),
   candidateDir: resolve(here, "../../release/candidate"),
   fixtures: resolve(here, "fixtures/api.json"),
 };
@@ -30,15 +30,12 @@ export const ROLE_FIXTURES = {
   cloud: resolve(here, "fixtures/cloud-api.json"),
 };
 
-/** Playwright is not a console dependency: it is taken from PLAYWRIGHT_MODULE, or from
- *  the workspace's design-QA tool install (SelfUseAI/.ai-design-qa/tools). */
+/** Playwright is a console dev dependency: PLAYWRIGHT_MODULE wins, then the
+ *  repo's own install under web/node_modules. */
 export async function loadPlaywright() {
   const mod =
     process.env.PLAYWRIGHT_MODULE ||
-    resolve(
-      paths.selfUseAI,
-      ".ai-design-qa/tools/node_modules/playwright/index.mjs"
-    );
+    resolve(paths.console, "node_modules/playwright/index.mjs");
   return import(pathToFileURL(mod).href);
 }
 

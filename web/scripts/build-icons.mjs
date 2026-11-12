@@ -34,7 +34,7 @@ if (!best) throw Error(`${source}: no PNG frame to scale`);
 
 const playwright =
   process.env.PLAYWRIGHT_MODULE ||
-  resolve("../../.ai-design-qa/tools/node_modules/playwright/index.mjs");
+  resolve("node_modules/playwright/index.mjs");
 const { chromium } = await import(pathToFileURL(playwright).href);
 const browser = await chromium.launch({ channel: "chrome" });
 const page = await browser.newPage();

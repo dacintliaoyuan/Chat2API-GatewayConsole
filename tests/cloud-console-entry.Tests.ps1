@@ -600,7 +600,7 @@ Assert-Match $entryText 'data\\cloud-console-tunnel\.json' 'default state file l
 Assert-Match $entryText 'data\\cloud-console-entry\.log' 'default log lives under data'
 Assert-Match $entryText 'cloud-console-tunnel\.stdout\.log' 'tunnel stdout log name'
 Assert-Match $entryText 'cloud-console-tunnel\.stderr\.log' 'tunnel stderr log name'
-Assert-Match $gitignoreText '(?m)^/ai-gateway/data/\s*$' 'gitignore covers ai-gateway/data'
+Assert-Match $gitignoreText '(?m)^/data/\s*$' 'gitignore covers data/'
 Assert-Match $entryText 'BatchMode=yes' 'ssh command enforces BatchMode'
 Assert-Match $entryText 'StrictHostKeyChecking=yes' 'ssh command enforces strict host checking'
 Assert-Match $entryText 'IdentitiesOnly=yes' 'ssh command uses only the configured identity'

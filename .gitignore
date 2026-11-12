@@ -16,10 +16,10 @@ web/release/
 .wrangler/
 
 # 运行时数据：凭据、账本、浏览器资料、部署状态，一律不入库
-data/
-profile/
-tmp/
-output/
+/data/
+/profile/
+/tmp/
+/output/
 chat2api/token.json
 chat2api/token.json.*.tmp
 chat2api/.edge-profile/

@@ -81,8 +81,8 @@ export function rev25ReadOps() {
   const rev = JSON.parse(
     readFileSync(
       resolve(
-        paths.selfUseAI,
-        "ai-gateway/tests/fixtures/frontend_contract_rev25.json"
+        paths.repoRoot,
+        "tests/fixtures/frontend_contract_rev25.json"
       ),
       "utf8"
     )

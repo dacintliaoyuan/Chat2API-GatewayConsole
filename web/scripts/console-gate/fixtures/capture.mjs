@@ -29,7 +29,7 @@ if (!out) {
 }
 const origin = opt("--origin", "http://127.0.0.1:8001").replace(/\/$/, "");
 const OUT = resolve(out);
-if (!OUT.startsWith(resolve(paths.selfUseAI, "output"))) {
+if (!OUT.startsWith(resolve(paths.repoRoot, "output"))) {
   console.error(
     "refusing: the capture holds real data and must stay under SelfUseAI/output/"
   );

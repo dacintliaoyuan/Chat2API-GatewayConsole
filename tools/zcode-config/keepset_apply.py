@@ -55,13 +55,13 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# 与 ai-gateway 产品代码同仓：把 ai-gateway 目录加进 sys.path，才能调用真实的
-# 规则库渲染函数（不复制规则、不另写一份实现）。
+# 与产品代码同仓：把仓库根加进 sys.path，才能调用真实的规则库渲染函数
+# （不复制规则、不另写一份实现）。迁移后应用根就是仓库根，没有上一级。
 AI_GATEWAY_DIR = Path(__file__).resolve().parents[2]
 if str(AI_GATEWAY_DIR) not in sys.path:
     sys.path.insert(0, str(AI_GATEWAY_DIR))
 
-REPO_ROOT = AI_GATEWAY_DIR.parent
+REPO_ROOT = AI_GATEWAY_DIR
 DEFAULT_KEEPSET = (REPO_ROOT / "output" / "ai-gw-round6-20260927"
                   / "zcode-keepset.json")
 DEFAULT_CONFIG = Path.home() / ".zcode" / "v2" / "provider_config.json"
