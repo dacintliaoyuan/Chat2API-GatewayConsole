@@ -375,10 +375,16 @@ MAX_REQUEST_BYTES = max(1, min(MAX_REQUEST_BYTES, 1024 * 1024 * 1024))
 # The merged share entry keeps the dedicated backend's 32 MiB default and lets a
 # deployment lower/raise it explicitly (clamped to 1 GiB). The private 8000 chain
 # keeps MAX_REQUEST_BYTES unchanged.
-SHARE_MAX_REQUEST_BYTES = max(
-    1, min(int(os.environ.get("CHAT2API_SHARE_MAX_REQUEST_BYTES",
-                              str(32 * 1024 * 1024))),
-           1024 * 1024 * 1024))
+def _share_max_request_bytes():
+    try:
+        value = int(os.environ.get("CHAT2API_SHARE_MAX_REQUEST_BYTES",
+                                  str(32 * 1024 * 1024)))
+    except (TypeError, ValueError):
+        value = 32 * 1024 * 1024
+    return max(1, min(value, 1024 * 1024 * 1024))
+
+
+SHARE_MAX_REQUEST_BYTES = _share_max_request_bytes()
 # Total wall-clock budget for ONE chat request's transparent retry loop
 # (reasoning-only phase). Attempt counts alone would let a silent gateway
 # (~120s first-byte budget x 6 attempts) pin an unattended client for ~12
@@ -6545,16 +6551,17 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _error(self, code: int, message: str, detail=None,
-               error_type="chat2api_error", extra_headers=None):
+               error_type="chat2api_error", extra_headers=None, extra=None):
         # Errors may fire before the request body is read (unknown path,
         # rejected control token, invalid local key). Reusing the connection
         # would let those unread bytes be parsed as the next request line
         # ("501 Unsupported method ({json}POST)"), so every error closes it.
         self.close_connection = True
-        self._json(code, {"error": {"message": message,
-                                    "type": error_type,
-                                    "detail": detail}},
-                   extra_headers)
+        error = {"message": message, "type": error_type,
+                 "detail": detail}
+        if extra:
+            error.update(extra)
+        self._json(code, {"error": error}, extra_headers)
 
     def _reauthentication_error(self, detail=None):
         proxy = getattr(self.server, "proxy", None)
@@ -6897,14 +6904,20 @@ class Handler(BaseHTTPRequestHandler):
             return False
         auth = gate.authenticate(self.headers, allow_api_key)
         if auth is None:
-            self._error(401, "invalid_api_key", error_type="invalid_api_key")
+            self._error(401, "invalid_api_key",
+                        error_type="share_gateway_error",
+                        extra={"code": "invalid_api_key"})
             return False
         entry, cfg = auth
         reason = {}
         if not gate.acquire(entry["key_id"], cfg["config_generation"],
                             entry["secret_version"], reason_out=reason):
-            self._error(429, "sharing_limit_reached", detail=reason,
-                        error_type="share_gateway_error")
+            self._error(
+                429, "sharing_limit_reached",
+                error_type="share_gateway_error",
+                extra={"code": "sharing_limit_reached",
+                       "reason": reason.get("reason"),
+                       "detail": reason.get("detail")})
             return False
         ctx = share._InflightCtx(self.connection, retryable_refusal=False)
         gate.register_inflight(entry["key_id"], ctx)
@@ -9828,8 +9841,16 @@ class _ShareInstanceControl:
             for key_id in terminate:
                 if isinstance(key_id, str):
                     released += self.gate.terminate_key(key_id)
+            snapshot = self.gate.snapshot()
             result = {"instance_id": self.instance_id,
-                      "state": self.gate.snapshot()["state"],
+                      "generation": fields.get("generation"),
+                      "fingerprint": fields.get("fingerprint"),
+                      "installed": True,
+                      "state": snapshot["state"],
+                      "share_max_concurrency":
+                          snapshot["share_max_concurrency"],
+                      "security_generation":
+                          snapshot["config_generation"],
                       "released": released}
         elif action == "drain":
             self.gate.set_state("draining")
@@ -10137,6 +10158,8 @@ def main():
                 try:
                     remove_registration(args.registration_file)
                 except OSError:
+                    # The listener is already stopped; a missing registration
+                    # file means the broker already learned the instance is gone.
                     pass
         server.server_close()
         _logger.info("exit complete port=%d pid=%d", args.port, os.getpid())

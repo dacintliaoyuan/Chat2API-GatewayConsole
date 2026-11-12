@@ -1590,7 +1590,7 @@ def _selftest():
             "unreachable broker refuses")
         broker.status_result = _StubResult(True, {
             "checked_at": 1000, "lease": {"lease_id": "a" * 32,
-                                          "component": "share_entry",
+                                          "component": "share_gateway",
                                           "expires_at": 2000},
             "lease_expired": False, "instance": None, "last_outcome": None})
         _expect(check_preconditions(
@@ -1599,7 +1599,7 @@ def _selftest():
             "live lease refuses")
         broker.status_result = _StubResult(True, {
             "checked_at": 1000, "lease": {"lease_id": "a" * 32,
-                                          "component": "share_entry",
+                                          "component": "share_gateway",
                                           "expires_at": 999},
             "lease_expired": True, "instance": None, "last_outcome": None})
         # The READ-ONLY check reports the expired lease without ending it:

@@ -1847,31 +1847,31 @@ def _item_share_entry(before, after):
         before_probe = _dig(before, "share_entry_probe", name)
         after_probe = _dig(after, "share_entry_probe", name)
         if not isinstance(before_probe, dict) or not isinstance(after_probe, dict):
-            return _item("share_entry", title, "③.1b 行7", "undecidable",
+            return _item("share_gateway", title, "③.1b 行7", "undecidable",
                          "探测结果缺失：%s" % name)
         if after_probe.get("status") is None:
-            return _item("share_entry", title, "③.1b 行7", "undecidable",
+            return _item("share_gateway", title, "③.1b 行7", "undecidable",
                          "重启后探测失败：%s error=%r"
                          % (name, after_probe.get("error")))
         if before_probe.get("status") is None:
-            return _item("share_entry", title, "③.1b 行7", "undecidable",
+            return _item("share_gateway", title, "③.1b 行7", "undecidable",
                          "重启前探测失败：%s error=%r"
                          % (name, before_probe.get("error")))
         if (after_probe.get("status"), after_probe.get("code")) \
                 != (want_status, want_code):
-            return _item("share_entry", title, "③.1b 行7", "fail",
+            return _item("share_gateway", title, "③.1b 行7", "fail",
                          "%s %s 期望 %d %s，实测 %r %r"
                          % (name, path, want_status, want_code,
                             after_probe.get("status"), after_probe.get("code")))
         if (before_probe.get("status"), before_probe.get("code")) \
                 != (want_status, want_code):
-            return _item("share_entry", title, "③.1b 行7", "fail",
+            return _item("share_gateway", title, "③.1b 行7", "fail",
                          "重启前 %s 就不符期望：%r %r"
                          % (name, before_probe.get("status"),
                             before_probe.get("code")))
         details.append("%s %s %s→%s" % (name, path, after_probe.get("status"),
                                         after_probe.get("code")))
-    return _item("share_entry", title, "③.1b 行7", "pass",
+    return _item("share_gateway", title, "③.1b 行7", "pass",
                  "；".join(details))
 
 

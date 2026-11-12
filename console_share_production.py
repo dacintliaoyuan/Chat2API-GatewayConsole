@@ -2458,6 +2458,7 @@ class _MergedBackendOps(_LinuxBackendOps):
     def _paths(self):
         paths = super()._paths()
         paths["port"] = SHARE_GATEWAY_PORT
+        paths["pid"] = "/run/um-share/share-gateway.pid"
         if self._config is not None:
             paths["control_token"] = self._config.control_token_file
         else:
@@ -2467,10 +2468,15 @@ class _MergedBackendOps(_LinuxBackendOps):
         return paths
 
     def start(self):
-        return True
+        # The broker is the only launcher. This is an honest readiness check,
+        # never a second Popen: False means the login flow must not claim a
+        # cold start it did not perform.
+        return self.verify_running() is True
 
     def stop(self):
-        return True
+        # The broker owns the stop intent. Report success only when the
+        # merged process is actually gone.
+        return self.verify_running() is not True
 
     def restart(self, **kwargs):
         return production_gateway_restart()

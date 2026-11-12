@@ -1242,7 +1242,7 @@ class CloudServiceBrokerRoutingTests(unittest.TestCase):
         out = adapter.service_restart("share-gateway", {}, None)
         self.assertEqual(out["status"], "Restarted")
         self.assertEqual(self.broker.calls,
-                         [("gateway_restart", "share_entry", 120)])
+                         [("gateway_restart", "share_gateway", 120)])
 
     def test_snapshot_remains_a_read_only_pid_file_read(self):
         # The read face never goes through the broker mutation verbs: it uses the

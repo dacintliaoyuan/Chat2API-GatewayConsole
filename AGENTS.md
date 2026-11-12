@@ -16,7 +16,7 @@
 |---|---|
 | 领域词汇 | [GLOSSARY.md](GLOSSARY.md) |
 | 云端部署与运维 | [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
-| 旧 Windows 分享链 | [um-share-deploy/README.md](um-share-deploy/README.md)、[SHARING.md](SHARING.md) |
+| 旧 Windows 分享链（已退役） | Git 历史；当前云端见 [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
 | 操作 issue | [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) |
 | 查标签含义 | [docs/agents/triage-labels.md](docs/agents/triage-labels.md) |
 | 领域文档消费规则 | [docs/agents/domain.md](docs/agents/domain.md) |
@@ -28,7 +28,6 @@
 | 8000 | chat2api（UM） | 127.0.0.1 |
 | 8001 | usagesrv 本机控制台宿主 | 127.0.0.1 |
 | 8100 | 分享链 um-share 网关 | 127.0.0.1 |
-| 8110 | 分享链专用后端 | 127.0.0.1 |
 | 18096 | usagesrv 云端控制台宿主 | 127.0.0.1 |
 | 5173 | vite 开发服务 | 127.0.0.1 |
 | 8099 | 候选预览（vite preview） | 127.0.0.1 |
@@ -38,11 +37,11 @@
 ## 4. 分享链边界
 
 - 8100 只由 broker 拉起：`um-share-broker.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`；控制台的 `share.start/stop/estop/retry_stop` 在云端为 `enabled=False`。
-- 8110 只由控制台 `share.backend_restart` / `share.backend_login` 启停；云端不安装第二套 watchdog。
-- 18096 只监听 loopback；公网入口只反代分享白名单到 8100，不反代 8110/18096/5901。
+- 8100 合并进程由 broker 唯一拉起；控制台的 `share.backend_restart` 走 broker restart，`share.backend_login` 走 8100 控制令牌端点。云端不安装第二套 watchdog。
+- 18096 只监听 loopback；公网入口只反代分享白名单到 8100，不反代 18096/5901。
 - 分享 Key 鉴权、每 Key 并发准入与撤销在 8100 进程内完成；撤销 Key 会关闭该 Key 的在途请求。归因直接使用鉴权后的 `key_id`，不再有跨进程 HMAC 标记。
 - 运行数据在 `/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share`，不在 release 内；预算保护与自动备份已从默认装配移除，恢复只走显式 `backup_restore.py`。
-- 旧 Windows 链的部署/恢复与密钥命令见 [um-share-deploy/README.md](um-share-deploy/README.md) 与 [SHARING.md](SHARING.md)。
+- 旧 Windows 分享链已退役；当前云端分享只走 `um-cloud-deploy/` 与 `chat2api/chat2api.py`。
 
 ## 5. 许可
 

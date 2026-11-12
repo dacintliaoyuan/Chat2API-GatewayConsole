@@ -7,15 +7,15 @@
       "model_sync.py": "efb892b26bc50fa4fa311255ff684fae83882ec1760815958e5529a45c101b25",
       "model_sync_core.py": "eb6bf1601da6f7752765dd08e830c80d7b87126b2a1554fa9059b4013508bcb0",
       "console_model_actions.py": "37fe642751f81201c5f4bc1a6a4a1c69c96d1f8bbed607a66377632b133e760c",
-      "console_adapters.py": "aa79caca389401906abff1445ac6dfcd8e9ca09992ff90b15d616a91ce1c7656",
+      "console_adapters.py": "7283f7820a99a210c9e93206750fa6e0a6f03c2fc2f9e74f1765518d27ac821b",
       "console_operations.py": "90bb9896c112c342efc9cf0430676be22c913c376c7d015b06916db91c586c58",
       "share_metering.py": "46f57c0459211c92f0ed3dc2097481bce750274ee2de8b5bfc686ae1876e5417",
       "console_stats.py": "510900c6ff67df1fd0c3d5a952bc7a2c5f89cb8d0021af82f62a032c1de80cfd",
-      "console_log_reader.py": "f30788d7cba7599d2801772da1c08ecbfbccf9d307997ee3863e68d29d963af2",
+      "console_log_reader.py": "0e245ce10ee148f79285c0f14e273fad2341b245dc177448c51db0b5f6fb9a4f",
       "usagesrv.py": "591de6da562186c2886cbeaec60714169dba081515c31081bafc7b980028db26",
-      "console_share_actions.py": "2eff46720a9b929d838d01124bb9899248a159a49a401cb562e39fb1ab51a904",
-      "console_share_production.py": "f951599aa3b67d25fd7f6bf10f8e1c8fcda69307818656d0da57ab8981170b0f",
-      "console_gateway_connection.py": "b2176a92240a794af7ef781c9741eb4bbb738162ad0e32e3ac0b1795042fa349"
+      "console_share_actions.py": "982d24c36be52031a82c3f9f0adf71abda35c569c66c47c6c5d3854b1a862eda",
+      "console_share_production.py": "a78954460a0517e1a353ae24db0365a199429714ac2373c9d02789ee9dfb18cc",
+      "console_gateway_connection.py": "f9c0196d6347d07b41929e0c69f9c0636de9b62256e6dd905a9d043fc39fed3d"
     }
   },
   "actions": {
@@ -2587,7 +2587,7 @@
   "share_maintenance": {
     "generatedFrom": "console_share_actions handlers via the real registry + OperationManager, and share_backend_supervision.run_once for the supervision decision; every seam value is a private fixture",
     "components": {
-      "share_entry": "8100 分享入口进程（um-share-python.exe + share_entry.py）",
+      "share_gateway": "8100 分享入口进程（um-share-python.exe + share_entry.py）",
       "share_backend": "8110 专用后端进程（chat2api.py --port 8110 --profile <dir>\\edge-profile）"
     },
     "actions": [
@@ -2599,7 +2599,7 @@
         "description": "UM 分享九层分层诊断（只读；含看门狗、维护视图与故障留证）",
         "param_schema": {},
         "components": [
-          "share_entry",
+          "share_gateway",
           "share_backend"
         ],
         "side_effects": [
@@ -2679,7 +2679,7 @@
           }
         },
         "components": [
-          "share_entry"
+          "share_gateway"
         ],
         "side_effects": [
           "restart_share_entry"
@@ -2745,7 +2745,7 @@
           "result": {
             "checked_at": 1790942402.25,
             "layers": {
-              "share_entry": {
+              "share_gateway": {
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -2992,7 +2992,7 @@
         "result": {
           "checked_at": 1790942402.25,
           "layers": {
-            "share_entry": {
+            "share_gateway": {
               "state": "running",
               "verdict": "confirmed",
               "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -3234,7 +3234,7 @@
           "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收"
         },
         "readback": {
-          "share_entry": {
+          "share_gateway": {
             "state": "running",
             "verdict": "confirmed",
             "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -3397,7 +3397,7 @@
           "result": {
             "checked_at": 1790942410.25,
             "layers": {
-              "share_entry": {
+              "share_gateway": {
                 "state": "unavailable",
                 "verdict": "unavailable",
                 "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -3588,7 +3588,7 @@
             "desired_stop_in_force": false,
             "last_error": null,
             "supervision": null,
-            "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收；证据不可得层：share_entry"
+            "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收；证据不可得层：share_gateway"
           },
           "error": null,
           "idempotency_key": null
@@ -3596,7 +3596,7 @@
         "result": {
           "checked_at": 1790942410.25,
           "layers": {
-            "share_entry": {
+            "share_gateway": {
               "state": "unavailable",
               "verdict": "unavailable",
               "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -3787,10 +3787,10 @@
           "desired_stop_in_force": false,
           "last_error": null,
           "supervision": null,
-          "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收；证据不可得层：share_entry"
+          "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收；证据不可得层：share_gateway"
         },
         "readback": {
-          "share_entry": {
+          "share_gateway": {
             "state": "unavailable",
             "verdict": "unavailable",
             "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -3905,7 +3905,7 @@
           "result": {
             "checked_at": 1790942418.0,
             "layers": {
-              "share_entry": {
+              "share_gateway": {
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -4135,7 +4135,7 @@
         "result": {
           "checked_at": 1790942418.0,
           "layers": {
-            "share_entry": {
+            "share_gateway": {
               "state": "running",
               "verdict": "confirmed",
               "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -4483,7 +4483,7 @@
           "result": {
             "checked_at": 1790942426.0,
             "layers": {
-              "share_entry": {
+              "share_gateway": {
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -4713,7 +4713,7 @@
         "result": {
           "checked_at": 1790942426.0,
           "layers": {
-            "share_entry": {
+            "share_gateway": {
               "state": "running",
               "verdict": "confirmed",
               "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -5145,7 +5145,7 @@
         },
         "result": null,
         "readback": {
-          "share_entry": {
+          "share_gateway": {
             "state": "running",
             "verdict": "confirmed",
             "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -5242,7 +5242,7 @@
         "maintenance": {
           "lease": {
             "lease_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "component": "share_entry",
+            "component": "share_gateway",
             "instance_id": "fixture-instance-1",
             "round": 7,
             "created_at": 1790000000,
@@ -5288,7 +5288,7 @@
             },
             {
               "at": 1790942453.5,
-              "note": "维护租约已建立（component=share_entry，lease_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa，round=7，active_count=3）：8100 已暂停接收"
+              "note": "维护租约已建立（component=share_gateway，lease_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa，round=7，active_count=3）：8100 已暂停接收"
             },
             {
               "at": 1790942453.75,
@@ -5402,7 +5402,7 @@
           "result": {
             "restarted": true,
             "gateway": {
-              "component": "share_entry",
+              "component": "share_gateway",
               "stopped_confirmed": true,
               "running_confirmed": true,
               "elapsed_s": 41.2,
@@ -5419,7 +5419,7 @@
               "last_outcome": null
             },
             "before": {
-              "share_entry": {
+              "share_gateway": {
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -5629,7 +5629,7 @@
               }
             },
             "after": {
-              "share_entry": {
+              "share_gateway": {
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -5839,7 +5839,7 @@
               }
             },
             "last_error": null,
-            "note": "8100 单层重启完成（component=share_entry）：经 broker 受限宿主协议，未以 share.stop→share.start 代替；8110 实例、私人 8000、TS/Funnel 配置、Key/名称/身份及发布配置不变；入口重启期间业务可能暂时不可用"
+            "note": "8100 单层重启完成（component=share_gateway）：经 broker 受限宿主协议，未以 share.stop→share.start 代替；8110 实例、私人 8000、TS/Funnel 配置、Key/名称/身份及发布配置不变；入口重启期间业务可能暂时不可用"
           },
           "error": null,
           "idempotency_key": null
@@ -5847,7 +5847,7 @@
         "result": {
           "restarted": true,
           "gateway": {
-            "component": "share_entry",
+            "component": "share_gateway",
             "stopped_confirmed": true,
             "running_confirmed": true,
             "elapsed_s": 41.2,
@@ -5864,7 +5864,7 @@
             "last_outcome": null
           },
           "before": {
-            "share_entry": {
+            "share_gateway": {
               "state": "running",
               "verdict": "confirmed",
               "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -6074,7 +6074,7 @@
             }
           },
           "after": {
-            "share_entry": {
+            "share_gateway": {
               "state": "running",
               "verdict": "confirmed",
               "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -6284,10 +6284,10 @@
             }
           },
           "last_error": null,
-          "note": "8100 单层重启完成（component=share_entry）：经 broker 受限宿主协议，未以 share.stop→share.start 代替；8110 实例、私人 8000、TS/Funnel 配置、Key/名称/身份及发布配置不变；入口重启期间业务可能暂时不可用"
+          "note": "8100 单层重启完成（component=share_gateway）：经 broker 受限宿主协议，未以 share.stop→share.start 代替；8110 实例、私人 8000、TS/Funnel 配置、Key/名称/身份及发布配置不变；入口重启期间业务可能暂时不可用"
         },
         "readback": {
-          "share_entry": {
+          "share_gateway": {
             "state": "running",
             "verdict": "confirmed",
             "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -6372,7 +6372,7 @@
           }
         },
         "before": {
-          "share_entry": {
+          "share_gateway": {
             "state": "running",
             "verdict": "confirmed",
             "source": "broker:host-verify{running}+instance-probe+attribution",
@@ -6582,7 +6582,7 @@
           }
         },
         "after": {
-          "share_entry": {
+          "share_gateway": {
             "state": "running",
             "verdict": "confirmed",
             "source": "broker:host-verify{running}+instance-probe+attribution",

@@ -2380,7 +2380,7 @@ _LEASE_ID = "a" * 32
 
 
 def _lease_begin(**over):
-    out = {"accepted": True, "component": "share_entry",
+    out = {"accepted": True, "component": "share_gateway",
            "lease_id": _LEASE_ID, "lease_expires_at": 1790000300,
            "instance_id": "inst-1", "round": 7, "state": "draining",
            "active_count": 3}
@@ -2389,7 +2389,7 @@ def _lease_begin(**over):
 
 
 def _lease_end(**over):
-    out = {"resumed": True, "component": "share_entry",
+    out = {"resumed": True, "component": "share_gateway",
            "lease_id": _LEASE_ID, "instance_id": "inst-1", "round": 7,
            "state": "running", "active_count": 0}
     out.update(over)
@@ -2398,7 +2398,7 @@ def _lease_end(**over):
 
 def _maint_view(**over):
     out = {"checked_at": 1790000000,
-           "lease": {"lease_id": _LEASE_ID, "component": "share_entry",
+           "lease": {"lease_id": _LEASE_ID, "component": "share_gateway",
                      "instance_id": "inst-1", "round": 7,
                      "created_at": 1790000000, "expires_at": 1790000300,
                      "active_count_at_begin": 3},
@@ -2514,10 +2514,10 @@ class TestShareDiagnostics(ShareActionsTestBase):
             report = m.diagnostics("share", {}, _Ctx())
         self.assertEqual(set(report["layers"]), set(m._DIAG_LAYER_KEYS))
         layers = report["layers"]
-        self.assertEqual(layers["share_entry"]["state"], "running")
-        self.assertEqual(layers["share_entry"]["verdict"], "confirmed")
+        self.assertEqual(layers["share_gateway"]["state"], "running")
+        self.assertEqual(layers["share_gateway"]["verdict"], "confirmed")
         self.assertEqual(
-            layers["share_entry"]["evidence"]["attribution"]
+            layers["share_gateway"]["evidence"]["attribution"]
             ["instance_loaded"]["value"], "yes")
         self.assertEqual(layers["share_backend"]["state"], "running")
         self.assertEqual(layers["backend_auth"]["state"], "valid")
@@ -2817,7 +2817,7 @@ class TestBackendRestart(ShareActionsTestBase):
         self.assertIn("未强停目标", error.message)
         # Acceptance was restored through the lease; the target was NOT stopped
         # and NOT restarted (排空超时不默认强停).
-        self.assertEqual(maint.end_calls, [("share_entry", _LEASE_ID)])
+        self.assertEqual(maint.end_calls, [("share_gateway", _LEASE_ID)])
         self.assertNotIn("restart", backend.calls)
         self.assertNotIn("stop", backend.calls)
 
@@ -2847,8 +2847,8 @@ class TestBackendRestart(ShareActionsTestBase):
         self.assertIn("未撤 Funnel", result["note"])
         self.assertIn("分享账本", result["note"])
         # Lease begin/end carried the frozen component + bounds.
-        self.assertEqual(maint.begin_calls, [("share_entry", 300)])
-        self.assertEqual(maint.end_calls, [("share_entry", _LEASE_ID)])
+        self.assertEqual(maint.begin_calls, [("share_gateway", 300)])
+        self.assertEqual(maint.end_calls, [("share_gateway", _LEASE_ID)])
         self.assertEqual(backend.calls.count("restart"), 1)
         self.assertEqual(backend.restart_kwargs["stop_budget_s"], 30.0)
         self.assertEqual(backend.restart_kwargs["start_budget_s"], 90.0)
@@ -2891,7 +2891,7 @@ class TestBackendRestart(ShareActionsTestBase):
         self.assertIn("停止优先", caught.exception.message)
         self.assertEqual(backend.calls.count("restart"), 0)
         self.assertNotIn("stop", backend.calls)
-        self.assertEqual(maint.end_calls, [("share_entry", _LEASE_ID)])
+        self.assertEqual(maint.end_calls, [("share_gateway", _LEASE_ID)])
 
     def test_36_desired_stop_in_force_aborts_before_start(self):
         backend = _BackendOpsStub()
@@ -2904,7 +2904,7 @@ class TestBackendRestart(ShareActionsTestBase):
                          "share_maintenance_refused")
         self.assertIn("停止意图生效", caught.exception.message)
         self.assertEqual(backend.calls.count("restart"), 0)
-        self.assertEqual(maint.end_calls, [("share_entry", _LEASE_ID)])
+        self.assertEqual(maint.end_calls, [("share_gateway", _LEASE_ID)])
 
     def test_37_cancel_during_restart_reports_and_resumes(self):
         backend = _BackendOpsStub(restart=OperationCancelled())
@@ -2914,7 +2914,7 @@ class TestBackendRestart(ShareActionsTestBase):
         with self.assertRaises(OperationCancelled):
             m.backend_restart("share", {}, ctx)
         # The compensation THIS operation owns ran; the cancel is reported.
-        self.assertEqual(maint.end_calls, [("share_entry", _LEASE_ID)])
+        self.assertEqual(maint.end_calls, [("share_gateway", _LEASE_ID)])
         self.assertIn("取消", " ".join(ctx.steps))
         self.assertIn("不伪报回退", " ".join(ctx.steps))
 
@@ -2930,7 +2930,7 @@ class TestBackendRestart(ShareActionsTestBase):
         self.assertIn("stub: 停止后启动失败", error.message)
         self.assertIn("补偿", error.message)
         self.assertIn("resumed=true", error.message)
-        self.assertEqual(maint.end_calls, [("share_entry", _LEASE_ID)])
+        self.assertEqual(maint.end_calls, [("share_gateway", _LEASE_ID)])
 
 
 class TestGatewayRestart(ShareActionsTestBase):
@@ -2975,7 +2975,7 @@ class TestGatewayRestart(ShareActionsTestBase):
     def test_42_unconfirmed_broker_result_fails(self):
         broker = _BrokerStub(verify_running=True)
         self._wire_gateway(broker=broker, gateway_restart=lambda budget: {
-            "restarted": True, "component": "share_entry",
+            "restarted": True, "component": "share_gateway",
             "stopped_confirmed": False, "running_confirmed": True,
             "elapsed_s": 41.2, "maintenance_state": "restarting"})
         with self.assertRaises(OperationError) as caught:
@@ -2989,7 +2989,7 @@ class TestGatewayRestart(ShareActionsTestBase):
         broker = _BrokerStub(verify_running=True)
         self._wire_gateway(broker=broker, gateway_restart=lambda budget: (
             calls.append(budget) or {
-                "restarted": True, "component": "share_entry",
+                "restarted": True, "component": "share_gateway",
                 "stopped_confirmed": True, "running_confirmed": True,
                 "elapsed_s": 41.2, "maintenance_state": "idle"}))
         # share_open/share_close must NEVER be the 8100 restart channel.
@@ -3001,7 +3001,7 @@ class TestGatewayRestart(ShareActionsTestBase):
                                        _Ctx())
         self.assertTrue(result["restarted"])
         self.assertEqual(calls, [120])
-        self.assertEqual(result["gateway"]["component"], "share_entry")
+        self.assertEqual(result["gateway"]["component"], "share_gateway")
         self.assertIs(result["gateway"]["stopped_confirmed"], True)
         self.assertIs(result["gateway"]["running_confirmed"], True)
         self.assertEqual(result["gateway"]["elapsed_s"], 41.2)
@@ -3018,7 +3018,7 @@ class TestGatewayRestart(ShareActionsTestBase):
 
         def restart(budget):
             ctx.event.set()      # cancel arrives DURING the blocking call
-            return {"restarted": True, "component": "share_entry",
+            return {"restarted": True, "component": "share_gateway",
                     "stopped_confirmed": True, "running_confirmed": True,
                     "elapsed_s": 41.2, "maintenance_state": "idle"}
 
@@ -3114,7 +3114,7 @@ class TestModuleBoundaries(unittest.TestCase):
         # AST check catches a future local re-declaration; the literal
         # assertions pin the frozen wire values.
         import share_broker_protocol as bp
-        self.assertEqual(m.COMPONENT_SHARE_GATEWAY, "share_entry")
+        self.assertEqual(m.COMPONENT_SHARE_GATEWAY, "share_gateway")
         self.assertEqual(m.COMPONENT_SHARE_BACKEND, "share_backend")
         self.assertIs(m.COMPONENT_SHARE_GATEWAY, bp.COMPONENT_SHARE_GATEWAY)
         self.assertIs(m.COMPONENT_SHARE_BACKEND, bp.COMPONENT_SHARE_BACKEND)
@@ -3232,7 +3232,7 @@ class TestModuleBoundaries(unittest.TestCase):
             self.assertIsNone(obs)
             self.assertEqual(obs_reason, "share_backend_unwired")
             with self.assertRaises(OperationError) as caught:
-                m._maintenance_begin_call("share_entry", 300)
+                m._maintenance_begin_call("share_gateway", 300)
             self.assertEqual(caught.exception.code, "share_broker_unwired")
             ok, fact, view = m._maintenance_end_call("x")
             self.assertIs(ok, False)

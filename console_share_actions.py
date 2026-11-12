@@ -188,10 +188,10 @@ _PUBLIC_CANCEL_CLEAR = None     # () -> bool
 # Observation TTLs (contract §3.4, frozen): stale = age_s > ttl_s; a layer
 # whose evidence carries no observation time reads checked_at=None + stale=true
 # ("this process obtained no evidence").
-_DIAG_TTL_S = {"share_entry": 60, "share_backend": 60, "backend_auth": 300,
+_DIAG_TTL_S = {"share_gateway": 60, "share_backend": 60, "backend_auth": 300,
                "connectivity": 300, "upstream": 300, "ts_service": 600,
                "funnel": 600, "security_gate": 600, "watchdog": 60}
-_DIAG_LAYER_KEYS = ("share_entry", "share_backend", "backend_auth",
+_DIAG_LAYER_KEYS = ("share_gateway", "share_backend", "backend_auth",
                     "connectivity", "upstream", "ts_service", "funnel",
                     "security_gate", "watchdog")
 # Rev19 A19-2 监督段 TTL：监督自己的持久状态由 watch 每分钟一轮写入；
@@ -2425,11 +2425,11 @@ def _diag_share_entry():
     source = "broker:host-verify{running}+instance-probe+attribution"
     ops = _BROKER_OPS
     if ops is None:
-        return _diag_layer("share_entry", "unavailable", "unavailable",
+        return _diag_layer("share_gateway", "unavailable", "unavailable",
                            source, reason="share_broker_unwired")
     running, reason = _probe(ops.verify_running)
     if reason is not None:
-        return _diag_layer("share_entry", "unavailable", "unavailable",
+        return _diag_layer("share_gateway", "unavailable", "unavailable",
                            source, reason=reason)
     state = {True: "running", False: "stopped"}.get(running, "unconfirmed")
     verdict = "unconfirmed" if running is None else "confirmed"
@@ -2453,7 +2453,7 @@ def _diag_share_entry():
     if not isinstance(faults, dict):
         # §8.6: no fabricated "no faults" — absent evidence reads absent.
         evidence["faults_reason"] = "fault_log_absent"
-    return _diag_layer("share_entry", state, verdict, source,
+    return _diag_layer("share_gateway", state, verdict, source,
                        checked_at=time.time(), evidence=evidence)
 
 
@@ -2768,7 +2768,7 @@ def diagnostics(target, params, ctx=None):
     now = time.time()
     layers = {}
     _report(ctx, '核验分享入口：受限任务、进程身份和监听')
-    layers["share_entry"] = _diag_share_entry()
+    layers["share_gateway"] = _diag_share_entry()
     _cancel_point(ctx)
     _report(ctx, '核验独立分享后端 8110')
     layers["share_backend"] = _diag_share_backend()

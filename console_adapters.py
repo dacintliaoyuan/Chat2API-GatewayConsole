@@ -406,8 +406,6 @@ def _cloud_host_ops():
     """
     from share_broker_ops import LinuxHostOps
     gateway_port = _cloud_gateway_port()
-    backend_port = _strict_port(CLOUD_GATEWAY_BACKEND_PORT_ENV,
-                                DEFAULT_CLOUD_BACKEND_PORT)
     script = os.path.join(HERE, "chat2api", "chat2api.py")
     return LinuxHostOps(
         os.environ.get(CLOUD_GATEWAY_PID_FILE_ENV)
