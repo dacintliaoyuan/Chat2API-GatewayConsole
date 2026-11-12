@@ -90,7 +90,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import requests
 
 import chat2api
-import share_dispatch
+import share_dispatch as share_dispatch
 
 _LOCK = threading.Lock()
 _RELEASE = threading.Event()
@@ -525,7 +525,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import share_entry
+import share_entry as share_entry
 
 _LOCK = threading.Lock()
 _RELEASE = threading.Event()
@@ -1337,7 +1337,7 @@ class ChainFixture:
             os.chmod(self.paths["management_config"], 0o600)
 
         # The initial projection comes from the REAL store implementation.
-        share_store = _load_module("share_store", HERE / "share_store.py")
+        share_store = _load_module("share_store", HERE / "share/store.py")
         store = share_store.ShareStore(str(self.paths["store"]))
         try:
             projection = store.render_projection()
@@ -1347,7 +1347,7 @@ class ChainFixture:
             json.dumps(projection, ensure_ascii=False, indent=2),
             encoding="utf-8")
         # The chain runs the REAL Linux product entry
-        # (share_broker_ops.py::linux_main): build_linux_server assembles the
+        # (share/broker_ops.py::linux_main): build_linux_server assembles the
         # AF_UNIX transport WITH the same management dispatch the Windows
         # ManagementPipeServer uses. No fixture subclass or monkeypatch is
         # involved, so this exercises the production assembly end to end.
@@ -1455,7 +1455,7 @@ class ChainFixture:
         pid = self.share.process.pid
         self.paths["host_pid"].write_text(str(pid), encoding="ascii")
         argv = [
-            sys.executable, str(HERE / "share_broker_ops.py"),
+            sys.executable, str(HERE / "share/broker_ops.py"),
             "--socket-path", str(self.paths["broker_socket"]),
             "--key-file", str(self.paths["broker_key"]),
             "--instance-key-file", str(self.paths["instance_key"]),
@@ -1481,7 +1481,7 @@ class ChainFixture:
         self.broker.start()
         self.notes.append(
             "Broker started through the REAL product entry "
-            "share_broker_ops.py::linux_main; build_linux_server assembled "
+            "share/broker_ops.py::linux_main; build_linux_server assembled "
             "the AF_UNIX transport with the management dispatch (no fixture "
             "subclass or monkeypatch).")
         _wait_for(lambda: self.paths["broker_socket"].exists(), 20.0)
@@ -1595,9 +1595,9 @@ class ChainFixture:
         # The test process runs from tests/, so the product module's own
         # sibling import needs the protocol module registered first.
         _load_module("share_broker_protocol",
-                     HERE / "share_broker_protocol.py")
+                     HERE / "share/broker_protocol.py")
         module = _load_module("share_broker_client",
-                              HERE / "share_broker_client.py")
+                              HERE / "share/broker_client.py")
         transport = module.UnixSocketBrokerTransport(
             registration["pipe_name"])
         client = module.BrokerClient(lambda: transport, secret)

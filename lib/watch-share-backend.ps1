@@ -11,9 +11,9 @@ param(
 # Thin entry for the dedicated share backend (8110) watch and the public Funnel
 # supervision - contract share-resilience-contract-4 section 4.1. ALL decision
 # logic lives in the two Python modules:
-#   share_backend_supervision.py - desired intent, maintenance lease, broker
+#   share/backend_supervision.py - desired intent, maintenance lease, broker
 #                                 lifecycle, confirmations, hourly budget;
-#   share_public_supervision.py  - public DNS/TLS rounds, the in-process 10 s
+#   share/public_supervision.py  - public DNS/TLS rounds, the in-process 10 s
 #                                 re-check, the rolling 30 minute budget and
 #                                 the bounded mapping/TS recovery.
 # SAFETY DEFAULT: the public lane is OFF. The registered task action passes no
@@ -74,11 +74,11 @@ function Get-SupervisionScriptPath {
 }
 
 function Get-BackendSupervisionScript {
-    return Get-SupervisionScriptPath -Name 'share_backend_supervision.py'
+    return Get-SupervisionScriptPath -Name 'share/backend_supervision.py'
 }
 
 function Get-PublicSupervisionScript {
-    return Get-SupervisionScriptPath -Name 'share_public_supervision.py'
+    return Get-SupervisionScriptPath -Name 'share/public_supervision.py'
 }
 
 function Get-PublicEnableMarkerPath {

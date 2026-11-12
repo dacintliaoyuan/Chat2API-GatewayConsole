@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import share_metering  # noqa: E402
+import share.metering as share_metering  # noqa: E402
 
 
 BASE = {

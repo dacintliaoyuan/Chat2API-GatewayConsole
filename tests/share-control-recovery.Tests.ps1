@@ -221,7 +221,7 @@ Assert-Equal (Get-ShareControlErrorCode ([System.Exception]::new('a secret arbit
 
 $processRow = @{ ProcessId = 77; CreationDate = '20261019';
     ExecutablePath = 'C:\ProgramData\UMShareRun\um-share-python.exe';
-    CommandLine = '"C:\ProgramData\UMShareRun\um-share-python.exe" "C:\ProgramData\UMShareRun\share_broker_server.py" --broker-dir "C:\ProgramData\UMShareRun\broker"' }
+    CommandLine = '"C:\ProgramData\UMShareRun\um-share-python.exe" "C:\ProgramData\UMShareRun\share/broker_server.py" --broker-dir "C:\ProgramData\UMShareRun\broker"' }
 $systemOwner = { param($row) return @{ ReturnValue = 0; Sid = 'S-1-5-18' } }
 $readProcess = { return $processRow }.GetNewClosure()
 $processResult = Get-ShareControlBrokerProcessWorker -ProcessReader $readProcess -OwnerReader $systemOwner
@@ -231,7 +231,7 @@ Assert-Equal $processResult.count 0 'successful empty process inventory proves e
 $processResult = Get-ShareControlBrokerProcessWorker -ProcessReader { throw 'private query failure' } -OwnerReader $systemOwner
 Assert-Equal $processResult.ok $false 'failed process query never becomes empty inventory'
 foreach ($case in @(
-    @{ Name = 'wrong script path'; Field = 'CommandLine'; Value = '"C:\ProgramData\UMShareRun\um-share-python.exe" "C:\other\share_broker_server.py"' },
+    @{ Name = 'wrong script path'; Field = 'CommandLine'; Value = '"C:\ProgramData\UMShareRun\um-share-python.exe" "C:\other\share/broker_server.py"' },
     @{ Name = 'missing command line'; Field = 'CommandLine'; Value = '' },
     @{ Name = 'missing creation'; Field = 'CreationDate'; Value = '' },
     @{ Name = 'invalid pid'; Field = 'ProcessId'; Value = 0 }

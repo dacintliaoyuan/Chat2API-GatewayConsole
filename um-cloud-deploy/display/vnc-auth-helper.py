@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from console_display_proxy import load_vnc_password, vnc_auth_response
+from console.display_proxy import load_vnc_password, vnc_auth_response
 
 MAX_CONNECTIONS = 4
 CONNECTION_TIMEOUT = 5.0

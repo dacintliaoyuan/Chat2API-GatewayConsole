@@ -8,7 +8,7 @@
 
 `make-manifest.py` 用 AST 从当前字节冻结闭包，不导入产品模块：
 
-- **静态超集**从 `usagesrv.py`、`chat2api/chat2api.py`、`chat2api/chat2api.py`、`share_broker_ops.py`、`share_backend_supervision.py` 出发，跟随所有函数体内的 `import`，并补上 4 个 `importlib.util.spec_from_file_location` 目标。
+- **静态超集**从 `usagesrv.py`、`chat2api/chat2api.py`、`chat2api/chat2api.py`、`share/broker_ops.py`、`share/backend_supervision.py` 出发，跟随所有函数体内的 `import`，并补上 4 个 `importlib.util.spec_from_file_location` 目标。
 - **云端动态装配**只列云端角色实际导入的产品模块；manifest 校验 `cloud_runtime ⊆ static_superset`，并列出 `static_only` / `cloud_only`。
 - **部署材料**在 `deployment_files` 单独列出，不与产品闭包混为一谈；`RELEASE-MANIFEST.json`、`SHA256SUMS`、解释器缓存与本地工具状态按规则排除。
 
@@ -55,7 +55,7 @@ cd ..
 
 ```text
 systemd
-├── um-share-broker.service   → share_broker_ops.py → chat2api.py :8100
+├── um-share-broker.service   → share/broker_ops.py → chat2api.py :8100
 ├── um-share-console.service  → usagesrv.py :18096
 └── um-share-display.service  → Xvfb :99 + x11vnc 127.0.0.1:5901（可选）
 ```

@@ -34,25 +34,25 @@ assert.equal(
 );
 assert.equal(fixture.metadata.sourceHashEncoding, "utf8-lf");
 // Mirrors the generator's `names` (contract §10.2): the newly published action
-// shapes come from console_share_actions.py / console_share_production.py (Rev9).
+// shapes come from console/share_actions.py / console/share_production.py (Rev9).
 // The share_maintenance supervision segment is not source-hashed by contract, so
-// its generator (share_backend_supervision.py) is deliberately not listed here.
+// its generator (share/backend_supervision.py) is deliberately not listed here.
 // The cliproxy_status segment is frozen retired data: its handler module was
 // deleted with the UM-only consolidation, so it has no source hash either and the
 // assertions below keep validating the published shape without a live handler.
 const sourceNames = [
-  "model_sync.py",
-  "model_sync_core.py",
-  "console_model_actions.py",
-  "console_adapters.py",
-  "console_operations.py",
-  "share_metering.py",
-  "console_stats.py",
-  "console_log_reader.py",
+  "model_sync/sync.py",
+  "model_sync/sync_core.py",
+  "console/model_actions.py",
+  "console/adapters.py",
+  "console/operations.py",
+  "share/metering.py",
+  "console/stats.py",
+  "console/log_reader.py",
   "usagesrv.py",
-  "console_share_actions.py",
-  "console_share_production.py",
-  "console_gateway_connection.py",
+  "console/share_actions.py",
+  "console/share_production.py",
+  "console/gateway_connection.py",
 ];
 assert.deepEqual(
   Object.keys(fixture.metadata.sourceHashes).sort(),
@@ -387,7 +387,7 @@ assert.equal(maintenance.supervision.state.idle_reason, "budget_exhausted");
 assert.equal(maintenance.supervision.state.version, 1);
 assert.ok(
   maintenance.supervision.generatedFrom.includes(
-    "share_backend_supervision.run_once"
+    "share.backend_supervision.run_once"
   )
 );
 assert.ok(

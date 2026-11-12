@@ -32,8 +32,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import console_log_reader  # noqa: E402
-import console_stats       # noqa: E402
+from console import log_reader as console_log_reader  # noqa: E402
+from console import stats as console_stats       # noqa: E402
 import usagesrv             # noqa: E402
 
 BEIJING = timezone.utc

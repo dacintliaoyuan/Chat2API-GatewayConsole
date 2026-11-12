@@ -17,8 +17,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import zcode_hot_sync
-import zcode_hot_sync_protocol
+from zcode import hot_sync as zcode_hot_sync
+from zcode import hot_sync_protocol as zcode_hot_sync_protocol
 from tests import zcode_current_protocol_fixture as current_fixture
 from tests.zcode_protocol_fixture import sources, profile
 
@@ -949,7 +949,7 @@ class ZcodeCurrentHotSyncAdmissionTests(unittest.TestCase):
         # 运行中安装的只读解析核对：每个区域都必须定位到唯一 bundle 并提取
         # 全部元素；摘要与证据表一致时准入，不一致时必须按具体区域延期
         # （3.16.2 的实现变化需要下一轮语义复核与新证据表，不在这里放行）。
-        import zcode_hot_sync_protocol as proto
+        from zcode import hot_sync_protocol as proto
         root = zcode_hot_sync.zcode_client_root()
         if root is None:
             self.skipTest("未找到 ZCode 安装根：跳过真实安装只读核对")
@@ -996,7 +996,7 @@ class ZcodeCurrentHotSyncAdmissionTests(unittest.TestCase):
         # 一个区域必须变成依赖无法解析——只按 export 名回退的旧实现会给出同一
         # 摘要并保持同一结论。基线不得已经是依赖解析失败，否则检查是空的。
         import re
-        import zcode_hot_sync_protocol as proto
+        from zcode import hot_sync_protocol as proto
         root = zcode_hot_sync.zcode_client_root()
         if root is None:
             self.skipTest("未找到 ZCode 安装根：跳过真实安装只读核对")

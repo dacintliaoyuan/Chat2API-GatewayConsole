@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """M6-B：分享每 Key 费用链与双协议归因的全链隔离回归。
 
-既有覆盖（本文件不重复）：tests/test_share_metering.py 已钉死 8100 标记构建
+既有覆盖（本文件不重复）：tests/test_share/metering.py 已钉死 8100 标记构建
 /8110 校验的单元契约、8110 直连的 Messages 归因/分段用量/断流下界、读端的
 零值/别名/失败/未定价/未归属桶/轮换删除历史与私人汇总不变；
 tests/test_chat2api_usage_normalize.py 钉死用量别名归一化；
@@ -44,7 +44,7 @@ HERE = Path(__file__).resolve().parents[1]
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-# 照 tests/test_share_metering.py 先例：导入 chat2api 前把生产状态路径重定向
+# 照 tests/test_share/metering.py 先例：导入 chat2api 前把生产状态路径重定向
 # 到夹具临时目录（导入后立即还原，避免污染同进程其他测试模块）。
 _REDIRECT_TMP = tempfile.TemporaryDirectory(prefix="share-metering-chain-")
 _REDIRECTED_ENV = {
@@ -70,12 +70,12 @@ def _load(name, relative):
 
 share = _load("share_entry_metering_chain", "chat2api/share_entry.py")
 chat2api = _load("chat2api_metering_chain", "chat2api/chat2api.py")
-metering = _load("share_metering_metering_chain", "share_metering.py")
+metering = _load("share_metering_metering_chain", "share/metering.py")
 
 
 def _write_private(path, text):
     """Fixture secrets must pass the POSIX 0600/current-uid gate."""
-    from share_secret_protection import write_private_secret_path
+    from share.secret_protection import write_private_secret_path
     write_private_secret_path(Path(path), str(text).encode("utf-8"))
 
 if str(Path(__file__).resolve().parent) not in sys.path:

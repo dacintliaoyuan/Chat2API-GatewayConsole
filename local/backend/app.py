@@ -32,9 +32,9 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-import console_stats
-import model_sync
-from console_operations import (OperationError, OperationManager,
+from console import stats as console_stats
+from model_sync import sync as model_sync
+from console.operations import (OperationError, OperationManager,
                                OperationUnavailable)
 
 from .config import LocalConfigError
@@ -42,7 +42,7 @@ from .registry import build_registry
 from .service_runtime import build_runtime_control
 from .stats_env import build_stats_environment
 
-from console_backend_app import (
+from app.console_backend_app import (
     BackendHandler, BackendHTTPServer,
     append_bounded_log as _append_bounded_log,
     has_proxy_metadata as _has_proxy_metadata,
@@ -465,7 +465,7 @@ class _LocalHandler(BackendHandler):
             self._send_json(400, {"error": "invalid_service"})
             return
         try:
-            import console_gateway_connection
+            from console import gateway_connection as console_gateway_connection
             payload = console_gateway_connection.connection_info(service)
         except Exception as exc:  # noqa: BLE001 - reported, never silent
             name = type(exc).__name__
@@ -548,7 +548,7 @@ class _LocalHandler(BackendHandler):
                     cursor=_q("cursor", 512),
                     limit=_qint("limit", 50))
             elif sub == "logs":
-                import console_log_reader
+                from console import log_reader as console_log_reader
                 levels = [v.strip() for v in
                           (_q("levels") or "").split(",") if v.strip()]
                 payload = console_log_reader.read_um_logs(
@@ -563,7 +563,7 @@ class _LocalHandler(BackendHandler):
                                            "detail": payload.get("error")})
                     return
             elif sub == "request-logs":
-                import console_log_reader
+                from console import log_reader as console_log_reader
                 payload = console_log_reader.read_um_request_logs(
                     _q("request_id") or "",
                     limit=_qint("limit", 100),

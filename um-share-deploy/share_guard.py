@@ -180,7 +180,7 @@ def select_config(here: Path, mode_file: Path = None) -> Path:
         # object must NEVER be consumed as authorization under projection
         # mode; without the parser module it fails CLOSED.
         try:
-            from share_broker_protocol import (ProtocolError,
+            from share.broker_protocol import (ProtocolError,
                                                parse_projection_payload)
         except ImportError as exc:
             raise SystemExit(

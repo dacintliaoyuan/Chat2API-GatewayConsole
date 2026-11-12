@@ -42,7 +42,7 @@ class UmRuntimeError(RuntimeError):
 def _read_control_token(path):
     """Read the child control token; any failure returns None (deny)."""
     try:
-        from share_secret_protection import read_private_secret_path
+        from share.secret_protection import read_private_secret_path
         raw = read_private_secret_path(path, max_bytes=1024,
                                        label="control token")
         value = raw.decode("utf-8").strip()

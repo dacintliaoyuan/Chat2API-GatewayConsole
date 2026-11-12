@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import os
 
-from share_management import (BrokerClientAdapter, BrokerError, ShareManager)
+from share.management import (BrokerClientAdapter, BrokerError, ShareManager)
 
 
 class KeyApiError(Exception):
@@ -54,10 +54,10 @@ class KeyApi:
 
     @staticmethod
     def _build_broker(config):
-        from share_broker_client import (BrokerClient,
+        from share.broker_client import (BrokerClient,
                                         UnixSocketBrokerTransport,
                                         validate_unix_socket_path)
-        from share_broker_server import read_control_key
+        from share.broker_server import read_control_key
 
         socket_path = validate_unix_socket_path(config.broker_socket)
         secret = read_control_key(config.broker_key_file)

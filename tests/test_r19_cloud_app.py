@@ -4,7 +4,7 @@
 The cloud chain runs the REAL package processes on loopback only:
 
     fake UM (verification upstream)
-    share_broker_ops.py::linux_main (AF_UNIX broker, spawns 8100)
+    share/broker_ops.py::linux_main (AF_UNIX broker, spawns 8100)
     chat2api/share_entry.py (8100 role, spawned by the broker)
     cloud/run_cloud.py (18096 role, owns the 8110 chat2api backend)
 
@@ -60,11 +60,11 @@ class CloudPackageTests(unittest.TestCase):
             "chat2api/chat2api.py",
             "chat2api/share_entry.py",
             "chat2api/share_dispatch.py",
-            "share_broker_ops.py",
-            "share_broker_server.py",
-            "share_store.py",
-            "share_management.py",
-            "console_share_production.py",
+            "share/broker_ops.py",
+            "share/broker_server.py",
+            "share/store.py",
+            "share/management.py",
+            "console/share_production.py",
             "tests/fake_um/fake_um_server.py",
         )
         for relative in required:
@@ -72,8 +72,8 @@ class CloudPackageTests(unittest.TestCase):
         self.assertEqual(package_cloud.forbidden_entries(PACKAGE), [])
         self.assertFalse((PACKAGE / "local").exists())
         self.assertFalse((PACKAGE / "usagesrv.py").exists())
-        self.assertFalse((PACKAGE / "model_sync.py").exists())
-        self.assertFalse((PACKAGE / "console_stats.py").exists())
+        self.assertFalse((PACKAGE / "model_sync/sync.py").exists())
+        self.assertFalse((PACKAGE / "console/stats.py").exists())
         self.assertFalse((PACKAGE / "chat2api" / "token.json").exists())
         self.assertFalse(
             (PACKAGE / "chat2api" / ".edge-profile").exists())
@@ -288,7 +288,7 @@ class CloudIsolationTests(unittest.TestCase):
             # imports it too (it is part of the cloud closure).
             "import cloud.backend.summary\n"
             "forbidden = [name for name in (\n"
-            "    'usagesrv', 'model_sync', 'local', 'console_adapters',\n"
+            "    'usagesrv', 'model_sync', 'local', 'console.adapters',\n"
             "    'console_stats', 'zcode_hot_sync') if name in sys.modules]\n"
             "print(json.dumps({'forbidden': forbidden,\n"
             "                  'cloud': cloud.backend.app.__file__,\n"

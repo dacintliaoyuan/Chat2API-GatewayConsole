@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(CHAT2API_PATH.parent))
 import _chat2api_http_harness as harness  # noqa: E402
 import nonstream_aggregate  # noqa: E402
-import share_entry  # noqa: E402
+import share_entry as share_entry  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location(
     "chat2api_nonstream_aggregate", CHAT2API_PATH)
@@ -57,7 +57,7 @@ SPEC.loader.exec_module(chat2api)
 
 def _write_private(path, text):
     """Fixture secrets must pass the POSIX 0600/current-uid gate."""
-    from share_secret_protection import write_private_secret_path
+    from share.secret_protection import write_private_secret_path
     write_private_secret_path(Path(path), str(text).encode("utf-8"))
 
 STUB_TOKEN = "stub-token"

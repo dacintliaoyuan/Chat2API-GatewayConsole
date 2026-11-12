@@ -25,8 +25,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 AI_GATEWAY = Path(__file__).resolve().parents[1]
 
-import console_share_production as prod  # noqa: E402
-from console_operations import OperationError  # noqa: E402
+from console import share_production as prod  # noqa: E402
+from console.operations import OperationError  # noqa: E402
 
 
 class _NoEnvironment:

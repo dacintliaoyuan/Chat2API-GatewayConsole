@@ -24,7 +24,7 @@ from share_guard import (EXPERIMENT_PIPE_PREFIX, PRODUCTION_PIPE_PREFIX,
                          build_experiment_share_args,
                          validate_experiment_guard_invocation)
 import share_guard as guard
-import share_instance_pipe
+import share.instance_pipe as share_instance_pipe
 
 _spec = importlib.util.spec_from_file_location(
     "share_entry", _repo / "chat2api" / "share_entry.py")
@@ -166,9 +166,9 @@ class ImportClosureTests(unittest.TestCase):
 
     def test_share_closure_imports(self):
         self.assertIsNotNone(share.instance_pipe_name if hasattr(share, "instance_pipe_name") else share)
-        for name in ("share_guard", "share_instance_pipe",
-                     "share_broker_server", "share_broker_host",
-                     "share_broker_protocol", "share_runtime"):
+        for name in ("share_guard", "share.instance_pipe",
+                     "share.broker_server", "share.broker_host",
+                     "share.broker_protocol", "share.runtime"):
             self.assertIsNotNone(importlib.import_module(name))
 
 

@@ -23,10 +23,12 @@ Chat2API 网关控制台：同一套前端按构建期角色产出本机与云�
 
 ## 文件
 
-- `usagesrv.py`、`console_*.py`：本机管理路由、任务队列、统计、日志与分享动作；`usagesrv.py` 在 `UM_SHARE_ROLE=cloud` 时只装配云端分享控制台。
-- `chat2api/`：UM 网关（8000）与分享入口／专用后端（8100／8110）。
-- `share_*.py`、`share_admin.py`：分享存储、管理、运行链与 broker；边界见 [AGENTS.md](AGENTS.md) 的分享链边界。
-- `model_sync.py`、`model_sync_core.py`、`model_config_adapters.py`：模型目录镜像、受管合并与客户端适配。
+- `usagesrv.py`、`app/`：控制台宿主入口与后端装配；`usagesrv.py` 在 `UM_SHARE_ROLE=cloud` 时只装配云端分享控制台。
+- `chat2api/`：UM 网关（8000）与合并后的分享入口（8100）；`share_entry.py` 是旧链测试专用。
+- `console/`：本机管理路由、任务队列、统计、日志与分享动作。
+- `share/`：分享存储、管理、运行链、broker 与监督；边界见 [AGENTS.md](AGENTS.md) 的分享链边界。
+- `model_sync/`：模型目录镜像、受管合并与客户端适配。
+- `zcode/`：ZCode 热同步与文件锁。
 - `local/`、`cloud/`、`shared/`：两个角色的组合根与双端纯规则；见各自的 README。
 - `web/`：TypeScript/Vite 前端；`tests/`：Python 回归与隔离包。
 - `um-cloud-deploy/`、`um-share-deploy/`：云端与旧 Windows 本机分享链的部署/运维材料。

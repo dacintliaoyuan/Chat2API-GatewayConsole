@@ -9,8 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from share_management import BrokerError, ShareManager  # noqa: E402
-from share_runtime import (DeployBroker, PowerShellStageExecutor,  # noqa: E402
+from share.management import BrokerError, ShareManager  # noqa: E402
+from share.runtime import (DeployBroker, PowerShellStageExecutor,  # noqa: E402
                            ProjectionFileBroker)
 
 

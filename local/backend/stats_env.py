@@ -21,7 +21,7 @@ import os
 import threading
 import time
 
-from console_stats import StatsEnvironment
+from console.stats import StatsEnvironment
 from shared import pricing_rules
 
 PRICE_CACHE_TTL_S = 60.0

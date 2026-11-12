@@ -11,8 +11,8 @@ import uuid
 
 def native_child():
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from share_broker_server import BoundedPipeServer
-    from share_broker_client import NamedPipeBrokerTransport
+    from share.broker_server import BoundedPipeServer
+    from share.broker_client import NamedPipeBrokerTransport
 
     name = r'\\.\pipe\SelfUseAI-share-preconnect-' + uuid.uuid4().hex
     server = BoundedPipeServer(name)
@@ -32,8 +32,8 @@ def native_child():
 
 def native_delayed_child(explicit=False, silent=False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from share_broker_server import BoundedPipeServer
-    from share_broker_client import NamedPipeBrokerTransport
+    from share.broker_server import BoundedPipeServer
+    from share.broker_client import NamedPipeBrokerTransport
     created = threading.Event()
     records = []
     class EchoServer(BoundedPipeServer):
@@ -91,8 +91,8 @@ def native_delayed_child(explicit=False, silent=False):
 
 def native_client_timeout_child():
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from share_broker_server import BoundedPipeServer
-    from share_broker_client import NamedPipeBrokerTransport
+    from share.broker_server import BoundedPipeServer
+    from share.broker_client import NamedPipeBrokerTransport
     server = BoundedPipeServer(r'\\.\pipe\SelfUseAI-share-client-timeout-' + uuid.uuid4().hex)
     client = NamedPipeBrokerTransport(server.pipe_name)
     try:
@@ -114,8 +114,8 @@ def native_client_timeout_child():
 
 def native_idle_accept_child():
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from share_broker_server import BoundedPipeServer
-    from share_broker_client import NamedPipeBrokerTransport
+    from share.broker_server import BoundedPipeServer
+    from share.broker_client import NamedPipeBrokerTransport
     import json
     class EchoServer(BoundedPipeServer):
         def _dispatch(self, body, record):

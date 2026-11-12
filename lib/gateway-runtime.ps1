@@ -1,4 +1,4 @@
-﻿# Gateway runtime module: single source of truth for service identity,
+# Gateway runtime module: single source of truth for service identity,
 # health checks, start/stop strategies and startup order.
 #
 # Two active services and one retired identity tombstone:
@@ -47,7 +47,7 @@ $script:GatewayServiceDescriptors = [ordered]@{
         # Round 18 (2026-09-29) stop-scope identity. The entrypoint token above
         # also matched the dedicated share backend (chat2api.py --port 8110
         # --profile <share>\edge-profile, started by
-        # console_share_production.py:1226-1234), so a private stop force-stopped
+        # console/share_production.py:1226-1234), so a private stop force-stopped
         # a share instance. The private launcher (start_chat2api.bat) passes only
         # --base-url, so these two facts positively identify the private
         # instance; --port, when declared, must agree with Port. See
@@ -1293,7 +1293,7 @@ function Stop-GatewayService {
                 # the private instance's own control token opens its
                 # /admin/shutdown (the share backend reads
                 # CHAT2API_CONTROL_TOKEN_FILE from its own data dir,
-                # console_share_production.py:1236-1246). The FORCE-KILL below
+                # console/share_production.py:1236-1246). The FORCE-KILL below
                 # is the part that used to select the share backend, so it runs
                 # through the verified stop scope.
                 $gracefulRequested = $false

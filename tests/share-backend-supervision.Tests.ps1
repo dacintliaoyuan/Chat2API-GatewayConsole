@@ -17,8 +17,8 @@ $watchScript = Join-Path $root 'lib\watch-share-backend.ps1'
 $registerScript = Join-Path $root 'lib\register-share-backend-watch.ps1'
 $hiddenLauncher = Join-Path $root 'lib\watch-share-backend-hidden.vbs'
 $notificationScript = Join-Path $root 'lib\show-share-public-notification.ps1'
-$supervisionModule = Join-Path $root 'share_backend_supervision.py'
-$publicSupervisionModule = Join-Path $root 'share_public_supervision.py'
+$supervisionModule = Join-Path $root 'share/backend_supervision.py'
+$publicSupervisionModule = Join-Path $root 'share/public_supervision.py'
 
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     throw 'python was not found on PATH; the offline supervision tests need it'
@@ -68,8 +68,8 @@ Assert-True (Test-Path -LiteralPath $watchScript -PathType Leaf) 'watch-share-ba
 Assert-True (Test-Path -LiteralPath $registerScript -PathType Leaf) 'register-share-backend-watch.ps1 exists'
 Assert-True (Test-Path -LiteralPath $hiddenLauncher -PathType Leaf) 'watch-share-backend-hidden.vbs exists'
 Assert-True (Test-Path -LiteralPath $notificationScript -PathType Leaf) 'show-share-public-notification.ps1 exists'
-Assert-True (Test-Path -LiteralPath $supervisionModule -PathType Leaf) 'share_backend_supervision.py exists'
-Assert-True (Test-Path -LiteralPath $publicSupervisionModule -PathType Leaf) 'share_public_supervision.py exists'
+Assert-True (Test-Path -LiteralPath $supervisionModule -PathType Leaf) 'share/backend_supervision.py exists'
+Assert-True (Test-Path -LiteralPath $publicSupervisionModule -PathType Leaf) 'share/public_supervision.py exists'
 
 # ===========================================================================
 # 2. The hidden launcher keeps the watch-chat2api-hidden.vbs shape.
@@ -96,13 +96,13 @@ try {
     foreach ($name in @('watch-share-backend-hidden.vbs', 'watch-share-backend.ps1', 'gateway-runtime.ps1')) {
         Copy-Item -LiteralPath (Join-Path $root ("lib\" + $name)) -Destination (Join-Path $chainLib $name)
     }
-    Set-Content -LiteralPath (Join-Path $chainRoot 'share_backend_supervision.py') -Encoding ASCII -Value @'
+    Set-Content -LiteralPath (Join-Path $chainRoot 'share/backend_supervision.py') -Encoding ASCII -Value @'
 import os, sys, time
 print('fake backend argv=' + ' '.join(sys.argv[1:]))
 time.sleep(float(os.environ.get('FAKE_BACKEND_SLEEP', '0')))
 sys.exit(int(os.environ.get('FAKE_BACKEND_EXIT', '0')))
 '@
-    Set-Content -LiteralPath (Join-Path $chainRoot 'share_public_supervision.py') -Encoding ASCII -Value @'
+    Set-Content -LiteralPath (Join-Path $chainRoot 'share/public_supervision.py') -Encoding ASCII -Value @'
 import os, sys, time
 print('fake public argv=' + ' '.join(sys.argv[1:]))
 time.sleep(float(os.environ.get('FAKE_PUBLIC_SLEEP', '0')))
@@ -217,7 +217,7 @@ sys.exit(int(os.environ.get('FAKE_PUBLIC_EXIT', '0')))
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $chainWatch,
         '-Mode', 'Check', '-TimeoutSeconds', '196', '-PublicSupervision')
     Assert-True ($chainTimeout.ExitCode -eq 2) ("a hung public child exits 2, never 0 (got {0})" -f $chainTimeout.ExitCode)
-    Assert-Contains $chainTimeout.Output 'child killed (share_public_supervision.py)' 'the timeout names the killed public child'
+    Assert-Contains $chainTimeout.Output 'child killed (share/public_supervision.py)' 'the timeout names the killed public child'
 
     # 195 s cannot cover 180 s backend + 15 s overhead: no child starts.
     $chainBudget = Invoke-ChildProcess 'pwsh.exe' @(
@@ -245,7 +245,7 @@ sys.exit(int(os.environ.get('FAKE_PUBLIC_EXIT', '0')))
         foreach ($name in @('watch-share-backend.ps1', 'gateway-runtime.ps1')) {
             Copy-Item -LiteralPath (Join-Path $root ("lib\" + $name)) -Destination (Join-Path $missingRoot ("lib\" + $name))
         }
-        Copy-Item -LiteralPath (Join-Path $chainRoot 'share_backend_supervision.py') -Destination (Join-Path $missingRoot 'share_backend_supervision.py')
+        Copy-Item -LiteralPath (Join-Path $chainRoot 'share/backend_supervision.py') -Destination (Join-Path $missingRoot 'share/backend_supervision.py')
         $missingDefault = Invoke-ChildProcess 'pwsh.exe' @(
             '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
             (Join-Path $missingRoot 'lib\watch-share-backend.ps1'),
@@ -257,7 +257,7 @@ sys.exit(int(os.environ.get('FAKE_PUBLIC_EXIT', '0')))
             (Join-Path $missingRoot 'lib\watch-share-backend.ps1'),
             '-Mode', 'Check', '-TimeoutSeconds', '300', '-PublicSupervision')
         Assert-True ($missing.ExitCode -eq 2) ("an enabled lane with a missing public module exits 2 (got {0})" -f $missing.ExitCode)
-        Assert-Contains $missing.Output 'share_public_supervision.py' 'the refusal names the fixed public module path'
+        Assert-Contains $missing.Output 'share/public_supervision.py' 'the refusal names the fixed public module path'
     } finally {
         Remove-Item -LiteralPath $missingRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -332,8 +332,8 @@ try {
 # real exit codes, and the maintenance gate + budgets live in the Python modules.
 # ===========================================================================
 $watchText = [IO.File]::ReadAllText($watchScript)
-Assert-Contains $watchText 'share_backend_supervision.py' 'the watch entry runs share_backend_supervision.py'
-Assert-Contains $watchText 'share_public_supervision.py' 'the watch entry runs share_public_supervision.py'
+Assert-Contains $watchText 'share/backend_supervision.py' 'the watch entry runs share/backend_supervision.py'
+Assert-Contains $watchText 'share/public_supervision.py' 'the watch entry runs share/public_supervision.py'
 Assert-Contains $watchText 'function Get-BackendSupervisionScript' 'the watch resolves the backend module by fixed name'
 Assert-Contains $watchText 'function Get-PublicSupervisionScript' 'the watch resolves the public module by fixed name'
 Assert-Contains $watchText '$TimeoutSeconds = 840' 'the watch default budget is 840 seconds'
@@ -408,7 +408,7 @@ $writeDesired = Join-Path $sandbox 'write-desired.py'
 Set-Content -LiteralPath $writeDesired -Encoding ASCII -Value @'
 import sys
 sys.path.insert(0, sys.argv[1])
-import share_backend_supervision as m
+import share.backend_supervision as m
 sys.exit(0 if m.write_desired_state("stopped", source="ps-suite",
                                      path=sys.argv[2]) else 3)
 '@
@@ -434,7 +434,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
-import share_backend_supervision as m
+import share.backend_supervision as m
 
 failures = []
 

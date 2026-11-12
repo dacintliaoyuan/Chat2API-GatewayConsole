@@ -126,16 +126,16 @@ TOOL_PATH = os.path.abspath(__file__)
 
 # 动作门 §1.4 表逐字：回退副本（本项判据）。
 ROLLBACK_COPY_TABLE = (
-    ("rollback-console_share_production.py",
-     "output/ai-gw-round6-20260927/rollback-console_share_production.py",
+    ("rollback-console/share_production.py",
+     "output/ai-gw-round6-20260927/rollback-console/share_production.py",
      79626,
      "5f5c0eda21f7e9b130288ff111fe4ea329867802edfc593121e70707f03d4f68"),
     ("rollback-usagesrv.py",
      "output/ai-gw-round6-20260927/rollback-usagesrv.py",
      161103,
      "bcc47fd198d5210c70e6ddd5de2b07f8c12ca54aa90e26e7a8e6bc192fdf15d7"),
-    ("rollback-console_share_actions.py",
-     "output/ai-gw-round6-20260927/rollback-console_share_actions.py",
+    ("rollback-console/share_actions.py",
+     "output/ai-gw-round6-20260927/rollback-console/share_actions.py",
      57520,
      "06424f8603bd9db0971b5155544c0be7203dbf5ad88fd4398ee7690d4596961f"),
 )
@@ -146,16 +146,16 @@ LOAD_TARGET_TABLE = (
     # `forget_stale` 与 `_pid_alive` 修复、执行轮 11 的行号变动把这份「将载入版本」
     # 从 94523/266dc3d0… 变成 99133/512710e7…。本常量与动作门 §1.4 表**必须一起改**：
     # 它就是这个前置门用来发现「表已过期」的那把尺子。
-    ("console_share_production.py",
-     "ai-gateway/console_share_production.py",
+    ("console/share_production.py",
+     "console/share_production.py",
      99133,
      "2e5a6892fdc1bca4deecc5bb87f0e08b136e21d3c56ea723fa8779c57c918d24"),
     ("usagesrv.py",
-     "ai-gateway/usagesrv.py",
+     "usagesrv.py",
      161584,
      "1345a4f08c1b8009e47cf8ad7af5cd129b0fde9f7de16d6e15c74893bf9af8c9"),
-    ("console_share_actions.py",
-     "ai-gateway/console_share_actions.py",
+    ("console/share_actions.py",
+     "console/share_actions.py",
      58050,
      "54a681d5d40cc268aa00ed5582ec0261ba1722347c43ee8c90d3b9b5a6930029"),
 )

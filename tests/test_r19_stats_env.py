@@ -26,7 +26,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import console_stats  # noqa: E402
+from console import stats as console_stats  # noqa: E402
 from local.backend import stats_env  # noqa: E402
 from shared import pricing_rules  # noqa: E402
 
@@ -119,9 +119,9 @@ class ImportIsolationTests(unittest.TestCase):
         code = (
             "import sys\n"
             "sys.path.insert(0, %r)\n"
-            "import console_stats\n"
+            "from console import stats as console_stats\n"
             "print('usagesrv' in sys.modules)\n"
-            "print('console_stats' in sys.modules)\n"
+            "print('console.stats' in sys.modules)\n"
         ) % str(GATEWAY_DIR)
         proc = subprocess.run(
             [sys.executable, "-I", "-c", code],

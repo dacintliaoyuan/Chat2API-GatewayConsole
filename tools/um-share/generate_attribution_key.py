@@ -7,7 +7,7 @@
   **须提权**）与 §⑤.2（密钥回退判据：回退只动文件、不动目录）；
 * ``SHARING.md``「生成（维护者本机执行）」段（:51-100 的 PowerShell
   原文）与「轮换」段（:150-170）；
-* ``ai-gateway/console_share_production.py`` 的 ``SHARE_ATTRIBUTION_KEY_NAME``
+* ``ai-gateway/console/share_production.py`` 的 ``SHARE_ATTRIBUTION_KEY_NAME``
   （:845）与 ``share_attribution_key_path()``（:864-880）——**唯一的**生产路径解析器。
 
 三种模式（默认 dry-run；任何写盘动作都必须显式开关）：
@@ -65,7 +65,7 @@ AI_GATEWAY_DIR = os.path.dirname(os.path.dirname(
 if AI_GATEWAY_DIR not in sys.path:
     sys.path.insert(0, AI_GATEWAY_DIR)
 
-# 生产 RunRoot = deploy-elevated.ps1 的 -RunRoot 默认值（console_share_production.py:843）。
+# 生产 RunRoot = deploy-elevated.ps1 的 -RunRoot 默认值（console/share_production.py:843）。
 # --apply 只允许写这个根之下（动作门 §2.4 + 本任务边界：绝不改它以外的生产路径）。
 ALLOWED_PRODUCTION_ROOT = r"C:\ProgramData\UMShareRun"
 # 仓库内 data/：对 DAICNT\um_share 是显式拒绝 ACE（SHARING.md:22-23）。
@@ -649,7 +649,7 @@ def key_path():
     ``DEFAULT_SHARE_RUN_ROOT``）；本工具**不复制**它的字面量。
     """
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         path = console_share_production.share_attribution_key_path()
     except Exception as exc:  # noqa: BLE001 — 解析不了就如实报，不猜路径
         return None, "resolver_failed:%s" % type(exc).__name__, None
@@ -661,7 +661,7 @@ def key_path():
 def key_name():
     """读取 ``SHARE_ATTRIBUTION_KEY_NAME``（产品常量；读不到返回 ``None``）。"""
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         name = console_share_production.SHARE_ATTRIBUTION_KEY_NAME
     except Exception:  # noqa: BLE001 — 读不到就如实报，不猜名字
         return None

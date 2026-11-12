@@ -10,10 +10,10 @@ from unittest import mock
 from test_console_public_probe import (
     ANSWER, CATALOG, PUBLIC_IP, PUBLIC_URL, SECRET, isolated_http, probe, reply,
 )
-import console_share_actions as actions
-import share_broker_client as client_module
-from share_broker_server import BoundedPipeServer
-from share_broker_ops import WindowsHostOps
+from console import share_actions as actions
+import share.broker_client as client_module
+from share.broker_server import BoundedPipeServer
+from share.broker_ops import WindowsHostOps
 
 
 class PublicIngressRecoveryTests(unittest.TestCase):

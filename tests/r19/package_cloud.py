@@ -21,20 +21,20 @@ AI_GATEWAY = HERE.parents[1]                    # ai-gateway/
 CLOUD_DIRS = ("cloud", "shared")
 
 ROOT_FILES = (
-    "console_operations.py",
-    "console_share_production.py",
-    "share_backend_supervision.py",
-    "share_broker_client.py",
-    "share_broker_host.py",
-    "share_broker_ops.py",
-    "share_broker_protocol.py",
-    "share_broker_server.py",
-    "share_instance_pipe.py",
-    "share_management.py",
-    "share_metering.py",
-    "share_runtime.py",
-    "share_secret_protection.py",
-    "share_store.py",
+    "console/operations.py",
+    "console/share_production.py",
+    "share/backend_supervision.py",
+    "share/broker_client.py",
+    "share/broker_host.py",
+    "share/broker_ops.py",
+    "share/broker_protocol.py",
+    "share/broker_server.py",
+    "share/instance_pipe.py",
+    "share/management.py",
+    "share/metering.py",
+    "share/runtime.py",
+    "share/secret_protection.py",
+    "share/store.py",
 )
 
 CHAT2API_FILES = (
@@ -57,14 +57,19 @@ FORBIDDEN_DIR_NAMES = (
 
 FORBIDDEN_NAMES = (
     "usagesrv.py",
-    "console_adapters.py",
-    "console_share_actions.py",
-    "console_stats.py",
-    "console_model_actions.py",
-    "console_log_reader.py",
-    "console_magpie_prices.py",
-    "model_reconcile.py",
-    "model_config_adapters.py",
+    "console/adapters.py",
+    "console/share_actions.py",
+    "console/stats.py",
+    "console/model_actions.py",
+    "console/log_reader.py",
+    "console/magpie_prices.py",
+    "model_sync/reconcile.py",
+    "model_sync/config_adapters.py",
+    "model_sync/sync.py",
+    "model_sync/sync_core.py",
+    "zcode/hot_sync.py",
+    "zcode/file_lock.py",
+    "zcode/hot_sync_protocol.py",
 )
 
 FORBIDDEN_PREFIXES = ("model_sync", "zcode_", "console_um_")
@@ -114,10 +119,12 @@ def forbidden_entries(package_root) -> list:
         if any(part in FORBIDDEN_DIR_NAMES for part in relative.parts):
             found.append(str(relative).replace("\\", "/"))
             continue
+        relative_posix = str(relative).replace("\\", "/")
         name = relative.name
-        if name in FORBIDDEN_NAMES or any(
-                name.startswith(prefix) for prefix in FORBIDDEN_PREFIXES):
-            found.append(str(relative).replace("\\", "/"))
+        if relative_posix in FORBIDDEN_NAMES or name in FORBIDDEN_NAMES or any(
+                name.startswith(prefix) or relative_posix.startswith(prefix)
+                for prefix in FORBIDDEN_PREFIXES):
+            found.append(relative_posix)
     if (root / "chat2api" / "token.json").exists():
         found.append("chat2api/token.json")
     if (root / "chat2api" / ".edge-profile").exists():

@@ -10,7 +10,7 @@
 
 `run-deploy-guarded.ps1` 提供 Prep、Watchdog、Start、Stop 阶段；`install-share-broker.ps1` 安装受限运维入口。这些操作涉及管理员权限、任务、WFP、防火墙或进程，先核对当前授权、原状态和回退材料。
 
-SQLite 分享存储是 Key 与设置的权威来源，运行配置由它投影。Key 管理走控制台或 `../share_admin.py`，不直接改旧副本、不把历史明文文件当作当前 Key 列表。
+SQLite 分享存储是 Key 与设置的权威来源，运行配置由它投影。Key 管理走控制台或 `../share/admin.py`，不直接改旧副本、不把历史明文文件当作当前 Key 列表。
 
 看门狗任务登记部署时 PowerShell 7 宿主的绝对路径，`Watchdog` 阶段须有界确认任务为 `Running` 才算成功。若最后运行结果为 `0x80070002`，先核对任务实际执行路径；SYSTEM 与任务计划程序可能仍持有安装 PowerShell 7 之前的 PATH。看门狗子检查沿用自身宿主目录；broker 的 Windows 原生命令输出按 OEM 编码读取，PowerShell 7 输出按 UTF-8 读取。更新运行副本后重启 broker 并核对真实状态。
 

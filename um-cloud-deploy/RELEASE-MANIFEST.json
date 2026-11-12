@@ -8,54 +8,54 @@
         "chat2api/nonstream_aggregate.py",
         "chat2api/share_dispatch.py",
         "chat2api/share_entry.py",
-        "console_adapters.py",
-        "console_display_proxy.py",
-        "console_log_reader.py",
-        "console_magpie_prices.py",
-        "console_operations.py",
-        "console_public_probe.py",
-        "console_share_actions.py",
-        "console_share_probe.py",
-        "console_share_production.py",
-        "console_stats.py",
-        "console_tailnet.py",
-        "share_broker_client.py",
-        "share_broker_host.py",
-        "share_broker_ops.py",
-        "share_broker_protocol.py",
-        "share_broker_server.py",
-        "share_instance_pipe.py",
-        "share_management.py",
-        "share_metering.py",
-        "share_runtime.py",
-        "share_secret_protection.py",
-        "share_store.py",
+        "console/adapters.py",
+        "console/display_proxy.py",
+        "console/log_reader.py",
+        "console/magpie_prices.py",
+        "console/operations.py",
+        "console/public_probe.py",
+        "console/share_actions.py",
+        "console/share_probe.py",
+        "console/share_production.py",
+        "console/stats.py",
+        "console/tailnet.py",
+        "share/broker_client.py",
+        "share/broker_host.py",
+        "share/broker_ops.py",
+        "share/broker_protocol.py",
+        "share/broker_server.py",
+        "share/instance_pipe.py",
+        "share/management.py",
+        "share/metering.py",
+        "share/runtime.py",
+        "share/secret_protection.py",
+        "share/store.py",
         "usagesrv.py"
       ],
       "roots": [
         "usagesrv.py",
-        "console_tailnet.py",
-        "console_display_proxy.py",
-        "console_adapters.py",
-        "console_operations.py",
-        "console_public_probe.py",
-        "console_share_actions.py",
-        "console_share_probe.py",
-        "console_share_production.py",
-        "console_stats.py",
-        "console_log_reader.py",
-        "console_magpie_prices.py",
-        "share_management.py",
-        "share_store.py",
-        "share_broker_client.py",
-        "share_broker_host.py",
-        "share_broker_ops.py",
-        "share_broker_protocol.py",
-        "share_broker_server.py",
-        "share_runtime.py",
-        "share_metering.py",
-        "share_secret_protection.py",
-        "share_instance_pipe.py",
+        "console/tailnet.py",
+        "console/display_proxy.py",
+        "console/adapters.py",
+        "console/operations.py",
+        "console/public_probe.py",
+        "console/share_actions.py",
+        "console/share_probe.py",
+        "console/share_production.py",
+        "console/stats.py",
+        "console/log_reader.py",
+        "console/magpie_prices.py",
+        "share/management.py",
+        "share/store.py",
+        "share/broker_client.py",
+        "share/broker_host.py",
+        "share/broker_ops.py",
+        "share/broker_protocol.py",
+        "share/broker_server.py",
+        "share/runtime.py",
+        "share/metering.py",
+        "share/secret_protection.py",
+        "share/instance_pipe.py",
         "chat2api/share_entry.py",
         "chat2api/chat2api.py",
         "chat2api/nonstream_aggregate.py",
@@ -63,85 +63,90 @@
       ]
     },
     "static_only": [
-      "console_gateway_connection.py",
-      "console_model_actions.py",
-      "console_public_url.py",
-      "console_speedtest.py",
-      "console_um_adapter.py",
-      "console_um_login.py",
-      "model_config_adapters.py",
-      "model_reconcile.py",
-      "model_sync.py",
-      "model_sync_core.py",
-      "share_admin.py",
-      "share_backend_supervision.py",
-      "share_public_supervision.py",
+      "console/__init__.py",
+      "console/gateway_connection.py",
+      "console/model_actions.py",
+      "console/public_url.py",
+      "console/speedtest.py",
+      "console/um_adapter.py",
+      "console/um_login.py",
+      "model_sync/__init__.py",
+      "model_sync/config_adapters.py",
+      "model_sync/reconcile.py",
+      "model_sync/sync.py",
+      "model_sync/sync_core.py",
+      "share/admin.py",
+      "share/backend_supervision.py",
       "shared/__init__.py",
       "shared/nonstream_aggregate.py",
       "shared/pricing_rules.py",
       "shared/responses_protocol.py",
-      "zcode_file_lock.py",
-      "zcode_hot_sync.py",
-      "zcode_hot_sync_protocol.py"
+      "zcode/__init__.py",
+      "zcode/file_lock.py",
+      "zcode/hot_sync.py",
+      "zcode/hot_sync_protocol.py"
     ],
     "static_superset": {
-      "count": 47,
+      "count": 49,
       "files": [
         "chat2api/chat2api.py",
         "chat2api/nonstream_aggregate.py",
         "chat2api/share_dispatch.py",
         "chat2api/share_entry.py",
-        "console_adapters.py",
-        "console_display_proxy.py",
-        "console_gateway_connection.py",
-        "console_log_reader.py",
-        "console_magpie_prices.py",
-        "console_model_actions.py",
-        "console_operations.py",
-        "console_public_probe.py",
-        "console_public_url.py",
-        "console_share_actions.py",
-        "console_share_probe.py",
-        "console_share_production.py",
-        "console_speedtest.py",
-        "console_stats.py",
-        "console_tailnet.py",
-        "console_um_adapter.py",
-        "console_um_login.py",
-        "model_config_adapters.py",
-        "model_reconcile.py",
-        "model_sync.py",
-        "model_sync_core.py",
-        "share_admin.py",
-        "share_backend_supervision.py",
-        "share_broker_client.py",
-        "share_broker_host.py",
-        "share_broker_ops.py",
-        "share_broker_protocol.py",
-        "share_broker_server.py",
-        "share_instance_pipe.py",
-        "share_management.py",
-        "share_metering.py",
-        "share_public_supervision.py",
-        "share_runtime.py",
-        "share_secret_protection.py",
-        "share_store.py",
+        "console/__init__.py",
+        "console/adapters.py",
+        "console/display_proxy.py",
+        "console/gateway_connection.py",
+        "console/log_reader.py",
+        "console/magpie_prices.py",
+        "console/model_actions.py",
+        "console/operations.py",
+        "console/public_probe.py",
+        "console/public_url.py",
+        "console/share_actions.py",
+        "console/share_probe.py",
+        "console/share_production.py",
+        "console/speedtest.py",
+        "console/stats.py",
+        "console/tailnet.py",
+        "console/um_adapter.py",
+        "console/um_login.py",
+        "model_sync/__init__.py",
+        "model_sync/config_adapters.py",
+        "model_sync/reconcile.py",
+        "model_sync/sync.py",
+        "model_sync/sync_core.py",
+        "share/admin.py",
+        "share/backend_supervision.py",
+        "share/broker_client.py",
+        "share/broker_host.py",
+        "share/broker_ops.py",
+        "share/broker_protocol.py",
+        "share/broker_server.py",
+        "share/instance_pipe.py",
+        "share/management.py",
+        "share/metering.py",
+        "share/runtime.py",
+        "share/secret_protection.py",
+        "share/store.py",
         "shared/__init__.py",
         "shared/nonstream_aggregate.py",
         "shared/pricing_rules.py",
         "shared/responses_protocol.py",
         "usagesrv.py",
-        "zcode_file_lock.py",
-        "zcode_hot_sync.py",
-        "zcode_hot_sync_protocol.py"
+        "zcode/__init__.py",
+        "zcode/file_lock.py",
+        "zcode/hot_sync.py",
+        "zcode/hot_sync_protocol.py"
       ],
       "roots": [
         "usagesrv.py",
         "chat2api/share_entry.py",
         "chat2api/chat2api.py",
-        "share_broker_ops.py",
-        "share_backend_supervision.py",
-        "share_admin.py"
+        "share/broker_ops.py",
+        "share/backend_supervision.py",
+        "share/admin.py",
+        "share/metering.py"
       ]
     }
   },
@@ -346,20 +351,20 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/backup_restore.py",
-      "sha256": "654ba68e5bd81797739a66eb2a13baf92a820299e7424d396234aa2aeb6b2d6f",
-      "size": 137502
+      "sha256": "5654cbc269b9ee57080aadda89d2f0b31de420e31ebb4fcc89cb6dcea8d35756",
+      "size": 137553
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/bin/um-share-brokerctl.py",
-      "sha256": "8764b6d358e32e2f2973078ffc8d03db9a2349d2472c41978274693fa202d982",
+      "sha256": "e0139e7b2f7293b8b33526ab952318abf45311621bbc8d6125a7c2407b2b73da",
       "size": 13739
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/bootstrap-wsl.sh",
-      "sha256": "3641f6f770bbb29a478746b0dc5611145c3320f8df510f9d6ace9027cdd36bf9",
-      "size": 10344
+      "sha256": "41da27b63b906e3bfc9dd06b012de7c6e28f54d3790f70dddce5cccd7f02eb94",
+      "size": 10090
     },
     {
       "kind": "deployment",
@@ -412,8 +417,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/display/configure-tailscale-serve.sh",
-      "sha256": "f7a7e1f45677dfa0fdfbbabc29e466a6adad463d695acea47613345ccb843cc0",
-      "size": 5543
+      "sha256": "34f070eaa3841e1aadadd6bd27bf59f47f585b306e6ed66c2b30733a11fe1778",
+      "size": 5363
     },
     {
       "kind": "deployment",
@@ -448,14 +453,14 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/display/README.md",
-      "sha256": "2499b88565f5ee7382ddd9df8f389f607ca1145abf24eec697fe14adbd211e4c",
-      "size": 3566
+      "sha256": "d5c1a63eba6edd536f60856607a1b2b67dedc7b3ee05a1463186accea10f7482",
+      "size": 3622
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/display/start-loopback-display.sh",
-      "sha256": "d8ac92f1f7811a67d9aee6b1808a2792fd5917004d968f02e737e2cd0800379e",
-      "size": 6248
+      "sha256": "c77693e486b875ae29a15380036e32c23bc997e9043a41479b1cef30bf7121bb",
+      "size": 6096
     },
     {
       "kind": "deployment",
@@ -466,38 +471,38 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/display/vnc-auth-helper.py",
-      "sha256": "f89ed19a622df941fa81fc0d2c27b3b37d866df5a1fe4d757198a108f475ee99",
+      "sha256": "8e8c8ca869d62c15621e37bf028292db10b7261b11ae5cf408d31ec94d996e00",
       "size": 3483
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/install.sh",
-      "sha256": "12854b09be5af37b563d0f77b9b5b6f17310acfc7b35685b99d1c12ede018d45",
-      "size": 29271
+      "sha256": "5bf3224fdac5671bc3c610eb2a756a05836e45c8fdd7566cc04e18bb0b1ecbf3",
+      "size": 28587
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/lib/common.sh",
-      "sha256": "7294c3fd5949acea7976832504e217eea365da95bd3f448880fd575468b36b35",
-      "size": 21901
+      "sha256": "ea68167d8d7e61f36dd357143923021a8cd8820b6cd06ac382ab69f57e1647c8",
+      "size": 21273
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/make-manifest.py",
-      "sha256": "d85eb22e946b94ca5bc5329b9a4dccb340f6593f0c0d760fb44cff193bb5b433",
-      "size": 19940
+      "sha256": "06193e2fe8370d1d21354abd899bb642d2f7b6831042eca6fe8ad7c2c65ed4c4",
+      "size": 20226
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/package-release.sh",
-      "sha256": "67f69773d471962c9d99d31ba6b8bc23bf3b1afd0ae7626f8f66c68cffbfd1d7",
+      "sha256": "e751ff1ffd4037a071f11140bb4294908df07f8a0aa95ce8946f9d982db74f79",
       "size": 10470
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/README.md",
-      "sha256": "2fafc4aa6da952c39d77b0c679b44d9e932b57bf1c575391c83f9be019cd7b07",
-      "size": 10174
+      "sha256": "a596c0c7c05dadb8c2229b27fdf47092d75200c625ff51440dcb97f83266ddbd",
+      "size": 10591
     },
     {
       "kind": "deployment",
@@ -508,14 +513,14 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/rollback.sh",
-      "sha256": "3fec280787fc4f35c1722a5473c34a14488b06530e75a9f7440d125523f76d14",
-      "size": 26306
+      "sha256": "52eae1f71363bf71465639f482a8439ba4f09d9675241135ae7b2d0d67e68a91",
+      "size": 25677
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/run-linux-checks.sh",
-      "sha256": "aa3c5e5face0fa0c50b741ff584c330cf9f60c71e5a31a8a8e782558c51627e0",
-      "size": 4015
+      "sha256": "85d87da4848d2a0dc40b12d928f7ac14c1eff4bd3c79297a1e01abe596ac02f5",
+      "size": 3800
     },
     {
       "kind": "deployment",
@@ -544,8 +549,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/update.sh",
-      "sha256": "02a7baae5154e2ed7b0ceaafaa2911b9910dfd2eff758ddf93c4d2b769222e6f",
-      "size": 30915
+      "sha256": "4fcedf0ecef462f9bbe6a636803d61ef9a7709d7cb7610b52d15dfa2471eee87",
+      "size": 30165
     },
     {
       "kind": "deployment",
@@ -561,8 +566,8 @@
         "cloud_runtime"
       ],
       "path": "chat2api/chat2api.py",
-      "sha256": "d861603c41946dea02c6b7ebad949f656f613a82721908621fd146a83f1a78e2",
-      "size": 515602
+      "sha256": "3ef5c91721d4a79ebab9f87c65cb83a285802c4ab1f81987d0a8bc16d0f4ac45",
+      "size": 501816
     },
     {
       "closures": [
@@ -588,67 +593,75 @@
         "cloud_runtime"
       ],
       "path": "chat2api/share_entry.py",
-      "sha256": "b077425d8ea8a88e418ee5a514b1b71d757f3d28aca381deb432b69c5b9c0946",
-      "size": 206733
+      "sha256": "0686af3cd6396ed03c0638b663cd7d7641d8e18d9c6e4d132fb7fbca3a9ee11b",
+      "size": 206973
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "console/__init__.py",
+      "sha256": "199b9ca3d252ec530996db0e6efd79f3eae4041fe0930e195fae39df53064866",
+      "size": 23
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_adapters.py",
-      "sha256": "c601c2b38225b5e774f64ac679b7d78eeda2513fdc1b0ba34a20ae137721af43",
-      "size": 74119
+      "path": "console/adapters.py",
+      "sha256": "e8ddf70f659200f2546a361bee4b7f09bcd9e1d001079276e1b11a38bbdb02aa",
+      "size": 74392
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_display_proxy.py",
-      "sha256": "43af4fcc6311bdaafe2f9f591b67fa9521c75b4854d897e6c3c52d464e64a864",
+      "path": "console/display_proxy.py",
+      "sha256": "6a7a0d1e535783540eee0f483e4c0f086ba0f31e3c320d1635ac3097af9a3073",
       "size": 81096
     },
     {
       "closures": [
         "static_superset"
       ],
-      "path": "console_gateway_connection.py",
-      "sha256": "4a177b2d26a554e470d099e373378347bb4e42363f0eddb64b3c054e18feee1c",
-      "size": 25816
+      "path": "console/gateway_connection.py",
+      "sha256": "3b15d07d2d6d285bbb2e936a186ab9ed5566c508ecfdfe5cca3b657beaf2128b",
+      "size": 25838
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_log_reader.py",
-      "sha256": "d7ae9ba711ad1d69555add30a2a16d2fa75f0645eb3c195abc03e414766127c8",
-      "size": 61748
+      "path": "console/log_reader.py",
+      "sha256": "2195b5d286014296b26fc49abc0db71a3dfe94906bbe00b5bb7bb802959ea555",
+      "size": 61739
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_magpie_prices.py",
-      "sha256": "a5fbd375c8e6d826778c88280e201565827e4a3d437ab8c8446e57247b1176a6",
-      "size": 70155
+      "path": "console/magpie_prices.py",
+      "sha256": "4fe34be64b6d8013e3d91844af1e398770ffc63288beddb3c90a319bef6cf650",
+      "size": 70177
     },
     {
       "closures": [
         "static_superset"
       ],
-      "path": "console_model_actions.py",
-      "sha256": "eae7ecfe00328ca40a8bce8660f3e71bb4c3c7316a523dc0e7f5c2caedb5c1e7",
-      "size": 86248
+      "path": "console/model_actions.py",
+      "sha256": "4afdb9ab8f2ce731ba72254328e8e4779c26e3ea90b38a285e3f1125652b20a6",
+      "size": 86283
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_operations.py",
+      "path": "console/operations.py",
       "sha256": "638fc4c83cb36fd19feb9fd251918f016e60432f8e5f3d21bcb71a2b63a8191a",
       "size": 37160
     },
@@ -657,7 +670,7 @@
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_public_probe.py",
+      "path": "console/public_probe.py",
       "sha256": "828465fc9144b6f99b550a17dc7807f2f2f5004349775a0f973c95a173f4ddbe",
       "size": 38911
     },
@@ -665,8 +678,8 @@
       "closures": [
         "static_superset"
       ],
-      "path": "console_public_url.py",
-      "sha256": "1032096bfbce7c6b96e192695271b0ad201b209eeacddb6726e77368c831a5c8",
+      "path": "console/public_url.py",
+      "sha256": "9fcb7a00de280e26896208b72dd0fc49e84f159449f8c915c46df95091e24176",
       "size": 3988
     },
     {
@@ -674,51 +687,51 @@
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_share_actions.py",
-      "sha256": "c1be1a843b767163309d6725b2df2fde939b57b7656e8ece08ec2f5698e3cefa",
-      "size": 164591
+      "path": "console/share_actions.py",
+      "sha256": "04bd5cdd94eb8b54f415e4b808f35d07242509d3d342f4a1cbc40add1b8a826f",
+      "size": 164763
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_share_probe.py",
-      "sha256": "303d27bbe914f24f473aecb7f9cca1475b55688cf5b7c8b69a9d7a6acd737bc0",
-      "size": 12776
+      "path": "console/share_probe.py",
+      "sha256": "68cd691cda12f25fc4987a6d747a0cdd4d45d5a1461de461f0d5ae3412c80d83",
+      "size": 12768
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_share_production.py",
-      "sha256": "fd7aae711802a78ce20a5d9b5cf1c21260630e3d9dbc0b7b9d1f6fd73f437138",
-      "size": 197513
+      "path": "console/share_production.py",
+      "sha256": "15bc0cddc99be7e50f4c3195795f9581b316919e380076f92355d7e034ec1ce4",
+      "size": 197994
     },
     {
       "closures": [
         "static_superset"
       ],
-      "path": "console_speedtest.py",
-      "sha256": "b55c604e6c6bb3ce5a469d0604424091e1c922e004c4512f117c7ecb1c91d328",
-      "size": 29603
+      "path": "console/speedtest.py",
+      "sha256": "d10a01fff7a0374c401c9f47fad9456e57cc1396cc35f36f56d550e08a53f97f",
+      "size": 29628
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_stats.py",
-      "sha256": "7f91305e7973f5eed7be2e1c35e767e7c8db051df26d0b8f4a59ead6ea8ca03f",
-      "size": 156788
+      "path": "console/stats.py",
+      "sha256": "e345c9e5d573d29c676708cc9a64d1faca443d579be01c6292c2729088e539e9",
+      "size": 156870
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "console_tailnet.py",
+      "path": "console/tailnet.py",
       "sha256": "d4c247553be32c3fec59c7ed4fb0f74e0360a30c05192e1db30cd20496d89ef6",
       "size": 5924
     },
@@ -726,31 +739,39 @@
       "closures": [
         "static_superset"
       ],
-      "path": "console_um_adapter.py",
-      "sha256": "c2941d0cc16066e7fd8454bb62f9c75c58e9e4baf70c0e33340f4f8116824181",
-      "size": 13697
+      "path": "console/um_adapter.py",
+      "sha256": "b5b5a4ac2c626e198c5d1b4e179b46ad4dfc1fdfe44e0574cb0d2d34def22b6f",
+      "size": 13733
     },
     {
       "closures": [
         "static_superset"
       ],
-      "path": "console_um_login.py",
-      "sha256": "9b0162ef4ee055b9ea027b827bf57e6324784514f3f0bf73dd89e135c8f6a5fb",
-      "size": 18640
+      "path": "console/um_login.py",
+      "sha256": "5e2e29b2322b8f9e938fd96b9e3af179e524b005b673313c39a24c74eec535a0",
+      "size": 18692
     },
     {
       "closures": [
         "static_superset"
       ],
-      "path": "model_config_adapters.py",
-      "sha256": "a01cead612571147d4fa79add43b9809d7070f5b00ce5193a8449e46eeb7ab57",
-      "size": 26052
+      "path": "model_sync/__init__.py",
+      "sha256": "5e2e5c85d7ae20fe33d903bef76ec3645f23190e1b85242f5a55e292dcc77f38",
+      "size": 26
     },
     {
       "closures": [
         "static_superset"
       ],
-      "path": "model_reconcile.py",
+      "path": "model_sync/config_adapters.py",
+      "sha256": "ab5a841489bfd4270dfc1e8d4dc6f936adca0a7149a3635fd8a8c99ffd408e5b",
+      "size": 26085
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "model_sync/reconcile.py",
       "sha256": "fbbc44a82f33962c3a988a2e0ce53fde78aaffc70331f991c79bdcc0583cd295",
       "size": 8802
     },
@@ -758,15 +779,15 @@
       "closures": [
         "static_superset"
       ],
-      "path": "model_sync.py",
-      "sha256": "416bf190a185cbcfd16077c4351a4787f070a19dd5a2bddebddd6a2bbd6df477",
-      "size": 245701
+      "path": "model_sync/sync.py",
+      "sha256": "7a32a45cb39035c0ec28fc4bbfadcf1d12ad369a4d14d86ecbc000c86c03082e",
+      "size": 245875
     },
     {
       "closures": [
         "static_superset"
       ],
-      "path": "model_sync_core.py",
+      "path": "model_sync/sync_core.py",
       "sha256": "331a807ca32ecd0633b7596813967888f892b3b93d7769c81009dbf68b5b1443",
       "size": 38581
     },
@@ -774,25 +795,25 @@
       "closures": [
         "static_superset"
       ],
-      "path": "share_admin.py",
-      "sha256": "0844bdfdcceb0ca8b7d377642f9b310733173f31e0cb4e68e20c9e22a726547c",
+      "path": "share/admin.py",
+      "sha256": "65db76ee6dfabb2c6d3ce42ad24988898c150a92fb3a2e15455d4b4c711cfa64",
       "size": 13576
     },
     {
       "closures": [
         "static_superset"
       ],
-      "path": "share_backend_supervision.py",
-      "sha256": "73c0538df9df91f04284d14673bcb8b32c174427c82fe1bf82b068694b514e5f",
-      "size": 82576
+      "path": "share/backend_supervision.py",
+      "sha256": "231d9b195fa004bbe3c5a1d6822bdfbda9ed43e60cbdc5771ab31f3c9469b4c1",
+      "size": 82585
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_broker_client.py",
-      "sha256": "8bcfc762c4648ff453a6c7efdddf03528e7e2a288b97305f0b079932614cbf1f",
+      "path": "share/broker_client.py",
+      "sha256": "9122aa61780dc510ad20bdd0069e9379aca2bd5db5c687610b05c1643d6a3303",
       "size": 51773
     },
     {
@@ -800,8 +821,8 @@
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_broker_host.py",
-      "sha256": "b1c4b35f67fe945e6f8e3af39c07f83437004142f0e7ca8431588c919e4fa445",
+      "path": "share/broker_host.py",
+      "sha256": "faa0ad701930e03824e96c57c8af6ca639ee10db97080a431eb48a9b517e0edc",
       "size": 58310
     },
     {
@@ -809,26 +830,26 @@
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_broker_ops.py",
-      "sha256": "06896a359a87c3873a3d657fc2f1558d258c41dec77c0065e19b1d90ad0274ea",
-      "size": 129914
+      "path": "share/broker_ops.py",
+      "sha256": "5199cb8eb54c73c8e688fb9f2963933b8e04ac78d6c8153e584d4c0c5dcb0ecf",
+      "size": 130060
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_broker_protocol.py",
-      "sha256": "5e016a25bc6f0ebe69d03cf9a8a80db1a1524eb45fa06d860cd5eadf94bc0e0b",
-      "size": 35250
+      "path": "share/broker_protocol.py",
+      "sha256": "07fdfd78f40d5a941bdaf891ec54e29c27e53375393ebdc2adaa5c39f159c42e",
+      "size": 35252
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_broker_server.py",
-      "sha256": "649711eedb1968dcf307eac9d4943cdcdc5db8af6cc01779d5ba1981460b49d9",
+      "path": "share/broker_server.py",
+      "sha256": "873f1a622daaddffed883d31f437ad2c07312b8d6b51bd41a0f92decc35cd738",
       "size": 83995
     },
     {
@@ -836,8 +857,8 @@
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_instance_pipe.py",
-      "sha256": "414285f523e2f62fffaba4f0c31bb12b2f094d098d99e16ca13b4078fc3b7e94",
+      "path": "share/instance_pipe.py",
+      "sha256": "9b5e879dd9977771e47ecdd2714fca1fe821dde5a34bb9c4557a4cd6c62142d8",
       "size": 11450
     },
     {
@@ -845,8 +866,8 @@
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_management.py",
-      "sha256": "35702bfa287d02cc383abe12f835dd2961a3a3c1fd572c31f98e56f5a2be827f",
+      "path": "share/management.py",
+      "sha256": "2aebd7cb2f35c0444f6deddb73d8f4d6e87fe934037c51eefd3d3d93b8784da6",
       "size": 74263
     },
     {
@@ -854,25 +875,17 @@
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_metering.py",
+      "path": "share/metering.py",
       "sha256": "ca376821b05e88694f6b1d10b8590cd3337d1e80dd4f3b41ee15cc5f325fc661",
       "size": 49123
-    },
-    {
-      "closures": [
-        "static_superset"
-      ],
-      "path": "share_public_supervision.py",
-      "sha256": "e112c792354e9ae4bf586558c40df19f2444c575b5c8d7e4721abda8df7d0b9a",
-      "size": 197815
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_runtime.py",
-      "sha256": "f33c3b4c6e854770abedea6ba8b9b38f915cf0b0bf5adb35a7fb3809406afd5c",
+      "path": "share/runtime.py",
+      "sha256": "12ab7611c61314b963c45d4ea741ad689be2e85c4d4365a425af4f8505859343",
       "size": 15570
     },
     {
@@ -880,8 +893,8 @@
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_secret_protection.py",
-      "sha256": "9502c60b2788624c42a0fd107c4864debd82a212c4b964f4d52dbd9679c67276",
+      "path": "share/secret_protection.py",
+      "sha256": "287a363c440a2c5601e697891a88c23fa1cd51938c3a3efd9a83c1743b7d0309",
       "size": 14259
     },
     {
@@ -889,9 +902,9 @@
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "share_store.py",
-      "sha256": "8956de03943a43cb364e1f03d9abc2df63a692a574a35b7d4f6bf4ccd4215910",
-      "size": 85091
+      "path": "share/store.py",
+      "sha256": "10ed60a8362831c5e12ae8bdee90c6f2de467ad87583e38d63f00582ddab8c6b",
+      "size": 85151
     },
     {
       "closures": [
@@ -931,14 +944,22 @@
         "cloud_runtime"
       ],
       "path": "usagesrv.py",
-      "sha256": "36fadd1706350f35689e2bf5df726ce89e820af439302cf4f4ba65f90ce62431",
-      "size": 239099
+      "sha256": "698cff66b2bc52827129f69de95ae39ad6920dd9bcaf375dee6cd9b151645806",
+      "size": 240000
     },
     {
       "closures": [
         "static_superset"
       ],
-      "path": "zcode_file_lock.py",
+      "path": "zcode/__init__.py",
+      "sha256": "02a484cad385f5b0e090be87714c9496ba7db4eb9a33998a6d5c52e03925fe23",
+      "size": 21
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "zcode/file_lock.py",
       "sha256": "073c2a3e65a010ecee3543140dd2a96b5d5a5f64923d7e986cbd45c6753074d3",
       "size": 16283
     },
@@ -946,20 +967,20 @@
       "closures": [
         "static_superset"
       ],
-      "path": "zcode_hot_sync.py",
-      "sha256": "9a5fd78b86d8cc347f5d871a0af99d9b219536be0dcd49ce0b528c61ba59442a",
+      "path": "zcode/hot_sync.py",
+      "sha256": "af192e4c4c6e9d7471227976a507cc20ae8abe08560b809081695947d1bf6c5b",
       "size": 21165
     },
     {
       "closures": [
         "static_superset"
       ],
-      "path": "zcode_hot_sync_protocol.py",
+      "path": "zcode/hot_sync_protocol.py",
       "sha256": "ade484e2cbfb877c1282a5b7a79b5cc06f35cef1494eec7f460946492df32857",
       "size": 46032
     }
   ],
-  "generated_at": "2026-11-12T12:41:23.043561+00:00",
+  "generated_at": "2026-11-12T16:30:37.729176+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",
@@ -968,7 +989,7 @@
     "target": "3.14",
     "version": "3.14.7"
   },
-  "release_version": "s2-20261110h",
+  "release_version": "s2-20261113a",
   "schema_version": 2,
   "source_root": ".",
   "web_dist": {

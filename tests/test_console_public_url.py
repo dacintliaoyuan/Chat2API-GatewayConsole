@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import console_public_url as public_url  # noqa: E402
+from console import public_url as public_url  # noqa: E402
 
 
 CONFIGURED = "https://dacintapi.de5.net"

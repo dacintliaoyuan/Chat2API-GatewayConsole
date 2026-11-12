@@ -43,22 +43,22 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "chat2api"))
 
-import console_adapters  # noqa: E402
-import console_share_actions  # noqa: E402
-import console_share_production  # noqa: E402
-import share_broker_ops  # noqa: E402
-import share_broker_protocol as bp  # noqa: E402
+from console import adapters as console_adapters  # noqa: E402
+from console import share_actions as console_share_actions  # noqa: E402
+from console import share_production as console_share_production  # noqa: E402
+import share.broker_ops as share_broker_ops  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
 import usagesrv  # noqa: E402  (no role env set -> the local default)
-from share_broker_client import BrokerClient  # noqa: E402
-from share_broker_protocol import BrokerResult  # noqa: E402
+from share.broker_client import BrokerClient  # noqa: E402
+from share.broker_protocol import BrokerResult  # noqa: E402
 from share_entry import ShareServer  # noqa: E402
-from share_management import BrokerClientAdapter, ShareManager  # noqa: E402
-from console_operations import (  # noqa: E402
+from share.management import BrokerClientAdapter, ShareManager  # noqa: E402
+from console.operations import (  # noqa: E402
     OperationError,
     OperationManager,
     OperationUnavailable,
 )
-import share_management  # noqa: E402
+import share.management as share_management  # noqa: E402
 
 
 # --------------------------------------------------------------------- helpers
@@ -604,7 +604,7 @@ class CloudHttpGateTests(unittest.TestCase):
         null with explicit reasons.
         """
         self._isolate_capacity_seams()
-        from share_store import ShareStore
+        from share.store import ShareStore
         store = ShareStore(Path(self.tmp.name) / "share.db")
         try:
             store.set_share_max_concurrency(32)
@@ -633,7 +633,7 @@ class CloudHttpGateTests(unittest.TestCase):
     def test_cloud_share_status_capacity_note_follows_configured_value(self):
         """The note states the payload's configured cap, never a fixed 128."""
         self._isolate_capacity_seams()
-        from share_store import ShareStore
+        from share.store import ShareStore
         store = ShareStore(Path(self.tmp.name) / "share.db")
         try:
             store.set_share_max_concurrency(64)
@@ -1039,7 +1039,7 @@ class LinuxBrokerEntryTests(unittest.TestCase):
         plan = share_broker_ops.linux_server_plan(self._args())
         self.assertEqual(plan["transport"], "unix_socket")
         self.assertIs(plan["server_class"],
-                      __import__("share_broker_server").UnixSocketBrokerServer)
+                      __import__("share.broker_server", fromlist=["UnixSocketBrokerServer"]).UnixSocketBrokerServer)
         for overrides in (
                 {"socket_path": "\\\\.\\pipe\\um-share-broker"},
                 {"socket_path": "relative.sock"},
@@ -1054,7 +1054,7 @@ class LinuxBrokerEntryTests(unittest.TestCase):
         """A4/A7/A8: the Linux product class must not inherit the base
         transport's NotImplementedError dispatch. The chain test runs the REAL
         linux_main entry; this cross-platform assertion pins the class wiring."""
-        import share_broker_server as srv
+        import share.broker_server as srv
         self.assertIs(srv.UnixSocketBrokerServer._dispatch,
                       srv._ManagementDispatch._dispatch)
         self.assertIsNot(srv.UnixSocketBrokerServer._dispatch,
@@ -1101,7 +1101,7 @@ class LinuxBrokerEntryTests(unittest.TestCase):
             # (Windows uses DPAPI and needs no file). Provisioning a TEMP key
             # file keeps this real-chain test host-independent without changing
             # anything it verifies; on Windows the env entry is never read.
-            import share_secret_protection
+            import share.secret_protection as share_secret_protection
             key_file = self.root / "share-secret.key"
             key_file.write_bytes(os.urandom(share_secret_protection.KEY_SIZE))
             os.chmod(key_file, 0o600)

@@ -21,17 +21,17 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import share_broker_protocol as bp  # noqa: E402
-import share_broker_client as bc  # noqa: E402
-from share_broker_client import (BrokerClient,  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
+import share.broker_client as bc  # noqa: E402
+from share.broker_client import (BrokerClient,  # noqa: E402
                                  LoopbackTcpBrokerTransport)
-from share_broker_host import (BrokerHostCoordinator,  # noqa: E402
+from share.broker_host import (BrokerHostCoordinator,  # noqa: E402
                                InstanceRegistry, MaintenanceLeaseStore,
                                ReplayRegistry)
-from share_management import (BrokerClientAdapter, BrokerError,  # noqa: E402
+from share.management import (BrokerClientAdapter, BrokerError,  # noqa: E402
                               NoopBroker, ShareManager)
-from share_runtime import ProtectedProjectionWriter  # noqa: E402
-from share_store import MigrationConflict, ShareStore  # noqa: E402
+from share.runtime import ProtectedProjectionWriter  # noqa: E402
+from share.store import MigrationConflict, ShareStore  # noqa: E402
 
 _SHARE_GW = importlib.util.spec_from_file_location(
     "share_entry_broker_test",
@@ -250,7 +250,7 @@ class BrokerClientAdapterHostVerbTests(unittest.TestCase):
         self.assertEqual(client.calls, [("host-stop", {})] * 2)
 
     def test_noop_broker_host_verbs_raise(self):
-        from share_management import NoopBroker
+        from share.management import NoopBroker
         broker = NoopBroker()
         with self.assertRaises(BrokerError):
             broker.host_verify("running")
@@ -1171,7 +1171,7 @@ class R31ClosureTests(_RuntimeRevokeFixture, unittest.TestCase):
                 entered.set()          # 通知：delete 的 load 已到旧实例
                 release.wait(15)       # 扣住返回——等测试换代登记
                 # 旧实例产生成功 ACK 并保存（真实 share 端确认）。
-                from share_broker_protocol import build_request as _build
+                from share.broker_protocol import build_request as _build
                 req = _build(share_secret, action, fields,
                              instance_id=instance_id)
                 resp = self.server.handle_instance_control(req, share_secret)
@@ -1638,7 +1638,7 @@ class R33PipeTransportTests(unittest.TestCase):
     def test_client_full_exchange_succeeds_over_fake_kernel(self):
         # 完整 BrokerClient→NamedPipe（注入 fake kernel）open→write→read
         # →解码成功：正常路径不再必失败（R33-1 核心验收）。
-        from share_broker_client import BrokerClient
+        from share.broker_client import BrokerClient
 
         class EchoKernel:
             def __init__(self):
@@ -3262,7 +3262,7 @@ class CloseBudgetAlignmentTests(unittest.TestCase):
 
     def test_the_coordinator_defaults_are_the_shared_protocol_budgets(self):
         # 直接构造协调端时，默认值也来自同一份协议常量（不是各写一份数字）
-        import share_broker_host
+        import share.broker_host as share_broker_host
         coordinator = share_broker_host.BrokerHostCoordinator(
             writer=SimpleNamespace(write=lambda *a, **k: None),
             mgmt_secret="mgmt-k", instance_secret="inst-k",

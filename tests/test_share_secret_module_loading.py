@@ -8,7 +8,7 @@
   ``from share_secret_protection import ...`` 必然 ModuleNotFoundError，
   而失败会被 fail-closed 处理器吞掉，控制令牌与归属密钥都被静默拒绝。
 * ``_load_share_secret_protection()`` 先复用 ``sys.modules``，否则按路径
-  加载父目录的 ``share_secret_protection.py``；不修改 ``sys.path``。
+  加载父目录的 ``share/secret_protection.py``；不修改 ``sys.path``。
 * 正控：已有控制令牌与已有归属密钥都能读到。
 * 负控：缺失或权限不符的密钥仍拒绝（令牌读取失败返回 None，归属密钥
   缺失、过短或 POSIX 权限过宽返回 None），绝不退化成新建或猜测。
@@ -35,7 +35,7 @@ GATEWAY_DIR = TEST_DIR.parent
 CHAT2API_DIR = GATEWAY_DIR / "chat2api"
 CHAT2API_PATH = CHAT2API_DIR / "chat2api.py"
 SHARE_GATEWAY_PATH = CHAT2API_DIR / "share_entry.py"
-SECRET_PATH = GATEWAY_DIR / "share_secret_protection.py"
+SECRET_PATH = GATEWAY_DIR / "share/secret_protection.py"
 
 TOKEN = "existing-control-token-value"
 ATTRIBUTION_KEY = "a" * 48
@@ -121,7 +121,7 @@ def main():
     }
     # 先证明普通 import 在这种装配下不可用：路径加载不是冗余的。
     try:
-        import share_secret_protection  # noqa: F401
+        import share.secret_protection as share_secret_protection  # noqa: F401
     except ImportError:
         report["plain_import"] = "unavailable"
     else:
@@ -215,7 +215,7 @@ class ModuleReuseTests(unittest.TestCase):
             write_private_secret_path=lambda *args, **kwargs: None,
         )
         with mock.patch.dict(sys.modules,
-                             {"share_secret_protection": fake}):
+                             {"share.secret_protection": fake}):
             self.assertIs(chat2api._load_share_secret_protection(), fake)
             self.assertIs(share._load_share_secret_protection(), fake)
 

@@ -33,17 +33,17 @@ from unittest import mock
 sys.path[:0] = [str(Path(__file__).parent), str(Path(__file__).parents[1])]
 from test_console_model_actions import temp_sync_env, _aligned_store, _Ctx
 from test_console_api import usagesrv
-import console_adapters
-import console_log_reader
-import console_model_actions as actions
-import console_share_actions
-import console_share_production
-import share_backend_supervision as supervision
-from console_operations import (OperationCancelled, OperationError,
+from console import adapters as console_adapters
+from console import log_reader as console_log_reader
+from console import model_actions as actions
+from console import share_actions as console_share_actions
+from console import share_production as console_share_production
+import share.backend_supervision as supervision
+from console.operations import (OperationCancelled, OperationError,
                                OperationManager, ResourceFileLock)
-import model_sync as sync
-import share_metering
-from model_sync_core import CatalogModel
+from model_sync import sync as sync
+import share.metering as share_metering
+from model_sync.sync_core import CatalogModel
 
 DESTINATION = Path(__file__).parent / "fixtures" / "frontend_contract_rev25.json"
 
@@ -105,7 +105,7 @@ def generate():
         deferred_selection = {"um|fixture-model": deferred_save["draft_version"]}
         deferred_preview = actions.model_settings_preview("", {"selection": deferred_selection}, _Ctx())
         # R27-HOT：运行中会真的调用安装版兼容准入；夹具场景固定为
-        # 「未准入」的延期形态（真实准入见 tests/test_zcode_hot_sync.py）。
+        # 「未准入」的延期形态（真实准入见 tests/test_zcode/hot_sync.py）。
         with mock.patch.object(sync, "zcode_running", return_value=True), \
              mock.patch.object(sync, "zcode_hot_sync_admission",
                                return_value=(False, "Demo 夹具：安装版未通过取证准入")):
@@ -217,16 +217,16 @@ def generate():
         # Frozen: the retired handler module is gone; see _frozen_cliproxy_status.
         cliproxy_status = _frozen_cliproxy_status()
         root = Path(__file__).parents[1]
-        names = ["model_sync.py", "model_sync_core.py", "console_model_actions.py", "console_adapters.py",
-                 "console_operations.py", "share_metering.py", "console_stats.py",
-                 "console_log_reader.py", "usagesrv.py",
+        names = ["model_sync/sync.py", "model_sync/sync_core.py", "console/model_actions.py", "console/adapters.py",
+                 "console/operations.py", "share/metering.py", "console/stats.py",
+                 "console/log_reader.py", "usagesrv.py",
                  # Rev9 A9-8: the new published shapes are generated from
                  # these handlers too (contract §10.2).
-                 "console_share_actions.py", "console_share_production.py",
+                 "console/share_actions.py", "console/share_production.py",
                  # Rev15: the narrow gateway-connection read surface lives in
                  # this module (the usagesrv.py route only dispatches to it), so
                  # a change to the published shape moves this hash too.
-                 "console_gateway_connection.py"]
+                 "console/gateway_connection.py"]
         # The supervision decision/state records come from the real
         # share_backend_supervision.run_once handler, but contract §10.2 does not
         # list that module for sourceHashes: hashing it would make the fixture
@@ -1174,7 +1174,7 @@ def _share_maintenance_supervision(clock):
     decision["detail"] = decision["detail"].replace(
         os.path.normpath(tmp), "<watch-dir>").replace(tmp, "<watch-dir>")
     return {
-        "generatedFrom": ("share_backend_supervision.run_once(apply=True) via"
+        "generatedFrom": ("share.backend_supervision.run_once(apply=True) via"
                             " the real handler; private fixture inputs"
                             " (temp watch dir, fake boot id, fake broker view,"
                             " fake ops gate)"),
@@ -1268,7 +1268,7 @@ def generate_share_maintenance(specs):
                            " value is a private fixture"),
         "components": {
             "share_gateway": ("8100 分享入口进程（um-share-python.exe + "
-                                "share_entry.py）"),
+                                "share.entry.py）"),
             "share_backend": ("8110 专用后端进程（chat2api.py --port 8110 "
                                 "--profile <dir>\\edge-profile）"),
         },
@@ -1283,7 +1283,7 @@ def generate_share_maintenance(specs):
 # ===========================================================================
 # The CLIProxy status handler module was deleted with the UM-only consolidation
 # (commit f41080d1): ``cliproxy.status`` is a retired action
-# (``console_adapters.py`` ``RETIRED_ACTION_PREFIXES``), so there is no current
+# (``console/adapters.py`` ``RETIRED_ACTION_PREFIXES``), so there is no current
 # handler to drive this segment and no source hash to record for it. The local
 # console still renders the frozen read-only shape (``workbench.ts``
 # ``cliproxyLoginReading`` and the offline console-gate preview read the same

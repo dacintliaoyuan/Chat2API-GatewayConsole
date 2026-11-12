@@ -6,9 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from share_broker_host import BrokerHostCoordinator, InstanceRegistry, ReplayRegistry
-from share_broker_ops import WindowsHostOps, LIMITS_CHECK_TIMEOUT_SECONDS
-from share_broker_protocol import DEFAULT_DEADLINE_SECONDS, build_request
+from share.broker_host import BrokerHostCoordinator, InstanceRegistry, ReplayRegistry
+from share.broker_ops import WindowsHostOps, LIMITS_CHECK_TIMEOUT_SECONDS
+from share.broker_protocol import DEFAULT_DEADLINE_SECONDS, build_request
 
 
 class StatusBudgetTests(unittest.TestCase):

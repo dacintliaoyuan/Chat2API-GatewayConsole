@@ -23,14 +23,14 @@ from unittest.mock import patch
 _REAL_RUN = subprocess.run
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import console_share_actions as actions
-import console_share_production as production
-import share_broker_protocol as protocol
-from console_operations import OperationError
-from share_broker_client import BrokerClient
-from share_broker_ops import WindowsHostOps
-from share_broker_server import _HostOpsControlCoordinator
-from share_management import BrokerClientAdapter, BrokerError
+from console import share_actions as actions
+from console import share_production as production
+import share.broker_protocol as protocol
+from console.operations import OperationError
+from share.broker_client import BrokerClient
+from share.broker_ops import WindowsHostOps
+from share.broker_server import _HostOpsControlCoordinator
+from share.management import BrokerClientAdapter, BrokerError
 
 
 SCRIPT = r"C:\fixture\watchdog-umshare.ps1"

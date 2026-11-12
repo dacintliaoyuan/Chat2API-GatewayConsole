@@ -1,4 +1,4 @@
-﻿# execute-d4-experiment.ps1 - the D4 experiment orchestration ENTRY (D4-P
+# execute-d4-experiment.ps1 - the D4 experiment orchestration ENTRY (D4-P
 # rework per handoff §62). The full lifecycle S0 -> S1 -> E1..E4 -> Cleanup
 # runs through THIS entry; every OS edge is a runner/boundary that the
 # offline fixture substitutes with an in-memory fake OS model (the test
@@ -1289,7 +1289,7 @@ switch ($Stage) {
         # cycles and may not exist yet right after /Run. Wait for the
         # management pipe to exist (bounded) so the matrix runs against a
         # live broker; the reconnect race itself is covered by the client's
-        # bounded open retry (share_broker_client.py, W2 run20 root cause).
+        # bounded open retry (share/broker_client.py, W2 run20 root cause).
         $brokerReady = $false
         $brokerDeadline = (Get-Date).AddSeconds(25)
         while ((Get-Date) -lt $brokerDeadline) {

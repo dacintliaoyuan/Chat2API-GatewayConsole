@@ -104,9 +104,9 @@ def _guard_usage_module(module):
 
 def setUpModule():
     global _ISOLATION_TEMP, _ISOLATION_SAVED_SEAMS
-    import share_broker_client
-    import share_broker_server
-    import console_share_actions
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
+    from console import share_actions as console_share_actions
     _ISOLATION_ATTEMPTS.clear()
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(prefix="offline-management-")
     root = Path(_ISOLATION_TEMP.name)
@@ -132,7 +132,7 @@ def setUpModule():
 
 
 def tearDownModule():
-    import console_share_actions
+    from console import share_actions as console_share_actions
     try:
         for module, old_console, _old_share in _ISOLATION_MODULES:
             current = module._console_manager
@@ -893,7 +893,7 @@ class ShareUsageMountTest(PriceFixture):
 
     def setUp(self):
         super().setUp()
-        from share_secret_protection import write_private_secret_path
+        from share.secret_protection import write_private_secret_path
         write_private_secret_path(
             usage_service.CONTROL_TOKEN_FILE, b"test-control-token")
         self.server = usage_service.ThreadingHTTPServer(
@@ -936,7 +936,7 @@ class ShareUsageMountTest(PriceFixture):
         self.assertEqual(status, 404)
 
     def test_missing_module_is_reported_not_faked_as_zero(self):
-        with mock.patch.dict(sys.modules, {"share_metering": None}):
+        with mock.patch.dict(sys.modules, {"share.metering": None}):
             status, body = self.request(control_token="test-control-token")
         self.assertEqual(status, 503)
         self.assertEqual(body, {"error": "share_metering_unavailable"})
@@ -954,7 +954,7 @@ class ShareUsageMountTest(PriceFixture):
                     "coverage": {"ledger_present": True}}
 
         with mock.patch.dict(sys.modules,
-                             {"share_metering": self.fake_share_metering(reader)}), \
+                             {"share.metering": self.fake_share_metering(reader)}), \
                 mock.patch.object(usage_service, "SHARE_BACKEND_DIR_ENV",
                                   "CONSOLE_SHARE_BACKEND_DIR"), \
                 mock.patch.object(usage_service, "read_key_labels",
@@ -979,7 +979,7 @@ class ShareUsageMountTest(PriceFixture):
             raise OSError("ledger unreadable")
 
         with mock.patch.dict(sys.modules,
-                             {"share_metering": self.fake_share_metering(reader)}), \
+                             {"share.metering": self.fake_share_metering(reader)}), \
                 mock.patch.dict(os.environ,
                                 {"CONSOLE_SHARE_BACKEND_DIR": str(self.prices_path.parent)}):
             status, body = self.request(control_token="test-control-token")
@@ -989,7 +989,7 @@ class ShareUsageMountTest(PriceFixture):
     def test_unresolvable_ledger_path_is_reported(self):
         reader = lambda ledger, price_fn=None, limit=200000: {"requests": 0}
         with mock.patch.dict(sys.modules,
-                             {"share_metering": self.fake_share_metering(reader)}), \
+                             {"share.metering": self.fake_share_metering(reader)}), \
                 mock.patch.dict(os.environ,
                                 {"CONSOLE_SHARE_BACKEND_DIR": "relative/dir"}):
             status, body = self.request(control_token="test-control-token")
@@ -1159,7 +1159,7 @@ class StatsEnvironmentWiringTest(unittest.TestCase):
     """E19-1-04B：usagesrv 构造并注入 console_stats.StatsEnvironment。"""
 
     def test_stats_environment_uses_host_constants(self):
-        import console_stats
+        from console import stats as console_stats
         environment = usage_service.STATS_ENV
         self.assertIsInstance(environment, console_stats.StatsEnvironment)
         for name, expected in _STATS_ENV_PATHS.items():
@@ -1175,7 +1175,7 @@ class StatsEnvironmentWiringTest(unittest.TestCase):
                       usage_service.load_price_table)
 
     def test_stats_call_points_resolve_the_installed_environment(self):
-        import console_stats
+        from console import stats as console_stats
         installed = mock.Mock()
         saved = console_stats._STATS_ENVIRONMENT
         console_stats._STATS_ENVIRONMENT = installed
@@ -1183,7 +1183,7 @@ class StatsEnvironmentWiringTest(unittest.TestCase):
         self.assertIs(usage_service._stats_environment(), installed)
 
     def test_main_installs_the_process_environment(self):
-        import console_stats
+        from console import stats as console_stats
 
         class FakeServer:
             def __init__(self, *args, **kwargs):
@@ -1211,14 +1211,14 @@ class StatsEnvironmentWiringTest(unittest.TestCase):
 
     def test_console_manager_configures_broker_loader_before_seams(self):
         order = []
-        adapters = types.ModuleType("console_adapters")
+        adapters = types.ModuleType("console.adapters")
         adapters.wire_share_production_seams = (
             lambda **kwargs: order.append("wire"))
         adapters.build_registry = lambda **kwargs: {}
-        operations = types.ModuleType("console_operations")
+        operations = types.ModuleType("console.operations")
         manager = mock.Mock()
         operations.OperationManager = lambda **kwargs: manager
-        production = types.ModuleType("console_share_production")
+        production = types.ModuleType("console.share_production")
         production.configure_broker_loader = (
             lambda loader: order.append(("loader", loader)))
 
@@ -1226,9 +1226,9 @@ class StatsEnvironmentWiringTest(unittest.TestCase):
         usage_service._console_manager = None
         self.addCleanup(setattr, usage_service, "_console_manager", saved)
         with mock.patch.dict(sys.modules, {
-                "console_adapters": adapters,
-                "console_operations": operations,
-                "console_share_production": production}), \
+                "console.adapters": adapters,
+                "console.operations": operations,
+                "console.share_production": production}), \
                 mock.patch.object(usage_service, "get_share_manager",
                                   lambda: object()):
             result = usage_service.get_console_manager()

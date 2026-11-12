@@ -49,7 +49,7 @@ os.environ["USAGE_CONTROL_TOKEN_FILE"] = os.path.join(_TMP, "admin-control-token
 os.environ["SHARE_STORE_FILE"] = os.path.join(_TMP, "share-store.db")
 os.environ["SHARE_MANAGEMENT_CONFIG"] = os.path.join(_TMP, "no-share-deployment.json")
 _CONTROL_TOKEN = "test-control-token-console-api"
-from share_secret_protection import write_private_secret_path
+from share.secret_protection import write_private_secret_path
 write_private_secret_path(
     os.environ["USAGE_CONTROL_TOKEN_FILE"], _CONTROL_TOKEN.encode("utf-8"))
 
@@ -61,10 +61,10 @@ assert _SPEC.loader is not None
 sys.modules[_SPEC.name] = usagesrv
 _SPEC.loader.exec_module(usagesrv)
 
-import console_adapters  # noqa: E402  (same directory, sys.path prepared)
-import console_share_actions as orch  # noqa: E402  (share observe seam)
-import share_metering  # noqa: E402  (share-usage payload clock seam)
-import share_store  # noqa: E402  (B8-6 key-name projection fixture store)
+from console import adapters as console_adapters  # noqa: E402  (same directory, sys.path prepared)
+from console import share_actions as orch  # noqa: E402  (share observe seam)
+import share.metering as share_metering  # noqa: E402  (share-usage payload clock seam)
+import share.store as share_store  # noqa: E402  (B8-6 key-name projection fixture store)
 
 
 # Guard before any test can construct a default management client. The
@@ -163,9 +163,9 @@ def _guard_usage_module(module, root=None, patchers=None, modules=None):
 
 def setUpModule():
     global _ISOLATION_TEMP, _ISOLATION_SAVED_SEAMS
-    import share_broker_client
-    import share_broker_server
-    import console_share_actions
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
+    from console import share_actions as console_share_actions
     _ISOLATION_ATTEMPTS.clear()
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(prefix="offline-management-")
     root = Path(_ISOLATION_TEMP.name)
@@ -191,7 +191,7 @@ def setUpModule():
 
 
 def tearDownModule():
-    import console_share_actions
+    from console import share_actions as console_share_actions
     try:
         for module, old_console, _old_share in _ISOLATION_MODULES:
             current = module._console_manager
@@ -293,8 +293,8 @@ class ConsoleApiTestBase(unittest.TestCase):
                 "CONSOLE_LOCK_DIR": str(root / "console-locks")})
             cls._isolation_env.start()
             cls.addClassCleanup(cls._isolation_env.stop)
-        import share_broker_client
-        import share_broker_server
+        import share.broker_client as share_broker_client
+        import share.broker_server as share_broker_server
         for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
                              "_declare_real_kernel"),
                             (share_broker_server, "_declared_kernel")):
@@ -319,7 +319,7 @@ class ConsoleApiTestBase(unittest.TestCase):
                 if current is not None and current is not old_console:
                     current.close(wait=True)
         finally:
-            import console_stats
+            from console import stats as console_stats
             console_stats._STATS_ENVIRONMENT = cls._isolation_stats_before
             for patcher in reversed(cls._isolation_patchers):
                 patcher.stop()
@@ -334,7 +334,7 @@ class ConsoleApiTestBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.status_patcher = mock.patch(
-            "console_adapters.service_status", return_value=FAKE_SNAPSHOT)
+            "console.adapters.service_status", return_value=FAKE_SNAPSHOT)
         cls.status_patcher.start()
         cls.addClassCleanup(cls.status_patcher.stop)
         cls._start_class_isolation()
@@ -370,7 +370,7 @@ class ConsoleApiTestBase(unittest.TestCase):
         cls.addClassCleanup(cls.server.shutdown)
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
-        import console_stats
+        from console import stats as console_stats
         # standards-tests-04: the class installed a PROCESS-WIDE environment and
         # never restored it, so every later module of the same ``discover`` run
         # inherited an environment whose paths pointed into this class's temp
@@ -723,7 +723,7 @@ class LogOverviewRouteTests(ConsoleApiTestBase):
     """
 
     def test_overview_aggregates_all_targets_and_states_coverage(self):
-        import console_log_reader
+        from console import log_reader as console_log_reader
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "chat2api").mkdir()
@@ -785,7 +785,7 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="console-share-usage-")
         self.addCleanup(self._tmp.cleanup)
-        # 价目链按生产同款注入点重定向（照 tests/test_console_stats.py 先例），
+        # 价目链按生产同款注入点重定向（照 tests/test_console/stats.py 先例），
         # 夹具价表只有 PRICED_MODEL 一条：无价模型因此必然无价，不读生产价表。
         self._orig_price_file = usagesrv.PRICE_FILE
         self._orig_override_file = usagesrv.OVERRIDE_FILE
@@ -968,7 +968,7 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertEqual(coverage["keyNames"], 2)
 
     def test_usage_read_never_assembles_management_or_opens_broker(self):
-        from share_broker_client import NamedPipeBrokerTransport
+        from share.broker_client import NamedPipeBrokerTransport
 
         # 每次拒绝都记进 _ISOLATION_ATTEMPTS：若路由把异常吞掉，入口仍会
         # 因累计 attempts 失败（与 58-63 行的设计一致），证据不再只剩
@@ -1075,7 +1075,7 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
 
     def test_missing_share_metering_reports_an_error_not_zero(self):
         # 模块缺席不是「零用量」：503 错误码原样透出，绝不返回 0 请求载荷。
-        with mock.patch.dict(sys.modules, {"share_metering": None}):
+        with mock.patch.dict(sys.modules, {"share.metering": None}):
             status, raw = self.req("GET", "/api/console/share-usage")
         self.assertEqual(status, 503)
         self.assertEqual(json.loads(raw), {"error": "share_metering_unavailable"})
@@ -1165,7 +1165,7 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
                 self.assertEqual(json.loads(raw)["error"], "unknown path")
 
     def test_request_page_missing_metering_reports_an_error_not_empty(self):
-        with mock.patch.dict(sys.modules, {"share_metering": None}):
+        with mock.patch.dict(sys.modules, {"share.metering": None}):
             status, raw = self.req(
                 "GET", "/api/console/share-usage/requests")
         self.assertEqual(status, 503)
@@ -1262,7 +1262,7 @@ class EnvironmentRestorationTests(unittest.TestCase):
         code = "\n".join([
             "import json, os, sys, unittest",
             "sys.path[:0] = [%r, %r]",
-            "import console_stats",
+            "from console import stats as console_stats",
             "before = console_stats._STATS_ENVIRONMENT",
             "import test_console_api as module",
             "suite = unittest.TestSuite([",
@@ -1414,7 +1414,7 @@ class RegistryHonestyTests(ConsoleApiTestBase):
         self.assertEqual(data["error"], "invalid_stats_query")
 
     def test_stats_valid_query_with_fixture_ledgers(self):
-        import console_stats
+        from console import stats as console_stats
         fixture = console_stats.bounded_stats(
             {}, "2099-01-01", "2099-01-02")
         # No ledgers: coverage absent, empty days — honest empty, not zeros.
@@ -1685,7 +1685,7 @@ class ConsoleModelScopeContractTests(ConsoleApiTestBase):
 
     维护者报告「应用同步 model · 失败／被拒绝：invalid_params」的确定性触发链是
     scope 参数形状：网页发数组（workbench.ts:3919-3941），后端要求 JSON 数组
-    字符串（console_adapters.py:155-159 的 _MODEL_SYNC_SCOPE_SCHEMA）。本类锁定
+    字符串（console/adapters.py:155-159 的 _MODEL_SYNC_SCOPE_SCHEMA）。本类锁定
     两件事：
 
     1. 拒绝说明：已知的参数形状错误在 400 机器码之外补一个受控 detail（不含
@@ -1709,7 +1709,7 @@ class ConsoleModelScopeContractTests(ConsoleApiTestBase):
 
     @contextlib.contextmanager
     def _isolated_sync(self):
-        import model_sync
+        from model_sync import sync as model_sync
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory) / "data"
             data.mkdir(parents=True, exist_ok=True)
@@ -1848,7 +1848,7 @@ class ConsoleModelScopeContractTests(ConsoleApiTestBase):
 
     def test_valid_scope_normalizes_identically_and_reaches_run_sync(self):
         """合法 scope 在两处归一化到同一字典，并原样传给 run_sync。"""
-        import model_sync
+        from model_sync import sync as model_sync
         params = {"scope_mode": "selected", "sources": '["um"]',
                   "consumers": '["ZCode"]', "models": {"um": ["model-a"]}}
         expected = {"sources": ["um"], "consumers": ["ZCode"],
@@ -1882,7 +1882,7 @@ class ConsoleModelScopeContractTests(ConsoleApiTestBase):
         §11.3 组合窗口（2026-10-10）：两处都接受 selection（草稿版本），
         应用另需带回组合预览的 preview_token；范围四键仍逐项一致。
         """
-        import console_adapters
+        from console import adapters as console_adapters
         specs = {spec.name: spec for spec in console_adapters.build_registry()}
         preview = specs[self.PREVIEW].param_schema
         apply_ = specs[self.APPLY].param_schema

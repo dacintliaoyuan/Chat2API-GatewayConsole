@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
-_READER_PATH = Path(__file__).resolve().parents[1] / "console_log_reader.py"
+_READER_PATH = Path(__file__).resolve().parents[1] / "console/log_reader.py"
 _SPEC = importlib.util.spec_from_file_location("console_log_reader_test",
                                                _READER_PATH)
 console_log_reader = importlib.util.module_from_spec(_SPEC)

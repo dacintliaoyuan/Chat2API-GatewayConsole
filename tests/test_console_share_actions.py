@@ -45,8 +45,8 @@ from urllib.parse import urlparse
 sys.path.insert(0, str(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-import console_share_actions as m  # noqa: E402  (same directory on sys.path)
-from console_operations import OperationCancelled, OperationError  # noqa: E402
+from console import share_actions as m  # noqa: E402  (same directory on sys.path)
+from console.operations import OperationCancelled, OperationError  # noqa: E402
 
 
 def setUpModule():
@@ -412,7 +412,7 @@ class ShareActionsTestBase(unittest.TestCase):
         patch("_KEYS_DIAGNOSIS", keys_diagnosis)
         # Product gap (reported in the delivery notes, NOT fixed here): the
         # open layer fetches the gate through the module-level accessor
-        # ``_backend_ops()`` (console_share_actions.py:417) which the module
+        # ``_backend_ops()`` (console/share_actions.py:417) which the module
         # never defines — production code would raise NameError on the
         # start path. Tests inject the accessor (create=True) to return the
         # wired gate stub and verify the documented gate contract.
@@ -473,7 +473,7 @@ class ShareActionsTestBase(unittest.TestCase):
     def _adapt_sb_rollback_fact(self):
         """Defect workaround (reported in the delivery notes, NOT fixed in
         product code): _open_rollback concatenates the TUPLE returned by
-        _stop_share_backend_best_effort (console_share_actions.py:584) —
+        _stop_share_backend_best_effort (console/share_actions.py:584) —
         TypeError on EVERY owned share_backend rollback (the ts_service
         rollback after it never runs). The adapter keeps the original gate
         logic and flattens the return to its fact string so the ownership
@@ -2657,7 +2657,7 @@ class TestShareDiagnostics(ShareActionsTestBase):
         # stale. The state is written through the module's own bounded writer;
         # the read face is a SEAM, so this test injects a private synthetic
         # segment (no production state file is ever read here).
-        import share_backend_supervision
+        import share.backend_supervision as share_backend_supervision
         root = tempfile.mkdtemp(prefix="SelfUseAI-rev19-supervision-")
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         _base, _desired, state_path, _log = \
@@ -2692,7 +2692,7 @@ class TestShareDiagnostics(ShareActionsTestBase):
         # supervisor state -> the segment is None (the page writes
         # 「未返回监督段（未提供 ≠ 监督未运行）」); it is never reported as
         # "supervision off" and the report itself still succeeds.
-        import share_backend_supervision
+        import share.backend_supervision as share_backend_supervision
         root = tempfile.mkdtemp(prefix="SelfUseAI-rev19-supervision-absent-")
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         _base, _desired, state_path, _log = \
@@ -3113,7 +3113,7 @@ class TestModuleBoundaries(unittest.TestCase):
         # rename cannot leave this layer sending a stale component name.  The
         # AST check catches a future local re-declaration; the literal
         # assertions pin the frozen wire values.
-        import share_broker_protocol as bp
+        import share.broker_protocol as bp
         self.assertEqual(m.COMPONENT_SHARE_GATEWAY, "share_gateway")
         self.assertEqual(m.COMPONENT_SHARE_BACKEND, "share_backend")
         self.assertIs(m.COMPONENT_SHARE_GATEWAY, bp.COMPONENT_SHARE_GATEWAY)
@@ -3123,7 +3123,7 @@ class TestModuleBoundaries(unittest.TestCase):
         imported = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) \
-                    and node.module == "share_broker_protocol":
+                    and node.module == "share.broker_protocol":
                 imported.update(alias.name for alias in node.names)
         self.assertIn("COMPONENT_SHARE_GATEWAY", imported)
         self.assertIn("COMPONENT_SHARE_BACKEND", imported)
@@ -3488,7 +3488,7 @@ class PublicSupervisionActionTests(ShareActionsTestBase):
     def _module(self, **attrs):
         module = SimpleNamespace(**attrs)
         patcher = mock.patch.dict(sys.modules,
-                                   {"share_public_supervision": module})
+                                   {"share.public_supervision": module})
         patcher.start()
         self.addCleanup(patcher.stop)
         return module
@@ -3533,7 +3533,7 @@ class PublicSupervisionActionTests(ShareActionsTestBase):
 
     def test_public_check_module_missing_is_honest(self):
         with mock.patch.dict(sys.modules,
-                             {"share_public_supervision": None}):
+                             {"share.public_supervision": None}):
             with self.assertRaises(OperationError) as caught:
                 m.public_check("share", {}, None)
         self.assertEqual(caught.exception.code, "share_public_unavailable")
@@ -3599,7 +3599,7 @@ class PublicSupervisionActionTests(ShareActionsTestBase):
 
     def test_public_retry_module_missing_is_honest(self):
         with mock.patch.dict(sys.modules,
-                             {"share_public_supervision": None}):
+                             {"share.public_supervision": None}):
             with self.assertRaises(OperationError) as caught:
                 m.public_retry("share", {}, None)
         self.assertEqual(caught.exception.code, "share_public_unavailable")
@@ -3614,7 +3614,7 @@ class PublicSupervisionRegistryTests(unittest.TestCase):
     """S5（契约 §5.2）：真实 registry 的注册、资源与 pre_lock。"""
 
     def test_actions_registered_enabled_with_public_resource(self):
-        import console_adapters
+        from console import adapters as console_adapters
         specs = {spec.name: spec for spec in console_adapters.build_registry()}
         for name in ("share.public_check", "share.public_retry"):
             spec = specs[name]
@@ -3630,7 +3630,7 @@ class PublicSupervisionRegistryTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "invalid_target")
 
     def test_close_actions_have_pre_lock_hooks(self):
-        import console_adapters
+        from console import adapters as console_adapters
         specs = {spec.name: spec for spec in console_adapters.build_registry()}
         for name, reason in (("share.stop", "manual_close"),
                              ("share.estop", "manual_estop"),
@@ -3663,8 +3663,8 @@ class PublicCancelProductionWiringTests(unittest.TestCase):
             setattr(m, name, value)
 
     def test_wire_binds_cancel_seams_without_changing_seam_dict(self):
-        import console_adapters
-        import console_share_production
+        from console import adapters as console_adapters
+        from console import share_production as console_share_production
         m._PUBLIC_CANCEL_REQUEST = None
         m._PUBLIC_CANCEL_CLEAR = None
         patcher = mock.patch.object(console_share_production,
@@ -3678,8 +3678,8 @@ class PublicCancelProductionWiringTests(unittest.TestCase):
                       console_adapters.production_public_cancel_clear)
 
     def test_wire_keeps_unwired_when_module_is_missing(self):
-        import console_adapters
-        import console_share_production
+        from console import adapters as console_adapters
+        from console import share_production as console_share_production
         m._PUBLIC_CANCEL_REQUEST = None
         m._PUBLIC_CANCEL_CLEAR = None
         patcher = mock.patch.object(console_share_production,
@@ -3687,16 +3687,16 @@ class PublicCancelProductionWiringTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         with mock.patch.dict(sys.modules,
-                             {"share_public_supervision": None}):
+                             {"share.public_supervision": None}):
             console_adapters.wire_share_production_seams()
         self.assertIsNone(m._PUBLIC_CANCEL_REQUEST)
         self.assertIsNone(m._PUBLIC_CANCEL_CLEAR)
 
     def test_production_request_distinguishes_unwired_from_failure(self):
-        import console_adapters
+        from console import adapters as console_adapters
         ok = SimpleNamespace(request_cancel=lambda reason: True,
                               clear_cancel=lambda: True)
-        with mock.patch.dict(sys.modules, {"share_public_supervision": ok}):
+        with mock.patch.dict(sys.modules, {"share.public_supervision": ok}):
             self.assertIs(
                 console_adapters.production_public_cancel_request(
                     "manual_close"), True)
@@ -3708,14 +3708,14 @@ class PublicCancelProductionWiringTests(unittest.TestCase):
             clear_cancel=lambda: (_ for _ in ()).throw(
                 RuntimeError("clear failed")))
         with mock.patch.dict(sys.modules,
-                             {"share_public_supervision": broken}):
+                             {"share.public_supervision": broken}):
             self.assertIs(
                 console_adapters.production_public_cancel_request(
                     "manual_close"), False)
             self.assertIs(
                 console_adapters.production_public_cancel_clear(), False)
         with mock.patch.dict(sys.modules,
-                             {"share_public_supervision": None}):
+                             {"share.public_supervision": None}):
             self.assertIsNone(
                 console_adapters.production_public_cancel_request(
                     "manual_close"))
@@ -3727,7 +3727,7 @@ class PublicCancelPreLockWorkerTests(unittest.TestCase):
     """S5（契约 §3.5）：pre_lock 在 ResourceFileLock.acquire 之前执行。"""
 
     def _manager(self, spec, order):
-        import console_operations as ops
+        from console import operations as ops
 
         class FakeLock:
             def __init__(self, lock_dir, resource, owner, timeout_s):
@@ -3751,7 +3751,7 @@ class PublicCancelPreLockWorkerTests(unittest.TestCase):
         return manager
 
     def _wait(self, manager, op_id):
-        import console_operations as ops
+        from console import operations as ops
         deadline = time.time() + 5
         view = manager.get_operation(op_id)
         while view["state"] not in ops.TERMINAL_STATES \
@@ -3761,7 +3761,7 @@ class PublicCancelPreLockWorkerTests(unittest.TestCase):
         return view
 
     def test_pre_lock_runs_before_the_action_lock(self):
-        import console_operations as ops
+        from console import operations as ops
         order = []
 
         def pre_lock(target, params):
@@ -3788,7 +3788,7 @@ class PublicCancelPreLockWorkerTests(unittest.TestCase):
                             for step in view["steps"]))
 
     def test_pre_lock_failure_never_blocks_the_action(self):
-        import console_operations as ops
+        from console import operations as ops
         order = []
 
         def pre_lock(target, params):
@@ -3814,7 +3814,7 @@ class PublicCancelPreLockWorkerTests(unittest.TestCase):
             for step in view["steps"]))
 
     def test_pre_lock_cancel_is_honoured(self):
-        import console_operations as ops
+        from console import operations as ops
         order = []
 
         def pre_lock(target, params):

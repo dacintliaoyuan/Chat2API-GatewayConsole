@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from model_sync_core import (
+from model_sync.sync_core import (
     STATE_VERSION,
     Binding,
     CatalogModel,

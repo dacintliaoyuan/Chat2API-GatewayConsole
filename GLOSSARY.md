@@ -370,7 +370,7 @@ _Avoid_: 隔离演练通过即生产可用、把本地目录当异机备份
 _Avoid_: 只拷源码即发布、依赖版本靠环境现状、把 dist-cloud 当已部署
 
 **Linux 检查入口 (Linux check entry)**:
-`um-cloud-deploy/run-linux-checks.sh` 支持 `core`（默认，`tests/linux_share_chain.py --scenario core`）、`full`（core + long 场景 + `tests.test_cloud_ops`）与 `resource`（`tests/linux_resource_envelope.py`）三种模式，各场景保留独立退出码；`verify.ps1` 的 `py_compile` 列表已包含 `share_secret_protection.py` 与 `chat2api/share_dispatch.py`。这些入口不是完整云端验收，也不能据单一 core 通过声称 Linux 全套通过。
+`um-cloud-deploy/run-linux-checks.sh` 支持 `core`（默认，`tests/linux_share_chain.py --scenario core`）、`full`（core + long 场景 + `tests.test_cloud_ops`）与 `resource`（`tests/linux_resource_envelope.py`）三种模式，各场景保留独立退出码；`scripts/check.sh` 的 `compileall` 覆盖 `chat2api/`、`share/`、`console/` 等全部 Python 包。这些入口不是完整云端验收，也不能据单一 core 通过声称 Linux 全套通过。
 _Avoid_: 单项 core 绿即全套通过、跳过 Windows 全量
 
 **云端 P1 收口约束 (Cloud P1 closure constraints)**:

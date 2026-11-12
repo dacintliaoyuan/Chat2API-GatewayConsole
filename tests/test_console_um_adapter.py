@@ -27,9 +27,9 @@ from unittest import mock
 sys.path.insert(0, str(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-import console_adapters  # noqa: E402  (same directory, sys.path prepared)
-import console_um_adapter  # noqa: E402
-from console_operations import OperationError  # noqa: E402
+from console import adapters as console_adapters  # noqa: E402  (same directory, sys.path prepared)
+from console import um_adapter as console_um_adapter  # noqa: E402
+from console.operations import OperationError  # noqa: E402
 
 _TMP = tempfile.mkdtemp(prefix="console-um-adapter-tests-")
 _CONTROL_TOKEN = "test-um-control-token-42"

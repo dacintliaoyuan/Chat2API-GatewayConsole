@@ -23,11 +23,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import console_model_actions  # noqa: E402
-import console_operations  # noqa: E402
-import model_sync  # noqa: E402
-from console_operations import OperationError  # noqa: E402
-from model_sync_core import CatalogModel, empty_state  # noqa: E402
+from console import model_actions as console_model_actions  # noqa: E402
+from console import operations as console_operations  # noqa: E402
+from model_sync import sync as model_sync  # noqa: E402
+from console.operations import OperationError  # noqa: E402
+from model_sync.sync_core import CatalogModel, empty_state  # noqa: E402
 
 FINAL_ANCHOR = re.compile(r"\[ctxprobe (run\d+)\] FINAL anchor")
 

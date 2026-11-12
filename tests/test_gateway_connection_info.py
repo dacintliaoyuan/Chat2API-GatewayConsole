@@ -36,7 +36,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import console_gateway_connection as conn  # noqa: E402
+from console import gateway_connection as conn  # noqa: E402
 
 
 def _restore_process_env(saved):
@@ -506,7 +506,7 @@ class GatewayConnectionRouteTests(unittest.TestCase):
         _restore_process_env(cls._saved_env)
         cls.addClassCleanup(_restore_process_env, cls._saved_env)
         cls.status_patcher = mock.patch(
-            "console_adapters.service_status", return_value=_FAKE_SNAPSHOT)
+            "console.adapters.service_status", return_value=_FAKE_SNAPSHOT)
         cls.status_patcher.start()
         cls.addClassCleanup(cls.status_patcher.stop)
         cls.server = cls.usagesrv.ThreadingHTTPServer(
@@ -613,7 +613,7 @@ class GatewayConnectionRouteTests(unittest.TestCase):
         self.assertEqual(status, 404)
 
     def test_route_snapshot_failure_is_unknown_not_absent(self):
-        with mock.patch("console_adapters.service_status",
+        with mock.patch("console.adapters.service_status",
                         side_effect=RuntimeError("synthetic snapshot failure")):
             status, _, raw = self._get(
                 "/api/console/gateway-connection?service=chat2api")

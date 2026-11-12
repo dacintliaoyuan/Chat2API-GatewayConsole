@@ -41,7 +41,7 @@ def _write_projection(path, generation=1):
 
 
 def _signed_load(server, payload, extra_fields=None, request_id=None):
-    from share_broker_protocol import INSTANCE_SIGNED_KEYS, sign
+    from share.broker_protocol import INSTANCE_SIGNED_KEYS, sign
     fields = {"generation": payload["config_generation"],
               "fingerprint": hashlib.sha256(json.dumps(
                   payload, sort_keys=True).encode()).hexdigest()}

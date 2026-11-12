@@ -19,9 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 COMPONENT_KEY_FILES = (
-    "console_share_actions.py",
-    "share_broker_protocol.py",
-    "share_backend_supervision.py",
+    "console/share_actions.py",
+    "share/broker_protocol.py",
+    "share/backend_supervision.py",
     "web/src/workbench.ts",
     "web/scripts/backend-contract/check-generated.mjs",
     "tests/fixtures/frontend_contract_rev25.json",
@@ -31,12 +31,12 @@ COMPONENT_KEY_FILES = (
 PRODUCTION_FILES = (
     "chat2api/chat2api.py",
     "chat2api/share_entry.py",
-    "console_share_actions.py",
-    "console_share_production.py",
-    "console_adapters.py",
-    "share_broker_ops.py",
-    "share_management.py",
-    "share_backend_supervision.py",
+    "console/share_actions.py",
+    "console/share_production.py",
+    "console/adapters.py",
+    "share/broker_ops.py",
+    "share/management.py",
+    "share/backend_supervision.py",
     "web/src/workbench.ts",
     "web/scripts/backend-contract/check-generated.mjs",
 )

@@ -54,6 +54,7 @@ DSH（DeepSeek Harness, 3080）流量经 chat2api 网关时已由 data/usage-cha
 （2026-09-02），并入顶部累计参考费用；其他日期不进入任何 DSH 口径。
 """
 
+import importlib
 import json
 import os
 import re
@@ -70,12 +71,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from share_management import (BrokerClientAdapter, BrokerError, ShareManager,
+from share.management import (BrokerClientAdapter, BrokerError, ShareManager,
                               status_code_for)  # noqa: E402
-from share_store import (Disabled, StoreError, SecretUnavailable,  # noqa: E402
+from share.store import (Disabled, StoreError, SecretUnavailable,  # noqa: E402
                          SecretUndecryptable, VersionMismatch, read_key_labels)
-import console_public_url  # noqa: E402
-import console_stats  # noqa: E402
+from console import public_url as console_public_url  # noqa: E402
+from console import stats as console_stats  # noqa: E402
 from shared import pricing_rules as _pricing_rules  # noqa: E402
 
 CHAT2API_LOG = os.environ.get("CHAT2API_USAGE_LOG") or \
@@ -985,7 +986,7 @@ def _um_reference_summary(records):
     here, so no second ledger read is issued.
     """
     try:
-        import console_magpie_prices
+        from console import magpie_prices as console_magpie_prices
     except Exception as exc:  # noqa: BLE001 - the service must still start
         return _um_reference_unavailable(
             "价格同步模块不可用（%s）" % type(exc).__name__,
@@ -1332,7 +1333,7 @@ def build_summary():
 
 
 # ------------------------------------------------------ 分享用量（只读挂载）
-# share_metering.py 由另一名实现者并行编写：这里只做受保护的延迟导入——
+# share/metering.py 由另一名实现者并行编写：这里只做受保护的延迟导入——
 # 模块不存在时 usagesrv 行为与现在完全一致（绝不因它起不来），路由如实报
 # 不可用；绝不把「读不到」折成 0 请求 / 0 费用。挂载点是两个只读口：
 # GET /api/share/usage（share 管理面，鉴权走既有 _share_auth：本机会话或管理
@@ -1368,7 +1369,7 @@ def share_usage_reader():
     返回 (reader, error)：模块不存在/导入失败/接口缺失 → (None, 错误码)，
     导入失败只打印类型名，不抛出——服务照常运行。"""
     try:
-        import share_metering
+        share_metering = __import__("importlib").import_module("share.metering")
     except Exception as exc:  # noqa: BLE001 — 缺模块不是错误：路由如实报不可用
         print(f"[usagesrv] share_metering unavailable: {type(exc).__name__}", flush=True)
         return None, "share_metering_unavailable"
@@ -1385,7 +1386,7 @@ def share_usage_requests_reader():
     (None, 错误码)，路由如实报不可用，绝不折成空页。
     """
     try:
-        import share_metering
+        share_metering = __import__("importlib").import_module("share.metering")
     except Exception as exc:  # noqa: BLE001 — 缺模块不是错误：路由如实报不可用
         print(f"[usagesrv] share_metering unavailable: {type(exc).__name__}",
               flush=True)
@@ -1421,7 +1422,7 @@ def _generate_session_code_locked(now):
     _session["code"] = secrets.token_urlsafe(24)
     _session["code_expires"] = now + SESSION_CODE_TTL_SECONDS
     try:
-        from share_secret_protection import write_private_secret_path
+        from share.secret_protection import write_private_secret_path
         write_private_secret_path(
             SESSION_CODE_FILE, _session["code"].encode("utf-8"))
     except (OSError, ValueError, ImportError):
@@ -1489,7 +1490,7 @@ def control_token_ok(supplied):
     不把管理令牌读进进程。Windows 保持既有读取路径（ACL 边界另管）。
     """
     try:
-        from share_secret_protection import read_private_secret_path
+        from share.secret_protection import read_private_secret_path
         expected = read_private_secret_path(
             CONTROL_TOKEN_FILE, max_bytes=1024,
             label="control token").decode("utf-8").strip()
@@ -1529,9 +1530,10 @@ def get_console_manager():
     global _console_manager
     with _console_manager_lock:
         if _console_manager is None:
-            import console_adapters
-            import console_operations
-            import console_share_production
+            console_adapters = importlib.import_module("console.adapters")
+            console_operations = importlib.import_module("console.operations")
+            console_share_production = importlib.import_module(
+                "console.share_production")
             # E19-1-06/04B: the share broker construction loader is wired
             # explicitly BEFORE the seams are assembled; console_share_production
             # never imports this host module. The cloud root passes a broker
@@ -1558,7 +1560,7 @@ def console_services_snapshot():
         cached = _console_status_cache["value"]
         if cached is not None and now - _console_status_cache["at"] < CONSOLE_STATUS_TTL:
             return cached, True, round(now - _console_status_cache["at"], 1)
-    import console_adapters
+    console_adapters = importlib.import_module("console.adapters")
     payload = console_adapters.service_status(cloud=CLOUD_ROLE)
     with _console_status_lock:
         _console_status_cache["at"] = now
@@ -1667,7 +1669,7 @@ def _console_health_payload(force):
     if CLOUD_ROLE:
         # 云端角色：只报 UM 分享入口的 pid/身份事实；绝不 TCP 探测
         # Qoder/CLIProxy/model_sync 等非 UM 端口。
-        import console_adapters
+        from console import adapters as console_adapters
         snapshot = console_adapters.cloud_service_status()
         services = list(snapshot.get("services") or [])
         services.append({"id": "usagesrv", "port": PORT,
@@ -1786,7 +1788,7 @@ def _load_cloud_share_management_deployment(payload):
         raise BrokerError(
             "cloud share management config transport must be 'unix_socket' "
             "(got %r)" % (transport,))
-    from share_broker_client import (BrokerClient,
+    from share.broker_client import (BrokerClient,
                                     UnixSocketBrokerTransport,
                                     validate_unix_socket_path)
     socket_path = payload.get("socket_path")
@@ -1799,7 +1801,7 @@ def _load_cloud_share_management_deployment(payload):
     key_file = payload.get("control_key_file")
     if not isinstance(key_file, str) or not key_file:
         raise BrokerError("share management config control_key_file missing")
-    from share_broker_server import read_control_key
+    from share.broker_server import read_control_key
     try:
         secret = read_control_key(key_file)
     except (OSError, ValueError) as exc:
@@ -1856,8 +1858,8 @@ def _load_share_management_deployment():
     key_file = payload.get("control_key_file")
     if not isinstance(key_file, str) or not key_file:
         raise BrokerError("share management config control_key_file missing")
-    from share_broker_client import BrokerClient, NamedPipeBrokerTransport
-    from share_broker_server import read_control_key
+    from share.broker_client import BrokerClient, NamedPipeBrokerTransport
+    from share.broker_server import read_control_key
     try:
         secret = read_control_key(key_file)
     except (OSError, ValueError) as exc:
@@ -1951,7 +1953,7 @@ def origin_allowed(origin):
 
 # Remote console access is opt-in and device-scoped. The HTTP listener stays
 # on loopback; only the configured HTTPS Serve proxy may authenticate a peer.
-from console_tailnet import TailnetPolicy, has_proxy_metadata, load_policy
+from console.tailnet import TailnetPolicy, has_proxy_metadata, load_policy
 
 TAILNET_POLICY = TailnetPolicy()
 
@@ -1965,7 +1967,7 @@ TAILNET_POLICY = TailnetPolicy()
 # load so a missing optional display package cannot stop the console; /display/
 # then answers an honest 503.
 try:
-    from console_display_proxy import (
+    from console.display_proxy import (
         DisplayGrantError,
         DisplayGrants,
         DisplayProxy,
@@ -2099,7 +2101,7 @@ def _usage_rates_recorded_requests(payload):
     但窗口内无记录为真实的 0（零记录 ≠ 无记录）；malformed_lines（部分坏行、
     其余仍可读）照常计数。
     """
-    import console_stats
+    from console import stats as console_stats
     coverage = payload.get("coverage") or {}
     hours = coverage.get("hours")
     checked_epoch = payload.get("checked_epoch")
@@ -2874,7 +2876,7 @@ class Handler(BaseHTTPRequestHandler):
                         or not isinstance(expected, int) or expected < 1:
                     _bad("invalid key_id or expected_row_version")
                     return
-                from console_share_probe import test_key
+                from console.share_probe import test_key
                 self._send_json(200, test_key(
                     manager, rest[1], expected,
                     discover_url=lambda: self._share_funnel_url(refresh=True)))
@@ -3144,7 +3146,7 @@ class Handler(BaseHTTPRequestHandler):
         checked_at = None
         reason = "maintenance_unwired"
         try:
-            import console_share_actions
+            from console import share_actions as console_share_actions
             seam = getattr(console_share_actions, "_MAINTENANCE_STATUS", None)
             if seam is not None:
                 view = seam()
@@ -3236,7 +3238,7 @@ class Handler(BaseHTTPRequestHandler):
         never an exception that turns into a 500.
         """
         try:
-            import share_public_supervision
+            share_public_supervision = __import__("importlib").import_module("share.public_supervision")
         except Exception:  # noqa: BLE001
             return None
         return share_public_supervision
@@ -3487,7 +3489,7 @@ class Handler(BaseHTTPRequestHandler):
         instance and never extends the login window: the deadline comes from
         the instance's OWN one-time window and is passed through verbatim.
         """
-        import console_share_actions
+        from console import share_actions as console_share_actions
         failed = None
         try:
             auth = console_share_actions.backend_auth_read()
@@ -3514,8 +3516,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _console_backend_login_cancel_payload(self):
         """POST /backend-login-cancel: end THIS login round only (D18-8)."""
-        import console_share_actions
-        from console_operations import OperationError
+        from console import share_actions as console_share_actions
+        from console.operations import OperationError
         try:
             result = console_share_actions.backend_login_cancel("", {})
         except OperationError as exc:
@@ -3673,8 +3675,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 # Fixed loopback health read: no store construction/recovery,
                 # account probe, Funnel query or operation side effects.
-                from console_share_production import production_broker_ops
-                from console_operations import OperationError
+                from console.share_production import production_broker_ops
+                from console.operations import OperationError
                 try:
                     production_broker_ops().ensure_control_ready()
                     payload = {"responsive": True}
@@ -3721,8 +3723,8 @@ class Handler(BaseHTTPRequestHandler):
                 # Tailscale/Funnel seams into a cloud process (the cloud
                 # assembly deliberately leaves them unwired).
                 try:
-                    import console_adapters
-                    import console_share_actions
+                    from console import adapters as console_adapters
+                    from console import share_actions as console_share_actions
                     if console_share_actions._FUNNEL_OBSERVED is None:
                         console_adapters.wire_share_production_seams(
                             keys_manager=manager, cloud=CLOUD_ROLE)
@@ -3846,7 +3848,7 @@ class Handler(BaseHTTPRequestHandler):
                         or not isinstance(expected, int) or expected < 1:
                     _bad("invalid key_id or expected_row_version")
                     return
-                from console_share_probe import test_key
+                from console.share_probe import test_key
                 self._send_json(200, test_key(
                     manager, rest[1], expected, private=rest[2] == "test-private",
                     discover_url=lambda: self._share_funnel_url(refresh=True)))
@@ -3920,7 +3922,7 @@ class Handler(BaseHTTPRequestHandler):
                         or not isinstance(expected, int) or expected < 1:
                     _bad("invalid key_id or expected_row_version")
                     return
-                from console_share_probe import test_key
+                from console.share_probe import test_key
                 self._send_json(200, test_key(
                     manager, rest[1], expected,
                     discover_url=lambda: self._share_funnel_url(refresh=True)))
@@ -4163,14 +4165,14 @@ class Handler(BaseHTTPRequestHandler):
             sub = rest[1]
             try:
                 if sub == "today":
-                    import console_stats
+                    from console import stats as console_stats
                     payload = console_stats.um_today()
                 elif sub == "trend":
-                    import console_stats
+                    from console import stats as console_stats
                     payload = console_stats.um_trend(
                         range=_q("range") or "7d")
                 elif sub == "requests":
-                    import console_stats
+                    from console import stats as console_stats
                     payload = console_stats.um_requests(
                         window=_q("window") or "today",
                         model=_q("model"),
@@ -4179,7 +4181,7 @@ class Handler(BaseHTTPRequestHandler):
                         cursor=_q("cursor", 512),
                         limit=_qint("limit", 50))
                 elif sub == "logs":
-                    import console_log_reader
+                    from console import log_reader as console_log_reader
                     levels = [v.strip() for v in
                               (_q("levels") or "").split(",")
                               if v.strip()]
@@ -4196,7 +4198,7 @@ class Handler(BaseHTTPRequestHandler):
                             "detail": payload.get("error")})
                         return
                 elif sub == "request-logs":
-                    import console_log_reader
+                    from console import log_reader as console_log_reader
                     payload = console_log_reader.read_um_request_logs(
                         _q("request_id") or "",
                         limit=_qint("limit", 100),
@@ -4230,7 +4232,7 @@ class Handler(BaseHTTPRequestHandler):
                                       "detail": "days 必须是整数"})
                 return
             try:
-                import console_stats
+                from console import stats as console_stats
                 payload = console_stats.usage_tokens(
                     console_stats.default_sources(
                         environment=_stats_environment()), days=days)
@@ -4257,7 +4259,7 @@ class Handler(BaseHTTPRequestHandler):
                                       "detail": "hours 必须是整数"})
                 return
             try:
-                import console_stats
+                from console import stats as console_stats
                 payload = console_stats.usage_rates(
                     console_stats.default_sources(
                         environment=_stats_environment()), hours=hours)
@@ -4289,7 +4291,7 @@ class Handler(BaseHTTPRequestHandler):
             # get_console_manager() 装配之前（console 子系统故障不掩盖本读面），
             # 且绝不走操作框架——明文调用 Key 不能进
             # data/console-state.sqlite3 的 operations.result_json
-            # （console_operations.py:266/:645-649）。只读：写方法与子路径
+            # （console/operations.py:266/:645-649）。只读：写方法与子路径
             # 按未知路径拒绝（与 /api/console/share-usage 同一既有行为，
             # 不新增 405 语义）；未读请求体先排空再应答。
             if method != "GET" or rest != ["gateway-connection"]:
@@ -4297,7 +4299,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._discard_unread_body()
                 self._send_json(404, {"error": "unknown path"})
                 return
-            import console_gateway_connection  # noqa: WPS433 惰性装配
+            from console import gateway_connection as console_gateway_connection  # noqa: WPS433 惰性装配
             query = parse_qs(parsed.query)
             service = (query.get("service") or [""])[0].strip()
             # B0（2026-11-01）：退役来源必须在快照/装配之前按模块契约映射为
@@ -4481,7 +4483,7 @@ class Handler(BaseHTTPRequestHandler):
             sources = _csv_list("sources")
             models = _csv_list("models")
             try:
-                import console_stats
+                from console import stats as console_stats
                 payload = console_stats.bounded_stats(
                     console_stats.default_ledgers(
                         environment=_stats_environment()),
@@ -4503,7 +4505,7 @@ class Handler(BaseHTTPRequestHandler):
             # R9-R38 各网关运行日志详情页：来源注册表（服务端唯一权威，
             # 客户端只传 id，绝不传路径）。账本路径按既有环境变量先例注入；
             # 绝对路径不出本机——响应只带文件名，浏览器拿不到目录结构。
-            import console_log_reader
+            from console import log_reader as console_log_reader
             sources = console_log_reader.build_registry(
                 {"chat2api": CHAT2API_LOG}).get("sources") or []
             slim = []
@@ -4524,7 +4526,7 @@ class Handler(BaseHTTPRequestHandler):
             # 内收口（预算、脱敏、三态分码）；此处只做查询串截断与装配。
             # cursor 是服务端铸的 opaque 串（~150 字符），不属搜索词预算，
             # 只截宽裕上限防滥用；形状仍由 reader 验证。
-            import console_log_reader
+            from console import log_reader as console_log_reader
             query = parse_qs(parsed.query)
             def _s(key, cap=120):
                 return (query.get(key) or [""])[0][:cap] or None
@@ -4554,7 +4556,7 @@ class Handler(BaseHTTPRequestHandler):
             # 携带 src/cat，由 reader 解码归位）。汇总的覆盖/截断/未读/
             # 失败由 console_log_reader.read_overview 的 coverage 收口；
             # 逐来源详情契约仍是上面的 log-entries，不改语义。
-            import console_log_reader
+            from console import log_reader as console_log_reader
             query = parse_qs(parsed.query)
             def _s(key, cap=120):
                 return (query.get(key) or [""])[0][:cap] or None
@@ -4574,7 +4576,7 @@ class Handler(BaseHTTPRequestHandler):
             # （load_state + 最近应用结果），只读、无 SyncLock、无探测、
             # 不记操作账本行（与 prices/logs 的高频只读直读同款）。写入类
             # 动作（preview/apply/pin/catalog/task）仍走 POST 操作行。
-            import console_model_actions
+            from console import model_actions as console_model_actions
             try:
                 payload = console_model_actions.model_sync_pending("", {}, None)
             except Exception as exc:
@@ -4628,7 +4630,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 # B0: a retired-source action is refused explicitly before the
                 # manager looks it up, so no handler runs and no row is created.
-                import console_adapters
+                from console import adapters as console_adapters
                 console_adapters.refuse_retired_action(action)
                 op = manager.submit(action, target=target, params=params,
                                     idempotency_key=idem)

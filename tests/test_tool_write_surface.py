@@ -76,7 +76,7 @@ if __name__ == "__main__":
 #: 委托链显式 forget_stale=False：只读档。
 FORGET_STALE_FALSE = '''\
 # -*- coding: utf-8 -*-
-import console_share_production
+from console import share_production as console_share_production
 
 
 def collect():
@@ -96,7 +96,7 @@ if __name__ == "__main__":
 FORGET_STALE_DEFAULT = '''\
 # -*- coding: utf-8 -*-
 import argparse
-import share_chain_snapshot
+from share_chain_snapshot import share_chain_snapshot
 
 
 def collect_snapshot():

@@ -492,7 +492,7 @@ try {
 }
 
 # --------------------------------------------------------- (4) backend.pid 字节
-# Path rule = `console_share_production._backend_dir()` (env override must be an
+# Path rule = `console.share_production._backend_dir()` (env override must be an
 # absolute path; otherwise LOCALAPPDATA\SelfUseAI\ai-gateway\share-backend).
 $backendDirResolved = ''
 $backendDirSource = ''

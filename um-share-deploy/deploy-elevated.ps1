@@ -143,7 +143,7 @@ function Restart-BrokerAndVerify {
     # task and proves the refreshed protocol is live with THREE checks
     # (fail-closed: the share must not open against a stale or absent
     # broker; a plain ok status would prove only that a pipe answers):
-    #   1. a FRESH broker process (CommandLine pins share_broker_server.py
+    #   1. a FRESH broker process (CommandLine pins share/broker_server.py
     #      under the RunRoot image; CreationDate > restart moment),
     #   2. a signed management `status` exchange through the pipe, AND
     #   3. the R51.4-generation `host-verify` verb — the restricted
@@ -151,7 +151,7 @@ function Restart-BrokerAndVerify {
     #      answers {"check":"running"} with ok + result.host_running,
     #      while any pre-extension broker rejects the unknown action. The
     #      wire shapes this probe depends on are pinned by
-    #      tests/test_share_broker_server.py (status result = host/task/
+    #      tests/test_share/broker_server.py (status result = host/task/
     #      state only; host-verify ok carries host_running) — Reviewer
     #      finding R1 (2026-09-17): share_max_concurrency is a
     #      ShareManager.status() field and NEVER crosses the broker pipe.
@@ -176,13 +176,13 @@ function Restart-BrokerAndVerify {
     $procDeadline = (Get-Date).AddSeconds(45)
     while ((Get-Date) -lt $procDeadline) {
         $brokerProc = @(Get-CimInstance Win32_Process -Filter "Name='um-share-python.exe'" |
-            Where-Object { $_.CommandLine -like ('*' + $RunRoot + '*share_broker_server.py*') -and
+            Where-Object { $_.CommandLine -like ('*' + $RunRoot + '*share/broker_server.py*') -and
                            $_.CreationDate -gt $restartAt })[0]
         if ($brokerProc) { break }
         Start-Sleep -Seconds 1
     }
     if (-not $brokerProc) {
-        throw ('broker restart verification failed: no fresh share_broker_server.py ' +
+        throw ('broker restart verification failed: no fresh share/broker_server.py ' +
             'process started under ' + $RunRoot + ' after the task restart; ' +
             'NOT starting the share')
     }
@@ -194,8 +194,8 @@ function Restart-BrokerAndVerify {
     @'
 import json
 import sys
-from share_broker_client import BrokerClient, NamedPipeBrokerTransport
-from share_broker_server import read_control_key
+from share.broker_client import BrokerClient, NamedPipeBrokerTransport
+from share.broker_server import read_control_key
 
 secret = read_control_key(sys.argv[1])
 client = BrokerClient(lambda: NamedPipeBrokerTransport(sys.argv[2]), secret)
@@ -233,7 +233,7 @@ json.dump({"status": frame(status), "hostverify": frame(hostverify)},
                     # at this stage the umshare-live task is NOT yet
                     # registered, so WindowsHostOps.verify_running answers
                     # None (unresolvable evidence, never a fake success,
-                    # share_broker_ops.py:91-97). Requiring non-null here made
+                    # share/broker_ops.py:91-97). Requiring non-null here made
                     # the check unpassable and killed Start 3× (21:17 log).
                     if ($payload.hostverify.ok -and
                         $null -ne $payload.hostverify.result) {
@@ -397,10 +397,10 @@ function Copy-ShareSource {
         # R41-1 would downgrade to a never-confirming publication). The
         # list mirrors install-share-broker-lib.ps1's copy closure.
         $closureSrc = @(
-            'share_broker_protocol.py', 'share_broker_host.py',
-            'share_broker_client.py', 'share_broker_ops.py',
-            'share_broker_server.py', 'share_instance_pipe.py',
-            'share_runtime.py', 'share_management.py', 'share_store.py'
+            'share/broker_protocol.py', 'share/broker_host.py',
+            'share/broker_client.py', 'share/broker_ops.py',
+            'share/broker_server.py', 'share/instance_pipe.py',
+            'share/runtime.py', 'share/management.py', 'share/store.py'
         )
         foreach ($modName in $closureSrc) {
             $srcMod = Join-Path $Root ('ai-gateway\' + $modName)

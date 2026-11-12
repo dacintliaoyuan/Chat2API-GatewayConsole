@@ -70,7 +70,7 @@ def _load(name, relative):
 
 
 chat2api = _load("chat2api_usage_normalize", "chat2api/chat2api.py")
-metering = _load("share_metering_usage_normalize", "share_metering.py")
+metering = _load("share_metering_usage_normalize", "share/metering.py")
 
 STUB_TOKEN = "stub-token"
 

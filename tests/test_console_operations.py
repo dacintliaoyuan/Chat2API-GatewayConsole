@@ -13,7 +13,7 @@ import time
 import unittest
 from pathlib import Path
 
-_OPS_PATH = Path(__file__).resolve().parents[1] / "console_operations.py"
+_OPS_PATH = Path(__file__).resolve().parents[1] / "console/operations.py"
 _SPEC = importlib.util.spec_from_file_location("console_operations_test",
                                                _OPS_PATH)
 console_operations = importlib.util.module_from_spec(_SPEC)
@@ -21,7 +21,7 @@ assert _SPEC.loader is not None
 sys.modules[_SPEC.name] = console_operations
 _SPEC.loader.exec_module(console_operations)
 
-from console_operations import (ActionSpec, ConsoleStateError, LockBusy,
+from console.operations import (ActionSpec, ConsoleStateError, LockBusy,
                                 OperationCancelled, OperationError,
                                 OperationManager, OperationUnavailable,
                                 ResourceFileLock)
@@ -472,8 +472,8 @@ class ShareOrchestrationResourceTests(ConsoleTestBase):
         # operation row on share:orchestration; with every seam unwired the
         # read-only report succeeds with eight honestly-unavailable layers
         # (never a raise, never a fabricated state) and is JSON-persisted.
-        import console_adapters
-        import console_share_actions
+        from console import adapters as console_adapters
+        from console import share_actions as console_share_actions
         seam_names = ("_BROKER_OPS", "_TS_SERVICE_STATUS",
                       "_CONNECTIVITY_OK", "_FUNNEL_OBSERVED", "_BACKEND_OBSERVE",
                       "_BACKEND_OPS", "_MAINTENANCE_STATUS", "_INTENT_WRITE")
@@ -512,7 +512,7 @@ class SubmitIdempotencyParamTests(ConsoleTestBase):
         # The REAL production param schema (drain_budget_s 1..600), not a test
         # approximation: this is the schema the console exposes for the
         # share.backend_restart host action.
-        import console_adapters
+        from console import adapters as console_adapters
         real = {spec.name: spec
                 for spec in console_adapters.build_registry()}[
                     "share.backend_restart"]

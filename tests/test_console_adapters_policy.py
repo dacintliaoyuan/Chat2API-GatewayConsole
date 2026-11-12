@@ -22,9 +22,9 @@ from unittest import mock
 sys.path.insert(0, str(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-import console_adapters  # noqa: E402
-import console_share_actions  # noqa: E402
-from console_operations import (OperationError, OperationManager,  # noqa: E402
+from console import adapters as console_adapters  # noqa: E402
+from console import share_actions as console_share_actions  # noqa: E402
+from console.operations import (OperationError, OperationManager,  # noqa: E402
                                 OperationUnavailable)
 
 

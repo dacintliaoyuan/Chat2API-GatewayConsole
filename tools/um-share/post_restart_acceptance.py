@@ -360,12 +360,12 @@ def gateway_startup_path():
     """8100 启动行路径：``<RunRoot>/run/live/raw.txt``（``(path, error)``）。
 
     路径解析器 = 产品的 ``console_share_production._share_run_root()``（默认
-    ``DEFAULT_SHARE_RUN_ROOT``，console_share_production.py:843-861；部署端
+    ``DEFAULT_SHARE_RUN_ROOT``，console/share_production.py:843-861；部署端
     ``-RunRoot`` 同一默认，deploy-elevated.ps1:820 的 ``$liveRun`` 就是
     ``<RunRoot>\\run\\live``）；本工具不复制它的默认字面量。解析失败不猜路径。
     """
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         root = console_share_production._share_run_root()
     except Exception as exc:  # noqa: BLE001 — 解析不了就如实报，不猜路径
         return None, "run_root_unresolved:%s" % type(exc).__name__
@@ -431,7 +431,7 @@ def backend_pid_facts():
     无写、无删）：陈旧 ``backend.pid`` 照实报成 ``pid_stale``（进程已不在或身份
     不匹配，``_pid_matches`` 无法区分两者，本报告不猜），文件原样留在盘上。
     状态词表与产品逐字一致：``pid_file_absent`` / ``pid_file_unreadable`` /
-    ``pid_stale`` / ``port_not_listening`` / ``running``（console_share_production.py
+    ``pid_stale`` / ``port_not_listening`` / ``running``（console/share_production.py
     :1348-1388）。读不到即 ``state="unavailable"`` 并带原因码，绝不折成
     「不存在」。
     """
@@ -439,7 +439,7 @@ def backend_pid_facts():
            "pid_matches": None, "port_listening": None, "state": None,
            "error": None}
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         facts = console_share_production.production_backend_pid_state()
     except Exception as exc:  # noqa: BLE001 — 读不到是证据，不是崩溃
         out["state"] = "unavailable"

@@ -4,18 +4,18 @@
     "generatedFrom": "generate_frontend_contract_fixture.py:real handlers/private fixtures",
     "sourceHashEncoding": "utf8-lf",
     "sourceHashes": {
-      "model_sync.py": "efb892b26bc50fa4fa311255ff684fae83882ec1760815958e5529a45c101b25",
-      "model_sync_core.py": "eb6bf1601da6f7752765dd08e830c80d7b87126b2a1554fa9059b4013508bcb0",
-      "console_model_actions.py": "37fe642751f81201c5f4bc1a6a4a1c69c96d1f8bbed607a66377632b133e760c",
-      "console_adapters.py": "7283f7820a99a210c9e93206750fa6e0a6f03c2fc2f9e74f1765518d27ac821b",
-      "console_operations.py": "90bb9896c112c342efc9cf0430676be22c913c376c7d015b06916db91c586c58",
-      "share_metering.py": "46f57c0459211c92f0ed3dc2097481bce750274ee2de8b5bfc686ae1876e5417",
-      "console_stats.py": "510900c6ff67df1fd0c3d5a952bc7a2c5f89cb8d0021af82f62a032c1de80cfd",
-      "console_log_reader.py": "0e245ce10ee148f79285c0f14e273fad2341b245dc177448c51db0b5f6fb9a4f",
-      "usagesrv.py": "591de6da562186c2886cbeaec60714169dba081515c31081bafc7b980028db26",
-      "console_share_actions.py": "982d24c36be52031a82c3f9f0adf71abda35c569c66c47c6c5d3854b1a862eda",
-      "console_share_production.py": "a78954460a0517e1a353ae24db0365a199429714ac2373c9d02789ee9dfb18cc",
-      "console_gateway_connection.py": "f9c0196d6347d07b41929e0c69f9c0636de9b62256e6dd905a9d043fc39fed3d"
+      "model_sync/sync.py": "c00c0a121c5b0840bebadb5b892b1f62f3d460625e89a49382b3c9e41917943f",
+      "model_sync/sync_core.py": "eb6bf1601da6f7752765dd08e830c80d7b87126b2a1554fa9059b4013508bcb0",
+      "console/model_actions.py": "d0471efb872574604b3cc3684b31cefea9e600634419522d396cefed50e6ed88",
+      "console/adapters.py": "45df43be32dbe7402287bca6874fa9dcf86d221f1ab3d1ec252e2bec47eaafc1",
+      "console/operations.py": "90bb9896c112c342efc9cf0430676be22c913c376c7d015b06916db91c586c58",
+      "share/metering.py": "46f57c0459211c92f0ed3dc2097481bce750274ee2de8b5bfc686ae1876e5417",
+      "console/stats.py": "7b11c9f16b994c440fe0f3b1067cfd76d95d404423e81ae693de39710c6ea4e4",
+      "console/log_reader.py": "b2e10c171a47fa92b19e45ddca2d75009b700b9667b4d3edeb919b427253bb20",
+      "usagesrv.py": "8cd3f0963c251cfbb64b45a56b26431bb28f6e686a30a6dbf1892a31f8644ceb",
+      "console/share_actions.py": "fdd2212e6acb427c71116b2beffa7a9e55c1c14931c198fee98e34217442317e",
+      "console/share_production.py": "d4b9ecc2d792d6dc18e2dedb62bab7c76abd061c49ebb51845abcf68dc06015c",
+      "console/gateway_connection.py": "b156114ce66f9bf05857dcb9134455b94719d8ba2a30981d7b912ae7a3549dd9"
     }
   },
   "actions": {
@@ -910,7 +910,7 @@
   },
   "settings_preview": {
     "timestamp": "2026-10-02T20:00:00+08:00",
-    "code_stamp": "8929db352f86",
+    "code_stamp": "1ebd4cbd6ac0",
     "status": "preview",
     "applied": [],
     "pending": [],
@@ -1250,7 +1250,7 @@
   },
   "settings_deferred_preview": {
     "timestamp": "2026-10-02T20:00:00+08:00",
-    "code_stamp": "8929db352f86",
+    "code_stamp": "1ebd4cbd6ac0",
     "status": "preview",
     "applied": [],
     "pending": [],
@@ -1426,7 +1426,7 @@
   "sync_combined_preview": {
     "preview": {
       "timestamp": "2026-10-02T20:00:00+08:00",
-      "code_stamp": "8929db352f86",
+      "code_stamp": "1ebd4cbd6ac0",
       "status": "preview",
       "applied": [],
       "pending": [],
@@ -2587,7 +2587,7 @@
   "share_maintenance": {
     "generatedFrom": "console_share_actions handlers via the real registry + OperationManager, and share_backend_supervision.run_once for the supervision decision; every seam value is a private fixture",
     "components": {
-      "share_gateway": "8100 分享入口进程（um-share-python.exe + share_entry.py）",
+      "share_gateway": "8100 分享入口进程（um-share-python.exe + share.entry.py）",
       "share_backend": "8110 专用后端进程（chat2api.py --port 8110 --profile <dir>\\edge-profile）"
     },
     "actions": [
@@ -6834,7 +6834,7 @@
         "last_error": null,
         "note": "监督决策记录由真实 share_backend_supervision.run_once(apply=True) 生成：action=none、code=budget_exhausted、attempts_this_hour=3、idle_reason=budget_exhausted；本段无 console 动作（不与动作名混用）。",
         "supervision": {
-          "generatedFrom": "share_backend_supervision.run_once(apply=True) via the real handler; private fixture inputs (temp watch dir, fake boot id, fake broker view, fake ops gate)",
+          "generatedFrom": "share.backend_supervision.run_once(apply=True) via the real handler; private fixture inputs (temp watch dir, fake boot id, fake broker view, fake ops gate)",
           "decision": {
             "at_utc": "2026-10-02T12:01:09.500000+00:00",
             "action": "none",
@@ -6863,7 +6863,7 @@
       }
     ],
     "supervision": {
-      "generatedFrom": "share_backend_supervision.run_once(apply=True) via the real handler; private fixture inputs (temp watch dir, fake boot id, fake broker view, fake ops gate)",
+      "generatedFrom": "share.backend_supervision.run_once(apply=True) via the real handler; private fixture inputs (temp watch dir, fake boot id, fake broker view, fake ops gate)",
       "decision": {
         "at_utc": "2026-10-02T12:01:09.500000+00:00",
         "action": "none",

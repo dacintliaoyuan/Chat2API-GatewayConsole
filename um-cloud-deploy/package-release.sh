@@ -220,9 +220,9 @@ verify_release_manifest "$PAYLOAD" "$PAYLOAD/RELEASE-MANIFEST.json" || \
 # Linux extraction keeps systemd ExecStart/ExecStop working.
 find "$PAYLOAD/um-cloud-deploy" -type f \
   \( -name '*.sh' -o -path '*/bin/*.py' \) -exec chmod 0755 {} +
-# The operator runs `console_magpie_prices.py --sync` directly (README); keep the
+# The operator runs `console/magpie_prices.py --sync` directly (README); keep the
 # root-level synchronizer executable in the extracted release.
-chmod 0755 "$PAYLOAD/console_magpie_prices.py"
+chmod 0755 "$PAYLOAD/console/magpie_prices.py"
 
 if command -v pwsh >/dev/null 2>&1 && [ -f "$PAYLOAD/um-cloud-deploy/verify-release.ps1" ]; then
   pwsh -NoProfile -NonInteractive -File \

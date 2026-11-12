@@ -42,7 +42,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-import console_magpie_prices as magpie
+from console import magpie_prices as magpie
 
 USAGE_SERVICE_PATH = Path(__file__).resolve().parents[1] / "usagesrv.py"
 import importlib.util
@@ -717,7 +717,7 @@ class HttpReadSurfaceTest(MagpiePriceFixture):
 
 
 class CliSyncTests(MagpiePriceFixture):
-    """``console_magpie_prices.py --sync`` is the operator/deployment entry.
+    """``console/magpie_prices.py --sync`` is the operator/deployment entry.
 
     install.sh leaves the first encrypted checkpoint fail-closed until a Magpie
     snapshot exists; this CLI reads the deployment configuration (env or

@@ -1,5 +1,5 @@
 """Offline tests for the share-side instance-channel wire server
-(ai-gateway/share_instance_pipe.py, R41-1).
+(ai-gateway/share/instance_pipe.py, R41-1).
 
 Fake kernels only - no real pipe. Verifies: the bounded wire layer
 dispatches to the REAL ShareServer.handle_instance_control (signed schema
@@ -19,8 +19,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 
-import share_broker_protocol as bp  # noqa: E402
-import share_instance_pipe as sip  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
+import share.instance_pipe as sip  # noqa: E402
 from share_entry import ShareServer  # noqa: E402
 
 

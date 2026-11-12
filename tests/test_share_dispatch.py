@@ -45,7 +45,7 @@ if str(HERE) not in sys.path:
 
 def _write_private(path, text):
     """Fixture secrets must pass the POSIX 0600/current-uid gate."""
-    from share_secret_protection import write_private_secret_path
+    from share.secret_protection import write_private_secret_path
     write_private_secret_path(Path(path), str(text).encode("utf-8"))
 
 
@@ -621,7 +621,7 @@ class TestRevokeNoticeLoadAck(unittest.TestCase):
         }), encoding="utf-8")
 
     def _signed_load(self, *, generation, enabled):
-        from share_broker_protocol import INSTANCE_SIGNED_KEYS, sign
+        from share.broker_protocol import INSTANCE_SIGNED_KEYS, sign
         self._write(generation=generation, enabled=enabled)
         payload = json.loads(self.config.read_text(encoding="utf-8"))
         secret = "inst-secret"

@@ -1488,7 +1488,7 @@ test("a known key state must name a mechanism and absent stays startup_env", () 
   // Rev15 R32-KEY-ACTIVE cross-field mirror: a state that carries (or needs)
   // a value always names how the instance consumes it, while `unknown` keeps
   // both `unknown` and a mechanism the file source confirmed
-  // (console_gateway_connection.py:596 then :637 for the only `absent`).
+  // (console/gateway_connection.py:596 then :637 for the only `absent`).
   for (const state of FIXTURE_CONNECTION_STATES)
     assert.equal(
       normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES[state]).keyInUse,

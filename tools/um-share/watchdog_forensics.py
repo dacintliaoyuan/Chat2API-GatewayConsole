@@ -40,7 +40,7 @@ limits/broker 读数），输出「看门狗会怎么判」的结论与命中的
   ``lib/gateway-runtime.ps1:95-109``（``usage`` 描述符 = 8096）与 ``:524-531``
   （``Port`` 停止 = 只杀该端口的占用者 + 该描述符命令行匹配者）。
 * 控制台的 ``backend.pid`` 文件：看门狗不读；读它的是
-  ``console_share_production.py:1328-1346``／``:1400-1412``。
+  ``console/share_production.py:1328-1346``／``:1400-1412``。
 
 **建模口径的两条声明**（哪些是源码事实、哪些是本工具的建模选择）：
 
@@ -149,7 +149,7 @@ DEFAULT_WATCHDOG = {
 WD = "ai-gateway/um-share-deploy/watchdog-umshare.ps1"
 DEPLOY = "ai-gateway/um-share-deploy/deploy-elevated.ps1"
 RUNTIME = "ai-gateway/lib/gateway-runtime.ps1"
-PROD = "ai-gateway/console_share_production.py"
+PROD = "ai-gateway/console/share_production.py"
 GUARD = "ai-gateway/um-share-deploy/share_guard.py"
 SNAP = "ai-gateway/tools/um-share/share_chain_snapshot.py"
 # The deployment README is a DIFFERENT file from the deploy script:

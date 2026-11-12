@@ -35,7 +35,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(DEPLOY))
 
 import backup_restore  # noqa: E402
-from share_store import ShareStore  # noqa: E402
+from share.store import ShareStore  # noqa: E402
 
 MAGPIE_SNAPSHOT = "magpie-prices.snapshot.json"
 MAGPIE_STATUS = "magpie-prices.status.json"
@@ -418,7 +418,7 @@ class DeploymentTextAssemblyTests(unittest.TestCase):
         self.assertIn('(cd "$OUTPUT_DIR" && sha256sum '
                       '"$(basename "$ARCHIVE")")', text)
         self.assertNotIn('sha256sum "$ARCHIVE" >', text)
-        self.assertIn('chmod 0755 "$PAYLOAD/console_magpie_prices.py"', text)
+        self.assertIn('chmod 0755 "$PAYLOAD/console/magpie_prices.py"', text)
 
     def test_release_packaging_requires_a_production_console_line(self):
         # usagesrv.py answers 500 for every line other than production, so a

@@ -11,10 +11,10 @@ Key」做成可核对的命令，**默认 dry-run**：只打印将写入的存�
 * 权威存储 = ``share_management.ShareManager`` 背后的 ``share_store.ShareStore``
   （SQLite 单写者；默认 ``ai-gateway/data/share-store.db``，可用
   ``SHARE_STORE_FILE`` 或 ``--store`` 覆盖）；
-* 键行字段与写入语义见 ``share_store.py:519-541``（``_insert_key_conn``）与
-  ``share_store.py:859-877``（``delete_key`` 软删除 tombstone）；
-* 创建/撤销的**发布意图**与代次递增在同一事务里（``share_store.py:588-596``、
-  ``:873-874``）；撤销是 fail-closed 方向（``share_management.py:797-803``）。
+* 键行字段与写入语义见 ``share/store.py:519-541``（``_insert_key_conn``）与
+  ``share/store.py:859-877``（``delete_key`` 软删除 tombstone）；
+* 创建/撤销的**发布意图**与代次递增在同一事务里（``share/store.py:588-596``、
+  ``:873-874``）；撤销是 fail-closed 方向（``share/management.py:797-803``）。
 
 硬约束（本工具的全部承诺）：
 
@@ -72,7 +72,7 @@ TEST_LABEL_PREFIX = "zz-test-"
 TEST_KEY_MAX_CONCURRENCY = 1
 
 KEY_ID_SHAPE = "uuid4（8-4-4-4-12 小写 hex，36 字符；写入前不可知具体值）"
-MASKED_SHAPE = "um-share-****<末 4 字符>（掩码不含明文，share_store.py:85-87）"
+MASKED_SHAPE = "um-share-****<末 4 字符>（掩码不含明文，share/store.py:85-87）"
 SECRET_HASH_FIELD = "sha256(<生成的密钥>)：只写摘要，明文绝不打印"
 REMINDER = ("提醒：这是专用测试 Key，验收完成必须立刻撤销 —— "
             "python ai-gateway/tools/um-share/test_key_ops.py "
@@ -86,7 +86,7 @@ KEY_COLUMNS = ("key_id", "name", "enabled", "secret_version", "masked_key",
 # ------------------------------------------------------------------- 只读层
 def default_store_path():
     """权威存储路径：``SHARE_STORE_FILE`` 优先，否则 ``data/share-store.db``。"""
-    import share_management
+    share_management = __import__("importlib").import_module("share.management")
     return str(share_management.DEFAULT_STORE_FILE)
 
 
@@ -252,7 +252,7 @@ def plan_create(intent, store):
         "store_reason": store.get("reason"),
         "store_note": store_note(intent),
         "generation_now": (store.get("generation") or {}).get("config_generation"),
-        "table": "keys（schema_version=%s，share_store.py:226-265）"
+        "table": "keys（schema_version=%s，share/store.py:226-265）"
                  % (store.get("meta", {}).get("schema_version")),
         "key_id": KEY_ID_SHAPE,
         "rows_to_insert": [
@@ -262,7 +262,7 @@ def plan_create(intent, store):
             ("secret_version", 1),
             ("masked_key", MASKED_SHAPE),
             ("secret_blob", "DPAPI user-scope 密文；保护失败时为 NULL"
-                             "（降级 hash-only，share_store.py:523-528）"),
+                             "（降级 hash-only，share/store.py:523-528）"),
             ("secret_algo", "dpapi-user-scope-v1 或 NULL"),
             ("enabled", 1),
             ("max_concurrency", intent.get("max_concurrency")),
@@ -271,9 +271,9 @@ def plan_create(intent, store):
             ("row_version", 1),
         ],
         "same_transaction": [
-            "configgen.config_generation +1（desired；share_store.py:399-401）",
+            "configgen.config_generation +1（desired；share/store.py:399-401）",
             "ops：插入 publish intent（revoking=false, action_kind=create, "
-            "key_id=<新 key_id>；share_store.py:588-596）",
+            "key_id=<新 key_id>；share/store.py:588-596）",
         ],
         "publication": publication_note(intent),
         "reminder": REMINDER,
@@ -292,7 +292,7 @@ def plan_revoke(intent, store):
         "sql": ("UPDATE keys SET enabled=0, deleted_at=<UTC now>,"
                 " secret_blob=NULL, secret_algo=NULL, updated_at=<UTC now>,"
                 " row_version=row_version+1"
-                " WHERE key_id=? AND row_version=?（share_store.py:859-877）"),
+                " WHERE key_id=? AND row_version=?（share/store.py:859-877）"),
         "same_transaction": [
             "configgen.config_generation +1（desired）",
             "ops：插入 publish intent（revoking=true, action_kind=delete, "
@@ -301,7 +301,7 @@ def plan_revoke(intent, store):
         "publication": publication_note(intent),
         "fail_closed": ("撤销方向 fail-closed：发布未确认时 BrokerError(503)，"
                         "控制台把它记为 blocked 发布意图"
-                        "（share_management.py:797-803）"),
+                        "（share/management.py:797-803）"),
         "reminder": REMINDER,
     }
 
@@ -357,7 +357,7 @@ def format_plan(plan, intent):
 # ------------------------------------------------------------------ 写盘层
 def build_manager(intent):
     """--apply 的管理器装配：console = 控制台自己的（真实 broker）。"""
-    import share_management
+    share_management = __import__("importlib").import_module("share.management")
     if intent.get("broker") == "console":
         import usagesrv
         return usagesrv.get_share_manager()
@@ -379,7 +379,7 @@ def write_secret_exclusive(path, secret):
 
 def apply_create(intent):
     """--apply --create：写权威存储；StoreError 不冒泡，按 exit 2 如实报。"""
-    import share_store
+    share_store = __import__("importlib").import_module("share.store")
     try:
         manager = build_manager(intent)
         result = manager.create_key(name=intent["label"],
@@ -397,8 +397,8 @@ def apply_create(intent):
 
 
 def apply_revoke(intent):
-    import share_management
-    import share_store
+    share_management = __import__("importlib").import_module("share.management")
+    share_store = __import__("importlib").import_module("share.store")
     try:
         manager = build_manager(intent)
         result = manager.delete_key(intent["key_id"])
@@ -497,7 +497,7 @@ def render_list(store):
 
 def console_store_path():
     """控制台自己的权威存储路径（``usagesrv.get_share_manager()`` 用的是它）。"""
-    import share_management
+    share_management = __import__("importlib").import_module("share.management")
     return str(share_management.DEFAULT_STORE_FILE)
 
 

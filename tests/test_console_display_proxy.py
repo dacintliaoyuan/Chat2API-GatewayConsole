@@ -25,8 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import console_display_proxy as display
-import console_tailnet
+from console import display_proxy as display
+from console import tailnet as console_tailnet
 
 DISPLAY_DIR = ROOT / "um-cloud-deploy" / "display"
 LAUNCHER = DISPLAY_DIR / "novnc-launcher.html"

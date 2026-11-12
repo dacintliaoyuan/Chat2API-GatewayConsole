@@ -6,7 +6,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import share_broker_client as client_module
+import share.broker_client as client_module
 
 
 class EvidenceReadDeadlineTests(unittest.TestCase):

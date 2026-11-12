@@ -28,10 +28,10 @@ from unittest import mock
 sys.path.insert(0, str(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-import console_adapters  # noqa: E402  (same directory, sys.path prepared)
-import console_um_adapter  # noqa: E402
-import console_um_login  # noqa: E402
-from console_operations import OperationCancelled, OperationError  # noqa: E402
+from console import adapters as console_adapters  # noqa: E402  (same directory, sys.path prepared)
+from console import um_adapter as console_um_adapter  # noqa: E402
+from console import um_login as console_um_login  # noqa: E402
+from console.operations import OperationCancelled, OperationError  # noqa: E402
 
 
 class _Ctx:

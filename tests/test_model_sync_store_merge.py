@@ -22,9 +22,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import model_sync
-import zcode_file_lock
-from model_sync_core import Binding, CatalogModel, empty_state
+from model_sync import sync as model_sync
+from zcode import file_lock as zcode_file_lock
+from model_sync.sync_core import Binding, CatalogModel, empty_state
 
 UM = Binding("um", "ZCode", "local:openwebui", "UM", "（UM）")
 MANUAL = "local:manual"

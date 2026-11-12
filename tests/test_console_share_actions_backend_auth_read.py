@@ -19,8 +19,8 @@ from unittest import mock
 sys.path.insert(0, str(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-import console_share_actions as m  # noqa: E402
-from console_operations import OperationError  # noqa: E402
+from console import share_actions as m  # noqa: E402
+from console.operations import OperationError  # noqa: E402
 
 _SEAM_GLOBALS = ("_BACKEND_OBSERVE", "_BACKEND_OPS", "_BROKER_OPS",
                  "_BACKEND_LOGIN", "_BACKEND_LOGIN_CANCEL", "_STATE")
@@ -148,7 +148,7 @@ class BackendAuthReadTests(unittest.TestCase):
         backend = _GateStub()
         broker = _GateStub()
         self._wire(_ObserveStub(None), backend=backend, broker=broker)
-        import console_share_production
+        from console import share_production as console_share_production
         with mock.patch.object(console_share_production,
                                "backend_login_cancel",
                                return_value=sentinel) as cancel:

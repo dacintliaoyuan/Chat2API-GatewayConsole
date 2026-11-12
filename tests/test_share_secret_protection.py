@@ -26,9 +26,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import share_secret_protection as protection  # noqa: E402
-import share_store  # noqa: E402
-from share_store import (SecretUndecryptable, SecretUnavailable,  # noqa: E402
+import share.secret_protection as protection  # noqa: E402
+import share.store as share_store  # noqa: E402
+from share.store import (SecretUndecryptable, SecretUnavailable,  # noqa: E402
                          ShareStore, StoreError)
 
 _IS_LINUX = sys.platform.startswith("linux")
@@ -114,7 +114,7 @@ class DispatchTests(unittest.TestCase):
         try:
             self.assertEqual(
                 protection.default_key_file(),
-                Path(protection.__file__).resolve().parent
+                Path(protection.__file__).resolve().parents[1]
                 / "data" / "share-secret.key")
         finally:
             if saved is not _MISSING:
@@ -148,11 +148,11 @@ class DispatchTests(unittest.TestCase):
         code = (
             "import sys\n"
             "sys.modules['cryptography'] = None\n"
-            "sys.modules['share_secret_protection'] = None\n"
-            "import share_store\n"
+            "sys.modules['share.secret_protection'] = None\n"
+            "import share.store as share_store\n"
             "print(share_store.SECRET_ALGO_DPAPI_USER)\n"
-            "sys.modules.pop('share_secret_protection')\n"
-            "import share_secret_protection as p\n"
+            "sys.modules.pop('share.secret_protection')\n"
+            "import share.secret_protection as p\n"
             "print(p.SECRET_ALGO_AESGCM_FILE_KEY)\n"
             "try:\n"
             "    p.protect_secret_aesgcm('um-share-probe')\n"

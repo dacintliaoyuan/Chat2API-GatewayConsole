@@ -10,7 +10,7 @@ friend key from the restricted delivery file WITHOUT printing it. Verifies:
     aliases)
   * non-stream + stream chat
   * revocation behaviour is covered separately by the management-service
-    path (share_admin.py + tests/test_share_management*.py), never against
+    path (share/admin.py + tests/test_share_management*.py), never against
     the delivered key. key_lifecycle_20260906.py is SUPERSEDED: the gateway
     no longer provisions keys and now requires an explicit upstream port.
 Usage:  python verify_8100.py --base http://127.0.0.1:8100 --key-file <delivery> [--probe]

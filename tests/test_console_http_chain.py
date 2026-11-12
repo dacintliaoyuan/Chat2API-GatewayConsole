@@ -36,7 +36,7 @@ os.environ["CONSOLE_LOCK_DIR"] = os.path.join(_TMP, "console-locks")
 os.environ["USAGE_SESSION_CODE_FILE"] = os.path.join(_TMP, "usage-session-code")
 os.environ["USAGE_CONTROL_TOKEN_FILE"] = os.path.join(_TMP, "admin-control-token")
 _CONTROL_TOKEN = "test-control-token-console-http-chain"
-from share_secret_protection import write_private_secret_path
+from share.secret_protection import write_private_secret_path
 write_private_secret_path(
     os.environ["USAGE_CONTROL_TOKEN_FILE"], _CONTROL_TOKEN.encode("utf-8"))
 
@@ -48,8 +48,8 @@ assert _SPEC.loader is not None
 sys.modules[_SPEC.name] = usagesrv
 _SPEC.loader.exec_module(usagesrv)
 
-import console_adapters  # noqa: E402  (same directory, sys.path via cwd)
-import console_operations  # noqa: E402
+from console import adapters as console_adapters  # noqa: E402  (same directory, sys.path via cwd)
+from console import operations as console_operations  # noqa: E402
 
 _LOCK_DIR = os.environ["CONSOLE_LOCK_DIR"]
 # 本模块的 db/lock 路径在导入期就写进 env；本类装配 manager 时必须用
@@ -144,7 +144,7 @@ class HttpChainTestBase(unittest.TestCase):
         cls.run_patcher.start()
         cls.addClassCleanup(cls.run_patcher.stop)
         cls.status_patcher = mock.patch(
-            "console_adapters.service_status", return_value=FAKE_SNAPSHOT)
+            "console.adapters.service_status", return_value=FAKE_SNAPSHOT)
         cls.status_patcher.start()
         cls.addClassCleanup(cls.status_patcher.stop)
         registry = console_adapters.build_registry()

@@ -46,7 +46,7 @@ VNC 认证由云端完成：控制台代理与 x11vnc 完成 RFB 3.8/3.7/3.3 的
 
 ## 认证与来源
 
-- 显示面的来源校验由控制台承担：远程请求必须通过 `console_tailnet.py` 的 Serve 来源/owner/具体设备校验；本地请求必须来自 loopback Host/Origin 和同一端口。
+- 显示面的来源校验由控制台承担：远程请求必须通过 `console/tailnet.py` 的 Serve 来源/owner/具体设备校验；本地请求必须来自 loopback Host/Origin 和同一端口。
 - `/display/websockify` 只接受 Tailscale Serve 的 owner/具体设备加控制台会话、管理控制令牌、控制台 `usage_session`，或由 `POST /display/grant` 换来的 HttpOnly 显示会话 Cookie；仅 loopback 而没有上述凭据的请求一律 403。
 - `POST /api/console/share-management/display-grant` 只在管理身份成立时发放一次性、短时、绑定来源的 grant；`POST /display/grant` 用 grant 换取 `um_display_session` Cookie（`HttpOnly; SameSite=Strict; Path=/display/`，HTTPS 时加 `Secure`）。grant 只能成功兑换一次。
 - 默认最多 2 个并发显示连接，空闲 900 秒、单会话最长 4 小时；均在 `console.env` 可调。

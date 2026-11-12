@@ -15,10 +15,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from share_broker_protocol import BrokerResult  # noqa: E402
-from share_management import (BrokerClientAdapter, BrokerError,  # noqa: E402
+from share.broker_protocol import BrokerResult  # noqa: E402
+from share.management import (BrokerClientAdapter, BrokerError,  # noqa: E402
                              ShareManager, _fingerprint)
-from share_store import ShareStore, StoreError  # noqa: E402
+from share.store import ShareStore, StoreError  # noqa: E402
 
 
 class ScriptedBroker:

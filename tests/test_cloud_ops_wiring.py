@@ -26,7 +26,7 @@ sys.path.insert(0, str(HERE / "um-cloud-deploy"))
 
 import backup_restore  # noqa: E402
 import usagesrv  # noqa: E402
-from share_store import ShareStore  # noqa: E402
+from share.store import ShareStore  # noqa: E402
 
 _SPEC = importlib.util.spec_from_file_location(
     "share_entry", HERE / "chat2api" / "share_entry.py")

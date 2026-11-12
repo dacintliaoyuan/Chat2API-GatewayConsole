@@ -9,12 +9,12 @@ try:  # `python -m unittest tests.<module>` from ai-gateway/
         temp_sync_env, _aligned_store, _Ctx)
 except ImportError:  # `discover -s ai-gateway/tests` (top-level module names)
     from test_console_model_actions import temp_sync_env, _aligned_store, _Ctx
-import console_model_actions as actions
-import model_sync as sync
-from model_sync_core import CatalogModel
-from console_operations import OperationError
-from console_operations import OperationCancelled, OperationManager
-import console_adapters
+from console import model_actions as actions
+from model_sync import sync as sync
+from model_sync.sync_core import CatalogModel
+from console.operations import OperationError
+from console.operations import OperationCancelled, OperationManager
+from console import adapters as console_adapters
 
 
 class SettingsPublicationTests(unittest.TestCase):

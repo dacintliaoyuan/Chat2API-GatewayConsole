@@ -1,4 +1,4 @@
-﻿# Offline regression tests for the console runtime JSON bridge.
+# Offline regression tests for the console runtime JSON bridge.
 # Verifies the PowerShell lock protocol against the Python implementation via
 # a REAL cross-process hold, plus snapshot/start/stop shapes with injected
 # test-only scriptblock seams. No real gateway service is started or stopped.
@@ -276,7 +276,7 @@ $pyFile = Join-Path $tempRoot 'holder.py'
 $pyCode = @'
 import sys, time
 sys.path.insert(0, r"__GATEWAY__")
-from console_operations import ResourceFileLock
+from console.operations import ResourceFileLock
 lock = ResourceFileLock(sys.argv[1], "service:testkey", "test-holder", timeout_s=2.0)
 lock.acquire()
 print("READY", flush=True)

@@ -44,10 +44,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from share_broker_client import BrokerClient, NamedPipeBrokerTransport
-from share_broker_ops import make_instance_call
-from share_management import BrokerClientAdapter, ShareManager
-from share_store import ShareStore
+from share.broker_client import BrokerClient, NamedPipeBrokerTransport
+from share.broker_ops import make_instance_call
+from share.management import BrokerClientAdapter, ShareManager
+from share.store import ShareStore
 
 EXPERIMENT_PORT = 9100
 PROBE_DEADLINE_SECONDS = 10.0
@@ -152,14 +152,14 @@ def run_request_matrix(spec, transport_factory=None, http_opener=None,
 
 def build_signed_replay_frame(secret):
     """One signed management frame, returned twice for the replay check."""
-    import share_broker_protocol as bp
+    import share.broker_protocol as bp
     request = bp.build_request(secret, "status")
     return bp.encode_frame(request)
 
 
 def send_raw_frame(transport_factory, frame):
     """One raw wire exchange: send the signed frame, read one reply line."""
-    import share_broker_protocol as bp
+    import share.broker_protocol as bp
     import time as _time
     transport = transport_factory().open()
     try:
@@ -203,7 +203,7 @@ def run_stall_matrix(spec, transport_factory=None, clock=None):
     # drip goes through the transport's OWN kernel facade (real or fake) -
     # one WriteFile per byte, never a fabricated bulk send.
     import ctypes
-    import share_broker_protocol as bp
+    import share.broker_protocol as bp
     frame = bp.encode_frame(bp.build_request("drip-probe", "status"))
     for _ in range(max_per_class):
         transport = transport_factory().open()
@@ -263,7 +263,7 @@ def run_stall_matrix(spec, transport_factory=None, clock=None):
 def _read_secret(path):
     """The controlled key file reader (operator-readable control secret);
     any failure fails closed with an explicit error - never a fallback."""
-    from share_broker_ops import _KeyFileSecret
+    from share.broker_ops import _KeyFileSecret
     return _KeyFileSecret.read(path)
 
 
@@ -531,7 +531,7 @@ def _pipe_probe(name, sddl):
     """ONE real pipe instance creation attempt (the negative-first probe).
     A placeholder SDDL must FAIL the conversion (exit 1, ZERO namespace
     side effects); a calibrated SDDL creates + closes one probe instance."""
-    import share_broker_server as srv
+    import share.broker_server as srv
     kernel_pair = srv._declared_kernel()
     try:
         security = srv._SecurityAttrs(sddl, kernel_pair)

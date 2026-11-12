@@ -1,4 +1,4 @@
-﻿# execute-d4-experiment-lib.ps1 - offline-testable machinery for the D4
+# execute-d4-experiment-lib.ps1 - offline-testable machinery for the D4
 # experiment orchestration (D4-P rework per handoff §62). Every OS edge is
 # injectable: FileBoundary (exists/leaf/list/read/write/xml-write/remove/
 # mkdir/hash/byte-copy), task/process/port/rule runners. The production entry wires real boundaries
@@ -147,10 +147,10 @@ function New-D4ExperimentContract {
         BootstrapAccountDefault  = 'um_share_d4'
         ModuleClosure            = @(
             'chat2api\share_entry.py', 'um-share-deploy\share_guard.py',
-            'share_instance_pipe.py', 'share_broker_server.py',
-            'share_broker_host.py', 'share_broker_protocol.py',
-            'share_runtime.py', 'share_management.py', 'share_store.py',
-            'share_broker_client.py', 'share_broker_ops.py',
+            'share/instance_pipe.py', 'share/broker_server.py',
+            'share/broker_host.py', 'share/broker_protocol.py',
+            'share/runtime.py', 'share/management.py', 'share/store.py',
+            'share/broker_client.py', 'share/broker_ops.py',
             'um-share-deploy\d4_stage_probe.py',
             'um-share-deploy\d4-account-bootstrap.ps1'
         )

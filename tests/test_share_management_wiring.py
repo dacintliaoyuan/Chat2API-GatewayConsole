@@ -21,9 +21,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from share_broker_client import (BrokerClient, NamedPipeBrokerTransport)  # noqa: E402
-from share_broker_protocol import DEFAULT_DEADLINE_SECONDS  # noqa: E402
-from share_management import BrokerError, NoopBroker  # noqa: E402
+from share.broker_client import (BrokerClient, NamedPipeBrokerTransport)  # noqa: E402
+from share.broker_protocol import DEFAULT_DEADLINE_SECONDS  # noqa: E402
+from share.management import BrokerError, NoopBroker  # noqa: E402
 
 _HERE = Path(__file__).resolve().parents[1]
 
@@ -70,9 +70,9 @@ def _guard_usage_module(module):
 
 def setUpModule():
     global _ISOLATION_TEMP, _ISOLATION_SAVED_SEAMS
-    import share_broker_client
-    import share_broker_server
-    import console_share_actions
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
+    from console import share_actions as console_share_actions
     _ISOLATION_ATTEMPTS.clear()
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(prefix="offline-management-")
     root = Path(_ISOLATION_TEMP.name)
@@ -100,7 +100,7 @@ def setUpModule():
 
 
 def tearDownModule():
-    import console_share_actions
+    from console import share_actions as console_share_actions
     try:
         for module, old_console, _old_share in _ISOLATION_MODULES:
             current = module._console_manager
@@ -164,7 +164,7 @@ class WiringTestBase(unittest.TestCase):
         self.usagesrv.SHARE_MANAGEMENT_CONFIG_FILE = str(self.config_path)
         self.addCleanup(setattr, self.usagesrv,
                         "SHARE_MANAGEMENT_CONFIG_FILE", old_config)
-        import share_broker_client
+        import share.broker_client as share_broker_client
         patcher = mock.patch.object(share_broker_client,
                                    "NamedPipeBrokerTransport", _MissingPipeTransport)
         patcher.start()

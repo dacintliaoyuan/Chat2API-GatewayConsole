@@ -11,8 +11,8 @@ try:  # `python -m unittest tests.<module>` from ai-gateway/
 except ImportError:  # `discover -s ai-gateway/tests` (top-level module names)
     from test_console_api import ConsoleApiTestBase as _ApiBase
     from test_console_model_actions import temp_sync_env, _aligned_store
-import model_sync as sync
-from model_sync_core import CatalogModel
+from model_sync import sync as sync
+from model_sync.sync_core import CatalogModel
 
 
 class SettingsHttpContractTests(_ApiBase):

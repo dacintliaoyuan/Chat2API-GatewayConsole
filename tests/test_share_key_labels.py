@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import share_store
+import share.store as share_store
 
 
 class ReadOnlyKeyLabelsTests(unittest.TestCase):

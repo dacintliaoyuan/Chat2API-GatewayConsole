@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from share_management import (BrokerError, Conflict, Disabled, NotFound,
+from share.management import (BrokerError, Conflict, Disabled, NotFound,
                              StoreError, VersionMismatch)
 # spec-shared-05: ``shared`` is a REQUIRED dependency of BOTH roots, so it is
 # imported at module import time exactly like the local host does. The summary
@@ -40,7 +40,7 @@ from .backend_process import BackendProcess, BackendProcessError
 from .config import CloudConfigError
 from .keys_api import KeyApi, KeyApiError
 
-from console_backend_app import (
+from app.console_backend_app import (
     BackendHandler, BackendHTTPServer,
     append_bounded_log as _append_bounded_log,
     has_proxy_metadata as _has_proxy_metadata,
@@ -440,7 +440,7 @@ class CloudApp:
     def _start_chain(self):
         # E19-1-06 step 8: the supervision roots come from the explicit
         # config, never from the LOCALAPPDATA / in-package defaults.
-        from console_share_production import configure_supervision_paths
+        from console.share_production import configure_supervision_paths
         configure_supervision_paths(
             watch_dir=self.config.supervision_watch_dir,
             lock_dir=self.config.supervision_lock_dir)
@@ -640,7 +640,7 @@ def _start_broker(config, host_command=None):
     binary with the same flags.
 
     ``config.broker_args()`` returns only the broker's OWN required flags
-    (``share_broker_ops.py::linux_main``). ``--host-command`` is a REMAINDER
+    (``share/broker_ops.py::linux_main``). ``--host-command`` is a REMAINDER
     that carries the 8100 gateway argv and belongs to the caller — this root
     does not own the 8100 child (the broker does, once started). Without it the
     broker parser exits 2 with ``unrecognized arguments``/``required``, so a

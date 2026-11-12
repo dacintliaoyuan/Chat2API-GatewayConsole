@@ -1489,7 +1489,7 @@ class ConcurrencyAccountingTests(unittest.TestCase):
         self.assertEqual(resp["result"]["share_max_concurrency"], 2)
 
     def _signed_load(self, server, payload, extra_fields):
-        from share_broker_protocol import INSTANCE_SIGNED_KEYS, sign
+        from share.broker_protocol import INSTANCE_SIGNED_KEYS, sign
         secret = "inst-secret"
         fields = {"generation": payload["config_generation"],
                   "fingerprint": hashlib.sha256(json.dumps(
@@ -1627,7 +1627,7 @@ class RealTcpGlobalCapacityTests(unittest.TestCase):
 
     def _load_global_64(self):
         """Write a 64 projection and drive the signed instance load ACK."""
-        from share_broker_protocol import INSTANCE_SIGNED_KEYS, sign
+        from share.broker_protocol import INSTANCE_SIGNED_KEYS, sign
         payload = json.loads(self.config.read_text(encoding="utf-8"))
         payload["config_generation"] = 2
         payload["share_max_concurrency"] = 64
@@ -1798,7 +1798,7 @@ class RevokeTerminateTests(unittest.TestCase):
         self.assertEqual(server.terminate_key("missing"), 0)
 
     def _signed_load(self, server, payload, extra_fields):
-        from share_broker_protocol import INSTANCE_SIGNED_KEYS, sign
+        from share.broker_protocol import INSTANCE_SIGNED_KEYS, sign
         secret = "inst-secret"
         fields = {"generation": payload["config_generation"],
                   "fingerprint": hashlib.sha256(json.dumps(
@@ -1812,7 +1812,7 @@ class RevokeTerminateTests(unittest.TestCase):
                              "fields": fields}, INSTANCE_SIGNED_KEYS), secret
 
     def test_load_acks_terminated_count(self):
-        from share_broker_protocol import INSTANCE_SIGNED_KEYS, sign
+        from share.broker_protocol import INSTANCE_SIGNED_KEYS, sign
         entries = [dict(self._entry("ka"))]
         payload = {"schema_version": 2, "config_generation": 5,
                    "share_max_concurrency": 4, "data": entries}
@@ -2525,7 +2525,7 @@ class ResumeControlTests(unittest.TestCase):
         self.addCleanup(self.server.server_close)
 
     def _call(self, action):
-        from share_broker_protocol import build_request
+        from share.broker_protocol import build_request
         body = build_request(self.secret, action, {},
                              instance_id=self.server.instance_id,
                              now=int(time.time()) + 1)
@@ -2590,7 +2590,7 @@ class ResumeControlTests(unittest.TestCase):
         # 旧实例（协议模块不认识 resume）在 validate_instance_request
         # 先一步拒绝：bad_request / detail == "unknown action"。契约 §0.7：
         # "unknown instance action" 是死代码串，绝不作为旧实例信号。
-        import share_broker_protocol as bp
+        import share.broker_protocol as bp
         old_actions = {k: v for k, v in bp.INSTANCE_ACTIONS.items()
                        if k != "resume"}
         with mock.patch.dict(bp.INSTANCE_ACTIONS, old_actions, clear=True):

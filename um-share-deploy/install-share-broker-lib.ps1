@@ -1,4 +1,4 @@
-﻿# install-share-broker-lib.ps1 - function library for the SYSTEM broker host
+# install-share-broker-lib.ps1 - function library for the SYSTEM broker host
 # install/uninstall (D4 prerequisite). Dot-sourced by install-share-broker.ps1
 # and by the offline tests (tests/install-share-broker.Tests.ps1); contains NO
 # top-level execution, so loading it never touches the real host.
@@ -105,15 +105,15 @@ function Get-BrokerSourceManifest {
     # closure is reviewed code; Dst values are PURE file names.
     param([string]$SourceRoot)
     return @(
-        @{ Src = (Join-Path $SourceRoot 'share_broker_protocol.py');  File = 'share_broker_protocol.py' },
-        @{ Src = (Join-Path $SourceRoot 'share_broker_host.py');      File = 'share_broker_host.py' },
-        @{ Src = (Join-Path $SourceRoot 'share_broker_client.py');    File = 'share_broker_client.py' },
-        @{ Src = (Join-Path $SourceRoot 'share_broker_ops.py');       File = 'share_broker_ops.py' },
-        @{ Src = (Join-Path $SourceRoot 'share_broker_server.py');    File = 'share_broker_server.py' },
-        @{ Src = (Join-Path $SourceRoot 'share_instance_pipe.py');    File = 'share_instance_pipe.py' },
-        @{ Src = (Join-Path $SourceRoot 'share_runtime.py');          File = 'share_runtime.py' },
-        @{ Src = (Join-Path $SourceRoot 'share_management.py');       File = 'share_management.py' },
-        @{ Src = (Join-Path $SourceRoot 'share_store.py');            File = 'share_store.py' }
+        @{ Src = (Join-Path $SourceRoot 'share/broker_protocol.py');  File = 'share/broker_protocol.py' },
+        @{ Src = (Join-Path $SourceRoot 'share/broker_host.py');      File = 'share/broker_host.py' },
+        @{ Src = (Join-Path $SourceRoot 'share/broker_client.py');    File = 'share/broker_client.py' },
+        @{ Src = (Join-Path $SourceRoot 'share/broker_ops.py');       File = 'share/broker_ops.py' },
+        @{ Src = (Join-Path $SourceRoot 'share/broker_server.py');    File = 'share/broker_server.py' },
+        @{ Src = (Join-Path $SourceRoot 'share/instance_pipe.py');    File = 'share/instance_pipe.py' },
+        @{ Src = (Join-Path $SourceRoot 'share/runtime.py');          File = 'share/runtime.py' },
+        @{ Src = (Join-Path $SourceRoot 'share/management.py');       File = 'share/management.py' },
+        @{ Src = (Join-Path $SourceRoot 'share/store.py');            File = 'share/store.py' }
     )
 }
 
@@ -464,7 +464,7 @@ setlocal
 set "PYTHONHOME=__PYTHONHOME__"
 set "PYTHONDONTWRITEBYTECODE=1"
 set "PYTHONPATH="
-"%~dp0um-share-python.exe" "%~dp0share_broker_server.py" --broker-dir "%~dp0broker" --key-file "%~dp0broker\broker-control-key" --instance-key-file "%~dp0instance-channel-key" --registration-file "%~dp0run\live\instance-registration.json" --pipe-name "__BROKER_PIPE__" --instance-pipe-prefix "__INSTANCE_PREFIX__" --projection-path "%~dp0um-share-projection.json" --share-task "__SHARE_TASK__" --share-port __SHARE_PORT__ --expected-owner-account "__EXPECTED_OWNER__" --expect-image "%~dp0um-share-python.exe" --watchdog-script "%~dp0watchdog-umshare.ps1" --run-root "%~dp0\" --firewall-rule "um-share-outbound-block" --share-faults-file "%~dp0run\live\share-faults.jsonl" --dispatch-deadline 130__SDDL____SID__ %*
+"%~dp0um-share-python.exe" "%~dp0share/broker_server.py" --broker-dir "%~dp0broker" --key-file "%~dp0broker\broker-control-key" --instance-key-file "%~dp0instance-channel-key" --registration-file "%~dp0run\live\instance-registration.json" --pipe-name "__BROKER_PIPE__" --instance-pipe-prefix "__INSTANCE_PREFIX__" --projection-path "%~dp0um-share-projection.json" --share-task "__SHARE_TASK__" --share-port __SHARE_PORT__ --expected-owner-account "__EXPECTED_OWNER__" --expect-image "%~dp0um-share-python.exe" --watchdog-script "%~dp0watchdog-umshare.ps1" --run-root "%~dp0\" --firewall-rule "um-share-outbound-block" --share-faults-file "%~dp0run\live\share-faults.jsonl" --dispatch-deadline 130__SDDL____SID__ %*
 endlocal
 '@
     $content = $template.Replace('__PYTHONHOME__', $Cfg['PythonHome']).Replace('__BROKER_PIPE__', $Cfg['BrokerPipeName']).Replace('__INSTANCE_PREFIX__', $Cfg['InstancePipePrefix']).Replace('__SHARE_TASK__', $Cfg['ShareTaskName']).Replace('__SHARE_PORT__', [string]$Cfg['SharePort']).Replace('__EXPECTED_OWNER__', $OwnerArg).Replace('__SDDL__', $sddlArg).Replace('__SID__', $sidArg)
@@ -846,7 +846,7 @@ function Get-BrokerTaskFacts {
 function Get-BrokerProcessPids {
     # D5: broker-process evidence by ACTUAL COMMAND LINE (CIM query by the
     # image name; the row counts as the broker only when its command line
-    # runs share_broker_server.py). $null = evidence failure (unconfirmed
+    # runs share/broker_server.py). $null = evidence failure (unconfirmed
     # - never treated as "no broker"); an empty result from a succeeded
     # query is the explicit no-broker evidence.
     param([hashtable]$Cfg, [scriptblock]$Runner)

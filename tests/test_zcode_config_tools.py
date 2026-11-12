@@ -40,7 +40,7 @@ TOOL_PATH = AI_GATEWAY_DIR / "tools" / "zcode-config" / "keepset_apply.py"
 if str(AI_GATEWAY_DIR) not in sys.path:
     sys.path.insert(0, str(AI_GATEWAY_DIR))
 
-import model_config_adapters  # noqa: E402
+from model_sync import config_adapters as model_config_adapters  # noqa: E402
 
 
 def _load_tool():

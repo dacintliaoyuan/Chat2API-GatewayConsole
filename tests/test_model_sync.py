@@ -15,11 +15,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import model_config_adapters
-import model_sync
-import zcode_file_lock
-import zcode_hot_sync
-from model_sync_core import Binding, CatalogModel, SyncChange, SyncPlan, empty_state
+from model_sync import config_adapters as model_config_adapters
+from model_sync import sync as model_sync
+from zcode import file_lock as zcode_file_lock
+from zcode import hot_sync as zcode_hot_sync
+from model_sync.sync_core import Binding, CatalogModel, SyncChange, SyncPlan, empty_state
 
 # The suite must never read or write the operator's real rule store.
 # model_sync resolves ZCODE_PROVIDER_CONFIG at call time, so a test that forgets to
@@ -190,7 +190,7 @@ class TestPinManagement(unittest.TestCase):
         self.assertFalse(hasattr(model_sync, "update_pin"))
 
     def test_cli_pin_arguments_are_gone(self):
-        # 模块绝对路径：discover 从仓库根跑，相对 "model_sync.py" 会解析到
+        # 模块绝对路径：discover 从仓库根跑，相对 "model_sync/sync.py" 会解析到
         # 仓库根（文件打不开），测不到 argparse 的拒绝语义。
         proc = subprocess.run(
             [sys.executable, model_sync.__file__, "--pin",
@@ -2490,7 +2490,7 @@ class TestSingleFilePublishAndRecovery(unittest.TestCase):
     「会话已采用」。每个用例只在自己的临时目录内构造双存储，绝不读写真实的
     ~/.zcode / ~/.dsh 配置。R27-HOT：运行中用例把安装版兼容准入按钉子给定
     （已准入/未准入），只测本类的发布/延期语义；真实准入核对见
-    tests/test_zcode_hot_sync.py。
+    tests/test_zcode/hot_sync.py。
     """
 
     UM = Binding("um", "ZCode", "local:openwebui", "UM", "（UM）")
@@ -2546,7 +2546,7 @@ class TestSingleFilePublishAndRecovery(unittest.TestCase):
         if running and not real_hot_admission:
             # R27-HOT：运行中会真的调用安装版兼容准入；本类用例只测
             # 延期/发布语义，准入结论一律按钉子给定（真实准入见
-            # tests/test_zcode_hot_sync.py 的独立核对）。
+            # tests/test_zcode/hot_sync.py 的独立核对）。
             patches.append(mock.patch.object(
                 model_sync, "zcode_hot_sync_admission",
                 return_value=hot_admission))
@@ -2635,8 +2635,8 @@ class TestSingleFilePublishAndRecovery(unittest.TestCase):
             self.assertEqual(boundary["sessionAdopted"], "unverified")
 
     def test_running_publication_uses_real_protocol_admission(self):
-        import zcode_hot_sync
-        import zcode_hot_sync_protocol
+        from zcode import hot_sync as zcode_hot_sync
+        from zcode import hot_sync_protocol as zcode_hot_sync_protocol
         from tests.test_zcode_hot_sync import _asar_bytes, _layout_entries, _scan
         from tests.zcode_protocol_fixture import profile
 
@@ -2684,8 +2684,8 @@ class TestSingleFilePublishAndRecovery(unittest.TestCase):
         # 真实 run_sync 入口 + 真实准入（不钉死结论）——等价改名后的安装
         # 仍按客户端锁协议发布 provider_config.json；关键实现变化保持
         # pending 且客户端字节不变。准入/发布都不得重启客户端。
-        import zcode_hot_sync
-        import zcode_hot_sync_protocol
+        from zcode import hot_sync as zcode_hot_sync
+        from zcode import hot_sync_protocol as zcode_hot_sync_protocol
         from tests import zcode_current_protocol_fixture as current
         from tests.test_zcode_hot_sync import _asar_bytes, _scan
 
@@ -3132,7 +3132,7 @@ class TestSingleFilePublishAndRecovery(unittest.TestCase):
             self.assertEqual(state["lastStatus"], "pending")
             # 同步侧结果记录（result.json）不是客户端发布物：它如实记录本轮
             # pending，绝不宣称任何客户端文件已发布。（run_sync 在 apply 路径
-            # 总会写这份记录，见 model_sync.py:3777 与 _write_result。）
+            # 总会写这份记录，见 model_sync/sync.py:3777 与 _write_result。）
             recorded = json.loads((root / "result.json").read_text("utf-8"))
             self.assertEqual(recorded["status"], "pending")
             self.assertEqual(recorded["applicationBoundary"]["filesWritten"], [])
@@ -4070,7 +4070,7 @@ class TestScheduledSourceScope(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
             root = Path(raw)
-            with mock.patch.object(sys, "argv", ["model_sync.py"] + argv), \
+            with mock.patch.object(sys, "argv", ["model_sync/sync.py"] + argv), \
                     mock.patch.object(model_sync, "DATA_DIR", root), \
                     mock.patch.object(model_sync, "LOCK_FILE",
                                       root / "sync.lock"), \

@@ -20,8 +20,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from share_management import ShareManager  # noqa: E402
-import console_share_actions as _share_orchestration  # noqa: E402
+from share.management import ShareManager  # noqa: E402
+from console import share_actions as _share_orchestration  # noqa: E402
 
 _ISOLATION_TEMP = None
 _ISOLATION_PATCHERS = []
@@ -49,8 +49,8 @@ def _guard_usage_module(module):
 
 def setUpModule():
     global _ISOLATION_TEMP
-    import share_broker_client
-    import share_broker_server
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(
         prefix="secret-redaction-")
     root = Path(_ISOLATION_TEMP.name)
@@ -156,8 +156,8 @@ class SecretRedactionTests(unittest.TestCase):
             self.usagesrv._share_manager = None
 
     def _install_observation_fixtures(self):
-        import console_adapters
-        import console_share_production
+        from console import adapters as console_adapters
+        from console import share_production as console_share_production
         import subprocess
         saved = {name: value for name, value in vars(_share_orchestration).items()
                  if name.startswith("_") and name.upper() == name}
@@ -260,7 +260,7 @@ class SecretRedactionTests(unittest.TestCase):
         self.assertNotIn(plaintext, stdout.getvalue())
         self.assertNotIn(plaintext, stderr.getvalue())
 
-        from share_store import ShareStore
+        from share.store import ShareStore
         store = ShareStore(os.environ["SHARE_STORE_FILE"])
         try:
             operations = store.operations()

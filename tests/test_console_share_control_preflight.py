@@ -10,10 +10,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import console_share_actions as orch
-import console_share_production as prod
-from console_operations import OperationError
-from share_management import BrokerClientAdapter
+from console import share_actions as orch
+from console import share_production as prod
+from console.operations import OperationError
+from share.management import BrokerClientAdapter
 
 
 class BrokerPreflightTests(unittest.TestCase):
@@ -75,7 +75,7 @@ class BrokerPreflightTests(unittest.TestCase):
         None gate that raises AttributeError at the call site, and never an
         uncaught exception that surfaces as a 500.
         """
-        import console_adapters
+        from console import adapters as console_adapters
         saved_loader = prod._BROKER_LOADER
         self.addCleanup(prod.configure_broker_loader, saved_loader)
         prod.configure_broker_loader(None)
@@ -100,10 +100,10 @@ class BrokerPreflightTests(unittest.TestCase):
         self.assertIn("share-management.json", gate_caught.exception.message)
 
     def test_default_assembly_preflight_uses_real_loader_and_protocol(self):
-        import console_adapters
+        from console import adapters as console_adapters
         import usagesrv
-        import share_broker_client
-        import share_broker_server
+        import share.broker_client as share_broker_client
+        import share.broker_server as share_broker_server
         calls = []
 
         class Transport:
@@ -160,7 +160,7 @@ class BrokerPreflightTests(unittest.TestCase):
 class ControlStatusRouteTests(unittest.TestCase):
     def setUp(self):
         import usagesrv
-        import share_broker_client
+        import share.broker_client as share_broker_client
         self.usagesrv = usagesrv
         self.client = mock.Mock()
         self.client.status.return_value = SimpleNamespace(ok=True, result={})

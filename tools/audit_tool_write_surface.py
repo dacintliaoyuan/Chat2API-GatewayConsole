@@ -193,10 +193,10 @@ FORGET_STALE_KINDS = (
 DELEGATED = {
     "production_backend_observe": {
         "read_only": False,
-        "surface": "console_share_production.py:1496 → verify_running()；forget_stale=True（默认）时"
+        "surface": "console/share_production.py:1496 → verify_running()；forget_stale=True（默认）时"
                    "经 _forget() os.remove 陈旧 backend.pid（:1343, :1381-1384）；"
                    "forget_stale=False 时全分支无写。",
-        "citation": "ai-gateway/console_share_production.py:1495-1538",
+        "citation": "ai-gateway/console/share_production.py:1495-1538",
     },
     "backend_observe_facts": {
         "read_only": False,
@@ -207,25 +207,25 @@ DELEGATED = {
     },
     "production_backend_pid_state": {
         "read_only": True,
-        "surface": "console_share_production.py:1550 → backend_pid_state()；全分支无写、"
+        "surface": "console/share_production.py:1550 → backend_pid_state()；全分支无写、"
                    "无删（陈旧 pid 原样留在盘上）。",
-        "citation": "ai-gateway/console_share_production.py:1348-1397, :1549-1558",
+        "citation": "ai-gateway/console/share_production.py:1348-1397, :1549-1558",
     },
     "share_attribution_status": {
         "read_only": True,
-        "surface": "console_share_production.py:1111；只读事实（stat + 只读打开 + "
+        "surface": "console/share_production.py:1111；只读事实（stat + 只读打开 + "
                    "只读 CIM 查询），无写。",
-        "citation": "ai-gateway/console_share_production.py:1111-1185",
+        "citation": "ai-gateway/console/share_production.py:1111-1185",
     },
     "share_attribution_key_path": {
         "read_only": True,
-        "surface": "console_share_production.py:864；只读路径解析（环境变量 + 默认根），无写。",
-        "citation": "ai-gateway/console_share_production.py:864-880",
+        "surface": "console/share_production.py:864；只读路径解析（环境变量 + 默认根），无写。",
+        "citation": "ai-gateway/console/share_production.py:864-880",
     },
     "_share_run_root": {
         "read_only": True,
-        "surface": "console_share_production.py:851；只读路径解析，无写。",
-        "citation": "ai-gateway/console_share_production.py:851-861",
+        "surface": "console/share_production.py:851；只读路径解析，无写。",
+        "citation": "ai-gateway/console/share_production.py:851-861",
     },
     "estimate_record_with_version": {
         "read_only": True,
@@ -234,40 +234,40 @@ DELEGATED = {
     },
     "get_share_manager": {
         "read_only": False,
-        "surface": "usagesrv.py:1804 → ShareManager()（share_management.py:251）→ "
+        "surface": "usagesrv.py:1804 → ShareManager()（share/management.py:251）→ "
                    "_recover_interrupted_operations() 会写 share-store.db 的 ops 行；"
                    "真实 broker 装配还会在线发布。",
         "citation": "ai-gateway/usagesrv.py:1804-1811; "
-                    "ai-gateway/share_management.py:251-274, :310-420",
+                    "ai-gateway/share/management.py:251-274, :310-420",
     },
     "ShareManager": {
         "read_only": False,
-        "surface": "share_management.py:251 __init__ → _recover_interrupted_operations()"
+        "surface": "share/management.py:251 __init__ → _recover_interrupted_operations()"
                    "（写 ops 行 / 可能驱动受限关停）；构造即写库。",
-        "citation": "ai-gateway/share_management.py:251-274, :310-420",
+        "citation": "ai-gateway/share/management.py:251-274, :310-420",
     },
     "create_key": {
         "read_only": False,
-        "surface": "share_management.py:672 → share_store.py:562 写 keys 行 + configgen "
+        "surface": "share/management.py:672 → share/store.py:562 写 keys 行 + configgen "
                    "代次 + publish intent（同一事务）。",
-        "citation": "ai-gateway/share_management.py:672; ai-gateway/share_store.py:562",
+        "citation": "ai-gateway/share/management.py:672; ai-gateway/share/store.py:562",
     },
     "delete_key": {
         "read_only": False,
-        "surface": "share_management.py:797 → share_store.py:859 软删除 tombstone + "
+        "surface": "share/management.py:797 → share/store.py:859 软删除 tombstone + "
                    "publish intent；撤销方向 fail-closed。",
-        "citation": "ai-gateway/share_management.py:797-803; "
-                    "ai-gateway/share_store.py:859-877",
+        "citation": "ai-gateway/share/management.py:797-803; "
+                    "ai-gateway/share/store.py:859-877",
     },
     "render_provider_config_sync": {
         "read_only": True,
-        "surface": "model_sync.py:468；纯函数（解析 + 返回新文本），无写。",
-        "citation": "ai-gateway/model_sync.py:468-610",
+        "surface": "model_sync/sync.py:468；纯函数（解析 + 返回新文本），无写。",
+        "citation": "ai-gateway/model_sync/sync.py:468-610",
     },
     "zcode_running": {
         "read_only": True,
-        "surface": "model_config_adapters.py:455；只读 tasklist 查询，无写。",
-        "citation": "ai-gateway/model_config_adapters.py:455-464",
+        "surface": "model_sync/config_adapters.py:455；只读 tasklist 查询，无写。",
+        "citation": "ai-gateway/model_sync/config_adapters.py:455-464",
     },
     "CHAT2API_LOG": {
         "read_only": True,
@@ -276,28 +276,28 @@ DELEGATED = {
     },
     "DEFAULT_STORE_FILE": {
         "read_only": True,
-        "surface": "share_management.py:28；模块级路径常量，读取不改状态。",
-        "citation": "ai-gateway/share_management.py:28",
+        "surface": "share/management.py:28；模块级路径常量，读取不改状态。",
+        "citation": "ai-gateway/share/management.py:28",
     },
     "CODE_STAMP": {
         "read_only": True,
-        "surface": "model_sync.py:65；模块级常量（自身文件指纹），读取不改状态。",
-        "citation": "ai-gateway/model_sync.py:57-65",
+        "surface": "model_sync/sync.py:65；模块级常量（自身文件指纹），读取不改状态。",
+        "citation": "ai-gateway/model_sync/sync.py:57-65",
     },
     "DEFAULT_BINDINGS": {
         "read_only": True,
-        "surface": "model_sync_core.py:84；模块级绑定表，读取不改状态。",
-        "citation": "ai-gateway/model_sync_core.py:84",
+        "surface": "model_sync/sync_core.py:84；模块级绑定表，读取不改状态。",
+        "citation": "ai-gateway/model_sync/sync_core.py:84",
     },
     "SHARE_ATTRIBUTION_KEY_NAME": {
         "read_only": True,
-        "surface": "console_share_production.py:846；模块级常量，读取不改状态。",
-        "citation": "ai-gateway/console_share_production.py:846",
+        "surface": "console/share_production.py:846；模块级常量，读取不改状态。",
+        "citation": "ai-gateway/console/share_production.py:846",
     },
     "StoreError": {
         "read_only": True,
-        "surface": "share_store.py 异常类型，捕获不写状态。",
-        "citation": "ai-gateway/share_store.py",
+        "surface": "share/store.py 异常类型，捕获不写状态。",
+        "citation": "ai-gateway/share/store.py",
     },
 }
 
@@ -378,7 +378,7 @@ DECLARED = {
      "build_manager", "delegated:ShareManager", 1):
         {"tier": "b", "line": 364,
          "trigger": "--apply（构造即写库：_recover_interrupted_operations 写 ops 行）",
-         "citation": "share_management.py:251-274, :310-420",
+         "citation": "share/management.py:251-274, :310-420",
          "note": "启发式把 build_manager 归 (c)：--apply 门在 main 的 "
                     "if not intent[\"apply\"]: return EXIT_OK 提前返回里，静态扫描"
                     "不建模这种提前返回；人工审计按 --apply 判 (b)。"},
@@ -393,7 +393,7 @@ DECLARED = {
      "apply_create", "delegated:create_key", 1):
         {"tier": "b", "line": 385,
          "trigger": "--apply --create（写权威存储 keys 行 + 代次 + publish intent）",
-         "citation": "share_management.py:672; share_store.py:562",
+         "citation": "share/management.py:672; share/store.py:562",
          "note": "启发式把 apply_create 归 (c)：--apply 门在 main 的提前返回里；"
                     "人工审计按 --apply 判 (b)。"},
     ("ai-gateway/tools/um-share/test_key_ops.py",
@@ -401,7 +401,7 @@ DECLARED = {
         {"tier": "b", "line": 404,
          "trigger": "--apply --revoke（软删除 tombstone + publish intent；发布未确认时 "
                     "fail-closed）",
-         "citation": "share_management.py:797-803; share_store.py:859-877",
+         "citation": "share/management.py:797-803; share/store.py:859-877",
          "note": "启发式把 apply_revoke 归 (c)：--apply 门在 main 的提前返回里；"
                     "人工审计按 --apply 判 (b)。"},
     ("ai-gateway/tools/zcode-config/keepset_apply.py",

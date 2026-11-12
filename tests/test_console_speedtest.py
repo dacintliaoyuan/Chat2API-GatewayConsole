@@ -41,9 +41,9 @@ from unittest import mock
 sys.path.insert(0, str(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-import console_adapters  # noqa: E402  (same directory, sys.path prepared)
-import console_speedtest  # noqa: E402
-from console_operations import (  # noqa: E402
+from console import adapters as console_adapters  # noqa: E402  (same directory, sys.path prepared)
+from console import speedtest as console_speedtest  # noqa: E402
+from console.operations import (  # noqa: E402
     OperationCancelled,
     OperationContext,
     OperationError,

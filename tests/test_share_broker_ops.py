@@ -1,5 +1,5 @@
 """D4-prerequisite offline tests for the real OS adapters
-(ai-gateway/share_broker_ops.py).
+(ai-gateway/share/broker_ops.py).
 
 All OS boundaries are injected: the schtasks/tasklist runner, the
 instance-pipe kernel facade, the H6 identity facade and the icacls runner
@@ -20,10 +20,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 
-import share_broker_protocol as bp  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
 from share_entry import ShareServer  # noqa: E402
 
-import share_broker_ops  # noqa: E402
+import share.broker_ops as share_broker_ops  # noqa: E402
 
 _OPS = share_broker_ops
 
@@ -152,7 +152,7 @@ class WindowsHostOpsTests(unittest.TestCase):
         # R44-3：同名 broker/guard 进程不算 share——broker 活、share 停 →
         # 关闭成立（按命令行区分，不按映像名）。
         rows = ('[{"ProcessId": 10, "CommandLine": '
-                '"exe share_broker_server.py --broker-dir x", '
+                '"exe share/broker_server.py --broker-dir x", '
                 '"ExecutablePath": "C:\\\\run\\\\um-share-python.exe", '
                 '"CreationDate": "20260908000000.000000+480", "OwnerDomain": "MACHINE", "OwnerUser": "dacint"},'
                 ' {"ProcessId": 11, "CommandLine": '
@@ -163,7 +163,7 @@ class WindowsHostOpsTests(unittest.TestCase):
         self.assertIs(ops.verify_closed(), True)
         # share 网关行在场 → 未关闭。
         combined = ('[{"ProcessId": 10, "CommandLine": '
-                    '"exe share_broker_server.py --broker-dir x", '
+                    '"exe share/broker_server.py --broker-dir x", '
                     '"ExecutablePath": "C:\\\\run\\\\um-share-python.exe", '
                     '"CreationDate": "20260908000000.000000+480", "OwnerDomain": "MACHINE", "OwnerUser": "dacint"},'
                     ' {"ProcessId": 11, "CommandLine": '
@@ -299,7 +299,7 @@ class WindowsHostOpsTests(unittest.TestCase):
         # share 标记排除，它们永远不可能是目标，其 owner 不再参与；候选行
         # 缺 owner 仍判证据失败（None），完整记录契约不变。
         broker_row = ('[{"ProcessId": 10, "CommandLine": '
-                      '"exe share_broker_server.py --broker-dir x", '
+                      '"exe share/broker_server.py --broker-dir x", '
                       '"ExecutablePath": "C:\\\\run\\\\um-share-python.exe", '
                       '"CreationDate": "20260908000000.000000+480"}]')
         ops, calls = self._ops('"t","x","Ready"', broker_row,
@@ -827,7 +827,7 @@ class IcaclsAclCheckerTests(unittest.TestCase):
         self.assertFalse(checker2.check())
 
     def test_call_raises_broker_error_for_writer_contract(self):
-        from share_management import BrokerError
+        from share.management import BrokerError
         checker = self._checker(returncode=2)
         with self.assertRaises(BrokerError):
             checker(r"C:\some\tmp-path")

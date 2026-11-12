@@ -43,7 +43,7 @@ sys.path.insert(0, str(ROOT))
 
 import cloud.backend.app as app_module  # noqa: E402
 from cloud.backend.app import CloudApp  # noqa: E402
-from console_share_production import (  # noqa: E402
+from console.share_production import (  # noqa: E402
     BackendConfig, production_backend_ops)
 from cloud.backend.backend_process import (  # noqa: E402
     BackendProcess,
@@ -54,7 +54,7 @@ from cloud.backend.config import (  # noqa: E402
 
 from cloud.backend.keys_api import KeyApi  # noqa: E402
 from cloud.backend.summary import build_cloud_summary  # noqa: E402
-from share_management import BrokerError  # noqa: E402
+from share.management import BrokerError  # noqa: E402
 
 PROBE_MARKER = "R19_PROBE_JSON:"
 FIXTURE_CLOUD_MODEL = "cloud-fixture-model"
@@ -722,10 +722,10 @@ class CloudGuardTests(unittest.TestCase):
                          str(self.root / "l"))
 
     def test_broker_args_are_the_complete_ops_cli(self):
-        """The argv must be the REAL ``share_broker_ops.py`` CLI (F3/F4).
+        """The argv must be the REAL ``share/broker_ops.py`` CLI (F3/F4).
 
         The previous assertion pinned ``--socket``/``--share-store`` and
-        ``backend_port``. The real parser (``share_broker_ops.py:2605-2640``)
+        ``backend_port``. The real parser (``share/broker_ops.py:2605-2640``)
         defines none of them, so the test kept a broker that cannot start green.
         The flags are asserted against the CONFIG-derived argv directly; the
         discriminating end-to-end check is
@@ -734,7 +734,7 @@ class CloudGuardTests(unittest.TestCase):
         """
         config = CloudConfig.from_mapping(_fixture_config(self.root))
         args = config.broker_args()
-        self.assertEqual(args[0], "share_broker_ops.py")
+        self.assertEqual(args[0], "share/broker_ops.py")
         # ``--host-command`` is a REMAINDER the caller appends; it must never be
         # baked into the config-derived argv.
         self.assertNotIn("--host-command", args)
@@ -1463,7 +1463,7 @@ class CloudAppTests(unittest.TestCase):
             "import cloud.backend.app\n"
             "print(json.dumps({\n"
             "    'forbidden': [name for name in (\n"
-            "        'usagesrv', 'console_adapters', 'model_sync', 'local')\n"
+            "        'usagesrv', 'console.adapters', 'model_sync', 'local')\n"
             "        if name in sys.modules],\n"
             "    'cloud': cloud.backend.app.__file__}))\n"
             % str(ROOT),
@@ -1566,7 +1566,7 @@ class CloudAppTests(unittest.TestCase):
 class CloudPackageValidatorTests(unittest.TestCase):
     """E19-1-C1 item 7: the cloud package validator must refuse local code.
 
-    ``FORBIDDEN_NAMES`` already lists ``usagesrv.py``/``console_adapters.py``.
+    ``FORBIDDEN_NAMES`` already lists ``usagesrv.py``/``console/adapters.py``.
     The gap is that nothing proved the VALIDATOR actually fires: a package that
     carried the local application would have to be caught, otherwise "the cloud
     package contains no local code" is an unverified claim.
@@ -1588,7 +1588,7 @@ class CloudPackageValidatorTests(unittest.TestCase):
     def test_a_clean_cloud_package_reports_nothing(self):
         self._plant("cloud/run_cloud.py")
         self._plant("shared/pricing_rules.py")
-        self._plant("share_broker_ops.py")
+        self._plant("share/broker_ops.py")
         self.assertEqual(
             self.package_cloud.forbidden_entries(self.root), [])
 
@@ -1601,11 +1601,12 @@ class CloudPackageValidatorTests(unittest.TestCase):
         self.assertTrue(planted.is_file())
 
     def test_planted_legacy_hosts_are_reported(self):
-        for name in ("usagesrv.py", "console_adapters.py", "model_sync.py",
-                     "zcode_hot_sync.py"):
+        for name in ("usagesrv.py", "console/adapters.py", "model_sync/sync.py",
+                     "zcode/hot_sync.py"):
             with self.subTest(name=name):
                 root = Path(tempfile.mkdtemp(prefix="r19-cloud-pkg-"))
                 self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
                 (root / name).write_text("# planted\n", encoding="utf-8")
                 self.assertIn(
                     name, self.package_cloud.forbidden_entries(root))
@@ -1876,7 +1877,7 @@ class RunCloudPathTests(unittest.TestCase):
             "after_entry = os.environ.get('SHARE_STORE_FILE')\n"
             "from cloud.backend.config import CloudConfig\n"
             "from cloud.backend.app import build_app\n"
-            "import share_management\n"
+            "import share.management as share_management\n"
             "config = CloudConfig.from_file(%r)\n"
             "app = build_app(config)\n"
             "print(PROBE_MARKER + json.dumps({\n"

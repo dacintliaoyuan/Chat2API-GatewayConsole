@@ -7,7 +7,7 @@
   （§2）、备份步骤（§5）、回退步骤（§6）与前置门（§7）；
 * ``output/ai-gw-round6-20260927/zcode-keepset.json`` —— 机器推导的保留集
   （每个 ZCode binding 的 ``keep`` / ``retired`` / ``managed``）；
-* ``ai-gateway/model_sync.py`` —— 规则库的**唯一写入规则**：``render_provider_config_sync``
+* ``ai-gateway/model_sync/sync.py`` —— 规则库的**唯一写入规则**：``render_provider_config_sync``
   （:562-771）负责对齐 ``personalModelIds`` / ``modelOrder`` / ``providerModelRules``，
   产品调用方是 ``_provider_config_candidate``（:822-923）。
 
@@ -115,7 +115,7 @@ def read_json_file(path):
 
 def model_sync_module():
     """延迟导入产品模块 model_sync（导入本身无副作用，只读自身文件算代码指纹）。"""
-    import model_sync
+    from model_sync import sync as model_sync
     return model_sync
 
 
@@ -131,7 +131,7 @@ def zcode_running() -> bool:
     委托 ``model_config_adapters.zcode_running``（:455-464，``tasklist`` 只读查询），
     绝不启动/停止任何进程。测试用注入的 ``running`` 替身，不真查本机进程。
     """
-    import model_config_adapters
+    from model_sync import config_adapters as model_config_adapters
     return bool(model_config_adapters.zcode_running())
 
 
@@ -297,7 +297,7 @@ def project_text(raw, entries, bindings):
     直接调用 ``model_sync.render_provider_config_sync``：白名单保留规则、每模型规则
     的离开规则与「范围外不动」都由产品代码决定，本工具不复制一份。
     """
-    from model_sync_core import CatalogModel
+    from model_sync.sync_core import CatalogModel
     module = model_sync_module()
     doc = json.loads(raw)
     contexts = stored_contexts(doc)
@@ -914,12 +914,12 @@ def format_check(result) -> str:
         lines.append("   %s" % _surface_line(block))
         if block["empty_keep"]:
             lines.append("   keep 为空：产品渲染函数对空目录不误删"
-                         "（model_sync.py:512-517），该 provider 本轮不会被对齐")
+                         "（model_sync/sync.py:512-517），该 provider 本轮不会被对齐")
         for model in block["models"]:
             lines.append(_status_line(model))
     if classified["blocked"]:
         lines.append("[核对] 阻塞：以下 provider 在规则库里没有规则块，产品渲染函数只对齐"
-                     "已存在的块（model_sync.py:518-522），本工具不会新建块：")
+                     "已存在的块（model_sync/sync.py:518-522），本工具不会新建块：")
         for item in classified["blocked"]:
             lines.append("   %s：%d 条 keep 无法补齐（%s）"
                          % (item["provider"], len(item["model_ids"]),

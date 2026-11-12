@@ -572,9 +572,9 @@ class CloudConfig:
                 for name, field in PROCESS_ENV_FIELDS}
 
     def broker_args(self):
-        """The broker's OWN required CLI tuple (``share_broker_ops.py:2605-2640``).
+        """The broker's OWN required CLI tuple (``share/broker_ops.py:2605-2640``).
 
-        The flags are the ones ``share_broker_ops.py::linux_main`` actually
+        The flags are the ones ``share/broker_ops.py::linux_main`` actually
         defines. The previous tuple (``--socket``/``--control-key-file``/
         ``--share-store``/``--share-management-config``/``--share-run-root``/
         ``--backend-port``/``--pid-file``) shared not one spelling with the real
@@ -588,7 +588,7 @@ class CloudConfig:
         same field names; a test pins the two together.
         """
         return (
-            "share_broker_ops.py",
+            "share/broker_ops.py",
             "--socket-path", self.broker_socket,
             "--key-file", self.broker_key_file,
             "--instance-key-file", self.instance_key_file,

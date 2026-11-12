@@ -62,7 +62,7 @@ BARE_PATHS = {
     "env_child_verify.py": "ai-gateway/tools/um-a2/env_child_verify.py",
     "gate_mutation_check.py": "ai-gateway/tools/um-a2/gate_mutation_check.py",
     "probe.py": "output/um-a2-20260926/probe.py",
-    "console_share_production.py": "ai-gateway/console_share_production.py",
+    "console/share_production.py": "ai-gateway/console/share_production.py",
     "test_chat2api_stream.py": "ai-gateway/tests/test_chat2api_stream.py",
     "test_chat2api_endpoints.py": "ai-gateway/tests/test_chat2api_endpoints.py",
     "README.md": "ai-gateway/README.md",

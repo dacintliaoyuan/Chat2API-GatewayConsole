@@ -34,13 +34,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import yaml  # noqa: E402  (same requirement as model_sync itself)
 
-import console_adapters  # noqa: E402
-import console_model_actions  # noqa: E402
-import model_config_adapters  # noqa: E402
-import model_sync  # noqa: E402
-import model_sync_core  # noqa: E402
-from model_sync_core import CatalogModel  # noqa: E402
-from console_operations import OperationCancelled, OperationError  # noqa: E402
+from console import adapters as console_adapters  # noqa: E402
+from console import model_actions as console_model_actions  # noqa: E402
+from model_sync import config_adapters as model_config_adapters  # noqa: E402
+from model_sync import sync as model_sync  # noqa: E402
+from model_sync import sync_core as model_sync_core  # noqa: E402
+from model_sync.sync_core import CatalogModel  # noqa: E402
+from console.operations import OperationCancelled, OperationError  # noqa: E402
 
 DSH_VALID = """\
 llm-pi-ai:
@@ -888,7 +888,7 @@ class PinRemovedContractTests(unittest.TestCase):
     """
 
     def test_registry_no_longer_registers_pin_actions(self):
-        import console_adapters
+        from console import adapters as console_adapters
         names = {spec.name for spec in console_adapters.build_registry()}
         self.assertNotIn("model.pin_add", names)
         self.assertNotIn("model.pin_remove", names)
@@ -955,7 +955,7 @@ class PinRemovedContractTests(unittest.TestCase):
         self.assertEqual(migrated, model_sync.migrate_state(dict(migrated)))
 
     def test_cli_pin_arguments_are_gone(self):
-        # 用模块绝对路径调用 CLI：discover 从仓库根跑，相对路径 "model_sync.py"
+        # 用模块绝对路径调用 CLI：discover 从仓库根跑，相对路径 "model_sync/sync.py"
         # 会被解析到仓库根（文件打不开），测不到 argparse 的拒绝语义。
         with temp_sync_env():
             proc = subprocess.run(
@@ -969,7 +969,7 @@ class PinRemovedContractTests(unittest.TestCase):
 
 class TaskActionTests(unittest.TestCase):
     def _run_patched(self, fake, handler):
-        with mock.patch("console_model_actions.subprocess.run", fake):
+        with mock.patch("console.model_actions.subprocess.run", fake):
             return handler()
 
     def test_task_status_is_read_only(self):
@@ -1057,7 +1057,7 @@ class TaskActionTests(unittest.TestCase):
     def test_task_timeout_maps_to_task_timeout(self):
         def timeout_run(cmd, capture_output=True, timeout=None):
             raise subprocess.TimeoutExpired("powershell", timeout)
-        with mock.patch("console_model_actions.subprocess.run",
+        with mock.patch("console.model_actions.subprocess.run",
                         side_effect=timeout_run):
             with self.assertRaises(OperationError) as caught:
                 console_model_actions.model_task_install("", {}, _Ctx())

@@ -17,9 +17,9 @@ from pathlib import Path
 from unittest import mock
 
 import usagesrv
-import console_share_actions
-from console_display_proxy import DisplayConfig, DisplayProxy
-from share_secret_protection import write_private_secret_path
+from console import share_actions as console_share_actions
+from console.display_proxy import DisplayConfig, DisplayProxy
+from share.secret_protection import write_private_secret_path
 
 _TMP = tempfile.mkdtemp(prefix="display-route-")
 _TOKEN_FILE = os.path.join(_TMP, "control-token")

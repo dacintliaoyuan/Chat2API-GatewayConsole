@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from share_store import (Conflict, Disabled, MigrationConflict, SCHEMA_VERSION,
+from share.store import (Conflict, Disabled, MigrationConflict, SCHEMA_VERSION,
                          ShareStore, StoreError, VersionMismatch,
                          load_digest_config, read_key_labels)
 

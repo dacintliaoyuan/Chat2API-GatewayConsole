@@ -374,7 +374,7 @@ $srcDir = Join-Path $wd 'src'
 New-TestSourceDir -Dir $srcDir
 $dstDir = Join-Path $wd 'dst'
 New-Item -ItemType Directory -Path $dstDir -Force | Out-Null
-$hash = Copy-VerifiedModule -Source (Join-Path $srcDir 'share_runtime.py') -Destination (Join-Path $dstDir 'share_runtime.py')
+$hash = Copy-VerifiedModule -Source (Join-Path $srcDir 'share/runtime.py') -Destination (Join-Path $dstDir 'share/runtime.py')
 Assert-True ($hash -is [string] -and $hash.Length -eq 64) 'return value is ONE sha256 string'
 Assert-Throws { Copy-VerifiedModule -Source (Join-Path $srcDir 'absent.py') -Destination (Join-Path $dstDir 'a.py') } 'missing source throws' 'missing'
 
@@ -465,12 +465,12 @@ Assert-Equal ([string]$state.task_wrapper) 'run-broker.cmd' 'manifest records th
 Write-Host '== pre-existing identical file before install is shared =='
 $runRoot2 = Join-Path $wd 'run2'
 New-RunRoot -Dir $runRoot2
-Copy-Item -LiteralPath (Join-Path $root 'share_broker_protocol.py') -Destination (Join-Path $runRoot2 'share_broker_protocol.py') -Force
+Copy-Item -LiteralPath (Join-Path $root 'share/broker_protocol.py') -Destination (Join-Path $runRoot2 'share/broker_protocol.py') -Force
 $cfg2 = New-Cfg -RunRoot $runRoot2 -SourceRoot $srcDir
 $fakeB = New-FakeSchtasks -OwnedWrapper (Join-Path $runRoot2 'run-broker.cmd') -TaskAbsent $true
 Install-Broker -Cfg $cfg2 -SchtasksRunner $fakeB.Runner -IcaclsRunner (New-GoodIcaclsRunner)
 $stateB = Get-Content -LiteralPath (Join-Path $runRoot2 'broker\install-state.json') -Raw | ConvertFrom-Json
-$protoEntry = @($stateB.modules | Where-Object { $_.file -eq 'share_broker_protocol.py' })[0]
+$protoEntry = @($stateB.modules | Where-Object { $_.file -eq 'share/broker_protocol.py' })[0]
 Assert-Equal $protoEntry.classification 'shared' 'pre-existing identical protocol classified shared (kept on uninstall)'
 
 Write-Host '== broker runtime records are NOT foreign content (contract §11.2) =='
@@ -488,7 +488,7 @@ $fakeM = New-FakeSchtasks -OwnedWrapper (Join-Path $runRootM 'run-broker.cmd') -
 Install-Broker -Cfg $cfgM -SchtasksRunner $fakeM.Runner -IcaclsRunner (New-GoodIcaclsRunner)
 Assert-True (Test-Path -LiteralPath (Join-Path $runRootM 'broker\lifecycle.json')) 'lifecycle.json kept (owned record, not foreign)'
 Assert-True (Test-Path -LiteralPath (Join-Path $runRootM 'broker\maintenance.json')) 'maintenance.json kept (owned record, not foreign)'
-Assert-True (Test-Path -LiteralPath (Join-Path $runRootM 'share_broker_protocol.py')) 'install completed over the protected records'
+Assert-True (Test-Path -LiteralPath (Join-Path $runRootM 'share/broker_protocol.py')) 'install completed over the protected records'
 
 Write-Host '== a truly foreign broker-dir file still refuses =='
 $runRootN = Join-Path $wd 'runN'
@@ -519,11 +519,11 @@ Assert-Equal $defEntryC.classification $defEntry1.classification 'the pre-existi
 Write-Host '== absent-then-conflict copies NOTHING (R44-5) =='
 $runRootX = Join-Path $wd 'runx'
 New-RunRoot -Dir $runRootX
-Set-Content -LiteralPath (Join-Path $runRootX 'share_runtime.py') -Value '# tampered'
+Set-Content -LiteralPath (Join-Path $runRootX 'share/runtime.py') -Value '# tampered'
 $cfgX = New-Cfg -RunRoot $runRootX -SourceRoot $srcDir
 $fakeX = New-FakeSchtasks
 Assert-Throws { Install-Broker -Cfg $cfgX -SchtasksRunner $fakeX.Runner -IcaclsRunner (New-GoodIcaclsRunner) } 'conflict install throws' 'conflict'
-Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRootX 'share_broker_protocol.py'))) 'earlier absent modules were NOT copied before the conflict'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRootX 'share/broker_protocol.py'))) 'earlier absent modules were NOT copied before the conflict'
 Assert-Equal ($fakeX.State['Calls'] | Where-Object { $_ -match ' /Create ' }).Count 0 'conflict install registers no task'
 
 Write-Host '== unknown same-name task refuses, zero modification (R44-5) =='
@@ -559,7 +559,7 @@ $keyEntry = @($stateE.modules | Where-Object { $_.file -eq 'broker\broker-contro
 Assert-Equal $keyEntry.classification 'created' 'written key is recorded as created (not planned)'
 $fakeF = New-FakeSchtasks -OwnedWrapper (Join-Path $runRoot3 'run-broker.cmd')
 Uninstall-Broker -Cfg $cfg3 -SchtasksRunner $fakeF.Runner -IcaclsRunner $null
-Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot3 'share_runtime.py'))) 'recovery uninstall removed owned copies'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot3 'share/runtime.py'))) 'recovery uninstall removed owned copies'
 Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot3 'broker'))) 'recovery uninstall removed empty broker dir'
 
 Write-Host '== planned/empty-hash entries are NEVER delete permission (R49-2) =='
@@ -580,7 +580,7 @@ $fake5b = New-FakeSchtasks -OwnedWrapper (Join-Path $runRoot5 'run-broker.cmd')
 Uninstall-Broker -Cfg $cfg5 -SchtasksRunner $fake5b.Runner -IcaclsRunner $null
 Assert-True (Test-Path -LiteralPath (Join-Path $runRoot5 'broker\broker-control-key')) 'empty-hash planned entry is NOT delete permission (replaced content kept)'
 Assert-True (Test-Path -LiteralPath (Join-Path $runRoot5 'broker\install-state.json')) 'state file kept while unconfirmed entries exist'
-Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot5 'share_runtime.py'))) 'created copies with hashes still removed'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot5 'share/runtime.py'))) 'created copies with hashes still removed'
 
 Write-Host '== planned with EXPECTED hash is still not delete permission (R51.2) =='
 $runRoot7 = Join-Path $wd 'run7'
@@ -592,12 +592,12 @@ Assert-Throws { Install-Broker -Cfg $cfg7 -SchtasksRunner $fake7a.Runner -Icacls
 # 文件已在盘上（copy 成功）——planned 语义：未经创建确认，绝不删除。
 $state7 = Get-Content -LiteralPath (Join-Path $runRoot7 'broker\install-state.json') -Raw | ConvertFrom-Json
 foreach ($m in @($state7.modules)) {
-    if ($m.file -eq 'share_broker_host.py') { $m.classification = 'planned' }
+    if ($m.file -eq 'share/broker_host.py') { $m.classification = 'planned' }
 }
 Set-Content -LiteralPath (Join-Path $runRoot7 'broker\install-state.json') -Value ($state7 | ConvertTo-Json -Depth 4)
 $fake7b = New-FakeSchtasks -OwnedWrapper (Join-Path $runRoot7 'run-broker.cmd')
 Uninstall-Broker -Cfg $cfg7 -SchtasksRunner $fake7b.Runner -IcaclsRunner $null
-Assert-True (Test-Path -LiteralPath (Join-Path $runRoot7 'share_broker_host.py')) 'planned with expected hash is NOT delete permission (same-content later file kept)'
+Assert-True (Test-Path -LiteralPath (Join-Path $runRoot7 'share/broker_host.py')) 'planned with expected hash is NOT delete permission (same-content later file kept)'
 Assert-True (Test-Path -LiteralPath (Join-Path $runRoot7 'broker\install-state.json')) 'state kept while planned entries exist'
 
 Write-Host '== ACL recovery state machine across restarts (R53.2) =='
@@ -961,7 +961,7 @@ $fakeH = New-FakeSchtasks -OwnedWrapper (Join-Path $runRoot 'run-broker.cmd') -D
 Assert-Throws { Uninstall-Broker -Cfg $cfg -SchtasksRunner $fakeH.Runner -IcaclsRunner $null } 'delete unconfirmed blocks deletion' 'not confirmed'
 
 Write-Host '== uninstall: orphaned broker process refuses (D5) =='
-$fakeO = New-FakeSchtasks -OwnedWrapper (Join-Path $runRoot 'run-broker.cmd') -BrokerPidsJson '[{"ProcessId": 77, "CommandLine": "C:/run/um-share-python.exe share_broker_server.py --broker-dir x", "ExecutablePath": "C:/run/um-share-python.exe", "CreationDate": "20260909000000.000000+480", "OwnerDomain": "MACHINE", "OwnerUser": "dacint"}]'
+$fakeO = New-FakeSchtasks -OwnedWrapper (Join-Path $runRoot 'run-broker.cmd') -BrokerPidsJson '[{"ProcessId": 77, "CommandLine": "C:/run/um-share-python.exe share/broker_server.py --broker-dir x", "ExecutablePath": "C:/run/um-share-python.exe", "CreationDate": "20260909000000.000000+480", "OwnerDomain": "MACHINE", "OwnerUser": "dacint"}]'
 Assert-Throws { Uninstall-Broker -Cfg $cfg -SchtasksRunner $fakeO.Runner -IcaclsRunner $null } 'orphan broker process blocks deletion' 'broker process still alive'
 
 Write-Host '== uninstall: bad manifest tail path refuses BEFORE task action (D2) =='
@@ -983,28 +983,28 @@ Assert-Throws { Uninstall-Broker -Cfg $cfgWrong -SchtasksRunner $fakeW.Runner -I
 Assert-Equal $fakeW.State['Calls'].Count 0 'mismatched task namespace is never operated'
 
 Write-Host '== uninstall keeps shared entries, foreign files, post-install edits =='
-$protoDst = Join-Path $runRoot 'share_broker_protocol.py'
+$protoDst = Join-Path $runRoot 'share/broker_protocol.py'
 $foreign = Join-Path $runRoot 'broker\someone-elses.txt'
 Set-Content -LiteralPath $foreign -Value 'not ours'
-$edited = Join-Path $runRoot 'share_management.py'
+$edited = Join-Path $runRoot 'share/management.py'
 Set-Content -LiteralPath $edited -Value '# edited by a later task'
 $fakeI = New-FakeSchtasks -OwnedWrapper (Join-Path $runRoot 'run-broker.cmd')
 Uninstall-Broker -Cfg $cfg -SchtasksRunner $fakeI.Runner -IcaclsRunner $null
 Assert-True (Test-Path -LiteralPath $foreign) 'unknown leftover in broker dir kept (dir NOT recursed)'
 Assert-True (Test-Path -LiteralPath $edited) 'owned file edited after install is KEPT'
-Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot 'share_runtime.py'))) 'unmodified owned copy removed'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot 'share/runtime.py'))) 'unmodified owned copy removed'
 Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot 'broker\broker-control-key'))) 'owned key removed'
 Assert-True (Test-Path -LiteralPath (Join-Path $runRoot 'broker\install-state.json')) 'ownership record KEPT while owned entries were modified (traceability)'
 Assert-True (Test-Path -LiteralPath (Join-Path $runRoot 'broker')) 'broker dir kept while owned entries were modified'
 
 Write-Host '== uninstall keeps the PRE-EXISTING shared protocol and keys (runRoot2) =='
-$protoDst2 = Join-Path $runRoot2 'share_broker_protocol.py'
+$protoDst2 = Join-Path $runRoot2 'share/broker_protocol.py'
 $protoHashBefore2 = (Get-FileHash -LiteralPath $protoDst2 -Algorithm SHA256).Hash
 $fakeJ = New-FakeSchtasks -OwnedWrapper (Join-Path $runRoot2 'run-broker.cmd')
 Uninstall-Broker -Cfg $cfg2 -SchtasksRunner $fakeJ.Runner -IcaclsRunner $null
 Assert-True (Test-Path -LiteralPath $protoDst2) 'pre-existing identical protocol kept after uninstall'
 Assert-Equal (Get-FileHash -LiteralPath $protoDst2 -Algorithm SHA256).Hash $protoHashBefore2 'kept protocol content unchanged'
-Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot2 'share_runtime.py'))) 'owned copies on the same root removed'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot2 'share/runtime.py'))) 'owned copies on the same root removed'
 Assert-True (-not (Test-Path -LiteralPath (Join-Path $runRoot2 'broker\install-state.json'))) 'ownership record closed on clean uninstall'
 
 Write-Host '== repeat uninstall is idempotent and safe =='

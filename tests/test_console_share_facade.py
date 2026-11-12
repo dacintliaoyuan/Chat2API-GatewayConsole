@@ -21,8 +21,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from share_management import ShareManager  # noqa: E402
-import console_share_actions as _share_orchestration  # noqa: E402
+from share.management import ShareManager  # noqa: E402
+from console import share_actions as _share_orchestration  # noqa: E402
 
 
 
@@ -67,9 +67,9 @@ def _guard_usage_module(module):
 
 def setUpModule():
     global _ISOLATION_TEMP, _ISOLATION_SAVED_SEAMS
-    import share_broker_client
-    import share_broker_server
-    import console_share_actions
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
+    from console import share_actions as console_share_actions
     _ISOLATION_ATTEMPTS.clear()
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(prefix="offline-management-")
     root = Path(_ISOLATION_TEMP.name)
@@ -97,7 +97,7 @@ def setUpModule():
 
 
 def tearDownModule():
-    import console_share_actions
+    from console import share_actions as console_share_actions
     try:
         for module, old_console, _old_share in _ISOLATION_MODULES:
             current = module._console_manager
@@ -253,8 +253,8 @@ class ConsoleShareFacadeTests(unittest.TestCase):
             self.usagesrv._share_manager = None
 
     def _install_observation_fixtures(self):
-        import console_adapters
-        import console_share_production
+        from console import adapters as console_adapters
+        from console import share_production as console_share_production
         import subprocess
         saved = {name: value for name, value in vars(_share_orchestration).items()
                  if name.startswith("_") and name.upper() == name}
@@ -540,7 +540,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         blocker = status_payload["blocked_publications"][0]
         self.assertEqual(blocker["target_generation"],
                          status_payload["desired_generation"])
-        from share_store import ShareStore
+        from share.store import ShareStore
         store = ShareStore(os.environ["SHARE_STORE_FILE"])
         try:
             publish_ops = store.operations(kind="publish")
@@ -616,7 +616,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.assertNotIn("已撤销并确认终止在途", result["note"])
 
     def test_limits_normalize_route_and_cli_reach_the_manager(self):
-        # D18-4/C1: the documented `share_admin.py limits --normalize`
+        # D18-4/C1: the documented `share/admin.py limits --normalize`
         # action must reach ShareManager.normalize_limits(), not fall through
         # to the unknown-path 404.
         status, body = self.request(
@@ -629,7 +629,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.assertIn("before", result["global"])
         self.assertIn("after", result["global"])
 
-        admin = Path(__file__).resolve().parents[1] / "share_admin.py"
+        admin = Path(__file__).resolve().parents[1] / "share/admin.py"
         env = dict(os.environ, SHARE_MGMT_ALLOW_PORT=str(self.port))
         proc = subprocess.run(
             [sys.executable, "-B", "-X", "utf8", str(admin),
@@ -666,7 +666,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
 
     # ------------------------------------------------ B1 narrow readback
     def test_key_probe_route_is_explicit_public_and_version_bound(self):
-        import console_share_probe
+        from console import share_probe as console_share_probe
         created = json.loads(self.request(
             '/api/console/share-management/keys', method='POST',
             xrw='XMLHttpRequest', body={'name': 'probe-fixture'})[1])
@@ -698,7 +698,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
             self.assertEqual(self.request(path, method='POST', xrw='XMLHttpRequest', body=body)[0], 400)
 
     def test_key_probe_never_sends_credential_to_unverified_gateway(self):
-        import console_share_probe
+        from console import share_probe as console_share_probe
         created = json.loads(self.request(
             '/api/console/share-management/keys', method='POST',
             xrw='XMLHttpRequest', body={'name': 'unverified'})[1])
@@ -788,7 +788,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["error"], "key_deleted")
         # A legacy hash-only row (no ciphertext blob) answers an honest
         # inline unavailable state — an expected condition until rotation.
-        from share_store import ShareStore
+        from share.store import ShareStore
         legacy = ShareStore(self.usagesrv.os.environ["SHARE_STORE_FILE"])
         try:
             legacy.migrate_apply({"legacy-friend": "a" * 64})

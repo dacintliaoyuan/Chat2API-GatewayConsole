@@ -9,10 +9,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import console_model_actions  # noqa: E402
-import model_sync  # noqa: E402
-from console_operations import OperationError  # noqa: E402
-from model_sync_core import DEFAULT_BINDINGS  # noqa: E402
+from console import model_actions as console_model_actions  # noqa: E402
+from model_sync import sync as model_sync  # noqa: E402
+from console.operations import OperationError  # noqa: E402
+from model_sync.sync_core import DEFAULT_BINDINGS  # noqa: E402
 
 
 class _Ctx:

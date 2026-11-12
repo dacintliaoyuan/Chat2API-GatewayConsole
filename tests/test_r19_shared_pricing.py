@@ -688,7 +688,7 @@ class SharedBoundaryTests(unittest.TestCase):
                          + completed.stderr)
         modules = json.loads(completed.stdout.strip().splitlines()[-1])
         self.assertIn("shared.pricing_rules", modules)
-        for forbidden in ("usagesrv", "chat2api", "console_adapters",
+        for forbidden in ("usagesrv", "chat2api", "console.adapters",
                           "share_management", "model_sync"):
             self.assertNotIn(forbidden, modules)
 

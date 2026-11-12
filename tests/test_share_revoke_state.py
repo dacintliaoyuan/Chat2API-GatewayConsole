@@ -69,7 +69,7 @@ STUB_TOKEN = "stub-token"
 
 def _write_private(path, text):
     """Fixture secrets must pass the POSIX 0600/current-uid gate."""
-    from share_secret_protection import write_private_secret_path
+    from share.secret_protection import write_private_secret_path
     write_private_secret_path(Path(path), str(text).encode("utf-8"))
 
 
@@ -356,7 +356,7 @@ class TestProjectionSnapshotRecovery(unittest.TestCase):
 
     def _signed_load(self, server, *, generation, enabled, secret_version=1,
                      max_concurrency=4, share_max_concurrency=8):
-        from share_broker_protocol import INSTANCE_SIGNED_KEYS, sign
+        from share.broker_protocol import INSTANCE_SIGNED_KEYS, sign
         self._write(generation=generation, enabled=enabled,
                      secret_version=secret_version,
                      max_concurrency=max_concurrency,
@@ -649,7 +649,7 @@ class TestAppliedSecurityGenerationWatermark(unittest.TestCase):
 
     def _ack(self, server):
         """The REAL signed instance-channel load (handle_instance_control)."""
-        from share_broker_protocol import INSTANCE_SIGNED_KEYS, sign
+        from share.broker_protocol import INSTANCE_SIGNED_KEYS, sign
         payload = json.loads(server.config.read_text(encoding="utf-8"))
         secret = "inst-secret"
         body = sign(secret, {

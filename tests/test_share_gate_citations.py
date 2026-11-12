@@ -32,7 +32,7 @@ REPO_ROOT = GATEWAY_DIR.parent             # SelfUseAI/
 
 sys.path.insert(0, str(GATEWAY_DIR))
 
-import console_share_production as prod  # noqa: E402  (same directory on path)
+from console import share_production as prod  # noqa: E402  (same directory on path)
 
 
 def _lines(path):
@@ -176,12 +176,12 @@ class DeployElevatedCitationTests(CitationPin):
 
         `deploy-elevated.ps1:56` 的注释仍写 `run\\live` 的删除重建在 `:744-746`，
         而实测 `:744-746` 是 escjob、`:820-822` 才是 `run\\live`；
-        `console_share_production.py:837` 已改为指向 `:820-822` ⇒ 两份注释互相矛盾。
+        `console/share_production.py:837` 已改为指向 `:820-822` ⇒ 两份注释互相矛盾。
 
         本用例把**两侧**都钉住：任一侧被修正（或注释再移动）时它先失败，
         提醒同步更新动作门 §1.4 与本断言——不让这条已知矛盾无声变化。
 
-        （2026-10-04 Rev13-A/T：`console_share_production.py` 新增
+        （2026-10-04 Rev13-A/T：`console/share_production.py` 新增
         `production_connectivity_state` 并改写 `production_ts_service_control`
         后，生产侧那段注释从 `:857-863` 下移到 `:927-933`；按新行号同步。）
         """
@@ -192,20 +192,20 @@ class DeployElevatedCitationTests(CitationPin):
         self.assertIn(":744-746",
                       _block_from_symbol(
                           self.path, r"run\live", tail=8))
-        prod_path = self.gateway("console_share_production.py")
+        prod_path = self.gateway("console/share_production.py")
         self.assertIn("deploy-elevated.ps1 :824-826",
                       _block_from_symbol(
                           prod_path, "explicit DENY ACE for um_share", tail=8))
 
 
 class ConsoleOperationsLockCitationTests(CitationPin):
-    """`console_operations.py`：锁语义与锁文件名推导的行号（动作门 §1.1）。"""
+    """`console/operations.py`：锁语义与锁文件名推导的行号（动作门 §1.1）。"""
 
     def setUp(self):
-        self.path = self.gateway("console_operations.py")
+        self.path = self.gateway("console/operations.py")
 
     def test_file_presence_alone_never_means_locked(self):
-        # 动作门 §1.1 引用 `console_operations.py:86-94` 与 `:88-94` 的原文。
+        # 动作门 §1.1 引用 `console/operations.py:86-94` 与 `:88-94` 的原文。
         sentence = "presence alone never means the resource is locked"
         for first, last in ((86, 94), (88, 94)):
             self.assertIn(sentence, _span(self.path, first, last))
@@ -268,10 +268,10 @@ class SharingDocCitationTests(CitationPin):
 
 @unittest.skip("SHARING.md is now the merged-process boundary")
 class ConsoleShareProductionCitationTests(CitationPin):
-    """`console_share_production.py`：`_paths` / `_child_env` / 状态读面的行号与键名。"""
+    """`console/share_production.py`：`_paths` / `_child_env` / 状态读面的行号与键名。"""
 
     def setUp(self):
-        self.path = self.gateway("console_share_production.py")
+        self.path = self.gateway("console/share_production.py")
 
     # The fixed repair adapter adds 24 lines before these source anchors.
 
@@ -318,13 +318,13 @@ class ConsoleShareProductionCitationTests(CitationPin):
     def test_login_timeout_comment_citation_matches_the_real_default_line(self):
         """注释必须引到 `--login-timeout` 默认 180 的真实位置。
 
-        `console_share_production.py` 的 `_child_cmdline` 注释原写
+        `console/share_production.py` 的 `_child_cmdline` 注释原写
         `chat2api.py:1446`（那是 `if saved and saved.get("token"):`），实测默认值在
         `ap.add_argument("--login-timeout", type=int, default=180`。该错引由执行轮 7
         的引用漂移复核发现并在同一轮就地修正。
 
         **E19-1-08 step 1：本用例不再钉注释所在的行号。** 旧版把
-        `console_share_production.py:1587` 写死，随后每次在它上面插入代码都会打破
+        `console/share_production.py:1587` 写死，随后每次在它上面插入代码都会打破
         断言（注释自己的历史里记录了 1215→1222→…→1587 的一串漂移）。现在改为
         按 SYMBOL 定位：找到 `def _child_cmdline` 块，断言块内确实写了
         `chat2api.py:<n>`；再核对 `chat2api.py` 的第 n 行确实是默认值行。
@@ -384,7 +384,7 @@ class ConsoleShareProductionCitationTests(CitationPin):
                          "not_observed_here")
 
     def test_existing_test_pins_the_same_seven_keys(self):
-        # 动作门 §1.3 引用的正是 `tests/test_console_share_production.py:2617-2624`
+        # 动作门 §1.3 引用的正是 `tests/test_console/share_production.py:2617-2624`
         # （2026-09-28 随只读开关的 `import builtins` 下移一行；2026-09-29 执行轮 14
         # 的测试隔离修复再下移 16 行 → 2633-2640/2641；同日执行轮 15 的第三处
         # 隔离修复（DedicatedBackendOpsTests.setUp 中性化密钥路径覆盖开关）再下移 3 行
@@ -397,7 +397,7 @@ class ConsoleShareProductionCitationTests(CitationPin):
         # → 3010-3014/3016；2026-10-25 r2 测试隔离回归再下移
         # → 3072-3076/3078；2026-11-04 D15-4 新增 reauth slot 与
         # error/recovery 用例再下移 48 行 → 3120-3124/3126）。
-        path = GATEWAY_DIR / "tests" / "test_console_share_production.py"
+        path = GATEWAY_DIR / "tests" / "test_console/share_production.py"
         # 2026-11-07 r18 的 W1/W3 改动再下移：七键断言现位于
         # 3292-3298（2026-11-07 工作树）；2026-11-07 E19-1-06 新增
         # BackendConfig 后再下移，七键断言现位于 3296-3300、assertNotIn 在 3302。

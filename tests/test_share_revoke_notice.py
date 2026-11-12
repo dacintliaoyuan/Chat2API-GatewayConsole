@@ -525,7 +525,7 @@ class TestProjectionPersistence(_IsolatedRevokeStateTestCase):
         return server
 
     def _signed_load(self, server, *, generation, enabled):
-        from share_broker_protocol import INSTANCE_SIGNED_KEYS, sign
+        from share.broker_protocol import INSTANCE_SIGNED_KEYS, sign
         self._write(generation=generation, enabled=enabled)
         payload = json.loads(self.config.read_text(encoding="utf-8"))
         secret = "inst-secret"
@@ -796,7 +796,7 @@ class TestRevokeNoticeEndpoint(_IsolatedRevokeStateTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.key_file = Path(self.tmp.name) / "attribution.key"
-        from share_secret_protection import write_private_secret_path
+        from share.secret_protection import write_private_secret_path
         write_private_secret_path(self.key_file, SECRET.encode("utf-8"))
 
         self._original_key_file = chat2api.SHARE_ATTRIBUTION_KEY_FILE

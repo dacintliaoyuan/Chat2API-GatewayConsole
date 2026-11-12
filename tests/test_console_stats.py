@@ -36,7 +36,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import console_stats  # noqa: E402  (same directory, sys.path prepared)
+from console import stats as console_stats  # noqa: E402  (same directory, sys.path prepared)
 import usagesrv       # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -148,9 +148,9 @@ def _guard_usage_module(module):
 def setUpModule():
     global _ISOLATION_TEMP, _ISOLATION_SAVED_SEAMS, \
         _ISOLATION_SAVED_STATS_ENVIRONMENT
-    import share_broker_client
-    import share_broker_server
-    import console_share_actions
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
+    from console import share_actions as console_share_actions
     _ISOLATION_ATTEMPTS.clear()
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(prefix="offline-management-")
     root = Path(_ISOLATION_TEMP.name)
@@ -181,7 +181,7 @@ def setUpModule():
 
 def tearDownModule():
     global _ISOLATION_SAVED_STATS_ENVIRONMENT
-    import console_share_actions
+    from console import share_actions as console_share_actions
     try:
         for module, old_console, _old_share in _ISOLATION_MODULES:
             current = module._console_manager
@@ -2018,7 +2018,7 @@ class ModelTokenRankingTests(unittest.TestCase):
     """
 
     def test_day_rows_carry_token_total_and_ranking(self):
-        from console_stats import _emit_models
+        from console.stats import _emit_models
         records = []
         for model, requests, input_tok, output_tok in (
                 ("model-b", 2, 300, 700), ("model-a", 9, 1000, 2000)):
@@ -2207,7 +2207,7 @@ class StatsEnvironmentRestorationTests(unittest.TestCase):
         code = (
             "import json, os, sys, unittest\n"
             "sys.path[:0] = [%r, %r]\n"
-            "import console_stats\n"
+            "from console import stats as console_stats\n"
             "before = console_stats._STATS_ENVIRONMENT\n"
             "import test_console_stats as module\n"
             "suite = unittest.TestSuite([\n"

@@ -114,7 +114,7 @@ if ($resolvedRoot.StartsWith('C:\ProgramData\UMShareRun', [StringComparison]::Or
 if (-not (Test-Path -LiteralPath $SourceRoot)) {
     throw ("run-d4-experiment: source root must exist: " + $SourceRoot)
 }
-if (-not (Test-Path -LiteralPath (Join-Path $SourceRoot 'share_broker_server.py') -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath (Join-Path $SourceRoot 'share/broker_server.py') -PathType Leaf)) {
     throw ("run-d4-experiment: source root does not contain the broker server entry: " + $SourceRoot)
 }
 

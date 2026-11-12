@@ -178,7 +178,7 @@ function Get-ShareControlBrokerProcessWorker {
     try {
         $runRoot = 'C:\ProgramData\UMShareRun'
         $image = "$runRoot\um-share-python.exe"
-        $serverToken = '(?:^|\s)"?' + [regex]::Escape("$runRoot\share_broker_server.py") + '"?(?=\s|$)'
+        $serverToken = '(?:^|\s)"?' + [regex]::Escape("$runRoot\share/broker_server.py") + '"?(?=\s|$)'
         $count = 0
         $rows = if ($null -eq $ProcessReader) {
             @(Get-CimInstance Win32_Process -Filter "Name='um-share-python.exe'" -ErrorAction Stop)

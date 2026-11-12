@@ -46,8 +46,8 @@ TOOLS_DIR = AI_GATEWAY_DIR / "tools" / "um-share"
 if str(AI_GATEWAY_DIR) not in sys.path:
     sys.path.insert(0, str(AI_GATEWAY_DIR))
 
-import console_share_production as prod  # noqa: E402
-import share_management  # noqa: E402
+from console import share_production as prod  # noqa: E402
+import share.management as share_management  # noqa: E402
 
 
 def _load(module_name):
@@ -330,7 +330,7 @@ class KeyOpsStoreTests(unittest.TestCase):
         self.assertEqual(0, store["generation"]["applied_generation"])
         secret = Path(self.secret).read_text(encoding="utf-8")
         self.assertGreaterEqual(len(secret), 32)
-        # 掩码只给 scheme + 末 4 字符（share_store.py:85-87），不是明文。
+        # 掩码只给 scheme + 末 4 字符（share/store.py:85-87），不是明文。
         self.assertEqual("um-share-****" + secret[-4:], row["masked_key"])
         # 明文绝不进 stdout/stderr（只进 --secret-out 文件）。
         self.assertNotIn(secret, out)

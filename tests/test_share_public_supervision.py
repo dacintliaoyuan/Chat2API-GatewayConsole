@@ -19,8 +19,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import share_public_supervision as supervision  # noqa: E402
-from console_operations import OperationError  # noqa: E402
+import share.public_supervision as supervision  # noqa: E402
+from console.operations import OperationError  # noqa: E402
 
 BOOT = "test-boot"
 URL = "https://share.example.ts.net"
@@ -2101,7 +2101,7 @@ class DefaultPublicUrlTests(BasePublicSupervisionTest):
         with mock.patch.dict(os.environ,
                              {"CONSOLE_PUBLIC_ORIGIN": self.CONFIGURED}), \
                 mock.patch(
-                    "console_share_production.production_share_public_url",
+                    "console.share_production.production_share_public_url",
                     side_effect=AssertionError(
                         "the Tailscale URL must not be read")):
             self.assertEqual(supervision._public_url(None), self.CONFIGURED)
@@ -2110,7 +2110,7 @@ class DefaultPublicUrlTests(BasePublicSupervisionTest):
         with mock.patch.dict(os.environ, {
                 "CONSOLE_PUBLIC_ORIGIN": self.CONFIGURED + "/v1"}), \
                 mock.patch(
-                    "console_share_production.production_share_public_url",
+                    "console.share_production.production_share_public_url",
                     side_effect=AssertionError(
                         "the Tailscale URL must not be read")):
             self.assertIsNone(supervision._public_url(None))
@@ -2118,7 +2118,7 @@ class DefaultPublicUrlTests(BasePublicSupervisionTest):
     def test_unconfigured_keeps_the_tailscale_url(self):
         with mock.patch.dict(os.environ, {}, clear=False), \
                 mock.patch(
-                    "console_share_production.production_share_public_url",
+                    "console.share_production.production_share_public_url",
                     return_value="https://fixture.tail-test.ts.net"):
             os.environ.pop("CONSOLE_PUBLIC_ORIGIN", None)
             self.assertEqual(supervision._public_url(None),

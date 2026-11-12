@@ -266,13 +266,13 @@ class LoadTargetTests(unittest.TestCase):
         self.assertIn("workspace_differs_from_head:usagesrv.py", item["reason"])
 
     def test_stale_gate_table_fails(self):
-        rows = _load_rows(**{"console_share_production.py": {
+        rows = _load_rows(**{"console/share_production.py": {
             "workspace": {"exists": True, "size": 99133, "sha256": "a" * 64,
                           "error": None, "error_kind": None},
             "head": {"sha256": "a" * 64, "size": 99133, "error": None}}})
         item = preflight.judge_load_targets_head(rows)
         self.assertEqual(preflight.FAIL, item["verdict"])
-        self.assertIn("gate_table_stale:console_share_production.py",
+        self.assertIn("gate_table_stale:console/share_production.py",
                       item["reason"])
         drift = item["readings"]["drift"]
         self.assertEqual(1, len(drift))
@@ -581,9 +581,9 @@ class RefreshGateTableTests(unittest.TestCase):
     """
 
     MEASURED = {
-        "console_share_production.py": (99134, "a" * 64),
+        "share_production.py": (99134, "a" * 64),
         "usagesrv.py": (161585, "b" * 64),
-        "console_share_actions.py": (58051, "c" * 64),
+        "share_actions.py": (58051, "c" * 64),
     }
 
     def _stale_gate_text(self):
@@ -656,10 +656,11 @@ class RefreshGateTableTests(unittest.TestCase):
                 self.assertEqual((label, rel, size, sha),
                                  (row["label"], row["path"], row["size"],
                                   row["sha256"]))
-                self.assertEqual(self.MEASURED[label], (size, sha))
+                self.assertEqual(self.MEASURED[os.path.basename(label)],
+                                 (size, sha))
             gate_text = gate.read_text(encoding="utf-8")
             for label, _rel, size, sha in refreshed:
-                self.assertIn("| 将载入版本（HEAD） | `ai-gateway/%s` | %s | `%s` |"
+                self.assertIn("| 将载入版本（HEAD） | `%s` | %s | `%s` |"
                               % (label, size, sha), gate_text)
             # 刷新后 table_match=true：用刷新后的常量文本构造第 3 项事实。
             item = preflight.judge_load_targets_head(self._judge_rows(refreshed))
@@ -682,7 +683,7 @@ class RefreshGateTableTests(unittest.TestCase):
         def _facts():
             facts = _all_pass_facts()
             facts["load_targets"] = _load_rows(**{
-                "console_share_production.py": {
+                "console/share_production.py": {
                     "workspace": {"exists": True, "size": 99134,
                                   "sha256": "a" * 64, "error": None,
                                   "error_kind": None},

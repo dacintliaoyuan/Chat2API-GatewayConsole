@@ -49,7 +49,8 @@ from shared import responses_protocol  # noqa: E402
 
 SHARED_MODULES = (nonstream_aggregate, responses_protocol, pricing)
 
-FORBIDDEN_EXACT_MODULES = ("chat2api", "usagesrv", "local", "cloud")
+FORBIDDEN_EXACT_MODULES = ("chat2api", "usagesrv", "local", "cloud",
+                           "console", "share", "model_sync", "zcode")
 FORBIDDEN_PREFIXES = ("console_", "share_", "model_", "zcode_")
 
 # 2026-09-25T12:00:00Z, after LEGACY_BASE_BOUNDARY; hand-computed epoch ms.
@@ -59,10 +60,10 @@ FORBIDDEN_IMPORT_SOURCE = """
 import json
 import chat2api
 from usagesrv import load_price_table
-import console_stats
+from console import stats as console_stats
 from share_entry import ShareServer
-import model_sync
-from zcode_hot_sync import marker
+from model_sync import sync as model_sync
+from zcode.hot_sync import marker
 import local.app
 from cloud.backend import app
 """
@@ -179,10 +180,10 @@ class ImportScannerTests(unittest.TestCase):
             sorted([
                 "chat2api",
                 "usagesrv",
-                "console_stats",
+                "console",
                 "share_entry",
                 "model_sync",
-                "zcode_hot_sync",
+                "zcode.hot_sync",
                 "local.app",
                 "cloud.backend",
             ]),
@@ -207,10 +208,10 @@ class ImportScannerTests(unittest.TestCase):
             "chat2api",
             "chat2api.handler",
             "usagesrv",
-            "console_stats",
+            "console.stats",
             "share_entry",
-            "model_sync",
-            "zcode_hot_sync",
+            "model_sync.sync",
+            "zcode.hot_sync",
             "local",
             "local.app",
             "cloud",
@@ -222,10 +223,10 @@ class ImportScannerTests(unittest.TestCase):
                 "chat2api",
                 "chat2api.handler",
                 "usagesrv",
-                "console_stats",
+                "console.stats",
                 "share_entry",
-                "model_sync",
-                "zcode_hot_sync",
+                "model_sync.sync",
+                "zcode.hot_sync",
                 "local",
                 "local.app",
                 "cloud",
@@ -536,15 +537,15 @@ class KnownDeferredBoundaryTests(unittest.TestCase):
     matching assertion here is the reminder that must be updated in the same change.
     """
 
-    BROKER_CLIENT_PATH = AI_GATEWAY_ROOT / "share_broker_client.py"
-    SECRET_PROTECTION_IMPORT = "share_secret_protection"
+    BROKER_CLIENT_PATH = AI_GATEWAY_ROOT / "share/broker_client.py"
+    SECRET_PROTECTION_IMPORT = "share.secret_protection"
 
     def test_named_pipe_transport_is_still_importable(self):
         self.assertTrue(self.BROKER_CLIENT_PATH.is_file())
         probe = (
             "import sys\n"
             "sys.path.insert(0, sys.argv[1])\n"
-            "from share_broker_client import NamedPipeBrokerTransport\n"
+            "from share.broker_client import NamedPipeBrokerTransport\n"
             "print(NamedPipeBrokerTransport.__name__)\n"
         )
         with tempfile.TemporaryDirectory(
@@ -586,14 +587,13 @@ class KnownDeferredBoundaryTests(unittest.TestCase):
             names = set()
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
-                    names.update(alias.name.split(".")[0]
-                                 for alias in node.names)
+                    names.update(alias.name for alias in node.names)
                 elif isinstance(node, ast.ImportFrom) and not node.level:
-                    names.add((node.module or "").split(".")[0])
+                    names.add(node.module or "")
             return names
 
-        shared = AI_GATEWAY_ROOT / "console_backend_app.py"
-        self.assertTrue(shared.is_file(), "console_backend_app.py must exist")
+        shared = AI_GATEWAY_ROOT / "app/console_backend_app.py"
+        self.assertTrue(shared.is_file(), "app/console_backend_app.py must exist")
         self.assertIn(
             self.SECRET_PROTECTION_IMPORT, imported_of(shared),
             "{} no longer imports {}: E19-2 moved the credential reader; "
@@ -604,7 +604,7 @@ class KnownDeferredBoundaryTests(unittest.TestCase):
             with self.subTest(path=relative):
                 self.assertTrue(path.is_file(), "{} must exist".format(path))
                 self.assertIn(
-                    "console_backend_app", imported_of(path),
+                    "app.console_backend_app", imported_of(path),
                     "{} no longer imports console_backend_app: the shared "
                     "backend module carries the credential reader".format(
                         relative))

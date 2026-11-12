@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from share_broker_ops import WindowsHostOps
+from share.broker_ops import WindowsHostOps
 
 
 class SharePowerShellHostTests(unittest.TestCase):
@@ -20,7 +20,7 @@ class SharePowerShellHostTests(unittest.TestCase):
             args = ["pwsh", "-NoProfile", "-Command", "Write-Output '状态'"]
             reply = subprocess.CompletedProcess(args, 0, "状态\n", "")
             with patch.dict(os.environ, {"ProgramFiles": directory, "PATH": ""}), \
-                    patch("share_broker_ops.subprocess.run", return_value=reply) as run:
+                    patch("share.broker_ops.subprocess.run", return_value=reply) as run:
                 actual = WindowsHostOps._default_runner(args, 3)
             self.assertIs(actual, reply)
             self.assertEqual(run.call_args.args[0], [str(executable), *args[1:]])
@@ -29,7 +29,7 @@ class SharePowerShellHostTests(unittest.TestCase):
 
     def test_other_commands_keep_their_arguments(self):
         args = ["schtasks", "/Query", "/TN", "share fixture"]
-        with patch("share_broker_ops.subprocess.run") as run:
+        with patch("share.broker_ops.subprocess.run") as run:
             WindowsHostOps._default_runner(args, 4)
         self.assertEqual(run.call_args.args[0], args)
         self.assertEqual(run.call_args.kwargs["timeout"], 4)
@@ -48,7 +48,7 @@ class SharePowerShellHostTests(unittest.TestCase):
     def test_path_install_remains_supported_without_standard_install(self):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.dict(os.environ, {"ProgramFiles": directory}), \
-                patch("share_broker_ops.subprocess.run") as run:
+                patch("share.broker_ops.subprocess.run") as run:
             WindowsHostOps._default_runner(["pwsh", "-NoProfile"], 3)
         self.assertEqual(run.call_args.args[0], ["pwsh", "-NoProfile"])
 

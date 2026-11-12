@@ -61,7 +61,7 @@ PASS。
   的委托只读观察一律走只读开关，**不删任何文件、不写任何文件**（都不是本工具
   自己的写动作，也都不写 ``ai-gateway/data/``、不杀活进程、不重启、不发模型请求）：
   1. ``console_share_production.production_backend_observe(forget_stale=False)``
-     （console_share_production.py:1495-1546）→
+     （console/share_production.py:1495-1546）→
      ``_ProductionBackendOps.verify_running()``（:1328-1346）的
      ``forget_stale=False`` 关掉那条 ``_forget()``（:1408-1412）
      ``os.remove(paths["pid"])``——此前它会删除**陈旧**的
@@ -351,7 +351,7 @@ def write_snapshot(path, snapshot):
 def parse_listener_pids(text, port):
     """纯解析 ``netstat -ano -p TCP``：``(pids, reason)``。
 
-    与 ``console_share_production._listening_pids``（ai-gateway/console_share_production.py
+    与 ``console_share_production._listening_pids``（ai-gateway/console/share_production.py
     :954-981）同一口径：``(sorted pids, None)`` 解析成功（空表 = 无人监听），
     ``(None, "query_failed")`` 有行解析不出 PID（**证据不可用，绝不当作空表**）。
     """
@@ -1158,7 +1158,7 @@ def scan_share_ledger(path, tail_fields=LEDGER_ROW_FIELDS):
                 result["last"] = row
                 attribution = record.get("attribution")
                 if not (isinstance(attribution, str) and attribution):
-                    # 与 share_metering.py :194-200 同一口径：写盘端明确写了
+                    # 与 share/metering.py :194-200 同一口径：写盘端明确写了
                     # 「没有归因标记」记 absent，旧记录没有该字段记 legacy。
                     attribution = "absent" if "attribution" in record else "legacy"
                 result["attribution_counts"][attribution] = \
@@ -1222,7 +1222,7 @@ def gateway_attribution_facts():
            "instance_loaded_basis": None, "instance_loaded_reason": None,
            "request_attribution_observed": None, "error": None}
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         facts = console_share_production.share_attribution_status()
     except Exception as exc:  # noqa: BLE001 — 读不到是证据，不是崩溃
         out["error"] = "share_attribution_status_failed:%s" % type(exc).__name__
@@ -1258,7 +1258,7 @@ def backend_observe_facts(forget_stale=False):
     out = {"running": None, "auth_state": None, "auth_label": None,
            "ledger_file": None, "error": None}
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         observed = console_share_production.production_backend_observe(
             forget_stale=forget_stale)
     except Exception as exc:  # noqa: BLE001 — 读不到是证据，不是崩溃
@@ -1304,7 +1304,7 @@ def broker_faults_facts():
     out = {"source": "console_share_production.production_broker_evidence",
            "reply": None, "error": None}
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         reply = console_share_production.production_broker_evidence("faults")
     except Exception as exc:  # noqa: BLE001 — 读不到是证据，不是崩溃
         out["error"] = "broker_evidence_failed:%s" % type(exc).__name__
@@ -1325,7 +1325,7 @@ def maintenance_state_facts():
     out = {"source": "console_share_production.production_maintenance_status",
            "view": None, "error": None}
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         view = console_share_production.production_maintenance_status()
     except Exception as exc:  # noqa: BLE001 — 读不到是证据，不是崩溃
         out["error"] = "maintenance_read_failed:%s" % type(exc).__name__
@@ -1348,7 +1348,7 @@ def supervision_state_facts(state_dir=None):
            "desired": None, "desired_error": None,
            "watch": None, "watch_error": None}
     try:
-        import share_backend_supervision
+        share_backend_supervision = __import__("importlib").import_module("share.backend_supervision")
     except Exception as exc:  # noqa: BLE001 — 读不到是证据，不是崩溃
         out["watch_error"] = "import_failed:%s" % type(exc).__name__
         return out

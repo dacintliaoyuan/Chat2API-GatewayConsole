@@ -1,5 +1,5 @@
 """D4-prerequisite offline tests for the SYSTEM broker management pipe
-server (ai-gateway/share_broker_server.py).
+server (ai-gateway/share/broker_server.py).
 
 Everything runs on injected fake kernels and fixture coordinators/writers
 in temp dirs - no real pipe, no SYSTEM task, no RunRoot access. The server
@@ -35,14 +35,14 @@ def _write_secret(path, text):
     return path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 
-import share_broker_protocol as bp  # noqa: E402
-import share_broker_server as srv  # noqa: E402
-from share_broker_host import (BrokerHostCoordinator,  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
+import share.broker_server as srv  # noqa: E402
+from share.broker_host import (BrokerHostCoordinator,  # noqa: E402
                                InstanceRegistry, MaintenanceLeaseStore,
                                ReplayRegistry)
-from share_broker_ops import WindowsInstanceVerifier  # noqa: E402
+from share.broker_ops import WindowsInstanceVerifier  # noqa: E402
 from share_entry import ShareServer  # noqa: E402
-from share_runtime import ProtectedProjectionWriter  # noqa: E402
+from share.runtime import ProtectedProjectionWriter  # noqa: E402
 
 
 def _projection(generation=1, entries=None):
@@ -1421,7 +1421,7 @@ class DeployProbeDiscriminationTests(unittest.TestCase):
     answers."""
 
     def _inner(self, host_ops):
-        from share_broker_host import BrokerHostCoordinator
+        from share.broker_host import BrokerHostCoordinator
         return BrokerHostCoordinator(
             writer=SimpleNamespace(write=lambda *args, **kwargs: None),
             mgmt_secret="mgmt-k", instance_secret="inst-k",
@@ -1433,7 +1433,7 @@ class DeployProbeDiscriminationTests(unittest.TestCase):
                 "result": {}})
 
     def test_status_shape_and_host_verify_discriminator(self):
-        # WindowsHostOps.status() wire shape (share_broker_ops.py:257):
+        # WindowsHostOps.status() wire shape (share/broker_ops.py:257):
         # exactly host/task/state - nothing else ever crosses the pipe.
         host_ops = SimpleNamespace(
             status=lambda: {"host": "scheduled-task",
@@ -1494,7 +1494,7 @@ class BrokerDiagStageTests(unittest.TestCase):
                         events.append(dict(stage=stage, **kw)))
 
     def test_ring_fixed_keys_and_bounded(self):
-        from share_broker_host import BrokerDiag
+        from share.broker_host import BrokerDiag
         d = BrokerDiag(maxlen=3)
         for i in range(5):
             d.record("stage%d" % i, ok=False, error_code="e" * 80,
@@ -1512,7 +1512,7 @@ class BrokerDiagStageTests(unittest.TestCase):
         self.assertNotIn("signature", json.dumps(entry))
 
     def test_instance_call_happy_path_records_identity_and_exchange(self):
-        import share_broker_ops as ops_mod
+        import share.broker_ops as ops_mod
         events, diag = self._collector()
         captured = {}
 
@@ -1558,7 +1558,7 @@ class BrokerDiagStageTests(unittest.TestCase):
         self.assertTrue(events[1]["ok"])
 
     def test_instance_call_connect_failure_records_stage(self):
-        import share_broker_ops as ops_mod
+        import share.broker_ops as ops_mod
         events, diag = self._collector()
 
         class DeniedKernel:
@@ -1579,7 +1579,7 @@ class BrokerDiagStageTests(unittest.TestCase):
         self.assertEqual(events[0]["exception_type"], "OSError")
 
     def test_instance_call_identity_refusal_records_reason_code(self):
-        import share_broker_ops as ops_mod
+        import share.broker_ops as ops_mod
         events, diag = self._collector()
 
         class Kernel:
@@ -1612,7 +1612,7 @@ class BrokerDiagStageTests(unittest.TestCase):
     def test_coordinator_publish_records_resolve_stage(self):
         # 空信任注册表+发现缝未接线 → resolve 阶段如实记录（脱敏），且
         # status 暴露 diag（受保护管理边界）。
-        from share_broker_host import BrokerDiag, BrokerHostCoordinator
+        from share.broker_host import BrokerDiag, BrokerHostCoordinator
         diag = BrokerDiag()
         import hashlib
         writer = SimpleNamespace(

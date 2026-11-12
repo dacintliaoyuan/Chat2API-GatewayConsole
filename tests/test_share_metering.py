@@ -67,7 +67,7 @@ def _load(name, relative):
     return module
 
 
-metering = _load("share_metering", "share_metering.py")
+metering = _load("share_metering", "share/metering.py")
 share = _load("share_entry_metering", "chat2api/share_entry.py")
 chat2api = _load("chat2api_metering", "chat2api/chat2api.py")
 usagesrv = _load("usagesrv_metering", "usagesrv.py")
@@ -81,7 +81,7 @@ import _chat2api_http_harness as harness  # noqa: E402
 
 def _write_private(path, text):
     """Fixture secrets must pass the POSIX 0600/current-uid gate."""
-    from share_secret_protection import write_private_secret_path
+    from share.secret_protection import write_private_secret_path
     write_private_secret_path(Path(path), str(text).encode("utf-8"))
 
 

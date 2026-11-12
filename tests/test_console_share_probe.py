@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import console_share_probe as probe
+from console import share_probe as probe
 
 URL = 'https://fixture.tail-test.ts.net'
 SECRET = 'fixture-secret'
@@ -34,7 +34,7 @@ class WorkerBoundaryTests(unittest.TestCase):
         args, options = run.call_args
         self.assertEqual(args[0][0], sys.executable)
         self.assertIn('-I', args[0])
-        self.assertEqual(Path(args[0][-1]).name, 'console_public_probe.py')
+        self.assertEqual(Path(args[0][-1]).name, 'public_probe.py')
         self.assertNotIn(SECRET, repr(args))
         self.assertEqual(json.loads(options['input']), {'secret': SECRET, 'public_url': URL})
         self.assertEqual(options['timeout'], 65)

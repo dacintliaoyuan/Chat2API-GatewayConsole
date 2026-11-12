@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import share_broker_protocol as bp  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
 
 _SHARE_GW = importlib.util.spec_from_file_location(
     "share_entry_authmode_test",

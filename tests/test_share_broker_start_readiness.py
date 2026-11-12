@@ -26,10 +26,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import share_broker_host  # noqa: E402
-import share_broker_ops  # noqa: E402
-import share_broker_protocol as bp  # noqa: E402
-from share_broker_host import (BrokerHostCoordinator,  # noqa: E402
+import share.broker_host as share_broker_host  # noqa: E402
+import share.broker_ops as share_broker_ops  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
+from share.broker_host import (BrokerHostCoordinator,  # noqa: E402
                                InstanceRegistry, ReplayRegistry)
 
 
@@ -237,7 +237,7 @@ class StartReadinessTests(unittest.TestCase):
             ScriptedReadinessHost([True]))
         self.assertLess(coordinator.start_ready_timeout,
                         bp.DEFAULT_DEADLINE_SECONDS)
-        from console_share_actions import _BACKEND_DEFAULT_S
+        from console.share_actions import _BACKEND_DEFAULT_S
         self.assertLess(coordinator.start_ready_timeout, _BACKEND_DEFAULT_S)
         self.assertGreater(coordinator.start_poll_interval, 0.0)
         self.assertLessEqual(coordinator.start_poll_interval,

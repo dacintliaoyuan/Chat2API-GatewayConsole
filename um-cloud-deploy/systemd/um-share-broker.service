@@ -3,7 +3,7 @@ Description=UM share broker host (single authority for the 8100 child)
 Documentation=file:///opt/um-share/current/um-cloud-deploy/README.md
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/opt/um-share/current/share_broker_ops.py
+ConditionPathExists=/opt/um-share/current/share/broker_ops.py
 ConditionPathExists=/etc/um-share/broker-control.key
 
 [Service]
@@ -31,7 +31,7 @@ UMask=0077
 # Fail the START, never silently run without metering: the installed unit must
 # still name the price table, and broker.env must set UM_SHARE_UID.
 ExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly broker /etc/systemd/system/um-share-broker.service /etc/um-share/broker.env
-ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share_broker_ops.py \
+ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share/broker_ops.py \
   --socket-path /run/um-share/broker.sock \
   --key-file /etc/um-share/broker-control.key \
   --instance-key-file /etc/um-share/instance.key \

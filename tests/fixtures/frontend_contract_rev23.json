@@ -4,14 +4,14 @@
     "generatedFrom": "generate_frontend_contract_fixture.py:real handlers/private fixtures",
     "sourceHashEncoding": "utf8-lf",
     "sourceHashes": {
-      "model_sync.py": "341d7cba1953593811afb6236f587ac9fcbe2cee36ce59c96b9bbd60d9d43d83",
-      "model_sync_core.py": "ca881af779d6ededb56095a49e0a4e18e7fc43ffec9a72dc4e1bd6a5e4b588be",
-      "console_model_actions.py": "b6efc0f0db16c29b2679a9901978e4c5ed5114b8aec0f2ab391f7462538d4cd5",
-      "console_adapters.py": "af70eb4369392aebef573fd9b86e9bb50c662f9577cbcdfcb6f94ae0a50e21aa",
-      "console_operations.py": "e1bdf52bd24548eb71ee09de4271dba94d0c6a2c26e749592381d23c0994c5e4",
-      "share_metering.py": "152a4cc8d38074c0e9d2829315e995fd0eb7d8054592e951ae43d2b5442b1e57",
-      "console_stats.py": "92770da5d2de533b7e7f0ff249fa86c15229e5c8d13c1c2cc6be4322fdb44447",
-      "console_log_reader.py": "c8f74a73ec8b69efa5339a6bcbff7e5faccdb06c2eeb7eefd8f1a25c10c71768",
+      "model_sync/sync.py": "341d7cba1953593811afb6236f587ac9fcbe2cee36ce59c96b9bbd60d9d43d83",
+      "model_sync/sync_core.py": "ca881af779d6ededb56095a49e0a4e18e7fc43ffec9a72dc4e1bd6a5e4b588be",
+      "console/model_actions.py": "b6efc0f0db16c29b2679a9901978e4c5ed5114b8aec0f2ab391f7462538d4cd5",
+      "console/adapters.py": "af70eb4369392aebef573fd9b86e9bb50c662f9577cbcdfcb6f94ae0a50e21aa",
+      "console/operations.py": "e1bdf52bd24548eb71ee09de4271dba94d0c6a2c26e749592381d23c0994c5e4",
+      "share/metering.py": "152a4cc8d38074c0e9d2829315e995fd0eb7d8054592e951ae43d2b5442b1e57",
+      "console/stats.py": "92770da5d2de533b7e7f0ff249fa86c15229e5c8d13c1c2cc6be4322fdb44447",
+      "console/log_reader.py": "c8f74a73ec8b69efa5339a6bcbff7e5faccdb06c2eeb7eefd8f1a25c10c71768",
       "usagesrv.py": "548506c927b7ac6ef57d16a4875cb09057db61bb5c6f7fa80f10f0556d8a1e97"
     }
   },

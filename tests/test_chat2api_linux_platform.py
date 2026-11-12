@@ -475,19 +475,19 @@ class TestInstancePipePrefixDefault(unittest.TestCase):
         self.assertEqual(args.instance_pipe_prefix, r"\\.\pipe\custom-")
 
     def test_real_default_matches_the_instance_channel_module(self):
-        import share_instance_pipe
+        import share.instance_pipe as share_instance_pipe
         self.assertEqual(
             share_entry._default_instance_pipe_prefix(),
             share_instance_pipe.default_instance_pipe_prefix())
 
     def test_real_omitted_prefix_is_the_platform_default(self):
-        import share_instance_pipe
+        import share.instance_pipe as share_instance_pipe
         self.assertEqual(
             share_entry._resolve_instance_pipe_prefix(None),
             share_instance_pipe.default_instance_pipe_prefix())
 
     def test_posix_default_is_the_unix_socket_prefix(self):
-        import share_instance_pipe
+        import share.instance_pipe as share_instance_pipe
         with mock.patch.object(share_instance_pipe.os, "name", "posix"):
             self.assertEqual(
                 share_instance_pipe.default_instance_pipe_prefix(),

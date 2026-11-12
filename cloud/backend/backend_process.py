@@ -24,7 +24,7 @@ import os
 import sys
 import time
 
-from console_share_production import BackendConfig, production_backend_ops
+from console.share_production import BackendConfig, production_backend_ops
 
 BACKEND_PID_NAME = "backend.pid"
 

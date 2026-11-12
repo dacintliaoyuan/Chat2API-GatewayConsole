@@ -8,18 +8,18 @@ from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import console_share_actions as actions
-import share_broker_protocol as protocol
-import share_broker_server as server
-from share_broker_host import ReplayRegistry
-from share_broker_ops import WindowsHostOps
-from console_operations import OperationError
-from share_broker_client import BrokerClient
+from console import share_actions as actions
+import share.broker_protocol as protocol
+import share.broker_server as server
+from share.broker_host import ReplayRegistry
+from share.broker_ops import WindowsHostOps
+from console.operations import OperationError
+from share.broker_client import BrokerClient
 
 
 class RepairTests(unittest.TestCase):
     def setUp(self):
-        import share_public_supervision as supervision
+        import share.public_supervision as supervision
 
         sandbox = tempfile.TemporaryDirectory(prefix='share-repair-cancel-')
         self.addCleanup(sandbox.cleanup)

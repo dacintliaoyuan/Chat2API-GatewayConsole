@@ -39,11 +39,14 @@ STATIC_ROOTS = [
     "usagesrv.py",
     "chat2api/share_entry.py",
     "chat2api/chat2api.py",
-    "share_broker_ops.py",
-    "share_backend_supervision.py",
+    "share/broker_ops.py",
+    "share/backend_supervision.py",
     # Ops CLI included in the release even though no runtime module imports
     # it: key create/rotate/disable/delete is a supported private operation.
-    "share_admin.py",
+    "share/admin.py",
+    # ``usagesrv`` imports this through ``importlib.import_module`` (the AST
+    # closure cannot see a dynamic import), so it is named explicitly.
+    "share/metering.py",
 ]
 
 # Modules the cloud role actually imports (directly or through the cloud
@@ -51,28 +54,28 @@ STATIC_ROOTS = [
 # Qoder / CLIProxy / model_sync / zcode / Windows probes are NOT here.
 CLOUD_RUNTIME = [
     "usagesrv.py",
-    "console_tailnet.py",
-    "console_display_proxy.py",
-    "console_adapters.py",
-    "console_operations.py",
-    "console_public_probe.py",
-    "console_share_actions.py",
-    "console_share_probe.py",
-    "console_share_production.py",
-    "console_stats.py",
-    "console_log_reader.py",
-    "console_magpie_prices.py",
-    "share_management.py",
-    "share_store.py",
-    "share_broker_client.py",
-    "share_broker_host.py",
-    "share_broker_ops.py",
-    "share_broker_protocol.py",
-    "share_broker_server.py",
-    "share_runtime.py",
-    "share_metering.py",
-    "share_secret_protection.py",
-    "share_instance_pipe.py",
+    "console/tailnet.py",
+    "console/display_proxy.py",
+    "console/adapters.py",
+    "console/operations.py",
+    "console/public_probe.py",
+    "console/share_actions.py",
+    "console/share_probe.py",
+    "console/share_production.py",
+    "console/stats.py",
+    "console/log_reader.py",
+    "console/magpie_prices.py",
+    "share/management.py",
+    "share/store.py",
+    "share/broker_client.py",
+    "share/broker_host.py",
+    "share/broker_ops.py",
+    "share/broker_protocol.py",
+    "share/broker_server.py",
+    "share/runtime.py",
+    "share/metering.py",
+    "share/secret_protection.py",
+    "share/instance_pipe.py",
     "chat2api/share_entry.py",
     "chat2api/chat2api.py",
     "chat2api/nonstream_aggregate.py",
@@ -86,11 +89,11 @@ DYNAMIC_MODULES = {
         "chat2api/nonstream_aggregate",
         "chat2api/share_dispatch",
         "chat2api/share_entry",
-        "share_secret_protection",
+        "share/secret_protection",
     ],
     "chat2api/share_entry": [
-        "share_secret_protection",
-        "share_instance_pipe",
+        "share/secret_protection",
+        "share/instance_pipe",
     ],
 }
 
@@ -126,10 +129,11 @@ def _module_map(root: Path) -> dict[str, Path]:
     # ``ModuleNotFoundError: No module named 'shared'``.  The package
     # initializer is registered under ``shared/__init__`` and resolved through
     # ``_resolve`` (a bare ``shared`` maps there).
-    shared = root / "shared"
-    if shared.is_dir():
-        for path in sorted(shared.glob("*.py")):
-            modules["shared/" + path.stem] = path
+    for package in ("shared", "console", "share", "model_sync", "zcode", "app"):
+        directory = root / package
+        if directory.is_dir():
+            for path in sorted(directory.glob("*.py")):
+                modules[package + "/" + path.stem] = path
     return modules
 
 
@@ -149,7 +153,7 @@ def _resolve(name: str, modules: dict[str, Path]) -> str | None:
     if name in modules:
         return name
     if name in ("nonstream_aggregate", "share_dispatch", "share_entry",
-                 "share_secret_protection", "share_instance_pipe"):
+                 "share/secret_protection", "share/instance_pipe"):
         candidate = "chat2api/" + name
         if candidate in modules:
             return candidate

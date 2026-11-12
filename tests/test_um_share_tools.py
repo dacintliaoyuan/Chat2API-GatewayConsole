@@ -312,7 +312,7 @@ class LedgerScanTests(unittest.TestCase):
         result = snapshot_tool.scan_share_ledger(path)
         self.assertEqual(2, result["rows"])
         self.assertEqual(1, result["unparsed"])
-        # 没有 attribution 字段的旧行记 legacy（与 share_metering.py:194-200 同口径）。
+        # 没有 attribution 字段的旧行记 legacy（与 share/metering.py:194-200 同口径）。
         self.assertEqual({"legacy": 1}, result["attribution_counts"])
 
     def test_share_ledger_missing_path_is_an_error_not_empty_data(self):

@@ -13,10 +13,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import share_broker_client as bc  # noqa: E402
-import share_broker_host as bh  # noqa: E402
-import share_broker_ops as ops  # noqa: E402
-import share_broker_protocol as bp  # noqa: E402
+import share.broker_client as bc  # noqa: E402
+import share.broker_host as bh  # noqa: E402
+import share.broker_ops as ops  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
 
 
 class Clock:

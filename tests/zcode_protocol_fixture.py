@@ -1,7 +1,7 @@
 """Synthetic source regions for admission wiring, never executable client code."""
 import hashlib
 
-import zcode_hot_sync_protocol as protocol
+from zcode import hot_sync_protocol as protocol
 
 
 def sources(shared_name="chunk-FNQWK6LT.js"):

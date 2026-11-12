@@ -57,7 +57,7 @@ from r19.local_fixture import (  # noqa: E402
 TERMINAL_STATES = ("succeeded", "failed", "cancelled", "interrupted")
 FORBIDDEN_MODULES = (
     "usagesrv",
-    "console_adapters",
+    "console.adapters",
     "share_management",
     "share_store",
     "share_entry",
@@ -124,7 +124,8 @@ class LocalConfigTests(unittest.TestCase):
     def test_print_runtime_info_is_isolated_and_does_not_load_cloud(self):
         polluted = self.fixture.root / "polluted"
         polluted.mkdir(parents=True, exist_ok=True)
-        (polluted / "console_stats.py").write_text(
+        (polluted / "console").mkdir(parents=True, exist_ok=True)
+        (polluted / "console/stats.py").write_text(
             "raise RuntimeError('polluted console_stats imported')\n",
             encoding="utf-8")
         arbitrary_cwd = Path(tempfile.mkdtemp(prefix="r19-arbitrary-cwd-"))
@@ -227,7 +228,8 @@ class LocalEndToEndTests(unittest.TestCase):
         self.arbitrary_cwd = Path(tempfile.mkdtemp(prefix="r19-e2e-cwd-"))
         self.polluted = self.fixture.root / "polluted"
         self.polluted.mkdir(parents=True, exist_ok=True)
-        (self.polluted / "console_stats.py").write_text(
+        (self.polluted / "console").mkdir(parents=True, exist_ok=True)
+        (self.polluted / "console/stats.py").write_text(
             "raise RuntimeError('polluted console_stats imported')\n",
             encoding="utf-8")
         self.fixture.start_app(cwd=self.arbitrary_cwd,

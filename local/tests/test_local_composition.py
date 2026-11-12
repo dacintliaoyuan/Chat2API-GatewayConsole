@@ -43,10 +43,10 @@ PROJECT_ROOT = AI_GATEWAY.parent
 GIT_ROOT = AI_GATEWAY.parents[1]
 sys.path.insert(0, str(AI_GATEWAY))
 
-import console_stats  # noqa: E402
-import model_sync  # noqa: E402
+from console import stats as console_stats  # noqa: E402
+from model_sync import sync as model_sync  # noqa: E402
 
-from console_operations import ActionSpec, OperationManager  # noqa: E402
+from console.operations import ActionSpec, OperationManager  # noqa: E402
 from local.backend import app as local_app  # noqa: E402
 from local.backend.config import LocalConfig, LocalConfigError  # noqa: E402
 from local.backend.registry import build_registry  # noqa: E402

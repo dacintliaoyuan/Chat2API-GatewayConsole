@@ -1,4 +1,4 @@
-﻿# Offline regression tests for the gateway runtime module.
+# Offline regression tests for the gateway runtime module.
 # Uses injected hooks to verify start/stop/status calls without touching
 # real processes or the task scheduler. Health-only cases use isolated
 # ephemeral loopback sockets, never a configured service port.
@@ -518,7 +518,7 @@ Assert-Equal (Test-Chat2ApiControlUri 'http://127.0.0.1:8000/health') $false 'co
 #
 # StopCommandLinePattern ((^|\s)chat2api\.py(\s|$)) alone also matched the
 # dedicated share backend (chat2api.py --port 8110 --profile <share>\edge-profile,
-# started by console_share_production.py:1226-1234), so Stop-GatewayService's
+# started by console/share_production.py:1226-1234), so Stop-GatewayService's
 # GracefulHttp residual branch force-stopped a share instance.
 #
 # The substitutes below land on the LAST boundary — the CIM process query and the

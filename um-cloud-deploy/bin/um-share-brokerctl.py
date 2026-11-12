@@ -4,7 +4,7 @@
 
 This helper is the ONLY operator/systemd entry that talks to the broker host's
 AF_UNIX management channel.  It never starts the 8100 gateway with a bare
-``Popen``: the broker host (``share_broker_ops.py``) owns that child.  A start is
+``Popen``: the broker host (``share/broker_ops.py``) owns that child.  A start is
 sent as the restricted broker ``start`` verb; an explicit operator start first
 writes the persistent ``share-host-desired.json`` intent as ``running`` (the same
 schema ``LinuxHostOps`` reads) and then sends the broker verb.
@@ -123,8 +123,8 @@ def _wait_connections_zero(port: int, budget_s: int, interval_s: float,
 
 
 def _client(args):
-    from share_broker_client import BrokerClient, UnixSocketBrokerTransport
-    from share_broker_server import read_control_key
+    from share.broker_client import BrokerClient, UnixSocketBrokerTransport
+    from share.broker_server import read_control_key
     try:
         secret = read_control_key(args.key_file)
     except (OSError, ValueError) as exc:

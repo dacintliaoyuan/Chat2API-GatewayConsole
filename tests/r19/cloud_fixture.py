@@ -4,7 +4,7 @@
 Runs the REAL cloud package on loopback only:
 
     fake UM (verification upstream)
-    share_broker_ops.py::linux_main (AF_UNIX broker, spawns 8100)
+    share/broker_ops.py::linux_main (AF_UNIX broker, spawns 8100)
     chat2api/share_entry.py (8100 role, spawned by the broker)
     cloud/run_cloud.py --config (18096 role, owns the 8110 backend)
 
@@ -106,7 +106,7 @@ def broker_fields(paths: dict) -> dict:
 
 def _broker_argv_from(values) -> tuple:
     """Build the argv from a ``CloudConfig`` or any field-named mapping."""
-    argv = ["share_broker_ops.py"]
+    argv = ["share/broker_ops.py"]
     for flag, field in BROKER_ARG_FIELDS:
         if isinstance(values, dict):
             value = values[field]
@@ -325,7 +325,7 @@ class CloudChainFixture(chain.ChainFixture):
         return self.config_path
 
     def _write_projection(self):
-        path = self.package / "share_store.py"
+        path = self.package / "share/store.py"
         module = chain._load_module(
             _module_name("r19_cloud_share_store", path), path)
         store = module.ShareStore(str(self.paths["store"]))
@@ -428,7 +428,7 @@ class CloudChainFixture(chain.ChainFixture):
         ]
         argv = [
             sys.executable,
-            str(self.package / "share_broker_ops.py"),
+            str(self.package / "share/broker_ops.py"),
             # F8: the broker's own flags come from the SAME helper the product
             # path (``CloudConfig.broker_args``) mirrors, never a hand-written
             # list that can drift from it.
@@ -456,7 +456,7 @@ class CloudChainFixture(chain.ChainFixture):
             encoding="utf-8").strip()
         sys.path.insert(0, str(self.package))
         try:
-            from share_broker_client import (BrokerClient,
+            from share.broker_client import (BrokerClient,
                                             UnixSocketBrokerTransport)
             client = BrokerClient(
                 lambda: UnixSocketBrokerTransport(

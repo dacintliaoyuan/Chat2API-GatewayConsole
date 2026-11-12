@@ -19,8 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import share_backend_supervision as supervision  # noqa: E402
-import console_share_production  # noqa: E402
+import share.backend_supervision as supervision  # noqa: E402
+from console import share_production as console_share_production  # noqa: E402
 
 BOOT = "test-boot"
 
@@ -79,7 +79,7 @@ class _StubBroker:
     The console seams call the ``BrokerClientAdapter`` public control surface
     directly — ``production_maintenance_status``/``production_maintenance_end``
     invoke the adapter verbs and NEVER ``broker.client`` (pinned by
-    tests/test_console_share_production.py::test_console_never_reaches_the_inner_client),
+    tests/test_console/share_production.py::test_console_never_reaches_the_inner_client),
     so the double exposes the adapter verbs itself and deliberately has no
     ``client`` attribute: a seam that regressed to the inner client would read
     as unavailable (``broker_unavailable``) instead of silently passing here.
@@ -864,7 +864,7 @@ class PreconditionTests(BaseSupervisionTest):
 
 class LocalTimeEvidenceTests(BaseSupervisionTest):
     """The evidence logs write naive LOCAL wall-clock stamps
-    (chat2api.py:492-493, console_share_production.py:1326) while the intent
+    (chat2api.py:492-493, console/share_production.py:1326) while the intent
     ``at_utc`` is real UTC (``_utc_iso(time.time())``): reading a local
     stamp as UTC shifted every exit by the host's UTC offset, so under UTC+8 a
     graceful exit 2 h BEFORE the intent compared as 6 h AFTER it and
@@ -1298,7 +1298,7 @@ class SharedHandlerAndManagerTests(BaseSupervisionTest):
         self.assertIs(type(ops), console_share_production._ProductionBackendOps)
 
     def test_no_operation_manager_is_constructed(self):
-        import console_operations
+        from console import operations as console_operations
         saved = console_operations.OperationManager
 
         class _ForbiddenManager:

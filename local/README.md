@@ -20,7 +20,7 @@ python -I local/run_local.py --config <绝对路径.json> [--check-config | --pr
 
 ## 模块边界
 
-`local/backend/app.py` 拥有自己的路由、鉴权、配置与生命周期，不 import `console_adapters`、`share_management`、`share_store`、`share_entry`、`share_dispatch`、`console_display_proxy`、`usagesrv`、`cloud`。唯一的 `share_*` 依赖是控制令牌校验器 `share_secret_protection`，隔离包会携带它。
+`local/backend/app.py` 拥有自己的路由、鉴权、配置与生命周期，不 import `console.adapters`、`share.management`、`share.store`、`chat2api.share_entry`、`chat2api.share_dispatch`、`console.display_proxy`、`usagesrv`、`cloud`。唯一的 `share` 依赖是控制令牌校验器 `share.secret_protection`，隔离包会携带它。
 
 `local/backend/stats_env.py` 只用 `shared.pricing_rules` 的公开名；价目缓存与文件读取留在端内。
 

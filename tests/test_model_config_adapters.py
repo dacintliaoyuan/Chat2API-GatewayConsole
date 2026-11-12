@@ -17,11 +17,11 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import model_config_adapters
+from model_sync import config_adapters as model_config_adapters
 
-from model_reconcile import RepairItem
-from model_sync_core import Binding, CatalogModel, SyncChange
-from model_config_adapters import (
+from model_sync.reconcile import RepairItem
+from model_sync.sync_core import Binding, CatalogModel, SyncChange
+from model_sync.config_adapters import (
     ZCODE_MANAGED_PROVIDER_DEFAULTS,
     dsh_apply_ctx, dsh_apply_remove, dsh_provider_span,
     dsh_read, dsh_apply_fixes,
@@ -253,7 +253,7 @@ class TestZCodeJsonAdapter(unittest.TestCase):
             fixes = [RepairItem(
                 target="ZCode", kind="ctx", mid="GLM-5.2-NVFP4",
                 ctx=200000, desc="test ctx fix")]
-            with mock.patch("model_config_adapters.os.replace",
+            with mock.patch("model_sync.config_adapters.os.replace",
                             side_effect=OSError("replace failed")):
                 with self.assertRaises(OSError):
                     zcode_apply_fixes(path, fixes)
@@ -380,7 +380,7 @@ class TestCatalogSyncRendering(unittest.TestCase):
                     raise OSError("second replace failed")
                 return real_replace(src, dst)
 
-            with mock.patch("model_config_adapters.os.replace", side_effect=fail_second):
+            with mock.patch("model_sync.config_adapters.os.replace", side_effect=fail_second):
                 with self.assertRaises(OSError):
                     apply_config_transaction(
                         {first: "new-first", second: "new-second"},
@@ -439,9 +439,9 @@ class TestConfigPublishTransaction(unittest.TestCase):
                     raise self._busy_error()
                 return real_replace(src, dst)
 
-            with mock.patch("model_config_adapters.os.replace",
+            with mock.patch("model_sync.config_adapters.os.replace",
                             side_effect=flaky), \
-                    mock.patch("model_config_adapters.time.sleep",
+                    mock.patch("model_sync.config_adapters.time.sleep",
                                side_effect=sleeps.append):
                 replaced = apply_config_transaction(
                     {first: "new"}, root / "backups",
@@ -463,9 +463,9 @@ class TestConfigPublishTransaction(unittest.TestCase):
             def always_busy(src, dst):
                 raise self._busy_error()
 
-            with mock.patch("model_config_adapters.os.replace",
+            with mock.patch("model_sync.config_adapters.os.replace",
                             side_effect=always_busy), \
-                    mock.patch("model_config_adapters.time.sleep",
+                    mock.patch("model_sync.config_adapters.time.sleep",
                                side_effect=sleeps.append):
                 with self.assertRaises(
                         model_config_adapters.ConfigPublishError) as caught:
@@ -494,9 +494,9 @@ class TestConfigPublishTransaction(unittest.TestCase):
             def missing(src, dst):
                 raise OSError(errno.ENOENT, "gone")
 
-            with mock.patch("model_config_adapters.os.replace",
+            with mock.patch("model_sync.config_adapters.os.replace",
                             side_effect=missing), \
-                    mock.patch("model_config_adapters.time.sleep",
+                    mock.patch("model_sync.config_adapters.time.sleep",
                                side_effect=sleeps.append):
                 with self.assertRaises(
                         model_config_adapters.ConfigPublishError):
@@ -524,7 +524,7 @@ class TestConfigPublishTransaction(unittest.TestCase):
                     raise OSError("second replace failed")
                 return real_replace(src, dst)
 
-            with mock.patch("model_config_adapters.os.replace",
+            with mock.patch("model_sync.config_adapters.os.replace",
                             side_effect=fail_second):
                 with self.assertRaises(
                         model_config_adapters.ConfigPublishError) as caught:
@@ -553,9 +553,9 @@ class TestConfigPublishTransaction(unittest.TestCase):
                     raise OSError(errno.EACCES, "state busy")
                 return real_replace(src, dst)
 
-            with mock.patch("model_config_adapters.os.replace",
+            with mock.patch("model_sync.config_adapters.os.replace",
                             side_effect=fail_state), \
-                    mock.patch("model_config_adapters.time.sleep"):
+                    mock.patch("model_sync.config_adapters.time.sleep"):
                 with self.assertRaises(
                         model_config_adapters.ConfigPublishError) as caught:
                     apply_config_transaction(

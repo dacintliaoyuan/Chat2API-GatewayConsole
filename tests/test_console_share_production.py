@@ -83,14 +83,14 @@ from unittest import mock
 sys.path.insert(0, str(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-import console_share_actions as orch  # noqa: E402  (same directory on path)
-import console_share_production as prod  # noqa: E402
-import share_broker_client  # noqa: E402
-import share_broker_server  # noqa: E402
+from console import share_actions as orch  # noqa: E402  (same directory on path)
+from console import share_production as prod  # noqa: E402
+import share.broker_client as share_broker_client  # noqa: E402
+import share.broker_server as share_broker_server  # noqa: E402
 import usagesrv  # noqa: E402  (real loader chain for the assembly test)
-from console_operations import OperationError  # noqa: E402
-from share_broker_ops import TailscaleServiceOps  # noqa: E402
-from share_management import BrokerClientAdapter, BrokerError  # noqa: E402
+from console.operations import OperationError  # noqa: E402
+from share.broker_ops import TailscaleServiceOps  # noqa: E402
+from share.management import BrokerClientAdapter, BrokerError  # noqa: E402
 
 _EXE = "fake-tailscale.exe"
 _OFF_ARGS = [_EXE, "funnel", "--https=443", "off"]
@@ -119,7 +119,7 @@ _CANCEL_SEAM_ATTRS = ("_PUBLIC_CANCEL_REQUEST", "_PUBLIC_CANCEL_CLEAR")
 _RESTORE_ATTRS = _SEAM_ATTRS + _CANCEL_SEAM_ATTRS
 
 _SOURCE_FILE = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "console_share_production.py")
+    os.path.abspath(__file__))), "console/share_production.py")
 
 
 @contextlib.contextmanager
@@ -828,7 +828,7 @@ class PublicShareUrlTests(unittest.TestCase):
     def test_public_supervision_wrapper_resolves_the_production_url(self):
         # The wrapper path (``_public_url(None)``) must reach the production
         # seam, not depend on an injected url_provider.
-        import share_public_supervision as supervision
+        import share.public_supervision as supervision
 
         runner = _FakeRunner([(0, self._status_json(
             "Running", "share.example.ts.net."), "")])
@@ -1609,7 +1609,7 @@ class ProductionAssemblyTests(unittest.TestCase):
         _spawn_log.clear()
 
     def test_real_default_assembly_wires_all_seams_without_real_calls(self):
-        import console_adapters
+        from console import adapters as console_adapters
         with tempfile.TemporaryDirectory() as td:
             config = Path(td) / "share-management.json"
             key = Path(td) / "broker-control-key"
@@ -1663,7 +1663,7 @@ class ProductionAssemblyTests(unittest.TestCase):
         # 装配后的 _TS_SERVICE_CONTROL 缝发真实协议动词；管道边界是替身
         # transport，回帧由替身给出 —— 全链（真实 loader/适配器形状）零真实
         # OS 命令。
-        import console_adapters
+        from console import adapters as console_adapters
         with tempfile.TemporaryDirectory() as td:
             config = Path(td) / "share-management.json"
             key = Path(td) / "broker-control-key"
@@ -1739,7 +1739,7 @@ class ProductionAssemblyTests(unittest.TestCase):
         broker_requests) with the sc.exe/tailscale runner scripted by
         `sc_seq`/`ts_seq` (last item repeats) and the fake pipe transport
         recording every request action."""
-        import console_adapters
+        from console import adapters as console_adapters
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         config = Path(td.name) / "share-management.json"
@@ -1882,8 +1882,8 @@ class AssemblyCancelIsolationTests(unittest.TestCase):
         # also a sandbox, so a regression cannot reach the operator's files.
         with tempfile.TemporaryDirectory(prefix="share-cancel-isolation-") as td:
             with mock.patch.dict(os.environ, {"LOCALAPPDATA": td}):
-                import share_public_supervision as supervision
-                import console_adapters
+                import share.public_supervision as supervision
+                from console import adapters as console_adapters
                 from tests.test_console_share_repair import RepairTests
 
                 watch_dir = Path(td) / "default-watch"
@@ -2282,7 +2282,7 @@ class BackendObserveTests(unittest.TestCase):
         with mock.patch.object(prod, "production_backend_ops",
                                return_value=ops), \
                 mock.patch.object(ops, "verify_running", return_value=True), \
-                mock.patch("console_share_production.urllib.request.urlopen",
+                mock.patch("console.share_production.urllib.request.urlopen",
                            self._urlopen_json(payload)):
             out = prod.production_backend_observe()
         self.assertEqual(out["auth_state"], "failed")
@@ -2297,7 +2297,7 @@ class BackendObserveTests(unittest.TestCase):
         with mock.patch.object(prod, "production_backend_ops",
                                return_value=ops), \
                 mock.patch.object(ops, "verify_running", return_value=True), \
-                mock.patch("console_share_production.urllib.request.urlopen",
+                mock.patch("console.share_production.urllib.request.urlopen",
                            self._urlopen_json({"state": "valid",
                                                "label": "认证有效"})):
             out = prod.production_backend_observe()
@@ -4318,7 +4318,7 @@ class MaintenanceVerbTests(unittest.TestCase):
         # E19-1-03: the redirection is the explicit injection seam
         # (configure_paths), not a patched module constant — the constants are
         # defaults only now.
-        import share_backend_supervision
+        import share.backend_supervision as share_backend_supervision
         with tempfile.TemporaryDirectory() as td:
             # The module's own bounded path helper validates the fixed
             # name and its containment; this test never builds a path.
@@ -4386,14 +4386,14 @@ class SupervisionPathInjectionTests(unittest.TestCase):
     """
 
     def setUp(self):
-        import share_backend_supervision
+        import share.backend_supervision as share_backend_supervision
         self.supervision = share_backend_supervision
         self.saved = (share_backend_supervision.active_watch_dir(),
                       share_backend_supervision.active_lock_dir())
         self.addCleanup(self.supervision.configure_paths)
 
     def test_injected_roots_carry_every_read_and_write(self):
-        import share_backend_supervision as supervision
+        import share.backend_supervision as supervision
         with tempfile.TemporaryDirectory(
                 prefix="supervision-inject-") as td:
             watch_dir = Path(td) / "watch"
@@ -4435,7 +4435,7 @@ class SupervisionPathInjectionTests(unittest.TestCase):
                     "the injection leaked into the default root %s" % default)
 
     def test_reset_restores_the_production_defaults(self):
-        import share_backend_supervision as supervision
+        import share.backend_supervision as supervision
         prod.configure_supervision_paths(watch_dir=str(Path(tempfile.gettempdir())
                                                      / "r19-unused-watch"))
         self.assertNotEqual(supervision.active_watch_dir(),
@@ -4466,7 +4466,7 @@ class SupervisionPathInjectionTests(unittest.TestCase):
         root: the default is redirected to a second temp dir (never the real
         LOCALAPPDATA watch dir) and the reader must return THAT file.
         """
-        import share_backend_supervision as supervision
+        import share.backend_supervision as supervision
         with tempfile.TemporaryDirectory(
                 prefix="supervision-behaviour-") as td:
             injected = Path(td) / "injected-watch"
@@ -4519,7 +4519,7 @@ class SupervisionPathInjectionTests(unittest.TestCase):
 
     def test_production_read_face_names_the_injected_state_file(self):
         """The page must name the file the supervisor actually writes."""
-        import share_backend_supervision as supervision
+        import share.backend_supervision as supervision
         with tempfile.TemporaryDirectory(
                 prefix="supervision-readface-") as td:
             watch_dir = Path(td) / "watch"
@@ -4564,7 +4564,7 @@ class GatewayRestartProductionTests(unittest.TestCase):
                          ["gateway-restart"])
 
     def test_default_budget_is_the_protocol_default(self):
-        from share_broker_protocol import GATEWAY_RESTART_BUDGET_DEFAULT_S
+        from share.broker_protocol import GATEWAY_RESTART_BUDGET_DEFAULT_S
         self.assertEqual(GATEWAY_RESTART_BUDGET_DEFAULT_S, 120)
         client = _Rev9FakeClient([(True, "ok", self.OK)])
         prod.production_gateway_restart(broker=_rev9_broker(client))
@@ -5354,7 +5354,7 @@ class IntentWriteTests(unittest.TestCase):
             write_desired_state=lambda state, source=None: (
                 calls.append((state, source)) or True))
         with mock.patch.dict(sys.modules,
-                              {"share_backend_supervision": module}):
+                              {"share.backend_supervision": module}):
             self.assertIs(prod._production_intent_write(
                 "running", source="share.backend_restart"), True)
         self.assertEqual(calls, [("running", "share.backend_restart")])
@@ -5363,12 +5363,12 @@ class IntentWriteTests(unittest.TestCase):
         module = SimpleNamespace(
             write_desired_state=lambda state, source=None: False)
         with mock.patch.dict(sys.modules,
-                              {"share_backend_supervision": module}):
+                              {"share.backend_supervision": module}):
             self.assertIs(prod._production_intent_write(
                 "stopped", source="share.close"), False)
         # A missing module is False too: the caller reports "意图未写".
         with mock.patch.dict(sys.modules,
-                              {"share_backend_supervision": None}):
+                              {"share.backend_supervision": None}):
             self.assertIs(prod._production_intent_write(
                 "running", source="share.open"), False)
 
@@ -5378,7 +5378,7 @@ class IntentWriteTests(unittest.TestCase):
 
         module = SimpleNamespace(write_desired_state=explode)
         with mock.patch.dict(sys.modules,
-                              {"share_backend_supervision": module}):
+                              {"share.backend_supervision": module}):
             self.assertIs(prod._production_intent_write(
                 "running", source="share.open"), False)
 
@@ -5418,7 +5418,7 @@ class ObserveEvidenceTests(unittest.TestCase):
                                return_value=ops), \
                 mock.patch.object(ops, "verify_running",
                                   return_value=True), \
-                mock.patch("console_share_production.urllib.request.urlopen",
+                mock.patch("console.share_production.urllib.request.urlopen",
                            fake_urlopen):
             out = prod.production_backend_observe(forget_stale=False)
         return out, calls
@@ -5675,7 +5675,7 @@ class BackendAuthWaitOpenChainTests(unittest.TestCase):
                 json.dumps({"state": body[0], "label": body[1]})
                 .encode("utf-8"))
 
-        patcher = mock.patch("console_share_production.urllib.request.urlopen",
+        patcher = mock.patch("console.share_production.urllib.request.urlopen",
                              fake_urlopen)
         patcher.start()
         self.addCleanup(patcher.stop)

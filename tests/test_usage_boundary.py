@@ -68,9 +68,9 @@ def _guard_usage_module(module):
 
 def setUpModule():
     global _ISOLATION_TEMP, _ISOLATION_SAVED_SEAMS
-    import share_broker_client
-    import share_broker_server
-    import console_share_actions
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
+    from console import share_actions as console_share_actions
     _ISOLATION_ATTEMPTS.clear()
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(prefix="offline-management-")
     root = Path(_ISOLATION_TEMP.name)
@@ -98,7 +98,7 @@ def setUpModule():
 
 
 def tearDownModule():
-    import console_share_actions
+    from console import share_actions as console_share_actions
     try:
         for module, old_console, _old_share in _ISOLATION_MODULES:
             current = module._console_manager

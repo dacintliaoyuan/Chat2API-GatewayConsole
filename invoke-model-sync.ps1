@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [ValidateSet('Preview', 'Manual', 'Scheduled', 'Probe')]
     [string]$Mode = 'Manual'
@@ -26,7 +26,7 @@ if ($Mode -eq 'Scheduled') {
 
 # B0（2026-11-01）：默认同步装配只剩 UM。Qoder 国内/国际、CLIProxy 与 M365
 # 已随源码退役（服务描述符、端点与 token 文件一并删除），不再作为来源键；
-# 显式点名退役来源由 model_sync.py 在边界处拒绝，绝不拉起或读取旧上游。
+# 显式点名退役来源由 model_sync/sync.py 在边界处拒绝，绝不拉起或读取旧上游。
 $sourceKeys = @('chat2api')
 $startedHere = New-Object System.Collections.Generic.List[string]
 $warnings = New-Object System.Collections.Generic.List[string]
@@ -79,7 +79,7 @@ try {
         exit 0
     }
 
-    $arguments = @((Join-Path $gatewayRoot 'model_sync.py'))
+    $arguments = @((Join-Path $gatewayRoot 'model_sync/sync.py'))
     # 同步来源集合：只含本轮应同步的来源（人工停用的已剔除）。空集合已在上面
     # 正常返回，绝不会传成「全部来源」。
     # PS 5.1 的 native 参数编组会丢弃空字符串参数，所以用单参数 `--sources=<值>`

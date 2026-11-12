@@ -117,7 +117,7 @@ class ShareRoleSourceTests(unittest.TestCase):
     def test_the_production_share_profile_is_the_default_share_role(self):
         # The dedicated 8110 launcher's own profile is the share-backend
         # default main() resolves; the private 8000 profile does not match.
-        import console_share_production
+        from console import share_production as console_share_production
         profile = console_share_production._ProductionBackendOps()._paths()[
             "profile"]
         self.assertIn("share-backend", profile)

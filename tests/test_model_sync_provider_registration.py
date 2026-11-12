@@ -17,9 +17,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import model_config_adapters  # noqa: E402
-import model_sync  # noqa: E402
-from model_sync_core import Binding  # noqa: E402
+from model_sync import config_adapters as model_config_adapters  # noqa: E402
+from model_sync import sync as model_sync  # noqa: E402
+from model_sync.sync_core import Binding  # noqa: E402
 
 
 CLIPROXY_BINDING = Binding("cliproxy", "ZCode", "local:cliproxy",

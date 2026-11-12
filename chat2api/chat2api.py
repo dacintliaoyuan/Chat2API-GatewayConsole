@@ -107,7 +107,7 @@ def _load_share_entry():
     try:
         from . import share_entry
     except ImportError:
-        import share_entry
+        import share_entry as share_entry
     return share_entry
 
 
@@ -9501,7 +9501,7 @@ class _ShareInstanceControl:
         self._replay = None
 
     def handle(self, body, secret, now=None):
-        from share_broker_protocol import (ProtocolError, ReplayRegistry,
+        from share.broker_protocol import (ProtocolError, ReplayRegistry,
                                           validate_instance_request)
         if self._replay is None:
             self._replay = ReplayRegistry()
@@ -9747,9 +9747,9 @@ def main():
     instance_channel = None
     if args.instance_key_file and server.share_gate is not None:
         try:
-            from share_instance_pipe import (start_instance_channel,
+            from share.instance_pipe import (start_instance_channel,
                                              remove_registration)
-            from share_secret_protection import read_private_secret_path
+            from share.secret_protection import read_private_secret_path
             instance_secret = read_private_secret_path(
                 args.instance_key_file, max_bytes=128,
                 label="instance key").decode("utf-8").strip()
@@ -10029,11 +10029,12 @@ def _load_share_secret_protection():
     file by path. No secret is read here.
     """
     import importlib.util
-    module = sys.modules.get("share_secret_protection")
+    module = (sys.modules.get("share.secret_protection")
+              or sys.modules.get("share_secret_protection"))
     if module is not None:
         return module
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        os.pardir, "share_secret_protection.py")
+                        os.pardir, "share/secret_protection.py")
     spec = importlib.util.spec_from_file_location(
         "share_secret_protection", path)
     if spec is None or spec.loader is None:

@@ -39,6 +39,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+_RELEASE_ROOT = Path(__file__).resolve().parents[1]
+if str(_RELEASE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_RELEASE_ROOT))
+
 MAGIC = b"UMCLDBK1"
 FORMAT = "um-share-backup-v1"
 KEY_SIZE = 32
@@ -2196,10 +2200,11 @@ def latest_security_state(adapter) -> dict:
 
 def _load_share_store():
     import importlib.util
-    module = sys.modules.get("share_store")
+    module = (sys.modules.get("share.store")
+              or sys.modules.get("share_store"))
     if module is not None:
         return module
-    path = Path(__file__).resolve().parents[1] / "share_store.py"
+    path = Path(__file__).resolve().parents[1] / "share/store.py"
     spec = importlib.util.spec_from_file_location("share_store", path)
     if spec is None or spec.loader is None:
         raise BackupError(f"cannot load {path}")
@@ -2215,7 +2220,7 @@ def _load_share_secret_protection():
     module = sys.modules.get("share_secret_protection")
     if module is not None:
         return module
-    path = Path(__file__).resolve().parents[1] / "share_secret_protection.py"
+    path = Path(__file__).resolve().parents[1] / "share/secret_protection.py"
     spec = importlib.util.spec_from_file_location(
         "share_secret_protection", path)
     if spec is None or spec.loader is None:
@@ -2232,7 +2237,7 @@ def _load_magpie_prices():
     module = sys.modules.get("console_magpie_prices")
     if module is not None:
         return module
-    path = Path(__file__).resolve().parents[1] / "console_magpie_prices.py"
+    path = Path(__file__).resolve().parents[1] / "console/magpie_prices.py"
     spec = importlib.util.spec_from_file_location(
         "console_magpie_prices", path)
     if spec is None or spec.loader is None:

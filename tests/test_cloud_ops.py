@@ -33,8 +33,8 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "um-cloud-deploy"))
 
 import backup_restore  # noqa: E402
-import share_metering  # noqa: E402
-from share_store import ShareStore  # noqa: E402
+import share.metering as share_metering  # noqa: E402
+from share.store import ShareStore  # noqa: E402
 
 SCENARIOS = []
 UNCOVERED = [

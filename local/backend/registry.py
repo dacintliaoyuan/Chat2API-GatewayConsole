@@ -12,8 +12,8 @@ land in warnings), holds no ``SyncLock`` and writes no client configuration.
 """
 from __future__ import annotations
 
-import console_model_actions
-from console_operations import ActionSpec
+from console import model_actions as console_model_actions
+from console.operations import ActionSpec
 
 
 def _model_catalog_resource(target, params):

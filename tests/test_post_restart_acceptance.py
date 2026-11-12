@@ -72,7 +72,7 @@ def _load(module_name):
 
 tool = _load("post_restart_acceptance")
 
-import console_share_production as prod  # noqa: E402  (products' read-only ops)
+from console import share_production as prod  # noqa: E402  (products' read-only ops)
 
 FOUR_KEYS = ["key_chars", "key_file", "reason", "wired"]
 SEVEN_KEYS = ["file_ready", "file_reason", "instance_loaded", "key_chars",

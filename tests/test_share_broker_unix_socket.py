@@ -36,10 +36,10 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 
-import share_broker_protocol as bp  # noqa: E402
-import share_broker_server as srv  # noqa: E402
-import share_instance_pipe as sip  # noqa: E402
-from share_broker_client import (BrokerClient, BrokerTransport,  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
+import share.broker_server as srv  # noqa: E402
+import share.instance_pipe as sip  # noqa: E402
+from share.broker_client import (BrokerClient, BrokerTransport,  # noqa: E402
                                 UnixSocketBrokerTransport,
                                 validate_unix_socket_path)
 from share_entry import ShareServer  # noqa: E402

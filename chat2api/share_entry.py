@@ -1580,7 +1580,7 @@ def load_config(path, auth_mode=None):
         # same verdict as the writer pre-check and the control-end ACK); a
         # missing protocol module fails CLOSED instead of parsing locally.
         try:
-            from share_broker_protocol import (ProtocolError,
+            from share.broker_protocol import (ProtocolError,
                                                parse_projection_payload)
         except ImportError as exc:
             raise ValueError("Shared projection parser unavailable") from exc
@@ -2681,7 +2681,7 @@ class ShareServer(ThreadingHTTPServer):
         generation = request["fields"]["generation"]
         fingerprint = request["fields"]["fingerprint"]
         try:
-            from share_broker_protocol import (ProtocolError,
+            from share.broker_protocol import (ProtocolError,
                                                parse_projection_payload)
         except ImportError:
             return ({"v": 2, "request_id": request["request_id"],
@@ -2766,7 +2766,7 @@ class ShareServer(ThreadingHTTPServer):
         if not hasattr(self, "instance_id"):
             self.instance_id = secrets.token_hex(16)
         try:
-            from share_broker_protocol import (ProtocolError, ReplayRegistry,
+            from share.broker_protocol import (ProtocolError, ReplayRegistry,
                                                parse_projection_payload,
                                                validate_instance_request)
             if not hasattr(self, "_instance_replay"):
@@ -4016,10 +4016,10 @@ def main(argv=None):
     args = _parse_args(parser, argv)
     if args.add_client or args.revoke_client:
         # Removed as a second writer: direct JSON mutation would bypass the
-        # single-authority management store. Operators must use share_admin.py
+        # single-authority management store. Operators must use share/admin.py
         # against the management service (see R4).
         print("ERROR: --add-client/--revoke-client no longer mutate config "
-              "directly. Use share_admin.py against the single-authority "
+              "directly. Use share/admin.py against the single-authority "
               "management service: create with an existing name is a 409 "
               "conflict, and rotation is an explicit `rotate` operation.",
               file=sys.stderr, flush=True)
@@ -4056,7 +4056,7 @@ def main(argv=None):
         # serves status-only and every publish reports unconfirmed (an
         # absent registration is the explicit not-ready fact).
         try:
-            from share_instance_pipe import (start_instance_channel,
+            from share.instance_pipe import (start_instance_channel,
                                              remove_registration)
             secret_module = _load_share_secret_protection()
             instance_secret = secret_module.read_private_secret_path(
@@ -4130,11 +4130,12 @@ def _load_share_secret_protection():
     path. No secret is read here.
     """
     import importlib.util
-    module = sys.modules.get("share_secret_protection")
+    module = (sys.modules.get("share.secret_protection")
+              or sys.modules.get("share_secret_protection"))
     if module is not None:
         return module
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        os.pardir, "share_secret_protection.py")
+                        os.pardir, "share/secret_protection.py")
     spec = importlib.util.spec_from_file_location(
         "share_secret_protection", path)
     if spec is None or spec.loader is None:
@@ -4154,7 +4155,7 @@ def default_instance_pipe_prefix():
     sys.path; the caller treats an unavailable module as an explicit not-ready
     state instead of guessing a prefix.
     """
-    from share_instance_pipe import default_instance_pipe_prefix as resolve
+    from share.instance_pipe import default_instance_pipe_prefix as resolve
     return resolve()
 
 

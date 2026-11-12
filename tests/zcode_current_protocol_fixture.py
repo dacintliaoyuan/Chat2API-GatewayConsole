@@ -15,7 +15,7 @@ repository class, whose only reference is cross-region).
 """
 import re
 
-import zcode_hot_sync_protocol as protocol
+from zcode import hot_sync_protocol as protocol
 
 LOCK_CHUNK = "out/host/chunk-LOCK0000.js"
 SHARED_CHUNK = "out/host/chunk-SHARED00.js"

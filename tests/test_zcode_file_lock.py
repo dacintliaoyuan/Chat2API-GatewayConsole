@@ -24,8 +24,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import zcode_file_lock as lock_module
-from zcode_file_lock import (
+from zcode import file_lock as lock_module
+from zcode.file_lock import (
     ZCODE_FILE_LOCK_TIMEOUT,
     ZCodeFileLockTimeout,
     zcode_file_lock,

@@ -184,7 +184,7 @@ def backend_pid_facts():
     out = {key: None for key in _PID_STATE_KEYS}
     out["error"] = None
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         facts = console_share_production.production_backend_pid_state()
     except Exception as exc:  # noqa: BLE001 — 读不到是证据，不是崩溃
         out["state"] = "unavailable"
@@ -205,7 +205,7 @@ def share_ledger_path():
     ``forget_stale=False``：这条只读路径不再可能删除陈旧 ``backend.pid``。
     """
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         observed = console_share_production.production_backend_observe(
             forget_stale=False)
     except Exception as exc:  # noqa: BLE001 — 读不到是证据，不是崩溃
@@ -240,7 +240,7 @@ def in_process_attribution():
            "instance_loaded_basis": None, "instance_loaded_reason": None,
            "request_attribution_observed": None, "error": None}
     try:
-        import console_share_production
+        from console import share_production as console_share_production
         facts = console_share_production.share_attribution_status()
     except Exception as exc:  # noqa: BLE001 — 读不到是证据，不是崩溃
         out["error"] = "share_attribution_status_failed:%s" % type(exc).__name__
