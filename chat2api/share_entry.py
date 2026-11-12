@@ -1,4 +1,9 @@
-"""Small, opt-in UM sharing boundary. Only this listener may face a tunnel."""
+"""Legacy two-process share gateway (test-only).
+
+Production no longer launches this server: the merged 8100 process
+(``chat2api.py``) authenticates the share key in-process. This module is
+kept for the legacy Windows chain and its offline tests.
+"""
 
 import argparse
 import base64

@@ -496,7 +496,7 @@ class PreconditionTests(BaseSupervisionTest):
         self.write_desired()
         self.broker.set_status(True, {
             "checked_at": 1000,
-            "lease": {"lease_id": "a" * 32, "component": "share_entry",
+            "lease": {"lease_id": "a" * 32, "component": "share_gateway",
                        "expires_at": 2000},
             "lease_expired": False, "instance": None, "last_outcome": None})
         check = supervision.check_preconditions(
@@ -510,7 +510,7 @@ class PreconditionTests(BaseSupervisionTest):
         self.write_desired()
         self.broker.set_status(True, {
             "checked_at": 1000,
-            "lease": {"lease_id": "a" * 32, "component": "share_entry",
+            "lease": {"lease_id": "a" * 32, "component": "share_gateway",
                        "expires_at": 999},
             "lease_expired": True, "instance": None, "last_outcome": None})
         check = supervision.check_preconditions(
@@ -520,7 +520,7 @@ class PreconditionTests(BaseSupervisionTest):
         # No maintenance-end from the read-only view (contract §7.3).
         self.assertEqual(self.broker.end_calls, [])
         self.assertEqual(check["expired_lease"],
-                         {"component": "share_entry", "lease_id": "a" * 32})
+                         {"component": "share_gateway", "lease_id": "a" * 32})
 
     def test_apply_ends_an_expired_lease_once_and_refuses_if_uncleared(self):
         """The ONE maintenance-end runs in APPLY mode, inside the lock."""
@@ -528,7 +528,7 @@ class PreconditionTests(BaseSupervisionTest):
         self.write_watch_state(2)
         self.broker.set_status(True, {
             "checked_at": 1000,
-            "lease": {"lease_id": "a" * 32, "component": "share_entry",
+            "lease": {"lease_id": "a" * 32, "component": "share_gateway",
                        "expires_at": 999},
             "lease_expired": True, "instance": None, "last_outcome": None})
         record = supervision.run_once(
@@ -536,7 +536,7 @@ class PreconditionTests(BaseSupervisionTest):
             state_dir=self.state_dir, lock_dir=self.lock_dir,
             log_path=self.service_log)
         self.assertEqual(self.broker.end_calls,
-                         [("share_entry", "a" * 32)])
+                         [("share_gateway", "a" * 32)])
         self.assertEqual(record["action"], "none")
         self.assertEqual(record["code"], "maintenance_in_force")
         self.assertEqual(self.ops.starts, 0)
@@ -546,7 +546,7 @@ class PreconditionTests(BaseSupervisionTest):
         broker = _ClearingBroker()
         broker.set_status(True, {
             "checked_at": 1000,
-            "lease": {"lease_id": "a" * 32, "component": "share_entry",
+            "lease": {"lease_id": "a" * 32, "component": "share_gateway",
                        "expires_at": 999},
             "lease_expired": True, "instance": None, "last_outcome": None})
         self.candidate()
@@ -554,7 +554,7 @@ class PreconditionTests(BaseSupervisionTest):
             apply=True, now=1000.0, ops=self.ops, broker=broker,
             state_dir=self.state_dir, lock_dir=self.lock_dir,
             log_path=self.service_log)
-        self.assertEqual(broker.end_calls, [("share_entry", "a" * 32)])
+        self.assertEqual(broker.end_calls, [("share_gateway", "a" * 32)])
         self.assertEqual(record["action"], "start")
         self.assertEqual(record["code"], "started")
         self.assertEqual(self.ops.starts, 1)
@@ -565,7 +565,7 @@ class PreconditionTests(BaseSupervisionTest):
         self.write_watch_state(2)
         self.broker.set_status(True, {
             "checked_at": 1000,
-            "lease": {"lease_id": "a" * 32, "component": "share_entry",
+            "lease": {"lease_id": "a" * 32, "component": "share_gateway",
                        "expires_at": 999},
             "lease_expired": True, "instance": None, "last_outcome": None})
         state_path = self.state_path
@@ -606,7 +606,7 @@ class PreconditionTests(BaseSupervisionTest):
         self.write_watch_state(2)
         self.broker.set_status(True, {
             "checked_at": 1000,
-            "lease": {"lease_id": "a" * 32, "component": "share_entry",
+            "lease": {"lease_id": "a" * 32, "component": "share_gateway",
                        "expires_at": 999},
             "lease_expired": True, "instance": None, "last_outcome": None})
         calls = {"n": 0}

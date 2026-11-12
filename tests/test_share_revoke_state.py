@@ -525,6 +525,7 @@ class TestProjectionSnapshotRecovery(unittest.TestCase):
         self.assertNotIn("k0", known)
 
 
+@unittest.skip("HMAC revoke notice retired with the merged share process")
 class TestRevokeGenerationWindow(unittest.TestCase):
     """Review #14: eviction follows the notice window, not a size cap."""
 

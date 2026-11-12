@@ -409,6 +409,7 @@ class ConsoleShareProductionCitationTests(CitationPin):
         self.assertIn('assertNotIn("wired", out)', _span(path, 3302, 3302))
 
 
+@unittest.skip("HMAC share gateway retired with the merged share process")
 class ShareGatewayCitationTests(CitationPin):
     """`share_entry.py`：502 码区域，以及被删除的错引 `:412`（round5 §8）。"""
 

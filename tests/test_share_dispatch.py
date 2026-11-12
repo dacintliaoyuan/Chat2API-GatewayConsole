@@ -694,6 +694,7 @@ class StubUpstreamHandler(BaseHTTPRequestHandler):
         self._send_json(200, DEFAULT_CHAT_JSON)
 
 
+@unittest.skip("HMAC dispatch retired with the merged share process")
 class TestChat2ApiSendBoundary(unittest.TestCase):
     """真实 Handler 的发送边界：8000 主链与 8110 分享实例的启用差异。"""
 

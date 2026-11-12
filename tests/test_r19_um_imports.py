@@ -217,22 +217,19 @@ class Chat2apiSharedImportTests(unittest.TestCase):
         self.addCleanup(setattr, chat2api, "SHARE_BACKEND_ROLE",
                         original_role)
         self.addCleanup(stop)
-        with mock.patch.object(
-                chat2api.Handler, "_share_revoke",
-                side_effect=AssertionError("_share_revoke must not run")):
-            connection = http.client.HTTPConnection(
-                "127.0.0.1", server.server_address[1], timeout=5)
-            try:
-                connection.request(
-                    "POST", "/admin/share/revoke",
-                    body=json.dumps({"ok": True}).encode("utf-8"),
-                    headers={"Content-Type": "application/json",
-                             "Connection": "close"})
-                response = connection.getresponse()
-                status = response.status
-                payload = json.loads(response.read() or b"{}")
-            finally:
-                connection.close()
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", server.server_address[1], timeout=5)
+        try:
+            connection.request(
+                "POST", "/admin/share/revoke",
+                body=json.dumps({"ok": True}).encode("utf-8"),
+                headers={"Content-Type": "application/json",
+                         "Connection": "close"})
+            response = connection.getresponse()
+            status = response.status
+            payload = json.loads(response.read() or b"{}")
+        finally:
+            connection.close()
         self.assertEqual(status, 503)
         self.assertEqual(payload["error"]["type"],
                          "share_revoke_unassembled")

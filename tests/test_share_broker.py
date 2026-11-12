@@ -2266,12 +2266,12 @@ class MaintenanceProtocolTests(unittest.TestCase):
         self.assertEqual(bp.HOST_EVIDENCE_ACTION, "host-evidence")
         self.assertEqual(bp.HOST_EVIDENCE_CHECKS,
                          frozenset(("limits", "faults", "watchdog")))
-        self.assertEqual(bp.COMPONENT_SHARE_GATEWAY, "share_entry")
+        self.assertEqual(bp.COMPONENT_SHARE_GATEWAY, "share_gateway")
         self.assertEqual(bp.COMPONENT_SHARE_BACKEND, "share_backend")
         self.assertEqual(bp.MAINTENANCE_COMPONENTS,
-                         frozenset(("share_entry",)))
+                         frozenset(("share_gateway",)))
         self.assertEqual(bp.GATEWAY_RESTART_COMPONENTS,
-                         frozenset(("share_entry",)))
+                         frozenset(("share_gateway",)))
         self.assertEqual((bp.MAINTENANCE_LEASE_DEFAULT_S,
                           bp.MAINTENANCE_LEASE_MAX_S), (300, 600))
         self.assertEqual((bp.GATEWAY_RESTART_BUDGET_DEFAULT_S,
@@ -2310,34 +2310,34 @@ class MaintenanceProtocolTests(unittest.TestCase):
 
     def test_maintenance_begin_validator_is_exact_and_bounded(self):
         self.assertEqual(bp.validate_maintenance_begin_fields(
-            {"component": "share_entry", "lease_s": 600}),
-            {"component": "share_entry", "lease_s": 600})
+            {"component": "share_gateway", "lease_s": 600}),
+            {"component": "share_gateway", "lease_s": 600})
         # 越界/未知组件/未知字段一律 bad_request（不静默 clamp）。
         for fields in (
-                {"component": "share_entry", "lease_s": 601},
-                {"component": "share_entry", "lease_s": 0},
-                {"component": "share_entry", "lease_s": -5},
-                {"component": "share_entry", "lease_s": True},
+                {"component": "share_gateway", "lease_s": 601},
+                {"component": "share_gateway", "lease_s": 0},
+                {"component": "share_gateway", "lease_s": -5},
+                {"component": "share_gateway", "lease_s": True},
                 {"component": "share_backend", "lease_s": 300},
                 {"component": "garbage", "lease_s": 300},
-                {"component": "share_entry", "lease_s": 300,
+                {"component": "share_gateway", "lease_s": 300,
                  "task": "x"},
-                {"component": "share_entry"},
+                {"component": "share_gateway"},
                 {"lease_s": 300},
-                {"component": ["share_entry"], "lease_s": 300}):
+                {"component": ["share_gateway"], "lease_s": 300}):
             with self.assertRaises(bp.ProtocolError) as caught:
                 bp.validate_maintenance_begin_fields(fields)
             self.assertEqual(caught.exception.code, "bad_request")
 
     def test_maintenance_end_and_status_validators(self):
         self.assertEqual(bp.validate_maintenance_end_fields(
-            {"component": "share_entry", "lease_id": "a" * 64}),
-            {"component": "share_entry", "lease_id": "a" * 64})
-        for fields in ({"component": "share_entry", "lease_id": ""},
-                       {"component": "share_entry", "lease_id": "a" * 65},
-                       {"component": "share_entry", "lease_id": 7},
+            {"component": "share_gateway", "lease_id": "a" * 64}),
+            {"component": "share_gateway", "lease_id": "a" * 64})
+        for fields in ({"component": "share_gateway", "lease_id": ""},
+                       {"component": "share_gateway", "lease_id": "a" * 65},
+                       {"component": "share_gateway", "lease_id": 7},
                        {"component": "share_backend", "lease_id": "a"},
-                       {"component": "share_entry", "lease_id": "a",
+                       {"component": "share_gateway", "lease_id": "a",
                         "round": 1}):
             with self.assertRaises(bp.ProtocolError):
                 bp.validate_maintenance_end_fields(fields)
@@ -2347,13 +2347,13 @@ class MaintenanceProtocolTests(unittest.TestCase):
 
     def test_gateway_restart_and_host_evidence_validators(self):
         self.assertEqual(bp.validate_gateway_restart_fields(
-            {"component": "share_entry", "budget_s": 180}),
-            {"component": "share_entry", "budget_s": 180})
-        for fields in ({"component": "share_entry", "budget_s": 181},
-                       {"component": "share_entry", "budget_s": 0},
-                       {"component": "share_entry", "budget_s": False},
+            {"component": "share_gateway", "budget_s": 180}),
+            {"component": "share_gateway", "budget_s": 180})
+        for fields in ({"component": "share_gateway", "budget_s": 181},
+                       {"component": "share_gateway", "budget_s": 0},
+                       {"component": "share_gateway", "budget_s": False},
                        {"component": "share_backend", "budget_s": 60},
-                       {"component": "share_entry", "budget_s": 60,
+                       {"component": "share_gateway", "budget_s": 60,
                         "lease_s": 300}):
             with self.assertRaises(bp.ProtocolError):
                 bp.validate_gateway_restart_fields(fields)
@@ -2371,7 +2371,7 @@ class MaintenanceProtocolTests(unittest.TestCase):
         # （上界自查是硬要求，绝不依赖通用层）。
         secret = "k" * 8
         body = bp.build_request(secret, bp.MAINTENANCE_BEGIN_ACTION,
-                                {"component": "share_entry",
+                                {"component": "share_gateway",
                                  "lease_s": 100000})
         req = bp.validate_management_request(body, secret)
         self.assertEqual(req["fields"]["lease_s"], 100000)
@@ -2382,12 +2382,12 @@ class MaintenanceProtocolTests(unittest.TestCase):
         secret = "k" * 8
         for action, fields in (
                 (bp.MAINTENANCE_BEGIN_ACTION,
-                 {"component": "share_entry", "lease_s": 300}),
+                 {"component": "share_gateway", "lease_s": 300}),
                 (bp.MAINTENANCE_END_ACTION,
-                 {"component": "share_entry", "lease_id": "a" * 32}),
+                 {"component": "share_gateway", "lease_id": "a" * 32}),
                 (bp.MAINTENANCE_STATUS_ACTION, {}),
                 (bp.GATEWAY_RESTART_ACTION,
-                 {"component": "share_entry", "budget_s": 60}),
+                 {"component": "share_gateway", "budget_s": 60}),
                 (bp.HOST_EVIDENCE_ACTION, {"check": "limits"})):
             body = bp.build_request(secret, action, fields)
             req = bp.validate_management_request(body, secret)
@@ -2446,10 +2446,10 @@ class MaintenanceLeaseStoreTests(unittest.TestCase):
         clock = _FakeClock()
         store = MaintenanceLeaseStore(clock=clock)
         self.assertIsNone(store.current())
-        lease = store.begin("share_entry", "i-1", 7, 300)
+        lease = store.begin("share_gateway", "i-1", 7, 300)
         self.assertEqual(len(lease["lease_id"]), 32)
         int(lease["lease_id"], 16)
-        self.assertEqual(lease["component"], "share_entry")
+        self.assertEqual(lease["component"], "share_gateway")
         self.assertEqual(lease["instance_id"], "i-1")
         self.assertEqual(lease["round"], 7)
         self.assertEqual(lease["created_at"], 1000)
@@ -2463,16 +2463,16 @@ class MaintenanceLeaseStoreTests(unittest.TestCase):
     def test_end_requires_component_lease_and_unexpired(self):
         clock = _FakeClock()
         store = MaintenanceLeaseStore(clock=clock)
-        self.assertEqual(store.end("share_entry", "x"), (False, None))
-        lease = store.begin("share_entry", "i-1", 7, 300)
+        self.assertEqual(store.end("share_gateway", "x"), (False, None))
+        lease = store.begin("share_gateway", "i-1", 7, 300)
         ok, current = store.end("share_backend", lease["lease_id"])
         self.assertFalse(ok)
         self.assertEqual(current["lease_id"], lease["lease_id"])
-        ok, current = store.end("share_entry", "0" * 32)
+        ok, current = store.end("share_gateway", "0" * 32)
         self.assertFalse(ok)
         self.assertEqual(current["lease_id"], lease["lease_id"])
         clock.advance(300)
-        ok, current = store.end("share_entry", lease["lease_id"])
+        ok, current = store.end("share_gateway", lease["lease_id"])
         self.assertFalse(ok)                 # 到期后拒绝（绝不重开）
         self.assertEqual(current["lease_id"], lease["lease_id"])
         self.assertIsNotNone(store.current())   # 过期租约仍如实可见
@@ -2482,8 +2482,8 @@ class MaintenanceLeaseStoreTests(unittest.TestCase):
     def test_end_consumes_the_matching_unexpired_lease(self):
         clock = _FakeClock()
         store = MaintenanceLeaseStore(clock=clock)
-        lease = store.begin("share_entry", "i-1", 7, 300)
-        ok, ended = store.end("share_entry", lease["lease_id"])
+        lease = store.begin("share_gateway", "i-1", 7, 300)
+        ok, ended = store.end("share_gateway", lease["lease_id"])
         self.assertTrue(ok)
         self.assertEqual(ended["lease_id"], lease["lease_id"])
         self.assertIsNone(store.current())
@@ -2491,7 +2491,7 @@ class MaintenanceLeaseStoreTests(unittest.TestCase):
     def test_expire_due_reclaims_only_a_due_lease(self):
         clock = _FakeClock()
         store = MaintenanceLeaseStore(clock=clock)
-        lease = store.begin("share_entry", "i-1", 7, 300)
+        lease = store.begin("share_gateway", "i-1", 7, 300)
         self.assertIsNone(store.expire_due())      # 未到期：不回收
         self.assertIsNotNone(store.current())
         clock.advance(300)
@@ -2524,11 +2524,11 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
     def test_begin_leases_and_pauses(self):
         fx = _MaintenanceFixture()
         resp = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                             {"component": "share_entry", "lease_s": 300})
+                             {"component": "share_gateway", "lease_s": 300})
         self.assertTrue(resp["ok"], resp)
         result = resp["result"]
         self.assertTrue(result["accepted"])
-        self.assertEqual(result["component"], "share_entry")
+        self.assertEqual(result["component"], "share_gateway")
         self.assertEqual(len(result["lease_id"]), 32)
         self.assertEqual(result["instance_id"], "i-1")
         self.assertEqual(result["round"], 1)
@@ -2548,10 +2548,10 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
     def test_begin_refuses_a_second_lease(self):
         fx = _MaintenanceFixture()
         first = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                              {"component": "share_entry", "lease_s": 300})
+                              {"component": "share_gateway", "lease_s": 300})
         self.assertTrue(first["ok"])
         second = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                               {"component": "share_entry", "lease_s": 300})
+                               {"component": "share_gateway", "lease_s": 300})
         self.assertFalse(second["ok"])
         self.assertEqual(second["error_code"], "blocked")
         self.assertEqual(fx.instance.count("drain"), 1)
@@ -2560,7 +2560,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
         fx = _MaintenanceFixture(
             instance=_FakeInstanceChannel(state="stopped"))
         resp = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                             {"component": "share_entry", "lease_s": 300})
+                             {"component": "share_gateway", "lease_s": 300})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "blocked")
         # 终态停止绝不被维护租约重开：连 drain 都不发。
@@ -2570,7 +2570,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
     def test_begin_without_trusted_instance_is_unconfirmed(self):
         fx = _MaintenanceFixture(register=False)
         resp = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                             {"component": "share_entry", "lease_s": 300})
+                             {"component": "share_gateway", "lease_s": 300})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "unconfirmed")
         self.assertIsNone(fx.coordinator.leases.current())
@@ -2580,7 +2580,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
         instance.status_raises = True
         fx = _MaintenanceFixture(instance=instance)
         resp = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                             {"component": "share_entry", "lease_s": 300})
+                             {"component": "share_gateway", "lease_s": 300})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "unconfirmed")
         self.assertNotIn("drain", fx.instance.calls)
@@ -2592,7 +2592,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
             "result": {"detail": "unknown action"}}
         fx = _MaintenanceFixture(instance=instance)
         resp = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                             {"component": "share_entry", "lease_s": 300})
+                             {"component": "share_gateway", "lease_s": 300})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "capability_missing")
         self.assertIsNone(fx.coordinator.leases.current())
@@ -2612,7 +2612,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
 
         fx = _MaintenanceFixture(instance=_HalfDrain())
         resp = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                             {"component": "share_entry", "lease_s": 300})
+                             {"component": "share_gateway", "lease_s": 300})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "unconfirmed")
         self.assertIsNone(fx.coordinator.leases.current())
@@ -2628,11 +2628,11 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
     def test_end_resumes_and_clears_the_lease(self):
         fx = _MaintenanceFixture()
         begin = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                               {"component": "share_entry",
+                               {"component": "share_gateway",
                                 "lease_s": 300})
         lease_id = begin["result"]["lease_id"]
         resp = fx.management(bp.MAINTENANCE_END_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "lease_id": lease_id})
         self.assertTrue(resp["ok"], resp)
         result = resp["result"]
@@ -2673,13 +2673,13 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
             fx.instances.register(instance_id)
             fx.coordinator.instance_call = real_instance_call
             begin = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                                   {"component": "share_entry",
+                                   {"component": "share_gateway",
                                     "lease_s": 300})
             self.assertTrue(begin["ok"], begin)
             self.assertEqual(begin["result"]["state"], "draining")
             self.assertEqual(server.state, "draining")
             end = fx.management(bp.MAINTENANCE_END_ACTION,
-                                 {"component": "share_entry",
+                                 {"component": "share_gateway",
                                   "lease_id": begin["result"]["lease_id"]})
             self.assertTrue(end["ok"], end)
             self.assertTrue(end["result"]["resumed"])
@@ -2691,9 +2691,9 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
     def test_end_with_a_mismatched_lease_is_refused(self):
         fx = _MaintenanceFixture()
         fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                       {"component": "share_entry", "lease_s": 300})
+                       {"component": "share_gateway", "lease_s": 300})
         resp = fx.management(bp.MAINTENANCE_END_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "lease_id": "0" * 32})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "instance_mismatch")
@@ -2704,12 +2704,12 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
         clock = _FakeClock()
         fx = _MaintenanceFixture(lease_clock=clock)
         begin = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                               {"component": "share_entry",
+                               {"component": "share_gateway",
                                 "lease_s": 300})
         lease_id = begin["result"]["lease_id"]
         clock.advance(301)
         resp = fx.coordinator._maintenance_end(
-            {"component": "share_entry", "lease_id": lease_id})
+            {"component": "share_gateway", "lease_id": lease_id})
         self.assertFalse(resp.ok)
         self.assertEqual(resp.error_code, "unconfirmed")
         self.assertIsNotNone(fx.coordinator.leases.current())
@@ -2717,11 +2717,11 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
     def test_end_after_the_instance_round_changed_is_instance_mismatch(self):
         fx = _MaintenanceFixture()
         begin = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                               {"component": "share_entry",
+                               {"component": "share_gateway",
                                 "lease_s": 300})
         fx.instances.register("i-2")     # 注册版本 +1：迟到结果不得重开
         resp = fx.management(bp.MAINTENANCE_END_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "lease_id": begin["result"]["lease_id"]})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "instance_mismatch")
@@ -2730,11 +2730,11 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
     def test_end_on_a_stopped_instance_is_blocked_and_keeps_the_lease(self):
         fx = _MaintenanceFixture()
         begin = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                               {"component": "share_entry",
+                               {"component": "share_gateway",
                                 "lease_s": 300})
         fx.instance.state = "stopped"
         resp = fx.management(bp.MAINTENANCE_END_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "lease_id": begin["result"]["lease_id"]})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "blocked")
@@ -2747,13 +2747,13 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
     def test_end_on_an_old_instance_is_capability_missing(self):
         fx = _MaintenanceFixture()
         begin = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                               {"component": "share_entry",
+                               {"component": "share_gateway",
                                 "lease_s": 300})
         fx.instance.resume_override = {
             "ok": False, "error_code": "bad_request",
             "result": {"detail": "unknown action"}}
         resp = fx.management(bp.MAINTENANCE_END_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "lease_id": begin["result"]["lease_id"]})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "capability_missing")
@@ -2765,7 +2765,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
     def test_end_without_a_lease_is_unconfirmed(self):
         fx = _MaintenanceFixture()
         resp = fx.management(bp.MAINTENANCE_END_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "lease_id": "a" * 32})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "unconfirmed")
@@ -2775,7 +2775,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
         # 维护暂态绝不在已确认停止之后存活。
         fx = _MaintenanceFixture()
         begin = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                               {"component": "share_entry", "lease_s": 300})
+                               {"component": "share_gateway", "lease_s": 300})
         self.assertTrue(begin["ok"], begin)
         resp = fx.management("drain")
         self.assertTrue(resp["ok"], resp)
@@ -2787,7 +2787,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
     def test_a_verified_emergency_stop_clears_the_lease(self):
         fx = _MaintenanceFixture()
         begin = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                               {"component": "share_entry", "lease_s": 300})
+                               {"component": "share_gateway", "lease_s": 300})
         self.assertTrue(begin["ok"], begin)
         resp = fx.management("emergency-stop")
         self.assertTrue(resp["ok"], resp)
@@ -2800,7 +2800,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
         clock = _FakeClock()
         fx = _MaintenanceFixture(lease_clock=clock)
         fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                       {"component": "share_entry", "lease_s": 300})
+                       {"component": "share_gateway", "lease_s": 300})
         clock.advance(301)
         # 任何管理请求派发时触发惰性到期（replay 消费之后、动作分支之前）。
         resp = fx.management("status")
@@ -2815,7 +2815,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
         clock = _FakeClock()
         fx = _MaintenanceFixture(lease_clock=clock)
         fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                       {"component": "share_entry", "lease_s": 300})
+                       {"component": "share_gateway", "lease_s": 300})
         clock.advance(301)
         fx.instance.resume_override = {
             "ok": False, "error_code": "unconfirmed",
@@ -2832,7 +2832,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
         clock = _FakeClock()
         fx = _MaintenanceFixture(lease_clock=clock)
         fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                       {"component": "share_entry", "lease_s": 300})
+                       {"component": "share_gateway", "lease_s": 300})
         clock.advance(301)
         fx.instances.register("i-2")      # 实例轮次变化：绝不向被替换实例发 resume
         fx.management("status")
@@ -2855,13 +2855,13 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
         self.assertEqual(resp["result"]["instance"]["state"], "running")
         # 有租约 + 有受信实例：形状齐全。
         begin = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "lease_s": 300})
         resp = fx.management(bp.MAINTENANCE_STATUS_ACTION)
         result = resp["result"]
         self.assertEqual(result["lease"]["lease_id"],
                          begin["result"]["lease_id"])
-        self.assertEqual(result["lease"]["component"], "share_entry")
+        self.assertEqual(result["lease"]["component"], "share_gateway")
         self.assertEqual(result["lease"]["round"], 1)
         self.assertEqual(result["lease"]["active_count_at_begin"], 0)
         self.assertIs(result["lease_expired"], False)
@@ -2894,7 +2894,7 @@ class GatewayRestartCoordinatorTests(unittest.TestCase):
             host.running = verdict
             fx = self._fixture(host)
             resp = fx.management(bp.GATEWAY_RESTART_ACTION,
-                                  {"component": "share_entry",
+                                  {"component": "share_gateway",
                                    "budget_s": 1})
             self.assertFalse(resp["ok"])
             self.assertEqual(resp["error_code"], "blocked")
@@ -2908,7 +2908,7 @@ class GatewayRestartCoordinatorTests(unittest.TestCase):
         seen = []
         host.on_stop = lambda: seen.append(dict(fx.records[-1]))
         resp = fx.management(bp.GATEWAY_RESTART_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "budget_s": 1})
         self.assertTrue(resp["ok"], resp)
         result = resp["result"]
@@ -2936,7 +2936,7 @@ class GatewayRestartCoordinatorTests(unittest.TestCase):
         host.stop_closes = False
         fx = self._fixture(host)
         resp = fx.management(bp.GATEWAY_RESTART_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "budget_s": 1})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "unconfirmed")
@@ -2955,7 +2955,7 @@ class GatewayRestartCoordinatorTests(unittest.TestCase):
         host.start_runs = False
         fx = self._fixture(host)
         resp = fx.management(bp.GATEWAY_RESTART_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "budget_s": 1})
         self.assertFalse(resp["ok"])
         self.assertEqual(resp["error_code"], "unconfirmed")
@@ -2973,13 +2973,13 @@ class GatewayRestartCoordinatorTests(unittest.TestCase):
         host.start_runs = False
         fx = self._fixture(host)
         fx.management(bp.GATEWAY_RESTART_ACTION,
-                       {"component": "share_entry", "budget_s": 1})
+                       {"component": "share_gateway", "budget_s": 1})
         failed = dict(fx.records[-1]["last_outcome"])
         self.assertEqual(failed["ok"], False)
         host.start_runs = True
         host.running = True           # 网关重新起回（身份重新确认）
         resp = fx.management(bp.GATEWAY_RESTART_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "budget_s": 1})
         self.assertTrue(resp["ok"], resp)
         # 恢复不擦除失败：last_outcome 仍是那次失败。
@@ -3001,11 +3001,11 @@ class GatewayRestartCoordinatorTests(unittest.TestCase):
         host = _GatewayHost()
         fx = self._fixture(host)
         begin = fx.management(bp.MAINTENANCE_BEGIN_ACTION,
-                               {"component": "share_entry",
+                               {"component": "share_gateway",
                                 "lease_s": 300})
         self.assertTrue(begin["ok"], begin)
         resp = fx.management(bp.GATEWAY_RESTART_ACTION,
-                              {"component": "share_entry",
+                              {"component": "share_gateway",
                                "budget_s": 1})
         self.assertTrue(resp["ok"], resp)
         # 重启窗口关闭后：仍在 force 的租约记录被恢复（绝不被重启清掉）。
@@ -3151,16 +3151,16 @@ class BrokerClientMaintenanceVerbTests(unittest.TestCase):
 
     def test_methods_map_to_the_frozen_wire_fields(self):
         for method, args, action, fields in (
-                ("maintenance_begin", ("share_entry", 300),
+                ("maintenance_begin", ("share_gateway", 300),
                  "maintenance-begin",
-                 {"component": "share_entry", "lease_s": 300}),
-                ("maintenance_end", ("share_entry", "a" * 32),
+                 {"component": "share_gateway", "lease_s": 300}),
+                ("maintenance_end", ("share_gateway", "a" * 32),
                  "maintenance-end",
-                 {"component": "share_entry", "lease_id": "a" * 32}),
+                 {"component": "share_gateway", "lease_id": "a" * 32}),
                 ("maintenance_status", (), "maintenance-status", {}),
-                ("gateway_restart", ("share_entry", 60),
+                ("gateway_restart", ("share_gateway", 60),
                  "gateway-restart",
-                 {"component": "share_entry", "budget_s": 60}),
+                 {"component": "share_gateway", "budget_s": 60}),
                 ("host_evidence", ("limits",), "host-evidence",
                  {"check": "limits"})):
             client, transport = self._client()
@@ -3194,21 +3194,21 @@ class BrokerClientMaintenanceVerbTests(unittest.TestCase):
     def test_gateway_restart_exchange_deadline_is_bounded(self):
         client, transport = self._client()
         before = time.monotonic()
-        self.assertTrue(client.gateway_restart("share_entry", 60).ok)
+        self.assertTrue(client.gateway_restart("share_gateway", 60).ok)
         window = transport.deadline - before
         self.assertGreater(window, 60)
         self.assertLessEqual(window, 76)
         # 冻结的 1..180 界：即使 budget_s=180 也绝不超过 180 秒。
         client2, transport2 = self._client()
         before2 = time.monotonic()
-        self.assertTrue(client2.gateway_restart("share_entry", 180).ok)
+        self.assertTrue(client2.gateway_restart("share_gateway", 180).ok)
         self.assertLessEqual(transport2.deadline - before2, 180.001)
 
     def test_old_broker_refusal_is_surfaced_unchanged(self):
         client, _ = self._client(
             {"ok": False, "error_code": "bad_request",
              "result": {"detail": "unknown action"}})
-        result = client.maintenance_begin("share_entry", 300)
+        result = client.maintenance_begin("share_gateway", 300)
         self.assertFalse(result.ok)
         self.assertEqual(result.error_code, "bad_request")
         self.assertEqual(result.result["detail"], "unknown action")

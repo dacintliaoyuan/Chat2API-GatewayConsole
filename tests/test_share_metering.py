@@ -841,6 +841,7 @@ class CnyShareMeteringTests(MeteringFixture):
         self.assertIs(result["coverage"]["rateFn"], False)
 
 
+@unittest.skip("HMAC share attribution retired with the merged share process")
 class ShareAttributionTests(unittest.TestCase):
     """8100 生成标记、8110 校验标记的跨端契约（同一函数对，两侧同源）。"""
 

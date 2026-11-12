@@ -1956,16 +1956,16 @@ class BrokerClientAdapterControlVerbTests(unittest.TestCase):
 
     def test_verbs_map_to_the_frozen_wire_fields(self):
         for method, args, action, fields in (
-                ("maintenance_begin", ("share_entry", 300),
+                ("maintenance_begin", ("share_gateway", 300),
                  "maintenance-begin",
-                 {"component": "share_entry", "lease_s": 300}),
-                ("maintenance_end", ("share_entry", "a" * 32),
+                 {"component": "share_gateway", "lease_s": 300}),
+                ("maintenance_end", ("share_gateway", "a" * 32),
                  "maintenance-end",
-                 {"component": "share_entry", "lease_id": "a" * 32}),
+                 {"component": "share_gateway", "lease_id": "a" * 32}),
                 ("maintenance_status", (), "maintenance-status", {}),
-                ("gateway_restart", ("share_entry", 60),
+                ("gateway_restart", ("share_gateway", 60),
                  "gateway-restart",
-                 {"component": "share_entry", "budget_s": 60}),
+                 {"component": "share_gateway", "budget_s": 60}),
                 ("host_evidence", ("limits",), "host-evidence",
                  {"check": "limits"}),
                 ("ts_service_control", ("start",), "ts-service-control",
@@ -1988,10 +1988,10 @@ class BrokerClientAdapterControlVerbTests(unittest.TestCase):
 
     def test_every_control_exchange_is_bounded(self):
         # The frozen 1..180 protocol bound: no control verb may exceed it.
-        for method, args in (("maintenance_begin", ("share_entry", 300)),
-                             ("maintenance_end", ("share_entry", "a" * 32)),
+        for method, args in (("maintenance_begin", ("share_gateway", 300)),
+                             ("maintenance_end", ("share_gateway", "a" * 32)),
                              ("maintenance_status", ()),
-                             ("gateway_restart", ("share_entry", 60)),
+                             ("gateway_restart", ("share_gateway", 60)),
                              ("host_evidence", ("limits",)),
                              ("ts_service_control", ("stop",))):
             with self.subTest(method=method):
@@ -2005,14 +2005,14 @@ class BrokerClientAdapterControlVerbTests(unittest.TestCase):
     def test_gateway_restart_deadline_is_bounded(self):
         adapter, transport = self._adapter()
         before = time.monotonic()
-        self.assertTrue(adapter.gateway_restart("share_entry", 60).ok)
+        self.assertTrue(adapter.gateway_restart("share_gateway", 60).ok)
         window = transport.deadline - before
         self.assertGreater(window, 60)
         self.assertLessEqual(window, 76)
         # The frozen 1..180 bound: even budget_s=180 never exceeds 180 s.
         adapter2, transport2 = self._adapter()
         before2 = time.monotonic()
-        self.assertTrue(adapter2.gateway_restart("share_entry", 180).ok)
+        self.assertTrue(adapter2.gateway_restart("share_gateway", 180).ok)
         self.assertLessEqual(transport2.deadline - before2, 180.001)
 
     def test_structured_error_code_passes_through_unchanged(self):
@@ -2025,7 +2025,7 @@ class BrokerClientAdapterControlVerbTests(unittest.TestCase):
                 adapter, _ = self._adapter({
                     "ok": False, "error_code": code,
                     "result": {"detail": "refused " + code}})
-                result = adapter.maintenance_begin("share_entry", 300)
+                result = adapter.maintenance_begin("share_gateway", 300)
                 self.assertFalse(result.ok)
                 self.assertEqual(result.error_code, code)
                 self.assertEqual(result.result["detail"],
@@ -2070,10 +2070,10 @@ class BrokerClientAdapterControlVerbTests(unittest.TestCase):
 
     def test_noop_broker_control_verbs_are_unwired(self):
         broker = NoopBroker()
-        for method, args in (("maintenance_begin", ("share_entry", 300)),
-                             ("maintenance_end", ("share_entry", "a" * 32)),
+        for method, args in (("maintenance_begin", ("share_gateway", 300)),
+                             ("maintenance_end", ("share_gateway", "a" * 32)),
                              ("maintenance_status", ()),
-                             ("gateway_restart", ("share_entry", 60)),
+                             ("gateway_restart", ("share_gateway", 60)),
                              ("host_evidence", ("limits",)),
                              ("ts_service_control", ("start",))):
             with self.subTest(method=method):
