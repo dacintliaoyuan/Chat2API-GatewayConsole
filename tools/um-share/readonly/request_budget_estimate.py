@@ -50,8 +50,14 @@ import time
 from decimal import Decimal, ROUND_CEILING
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-AI_GATEWAY_DIR = os.path.dirname(os.path.dirname(TOOLS_DIR))
-for _path in (AI_GATEWAY_DIR, TOOLS_DIR):
+_UM_SHARE_DIR = os.path.dirname(TOOLS_DIR)
+ACTIONS_DIR = os.path.join(_UM_SHARE_DIR, "actions")
+if _UM_SHARE_DIR not in sys.path:
+    sys.path.insert(0, _UM_SHARE_DIR)
+from lib.paths import bootstrap  # noqa: E402
+
+AI_GATEWAY_DIR = bootstrap(__file__)["repo"]
+for _path in (AI_GATEWAY_DIR, TOOLS_DIR, ACTIONS_DIR):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 

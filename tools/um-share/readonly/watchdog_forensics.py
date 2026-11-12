@@ -30,7 +30,7 @@ limits/broker 读数），输出「看门狗会怎么判」的结论与命中的
 
 * ``processes[*].parent_pid``（``ParentProcessId``）：看门狗源码里**没有**这个字符串
   （``grep -c ParentProcessId um-share-deploy/watchdog-umshare.ps1`` = 0）；读它的是快照工具
-  ``tools/um-share/share_chain_snapshot.py``（CIM 查询的 ``Select-Object … ParentProcessId``
+  ``tools/um-share/readonly/share_chain_snapshot.py``（CIM 查询的 ``Select-Object … ParentProcessId``
   与解析层的 ``row.get("ParentProcessId")`` 两处）。**该文件当前正被另一条线改写**（执行轮 9 的
   快照扩展线），工作树行号会漂移，故本文件只引「命令＋文件」，不引会漂移的工作树行号。
 * 8096／8110 的端口、进程、健康：看门狗源码里没有任何 ``8096``／``8110`` 字面量
@@ -104,9 +104,9 @@ limits/broker 读数），输出「看门狗会怎么判」的结论与命中的
 
 运行（工作目录不限；本工具不读网络、不查进程、不写任何文件）：
 
-    python ai-gateway/tools/um-share/watchdog_forensics.py --print-rules
-    python ai-gateway/tools/um-share/watchdog_forensics.py --from-fixture <fixture.json>
-    python ai-gateway/tools/um-share/watchdog_forensics.py --from-fixture <fixture.json> --json
+    python tools/um-share/readonly/watchdog_forensics.py --print-rules
+    python tools/um-share/readonly/watchdog_forensics.py --from-fixture <fixture.json>
+    python tools/um-share/readonly/watchdog_forensics.py --from-fixture <fixture.json> --json
 """
 
 from __future__ import annotations
@@ -151,7 +151,7 @@ DEPLOY = "ai-gateway/um-share-deploy/deploy-elevated.ps1"
 RUNTIME = "ai-gateway/lib/gateway-runtime.ps1"
 PROD = "ai-gateway/console/share_production.py"
 GUARD = "ai-gateway/um-share-deploy/share_guard.py"
-SNAP = "ai-gateway/tools/um-share/share_chain_snapshot.py"
+SNAP = "tools/um-share/readonly/share_chain_snapshot.py"
 # The deployment README is a DIFFERENT file from the deploy script:
 # concatenating DEPLOY (…deploy-elevated.ps1) with "/README.md"
 # produced an unresolvable path (2026-09-28 review finding 7).
@@ -777,12 +777,12 @@ def judge_window(before, after, watchdog=None):
         "after": after_result,
         "non_inputs": [
             {"signal": "processes[*].parent_pid",
-             "read_by": "tools/um-share/share_chain_snapshot.py（CIM Select-Object 与 row.get 两处；"
+             "read_by": "tools/um-share/readonly/share_chain_snapshot.py（CIM Select-Object 与 row.get 两处；"
                         "该文件正被另一条线改写，不引工作树行号）",
              "read_by_watchdog": False,
              "source": WD + ":174-200"},
             {"signal": "ports['8096'] / ports['8110']",
-             "read_by": "tools/um-share/share_chain_snapshot.py（CHAIN_PORTS 与监听读取两处）",
+             "read_by": "tools/um-share/readonly/share_chain_snapshot.py（CHAIN_PORTS 与监听读取两处）",
              "read_by_watchdog": False,
              "source": WD + ":38（$LivePort = 8100）, :176"},
             {"signal": "console backend.pid",

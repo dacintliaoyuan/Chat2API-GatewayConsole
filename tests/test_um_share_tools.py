@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""`ai-gateway/tools/um-share/` 两个只读工具的夹具测试（不连生产）。
+"""`tools/um-share/` 两个只读工具的夹具测试（不连生产）。
 
 覆盖：
 
@@ -29,10 +29,14 @@ import unittest
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools" / "um-share"
+TOOL_PATHS = {
+    "share_chain_snapshot": TOOLS_DIR / "readonly" / "share_chain_snapshot.py",
+    "metering_acceptance": TOOLS_DIR / "actions" / "metering_acceptance.py",
+}
 
 
 def _load(module_name):
-    path = TOOLS_DIR / (module_name + ".py")
+    path = TOOL_PATHS[module_name]
     spec = importlib.util.spec_from_file_location("um_share_" + module_name,
                                                   path)
     module = importlib.util.module_from_spec(spec)

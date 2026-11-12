@@ -38,7 +38,8 @@ import sys
 import unittest
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools" / "um-share"
+TOOLS_DIR = (Path(__file__).resolve().parents[1] / "tools" / "um-share"
+             / "readonly")
 
 
 def _load(module_name):

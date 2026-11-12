@@ -32,14 +32,14 @@
 #
 # USAGE (elevated identity; stdout is one JSON document):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File `
-#     D:\git\github\personal_files\SelfUseAI\ai-gateway\tools\um-share\authoritative_readings.ps1
+#     <repo>\tools\um-share\readonly\authoritative_readings.ps1
 #   # hand-over form (explicit write switch; run BEFORE and AFTER the window):
 #   ... -Out output\ai-gw-round10-20260928\authoritative-before.json
 #   # running-copy cross-check (the protected run copy the watchdog task runs):
 #   ... -RunningScriptPath C:\ProgramData\UMShareRun\watchdog-umshare.ps1
 #
 # MERGE (records source + capture time; the snapshot itself stays read-only):
-#   python ai-gateway/tools/um-share/share_chain_snapshot.py `
+#   python tools/um-share/readonly/share_chain_snapshot.py `
 #     --out output/ai-gw-round10-20260928/snapshot-before.json `
 #     --authoritative output/ai-gw-round10-20260928/authoritative-before.json
 #
@@ -169,7 +169,7 @@ function Test-ByteArrayEqual($left, $right) {
 
 if ($DeployDir -eq '') {
     $DeployDir = [System.IO.Path]::GetFullPath(
-        (Join-Path $PSScriptRoot '..\..\um-share-deploy'))
+        (Join-Path $PSScriptRoot '..\..\..\um-share-deploy'))
 }
 if ($WatchdogScript -eq '') {
     $WatchdogScript = Join-Path $DeployDir 'watchdog-umshare.ps1'

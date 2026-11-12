@@ -31,7 +31,7 @@ import unittest
 from pathlib import Path
 
 TOOL_PATH = (Path(__file__).resolve().parents[1] / "tools" / "um-share"
-             / "ledger_row_recheck.py")
+             / "actions" / "ledger_row_recheck.py")
 
 
 def _load():

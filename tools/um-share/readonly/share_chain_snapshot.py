@@ -6,25 +6,25 @@
 其中 §③.1b 要求 8096 重启**前后各做一次**只读核对，并把结果逐项比对。本工具
 把那次核对压成三步（授权窗口内只需跑这三条命令）：
 
-    python ai-gateway/tools/um-share/share_chain_snapshot.py --out <轮目录>/snapshot-before.json
+    python tools/um-share/readonly/share_chain_snapshot.py --out <轮目录>/snapshot-before.json
     # …执行 §③.1 的 8096 重启（本工具不重启任何东西）…
-    python ai-gateway/tools/um-share/share_chain_snapshot.py --out <轮目录>/snapshot-after.json
-    python ai-gateway/tools/um-share/share_chain_snapshot.py --compare <轮目录>/snapshot-before.json <轮目录>/snapshot-after.json
+    python tools/um-share/readonly/share_chain_snapshot.py --out <轮目录>/snapshot-after.json
+    python tools/um-share/readonly/share_chain_snapshot.py --compare <轮目录>/snapshot-before.json <轮目录>/snapshot-after.json
 
 提升身份的权威读数（执行轮 10，2026-09-28；维护者要求「窗口前必须有有权限的权威读数」）：
 
 非提升身份下 ``window_signals.watchdog_task`` 只能记 ``undecidable``（SYSTEM 任务
 看不见），WFP/防火墙 limits 与 8100 的 ``raw.txt`` 更是完全读不到；而 ``--compare``
 要求两侧都有可读状态。所以窗口前后各跑一次**提升身份只读探针**
-``tools/um-share/authoritative_readings.ps1``（它复用 ``um-share-deploy`` 里看门狗自己的
+``tools/um-share/readonly/authoritative_readings.ps1``（它复用 ``um-share-deploy`` 里看门狗自己的
 只读 ``Get-LimitsState`` / ``Get-FirewallState``，不另写一套语义），再用
 ``--authoritative`` 把那份权威读数**并进快照**：
 
     # 提升身份（窗口前 / 窗口后各一次；探针默认只打印，-Out 才写文件）
     pwsh -NoProfile -ExecutionPolicy Bypass -File `
-      ai-gateway/tools/um-share/authoritative_readings.ps1 `
+      tools/um-share/readonly/authoritative_readings.ps1 `
       -Out <轮目录>/authoritative-before.json
-    python ai-gateway/tools/um-share/share_chain_snapshot.py `
+    python tools/um-share/readonly/share_chain_snapshot.py `
       --out <轮目录>/snapshot-before.json `
       --authoritative <轮目录>/authoritative-before.json
 
@@ -124,12 +124,14 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-# 与 ai-gateway 产品代码同仓：把 ai-gateway 目录加进 sys.path，才能直接读
-# 运行中代码的只读事实（share_attribution_status / production_backend_observe）。
-AI_GATEWAY_DIR = os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))))
-if AI_GATEWAY_DIR not in sys.path:
-    sys.path.insert(0, AI_GATEWAY_DIR)
+# 与产品代码同仓：把仓库根加进 sys.path，才能直接读运行中代码的只读事实
+# （share_attribution_status / production_backend_observe）。
+_UM_SHARE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _UM_SHARE_DIR not in sys.path:
+    sys.path.insert(0, _UM_SHARE_DIR)
+from lib.paths import bootstrap  # noqa: E402
+
+AI_GATEWAY_DIR = bootstrap(__file__)["repo"]
 
 BEIJING = timezone(timedelta(hours=8))
 # v2 = 在 v1 之上**只增** window_signals / watchdog_task_query；v1 判定语义未改。
@@ -2582,7 +2584,7 @@ def main(argv=None):
                        help="逐项比对两份快照；全 PASS=0，任一项非 PASS=2")
     parser.add_argument(
         "--authoritative", metavar="PATH",
-        help="提升身份只读探针（tools/um-share/authoritative_readings.ps1）产出的 JSON："
+        help="提升身份只读探针（tools/um-share/readonly/authoritative_readings.ps1）产出的 JSON："
              "把权威读数并进快照并记录来源与采集时刻（加性；不提供时行为与现在"
              "逐字相同；只与 --out 同用）")
     args = parser.parse_args(argv)

@@ -96,7 +96,7 @@ if __name__ == "__main__":
 FORGET_STALE_DEFAULT = '''\
 # -*- coding: utf-8 -*-
 import argparse
-from share_chain_snapshot import share_chain_snapshot
+from readonly.share_chain_snapshot import share_chain_snapshot
 
 
 def collect_snapshot():

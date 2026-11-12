@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""``ai-gateway/tools/um-share/generate_attribution_key.py`` 的夹具测试（不连生产）。
+"""``tools/um-share/actions/generate_attribution_key.py`` 的夹具测试（不连生产）。
 
 覆盖动作门 §②（生成归因密钥 + ACL）的**纯判定函数**：
 
@@ -32,7 +32,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools" / "um-share"
+TOOLS_DIR = (Path(__file__).resolve().parents[1] / "tools" / "um-share"
+             / "actions")
 
 UM_SHARE_SID = "S-1-5-21-1771442332-1812804548-1420652959-1006"
 DACINT_SID = "S-1-5-21-1771442332-1812804548-1420652959-1001"

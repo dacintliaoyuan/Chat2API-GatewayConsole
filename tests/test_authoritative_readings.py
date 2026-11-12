@@ -52,7 +52,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools" / "um-share"
+TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools" / "um-share" / "readonly"
 
 FOUR_KEYS = ["key_chars", "key_file", "reason", "wired"]
 SEVEN_KEYS = ["file_ready", "file_reason", "instance_loaded", "key_chars",

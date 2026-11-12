@@ -50,10 +50,12 @@ import sys
 import urllib.error
 import urllib.request
 
-AI_GATEWAY_DIR = os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))))
-if AI_GATEWAY_DIR not in sys.path:
-    sys.path.insert(0, AI_GATEWAY_DIR)
+_UM_SHARE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _UM_SHARE_DIR not in sys.path:
+    sys.path.insert(0, _UM_SHARE_DIR)
+from lib.paths import bootstrap  # noqa: E402
+
+AI_GATEWAY_DIR = bootstrap(__file__)["repo"]
 
 CONSOLE_PORT = 8096
 KEY_MIN_CHARS = 32

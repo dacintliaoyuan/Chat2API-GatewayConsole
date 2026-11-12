@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""`ai-gateway/tools/um-share/window_preflight.py` 的夹具测试（不连生产）。
+"""`tools/um-share/readonly/window_preflight.py` 的夹具测试（不连生产）。
 
 覆盖维护者点名的三组反向分支，以及其余判据的每一条：
 
@@ -40,7 +40,8 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools" / "um-share"
+TOOLS_DIR = (Path(__file__).resolve().parents[1] / "tools" / "um-share"
+             / "readonly")
 
 
 def _load(module_name):

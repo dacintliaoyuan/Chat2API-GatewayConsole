@@ -48,7 +48,7 @@
 * **为什么需要**：``--check`` 自己跑在普通权限下时，``Get-ScheduledTask`` /
   ``schtasks`` 读不到 SYSTEM 的 watchdog 任务（拒绝访问），第 ⑧ 层只能记
   ``undecidable``——即使前后两份快照都已合并提升身份的读数。本开关把**窗口后**
-  那份提升身份只读探针（``tools/um-share/authoritative_readings.ps1 -Out``）的 JSON
+  那份提升身份只读探针（``tools/um-share/readonly/authoritative_readings.ps1 -Out``）的 JSON
   直接交给八层验收，用其中的读数判定第 ⑧ 层（以及 ③ 的 raw.txt mtime、④ 的
   ``backend.pid`` 身份旁证）。
 * **读数必须先过四道校验**（**按 ①②③④ 的顺序求值**；任一条不满足 → 相关层记
@@ -134,10 +134,12 @@ import sys
 
 # 同目录的 round7 只读快照工具：复用它的公开纯解析/观察函数，避免两处口径漂移。
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-AI_GATEWAY_DIR = os.path.dirname(os.path.dirname(TOOLS_DIR))
-for _path in (TOOLS_DIR, AI_GATEWAY_DIR):
-    if _path not in sys.path:
-        sys.path.insert(0, _path)
+_UM_SHARE_DIR = os.path.dirname(TOOLS_DIR)
+if _UM_SHARE_DIR not in sys.path:
+    sys.path.insert(0, _UM_SHARE_DIR)
+from lib.paths import bootstrap  # noqa: E402
+
+AI_GATEWAY_DIR = bootstrap(__file__)["repo"]
 
 import share_chain_snapshot as snapshot_tool  # noqa: E402
 
@@ -1463,7 +1465,7 @@ def main(argv=None):
                              "写出的那份）；不给时 ①④⑥⑦ 记 UNDECIDABLE")
     parser.add_argument("--authoritative", default=None, metavar="PATH",
                         help="窗口后权威读数 JSON（提升身份只读探针 "
-                             "tools/um-share/authoritative_readings.ps1 -Out "
+                             "tools/um-share/readonly/authoritative_readings.ps1 -Out "
                              "写出的那份）；给定时第 ⑧ 层（及 ③ 的 raw.txt "
                              "mtime、④ 的 backend.pid 旁证）以它为准，读数须先过"
                              "结构/新鲜度/身份/时间顺序四道校验，不可用即 "

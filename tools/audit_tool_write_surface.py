@@ -54,8 +54,7 @@ import os
 import sys
 from collections import deque
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 TIER_READ_ONLY = "a"
 TIER_GATED = "b"
@@ -66,17 +65,17 @@ TIER_UNDECIDED = "?"
 #: 未登记 → ``?``。--target 传别的文件（夹具 / 新脚本）时按机械层档位报，
 #: 但 (c) 一样非零。
 AUDITED_FILES = frozenset((
-    "ai-gateway/tools/um-share/generate_attribution_key.py",
-    "ai-gateway/tools/um-share/ledger_row_recheck.py",
-    "ai-gateway/tools/um-share/metering_acceptance.py",
-    "ai-gateway/tools/um-share/metering_request_probe.py",
-    "ai-gateway/tools/um-share/post_restart_acceptance.py",
-    "ai-gateway/tools/um-share/request_budget_estimate.py",
-    "ai-gateway/tools/um-share/share_chain_snapshot.py",
-    "ai-gateway/tools/um-share/test_key_ops.py",
-    "ai-gateway/tools/um-share/watchdog_forensics.py",
-    "ai-gateway/tools/zcode-config/keepset_apply.py",
-    "ai-gateway/tools/handoff_anchor_audit.py",
+    "tools/um-share/actions/generate_attribution_key.py",
+    "tools/um-share/actions/ledger_row_recheck.py",
+    "tools/um-share/actions/metering_acceptance.py",
+    "tools/um-share/actions/metering_request_probe.py",
+    "tools/um-share/readonly/post_restart_acceptance.py",
+    "tools/um-share/readonly/request_budget_estimate.py",
+    "tools/um-share/readonly/share_chain_snapshot.py",
+    "tools/um-share/actions/test_key_ops.py",
+    "tools/um-share/readonly/watchdog_forensics.py",
+    "tools/zcode-config/keepset_apply.py",
+    "tools/handoff_anchor_audit.py",
 ))
 
 #: 被审脚本（仓库相对路径）；``--target`` 可覆盖，用于夹具测试。
@@ -203,7 +202,7 @@ DELEGATED = {
         "surface": "share_chain_snapshot.py:907 的加性开关原样转发给 "
                    "production_backend_observe(forget_stale=...)：默认 True = 陈旧 "
                    "backend.pid 仍会被删。",
-        "citation": "ai-gateway/tools/um-share/share_chain_snapshot.py:907-921",
+        "citation": "tools/um-share/readonly/share_chain_snapshot.py:907-921",
     },
     "production_backend_pid_state": {
         "read_only": True,
@@ -306,75 +305,75 @@ DELEGATED = {
 #: 与启发式档位不一致时必须给出的原因。``citation`` 用于委托条目（产品侧行号）。
 DECLARED = {
     # ------------------------------------------------------ (b) 显式开关且默认关闭
-    ("ai-gateway/tools/um-share/generate_attribution_key.py",
+    ("tools/um-share/actions/generate_attribution_key.py",
      "write_key_file", "open", 1):
         {"tier": "b", "line": 799,
          "trigger": "--apply 或 --rehearse-rollback（写密钥文件；--apply 只允许 "
                     r"C:\ProgramData\UMShareRun 之下）"},
-    ("ai-gateway/tools/um-share/generate_attribution_key.py",
+    ("tools/um-share/actions/generate_attribution_key.py",
      "write_key_file", "write", 1):
         {"tier": "b", "line": 800,
          "trigger": "同上（写 64 字节 hex，无 BOM、单行、不追加结尾换行）"},
-    ("ai-gateway/tools/um-share/generate_attribution_key.py",
+    ("tools/um-share/actions/generate_attribution_key.py",
      "apply_acl", "icacls", 1):
         {"tier": "b", "line": 806,
          "trigger": "--apply 或 --rehearse-rollback（icacls /inheritance:r + 四个 "
                     "/grant:r 改 ACL）"},
-    ("ai-gateway/tools/um-share/generate_attribution_key.py",
+    ("tools/um-share/actions/generate_attribution_key.py",
      "rehearse_rollback", "tempfile.mkdtemp", 1):
         {"tier": "b", "line": 965, "trigger": "--rehearse-rollback（临时目录里演练回退）"},
-    ("ai-gateway/tools/um-share/generate_attribution_key.py",
+    ("tools/um-share/actions/generate_attribution_key.py",
      "rehearse_rollback", "os.remove", 1):
         {"tier": "b", "line": 1014, "trigger": "--rehearse-rollback（删临时目录里的假密钥）"},
-    ("ai-gateway/tools/um-share/generate_attribution_key.py",
+    ("tools/um-share/actions/generate_attribution_key.py",
      "rehearse_rollback", "shutil.rmtree", 1):
         {"tier": "b", "line": 1025, "trigger": "--rehearse-rollback（删整个临时目录）"},
-    ("ai-gateway/tools/um-share/ledger_row_recheck.py",
+    ("tools/um-share/actions/ledger_row_recheck.py",
      "write_manifest_atomic", "open", 1):
         {"tier": "b", "line": 498,
          "trigger": "--authorized --out <path>（写可执行移除清单；默认不写）"},
-    ("ai-gateway/tools/um-share/ledger_row_recheck.py",
+    ("tools/um-share/actions/ledger_row_recheck.py",
      "write_manifest_atomic", "write", 1):
         {"tier": "b", "line": 499, "trigger": "同上（清单正文写入临时文件）"},
-    ("ai-gateway/tools/um-share/ledger_row_recheck.py",
+    ("tools/um-share/actions/ledger_row_recheck.py",
      "write_manifest_atomic", "unlink", 1):
         {"tier": "b", "line": 503, "trigger": "同上（临时文件读回不一致时删临时文件）"},
-    ("ai-gateway/tools/um-share/ledger_row_recheck.py",
+    ("tools/um-share/actions/ledger_row_recheck.py",
      "write_manifest_atomic", "os.replace", 1):
         {"tier": "b", "line": 505, "trigger": "同上（受控替换到 --out）"},
-    ("ai-gateway/tools/um-share/metering_request_probe.py",
+    ("tools/um-share/actions/metering_request_probe.py",
      "send_request", "urllib.request.Request", 1):
         {"tier": "b", "line": 368,
          "trigger": "--run 且 --authorized-requests/--max-cost-usd/--model/"
                     "--credential-file 全给且两门通过、费用可证 ≤ 上限（唯一带凭据的"
                     "白名单 POST，真实模型请求）"},
-    ("ai-gateway/tools/um-share/share_chain_snapshot.py",
+    ("tools/um-share/readonly/share_chain_snapshot.py",
      "write_snapshot", "os.makedirs", 1):
         {"tier": "b", "line": 299, "trigger": "--out <path>（快照目录不存在时创建）"},
-    ("ai-gateway/tools/um-share/share_chain_snapshot.py",
+    ("tools/um-share/readonly/share_chain_snapshot.py",
      "write_snapshot", "open", 1):
         {"tier": "b", "line": 301, "trigger": "--out <path>（先写临时文件）"},
-    ("ai-gateway/tools/um-share/share_chain_snapshot.py",
+    ("tools/um-share/readonly/share_chain_snapshot.py",
      "write_snapshot", "json.dump", 1):
         {"tier": "b", "line": 302, "trigger": "--out <path>（快照正文写入临时文件）"},
-    ("ai-gateway/tools/um-share/share_chain_snapshot.py",
+    ("tools/um-share/readonly/share_chain_snapshot.py",
      "write_snapshot", "write", 1):
         {"tier": "b", "line": 303, "trigger": "--out <path>（补结尾换行）"},
-    ("ai-gateway/tools/um-share/share_chain_snapshot.py",
+    ("tools/um-share/readonly/share_chain_snapshot.py",
      "write_snapshot", "os.replace", 1):
         {"tier": "b", "line": 304, "trigger": "--out <path>（受控替换）"},
-    ("ai-gateway/tools/um-share/test_key_ops.py",
+    ("tools/um-share/actions/test_key_ops.py",
      "write_secret_exclusive", "open", 1):
         {"tier": "b", "line": 370,
          "trigger": "--apply --create --secret-out <path>（明文独占写入该文件）"},
-    ("ai-gateway/tools/um-share/test_key_ops.py",
+    ("tools/um-share/actions/test_key_ops.py",
      "write_secret_exclusive", "write", 1):
         {"tier": "b", "line": 371, "trigger": "同上（写入明文）"},
-    ("ai-gateway/tools/um-share/test_key_ops.py",
+    ("tools/um-share/actions/test_key_ops.py",
      "write_secret_exclusive", "os.chmod", 1):
         {"tier": "b", "line": 373,
          "trigger": "同上（尽力设 0600；Windows 上只影响只读位）"},
-    ("ai-gateway/tools/um-share/test_key_ops.py",
+    ("tools/um-share/actions/test_key_ops.py",
      "build_manager", "delegated:ShareManager", 1):
         {"tier": "b", "line": 364,
          "trigger": "--apply（构造即写库：_recover_interrupted_operations 写 ops 行）",
@@ -382,21 +381,21 @@ DECLARED = {
          "note": "启发式把 build_manager 归 (c)：--apply 门在 main 的 "
                     "if not intent[\"apply\"]: return EXIT_OK 提前返回里，静态扫描"
                     "不建模这种提前返回；人工审计按 --apply 判 (b)。"},
-    ("ai-gateway/tools/um-share/test_key_ops.py",
+    ("tools/um-share/actions/test_key_ops.py",
      "build_manager", "delegated:get_share_manager", 1):
         {"tier": "b", "line": 363,
          "trigger": "--apply --broker console（控制台自己的装配：真实 broker 会在线发布）",
          "citation": "usagesrv.py:1804-1811",
          "note": "启发式把 build_manager 归 (c)：--apply 门在 main 的提前返回里；"
                     "人工审计按 --apply 判 (b)。"},
-    ("ai-gateway/tools/um-share/test_key_ops.py",
+    ("tools/um-share/actions/test_key_ops.py",
      "apply_create", "delegated:create_key", 1):
         {"tier": "b", "line": 385,
          "trigger": "--apply --create（写权威存储 keys 行 + 代次 + publish intent）",
          "citation": "share/management.py:672; share/store.py:562",
          "note": "启发式把 apply_create 归 (c)：--apply 门在 main 的提前返回里；"
                     "人工审计按 --apply 判 (b)。"},
-    ("ai-gateway/tools/um-share/test_key_ops.py",
+    ("tools/um-share/actions/test_key_ops.py",
      "apply_revoke", "delegated:delete_key", 1):
         {"tier": "b", "line": 404,
          "trigger": "--apply --revoke（软删除 tombstone + publish intent；发布未确认时 "
@@ -404,31 +403,31 @@ DECLARED = {
          "citation": "share/management.py:797-803; share/store.py:859-877",
          "note": "启发式把 apply_revoke 归 (c)：--apply 门在 main 的提前返回里；"
                     "人工审计按 --apply 判 (b)。"},
-    ("ai-gateway/tools/zcode-config/keepset_apply.py",
+    ("tools/zcode-config/keepset_apply.py",
      "write_bytes", "tempfile.NamedTemporaryFile", 1):
         {"tier": "b", "line": 141, "trigger": "--apply / --revert（先写同目录临时文件）"},
-    ("ai-gateway/tools/zcode-config/keepset_apply.py",
+    ("tools/zcode-config/keepset_apply.py",
      "write_bytes", "write", 1):
         {"tier": "b", "line": 145, "trigger": "同上（写临时文件）"},
-    ("ai-gateway/tools/zcode-config/keepset_apply.py",
+    ("tools/zcode-config/keepset_apply.py",
      "write_bytes", "os.replace", 1):
         {"tier": "b", "line": 150, "trigger": "同上（受控替换到 --config）"},
-    ("ai-gateway/tools/zcode-config/keepset_apply.py",
+    ("tools/zcode-config/keepset_apply.py",
      "apply_keepset", "write_bytes", 1):
         {"tier": "b", "line": 711,
          "trigger": "--apply 且投影与当前规则库有差异（调用本地 write_bytes 写规则库）"},
-    ("ai-gateway/tools/zcode-config/keepset_apply.py",
+    ("tools/zcode-config/keepset_apply.py",
      "revert_backup", "write_bytes", 1):
         {"tier": "b", "line": 804,
          "trigger": "--revert --backup <path>（调用本地 write_bytes 恢复规则库）"},
-    ("ai-gateway/tools/zcode-config/keepset_apply.py",
+    ("tools/zcode-config/keepset_apply.py",
      "write_backup", "mkdir", 1):
         {"tier": "b", "line": 740,
          "trigger": "--apply（备份目录已存在即拒绝，不覆盖既有备份）"},
-    ("ai-gateway/tools/zcode-config/keepset_apply.py",
+    ("tools/zcode-config/keepset_apply.py",
      "write_backup", "write_bytes", 1):
         {"tier": "b", "line": 743, "trigger": "--apply（写 provider_config.json.bak）"},
-    ("ai-gateway/tools/zcode-config/keepset_apply.py",
+    ("tools/zcode-config/keepset_apply.py",
      "write_backup", "write_text", 1):
         {"tier": "b", "line": 748,
          "trigger": "--apply（写 sha256 记录，不含配置内容）"},

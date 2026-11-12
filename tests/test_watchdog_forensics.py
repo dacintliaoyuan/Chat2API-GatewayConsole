@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""``ai-gateway/tools/um-share/watchdog_forensics.py`` 的夹具测试（不连生产）。
+"""``tools/um-share/readonly/watchdog_forensics.py`` 的夹具测试（不连生产）。
 
 覆盖维护者点名的问题 4（重启 8096 会不会触发看门狗停分享链）与产出 2 要求的三类
 夹具：
@@ -33,7 +33,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools" / "um-share"
+TOOLS_DIR = (Path(__file__).resolve().parents[1] / "tools" / "um-share"
+             / "readonly")
 
 EXPECTED_EXE = r"C:\ProgramData\UMShareRun\um-share-python.exe"
 

@@ -60,9 +60,12 @@ import urllib.request
 from pathlib import Path
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-AI_GATEWAY_DIR = os.path.dirname(os.path.dirname(TOOLS_DIR))
-if AI_GATEWAY_DIR not in sys.path:
-    sys.path.insert(0, AI_GATEWAY_DIR)
+_UM_SHARE_DIR = os.path.dirname(TOOLS_DIR)
+if _UM_SHARE_DIR not in sys.path:
+    sys.path.insert(0, _UM_SHARE_DIR)
+from lib.paths import bootstrap  # noqa: E402
+
+AI_GATEWAY_DIR = bootstrap(__file__)["repo"]
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 

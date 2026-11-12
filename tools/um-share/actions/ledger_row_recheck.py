@@ -43,10 +43,10 @@
 
 用法：
 
-    python ai-gateway/tools/um-share/ledger_row_recheck.py
-    python ai-gateway/tools/um-share/ledger_row_recheck.py --json
+    python tools/um-share/actions/ledger_row_recheck.py
+    python tools/um-share/actions/ledger_row_recheck.py --json
     # 写清单须显式授权；本轮不执行：
-    python ai-gateway/tools/um-share/ledger_row_recheck.py --authorized --out <path>
+    python tools/um-share/actions/ledger_row_recheck.py --authorized --out <path>
 """
 
 from __future__ import annotations
@@ -60,7 +60,14 @@ import time
 from collections import Counter
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+_UM_SHARE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _UM_SHARE_DIR not in sys.path:
+    sys.path.insert(0, _UM_SHARE_DIR)
+from lib.paths import legacy_repo_parent  # noqa: E402
+
+# 旧布局的默认账本根是 ``parents[3]``（仓库根的上一级）；移动一层后
+# 由 helper 返回同一目录，默认路径逐字不变。
+REPO_ROOT = Path(legacy_repo_parent(__file__))
 LEDGER_DEFAULT = REPO_ROOT / "ai-gateway" / "data" / "usage-chat2api.jsonl"
 PLAN_DEFAULT = (REPO_ROOT / "output" / "ai-gw-round6-20260927"
                 / "ledger-10-rows.json")

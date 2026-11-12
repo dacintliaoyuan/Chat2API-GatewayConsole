@@ -57,10 +57,12 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 
-AI_GATEWAY_DIR = os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))))
-if AI_GATEWAY_DIR not in sys.path:
-    sys.path.insert(0, AI_GATEWAY_DIR)
+_UM_SHARE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _UM_SHARE_DIR not in sys.path:
+    sys.path.insert(0, _UM_SHARE_DIR)
+from lib.paths import bootstrap  # noqa: E402
+
+AI_GATEWAY_DIR = bootstrap(__file__)["repo"]
 
 EXIT_OK = 0
 EXIT_REFUSED = 2
@@ -75,7 +77,7 @@ KEY_ID_SHAPE = "uuid4（8-4-4-4-12 小写 hex，36 字符；写入前不可知�
 MASKED_SHAPE = "um-share-****<末 4 字符>（掩码不含明文，share/store.py:85-87）"
 SECRET_HASH_FIELD = "sha256(<生成的密钥>)：只写摘要，明文绝不打印"
 REMINDER = ("提醒：这是专用测试 Key，验收完成必须立刻撤销 —— "
-            "python ai-gateway/tools/um-share/test_key_ops.py "
+            "python tools/um-share/actions/test_key_ops.py "
             "--revoke --key-id <key_id> --apply")
 
 KEY_COLUMNS = ("key_id", "name", "enabled", "secret_version", "masked_key",

@@ -84,11 +84,13 @@ import time
 # 同目录的 round7/round9 只读快照工具：复用它的公开纯解析/观察函数与期望值，
 # 避免两处口径漂移（与 post_restart_acceptance.py:91-97 同一做法）。
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-AI_GATEWAY_DIR = os.path.dirname(os.path.dirname(TOOLS_DIR))
+_UM_SHARE_DIR = os.path.dirname(TOOLS_DIR)
+if _UM_SHARE_DIR not in sys.path:
+    sys.path.insert(0, _UM_SHARE_DIR)
+from lib.paths import bootstrap  # noqa: E402
+
+AI_GATEWAY_DIR = bootstrap(__file__)["repo"]
 PROJECT_ROOT = os.path.dirname(AI_GATEWAY_DIR)
-for _path in (TOOLS_DIR, AI_GATEWAY_DIR):
-    if _path not in sys.path:
-        sys.path.insert(0, _path)
 
 import share_chain_snapshot as snapshot_tool  # noqa: E402
 

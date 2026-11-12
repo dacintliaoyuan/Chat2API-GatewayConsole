@@ -58,12 +58,14 @@ import subprocess
 import sys
 import tempfile
 
-# 与 ai-gateway 产品代码同仓：把 ai-gateway 目录加进 sys.path，才能用产品代码的
-# 路径解析器（本工具**不复制**它的默认 RunRoot 字面量）。
-AI_GATEWAY_DIR = os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))))
-if AI_GATEWAY_DIR not in sys.path:
-    sys.path.insert(0, AI_GATEWAY_DIR)
+# 与产品代码同仓：把仓库根加进 sys.path，才能用产品代码的路径解析器
+# （本工具**不复制**它的默认 RunRoot 字面量）。
+_UM_SHARE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _UM_SHARE_DIR not in sys.path:
+    sys.path.insert(0, _UM_SHARE_DIR)
+from lib.paths import bootstrap  # noqa: E402
+
+AI_GATEWAY_DIR = bootstrap(__file__)["repo"]
 
 # 生产 RunRoot = deploy-elevated.ps1 的 -RunRoot 默认值（console/share_production.py:843）。
 # --apply 只允许写这个根之下（动作门 §2.4 + 本任务边界：绝不改它以外的生产路径）。
@@ -1088,7 +1090,7 @@ def format_plan(target, target_error, facts, result):
     lines.append("=" * 60)
     if result["ok"]:
         lines.append("结论：前置条件全部满足（退出码 0）。"
-                     "授权窗口内跑：python ai-gateway/tools/um-share/"
+                     "授权窗口内跑：python tools/um-share/actions/"
                      "generate_attribution_key.py --apply（**须提升**）")
     else:
         not_pass = [item["id"] for item in result["items"]

@@ -350,9 +350,87 @@
   "deployment_files": [
     {
       "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/__init__.py",
+      "sha256": "3804217934e8a5c7ef38477d62c5369a5f130d6f5c29d4c8f058f4bbc3132958",
+      "size": 6496
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/assembly.py",
+      "sha256": "31797487568f53c05259f0c60e59d4a9b5e52b494f1ad50d87e9d22c991ee5d9",
+      "size": 11675
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/backup.py",
+      "sha256": "52db748102b5c71c3e2360332d5a8a8360eb94304c08a1794dec0559b89aa7b6",
+      "size": 31678
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/cli.py",
+      "sha256": "7b4f8a746f0a44466e221c1da39007c6df445d93acbef2503064fce239e1996c",
+      "size": 8558
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/constants.py",
+      "sha256": "47a0f5acbd5ae3a62a62702c2fbaeedfdff625db4e9f6e3f5b6248967f1aa85c",
+      "size": 2099
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/errors.py",
+      "sha256": "0f66f78820eb6c3ae466c646bbf8a06550ac456fae5b9b1187453b2a8d4fa574",
+      "size": 1818
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/keyfile.py",
+      "sha256": "c2a1db833c5eabf35e2562bf3b70e939d9dd00cfee02a18a1b278e55c9099ab1",
+      "size": 4479
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/objectstore.py",
+      "sha256": "c2a48a1420c981923a95ceeea86f7c7ee4990e22583a652a1e3905fc7387420d",
+      "size": 4413
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/package.py",
+      "sha256": "c1b75f8138363bc5adc9d8b37099483555507acc43cf042ab28061a3852f6277",
+      "size": 25013
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/products.py",
+      "sha256": "55e9276713e1dbb78126e187895c0ad97ef2fc19454eb73398921af69905a7d0",
+      "size": 5096
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/recovery.py",
+      "sha256": "75df57b939a04df2b0afe25513a30bebc5b00699509eef4bfc74461b6989a10a",
+      "size": 11661
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/restore.py",
+      "sha256": "21ec33e15e1f67f017fc104634650f92cb09e4b7cffc890537552ff49ed82237",
+      "size": 27199
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore/security.py",
+      "sha256": "932deba117aa3cd3cacd57dcc43729778b64d5ca3c2e452a62f4a0bad082a7ad",
+      "size": 4379
+    },
+    {
+      "kind": "deployment",
       "path": "um-cloud-deploy/backup_restore.py",
-      "sha256": "5654cbc269b9ee57080aadda89d2f0b31de420e31ebb4fcc89cb6dcea8d35756",
-      "size": 137553
+      "sha256": "652ea2019bbdc1d69b376854963948ddcb07f057867a7b750e4076b02c625ba7",
+      "size": 1593
     },
     {
       "kind": "deployment",
@@ -531,7 +609,7 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/systemd/um-share-broker.service",
-      "sha256": "999300778b233e58478c45b01913b71d740f81e7fa4ab6af8afc3556da4130e6",
+      "sha256": "24740fdd7965bfefd73714fa05a2f5639858f9623c0a3615d1acacc3ec421972",
       "size": 5510
     },
     {
@@ -619,8 +697,8 @@
         "cloud_runtime"
       ],
       "path": "console/display_proxy.py",
-      "sha256": "6a7a0d1e535783540eee0f483e4c0f086ba0f31e3c320d1635ac3097af9a3073",
-      "size": 81096
+      "sha256": "2d2043858658e9ebdc2730c4d29259ed7e4355a3a55eda48e2b27758ed49dd1e",
+      "size": 81100
     },
     {
       "closures": [
@@ -636,8 +714,8 @@
         "cloud_runtime"
       ],
       "path": "console/log_reader.py",
-      "sha256": "2195b5d286014296b26fc49abc0db71a3dfe94906bbe00b5bb7bb802959ea555",
-      "size": 61739
+      "sha256": "76efb8d1adad2ccb10e0ebcacdc7cc88c0d884574b0a0ea939b8e726c9cfe3d2",
+      "size": 61743
     },
     {
       "closures": [
@@ -780,8 +858,8 @@
         "static_superset"
       ],
       "path": "model_sync/sync.py",
-      "sha256": "7a32a45cb39035c0ec28fc4bbfadcf1d12ad369a4d14d86ecbc000c86c03082e",
-      "size": 245875
+      "sha256": "55a83ba057ef6e98ffbbc16fb20b9cbc10462a88a70d8d2ea97b4364166a1a7a",
+      "size": 245879
     },
     {
       "closures": [
@@ -796,16 +874,16 @@
         "static_superset"
       ],
       "path": "share/admin.py",
-      "sha256": "65db76ee6dfabb2c6d3ce42ad24988898c150a92fb3a2e15455d4b4c711cfa64",
-      "size": 13576
+      "sha256": "7168d42acd29594571af285de005767de5c556e4df3d304f1b418f95f31b979b",
+      "size": 13646
     },
     {
       "closures": [
         "static_superset"
       ],
       "path": "share/backend_supervision.py",
-      "sha256": "231d9b195fa004bbe3c5a1d6822bdfbda9ed43e60cbdc5771ab31f3c9469b4c1",
-      "size": 82585
+      "sha256": "23f8d7c80e632c51d9f8d04444e3af33ae7b7756f93e048d2748b3c6994a1483",
+      "size": 82749
     },
     {
       "closures": [
@@ -831,8 +909,8 @@
         "cloud_runtime"
       ],
       "path": "share/broker_ops.py",
-      "sha256": "5199cb8eb54c73c8e688fb9f2963933b8e04ac78d6c8153e584d4c0c5dcb0ecf",
-      "size": 130060
+      "sha256": "ba6f532d6bbad1f68874a2cc248c12c640a3016b0fc8e79e313bba3df7468cf0",
+      "size": 130054
     },
     {
       "closures": [
@@ -849,8 +927,8 @@
         "cloud_runtime"
       ],
       "path": "share/broker_server.py",
-      "sha256": "873f1a622daaddffed883d31f437ad2c07312b8d6b51bd41a0f92decc35cd738",
-      "size": 83995
+      "sha256": "673db4b55d7ac49e41dc5c7f933326fc46e9455cf62e6326588f1b70106343ab",
+      "size": 84129
     },
     {
       "closures": [
@@ -867,8 +945,8 @@
         "cloud_runtime"
       ],
       "path": "share/management.py",
-      "sha256": "2aebd7cb2f35c0444f6deddb73d8f4d6e87fe934037c51eefd3d3d93b8784da6",
-      "size": 74263
+      "sha256": "c580060c60ce5f86a4af9eabe070422f51de39c1300c8fee9c8b2a062b31ad93",
+      "size": 74267
     },
     {
       "closures": [
@@ -894,8 +972,8 @@
         "cloud_runtime"
       ],
       "path": "share/secret_protection.py",
-      "sha256": "287a363c440a2c5601e697891a88c23fa1cd51938c3a3efd9a83c1743b7d0309",
-      "size": 14259
+      "sha256": "90bb078141d085dade112b779a0a36e755edba6a3cbc38c2947584ff8436aae4",
+      "size": 14286
     },
     {
       "closures": [
@@ -944,8 +1022,8 @@
         "cloud_runtime"
       ],
       "path": "usagesrv.py",
-      "sha256": "698cff66b2bc52827129f69de95ae39ad6920dd9bcaf375dee6cd9b151645806",
-      "size": 240000
+      "sha256": "515cdc51d2e4343d4d20d87d0d8a34e92035dea0035c1738c205b467ec0bb2b6",
+      "size": 240092
     },
     {
       "closures": [
@@ -980,7 +1058,7 @@
       "size": 46032
     }
   ],
-  "generated_at": "2026-11-12T16:30:37.729176+00:00",
+  "generated_at": "2026-11-12T20:42:18.209950+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",

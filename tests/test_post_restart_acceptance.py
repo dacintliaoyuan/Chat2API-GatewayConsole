@@ -55,7 +55,7 @@ from pathlib import Path
 from unittest import mock
 
 AI_GATEWAY_DIR = Path(__file__).resolve().parents[1]
-TOOLS_DIR = AI_GATEWAY_DIR / "tools" / "um-share"
+TOOLS_DIR = AI_GATEWAY_DIR / "tools" / "um-share" / "readonly"
 if str(AI_GATEWAY_DIR) not in sys.path:
     sys.path.insert(0, str(AI_GATEWAY_DIR))
 
@@ -176,7 +176,7 @@ def _item(result, index):
 
 
 # --------------------------------------------- 窗口后权威读数夹具（探针 JSON）
-# 形状逐字对照 tools/um-share/authoritative_readings.ps1 的输出与
+# 形状逐字对照 tools/um-share/readonly/authoritative_readings.ps1 的输出与
 # tests/test_authoritative_readings.py 的夹具：顶层 tool / schema_version /
 # read_only / elevated / identity / captured_at / window_signals。
 AUTH_CAPTURED_AT = 1790562898.0351868

@@ -48,10 +48,14 @@ if str(HERE) not in sys.path:
 import usagesrv  # noqa: E402 — 与工具同一个模块对象，补丁才生效
 
 TOOLS_DIR = HERE / "tools" / "um-share"
+TOOL_PATHS = {
+    "request_budget_estimate": TOOLS_DIR / "readonly" / "request_budget_estimate.py",
+    "metering_request_probe": TOOLS_DIR / "actions" / "metering_request_probe.py",
+}
 
 
 def _load(module_name):
-    path = TOOLS_DIR / (module_name + ".py")
+    path = TOOL_PATHS[module_name]
     spec = importlib.util.spec_from_file_location(
         "um_share_" + module_name, path)
     module = importlib.util.module_from_spec(spec)

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""`ai-gateway/tools/um-share/` 两个**动作工具**的夹具测试（不连生产）。
+"""`tools/um-share/actions/` 两个**动作工具**的夹具测试（不连生产）。
 
 覆盖（动作门 §④ 的工具化）：
 
@@ -42,7 +42,7 @@ from pathlib import Path
 from unittest import mock
 
 AI_GATEWAY_DIR = Path(__file__).resolve().parents[1]
-TOOLS_DIR = AI_GATEWAY_DIR / "tools" / "um-share"
+TOOLS_DIR = AI_GATEWAY_DIR / "tools" / "um-share" / "actions"
 if str(AI_GATEWAY_DIR) not in sys.path:
     sys.path.insert(0, str(AI_GATEWAY_DIR))
 
