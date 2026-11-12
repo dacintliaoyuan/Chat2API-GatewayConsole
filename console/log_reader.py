@@ -9,7 +9,8 @@ Contract (handoff A38-2, extended by P3/R3):
   The registry is inventoried from the launchers/supervisors actually in use
   (``lib/gateway-runtime.ps1`` descriptors, ``start_chat2api.bat``,
   ``lib/watch-*.ps1``, ``share/backend_supervision.py``,
-  ``deploy-elevated.ps1``, ``share/broker_server.py``) — never by walking
+  the retired Windows deploy script, ``share/broker_server.py``) — never by
+  walking
   directories. Only the chat2api (UM) and share producers are registered; the
   retired Qoder / CLIProxy producers are gone from the runtime.
 - Bounded reads: byte/row/wall-clock budgets per request; tail reads walk
@@ -53,8 +54,9 @@ MAX_OVERVIEW_ROWS = 1200
 # SELFUSEAI_GATEWAY_WATCH_DIR (lib/watch-chat2api.ps1:78-82,
 # lib/watch-share-backend.ps1 via share_backend_supervision.DEFAULT_WATCH_DIR).
 WATCH_DIR_ENV = "SELFUSEAI_GATEWAY_WATCH_DIR"
-# Fixed SYSTEM deployment root of the share chain (deploy-elevated.ps1:820,
-# run-broker.cmd / install-share-broker.ps1, chat2api.py:247).
+# Fixed SYSTEM deployment root of the retired Windows share chain
+# (the retired Windows deploy script :820, the retired run-broker.cmd /
+# install-share-broker.ps1, chat2api.py:247).
 SHARE_RUN_ROOT = Path(r"C:\ProgramData\UMShareRun")
 
 _HERE = Path(__file__).resolve().parents[1]
@@ -769,8 +771,8 @@ def build_registry(ledger_paths: dict[str, str] | None = None) -> dict:
       explicit ``note``;
     * share: the 8110 child log/ledger/lifecycle, its watch log, and the
       fixed SYSTEM artifacts of the 8100 share chain + broker (raw.txt,
-      share-faults.jsonl, lifecycle.json — deploy-elevated.ps1:820,
-      chat2api.py:247, share/broker_server.py:817-818).
+      share-faults.jsonl, lifecycle.json — the retired Windows deploy
+      script :820, chat2api.py:247, share/broker_server.py:817-818).
 
     A path that cannot be resolved is registered as ``None`` (read_entries
     answers ``unconfigured``); it is never silently dropped and never
@@ -834,8 +836,8 @@ def build_registry(ledger_paths: dict[str, str] | None = None) -> dict:
              {"category": "watch", "display": "监督日志 share-backend-watch.log",
               "path": watch_path("share-backend-watch.log"),
               "rotating": True, "rotation_index": 1},
-             # deploy-elevated.ps1:820-861 — the 8100 SYSTEM task's full
-             # stdout/stderr capture (run\live\raw.txt).
+             # the retired Windows deploy script :820-861 — the 8100 SYSTEM
+             # task's full stdout/stderr capture (run\live\raw.txt).
              {"category": "gateway", "display": "8100 任务输出 raw.txt",
               "path": str(share_run / "run" / "live" / "raw.txt"),
               "rotating": False},

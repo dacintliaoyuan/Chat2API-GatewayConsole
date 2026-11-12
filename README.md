@@ -10,7 +10,7 @@ Chat2API 网关控制台：同一套前端按构建期角色产出本机与云�
 | 领域词汇 | [GLOSSARY.md](GLOSSARY.md) |
 | 一套前端两个控制台的决策 | [ADR 0001](docs/adr/0001-one-frontend-two-consoles-build-time-role.md) |
 | 云端部署与运维 | [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
-| 旧 Windows 分享链 | [um-share-deploy/README.md](um-share-deploy/README.md)、[SHARING.md](SHARING.md) |
+| 分享链边界 | [SHARING.md](SHARING.md) |
 
 ## 角色与入口
 
@@ -31,7 +31,7 @@ Chat2API 网关控制台：同一套前端按构建期角色产出本机与云�
 - `zcode/`：ZCode 热同步与文件锁。
 - `local/`、`cloud/`、`shared/`：两个角色的组合根与双端纯规则；见各自的 README。
 - `web/`：TypeScript/Vite 前端；`tests/`：Python 回归与隔离包。
-- `um-cloud-deploy/`、`um-share-deploy/`：云端与旧 Windows 本机分享链的部署/运维材料。
+- `um-cloud-deploy/`：云端部署/运维材料。旧 Windows 本机分享链的部署材料已从仓库删除。
 
 ## 验证
 

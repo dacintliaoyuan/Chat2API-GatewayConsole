@@ -35,8 +35,8 @@ Each adapter mirrors a REAL local product surface, honestly:
   keeps the loader's fail-closed BrokerError (never a fallback).
 * ``production_funnel_control("on"/"off")`` — tailscale.exe argument-array
   calls ONLY (no shell, no interpolation, fixed argument shapes):
-  - "off" strictly mirrors the watchdog Close-Public three steps
-    (um-share-deploy/watchdog-umshare.ps1 :220-252): ``funnel --https=443
+  - "off" strictly mirrors the retired Windows watchdog Close-Public
+    three steps (see Git history): ``funnel --https=443
     off`` (:235) with the exit code checked (:237), the 2s settle (:238),
     then a ``serve status`` re-check (:239-245) where rc failure, EMPTY
     output ("cannot confirm mapping state", :243) or a still-present HTTPS
@@ -63,7 +63,7 @@ Each adapter mirrors a REAL local product surface, honestly:
   shapes, each noting its deployment pointer:
   - broker unwired/unreachable (deployment config absent/disabled, pipe
     not_installed) -> OperationError(share_broker_unwired) - the broker
-    task itself is not deployed (um-share-deploy/install-share-broker.ps1);
+    task itself is not deployed (see um-cloud-deploy/README.md);
   - the broker REJECTS the unknown verb (bad_request) -> the broker task
     predates the extension -> OperationError(share_broker_extension_missing)
     (update/restart the broker task per the deployment package);
@@ -161,20 +161,20 @@ from share.broker_protocol import RESULT_CODES
 from share.management import BrokerError
 
 # ---- fixed production defaults (deployment facts; injectable for tests) ----
-DEFAULT_TAILSCALE_EXE = r"C:\Program Files\Tailscale\tailscale.exe"  # watchdog :36
-DEFAULT_SHARE_TASK = "umshare-live"        # install-share-broker.ps1 :48
+DEFAULT_TAILSCALE_EXE = r"C:\Program Files\Tailscale\tailscale.exe"  # retired watchdog :36
+DEFAULT_SHARE_TASK = "umshare-live"        # retired Windows installer :48
 DEFAULT_RUNNER_TIMEOUT_S = 10.0
 FUNNEL_OFF_SETTLE_S = 2.0                  # watchdog Close-Public settle (:238)
 _FUNNEL_UPSTREAM = "http://127.0.0.1:8100"  # SHARING.md :33 target
 DETAIL_MAX_CHARS = 200
-# The broker's protected status record (watchdog-umshare.ps1 :54 resolves the
-# same default: <RunRoot>\broker\broker-status.json; install-share-broker.ps1
-# :45 default RunRoot). The broker writes it atomically per cycle
+# The broker's protected status record (the retired Windows watchdog resolved
+# the same default: <RunRoot>\broker\broker-status.json; the retired installer
+# had the same RunRoot default). The broker writes it atomically per cycle
 # (share/broker_server.py :484-506) with the lifecycle record mirrored at
 # :495. Deployment facts stay injectable — tests never read the real path.
 DEFAULT_BROKER_STATUS_PATH = r"C:\ProgramData\UMShareRun\broker\broker-status.json"
 
-# Watchdog verification token (watchdog-umshare.ps1 :244 `$out -match
+# Retired Windows watchdog verification token (:244 `$out -match
 # 'https://[^\s]+'`): an HTTPS mapping token in the serve status output.
 _HTTPS_MAPPING_RE = re.compile(r"https://\S+")
 
@@ -269,7 +269,7 @@ def _run_tailscale(args, exe_path, runner, timeout_s):
 
 def _serve_status(exe_path, runner, timeout_s):
     """The only observation command, fixed argument shape
-    (``[exe, "serve", "status"]``, watchdog-umshare.ps1 :239)."""
+    (``[exe, "serve", "status"]``, retired watchdog :239)."""
     return _run_tailscale(["serve", "status"], exe_path, runner, timeout_s)
 
 
@@ -288,7 +288,7 @@ class _FunnelAck(dict):
 
 
 def _funnel_off(exe_path, runner, sleeper, timeout_s):
-    """Strict watchdog Close-Public mirror (watchdog-umshare.ps1 :234-251):
+    """Strict retired watchdog Close-Public mirror (:234-251):
     funnel off with rc check (:235-237) -> 2s settle (:238) -> serve status
     re-check (:239-245); rc failure, empty output and a still-present HTTPS
     mapping are each an honest failure."""
@@ -608,7 +608,7 @@ def production_ts_service_control(action, *, broker=None):
 
     * broker unwired/unreachable — deployment config absent/disabled or the
       pipe answers not_installed -> share_broker_unwired (the broker task
-      is not deployed: um-share-deploy/install-share-broker.ps1);
+      is not deployed: see um-cloud-deploy/README.md);
     * the broker rejects the UNKNOWN VERB (bad_request) — the broker task
       predates the extension -> share_broker_extension_missing (update and
       restart the broker task per the deployment authorization package);
@@ -635,14 +635,16 @@ def production_ts_service_control(action, *, broker=None):
             _CODE_UNWIRED_BROKER,
             "TS 服务控制：broker 适配器无 ts_service_control 控制方法"
             "（部署配置与适配器形状不符）；部署指针："
-            "um-share-deploy/install-share-broker.ps1；不冒充可用")
+            "um-cloud-deploy/README.md；旧 Windows 脚本 "
+            "install-share-broker.ps1 已随旧链删除；不冒充可用")
     try:
         result = control(action)
     except Exception as exc:  # noqa: BLE001 - transport failures stay honest
         raise OperationError(
             _CODE_UNWIRED_BROKER,
             "TS 服务控制：broker 管道不可达（%s: %s）：broker 任务未部署或"
-            "未运行；部署指针：um-share-deploy/install-share-broker.ps1；"
+            "未运行；部署指针：um-cloud-deploy/README.md；旧 Windows "
+            "脚本 install-share-broker.ps1 已删除；"
             "不冒充可用" % (type(exc).__name__, exc)) from exc
     code = result.error_code
     if result.ok:
@@ -661,8 +663,9 @@ def production_ts_service_control(action, *, broker=None):
         raise OperationError(
             _CODE_UNWIRED_BROKER,
             "TS 服务控制：broker 管道不可达/未部署（error_code=%s）："
-            "部署指针 um-share-deploy/install-share-broker.ps1"
-            "（部署授权包节 5）；不冒充可用" % (code,))
+            "部署指针 um-cloud-deploy/README.md"
+            "（部署授权包节 5）；旧 Windows 脚本 install-share-broker.ps1 "
+            "已删除；不冒充可用" % (code,))
     elif code == "bad_request":
         raise OperationError(
             _CODE_EXTENSION_MISSING,
@@ -851,15 +854,17 @@ def _default_broker():
             _CODE_UNWIRED_BROKER,
             "share 管理部署加载器未接线（broker loader 未配置）："
             "broker 适配器不可用；部署指针：share-management.json / "
-            "um-share-deploy/install-share-broker.ps1（部署授权包节 5）；"
+            "um-cloud-deploy/README.md（部署授权包节 5）；旧 Windows 脚本 "
+            "install-share-broker.ps1 已删除；"
             "宿主须先调用 configure_broker_loader()；不冒充可用")
     broker = loader()
     if broker is None:
         raise OperationError(
             _CODE_UNWIRED_BROKER,
             "share 管理部署配置缺席/未启用（share-management.json）："
-            "broker 适配器不可用；部署指针：um-share-deploy/"
-            "install-share-broker.ps1（部署授权包节 5）；不冒充可用")
+            "broker 适配器不可用；部署指针：um-cloud-deploy/README.md"
+            "（部署授权包节 5）；旧 Windows 脚本 install-share-broker.ps1 "
+            "已删除；不冒充可用")
     return broker
 
 
@@ -1109,14 +1114,16 @@ def _backend_base_url(config=None):
 # the 8110 side resolves that path:
 #   * 8100 (share gateway) reads the file ONCE at startup through the
 #     SHARE_ATTRIBUTION_KEY_FILE env var (chat2api.py :115), which the
-#     deployed run wrapper sets (deploy-elevated.ps1 Start stage, $liveEnv);
+#     deployed run wrapper sets (the retired Windows deploy script Start stage,
+#     $liveEnv);
 #   * 8110 (dedicated backend) re-stats it PER REQUEST through
 #     CHAT2API_SHARE_ATTRIBUTION_KEY_FILE (chat2api.py :1525-1528),
 #     injected by _child_env below.
 # The file lives in the DEPLOYED RunRoot run/ dir: ai-gateway/data carries an
 # explicit DENY ACE for um_share (a key there is unreadable by 8100 and silently
 # disables attribution), and run/live is removed and recreated by every deploy
-# (deploy-elevated.ps1 :824-826). A missing, unreadable or too-short file is
+# (the retired Windows deploy script :824-826). A missing, unreadable or
+# too-short file is
 # NOT an error: it is the explicit "no attribution" state (a request 8110
 # cannot verify is recorded unattributed), which is why
 # share_attribution_status() reports it loudly instead of letting it hide.
@@ -1139,7 +1146,8 @@ BACKEND_PRICE_TABLE_ENV = "CHAT2API_PRICE_TABLE_FILE"
 
 
 def _share_run_root():
-    """Deployed RunRoot (deploy-elevated.ps1 -RunRoot default): the run/ dir
+    """Deployed RunRoot (retired Windows deploy script -RunRoot default): the
+    run/ dir
     below it is where the deployed share resolves its state, so the attribution
     key belongs there. An explicit override must be absolute — a relative value
     would silently resolve somewhere else and break the one-file invariant."""
@@ -1155,8 +1163,8 @@ def share_attribution_key_path():
     """Resolve the ONE key file both ends must point at.
 
     Default: <deployed RunRoot>/run/share-attribution.key — the run/ dir the
-    deploy prepares (deploy-elevated.ps1 :461-464) and the SAME path the 8100
-    wrapper gets through SHARE_ATTRIBUTION_KEY_FILE. The override
+    deploy prepares (the retired Windows deploy script :461-464) and the SAME
+    path the 8100 wrapper gets through SHARE_ATTRIBUTION_KEY_FILE. The override
     (CONSOLE_SHARE_ATTRIBUTION_KEY_FILE) exists for tests and for a deployment
     that overrides the 8100 side identically: overriding only this side makes
     the two ends disagree, which the status read surface then reports as a wiring
@@ -1776,7 +1784,7 @@ class _ProductionBackendOps:
     # (backend.pid is still THE pid source); this record only adds the
     # five-item identity facts (profile + creation time) the strict check
     # needs. The tolerance is the watchdog's own (±2 s, same as
-    # um-share-deploy/watchdog-umshare.ps1:255-281).
+    # the retired Windows watchdog's own tolerance (±2 s), see Git history).
     _INSTANCE_FILE = "backend-instance.json"
     _INSTANCE_CREATION_TOLERANCE_S = 2.0
 
@@ -2155,7 +2163,7 @@ class _ProductionBackendOps:
         ``creation_epoch`` is THIS parent's own spawn moment and ``image`` is
         the interpreter this adapter spawned — the same "captured at first
         sight" shape the watchdog keeps for its own record
-        (um-share-deploy/watchdog-umshare.ps1:255-281: its own datetime
+        (the retired Windows watchdog's own record: its own datetime
         compared with the LIVE CIM creation within ±2 s).
         ``_pid_matches_strict`` re-reads the LIVE creation time and
         requires agreement within ±2 s, so a recycled PID never verifies.
@@ -2610,7 +2618,8 @@ def _maintenance_result(broker, call, *, blocked_code, refused_code):
         raise OperationError(
             _CODE_UNWIRED_BROKER,
             "维护租约：broker 管道不可达（%s: %s）：broker 任务未部署或"
-            "未运行；部署指针：um-share-deploy/install-share-broker.ps1；"
+            "未运行；部署指针：um-cloud-deploy/README.md；旧 Windows "
+            "脚本 install-share-broker.ps1 已删除；"
             "不冒充可用" % (type(exc).__name__, exc)) from exc
     if result.ok:
         payload = result.result

@@ -127,77 +127,6 @@ class CitationPin(unittest.TestCase):
         return path
 
 
-class DeployElevatedCitationTests(CitationPin):
-    """`deploy-elevated.ps1`：`run\\live` 的删除重建与 escjob 行号。
-
-    动作门 §1.4 的更正说明：`:833` 注释把 `run/live` 删除重建引用更正为
-    `deploy-elevated.ps1:820-822`，并说原文引用的 `:744-746` 是 escjob 目录。
-    两侧都要钉住——否则更正说明本身会再次漂移。
-    """
-
-    def setUp(self):
-        self.path = self.gateway("um-share-deploy/deploy-elevated.ps1")
-
-    # The 2026-10-18 PS7 migration selector shifts the earlier pins by 13
-    # lines; bounded watchdog readiness also shifts the later Stop block.
-
-    def test_run_live_is_removed_and_recreated_at_the_cited_lines(self):
-        span = _span(self.path, 845, 847)
-        self.assertIn("$liveRun = Join-Path $RunRoot 'run\\live'", span)
-        self.assertIn("Remove-Item -LiteralPath $liveRun -Recurse -Force", span)
-        self.assertIn("New-Item -ItemType Directory -Path $liveRun -Force", span)
-
-    def test_the_old_citation_744_746_is_the_escjob_region(self):
-        span = _span(self.path, 768, 770)
-        self.assertIn("umshare-escjob", span)
-
-    def test_start_stage_precondition_is_at_the_cited_lines(self):
-        # 动作门 §3.2：`Start` 前置要求 limits 在、watchdog Running，否则 throw。
-        span = _span(self.path, 798, 809)
-        self.assertIn("Test-LimitsInstalled", span)
-        self.assertIn("'umshare-watchdog'", span)
-        self.assertIn("throw", span)
-
-    def test_stop_stage_removes_limits_and_watchdog_at_the_cited_lines(self):
-        # 动作门 §3.2：`Stop` 会 `Remove-Limits` 并撤注册 watchdog 任务。
-        span = _span(self.path, 1001, 1010)
-        self.assertIn("Remove-Limits", span)
-        self.assertIn("Unregister-ScheduledTask -TaskName 'umshare-watchdog'", span)
-
-    def test_key_name_literal_matches_the_python_module(self):
-        # 动作门 §5.2 表：`deploy-elevated.ps1` 的 key name 与
-        # `console_share_production.SHARE_ATTRIBUTION_KEY_NAME` 必须同值。
-        self.assertIn("$AttributionKeyName = '%s'"
-                      % prod.SHARE_ATTRIBUTION_KEY_NAME,
-                      _span(self.path, 71, 80))
-
-    def test_deploy_script_own_comment_citation_is_recorded_as_known_drift(self):
-        """已知漂移的两侧钉子（本线硬约束不得改 ai-gateway/ 生产文件）。
-
-        `deploy-elevated.ps1:56` 的注释仍写 `run\\live` 的删除重建在 `:744-746`，
-        而实测 `:744-746` 是 escjob、`:820-822` 才是 `run\\live`；
-        `console/share_production.py:837` 已改为指向 `:820-822` ⇒ 两份注释互相矛盾。
-
-        本用例把**两侧**都钉住：任一侧被修正（或注释再移动）时它先失败，
-        提醒同步更新动作门 §1.4 与本断言——不让这条已知矛盾无声变化。
-
-        （2026-10-04 Rev13-A/T：`console/share_production.py` 新增
-        `production_connectivity_state` 并改写 `production_ts_service_control`
-        后，生产侧那段注释从 `:857-863` 下移到 `:927-933`；按新行号同步。）
-        """
-        # E19-1-08 step 1: both sides are anchored on their SYMBOLS (a raw
-        # line range rotted again when E19-1-03 added configure_paths). The
-        # deploy script side is the comment block above its ACE assertion; the
-        # production side is the comment block above the key-path resolver.
-        self.assertIn(":744-746",
-                      _block_from_symbol(
-                          self.path, r"run\live", tail=8))
-        prod_path = self.gateway("console/share_production.py")
-        self.assertIn("deploy-elevated.ps1 :824-826",
-                      _block_from_symbol(
-                          prod_path, "explicit DENY ACE for um_share", tail=8))
-
-
 class ConsoleOperationsLockCitationTests(CitationPin):
     """`console/operations.py`：锁语义与锁文件名推导的行号（动作门 §1.1）。"""
 
@@ -220,50 +149,6 @@ class ConsoleOperationsLockCitationTests(CitationPin):
         self.assertIn('_sanitize_resource(resource) + ".lock"', span)
         # 动作门 §1.1：`service:usage` → `service_usage.lock` 的字符映射。
         self.assertIn('ch in "_-"', span)
-
-
-@unittest.skip("SHARING.md is now the merged-process boundary, not the HMAC recipe")
-class SharingDocCitationTests(CitationPin):
-    """`SHARING.md`：密钥路径常量与生成步骤的行号（动作门 §2.2、§2.4）。"""
-
-    def setUp(self):
-        self.path = self.gateway("SHARING.md")
-
-    def test_generation_steps_are_at_the_cited_lines(self):
-        # 动作门 §2.2 引用 `SHARING.md:51-100` 为「原文」，逐条比对关键步骤。
-        span = _span(self.path, 51, 100)
-        self.assertIn(
-            "$keyPath = 'C:\\ProgramData\\UMShareRun\\run\\share-attribution.key'",
-            span)
-        self.assertIn("RandomNumberGenerator]::Create()", span)
-        self.assertIn("$rng.GetBytes($bytes)", span)
-        self.assertIn("[IO.File]::WriteAllText($keyPath, $key,", span)
-        self.assertIn("icacls $keyPath /inheritance:r", span)
-        self.assertIn("没有 Allow 读 ACE", span)
-
-    def test_hard_constraints_are_at_the_cited_lines(self):
-        # 动作门 §2.4：不得放 `ai-gateway/data`、不得放 `RunRoot\run\live`。
-        self.assertIn("不要放 `ai-gateway/data`", _line(self.path, 22))
-        self.assertIn("不要放 `RunRoot\\run\\live`", _line(self.path, 24))
-
-    def test_acl_type_name_is_at_the_cited_line(self):
-        # 动作门 §2.2 括注：⑤ 的类型名与 `SHARING.md:88` 一致。
-        self.assertIn("System.Security.Principal.SecurityIdentifier",
-                      _line(self.path, 88))
-
-    def test_restart_instruction_is_at_the_cited_lines(self):
-        # 动作门 §3.2：`SHARING.md:119-121` 写 **Prep → Watchdog → Start -Mode real**
-        # （2026-09-28 执行轮 11 离线准备：维护者复审裁定「不得用 Stop → Start 做常规更新」
-        # ——`Stop` 撤限制与 watchdog 任务 ⇒ `Start` fail-closed，故本钉从
-        # 「Stop 再 Start」改为三段序列，并把禁令一起钉住）。
-        span = _span(self.path, 119, 121)
-        self.assertIn("-Stage Prep", span)
-        self.assertIn("-Stage Watchdog", span)
-        self.assertIn("-Stage Start -Mode real", span)
-        ban = _span(self.path, 124, 130)
-        self.assertIn("-Stage Stop", ban)
-        self.assertIn("-Stage Start", ban)
-        self.assertIn("fail-closed", ban)
 
 
 @unittest.skip("SHARING.md is now the merged-process boundary")
@@ -304,16 +189,6 @@ class ConsoleShareProductionCitationTests(CitationPin):
         cmdline = _block_from_symbol(self.path,
                                       "    def _child_cmdline(self, paths):")
         self.assertIn("--login-timeout", cmdline)
-
-    def test_key_path_comment_still_cites_the_run_live_lines(self):
-        # 动作门 §1.4 更正说明：注释必须把 `run/live` 的删除重建
-        # 指向 `deploy-elevated.ps1:820-822`（旧值 `744-746` 是 escjob 目录）。
-        # E19-1-08 step 1: anchored on the SYMBOL, not on a raw line range —
-        # the range moved again when E19-1-03 added configure_paths above it.
-        comment = _block_from_symbol(
-            self.path, "explicit DENY ACE for um_share", tail=8)
-        self.assertIn("explicit DENY ACE for um_share", comment)
-        self.assertIn("deploy-elevated.ps1 :824-826", comment)
 
     def test_login_timeout_comment_citation_matches_the_real_default_line(self):
         """注释必须引到 `--login-timeout` 默认 180 的真实位置。
@@ -382,32 +257,6 @@ class ConsoleShareProductionCitationTests(CitationPin):
         self.assertIs(out["request_attribution_observed"], False)
         self.assertEqual(out["request_attribution_detail"]["verdict"],
                          "not_observed_here")
-
-    def test_existing_test_pins_the_same_seven_keys(self):
-        # 动作门 §1.3 引用的正是 `tests/test_console/share_production.py:2617-2624`
-        # （2026-09-28 随只读开关的 `import builtins` 下移一行；2026-09-29 执行轮 14
-        # 的测试隔离修复再下移 16 行 → 2633-2640/2641；同日执行轮 15 的第三处
-        # 隔离修复（DedicatedBackendOpsTests.setUp 中性化密钥路径覆盖开关）再下移 3 行
-        # → 2636-2643/2644；本轮 TS 控制用例改走适配器公开动词并新增 2 条
-        # 端到端用例后再下移 → 2682-2686/2688；2026-10-04 Rev13-A/T 的
-        # 认证等待与连接状态用例新增后再下移 251 行 → 2933-2937/2939；
-        # 2026-10-07 Rev19 监督段读面与夹具隔离用例新增后再下移 1 行
-        # → 2934-2938/2940；2026-10-24 本轮新增测试后再下移 6 行
-        # → 2940-2944/2946；同日分享网关稳定性测试新增后再下移
-        # → 3010-3014/3016；2026-10-25 r2 测试隔离回归再下移
-        # → 3072-3076/3078；2026-11-04 D15-4 新增 reauth slot 与
-        # error/recovery 用例再下移 48 行 → 3120-3124/3126）。
-        path = GATEWAY_DIR / "tests" / "test_console/share_production.py"
-        # 2026-11-07 r18 的 W1/W3 改动再下移：七键断言现位于
-        # 3292-3298（2026-11-07 工作树）；2026-11-07 E19-1-06 新增
-        # BackendConfig 后再下移，七键断言现位于 3296-3300、assertNotIn 在 3302。
-        span = _span(path, 3296, 3300)
-        for key in ("file_ready", "file_reason", "instance_loaded", "key_chars",
-                    "key_file", "request_attribution_detail",
-                    "request_attribution_observed"):
-            self.assertIn('"%s"' % key, span)
-        self.assertIn('assertNotIn("wired", out)', _span(path, 3302, 3302))
-
 
 @unittest.skip("HMAC share gateway retired with the merged share process")
 class ShareGatewayCitationTests(CitationPin):

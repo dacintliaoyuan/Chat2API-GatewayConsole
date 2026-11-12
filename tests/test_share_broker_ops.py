@@ -44,10 +44,10 @@ def _projection(generation=1):
 
 class WindowsHostOpsTests(unittest.TestCase):
     """R41-3/R44-3 semantics: the task state is an AUXILIARY signal; share
-    identity is decided by COMMAND LINE (the broker/guard same-image
-    processes are excluded) plus a LISTENER on the share port; failed or
-    unparseable evidence is None (explicit unconfirmed) and a succeeded
-    empty query is the only empty evidence."""
+    identity is decided by COMMAND LINE (the broker same-image process is
+    excluded) plus a LISTENER on the share port; failed or unparseable
+    evidence is None (explicit unconfirmed) and a succeeded empty query is
+    the only empty evidence."""
 
     def _ops(self, task_stdout='"t","x","Ready"', cim_stdout="",
              netstat_stdout="", task_rc=0, cim_rc=0, netstat_rc=0):
@@ -148,15 +148,11 @@ class WindowsHostOpsTests(unittest.TestCase):
         self.assertIs(ops_bad.verify_closed(), None)
         self.assertIs(ops_bad.verify_running(), None)
 
-    def test_same_image_broker_and_guard_do_not_count_as_share(self):
-        # R44-3：同名 broker/guard 进程不算 share——broker 活、share 停 →
+    def test_same_image_broker_does_not_count_as_share(self):
+        # R44-3：同名 broker 进程不算 share——broker 活、share 停 →
         # 关闭成立（按命令行区分，不按映像名）。
         rows = ('[{"ProcessId": 10, "CommandLine": '
                 '"exe share/broker_server.py --broker-dir x", '
-                '"ExecutablePath": "C:\\\\run\\\\um-share-python.exe", '
-                '"CreationDate": "20260908000000.000000+480", "OwnerDomain": "MACHINE", "OwnerUser": "dacint"},'
-                ' {"ProcessId": 11, "CommandLine": '
-                '"exe share_guard.py --run-dir live", '
                 '"ExecutablePath": "C:\\\\run\\\\um-share-python.exe", '
                 '"CreationDate": "20260908000000.000000+480", "OwnerDomain": "MACHINE", "OwnerUser": "dacint"}]')
         ops, _ = self._ops('"t","x","Ready"', rows, netstat_stdout="")
@@ -164,10 +160,6 @@ class WindowsHostOpsTests(unittest.TestCase):
         # share 网关行在场 → 未关闭。
         combined = ('[{"ProcessId": 10, "CommandLine": '
                     '"exe share/broker_server.py --broker-dir x", '
-                    '"ExecutablePath": "C:\\\\run\\\\um-share-python.exe", '
-                    '"CreationDate": "20260908000000.000000+480", "OwnerDomain": "MACHINE", "OwnerUser": "dacint"},'
-                    ' {"ProcessId": 11, "CommandLine": '
-                    '"exe share_guard.py --run-dir live", '
                     '"ExecutablePath": "C:\\\\run\\\\um-share-python.exe", '
                     '"CreationDate": "20260908000000.000000+480", "OwnerDomain": "MACHINE", "OwnerUser": "dacint"},'
                     ' {"ProcessId": 123, "CommandLine": '
@@ -295,7 +287,7 @@ class WindowsHostOpsTests(unittest.TestCase):
         # 2026-10-19 生产事故（网关实际健康，share.open 在第 4 层报
         # unconfirmed / deadline_exceeded）：owner 查询是这条证据读的主导成本
         # （本机每行一次 WMI 往返约 2s，broker+gateway+backend 三行约 7s，
-        # 越过就绪预算）。broker/guard 行按命令行标记排除、非 share 行按
+        # 越过就绪预算）。broker 行按命令行标记排除、非 share 行按
         # share 标记排除，它们永远不可能是目标，其 owner 不再参与；候选行
         # 缺 owner 仍判证据失败（None），完整记录契约不变。
         broker_row = ('[{"ProcessId": 10, "CommandLine": '
@@ -310,7 +302,6 @@ class WindowsHostOpsTests(unittest.TestCase):
         script = calls[1][3] if len(calls) > 1 else ""
         self.assertIn(_OPS.WindowsHostOps._SHARE_MARKER, script)
         self.assertIn(_OPS.WindowsHostOps._BROKER_MARKER, script)
-        self.assertIn(_OPS.WindowsHostOps._GUARD_MARKER, script)
         # 候选（share）行缺 owner 仍是证据失败（None），契约不变。
         share_row = ('[{"ProcessId": 123, "CommandLine": '
                      '"exe chat2api.py --port 8100", '

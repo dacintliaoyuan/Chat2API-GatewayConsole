@@ -47,4 +47,4 @@ python tools/um-share/actions/test_key_ops.py --help
 python -m unittest tests.test_um_share_tools tests.test_um_share_metering_ops tests.test_um_share_keygen tests.test_authoritative_readings tests.test_post_restart_acceptance tests.test_share_chain_window tests.test_watchdog_forensics tests.test_window_preflight tests.test_request_budget_estimate tests.test_tool_write_surface -q
 ```
 
-旧链端口与步骤以 [SHARING.md](../../SHARING.md) 和 [um-share-deploy/README.md](../../um-share-deploy/README.md) 为准。
+旧 Windows 链及其部署材料已从仓库删除；端口与步骤以 [SHARING.md](../../SHARING.md) 为准。

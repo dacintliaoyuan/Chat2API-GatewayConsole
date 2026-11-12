@@ -4,7 +4,7 @@
 
 ## 1. 项目特有事实
 
-- **仓库根就是应用根**：`usagesrv.py`、`check_port_bindings.py`、`chat2api/`、`console/`、`share/`、`model_sync/`、`zcode/`、`app/`、`web/`、`tests/`、`um-cloud-deploy/`、`um-share-deploy/` 都在根级，没有上一级目录。根级模块按域收进包：控制台路由在 `console/`，分享链在 `share/`，模型镜像在 `model_sync/`，ZCode 热同步在 `zcode/`，后端装配在 `app/`。
+- **仓库根就是应用根**：`usagesrv.py`、`check_port_bindings.py`、`chat2api/`、`console/`、`share/`、`model_sync/`、`zcode/`、`app/`、`web/`、`tests/`、`um-cloud-deploy/` 都在根级，没有上一级目录。根级模块按域收进包：控制台路由在 `console/`，分享链在 `share/`，模型镜像在 `model_sync/`，ZCode 热同步在 `zcode/`，后端装配在 `app/`。
 - **两个角色**：`UM_SHARE_ROLE=local`（本机 8001，Windows）与 `cloud`（云端 18096，Linux）；前端按构建期角色装入 `web/src/local/local-console.ts` 或 `web/src/cloud/cloud-console.ts`（ADR 0001）。
 - **生产目录**：`web/dist` 是本机生产页，`web/dist-cloud` 是云端生产页（打包为 `web/dist`）；两者都在 `.gitignore` 里，构建产物不入库。
 - **凭据与运行数据不入库**：`data/`、`profile/`、`tmp/`、`output/`、`chat2api/token.json`、`chat2api/.edge-profile/` 都由根 `.gitignore` 覆盖。

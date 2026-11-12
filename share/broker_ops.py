@@ -85,7 +85,6 @@ class WindowsHostOps:
 
     _SHARE_MARKER = "chat2api.py"
     _BROKER_MARKER = "broker_server.py"
-    _GUARD_MARKER = "share_guard.py"
     WATCHDOG_TASK_NAME = "umshare-watchdog"
 
     def __init__(self, task_name, runner=None, timeout=10.0,
@@ -205,7 +204,7 @@ class WindowsHostOps:
 
     def verify_closed(self, budget_s=None):
         # R41-3/R44-3: closed needs ALL of: task not Running, NO share
-        # gateway process (broker/guard same-image processes do NOT count),
+        # gateway process (broker same-image processes do NOT count),
         # and NO listener on the share port (an occupied port means the
         # public entry is not closed regardless of owner). Any unresolvable
         # evidence returns None - the coordinator treats None as never
@@ -249,7 +248,7 @@ class WindowsHostOps:
         # start verb past the caller's exchange deadline (``unconfirmed`` /
         # ``deadline_exceeded`` with a healthily running gateway). The owner
         # is therefore fetched ONLY for the rows that can still BE the share
-        # AFTER the readable command-line filters; a broker/guard or non-share
+        # AFTER the readable command-line filters; a broker or non-share
         # same-image row can never be the match, so its owner round trip is
         # skipped (the Python side keeps the SAME filters, so the evidence
         # verdict is unchanged). The cost no longer scales with the number of
@@ -259,8 +258,7 @@ class WindowsHostOps:
                   + self.share_image + "'\" | ForEach-Object { "
                   "$c = [string]$_.CommandLine; $o = $null; "
                   "if ($c -like '*" + self._SHARE_MARKER + "*' "
-                  "-and $c -notlike '*" + self._BROKER_MARKER + "*' "
-                  "-and $c -notlike '*" + self._GUARD_MARKER + "*') { "
+                  "-and $c -notlike '*" + self._BROKER_MARKER + "*') { "
                   "try { $o = Invoke-CimMethod -InputObject $_ "
                   "-MethodName GetOwner -ErrorAction Stop } catch "
                   "{ $o = $null } }; [pscustomobject]@{ ProcessId = "
@@ -306,7 +304,7 @@ class WindowsHostOps:
                     image_path.lower() != str(
                         self.expected_image_path).lower():
                 continue               # full image path != expected: not target
-            if self._BROKER_MARKER in cmdline or self._GUARD_MARKER in cmdline:
+            if self._BROKER_MARKER in cmdline:
                 continue               # same-image non-target process
             if self._SHARE_MARKER not in cmdline:
                 continue               # not the share gateway: not the target
@@ -315,7 +313,7 @@ class WindowsHostOps:
             # (the dominant cost of this read; measured ~2s per row on this
             # machine 2026-10-19), so it is demanded only of the rows
             # that survived the readable filters above. A row excluded by
-            # its image path or its broker/guard command-line marker can
+            # its image path or its broker command-line marker can
             # never be the share: its owner round trip was pure cost and
             # pushed the read past the readiness budget (start reported
             # ``unconfirmed`` / ``deadline_exceeded`` with a healthily

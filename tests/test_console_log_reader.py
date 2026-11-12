@@ -786,7 +786,7 @@ class RegistryInventoryTests(unittest.TestCase):
     - chat2api 隐藏启动器 start_chat2api.bat 写 chat2api.console.log /
       .prev，监督 lib/watch-chat2api.ps1 写 watch/chat2api-watch.log；
     - 分享链：8110 父侧 backend-lifecycle.log、监督
-      share-backend-watch.log、8100 share_guard raw.txt 与
+      share-backend-watch.log、8100 raw.txt 与
       share-faults.jsonl、broker lifecycle.json。
     - B0（2026-11-01）：Qoder 国内/国际与 CLIProxy 已退役，registry
       不再登记它们的来源（/api/console/log-sources 与 log-entries 不再出现）。

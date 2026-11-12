@@ -1410,9 +1410,10 @@ class HostOpsExtensionTests(unittest.TestCase):
 
 
 class DeployProbeDiscriminationTests(unittest.TestCase):
-    """Wire-shape pin for deploy-elevated.ps1 Restart-BrokerAndVerify
-    (reviewer finding R1 round-trip): the PS probe discriminates the
-    refreshed broker via the host-verify VERB because the status result on
+    """Wire-shape pin for the retired Windows deploy script's
+    Restart-BrokerAndVerify (reviewer finding R1 round-trip): the PS probe
+    discriminates the refreshed broker via the host-verify VERB because the
+    status result on
     the management pipe NEVER carries share_max_concurrency (that field
     exists only in ShareManager.status(), usagesrv-side, never on the
     wire). These assertions pin exactly the shapes the PS probe depends
