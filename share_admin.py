@@ -3,12 +3,14 @@
 """share_admin.py — command line client for the share MANAGEMENT SERVICE.
 
 This CLI never opens the SQLite store directly. It calls the protected
-`/api/share/*` routes on usagesrv (127.0.0.1:8096 by default) using the local
+`/api/share/*` routes on usagesrv (127.0.0.1:8001 by default) using the local
 management control token, exactly like a browser session would. That keeps the
 share store single-authority: there is no second writer from the CLI.
 
-Secrets are printed only on create/rotate responses and must be saved by the
-operator immediately. status/list/get never include secret_hash or plaintext.
+Secrets are printed only on create/rotate responses and the explicit
+`secret` readback; they must be saved by the operator immediately. status/list/get
+never include secret_hash or plaintext, and the `secret` subcommand puts only the
+key id and an optional row version in the URL (never the plaintext itself).
 """
 from __future__ import annotations
 
@@ -25,9 +27,11 @@ HERE = Path(__file__).resolve().parent
 
 def _read_control_token(path):
     try:
-        with open(path, encoding="utf-8") as f:
-            token = f.read().strip()
-    except OSError as exc:
+        from share_secret_protection import read_private_secret_path
+        token = read_private_secret_path(
+            path, max_bytes=1024, label="control token").decode(
+                "utf-8").strip()
+    except (OSError, ValueError, ImportError) as exc:
         raise SystemExit(f"cannot read control token file {path}: {exc}")
     if not token:
         raise SystemExit("empty management control token")
@@ -41,9 +45,9 @@ def _default_token_path():
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="上游分享管理 CLI（仅通过本机管理服务，唯一写入者 SQLite share_store）")
+        description="UM 分享管理 CLI（仅通过本机管理服务，唯一写入者 SQLite share_store）")
     parser.add_argument("--base-url", default=os.environ.get(
-        "SHARE_MGMT_BASE_URL", "http://127.0.0.1:8096"))
+        "SHARE_MGMT_BASE_URL", "http://127.0.0.1:8001"))
     parser.add_argument("--control-token",
                         help="管理令牌；缺省读取 data/admin-control-token")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -56,14 +60,13 @@ def _parse_args(argv=None):
 
     create_p = sub.add_parser("create", help="创建 Key（明文只此一次输出）")
     create_p.add_argument("--name", required=True)
+    create_p.add_argument("--max-concurrency", type=int, default=16,
+                          help="单 Key 并发上限（1..48，默认 16）")
     create_p.add_argument("--idempotency-key")
-
-    patch_p = sub.add_parser("patch", help="原子改名/禁用/启用（需 expected 版本）")
+    patch_p = sub.add_parser("patch", help="原子改名/并发设置（需 expected 版本）")
     patch_p.add_argument("key_id")
     patch_p.add_argument("--name")
-    patch_p.add_argument("--enable", dest="enabled", action="store_true")
-    patch_p.add_argument("--disable", dest="enabled", action="store_false")
-    patch_p.set_defaults(enabled=None)
+    patch_p.add_argument("--max-concurrency", type=int)
     patch_p.add_argument("--expected-version", type=int, required=True)
 
     rotate_p = sub.add_parser("rotate", help="轮换 Key（新明文只此一次输出）")
@@ -71,7 +74,34 @@ def _parse_args(argv=None):
     rotate_p.add_argument("--idempotency-key")
     rotate_p.add_argument("--expected-version", type=int, required=True)
 
-    delete_p = sub.add_parser("delete", help="删除（tombstone；不可恢复启用）")
+    revoke_p = sub.add_parser(
+        "revoke", help="撤销并中断该 Key 的在途请求（需 expected 版本）")
+    revoke_p.add_argument("key_id")
+    revoke_p.add_argument("--idempotency-key")
+    revoke_p.add_argument("--expected-version", type=int, required=True)
+
+    secret_p = sub.add_parser(
+        "secret", help="读取单个 Key 的明文（只此一次响应，不进日志/URL）")
+    secret_p.add_argument("key_id")
+    secret_p.add_argument("--expected-version", type=int)
+
+    test_p = sub.add_parser(
+        "test", help="经公网 API 域名测试该 Key（会消耗少量模型用量）")
+    test_p.add_argument("key_id")
+    test_p.add_argument("--expected-version", type=int, required=True)
+
+    settings_p = sub.add_parser(
+        "settings", help="调整全局分享并发上限（1..64，需 expected 值）")
+    settings_p.add_argument("--share-max-concurrency", type=int, required=True)
+    settings_p.add_argument("--expected-share-max", type=int)
+
+    limits_p = sub.add_parser(
+        "limits", help="查看/归一化存储并发上限（显式管理动作）")
+    limits_p.add_argument("--normalize", action="store_true",
+                          help="把旧库 >64 全局与 >48 每 Key 调低到 D18-4 上限；"
+                               "调低需运行时 ACK，未确认返回 blocked=true")
+
+    delete_p = sub.add_parser("delete", help="删除（tombstone；不可恢复）")
     delete_p.add_argument("key_id")
     delete_p.add_argument("--expected-version", type=int, required=True)
 
@@ -96,7 +126,7 @@ class ApiError(Exception):
 
 
 MANAGEMENT_HOST = "127.0.0.1"
-MANAGEMENT_PORT = 8096
+MANAGEMENT_PORT = 8001
 
 
 def _validate_management_endpoint(base_url):
@@ -181,7 +211,8 @@ def main(argv=None) -> int:
         elif args.command == "get":
             _print(_call(base, "GET", f"/api/share/keys/{args.key_id}", token))
         elif args.command == "create":
-            body = {"name": args.name}
+            body = {"name": args.name,
+                    "max_concurrency": args.max_concurrency}
             if args.idempotency_key:
                 body["idempotency_key"] = args.idempotency_key
             _print(_call(base, "POST", "/api/share/keys", token, body))
@@ -189,8 +220,8 @@ def main(argv=None) -> int:
             body = {"expected_row_version": args.expected_version}
             if args.name is not None:
                 body["name"] = args.name
-            if args.enabled is not None:
-                body["enabled"] = args.enabled
+            if args.max_concurrency is not None:
+                body["max_concurrency"] = args.max_concurrency
             _print(_call(base, "PATCH", f"/api/share/keys/{args.key_id}",
                          token, body))
         elif args.command == "rotate":
@@ -199,6 +230,33 @@ def main(argv=None) -> int:
                 body["idempotency_key"] = args.idempotency_key
             _print(_call(base, "POST",
                          f"/api/share/keys/{args.key_id}/rotate", token, body))
+        elif args.command == "revoke":
+            body = {"expected_row_version": args.expected_version}
+            if args.idempotency_key:
+                body["idempotency_key"] = args.idempotency_key
+            _print(_call(base, "POST",
+                         f"/api/share/keys/{args.key_id}/revoke-and-terminate",
+                         token, body))
+        elif args.command == "secret":
+            path = f"/api/share/keys/{args.key_id}/secret"
+            if args.expected_version is not None:
+                path += f"?expected_row_version={args.expected_version}"
+            _print(_call(base, "GET", path, token))
+        elif args.command == "test":
+            _print(_call(base, "POST",
+                         f"/api/share/keys/{args.key_id}/test", token,
+                         {"expected_row_version": args.expected_version}))
+        elif args.command == "settings":
+            body = {"share_max_concurrency": args.share_max_concurrency}
+            if args.expected_share_max is not None:
+                body["expected_share_max"] = args.expected_share_max
+            _print(_call(base, "PATCH", "/api/share/settings", token, body))
+        elif args.command == "limits":
+            if not args.normalize:
+                _print(_call(base, "GET", "/api/share/status", token))
+            else:
+                _print(_call(base, "POST", "/api/share/limits/normalize",
+                              token, {}))
         elif args.command == "delete":
             _print(_call(base, "DELETE", f"/api/share/keys/{args.key_id}",
                          token, {"expected_row_version": args.expected_version}))

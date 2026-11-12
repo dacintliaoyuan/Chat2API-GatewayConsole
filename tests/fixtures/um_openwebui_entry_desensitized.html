@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<!--
+  SYNTHETIC, DESENSITIZED fixture — NOT a captured production page.
+
+  形状参照 chat2api 自己的 OPENWEBUI_SSO_BUTTON_SELECTORS（`使用 UMPASS 继续` /
+  `Continue with UMPASS`）。页面不含任何账号、凭据、token 或一次性 SSO 码；
+  按钮只做一次本机导航，由测试的路由处理器离线应答。
+-->
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>Open WebUI 登录入口（脱敏夹具）</title>
+</head>
+<body>
+  <main>
+    <h1>Open WebUI</h1>
+    <button id="umpassEntry"
+            onclick="location.href='https://websso.um.edu.mo/adfs/ls/';">使用 UMPASS 继续</button>
+  </main>
+</body>
+</html>

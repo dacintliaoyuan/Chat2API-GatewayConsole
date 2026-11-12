@@ -1,4 +1,12 @@
-import type { ActionCapability, ConnectionKeyState, JsonObject, OperationState, Transport, TransportRequest, TransportResponse } from "./types.ts";
+import type {
+  ActionCapability,
+  ConnectionKeyState,
+  JsonObject,
+  OperationState,
+  Transport,
+  TransportRequest,
+  TransportResponse,
+} from "./types.ts";
 import { ContractError, object, text } from "./normalize.ts";
 
 export interface FixtureActionResult {
@@ -30,7 +38,9 @@ interface FixtureOperation {
   cancelRequested: boolean;
 }
 
-function clone<T>(value: T): T { return structuredClone(value); }
+function clone<T>(value: T): T {
+  return structuredClone(value);
+}
 
 /** Entirely in memory; this transport has no fetch, process, filesystem, or live proxy. */
 export class FixtureTransport implements Transport {
@@ -48,32 +58,58 @@ export class FixtureTransport implements Transport {
 
   async request(request: TransportRequest): Promise<TransportResponse> {
     if (request.signal?.aborted) throw new Error("fixture_cancelled");
-    this.calls.push({ ...request, body: request.body ? clone(request.body) : undefined });
+    this.calls.push({
+      ...request,
+      body: request.body ? clone(request.body) : undefined,
+    });
     const path = request.path.split("?", 1)[0];
     if (request.method === "GET" && path === "/actions") {
-      return { status: 200, body: { actions: this.scenario.actions.map(row => ({
-        action: row.action, enabled: row.enabled, cancelable: row.cancelable,
-        disabled_reason: row.disabledReason, description: row.description,
-      })) } };
+      return {
+        status: 200,
+        body: {
+          actions: this.scenario.actions.map((row) => ({
+            action: row.action,
+            enabled: row.enabled,
+            cancelable: row.cancelable,
+            disabled_reason: row.disabledReason,
+            description: row.description,
+          })),
+        },
+      };
     }
     if (request.method === "POST" && path === "/operations") {
       const action = text(request.body?.action);
       const target = text(request.body?.target);
       if (!action || target === null || !object(request.body?.params))
         return { status: 400, body: { error: "invalid_params" } };
-      const capability = this.scenario.actions.find(row => row.action === action);
-      if (!capability) return { status: 400, body: { error: "invalid_action" } };
-      if (!capability.enabled) return { status: 409, body: { error: "action_disabled", reason: capability.disabledReason } };
+      const capability = this.scenario.actions.find(
+        (row) => row.action === action
+      );
+      if (!capability)
+        return { status: 400, body: { error: "invalid_action" } };
+      if (!capability.enabled)
+        return {
+          status: 409,
+          body: { error: "action_disabled", reason: capability.disabledReason },
+        };
       const index = this.counters.get(action) ?? 0;
       this.counters.set(action, index + 1);
       const reply = this.scenario.operations[action]?.[index];
-      if (!reply) return { status: 503, body: { error: "fixture_scenario_exhausted" } };
+      if (!reply)
+        return { status: 503, body: { error: "fixture_scenario_exhausted" } };
       if (reply.submitError) throw new Error(reply.submitError);
       if (reply.rejection) return clone(reply.rejection);
-      const states: OperationState[] = reply.states?.length ? [...reply.states] : ["queued", "running", "succeeded"];
+      const states: OperationState[] = reply.states?.length
+        ? [...reply.states]
+        : ["queued", "running", "succeeded"];
       const operation = {
-        id: `fixture-${++this.sequence}`, action, target, reply, states,
-        at: 0, cancelRequested: false,
+        id: `fixture-${++this.sequence}`,
+        action,
+        target,
+        reply,
+        states,
+        at: 0,
+        cancelRequested: false,
       };
       this.running.set(operation.id, operation);
       return { status: 202, body: { operation: this.view(operation) } };
@@ -83,7 +119,10 @@ export class FixtureTransport implements Transport {
       const operation = this.running.get(decodeURIComponent(match[1]));
       if (!operation) return { status: 404, body: { error: "not_found" } };
       if (request.method === "POST" && match[2]) {
-        if (!this.scenario.actions.find(row => row.action === operation.action)?.cancelable)
+        if (
+          !this.scenario.actions.find((row) => row.action === operation.action)
+            ?.cancelable
+        )
           return { status: 409, body: { error: "not_cancelable" } };
         operation.cancelRequested = true;
         // A cooperative cancel request is acknowledged; terminal cancellation is observed by polling.
@@ -91,7 +130,8 @@ export class FixtureTransport implements Transport {
         operation.at = 0;
         return { status: 200, body: { operation: this.view(operation) } };
       }
-      if (request.method !== "GET" || match[2]) throw new ContractError("fixture operation method/path is invalid");
+      if (request.method !== "GET" || match[2])
+        throw new ContractError("fixture operation method/path is invalid");
       if (operation.reply.pollError) throw new Error(operation.reply.pollError);
       operation.at = Math.min(operation.at + 1, operation.states.length - 1);
       return { status: 200, body: { operation: this.view(operation) } };
@@ -103,40 +143,252 @@ export class FixtureTransport implements Transport {
 
   private view(operation: FixtureOperation): JsonObject {
     const state = operation.states[operation.at];
-    const finished = ["succeeded", "failed", "cancelled", "interrupted"].includes(state);
+    const finished = [
+      "succeeded",
+      "failed",
+      "cancelled",
+      "interrupted",
+    ].includes(state);
     return {
-      id: operation.id, action: operation.action, target: operation.target, state,
-      resource: `fixture:${operation.action}`, generation: 1,
-      created_at: "2026-10-02T12:00:00+08:00", started_at: state === "queued" ? null : "2026-10-02T12:00:01+08:00",
+      id: operation.id,
+      action: operation.action,
+      target: operation.target,
+      state,
+      resource: `fixture:${operation.action}`,
+      generation: 1,
+      created_at: "2026-10-02T12:00:00+08:00",
+      started_at: state === "queued" ? null : "2026-10-02T12:00:01+08:00",
       finished_at: finished ? "2026-10-02T12:00:02+08:00" : null,
-      cancel_requested: operation.cancelRequested, steps: [],
-      result: state === "succeeded" ? clone(operation.reply.result ?? {}) : null,
-      error: state === "failed" || state === "interrupted" ? clone(operation.reply.error ?? { code: "fixture_failure" }) : null,
+      cancel_requested: operation.cancelRequested,
+      steps: [],
+      result:
+        state === "succeeded" ? clone(operation.reply.result ?? {}) : null,
+      error:
+        state === "failed" || state === "interrupted"
+          ? clone(operation.reply.error ?? { code: "fixture_failure" })
+          : null,
       idempotency_key: null,
     };
   }
 }
 
-// Synthetic chat2api payloads; no real credentials or network access.
+// Rev15 (2026-10-06) synthetic gateway connection fixtures. Every service ID,
+// port, path, reason and the plaintext key are invented for offline Demo and
+// isolated contract cases; the sentinel is not a real key and must never be
+// replaced by one.
 export const FIXTURE_CONNECTION_KEY = "fixture-connection-key-not-real";
-export const FIXTURE_CONNECTION_STATES: readonly ConnectionKeyState[] = ["present", "absent", "needs_key_unconfigured", "unreadable", "unknown"];
-export function gatewayConnectionFixtureBody(state: ConnectionKeyState, overrides: JsonObject = {}): JsonObject {
-  if (!FIXTURE_CONNECTION_STATES.includes(state)) throw new ContractError("unknown connection fixture state");
-  return { ok: true, service: "chat2api", display_name: "chat2api", port: 8000,
-    health_path: "/health", health_path_source: "descriptor", base_url: "http://127.0.0.1:8000/v1",
-    protocol: "openai-compatible", protocol_path: "/v1", runtime_state: "Running", runtime_healthy: true,
-    auth: state === "absent" ? "loopback_no_key" : "bearer", key_state: state,
-    key_plaintext: state === "present" ? FIXTURE_CONNECTION_KEY : null,
-    key_source: "env:CHAT2API_LOCAL_API_KEY", key_source_state: state === "needs_key_unconfigured" ? "absent" : state,
-    key_in_use: "startup_env", reason: "合成夹具：凭据状态仅用于离线展示，不代表真实实例。",
-    evidence: ["合成夹具"], checked_epoch: 1790920800, ...clone(overrides) };
+
+export const FIXTURE_CONNECTION_STATES: readonly ConnectionKeyState[] = [
+  "present",
+  "absent",
+  "needs_key_unconfigured",
+  "unreadable",
+  "unknown",
+];
+
+/** One synthetic read-face payload per honest key state, matching the Python shape. */
+export const FIXTURE_CONNECTION_BODIES: Readonly<
+  Record<ConnectionKeyState, JsonObject>
+> = Object.freeze({
+  present: {
+    ok: true,
+    service: "Qoder",
+    display_name: "Qoder（国内）",
+    port: 8095,
+    health_path: "/health",
+    health_path_source: "descriptor",
+    base_url: "http://127.0.0.1:8095/v1",
+    protocol: "openai-compatible",
+    protocol_path: "/v1",
+    runtime_state: "Running",
+    runtime_healthy: true,
+    auth: "bearer",
+    key_state: "present",
+    key_plaintext: FIXTURE_CONNECTION_KEY,
+    key_source: "<fixture>/data/qoder-cn-api-token",
+    key_source_state: "present",
+    key_in_use: "per_request",
+    reason:
+      "合成夹具：权威文件可读且非空；网关每请求重读该文件（qoder-cn/server.mjs:66 ensureApiToken），该文件值即实例当前使用的凭据",
+    evidence: ["合成夹具：Key 读取路径 <fixture>/data/qoder-cn-api-token"],
+    checked_epoch: 1790920800,
+  },
+  absent: {
+    ok: true,
+    service: "chat2api",
+    display_name: "chat2api",
+    port: 8000,
+    health_path: "/health",
+    health_path_source: "descriptor",
+    base_url: "http://127.0.0.1:8000/v1",
+    protocol: "openai-compatible",
+    protocol_path: "/v1",
+    runtime_state: "Running",
+    runtime_healthy: true,
+    auth: "loopback_no_key",
+    key_state: "absent",
+    key_plaintext: null,
+    key_source: "env:CHAT2API_LOCAL_API_KEY",
+    key_source_state: "absent",
+    key_in_use: "startup_env",
+    reason:
+      "合成夹具：运行实例已确认为回环绑定，可观测作用域与启动路径都不设置该变量；" +
+      "剩余缺口：进程级环境不可读，这是可观测事实支撑的判定",
+    evidence: ["合成夹具：回环绑定", "合成夹具：启动路径未设置该变量"],
+    checked_epoch: 1790920800,
+  },
+  needs_key_unconfigured: {
+    ok: true,
+    service: "QoderGlobal",
+    display_name: "Qoder（国际）",
+    port: 8097,
+    health_path: "/health",
+    health_path_source: "descriptor",
+    base_url: "http://127.0.0.1:8097/v1",
+    protocol: "openai-compatible",
+    protocol_path: "/v1",
+    runtime_state: "Stopped",
+    runtime_healthy: false,
+    auth: "bearer",
+    key_state: "needs_key_unconfigured",
+    key_plaintext: null,
+    key_source: "<fixture>/data/qoder-global-api-token",
+    key_source_state: "absent",
+    key_in_use: "startup_env",
+    reason:
+      "合成夹具：实例启动脚本把该文件读入 QODER2API_SK，启动后文件变更可能不生效（这是配置文件值）；该网关的 /v1 需要调用 Key，但权威文件缺席或为空：配置缺失，不能表示可免鉴权",
+    evidence: ["合成夹具：Key 读取路径 <fixture>/data/qoder-global-api-token"],
+    checked_epoch: 1790920800,
+  },
+  unreadable: {
+    ok: true,
+    service: "CLIProxy",
+    display_name: "Gemini 网关",
+    port: 8320,
+    health_path: "/healthz",
+    health_path_source: "descriptor",
+    base_url: "http://127.0.0.1:8320/v1",
+    protocol: "openai-compatible",
+    protocol_path: "/v1",
+    alternate_protocols: [
+      {
+        protocol: "gemini-native",
+        path: "/v1beta",
+        note: "合成夹具：同一网关的另一协议面，既有消费方未使用、鉴权口径未验证",
+      },
+    ],
+    runtime_state: "Stopped",
+    runtime_healthy: false,
+    auth: "bearer",
+    key_state: "unreadable",
+    key_plaintext: null,
+    key_source: "<fixture>/cliproxy/gateway-api-key.txt",
+    key_source_state: "unreadable",
+    key_in_use: "config_consumed",
+    reason:
+      "合成夹具：权威文件存在但读取失败（合成错误）：不返回猜测值，也不表示可免鉴权",
+    evidence: ["合成夹具：Key 读取路径 <fixture>/cliproxy/gateway-api-key.txt"],
+    checked_epoch: 1790920800,
+  },
+  unknown: {
+    ok: true,
+    service: "Qoder",
+    display_name: null,
+    port: null,
+    health_path: "/health",
+    health_path_source: "descriptor",
+    base_url: null,
+    protocol: "openai-compatible",
+    protocol_path: "/v1",
+    runtime_state: null,
+    runtime_healthy: null,
+    auth: "unknown",
+    key_state: "unknown",
+    key_plaintext: null,
+    key_source: null,
+    key_source_state: "unknown",
+    key_in_use: "unknown",
+    reason:
+      "合成夹具：runtime 快照不可用或缺少该服务条目；端口与 Base URL 不从显示名或描述符猜算",
+    evidence: ["合成夹具：runtime 快照不可用"],
+    checked_epoch: 1790920800,
+  },
+});
+
+/** A cloned synthetic payload; `overrides` lets a case build a deliberately
+ *  malformed or foreign-identity body without mutating the shared fixture. */
+export function gatewayConnectionFixtureBody(
+  state: ConnectionKeyState,
+  overrides: JsonObject = {}
+): JsonObject {
+  const base = FIXTURE_CONNECTION_BODIES[state];
+  if (!base) throw new ContractError("unknown connection fixture state");
+  return { ...clone(base), ...clone(overrides) };
 }
-export function gatewayConnectionFixtureResponse(service: string, state: ConnectionKeyState): TransportResponse {
-  return { status: 200, body: gatewayConnectionFixtureBody(state, { service }) };
+
+/** The other honest shape of `unknown`: the key file is readable and non-empty,
+ *  but the CLIProxy config consistency check could not be read
+ *  (console_gateway_connection.py:486-494). The read face keeps `bearer` and
+ *  `config_consumed` there; coercing it to `unknown`/`loopback_no_key` would
+ *  read as "no key required". */
+export const FIXTURE_CONNECTION_CONFIG_UNCONFIRMED: JsonObject =
+  gatewayConnectionFixtureBody("unreadable", {
+    key_state: "unknown",
+    key_source_state: "present",
+    key_plaintext: null,
+    reason:
+      "合成夹具：权威文件可读且非空，但无法读取 cliproxy/config.yaml：无法核对本文件值是否在 api-keys 列表内，按未知上报，不返回猜测值，也不表示可免鉴权",
+  });
+
+export function gatewayConnectionFixtureResponse(
+  service: string,
+  state: ConnectionKeyState
+): TransportResponse {
+  return {
+    status: 200,
+    body: gatewayConnectionFixtureBody(state, { service }),
+  };
 }
-export function gatewayConnectionFixtureReads(): Record<string, TransportResponse> {
-  return { ["/gateway-connection?" + new URLSearchParams({ service: "chat2api" })]: gatewayConnectionFixtureResponse("chat2api", "absent") };
+
+function connectionPath(service: string): string {
+  return `/gateway-connection?${new URLSearchParams({ service })}`;
 }
-export function gatewayConnectionFixtureScenario(name = "offline-connection-contract"): FixtureScenario {
-  return { name, actions: [], reads: gatewayConnectionFixtureReads(), operations: {} };
+
+/** FixtureTransport reads: one synthetic path per service, covering the four
+ *  live-looking states. The `unknown` body reuses a service ID, so install it
+ *  explicitly with `gatewayConnectionFixtureResponse(service, "unknown")`. */
+export function gatewayConnectionFixtureReads(): Record<
+  string,
+  TransportResponse
+> {
+  return {
+    [connectionPath("Qoder")]: gatewayConnectionFixtureResponse(
+      "Qoder",
+      "present"
+    ),
+    [connectionPath("chat2api")]: gatewayConnectionFixtureResponse(
+      "chat2api",
+      "absent"
+    ),
+    [connectionPath("QoderGlobal")]: gatewayConnectionFixtureResponse(
+      "QoderGlobal",
+      "needs_key_unconfigured"
+    ),
+    [connectionPath("CLIProxy")]: gatewayConnectionFixtureResponse(
+      "CLIProxy",
+      "unreadable"
+    ),
+  };
+}
+
+/** Ready-made offline scenario: no live gateway, no file, no real key. */
+export function gatewayConnectionFixtureScenario(
+  name = "offline-connection-contract"
+): FixtureScenario {
+  return {
+    name,
+    actions: [],
+    reads: gatewayConnectionFixtureReads(),
+    operations: {},
+  };
 }

@@ -1,0 +1,1931 @@
+/* Local UM console pages (handoff r3). Shell, tokens and base components come
+   from shell/; nothing here is read by the cloud console or the old workbench.
+   Content stays on solid surfaces; only the shell's navigation layer is glass. */
+
+/* The tooltip sits outside .um-console (it is appended to the stage). */
+.um-console,
+.um-tip {
+  --um-chart-other: var(--md-outline);
+}
+/* Single-column grids are pinned to their container: a long model ID (nowrap)
+   must ellipsize, never widen an auto track past the page. */
+.um-content,
+.um-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+/* ---------- Mode banner: offline preview / not wired yet ---------- */
+.um-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border-radius: var(--md-r-l);
+}
+.um-mode[data-mode="preview"] {
+  background: var(--md-tertiary-container);
+  color: var(--md-on-tertiary-container);
+}
+.um-mode[data-mode="unwired"] {
+  background: var(--md-neutral-container);
+  color: var(--md-on-surface);
+}
+.um-mode-text {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+.um-mode-text strong {
+  font-weight: 700;
+}
+.um-mode-text p {
+  margin: 2px 0 0;
+  font-size: 13px;
+}
+.um-mode-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.um-mode-label {
+  margin-right: 2px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.um-mode .chip {
+  height: 30px;
+  color: inherit;
+  text-decoration: none;
+  border-color: color-mix(in srgb, currentColor 38%, transparent);
+}
+.um-mode .chip[aria-current="page"] {
+  border-color: transparent;
+  background: var(--md-surface-lowest);
+  color: var(--md-on-surface);
+  font-weight: 600;
+}
+.um-mode .um-link {
+  margin-left: 6px;
+  color: inherit;
+}
+.um-mode a.btn {
+  text-decoration: none;
+}
+.shell-env[data-role-state="preview"] .shell-env-mark {
+  background: var(--md-tertiary);
+  box-shadow: 0 0 0 3px var(--md-tertiary-container);
+}
+
+.um-link {
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--md-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ---------- Shared bits ---------- */
+.um-chevron {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform var(--md-dur-short) var(--md-ease);
+}
+.um-absent {
+  color: var(--md-on-surface-variant);
+  font-weight: 500;
+}
+.um-hint {
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.um-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--md-on-surface-variant);
+}
+.um-err-text {
+  color: var(--md-error);
+  font-weight: 600;
+}
+.um-fresh {
+  color: var(--md-on-surface-variant);
+}
+.um-stale {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--md-warning);
+  font-weight: 600;
+}
+.um-placeholder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px dashed var(--md-outline-variant);
+  border-radius: var(--md-r-m);
+  font-size: 13px;
+  color: var(--md-on-surface-variant);
+}
+.um-placeholder[data-um-state="failed"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--md-error) 45%, var(--md-hairline));
+  color: var(--md-on-surface);
+}
+.um-placeholder[data-tone="err"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--md-error) 45%, var(--md-hairline));
+  color: var(--md-on-surface);
+}
+.um-render-error {
+  border: 1px solid color-mix(in srgb, var(--md-error) 45%, var(--md-hairline));
+}
+.um-render-error h2 {
+  margin: 0 0 6px;
+  font-size: var(--md-fs-title-m, 16px);
+  color: var(--md-error);
+}
+.um-render-error p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--md-on-surface);
+}
+.um-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 18px 4px;
+  color: var(--md-on-surface-variant);
+}
+.um-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: var(--md-r-s);
+  background: var(--tone-container);
+  color: var(--on-tone-container);
+  font-size: 13px;
+}
+.um-banner .um-stale {
+  color: inherit;
+}
+.um-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: var(--md-r-s);
+  background: var(--tone-container);
+  color: var(--on-tone-container);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.um-spinner {
+  flex: none;
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: um-spin 0.8s linear infinite;
+}
+@keyframes um-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.um-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--md-r-full);
+  background: var(--md-surface-container);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--md-on-surface-variant);
+}
+
+.um-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+}
+.um-facts > div {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--md-hairline);
+  font-size: 13px;
+}
+.um-facts > div:last-child {
+  border-bottom: 0;
+}
+.um-facts dt {
+  color: var(--md-on-surface-variant);
+}
+.um-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.um-facts code {
+  font-size: 12px;
+}
+.um-facts-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 28px;
+}
+.um-facts-2 > div:nth-last-child(2):nth-child(odd) {
+  border-bottom: 0;
+}
+
+/* Segmented controls and toggles. */
+.um-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-r-full);
+  background: var(--md-surface-low);
+}
+.um-seg button {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--md-r-full);
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color var(--md-dur-short) var(--md-ease);
+}
+.um-seg button:hover:not(:disabled):not([aria-pressed="true"]) {
+  background: color-mix(in srgb, var(--md-on-surface) 6%, transparent);
+  color: var(--md-on-surface);
+}
+.um-seg button[aria-pressed="true"] {
+  background: var(--md-surface-lowest);
+  color: var(--md-on-surface);
+  font-weight: 600;
+  box-shadow:
+    0 0 0 1px var(--md-outline-variant),
+    0 1px 3px rgba(20, 30, 60, 0.1);
+}
+.um-chip-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px 0 11px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-r-full);
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.um-chip-toggle .shell-icon {
+  width: 16px;
+  height: 16px;
+}
+.um-chip-toggle:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--md-on-surface) 6%, transparent);
+}
+.um-chip-toggle[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--md-secondary-container);
+  color: var(--md-on-secondary-container);
+  font-weight: 600;
+}
+.um-chip-toggle[aria-pressed="true"]:disabled {
+  opacity: 0.72;
+}
+/* The cap sits on the label so the drawn chevron stays inside the select. */
+.um-select {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(280px, 100%);
+}
+.um-select::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.6px solid var(--md-on-surface-variant);
+  border-bottom: 1.6px solid var(--md-on-surface-variant);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+.um-select select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: 36px;
+  padding: 0 32px 0 14px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-r-full);
+  background: var(--md-surface-lowest);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  appearance: none;
+  cursor: pointer;
+}
+.um-select select:disabled {
+  cursor: not-allowed;
+  color: var(--md-on-surface-variant);
+}
+.um-search {
+  position: relative;
+  display: inline-flex;
+  flex: 1 1 220px;
+  align-items: center;
+  max-width: 360px;
+  margin-left: auto;
+}
+.um-search .shell-icon {
+  position: absolute;
+  left: 11px;
+  width: 16px;
+  height: 16px;
+  color: var(--md-on-surface-variant);
+  pointer-events: none;
+}
+.um-search input {
+  width: 100%;
+  height: 36px;
+  padding: 0 14px 0 34px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-r-full);
+  background: var(--md-surface-lowest);
+  font-size: 13px;
+}
+.um-search input::placeholder {
+  color: var(--md-on-surface-variant);
+}
+.um-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-bottom: 12px;
+}
+.um-scope {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.um-scope-top {
+  margin-bottom: 4px;
+}
+.um-more {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding-top: 12px;
+}
+.um-more .um-note {
+  margin: 0;
+  text-align: center;
+}
+.um-table-scroll {
+  overflow-x: auto;
+}
+
+/* Maintenance menu in the toolbar capsule. */
+.um-menu-wrap {
+  position: relative;
+}
+.um-capsule .um-chevron {
+  width: 14px;
+  height: 14px;
+  margin-left: -2px;
+}
+.um-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 2px;
+  width: min(330px, calc(100vw - 24px));
+  padding: 6px;
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-r-l);
+  background: var(--md-surface-lowest);
+  box-shadow: var(--md-shadow-float);
+}
+.um-menu .um-menu-item {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  height: auto;
+  padding: 9px 12px;
+  border-radius: var(--md-r-s);
+  text-align: left;
+  white-space: normal;
+}
+.um-menu-item[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.um-menu-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.um-menu-note {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--md-on-surface-variant);
+}
+.um-menu-item[aria-disabled="true"] .um-menu-name {
+  color: var(--md-on-surface-variant);
+}
+.um-menu-danger:not([aria-disabled="true"]) .um-menu-name {
+  color: var(--md-error);
+}
+
+/* Chart tooltip: one plate, by pointer or keyboard. */
+.um-tip {
+  position: fixed;
+  z-index: 40;
+  min-width: min(210px, calc(100vw - 24px));
+  max-width: min(250px, calc(100vw - 24px));
+  padding: 10px 12px;
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-r-s);
+  background: var(--md-surface-lowest);
+  color: var(--md-on-surface);
+  font-size: 12px;
+  line-height: 1.55;
+  box-shadow: var(--md-shadow-float);
+  pointer-events: none;
+}
+.um-tip-title {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.um-tip-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.um-tip-row i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.um-tip-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.um-tip-row b,
+.um-tip-total b {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.um-tip-total {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--md-hairline);
+  color: var(--md-on-surface-variant);
+}
+.um-tip-total b {
+  color: var(--md-on-surface);
+}
+
+/* ---------- 总览 ---------- */
+.um-status-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.um-status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 18px 14px;
+}
+.um-status[data-tone="err"],
+.um-status[data-tone="warn"] {
+  border-color: color-mix(in srgb, var(--tone) 42%, var(--md-hairline));
+}
+.um-status-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--md-on-surface-variant);
+}
+.um-status-word {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 4px 0 0;
+  font-size: 20px;
+  line-height: 1.3;
+  font-weight: 700;
+}
+.um-status-word .dot {
+  width: 10px;
+  height: 10px;
+  background: var(--tone);
+  box-shadow: 0 0 0 3px var(--tone-container);
+}
+.um-status-detail {
+  min-height: 1.5em;
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--md-on-surface-variant);
+  overflow-wrap: anywhere;
+}
+.um-status-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: auto;
+  padding-top: 10px;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.um-status-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px 8px;
+  margin-left: auto;
+  text-align: right;
+}
+.um-block-reason {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.um-block-line {
+  margin: -4px 0 12px;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.um-status .um-placeholder {
+  margin-top: 8px;
+}
+
+.um-usage {
+  container: um-usage / inline-size;
+}
+.um-usage-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 24px;
+  margin-bottom: 14px;
+}
+.um-usage-title {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.um-usage-title h2 {
+  margin: 0;
+  font-size: var(--md-fs-title);
+  font-weight: 700;
+}
+.um-usage-title .card-meta {
+  margin: 3px 0 0;
+}
+.um-cost {
+  flex: none;
+}
+.um-cost[data-um-state] {
+  display: grid;
+  justify-items: end;
+  padding: 6px 12px;
+  border: 1px dashed var(--md-outline-variant);
+  border-radius: var(--md-r-m);
+}
+.um-cost-btn {
+  display: grid;
+  justify-items: end;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: var(--md-r-m);
+  background: var(--md-surface-low);
+  text-align: right;
+  appearance: none;
+  transition: background-color var(--md-dur-short) var(--md-ease);
+}
+.um-cost-btn:hover {
+  background: var(--md-surface-container);
+}
+.um-cost-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--md-on-surface-variant);
+}
+.um-cost-value {
+  font-size: 22px;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.um-cost-value.um-absent {
+  font-size: 15px;
+}
+.um-cost-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.um-cost-btn[aria-expanded="true"] .um-chevron {
+  transform: rotate(180deg);
+}
+.um-cost-detail {
+  margin-top: 14px;
+  padding: 6px 16px 12px;
+  border-radius: var(--md-r-m);
+  background: var(--md-surface-low);
+}
+
+.um-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-r-l);
+  background: var(--md-hairline);
+}
+.um-kpi {
+  min-width: 0;
+  padding: 14px 16px 15px;
+  background: var(--md-surface-lowest);
+}
+.um-kpi-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--md-on-surface-variant);
+}
+.um-kpi-value {
+  margin-top: 4px;
+  font-size: var(--md-fs-kpi);
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.um-kpi-value .um-absent {
+  font-size: 18px;
+}
+.um-kpi-value small {
+  margin-left: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--md-on-surface-variant);
+  white-space: nowrap;
+}
+.um-kpi-sub {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--md-on-surface-variant);
+}
+@container um-usage (max-width: 760px) {
+  .um-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .um-kpi:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+.um-trend {
+  container: um-trend / inline-size;
+}
+.um-trend-head {
+  gap: 8px 10px;
+}
+.um-trend-scope {
+  margin: -4px 0 14px;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.um-trend-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 38%);
+  gap: 28px;
+  align-items: stretch;
+}
+@container um-trend (max-width: 780px) {
+  .um-trend-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* The plot fills the row the ranking sets, so the chart and the list are the same
+   height: no strip of chart beside a taller list, no dead space under it. */
+.um-trend-plot {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.um-trend-rank {
+  min-width: 0;
+}
+.um-chart {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 248px;
+  border-radius: var(--md-r-s);
+}
+.um-chart:focus-visible {
+  outline-offset: 4px;
+}
+/* The SVG is painted at the host's pixel width; max-width guards the one frame
+   before a resize repaint, so a narrower host can never be overpainted. */
+.um-chart-svg {
+  display: block;
+  max-width: 100%;
+}
+.um-grid {
+  stroke: var(--md-chart-grid);
+  stroke-width: 1;
+}
+.um-axis {
+  font-family: var(--md-font);
+  font-size: 12px;
+  fill: var(--md-on-surface-variant);
+  font-variant-numeric: tabular-nums;
+}
+.um-chart-empty,
+.um-chart-note {
+  font-family: var(--md-font);
+  font-size: 13px;
+  fill: var(--md-on-surface-variant);
+}
+.um-chart-note {
+  font-size: 12px;
+  fill: var(--md-outline);
+}
+.um-col-hl {
+  fill: color-mix(in srgb, var(--md-on-surface) 6%, transparent);
+}
+.um-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: opacity 120ms var(--md-ease);
+}
+/* The series a ranking row points at (pointer or keyboard): slightly heavier, the
+   rest dimmed by paintFocus, so the linked curve is the one being read. */
+.um-line.is-focus {
+  stroke-width: 2.8;
+}
+/* A model past the four colour slots: neutral and dashed, named in the tooltip. */
+.um-line-other {
+  stroke-dasharray: 5 4;
+}
+/* A lower bound: the drawn value is a floor, so the curve is a short dash
+   (never the 5 4 of a model without a colour slot). */
+.um-line[data-quality="lower"] {
+  stroke-dasharray: 2 3;
+}
+/* An estimate stays solid — every cost bucket is one — and the tooltip says ≈. */
+.um-line[data-quality="estimated"] {
+  stroke-opacity: 0.88;
+}
+.um-bar {
+  transition: opacity 120ms var(--md-ease);
+}
+.um-bar.is-dim,
+.um-line.is-dim,
+.um-cursor-dot.is-dim {
+  opacity: 0.34;
+}
+/* The locator exists only while a pointer or the keyboard holds a column that a
+   drawn curve actually passes through; it is never a permanent dot. */
+.um-cursor {
+  pointer-events: none;
+}
+.um-cursor-line {
+  stroke: var(--md-outline);
+  stroke-width: 1;
+}
+.um-cursor-dot {
+  stroke: var(--md-surface-lowest);
+  stroke-width: 2;
+}
+.um-absent-mark {
+  stroke: var(--md-outline);
+  stroke-width: 2;
+  stroke-dasharray: 3 3;
+}
+
+.um-rank-scale {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--md-on-surface-variant);
+}
+.um-rank {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.um-rank-row {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--md-r-s);
+}
+.um-rank-row:hover,
+.um-rank-row.is-linked {
+  background: var(--md-surface-low);
+}
+.um-rank-row:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: -2px;
+}
+.um-rank-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+/* The swatch sits on the first line's baseline, not between two lines when the
+   model id wraps. */
+.um-swatch {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+.um-swatch[data-folded="true"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--um-chart-other);
+}
+.um-rank-name {
+  display: -webkit-box;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.um-rank-value {
+  flex: none;
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.um-rank-bar {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--md-surface-container);
+}
+.um-rank-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+.um-rank-row.is-linked .um-rank-bar span {
+  filter: brightness(1.08) saturate(1.12);
+}
+.um-rank-meta {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--md-on-surface-variant);
+}
+.um-rank-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--md-on-surface-variant);
+}
+.um-rank-more,
+.um-rank-empty {
+  margin: 8px 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--md-on-surface-variant);
+}
+
+.um-issue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.um-issue {
+  display: grid;
+  grid-template-columns: minmax(150px, max-content) 64px minmax(
+      0,
+      1fr
+    ) max-content max-content;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--md-hairline);
+}
+.um-issue:last-child {
+  border-bottom: 0;
+}
+.um-issue-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.um-issue-detail {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--md-on-surface-variant);
+}
+.um-issue-time {
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+  white-space: nowrap;
+}
+.um-issues {
+  container: um-issues / inline-size;
+}
+@container um-issues (max-width: 720px) {
+  .um-issue {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+  .um-issue-detail {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ---------- 请求与诊断 ---------- */
+.um-subtabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  justify-self: start;
+  padding: 4px;
+  border: 1px solid var(--md-hairline);
+  border-radius: 22px;
+  background: var(--md-surface-low);
+}
+.um-subtabs button {
+  height: 36px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--md-r-full);
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.um-subtabs button:hover:not([aria-selected="true"]) {
+  background: color-mix(in srgb, var(--md-on-surface) 6%, transparent);
+  color: var(--md-on-surface);
+}
+.um-subtabs button[aria-selected="true"] {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  font-weight: 700;
+}
+.um-req-table td,
+.um-model-table td,
+.um-maint-table td {
+  vertical-align: top;
+}
+.um-row-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 0;
+  border: 0;
+  background: none;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.um-row-toggle .um-chevron {
+  color: var(--md-on-surface-variant);
+}
+.um-row-toggle[aria-expanded="true"] .um-chevron,
+.um-model-name[aria-expanded="true"] .um-chevron {
+  transform: rotate(90deg);
+}
+.um-row-toggle:disabled .um-chevron {
+  opacity: 0;
+}
+.um-req-model {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.um-req-row.is-open td {
+  border-bottom-color: transparent;
+  background: var(--md-surface-low);
+}
+.um-req-detail td {
+  padding: 2px 16px 16px;
+  background: var(--md-surface-low);
+}
+.um-req-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 28px;
+}
+.um-req-logs h3 {
+  margin: 8px 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.um-retries,
+.um-steps {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.um-maint-result {
+  min-width: 220px;
+}
+.um-log-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+}
+.um-log {
+  display: grid;
+  grid-template-columns: 70px 62px minmax(80px, 120px) minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--md-hairline);
+}
+.um-log:last-child {
+  border-bottom: 0;
+}
+.um-log .pill {
+  height: 20px;
+  padding: 0 8px;
+}
+.um-log-time {
+  color: var(--md-on-surface-variant);
+}
+.um-log-src {
+  overflow: hidden;
+  color: var(--md-on-surface-variant);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.um-log-text {
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.um-log-compact .um-log {
+  grid-template-columns: 62px 56px minmax(0, 1fr);
+}
+.um-log-compact .um-log-src {
+  display: none;
+}
+/* Narrow: time, level and source on one line, the text under them. */
+.um-logs,
+.um-req-logs {
+  container-type: inline-size;
+}
+@container (max-width: 520px) {
+  .um-log,
+  .um-log-compact .um-log {
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+  }
+  .um-log-text {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 1100px) {
+  .um-req-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- 模型与设置 ---------- */
+.um-access-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 12px 28px;
+}
+.um-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.um-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--md-on-surface-variant);
+}
+.um-field-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.um-url {
+  padding: 6px 12px;
+  border-radius: var(--md-r-xs);
+  background: var(--md-surface-low);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.um-hints {
+  display: grid;
+  gap: 2px;
+  margin: 14px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--md-on-surface-variant);
+}
+.um-col-pick {
+  width: 56px;
+  text-align: center !important;
+}
+.um-col-pick input {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--md-primary);
+  cursor: pointer;
+}
+.um-model-row.is-picked td {
+  background: color-mix(in srgb, var(--md-primary) 7%, transparent);
+}
+/* The model table keeps readable column widths: below 46rem the card restacks
+   its rows (container query below) rather than squeezing a cell into a
+   column of single characters. */
+.um-catalog {
+  container: um-catalog / inline-size;
+  overflow: clip;
+}
+.um-model-table {
+  min-width: 46rem;
+}
+.um-col-name {
+  min-width: 11rem;
+}
+.um-model-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-weight: 600;
+  text-align: left;
+}
+.um-model-name span {
+  overflow-wrap: anywhere;
+}
+.um-model-name .um-chevron {
+  color: var(--md-on-surface-variant);
+}
+/* contain: a long ID ellipsizes inside its column instead of widening it. */
+.um-model-id {
+  max-width: 360px;
+  margin: 2px 0 0 20px;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  contain: inline-size;
+}
+.um-model-table td {
+  line-height: 1.6;
+}
+.um-col-ctx {
+  width: 19%;
+}
+.um-col-think {
+  width: 15%;
+}
+.um-col-last {
+  width: 31%;
+}
+/* 最近测试: a figure never breaks inside; the conclusion takes at most two
+   lines and the rest of the wording waits in 详情. */
+.um-nb {
+  white-space: nowrap;
+}
+.um-last-cell {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  min-width: 14rem;
+}
+.um-last {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  width: 100%;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.um-last .dot {
+  margin-top: 6px;
+  background: var(--tone);
+}
+.um-last-body {
+  min-width: 0;
+}
+.um-last-head {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.um-last-head b {
+  margin-right: 6px;
+  font-weight: 600;
+}
+.um-last-meta {
+  display: flex;
+  gap: 6px;
+  margin: 1px 0 0;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.um-last-rest {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.um-last-rest + .um-last-time::before {
+  content: "·";
+  margin-right: 6px;
+}
+.um-last-time {
+  flex: none;
+}
+.um-last-more {
+  padding: 0;
+  font-size: 12px;
+}
+/* Narrow card: each model is a block, the column names become small labels. */
+@container um-catalog (max-width: 760px) {
+  .um-model-table,
+  .um-model-table tbody {
+    display: block;
+    min-width: 0;
+  }
+  .um-model-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .um-model-table tr {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    column-gap: 8px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--md-hairline);
+  }
+  .um-model-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+  .um-model-table td {
+    display: block;
+    width: auto;
+    padding: 3px 0;
+    border: 0;
+  }
+  .um-model-table td.um-col-pick {
+    grid-row: span 4;
+    width: auto;
+    padding-top: 1px;
+  }
+  .um-model-table td[data-label]::before {
+    content: attr(data-label) / "";
+    display: block;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--md-on-surface-variant);
+  }
+  .um-model-table tr.um-req-detail {
+    display: block;
+    padding: 0 0 10px;
+  }
+  .um-model-table tr.um-req-detail > td {
+    padding: 6px 12px 12px;
+    border-radius: var(--md-r-s);
+  }
+  .um-model-row.is-picked {
+    background: color-mix(in srgb, var(--md-primary) 7%, transparent);
+  }
+  .um-model-row.is-picked td {
+    background: none;
+  }
+  .um-col-name,
+  .um-last-cell {
+    min-width: 0;
+  }
+  .um-model-id {
+    max-width: none;
+  }
+}
+/* The selection bar sticks to the bottom of the scrollport while the catalog
+   still has rows below it; the card's overflow clip rounds its corners at the
+   card's end and leaves a square edge where it meets the window bottom. */
+.um-selbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 12px -18px -16px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--md-hairline);
+  background: var(--md-surface-lowest);
+}
+.um-selbar-count {
+  padding: 0 4px;
+  font-size: 13px;
+  color: var(--md-on-surface-variant);
+}
+.um-selbar-count b {
+  color: var(--md-on-surface);
+  font-variant-numeric: tabular-nums;
+}
+.um-selbar-note {
+  flex: 1 1 260px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--md-on-surface-variant);
+}
+.um-catalog .um-table-scroll + .um-banner {
+  margin: 12px 0 0;
+}
+
+.um-run-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.um-run-item {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.1fr) 112px minmax(0, 2.2fr) max-content;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--md-hairline);
+}
+.um-run-item:last-child {
+  border-bottom: 0;
+}
+.um-run-model {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.um-run-text {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--md-on-surface-variant);
+}
+.um-run-detail {
+  grid-column: 1 / -1;
+  padding: 6px 14px 10px;
+  border-radius: var(--md-r-s);
+  background: var(--md-surface-low);
+}
+.um-run .status .um-spinner {
+  width: 10px;
+  height: 10px;
+}
+
+.um-fold {
+  padding: 0;
+}
+.um-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 18px;
+  border-radius: var(--md-r-xl);
+  font-weight: 700;
+  list-style: none;
+  cursor: pointer;
+}
+.um-fold > summary::-webkit-details-marker {
+  display: none;
+}
+.um-fold > summary:hover {
+  background: color-mix(in srgb, var(--md-on-surface) 4%, transparent);
+}
+.um-fold > summary .um-chevron {
+  color: var(--md-on-surface-variant);
+}
+.um-fold[open] > summary .um-chevron {
+  transform: rotate(90deg);
+}
+.um-fold-body {
+  padding: 0 18px 16px;
+}
+.um-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 28px;
+}
+.um-settings h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.um-settings .um-note {
+  margin: 0 0 10px;
+}
+tr.is-archived td {
+  color: var(--md-on-surface-variant);
+}
+
+@media (max-width: 1180px) {
+  .um-access-grid,
+  .um-settings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .um-run-item {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+  .um-run-text {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 900px) {
+  .um-status-row {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+  .um-facts-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .um-search {
+    margin-left: 0;
+    max-width: none;
+  }
+}
+
+/* ---------- Cards that own a table are their own query containers ---------- */
+/* A table is restacked when its card is narrow, not when the window is: the
+   model catalog already does this, and the request, maintenance and history
+   tables follow the same rule. */
+.um-req,
+.um-maint,
+.um-fold {
+  container-type: inline-size;
+}
+@container (max-width: 600px) {
+  .um-req-table,
+  .um-req-table tbody,
+  .um-maint-table,
+  .um-maint-table tbody,
+  .um-fold .data-table,
+  .um-fold .data-table tbody {
+    display: block;
+    min-width: 0;
+  }
+  .um-req-table thead,
+  .um-maint-table thead,
+  .um-fold .data-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .um-req-table tr,
+  .um-maint-table tr,
+  .um-fold .data-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--md-hairline);
+  }
+  .um-req-table tbody tr:last-child,
+  .um-maint-table tbody tr:last-child,
+  .um-fold .data-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+  .um-req-table td,
+  .um-maint-table td,
+  .um-fold .data-table td {
+    display: block;
+    width: auto;
+    padding: 2px 0;
+    border: 0;
+  }
+  .um-req-table td[data-label]::before,
+  .um-maint-table td[data-label]::before,
+  .um-fold .data-table td[data-label]::before {
+    content: attr(data-label) / "";
+    display: block;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--md-on-surface-variant);
+  }
+  .um-req-table td.um-req-time,
+  .um-req-table td.um-req-model,
+  .um-maint-table td.um-maint-time,
+  .um-maint-table td.um-maint-result,
+  .um-fold .data-table td.um-hist-time,
+  .um-fold .data-table td.um-hist-model,
+  .um-fold .data-table td.um-hist-summary {
+    grid-column: 1 / -1;
+  }
+  .um-req-table td.um-req-model,
+  .um-fold .data-table td.um-req-model {
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .um-maint-table td.um-maint-result {
+    min-width: 0;
+  }
+  .um-req-table td.num,
+  .um-maint-table td.num,
+  .um-fold .data-table td.num {
+    text-align: left;
+  }
+  .um-req-table tr.um-req-row.is-open {
+    border-bottom-color: transparent;
+    background: var(--md-surface-low);
+  }
+  .um-req-table tr.um-req-detail,
+  .um-maint-table tr.um-req-detail {
+    display: block;
+    padding: 0 0 10px;
+  }
+  .um-req-table tr.um-req-detail > td,
+  .um-maint-table tr.um-req-detail > td {
+    padding: 6px 12px 12px;
+    border-radius: var(--md-r-s);
+    background: var(--md-surface-low);
+  }
+}
+
+/* At 360px a two-column KPI leaves ~125px inside a cell; a unit such as
+   「token/秒」keeps its own line there instead of being forced beside the figure. */
+@container um-usage (max-width: 520px) {
+  .um-kpi {
+    padding: 12px 12px 13px;
+  }
+  .um-kpi-value small {
+    display: block;
+    margin: 2px 0 0;
+    font-size: 12px;
+  }
+}
+
+/* ---------- Phone (<= 720px): the rail becomes a top tab bar ---------- */
+/* At 360px the 248px rail leaves 112px for the page (and the collapsed 84px
+   rail still leaves only 220px after the page's padding), so the three entries
+   become a top bar with their names: the current page stays a word, every tab is
+   at least 44px tall, and the content keeps the window's full width. The rules
+   are scoped to .um-console, so the cloud console and the old workbench keep
+   their own shell. Desktop 1280px never matches this block. */
+@media (max-width: 720px) {
+  .um-console.app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  /* The overlay scrollbar needs no reserved gutter on a phone; keeping it costs
+     ~15px of the page's width on every card. */
+  .um-console .shell-main {
+    scrollbar-gutter: auto;
+  }
+  .um-console .shell-sidebar {
+    padding: 8px 8px 0;
+  }
+  .um-console .shell-side-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 2px 8px;
+    height: auto;
+    padding: 8px;
+    border-radius: var(--md-r-l);
+  }
+  .um-console .shell-env {
+    grid-column: 1;
+    padding: 0 2px;
+  }
+  .um-console .shell-env-name {
+    justify-content: flex-start;
+    font-size: 14px;
+  }
+  .um-console .shell-env-sub {
+    display: none;
+  }
+  .um-console .shell-side-foot {
+    grid-column: 2;
+    grid-row: 1;
+    flex-direction: row;
+    margin: 0;
+    padding: 0;
+    border-top: 0;
+  }
+  .um-console .shell-side-foot .shell-side-text {
+    display: none;
+  }
+  .um-console .shell-side-foot .shell-icon-btn {
+    width: 44px;
+    height: 44px;
+    margin-left: 0;
+  }
+  .um-console .shell-nav {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+  /* A stored / system-collapsed rail hides the names on the desktop; on a phone
+     the names are the only place the current page is readable as a word. */
+  .um-console .shell-side-panel .shell-nav button {
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    width: 100%;
+    height: 52px;
+    min-height: 44px;
+    padding: 4px 2px;
+    font-size: 12px;
+  }
+  .um-console .shell-side-panel .shell-nav svg {
+    width: 18px;
+    height: 18px;
+  }
+  .um-console .shell-side-panel .shell-nav .shell-nav-text {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .um-console .shell-side-panel .shell-nav .shell-hint,
+  .um-console .shell-side-panel .shell-icon-btn > .shell-hint {
+    display: none;
+  }
+  .um-console .shell-side-panel .shell-env .shell-env-name > span:last-child {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .um-console .shell-page {
+    padding: 10px 12px 28px;
+  }
+  .um-console .shell-toolbar {
+    position: static;
+    padding: 12px 0 14px;
+    gap: 8px 10px;
+  }
+  .um-console .shell-toolbar::before {
+    display: none;
+  }
+  .um-console .shell-title {
+    flex: 1 1 100%;
+  }
+  .um-console .shell-title h1 {
+    font-size: var(--md-fs-title-l);
+  }
+  .um-console .shell-capsules {
+    width: 100%;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+  .um-console .shell-capsule {
+    position: relative;
+  }
+  .um-console .shell-capsule button {
+    height: 44px;
+    padding: 0 12px;
+  }
+  /* The menu hangs from the capsule, not the 维护 button: at 360px a 330px
+     plate anchored to the button's own right edge would leave the window. */
+  .um-console .um-menu-wrap {
+    position: static;
+  }
+  .um-console .um-menu {
+    right: 0;
+    left: auto;
+  }
+
+  .um-console .um-content,
+  .um-console .um-page {
+    gap: 12px;
+  }
+  .um-console .um-mode {
+    margin-bottom: 12px;
+    padding: 10px 14px;
+  }
+  .um-console .um-mode .chip {
+    height: 36px;
+  }
+  .um-console .shell-role-notice {
+    margin-bottom: 12px;
+  }
+
+  .um-console .um-subtabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    padding: 4px;
+  }
+  .um-console .um-subtabs button {
+    height: 44px;
+    padding: 0 8px;
+  }
+  .um-console .um-seg button {
+    min-height: 44px;
+    padding: 0 10px;
+  }
+  .um-console .um-chip-toggle {
+    height: 44px;
+  }
+  .um-console .um-select select,
+  .um-console .um-search input {
+    height: 44px;
+  }
+  .um-console .um-menu-item {
+    min-height: 44px;
+  }
+  .um-console .um-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .um-console .um-row-toggle {
+    min-height: 44px;
+  }
+  .um-console .um-model-name {
+    min-height: 44px;
+  }
+  .um-console .um-selbar .btn {
+    height: 44px;
+  }
+
+  .um-console .um-usage-head .um-cost {
+    justify-self: start;
+  }
+  .um-console .um-cost-btn,
+  .um-console .um-cost[data-um-state] {
+    justify-items: start;
+    text-align: left;
+  }
+  .um-console .um-trend-body {
+    gap: 16px;
+  }
+}
+
+/* ---------- Phone (<= 480px): one column, full-width controls ---------- */
+/* Below 480px three status cards become one column, the segmented strips keep
+   their buttons on one line and scroll sideways instead of wrapping into a tall
+   stack, and every control keeps a 44px target. The .um-seg/.um-subtabs pair is
+   scoped to .um-console so it can replace the 720px grid by source order; the
+   rest keeps the plain selectors the base rules use. Desktop 1280px never
+   matches this block. */
+@media (max-width: 480px) {
+  .um-console {
+    overflow-x: clip;
+  }
+  .um-status-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .um-status {
+    padding: 14px 14px 12px;
+  }
+  .um-usage-head {
+    gap: 8px;
+  }
+  .um-cost {
+    justify-self: stretch;
+  }
+  .um-cost-btn {
+    justify-items: start;
+    text-align: left;
+  }
+  .um-facts > div {
+    grid-template-columns: 5.2rem minmax(0, 1fr);
+    gap: 8px;
+  }
+  .um-console .um-seg,
+  .um-console .um-subtabs {
+    display: flex;
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .um-seg button,
+  .um-subtabs button {
+    flex: 0 0 auto;
+    min-height: 44px;
+  }
+  .um-chip-toggle,
+  .um-mode .chip,
+  .um-select select,
+  .um-search input,
+  .um-row-toggle,
+  .um-console .shell-nav button {
+    min-height: 44px;
+  }
+  .um-search {
+    flex: 1 1 100%;
+    max-width: none;
+    margin-left: 0;
+  }
+  .um-rank-name {
+    font-size: 14px;
+  }
+  .um-chart {
+    min-height: 200px;
+  }
+  .um-axis {
+    font-size: 11px;
+  }
+  .um-tip {
+    min-width: min(180px, calc(100vw - 32px));
+    max-width: min(240px, calc(100vw - 32px));
+  }
+  .um-model-table tr {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+  .um-selbar {
+    margin: 12px -12px -12px;
+    padding: 10px 12px;
+  }
+  .um-menu {
+    width: min(330px, calc(100vw - 16px));
+  }
+}

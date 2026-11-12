@@ -38,6 +38,14 @@ def isolate_reauth_slot(testcase):
                                str(Path(tmp.name) / "reauth.state"))
     patcher.start()
     testcase.addCleanup(patcher.stop)
+    # The lease tests below drive fake PIDs (111/222) through the TTL, attempt-cap
+    # and round semantics. Pin the owner-liveness probe to "alive" so those tests
+    # keep measuring the TTL contract on every platform; the liveness behaviour
+    # itself is covered by TestOwnerLivenessProbe.
+    liveness = mock.patch.object(chat2api, "_owner_pid_alive",
+                                return_value=True)
+    liveness.start()
+    testcase.addCleanup(liveness.stop)
 
 
 # R13-1: the cross-instance mutex must hold across PROCESSES, so the regressions
@@ -78,6 +86,10 @@ def write_json(path, payload):
 def main():
     module_path, plan_path, pid, out_path = sys.argv[1:5]
     chat2api = load_chat2api(module_path)
+    # The lease tests drive FAKE PIDs through the TTL, attempt-cap and round
+    # semantics. Pin the owner-liveness probe to "alive" so those tests keep
+    # measuring the TTL contract; the liveness behaviour has its own class.
+    chat2api._owner_pid_alive = lambda _pid: True
     with open(plan_path, encoding="utf-8") as f:
         plan = json.load(f)
     write_json(out_path + ".ready", {"pid": os.getpid()})
@@ -553,8 +565,6 @@ class TestHealthEndpoint(unittest.TestCase):
             thread.join(2)
 
 
-
-
 def _auth_args(**overrides):
     values = dict(base_url="https://example.invalid", profile="profile",
                   login_timeout=2, use_api_key=False, no_browser=False)
@@ -869,12 +879,16 @@ class TestAuthWatchVisibility(unittest.TestCase):
 
     def test_watch_is_additive_and_honest_before_the_thread_starts(self):
         # 既有键一个不动、语义不变；watch 是加性新增，未启动时不冒充存活、
-        # 不编造 0 作为轮次时刻。
+        # 不编造 0 作为轮次时刻。D18-6 的登录窗口同样是加性新增：
+        # 首次显式登录之前不得编造 deadline。
         proxy = self._proxy()
         status = proxy.auth_status()
         self.assertEqual(sorted(status),
                          ["error", "evidence", "gate", "label", "login",
-                          "state", "watch"])
+                          "login_window_deadline_epoch", "login_window_s",
+                          "recovery", "state", "watch"])
+        self.assertIsNone(status["login_window_deadline_epoch"])
+        self.assertIsNone(status["login_window_s"])
         watch = status["watch"]
         self.assertEqual(sorted(watch), self.WATCH_KEYS)
         self.assertFalse(watch["thread_alive"])
@@ -883,12 +897,32 @@ class TestAuthWatchVisibility(unittest.TestCase):
         self.assertIsNone(watch["next_round_due"])
         self.assertEqual(watch["rounds"], 0)
 
+        # 恢复轮次摘要同样是加性新增：未启动时不冒充进行中。
+        recovery = status["recovery"]
+        self.assertEqual(sorted(recovery),
+                         ["last_failure_epoch", "last_failure_reason",
+                          "max_sessions", "next_attempt_epoch",
+                          "pause_reason", "round", "session_starts",
+                          "state"])
+        self.assertEqual(recovery["state"], "idle")
+        self.assertEqual(recovery["round"], 0)
+        self.assertEqual(recovery["session_starts"], 0)
+        self.assertEqual(recovery["max_sessions"],
+                         chat2api.REAUTH_MAX_SESSIONS_PER_CYCLE)
+        self.assertIsNone(recovery["next_attempt_epoch"])
+        self.assertIsNone(recovery["pause_reason"])
+
         # /health 同样带 watch；既有 authentication 仍只有 state/label。
         snapshot = proxy.health_snapshot()
         self.assertEqual(sorted(snapshot["authentication"]),
                          ["label", "state"])
         self.assertEqual(snapshot["watch"], watch)
         self.assertEqual(sorted(snapshot["watch"]), self.WATCH_KEYS)
+        # /health 的恢复摘要只给粗粒度进度，暂停原因留在控制令牌门后。
+        self.assertEqual(sorted(snapshot["recovery"]),
+                         ["max_sessions", "next_attempt_epoch",
+                          "session_starts", "state"])
+        self.assertNotIn("pause_reason", snapshot["recovery"])
 
     def test_thread_alive_tracks_the_real_watch_thread(self):
         proxy = self._proxy()
@@ -1010,9 +1044,30 @@ class TestCrossInstanceLock(unittest.TestCase):
             stale = time.time() - 3600
             os.utime(lock_path, (stale, stale))
             self.assertIsNone(chat2api._acquire_reauth_lock(self.slot))
-            # 持有句柄本身阻止按路径删除：不存在「删掉对方的锁」这条路。
-            with self.assertRaises(OSError):
-                os.unlink(lock_path)
+            # Windows 的文件共享语义使打开中的文件不可按路径删除；POSIX 允许
+            # 删除打开中的文件。产品自身从不 unlink 锁文件（R13-1），这里只
+            # 验证「外部删除路径不会释放持有者的锁」：硬链接保住 inode，删掉
+            # 原路径后第二个 flock 仍被挡住，再把路径恢复给后续断言。
+            if sys.platform.startswith("win"):
+                with self.assertRaises(OSError):
+                    os.unlink(lock_path)
+            else:
+                import fcntl
+                probe_path = str(lock_path) + ".probe"
+                os.link(lock_path, probe_path)
+                try:
+                    os.unlink(lock_path)
+                    self.assertFalse(lock_path.exists())
+                    probe_fd = os.open(probe_path, os.O_RDWR)
+                    try:
+                        with self.assertRaises(OSError):
+                            fcntl.flock(probe_fd,
+                                        fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    finally:
+                        os.close(probe_fd)
+                finally:
+                    if os.path.exists(probe_path):
+                        os.rename(probe_path, lock_path)
             self.assertTrue(lock_path.exists())
             granted, reason, _ledger = chat2api.acquire_reauth_slot(
                 self.slot, pid=222, ttl_s=60, now=1000.0)
@@ -1075,12 +1130,15 @@ class TestCrossInstanceGate(unittest.TestCase):
         self.assertTrue(granted)
         self.assertIsNone(reason)
         self.assertEqual(ledger["attempts_in_window"], 1)
+        self.assertIsNone(ledger["next_allowed_epoch"])
 
         granted, reason, ledger = chat2api.acquire_reauth_slot(
             self.slot, pid=222, ttl_s=60, now=1000.5)
         self.assertFalse(granted)
         self.assertEqual(reason, "global_session_active")
         self.assertEqual(ledger["owner_pid"], 111)
+        # A4：拒绝时给出最早允许时刻（活跃租约到期），调度据此等待。
+        self.assertEqual(ledger["next_allowed_epoch"], 1060.0)
 
     def test_expired_lease_is_reclaimed(self):
         chat2api.acquire_reauth_slot(self.slot, pid=111, ttl_s=60, now=1000.0)
@@ -1088,6 +1146,33 @@ class TestCrossInstanceGate(unittest.TestCase):
             self.slot, pid=222, ttl_s=60, now=1061.0)
         self.assertTrue(granted)
         self.assertIsNone(reason)
+
+    def test_a_dead_owner_lease_is_reclaimed_before_its_ttl(self):
+        # The slot records the owning PID, and the lease runs for a day. After a
+        # host restart the new instance has a different PID while the old lease
+        # still has hours to run, so only a liveness probe can tell a live holder
+        # from a dead one. Without it every login is refused with
+        # global_session_active until the TTL runs out (observed live: an ECS
+        # restart left owner_pid pointing at the previous 8110 for 24 hours).
+        chat2api.acquire_reauth_slot(self.slot, pid=111, ttl_s=86400, now=1000.0)
+        with mock.patch.object(chat2api, "_owner_pid_alive",
+                              return_value=False):
+            granted, reason, _ledger = chat2api.acquire_reauth_slot(
+                self.slot, pid=222, ttl_s=86400, now=1001.0)
+        self.assertTrue(granted, reason)
+        self.assertIsNone(reason)
+
+    def test_a_live_owner_lease_is_still_refused(self):
+        # The liveness probe must not open a second submission window while the
+        # owner really runs.
+        chat2api.acquire_reauth_slot(self.slot, pid=111, ttl_s=86400, now=1000.0)
+        with mock.patch.object(chat2api, "_owner_pid_alive",
+                              return_value=True):
+            granted, reason, ledger = chat2api.acquire_reauth_slot(
+                self.slot, pid=222, ttl_s=86400, now=1001.0)
+        self.assertFalse(granted)
+        self.assertEqual(reason, "global_session_active")
+        self.assertEqual(ledger["owner_pid"], 111)
 
     @staticmethod
     def _local_proxy():
@@ -1163,6 +1248,10 @@ class TestCrossInstanceGate(unittest.TestCase):
         self.assertFalse(granted)
         self.assertEqual(reason, "global_attempt_cap")
         self.assertEqual(ledger["attempts_in_window"], cap)
+        # A4：拒绝时给出最早允许时刻（最早 attempt 离开滚动窗口），
+        # 调度等待该时刻而不是空转或提前开窗。
+        self.assertEqual(ledger["next_allowed_epoch"],
+                         base + chat2api.REAUTH_ATTEMPT_WINDOW_S)
 
     def test_window_self_clears_so_the_cap_is_not_permanent(self):
         cap = chat2api.REAUTH_MAX_ATTEMPTS_PER_WINDOW
@@ -1191,6 +1280,41 @@ class TestCrossInstanceGate(unittest.TestCase):
         self.assertFalse(granted)
         self.assertEqual(reason, "global_session_active")
 
+    def test_stale_round_release_keeps_the_new_round_lease(self):
+        # R4：旧轮次的收尾不能释放新轮次已取得的租约。轮次写进租约，
+        # release 同时核对 PID 和轮次；只凭 PID 会清掉新轮次的互斥。
+        chat2api.acquire_reauth_slot(self.slot, pid=111, ttl_s=60,
+                                    now=1000.0, round_id=1)
+        granted, reason, ledger = chat2api.acquire_reauth_slot(
+            self.slot, pid=111, ttl_s=60, now=1000.1, round_id=2)
+        self.assertTrue(granted, reason)
+        self.assertEqual(ledger["round"], 2)
+        chat2api._release_reauth_slot_for_round(self.slot, 111, 1)
+        granted, reason, _ledger = chat2api.acquire_reauth_slot(
+            self.slot, pid=222, ttl_s=60, now=1000.2)
+        self.assertFalse(
+            granted,
+            "an old round's release cleared the new round's lease")
+        self.assertEqual(reason, "global_session_active")
+        state, error = chat2api._read_reauth_slot(self.slot)
+        self.assertIsNone(error)
+        self.assertEqual(state["owner_pid"], 111)
+        self.assertEqual(state["round"], 2)
+
+    def test_older_round_cannot_overwrite_the_newer_round(self):
+        # R4：旧轮次连 acquire 都不能覆盖新轮次的归属和 TTL。
+        chat2api.acquire_reauth_slot(self.slot, pid=111, ttl_s=60,
+                                    now=1000.0, round_id=2)
+        granted, reason, _ledger = chat2api.acquire_reauth_slot(
+            self.slot, pid=111, ttl_s=60, now=1000.5, round_id=1)
+        self.assertFalse(granted)
+        self.assertEqual(reason, "round_superseded")
+        state, error = chat2api._read_reauth_slot(self.slot)
+        self.assertIsNone(error)
+        self.assertEqual(state["owner_pid"], 111)
+        self.assertEqual(state["round"], 2)
+        self.assertAlmostEqual(state["expires_epoch"], 1060.0)
+
 
 class TestDamagedSlotIsNotAnEmptySlot(unittest.TestCase):
     """R13-2：只有「文件确定缺席」才按首次初始化处理。
@@ -1210,7 +1334,8 @@ class TestDamagedSlotIsNotAnEmptySlot(unittest.TestCase):
         self.assertFalse(granted)
         self.assertEqual(reason, expected_reason)
         self.assertEqual(ledger, {"owner_pid": None, "expires_epoch": 0.0,
-                                "attempts_in_window": 0})
+                                "attempts_in_window": 0,
+                                "next_allowed_epoch": None})
         # 证据保留：损坏文件逐字节未变，运维仍能看到现场。
         self.assertEqual(Path(self.slot).read_bytes(), before)
 
@@ -1392,7 +1517,8 @@ class TestCrossProcessDamagedSlot(CrossProcessLockHarness):
             # 什么都没读到，就什么都不声称：账本按「未观测」上报。
             self.assertEqual(result["ledger"], {
                 "owner_pid": None, "expires_epoch": 0.0,
-                "attempts_in_window": 0}, result)
+                "attempts_in_window": 0,
+                "next_allowed_epoch": None}, result)
         # 证据保留：损坏文件未被任何一方改写（覆盖它等于把 fail-closed 变回空槽）。
         self.assertEqual(Path(slot).read_bytes(), before)
         state, error = chat2api._read_reauth_slot(slot)
@@ -1412,8 +1538,14 @@ class TestRefreshUnderGate(unittest.TestCase):
                                       ttl_s=60)
         proxy = chat2api.Proxy({"token": "stale", "api_key": None},
                               _auth_args())
+        # The refused cycle now waits for the live lease and rechecks it every
+        # second; stop it when the test ends so no recovery window can open
+        # after the mock context is gone.
+        self.addCleanup(proxy.shutdown)
         rejected = mock.Mock(status_code=401)
         with (
+            mock.patch.object(chat2api, "AUTH_WAIT_BUDGET_S", 0.2, create=True),
+            mock.patch.object(chat2api, "MAX_REQUEST_SECONDS", 0.5),
             mock.patch.object(chat2api.requests, "request",
                               return_value=rejected),
             mock.patch.object(chat2api, "browser_login") as browser_login,
@@ -1429,6 +1561,39 @@ class TestRefreshUnderGate(unittest.TestCase):
         self.assertEqual(status["evidence"]["source"], "business")
         self.assertEqual(status["gate"]["granted"], False)
         self.assertEqual(status["gate"]["reason"], "global_session_active")
+
+    def test_valid_evidence_ends_the_wait_without_opening_a_window(self):
+        # 等待另一实例租约期间，本实例的探测已恢复有效凭据：恢复线程必须
+        # 结束等待且不再开窗，也不得释放对方仍持有的租约。
+        chat2api.acquire_reauth_slot(chat2api.REAUTH_SLOT_FILE, pid=111,
+                                      ttl_s=60)
+        proxy = chat2api.Proxy({"token": "stale", "api_key": None},
+                              _auth_args())
+        self.addCleanup(proxy.shutdown)
+        with mock.patch.object(chat2api, "browser_login") as browser_login:
+            self.assertTrue(proxy.refresh(force=True, wait=False))
+            self.assertFalse(browser_login.called)
+            self.assertEqual(proxy.auth_status()["recovery"]["state"],
+                             "waiting")
+            with mock.patch.object(
+                    chat2api, "classify_credential",
+                    return_value=("valid", None, 200)):
+                self.assertEqual(proxy.validate_or_refresh(source="test"),
+                                 "valid")
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if proxy.auth_status()["recovery"]["state"] == "idle":
+                    break
+                time.sleep(0.05)
+            self.assertEqual(proxy.auth_status()["recovery"]["state"],
+                             "idle",
+                             "有效新证据恢复后恢复线程必须结束等待")
+        browser_login.assert_not_called()
+        state, error = chat2api._read_reauth_slot(chat2api.REAUTH_SLOT_FILE)
+        self.assertIsNone(error)
+        self.assertEqual(state.get("owner_pid"), 111,
+                          "恢复线程不得释放其他实例的租约")
+        self.assertGreater(state.get("expires_epoch"), time.time())
 
     def test_corrupt_slot_is_reported_as_a_refusal_not_a_failure(self):
         # R13-2 拒绝面：损坏槽位必须如实报出（reauth_refused:slot_corrupt），
@@ -1456,7 +1621,9 @@ class TestRefreshUnderGate(unittest.TestCase):
         self.assertIsInstance(caught.exception,
                               chat2api.ReauthenticationRequired)
 
-    def test_successful_session_clears_the_shared_ledger(self):
+    def test_successful_session_keeps_the_window_ledger(self):
+        # A4：成功只重置当前实例的恢复轮次；滚动窗口内的全局会话启动记录
+        # 不得提前清空（否则 3 次/15 分钟的硬上限就不是硬上限）。
         proxy = chat2api.Proxy({"token": "stale", "api_key": None},
                               _auth_args())
         with (
@@ -1467,8 +1634,70 @@ class TestRefreshUnderGate(unittest.TestCase):
             self.assertTrue(proxy.refresh(force=True))
         state, error = chat2api._read_reauth_slot(chat2api.REAUTH_SLOT_FILE)
         self.assertIsNone(error)
-        self.assertEqual(state.get("attempts"), [])
         self.assertIsNone(state.get("owner_pid"))
+        self.assertEqual(len(state.get("attempts")), 1)
+        self.assertEqual(proxy.auth_status()["state"], "valid")
+        self.assertEqual(proxy.auth_status()["recovery"]["state"], "idle")
+
+    def test_default_lease_does_not_reserve_the_api_key_fetches(self):
+        proxy = chat2api.Proxy({"token": "stale", "api_key": None},
+                              _auth_args())
+        self.assertEqual(
+            proxy._reauth_slot_ttl_s(),
+            proxy.args.login_timeout + chat2api.REAUTH_SLOT_MARGIN_S)
+
+    def test_use_api_key_lease_covers_the_post_login_fetches(self):
+        # A5：--use-api-key 的提交前还有 probe_config 与最多两次
+        # fetch_api_key，各 15 秒预算，租约必须覆盖它们。
+        proxy = chat2api.Proxy({"token": "stale", "api_key": None},
+                              _auth_args(use_api_key=True))
+        self.assertEqual(
+            proxy._reauth_slot_ttl_s(),
+            proxy.args.login_timeout + chat2api.REAUTH_SLOT_MARGIN_S
+            + chat2api.CONFIG_REFRESH_TIMEOUT_S
+            + 2 * chat2api.REAUTH_SESSION_PROBE_BUDGET_S)
+
+    def test_manual_retry_after_a_release_keeps_the_new_lease(self):
+        # 审查反例：等待中的旧轮次被手动再试替换后，旧线程的 finally
+        # 不得释放新轮次的租约（同一 pid，release 只看 owner_pid）。
+        proxy = chat2api.Proxy({"token": "stale", "api_key": None},
+                              _auth_args())
+        chat2api.acquire_reauth_slot(chat2api.REAUTH_SLOT_FILE, pid=111,
+                                     ttl_s=60)
+        with mock.patch.object(chat2api, "browser_login") as first_login:
+            # 手动触发只开启等待轮次（被活跃租约拒绝），不打开会话。
+            self.assertTrue(proxy.refresh(force=True, wait=False))
+        first_login.assert_not_called()
+        gate = proxy.auth_status()["gate"]
+        self.assertFalse(gate["granted"])
+        self.assertEqual(gate["reason"], "global_session_active")
+        chat2api.release_reauth_slot(chat2api.REAUTH_SLOT_FILE, pid=111)
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        def fake_login(*args, **kwargs):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return "fresh-token"
+
+        with (
+            mock.patch.object(chat2api, "browser_login",
+                              side_effect=fake_login),
+            mock.patch.object(chat2api.TokenStore, "save"),
+        ):
+            self.assertTrue(proxy.refresh(force=True, wait=False))
+            self.assertTrue(entered.wait(2),
+                            "手动再试应开启新轮次并进入会话")
+            state, error = chat2api._read_reauth_slot(
+                chat2api.REAUTH_SLOT_FILE)
+            self.assertIsNone(error)
+            # 新会话进行中：共享槽必须仍由本进程持有，旧等待线程的
+            # 退出路径不得清掉新轮次的租约。
+            self.assertEqual(state.get("owner_pid"), os.getpid())
+            self.assertGreater(state.get("expires_epoch"), time.time())
+            release.set()
+            self.assertTrue(proxy.refresh(force=True, wait=True))
         self.assertEqual(proxy.auth_status()["state"], "valid")
 
     def test_no_browser_still_short_circuits_without_a_lease(self):
@@ -1577,6 +1806,23 @@ class TestRefreshUnderGate(unittest.TestCase):
         status = proxy.auth_status()
         self.assertEqual(status["state"], "failed")
         self.assertEqual(status["error"], "umpass_prefill_missing")
+
+
+class TestOwnerLivenessProbe(unittest.TestCase):
+    """The owner-liveness probe that reclaims a dead holder's lease."""
+
+    def test_a_pid_that_does_not_run_is_not_alive(self):
+        self.assertFalse(chat2api._owner_pid_alive(999999))
+
+    def test_an_invalid_pid_counts_as_alive(self):
+        # FAIL-CLOSED: a value the probe cannot judge must keep the lease
+        # instead of opening a second submission window.
+        for pid in (None, 0, -1, True, "111", 1.5):
+            self.assertTrue(chat2api._owner_pid_alive(pid), repr(pid))
+
+    def test_the_probe_never_raises(self):
+        for pid in (1, -1, 0, 999999, None, "x"):
+            self.assertIsInstance(chat2api._owner_pid_alive(pid), bool)
 
 
 if __name__ == "__main__":

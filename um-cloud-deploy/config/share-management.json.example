@@ -1,0 +1,7 @@
+{
+  "schema_version": 2,
+  "enabled": true,
+  "transport": "unix_socket",
+  "socket_path": "/run/um-share/broker.sock",
+  "control_key_file": "/etc/um-share/broker-control.key"
+}

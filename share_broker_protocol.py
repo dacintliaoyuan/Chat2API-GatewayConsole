@@ -2,10 +2,10 @@ r"""share_broker_protocol.py — schema v2 for the REAL broker control plane.
 
 Pure protocol layer shared by both control channels (D0 §27.5):
 
-* the MANAGEMENT pipe (\\.\pipe\um-share-public-broker): an ordinary-privilege
-  8096 client talks to a SYSTEM broker host; fixed actions only, no paths,
+* the MANAGEMENT pipe (\\.\pipe\um-share-broker): an ordinary-privilege
+  8001 client talks to a SYSTEM broker host; fixed actions only, no paths,
   commands, ports or envs (A2).
-* the INSTANCE pipe (\\.\pipe\um-share-public-instance-<id>): the SYSTEM broker
+* the INSTANCE pipe (\\.\pipe\um-share-instance-<id>): the SYSTEM broker
   talks to the in-process control endpoint of a share instance; the share
   can only report itself and ACK a loaded projection — it can never invoke
   management actions (A2/A4 privilege separation).
@@ -60,6 +60,7 @@ TS_SERVICE_NAME = "Tailscale"
 HOST_VERIFY_ACTION = "host-verify"
 HOST_VERIFY_CHECKS = frozenset(("running", "closed"))
 HOST_STOP_ACTION = "host-stop"
+HOST_REPAIR_LIMITS_ACTION = "host-repair-limits"
 
 # Temporary maintenance lease (A9-3 8110 restart pauses 8100 acceptance via
 # this lease; A9-4 8100 restart carries its own maintenance record). The
@@ -77,7 +78,7 @@ GATEWAY_RESTART_ACTION = "gateway-restart"
 # only, the object (task/run root/port/fault file) stays broker-side
 # deployment configuration.
 HOST_EVIDENCE_ACTION = "host-evidence"
-HOST_EVIDENCE_CHECKS = frozenset(("limits", "faults"))
+HOST_EVIDENCE_CHECKS = frozenset(("limits", "faults", "watchdog"))
 
 # Component enum: protocol constants; the concrete object is pinned by the
 # broker-side deployment configuration (the TS_SERVICE_NAME pattern).
@@ -97,7 +98,7 @@ GATEWAY_RESTART_BUDGET_MAX_S = 180
 # NEVER downgrades to a host stop/start of the whole chain.
 INSTANCE_RESUME_ACTION = "resume"
 
-# Management actions (8096 -> SYSTEM broker). Fixed schema, no caller
+# Management actions (8001 -> SYSTEM broker). Fixed schema, no caller
 # supplied paths, commands, PIDs, ports, URLs or environment variables.
 # R8-A7 revoke-and-terminate: a publish may carry an OPTIONAL
 # terminate_keys list (key_ids whose in-flight share requests must be
@@ -109,7 +110,11 @@ MANAGEMENT_ACTIONS = {
     "status": {},
     "publish": {"generation": int, "fingerprint": str, "projection": dict,
                 "terminate_keys": (list,)},
-    "start": {},
+    # The OPTIONAL ``explicit`` flag distinguishes the operator's own start
+    # (it supersedes a persisted stop intent) from the watchdog/systemd start
+    # (which must still be refused while that intent is in force). A missing
+    # field keeps the historical watchdog start, so old clients stay valid.
+    "start": {"explicit": (bool,)},
     "drain": {},
     "emergency-stop": {},
     # Restricted whitelist extension (console share production adapter,
@@ -123,6 +128,7 @@ MANAGEMENT_ACTIONS = {
     # configuration.
     HOST_VERIFY_ACTION: {"check": str},
     HOST_STOP_ACTION: {},
+    HOST_REPAIR_LIMITS_ACTION: {},
     # Temporary maintenance lease (A9-3/A9-4 broker side). The generic layer
     # checks field presence/type only; the SPECIALIZED validators below
     # enforce the component enum and the bounded lease_s/budget_s (the
@@ -132,7 +138,7 @@ MANAGEMENT_ACTIONS = {
     MAINTENANCE_STATUS_ACTION: {},
     GATEWAY_RESTART_ACTION: {"component": str, "budget_s": int},
     # Restricted host-evidence extension (read-only): the ONLY wire field is
-    # the fixed check enum (limits/faults).
+    # the fixed check enum (limits/faults/watchdog).
     HOST_EVIDENCE_ACTION: {"check": str},
 }
 
@@ -278,13 +284,18 @@ def _check_common(body: dict, secret: str, actions: dict, signed_keys,
             if not isinstance(value, dict):
                 raise ProtocolError("bad_request", f"field {key} must be an "
                                                    "object")
+        elif expected_type is bool:
+            # bool is a subclass of int: a 0/1 value is NOT a boolean here.
+            if not isinstance(value, bool):
+                raise ProtocolError("bad_request", f"field {key} must be a "
+                                                   "boolean")
         normalized[key] = value
     return {"action": action, "request_id": request_id,
             "instance_id": instance_id, "ts": ts, "fields": normalized}
 
 
 def validate_management_request(body: dict, secret: str, now=None) -> dict:
-    """Validate + authenticate a management-channel request (8096 -> broker)."""
+    """Validate + authenticate a management-channel request (8001 -> broker)."""
     return _check_common(body, secret, MANAGEMENT_ACTIONS,
                          MANAGEMENT_SIGNED_KEYS, require_instance=False,
                          now=now)
@@ -548,8 +559,17 @@ PROJECTION_SCHEMA_VERSIONS = frozenset((1, 2))
 LEGACY_PROJECTION_SCHEMA_VERSION = 1
 PROJECTION_DEFAULT_MAX_CONCURRENCY = 1
 PROJECTION_DEFAULT_SHARE_MAX_CONCURRENCY = 2
+# D18-4: the EFFECTIVE caps are per-key 48 and global 64. Values written
+# under the OLD contract (per-key up to 64, global up to 128) are still
+# accepted for compatibility and CLAMPED to the effective caps at parse time
+# — the returned payload is never rewritten on disk and the DB is never
+# touched. Values beyond the old contract (65/129) stay invalid.
 PROJECTION_MAX_CONCURRENCY_MIN = 1
-PROJECTION_MAX_CONCURRENCY_MAX = 64
+PROJECTION_MAX_CONCURRENCY_MAX = 48
+PROJECTION_LEGACY_MAX_CONCURRENCY_MAX = 64
+PROJECTION_SHARE_MAX_CONCURRENCY_MIN = 1
+PROJECTION_SHARE_MAX_CONCURRENCY_MAX = 64
+PROJECTION_LEGACY_SHARE_MAX_CONCURRENCY_MAX = 128
 PROJECTION_TOP_LEVEL_KEYS = frozenset(
     ("schema_version", "config_generation", "data", "share_max_concurrency"))
 PROJECTION_ENTRY_KEYS = frozenset(("key_id", "name", "secret_hash",
@@ -557,16 +577,22 @@ PROJECTION_ENTRY_KEYS = frozenset(("key_id", "name", "secret_hash",
                                    "max_concurrency"))
 
 
-def _parse_projection_limit(value, field):
+def _parse_projection_limit(value, field, minimum, maximum, legacy_maximum):
+    """One bounded-integer rule; the CALLER supplies the bound so the
+    per-entry 1..48 and the global 1..64 can never be confused.
+
+    An integer in ``minimum..legacy_maximum`` is accepted; a value above
+    ``maximum`` is CLAMPED to ``maximum`` (old 64/128 projections are
+    still readable under the new caps) while a value above
+    ``legacy_maximum`` is rejected (a genuinely invalid projection).
+    """
     if isinstance(value, bool) or not isinstance(value, int) \
-            or not (PROJECTION_MAX_CONCURRENCY_MIN <= value
-                    <= PROJECTION_MAX_CONCURRENCY_MAX):
+            or not (minimum <= value <= legacy_maximum):
         raise ProtocolError(
             "bad_request",
             f"projection field {field} must be an integer in "
-            f"{PROJECTION_MAX_CONCURRENCY_MIN}.."
-            f"{PROJECTION_MAX_CONCURRENCY_MAX}")
-    return value
+            f"{minimum}..{legacy_maximum}")
+    return min(value, maximum)
 
 
 def parse_projection_payload(payload) -> dict:
@@ -580,15 +606,17 @@ def parse_projection_payload(payload) -> dict:
     fields are rejected, not ignored), duplicate identities, bad digests and
     bad versions are rejected BEFORE any file is replaced.
 
-    Schema compatibility (R6-A2): schema 1 AND schema 2 payloads are both
-    accepted by this ONE parser — the writer pre-check, the instance ACK and
-    the auth loader can never disagree. Entries carry ``max_concurrency``
-    (1..64) and the payload may carry top-level ``share_max_concurrency``
-    (1..64); MISSING fields are filled with the legacy effective limits
-    (per-key 1, global 2), so a schema 1 projection behaves exactly as the
-    old hardcodes did. The returned ``data`` entries are normalized copies
-    with ``max_concurrency`` always present; the input payload is never
-    mutated.
+    Schema compatibility (R6-A2, D18-4): schema 1 AND schema 2 payloads
+    are both accepted by this ONE parser — the writer pre-check, the
+    instance ACK and the auth loader can never disagree. Entries carry
+    ``max_concurrency`` (per-key 1..48) and the payload may carry
+    top-level ``share_max_concurrency`` (GLOBAL 1..64); MISSING fields are
+    filled with the legacy effective limits (per-key 1, global 2), so a
+    schema 1 projection behaves exactly as the old hardcodes did. Values
+    written under the OLD caps (per-key up to 64, global up to 128) are
+    CLAMPED to the effective caps here; the returned ``data`` entries are
+    normalized copies with ``max_concurrency`` always present and the input
+    payload is never mutated.
     """
     if not isinstance(payload, dict):
         raise ProtocolError("bad_request", "projection must be an object")
@@ -612,7 +640,11 @@ def parse_projection_payload(payload) -> dict:
         # old behavior, for schema 1 and schema 2 alike).
         share_max = PROJECTION_DEFAULT_SHARE_MAX_CONCURRENCY
     else:
-        share_max = _parse_projection_limit(share_max, "share_max_concurrency")
+        share_max = _parse_projection_limit(
+            share_max, "share_max_concurrency",
+            PROJECTION_SHARE_MAX_CONCURRENCY_MIN,
+            PROJECTION_SHARE_MAX_CONCURRENCY_MAX,
+            PROJECTION_LEGACY_SHARE_MAX_CONCURRENCY_MAX)
     seen_ids, seen_names = set(), set()
     normalized_entries = []
     for item in entries:
@@ -654,8 +686,11 @@ def parse_projection_payload(payload) -> dict:
             # Legacy default: the old effective per-key limit.
             max_concurrency = PROJECTION_DEFAULT_MAX_CONCURRENCY
         else:
-            max_concurrency = _parse_projection_limit(max_concurrency,
-                                                      "max_concurrency")
+            max_concurrency = _parse_projection_limit(
+                max_concurrency, "max_concurrency",
+                PROJECTION_MAX_CONCURRENCY_MIN,
+                PROJECTION_MAX_CONCURRENCY_MAX,
+                PROJECTION_LEGACY_MAX_CONCURRENCY_MAX)
         # Normalized copy: consumers always see max_concurrency; the input
         # entry dict is never mutated.
         normalized_entries.append(dict(item, max_concurrency=max_concurrency))

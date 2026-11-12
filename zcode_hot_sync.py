@@ -368,6 +368,36 @@ def read_asar_entry(path: Path | str,
     return data
 
 
+def list_asar_entries(path: Path | str, prefix: str = "") -> list[str]:
+    """列出 asar 内某个前缀下的文件条目名（相对该前缀）；失败返回空列表。
+
+    只读：走 ``read_asar_header`` 的同一套边界与失败语义，只收录文件
+    条目（有 ``size``、非目录、非 unpacked）；不递归、不猜、不抛异常。
+    条目名按字典序，调用方按稳定顺序使用（区域定位要求可复现）。
+    """
+    header = read_asar_header(path)
+    if header is None:
+        return []
+    _, document = header
+    node: Any = document
+    for part in [segment for segment in prefix.split("/") if segment]:
+        files = node.get("files") if isinstance(node, dict) else None
+        if not isinstance(files, dict) or part not in files:
+            return []
+        node = files[part]
+    files = node.get("files") if isinstance(node, dict) else None
+    if not isinstance(files, dict):
+        return []
+    names = []
+    for name, entry in files.items():
+        if not isinstance(entry, dict) or entry.get("unpacked"):
+            continue
+        if not isinstance(entry.get("size"), (str, int)):
+            continue
+        names.append(name)
+    return sorted(names)
+
+
 def zcode_hot_sync_admission() -> tuple[bool, str]:
     """Check one confirmed installation against the hot-sync protocol.
 
@@ -417,5 +447,6 @@ def zcode_hot_sync_admission() -> tuple[bool, str]:
             pass  # Metadata failure never substitutes for protocol evidence.
     compatible, reason = inspect_installed_protocol(
         asar, lambda archive, entry: read_asar_entry(
-            archive, entry, max_bytes=8 * 1024 * 1024))
+            archive, entry, max_bytes=8 * 1024 * 1024),
+        list_asar_entries(asar, "out/host/"))
     return compatible, "包版本 %s（仅展示）：%s" % (version, reason)

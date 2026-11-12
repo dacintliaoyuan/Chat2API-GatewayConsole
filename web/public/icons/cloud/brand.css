@@ -1,0 +1,6 @@
+/* Generated cloud-only brand; the environment status dot remains visible. */
+.cloud-console .shell-env-name { position: relative; min-height: 40px; padding-left: 48px; }
+.cloud-console .shell-env-name::before { content: ""; position: absolute; top: 0; left: 0; width: 40px; height: 40px; background: transparent url("./icon-brand.png?v=c25402931d7e") center / contain no-repeat; }
+.cloud-console .shell-env-mark { position: absolute; left: 30px; bottom: 0; width: 8px; height: 8px; border: 2px solid var(--md-surface); box-shadow: none; }
+.cloud-console .shell-env-sub { padding-left: 48px; }
+html[data-console-rail="collapsed"] .cloud-console .shell-env-name { width: 40px; padding-left: 0; }

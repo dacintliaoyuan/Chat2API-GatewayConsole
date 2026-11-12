@@ -271,7 +271,7 @@ class StopReservationTests(unittest.TestCase):
             if timeout < 9.0:
                 raise subprocess.TimeoutExpired(args, timeout)
             stdout = ('"fixture-task","Ready"\n' if args[0] == "schtasks"
-                      else "[]\n" if args[0] == "powershell" else "")
+                      else "[]\n" if args[0] == "pwsh" else "")
             return SimpleNamespace(returncode=0, stdout=stdout)
 
         def instance(action, fields, instance_id, budget_s=None):

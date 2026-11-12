@@ -61,6 +61,7 @@ import queue
 import random
 import secrets
 import select
+import shutil
 import socket
 import subprocess
 import sys
@@ -70,8 +71,36 @@ import urllib.parse
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import requests
+
+
+# ``shared`` is bundled beside this app (``ai-gateway/shared``). The service may
+# run this file as a script (``sys.path[0]`` is ``chat2api/``) and the test suites
+# may load it by path, so the package root is inserted here when it is missing.
+# Other sys.path entries are kept untouched.
+_PACKAGE_ROOT = str(Path(__file__).resolve().parents[1])
+if _PACKAGE_ROOT not in sys.path:
+    sys.path.insert(0, _PACKAGE_ROOT)
+
+
+def _load_nonstream_aggregate():
+    """Import the pure aggregator from the bundled ``shared`` package.
+
+    ``shared`` is a REQUIRED dependency of this app: both the local and the cloud
+    packages carry it. A missing package fails here explicitly instead of silently
+    falling back to a second copy. No network, credential or ledger side effect
+    happens here.
+    """
+    from shared import nonstream_aggregate
+    return nonstream_aggregate
+
+
+_nonstream_aggregate = _load_nonstream_aggregate()
+_NonStreamAggregateError = _nonstream_aggregate.AggregateError
+_NonStreamChatAggregator = _nonstream_aggregate.ChatCompletionAggregator
+_NonStreamAnthropicAggregator = _nonstream_aggregate.AnthropicMessageAggregator
 
 # Default Open WebUI endpoint. Override with --base-url.
 BASE_URL = "http://localhost:3000"
@@ -143,11 +172,29 @@ REAUTH_SLOT_FILE = os.environ.get("CHAT2API_REAUTH_SLOT_FILE") or \
 # self-clears so the cap is never a permanent lockout.
 REAUTH_ATTEMPT_WINDOW_S = 900.0
 REAUTH_MAX_ATTEMPTS_PER_WINDOW = 3
-# Lease margin on top of --login-timeout: a session may spend its whole
-# timeout waiting for a human, so the lease must outlive it. A crashed holder
-# is therefore reclaimed by the other instance after this bound instead of
-# blocking it forever.
-REAUTH_SLOT_MARGIN_S = 30.0
+# Recovery cycle (Plan-Revision 2 A3): the FIRST failure is retried at once,
+# every following retry waits 30/60/300/600 seconds measured from the moment
+# the previous attempt actually FAILED (never from its start). The first attempt
+# plus five retries make at most six visible sessions per cycle; the last failure
+# pauses the automatic recovery and only an explicit manual request opens a new
+# cycle. A refused session (another instance's live lease, or the rolling global
+# cap) does NOT consume a retry: the scheduler waits for the earliest allowed
+# moment instead.
+REAUTH_RECOVERY_BACKOFF_S = (0.0, 30.0, 60.0, 300.0, 600.0)
+REAUTH_MAX_SESSIONS_PER_CYCLE = 1 + len(REAUTH_RECOVERY_BACKOFF_S)
+# Lease coverage on top of --login-timeout (A5): a visible session may spend
+# its whole human wait PLUS bounded startup, navigation, credential-probe and
+# cleanup budgets, so the shared lease must outlive all of them. These are
+# explicit per-phase bounds, not a fixed "safety" number, and a crashed holder
+# is reclaimed by the other instance only after the whole bounded session.
+REAUTH_SESSION_STARTUP_BUDGET_S = 60.0
+REAUTH_SESSION_NAV_BUDGET_S = 30.0
+REAUTH_SESSION_PROBE_BUDGET_S = 15.0
+REAUTH_SESSION_CLEANUP_BUDGET_S = 30.0
+REAUTH_SLOT_MARGIN_S = (REAUTH_SESSION_STARTUP_BUDGET_S
+                       + REAUTH_SESSION_NAV_BUDGET_S
+                       + REAUTH_SESSION_PROBE_BUDGET_S
+                       + REAUTH_SESSION_CLEANUP_BUDGET_S)
 
 # Bounded periodic credential check (A13-2). Interval, backoff ceiling and
 # per-round probe timeout are fixed here rather than derived: an idle instance
@@ -218,6 +265,18 @@ UMPASS_MFA_SELECTORS = (
     'input[id*="code" i]',
     'text="验证码"',
     'text="Verification code"',
+)
+# Explicit rejection evidence on the UMPASS form (A2). The real site's error
+# DOM is NOT verified here, so this is a conservative structural check: the page
+# must still be the UMPASS form, a VISIBLE alert/error region must be present
+# AND the autofilled password field must still hold its value. Anything else is
+# left to a human: an unrecognized page is never guessed to be a wrong password.
+UMPASS_ERROR_SELECTORS = (
+    '[role="alert"]',
+    '#errorText',
+    '.error',
+    '#usernameError',
+    '#passwordError',
 )
 # Recognized pages the state machine only WAITS on. The Duo prompt passes on
 # its own for a trusted device; a Duo prompt that asks for a code is the
@@ -420,6 +479,44 @@ _REPETITION_PREFLIGHT_MAX_BYTES = 2 * 1024 * 1024
 STREAM_MAX_CONCURRENT_READERS = 128
 _reader_slots = threading.BoundedSemaphore(STREAM_MAX_CONCURRENT_READERS)
 
+# N1: opt-in upstream transport for the NON-streaming Chat endpoint. When it is
+# enabled, a client that sent ``stream=false`` is still answered with ONE complete
+# JSON body, but the UM request itself selects SSE (``stream=true`` plus
+# ``stream_options``) and the gateway aggregates the deltas locally. The client's
+# response mode and the ledger's ``stream`` field stay the client's own
+# (``False``). Default False keeps the private 8000 chain and every other caller
+# on the native non-stream transport; the share entry (8110) is not wired to it in
+# N1, and enabling it there needs the N2/N3 gates first.
+NONSTREAM_UPSTREAM_AGGREGATE = False
+
+# Per-HTTP-request cumulative authentication wait budget (A3). It is created
+# at the Handler message boundary and passed down to every internal 401 re-send,
+# compatibility retry and hidden retry of THAT request. It is independent of the
+# stream-reader slots below: a request waiting for authentication must never
+# consume a streaming slot before it actually opens a stream. The generic
+# in-process default is 30 seconds; main() resolves the role default (180 for
+# both the private 8000 instance and the dedicated 8110 share backend, D18-5)
+# and an explicit CLI/env value (clamped to 1..180).
+try:
+    AUTH_WAIT_BUDGET_S = max(0.01, min(180.0, float(
+        os.environ.get("CHAT2API_AUTH_WAIT_BUDGET_S", "30"))))
+except ValueError:
+    AUTH_WAIT_BUDGET_S = 30.0
+try:
+    AUTH_WAIT_MAX_CONCURRENT = max(1, min(1024, int(
+        os.environ.get("CHAT2API_AUTH_WAIT_MAX_CONCURRENT", "128"))))
+except ValueError:
+    AUTH_WAIT_MAX_CONCURRENT = 128
+try:
+    AUTH_WAIT_RECHECK_S = max(0.01, min(1.0, float(
+        os.environ.get("CHAT2API_AUTH_WAIT_RECHECK_S", "1"))))
+except ValueError:
+    AUTH_WAIT_RECHECK_S = 1.0
+# A definite next attempt is projected as an integer Retry-After, bounded by
+# the rolling global-attempt window (never an unbounded or fabricated value).
+AUTH_WAIT_RETRY_AFTER_MAX_S = 900
+_auth_wait_slots = threading.BoundedSemaphore(AUTH_WAIT_MAX_CONCURRENT)
+
 # In-band stream error messages (after the 200 headers are already sent).
 # openai-node throws APIError on any SSE payload containing an "error" key, so
 # these surface in clients instead of a generic protocol failure.
@@ -583,19 +680,126 @@ class TokenStore:
             return None
 
     def save(self, token: str, api_key: str = None):
+        """Persist the credential through a controlled atomic replace (A6).
+
+        The new document is written COMPLETELY to a sibling temp file first and
+        only then replaces the target with ``os.replace``. The pre-fix
+        implementation opened the target with "w", so a write interrupted
+        mid-document truncated the only valid credential and the next load
+        returned None (the file read as "no credential", which would start an
+        unnecessary sign-in). A directory/permission/replace failure raises
+        ``OSError`` after removing the temp file: the previous valid document
+        stays byte-for-byte intact and the caller records the failure reason.
+        """
         data = {"url": self.url, "token": token, "api_key": api_key,
                 "saved_at": time.strftime("%Y-%m-%d %H:%M:%S")}
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.chmod(self.path, 0o600)
+        directory = os.path.dirname(os.path.abspath(self.path))
+        tmp_path = "%s.%d.tmp" % (self.path, os.getpid())
+        try:
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                # POSIX modes are best-effort; the atomic replace below is
+                # what protects the previous valid document.
+                pass
+            os.replace(tmp_path, self.path)
+        except OSError:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         return data
 
 
-def find_edge(candidates=None) -> str | None:
-    for p in candidates or EDGE_PATHS:
-        if os.path.exists(p):
-            return p
+BROWSER_PATH_ENV = "CHAT2API_BROWSER_PATH"
+
+# Linux has no Edge-first installation convention; any Chromium-family binary
+# Playwright can drive is acceptable. The order is the preference order and
+# ``shutil.which`` resolves each name through PATH.
+LINUX_BROWSER_NAMES = (
+    "chromium",
+    "chromium-browser",
+    "google-chrome",
+    "microsoft-edge",
+)
+
+
+class BrowserConfigError(RuntimeError):
+    """CHAT2API_BROWSER_PATH is set but unusable (explicit config error).
+
+    Raised instead of silently falling back to another browser: the operator named
+    the binary to drive, so signing in through a different one would contradict
+    the configuration rather than degrade gracefully.
+    """
+
+    def __init__(self, reason: str, detail: str = ""):
+        message = "browser configuration error: %s" % reason
+        if detail:
+            message += " (%s)" % detail
+        super().__init__(message)
+        self.reason = reason
+        self.detail = detail
+
+
+def linux_browser_candidates(which=None) -> list[str]:
+    """Chromium-family executables to try on Linux, in preference order.
+
+    ``shutil.which`` resolves each name through PATH; duplicate paths are
+    collapsed because ``chromium`` and ``chromium-browser`` are commonly symlinks
+    to the same binary. ``which`` is the deterministic test seam.
+    """
+    resolver = shutil.which if which is None else which
+    found = []
+    for name in LINUX_BROWSER_NAMES:
+        path = resolver(name)
+        if path and path not in found:
+            found.append(path)
+    return found
+
+
+def find_browser(candidates=None, platform=None, which=None) -> str | None:
+    """Resolve the browser executable to drive on this host.
+
+    Windows keeps the historical Edge-only lookup order (``EDGE_PATHS``); Linux
+    resolves ``LINUX_BROWSER_NAMES`` through PATH. ``CHAT2API_BROWSER_PATH`` is
+    an explicit operator override on every platform and is authoritative: an
+    unusable override raises ``BrowserConfigError`` instead of silently falling
+    back to another browser. ``candidates``, ``platform`` and ``which`` are the
+    deterministic test seams.
+    """
+    override = os.environ.get(BROWSER_PATH_ENV, "").strip()
+    if override:
+        if not os.path.exists(override):
+            raise BrowserConfigError("browser_path_missing", override)
+        if not os.path.isfile(override) or not os.access(override, os.X_OK):
+            raise BrowserConfigError("browser_path_not_executable", override)
+        return override
+    if candidates:
+        pool = candidates
+    elif (sys.platform if platform is None else platform).startswith("win"):
+        pool = EDGE_PATHS
+    else:
+        pool = linux_browser_candidates(which)
+    for path in pool:
+        if os.path.exists(path):
+            return path
     return None
+
+
+def find_edge(candidates=None) -> str | None:
+    """Historical entry point kept for existing callers and test seams (A13-1).
+
+    Delegates to ``find_browser``: on Windows the result is exactly the old
+    ``EDGE_PATHS`` order, while Linux now resolves a Chromium-family browser.
+    """
+    return find_browser(candidates)
 
 
 def fetch_upstream_config_observed(base_url: str, timeout=15):
@@ -800,6 +1004,13 @@ def _slot_state_is_well_formed(state) -> bool:
     for key in ("started_epoch", "expires_epoch"):
         if not _is_number(state.get(key)):
             return False
+    # ``round`` is optional for compatibility with slots written before R4 and
+    # with callers that never bind a recovery round. When present it must be a
+    # real integer: a string/bool cannot identify the owning round.
+    round_id = state.get("round")
+    if round_id is not None and (isinstance(round_id, bool)
+                                or not isinstance(round_id, int)):
+        return False
     return True
 
 
@@ -833,6 +1044,51 @@ def _read_reauth_slot(path: str):
     return state, None
 
 
+def _owner_pid_alive(pid) -> bool:
+    """Whether the lease owner recorded in the slot still runs on this host.
+
+    The slot is shared by the instances of ONE host, so the recorded PID is a valid
+    owner reference. A restart gives the new instance a different PID while the old
+    lease keeps its full TTL, so without this probe a dead holder refuses every
+    login until the TTL runs out (observed live: an ECS restart left the slot
+    pointing at the previous 8110 for 24 hours and every login answered
+    ``reauth_refused:global_session_active``).
+
+    FAIL-CLOSED: only a DEFINITE "no such process" counts as dead. A probe that
+    cannot answer (permissions, unsupported platform, a non-positive PID) reports
+    ALIVE so the caller keeps refusing instead of opening a second submission
+    window on a lease that may still be held.
+    """
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return True
+    if os.name == "posix":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            # EPERM means the process EXISTS but is not ours; any other OSError
+            # is not evidence of death either.
+            return True
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        # ERROR_INVALID_PARAMETER is what OpenProcess reports for a PID that is
+        # not running; anything else is not evidence of death.
+        return ctypes.get_last_error() != 87
+    except Exception:  # noqa: BLE001 - an unanswerable probe is not evidence
+        return True
+
+
 def _write_reauth_slot(path: str, state: dict) -> bool:
     """Atomic replace (temp sibling + os.replace) so a reader never sees a
     half-written slot. Returns False instead of raising: the caller must treat
@@ -862,19 +1118,43 @@ class _ReauthLock:
     """A held cross-process lock (R13-1).
 
     ``fd`` is the open handle that owns the kernel lock; ``path`` exists for
-    diagnostics and tests only. The lock FILE is never deleted, so its existence
-    says nothing about who holds the lock - exactly like model_sync.SyncLock and
-    console_operations.ResourceFileLock, the two precedents this protocol copies.
+    diagnostics and tests only. ``kind``/``primitive`` record which OS primitive
+    took the lock so the release path never has to guess. The lock FILE is never
+    deleted, so its existence says nothing about who holds the lock - exactly like
+    model_sync.SyncLock and console_operations.ResourceFileLock, the two
+    precedents this protocol copies.
     """
 
-    __slots__ = ("fd", "path")
+    __slots__ = ("fd", "path", "kind", "primitive")
 
-    def __init__(self, fd, path):
+    def __init__(self, fd, path, kind=None, primitive=None):
         self.fd = fd
         self.path = path
+        self.kind = kind
+        self.primitive = primitive
 
 
-def _acquire_reauth_lock(path: str):
+def _reauth_lock_primitive(platform=None, importer=None):
+    """Select the kernel mutex primitive for this host (R13-1).
+
+    Windows keeps the historical ``msvcrt`` byte-range lock. POSIX hosts use
+    ``fcntl.flock``, which - unlike POSIX record locks - contends between
+    separate opens in the SAME process as well, so the in-process concurrency
+    tests and the cross-process mutex share one semantic. ``(None, None)`` means
+    the host offers no usable primitive; the caller must then refuse the session
+    instead of running the slot read-modify-write without a mutex.
+    """
+    platform = sys.platform if platform is None else platform
+    importer = __import__ if importer is None else importer
+    try:
+        if platform.startswith("win"):
+            return "msvcrt", importer("msvcrt")
+        return "fcntl", importer("fcntl")
+    except ImportError:
+        return None, None
+
+
+def _acquire_reauth_lock(path: str, primitive=None):
     """Cross-process mutex for the slot read-modify-write (A13-3, R13-1).
 
     The lease below is advisory and long-lived, so it cannot make the acquire step
@@ -883,50 +1163,71 @@ def _acquire_reauth_lock(path: str):
     its ledger entry (two submissions counted as one). The lock covers only that
     step.
 
-    R13-1: the mutex IS the kernel's byte-range lock (``msvcrt.locking``, the
-    same protocol as ``model_sync.SyncLock``) on ``<slot>.lock``, held through an
-    open handle for the whole critical section. The previous implementation created
-    the file with O_EXCL, closed the handle at once, and reclaimed a "stale" file by
-    mtime + unlink: that unlink was not bound to the file it had observed, so two
+    R13-1: the mutex IS the kernel's lock (``msvcrt.locking`` on Windows,
+    ``fcntl.flock`` on POSIX) on ``<slot>.lock``, held through an open handle
+    for the whole critical section. The previous implementation created the file
+    with O_EXCL, closed the handle at once, and reclaimed a "stale" file by mtime
+    + unlink: that unlink was not bound to the file it had observed, so two
     parties could each delete the other's fresh lock and both end up holding one
     (a second submission window, and two attempts counted as one). Nothing is
-    reclaimed now - the OS drops the lock when the holding process dies, so a crashed
-    holder cannot block the next one and no observer ever has to delete a live
-    holder's file. It is therefore also impossible for a second party to "take over"
-    a lock: it can only wait, and the caller keeps observing.
+    reclaimed now - the OS drops the lock when the holding process dies, so a
+    crashed holder cannot block the next one and no observer ever has to delete a
+    live holder's file. It is therefore also impossible for a second party to
+    "take over" a lock: it can only wait, and the caller keeps observing.
+    POSIX cannot prevent an external unlink of the path by the same user; the
+    0700 directory and 0600 lock file are mitigations, not guarantees. Product
+    code itself never unlinks the lock file.
 
-    Returns the handle, or None when the lock could not be taken within
-    REAUTH_LOCK_WAIT_S; the caller must then refuse the session rather than
-    guess.
+    ``primitive`` is the ``(kind, module)`` test seam from
+    ``_reauth_lock_primitive``. Returns the handle, or None when the lock could
+    not be taken within REAUTH_LOCK_WAIT_S (or no OS primitive exists); the
+    caller must then refuse the session rather than guess.
     """
-    try:
-        import msvcrt  # Windows-only primitive, like the precedents above
-    except ImportError:  # pragma: no cover - non-Windows host
+    if primitive is None:
+        primitive = _reauth_lock_primitive()
+    kind, module = primitive
+    if module is None:
+        _logger.warning(
+            "reauthentication lock primitive unavailable on platform=%s - "
+            "refusing sessions rather than skipping the mutex", sys.platform)
         return None
     lock_path = "%s.lock" % path
     try:
         directory = os.path.dirname(os.path.abspath(lock_path))
         if directory:
-            os.makedirs(directory, exist_ok=True)
-        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+            # POSIX mitigation for external unlink: only the directory owner (and
+            # group) can remove the entry. An existing directory is never
+            # re-chmodded; on Windows the mode is ignored.
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        if kind == "fcntl":
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError:
+                _logger.warning(
+                    "could not restrict reauthentication lock permissions "
+                    "path=%s - refusing sessions", lock_path)
+                os.close(fd)
+                return None
     except OSError:
         return None
     try:
-        # msvcrt.locking() locks a byte RANGE from the current position, so
-        # the file must be at least one byte long and the position must be
-        # reset before every lock/unlock call.
-        if os.fstat(fd).st_size == 0:
-            try:
-                os.write(fd, b"\0")
-            except OSError:
-                # Two processes can both open a still-empty file, so the
-                # second one's fstat may see zero bytes and its seed write
-                # then hits the byte the first one already locked. That is a
-                # concurrent holder, not a failed acquisition: the range lock
-                # itself works on a zero-length file, so waiting below is the
-                # correct move (returning None here refused a free lock).
-                pass
-        os.lseek(fd, 0, os.SEEK_SET)
+        if kind == "msvcrt":
+            # msvcrt.locking() locks a byte RANGE from the current position,
+            # so the file must be at least one byte long and the position must
+            # be reset before every lock/unlock call.
+            if os.fstat(fd).st_size == 0:
+                try:
+                    os.write(fd, b"\0")
+                except OSError:
+                    # Two processes can both open a still-empty file, so the
+                    # second one's fstat may see zero bytes and its seed write
+                    # then hits the byte the first one already locked. That is a
+                    # concurrent holder, not a failed acquisition: the range lock
+                    # itself works on a zero-length file, so waiting below is the
+                    # correct move (returning None here refused a free lock).
+                    pass
+            os.lseek(fd, 0, os.SEEK_SET)
     except OSError:
         try:
             os.close(fd)
@@ -936,8 +1237,13 @@ def _acquire_reauth_lock(path: str):
     deadline = time.time() + REAUTH_LOCK_WAIT_S
     while True:
         try:
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-            return _ReauthLock(fd, lock_path)
+            if kind == "msvcrt":
+                module.locking(fd, module.LK_NBLCK, 1)
+            else:
+                # LOCK_NB is the same non-blocking attempt as LK_NBLCK; the
+                # poll loop and deadline below stay identical for both hosts.
+                module.flock(fd, module.LOCK_EX | module.LOCK_NB)
+            return _ReauthLock(fd, lock_path, kind, module)
         except OSError:
             pass
         if time.time() >= deadline:
@@ -961,14 +1267,16 @@ def _release_reauth_lock(handle):
     fd = getattr(handle, "fd", None)
     if fd is None:
         return
+    kind = getattr(handle, "kind", None)
+    module = getattr(handle, "primitive", None)
+    if module is None:
+        kind, module = _reauth_lock_primitive()
     try:
-        import msvcrt
-    except ImportError:  # pragma: no cover - non-Windows host
-        msvcrt = None
-    try:
-        if msvcrt is not None:
+        if module is not None and kind == "msvcrt":
             os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            module.locking(fd, module.LK_UNLCK, 1)
+        elif module is not None:
+            module.flock(fd, module.LOCK_UN)
     except OSError:
         pass
     finally:
@@ -978,7 +1286,8 @@ def _release_reauth_lock(handle):
             pass
 
 
-def acquire_reauth_slot(path: str, pid: int, ttl_s: float, now=None):
+def acquire_reauth_slot(path: str, pid: int, ttl_s: float, now=None,
+                        round_id=None):
     """Take the cross-instance reauthentication lease (A13-3).
 
     Returns ``(granted, reason, state)``. Two instances share one UM
@@ -987,18 +1296,30 @@ def acquire_reauth_slot(path: str, pid: int, ttl_s: float, now=None):
     lease is reclaimed, so a crashed holder cannot block the other instance
     forever. A same-pid re-acquire is idempotent and is not counted twice.
 
+    ``round_id`` binds the lease to ONE local recovery round (R4). The caller
+    holds its state lock across acquire/release, but a lease may still be
+    released by a late finally after the next round already acquired it; the
+    round stored in the slot lets that release refuse instead of clearing the
+    newer round's lease. A NEWER round takes over a same-pid live lease; an
+    OLDER round never overwrites it.
+
     A slot that cannot be read is NOT an empty slot (R13-2): ``slot_corrupt``
     and ``slot_unreadable`` refuse the session and report the state honestly,
     because granting here would restart the global attempt count from one and open a
     window on top of a lease nobody can read. The damaged file is left untouched
     for the operator to inspect or remove.
+
+    ``next_allowed_epoch`` is the earliest moment a refused session could be
+    granted (the live lease's expiry, or the moment the oldest attempt leaves the
+    rolling window); it is ``None`` when no retry is meaningful, so the recovery
+    scheduler waits for exactly that moment instead of polling.
     """
     now = time.time() if now is None else now
     lock = _acquire_reauth_lock(path)
     if lock is None:
         return False, "coordination_unavailable", {
             "owner_pid": None, "expires_epoch": 0.0,
-            "attempts_in_window": 0}
+            "attempts_in_window": 0, "next_allowed_epoch": None}
     try:
         state, error = _read_reauth_slot(path)
         if error not in (None, "missing"):
@@ -1011,51 +1332,111 @@ def acquire_reauth_slot(path: str, pid: int, ttl_s: float, now=None):
             # unreachable lock: nothing was observed, nothing is claimed.
             return False, reason, {
                 "owner_pid": None, "expires_epoch": 0.0,
-                "attempts_in_window": 0}
+                "attempts_in_window": 0, "next_allowed_epoch": None}
         attempts = _slot_attempts(state, now)
         owner = state.get("owner_pid")
         expires = state.get("expires_epoch")
+        # The TTL alone cannot decide liveness: a restarted instance has a new
+        # PID while the previous holder's lease keeps its full day. A lease whose
+        # owner is definitely gone is reclaimed here, before the TTL runs out.
         live_owner = (isinstance(owner, int) and not isinstance(owner, bool)
                       and isinstance(expires, (int, float))
-                      and float(expires) > now)
+                      and float(expires) > now
+                      and _owner_pid_alive(owner))
         if live_owner and owner != pid:
+            _logger.info(
+                "reauthentication slot refused reason=global_session_active "
+                "owner_pid=%s pid=%s expires=%.3f",
+                owner, pid, float(expires))
             return False, "global_session_active", {
                 "owner_pid": owner, "expires_epoch": float(expires),
-                "attempts_in_window": len(attempts)}
+                "attempts_in_window": len(attempts),
+                "next_allowed_epoch": float(expires)}
         if not live_owner and len(attempts) >= REAUTH_MAX_ATTEMPTS_PER_WINDOW:
             return False, "global_attempt_cap", {
                 "owner_pid": None, "expires_epoch": 0.0,
-                "attempts_in_window": len(attempts)}
+                "attempts_in_window": len(attempts),
+                "next_allowed_epoch": (min(attempts)
+                                      + REAUTH_ATTEMPT_WINDOW_S)}
         same_session = live_owner and owner == pid
+        stored_round = state.get("round")
+        if (same_session and round_id is not None
+                and stored_round is not None
+                and round_id < stored_round):
+            # A late re-acquire from an OLDER round must never overwrite the
+            # newer round's ownership or extend its TTL. The newer round keeps
+            # the lease; the older one only observes this refusal.
+            return False, "round_superseded", {
+                "owner_pid": pid, "expires_epoch": float(expires),
+                "attempts_in_window": len(attempts),
+                "next_allowed_epoch": float(expires),
+                "round": stored_round}
         new_state = {
             "owner_pid": pid,
             "started_epoch": state.get("started_epoch") if same_session else now,
             "expires_epoch": now + ttl_s,
             "attempts": attempts if same_session else attempts + [now],
+            "round": (round_id if round_id is not None
+                      else state.get("round")),
         }
         if not _write_reauth_slot(path, new_state):
             return False, "slot_unavailable", {
                 "owner_pid": None, "expires_epoch": 0.0,
-                "attempts_in_window": len(attempts)}
+                "attempts_in_window": len(attempts),
+                "next_allowed_epoch": None}
         return True, None, {
             "owner_pid": pid, "expires_epoch": new_state["expires_epoch"],
-            "attempts_in_window": len(new_state["attempts"])}
+            "attempts_in_window": len(new_state["attempts"]),
+            "next_allowed_epoch": None,
+            "round": new_state["round"]}
     finally:
         _release_reauth_lock(lock)
+
+
+_release_round_local = threading.local()
+
+
+def _release_reauth_slot_for_round(path: str, pid: int, round_id: int,
+                                    success=False):
+    """Release the lease bound to ONE recovery round (R4).
+
+    The public ``release_reauth_slot`` signature stays compatible with callers
+    (and test seams) that only know ``path/pid/success``. The round is carried
+    to the synchronous release through a thread-local context, so a release paused
+    inside the real function still checks the round stored in the lease: a late
+    finally of an OLD round refuses to clear the NEXT round's same-pid lease.
+    """
+    previous = getattr(_release_round_local, "round_id", None)
+    _release_round_local.round_id = round_id
+    try:
+        return release_reauth_slot(path, pid, success=success)
+    finally:
+        _release_round_local.round_id = previous
 
 
 def release_reauth_slot(path: str, pid: int, success=False):
     """Release a lease this pid holds; never release another instance's lease.
 
-    ``success`` clears the attempt ledger (a sign-in that worked is proof the
-    credential is good, so earlier rejections must not keep throttling the next
-    one); a failure keeps it, which is what bounds the lockout risk.
+    ``_release_reauth_slot_for_round`` additionally binds the release to the
+    recovery round that acquired the lease (R4). A late cleanup of an OLD round
+    must never clear a lease the NEXT round already holds: without a matching
+    round the release is a no-op. Direct callers that pass no round keep the
+    historical pid-only contract.
+
+    A successful session resets THIS instance's recovery progress (the caller
+    clears its own cycle), but it must NOT delete the global rolling ledger
+    (Plan-Revision 2 A4): the hard cap counts session STARTS, so the entries
+    still inside the window stay even after a success. The pre-fix code cleared
+    them, which made the cap a "failed attempts only" limit instead of the
+    confirmed hard cap. A failed session keeps the ledger too, which is what
+    bounds the lockout risk.
 
     R13-2: a slot that cannot be read is left exactly as it is. Writing over it
     would replace a fail-closed state with an empty slot and destroy the only
     evidence an operator has; an absent slot (or one owned by another pid) is not
     written either, exactly as before.
     """
+    round_id = getattr(_release_round_local, "round_id", None)
     lock = _acquire_reauth_lock(path)
     if lock is None:
         return
@@ -1065,12 +1446,17 @@ def release_reauth_slot(path: str, pid: int, success=False):
             return
         if state.get("owner_pid") != pid:
             return
-        attempts = [] if success else _slot_attempts(state, time.time())
+        if round_id is not None and state.get("round") != round_id:
+            # An older round's finally reached this call after a newer round
+            # acquired the same-pid lease: leave the newer ownership intact.
+            return
+        attempts = _slot_attempts(state, time.time())
         _write_reauth_slot(path, {
             "owner_pid": None,
             "started_epoch": 0.0,
             "expires_epoch": 0.0,
             "attempts": attempts,
+            "round": state.get("round"),
         })
     finally:
         _release_reauth_lock(lock)
@@ -1128,6 +1514,22 @@ class _LoginPage:
 
     def wait(self, ms):
         self._page.wait_for_timeout(ms)
+
+    def is_closed(self) -> bool:
+        """Whether the visible window is gone (A2 window-reopen signal).
+
+        A stand-in page without the Playwright method reports "not closed", so
+        the offline fakes keep their previous behaviour. A closed target can
+        make even ``is_closed()`` raise; that error IS the window-closed
+        signal, never a credential verdict.
+        """
+        try:
+            return bool(self._page.is_closed())
+        except AttributeError:
+            # A stand-in without the Playwright method is "not closed".
+            return False
+        except Exception as exc:
+            return "closed" in str(exc).lower()
 
     def _visible_matches(self, selectors):
         """Targets of the visible CONTROLS across the allowed selectors only.
@@ -1234,6 +1636,79 @@ class LoginStalled(RuntimeError):
         self.detail = detail
 
 
+class LoginWindowClosed(RuntimeError):
+    """The visible window vanished while the automatic flow still needed it.
+
+    Transient (A2): the closed window may be reopened within the same recovery
+    cycle, so this is never reported as a password rejection or a pause.
+    """
+
+    def __init__(self, reason: str = "window_closed", detail: str = ""):
+        super().__init__("login window closed: %s%s"
+                         % (reason, (" (%s)" % detail) if detail else ""))
+        self.reason = reason
+        self.detail = detail
+
+
+class LoginUnavailable(RuntimeError):
+    """The browser cannot be used at all (A2: terminal, not transient).
+
+    A missing Edge is a configuration fact that will not fix itself inside a
+    recovery cycle, so it pauses the automatic recovery instead of spending the
+    six-session budget on the same deterministic failure.
+    """
+
+    def __init__(self, reason: str = "browser_unavailable",
+                 detail: str = ""):
+        message = "login unavailable: %s" % reason
+        if detail:
+            message += " (%s)" % detail
+        super().__init__(message)
+        self.reason = reason
+        self.detail = detail
+
+
+class LoginCredentialRejected(RuntimeError):
+    """The upstream explicitly rejected the submitted account/password (A2).
+
+    Produced ONLY from structural evidence (a visible error region on the UMPASS
+    form after a submitted form). Terminal for the cycle on purpose: retrying a
+    rejected password would risk the documented UMPASS account lockout.
+    """
+
+    def __init__(self, reason: str = "upstream_credential_rejected",
+                 detail: str = ""):
+        message = "login credential rejected: %s" % reason
+        if detail:
+            message += " (%s)" % detail
+        super().__init__(message)
+        self.reason = reason
+        self.detail = detail
+
+
+class LoginCancelled(RuntimeError):
+    """The operator explicitly cancelled THIS login round (D18-6).
+
+    Terminal for the round but NOT a credential verdict: the service keeps
+    running, the browser context is closed, and ordinary requests never reopen
+    the window. Only an explicit ``/admin/auth/login`` may start a new round.
+    """
+
+    def __init__(self, reason: str = "cancelled"):
+        super().__init__("login cancelled: %s" % reason)
+        self.reason = reason
+
+
+class _LoginCancelSignal:
+    """OR of the shutdown event and the explicit login-cancel event."""
+
+    def __init__(self, *events):
+        self._events = tuple(event for event in events if event is not None)
+
+    def is_set(self):
+        return any(event.is_set() for event in self._events)
+
+
 def _click_and_observe(page, target, before_url, cancel_event) -> str:
     """One bounded click plus observation. Returns ``advanced`` when the page
     demonstrably moved (URL changed, or the clicked control left the page) and
@@ -1252,40 +1727,91 @@ def _click_and_observe(page, target, before_url, cancel_event) -> str:
             return "advanced"
         if not page.any_visible((target[0],)):
             return "advanced"  # the control left the DOM: something moved
-        page.wait(LOGIN_CLICK_OBSERVE_POLL_MS)
+        try:
+            page.wait(LOGIN_CLICK_OBSERVE_POLL_MS)
+        except Exception:
+            return "swallowed"  # a vanished window is reported by the caller
     return "swallowed"
+
+
+def _umpass_credential_rejected(page) -> bool:
+    """Structural rejection evidence on the UMPASS form (A2).
+
+    The real site's error DOM is NOT verified here, so the check stays
+    conservative: the page must still be the UMPASS form, a VISIBLE alert/error
+    region must be present AND the autofilled password field must still hold its
+    value. Anything else (a changed site, a missing field, a slow render) is left
+    to a human instead of being guessed as a wrong password.
+    """
+    if _page_host(page.url()) != UMPASS_SSO_HOST:
+        return False
+    if not page.any_visible(UMPASS_ERROR_SELECTORS):
+        return False
+    return page.field_filled(UMPASS_PASSWORD_SELECTORS)
+
+
+def _check_login_window(page, closed_check):
+    """Raise the transient window-closed signal when the page is gone (A2)."""
+    if closed_check():
+        raise LoginWindowClosed(
+            "window_closed", "last page %s" % (page.url() or "unknown"))
 
 
 def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                   on_context=None, cancel_event=None,
                   context_factory=None, credential_probe=None,
-                  on_progress=None) -> str:
-    """Open visible Edge and drive the two-step UM SSO in one bounded session.
+                  on_progress=None, cancel_login_event=None) -> str:
+    """Open a visible Chromium-family browser and drive the two-step UM SSO.
 
-    Controlled flow (A13-1/A13-3): the Open WebUI login page's
-    "使用 UMPASS 继续" entry, then the UMPASS form whose account and password
-    Edge already autofilled from this instance's own profile. The automatic part
+    Windows drives Microsoft Edge from its installation paths; Linux drives the
+    first Chromium-family binary found in PATH (or the explicit
+    ``CHAT2API_BROWSER_PATH`` override). Controlled flow (A13-1/A13-3): the Open
+    WebUI login page's "使用 UMPASS 继续" entry, then the UMPASS form whose
+    account and password the browser already autofilled from this instance's own
+    profile. The automatic part
     only acts on the verified Open WebUI origin (the instance's own --base-url)
     and on websso.um.edu.mo, and only while the expected control is uniquely
     visible. MFA/captcha, a missing prefill, a changed form, an unknown page
     or a swallowed click stop the automatic flow and leave the visible window to
     a human (``on_progress`` reports the reason; the token poll keeps
-    running). ``context_factory(edge, profile_dir)`` and
+    running). ``cancel_event`` cancels the session when the service stops and
+    ``cancel_login_event`` cancels it when the operator explicitly cancels THIS
+    round (D18-6): the latter raises ``LoginCancelled`` so the recovery loop
+    ends the round instead of treating a closed window as a reopenable failure.
+    ``context_factory(edge, profile_dir)`` and
     ``credential_probe(base_url, token)`` are the test seams: the real
     defaults are the Playwright persistent context and
     ``classify_credential``.
     """
-    edge = find_edge()
+    try:
+        edge = find_edge()
+    except BrowserConfigError as exc:
+        raise LoginUnavailable(
+            "browser_config_error",
+            "%s: %s" % (exc.reason, exc.detail)) from exc
     if not edge:
-        raise RuntimeError("Microsoft Edge was not found")
+        raise LoginUnavailable(*_missing_browser_error(sys.platform))
+    if not sys.platform.startswith("win") and not _headful_display_available():
+        raise LoginUnavailable(
+            "display_missing",
+            "DISPLAY and WAYLAND_DISPLAY are both unset; a visible "
+            "browser window cannot be opened")
+    # A visible login window needs a display on POSIX; Windows never reads it.
     print("=" * 60)
-    print(f"Opening Microsoft Edge: {base_url}")
+    print(f"Opening browser ({edge}): {base_url}")
     print("Sign in in the window that pops up (skipped if already logged in).")
     print(f"Waiting up to {timeout_s}s for the session token...")
     print("=" * 60)
 
     probe = credential_probe or classify_credential
     expected_origin = _page_origin(base_url)
+    cancel_signal = _LoginCancelSignal(cancel_event, cancel_login_event)
+
+    def raise_if_cancelled():
+        if cancel_login_event is not None and cancel_login_event.is_set():
+            raise LoginCancelled()
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("Login cancelled because chat2api is stopping")
 
     def note(phase, origin=None, manual_reason=None, detail=None):
         if not on_progress:
@@ -1329,8 +1855,8 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             stage_seen = {}
             manual_reason = None
             while time.time() < deadline:
-                if cancel_event and cancel_event.is_set():
-                    raise RuntimeError("Login cancelled because chat2api is stopping")
+                raise_if_cancelled()
+                _check_login_window(page, page.is_closed)
                 try:
                     token = page.read_token()
                 except Exception:
@@ -1403,10 +1929,9 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                         else:
                             clicks[stage] += 1
                             outcome = _click_and_observe(
-                                page, target, url, cancel_event)
+                                page, target, url, cancel_signal)
                             if outcome == "cancelled":
-                                raise RuntimeError(
-                                    "Login cancelled because chat2api is stopping")
+                                raise_if_cancelled()
                             note("openwebui_clicked", origin=url)
                 elif stage == "umpass":
                     if clicks[stage] >= LOGIN_MAX_CLICKS_PER_STAGE:
@@ -1435,13 +1960,25 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                         else:
                             clicks[stage] += 1
                             outcome = _click_and_observe(
-                                page, target, url, cancel_event)
+                                page, target, url, cancel_signal)
                             if outcome == "cancelled":
-                                raise RuntimeError(
-                                    "Login cancelled because chat2api is stopping")
+                                raise_if_cancelled()
                             note("umpass_submitted", origin=url)
+                            _check_login_window(page, page.is_closed)
+                            if _umpass_credential_rejected(page):
+                                # Structural evidence only: the visible form
+                                # reported an error and the autofilled
+                                # password is still there. A rejected
+                                # password must never be retried blindly.
+                                raise LoginCredentialRejected()
 
-                page.wait(LOGIN_POLL_INTERVAL_MS)
+                try:
+                    page.wait(LOGIN_POLL_INTERVAL_MS)
+                except Exception:
+                    # A vanished window is a transient (reopenable) signal,
+                    # never a password rejection or a silent timeout.
+                    _check_login_window(page, page.is_closed)
+                    raise
 
             if manual_reason is None and stage == "duo":
                 # The session ended while the visible window was still on the
@@ -1605,12 +2142,23 @@ _stat_cache_lock = threading.Lock()
 
 
 def set_request_facts(protocol, key_id=None, request_id=None,
-                      attribution="absent"):
-    """Install THIS request's attribution facts for record_usage."""
+                      attribution="absent", attribution_ts=None):
+    """Install THIS request's attribution facts for record_usage.
+
+    A new request on this thread also ends the PREVIOUS request's pre-send
+    ticket: the ticket is released exactly once here, so a committed ticket can
+    never outlive the request it belonged to (see share_dispatch).
+    ``attribution_ts`` is the VERIFIED marker's own timestamp; 8110 compares it
+    with a persisted revoke generation to refuse only requests admitted before
+    that revoke.
+    """
+    _release_share_dispatch_ticket("request_finished")
     _request_facts.protocol = protocol
     _request_facts.key_id = key_id
     _request_facts.request_id = request_id
     _request_facts.attribution = attribution
+    _request_facts.attribution_ts = attribution_ts
+    _request_facts.verified_attribution_ts = None
 
 
 def _request_fact(name):
@@ -1692,6 +2240,7 @@ def verify_share_attribution(headers, now=None):
     """
     values = {name: headers.get_all(name, []) for name in
               ATTRIBUTION_HEADER_NAMES}
+    _request_facts.verified_attribution_ts = None
     if not any(values.values()):
         return None, None, "absent"
     if any(len(found) > 1 for found in values.values()):
@@ -1737,7 +2286,486 @@ def verify_share_attribution(headers, now=None):
         return None, None, "bad_key_id"
     if not key_id or _attribution_first_seen(request_id) is False:
         return None, None, "replayed"
+    _request_facts.verified_attribution_ts = ts
     return key_id, request_id, "verified"
+
+
+# --------------------------------------- share pre-send dispatch (8110 only)
+# The dedicated share backend (8110) is the ONLY process that receives a
+# VERIFIED attribution marker, and it is the only place where a share request's
+# send can be staggered: before the upstream send, one share Key must not fire a
+# burst of simultaneous requests, while different keys rotate. The 8000 main chain
+# installs no verified fact, so it never assembles a dispatcher and keeps its
+# native JSON and its existing retry/budget/cancel semantics untouched.
+SHARE_DISPATCH_PROTOCOLS = frozenset({"chat", "messages", "responses"})
+
+# Review #9: the SAME source serves TWO roles - the private 8000 main chain and
+# the dedicated 8110 share backend.  Only the backend may assemble the pre-send
+# dispatcher or accept a signed revoke notice: a signed notice that somehow
+# reaches the private chain must be an explicit no-op, never a ticket release.
+# The role is resolved ONCE by main() (dedicated profile / explicit marker) and
+# stays None for an in-process module loaded without main(), so embedded tests
+# and callers keep their existing wiring.  None means "not launched by main()",
+# NOT "backend".
+SHARE_BACKEND_ROLE_ENV = "CHAT2API_SHARE_BACKEND"
+SHARE_BACKEND_KEY_ENV = "CHAT2API_SHARE_ATTRIBUTION_KEY_FILE"
+SHARE_BACKEND_ROLE = None
+
+
+def _parse_share_backend_marker(value):
+    """Parse the explicit role marker; None when the value is not one."""
+    if not isinstance(value, str):
+        return None
+    marker = value.strip().lower()
+    if marker in ("1", "true", "yes", "on", "share-backend",
+                  "share_backend", "backend"):
+        return True
+    if marker in ("0", "false", "no", "off", "private", "main"):
+        return False
+    return None
+
+
+def _resolve_share_backend_role(default):
+    """Resolve the role: explicit marker > backend key env > ``default``."""
+    marker = _parse_share_backend_marker(
+        os.environ.get(SHARE_BACKEND_ROLE_ENV))
+    if marker is not None:
+        return marker
+    if os.environ.get(SHARE_BACKEND_KEY_ENV):
+        return True
+    return default
+
+
+def share_backend_role():
+    """True for the dedicated share backend, False for the private chain.
+
+    ``None`` means this module was loaded without ``main()`` (in-process wiring
+    and tests); it keeps the legacy behavior instead of guessing a role.
+    """
+    if SHARE_BACKEND_ROLE is not None:
+        return SHARE_BACKEND_ROLE
+    return _resolve_share_backend_role(None)
+
+# A request whose cumulative send-wait budget ended before its turn is refused
+# with a retryable 429. The hint is a definite whole number of seconds (the share
+# relay only forwards 1..900) so a client backs off instead of immediately
+# re-entering the same congested rotation.
+SHARE_DISPATCH_RETRY_AFTER_S = 1
+# Review #9: a revoke state file that cannot be read is a retryable service
+# failure, never a client cancellation.  The HTTP error type and the ledger
+# status share this ONE stable name.
+SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS = "share_dispatch_state_unavailable"
+
+_share_dispatcher = None
+_share_dispatcher_lock = threading.Lock()
+
+
+def _load_share_dispatch():
+    """Load the pre-send scheduler beside THIS file, independent of sys.path.
+
+    Same seam as the other beside-THIS-file loaders: the service runs this
+    file as a script (its directory is on sys.path), while test suites load it by
+    path from another directory. Reuse the module when it is already imported so
+    the tests and the wiring share one class object. No I/O or network side effect
+    happens here; the dispatcher itself is still built only on first VERIFIED
+    request.
+
+    E19-1-02: a process resolved as the private (non-share) role refuses BEFORE
+    looking at ``sys.modules`` or the filesystem, so the local package never
+    needs the cloud share backend sources.
+    """
+    if share_backend_role() is False:
+        raise ImportError("share backend module not assembled")
+    import importlib.util
+    module = sys.modules.get("share_dispatch")
+    if module is not None:
+        return module
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "share_dispatch.py")
+    spec = importlib.util.spec_from_file_location("share_dispatch", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["share_dispatch"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def share_dispatcher():
+    """The process-wide pre-send dispatcher, built on first VERIFIED request.
+
+    Lazy on purpose: a process that never serves a verified share request (the
+    8000 main chain, or a direct 8110 caller) never assembles one.  Review #9:
+    a process explicitly resolved as the PRIVATE main chain never assembles one
+    even when it receives a verified marker or a signed revoke notice.
+    """
+    if share_backend_role() is False:
+        return None
+    global _share_dispatcher
+    with _share_dispatcher_lock:
+        if _share_dispatcher is None:
+            _share_dispatcher = _load_share_dispatch().ShareDispatcher()
+        return _share_dispatcher
+
+
+def share_dispatch_ticket(protocol):
+    """Register (or re-enter) THIS request's pre-send ticket; None when disabled.
+
+    Enabled ONLY for a request whose attribution this process VERIFIED at its own
+    HTTP boundary (``verify_share_attribution`` -> ``set_request_facts``): the
+    facts must say "verified", the installed protocol must be the handler's own
+    protocol (scope match), and both the verified key id and the request id must be
+    present. A direct 8110 caller, a missing marker, an unverified marker and a
+    mismatched protocol/scope all keep the dispatcher unassembled and this
+    function returns None, leaving the send path unchanged.
+
+    The ticket is stored on this thread's facts so the request-boundary reset in
+    ``set_request_facts`` can release it exactly once.
+    """
+    if protocol not in SHARE_DISPATCH_PROTOCOLS:
+        return None
+    if _request_fact("attribution") != "verified":
+        return None
+    if _request_fact("protocol") != protocol:
+        return None
+    key_id = _request_fact("key_id")
+    request_id = _request_fact("request_id")
+    if not isinstance(key_id, str) or not key_id:
+        return None
+    if not isinstance(request_id, str) or not request_id:
+        return None
+    # A request that 8100 admitted BEFORE the revoke notice may reach this
+    # process AFTER it: the persisted generation refuses a NEW ticket instead of
+    # granting and sending it late.  The check is fail-closed when the state
+    # cannot be read, and a later re-enabled Key's newer attribution is allowed.
+    refusal = _share_dispatch_refusal(key_id)
+    dispatcher = share_dispatcher()
+    if dispatcher is None:
+        # Review #9: the private main chain never assembles a dispatcher, so a
+        # verified marker that reaches it can never create a ticket.
+        return None
+    ticket = dispatcher.register(key_id, request_id,
+                                 closed_reason=refusal)
+    _request_facts.dispatch_ticket = ticket
+    return ticket
+
+
+def _release_share_dispatch_ticket(reason):
+    """Release THIS thread's request ticket exactly once (idempotent)."""
+    ticket = getattr(_request_facts, "dispatch_ticket", None)
+    _request_facts.dispatch_ticket = None
+    if ticket is not None:
+        ticket.release(reason)
+
+
+def _close_share_dispatch():
+    """Process exit: release every ticket exactly once."""
+    dispatcher = _share_dispatcher
+    if dispatcher is not None:
+        dispatcher.close_all("exit")
+
+
+def _raise_share_dispatch_refusal(outcome, reason=None):
+    """Map a non-GRANTED dispatch outcome onto this module's errors.
+
+    The SAME mapping is used after ``wait_turn`` and when ``commit`` refuses a
+    ticket that was released between the grant and the send. A revoke therefore
+    stays a retryable ``_ShareDispatchRevoked`` (429) instead of collapsing into
+    the generic client-disconnect cancellation.  Review #9: an unreadable revoke
+    state is a retryable SERVICE failure (503), not a client cancel; its reason
+    is the closed ticket's own ``revoke_state_unavailable``.
+    """
+    module = _load_share_dispatch()
+    # Review #9: the reason wins over the generic outcome: an unreadable
+    # revoke state is a retryable SERVICE failure, never a client cancel.
+    if reason == "revoke_state_unavailable":
+        raise _ShareDispatchStateUnavailable(
+            "share revoke state is unavailable; refusing the send")
+    if outcome == module.OUTCOME_TIMEOUT:
+        raise _ShareDispatchTimeout(
+            "share send wait budget exhausted before this request's turn")
+    if outcome == module.OUTCOME_REVOKED:
+        raise _ShareDispatchRevoked(
+            "the Key was revoked before this request's send turn")
+    if outcome == module.OUTCOME_DEADLINE:
+        raise _RequestDeadlineExceeded(
+            "request deadline exhausted while waiting for the share send turn")
+    if outcome == module.OUTCOME_STOPPED:
+        raise _RequestCancelled("instance stopping")
+    if outcome == module.OUTCOME_CANCELLED:
+        raise _RequestCancelled("client disconnected")
+    raise _RequestCancelled("share dispatch released")
+
+
+def _await_share_send_turn(ticket, cancel_check, request_deadline, stopping):
+    """Wait at the send boundary; map the outcome onto this module's errors.
+
+    Only a granted turn lets the send proceed. A cumulative-budget timeout is a
+    RETRYABLE refusal: the ticket was released exactly once without a grant, so this
+    raises ``_ShareDispatchTimeout`` and the request never reaches the upstream
+    (the handler maps it to 429 + Retry-After). Cancel and process exit keep this
+    module's existing error mapping, so the handler's retry/budget/cancel semantics
+    are unchanged. A release before the send (revoke, state unavailable or an
+    already closed ticket) refuses the send instead of letting it reach the upstream
+    late.
+    """
+    outcome = ticket.wait_turn(cancel_check=cancel_check,
+                              request_deadline=request_deadline,
+                              stop_check=stopping)
+    if outcome == _load_share_dispatch().OUTCOME_GRANTED:
+        return
+    _raise_share_dispatch_refusal(outcome, getattr(ticket, "reason", None))
+
+
+# ------------------------------------ share revoke notice (R-C5, 8100 -> 8110)
+# 8100 owns the projection, so it is the only process that can observe "this
+# Key became disabled/deleted at generation N". 8110 owns the pre-send tickets.
+# The 8100 handler can stay blocked in upstream.getresponse() after a revoke
+# closed the CLIENT socket, so the 8100->8110 socket never sees EOF and 8110's
+# cancel_check cannot release the ticket by itself.  The 8100 therefore sends ONE
+# loopback-only notice signed with the SAME shared attribution secret.  This
+# process verifies it at its own loopback boundary and releases that Key's
+# PENDING/GRANTED tickets.  The notice carries no plaintext Key and no secret.
+# Review #14: applied generations are evicted by TIME, never by insertion
+# order.  A notice older than the timestamp window can never pass verification,
+# so only entries whose last update is older than the window are dropped; every
+# stored generation inside the window stays absolute.
+REVOKE_NOTICE_GENERATIONS_TTL_S = 300
+_revoke_applied_generations = {}
+_revoke_applied_lock = threading.RLock()
+_revoke_applied_loaded = False
+
+
+def _revoke_generation_updated_at(entry):
+    """The eviction clock of ONE stored generation entry."""
+    if not isinstance(entry, dict):
+        return 0
+    updated_at = entry.get("updated_at", entry.get("applied_at", 0))
+    if isinstance(updated_at, bool) \
+            or not isinstance(updated_at, (int, float)):
+        return 0
+    return updated_at
+
+
+def _prune_revoke_generations_locked(now=None):
+    """Drop applied generations whose notice window has fully expired."""
+    now = time.time() if now is None else now
+    cutoff = now - REVOKE_NOTICE_GENERATIONS_TTL_S
+    for key_id, entry in list(_revoke_applied_generations.items()):
+        if _revoke_generation_updated_at(entry) < cutoff:
+            _revoke_applied_generations.pop(key_id, None)
+
+
+def _ensure_revoke_applied_loaded():
+    """Load the persisted per-Key generations exactly once (fail closed)."""
+    global _revoke_applied_loaded
+    with _revoke_applied_lock:
+        if _revoke_applied_loaded:
+            return
+        state = _share_gateway_module().load_revoke_state()
+        _revoke_applied_generations.clear()
+        _revoke_applied_generations.update(
+            state.get("generations") or {})
+        _prune_revoke_generations_locked()
+        _revoke_applied_loaded = True
+
+
+def _reset_share_revoke_state():
+    """Test seam: forget both in-process caches; the state file stays."""
+    global _revoke_applied_loaded
+    with _revoke_applied_lock:
+        _revoke_applied_generations.clear()
+        _revoke_applied_loaded = False
+    try:
+        _share_gateway_module().reset_revoke_state_cache()
+    except (ImportError, AttributeError):
+        pass
+
+
+def _share_dispatch_refusal(key_id):
+    """Why a NEW ticket for this Key must be refused, or None.
+
+    The applied revoke generation is persisted, so a request that 8100 admitted
+    before the notice but that reaches 8110 after it is refused even when the
+    notice closed no ticket.  A request admitted after a later re-enable carries
+    a strictly newer attribution timestamp and is admitted again; a missing
+    timestamp is fail-closed.
+    """
+    try:
+        # 8100 and 8110 read the same revoke state file; a write/rename on the
+        # 8100 side can briefly race this first load.  Retry a bounded number
+        # of times before treating it as a service failure.
+        for attempt in range(3):
+            try:
+                _ensure_revoke_applied_loaded()
+                break
+            except (OSError, ValueError):
+                if attempt == 2:
+                    raise
+                time.sleep(0.05)
+        with _revoke_applied_lock:
+            entry = _revoke_applied_generations.get(key_id)
+            if entry is None:
+                return None
+            applied_at = (entry.get("applied_at")
+                          if isinstance(entry, dict) else None)
+    except (ImportError, AttributeError, OSError, ValueError) as exc:
+        print(f"[share-dispatch] revoke state load failed: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return "revoke_state_unavailable"
+    if applied_at is None:
+        return "revoke"
+    ts = _request_fact("attribution_ts")
+    if ts is None or ts <= applied_at:
+        return "revoke"
+    return None
+
+
+_SHARE_GATEWAY_REQUIRED = (
+    "load_revoke_state", "reset_revoke_state_cache",
+    "record_revoke_generation", "_verified_revoke_notice_action",
+    "_verified_revoke_notice_ts", "valid_responses_request",
+    "responses_to_messages_request",
+)
+
+
+def _share_gateway_module():
+    """Load share_gateway beside THIS file, independent of sys.path.
+
+    Same seam as ``_load_share_dispatch``: the service runs this file as a
+    script (its directory is on sys.path), while tests load it by path from
+    another directory.  Reuse the module when it is already imported so the
+    notice builder/verifier has exactly ONE implementation.
+
+    A failed import leaves a partially initialized module in ``sys.modules``.
+    That partial module must never be reused: evict it before retrying, and
+    evict it again if the retry fails, so one transient failure cannot poison
+    every later request in this process.
+
+    E19-1-02: a process resolved as the private (non-share) role refuses
+    BEFORE looking at ``sys.modules`` or the filesystem, so the local package
+    never needs the cloud share backend sources.
+    """
+    if share_backend_role() is False:
+        raise ImportError("share backend module not assembled")
+    module = sys.modules.get("share_gateway")
+    if module is not None and all(
+            hasattr(module, name) for name in _SHARE_GATEWAY_REQUIRED):
+        return module
+    if module is not None:
+        sys.modules.pop("share_gateway", None)
+    import importlib.util
+    path = os.path.join(HERE, "share_gateway.py")
+    spec = importlib.util.spec_from_file_location("share_gateway", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["share_gateway"] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if sys.modules.get("share_gateway") is module:
+            sys.modules.pop("share_gateway", None)
+        raise
+    return module
+
+
+def apply_share_revoke_notice(body, secret, now=None):
+    """Verify and apply ONE signed transition notice.
+
+    Returns ``(http_status, payload)``.  The dispatcher is used ONLY when this
+    process already assembled one: a process that never served a verified share
+    request (the 8000 main chain) keeps its lazy dispatcher unassembled and
+    reports ``released=0`` instead of building one just to revoke nothing.
+    Review #9 makes that role boundary explicit: a process resolved as the
+    private main chain refuses the endpoint with a clear unassembled error even
+    when the notice signature is valid.
+
+    A repeated generation is an idempotent no-op; an older generation never
+    overrides the newer applied state.  A signed ``reenable`` advances the
+    per-Key generation watermark and NEVER calls ``revoke_key``: a late older
+    revoke is then ``stale_generation`` and cannot close the re-enabled Key's
+    newer tickets.
+    """
+    if share_backend_role() is False:
+        return 503, {"ok": False, "error": "share_revoke_unassembled",
+                     "released": 0, "aborted": 0,
+                     "detail": "this process is not the dedicated share backend"}
+    try:
+        verifier = _share_gateway_module()
+        key_id, generation, reason = verifier.verify_revoke_notice(
+            body, secret, now=now)
+    except (ImportError, AttributeError):
+        return 503, {"ok": False, "error": "share_revoke_unavailable"}
+    if reason != "verified":
+        status = 403 if reason in ("bad_signature", "replayed") else 400
+        if reason in ("no_key", "state_unavailable"):
+            status = 503
+        return status, {"ok": False, "error": "share_revoke_rejected",
+                        "reason": reason}
+    try:
+        action = (_share_gateway_module()._verified_revoke_notice_action()
+                  or "revoke")
+    except (ImportError, AttributeError):
+        action = "revoke"
+    if action not in ("revoke", "reenable"):
+        return 400, {"ok": False, "error": "share_revoke_rejected",
+                     "reason": "bad_action", "released": 0,
+                     "aborted": 0}
+    try:
+        notice_ts = _share_gateway_module()._verified_revoke_notice_ts()
+    except (ImportError, AttributeError):
+        notice_ts = None
+    applied_at = notice_ts if isinstance(notice_ts, (int, float)) else time.time()
+    try:
+        with _revoke_applied_lock:
+            _ensure_revoke_applied_loaded()
+            last = _revoke_applied_generations.get(key_id)
+            last_generation = (last.get("generation")
+                               if isinstance(last, dict) else None)
+            if last_generation is not None and generation < last_generation:
+                return 200, {"ok": True, "released": 0, "aborted": 0,
+                             "generation": generation,
+                             "ignored": "stale_generation"}
+            if last_generation is not None and generation == last_generation:
+                return 200, {"ok": True, "released": 0, "aborted": 0,
+                             "generation": generation, "duplicate": True}
+            if action == "reenable":
+                # "Only advance the watermark": the admission boundary
+                # (applied_at) is preserved, so requests admitted after the
+                # re-enable are not refused just because a notice arrived.
+                previous_at = (last.get("applied_at")
+                               if isinstance(last, dict) else None)
+                if isinstance(previous_at, (int, float)) \
+                        and not isinstance(previous_at, bool):
+                    applied_at = previous_at
+                else:
+                    applied_at = 0
+        # Persist BEFORE the ACK so a restart cannot forget this transition; a
+        # failed write leaves the ticket state unchanged and asks 8100 to retry.
+        _share_gateway_module().record_revoke_generation(
+            key_id, generation, applied_at)
+    except (ImportError, AttributeError, OSError, ValueError):
+        return 503, {"ok": False, "error": "share_revoke_state_unavailable"}
+    with _revoke_applied_lock:
+        _revoke_applied_generations[key_id] = {
+            "generation": generation, "applied_at": applied_at,
+            "updated_at": time.time()}
+        _prune_revoke_generations_locked()
+        if action == "reenable":
+            # A re-enable is a generation ADVANCE only: it must never release
+            # the re-enabled Key's in-flight tickets.  The newer watermark
+            # makes a LATE older revoke stale before it can reach the
+            # dispatcher.
+            return 200, {"ok": True, "released": 0, "aborted": 0,
+                         "generation": generation, "advanced": True}
+        dispatcher = _share_dispatcher
+        if dispatcher is None:
+            released, aborted = 0, 0
+        else:
+            released, aborted = dispatcher.revoke_key(key_id)
+    return 200, {"ok": True, "released": released, "aborted": aborted,
+                 "generation": generation}
 
 
 def _price_table_version():
@@ -1914,10 +2942,15 @@ def record_usage(model, stream, started_at, usage, in_est, out_est, status="ok",
     (see verify_share_attribution) and stay null for every other request, so an
     unattributed request is never guessed onto a key. No field ever carries
     credential material.
+
+    ``cache_report_status`` is additive (Q11): "reported" means the upstream
+    supplied a trusted ``prompt_tokens_details.cached_tokens`` (a real zero is
+    evidence), "unreported" means the upstream did not report a cache count.
+    ``cached_input_tokens`` keeps its previous numeric shape (missing folds to
+    0) so old readers are unchanged; new readers must use the status to avoid
+    reading that compatibility zero as a measured cache hit.
     """
     global _usage_disabled
-    if _usage_disabled:
-        return
     fields = _normalized_usage_fields(usage)
     prompt = fields.get("prompt_tokens")
     completion = fields.get("completion_tokens")
@@ -1935,16 +2968,22 @@ def record_usage(model, stream, started_at, usage, in_est, out_est, status="ok",
     total_tokens = fields.get("total_tokens")
     if total_tokens is None:
         total_tokens = input_tokens + output_tokens
+    cache_details = fields.get("prompt_tokens_details") or {}
     rec = {
         "time": datetime.now().astimezone().isoformat(timespec="seconds"),
+        # A2-8: the request START is the eligibility boundary for the FIRST
+        # effective Magpie snapshot; ``time`` stays the completion time. Old
+        # rows without this field keep their historical completion-time pricing.
+        "request_started_at": _ledger_request_start(started_at),
         "service": "chat2api",
         "model": model,
         "stream": stream,
         "status": status,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "cached_input_tokens": (fields.get("prompt_tokens_details")
-                                or {}).get("cached_tokens", 0),
+        "cached_input_tokens": cache_details.get("cached_tokens", 0),
+        "cache_report_status": ("reported" if "cached_tokens" in cache_details
+                                else "unreported"),
         "reasoning_tokens": (fields.get("completion_tokens_details")
                              or {}).get("reasoning_tokens", 0),
         "total_tokens": total_tokens,
@@ -1961,6 +3000,8 @@ def record_usage(model, stream, started_at, usage, in_est, out_est, status="ok",
         "attribution": _request_fact("attribution") or "absent",
         "price_version": _price_table_version(),
     }
+    if _usage_disabled:
+        return
     try:
         path = os.path.abspath(USAGE_LOG)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -2121,6 +3162,7 @@ AUTH_LABELS = {
     "needs_login": "需要登录",
     "logging_in": "登录中",
     "failed": "登录失败",
+    "cancelled": "已取消登录",
 }
 
 
@@ -2164,23 +3206,31 @@ def ensure_control_token(path: str) -> str | None:
 
     Returns None when the token cannot be read or created; callers must treat
     that as "deny" and never fall back to an unauthenticated state.
+
+    POSIX (Q11/secret boundary): an existing token is read only after the
+    0600/current-uid gate; a new token is created 0600 (an inherited wider
+    mode cannot survive). A foreign-owned or wider existing file denies instead
+    of being read. Windows keeps the existing read path plus the icacls step.
     """
-    try:
-        with open(path, encoding="utf-8") as f:
-            value = f.read().strip()
+    target = path
+    if os.path.exists(target):
+        try:
+            secret_module = _load_share_secret_protection()
+            value = secret_module.read_private_secret_path(
+                path, max_bytes=1024, label="control token").decode(
+                    "utf-8").strip()
+        except (OSError, ValueError, ImportError, AttributeError):
+            return None
         if value:
             return value
-    except FileNotFoundError:
-        pass
-    except OSError:
-        return None
     value = secrets.token_urlsafe(32)
     try:
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(value)
-    except OSError:
+        _load_share_secret_protection().write_private_secret_path(
+            path, value.encode("utf-8"))
+    except (OSError, ValueError, ImportError, AttributeError):
         return None
+    if os.name != "nt":
+        return value
     # Best effort: keep only the running user and SYSTEM (the file inherits
     # broad repo ACLs otherwise). Failure is acceptable because the boundary
     # that matters for the share identity is the repo-root deny ACE.
@@ -2225,6 +3275,14 @@ class Proxy:
         self._auth_thread = None
         self._browser_context = None
         self._shutdown_event = threading.Event()
+        # D18-6: ONE login window per explicit /admin/auth/login round. The
+        # deadline is fixed when that round starts; a status read, a reconnect
+        # (ordinary refresh) or a repeated explicit login never renews it.
+        # ``_login_cancel_event`` is the per-cycle operator cancel signal; a
+        # new explicit round replaces it, so a late cancel of an old round can
+        # never cancel the new one.
+        self._login_window = None
+        self._login_cancel_event = threading.Event()
         # The maintenance-loop thread (auth watch); kept so shutdown() can
         # wait for the current bounded round instead of leaving a daemon
         # mid-refresh when the process exits.
@@ -2261,6 +3319,37 @@ class Proxy:
         # superseded (shutdown) discards its late result instead of writing
         # credentials or state over a newer decision.
         self._auth_generation = 0
+        # Credential generation (A1): a probe result is bound to the
+        # credential/session it actually observed, so a stale verdict can never
+        # overwrite newer evidence or credentials.
+        self._credential_generation = 0
+        # Recovery cycle (A3). ONE cancellable scheduler thread per instance
+        # owns the whole automatic recovery, so the startup check, a business
+        # 401, the watch round and the manual entry all join the same
+        # effective cycle instead of opening one window each. ``round`` names the
+        # cycle, ``session_starts`` counts the sessions it actually opened,
+        # ``next_attempt_epoch`` is when the next retry may start (time.time
+        # epoch, None when no retry is scheduled) and ``pause_reason`` says why
+        # the automatic recovery stopped (exhausted / manual / credential
+        # rejected / browser unavailable).
+        self._recovery = {
+            "state": "idle",
+            "round": 0,
+            "session_starts": 0,
+            "max_sessions": REAUTH_MAX_SESSIONS_PER_CYCLE,
+            "next_attempt_epoch": None,
+            "last_failure_epoch": None,
+            "last_failure_reason": None,
+            "pause_reason": None,
+        }
+        self._recovery_thread = None
+        # Serial boundary between the FINAL credential commit (save +
+        # in-memory publish) and shutdown (A6): a commit that lost the race
+        # is discarded, never a late save or a late "valid" write-back.
+        self._commit_lock = threading.Lock()
+        # Per-cycle wake event: a newer manual cycle wakes a WAITING loop so it
+        # exits instead of holding the instance for a lease that was released.
+        self._recovery_wake = threading.Event()
         # Reachability is deliberately independent from authentication.  Only
         # this lock-protected state is mutated by _record_upstream_reachability;
         # readers always receive a copied snapshot.
@@ -2303,6 +3392,8 @@ class Proxy:
             login = dict(self._auth_login) if self._auth_login else None
             gate = dict(self._auth_gate) if self._auth_gate else None
             error = self._auth_error
+            recovery = dict(self._recovery)
+            window = dict(self._login_window) if self._login_window else None
         return {
             "state": state,
             "label": self._auth_label(state, evidence, login),
@@ -2311,6 +3402,16 @@ class Proxy:
             "login": login,
             "gate": gate,
             "watch": self._watch_status(),
+            # A7 additive recovery summary: progress, session count, the next
+            # allowed attempt and why the automatic recovery paused. Carries
+            # no credential and no page query string.
+            "recovery": recovery,
+            # D18-6 additive login window: the ONE deadline fixed when the
+            # explicit login started (null before the first explicit login).
+            # It is read-only here and never extended by a status read.
+            "login_window_deadline_epoch": (window["deadline_epoch"]
+                                            if window else None),
+            "login_window_s": (window["window_s"] if window else None),
         }
 
     def _raise_auth_required(self):
@@ -2320,11 +3421,18 @@ class Proxy:
         never judged the credential, so it must not be reported as an
         authentication failure: ReauthenticationThrottled says exactly that and,
         being a ReauthenticationRequired subclass, keeps every existing handler
-        working unchanged.
+        working unchanged. A request whose own wait budget ended while the shared
+        cycle is still working is the same kind of throttle (A3): the automatic
+        recovery did NOT fail, and the console-visible state says it is still in
+        progress.
         """
-        error = self.auth_status()["error"] or ""
+        status = self.auth_status()
+        error = status["error"] or ""
         if error.startswith("reauth_refused:"):
             raise ReauthenticationThrottled(error.split(":", 1)[1])
+        recovery = status.get("recovery") or {}
+        if recovery.get("state") in ("waiting", "running"):
+            raise ReauthenticationThrottled("recovery_in_progress")
         raise ReauthenticationRequired(error)
 
     @staticmethod
@@ -2631,6 +3739,15 @@ class Proxy:
             # §8.4 additive: the auth-watch thread's liveness and last
             # round only — no credential, no round content.
             "watch": status["watch"],
+            # A7 additive recovery progress: only coarse counters/times.
+            # Manual reasons and page details stay behind the control token.
+            "recovery": {
+                "state": status["recovery"]["state"],
+                "session_starts": status["recovery"]["session_starts"],
+                "max_sessions": status["recovery"]["max_sessions"],
+                "next_attempt_epoch":
+                    status["recovery"]["next_attempt_epoch"],
+            },
             "upstream": self.config_summary(),
             "upstream_reachability": self.upstream_reachability_snapshot(),
             "docs": "POST /v1/chat/completions",
@@ -2701,8 +3818,279 @@ class Proxy:
         with self._auth_condition:
             return self._auth_generation == generation
 
-    def _perform_refresh(self, generation):
-        success = False
+    def _recovery_now(self):
+        """The scheduler's clock; tests inject a fake to prove the backoff."""
+        return time.time()
+
+    def _recovery_sleep(self, seconds, wake=None):
+        """Wait ``seconds`` while observing shutdown and a newer cycle (A3).
+
+        The wait is bounded to one second so stopping the service, an explicit
+        manual retry, and a live lease released by another instance are
+        observed promptly; the loop rechecks the shared slot after every slice.
+        """
+        event = wake if wake is not None else self._recovery_wake
+        deadline = time.monotonic() + max(0.0, seconds)
+        while True:
+            if self._shutdown_event.is_set():
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            event.wait(min(remaining, 1.0))
+            event.clear()
+
+    def _recovery_stop_if_restored_locked(self, generation,
+                                          credential_generation,
+                                          evidence_epoch):
+        """End a WAITING cycle when newer valid evidence restored it; lock held.
+
+        A business 401, the startup check or the watch round may publish a valid
+        credential while this loop waits for another instance's lease. Opening a
+        window then would recover a credential that is already valid, so the cycle
+        becomes idle and the caller returns without touching the shared lease
+        (``release_reauth_slot`` still refuses to release another pid's lease).
+        A newer cycle (``_auth_generation``) owns its own summary and is left
+        untouched.
+        """
+        if self._shutdown_event.is_set():
+            self._stop_recovery_locked("stopped")
+            return True
+        if self._auth_generation != generation:
+            # A newer cycle replaced this one; its summary is authoritative.
+            return True
+        evidence = self._auth_evidence
+        restored = (
+            self._credential_generation != credential_generation
+            or (evidence.get("verdict") == "valid"
+                and evidence.get("checked_epoch") is not None
+                and evidence.get("checked_epoch") != evidence_epoch)
+            or (self._auth_state == "valid" and not self._auth_error)
+        )
+        if not restored:
+            return False
+        self._auth_state = "valid"
+        self._auth_error = None
+        self._auth_login = None
+        self._recovery["state"] = "idle"
+        self._recovery["next_attempt_epoch"] = None
+        self._recovery["last_failure_epoch"] = None
+        self._recovery["last_failure_reason"] = None
+        self._recovery["pause_reason"] = None
+        self._auth_condition.notify_all()
+        return True
+
+    def _reauth_slot_ttl_s(self):
+        """Lease TTL covering every bounded phase of one visible session (A5).
+
+        The human wait plus startup, navigation, credential probe and cleanup
+        are always covered. The post-login config and API-key fetches exist
+        only on the opt-in ``--use-api-key`` path, so their explicit bounds
+        are added only when that path is enabled (the default launchers do not
+        enable it).
+        """
+        margin = REAUTH_SLOT_MARGIN_S
+        if self.args.use_api_key:
+            margin += (CONFIG_REFRESH_TIMEOUT_S
+                       + 2 * REAUTH_SESSION_PROBE_BUDGET_S)
+        return self.args.login_timeout + margin
+
+    def _begin_login_window_locked(self):
+        """Fix the ONE deadline of the current explicit login round (D18-6).
+
+        Called under ``_auth_condition`` only by ``refresh(force=True)``, which
+        is the explicit ``/admin/auth/login`` entry. The deadline is
+        ``now + --login-timeout`` (30 minutes on the dedicated instance) and
+        is computed ONCE per round: a status read, a display reconnect/takeover
+        and a repeated explicit login while the round is still active never
+        renew it. Only a round that already ended (valid/failed/cancelled)
+        opens a new window.
+        """
+        if self._login_window is not None:
+            active = (self._recovery["state"] in ("running", "waiting")
+                      or self._auth_state == "logging_in")
+            if active:
+                return
+        started = self._recovery_now()
+        window_s = float(self.args.login_timeout)
+        self._login_window = {
+            "started_epoch": started,
+            "window_s": window_s,
+            "deadline_epoch": started + window_s,
+        }
+
+    def _stop_recovery_locked(self, pause_reason):
+        """End the cycle WITHOUT claiming a credential failure; lock held.
+
+        Used for a refusal that never judged the credential (a corrupt slot, an
+        unavailable coordination file) and for shutdown: the state keeps its
+        meaning, only the additive recovery summary says why nothing more will
+        happen automatically.
+        """
+        self._recovery["state"] = "exhausted"
+        self._recovery["next_attempt_epoch"] = None
+        self._recovery["pause_reason"] = pause_reason
+        self._auth_condition.notify_all()
+
+    def _fail_recovery_locked(self, reason):
+        """End the cycle with an honest failure reason; lock held (A3/A6)."""
+        now = self._recovery_now()
+        self._recovery["state"] = "exhausted"
+        self._recovery["next_attempt_epoch"] = None
+        self._recovery["pause_reason"] = reason
+        self._recovery["last_failure_epoch"] = now
+        self._recovery["last_failure_reason"] = reason
+        self._auth_state = "failed"
+        self._auth_error = reason
+        self._auth_condition.notify_all()
+
+    def _retry_recovery_locked(self, reason):
+        """Schedule the next bounded retry from the ACTUAL failure end (A3).
+
+        Returns False when the session budget is spent: the last failure pauses
+        the automatic recovery instead of looping forever.
+        """
+        now = self._recovery_now()
+        self._recovery["last_failure_epoch"] = now
+        self._recovery["last_failure_reason"] = reason
+        starts = self._recovery["session_starts"]
+        if starts >= self._recovery["max_sessions"]:
+            self._fail_recovery_locked("attempts_exhausted")
+            return False
+        self._recovery["state"] = "waiting"
+        self._recovery["next_attempt_epoch"] = (
+            now + REAUTH_RECOVERY_BACKOFF_S[starts - 1])
+        self._auth_state = "needs_login"
+        self._auth_error = None
+        self._auth_condition.notify_all()
+        return True
+
+    def _begin_recovery_cycle_locked(self, force=False):
+        """Start the ONE recovery cycle of this instance; lock held (A1/A3).
+
+        A running cycle is joined, never duplicated, so the startup check, a
+        business 401, the watch round and the manual entry share one effective
+        cycle. A paused (exhausted) cycle only restarts on an explicit manual
+        request; ordinary requests and the watch round never reset the budget.
+        The FIRST session is gated right here, which keeps the synchronous gate
+        evidence the management entry reports; every later retry is owned by the
+        single scheduler thread. The rolling global cap is still enforced by the
+        shared slot, so a manual retry cannot bypass it.
+        """
+        thread = self._recovery_thread
+        if thread is not None and thread.is_alive():
+            state = self._recovery["state"]
+            if state in ("running", "waiting"):
+                if not force or state == "running":
+                    return True
+                # An explicit manual retry while the cycle is only WAITING
+                # for a refused gate may open a new cycle; the old waiting
+                # thread is woken and exits without opening a window.
+                self._recovery_wake.set()
+            # A thread that already published valid/idle (or a terminal pause)
+            # is still finishing its finally block. It is NOT the cycle to
+            # join: start a new one so a fresh 401 never reuses the finished
+            # cycle's credential result.
+        if self._shutdown_event.is_set():
+            return False
+        if self._auth_state in ("failed", "cancelled") and not force:
+            return False
+        now = self._recovery_now()
+        self._recovery.update({
+            "state": "running",
+            "round": self._recovery["round"] + 1,
+            "session_starts": 0,
+            "next_attempt_epoch": None,
+            "last_failure_epoch": None,
+            "last_failure_reason": None,
+            "pause_reason": None,
+        })
+        _logger.info("reauthentication cycle started round=%s force=%s thread=%s",
+                     self._recovery["round"], force,
+                     threading.current_thread().name)
+        self._auth_gate = None
+        self._auth_error = None
+        self._auth_login = None
+        granted, reason, ledger = acquire_reauth_slot(
+            REAUTH_SLOT_FILE, os.getpid(), ttl_s=self._reauth_slot_ttl_s(),
+            round_id=self._recovery["round"])
+        self._auth_gate = {
+            "granted": granted,
+            "reason": reason,
+            "owner_pid": ledger.get("owner_pid"),
+            "expires_epoch": ledger.get("expires_epoch"),
+            "attempts_in_window": ledger.get("attempts_in_window"),
+            "max_attempts": REAUTH_MAX_ATTEMPTS_PER_WINDOW,
+            "window_s": REAUTH_ATTEMPT_WINDOW_S,
+            "checked_epoch": time.time(),
+        }
+        if not granted:
+            # A refused session never judged the credential: keep it a
+            # throttle, and let the scheduler wait for the earliest allowed
+            # moment instead of opening a second window.
+            next_at = ledger.get("next_allowed_epoch")
+            self._auth_state = "needs_login"
+            self._auth_error = "reauth_refused:%s" % reason
+            if reason == "global_session_active":
+                # Another instance holds a live login lease. Its expiry is
+                # the lease term (gate.expires_epoch), NOT this cycle's
+                # retry moment: the single scheduler rechecks the shared
+                # slot every second so an early release is followed at once.
+                self._recovery["state"] = "waiting"
+                self._recovery["next_attempt_epoch"] = None
+                self._auth_condition.notify_all()
+            elif next_at is None or reason == "round_superseded":
+                # A terminal refusal (corrupt/unreadable/unavailable slot, or
+                # an older round that must not overwrite a newer one) has no
+                # earliest moment this round could succeed: pause instead of
+                # polling it.
+                self._recovery["state"] = "exhausted"
+                self._recovery["next_attempt_epoch"] = None
+                self._recovery["pause_reason"] = "reauth_refused:%s" % reason
+                self._auth_condition.notify_all()
+                return False
+            else:
+                self._recovery["state"] = "waiting"
+                self._recovery["next_attempt_epoch"] = float(next_at)
+                self._auth_condition.notify_all()
+        else:
+            self._recovery["session_starts"] = 1
+            self._recovery["state"] = "running"
+            self._recovery["next_attempt_epoch"] = None
+            self._auth_state = "logging_in"
+            self._auth_error = None
+            self._auth_condition.notify_all()
+        self._auth_generation += 1
+        generation = self._auth_generation
+        wake = threading.Event()
+        self._recovery_wake = wake
+        # D18-6: a fresh per-cycle cancel signal. An operator cancel of an
+        # older round can never cancel this new round.
+        login_cancel = threading.Event()
+        self._login_cancel_event = login_cancel
+        thread = threading.Thread(
+            target=self._recovery_loop,
+            args=(generation, granted, self._recovery["round"], wake,
+                  login_cancel),
+            name="chat2api-reauthentication",
+            daemon=True,
+        )
+        self._recovery_thread = thread
+        self._auth_thread = thread  # the existing single-flight view
+        thread.start()
+        return True
+
+    def _perform_recovery_session(self, generation, login_cancel):
+        """Open ONE visible session and classify its outcome (A2).
+
+        Returns ``(outcome, reason)`` where outcome is ``valid`` (credentials
+        committed), ``manual`` (the window needs a human), ``rejected`` (the
+        upstream explicitly refused the submitted account/password),
+        ``unavailable`` (the browser cannot be used), ``transient`` (a network /
+        browser / closed-window failure that may be reopened), ``cancelled`` (the
+        operator explicitly cancelled THIS round) or ``superseded`` (shutdown or
+        a newer cycle won the final commit race).
+        """
         try:
             token = browser_login(
                 self.base_url,
@@ -2710,53 +4098,502 @@ class Proxy:
                 self.args.login_timeout,
                 on_context=self._set_browser_context,
                 cancel_event=self._shutdown_event,
+                cancel_login_event=login_cancel,
                 on_progress=self._note_login_progress,
             )
-            if not self._session_is_current(generation):
-                # Late result: shutdown superseded this session, so its token
-                # must not overwrite the newer state or the token file.
-                with self._auth_condition:
-                    self._auth_state = "failed"
-                    self._auth_error = "superseded"
-                _logger.warning(
-                    "discarded a late reauthentication result generation=%s",
-                    generation)
-                return
+        except LoginCancelled as exc:
+            return "cancelled", exc.reason
+        except LoginStalled as exc:
+            return "manual", exc.reason
+        except LoginCredentialRejected as exc:
+            return "rejected", exc.reason
+        except LoginUnavailable as exc:
+            return "unavailable", exc.reason
+        except LoginWindowClosed as exc:
+            return "transient", exc.reason
+        except (requests.RequestException, TimeoutError, OSError) as exc:
+            return "transient", type(exc).__name__
+        except Exception as exc:
+            # A closed target can surface from any page operation; it is the
+            # transient window-closed signal, never a credential verdict.
+            if "closed" in str(exc).lower():
+                return "transient", "window_closed"
+            # An unclassified failure is terminal: retrying an unknown state
+            # could repeat the same wrong action.
+            return "terminal", type(exc).__name__
+        try:
             config = self.probe_config() if self.args.use_api_key else None
             api_key = fetch_api_key(self.base_url, token, config) \
                 if self.args.use_api_key else None
-            TokenStore(TOKEN_FILE, self.base_url).save(token, api_key)
+        except Exception as exc:
+            return "terminal", type(exc).__name__
+        return self._commit_credentials(generation, token, api_key,
+                                        login_cancel)
+
+    def _commit_credentials(self, generation, token, api_key, login_cancel):
+        """Serial final commit: save + publish, or discard after shutdown (A6).
+
+        The generation/shutdown/cancel check happens INSIDE ``_commit_lock`` and
+        is the LAST step before the disk write, so a session that was superseded
+        while its post-login probe/fetch was still running cannot save a late
+        token or write "valid" back over the stopping instance. An explicit
+        operator cancel of THIS round (D18-6) discards the late credential the
+        same way. A directory, permission or replace failure keeps the previous
+        valid document (atomic replace) and is reported instead of being treated
+        as a successful update.
+        """
+        with self._commit_lock:
+            if (self._shutdown_event.is_set()
+                    or not self._session_is_current(generation)):
+                return "superseded", "superseded"
+            if login_cancel.is_set():
+                return "cancelled", "cancelled"
+            try:
+                TokenStore(TOKEN_FILE, self.base_url).save(token, api_key)
+            except OSError:
+                return "terminal", "token_save_failed"
             with self._auth_condition:
                 self.creds = {"token": token, "api_key": api_key}
                 self.models_cache = {"at": 0, "data": None}
-                self._auth_state = "valid"
-                self._auth_error = None
-                self._auth_login = None
-            success = True
-            _logger.info("authentication state changed to valid")
-        except Exception as exc:
-            error_type = type(exc).__name__
-            reason = getattr(exc, "reason", None) or error_type
-            with self._auth_condition:
-                self._auth_state = "failed"
-                self._auth_error = reason
-            _logger.warning("reauthentication failed: %s", reason)
+                self._credential_generation += 1
+                self._record_auth_evidence("valid", None, None, "login")
+        return "valid", None
+
+    def _recovery_loop(self, generation, granted, round_id, wake,
+                       login_cancel):
+        """Own ONE recovery cycle: wait, attempt, classify, retry (A2/A3).
+
+        The loop is the single cancellable owner of the automatic recovery. A
+        refused session (another instance's live lease, the rolling global cap)
+        never consumed a retry: the loop rechecks the shared slot and waits for
+        the earliest allowed moment. A live lease has no retry moment of its own
+        (``next_attempt_epoch`` is null and the lease term stays in
+        ``gate.expires_epoch``), so the single scheduler rechecks the shared
+        slot every second and follows an early release at once. A transient
+        failure waits the bounded backoff measured from the moment it actually
+        failed. A manual, rejected or unavailable session pauses the cycle instead
+        of retrying it. An explicit operator cancel of THIS round (D18-6) ends
+        the cycle as ``cancelled`` and is never retried; the service keeps
+        running. Before opening a window the loop rechecks this instance's
+        evidence and generations: a credential already restored by valid new
+        evidence ends the wait without opening a second window. Every wait also
+        watches the shutdown event, so stopping the service cancels the scheduler
+        at once and never treats the stop as a reopenable window. A newer manual
+        cycle replaces a WAITING loop through ``wake``/``round_id``; a loop that
+        already owns a visible session is never replaced.
+        """
+        succeeded = False
+        with self._auth_condition:
+            credential_generation = self._credential_generation
+            evidence_epoch = self._auth_evidence.get("checked_epoch")
+        try:
+            while True:
+                with self._auth_condition:
+                    if self._shutdown_event.is_set():
+                        self._stop_recovery_locked("stopped")
+                        return
+                    if login_cancel.is_set():
+                        self._stop_recovery_locked("cancelled")
+                        return
+                    if self._recovery["round"] != round_id:
+                        # A newer manual cycle replaced this waiting loop.
+                        return
+                    if self._recovery_stop_if_restored_locked(
+                            generation, credential_generation,
+                            evidence_epoch):
+                        return
+                    next_at = self._recovery.get("next_attempt_epoch")
+                    # A live lease has no retry moment of its own: recheck
+                    # the shared slot once a second. Every other wait (global
+                    # cap, failure backoff) has a definite next_at.
+                    waiting_for_lease = (
+                        not granted
+                        and next_at is None
+                        and self._recovery["state"] == "waiting")
+                    if (next_at is None and not granted
+                            and not waiting_for_lease):
+                        # A terminal refusal paused the cycle; never poll it.
+                        if self._recovery["state"] not in ("exhausted",
+                                                           "idle"):
+                            self._stop_recovery_locked("stopped")
+                        return
+                    wait_s = (AUTH_WAIT_RECHECK_S
+                              if waiting_for_lease
+                              else max(0.0, (next_at or 0.0)
+                                       - self._recovery_now()))
+                if wait_s > 0:
+                    self._recovery_sleep(wait_s, wake)
+                    with self._auth_condition:
+                        if self._shutdown_event.is_set():
+                            self._stop_recovery_locked("stopped")
+                            return
+                        if self._recovery["round"] != round_id:
+                            return
+                        if self._recovery_stop_if_restored_locked(
+                                generation, credential_generation,
+                                evidence_epoch):
+                            return
+                if not granted:
+                    # The round ownership check, the shared-slot acquire and
+                    # every state update share ONE critical section with
+                    # _begin_recovery_cycle_locked(). A newer manual round
+                    # therefore cannot replace this loop between the check and
+                    # the acquire, and an older loop can never overwrite the
+                    # newer round's lease. The file I/O is bounded by the
+                    # coordination lock wait; release never takes this
+                    # condition, so there is no lock-order inversion.
+                    with self._auth_condition:
+                        if self._shutdown_event.is_set():
+                            self._stop_recovery_locked("stopped")
+                            return
+                        if self._recovery["round"] != round_id:
+                            return
+                        if self._recovery_stop_if_restored_locked(
+                                generation, credential_generation,
+                                evidence_epoch):
+                            return
+                        starts = self._recovery["session_starts"]
+                        if starts >= self._recovery["max_sessions"]:
+                            self._fail_recovery_locked("attempts_exhausted")
+                            return
+                        ttl_s = self._reauth_slot_ttl_s()
+                        granted, reason, ledger = acquire_reauth_slot(
+                            REAUTH_SLOT_FILE, os.getpid(), ttl_s=ttl_s,
+                            round_id=round_id)
+                        self._auth_gate = {
+                            "granted": granted,
+                            "reason": reason,
+                            "owner_pid": ledger.get("owner_pid"),
+                            "expires_epoch": ledger.get("expires_epoch"),
+                            "attempts_in_window":
+                                ledger.get("attempts_in_window"),
+                            "max_attempts":
+                                REAUTH_MAX_ATTEMPTS_PER_WINDOW,
+                            "window_s": REAUTH_ATTEMPT_WINDOW_S,
+                            "checked_epoch": time.time(),
+                        }
+                        if self._shutdown_event.is_set():
+                            self._stop_recovery_locked("stopped")
+                            if not granted:
+                                return
+                        elif not granted:
+                            if reason == "global_session_active":
+                                # Another instance holds a live lease:
+                                # its expiry is NOT this cycle's retry
+                                # moment. Keep waiting and let the
+                                # single scheduler recheck the shared
+                                # slot every second; gate.expires_epoch
+                                # still carries the lease term.
+                                self._recovery["state"] = "waiting"
+                                self._recovery["next_attempt_epoch"] = None
+                                self._auth_state = "needs_login"
+                                self._auth_error = (
+                                    "reauth_refused:%s" % reason)
+                                self._auth_condition.notify_all()
+                                continue
+                            next_at = ledger.get("next_allowed_epoch")
+                            if next_at is None or reason == "round_superseded":
+                                # No earliest moment exists for this
+                                # terminal refusal: pause and keep it
+                                # visible instead of polling.
+                                self._auth_state = "needs_login"
+                                self._auth_error = (
+                                    "reauth_refused:%s" % reason)
+                                self._stop_recovery_locked(
+                                    "reauth_refused:%s" % reason)
+                                return
+                            self._recovery["state"] = "waiting"
+                            self._recovery["next_attempt_epoch"] = float(
+                                next_at)
+                            self._auth_state = "needs_login"
+                            # A refused session is a throttle, never a
+                            # credential failure: the reason stays
+                            # visible to the console while the cycle
+                            # keeps waiting.
+                            self._auth_error = (
+                                "reauth_refused:%s" % reason)
+                            self._auth_condition.notify_all()
+                            continue
+                        else:
+                            self._recovery["session_starts"] = starts + 1
+                            self._recovery["state"] = "running"
+                            self._recovery["next_attempt_epoch"] = None
+                            self._auth_state = "logging_in"
+                            self._auth_error = None
+                            self._auth_condition.notify_all()
+                outcome, detail = self._perform_recovery_session(
+                    generation, login_cancel)
+                # Release the lease as soon as the session ends and BEFORE
+                # publishing its outcome: a waiter that observes the terminal
+                # state must never see this instance still owning the lease.
+                # The release itself is bound to THIS round by the round stored
+                # in the lease, so a late finally can never clear the NEXT
+                # round's same-pid lease even when the new round acquires
+                # while this release is paused.
+                with self._auth_condition:
+                    current_round = self._recovery["round"] == round_id
+                if current_round:
+                    _release_reauth_slot_for_round(
+                        REAUTH_SLOT_FILE, os.getpid(), round_id,
+                        success=(outcome == "valid"))
+                granted = False
+                with self._auth_condition:
+                    if outcome == "valid":
+                        # The final commit already published the credential
+                        # INSIDE _commit_lock; the public "valid" state is
+                        # published only AFTER the lease was released above,
+                        # so a waiter that observes it never sees this
+                        # instance still owning the lease.
+                        succeeded = True
+                        self._auth_state = "valid"
+                        self._auth_error = None
+                        self._auth_login = None
+                        self._recovery.update({
+                            "state": "idle",
+                            "next_attempt_epoch": None,
+                            "last_failure_epoch": None,
+                            "last_failure_reason": None,
+                            "pause_reason": None,
+                        })
+                        self._auth_condition.notify_all()
+                        _logger.info("authentication state changed to valid")
+                        return
+                    if self._shutdown_event.is_set() or outcome == "superseded":
+                        if (not self._shutdown_event.is_set()
+                                and self._recovery["round"] != round_id):
+                            # A newer explicit round already replaced this
+                            # one; its state wins over this late result.
+                            return
+                        self._auth_state = "failed"
+                        self._auth_error = "superseded"
+                        self._stop_recovery_locked("stopped")
+                        return
+                    if outcome == "cancelled" or login_cancel.is_set():
+                        if self._recovery["round"] != round_id:
+                            # A newer explicit round already replaced
+                            # this one; its state wins over this cancel.
+                            return
+                        # D18-6: an explicit operator cancel is terminal
+                        # for THIS round and never reopens it; the service
+                        # keeps running and only a later explicit login
+                        # starts a new round.
+                        self._auth_state = "cancelled"
+                        self._auth_error = "cancelled"
+                        self._auth_login = None
+                        self._stop_recovery_locked("cancelled")
+                        return
+                    if outcome != "transient":
+                        # manual / rejected / unavailable / terminal:
+                        # retrying cannot produce different evidence.
+                        self._fail_recovery_locked(detail)
+                        return
+                    if not self._retry_recovery_locked(detail):
+                        return
         finally:
-            release_reauth_slot(REAUTH_SLOT_FILE, os.getpid(), success=success)
+            # The release is bound to THIS round by the round stored in the
+            # lease. A new round can start while this thread is still alive
+            # (state already idle); the late release then refuses because the
+            # lease round is the newer one, so it cannot clear the NEW round's
+            # lease. The shared references are cleared only for the CURRENT
+            # round: a replaced waiting loop must not clear the newer cycle.
             with self._auth_condition:
-                self._browser_context = None
-                self._auth_thread = None
+                current_round = self._recovery["round"] == round_id
+            if current_round:
+                _release_reauth_slot_for_round(
+                    REAUTH_SLOT_FILE, os.getpid(), round_id,
+                    success=succeeded)
+            with self._auth_condition:
+                if self._recovery["round"] == round_id:
+                    self._browser_context = None
+                    self._auth_thread = None
+                    self._recovery_thread = None
                 self._auth_condition.notify_all()
 
-    def refresh(self, force=False, wait=True, deadline=None) -> bool:
-        """Share one visible reauthentication session across all callers.
+    def _wait_recovery(self, deadline, auth_wait_budget=None,
+                       cancel_check=None):
+        """Wait for the shared cycle's terminal result, bounded by the caller.
 
-        A13-3: the session is gated by the cross-instance lease, so the two
-        instances sharing one UM identity never open two submission windows at
-        once. A refused session is reported as a throttle, never as an
-        authentication failure, and the single-flight thread plus the "failed
-        stays failed" rule keep a rejected credential from being retried in a
-        loop.
+        Only the time actually spent inside this method is charged to the
+        request-scoped authentication budget; normal upstream inference between
+        two internal retries is not. The budget object is shared by every retry
+        of the same logical request.
+        """
+        if auth_wait_budget is None:
+            return self._wait_recovery_inner(deadline, None, cancel_check)
+        auth_wait_budget.begin_wait()
+        try:
+            return self._wait_recovery_inner(
+                deadline, auth_wait_budget, cancel_check)
+        finally:
+            auth_wait_budget.end_wait()
+
+    def _wait_recovery_inner(self, deadline, auth_wait_budget=None,
+                             cancel_check=None):
+        """The bounded wait body; the caller owns the budget segment.
+
+        The caller's own wait budget (``deadline``, monotonic) and the
+        request-scoped cumulative auth-wait budget are independent of the
+        cycle's lifetime: when the next allowed attempt cannot happen before
+        either bound, the request fails now with the throttle instead of
+        blocking until then. The cycle itself keeps running. A live lease has
+        no definite next attempt, so its old expiry is never an early-failure
+        signal. The wait holds one of the per-instance auth-wait slots and
+        releases it on success, failure, cancellation and timeout.
+        """
+        wait_deadline = time.monotonic() + self.args.login_timeout + 10
+        if deadline is not None:
+            wait_deadline = min(wait_deadline, deadline)
+        budget_deadline = None
+        if auth_wait_budget is not None:
+            # The budget object owns the ONE expiry instant: the projection of
+            # the active segment while budget remains, and the FIRST real expiry
+            # once it is spent. Recomputing "now + remaining" here would turn a
+            # spent budget's expiry into this new segment's start, so a later
+            # request deadline would wrongly look like the earlier bound. The
+            # caller (``_wait_recovery``) always owns a started segment, so the
+            # fallback only keeps a hypothetical direct caller bounded.
+            budget_deadline = auth_wait_budget.deadline
+            if budget_deadline is None:
+                budget_deadline = (time.monotonic()
+                                   + auth_wait_budget.remaining)
+            wait_deadline = min(wait_deadline, budget_deadline)
+
+        def auth_budget_exhausted():
+            """True when this request's own cumulative budget is spent.
+
+            A terminal "valid" result belongs to the SHARED cycle, not to this
+            request: when the synchronous auth entry (or an earlier wait)
+            already consumed the whole budget, this request must not report
+            success and send another upstream call. The overall request
+            deadline keeps its own error mapping: when it is the earlier
+            bound, the wait returns normally and ``check_before_upstream``
+            reports it instead.
+            """
+            if budget_deadline is None:
+                return False
+            if time.monotonic() < budget_deadline:
+                return False
+            if deadline is not None and deadline < budget_deadline:
+                return False
+            return True
+
+        slot_acquired = False
+        with self._auth_condition:
+            if self._recovery["state"] not in ("running", "waiting"):
+                if self._auth_state != "valid":
+                    return False
+                if self._shutdown_event.is_set():
+                    raise _RequestCancelled("instance stopping")
+                if cancel_check is not None and cancel_check():
+                    raise _RequestCancelled("client disconnected")
+                if auth_budget_exhausted():
+                    raise _AuthWaitTimeout("auth wait budget expired")
+                return True
+            if self._auth_state in ("failed", "cancelled"):
+                # A terminal failure/cancel never judged a new credential:
+                # answer with its reason instead of waiting.
+                return False
+            error = self._auth_error or ""
+            if error.startswith("reauth_refused:"):
+                reason = error.split(":", 1)[1]
+                if reason in ("slot_corrupt", "slot_unreadable",
+                              "coordination_unavailable",
+                              "slot_unavailable", "round_superseded"):
+                    return False
+            if self._shutdown_event.is_set():
+                return False
+            if cancel_check is not None and cancel_check():
+                raise _RequestCancelled("client disconnected")
+            remaining = wait_deadline - time.monotonic()
+            if remaining <= 0:
+                if (budget_deadline is not None
+                        and budget_deadline <= wait_deadline):
+                    raise _AuthWaitTimeout("auth wait budget expired")
+                return False
+            next_at = self._recovery.get("next_attempt_epoch")
+            if (next_at is not None
+                    and next_at - time.time() > remaining):
+                # A definite next attempt is beyond this request's remaining
+                # budget: answer immediately (the caller projects Retry-After).
+                return False
+        if not _auth_wait_slots.acquire(blocking=False):
+            raise _AuthWaitCapacityExceeded("auth wait capacity exhausted")
+        slot_acquired = True
+        try:
+            with self._auth_condition:
+                while True:
+                    if self._shutdown_event.is_set():
+                        return False
+                    if cancel_check is not None and cancel_check():
+                        raise _RequestCancelled("client disconnected")
+                    if self._recovery["state"] not in ("running", "waiting"):
+                        if (self._auth_state == "valid"
+                                and auth_budget_exhausted()):
+                            raise _AuthWaitTimeout(
+                                "auth wait budget expired")
+                        return self._auth_state == "valid"
+                    if self._auth_state in ("failed", "cancelled"):
+                        return False
+                    error = self._auth_error or ""
+                    if error.startswith("reauth_refused:"):
+                        reason = error.split(":", 1)[1]
+                        if reason in ("slot_corrupt", "slot_unreadable",
+                                      "coordination_unavailable",
+                                      "slot_unavailable", "round_superseded"):
+                            return False
+                    remaining = wait_deadline - time.monotonic()
+                    if remaining <= 0:
+                        if (budget_deadline is not None
+                                and budget_deadline <= wait_deadline):
+                            raise _AuthWaitTimeout(
+                                "auth wait budget expired")
+                        return False
+                    next_at = self._recovery.get("next_attempt_epoch")
+                    if (next_at is not None
+                            and next_at - time.time() > remaining):
+                        return False
+                    self._auth_condition.wait(
+                        min(remaining, AUTH_WAIT_RECHECK_S))
+        finally:
+            if slot_acquired:
+                _auth_wait_slots.release()
+
+    def auth_retry_after(self):
+        """Integer Retry-After for a DEFINITE next attempt, or None.
+
+        Only a scheduled next attempt is projected. A live lease's old expiry
+        (``gate.expires_epoch``) is never used because that lease may be
+        released early. A terminal pause, an explicit credential rejection, a
+        browser failure, a corrupt coordination file and a request-scoped wait
+        timeout have no definite retry and therefore no Retry-After.
+        """
+        with self._auth_condition:
+            recovery = dict(self._recovery)
+            error = self._auth_error or ""
+        if recovery.get("state") != "waiting":
+            return None
+        next_at = recovery.get("next_attempt_epoch")
+        if next_at is None:
+            return None
+        if not error.startswith("reauth_refused:"):
+            if recovery.get("last_failure_epoch") is None:
+                return None
+        delay = int(math.ceil(float(next_at) - time.time()))
+        if delay <= 0:
+            return None
+        return min(delay, AUTH_WAIT_RETRY_AFTER_MAX_S)
+
+    def refresh(self, force=False, wait=True, deadline=None,
+                auth_wait_budget=None, cancel_check=None) -> bool:
+        """Join or start the ONE automatic recovery cycle (A1/A3).
+
+        Every trigger - the startup check, a business 401, the watch round and
+        the manual entry - joins the same effective cycle. A paused (exhausted)
+        cycle is only restarted by an explicit manual request (``force``); the
+        rolling global cap still gates every session, so the manual request cannot
+        bypass it. ``wait`` joins the cycle's terminal result bounded by the
+        caller's own deadline and the request-scoped auth-wait budget;
+        ``wait=False`` returns as soon as a cycle exists.
         """
         if self.args.no_browser:
             with self._auth_condition:
@@ -2764,59 +4601,76 @@ class Proxy:
                 self._auth_error = "BrowserDisabled"
             return False
 
-        with self._auth_condition:
-            if self._shutdown_event.is_set():
-                return False
-            if self._auth_thread is None:
-                # A failed automatic attempt stays failed until the console
-                # explicitly requests another one. This prevents popup loops.
-                if self._auth_state == "failed" and not force:
+        # The synchronous entry includes the state-lock wait and the bounded
+        # coordination-file lock wait; both are authentication entry time, so the
+        # request-scoped budget charges them. Normal upstream inference and
+        # retry delays are never inside this segment.
+        if auth_wait_budget is not None:
+            auth_wait_budget.begin_wait()
+        try:
+            with self._auth_condition:
+                if self._shutdown_event.is_set():
                     return False
-                granted, reason, ledger = acquire_reauth_slot(
-                    REAUTH_SLOT_FILE, os.getpid(),
-                    ttl_s=self.args.login_timeout + REAUTH_SLOT_MARGIN_S)
-                self._auth_gate = {
-                    "granted": granted,
-                    "reason": reason,
-                    "owner_pid": ledger.get("owner_pid"),
-                    "expires_epoch": ledger.get("expires_epoch"),
-                    "attempts_in_window": ledger.get("attempts_in_window"),
-                    "max_attempts": REAUTH_MAX_ATTEMPTS_PER_WINDOW,
-                    "window_s": REAUTH_ATTEMPT_WINDOW_S,
-                    "checked_epoch": time.time(),
-                }
-                if not granted:
-                    self._auth_error = "reauth_refused:%s" % reason
-                    _logger.warning("reauthentication session refused reason=%s",
-                                    reason)
+                if force:
+                    # D18-6: the explicit login is the ONLY entry that may
+                    # start the 30-minute window; an ordinary 401/watch
+                    # refresh never does.
+                    self._begin_login_window_locked()
+                started = self._begin_recovery_cycle_locked(force=force)
+                if not started:
                     return False
-                self._auth_state = "logging_in"
-                self._auth_error = None
+        finally:
+            if auth_wait_budget is not None:
+                auth_wait_budget.end_wait()
+
+        if not wait:
+            return True
+        return self._wait_recovery(deadline,
+                                   auth_wait_budget=auth_wait_budget,
+                                   cancel_check=cancel_check)
+
+    def cancel_login(self):
+        """Cancel THIS login round without stopping the service (D18-6).
+
+        Sets the per-cycle cancel event, closes the visible browser context and
+        publishes the terminal ``cancelled`` state. The service keeps running:
+        no ``shutdown``, no ``server.shutdown()`` and no restart. Ordinary
+        requests never reopen the round; only an explicit
+        ``/admin/auth/login`` (``refresh(force=True)``) starts a new one. The
+        commit boundary is serialized with ``_commit_lock``, so a credential
+        committed BEFORE this cancel keeps ``valid`` and is reported honestly
+        instead of being overwritten by ``cancelled``.
+        """
+        with self._commit_lock:
+            with self._auth_condition:
+                state = self._auth_state
+                active = (self._recovery["state"] in ("running", "waiting")
+                          or state == "logging_in")
+                if not active:
+                    if state == "cancelled":
+                        return {"cancelled": False, "state": "cancelled",
+                                "detail": "本轮登录已取消；服务继续运行"}
+                    return {"cancelled": False,
+                            "state": "no_login_in_progress",
+                            "detail": "当前没有进行中的登录"}
+                self._login_cancel_event.set()
+                self._auth_state = "cancelled"
+                self._auth_error = "cancelled"
                 self._auth_login = None
-                self._auth_generation += 1
-                generation = self._auth_generation
-                self._auth_thread = threading.Thread(
-                    target=self._perform_refresh,
-                    args=(generation,),
-                    name="chat2api-reauthentication",
-                    daemon=True,
-                )
-                self._auth_thread.start()
-                _logger.info("reauthentication session started generation=%s",
-                             generation)
-
-            if not wait:
-                return True
-
-            wait_deadline = time.monotonic() + self.args.login_timeout + 10
-            if deadline is not None:
-                wait_deadline = min(wait_deadline, deadline)
-            while self._auth_state == "logging_in":
-                remaining = wait_deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                self._auth_condition.wait(remaining)
-            return self._auth_state == "valid"
+                self._recovery["state"] = "exhausted"
+                self._recovery["next_attempt_epoch"] = None
+                self._recovery["pause_reason"] = "cancelled"
+                context = self._browser_context
+                # Wake a scheduler waiting on the shared lease or a backoff.
+                self._recovery_wake.set()
+                self._auth_condition.notify_all()
+            if context is not None:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+        return {"cancelled": True, "state": "cancelled",
+                "detail": "已取消本轮登录；服务继续运行，普通请求不会自动重开"}
 
     def validate_or_refresh(self, source="startup"):
         """Validate saved credentials without delaying the local HTTP server.
@@ -2824,33 +4678,49 @@ class Proxy:
         A13-2: the verdict comes from ``classify_credential``. Only an
         explicit upstream rejection or a locally missing credential starts a
         session; an inconclusive probe keeps the last evidence and never opens
-        a login window.
+        a login window. A1: the probe is bound to the credential and session
+        generation it actually observed, so a result that returns after a
+        session started or a credential was published is discarded instead of
+        overwriting the newer state (E2).
         """
+        with self._auth_condition:
+            generation = self._auth_generation
+            credential_generation = self._credential_generation
+            bearer = self.bearer()
         verdict, reason, upstream_status = classify_credential(
-            self.base_url, self.bearer())
-        self._record_auth_evidence(verdict, reason, upstream_status, source)
-        self._record_upstream_reachability(
-            self._reachability_from_credential_probe(
-                verdict, reason, upstream_status),
-            reason=reason, upstream_status=upstream_status)
-        if verdict == "valid":
-            with self._auth_condition:
+            self.base_url, bearer)
+        with self._auth_condition:
+            if (self._auth_generation != generation
+                    or self._credential_generation != credential_generation
+                    or self.bearer() != bearer):
+                _logger.info(
+                    "discarded a stale credential probe source=%s generation=%s/%s",
+                    source, generation, self._auth_generation)
+                return "stale"
+            self._record_auth_evidence(verdict, reason, upstream_status,
+                                       source)
+            self._record_upstream_reachability(
+                self._reachability_from_credential_probe(
+                    verdict, reason, upstream_status),
+                reason=reason, upstream_status=upstream_status)
+            if verdict == "valid":
                 self._auth_state = "valid"
                 self._auth_error = None
-            return "valid"
-        if verdict == "unknown":
-            # Undecidable: this is NOT evidence of an expired credential,
-            # so no browser window may open here.
-            _logger.warning(
-                "credential check inconclusive reason=%s source=%s "
-                "state kept=%s", reason, source, self.auth_status()["state"])
-            return "unknown"
-        with self._auth_condition:
-            # Never downgrade a terminal "failed": that state is what keeps a
-            # rejected credential from being retried in a loop.
-            if self._auth_state != "failed":
+                return "valid"
+            if verdict == "unknown":
+                # Undecidable: this is NOT evidence of an expired
+                # credential, so no browser window may open here.
+                return "unknown"
+            # Never downgrade a terminal "failed"/"cancelled": that state is
+            # what keeps a rejected credential from being retried in a loop
+            # (and an operator cancel from being reopened by a probe), and its
+            # reason is the honest evidence the console reads (E4).
+            if self._auth_state not in ("failed", "cancelled"):
                 self._auth_state = "needs_login"
-            self._auth_error = None
+                self._auth_error = None
+        _logger.warning(
+            "credential check rejected reason=%s source=%s state=%s",
+            reason, source, self.auth_status()["state"])
         self.refresh(wait=False)
         return verdict
 
@@ -2899,48 +4769,59 @@ class Proxy:
         Never calls ``Proxy.call()``, never issues a billable inference
         request and never refreshes the model cache: it reuses the same
         single-shot ``/api/models`` classification as ``/ready``, then starts
-        the shared single-flight session only on explicit evidence (upstream
+        the shared single-flight cycle only on explicit evidence (upstream
         rejection or a locally missing credential). A session already in flight
         is left alone, so a business-triggered 401 and this check never
-        reauthenticate twice. Every return records the round in the additive
-        watch view (§8.4).
+        reauthenticate twice. A1: the probe is bound to the credential and
+        session generation it observed, so a stale result never overwrites a
+        newer session's state. A6/E4: a terminal failure keeps its reason - a
+        periodic check never clears it. Every return records the round in the
+        additive watch view (§8.4).
         """
         if self._shutdown_event.is_set():
             return self._record_watch_round("stopped")
         with self._auth_condition:
             session_in_flight = self._auth_state == "logging_in"
+            generation = self._auth_generation
+            credential_generation = self._credential_generation
+            bearer = self.bearer()
         if session_in_flight:
             return self._record_watch_round("logging_in")
         verdict, reason, upstream_status = classify_credential(
-            self.base_url, self.bearer(),
+            self.base_url, bearer,
             timeout=AUTH_WATCH_PROBE_TIMEOUT_S)
-        self._record_auth_evidence(verdict, reason, upstream_status,
-                                   "auth_watch")
-        self._record_upstream_reachability(
-            self._reachability_from_credential_probe(
-                verdict, reason, upstream_status),
-            reason=reason, upstream_status=upstream_status)
-        if verdict == "valid":
-            with self._auth_condition:
+        with self._auth_condition:
+            if (self._auth_generation != generation
+                    or self._credential_generation != credential_generation
+                    or self.bearer() != bearer):
+                _logger.info("discarded a stale auth-watch probe")
+                return self._record_watch_round("stale")
+            self._record_auth_evidence(verdict, reason, upstream_status,
+                                       "auth_watch")
+            self._record_upstream_reachability(
+                self._reachability_from_credential_probe(
+                    verdict, reason, upstream_status),
+                reason=reason, upstream_status=upstream_status)
+            if verdict == "valid":
                 self._auth_state = "valid"
                 self._auth_error = None
-            return self._record_watch_round("valid")
-        if verdict == "unknown":
-            # Long-idle evidence is not evidence of expiry: keep the last
-            # known state and never open a login window.
-            return self._record_watch_round("unknown")
+                return self._record_watch_round("valid")
+            if verdict == "unknown":
+                # Long-idle evidence is not evidence of expiry: keep the last
+                # known state and never open a login window.
+                return self._record_watch_round("unknown")
+            if self._shutdown_event.is_set():
+                return self._record_watch_round("stopped")
+            if self._auth_state in ("failed", "cancelled"):
+                # Never clear a terminal failure/cancel reason, and never
+                # retry the rejected credential every round.
+                return self._record_watch_round(verdict)
+            # Never downgrade a terminal "failed" either: a credential the
+            # session already rejected must not be retried every round.
+            self._auth_state = "needs_login"
+            self._auth_error = None
         if self._shutdown_event.is_set():
             return self._record_watch_round("stopped")
-        with self._auth_condition:
-            session_in_flight = self._auth_state == "logging_in"
-            if not session_in_flight:
-                # Never downgrade a terminal "failed" either: a credential
-                # the session already rejected must not be retried every round.
-                if self._auth_state != "failed":
-                    self._auth_state = "needs_login"
-                self._auth_error = None
-        if session_in_flight:
-            return self._record_watch_round("logging_in")
         self.refresh(wait=False)
         return self._record_watch_round(verdict)
 
@@ -2979,20 +4860,40 @@ class Proxy:
         self._watch_thread.start()
 
     def shutdown(self):
+        """Stop this instance: supersede the session and cancel the scheduler.
+
+        The commit boundary (A6) is the ``_commit_lock``: a session whose final
+        commit already holds it either finishes that commit before this method
+        returns, or (when the shutdown event was set first) discards it. No late
+        save and no late "valid" write-back can follow a completed shutdown.
+        """
         self._shutdown_event.set()
-        with self._auth_condition:
-            # Supersede any in-flight session: its late result must not write
-            # credentials or state after this instance is stopping.
-            self._auth_generation += 1
-            context = self._browser_context
-            thread = self._auth_thread
+        # D18-6: shutdown also cancels the current login round promptly (the
+        # per-cycle event interrupts a blocking browser poll), but the state
+        # stays the existing shutdown outcome below, never "cancelled".
+        self._login_cancel_event.set()
+        # Process exit releases every pre-send ticket exactly once (8110 only;
+        # a process that never assembled a dispatcher has nothing to close).
+        _close_share_dispatch()
+        with self._commit_lock:
+            with self._auth_condition:
+                # Supersede any in-flight session: its late result must not
+                # write credentials or state after this instance is stopping.
+                self._auth_generation += 1
+                context = self._browser_context
+                thread = self._auth_thread
+                recovery_thread = self._recovery_thread
+                # Wake request-scoped auth waits: service stop ends the wait
+                # and the recovery, never leaving a handler blocked on it.
+                self._auth_condition.notify_all()
         if context is not None:
             try:
                 context.close()
             except Exception:
                 pass
-        if thread and thread is not threading.current_thread():
-            thread.join(timeout=3)
+        for target in (thread, recovery_thread):
+            if target and target is not threading.current_thread():
+                target.join(timeout=3)
         # The maintenance loop ends with the instance: stop waiting for a new
         # round at once and give the CURRENT bounded round a chance to
         # finish (a mid-flight config fetch is bounded by its own timeout).
@@ -3001,7 +4902,9 @@ class Proxy:
             watch_thread.join(timeout=3)
 
     def call(self, method: str, path: str, stream: bool = False,
-             physical_budget=None, request_deadline=None, **kwargs):
+             physical_budget=None, request_deadline=None,
+             auth_wait_budget=None, cancel_check=None, reader_lease=None,
+             dispatch_ticket=None, **kwargs):
         """Request with a single 401 -> re-auth retry. For streaming endpoints
         you MUST pass stream=True, otherwise requests buffers the whole SSE
         body until the upstream closes the connection.
@@ -3009,9 +4912,27 @@ class Proxy:
         ``physical_budget`` may be a shared ``_PhysicalRequestBudget`` (new
         callers) or a legacy integer meaning how many real requests THIS call
         may still make. Every requests.request(), including a post-401 hidden
-        re-send, consumes one unit before it is issued."""
+        re-send, consumes one unit before it is issued.
+
+        ``auth_wait_budget`` is the ONE cumulative budget of the downstream
+        HTTP request; this call never resets it across its internal re-sends.
+        ``cancel_check`` is the request-scoped cancellation probe. Both are
+        checked again after an auth wait and before every real upstream call.
+
+        ``dispatch_ticket`` is the pre-send ticket of a VERIFIED share request
+        (see share_dispatch). Only the dedicated 8110 share backend passes
+        one: it waits here for its Key's turn before the first upstream send,
+        and its cumulative wait budget is never reset by an internal retry. A
+        request whose budget ends before its turn is refused with a retryable
+        failure (``_ShareDispatchTimeout``) and never reaches the upstream. The
+        8000 main chain passes None and is byte-for-byte unchanged.
+        """
         extra_headers = kwargs.pop("headers", {})
         timeout = kwargs.pop("timeout", 600)
+        if dispatch_ticket is not None:
+            _await_share_send_turn(dispatch_ticket, cancel_check,
+                                   request_deadline,
+                                   self._shutdown_event.is_set)
         legacy_limit = None
         legacy_used = 0
         if physical_budget is not None and not isinstance(
@@ -3036,16 +4957,93 @@ class Proxy:
             legacy_used += 1
             return True
 
+        def check_before_upstream():
+            """Recheck cancellation, the auth budget and the deadline.
+
+            ``_wait_recovery`` enforces the same budget before it reports
+            success, but the shared cycle may publish "valid" between that
+            return and this send: a request whose cumulative auth-wait budget
+            is already spent must not open a new upstream connection. The
+            overall deadline keeps its own error mapping and wins when it was
+            the earlier bound.
+            """
+            if cancel_check is not None and cancel_check():
+                raise _RequestCancelled("client disconnected")
+            if self._shutdown_event.is_set():
+                raise _RequestCancelled("instance stopping")
+            if (auth_wait_budget is not None
+                    and auth_wait_budget.remaining <= 0.0):
+                budget_deadline = auth_wait_budget.deadline
+                if (request_deadline is None
+                        or budget_deadline is None
+                        or budget_deadline <= request_deadline):
+                    raise ReauthenticationThrottled("auth_wait_timeout")
+            if (request_deadline is not None
+                    and time.monotonic() >= request_deadline):
+                raise _RequestDeadlineExceeded(
+                    "request deadline exhausted before upstream call")
+
+        def clipped_timeout():
+            """Clip the socket timeout to the CURRENT overall deadline.
+
+            A timeout computed before an auth wait must never outlive the
+            request deadline after that wait.
+            """
+            if request_deadline is None:
+                return timeout
+            remaining = request_deadline - time.monotonic()
+            if remaining <= 0:
+                raise _RequestDeadlineExceeded(
+                    "request deadline exhausted before upstream call")
+            if isinstance(timeout, tuple):
+                return (max(0.001, min(timeout[0], remaining)),
+                        max(0.001, min(timeout[1], remaining)))
+            if isinstance(timeout, (int, float)):
+                return max(0.001, min(timeout, remaining))
+            return timeout
+
+        def refresh_before_retry():
+            # Authentication waiting has no upstream reader running. Release
+            # the streaming-reader slot for the wait and re-acquire it before
+            # the real upstream send; a full limit must fail here instead of
+            # leaving an unbounded upstream connection or reader behind.
+            if reader_lease is not None:
+                reader_lease.release()
+            try:
+                ok = self.refresh(
+                    deadline=request_deadline,
+                    auth_wait_budget=auth_wait_budget,
+                    cancel_check=cancel_check)
+            except _AuthWaitTimeout:
+                raise ReauthenticationThrottled("auth_wait_timeout")
+            except _AuthWaitCapacityExceeded:
+                raise ReauthenticationThrottled("auth_wait_capacity")
+            if ok and reader_lease is not None:
+                if not reader_lease.acquire(blocking=False):
+                    raise _ReaderSlotUnavailable(
+                        "stream reader capacity exhausted after auth wait")
+            return ok
+
         for attempt in (0, 1):
+            check_before_upstream()
             bearer = self.bearer()
+            with self._auth_condition:
+                credential_generation = self._credential_generation
             if not bearer:
-                if not self.refresh(deadline=request_deadline):
-                    if (request_deadline is not None and
-                            time.monotonic() >= request_deadline):
-                        raise _RequestDeadlineExceeded(
-                            "authentication wait exceeded request deadline")
+                if not refresh_before_retry():
+                    check_before_upstream()
                     self._raise_auth_required()
                 bearer = self.bearer()
+            check_before_upstream()
+            if dispatch_ticket is not None and not dispatch_ticket.commit():
+                # The ticket was released (cancel/revoke/exit) between the
+                # granted wait and this send: never send late, and keep the
+                # release reason (a revoke stays a retryable 429).  A ticket
+                # wrapper only needs to expose ``outcome``; a missing reason
+                # must not crash the handler into a bare connection close.
+                _raise_share_dispatch_refusal(
+                    dispatch_ticket.outcome,
+                    getattr(dispatch_ticket, "reason", None))
             if not consume_budget():
                 raise _PhysicalBudgetExceeded(
                     "upstream physical request budget exhausted")
@@ -3053,44 +5051,71 @@ class Proxy:
                 method, f"{self.base_url}{path}",
                 headers={"Authorization": f"Bearer {bearer}",
                          **extra_headers},
-                timeout=timeout, stream=stream, **kwargs)
-            if r.status_code == 401 and attempt == 0:
-                if budget_remaining() == 0:
-                    # The physical request budget is exhausted: the 401 is
-                    # surfaced as-is instead of spending one more request on
-                    # the post-refresh re-send.
-                    return r
-                r.close()
-                if self.bearer() != bearer:
-                    continue
-                # A13-2: an upstream 401 is explicit evidence that the
-                # CURRENT credential was rejected, so record it before trying
-                # to recover - the state must never keep claiming "valid"
-                # while the business path is answering 401.
-                self._record_auth_evidence("rejected", "upstream_rejected",
-                                           401, "business")
-                with self._auth_condition:
-                    # Never downgrade a terminal "failed": that state is what
-                    # keeps a rejected credential from being retried in a loop.
-                    if self._auth_state not in ("logging_in", "failed"):
+                timeout=clipped_timeout(),
+                # D18-3: a committed share send must be abortable by a key
+                # revoke. stream=True returns as soon as the response headers
+                # arrive, so the ticket can close the live connection; a
+                # non-stream handler still reads the whole body. The private
+                # 8000 chain (dispatch_ticket is None) keeps stream=stream.
+                stream=(True if dispatch_ticket is not None else stream),
+                **kwargs)
+            if r.status_code != 401:
+                if dispatch_ticket is not None:
+                    # Register the abort AFTER the response object exists. A
+                    # revoke that arrived between commit() and this point
+                    # closes it immediately (attach_abort returns True).
+                    dispatch_ticket.attach_abort(r.close)
+                return r
+            # A4/A7: an explicit credential rejection never leaks to a
+            # handler as a raw upstream response - every entry would
+            # otherwise translate it differently (502, a pass-through 401,
+            # or a 503 without a reason). Record the evidence bound to
+            # the credential that was actually rejected, then fail with
+            # the ONE shared error type and its specific reason.
+            with self._auth_condition:
+                stale_401 = (self.bearer() != bearer
+                             or self._credential_generation
+                             != credential_generation)
+                if not stale_401:
+                    # A13-2: an upstream 401 is explicit evidence
+                    # that the CURRENT credential was rejected, so
+                    # record it before trying to recover - the state
+                    # must never keep claiming "valid" while the
+                    # business path is answering 401.
+                    self._record_auth_evidence(
+                        "rejected", "upstream_rejected", 401, "business")
+                    if self._auth_state not in ("logging_in", "failed",
+                                                 "cancelled"):
                         self._auth_state = "needs_login"
-                if self.refresh(deadline=request_deadline):
+            r.close()
+            if attempt == 0 and budget_remaining() != 0:
+                if stale_401:
+                    # A newer credential was published while this
+                    # request was in flight: retry once with it instead
+                    # of judging the current credential by a stale 401
+                    # (A1).
                     continue
-                if (request_deadline is not None and
-                        time.monotonic() >= request_deadline):
-                    raise _RequestDeadlineExceeded(
-                        "authentication refresh exceeded request deadline")
+                if refresh_before_retry():
+                    continue
+                check_before_upstream()
                 self._raise_auth_required()
-            return r
+            check_before_upstream()
+            raise ReauthenticationRequired("upstream_rejected")
         return r
 
-    def list_models(self, force=False, raw_only=False, fresh_required=False):
+    def list_models(self, force=False, raw_only=False, fresh_required=False,
+                    auth_wait_budget=None, request_deadline=None,
+                    cancel_check=None):
         now = time.time()
         if (self.models_cache["data"] is None or force
                 or now - self.models_cache["at"] > 60):
             r = None
             try:
-                r = self.call("GET", "/api/models")
+                r = self.call(
+                    "GET", "/api/models",
+                    auth_wait_budget=auth_wait_budget,
+                    request_deadline=request_deadline,
+                    cancel_check=cancel_check)
                 if r.status_code == 200:
                     payload = r.json()
                     if (not isinstance(payload, dict)
@@ -3194,25 +5219,25 @@ def _has_control_chars(text):
     return False
 
 
-def _sanitize_upstream_trace_value(value):
+def _sanitize_upstream_trace_value(value, *, token=False):
     """One upstream trace header value, made safe for a single log line.
 
-    Returns the value verbatim when it is exactly claimable — a single-line
-    value within the length bound — so a real UM id stays lookup-able
-    byte-for-byte. A value carrying CR/LF or any other control character (an
-    upstream can fold them into a header value, which is how a forged log line
-    is injected) or one that is oversized is reported as
-    ``unavailable:<reason>`` instead: never a cleaned-up, escaped or truncated
-    value that would still look like a claimable id. None stays None so an
-    omitted header remains distinguishable from an unusable one.
+    Returns a bounded, single-line value verbatim so a real UM id remains
+    lookup-able byte-for-byte. For ``token=True``, whitespace also makes the
+    value unclaimable: HTTP parsing may already have unfolded CRLF into
+    spaces. Other header fields may retain their ordinary spaces.
+    Control characters, ambiguous token whitespace and oversized values
+    are reported as ``unavailable:<reason>`` rather than cleaned, escaped or
+    truncated near-ids. Inspection covers only the length bound plus one.
+    None remains None, distinguishing an absent header from an unusable one.
     """
     if value is None:
         return None
     text = str(value)
-    # Only the bound plus one character is inspected, so the safety check is
-    # itself bounded even for an oversized value.
-    if _has_control_chars(text[:_UPSTREAM_TRACE_VALUE_MAX_CHARS + 1]):
-        return f"{_UPSTREAM_TRACE_UNAVAILABLE}:control_chars"
+    prefix = text[:_UPSTREAM_TRACE_VALUE_MAX_CHARS + 1]
+    invalid_token = token and any(ch.isspace() for ch in prefix)
+    if _has_control_chars(prefix) or invalid_token:
+        return f"{_UPSTREAM_TRACE_UNAVAILABLE}:control_chars" + ("_or_whitespace" if invalid_token else "")
     if len(text) > _UPSTREAM_TRACE_VALUE_MAX_CHARS:
         return f"{_UPSTREAM_TRACE_UNAVAILABLE}:too_long"
     return text
@@ -3233,7 +5258,7 @@ def _upstream_trace_headers(response) -> dict:
         return trace
     for name in _UPSTREAM_TRACE_HEADER_NAMES:
         try:
-            trace[name] = _sanitize_upstream_trace_value(headers.get(name))
+            trace[name] = _sanitize_upstream_trace_value(headers.get(name), token=name == "x-request-id")
         except Exception:
             trace[name] = None
     return trace
@@ -3250,6 +5275,166 @@ class _CompatStreamRetryable(Exception):
 
 class _RequestDeadlineExceeded(RuntimeError):
     """No new upstream work may start after the per-request wall deadline."""
+
+
+class _ShareDispatchTimeout(RuntimeError):
+    """The cumulative pre-send wait ended before this request's turn.
+
+    The request was released exactly once and never reached the upstream. This is a
+    RETRYABLE refusal, never a cancellation and never a success: the handler maps
+    it to 429 + Retry-After with the ``share_dispatch_timeout`` error type and
+    records its own ledger status.
+    """
+
+
+class _ShareDispatchRevoked(RuntimeError):
+    """The Key was revoked while this request waited for its send turn.
+
+    The 8100 share gateway sent a trusted revoke notice and this request's
+    PENDING/GRANTED ticket was released before the send. This is a RETRYABLE
+    refusal with its own 429 error type, never a cancellation and never a
+    success; the request never reached the upstream.
+    """
+
+
+class _ShareDispatchStateUnavailable(RuntimeError):
+    """The persisted revoke state could not be read for this request.
+
+    This is a RETRYABLE service failure (503 + Retry-After), never a client
+    cancellation: the ticket was closed before the send, and the request never
+    reached the upstream.  The handler records the ledger status
+    ``share_dispatch_state_unavailable`` instead of ``client_disconnected``.
+    """
+
+
+class _RequestCancelled(RuntimeError):
+    """The downstream client is gone or the instance is stopping.
+
+    This is a request-scoped cancellation: it ends only this request's
+    authentication wait and prevents its later upstream call. The shared recovery
+    cycle keeps running.
+    """
+
+
+class _AuthWaitTimeout(RuntimeError):
+    """This request's own cumulative authentication wait budget expired."""
+
+
+class _AuthWaitCapacityExceeded(RuntimeError):
+    """The per-instance authentication-wait slot cap is exhausted."""
+
+
+class _ReaderSlotUnavailable(RuntimeError):
+    """The streaming-reader slot could not be re-acquired after auth wait."""
+
+
+class _AuthWaitBudget:
+    """Cumulative authentication-wait budget for ONE downstream request.
+
+    Only time actually spent inside the authentication-wait path is charged.
+    Normal upstream inference, retry delays and request-body handling between
+    two waits are NOT part of this budget. The same object is shared by every
+    internal 401 re-send, compatibility retry and hidden retry of one logical
+    request, so a second wait can never reset it. The existing overall request
+    deadline stays a separate bound.
+    """
+
+    def __init__(self, seconds=None, now=None):
+        self.limit = max(0.0, min(180.0, float(
+            AUTH_WAIT_BUDGET_S if seconds is None else seconds)))
+        self.used = 0.0
+        self._segments = 0
+        self._segment_started = None
+        self._deadline = None
+        self._lock = threading.Lock()
+        self._now = time.monotonic if now is None else now
+
+    @property
+    def remaining(self):
+        with self._lock:
+            used = self.used
+            if self._segment_started is not None:
+                used += max(0.0, self._now() - self._segment_started)
+            return max(0.0, self.limit - used)
+
+    @property
+    def deadline(self):
+        """Absolute monotonic instant this request's budget runs out.
+
+        While charged time is still below the limit it is the projection from the
+        active (or most recent) wait segment, so normal inference between waits
+        never moves it. Once the limit is actually reached it is the FIRST instant
+        the cumulative charge crossed the limit and never moves again: a later wait
+        segment starts after that instant, so recomputing from its start would push
+        an already spent budget's expiry into the future and hide that the budget
+        expired before the overall request deadline. It is NOT an absolute deadline
+        computed when the downstream request was created: a request with no wait
+        segment has no deadline.
+        """
+        with self._lock:
+            return self._deadline
+
+    def begin_wait(self):
+        """Start charging one authentication-wait segment (nesting-safe).
+
+        A caller may charge a synchronous auth entry and then the join/wait it
+        hands off to; nesting keeps ONE wall-clock segment so the outer
+        ``end_wait`` cannot stop the clock while the inner one still runs.
+        The segment's absolute deadline is derived from the budget remaining at
+        its start, never from the request creation time. An ALREADY spent budget
+        keeps the instant its charge first crossed the limit: this later segment
+        must not move that real expiry forward.
+        """
+        with self._lock:
+            if self._segments == 0:
+                self._segment_started = self._now()
+                if self._deadline is None or self.used < self.limit:
+                    self._deadline = (self._segment_started
+                                      + max(0.0, self.limit - self.used))
+            self._segments += 1
+
+    def end_wait(self):
+        """Stop charging the current segment and keep its elapsed time."""
+        with self._lock:
+            if self._segments <= 0:
+                return
+            self._segments -= 1
+            if self._segments == 0 and self._segment_started is not None:
+                self.used += max(0.0, self._now() - self._segment_started)
+                self._segment_started = None
+
+
+class _ReaderSlotLease:
+    """One streaming-reader slot with idempotent release.
+
+    A streaming request takes the slot before opening upstream (so a full limit
+    refuses without an upstream connection), releases it while waiting for
+    authentication, and re-acquires it before the real upstream read. The
+    handler and the producer may both release it; only the first release returns
+    the semaphore unit.
+    """
+
+    def __init__(self, semaphore):
+        self._semaphore = semaphore
+        self._held = False
+        self._lock = threading.Lock()
+
+    def acquire(self, blocking=True, timeout=None):
+        with self._lock:
+            if self._held:
+                return True
+            if not self._semaphore.acquire(blocking=blocking, timeout=timeout):
+                return False
+            self._held = True
+            return True
+
+    def release(self):
+        with self._lock:
+            if not self._held:
+                return False
+            self._held = False
+            self._semaphore.release()
+            return True
 
 
 class _PhysicalBudgetExceeded(RuntimeError):
@@ -4177,44 +6362,6 @@ def _reasoning_retry_preflight(upstream, first_data_deadline,
 # SSE line "", which is a real streamed line).
 _UPSTREAM_END = object()
 
-# Some downstream clients fail to parse streamed
-# reasoning increments - GLM (delta without a reasoning field) succeeds while
-# DeepSeek (delta.reasoning=...) is rejected after ~2s through the same
-# request shape and the same chain. Only the dedicated share-backend instance
-# (profile containing "share-backend") reshapes SSE data lines by dropping
-# delta reasoning fields before relay; every other instance keeps byte
-# fidelity. A line that cannot be parsed is passed through untouched - the
-# shim must never swallow a stream on its own hiccup.
-STRIP_REASONING_DELTA = False
-
-
-def _strip_reasoning_delta_line(line: str) -> str:
-    if not STRIP_REASONING_DELTA or not line.startswith("data:"):
-        return line
-    payload = line[len("data:"):].strip()
-    if payload == "[DONE]" or not payload.startswith("{"):
-        return line
-    try:
-        obj = json.loads(payload)
-    except ValueError:
-        return line
-    if not isinstance(obj, dict):
-        return line
-    changed = False
-    for choice in obj.get("choices") or []:
-        if not isinstance(choice, dict):
-            continue
-        delta = choice.get("delta")
-        if isinstance(delta, dict) and (
-                "reasoning" in delta or "reasoning_content" in delta):
-            delta.pop("reasoning", None)
-            delta.pop("reasoning_content", None)
-            changed = True
-    if not changed:
-        return line
-    return "data: " + json.dumps(obj, ensure_ascii=False,
-                                 separators=(",", ":"))
-
 
 class _UpstreamStream:
     """Cancellable line iterator over the upstream SSE response.
@@ -4297,8 +6444,7 @@ class _UpstreamStream:
                     line = bytes(pending[:nl]).rstrip(b"\r")
                     del pending[:nl + 1]
                     decoded = line.decode("utf-8", errors="replace")
-                    if self._thread is None or not self._enqueue(
-                            _strip_reasoning_delta_line(decoded)):
+                    if self._thread is None or not self._enqueue(decoded):
                         break
         except Exception as exc:
             self._error = exc
@@ -4373,7 +6519,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _error(self, code: int, message: str, detail=None,
-               error_type="chat2api_error"):
+               error_type="chat2api_error", extra_headers=None):
         # Errors may fire before the request body is read (unknown path,
         # rejected control token, invalid local key). Reusing the connection
         # would let those unread bytes be parsed as the next request line
@@ -4381,15 +6527,145 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._json(code, {"error": {"message": message,
                                     "type": error_type,
-                                    "detail": detail}})
+                                    "detail": detail}},
+                   extra_headers)
 
     def _reauthentication_error(self, detail=None):
+        proxy = getattr(self.server, "proxy", None)
+        retry_after = proxy.auth_retry_after() if proxy is not None else None
+        extra_headers = ({"Retry-After": str(retry_after)}
+                         if retry_after else None)
         self._error(
             503,
             "Open WebUI authentication requires an interactive sign-in",
             detail,
             "reauthentication_required",
+            extra_headers,
         )
+
+    def _share_dispatch_timeout_error(self):
+        """Refuse a request whose pre-send wait ended before its turn.
+
+        429 + a definite Retry-After + a distinct type: the request never
+        reached the upstream, so a retry is safe and no success is fabricated.
+        The 8100 share relay forwards this Retry-After on its own stable
+        failure wrapper, so the hint survives the hop.
+        """
+        self._error(
+            429,
+            "Share send wait budget exhausted before this request's turn",
+            error_type="share_dispatch_timeout",
+            extra_headers={
+                "Retry-After": str(SHARE_DISPATCH_RETRY_AFTER_S)})
+
+    def _share_dispatch_revoked_error(self):
+        """Refuse a request whose Key was revoked before its send turn.
+
+        429 + a definite Retry-After + a distinct type: the ticket was released
+        without a grant and the request never reached the upstream, so a retry is
+        safe and no success is fabricated.
+        """
+        self._error(
+            429,
+            "The share Key was revoked before this request's send turn",
+            error_type="share_dispatch_revoked",
+            extra_headers={
+                "Retry-After": str(SHARE_DISPATCH_RETRY_AFTER_S)})
+
+    def _share_dispatch_state_unavailable_error(self):
+        """Refuse a request whose revoke state could not be read.
+
+        503 + a definite Retry-After + a distinct type: this is a retryable
+        SERVICE failure, never a client cancel.  The request never reached the
+        upstream, so no success is fabricated and the ledger status is the same
+        stable name.
+        """
+        self._error(
+            503,
+            "The share revoke state is unavailable; retry later",
+            error_type=SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS,
+            extra_headers={
+                "Retry-After": str(SHARE_DISPATCH_RETRY_AFTER_S)})
+
+    @staticmethod
+    def _aggregate_failure_error(status, exc):
+        """Map one failed SSE aggregate onto a 502 (message, detail, type).
+
+        The reason is the aggregator's own terminal classification, never a
+        guess: an explicit upstream error keeps its sanitized message, a bad frame
+        and a missing terminal event name their contract, and every other failure
+        (including an unexpected one) is an upstream read failure. A failed
+        aggregate is never relayed as a partial success.
+        """
+        if status == "upstream_explicit_error":
+            return ("Upstream request failed",
+                    {"reason": "upstream_explicit_error",
+                     "upstream_message": getattr(exc, "message", None)},
+                    "upstream_explicit_error")
+        if status == "upstream_bad_frame":
+            return ("Upstream returned an invalid SSE frame",
+                    {"reason": "upstream_bad_frame"},
+                    "upstream_stream_error")
+        if status == "upstream_missing_terminal":
+            return ("Upstream stream ended without a complete terminal",
+                    {"reason": "upstream_missing_terminal"},
+                    "upstream_stream_error")
+        return ("Upstream stream failed",
+                {"reason": "upstream_read_error",
+                 "exception": (type(exc).__name__ if exc is not None
+                               else None)},
+                "upstream_stream_error")
+
+    def _consume_aggregate_stream(self, response, aggregator, reader_lease):
+        """Read one upstream SSE stream into a complete aggregated body.
+
+        The producer owns the response and the reader slot from ``start()``: it
+        closes the socket and releases the slot in its own finally, so this method
+        never closes either after a successful start. Returns
+        ``(data, status, exc)``: ``data`` is the aggregated body only after the
+        protocol's success terminal (Chat: BOTH ``[DONE]`` and a non-empty
+        ``finish_reason``; Messages: ``message_stop``); otherwise ``status`` is
+        ``client_disconnected``, an aggregator failure reason, or
+        ``upstream_read_error`` for a transport failure. A partial completion is
+        never returned as a success.
+        """
+        upstream = None
+        try:
+            upstream = _UpstreamStream(response, reader_slot=reader_lease)
+            upstream.start()
+        except Exception as exc:
+            if upstream is not None:
+                upstream.cancel()
+            try:
+                response.close()
+            except Exception:
+                pass
+            reader_lease.release()
+            return None, "upstream_read_error", exc
+        try:
+            while True:
+                if _client_disconnected(self.connection):
+                    return None, "client_disconnected", None
+                try:
+                    item = upstream.next_item(STREAM_WATCHDOG_POLL_S)
+                except queue.Empty:
+                    continue
+                if item is _UPSTREAM_END:
+                    return aggregator.finish(), "ok", None
+                aggregator.feed_line(item)
+                if aggregator.finished:
+                    # The protocol's terminal event is in hand: finish now
+                    # instead of waiting for a keep-alive upstream to close.
+                    return aggregator.finish(), "ok", None
+        except _NonStreamAggregateError as exc:
+            return None, exc.reason, exc
+        except Exception as exc:
+            # The only socket this loop reads is the upstream one (the client
+            # is only probed, never read): a transport error here is an
+            # upstream read failure, never a client disconnect.
+            return None, "upstream_read_error", exc
+        finally:
+            upstream.cancel()
 
     def _control_allowed(self) -> bool:
         if not is_local_control_request(
@@ -4480,6 +6756,65 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return body
 
+    def handle_one_request(self):
+        """Serve one downstream request, then release its pre-send ticket.
+
+        The ticket belongs to exactly ONE downstream request: it is released
+        here whatever path the request took - an early rejection before the send,
+        a cancel, or a normal completion. Releasing twice is a no-op, so the
+        request-boundary reset in ``set_request_facts`` and the process-exit
+        close stay idempotent too. A process that never assembled a dispatcher
+        (the 8000 main chain) has no ticket and this is a no-op.
+        """
+        try:
+            super().handle_one_request()
+        finally:
+            _release_share_dispatch_ticket("request_finished")
+
+    def _share_revoke(self):
+        """Loopback-only signed revoke notice from the 8100 share gateway.
+
+        This is NOT a public share route: it accepts only a loopback client with
+        a loopback Host and no Origin, and only a payload signed with the shared
+        attribution secret.  The response carries the number of tickets the
+        dispatcher released; a repeated generation is a no-op and an older
+        generation never overrides the newer state.
+        """
+        if not is_local_control_request(
+                self.client_address[0],
+                self.headers.get("Host", ""),
+                self.headers.get("Origin")):
+            self._error(403, "Share revoke notice denied",
+                        error_type="share_revoke_denied")
+            return
+        if share_backend_role() is False:
+            # Review #9: the private 8000 main chain is NOT the share backend.
+            # Even a correctly signed notice is an explicit no-op here; the
+            # response names the unassembled role and never touches a ticket.
+            self._error(
+                503,
+                "Share revoke endpoint is not assembled in this role",
+                detail={"released": 0, "reason": "share_backend_unassembled"},
+                error_type="share_revoke_unassembled")
+            return
+        body = self._read_body()
+        if body is None:
+            return
+        secret = load_share_attribution_key()
+        if not secret:
+            self._error(503, "Share revoke notice key unavailable",
+                        error_type="share_revoke_unavailable")
+            return
+        status, payload = apply_share_revoke_notice(body, secret)
+        if status == 200:
+            self._json(status, payload)
+            return
+        self._error(status,
+                     payload.get("error", "share_revoke_rejected"),
+                     detail={"reason": payload.get("reason")},
+                     error_type=payload.get("error",
+                                            "share_revoke_rejected"))
+
     def do_OPTIONS(self):
         self.send_response(204)
         origin = self._cors_allow_origin()
@@ -4496,6 +6831,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
         proxy: Proxy = self.server.proxy
+        auth_wait_budget = _AuthWaitBudget()
+        request_deadline = time.monotonic() + MAX_REQUEST_SECONDS
+        cancel_check = lambda: _client_disconnected(self.connection)
 
         if path in ("/", "/health"):
             self._json(200, proxy.health_snapshot())
@@ -4570,9 +6908,21 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 models = proxy.list_models(
                     force=True, raw_only=want_raw_fresh,
-                    fresh_required=want_raw_fresh)
+                    fresh_required=want_raw_fresh,
+                    auth_wait_budget=auth_wait_budget,
+                    request_deadline=request_deadline,
+                    cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(str(exc) or None)
+                self._reauthentication_error(
+                    getattr(exc, "reason", None) or str(exc) or None)
+                return
+            except _RequestCancelled:
+                self.close_connection = True
+                return
+            except _RequestDeadlineExceeded:
+                self._error(
+                    502, "Upstream request could not start another attempt",
+                    error_type="request_deadline_exceeded")
                 return
             if models is None:
                 self._error(502, "Failed to fetch model list (auth may have expired)")
@@ -4586,9 +6936,22 @@ class Handler(BaseHTTPRequestHandler):
             if not self._control_allowed():
                 return
             try:
-                r = proxy.call("GET", path)
+                r = proxy.call(
+                    "GET", path,
+                    auth_wait_budget=auth_wait_budget,
+                    request_deadline=request_deadline,
+                    cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(str(exc) or None)
+                self._reauthentication_error(
+                    getattr(exc, "reason", None) or str(exc) or None)
+                return
+            except _RequestCancelled:
+                self.close_connection = True
+                return
+            except _RequestDeadlineExceeded:
+                self._error(
+                    502, "Upstream request could not start another attempt",
+                    error_type="request_deadline_exceeded")
                 return
             self._passthrough(r)
         else:
@@ -4598,6 +6961,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         proxy: Proxy = self.server.proxy
+        auth_wait_budget = _AuthWaitBudget()
+        request_deadline = time.monotonic() + MAX_REQUEST_SECONDS
+        cancel_check = lambda: _client_disconnected(self.connection)
 
         # Verified share attribution (C2): verify the share entry point's marker
         # ONCE per request and install the facts for EVERY ledger row this
@@ -4608,13 +6974,40 @@ class Handler(BaseHTTPRequestHandler):
         elif path in ("/v1/chat/completions", "/api/chat/completions",
                       "/api/v1/chat/completions"):
             protocol = "chat"
+        elif path in ("/v1/responses", "/api/v1/responses"):
+            protocol = "responses"
         else:
             protocol = None
         if protocol is not None:
             key_id, request_id, reason = verify_share_attribution(self.headers)
-            set_request_facts(protocol, key_id, request_id, reason)
+            set_request_facts(
+                protocol, key_id, request_id, reason,
+                attribution_ts=getattr(
+                    _request_facts, "verified_attribution_ts", None))
 
-        if path == "/admin/auth/login":
+        if path == "/admin/share/revoke":
+            # R-C5: loopback-only signed revoke notice from the 8100 share
+            # gateway.  It is not a public share route and never needs the
+            # local control token: the shared attribution HMAC is its gate.
+            # E19-1-02: the private (non-share) role answers 503 HERE,
+            # before entering _share_revoke or loading the share backend. The
+            # loopback gate keeps its 403 precedence for every other caller.
+            if not is_local_control_request(
+                    self.client_address[0],
+                    self.headers.get("Host", ""),
+                    self.headers.get("Origin")):
+                self._error(403, "Share revoke notice denied",
+                            error_type="share_revoke_denied")
+            elif share_backend_role() is False:
+                self._error(
+                    503,
+                    "Share revoke endpoint is not assembled in this role",
+                    detail={"released": 0,
+                             "reason": "share_backend_unassembled"},
+                    error_type="share_revoke_unassembled")
+            else:
+                self._share_revoke()
+        elif path == "/admin/auth/login":
             if self._control_allowed():
                 # These admin handlers never read the request body; the 202
                 # must close the connection so leftover bytes cannot desync a
@@ -4623,6 +7016,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 proxy.refresh(force=True, wait=False)
                 self._json(202, proxy.auth_status())
+        elif path == "/admin/auth/cancel":
+            # D18-6: end THIS login round without stopping the service. The
+            # control-token gate is the same as the login trigger; the answer
+            # is the final state of the round (200, not a fire-and-forget
+            # 202), and ordinary requests never reopen it.
+            if self._control_allowed():
+                self.close_connection = True
+                self._json(200, proxy.cancel_login())
         elif path == "/admin/shutdown":
             if self._control_allowed():
                 self.close_connection = True
@@ -4636,14 +7037,29 @@ class Handler(BaseHTTPRequestHandler):
         elif path in ("/v1/chat/completions", "/api/chat/completions",
                           "/api/v1/chat/completions"):
             if self._api_allowed() and self._origin_allowed():
-                self._chat()
+                self._chat(auth_wait_budget=auth_wait_budget,
+                           request_deadline=request_deadline,
+                           cancel_check=cancel_check)
         elif path in ("/v1/embeddings", "/api/v1/embeddings"):
             if self._api_allowed() and self._origin_allowed():
-                self._compat_proxy("/api/v1/embeddings")
+                self._compat_proxy(
+                    "/api/v1/embeddings",
+                    auth_wait_budget=auth_wait_budget,
+                    request_deadline=request_deadline,
+                    cancel_check=cancel_check)
         elif path in ("/v1/messages", "/api/v1/messages"):
             if self._api_allowed() and self._origin_allowed():
-                self._compat_proxy("/api/v1/messages", allow_stream=True,
-                                   forward_anthropic_headers=True)
+                self._compat_proxy(
+                    "/api/v1/messages", allow_stream=True,
+                    forward_anthropic_headers=True,
+                    auth_wait_budget=auth_wait_budget,
+                    request_deadline=request_deadline,
+                    cancel_check=cancel_check)
+        elif path in ("/v1/responses", "/api/v1/responses"):
+            if self._api_allowed() and self._origin_allowed():
+                self._responses(auth_wait_budget=auth_wait_budget,
+                                 request_deadline=request_deadline,
+                                 cancel_check=cancel_check)
         elif path.startswith("/api/"):
             # Same control-token rule as the GET passthrough.
             if not self._control_allowed():
@@ -4652,16 +7068,552 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._read_body()
                 if body is None:
                     return
-                r = proxy.call("POST", path, json=body)
+                r = proxy.call(
+                    "POST", path, json=body,
+                    auth_wait_budget=auth_wait_budget,
+                    request_deadline=request_deadline,
+                    cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(str(exc) or None)
+                self._reauthentication_error(
+                    getattr(exc, "reason", None) or str(exc) or None)
+                return
+            except _RequestCancelled:
+                self.close_connection = True
+                return
+            except _RequestDeadlineExceeded:
+                self._error(
+                    502, "Upstream request could not start another attempt",
+                    error_type="request_deadline_exceeded")
                 return
             self._passthrough(r)
         else:
             self._error(404, f"Unknown path: {path}")
 
+    def _responses(self, auth_wait_budget=None, request_deadline=None,
+                   cancel_check=None):
+        """Serve the Responses subset on the existing chat upstream.
+
+        The request contract and response translation are the same ones the share
+        entry uses; this local entry keeps its own auth and body limits. Tools
+        are forwarded as function tools and their calls are translated back, so a
+        Responses client can use the same tools the chat endpoint accepts.
+        """
+        body = self._read_body()
+        if body is None:
+            return
+        if request_deadline is None:
+            request_deadline = time.monotonic() + MAX_REQUEST_SECONDS
+        from shared.responses_protocol import (valid_responses_request,
+                                  responses_to_chat_request,
+                                  chat_to_responses_response,
+                                  responses_stream_events,
+                                  responses_requires_messages,
+                                  responses_to_messages_request,
+                                  messages_to_responses_response,
+                                  messages_stream_events)
+        if not valid_responses_request(body):
+            self._error(400, "unsupported_responses_request")
+            return
+        if responses_requires_messages(body):
+            # Tool results carrying images need the one upstream protocol that
+            # can represent them: Anthropic Messages. Everything else keeps
+            # the Chat Completions translation.
+            self._responses_via_messages(
+                body, auth_wait_budget=auth_wait_budget,
+                request_deadline=request_deadline,
+                cancel_check=cancel_check)
+            return
+        chat_body = responses_to_chat_request(body)
+        client_stream = chat_body.get("stream") is True
+        # N2b: a stream=false Responses client may use an SSE chat upstream
+        # only for the selected (verified key, model, protocol) triple; the
+        # native non-stream transport is the default for everything else.
+        # A direct 8110 request has no verified key id and stays native.
+        upstream_stream = client_stream or nonstream_aggregate_allowed(
+            "responses", body.get("model"))
+        if upstream_stream and not client_stream:
+            # The upstream request must itself select streaming so UM writes
+            # SSE; the client's own body is not relayed with another mode.
+            chat_body["stream"] = True
+            chat_body.setdefault("stream_options", {"include_usage": True})
+        proxy: Proxy = self.server.proxy
+        started_at = time.time()
+        input_est = _message_tokens(chat_body.get("messages"))
+        upstream_owned = False
+        # Pre-send scheduling (8110 only): None unless this request's
+        # attribution was VERIFIED at this process's HTTP boundary.
+        dispatch_ticket = share_dispatch_ticket("responses")
+        try:
+            r = proxy.call("POST", "/api/chat/completions",
+                           stream=upstream_stream,
+                           json=chat_body,
+                           auth_wait_budget=auth_wait_budget,
+                           request_deadline=request_deadline,
+                           cancel_check=cancel_check,
+                           dispatch_ticket=dispatch_ticket)
+        except ReauthenticationRequired as exc:
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status="reauthentication_required")
+            self._reauthentication_error(
+                getattr(exc, "reason", None) or str(exc) or None)
+            return
+        except _ShareDispatchTimeout:
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status="share_dispatch_timeout")
+            self._share_dispatch_timeout_error()
+            return
+        except _ShareDispatchRevoked:
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status="share_dispatch_revoked")
+            self._share_dispatch_revoked_error()
+            return
+        except _ShareDispatchStateUnavailable:
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0,
+                          status=SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
+            self._share_dispatch_state_unavailable_error()
+            return
+        except _RequestCancelled:
+            self.close_connection = True
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status="client_disconnected")
+            return
+        except _RequestDeadlineExceeded:
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status="request_deadline_exceeded")
+            self._error(
+                502, "Upstream request could not start another attempt",
+                error_type="request_deadline_exceeded")
+            return
+        try:
+            if r.status_code != 200:
+                if r.status_code == 401:
+                    status = "reauthentication_required"
+                    self._reauthentication_error("upstream_rejected")
+                elif r.status_code in (400, 422):
+                    status = f"HTTP{r.status_code}"
+                    self._error(r.status_code, "upstream_request_rejected",
+                                 detail={"upstream_status": r.status_code})
+                else:
+                    status = "upstream_unavailable"
+                    self._error(502, "upstream_unavailable",
+                                detail={"upstream_status": r.status_code})
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status=status)
+                return
+            if not client_stream and not upstream_stream:
+                try:
+                    payload = r.json()
+                    translated = chat_to_responses_response(
+                        payload, body["model"])
+                except (ValueError, UnicodeError):
+                    record_usage(body["model"], False, started_at, None,
+                                  input_est, 0,
+                                  status="unexpected_upstream_response")
+                    self._error(502, "unexpected_upstream_response")
+                    return
+                self._json(200, translated)
+                out_chars = 0
+                for item in translated.get("output") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    for part in item.get("content") or []:
+                        if isinstance(part, dict):
+                            out_chars += len(part.get("text") or "")
+                record_usage(body["model"], False, started_at,
+                              payload.get("usage") if isinstance(
+                                  payload, dict) else None,
+                              input_est,
+                              max(1, out_chars // 4) if out_chars else 0)
+                return
+            if upstream_stream and not client_stream:
+                # N2b: the chat upstream answered SSE, the Responses client
+                # asked for ONE JSON body. Read the complete stream, translate
+                # it exactly like the native branch, and never return a partial
+                # completion as a success.
+                aggregate = _NonStreamChatAggregator(
+                    default_model=chat_body.get("model") or body["model"])
+                aggregate_lease = _ReaderSlotLease(_reader_slots)
+                if not aggregate_lease.acquire(blocking=False):
+                    try:
+                        r.close()
+                    except Exception:
+                        pass
+                    record_usage(body["model"], False, started_at, None,
+                                  input_est, 0,
+                                  status="concurrency_limit")
+                    self._error(503, "Too many concurrent streaming requests",
+                                error_type="too_many_concurrent_streams")
+                    return
+                upstream_owned = True
+                aggregate_data, aggregate_status, aggregate_exc = (
+                    self._consume_aggregate_stream(
+                        r, aggregate, aggregate_lease))
+                translated = None
+                if aggregate_data is not None:
+                    try:
+                        translated = chat_to_responses_response(
+                            aggregate_data, body["model"])
+                    except (ValueError, UnicodeError):
+                        record_usage(body["model"], False, started_at,
+                                      aggregate.usage(), input_est,
+                                      aggregate.output_estimate(),
+                                      status="unexpected_upstream_response")
+                        self._error(502, "unexpected_upstream_response")
+                        return
+                    try:
+                        self._json(200, translated)
+                    except (ConnectionError, OSError, ValueError):
+                        aggregate_status = "client_disconnected"
+                        self.close_connection = True
+                if aggregate_status == "client_disconnected":
+                    self.close_connection = True
+                elif aggregate_status != "ok":
+                    message, detail, error_type = (
+                        self._aggregate_failure_error(
+                            aggregate_status, aggregate_exc))
+                    try:
+                        self._error(502, message, detail, error_type)
+                    except (ConnectionError, OSError, ValueError):
+                        aggregate_status = "client_disconnected"
+                        self.close_connection = True
+                if aggregate_status == "ok":
+                    out_chars = 0
+                    for item in translated.get("output") or []:
+                        if not isinstance(item, dict):
+                            continue
+                        for part in item.get("content") or []:
+                            if isinstance(part, dict):
+                                out_chars += len(part.get("text") or "")
+                    record_usage(body["model"], False, started_at,
+                                  aggregate_data.get("usage"), input_est,
+                                  max(1, out_chars // 4) if out_chars else 0)
+                elif aggregate_status == "client_disconnected":
+                    record_usage(body["model"], False, started_at,
+                                  aggregate.usage(), input_est,
+                                  aggregate.output_estimate(),
+                                  status="client_disconnected")
+                else:
+                    record_usage(body["model"], False, started_at,
+                                  aggregate.usage(), input_est,
+                                  aggregate.output_estimate(),
+                                  status=f"aggregate_{aggregate_status}")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            response_id = "resp_" + secrets.token_hex(12)
+            created_at = int(time.time())
+            usage = {}
+            output_chars = 0
+            status = "ok"
+
+            def send_event(name, payload):
+                self.wfile.write(("event: " + name + "\ndata: "
+                                  + json.dumps(payload) + "\n\n").encode())
+                self.wfile.flush()
+
+            try:
+                for name, payload in responses_stream_events(
+                        r, body["model"], response_id, created_at):
+                    send_event(name, payload)
+                    if name == "response.output_text.delta":
+                        output_chars += len(payload.get("delta") or "")
+                    elif name == "response.function_call_arguments.delta":
+                        output_chars += len(payload.get("delta") or "")
+                    elif name in ("response.completed",
+                                  "response.incomplete"):
+                        response = payload.get("response") or {}
+                        usage = response.get("usage") or {}
+                        status = ("ok" if name == "response.completed"
+                                  else "incomplete")
+                    elif name == "response.failed":
+                        error = ((payload.get("response") or {})
+                                 .get("error") or {})
+                        status = error.get("code") or "upstream_error"
+            except (requests.RequestException, OSError) as exc:
+                if isinstance(exc, requests.RequestException):
+                    status = "upstream_stream_error"
+                    try:
+                        send_event("response.failed", {
+                            "type": "response.failed",
+                            "response": {"id": response_id,
+                                         "object": "response",
+                                         "created_at": created_at,
+                                         "status": "failed",
+                                         "model": body["model"], "output": [],
+                                         "error": {
+                                             "code": status,
+                                             "message": "upstream stream "
+                                                        "failed"}}})
+                    except (OSError, ConnectionError):
+                        status = "client_disconnected"
+                else:
+                    status = "client_disconnected"
+            finally:
+                out_est = (max(1, output_chars // 4)
+                           if status == "ok" else output_chars // 4)
+                record_usage(body["model"], client_stream, started_at, usage,
+                              input_est, out_est, status=status)
+        finally:
+            if not upstream_owned:
+                r.close()
+
+    def _responses_via_messages(self, body, auth_wait_budget=None,
+                                 request_deadline=None, cancel_check=None):
+        """Serve Responses through Anthropic Messages when a tool result has an image.
+
+        Chat Completions has no image slot on a tool message, so only the
+        image-bearing branch switches upstream protocol. The client still sees the
+        Responses wire format; the translation stays in this backend.
+        """
+        from shared.responses_protocol import (responses_to_messages_request,
+                                  messages_to_responses_response,
+                                  messages_stream_events)
+        messages_body = responses_to_messages_request(body)
+        client_stream = messages_body.get("stream") is True
+        # N2b: a stream=false Responses client may use an SSE Messages
+        # upstream only for the selected (verified key, model, protocol)
+        # triple; the client protocol is still Responses and every ledger row
+        # keeps the CLIENT's own mode.
+        upstream_stream = client_stream or nonstream_aggregate_allowed(
+            "responses", body.get("model"))
+        if upstream_stream and not client_stream:
+            messages_body["stream"] = True
+        proxy: Proxy = self.server.proxy
+        started_at = time.time()
+        input_est = _message_tokens(messages_body.get("messages"))
+        upstream_owned = False
+        if request_deadline is None:
+            request_deadline = time.monotonic() + MAX_REQUEST_SECONDS
+        # Pre-send scheduling (8110 only): the client protocol is still
+        # Responses, so the facts' own protocol must match it.
+        dispatch_ticket = share_dispatch_ticket("responses")
+        try:
+            r = proxy.call("POST", "/api/v1/messages", stream=upstream_stream,
+                           json=messages_body,
+                           headers={"Anthropic-Version": "2023-06-01"},
+                           auth_wait_budget=auth_wait_budget,
+                           request_deadline=request_deadline,
+                           cancel_check=cancel_check,
+                           dispatch_ticket=dispatch_ticket)
+        except ReauthenticationRequired as exc:
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status="reauthentication_required")
+            self._reauthentication_error(
+                getattr(exc, "reason", None) or str(exc) or None)
+            return
+        except _ShareDispatchTimeout:
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status="share_dispatch_timeout")
+            self._share_dispatch_timeout_error()
+            return
+        except _ShareDispatchRevoked:
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status="share_dispatch_revoked")
+            self._share_dispatch_revoked_error()
+            return
+        except _ShareDispatchStateUnavailable:
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0,
+                          status=SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
+            self._share_dispatch_state_unavailable_error()
+            return
+        except _RequestCancelled:
+            self.close_connection = True
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status="client_disconnected")
+            return
+        except _RequestDeadlineExceeded:
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status="request_deadline_exceeded")
+            self._error(
+                502, "Upstream request could not start another attempt",
+                error_type="request_deadline_exceeded")
+            return
+        try:
+            if r.status_code != 200:
+                if r.status_code == 401:
+                    status = "reauthentication_required"
+                    self._reauthentication_error("upstream_rejected")
+                elif r.status_code in (400, 422):
+                    status = f"HTTP{r.status_code}"
+                    self._error(r.status_code, "upstream_request_rejected",
+                                 detail={"upstream_status": r.status_code})
+                else:
+                    status = "upstream_unavailable"
+                    self._error(502, "upstream_unavailable",
+                                detail={"upstream_status": r.status_code})
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status=status)
+                return
+            if not client_stream and not upstream_stream:
+                try:
+                    payload = r.json()
+                    translated = messages_to_responses_response(
+                        payload, body["model"])
+                except (ValueError, UnicodeError):
+                    record_usage(body["model"], False, started_at, None,
+                                  input_est, 0,
+                                  status="unexpected_upstream_response")
+                    self._error(502, "unexpected_upstream_response")
+                    return
+                self._json(200, translated)
+                out_chars = 0
+                for item in translated.get("output") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    for part in item.get("content") or []:
+                        if isinstance(part, dict):
+                            out_chars += len(part.get("text") or "")
+                record_usage(body["model"], False, started_at,
+                              translated.get("usage"), input_est,
+                              max(1, out_chars // 4) if out_chars else 0)
+                return
+            if upstream_stream and not client_stream:
+                # N2b: the Messages upstream answered SSE, the Responses
+                # client asked for ONE JSON body. Read the complete stream,
+                # translate the SAME way the native branch does, and never
+                # return a partial message as a success.
+                aggregate = _NonStreamAnthropicAggregator(
+                    default_model=messages_body.get("model") or body["model"])
+                aggregate_lease = _ReaderSlotLease(_reader_slots)
+                if not aggregate_lease.acquire(blocking=False):
+                    try:
+                        r.close()
+                    except Exception:
+                        pass
+                    record_usage(body["model"], False, started_at, None,
+                                  input_est, 0,
+                                  status="concurrency_limit")
+                    self._error(503, "Too many concurrent streaming requests",
+                                error_type="too_many_concurrent_streams")
+                    return
+                upstream_owned = True
+                aggregate_data, aggregate_status, aggregate_exc = (
+                    self._consume_aggregate_stream(
+                        r, aggregate, aggregate_lease))
+                translated = None
+                if aggregate_data is not None:
+                    try:
+                        translated = messages_to_responses_response(
+                            aggregate_data, body["model"])
+                    except (ValueError, UnicodeError):
+                        record_usage(body["model"], False, started_at,
+                                      _anthropic_usage_fields(
+                                          aggregate.usage()) or None,
+                                      input_est, aggregate.output_estimate(),
+                                      status="unexpected_upstream_response")
+                        self._error(502, "unexpected_upstream_response")
+                        return
+                    try:
+                        self._json(200, translated)
+                    except (ConnectionError, OSError, ValueError):
+                        aggregate_status = "client_disconnected"
+                        self.close_connection = True
+                if aggregate_status == "client_disconnected":
+                    self.close_connection = True
+                elif aggregate_status != "ok":
+                    message, detail, error_type = (
+                        self._aggregate_failure_error(
+                            aggregate_status, aggregate_exc))
+                    try:
+                        self._error(502, message, detail, error_type)
+                    except (ConnectionError, OSError, ValueError):
+                        aggregate_status = "client_disconnected"
+                        self.close_connection = True
+                if aggregate_status == "ok":
+                    out_chars = 0
+                    for item in translated.get("output") or []:
+                        if not isinstance(item, dict):
+                            continue
+                        for part in item.get("content") or []:
+                            if isinstance(part, dict):
+                                out_chars += len(part.get("text") or "")
+                    record_usage(body["model"], False, started_at,
+                                  translated.get("usage"), input_est,
+                                  max(1, out_chars // 4) if out_chars else 0)
+                elif aggregate_status == "client_disconnected":
+                    record_usage(body["model"], False, started_at,
+                                  _anthropic_usage_fields(
+                                      aggregate.usage()) or None,
+                                  input_est, aggregate.output_estimate(),
+                                  status="client_disconnected")
+                else:
+                    record_usage(body["model"], False, started_at,
+                                  _anthropic_usage_fields(
+                                      aggregate.usage()) or None,
+                                  input_est, aggregate.output_estimate(),
+                                  status=f"aggregate_{aggregate_status}")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            response_id = "resp_" + secrets.token_hex(12)
+            created_at = int(time.time())
+            usage = {}
+            output_chars = 0
+            status = "ok"
+
+            def send_event(name, payload):
+                self.wfile.write(("event: " + name + "\ndata: "
+                                  + json.dumps(payload) + "\n\n").encode())
+                self.wfile.flush()
+
+            try:
+                for name, payload in messages_stream_events(
+                        r, body["model"], response_id, created_at):
+                    send_event(name, payload)
+                    if name == "response.output_text.delta":
+                        output_chars += len(payload.get("delta") or "")
+                    elif name == "response.function_call_arguments.delta":
+                        output_chars += len(payload.get("delta") or "")
+                    elif name in ("response.completed",
+                                  "response.incomplete"):
+                        response = payload.get("response") or {}
+                        usage = response.get("usage") or {}
+                        status = ("ok" if name == "response.completed"
+                                  else "incomplete")
+                    elif name == "response.failed":
+                        error = ((payload.get("response") or {})
+                                 .get("error") or {})
+                        status = error.get("code") or "upstream_error"
+            except (requests.RequestException, OSError) as exc:
+                if isinstance(exc, requests.RequestException):
+                    status = "upstream_stream_error"
+                    try:
+                        send_event("response.failed", {
+                            "type": "response.failed",
+                            "response": {"id": response_id,
+                                         "object": "response",
+                                         "created_at": created_at,
+                                         "status": "failed",
+                                         "model": body["model"], "output": [],
+                                         "error": {
+                                             "code": status,
+                                             "message": "upstream stream "
+                                                        "failed"}}})
+                    except (OSError, ConnectionError):
+                        status = "client_disconnected"
+                else:
+                    status = "client_disconnected"
+            finally:
+                out_est = (max(1, output_chars // 4)
+                           if status == "ok" else output_chars // 4)
+                record_usage(body["model"], client_stream, started_at, usage,
+                              input_est, out_est, status=status)
+        finally:
+            if not upstream_owned:
+                r.close()
+
     def _compat_proxy(self, upstream_path, allow_stream=False,
-                      forward_anthropic_headers=False):
+                      forward_anthropic_headers=False,
+                      auth_wait_budget=None, request_deadline=None,
+                      cancel_check=None):
         """Proxy a deliberately exposed compatibility endpoint.
 
         Transient retry rules match chat semantics: fast failures use the full
@@ -4678,15 +7630,23 @@ class Handler(BaseHTTPRequestHandler):
         body = self._read_body()
         if body is None:
             return
-        stream = allow_stream and bool(body.get("stream"))
+        client_stream = allow_stream and bool(body.get("stream"))
+        # N2b: stream=false Messages may aggregate only for the selected triple.
+        upstream_stream = client_stream or (allow_stream and
+                                          nonstream_aggregate_allowed(
+                                              "messages", body.get("model")))
+        if upstream_stream and not client_stream:
+            # The upstream request must itself select streaming so UM writes
+            # SSE; the client's own body is not relayed with another mode.
+            body["stream"] = True
         # Anthropic Messages usage accounting is armed ONLY for that protocol,
-        # and the stream accumulator only for a stream: a non-stream request
-        # carries its complete usage in the body.
+        # and the stream accumulator only for a client stream: a non-stream
+        # request carries its complete usage in the body.
         record_messages = upstream_path == "/api/v1/messages"
         messages_model = body.get("model") or ""
         messages_in_est = _message_tokens(body.get("messages"))
         stream_usage = (_AnthropicStreamUsage()
-                        if record_messages and stream else None)
+                        if record_messages and client_stream else None)
         headers = {}
         if forward_anthropic_headers:
             for name in ("Anthropic-Version", "Anthropic-Beta"):
@@ -4694,7 +7654,8 @@ class Handler(BaseHTTPRequestHandler):
                 if value:
                     headers[name] = value
 
-        deadline = time.monotonic() + MAX_REQUEST_SECONDS
+        deadline = (time.monotonic() + MAX_REQUEST_SECONDS
+                    if request_deadline is None else request_deadline)
         compat_request_id = secrets.token_hex(6)
         started_compat = time.monotonic()
         # record_usage derives duration_ms from the wall clock, while the log
@@ -4719,7 +7680,7 @@ class Handler(BaseHTTPRequestHandler):
                 "output budget request=%s %s", compat_request_id,
                 _format_output_budget(messages_output_budget))
 
-        def record_messages_usage(status, payload=None):
+        def record_messages_usage(status, payload=None, usage=None, out_est=None):
             """Append ONE ledger row for this logical Messages request.
 
             Called exactly once per request: every terminal path below ends in a
@@ -4728,15 +7689,19 @@ class Handler(BaseHTTPRequestHandler):
             never be counted twice. A non-stream 200 body carries the complete
             usage; a stream carries it through ``stream_usage``. An interrupted
             stream records its known lower bound with a non-"ok" status instead
-            of a fabricated complete success.
+            of a fabricated complete success. A failed aggregate passes the
+            aggregator's raw Anthropic usage block and output estimate through
+            ``usage``/``out_est``: the same translation boundary runs, so an
+            unknown side stays unknown instead of a fabricated zero.
             """
             if not record_messages:
                 return
-            usage, usage_source, out_est = None, None, 0
+            usage_source = None
+            out_est_value = 0
             if stream_usage is not None:
                 usage = stream_usage.usage()
                 usage_source = stream_usage.source()
-                out_est = stream_usage.output_estimate()
+                out_est_value = stream_usage.output_estimate()
             elif payload is not None:
                 # The coverage is DERIVED by the normalization boundary
                 # (record_usage), exactly like the stream path's source():
@@ -4746,9 +7711,12 @@ class Handler(BaseHTTPRequestHandler):
                 # Hardcoding "upstream" for any non-None block would let a
                 # single-side report masquerade as full upstream coverage.
                 usage = _anthropic_message_usage(payload)
-                out_est = _anthropic_output_estimate(payload)
-            record_usage(messages_model, stream, started_compat_wall, usage,
-                         messages_in_est, out_est, status=status,
+                out_est_value = _anthropic_output_estimate(payload)
+            elif usage is not None or out_est is not None:
+                usage = _anthropic_usage_fields(usage) or None
+                out_est_value = out_est if out_est is not None else 0
+            record_usage(messages_model, client_stream, started_compat_wall,
+                         usage, messages_in_est, out_est_value, status=status,
                          usage_source=usage_source)
 
         def retry_available(slow):
@@ -4793,6 +7761,10 @@ class Handler(BaseHTTPRequestHandler):
                 repetition_retries_done,
                 int((time.monotonic() - started_compat) * 1000))
 
+        # Pre-send scheduling (8110 only): only the Messages protocol is a
+        # conversation protocol here, so embeddings never enters the rotation.
+        dispatch_ticket = (share_dispatch_ticket("messages")
+                           if record_messages else None)
         while True:
             remaining_s = deadline - time.monotonic()
             if remaining_s <= 0:
@@ -4815,16 +7787,41 @@ class Handler(BaseHTTPRequestHandler):
             response = None
             try:
                 response = proxy.call(
-                    "POST", upstream_path, json=body, stream=stream,
+                    "POST", upstream_path, json=body, stream=upstream_stream,
                     headers=headers,
-                    timeout=(max(0.05, min(15.0, remaining_s)),
-                             max(0.05, min(180.0, remaining_s))),
+                    timeout=(max(0.001, min(15.0, remaining_s)),
+                             max(0.001, min(180.0, remaining_s))),
                     physical_budget=physical_budget,
-                    request_deadline=deadline)
+                    request_deadline=deadline,
+                    auth_wait_budget=auth_wait_budget,
+                    cancel_check=cancel_check,
+                    dispatch_ticket=dispatch_ticket)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(str(exc) or None)
+                self._reauthentication_error(
+                    getattr(exc, "reason", None) or str(exc) or None)
                 log_summary("reauthentication_required")
                 record_messages_usage("reauthentication_required")
+                return
+            except _ShareDispatchTimeout:
+                self._share_dispatch_timeout_error()
+                log_summary("share_dispatch_timeout")
+                record_messages_usage("share_dispatch_timeout")
+                return
+            except _ShareDispatchRevoked:
+                self._share_dispatch_revoked_error()
+                log_summary("share_dispatch_revoked")
+                record_messages_usage("share_dispatch_revoked")
+                return
+            except _ShareDispatchStateUnavailable:
+                self._share_dispatch_state_unavailable_error()
+                log_summary(SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
+                record_messages_usage(
+                    SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
+                return
+            except _RequestCancelled:
+                self.close_connection = True
+                log_summary("client_disconnected")
+                record_messages_usage("client_disconnected")
                 return
             except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
                 error_type = ("request_deadline_exceeded"
@@ -4837,7 +7834,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             except requests.RequestException as exc:
                 elapsed = time.monotonic() - attempt_started
-                if schedule_retry(type(exc).__name__, elapsed):
+                action = _compat_pre_output_retry(
+                    self, exc, elapsed, retry_available, proxy,
+                    auth_wait_budget, deadline, cancel_check,
+                    compat_request_id, record_messages_usage, log_summary)
+                if action == "handled":
+                    return
+                if action == "retry" and schedule_retry(
+                        type(exc).__name__, elapsed):
                     continue
                 self._error(502, "Failed to reach upstream compatibility endpoint",
                             type(exc).__name__)
@@ -4867,7 +7871,7 @@ class Handler(BaseHTTPRequestHandler):
                 # historical behavior and pass the last upstream status/body
                 # through instead of rewriting it to a synthetic 502.
 
-            if stream and response.status_code == 200:
+            if client_stream and response.status_code == 200:
                 try:
                     stream_status = self._passthrough_stream(
                         response, request_deadline=deadline,
@@ -4907,7 +7911,14 @@ class Handler(BaseHTTPRequestHandler):
                         log_summary("degenerate_repetition")
                         record_messages_usage("degenerate_repetition")
                         return
-                    if schedule_retry(str(exc), elapsed, stream_retry=True):
+                    action = _compat_pre_output_retry(
+                        self, exc, elapsed, retry_available, proxy,
+                        auth_wait_budget, deadline, cancel_check,
+                        compat_request_id, record_messages_usage, log_summary)
+                    if action == "handled":
+                        return
+                    if action == "retry" and schedule_retry(
+                            str(exc), elapsed, stream_retry=True):
                         continue
                     self._error(
                         502, "Upstream compatibility stream failed before any event",
@@ -4925,6 +7936,68 @@ class Handler(BaseHTTPRequestHandler):
                         int((time.monotonic() - started_compat) * 1000))
                 log_summary(stream_status or "ok")
                 record_messages_usage(stream_status or "ok")
+                return
+
+            if upstream_stream and not client_stream and \
+                    response.status_code == 200:
+                # N2b: the Messages upstream answered SSE, the client asked
+                # for ONE JSON body. Read the complete stream before
+                # answering: a malformed frame, an explicit upstream error, a
+                # missing message_stop or a broken connection is a 502, never a
+                # partial 200. The producer owns the response and the reader
+                # slot from start(); a client disconnect records the cancelled
+                # turn exactly like the stream path, and the ledger's stream
+                # field stays the client's own (False).
+                aggregate = _NonStreamAnthropicAggregator(
+                    default_model=messages_model)
+                aggregate_lease = _ReaderSlotLease(_reader_slots)
+                if not aggregate_lease.acquire(blocking=False):
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+                    self._error(503, "Too many concurrent streaming requests",
+                                error_type="too_many_concurrent_streams")
+                    log_summary("concurrency_limit")
+                    record_messages_usage("concurrency_limit")
+                    return
+                aggregate_data, aggregate_status, aggregate_exc = (
+                    self._consume_aggregate_stream(
+                        response, aggregate, aggregate_lease))
+                if aggregate_data is not None:
+                    try:
+                        self._json(200, aggregate_data)
+                    except (ConnectionError, OSError, ValueError):
+                        aggregate_status = "client_disconnected"
+                        self.close_connection = True
+                elif aggregate_status == "client_disconnected":
+                    self.close_connection = True
+                else:
+                    if aggregate_status == "upstream_explicit_error":
+                        _logger.warning(
+                            "upstream explicit stream error request=%s "
+                            "endpoint=%s message=%r", compat_request_id,
+                            upstream_path,
+                            getattr(aggregate_exc, "message", None))
+                    message, detail, error_type = (
+                        self._aggregate_failure_error(
+                            aggregate_status, aggregate_exc))
+                    try:
+                        self._error(502, message, detail, error_type)
+                    except (ConnectionError, OSError, ValueError):
+                        aggregate_status = "client_disconnected"
+                        self.close_connection = True
+                if aggregate_status == "ok":
+                    record_messages_usage("ok", payload=aggregate_data)
+                elif aggregate_status == "client_disconnected":
+                    record_messages_usage(
+                        "client_disconnected", usage=aggregate.usage(),
+                        out_est=aggregate.output_estimate())
+                else:
+                    record_messages_usage(
+                        f"aggregate_{aggregate_status}", usage=aggregate.usage(),
+                        out_est=aggregate.output_estimate())
+                log_summary(aggregate_status)
                 return
 
             status_code = response.status_code
@@ -4956,15 +8029,16 @@ class Handler(BaseHTTPRequestHandler):
                 # for a uniform reject-line shape across the two protocols.
                 _log_upstream_reject(
                     compat_request_id, status_code, model=messages_model,
-                    requested_model=messages_model, stream=stream, body=body,
-                    response_text=response_text,
+                    requested_model=messages_model, stream=client_stream,
+                    body=body, response_text=response_text,
                     output_budget=messages_output_budget)
             self._passthrough(response)
             log_summary(f"HTTP{status_code}")
             record_messages_usage(f"HTTP{status_code}", payload=payload)
             return
 
-    def _chat(self):
+    def _chat(self, auth_wait_budget=None, request_deadline=None,
+              cancel_check=None):
         proxy: Proxy = self.server.proxy
         body = self._read_body()
         if body is None:
@@ -4979,7 +8053,15 @@ class Handler(BaseHTTPRequestHandler):
         # can be tied together in chat2api.log; it is written only to the log
         # and never added to any response body.
         request_id = secrets.token_hex(6)
-        stream = bool(body.get("stream"))
+        # The client's response mode and the upstream transport mode are
+        # separate (N1): R13 aggregates only a fully selected (verified key,
+        # model, protocol) triple, while every existing caller keeps the native
+        # transport. A direct 8110 request has no verified key id and stays
+        # native. Every downstream decision uses client_stream; only the
+        # upstream request/read/reader-slot decision uses upstream_stream.
+        client_stream = bool(body.get("stream"))
+        upstream_stream = client_stream or nonstream_aggregate_allowed(
+            "chat", req_model)
 
         # Normalize the known UM image budget exactly once per downstream
         # request. Every subsequent compatibility/transient/repetition retry
@@ -5028,10 +8110,16 @@ class Handler(BaseHTTPRequestHandler):
             body["model"] = base
             body["reasoning_effort"] = effort
 
-        if stream:
+        if upstream_stream:
             # Ask the backend for a usage chunk so accounting is real, not
             # estimated; backends that reject the option get one plain retry.
             body.setdefault("stream_options", {"include_usage": True})
+        if upstream_stream and not client_stream:
+            # The client asked for ONE JSON body, but the upstream request must
+            # itself select streaming so UM writes SSE instead of a buffered
+            # non-stream response (N1). The client's own body is not relayed
+            # with a different response mode.
+            body["stream"] = True
 
         # B7-7: state once, at the point where the request body is complete
         # (image budget normalized, virtual model resolved, stream_options
@@ -5058,7 +8146,7 @@ class Handler(BaseHTTPRequestHandler):
                 "exception=%s downstream=%d stream=%s model=%s duration_ms=%d",
                 request_id, stage,
                 "-" if upstream_status is None else upstream_status,
-                exc_name or "-", downstream_code, stream, req_model,
+                exc_name or "-", downstream_code, client_stream, req_model,
                 int((time.time() - started_at) * 1000))
 
         physical_budget = _PhysicalRequestBudget(MAX_TOTAL_ATTEMPTS)
@@ -5071,7 +8159,14 @@ class Handler(BaseHTTPRequestHandler):
         # (e.g. 120s first-byte budget x 6 attempts ≈ 12 minutes) to pin an
         # unattended client. Beyond this the request stops retrying and
         # surfaces its last failure immediately.
-        request_deadline = time.monotonic() + MAX_REQUEST_SECONDS
+        request_deadline = (time.monotonic() + MAX_REQUEST_SECONDS
+                            if request_deadline is None
+                            else request_deadline)
+        # Pre-send scheduling (8110 only): None unless this request's
+        # attribution was VERIFIED at this process's HTTP boundary. The ticket
+        # lives for the whole logical request, so every retry below reuses the
+        # same cumulative wait budget instead of resetting it.
+        dispatch_ticket = share_dispatch_ticket("chat")
 
         def chat_call_timeout():
             """Per-attempt socket read timeout capped by the request deadline:
@@ -5080,9 +8175,13 @@ class Handler(BaseHTTPRequestHandler):
             if remaining <= 0:
                 raise _RequestDeadlineExceeded(
                     "chat request wall-clock deadline exhausted")
-            read_cap = STREAM_SOCKET_TIMEOUT_S if stream else 600
-            return (max(0.05, min(15.0, remaining)),
-                    max(0.05, min(read_cap, remaining)))
+            # The per-socket read cap follows the CLIENT's response mode, not
+            # the upstream transport: the aggregate serves stream=false, so it
+            # keeps the existing 600s non-stream cap (clipped to the request
+            # deadline) and never inherits the 120/180s stream boundaries.
+            read_cap = STREAM_SOCKET_TIMEOUT_S if client_stream else 600
+            return (max(0.001, min(15.0, remaining)),
+                    max(0.001, min(read_cap, remaining)))
 
         def transient_retry_available(slow=False):
             return (UPSTREAM_AUTO_RETRY and
@@ -5103,7 +8202,7 @@ class Handler(BaseHTTPRequestHandler):
                 MAX_TOTAL_ATTEMPTS, "slow" if slow else "fast",
                 reason, delay_s)
 
-        def open_chat_response():
+        def open_chat_response(reader_lease=None):
             """Open one chat response, transparently retrying transient setup failures.
 
             Every real HTTP request consumes the shared physical budget,
@@ -5124,15 +8223,44 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     rr = proxy.call(
                         "POST", "/api/chat/completions", json=body,
-                        stream=stream, timeout=chat_call_timeout(),
+                        stream=upstream_stream, timeout=chat_call_timeout(),
                         physical_budget=physical_budget,
-                        request_deadline=request_deadline)
+                        request_deadline=request_deadline,
+                        auth_wait_budget=auth_wait_budget,
+                        cancel_check=cancel_check,
+                        reader_lease=reader_lease,
+                        dispatch_ticket=dispatch_ticket)
                 except ReauthenticationRequired:
+                    raise
+                except _RequestCancelled:
                     raise
                 except _UPSTREAM_TRANSIENT_EXCEPTIONS as exc:
                     elapsed = time.monotonic() - attempt_started
                     slow = _attempt_is_slow(elapsed)
                     if transient_retry_available(slow):
+                        # The pre-output credential check can wait up to the
+                        # full authentication budget. Release the streaming
+                        # reader slot for that wait and take it back before the
+                        # retry send, exactly like the post-401 re-send path
+                        # (refresh_before_retry); otherwise a 180-second wait
+                        # would hold one of the reader slots and concurrent
+                        # clients would see a spurious 503.
+                        if reader_lease is not None:
+                            reader_lease.release()
+                        outcome = _pre_output_verify(
+                            proxy, auth_wait_budget, request_deadline,
+                            cancel_check, "chat_setup", request_id)
+                        if outcome == "retry" and reader_lease is not None:
+                            if not reader_lease.acquire(blocking=False):
+                                raise _ReaderSlotUnavailable(
+                                    "stream reader capacity exhausted after "
+                                    "pre-output auth wait")
+                        if outcome == "original":
+                            raise
+                        if outcome in ("cancelled", "stopped"):
+                            raise _RequestCancelled("client disconnected")
+                        if outcome in ("auth_timeout", "auth_capacity"):
+                            raise ReauthenticationThrottled(outcome)
                         transient_retries_done += 1
                         if slow:
                             slow_retries_done += 1
@@ -5147,7 +8275,7 @@ class Handler(BaseHTTPRequestHandler):
                 except requests.RequestException:
                     raise
 
-                if (rr.status_code == 400 and stream and
+                if (rr.status_code == 400 and upstream_stream and
                         "stream_options" in body):
                     # Compatibility retry is pre-existing behavior, not an
                     # upstream-health retry. Respect the global attempt cap.
@@ -5185,8 +8313,9 @@ class Handler(BaseHTTPRequestHandler):
         # this handler inside ONE finally: before the reader producer takes
         # over, every path closes the current response and returns the slot;
         # once start() succeeds the producer owns both and releases the slot.
-        reader_slot = _reader_slots if stream else None
-        if reader_slot is not None and not reader_slot.acquire(blocking=False):
+        reader_lease = (_ReaderSlotLease(_reader_slots)
+                        if upstream_stream else None)
+        if reader_lease is not None and not reader_lease.acquire(blocking=False):
             log_failure("concurrency_limit_rejected", 503)
             self._error(
                 503, "Too many concurrent streaming requests",
@@ -5195,16 +8324,53 @@ class Handler(BaseHTTPRequestHandler):
             return
         # Streaming reads are bounded per socket read by chat_call_timeout()
         # above (STREAM_SOCKET_TIMEOUT_S cap, also clipped to the request
-        # deadline); the non-stream path uses a flat 600s read cap there too.
+        # deadline); the NATIVE non-stream path and the non-stream client of
+        # the aggregate path use the existing flat 600s read cap.
         response = None
         compat_retry_used = False
         try:
             try:
-                r, compat_retry_used = open_chat_response()
+                r, compat_retry_used = open_chat_response(reader_lease)
+            except _ReaderSlotUnavailable:
+                log_failure("concurrency_limit_reacquire_failed", 503)
+                self._error(
+                    503, "Too many concurrent streaming requests",
+                    f"concurrent reader limit {STREAM_MAX_CONCURRENT_READERS} "
+                    "reached; retry later", "too_many_concurrent_streams")
+                return
             except ReauthenticationRequired as exc:
                 log_failure("reauthentication_required", 503,
                             exc_name=type(exc).__name__)
-                self._reauthentication_error(str(exc) or None)
+                self._reauthentication_error(
+                    getattr(exc, "reason", None) or str(exc) or None)
+                return
+            except _ShareDispatchTimeout:
+                log_failure("share_dispatch_timeout", 429)
+                record_usage(
+                    req_model, client_stream, started_at, None,
+                    _message_tokens(body.get("messages")), 0,
+                    status="share_dispatch_timeout")
+                self._share_dispatch_timeout_error()
+                return
+            except _ShareDispatchRevoked:
+                log_failure("share_dispatch_revoked", 429)
+                record_usage(
+                    req_model, client_stream, started_at, None,
+                    _message_tokens(body.get("messages")), 0,
+                    status="share_dispatch_revoked")
+                self._share_dispatch_revoked_error()
+                return
+            except _ShareDispatchStateUnavailable:
+                log_failure(SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS, 503)
+                record_usage(
+                    req_model, client_stream, started_at, None,
+                    _message_tokens(body.get("messages")), 0,
+                    status=SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
+                self._share_dispatch_state_unavailable_error()
+                return
+            except _RequestCancelled:
+                self.close_connection = True
+                log_failure("client_disconnected", 0)
                 return
             except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
                 stage = ("request_deadline_exceeded"
@@ -5240,7 +8406,13 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     response_text = ""
                 r.close()
-                if status_code in (400, 422):
+                if status_code == 401:
+                    # The retry used a credential that was just published;
+                    # its explicit rejection is a reauthentication failure,
+                    # never a generic upstream 502.
+                    status = "reauthentication_required"
+                    self._reauthentication_error("upstream_rejected")
+                elif status_code in (400, 422):
                     # Request-validation failure: mapping it to 502 would let
                     # ZCode replay the SAME payload as a transient failure and
                     # re-reject it forever. Surface the real status, never
@@ -5254,7 +8426,7 @@ class Handler(BaseHTTPRequestHandler):
                     _log_upstream_reject(
                         request_id, status_code,
                         model=body.get("model") or "",
-                        requested_model=req_model, stream=stream, body=body,
+                        requested_model=req_model, stream=client_stream, body=body,
                         response_text=response_text,
                         output_budget=output_budget)
                     self._error(
@@ -5270,7 +8442,9 @@ class Handler(BaseHTTPRequestHandler):
                             f"HTTP {status_code}: {response_text}")
                 return
 
-            if not stream:
+            if not upstream_stream:
+                # Native non-stream transport: the upstream answered one JSON
+                # body and this endpoint relays it unchanged.
                 try:
                     data = r.json()
                 except ValueError as exc:
@@ -5298,8 +8472,9 @@ class Handler(BaseHTTPRequestHandler):
                     # terminal failure too - never relayed as a successful
                     # completion, never accounted as "ok". Only the sanitized,
                     # bounded reason travels (the raw object may carry
-                    # credential material); no usage row, the same accounting
-                    # rule as every other terminal upstream failure.
+                    # credential material). This native path never read an SSE
+                    # stream, so it writes no usage row (the aggregate path,
+                    # which did read one, records its lower-bound row).
                     log_failure("upstream_explicit_error", 502,
                                 upstream_status=r.status_code)
                     _logger.warning(
@@ -5344,7 +8519,7 @@ class Handler(BaseHTTPRequestHandler):
             # gateway/network failures may be retried transparently; after
             # visible output, errors stay in-band because replaying a second
             # completion would concatenate two answers.
-            upstream = _UpstreamStream(r, reader_slot=reader_slot)
+            upstream = _UpstreamStream(r, reader_slot=reader_lease)
             # Trace headers of the response that feeds the visible stream: the
             # stream-end log line reports these so a production stall carries
             # the upstream request id it can be claimed by.
@@ -5358,15 +8533,160 @@ class Handler(BaseHTTPRequestHandler):
                             "producer thread could not start",
                             "upstream_stream_error")
                 return
-            reader_slot = None  # ownership transferred to the producer
+            reader_lease = None  # ownership transferred to the producer
         finally:
-            if reader_slot is not None:
+            if reader_lease is not None:
                 if response is not None:
                     try:
                         response.close()
                     except Exception:
                         pass
-                reader_slot.release()
+                reader_lease.release()
+
+        if not client_stream:
+            # N1: the upstream transport is SSE but the client asked for ONE
+            # JSON body. Consume the complete stream before answering: a
+            # malformed frame, an explicit upstream error, an incomplete
+            # terminal (a bare [DONE] or a bare finish_reason) or a broken
+            # connection is a 502, never a partial 200.
+            # The reader slot stays owned by the producer (released in its
+            # finally); a client disconnect cancels the read and records the
+            # cancelled turn exactly like the stream path, while the ledger's
+            # stream field stays the client's own (False). A failed aggregate
+            # records ONE ``aggregate_<reason>`` row (usage/estimate from the
+            # aggregator), never a success row.
+            aggregator = _NonStreamChatAggregator(
+                default_model=body.get("model") or req_model)
+            aggregate_data = None
+            aggregate_status = "ok"
+            aggregate_exc = None
+            try:
+                while True:
+                    if _client_disconnected(self.connection):
+                        aggregate_status = "client_disconnected"
+                        break
+                    try:
+                        item = upstream.next_item(STREAM_WATCHDOG_POLL_S)
+                    except queue.Empty:
+                        continue
+                    if item is _UPSTREAM_END:
+                        aggregate_data = aggregator.finish()
+                        break
+                    aggregator.feed_line(item)
+            except _NonStreamAggregateError as exc:
+                aggregate_status = exc.reason
+                aggregate_exc = exc
+            except Exception as exc:
+                # The only socket this loop reads is the upstream one (the
+                # client is only probed, never read): a transport error here
+                # is an upstream read failure, never a client disconnect.
+                aggregate_status = "upstream_read_error"
+                aggregate_exc = exc
+            finally:
+                upstream.cancel()
+            if aggregate_data is not None:
+                try:
+                    self._json(200, aggregate_data)
+                except (ConnectionError, OSError, ValueError):
+                    # The body may have been partially written: never attempt
+                    # a second status line on a dead downstream.
+                    aggregate_status = "client_disconnected"
+                    self.close_connection = True
+            elif aggregate_status == "upstream_explicit_error":
+                aggregate_reason = getattr(aggregate_exc, "message", None)
+                log_failure("upstream_explicit_error", 502,
+                            upstream_status=200)
+                _logger.warning(
+                    "upstream explicit stream error request=%s model=%s "
+                    "message=%r", request_id, req_model, aggregate_reason)
+                try:
+                    self._error(
+                        502, "Upstream request failed",
+                        {"reason": "upstream_explicit_error",
+                         "upstream_message": aggregate_reason},
+                        "upstream_explicit_error")
+                except (ConnectionError, OSError, ValueError):
+                    pass
+            elif aggregate_status == "upstream_bad_frame":
+                log_failure("upstream_bad_frame", 502, upstream_status=200)
+                try:
+                    self._error(
+                        502, "Upstream returned an invalid SSE frame",
+                        {"reason": "upstream_bad_frame"},
+                        "upstream_stream_error")
+                except (ConnectionError, OSError, ValueError):
+                    pass
+            elif aggregate_status == "upstream_missing_terminal":
+                log_failure("upstream_missing_terminal", 502,
+                            upstream_status=200)
+                try:
+                    self._error(
+                        502,
+                        "Upstream stream ended without a complete terminal",
+                        {"reason": "upstream_missing_terminal"},
+                        "upstream_stream_error")
+                except (ConnectionError, OSError, ValueError):
+                    pass
+            elif aggregate_status == "upstream_read_error":
+                log_failure(
+                    "upstream_read_error", 502, upstream_status=200,
+                    exc_name=(type(aggregate_exc).__name__
+                               if aggregate_exc is not None else None))
+                try:
+                    self._error(
+                        502, "Upstream stream failed",
+                        {"reason": "upstream_read_error",
+                         "exception": (type(aggregate_exc).__name__
+                                       if aggregate_exc is not None
+                                       else None)},
+                        "upstream_stream_error")
+                except (ConnectionError, OSError, ValueError):
+                    pass
+            if aggregate_status == "client_disconnected":
+                # The downstream is gone (or the 200 body could not be
+                # written): close it, and keep the reader slot owned by the
+                # producer until it releases in its own finally.
+                self.close_connection = True
+            if aggregate_status == "ok":
+                out_est = 0
+                try:
+                    content = aggregate_data["choices"][0]["message"]["content"]
+                    out_est = _est_tokens(content)
+                except Exception:
+                    pass
+                record_usage(
+                    req_model, False, started_at, aggregate_data.get("usage"),
+                    _message_tokens(body.get("messages")), out_est)
+            elif aggregate_status == "client_disconnected":
+                record_usage(
+                    req_model, False, started_at, aggregator.usage(),
+                    _message_tokens(body.get("messages")),
+                    aggregator.output_estimate(),
+                    status="client_disconnected")
+            else:
+                # Every failed aggregate still consumed upstream output, so it
+                # records ONE lower-bound row like the stream path's failure
+                # rows: the aggregator's own usage tail (None stays unknown,
+                # never a fabricated zero) and its output estimate. Unlike the
+                # native non-stream path, this path read a real SSE stream, so
+                # the upstream work is accounted for. ``stream`` stays the
+                # client's own mode (False).
+                record_usage(
+                    req_model, False, started_at, aggregator.usage(),
+                    _message_tokens(body.get("messages")),
+                    aggregator.output_estimate(),
+                    status=f"aggregate_{aggregate_status}")
+            _logger.info(
+                "request summary request=%s final=%s physical_attempts=%d/%d "
+                "upstream_retries=%d slow_retries=%d "
+                "images_before=%d images_after=%d images_trimmed=%d "
+                "duration_ms=%d",
+                request_id, aggregate_status, physical_budget.used,
+                MAX_TOTAL_ATTEMPTS, transient_retries_done,
+                slow_retries_done, image_stats["images_before"],
+                image_stats["images_after"], image_stats["images_trimmed"],
+                int((time.time() - started_at) * 1000))
+            return
         first_data_deadline = time.monotonic() + min(
             STREAM_FIRST_BYTE_TIMEOUT_S,
             max(0.05, request_deadline - time.monotonic()))
@@ -5406,14 +8726,14 @@ class Handler(BaseHTTPRequestHandler):
         def start_hidden_retry_attempt(stage):
             """Open a fresh streaming attempt while no visible body was sent."""
             nonlocal upstream_trace
-            retry_slot = _reader_slots
+            retry_lease = _ReaderSlotLease(_reader_slots)
             remaining = request_deadline - time.monotonic()
             if remaining <= 0:
                 log_failure(f"{stage}_retry_deadline", 502,
                             exc_name="RequestDeadlineExceeded")
                 fail_hidden_retry("RequestDeadlineExceeded")
                 return None
-            if not retry_slot.acquire(timeout=min(2.0, remaining)):
+            if not retry_lease.acquire(timeout=min(2.0, remaining)):
                 log_failure(f"{stage}_retry_concurrency_limit", 502,
                             exc_name="RetrySlotUnavailable")
                 fail_hidden_retry("RetrySlotUnavailable")
@@ -5423,7 +8743,16 @@ class Handler(BaseHTTPRequestHandler):
             slot_owned = True
             try:
                 try:
-                    rr, _compat = open_chat_response()
+                    rr, _compat = open_chat_response(retry_lease)
+                except _ReaderSlotUnavailable as exc:
+                    # Authentication succeeded, but another request took the
+                    # freed reader slot before the real re-send. Fail before
+                    # opening any upstream connection; the retry lease was
+                    # already released by Proxy.call's re-acquire failure.
+                    log_failure(f"{stage}_retry_concurrency_limit", 502,
+                                exc_name=type(exc).__name__)
+                    fail_hidden_retry("RetrySlotUnavailable")
+                    return None
                 except ReauthenticationRequired as exc:
                     log_failure(f"{stage}_retry_reauthentication_required",
                                 502, exc_name=type(exc).__name__)
@@ -5451,7 +8780,8 @@ class Handler(BaseHTTPRequestHandler):
                     fail_hidden_retry(f"HTTP{status_code}")
                     return None
 
-                retry_upstream = _UpstreamStream(rr, reader_slot=retry_slot)
+                retry_upstream = _UpstreamStream(
+                    rr, reader_slot=retry_lease)
                 try:
                     retry_upstream.start()
                 except Exception as exc:
@@ -5472,7 +8802,7 @@ class Handler(BaseHTTPRequestHandler):
                             retry_response.close()
                         except Exception:
                             pass
-                    retry_slot.release()
+                    retry_lease.release()
 
         repetition_final_origin = None
         preflight_enabled = (
@@ -5494,13 +8824,11 @@ class Handler(BaseHTTPRequestHandler):
                                 self.connection),
                             headers_already_sent=preflight_headers_sent,
                             transient_retry_available=can_retry_transient)
-                except (ConnectionError, OSError):
+                except (ReauthenticationThrottled, _RequestCancelled,
+                        ConnectionError, OSError) as exc:
                     upstream.cancel()
-                    self.close_connection = True
-                    record_usage(
-                        req_model, True, started_at, None,
-                        _message_tokens(body.get("messages")), 0,
-                        status="client_disconnected")
+                    _handle_preflight_failure(self, exc, req_model, started_at,
+                                               body, log_failure)
                     return
 
                 preflight_saw_substantive = saw_substantive
@@ -5515,18 +8843,41 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 if action == "upstream_retry":
+                    _release_upstream_reader(upstream)
+                    outcome = _pre_output_verify(
+                        proxy, auth_wait_budget, request_deadline, cancel_check,
+                        "chat_preflight", request_id)
+                    if outcome in ("cancelled", "stopped"):
+                        self.close_connection = True
+                        record_usage(
+                            req_model, True, started_at, None,
+                            _message_tokens(body.get("messages")), 0,
+                            status="client_disconnected")
+                        return
+                    if outcome in ("auth_timeout", "auth_capacity"):
+                        log_failure("reauthentication_required", 503,
+                                     exc_name="ReauthenticationThrottled")
+                        self._reauthentication_error(outcome)
+                        record_usage(
+                            req_model, True, started_at, None,
+                            _message_tokens(body.get("messages")), 0,
+                            status="reauthentication_required")
+                        return
+                    if outcome == "original":
+                        upstream = _BufferedUpstream(upstream, prefix)
+                        break
                     # The preflight only emits this action when the transient
                     # and total budgets both allow a new attempt.
                     elapsed = time.monotonic() - stream_attempt_started
                     slow = _attempt_is_slow(elapsed)
                     if not transient_retry_available(slow):
-                        upstream.cancel()
+                        _release_upstream_reader(upstream)
                         fail_hidden_retry(retry_reason or "StreamFailure")
                         return
                     transient_retries_done += 1
                     if slow:
                         slow_retries_done += 1
-                    upstream.cancel()
+                    _release_upstream_reader(upstream)
                     delay_s = _retry_delay_seconds(
                         transient_retries_done, elapsed, slow=slow)
                     log_upstream_retry(
@@ -6325,10 +9676,20 @@ def main():
     ap.add_argument("--base-url", default=BASE_URL, help="Open WebUI instance URL")
     ap.add_argument("--token", help="Use this JWT directly instead of browser login")
     ap.add_argument("--no-browser", action="store_true",
-                    help="Never open the browser (use with --token; no re-login on 401)")
+                    help="Never open the browser (use with --token or CHAT2API_UPSTREAM_TOKEN; no re-login on 401)")
     ap.add_argument("--profile", default=PROFILE_DIR, help="Chrome user-data directory")
     ap.add_argument("--login-timeout", type=int, default=180,
                     help="Seconds to wait for manual sign-in")
+    # N3: explicit, default-off transport switch for the non-streaming
+    # Chat/Messages/Responses paths. Only the dedicated 8110 share-backend
+    # passes it; the private 8000 command line and every other caller keep
+    # the native non-stream transport unless this flag is present. R13: the
+    # flag alone never aggregates - the startup scope must also select the
+    # verified (key, model, protocol) triple.
+    ap.add_argument("--nonstream-upstream-aggregate", action="store_true",
+                    help="Serve stream=false clients from one aggregated "
+                         "upstream SSE stream only for the configured "
+                         "trusted scope (default: native)")
     ap.add_argument("--use-api-key", action="store_true",
                     help="Fetch the long-lived Open WebUI API key after login")
     ap.add_argument("--effort-model", action="append", default=[],
@@ -6340,16 +9701,50 @@ def main():
                     help="Open Edge even when the saved credential is valid")
     ap.add_argument("--list-models", action="store_true",
                     help="List models and exit")
+    ap.add_argument("--auth-wait-budget-seconds", type=float, default=None,
+                    help="Per-request cumulative authentication wait budget "
+                         "(default: 180 private/share, 30 generic; "
+                         "explicit values clamp to 1..180)")
     args = ap.parse_args()
+    # E19-1-S2: an isolated launcher must not put the upstream credential in
+    # argv (any same-machine process can read /proc/<pid>/cmdline). The
+    # environment variable is the second source: an explicit --token still wins,
+    # the saved TokenStore document stays the last resort, and --login keeps its
+    # interactive meaning (it is the explicit sign-in entry, not a start path).
+    if not args.login and args.token is None:
+        env_token = os.environ.get(UPSTREAM_TOKEN_ENV, "").strip()
+        if env_token:
+            args.token = env_token
     if args.no_browser and not args.token:
-        ap.error("--no-browser requires --token")
+        if args.login:
+            # --login means "sign in and save the token, then exit". A launcher
+            # credential would make authenticate() return immediately and the
+            # "Signed in, token saved" line would claim a sign-in that never
+            # happened, so this combination is refused instead.
+            ap.error("--login --no-browser requires --token: "
+                      "CHAT2API_UPSTREAM_TOKEN cannot complete a sign-in")
+        ap.error("--no-browser requires --token or CHAT2API_UPSTREAM_TOKEN")
 
     EFFORT_MODELS.extend(args.effort_model)
 
-    # R45.6c: only the dedicated share-backend instance reshapes streams for
-    # the gateway's BYOK consumer; the 8000 main chain keeps byte fidelity.
-    global STRIP_REASONING_DELTA
-    STRIP_REASONING_DELTA = "share-backend" in (args.profile or "")
+    # Review #9: resolve the explicit role ONCE at startup. An explicit
+    # CHAT2API_SHARE_BACKEND marker wins; otherwise the dedicated profile
+    # (or the launcher's backend attribution-key env) is the backend. The
+    # private 8000 main chain resolves to False and can never assemble a
+    # pre-send dispatcher or release tickets from a signed notice.
+    global NONSTREAM_UPSTREAM_AGGREGATE, SHARE_BACKEND_ROLE, \
+        AUTH_WAIT_BUDGET_S
+    SHARE_BACKEND_ROLE = _resolve_share_backend_role(
+        "share-backend" in (args.profile or ""))
+    # A2-1/D18-5: the private direct 8000 instance and the dedicated 8110
+    # share backend both default to 180 seconds; an explicit CLI/env value
+    # overrides the role default and is clamped to 1..180. The generic
+    # in-process default keeps 30.
+    AUTH_WAIT_BUDGET_S = resolve_auth_wait_budget(
+        args.auth_wait_budget_seconds, SHARE_BACKEND_ROLE)
+    # N3: the switch is default-off and only the explicit flag turns it on.
+    # It is set before the startup record so the loaded mode is observable.
+    NONSTREAM_UPSTREAM_AGGREGATE = bool(args.nonstream_upstream_aggregate)
 
     # Create the control token before serving so the console can read it on
     # its very first management call after a restart.
@@ -6366,14 +9761,17 @@ def main():
         "upstream_slow_retries=%d slow_threshold_s=%.1f "
         "max_physical_attempts=%d max_request_seconds=%d "
         "max_images=%d auto_trim_historical_images=%s "
-        "auto_trim_current_turn_images=%s",
+        "auto_trim_current_turn_images=%s nonstream_upstream_aggregate=%s "
+        "nonstream_aggregate_scope=%s auth_wait_budget_s=%g",
         RUNTIME_BUILD_ID, CHAT2API_VERSION, CHAT2API_SOURCE_REV,
-        "share-backend" if STRIP_REASONING_DELTA else "private",
+        "share-backend" if SHARE_BACKEND_ROLE else "private",
         args.host, args.port, os.getpid(), os.getppid(), launch_source(),
         REPETITION_GUARD_AUTO_RETRIES, UPSTREAM_AUTO_RETRIES,
         UPSTREAM_SLOW_AUTO_RETRIES, UPSTREAM_SLOW_RETRY_THRESHOLD_S,
         MAX_TOTAL_ATTEMPTS, MAX_REQUEST_SECONDS, MAX_IMAGES,
-        AUTO_TRIM_HISTORICAL_IMAGES, AUTO_TRIM_CURRENT_TURN_IMAGES)
+        AUTO_TRIM_HISTORICAL_IMAGES, AUTO_TRIM_CURRENT_TURN_IMAGES,
+        NONSTREAM_UPSTREAM_AGGREGATE,
+        nonstream_aggregate_scope_label(), AUTH_WAIT_BUDGET_S)
 
     if args.login:
         if args.force_login:
@@ -6395,7 +9793,13 @@ def main():
     proxy = Proxy(creds, args)
 
     if args.list_models:
-        models = proxy.list_models(force=True)
+        try:
+            models = proxy.list_models(force=True)
+        except ReauthenticationRequired as exc:
+            print("Failed to fetch models (token may have expired):",
+                  getattr(exc, "reason", None) or str(exc) or None,
+                  file=sys.stderr)
+            sys.exit(1)
         if models is None:
             print("Failed to fetch models (token may have expired):", file=sys.stderr)
             sys.exit(1)
@@ -6491,6 +9895,444 @@ def launch_source():
     if not raw:
         return "unspecified"
     return raw if re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", raw) else "invalid"
+
+
+# E19-1-S2: the upstream credential may arrive through the environment so an
+# isolated launcher never writes it into argv (``/proc/<pid>/cmdline`` is readable
+# by any same-machine process). Precedence inside main(): explicit ``--token`` >
+# this variable > the saved TokenStore document. Defined after main() on purpose:
+# test_share_gate_citations.py pins the line of the --login-timeout default above,
+# so this block must move no line above it.
+UPSTREAM_TOKEN_ENV = "CHAT2API_UPSTREAM_TOKEN"
+
+
+# R13: trusted gray-release scope for the aggregate transport. The switch alone
+# is not enough: an operator selects the exact (share key, model, client protocol)
+# triples that may be served from an aggregated upstream SSE stream. The value is
+# read from the STARTUP environment only (never a request header or body), so a
+# client cannot widen its own scope. Missing, malformed or partial configuration
+# disables aggregation for EVERY request (fail-closed to native).
+#
+# Defined after main() on purpose: test_share_gate_citations.py pins the line of
+# the --login-timeout default above, so this block must move no line above it.
+NONSTREAM_AGGREGATE_SCOPE_ENV = "CHAT2API_NONSTREAM_AGGREGATE_SCOPE"
+_NONSTREAM_AGGREGATE_PROTOCOLS = frozenset(("chat", "messages", "responses"))
+_NONSTREAM_AGGREGATE_SCOPE_FIELDS = frozenset(
+    ("key_ids", "models", "protocols"))
+_NONSTREAM_AGGREGATE_SCOPE_MAX_ENTRIES = 100
+_NONSTREAM_AGGREGATE_SCOPE_MAX_CHARS = 256
+_NONSTREAM_AGGREGATE_SCOPE_MAX_RAW = 65536
+
+
+def parse_nonstream_aggregate_scope(raw):
+    """Parse the trusted aggregate allowlist; None on ANY failure.
+
+    ``raw`` is the startup environment value: a JSON object with EXACTLY
+    ``key_ids``, ``models`` and ``protocols``, each a list of non-empty
+    bounded strings without duplicates. Unknown protocol names are refused too.
+    The all-empty object is the explicit "disabled" scope: it selects nothing,
+    so every request stays native while the startup record says the operator
+    decided not to enable the gray release. A PARTIALLY empty object is
+    ambiguous and refused like every other deviation, so a scope is either fully
+    understood or aggregation is off for every request.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    if len(raw) > _NONSTREAM_AGGREGATE_SCOPE_MAX_RAW:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    if not isinstance(data, dict) \
+            or set(data) != _NONSTREAM_AGGREGATE_SCOPE_FIELDS:
+        return None
+    parsed = {}
+    for name in _NONSTREAM_AGGREGATE_SCOPE_FIELDS:
+        values = data[name]
+        if not isinstance(values, list) \
+                or len(values) > _NONSTREAM_AGGREGATE_SCOPE_MAX_ENTRIES:
+            return None
+        normalized = []
+        for value in values:
+            if not isinstance(value, str) or not value \
+                    or len(value) > _NONSTREAM_AGGREGATE_SCOPE_MAX_CHARS \
+                    or value != value.strip():
+                return None
+            normalized.append(value)
+        if len(set(normalized)) != len(normalized):
+            return None
+        parsed[name] = frozenset(normalized)
+    if not parsed["protocols"] <= _NONSTREAM_AGGREGATE_PROTOCOLS:
+        return None
+    empty = [name for name in _NONSTREAM_AGGREGATE_SCOPE_FIELDS
+             if not parsed[name]]
+    if empty and len(empty) != len(_NONSTREAM_AGGREGATE_SCOPE_FIELDS):
+        return None
+    return parsed
+
+
+_NONSTREAM_AGGREGATE_SCOPE_RAW = os.environ.get(
+    NONSTREAM_AGGREGATE_SCOPE_ENV)
+NONSTREAM_AGGREGATE_SCOPE = parse_nonstream_aggregate_scope(
+    _NONSTREAM_AGGREGATE_SCOPE_RAW)
+
+
+def nonstream_aggregate_scope_label():
+    """Operator-facing state of the startup scope: absent/invalid/disabled/selected."""
+    if not _NONSTREAM_AGGREGATE_SCOPE_RAW:
+        return "absent"
+    scope = NONSTREAM_AGGREGATE_SCOPE
+    if scope is None:
+        return "invalid"
+    if not scope["key_ids"] and not scope["models"] \
+            and not scope["protocols"]:
+        return "disabled"
+    return "keys=%d/models=%d/protocols=%s" % (
+        len(scope["key_ids"]), len(scope["models"]),
+        ",".join(sorted(scope["protocols"])))
+
+
+def nonstream_aggregate_allowed(protocol, model):
+    """True only for a fully selected (verified key, model, protocol) triple.
+
+    Every input is trusted and comes from this process, never from the request
+    body: the key id is the VERIFIED attribution fact installed at the HTTP
+    boundary (``verify_share_attribution`` -> ``set_request_facts``), the
+    protocol must be the one that same boundary installed, and the model is the
+    handler's own client-requested model. A direct 8110 caller carries no
+    marker, so it has no key id and stays native. The switch must be on, the
+    startup scope must be valid and non-empty, and all three components must
+    match; any missing or mismatched component keeps the native non-stream
+    transport. The explicit all-empty scope selects nothing and therefore keeps
+    every request native too.
+    """
+    if not NONSTREAM_UPSTREAM_AGGREGATE:
+        return False
+    scope = NONSTREAM_AGGREGATE_SCOPE
+    if not isinstance(scope, dict):
+        return False
+    if _request_fact("attribution") != "verified":
+        return False
+    if _request_fact("protocol") != protocol:
+        return False
+    key_id = _request_fact("key_id")
+    if not isinstance(key_id, str) or not key_id:
+        return False
+    if not isinstance(model, str) or not model:
+        return False
+    key_ids = scope.get("key_ids")
+    models = scope.get("models")
+    protocols = scope.get("protocols")
+    if not isinstance(key_ids, (set, frozenset)) or not key_ids \
+            or key_id not in key_ids:
+        return False
+    if not isinstance(models, (set, frozenset)) or not models \
+            or model not in models:
+        return False
+    if not isinstance(protocols, (set, frozenset)) or not protocols \
+            or protocol not in protocols:
+        return False
+    return True
+
+
+def _load_share_secret_protection():
+    """Load the repo-root secret adapter independent of sys.path.
+
+    Same seam as ``_load_share_dispatch``: the service runs this file as a
+    script from ``chat2api/`` (so the repository root is NOT on sys.path), while
+    the adapter lives one directory up. A plain
+    ``from share_secret_protection import ...`` therefore raised ImportError
+    there, and the fail-closed handlers swallowed it: the control token and the
+    attribution key were silently denied. Reuse the module when it is already
+    imported (tests, or a flat deployment), otherwise load the parent-directory
+    file by path. No secret is read here.
+    """
+    import importlib.util
+    module = sys.modules.get("share_secret_protection")
+    if module is not None:
+        return module
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        os.pardir, "share_secret_protection.py")
+    spec = importlib.util.spec_from_file_location(
+        "share_secret_protection", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["share_secret_protection"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _headful_display_available(environ=None):
+    """True when a POSIX session can open a visible browser window.
+
+    ``DISPLAY`` or ``WAYLAND_DISPLAY`` must name a non-empty display; a
+    headless service (both unset or blank) cannot drive the visible login
+    window, so the caller reports ``display_missing`` instead of launching a
+    browser that would fail at startup. Windows never consults this helper.
+    """
+    env = os.environ if environ is None else environ
+    return bool((env.get("DISPLAY") or "").strip() or
+                (env.get("WAYLAND_DISPLAY") or "").strip())
+
+
+def _missing_browser_error(platform=None):
+    """Classify a missing browser as ``(reason, detail)``.
+
+    Windows keeps the historical ``edge_missing`` reason (Edge is the only
+    supported browser there). POSIX accepts any Chromium-family binary, so the
+    precise reason is ``browser_missing``. The detail keeps the historical
+    "Edge was not found" sentence so existing logs and callers still recognize
+    the condition.
+    """
+    name = sys.platform if platform is None else platform
+    if name.startswith("win"):
+        return "edge_missing", "Microsoft Edge was not found"
+    return ("browser_missing",
+            "Microsoft Edge was not found on Windows; on Linux none of "
+            "chromium, chromium-browser, google-chrome or microsoft-edge "
+            "was found in PATH")
+
+
+def _release_upstream_reader(upstream):
+    """Stop a failed pre-output stream and return its reader slot BEFORE wait.
+
+    The producer still owns the socket and releases the same slot in its own
+    finally; the lease release is idempotent, so the authentication wait never
+    holds the streaming-reader capacity while it waits for recovery.
+    """
+    slot = getattr(upstream, "_slot", None)
+    if slot is not None:
+        try:
+            slot.release()
+        except Exception:
+            pass
+    upstream.cancel()
+
+
+def _clamp_auth_wait_budget(raw, fallback):
+    """Parse one operator-supplied budget; an invalid value is explicit.
+
+    The hard ceiling is 180 seconds and the floor is 1 second: a value that
+    would disable the budget is raised to 1 instead of becoming an unbounded
+    wait. ``None`` means "no value was supplied", so the caller keeps its role
+    default.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return fallback
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(value):
+        return fallback
+    return max(1.0, min(180.0, value))
+
+
+def resolve_auth_wait_budget(cli_value=None, share_backend=None):
+    """Resolve the per-request authentication-wait budget (A2-1/D18-5).
+
+    The private direct 8000 instance and the dedicated 8110 share backend both
+    default to 180 seconds. An explicit CLI value or the existing
+    ``CHAT2API_AUTH_WAIT_BUDGET_S`` env value overrides the role default
+    for BOTH roles and is clamped to 1..180, so neither an operator value nor
+    a leaked local env can exceed the hard ceiling or disable the budget. The
+    generic/in-process default (``None``) stays 30 unless an explicit value
+    selects another legal value.
+    """
+    if cli_value is not None:
+        return _clamp_auth_wait_budget(cli_value, 180.0)
+    raw = os.environ.get("CHAT2API_AUTH_WAIT_BUDGET_S")
+    value = _clamp_auth_wait_budget(raw, None)
+    if value is not None:
+        return value
+    if share_backend is True or share_backend is False:
+        return 180.0
+    return 30.0
+
+
+def _ledger_request_start(started_at):
+    """The request START as an ISO timestamp for the A2-8 eligibility boundary.
+
+    ``record_usage`` keeps ``time`` as the completion instant; this additive
+    field is written only for new rows. An unusable value stays ``None`` so a
+    historical row is never priced with a fabricated start.
+    """
+    try:
+        return datetime.fromtimestamp(float(started_at)).astimezone().isoformat(
+            timespec="milliseconds")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _claim_pre_output_verification(auth_wait_budget):
+    """Claim the ONE bounded pre-output credential check of this request.
+
+    The flag lives on the same per-request cumulative budget as the 401 waits,
+    so hidden retries, compatibility retries and re-streams can never reset it.
+    """
+    lock = getattr(auth_wait_budget, "_lock", None)
+    if lock is None:
+        return False
+    with lock:
+        if getattr(auth_wait_budget, "_pre_output_verified", False):
+            return False
+        auth_wait_budget._pre_output_verified = True
+        return True
+
+
+def _pre_output_verify(proxy, auth_wait_budget, request_deadline, cancel_check,
+                       stage, request_id=None):
+    """At most ONE bounded credential check after a non-401 pre-output error.
+
+    Returns a safe outcome: ``retry`` (the existing retry may proceed),
+    ``original`` (surface the original error, never open a login window),
+    ``cancelled``/``stopped`` (no late upstream call) or
+    ``auth_timeout``/``auth_capacity`` (the request-scoped auth budget ended).
+    Only an explicit ``rejected``/``needs_login`` verdict joins the SAME shared
+    recovery cycle; ``unknown`` never starts a login window.
+    """
+    if auth_wait_budget is None:
+        return "retry"
+    # A2-1/D18-5: the bounded pre-output check belongs to the private
+    # direct 8000 chain. The dedicated 8110 share backend keeps its existing
+    # strategy and never gains this extra probe/recovery path: its 180-second
+    # budget covers the 401 re-send only, not a non-401 pre-output probe.
+    if share_backend_role() is True:
+        return "retry"
+    # A credential validated moments ago is already strong evidence: a normal
+    # request must not gain a new probe on every read failure. Only a stale or
+    # absent "valid" verdict reaches the ONE bounded check below.
+    with proxy._auth_condition:
+        evidence = dict(proxy._auth_evidence)
+    checked_epoch = evidence.get("checked_epoch")
+    if (evidence.get("verdict") == "valid"
+            and isinstance(checked_epoch, (int, float))
+            and time.time() - checked_epoch < 15.0):
+        return "retry"
+    if not _claim_pre_output_verification(auth_wait_budget):
+        return "retry"
+    if cancel_check is not None and cancel_check():
+        return "cancelled"
+    if proxy._shutdown_event.is_set():
+        return "stopped"
+    now = time.monotonic()
+    if request_deadline is not None and now >= request_deadline:
+        # The overall request deadline keeps its own error mapping; this check
+        # must not extend it.
+        return "retry"
+    remaining = auth_wait_budget.remaining
+    if request_deadline is not None:
+        remaining = min(remaining, request_deadline - now)
+    if remaining <= 0.0:
+        budget_deadline = auth_wait_budget.deadline
+        if (budget_deadline is not None and
+                (request_deadline is None
+                 or budget_deadline <= request_deadline)):
+            return "auth_timeout"
+        return "retry"
+    bearer = proxy.bearer()
+    with proxy._auth_condition:
+        credential_generation = proxy._credential_generation
+    started = time.monotonic()
+    auth_wait_budget.begin_wait()
+    try:
+        verdict, reason, upstream_status = classify_credential(
+            proxy.base_url, bearer,
+            timeout=max(0.001, min(15.0, remaining)))
+    except Exception as exc:  # a probe failure stays "unknown", never a login
+        verdict, reason, upstream_status = "unknown", type(exc).__name__, None
+    finally:
+        auth_wait_budget.end_wait()
+    _logger.info(
+        "pre-output credential check request=%s stage=%s verdict=%s "
+        "reason=%s upstream_status=%s duration_ms=%d",
+        request_id or "-", stage, verdict, reason,
+        "-" if upstream_status is None else upstream_status,
+        int((time.monotonic() - started) * 1000))
+    if cancel_check is not None and cancel_check():
+        return "cancelled"
+    if proxy._shutdown_event.is_set():
+        return "stopped"
+    if verdict == "unknown":
+        # An undecidable probe is NOT evidence of an expired credential: keep
+        # the original network error and never open a login window from it.
+        return "retry"
+    if verdict == "valid":
+        return "retry"
+    with proxy._auth_condition:
+        stale = (proxy.bearer() != bearer
+                 or proxy._credential_generation != credential_generation)
+        if not stale and verdict == "rejected":
+            proxy._record_auth_evidence(
+                "rejected", "upstream_rejected", upstream_status,
+                "pre_output")
+            if proxy._auth_state not in ("logging_in", "failed", "cancelled"):
+                proxy._auth_state = "needs_login"
+    if stale:
+        # A late result for the old credential never overrides the new one.
+        return "retry"
+    try:
+        recovered = proxy.refresh(
+            deadline=request_deadline,
+            auth_wait_budget=auth_wait_budget,
+            cancel_check=cancel_check)
+    except _AuthWaitTimeout:
+        return "auth_timeout"
+    except _AuthWaitCapacityExceeded:
+        return "auth_capacity"
+    except _RequestCancelled:
+        return "cancelled"
+    if recovered:
+        return "retry"
+    return "original"
+
+
+def _compat_pre_output_retry(handler, exc, elapsed, retry_available, proxy,
+                             auth_wait_budget, deadline, cancel_check,
+                             request_id, record_usage, log_summary):
+    """One bounded pre-output check on the Messages pre-output retry seam."""
+    candidate = (isinstance(exc, _UPSTREAM_TRANSIENT_EXCEPTIONS)
+                 or isinstance(exc, _CompatStreamRetryable))
+    if not candidate or not retry_available(_attempt_is_slow(elapsed)):
+        return "original"
+    outcome = _pre_output_verify(
+        proxy, auth_wait_budget, deadline, cancel_check,
+        "messages_stream" if isinstance(exc, _CompatStreamRetryable)
+        else "messages_setup", request_id)
+    if outcome == "retry":
+        return "retry"
+    if outcome == "original":
+        return "original"
+    if outcome in ("cancelled", "stopped"):
+        handler.close_connection = True
+        log_summary("client_disconnected")
+        record_usage("client_disconnected")
+        return "handled"
+    handler._reauthentication_error(outcome)
+    log_summary("reauthentication_required")
+    record_usage("reauthentication_required")
+    return "handled"
+
+
+def _handle_preflight_failure(handler, exc, req_model, started_at, body,
+                              log_failure):
+    """Finish a failed chat preflight without retrying or opening a login."""
+    handler.close_connection = True
+    if isinstance(exc, ReauthenticationThrottled):
+        log_failure("reauthentication_required", 503,
+                    exc_name=type(exc).__name__)
+        handler._reauthentication_error(
+            getattr(exc, "reason", None) or str(exc))
+        record_usage(req_model, True, started_at, None,
+                      _message_tokens(body.get("messages")), 0,
+                      status="reauthentication_required")
+        return
+    log_failure("client_disconnected", 0)
+    record_usage(req_model, True, started_at, None,
+                  _message_tokens(body.get("messages")), 0,
+                  status="client_disconnected")
 
 
 if __name__ == "__main__":

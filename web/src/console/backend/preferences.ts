@@ -45,11 +45,11 @@ export interface GatewayOrderStorage {
 
 /** Explicit, presentable derivation outcome; every reset leaves the stored payload untouched. */
 export type GatewayOrderStatus =
-  | "default"              // no usable stored preference: key absent, empty sequence
-  | "coordinated"          // stored order kept known IDs, dropped removed, appended new
-  | "reset_corrupt"        // malformed JSON/shape or an over-bound sequence
-  | "reset_version"        // missing or unknown format version
-  | "reset_duplicate"      // the same gateway ID twice in the stored sequence
+  | "default" // no usable stored preference: key absent, empty sequence
+  | "coordinated" // stored order kept known IDs, dropped removed, appended new
+  | "reset_corrupt" // malformed JSON/shape or an over-bound sequence
+  | "reset_version" // missing or unknown format version
+  | "reset_duplicate" // the same gateway ID twice in the stored sequence
   | "storage_read_failed"; // storage denied the read; default order, nothing assumed
 
 export interface GatewayOrderRead {
@@ -65,10 +65,14 @@ export interface GatewayOrderSave {
 }
 
 function exactGatewayIds(value: readonly unknown[]): string[] {
-  if (!Array.isArray(value) || value.some(id => typeof id !== "string" || !id.trim()))
+  if (
+    !Array.isArray(value) ||
+    value.some((id) => typeof id !== "string" || !id.trim())
+  )
     throw new ContractError("gateway identities must be nonempty strings");
   const ids = value as string[];
-  if (new Set(ids).size !== ids.length) throw new ContractError("gateway identities contain duplicates");
+  if (new Set(ids).size !== ids.length)
+    throw new ContractError("gateway identities contain duplicates");
   return [...ids];
 }
 
@@ -80,7 +84,9 @@ export class GatewayOrderPreferences {
 
   constructor(options: { storage: GatewayOrderStorage; namespace: string }) {
     if (typeof options?.namespace !== "string" || !options.namespace.trim())
-      throw new ContractError("gateway order namespace must be a nonempty string");
+      throw new ContractError(
+        "gateway order namespace must be a nonempty string"
+      );
     this.storage = options.storage;
     this.storageKey = `${GATEWAY_ORDER_STORAGE_KEY}:${options.namespace}`;
   }
@@ -94,7 +100,8 @@ export class GatewayOrderPreferences {
     } catch {
       return { order: available, status: "storage_read_failed" };
     }
-    if (raw === null || raw === "") return { order: available, status: "default" };
+    if (raw === null || raw === "")
+      return { order: available, status: "default" };
     let payload: unknown;
     try {
       payload = JSON.parse(raw);
@@ -103,32 +110,59 @@ export class GatewayOrderPreferences {
     }
     const row = object(payload);
     if (!row) return { order: available, status: "reset_corrupt" };
-    if (row.version !== GATEWAY_ORDER_FORMAT_VERSION) return { order: available, status: "reset_version" };
-    if (!Array.isArray(row.order) || row.order.some(id => typeof id !== "string"))
+    if (row.version !== GATEWAY_ORDER_FORMAT_VERSION)
+      return { order: available, status: "reset_version" };
+    if (
+      !Array.isArray(row.order) ||
+      row.order.some((id) => typeof id !== "string")
+    )
       return { order: available, status: "reset_corrupt" };
     const stored = row.order as string[];
-    if (stored.length > MAX_GATEWAY_ORDER_IDS) return { order: available, status: "reset_corrupt" };
-    if (new Set(stored).size !== stored.length) return { order: available, status: "reset_duplicate" };
+    if (stored.length > MAX_GATEWAY_ORDER_IDS)
+      return { order: available, status: "reset_corrupt" };
+    if (new Set(stored).size !== stored.length)
+      return { order: available, status: "reset_duplicate" };
     if (!stored.length) return { order: available, status: "default" };
     const availableSet = new Set(available);
-    const kept = stored.filter(id => availableSet.has(id));
+    const kept = stored.filter((id) => availableSet.has(id));
     const keptSet = new Set(kept);
-    return { order: [...kept, ...available.filter(id => !keptSet.has(id))], status: "coordinated" };
+    return {
+      order: [...kept, ...available.filter((id) => !keptSet.has(id))],
+      status: "coordinated",
+    };
   }
 
   /** Persist one complete reordering of exactly the available gateways; the
    *  pinned all-models entry and filtered-out hidden gateways must already be
    *  merged into `order` by the caller (see reorderGatewaySubset). */
-  save(order: readonly string[], availableGatewayIds: readonly string[]): GatewayOrderSave {
+  save(
+    order: readonly string[],
+    availableGatewayIds: readonly string[]
+  ): GatewayOrderSave {
     const available = exactGatewayIds(availableGatewayIds);
-    if (!available.length) throw new ContractError("gateway order cannot be saved for an empty gateway set");
+    if (!available.length)
+      throw new ContractError(
+        "gateway order cannot be saved for an empty gateway set"
+      );
     const candidate = exactGatewayIds(order);
     const availableSet = new Set(available);
-    if (candidate.length !== available.length || candidate.some(id => !availableSet.has(id)))
-      throw new ContractError("gateway order must reorder exactly the available gateways");
-    if (candidate.length > MAX_GATEWAY_ORDER_IDS) return { persisted: false, reason: "sequence_too_long" };
+    if (
+      candidate.length !== available.length ||
+      candidate.some((id) => !availableSet.has(id))
+    )
+      throw new ContractError(
+        "gateway order must reorder exactly the available gateways"
+      );
+    if (candidate.length > MAX_GATEWAY_ORDER_IDS)
+      return { persisted: false, reason: "sequence_too_long" };
     try {
-      this.storage.setItem(this.storageKey, JSON.stringify({ version: GATEWAY_ORDER_FORMAT_VERSION, order: candidate }));
+      this.storage.setItem(
+        this.storageKey,
+        JSON.stringify({
+          version: GATEWAY_ORDER_FORMAT_VERSION,
+          order: candidate,
+        })
+      );
       return { persisted: true, reason: null };
     } catch {
       return { persisted: false, reason: "storage_write_failed" };
@@ -149,14 +183,19 @@ export class GatewayOrderPreferences {
 /** Merge a completed reorder of the visible subset back into the complete list:
  *  visible slots take the new order while hidden gateways keep their exact
  *  position and are never dropped. Pure; persistence happens only via save. */
-export function reorderGatewaySubset(fullOrder: readonly string[], visibleOrder: readonly string[]): string[] {
+export function reorderGatewaySubset(
+  fullOrder: readonly string[],
+  visibleOrder: readonly string[]
+): string[] {
   const full = exactGatewayIds(fullOrder);
   const visible = exactGatewayIds(visibleOrder);
   const visibleSet = new Set(visible);
-  const hiddenCount = full.filter(id => !visibleSet.has(id)).length;
+  const hiddenCount = full.filter((id) => !visibleSet.has(id)).length;
   if (visible.length + hiddenCount !== full.length)
-    throw new ContractError("reordered subset must contain only gateways from the complete list");
+    throw new ContractError(
+      "reordered subset must contain only gateways from the complete list"
+    );
   const next = [...visible];
   let taken = 0;
-  return full.map(id => (visibleSet.has(id) ? next[taken++] : id));
+  return full.map((id) => (visibleSet.has(id) ? next[taken++] : id));
 }

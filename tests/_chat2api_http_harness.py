@@ -270,6 +270,9 @@ class TrackedHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, *args, **kwargs):
+        # Remember the port the caller asked for: 0 means the OS assigned it,
+        # which must not be mistaken for a configured real service port.
+        self._requested_port = args[0][1]
         self._requests_cond = threading.Condition()
         self._requests_active = 0
         self._client_socks = {}
@@ -397,7 +400,10 @@ def assert_loopback_ephemeral_server(server, *, name):
         raise AssertionError(
             f"{name} bound to non-loopback {host!r} — tests must never expose "
             f"the gateway beyond this machine")
-    if port in REAL_SERVICE_PORTS:
+    # A requested port of 0 is an OS-assigned ephemeral bind; the dynamic port
+    # range can legitimately include a real service port, so only an explicitly
+    # requested port can be a configuration error.
+    if getattr(server, "_requested_port", None) != 0 and port in REAL_SERVICE_PORTS:
         raise AssertionError(
             f"{name} bound to real service port {port}; tests must use an "
             f"ephemeral port")

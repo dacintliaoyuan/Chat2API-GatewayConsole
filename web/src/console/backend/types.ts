@@ -1,7 +1,8 @@
 /** Backend contracts only. This module has no DOM, renderer, or live-data side effects. */
 export type JsonObject = Record<string, unknown>;
 export type Intent = "read" | "draft" | "client-write" | "probe";
-export type OperationState = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+export type OperationState =
+  "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 
 export interface ActionCapability {
   action: string;
@@ -43,7 +44,13 @@ export interface Transport {
 }
 
 export interface OperationResult {
-  state: "succeeded" | "failed" | "cancelled" | "interrupted" | "refused" | "unconfirmed";
+  state:
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "interrupted"
+    | "refused"
+    | "unconfirmed";
   operation: Operation | null;
   /** Retained for read-only reconciliation; an uncertain POST is never retried. */
   operationId: string | null;
@@ -137,7 +144,11 @@ export interface ClientReadback {
   alias: string | null;
   defaultEffort: string | null;
   outputCap: OutputCap;
-  matchesApplied: { context: boolean | null; alias: boolean | null; defaultEffort: boolean | null };
+  matchesApplied: {
+    context: boolean | null;
+    alias: boolean | null;
+    defaultEffort: boolean | null;
+  };
 }
 
 export interface ContextHistory {
@@ -179,7 +190,12 @@ export interface ModelDetail {
 
 export type SyncScope =
   | { mode: "all" }
-  | { mode: "selected"; sources?: readonly string[]; consumers?: readonly string[]; models?: Readonly<Record<string, readonly string[]>> };
+  | {
+      mode: "selected";
+      sources?: readonly string[];
+      consumers?: readonly string[];
+      models?: Readonly<Record<string, readonly string[]>>;
+    };
 
 export interface LogEvent {
   timestamp: string | null;
@@ -219,6 +235,23 @@ export interface CostCoverage {
   unknownTimeRequests: number | null;
   pricingUnavailableRequests: number | null;
   costComplete: boolean | null;
+  /** True when `costCny` only covers the convertible records (a lower bound);
+   *  null when the response did not say (legacy shape). Never defaulted to false. */
+  costCnyPartial: boolean | null;
+  /** Per-subtotal partial flags: an unknown-usage record makes only the total a
+   *  lower bound, so known/estimated can stay complete real zeros. Null means the
+   *  response did not say. */
+  knownCostCnyPartial: boolean | null;
+  estimatedCostCnyPartial: boolean | null;
+  /** Q11 cache reporting evidence, separate from token coverage. A reported
+   *  zero is evidence; unreported/unknown are counted, never read as zero. */
+  cacheReportedRequests: number | null;
+  cacheUnreportedRequests: number | null;
+  cacheUnknownRequests: number | null;
+  cacheUnknownPricedRequests: number | null;
+  /** Records whose time could not be parsed; a bounded window excludes them
+   *  instead of guessing a time. */
+  excludedUnknownTimeRequests: number | null;
   /** False for legacy details that do not identify local unknown coverage. */
   localCoverageAvailable: boolean;
 }
@@ -238,12 +271,21 @@ export interface TokenUsage {
   estimatedRequests: number | null;
   unknownRequests: number | null;
   complete: boolean | null;
+  /** Cache evidence is separate from input/output coverage (Q11). */
+  cachedInputTokens: number | null;
+  cacheReportedRequests: number | null;
+  cacheUnreportedRequests: number | null;
+  cacheUnknownRequests: number | null;
 }
 
 export interface CostDetail {
   identity: string;
   knownCostUsd: number | null;
   estimatedCostUsd: number | null;
+  /** CNY amounts from the same price chain; null means unknown, never 0. */
+  costCny: number | null;
+  knownCostCny: number | null;
+  estimatedCostCny: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
   coverage: CostCoverage;
@@ -257,6 +299,9 @@ export interface KeyUsage {
   deleted: boolean | null;
   knownCostUsd: number | null;
   estimatedCostUsd: number | null;
+  costCny: number | null;
+  knownCostCny: number | null;
+  estimatedCostCny: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
   coverage: CostCoverage;
@@ -275,6 +320,9 @@ export interface ShareUsageBucket {
   keyId: null;
   knownCostUsd: number | null;
   estimatedCostUsd: number | null;
+  costCny: number | null;
+  knownCostCny: number | null;
+  estimatedCostCny: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
   coverage: CostCoverage;
@@ -282,6 +330,21 @@ export interface ShareUsageBucket {
   priceVersions: string[];
   models: CostDetail[];
   days: CostDetail[];
+  /** Records whose date is unknowable; same shape as a key's undated row. */
+  undated: Omit<CostDetail, "identity"> | null;
+}
+
+/** D18-2: the real outcome split of the filtered records. `unknown` counts
+ *  records whose outcome was never recorded and is NEVER merged into `success`.
+ *  null means the backend did not provide that counter (legacy shape), which the
+ *  page renders as 未提供 instead of a fabricated 0. */
+export interface ShareUsageResults {
+  success: number | null;
+  failed: number | null;
+  cancelled: number | null;
+  unknown: number | null;
+  total: number | null;
+  unknownResult: number | null;
 }
 
 export interface ShareUsage {
@@ -290,6 +353,114 @@ export interface ShareUsage {
   coverage: JsonObject;
   checkedAt: string | null;
   requests: number | null;
+  /** Echo of the filter set this aggregate was built with (r14 additive).
+   *  null means the response did not echo it (legacy shape). */
+  filters: ShareUsageFilters | null;
+  /** The four real outcomes plus their total and coverage (C8). */
+  results: ShareUsageResults | null;
+}
+
+/** Filters shared by the share-usage aggregate and the per-request page. */
+export type ShareUsageWindow = "1h" | "24h" | "7d" | "30d" | "all";
+export interface ShareUsageFilters {
+  window: ShareUsageWindow | null;
+  key: string | null;
+  model: string | null;
+  result: string | null;
+}
+
+export type ShareRequestResult = "success" | "failed" | "cancelled" | "unknown";
+export type ShareUsageSource = "upstream" | "partial" | "estimated" | "none";
+export type ShareCacheReportStatus = "reported" | "unreported" | "unknown";
+
+/** One ledger row on the per-request page (`GET .../share-usage/requests`).
+ *  Unknown stays null: a missing time keeps `time`/`day` null, unknown usage
+ *  keeps token/cost null, an unreported cache count is null (never a measured
+ *  zero), and an unpriced model has null amounts with `priced` false. */
+export interface ShareUsageRequestRow {
+  requestId: string | null;
+  time: string | null;
+  day: string | null;
+  keyId: string | null;
+  keyName: string | null;
+  deleted: boolean | null;
+  model: string | null;
+  /** Raw ledger status; null when the row did not record one. */
+  status: string | null;
+  result: ShareRequestResult;
+  attribution: string | null;
+  usageSource: ShareUsageSource;
+  cacheReportStatus: ShareCacheReportStatus;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** The ledger's measured request duration; null for an old row without it. */
+  durationMs: number | null;
+  cacheTokens: number | null;
+  reasoningTokens: number | null;
+  /** null when no pricing chain was supplied (not evaluated, not free). */
+  priced: boolean | null;
+  priceVersion: string | null;
+  costUsd: number | null;
+  costCny: number | null;
+  costCnyPartial: boolean;
+}
+
+export interface ShareUsageRequestsPage {
+  rows: ShareUsageRequestRow[];
+  /** Opaque line-number cursor; null means no older matched row in the read window. */
+  nextCursor: string | null;
+  truncated: boolean | null;
+  filters: ShareUsageFilters | null;
+  coverage: JsonObject;
+  checkedAt: string | null;
+}
+
+/** r14 overview capacity block (`GET .../share-management/status.capacity`).
+ *  `configured` is the user-configured admission cap (128 in the current
+ *  deployment), never a measured upstream capacity. `inFlight` comes from the
+ *  restricted broker's read-only instance view; `queued` and `upstreamCapacity`
+ *  have no read seam and stay null with an explicit reason. */
+export interface ShareCapacity {
+  configured: number | null;
+  inFlight: number | null;
+  inFlightReason: string | null;
+  queued: number | null;
+  queuedReason: string | null;
+  upstreamCapacity: number | null;
+  upstreamCapacityMeasured: boolean | null;
+  upstreamCapacityReason: string | null;
+  checkedAt: number | null;
+  note: string | null;
+}
+
+/** One read-only cloud-ops section. A missing configuration is
+ *  `configured: false`; an unreadable state is `available: false` with a
+ *  reason — never a fabricated "no budget / no backup / no revocations". */
+export interface CloudOpsSection {
+  configured: boolean;
+  available: boolean;
+  status: JsonObject | null;
+  reason: string | null;
+  remote: JsonObject | null;
+  generationFloor: number | null;
+  records: number | null;
+  pendingRemote: number | null;
+  exportedAt: string | null;
+}
+
+/** `GET /api/console/cloud-ops` (S2 read face, D18-11 narrowed).
+ *
+ *  The cloud console keeps only the security read face: the budget guard and the
+ *  automatic backup are no longer part of the default assembly, so their sections
+ *  are gone from this contract instead of being rendered as "not configured". */
+export interface CloudSecurityStatus {
+  available: boolean;
+  /** The time this read face answered; never a last-check time. */
+  readAt: number | null;
+  security: CloudOpsSection;
+  reasons: string[];
+  /** Explicitly-open questions this read face does not close. */
+  unresolved: JsonObject | null;
 }
 
 export interface ReadResult<T> {
@@ -299,6 +470,176 @@ export interface ReadResult<T> {
   reason: string | null;
 }
 
+/** S5 public share supervision read face (`GET /api/console/share-management/public`).
+ *
+ *  Every optional field is nullable: a missing value is "not provided" and is never
+ *  coerced into a healthy default. `overall`, `entry.state`, `recovery.state` and
+ *  `intent.state` are closed sets with an explicit `unknown` member, while the
+ *  backend's own reason codes pass through as opaque strings (they are never mapped
+ *  to `ok`). */
+export type PublicShareOverall =
+  "ok" | "degraded" | "all_failed" | "incomplete" | "not_checked" | "unknown";
+export type PublicShareEntryState = "ok" | "failed" | "unchecked";
+export type PublicShareCheck = "ok" | "failed" | "not_checked";
+export type PublicDnsSourceState =
+  "ok" | "empty" | "nxdomain" | "error" | "timeout" | "not_checked";
+export type PublicDnsState =
+  | "ok"
+  | "empty"
+  | "nxdomain"
+  | "error"
+  | "timeout"
+  | "disagreement"
+  | "unconfirmed"
+  | "not_checked";
+
+/** One DoH source's bounded reading. A missing TTL stays null (未知), never a
+ *  fabricated 300 seconds; the page shows the source's own rcode and time. */
+export interface PublicDnsSource {
+  source: string | null;
+  state: PublicDnsSourceState;
+  status: number | null;
+  classification: string | null;
+  addresses: string[];
+  addressesTruncated: boolean | null;
+  ttlSeconds: number | null;
+  negativeTtlSeconds: number | null;
+  checkedAt: number | null;
+  elapsedMs: number | null;
+}
+
+/** Additive two-source DNS evidence. ``disagreement`` means one source had a
+ *  valid answer and the other explicitly denied it; a different valid address
+ *  set is NOT a fault. */
+export interface PublicDnsDetail {
+  state: PublicDnsState;
+  reason: string | null;
+  addresses: string[];
+  addressesTruncated: boolean | null;
+  ttlSeconds: number | null;
+  negativeTtlSeconds: number | null;
+  /** Aggregate observation time; a missing value keeps TTL remaining unknown. */
+  checkedAt: number | null;
+  sources: PublicDnsSource[];
+}
+export type PublicShareRecoveryState =
+  | "idle"
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "manual_required"
+  | "budget_exhausted"
+  | "stopped"
+  | "unknown";
+
+export interface PublicShareEntry {
+  host: string | null;
+  ip: string | null;
+  state: PublicShareEntryState;
+  dns: PublicShareCheck;
+  tls: PublicShareCheck;
+  certificate: PublicShareCheck;
+  reason: string | null;
+  elapsedMs: number | null;
+  checkedAt: number | null;
+}
+
+export interface PublicShareRecovery {
+  state: PublicShareRecoveryState;
+  action: string | null;
+  stage: string | null;
+  reason: string | null;
+  attemptedAt: string | null;
+  finishedAt: string | null;
+  manual: boolean | null;
+}
+
+export interface PublicShareBudget {
+  windowSeconds: number | null;
+  mappingUsed: number | null;
+  mappingLimit: number | null;
+  tsRestartUsed: number | null;
+  tsRestartLimit: number | null;
+  mappingNextEligibleAt: string | null;
+  tsRestartNextEligibleAt: string | null;
+  /** True when the budget file is damaged/version-mismatched; the page must
+   *  show 「预算不可读，不自动恢复」 and must not treat it as 0/0. */
+  unreadable: boolean | null;
+  reason: string | null;
+}
+
+export interface PublicShareEvent {
+  at: string | null;
+  status: string | null;
+  code: string | null;
+  action: string | null;
+}
+
+export interface PublicShareIntent {
+  state: "running" | "stopped" | "unknown";
+  at: string | null;
+}
+
+export interface PublicShareRound {
+  nextCheckAt: string | null;
+  nextActionAt: string | null;
+}
+
+export interface PublicShareSnapshot {
+  observedAt: number | null;
+  overall: PublicShareOverall;
+  reason: string | null;
+  publicUrl: string | null;
+  host: string | null;
+  entries: PublicShareEntry[];
+  dns: PublicDnsDetail | null;
+  recovery: PublicShareRecovery | null;
+  budget: PublicShareBudget | null;
+  intent: PublicShareIntent | null;
+  round: PublicShareRound | null;
+  local: JsonObject | null;
+}
+
+export interface PublicShareStatus {
+  available: boolean;
+  version: number | null;
+  checkedAt: number | null;
+  snapshot: PublicShareSnapshot | null;
+  events: PublicShareEvent[] | null;
+  eventsTruncated: boolean | null;
+  /** True when the events file exists but is unreadable; the page must show
+   *  「事件不可读」 and must not render it as 「无事件」. */
+  eventsUnreadable: boolean | null;
+  budget: PublicShareBudget | null;
+  cancel: { cancelled: boolean | null; reason: string | null } | null;
+  unreadable: boolean;
+  reason: string | null;
+  stateFile: string | null;
+}
+
+export interface PublicShareEventsPage {
+  available: boolean;
+  events: PublicShareEvent[] | null;
+  nextBefore: number | null;
+  truncated: boolean | null;
+  reason: string | null;
+}
+
+/** Redacted diagnostics export (`GET .../public-export?format=json`). The page
+ *  downloads this object as a Blob; it never re-reads or augments it from other
+ *  endpoints. */
+export interface PublicShareExport {
+  exportVersion: number | null;
+  generatedAt: string | null;
+  redaction: JsonObject | null;
+  snapshot: PublicShareSnapshot | null;
+  events: PublicShareEvent[] | null;
+  budget: PublicShareBudget | null;
+  cancel: { cancelled: boolean | null; reason: string | null } | null;
+  limits: JsonObject | null;
+}
+
 /** Rev15 (2026-10-06): read-only connection info for one selected gateway.
  *
  *  Mirrors the Python read face (`console_gateway_connection.py`) exactly. The
@@ -306,25 +647,27 @@ export interface ReadResult<T> {
  *  its own and is never coerced into a "no key" state. A plaintext key exists
  *  only while the read state is `present`; every other state keeps it null. */
 export type ConnectionKeyState =
-  | "present"              // authority file/env readable and non-empty
-  | "absent"               // chat2api loopback instance: no key and auth off
+  | "present" // authority file/env readable and non-empty
+  | "absent" // chat2api loopback instance: no key and auth off
   | "needs_key_unconfigured" // gateway needs a key but the source is missing/empty
-  | "unreadable"           // source exists but cannot be read
-  | "unknown";            // running instance unconfirmed; never downgraded
+  | "unreadable" // source exists but cannot be read
+  | "unknown"; // running instance unconfirmed; never downgraded
 
-export type ConnectionKeySourceState = "present" | "absent" | "unreadable" | "unknown";
+export type ConnectionKeySourceState =
+  "present" | "absent" | "unreadable" | "unknown";
 
-/** How the running instance consumes its key. Unknown stays unknown; a saved
- *  configuration value never proves that a running instance uses it. */
+/** Rev15 R32-KEY-ACTIVE: how the shown key value is consumed by the running
+ *  instance. `per_request` = the gateway rereads the file on every request
+ *  (Qoder 国内); `startup_env` = the value was read into the process
+ *  environment at launch and later file edits may not take effect (Qoder 国际);
+ *  `config_consumed` = the gateway takes the key from cliproxy/config.yaml.
+ *  `unknown` is honest and never coerced into one of the known mechanisms. */
 export type ConnectionKeyInUse =
-  | "per_request"
-  | "startup_env"
-  | "config_consumed"
-  | "unknown";
+  "per_request" | "startup_env" | "config_consumed" | "unknown";
 
 export type ConnectionAuth =
-  | "bearer"               // clients must present the key
-  | "loopback_no_key"       // loopback instance with inbound auth off
+  | "bearer" // clients must present the key
+  | "loopback_no_key" // loopback instance with inbound auth off
   | "unknown";
 
 /** An alternate protocol face of the same gateway; not used by existing consumers. */
@@ -364,4 +707,269 @@ export interface GatewayConnection {
   reason: string;
   evidence: string[];
   checkedEpoch: number;
+}
+
+// ---------------------------------------------------------------- UM read face (B5/B6)
+//
+// Wire shapes of `/api/console/um/*` plus the supporting read faces
+// (`/api/console/services`, `/api/console/operations`, `/api/summary`). They
+// mirror the Python handlers field for field; the B6 data controller maps them
+// to the frozen view contract in `local/um-ui/contract.ts`. A reading keeps the
+// backend's honest kinds (exact / atLeast / estimate / unreported / unknown /
+// missing); a real zero is only ever `exact` with value 0.
+
+export type UmReadingKind =
+  "exact" | "atLeast" | "estimate" | "unreported" | "unknown" | "missing";
+
+export type UmReading =
+  | { kind: "exact"; value: number; note?: string }
+  | { kind: "atLeast"; value: number; note?: string }
+  | { kind: "estimate"; value: number; note?: string }
+  | { kind: "unreported"; note?: string }
+  | { kind: "unknown"; note?: string }
+  | { kind: "missing"; note?: string };
+
+export interface UmTodayPayload {
+  day: string;
+  tokens: { total: UmReading; input: UmReading; output: UmReading };
+  cacheRead: {
+    tokens: UmReading;
+    report: "reported" | "partial" | "unreported" | "unknown";
+    detail: string;
+  };
+  reasoning: UmReading;
+  requests: { recorded: UmReading; failed: UmReading };
+  speed: {
+    value: UmReading;
+    basis: "whole_request" | "generation";
+    samples: number | null;
+  };
+}
+
+export interface UmPricePayload {
+  state: "synced" | "unsynced" | "failed";
+  source: string | null;
+  /** Epoch milliseconds. */
+  snapshotAt: number | null;
+  version: string | null;
+  failure: string | null;
+}
+
+export interface UmFxPayload {
+  rate: number | null;
+  version: string | null;
+}
+
+export interface UmCostPayload {
+  label: string | null;
+  cny: UmReading;
+  cnyPartial: boolean | null;
+  costUsd: number | null;
+  price: UmPricePayload;
+  fx: UmFxPayload;
+  unpricedRequests: number | null;
+  estimatedRequests: number | null;
+  coverage: JsonObject;
+  models: JsonObject[];
+}
+
+export interface UmTodayResponse {
+  today: UmTodayPayload;
+  cost: UmCostPayload;
+  coverage: JsonObject;
+  timezone: string | null;
+  /** Epoch milliseconds; the backend reports seconds. */
+  checkedAt: number | null;
+}
+
+export type UmTrendRange = "7d" | "14d" | "30d";
+export type UmReadWindow = "today" | "24h" | "7d" | "30d";
+
+export interface UmBucketPayload {
+  tokens: UmReading;
+  costCny: UmReading;
+  requests: UmReading;
+  speed: UmReading;
+}
+
+export interface UmTrendModelPayload {
+  model: string;
+  daily: UmBucketPayload[];
+  total: UmBucketPayload;
+  failed: UmReading;
+}
+
+export interface UmTrendPayload {
+  range: UmTrendRange;
+  days: string[];
+  all: { daily: UmBucketPayload[]; total: UmBucketPayload };
+  models: UmTrendModelPayload[];
+  speedBasis: "whole_request" | "generation";
+}
+
+export interface UmTrendResponse {
+  trend: UmTrendPayload;
+  coverage: JsonObject;
+  timezone: string | null;
+  checkedAt: number | null;
+}
+
+export type UmRequestResult =
+  | "success"
+  | "failed"
+  | "truncated"
+  | "client_disconnected"
+  | "cancelled"
+  | "unknown";
+
+export interface UmRequestRowPayload {
+  key: string;
+  requestId: string | null;
+  at: number;
+  model: string;
+  result: UmRequestResult;
+  resultNote: string;
+  httpStatus: number | null;
+  input: UmReading;
+  output: UmReading;
+  cacheRead: UmReading;
+  reasoning: UmReading;
+  costCny: UmReading;
+  durationMs: UmReading;
+  firstTokenMs: UmReading;
+  speed: UmReading;
+  speedBasis: "whole_request" | "generation";
+  retries: { at: number; note: string }[] | null;
+  error: { code: string; message: string } | null;
+}
+
+export interface UmRequestPagePayload {
+  rows: UmRequestRowPayload[];
+  scope: string;
+  earlier: string | null;
+}
+
+export interface UmRequestsResponse {
+  page: UmRequestPagePayload;
+  models: string[];
+  coverage: JsonObject;
+  timezone: string | null;
+  checkedAt: number | null;
+}
+
+export type UmLogLevel = "error" | "warn" | "info" | "debug" | "unknown";
+
+export interface UmLogLinePayload {
+  key: string;
+  at: number | null;
+  level: UmLogLevel;
+  source: string;
+  text: string;
+  requestId: string | null;
+}
+
+export interface UmLogPagePayload {
+  lines: UmLogLinePayload[];
+  sources: string[];
+  scope: string;
+  earlier: string | null;
+  coverage: JsonObject;
+}
+
+export interface UmRequestLogsPayload {
+  lines: UmLogLinePayload[];
+  scope: string;
+  partial: boolean;
+  coverage: JsonObject;
+}
+
+export interface UmMaintenanceRowPayload {
+  key: string;
+  /** Raw backend action id; the frozen view falls back to this name when it
+   *  is not one of its five write actions (e.g. account.um_status). */
+  action: string;
+  state:
+    "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  at: number;
+  finishedAt: number | null;
+  steps: { at: number; note: string }[];
+  result: string;
+}
+
+export interface UmMaintenancePagePayload {
+  rows: UmMaintenanceRowPayload[];
+  scope: string;
+  earlier: string | null;
+  coverage: JsonObject;
+}
+
+export interface UmCatalogModelPayload {
+  id: string;
+  displayName: string | null;
+  declaredContext: number | null;
+  efforts: string[];
+  effortsSource: string | null;
+  defaultEffort: string | null;
+}
+
+export interface UmCatalogPayload {
+  models: UmCatalogModelPayload[];
+  /** Epoch milliseconds; the backend reports seconds. */
+  checkedAt: number | null;
+  source: string;
+  warnings: string[];
+}
+
+export interface UmServiceEntry {
+  key: string;
+  displayName: string | null;
+  port: number | null;
+  state: string;
+  healthy: boolean | null;
+  detail: string;
+  processIds: number[];
+}
+
+export interface UmServicesPayload {
+  services: UmServiceEntry[];
+  /** Epoch milliseconds; the backend reports seconds. */
+  checkedAt: number | null;
+  cached: boolean;
+  cacheAgeSeconds: number | null;
+}
+
+export interface UmOperationPayload {
+  id: string;
+  action: string;
+  target: string;
+  state:
+    "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  result: JsonObject | null;
+  error: JsonObject | null;
+  /** Epoch milliseconds; the backend reports seconds. */
+  createdAt: number | null;
+  finishedAt: number | null;
+  steps: { at: number; note: string }[];
+}
+
+export interface UmOperationsPayload {
+  operations: UmOperationPayload[];
+}
+
+export interface UmSummaryReferencePayload {
+  label: string | null;
+  cny: number | null;
+  cnyPartial: boolean | null;
+  costUsd: number | null;
+  price: UmPricePayload;
+  fx: UmFxPayload;
+  snapshotSha256: string | null;
+  coverage: JsonObject;
+  models: JsonObject[];
+}
+
+export interface UmSummaryPayload {
+  /** `cloud` when the backend is the cloud role; the local role omits it. */
+  role: string | null;
+  umReference: UmSummaryReferencePayload | null;
 }

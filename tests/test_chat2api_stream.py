@@ -61,6 +61,15 @@ def _chunk(content: str = None, finish_reason=None, usage=None) -> str:
     return json.dumps(chunk, ensure_ascii=False)
 
 
+def _reasoning_chunk() -> str:
+    """One chat.completion.chunk carrying BOTH reasoning channels (D18-5)."""
+    return json.dumps({
+        "choices": [{"delta": {"reasoning": "think-a",
+                                "reasoning_content": "think-b"},
+                      "finish_reason": None}],
+    }, ensure_ascii=False)
+
+
 def _tool_chunk(name: str = None, arguments: str = None,
                 tool_id: str = "call_t1", finish_reason=None,
                 role: str = None) -> str:
@@ -96,9 +105,9 @@ TRACE_UPSTREAM_REQUEST_ID = "um-trace-7f3c1a2b"
 # being lookup-able on the UM side.
 TRACE_VERBATIM_REQUEST_ID = "um-trace-7F3c-1a2b_ok.v1"
 
-# A folded (obs-fold) header value. The CRLF plus the continuation line survive
-# HTTP parsing (checked in this environment against requests/urllib3), so logging
-# the value verbatim writes a second, attacker-chosen log line.
+# A folded (obs-fold) header value. Parsers may preserve CRLF or unfold it to
+# spaces; either representation must remain unclaimable as a request-id token
+# rather than embedding attacker-chosen stream-end fields in the log.
 FORGED_LOG_LINE = ("stream end model=forged status=ok data_lines=99 "
                    "duration_ms=1 upstream_request_id=fake-id")
 TRACE_FORGED_REQUEST_ID = f"{TRACE_UPSTREAM_REQUEST_ID}\r\n\t{FORGED_LOG_LINE}"
@@ -123,6 +132,7 @@ OK_STREAM_SCENARIOS = (
     "trace-headers",
     "trace-headers-verbatim",
     "trace-headers-forged",
+    "trace-headers-unfolded",
     "trace-headers-control-char",
     "trace-headers-length-boundary",
     "trace-headers-secrets",
@@ -210,9 +220,11 @@ class StubUpstreamHandler(BaseHTTPRequestHandler):
             self.send_header("x-request-id", TRACE_VERBATIM_REQUEST_ID)
             self.send_header("Connection", "close")
         elif scenario == "trace-headers-forged":
-            # Folded header: the CRLF and its continuation line survive HTTP
-            # parsing, so logging the value verbatim forges a log line.
+            # Reject the folded value whether the parser preserves or unfolds it.
             self.send_header("x-request-id", TRACE_FORGED_REQUEST_ID)
+            self.send_header("Connection", "close")
+        elif scenario == "trace-headers-unfolded":
+            self.send_header("x-request-id", TRACE_FORGED_REQUEST_ID.replace("\r\n\t", " "))
             self.send_header("Connection", "close")
         elif scenario == "trace-headers-control-char":
             # One control character per field, from three different blocks:
@@ -260,6 +272,18 @@ class StubUpstreamHandler(BaseHTTPRequestHandler):
                 self._send(b"data: [DONE]\n\n", chunked)
                 # Hold the connection after [DONE]: chat2api must stop reading
                 # and close the downstream instead of waiting for EOF.
+                time.sleep(2)
+            elif scenario == "reasoning-kept":
+                # D18-5: the share backend keeps the upstream's reasoning
+                # channels instead of reshaping the SSE data lines.
+                self._send(_sse(_chunk()), chunked)
+                self._send(_sse(_reasoning_chunk()), chunked)
+                self._send(_sse(_chunk(content="OK")), chunked)
+                self._send(_sse(_chunk(
+                    finish_reason="stop",
+                    usage={"prompt_tokens": 5, "completion_tokens": 1,
+                           "total_tokens": 6})), chunked)
+                self._send(b"data: [DONE]\n\n", chunked)
                 time.sleep(2)
             elif scenario == "trace-headers-retry":
                 # First attempt: only the metadata-only role chunk arrives,
@@ -834,6 +858,19 @@ class TestChat2ApiStreaming(unittest.TestCase):
         self.assertNotIn("model=forged", joined)
         self.assertNotIn("fake-id", joined)
 
+    def test_stream_end_trace_id_rejects_unfolded_whitespace(self):
+        with self.assertLogs("chat2api", level="INFO") as cm:
+            with self.stream_request("trace-headers-unfolded") as response:
+                self.assertEqual(response.status_code, 200)
+                lines, _ = self.read_to_eof(response)
+        self.assertEqual(lines[-1], "data: [DONE]")
+        fields = self.stream_end_fields(cm.output)
+        self.assertEqual(fields.group("request_id"),
+                         "unavailable:control_chars_or_whitespace")
+        self.assertIn("BaseHTTP/", fields.group("server"))
+        self.assertIn(" Python/", fields.group("server"))
+        self.assertNotIn(FORGED_LOG_LINE, "\n".join(cm.output))
+
     def test_stream_end_trace_fields_reject_other_control_characters(self):
         # CR/LF are not the only characters a header value can smuggle in: a C0
         # control (VT), DEL and a C1 control must each mark their field
@@ -958,6 +995,27 @@ class TestChat2ApiStreaming(unittest.TestCase):
         self.assertEqual(record["status"], "ok")
         self.assertFalse(record["estimated"])
         self.assertEqual(record["output_tokens"], 1)
+
+    def test_share_backend_keeps_streamed_reasoning(self):
+        # D18-5: the dedicated share backend keeps the upstream's reasoning
+        # channels in a client-visible SSE stream, exactly like the private
+        # 8000 chain. The Qoder-only delta filter is gone.
+        with self.stream_request("reasoning-kept") as response:
+            self.assertEqual(response.status_code, 200)
+            lines, _ = self.read_to_eof(response)
+        self.assertEqual(lines[-1], "data: [DONE]")
+        deltas = [
+            json.loads(line[len("data:"):].strip())["choices"][0]["delta"]
+            for line in lines
+            if line.startswith("data:") and line.strip() != "data: [DONE]"]
+        self.assertIn({"reasoning": "think-a", "reasoning_content": "think-b"},
+                      deltas)
+        self.assertEqual(
+            "".join(delta.get("content") or "" for delta in deltas), "OK")
+
+        (record,) = self.wait_usage_records()
+        self.assertEqual(record["status"], "ok")
+        self.assertFalse(record["estimated"])
 
     def test_upstream_eof_without_done_is_reported_in_band(self):
         with self.stream_request("eof-no-done") as response:

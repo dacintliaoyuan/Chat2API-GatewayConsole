@@ -1,4 +1,4 @@
-﻿# watchdog-umshare.ps1 — persistent SYSTEM monitor for the live UM share.
+# watchdog-umshare.ps1 — persistent SYSTEM monitor for the live UM share.
 #
 # Hardened per review:
 #  * limit check = wfp_helper `strong` (presence + action + layer + app-id blob
@@ -30,11 +30,11 @@
 # TestMode is TEST-ONLY: it logs would-be actions and may run a fake close
 # command via -CloseCmd when -TestCloseReal is set; never used in deployment.
 param(
-    [string]$RunRoot = 'C:\ProgramData\AIGatewayPublicShareRun',
+    [string]$RunRoot = 'C:\ProgramData\UMShareRun',
     [string]$WfpHelper = '',
     [string]$AppExe = '',
-    [string]$FirewallRule = 'um-share-public-outbound-block',
-    [string]$RequireOwner = 'um_share_public',
+    [string]$FirewallRule = 'um-share-outbound-block',
+    [string]$RequireOwner = 'um_share',
     [int]$LivePort = 8100,
     [string]$Tailscale = 'C:\Program Files\Tailscale\tailscale.exe',
     [string]$CloseCmd = '',
@@ -51,6 +51,9 @@ param(
                                         # decision-file directory (never set in deployment)
 )
 $ErrorActionPreference = 'Continue'
+# Child checks must use this PowerShell 7 installation even when the SYSTEM
+# task inherited an older PATH. Do not change the machine or user environment.
+$env:PATH = $PSHOME + [IO.Path]::PathSeparator + $env:PATH
 
 if ($WfpHelper -eq '') { $WfpHelper = Join-Path $RunRoot 'wfp_helper.ps1' }
 if ($AppExe -eq '') { $AppExe = Join-Path $RunRoot 'um-share-python.exe' }
@@ -133,12 +136,15 @@ function Test-FirewallScopeOk {
     param($rule)
     try {
         if ($rule.Direction -ne 'Outbound') { return $false, ('direction=' + $rule.Direction) }
+        if ([string]$rule.Profile -ne 'Any') { return $false, 'firewall-scope-mismatch' }
         $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
         $addr = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-        $proto = $port.Protocol
-        $remote = $addr.RemoteAddress
-        if ($proto -and $proto -ne 'Any' -and $proto -ne '') { return $false, ('protocol=' + $proto) }
-        if ($remote -and $remote -ne 'Any' -and $remote -ne '' -and $remote -ne '*') { return $false, ('remote=' + ($remote -join ',')) }
+        foreach ($value in @($port.Protocol, $port.LocalPort, $port.RemotePort)) {
+            if ([string]($value -join ',') -ne 'Any') { return $false, 'firewall-scope-mismatch' }
+        }
+        foreach ($value in @($addr.LocalAddress, $addr.RemoteAddress)) {
+            if ([string]($value -join ',') -notin @('Any', '*')) { return $false, 'firewall-scope-mismatch' }
+        }
         return $true, 'scope-ok'
     } catch {
         return $false, ('scope-query-error: ' + $_.Exception.Message)
@@ -147,16 +153,24 @@ function Test-FirewallScopeOk {
 
 function Get-FirewallState {
     try {
-        $rule = Get-NetFirewallRule -DisplayName $FirewallRule -ErrorAction Stop
-        if (-not $rule) { return $false, 'rule-missing' }
-        if ($rule.Enabled -ne 'True' -and $rule.Enabled -ne $true) { return $false, 'rule-disabled' }
+        $rule = Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName $FirewallRule -ErrorAction Stop
+        if (-not $rule) { return $false, 'firewall-missing' }
+        if (@($rule).Count -ne 1) { return $false, 'firewall-scope-mismatch' }
+        if ($rule.Enabled -ne 'True' -and $rule.Enabled -ne $true) { return $false, 'firewall-disabled' }
         if ($rule.Action -ne 'Block') { return $false, ('action=' + $rule.Action) }
         $app = (Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop).Program
         if ($app -ne $AppExe) { return $false, ('program=' + $app) }
         $scopeOk, $scopeWhy = Test-FirewallScopeOk $rule
         if (-not $scopeOk) { return $false, $scopeWhy }
+        $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop)
+        foreach ($name in @('Domain', 'Private', 'Public')) {
+            $profile = @($profiles | Where-Object { $_.Name -eq $name })
+            if ($profile.Count -ne 1) { return $false, 'firewall-error: profiles unavailable' }
+            if ($profile[0].Enabled -ne 'True' -and $profile[0].Enabled -ne $true) { return $false, 'firewall-disabled' }
+        }
         return $true, 'ok'
     } catch {
+        if ($_.FullyQualifiedErrorId -like '*CmdletizationQuery_NotFound*') { return $false, 'firewall-missing' }
         return $false, ('firewall-error: ' + $_.Exception.Message)
     }
 }
@@ -171,28 +185,61 @@ function Get-LimitsState {
         # read.
         return $false, ('detection-failure(' + $(if ($script:BackendPortError) { $script:BackendPortError } else { 'backend-port-unavailable' }) + ')')
     }
-    $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $WfpHelper -Action strong -AppExePath $AppExe -Port $script:BackendPort 2>&1
+    $output = & pwsh -NoProfile -ExecutionPolicy Bypass -File $WfpHelper -Action strong -AppExePath $AppExe -Port $script:BackendPort 2>&1
     $rc = $LASTEXITCODE
     $text = ($output -join ' ')
     if (($null -eq $output -or $output.Count -eq 0)) { return $false, "detection-failure(no-output, rc=$rc)" }
+    # Query errors are unavailable evidence, while a completed strong check
+    # proving a missing/mis-scoped filter is a confirmed failed condition.
+    if ($text -match 'UNREADABLE\(|ERROR\(|APPID-ERROR') {
+        return $false, 'detection-failure(wfp-query-failed)'
+    }
+    if ($rc -eq 1 -and $text -match 'STRONG=FAIL') {
+        if ($text -match 'MISSING\(FWP_E_FILTER_NOT_FOUND') { return $false, 'wfp-filter-missing' }
+        return $false, 'wfp-filter-mismatch'
+    }
     if ($rc -ne 0) { return $false, "detection-failure(rc=$rc)" }
     if ($text -notlike '*STRONG=OK*') { return $false, ('strong-not-ok: ' + ($text.Substring(0, [Math]::Min(120, $text.Length)))) }
     return $true, 'ok'
 }
 
+# A completed query with no matching listener is absence; other query errors
+# remain unavailable evidence, including errors during an identity recheck.
+function Get-ShareListener {
+    try {
+        return Get-NetTCPConnection -LocalPort $LivePort -State Listen -ErrorAction Stop | Select-Object -First 1
+    } catch {
+        if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return $null }
+        throw
+    }
+}
+
 # Returns a hashtable: state = verified | absent | unconfirmed ; share / err.
 function Get-ShareState {
     try {
-        $conn = Get-NetTCPConnection -LocalPort $LivePort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        $conn = Get-ShareListener
         if (-not $conn) { return @{ state = 'absent'; share = $null; err = 'no-listener' } }
         $pid_ = [int]$conn.OwningProcess
         try {
             $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$pid_" -ErrorAction Stop
+            if (-not $proc) { throw 'listener-process-disappeared' }
             $owner = Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction Stop
             $exe = [string]$proc.ExecutablePath
             $crt = $proc.CreationDate
         } catch {
-            return @{ state = 'unconfirmed'; share = $null; err = 'procquery: ' + $_.Exception.Message }
+            $identityError = $_.Exception.Message
+            # A managed stop can finish between the listener and owner reads.
+            # Confirm absence once; a replacement or unreadable listener keeps
+            # the anomaly path, regardless of the management stop record.
+            try {
+                $currentListener = Get-ShareListener
+                if (-not $currentListener) {
+                    return @{ state = 'absent'; share = $null; err = 'listener-gone-during-identity-query' }
+                }
+            } catch {
+                return @{ state = 'unconfirmed'; share = $null; err = 'listener-recheck-error: ' + $_.Exception.Message }
+            }
+            return @{ state = 'unconfirmed'; share = $null; err = 'procquery: ' + $identityError }
         }
         $imgOk = ($exe -and $exe -eq $ExpectedExe)
         # RequireOwner=='' (TEST-ONLY) skips the owner assertion; otherwise the
@@ -348,7 +395,7 @@ function Close-Public {
 
 function Cleanup-Task {
     if ($TestMode) { Write-WdLog 'CLEANUP: TEST-ONLY (task kept)'; return }
-    try { Unregister-ScheduledTask -TaskName 'umshare-public-live' -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    try { Unregister-ScheduledTask -TaskName 'umshare-live' -Confirm:$false -ErrorAction SilentlyContinue } catch { }
 }
 
 # ------------------ bounded crash recovery (R8-A7) ------------------
@@ -406,7 +453,7 @@ function Invoke-ShareRecovery {
         return $true
     }
     try {
-        Start-ScheduledTask -TaskName 'umshare-public-live' -ErrorAction Stop
+        Start-ScheduledTask -TaskName 'umshare-live' -ErrorAction Stop
     } catch {
         Write-WdLog ('RECOVERY-START-FAILED: ' + $_.Exception.Message)
         return $false
@@ -475,6 +522,10 @@ while ($true) {
 
     if (-not $limitsOk) {
         Write-WdLog ("LIMIT-LOSS: " + $limitReason + " (bounded stop begins now)")
+        # Withdraw even when the gateway is absent or stops successfully:
+        # an existing Funnel mapping is not a usable/safe sharing service.
+        $okClose = Close-Public
+        Write-WdLog ('LIMIT-LOSS-CLOSE: ' + $(if ($okClose) { 'OK' } else { 'FAILED (manual action needed)' }))
         if ($st.state -eq 'absent') {
             Write-WdLog 'share confirmed absent on the port; nothing to kill (public served by nothing)'
         } else {

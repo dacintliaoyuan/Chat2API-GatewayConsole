@@ -47,8 +47,8 @@ if ($needsKey -and [string]::IsNullOrWhiteSpace($Key)) {
 # marker the private-instance watch obeys. Offline tests (hooks file or their
 # own lock namespace) must never touch the real marker.
 if ($RuntimeHooksFile -eq '' -and $LockDir -eq '') {
-    if (-not $env:AIGATEWAY_PUBLIC_ACTION_SOURCE) {
-        $env:AIGATEWAY_PUBLIC_ACTION_SOURCE = 'console'
+    if (-not $env:SELFUSEAI_GATEWAY_ACTION_SOURCE) {
+        $env:SELFUSEAI_GATEWAY_ACTION_SOURCE = 'console'
     }
     Enable-GatewayDesiredState
 }

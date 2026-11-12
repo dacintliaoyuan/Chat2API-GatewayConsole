@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>UM 私有登录窗口</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0b0d10; color: #e6e8eb;
+               font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #screen { position: fixed; inset: 0; }
+  #result { position: fixed; inset: 0; display: grid; place-items: center;
+            padding: 24px; text-align: center; }
+  #result[hidden], #screen[hidden], #actions[hidden], button[hidden] {
+    display: none; }
+  #result-text { margin: 0; max-width: 42rem; font-size: 18px; line-height: 1.6; }
+  #status { position: fixed; left: max(12px, env(safe-area-inset-left));
+            top: max(12px, env(safe-area-inset-top));
+            max-width: calc(100vw - 24px); padding: 6px 10px;
+            border-radius: 6px; background: rgba(0, 0, 0, .72);
+            color: #e6e8eb; font-size: 13px; pointer-events: none; }
+  #status[data-state="error"], #status[data-state="failed"],
+  #status[data-state="timed_out"], #status[data-state="cancelled"],
+  #status[data-state="display_disconnected"],
+  #status[data-state="conflict"] { background: #5a1d1d; }
+  #status[data-state="connected"], #status[data-state="valid"] {
+    background: #173d2a; }
+  #actions { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom));
+            transform: translateX(-50%); display: flex; flex-wrap: wrap;
+            justify-content: center; gap: 8px; padding: 8px 12px;
+            border-radius: 8px; background: rgba(0, 0, 0, .72); }
+  button { font: inherit; color: #e6e8eb; background: #1d2733;
+           border: 1px solid #3b4a5c; border-radius: 6px;
+           padding: 8px 14px; cursor: pointer; }
+  button:hover { background: #263545; }
+  button:focus-visible { outline: 2px solid #7db4ff; outline-offset: 2px; }
+  button:disabled { opacity: .55; cursor: default; }
+</style>
+</head>
+<body>
+<div id="screen" aria-label="云端 UM 登录显示"></div>
+<div id="result" hidden><p id="result-text"></p></div>
+<div id="status" data-state="connecting" role="status" aria-live="polite">正在读取登录状态…</div>
+<div id="actions" hidden>
+  <button id="action-reconnect" type="button">重新连接</button>
+  <button id="action-cancel" type="button">取消登录</button>
+  <button id="action-takeover" type="button">接管操作</button>
+  <button id="action-back" type="button">返回控制台</button>
+</div>
+<!-- The page CSP is script-src 'self'; inline script would be blocked. -->
+<script type="module" src="/display/launcher.js"></script>
+</body>
+</html>

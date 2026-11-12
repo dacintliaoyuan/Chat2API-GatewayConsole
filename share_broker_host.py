@@ -344,28 +344,36 @@ class BrokerHostCoordinator:
                                      budget_s=budget_s)
         return self.instance_call(action, fields, instance_id)
 
-    def _host_op(self, name, budget_s=None):
-        """Call ONE host op, passing the caller's REMAINING budget when the
-        seam accepts it.
+    def _host_op(self, name, budget_s=None, explicit=None):
+        """Call ONE host op, passing the caller's REMAINING budget and/or the
+        operator's EXPLICIT start when the seam accepts it.
 
         The HostOps surface itself stays FIXED (the same four verbs, no new
-        command/service/path channel): the budget rides an OPTIONAL ``budget_s``
-        keyword. A seam that does not accept it keeps its own command bound
-        (the previous behaviour), while the production ``WindowsHostOps`` uses it
-        to bound EVERY subprocess and to share ONE budget across the
-        consecutive queries of a single evidence read - so a slow task run or a
-        slow query can never make the whole verb outlive the caller's deadline.
+        command/service/path channel): the budget and the explicit-start flag ride
+        OPTIONAL keywords. A seam that does not accept a keyword keeps its own
+        command bound (the previous behaviour), while the production
+        ``WindowsHostOps`` uses ``budget_s`` to bound EVERY subprocess and to
+        share ONE budget across the consecutive queries of a single evidence read
+        - so a slow task run or a slow query can never make the whole verb
+        outlive the caller's deadline. ``explicit`` reaches only a host-ops seam
+        that models the persistent stop intent (the Linux pid-file host); the
+        Windows scheduled task has no such intent and keeps its historical call.
         """
         method = getattr(self.host_ops, name)
-        if budget_s is None:
+        keywords = {}
+        if budget_s is not None:
+            keywords["budget_s"] = budget_s
+        if explicit is not None:
+            keywords["explicit"] = explicit
+        if not keywords:
             return method()
         try:
             parameters = inspect.signature(method).parameters
         except (TypeError, ValueError):        # builtins / exotic callables
             return method()
-        if "budget_s" in parameters:
-            return method(budget_s=budget_s)
-        return method()
+        filtered = {key: value for key, value in keywords.items()
+                    if key in parameters}
+        return method(**filtered)
 
     # ------------------------------------------------------------ mgmt channel
     def handle_management(self, body, now=None):
@@ -397,7 +405,11 @@ class BrokerHostCoordinator:
             return self._reply(req, self._publish(req["fields"],
                                                   request_id=req["request_id"]))
         if action == "start":
-            return self._reply(req, self._start())
+            # A missing ``explicit`` field is the historical watchdog/systemd
+            # start; only the operator's own start supersedes a persisted stop
+            # intent.
+            return self._reply(req, self._start(
+                req["fields"].get("explicit", False)))
         if action == "drain":
             return self._reply(req, self._drain())
         if action == "emergency-stop":
@@ -460,6 +472,24 @@ class BrokerHostCoordinator:
         self._try_discovery()
         current_after, version_after = self.instances.snapshot()
         return current_after != current or version_after != version
+
+    def _drain_instance_id(self):
+        """Resolve the instance to notify for a drain/stop verb.
+
+        ``_drain`` and ``_emergency_stop`` used to read
+        ``self.instances.current()`` directly, so a broker that started BEFORE
+        the share published its registration addressed every notification with
+        ``instance_id=None``. The real AF_UNIX seam refuses that before any
+        I/O (``instance_id must be a non-empty string``), which surfaced as
+        ``notification_failed: true`` against a perfectly healthy instance and
+        made ``update.sh`` refuse the version switch (observed live on the cloud
+        host after a restart). The verbs now perform the SAME ONE trusted
+        discovery ``_publish`` already uses. Without the discovery seam the
+        registry stays empty on purpose: the notification failure must remain
+        VISIBLE rather than being hidden behind a fabricated instance.
+        """
+        current, _version = self._resolve_instance()
+        return current
 
     # ------------------------------------------------------------ actions
     def _publish(self, fields, request_id=None):
@@ -547,7 +577,7 @@ class BrokerHostCoordinator:
                                     "ACK content differs from publication")
         return BrokerResult.ok(result)
 
-    def _start(self):
+    def _start(self, explicit=False):
         """Restricted start with a BOUNDED readiness confirmation.
 
         The task is run ONCE (``start_host``); the gateway process then needs a
@@ -559,9 +589,14 @@ class BrokerHostCoordinator:
         deadline (a late success would leave an ownerless running instance).
         ``None`` (unreadable evidence) is never ready, the task is never re-run
         and nothing is force-killed here.
+
+        ``explicit=True`` is the operator's own start: it is forwarded to a
+        host-ops seam that models the persistent stop intent, so it can clear an
+        intent the watchdog/systemd start must keep refusing.
         """
         deadline = self._clock() + self.start_ready_timeout
-        result = self._host_op("start_host", self.start_ready_timeout)
+        result = self._host_op("start_host", self.start_ready_timeout,
+                              explicit=explicit)
         if result is not True:
             return BrokerResult.err("unconfirmed",
                                     "start did not confirm the host task")
@@ -604,12 +639,16 @@ class BrokerHostCoordinator:
         can spend the whole drain window and the stop still runs."""
         notification_failed = False
         active_left = None
+        # Resolve ONCE before the first notification: an empty registry means
+        # the broker came up before the share registered, and every verb below
+        # must address the discovered instance instead of None.
+        instance_id = self._drain_instance_id()
         # R-WIRE-DRAIN: the WHOLE drain phase (the notification AND every
         # status query) is bounded by the drain window - the LAST query can no
         # longer cross the deadline with a full per-exchange budget.
         deadline = self._clock() + self.drain_timeout
         try:
-            resp = self._instance_op("drain", {}, self.instances.current(),
+            resp = self._instance_op("drain", {}, instance_id,
                                      deadline - self._clock())
             if not resp.get("ok"):
                 notification_failed = True
@@ -621,7 +660,7 @@ class BrokerHostCoordinator:
                 break
             try:
                 resp = self._instance_op("instance-status", {},
-                                         self.instances.current(), remaining)
+                                         instance_id, remaining)
                 active_left = (resp.get("result") or {}).get("active_count")
                 if active_left == 0:
                     break
@@ -635,7 +674,7 @@ class BrokerHostCoordinator:
         stop_deadline = self._clock() + self.stop_timeout
         try:
             stop = self._instance_op(
-                "emergency", {}, self.instances.current(),
+                "emergency", {}, instance_id,
                 min(self.stop_timeout / 2, stop_deadline - self._clock()))
             if not stop.get("ok"):
                 notification_failed = True
@@ -656,7 +695,11 @@ class BrokerHostCoordinator:
         return BrokerResult.ok({"drained": not timed_out,
                                 "timed_out": timed_out,
                                 "stopped": closed,
-                                "notification_failed": notification_failed})
+                                "notification_failed": notification_failed,
+                                # D18-10: the OBSERVED in-flight count
+                                # (None = no instance-status observation
+                                # resolved a count; never a fabricated 0).
+                                "in_flight": active_left})
 
 
     def _emergency_stop(self):
@@ -673,9 +716,13 @@ class BrokerHostCoordinator:
         cleared = None
         instance_stopped = False
         stop_deadline = self._clock() + self.stop_timeout
+        # Same ONE trusted discovery as _drain: an emergency stop issued right
+        # after a broker restart must still reach the instance the share
+        # registered instead of addressing None.
+        instance_id = self._drain_instance_id()
         try:
             stop = self._instance_op("emergency", {},
-                                      self.instances.current(),
+                                      instance_id,
                                       min(self.stop_timeout / 2,
                                           stop_deadline - self._clock()))
             if not stop.get("ok"):
@@ -981,15 +1028,38 @@ class BrokerHostCoordinator:
             round=None, expires_at=None, by="expiry")
         self.diag.record("maintenance-expiry", ok=True, instance_id=current)
 
+    def _start_host_explicit(self):
+        """Start the host as the OPERATOR's explicit action.
+
+        The Linux pid-file host ops model the persistent stop intent: a plain
+        ``start_host()`` (the watchdog/systemd path) refuses while a stop intent
+        is in force, while ``start_host(explicit=True)`` is the operator's own
+        start and clears it. This restart is that operator action - the stop it
+        just wrote is its own, so the start MUST clear it. Host ops without the
+        ``explicit`` keyword (the Windows scheduled task) keep the historical
+        call byte-for-byte.
+        """
+        method = self.host_ops.start_host
+        try:
+            parameters = inspect.signature(method).parameters
+        except (TypeError, ValueError):        # builtins / exotic callables
+            return method()
+        if "explicit" in parameters:
+            return method(explicit=True)
+        return method()
+
     def _gateway_restart(self, fields, request_id=None) -> BrokerResult:
         """A9-4 broker side: ONE bounded 8100 single-layer restart.
 
         The THREE host proofs gate the action (False/None -> blocked, the
         restart never doubles as a way to start a stopped gateway); the
         protected record is written BEFORE the stop so the watchdog does not
-        race the maintenance window; a stop/start that is not confirmed is
-        reported as ``unconfirmed`` with the actual flags and never retried
-        with a force-kill.
+        race the maintenance window; the restart's OWN stop writes the
+        persistent stop intent, so the following start is the operator's
+        EXPLICIT start (it clears that intent) - a plain watchdog start would
+        be refused and the restart would never come back. A stop/start that is
+        not confirmed is reported as ``unconfirmed`` with the actual flags and
+        never retried with a force-kill.
         """
         try:
             clean = validate_gateway_restart_fields(fields)
@@ -1024,7 +1094,7 @@ class BrokerHostCoordinator:
         running_confirmed = False
         if stopped_confirmed:
             try:
-                self.host_ops.start_host()
+                self._start_host_explicit()
                 deadline = self._clock() + budget_s
                 while self._clock() < deadline:
                     if self.host_ops.verify_running() is True:

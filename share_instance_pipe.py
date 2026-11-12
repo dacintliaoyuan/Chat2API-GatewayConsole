@@ -27,21 +27,49 @@ Deployment contract (R41-1):
   planned default carries placeholder SIDs that FAIL conversion on
   purpose, so an uncalibrated deployment refuses to serve instead of
   starting with a default ACL.
+
+POSIX (Linux) deployment: the instance channel is an AF_UNIX
+SOCK_STREAM socket. The "pipe name" is then the SOCKET PATH produced by
+``instance_pipe_name(prefix, instance_id)``, where the deployment-supplied
+prefix is an absolute path prefix (for example
+``/run/um-share/instance-``). The server enforces the parent directory
+0700 / socket file 0600, and the broker-side peer identity is kernel
+evidence (SO_PEERCRED pid/uid/gid) — never this registration file. The
+Windows named-pipe path stays the default on Windows and is byte-for-byte
+unchanged.
 """
 from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import time
 from pathlib import Path
 
-from share_broker_server import BoundedPipeServer
+from share_broker_server import BoundedPipeServer, UnixSocketBrokerServer
 from share_broker_protocol import DEFAULT_DEADLINE_SECONDS, ProtocolError
 
 
+POSIX_INSTANCE_PIPE_PREFIX = "/run/um-share/instance-"
+
+
+def default_instance_pipe_prefix():
+    """The platform default instance-channel prefix. On POSIX it is an
+    absolute SOCKET PATH prefix; on Windows the named-pipe prefix is read from
+    the single source of truth in ``share_broker_ops`` (unchanged)."""
+    if os.name == "posix":
+        return POSIX_INSTANCE_PIPE_PREFIX
+    from share_broker_ops import INSTANCE_PIPE_PREFIX
+    return INSTANCE_PIPE_PREFIX
+
+
 def instance_pipe_name(pipe_prefix, instance_id):
-    """The instance channel endpoint for ONE share instance."""
+    """The instance channel endpoint for ONE share instance.
+
+    Windows: ``\\\\.\\pipe\\<prefix><id>``. POSIX: an absolute socket path
+    ``<prefix><id>`` (the prefix is a socket path prefix, not a directory).
+    """
     if not isinstance(instance_id, str) or not instance_id:
         raise ValueError("instance_id must be a non-empty string")
     return f"{pipe_prefix}{instance_id}"
@@ -73,26 +101,16 @@ def remove_registration(path):
         pass
 
 
-class InstancePipeServer(BoundedPipeServer):
-    """Instance-channel wire server on the share side (R41-1).
+class _InstanceControlDispatch:
+    """Dispatch shared by the Windows named-pipe and POSIX socket servers.
 
-    Dispatch runs ``share_server.handle_instance_control(body, secret)`` —
-    the REAL endpoint that validates the signed instance frame (schema v2,
+    Dispatch runs ``share_server.handle_instance_control(body, secret)`` — the
+    REAL endpoint that validates the signed instance frame (schema v2,
     instance_id binding, replay, action whitelist) inside the share's own
     guard. Protocol decode failures are answered with a structured
     bad_request frame (request_id unavailable from an unparsable body),
     never with a crash of the accept loop.
     """
-
-    def __init__(self, share_server, instance_secret, pipe_name,
-                 sddl=None, kernel=None,
-                 deadline_seconds=DEFAULT_DEADLINE_SECONDS, state_dir=None,
-                 clock=time.monotonic):
-        self.share_server = share_server
-        self.instance_secret = instance_secret
-        super().__init__(pipe_name, sddl=sddl, kernel=kernel,
-                         deadline_seconds=deadline_seconds,
-                         state_dir=state_dir, clock=clock)
 
     def _dispatch(self, body, record):
         try:
@@ -114,6 +132,42 @@ class InstancePipeServer(BoundedPipeServer):
         return (json.dumps(response) + "\n").encode("utf-8")
 
 
+class InstancePipeServer(_InstanceControlDispatch, BoundedPipeServer):
+    """Instance-channel wire server on the share side (R41-1).
+
+    Windows named-pipe transport; the bounded cycle, HMAC/replay handling and
+    the real handler are shared with the POSIX socket server below.
+    """
+
+    def __init__(self, share_server, instance_secret, pipe_name,
+                 sddl=None, kernel=None,
+                 deadline_seconds=DEFAULT_DEADLINE_SECONDS, state_dir=None,
+                 clock=time.monotonic):
+        self.share_server = share_server
+        self.instance_secret = instance_secret
+        super().__init__(pipe_name, sddl=sddl, kernel=kernel,
+                         deadline_seconds=deadline_seconds,
+                         state_dir=state_dir, clock=clock)
+
+
+class UnixSocketInstanceServer(_InstanceControlDispatch,
+                               UnixSocketBrokerServer):
+    """Instance-channel wire server over a POSIX AF_UNIX socket.
+
+    Same dispatch/bounded-cycle contract as ``InstancePipeServer``; the
+    transport is the Unix socket server (parent 0700, socket 0600, SO_PEERCRED
+    peer identity). ``sddl`` is a Windows DACL knob and is not used here.
+    """
+
+    def __init__(self, share_server, instance_secret, socket_path,
+                 deadline_seconds=DEFAULT_DEADLINE_SECONDS, state_dir=None,
+                 clock=time.monotonic):
+        self.share_server = share_server
+        self.instance_secret = instance_secret
+        super().__init__(socket_path, deadline_seconds=deadline_seconds,
+                         state_dir=state_dir, clock=clock)
+
+
 def probe_instance_listener(server):
     """Create ONE pipe instance eagerly to fail the channel loudly BEFORE
     the share HTTP service reports the instance as ready. A success closes
@@ -127,6 +181,18 @@ def probe_instance_listener(server):
     return True, None
 
 
+def _unix_socket_channel_selected(kernel):
+    """POSIX socket channel: only when NO kernel facade was injected.
+
+    An injected kernel is the offline-test seam for the named-pipe server and
+    keeps that server on every platform; the production POSIX path (no kernel)
+    uses the real AF_UNIX socket. This keeps the Windows named-pipe behavior
+    unchanged and lets the existing offline tests run on any host.
+    """
+    return (kernel is None and os.name == "posix"
+            and hasattr(socket, "AF_UNIX"))
+
+
 def start_instance_channel(share_server, instance_secret, pipe_prefix,
                            registration_path, sddl=None, kernel=None,
                            deadline_seconds=DEFAULT_DEADLINE_SECONDS):
@@ -134,23 +200,39 @@ def start_instance_channel(share_server, instance_secret, pipe_prefix,
 
     Returns a record {ready, pipe_name?, error?}. Never raises into the
     share main service: a listener failure (name taken, DACL refused,
-    kernel error) leaves the share serving WITHOUT a registration file —
-    the broker's load path stays explicitly not-ready (R41-1), and the
-    HTTP share is never killed by the control channel.
+    kernel error, bad socket path) leaves the share serving WITHOUT a
+    registration file — the broker's load path stays explicitly not-ready
+    (R41-1), and the HTTP share is never killed by the control channel.
+
+    POSIX (no injected kernel): the channel is an AF_UNIX socket at
+    ``instance_pipe_name(pipe_prefix, instance_id)``; ``sddl`` is not used
+    (mode bits are enforced by the socket server).
     """
     instance_id = getattr(share_server, "instance_id", None)
     if not instance_id:
         return {"ready": False,
                 "error": "share server has no instance identity"}
+    if pipe_prefix is None:
+        pipe_prefix = default_instance_pipe_prefix()
     pipe_name = instance_pipe_name(pipe_prefix, instance_id)
-    server = InstancePipeServer(
-        share_server, instance_secret, pipe_name, sddl=sddl, kernel=kernel,
-        deadline_seconds=deadline_seconds)
+    try:
+        if _unix_socket_channel_selected(kernel):
+            server = UnixSocketInstanceServer(
+                share_server, instance_secret, pipe_name,
+                deadline_seconds=deadline_seconds)
+        else:
+            server = InstancePipeServer(
+                share_server, instance_secret, pipe_name, sddl=sddl,
+                kernel=kernel, deadline_seconds=deadline_seconds)
+    except (OSError, ValueError) as exc:
+        # A bad POSIX path (relative/too long) is the SAME explicit not-ready
+        # state as a failed listener: nothing is written, nothing is killed.
+        return {"ready": False, "error": f"{type(exc).__name__}: {exc}"}
     ok, error = probe_instance_listener(server)
     if not ok:
         return {"ready": False, "error": error}
     thread = threading.Thread(target=server.serve_forever, daemon=True,
-                              name="um-share-public-instance-channel")
+                              name="um-share-instance-channel")
     thread.start()
     try:
         write_registration(registration_path, instance_id, pipe_name)

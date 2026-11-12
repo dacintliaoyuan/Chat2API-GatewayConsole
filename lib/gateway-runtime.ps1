@@ -1,7 +1,34 @@
-﻿# Public gateway runtime: chat2api (8000) and usage console (8096).
-# Sharing has its own isolated backend (8110) and guarded edge (8100).
+﻿# Gateway runtime module: single source of truth for service identity,
+# health checks, start/stop strategies and startup order.
+#
+# Two active services and one retired identity tombstone:
+#   M365        4141  retired (historical ledger identity only)
+#   chat2api    8000  /health       UM 模型直连
+#   usage       8001  /health       费用统计聚合
+#
+# B0（2026-11-01）：Qoder 国内 / Qoder 国际 / CLIProxy 三个网关已退役，
+# 描述符、启动顺序项与 Bearer 辅助函数全部删除；退役来源不再出现在 runtime。
+#
+# This module owns the descriptors and the start/stop/status implementation.
+# Adapters (menu, BAT, VBS) delegate here and only handle presentation.
+
+# ---------------------------------------------------------------------------
+# Descriptors
+# ---------------------------------------------------------------------------
 
 $script:GatewayServiceDescriptors = [ordered]@{
+    'M365' = [pscustomobject]@{
+        Key          = 'M365'
+        Archived     = $true
+        DisplayName  = 'M365'
+        Port         = 4141
+        HealthPath   = $null
+        StartOrder   = 1
+        OpenUrl      = $null
+        StartAction  = 'Archived'
+        StopAction   = 'Archived'
+        StopStrategy = 'Archived'
+    }
     'chat2api' = [pscustomobject]@{
         Key          = 'chat2api'
         DisplayName  = 'chat2api'
@@ -43,23 +70,22 @@ $script:GatewayServiceDescriptors = [ordered]@{
         # scheduled task, a deliberate stop releases it, an abnormal exit
         # never touches it (the recovery entry survives). The task name must
         # stay identical to lib\register-chat2api-watch.ps1's registration.
-        WatchTaskName = 'AI Gateway Public Chat2API Watch'
+        WatchTaskName = 'SelfUseAI AI Gateway Chat2API Watch'
     }
     'usage' = [pscustomobject]@{
         Key          = 'usage'
         DisplayName  = '费用统计'
-        Port         = 8096
+        Port         = 8001
         HealthPath   = '/health'
         StartOrder   = 6
-        OpenUrl      = 'http://127.0.0.1:8096/'
+        OpenUrl      = 'http://127.0.0.1:8001/'
         StartAction  = 'HiddenBatch'
-        StopAction   = 'CommandLine'
+        StopAction   = 'Port'
         StartPath    = 'start_usage_service.bat'
         StartTimeoutSeconds = 10
-        StopStrategy = 'CommandLine'
-        StopWhenUnhealthy = $true
+        StopStrategy = 'Port'
         StopProcessName = 'python.exe'
-        StopCommandLinePattern = '(^|\s|[\\/])usagesrv\.py(\s|$)'
+        StopCommandLinePattern = '(^|\s)usagesrv\.py(\s|$)'
         StopInstanceScript = 'usagesrv.py'
         OwnerProcessName = 'python.exe'
         OwnerCommandLinePattern = '(^|\s)usagesrv\.py(\s|$)'
@@ -121,6 +147,7 @@ function Resolve-GatewayStartPath {
     $desc = $script:GatewayServiceDescriptors[$Key]
     switch ($desc.StartAction) {
         'HiddenBatch' { return (Join-Path (Get-GatewayRoot) $desc.StartPath) }
+        'HiddenExecutable' { return (Join-Path (Get-GatewayRoot) $desc.StartPath) }
         default {
             throw "Unknown start action for $Key"
         }
@@ -138,6 +165,7 @@ function Test-GatewayServiceHealth {
         [scriptblock]$HttpChecker
     )
 
+    if (Test-GatewayServiceArchived -Key $Key) { return $false }
     $desc = $script:GatewayServiceDescriptors[$Key]
     $url = "http://127.0.0.1:$($desc.Port)$($desc.HealthPath)"
 
@@ -158,8 +186,13 @@ function Test-GatewayServiceHealth {
             $ProgressPreference = $previousProgressPreference
         }
     } catch {
-        # Any HTTP response proves listener liveness; ownership is checked separately.
-        if ($null -ne $_.Exception.Response) {
+        # The previous curl-based console treated any HTTP response as proof
+        # that the process was listening. A rejected HTTP response still
+        # proves reachability and must not trigger a duplicate start attempt.
+        # PS7 transport exceptions have no Response property; inspect the
+        # optional member without raising again under the launcher's StrictMode.
+        $httpResponseProperty = $_.Exception.PSObject.Properties['Response']
+        if ($null -ne $httpResponseProperty -and $null -ne $httpResponseProperty.Value) {
             return $true
         }
         return $false
@@ -172,9 +205,6 @@ function Get-GatewayServiceStatus {
         [scriptblock]$HttpChecker
     )
 
-    if ($null -eq $HttpChecker) {
-        return (Get-GatewayServiceInspection -Key $Key).State
-    }
     if (Test-GatewayServiceHealth -Key $Key -HttpChecker $HttpChecker) {
         return 'Running'
     }
@@ -186,8 +216,71 @@ function Test-GatewayProcessOwnership {
         [Parameter(Mandatory = $true)]$Descriptor,
         [Parameter(Mandatory = $true)]$Process
     )
-    return ($Process.Name -eq $Descriptor.OwnerProcessName -and
-        (Get-GatewayStopScopeClass -Descriptor $Descriptor -Process $Process -GatewayRoot (Get-GatewayRoot)) -eq 'Private')
+    try {
+        return ($Process.Name -eq $Descriptor.OwnerProcessName -and
+            $Process.CommandLine -match $Descriptor.OwnerCommandLinePattern)
+    } catch {
+        return $false
+    }
+}
+
+function Get-GatewayListenerScopeClass {
+    # All managed health/control clients target 127.0.0.1. A Serve listener on
+    # another interface can share the port without owning that endpoint. An
+    # IPv6 wildcard can be dual-stack, so it cannot be excluded safely.
+    param([Parameter(Mandatory = $true)]$Listener)
+    try {
+        $property = $Listener.PSObject.Properties['LocalAddress']
+        if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return 'Unconfirmed'
+        }
+        $address = $null
+        if (-not [Net.IPAddress]::TryParse([string]$property.Value, [ref]$address)) {
+            return 'Unconfirmed'
+        }
+        if ($address.IsIPv4MappedToIPv6) { $address = $address.MapToIPv4() }
+        if ($address.Equals([Net.IPAddress]::Any) -or
+                $address.Equals([Net.IPAddress]::IPv6Any) -or
+                $address.Equals([Net.IPAddress]::Loopback)) {
+            return 'Overlapping'
+        }
+        return 'Separate'
+    } catch {
+        return 'Unconfirmed'
+    }
+}
+
+function Get-GatewayListenerSnapshot {
+    param([Parameter(Mandatory = $true)][int]$Port)
+    $listeners = @()
+    try {
+        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop)
+    } catch {
+        # NetTCPIP reports an ordinary empty match as ObjectNotFound. Every
+        # other failure is an unreadable snapshot, not an empty listener set.
+        if ([string]$_.CategoryInfo.Category -ne 'ObjectNotFound' -or
+                [string]$_.FullyQualifiedErrorId -notmatch 'CmdletizationQuery_NotFound') {
+            throw
+        }
+    }
+    $overlapping = @()
+    $separate = @()
+    $unconfirmed = @()
+    foreach ($listener in $listeners) {
+        $scopeClass = Get-GatewayListenerScopeClass -Listener $listener
+        try {
+            if (-not $listener.PSObject.Properties['OwningProcess'] -or
+                    [int]$listener.OwningProcess -le 0) { $scopeClass = 'Unconfirmed' }
+        } catch { $scopeClass = 'Unconfirmed' }
+        switch ($scopeClass) {
+            'Overlapping' { $overlapping += $listener }
+            'Separate' { $separate += $listener }
+            default { $unconfirmed += $listener }
+        }
+    }
+    return [pscustomobject]@{
+        Overlapping = $overlapping; Separate = $separate; Unconfirmed = $unconfirmed
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -250,18 +343,14 @@ function Get-GatewayStopScopeClass {
     }
     $leaf = [regex]::Escape([IO.Path]::GetFileName($expected))
 
+    # The entrypoint may be given bare (the private launcher's shape) or
+    # path-qualified; either way it must reference THIS entrypoint.
+    $bareToken = $commandLine -match $Descriptor.StopCommandLinePattern
     $references = @()
-    $tokenPattern = '(?:"(?<quoted>[^"\r\n]+)"|(?<plain>[^\s"]+))'
-    foreach ($match in [regex]::Matches($commandLine, $tokenPattern)) {
-        $reference = if ($match.Groups['quoted'].Success) { $match.Groups['quoted'].Value } else { $match.Groups['plain'].Value }
-        if ([IO.Path]::GetFileName($reference) -eq [IO.Path]::GetFileName($expected)) { $references += $reference }
+    foreach ($match in [regex]::Matches($commandLine, "(?<ref>\S*[\\/]$leaf)(?=\s|$)")) {
+        $references += $match.Groups['ref'].Value.Trim('"', "'")
     }
-    if ($references.Count -eq 0) { return 'Foreign' }
-    foreach ($reference in $references) {
-        if (-not [IO.Path]::IsPathRooted($reference)) { return 'Unconfirmed' }
-        try { $resolved = [IO.Path]::GetFullPath($reference) } catch { return 'Unconfirmed' }
-        if (-not $resolved.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) { return 'Foreign' }
-    }
+    if (-not $bareToken -and $references.Count -eq 0) { return 'Foreign' }
 
     $declaredPort = Get-GatewayDeclaredPort -CommandLine $commandLine
     if ($null -ne $declaredPort -and $declaredPort -ne [int]$Descriptor.Port) {
@@ -276,6 +365,16 @@ function Get-GatewayStopScopeClass {
         if ($pattern -and $commandLine -match $pattern) { return 'Foreign' }
     }
 
+    foreach ($reference in $references) {
+        $resolved = $reference
+        if (-not [IO.Path]::IsPathRooted($resolved)) {
+            $resolved = Join-Path $GatewayRoot $resolved
+        }
+        try { $resolved = [IO.Path]::GetFullPath($resolved) } catch { return 'Unconfirmed' }
+        if (-not $resolved.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) {
+            return 'Foreign'
+        }
+    }
     return 'Private'
 }
 
@@ -352,15 +451,42 @@ function Stop-GatewayScopedProcesses {
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Key,
-        [Parameter(Mandatory = $true)]$Descriptor
+        [Parameter(Mandatory = $true)]$Descriptor,
+        [switch]$LoopbackPortOnly
     )
     try {
         $scope = Select-GatewayStopScope -Descriptor $Descriptor -GatewayRoot (Get-GatewayRoot)
+        $targets = @($scope.Private)
+        if ($LoopbackPortOnly) {
+            $listeners = Get-GatewayListenerSnapshot -Port $Descriptor.Port
+            if (@($listeners.Unconfirmed).Count -gt 0) {
+                return [pscustomobject]@{
+                    Key = $Key; Status = 'StopRefused'; Action = 'Stop'
+                    TerminatedProcessIds = @()
+                    Detail = '监听地址或进程归属无法确认，未终止任何进程'
+                }
+            }
+            $localPids = @($listeners.Overlapping | ForEach-Object { [int]$_.OwningProcess })
+            $separatePids = @($listeners.Separate | ForEach-Object { [int]$_.OwningProcess })
+            $privatePids = @($targets | ForEach-Object { [int]$_.ProcessId })
+            if (@($localPids | Where-Object { $_ -notin $privatePids }).Count -gt 0) {
+                return [pscustomobject]@{
+                    Key = $Key; Status = 'StopRefused'; Action = 'Stop'
+                    TerminatedProcessIds = @()
+                    Detail = '本机端口存在未确认的受管进程，未终止任何进程'
+                }
+            }
+            # Preserve cleanup of confirmed residual processes with no socket,
+            # but never select a process listening only on another interface.
+            $targets = @($targets | Where-Object {
+                [int]$_.ProcessId -notin $separatePids -or [int]$_.ProcessId -in $localPids
+            })
+        }
     } catch {
         return [pscustomobject]@{
             Key = $Key; Status = 'StopRefused'; Action = 'Stop'
             TerminatedProcessIds = @()
-            Detail = '进程归属无法确认（进程清单查询失败），未终止任何进程'
+            Detail = '进程归属无法确认（进程或监听清单查询失败），未终止任何进程'
         }
     }
     if (@($scope.Unconfirmed).Count -gt 0) {
@@ -377,7 +503,7 @@ function Stop-GatewayScopedProcesses {
     }
     $terminated = @()
     $skipped = @()
-    foreach ($target in @($scope.Private)) {
+    foreach ($target in $targets) {
         $current = $null
         try {
             $current = @(Get-CimInstance Win32_Process `
@@ -415,13 +541,37 @@ function Get-GatewayServiceInspection {
     param([Parameter(Mandatory = $true)][string]$Key)
 
     $desc = $script:GatewayServiceDescriptors[$Key]
-    $listeners = @(Get-NetTCPConnection -LocalPort $desc.Port -State Listen `
-        -ErrorAction SilentlyContinue)
+    try {
+        $snapshot = Get-GatewayListenerSnapshot -Port $desc.Port
+    } catch {
+        return [pscustomobject]@{
+            Key = $Key; State = 'Conflict'; Healthy = $false; ProcessIds = @()
+            Detail = '监听信息无法读取，无法确认端口状态'
+        }
+    }
+    if (@($snapshot.Unconfirmed).Count -gt 0) {
+        return [pscustomobject]@{
+            Key = $Key; State = 'Conflict'; Healthy = $false; ProcessIds = @()
+            Detail = '监听地址或进程归属无法确认'
+        }
+    }
     $owners = @()
-    foreach ($listener in $listeners) {
-        $process = Get-CimInstance Win32_Process `
-            -Filter "ProcessId=$($listener.OwningProcess)" -ErrorAction SilentlyContinue
-        if ($null -ne $process) { $owners += $process }
+    $unconfirmedPids = @()
+    $listenerPids = @($snapshot.Overlapping | ForEach-Object { [int]$_.OwningProcess } | Select-Object -Unique)
+    foreach ($listenerPid in $listenerPids) {
+        try {
+            $process = @(Get-CimInstance Win32_Process `
+                -Filter "ProcessId=$listenerPid" -ErrorAction Stop)
+            if ($process.Count -ne 1 -or [int]$process[0].ProcessId -ne $listenerPid) {
+                $unconfirmedPids += $listenerPid
+            } else { $owners += $process[0] }
+        } catch { $unconfirmedPids += $listenerPid }
+    }
+    if ($unconfirmedPids.Count -gt 0) {
+        return [pscustomobject]@{
+            Key = $Key; State = 'Conflict'; Healthy = $false
+            ProcessIds = @($unconfirmedPids); Detail = '监听进程归属无法确认'
+        }
     }
     $unknown = @($owners | Where-Object { -not (Test-GatewayProcessOwnership $desc $_) })
     if ($unknown.Count -gt 0) {
@@ -438,8 +588,15 @@ function Get-GatewayServiceInspection {
             Detail = if ($healthy) { '运行中' } else { '程序在运行但健康检查失败' }
         }
     }
-    $residual = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { Test-GatewayProcessOwnership $desc $_ })
+    try {
+        $residual = @(Get-CimInstance Win32_Process -ErrorAction Stop |
+            Where-Object { Test-GatewayProcessOwnership $desc $_ })
+    } catch {
+        return [pscustomobject]@{
+            Key = $Key; State = 'Conflict'; Healthy = $false; ProcessIds = @()
+            Detail = '进程信息无法读取，无法确认服务状态'
+        }
+    }
     # Empty $residual makes $residual.ProcessId evaluate to $null, so
     # @($null) would surface as process id 0 downstream; build the array
     # per-element so a stopped service reports an empty PID list.
@@ -480,8 +637,8 @@ function Enable-GatewayDesiredState {
 
 function Get-GatewayActionSource {
     # Who is driving this runtime call: the console bridge and the watch set
-    # AIGATEWAY_PUBLIC_ACTION_SOURCE; any other caller is a script ("cli").
-    $raw = [string]$env:AIGATEWAY_PUBLIC_ACTION_SOURCE
+    # SELFUSEAI_GATEWAY_ACTION_SOURCE; any other caller is a script ("cli").
+    $raw = [string]$env:SELFUSEAI_GATEWAY_ACTION_SOURCE
     if ($raw -match '^[a-z][a-z0-9_-]{0,31}$') { return $raw }
     return 'cli'
 }
@@ -499,9 +656,9 @@ function Get-GatewayBootIdentity {
 
 function Get-GatewayDesiredStatePath {
     param([Parameter(Mandatory = $true)][string]$Key)
-    $root = [string]$env:AIGATEWAY_PUBLIC_WATCH_DIR
+    $root = [string]$env:SELFUSEAI_GATEWAY_WATCH_DIR
     if (-not $root) {
-        $root = Join-Path $env:LOCALAPPDATA 'AIGatewayPublic\watch'
+        $root = Join-Path $env:LOCALAPPDATA 'SelfUseAI\ai-gateway\watch'
     }
     return Join-Path $root ('{0}-desired.json' -f $Key)
 }
@@ -606,6 +763,22 @@ function Read-GatewayDesiredState {
     } catch {
         return $null
     }
+}
+
+function Get-GatewayManuallyStoppedKeys {
+    # R1/D1（2026-10-11）：哪些键被人为停用（desired state = stopped）。
+    # 定时/手动全源同步也要遵守「显式停用取消自动上游查询」：调用方按本函数
+    # 剔除人工停用来源（不拉起、不进同步来源集合）。标记缺席/不可读/形状不合法
+    # = 「意图未知」，与「已停用」不同，不在这里剔除——未知不能伪装成已停止。
+    param([Parameter(Mandatory = $true)][string[]]$Keys)
+    $stopped = New-Object System.Collections.Generic.List[string]
+    foreach ($key in $Keys) {
+        $desired = Read-GatewayDesiredState -Key $key
+        if ($null -ne $desired -and [string]$desired.state -eq 'stopped') {
+            $stopped.Add($key)
+        }
+    }
+    return $stopped.ToArray()
 }
 
 function Set-GatewayDesiredStartOutcome {
@@ -713,9 +886,9 @@ function Get-GatewayWatchTaskName {
 }
 
 function Get-GatewayWatchControlPath {
-    $root = [string]$env:AIGATEWAY_PUBLIC_WATCH_DIR
+    $root = [string]$env:SELFUSEAI_GATEWAY_WATCH_DIR
     if (-not $root) {
-        $root = Join-Path $env:LOCALAPPDATA 'AIGatewayPublic\watch'
+        $root = Join-Path $env:LOCALAPPDATA 'SelfUseAI\ai-gateway\watch'
     }
     return Join-Path $root 'chat2api-watch-lifecycle-control.enabled'
 }
@@ -925,6 +1098,14 @@ function Start-GatewayService {
         [scriptblock]$Sleeper
     )
 
+    # Archival metadata remains readable; no desired-state or process action.
+    if (Test-GatewayServiceArchived -Key $Key) {
+        return [pscustomobject]@{
+            Key = $Key; Status = 'Archived'; Action = 'None'
+            Detail = 'M365 已退役；仅保留历史统计身份，不提供启停'
+        }
+    }
+
     $desc = $script:GatewayServiceDescriptors[$Key]
     # Rev13-W order: publish the intent, then make the independent watch entry
     # ready, then launch; the start outcome is recorded after the launch is
@@ -982,7 +1163,7 @@ function Start-GatewayService {
                 # The child inherits this environment: the launcher learns it
                 # runs hidden (so it records its exit instead of pausing in an
                 # invisible window) and the service learns who started it.
-                $childEnv = @{ AIGATEWAY_PUBLIC_HIDDEN_LAUNCH = '1' }
+                $childEnv = @{ SELFUSEAI_HIDDEN_LAUNCH = '1' }
                 $sourceProp = $desc.PSObject.Properties['LaunchSourceEnv']
                 if ($null -ne $sourceProp -and $sourceProp.Value) {
                     $childEnv[[string]$sourceProp.Value] = Get-GatewayActionSource
@@ -1002,6 +1183,12 @@ function Start-GatewayService {
                         [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process')
                     }
                 }
+            }
+            'HiddenExecutable' {
+                Start-Process -FilePath $startPath `
+                    -ArgumentList @($desc.StartArguments) `
+                    -WorkingDirectory (Split-Path -Parent $startPath) `
+                    -WindowStyle Hidden
             }
         }
     }
@@ -1045,6 +1232,14 @@ function Stop-GatewayService {
         # stop meant as a stop records the "stopped" intent.
         [switch]$KeepDesiredState
     )
+
+    # Archival metadata remains readable; no desired-state or process action.
+    if (Test-GatewayServiceArchived -Key $Key) {
+        return [pscustomobject]@{
+            Key = $Key; Status = 'Archived'; Action = 'None'
+            Detail = 'M365 已退役；仅保留历史统计身份，不提供启停'
+        }
+    }
 
     $desc = $script:GatewayServiceDescriptors[$Key]
     # Rev13-W: a deliberate stop commits the "stopped" intent FIRST (under the
@@ -1135,6 +1330,12 @@ function Stop-GatewayService {
                     return (Add-GatewayWatchToResult -Result $scoped -Watch $watch)
                 }
             }
+            'Port' {
+                $scoped = Stop-GatewayScopedProcesses -Key $Key -Descriptor $desc -LoopbackPortOnly
+                if ($scoped.Status -eq 'StopRefused') {
+                    return (Add-GatewayWatchToResult -Result $scoped -Watch $watch)
+                }
+            }
         }
     }
 
@@ -1177,6 +1378,14 @@ function Restart-GatewayService {
         [scriptblock]$Stopper,
         [scriptblock]$Sleeper
     )
+
+    # Archival metadata remains readable; no desired-state or process action.
+    if (Test-GatewayServiceArchived -Key $Key) {
+        return [pscustomobject]@{
+            Key = $Key; Status = 'Archived'; Action = 'None'
+            Detail = 'M365 已退役；仅保留历史统计身份，不提供启停'
+        }
+    }
 
     # The stop half keeps the intent; Start-GatewayService records "running"
     # AFTER the stop, so an instance's graceful shutdown is never newer than

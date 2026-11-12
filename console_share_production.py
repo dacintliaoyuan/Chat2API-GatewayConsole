@@ -24,13 +24,15 @@ Each adapter mirrors a REAL local product surface, honestly:
     protocol shape consumed at console_share_actions.py :519-531);
   - ``emergency_stop`` -> BrokerClientAdapter.emergency_stop
     (share_management.py :142 — the explicit ``stopped`` flag contract).
-  The default broker construction reuses the production loader
-  (``usagesrv._load_share_management_deployment``, usagesrv.py :949-1001)
-  which builds the share-management adapter in its actual construction
-  shape — ``BrokerClientAdapter(BrokerClient(lambda: NamedPipeBrokerTransport(
-  pipe_name), secret))`` (usagesrv.py :1000-1001). Absent/disabled
-  deployment config raises share_broker_unwired; a corrupt config keeps the
-  loader's fail-closed BrokerError (never a fallback).
+  The default broker construction uses the EXPLICIT loader the host wires
+  through ``configure_broker_loader`` (the old implicit
+  ``usagesrv._load_share_management_deployment`` import was removed in
+  E19-1-06). The loader builds the share-management adapter in its actual
+  construction shape — ``BrokerClientAdapter(BrokerClient(lambda:
+  NamedPipeBrokerTransport(pipe_name), secret))`` (usagesrv.py :1000-1001).
+  With no loader configured, or a loader returning None (absent/disabled
+  deployment config), the refusal is share_broker_unwired; a corrupt config
+  keeps the loader's fail-closed BrokerError (never a fallback).
 * ``production_funnel_control("on"/"off")`` — tailscale.exe argument-array
   calls ONLY (no shell, no interpolation, fixed argument shapes):
   - "off" strictly mirrors the watchdog Close-Public three steps
@@ -49,6 +51,11 @@ Each adapter mirrors a REAL local product surface, honestly:
   share_privilege_unwired (same convention as the connectivity seam).
 * ``production_connectivity_ok()`` — read-only ``tailscale status --json``
   parsing (see the second entry below for the structured contract).
+* ``production_share_public_url()`` — read-only public Funnel URL from the
+  SAME ``tailscale status --json`` surface: BackendState "Running" plus a
+  non-empty ``Self.DNSName`` -> ``https://<name>``; every unreadable,
+  non-Running or off-contract reading -> None (the public check reports
+  ``public_url_unavailable`` instead of probing a guessed host).
 * ``production_ts_service_control("start"/"stop")`` — the TS privileged
   layer executed THROUGH the broker adapter's public ``ts_service_control``
   verb over the restricted ``ts-service-control`` whitelist extension (the
@@ -135,6 +142,7 @@ start time — never any file content, and never a write/signal/restart.
 """
 
 import csv
+import inspect
 import json
 import math
 import os
@@ -143,16 +151,18 @@ import subprocess
 import sys
 import time
 import urllib.request
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
 from console_operations import OperationError
-from share_broker_ops import TailscaleServiceOps
+from share_broker_ops import TailscaleServiceOps, linux_entry_script
+from share_broker_protocol import RESULT_CODES
 from share_management import BrokerError
 
 # ---- fixed production defaults (deployment facts; injectable for tests) ----
 DEFAULT_TAILSCALE_EXE = r"C:\Program Files\Tailscale\tailscale.exe"  # watchdog :36
-DEFAULT_SHARE_TASK = "umshare-public-live"        # install-share-broker.ps1 :48
+DEFAULT_SHARE_TASK = "umshare-live"        # install-share-broker.ps1 :48
 DEFAULT_RUNNER_TIMEOUT_S = 10.0
 FUNNEL_OFF_SETTLE_S = 2.0                  # watchdog Close-Public settle (:238)
 _FUNNEL_UPSTREAM = "http://127.0.0.1:8100"  # chat2api/SHARING.md :33 target
@@ -162,7 +172,7 @@ DETAIL_MAX_CHARS = 200
 # :45 default RunRoot). The broker writes it atomically per cycle
 # (share_broker_server.py :484-506) with the lifecycle record mirrored at
 # :495. Deployment facts stay injectable — tests never read the real path.
-DEFAULT_BROKER_STATUS_PATH = r"C:\ProgramData\AIGatewayPublicShareRun\broker\broker-status.json"
+DEFAULT_BROKER_STATUS_PATH = r"C:\ProgramData\UMShareRun\broker\broker-status.json"
 
 # Watchdog verification token (watchdog-umshare.ps1 :244 `$out -match
 # 'https://[^\s]+'`): an HTTPS mapping token in the serve status output.
@@ -535,6 +545,44 @@ def production_connectivity_state(*, exe_path=DEFAULT_TAILSCALE_EXE,
     return state
 
 
+def production_share_public_url(*, exe_path=DEFAULT_TAILSCALE_EXE, runner=None,
+                               timeout_s=DEFAULT_RUNNER_TIMEOUT_S):
+    """Read-only public Funnel URL from ``tailscale status --json``.
+
+    The SAME status surface as the connectivity verdict, but the Funnel host is
+    taken from the self node's DNS name (``usagesrv._share_funnel_url`` uses the
+    same field). Returns ``https://<Self.DNSName>`` only when the backend is
+    Running and the name is non-empty; EVERY other reading (absent exe, launch
+    failure, non-zero exit, bad or non-object JSON, non-Running backend,
+    missing/empty DNSName) returns None. The public check then reports
+    ``public_url_unavailable`` and never probes a guessed host.
+    """
+    try:
+        proc = (runner or _default_runner)(
+            [exe_path, "status", "--json"], timeout_s)
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return None
+    if getattr(proc, "returncode", None) != 0:
+        return None
+    try:
+        payload = json.loads(_proc_text(proc))
+    except ValueError:
+        return None
+    if not isinstance(payload, dict) \
+            or payload.get("BackendState") != "Running":
+        return None
+    self_node = payload.get("Self")
+    if not isinstance(self_node, dict):
+        return None
+    name = self_node.get("DNSName")
+    if not isinstance(name, str):
+        return None
+    name = name.strip().strip(".").strip()
+    if not name:
+        return None
+    return "https://%s" % name
+
+
 def production_ts_service_status(*, runner=None,
                                  timeout_s=DEFAULT_RUNNER_TIMEOUT_S):
     """Read-only TS service observation (console_share_actions
@@ -614,7 +662,7 @@ def production_ts_service_control(action, *, broker=None):
             _CODE_UNWIRED_BROKER,
             "TS 服务控制：broker 管道不可达/未部署（error_code=%s）："
             "部署指针 um-share-deploy/install-share-broker.ps1"
-            "（需独立部署）；不冒充可用" % (code,))
+            "（部署授权包节 5）；不冒充可用" % (code,))
     elif code == "bad_request":
         raise OperationError(
             _CODE_EXTENSION_MISSING,
@@ -750,22 +798,68 @@ def production_drain(budget_s, interval_s, ctx, *, broker=None,
     return _drain_with(ops, budget_s, interval_s, ctx, sleeper=sleeper)
 
 
+_BROKER_LOADER = None
+
+
+def configure_supervision_paths(*, watch_dir=None, lock_dir=None):
+    """Explicitly wire the share supervision state/lock roots (E19-1-03).
+
+    The production defaults (``share_backend_supervision.DEFAULT_WATCH_DIR``
+    under LOCALAPPDATA and the in-package ``data/console-locks``) are correct
+    for the local Windows deployment but wrong for the cloud root, which owns
+    its own state tree. This forwards to
+    ``share_backend_supervision.configure_paths`` (the ONE implementation) so
+    the read/write faces used here — ``production_supervision_state`` and the
+    ``_production_intent_write`` seam — resolve against the configured dirs.
+
+    ``None`` keeps the production default for that root. The import is
+    deferred for the same reason as the other supervision seams: the console
+    action layer must not import the supervision module at assembly time.
+    """
+    from share_backend_supervision import configure_paths
+    configure_paths(watch_dir=watch_dir, lock_dir=lock_dir)
+
+
+def configure_broker_loader(loader):
+    """Explicitly wire the share broker construction loader (E19-1-06).
+
+    The production console no longer reaches back into ``usagesrv``: the old
+    implicit ``import usagesrv`` inside ``_default_broker`` is gone. The
+    host/composition root passes its own loader here before assembling the
+    seams; the cloud composition passes a broker object directly to
+    ``production_seams(broker=...)`` instead. ``loader()`` returns the
+    deployment adapter, or None when the deployment config is absent/disabled
+    (the honest share_broker_unwired refusal). Passing None resets this module
+    to the unwired state.
+    """
+    global _BROKER_LOADER
+    _BROKER_LOADER = loader
+
+
 def _default_broker():
-    """The REAL share-management deployment adapter, constructed in its
-    actual production shape by the loader (usagesrv.py :949-1001:
-    ``BrokerClientAdapter(BrokerClient(lambda: NamedPipeBrokerTransport(
-    pipe_name), secret))``). Absent/disabled deployment config raises
-    share_broker_unwired honestly with the deployment pointer; a corrupt
-    config keeps the loader's fail-closed BrokerError (never a fallback)."""
-    import usagesrv  # deferred: the production console process already
-    # holds this module; tests inject fakes and never import it here.
-    broker = usagesrv._load_share_management_deployment()
+    """Build the deployment broker adapter through the EXPLICIT loader.
+
+    The loader is configured by the host (``configure_broker_loader``) — this
+    module never imports ``usagesrv``. With no loader configured the refusal
+    is share_broker_unwired with the deployment pointer; a loader returning
+    None (absent/disabled deployment config) keeps the same honest refusal.
+    A corrupt config keeps the loader's fail-closed BrokerError (never a
+    fallback)."""
+    loader = _BROKER_LOADER
+    if loader is None:
+        raise OperationError(
+            _CODE_UNWIRED_BROKER,
+            "share 管理部署加载器未接线（broker loader 未配置）："
+            "broker 适配器不可用；部署指针：share-management.json / "
+            "um-share-deploy/install-share-broker.ps1（部署授权包节 5）；"
+            "宿主须先调用 configure_broker_loader()；不冒充可用")
+    broker = loader()
     if broker is None:
         raise OperationError(
             _CODE_UNWIRED_BROKER,
             "share 管理部署配置缺席/未启用（share-management.json）："
             "broker 适配器不可用；部署指针：um-share-deploy/"
-            "install-share-broker.ps1（需独立部署）；不冒充可用")
+            "install-share-broker.ps1（部署授权包节 5）；不冒充可用")
     return broker
 
 
@@ -775,6 +869,7 @@ class _ProductionBrokerOps:
     Seam surface FIXED to the orchestration's restricted primitives
     (console_share_actions.py :106-121) — nothing else is exposed:
 
+    * ``ensure_control_ready`` -> read-only broker status before opening;
     * ``start_host``/``stop_host``  -> broker ``start``/``host-stop`` verbs
       (share_management.py adapter: start re-confirms a running host via
       the broker-side three-evidence verify; host-stop is the SYSTEM-side
@@ -797,11 +892,63 @@ class _ProductionBrokerOps:
     def __init__(self, broker):
         self._broker = broker
 
-    def start_host(self):
+    def ensure_control_ready(self):
+        """Confirm the read-only channel before the open chain owns changes."""
         try:
-            self._broker.start()
+            snapshot = self._broker.snapshot()
+        except Exception:
+            # Transport details may contain local configuration or secrets.
+            snapshot = None
+        if (isinstance(snapshot, dict) and snapshot.get("state") == "ok"
+                and isinstance(snapshot.get("broker"), dict)):
+            return
+        code = snapshot.get("error_code") if isinstance(snapshot, dict) else None
+        if not isinstance(code, str) or code not in RESULT_CODES or code == "ok":
+            code = "unconfirmed"
+        raise OperationError(
+            "share_broker_unavailable",
+            "受限后台响应未确认（code=%s）；尚未启动或登录 8110。"
+            "请在本机控制台目录运行 Recover-ShareControl.bat，"
+            "允许 Windows 管理员确认后重新读取分层状态；"
+            "任务及账号状态未知，不据此判为已停止或失效" % code)
+
+    def start_host(self, explicit=False):
+        try:
+            # ``explicit`` is the operator's own start (it clears a persisted
+            # stop intent); a legacy broker seam without the keyword keeps the
+            # historical zero-argument start.
+            start = self._broker.start
+            try:
+                parameters = inspect.signature(start).parameters
+            except (TypeError, ValueError):
+                start()
+            else:
+                if "explicit" in parameters:
+                    start(explicit=explicit)
+                else:
+                    start()
             return True
-        except BrokerError:
+        except BrokerError as exc:
+            code = getattr(exc, "code", None)
+            if isinstance(code, str) and code in RESULT_CODES and code != "ok":
+                stage = getattr(exc, "stage", None)
+                if stage not in ("broker_start", "broker_start_confirmation"):
+                    stage = "broker_start"
+                reasons = {
+                    "access_denied": "权限不足",
+                    "forbidden": "受限后台拒绝此操作",
+                    "not_installed": "受限后台未部署或不可达",
+                    "capability_missing": "受限后台缺少启动支持",
+                    "deadline_exceeded": "启动确认超时",
+                    "blocked": "后台条件未满足，启动被阻止",
+                    "unconfirmed": "启动未获确认",
+                }
+                raise OperationError(
+                    "share_broker_" + code,
+                    "受限启动失败（stage=%s，code=%s）：%s；请读取分层诊断"
+                    % (stage, code, reasons.get(code, "后台未确认启动"))) from exc
+            # Legacy adapters have no structured metadata. Keep their old
+            # boolean refusal contract without exposing arbitrary error text.
             return False
 
     def stop_host(self):
@@ -828,8 +975,32 @@ class _ProductionBrokerOps:
     def emergency_stop(self):
         return self._broker.emergency_stop()
 
+    def repair_limits(self):
+        try:
+            result = self._broker.repair_limits()
+        except (BrokerError, OSError):
+            raise OperationError("share_repair_failed", "隔离修复后台不可达，公网保持关闭")
+        if not result.ok:
+            code = result.error_code
+            if code in ("bad_request", "capability_missing", "not_installed"):
+                raise OperationError("share_repair_unavailable", "当前管理员后台未安装隔离修复功能，需要先更新部署")
+            reasons = {
+                "firewall_not_satisfied": "WFP 已重建，但防火墙仍不符合要求，请重新检查安全条件",
+                "watchdog_not_boot_ready": "看门狗的开机监控尚未配置，需要管理员更新部署",
+                "wfp_repair_failed": "WFP 规则重建或强核验失败",
+                "repair_timeout": "隔离修复超时，结果未确认，请重新检查",
+                "gateway_not_closed": "分享入口未确认停止，未重建规则",
+                "stop_intent_unconfirmed": "后台未确认关闭意图，未重建规则",
+                "public_not_closed": "公网仍有映射，未重建规则",
+                "public_unconfirmed": "无法确认公网关闭，未重建规则",
+            }
+            if code in reasons:
+                raise OperationError("share_repair_failed", reasons[code] + "；分享不会自动开启")
+            raise OperationError("share_repair_failed", "隔离修复未确认成功，公网保持关闭")
+        return result.result
+
     def host_evidence(self, check):
-        """Restricted READ-ONLY host evidence (limits/faults), A9-1.
+        """Restricted READ-ONLY host evidence (limits/faults/watchdog).
 
         The broker's SYSTEM-privilege verdict passes through VERBATIM: the
         frozen reply dict {check, verdict, detail, checked_at} on success —
@@ -839,12 +1010,24 @@ class _ProductionBrokerOps:
         broker: bad_request): honest unconfirmed, never a fabricated verdict.
         The concrete object (watchdog script, run root, firewall rule, fault
         file) stays broker-side deployment configuration; the wire carries
-        the fixed check enum only."""
+        the fixed check enum only. The additive watchdog read retains a
+        stable unavailability reason for old or inaccessible brokers."""
         try:
             result = self._broker.host_evidence(check)
         except Exception:  # noqa: BLE001 - transport failures stay honest
+            if check == "watchdog":
+                return _HostEvidence({"check": check, "verdict": None,
+                    "detail": "watchdog_broker_unavailable", "checked_at": None})
             return None
         if not result.ok:
+            if check == "watchdog":
+                reason = ("watchdog_capability_missing" if result.error_code
+                          in ("bad_request", "capability_missing")
+                          else "watchdog_query_failed" if result.error_code
+                          in ("access_denied", "forbidden")
+                          else "watchdog_broker_unavailable")
+                return _HostEvidence({"check": check, "verdict": None,
+                    "detail": reason, "checked_at": None})
             return None
         payload = result.result
         if not isinstance(payload, dict) or "verdict" not in payload:
@@ -880,10 +1063,12 @@ def production_broker_ops(broker=None):
 # --port <port>) before ANY stop action, so a console stop can never kill
 # the production instance by pattern.
 DEFAULT_SHARE_BACKEND_PORT = 8110
-DEFAULT_UM_BASE_URL = "http://localhost:3000"
+DEFAULT_UM_BASE_URL = "https://chat.genai.um.edu.mo"
 
 
-def _backend_dir():
+def _backend_dir(config=None):
+    if config is not None:
+        return config.backend_dir
     override = os.environ.get("CONSOLE_SHARE_BACKEND_DIR")
     if override:
         if not os.path.isabs(override):
@@ -894,10 +1079,12 @@ def _backend_dir():
         raise ValueError(
             "CONSOLE_SHARE_BACKEND_DIR unresolvable: no LOCALAPPDATA "
             "(无回退；显式配置或设置环境变量)")
-    return os.path.join(local, "AIGatewayPublic", "share-backend")
+    return os.path.join(local, "SelfUseAI", "ai-gateway", "share-backend")
 
 
-def _backend_port():
+def _backend_port(config=None):
+    if config is not None:
+        return config.backend_port
     raw = os.environ.get("CONSOLE_SHARE_BACKEND_PORT")
     if not raw:
         return DEFAULT_SHARE_BACKEND_PORT
@@ -910,8 +1097,10 @@ def _backend_port():
     return port
 
 
-def _backend_base_url():
-    return os.environ.get("CONSOLE_SHARE_BACKEND_BASE_URL") or os.environ.get("AI_GATEWAY_OPENWEBUI_URL") or \
+def _backend_base_url(config=None):
+    if config is not None:
+        return config.backend_base_url
+    return os.environ.get("CONSOLE_SHARE_BACKEND_BASE_URL") or \
         DEFAULT_UM_BASE_URL
 
 
@@ -927,7 +1116,7 @@ def _backend_base_url():
 # The file lives in the DEPLOYED RunRoot run/ dir: ai-gateway/data carries an
 # explicit DENY ACE for um_share (a key there is unreadable by 8100 and silently
 # disables attribution), and run/live is removed and recreated by every deploy
-# (deploy-elevated.ps1 :820-822). A missing, unreadable or too-short file is
+# (deploy-elevated.ps1 :824-826). A missing, unreadable or too-short file is
 # NOT an error: it is the explicit "no attribution" state (a request 8110
 # cannot verify is recorded unattributed), which is why
 # share_attribution_status() reports it loudly instead of letting it hide.
@@ -937,12 +1126,16 @@ def _backend_base_url():
 # (``instance_loaded``, inferred from the gateway process start time vs this
 # file's mtime — see share_gateway_instance_probe). Generation/rotation
 # procedure: ai-gateway/SHARING.md.
-DEFAULT_SHARE_RUN_ROOT = r"C:\ProgramData\AIGatewayPublicShareRun"  # deploy -RunRoot default
+DEFAULT_SHARE_RUN_ROOT = r"C:\ProgramData\UMShareRun"  # deploy -RunRoot default
 SHARE_RUN_ROOT_ENV = "CONSOLE_SHARE_RUN_ROOT"
 SHARE_ATTRIBUTION_KEY_NAME = "share-attribution.key"
 SHARE_ATTRIBUTION_KEY_FILE_ENV = "CONSOLE_SHARE_ATTRIBUTION_KEY_FILE"
 SHARE_ATTRIBUTION_KEY_MIN_BYTES = 32   # = share_gateway/chat2api constant
 BACKEND_ATTRIBUTION_KEY_ENV = "CHAT2API_SHARE_ATTRIBUTION_KEY_FILE"
+BACKEND_SHARE_SECRET_KEY_ENV = "CHAT2API_SHARE_SECRET_KEY_FILE"
+# standards-config-05: the two identity paths the 8110 child also owns.
+BACKEND_REVOKE_STATE_ENV = "CHAT2API_SHARE_REVOKE_STATE_FILE"
+BACKEND_PRICE_TABLE_ENV = "CHAT2API_PRICE_TABLE_FILE"
 
 
 def _share_run_root():
@@ -1035,7 +1228,7 @@ _CIM_START_EPOCH_SCRIPT = (
     "{ [double]($_.CreationDate.ToUniversalTime().Ticks "
     "- %d) / 10000000.0 }")
 _INSTANCE_LOADED_RULE = "gateway_process_start_time_vs_key_file_mtime"
-# The 8100 share gateway runs as the dedicated share identity through the deployed
+# The 8100 share gateway runs as DAICNT\um_share through the deployed
 # wrapper, so its image is the um-share python: a listener with any other
 # image name is NOT assumed to be the gateway (2026-09-26 review F-16).
 SHARE_GATEWAY_IMAGE_NAMES = ("um-share-python.exe",)
@@ -1088,7 +1281,7 @@ def _process_start_epoch(pid, runner=None):
     """
     run = runner or _default_bytes_runner
     try:
-        proc = run(["powershell", "-NoProfile", "-Command",
+        proc = run(["pwsh", "-NoProfile", "-Command",
                     _CIM_START_EPOCH_SCRIPT % (int(pid),
                                                _DOTNET_EPOCH_TICKS)],
                    DEFAULT_RUNNER_TIMEOUT_S)
@@ -1158,7 +1351,7 @@ def _process_image_name(pid, runner=None):
     """
     run = runner or _default_bytes_runner
     try:
-        proc = run(["powershell", "-NoProfile", "-Command",
+        proc = run(["pwsh", "-NoProfile", "-Command",
                     _CIM_IMAGE_NAME_SCRIPT % int(pid)],
                    DEFAULT_RUNNER_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError):
@@ -1268,6 +1461,140 @@ def share_attribution_status(path=None, gateway_probe=None, ledger_path=None):
     }
 
 
+# standards-config-10: the same production facts the cloud root refuses, for
+# the public ``BackendConfig`` constructor.
+_BACKEND_FORBIDDEN_PORTS = frozenset({8000, 8001, 8100, 8110, 18096, 5901})
+_BACKEND_LOOPBACK_HOSTS = frozenset(("127.0.0.1", "::1", "localhost"))
+
+_BACKEND_CONFIG_PATH_FIELDS = (
+    "share_run_root", "share_secret_key", "attribution_key", "token",
+    "service_log", "usage_log", "control_token", "reauth_slot", "pid",
+    "backend_dir", "profile", "backend_gateway_dir")
+# Optional identity paths: validated only when the caller supplies them.
+_BACKEND_CONFIG_OPTIONAL_PATH_FIELDS = (
+    "revoke_state_file", "price_table_file")
+
+
+@dataclass(frozen=True)
+class BackendConfig:
+    """Explicit dedicated-backend configuration (E19-1-06).
+
+    The cloud composition root passes this object to
+    ``production_backend_ops(config=...)`` instead of relying on process-wide
+    environment variables. Every field is REQUIRED: a missing value is a caller
+    error, never a silent fallback to the historical env/default path. Paths must
+    be absolute, ``backend_port`` must be a real port and ``backend_base_url``
+    must be an HTTP(S) URL.
+
+    Field wiring:
+    * ``share_run_root`` / ``share_secret_key`` / ``attribution_key`` are the
+      shared deployment facts: ``_paths()`` carries them and ``_child_env()``
+      redirects ``CHAT2API_SHARE_SECRET_KEY_FILE``,
+      ``CHAT2API_SHARE_ATTRIBUTION_KEY_FILE`` and
+      ``CONSOLE_SHARE_RUN_ROOT`` to them;
+    * ``token`` / ``service_log`` / ``usage_log`` / ``control_token`` /
+      ``reauth_slot`` / ``pid`` are the dedicated instance's private state
+      files (``_paths()`` and ``_child_env()``);
+    * ``backend_dir`` is the dedicated state directory;
+    * ``profile`` is the dedicated instance's private browser profile dir
+      (``_paths()``/``_child_cmdline()``), NOT silently re-derived from
+      ``backend_dir``;
+    * ``backend_port`` / ``backend_base_url`` are the child's listener facts;
+    * ``backend_gateway_dir`` is the chat2api source dir the child runs from.
+    """
+
+    share_run_root: str
+    share_secret_key: str
+    attribution_key: str
+    token: str
+    service_log: str
+    usage_log: str
+    control_token: str
+    reauth_slot: str
+    pid: str
+    backend_dir: str
+    profile: str
+    backend_port: int
+    backend_base_url: str
+    backend_gateway_dir: str
+    # standards-config-05: the two identity paths the 8110 child also owns.
+    # ``revoke_state_file`` is the ONE revoke-state file 8100 reads and 8110
+    # writes (``chat2api.py`` reads ``CHAT2API_SHARE_REVOKE_STATE_FILE``);
+    # ``price_table_file`` is the price document the child prices its ledger
+    # with. Both used to be CloudConfig fields with NO consumer: the 8110 child
+    # fell back to the deployment default, so the console and the child read
+    # DIFFERENT files. They are REQUIRED (no silent fallback) and forwarded in
+    # ``_child_env``.
+    # The two identity paths the 8110 child also owns. ``None`` means the
+    # caller built its own path map without them (the existing tests do), so
+    # ``_child_env`` writes no redirect; a caller that supplies them gets the
+    # exact same paths the console reads.
+    revoke_state_file: str | None = None
+    price_table_file: str | None = None
+
+    def __post_init__(self):
+        for name in _BACKEND_CONFIG_PATH_FIELDS:
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    "BackendConfig %s must be a non-empty path" % name)
+            if not os.path.isabs(value):
+                raise ValueError(
+                    "BackendConfig %s must be absolute" % name)
+        for name in _BACKEND_CONFIG_OPTIONAL_PATH_FIELDS:
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    "BackendConfig %s must be a non-empty path" % name)
+            if not os.path.isabs(value):
+                raise ValueError(
+                    "BackendConfig %s must be absolute" % name)
+        port = self.backend_port
+        if isinstance(port, bool) or not isinstance(port, int):
+            raise ValueError("BackendConfig backend_port must be an integer")
+        if not 1 <= port <= 65535:
+            raise ValueError("BackendConfig backend_port out of range")
+        url = self.backend_base_url
+        if not isinstance(url, str) or not url:
+            raise ValueError(
+                "BackendConfig backend_base_url must be a non-empty URL")
+        if not url.startswith(("http://", "https://")):
+            raise ValueError(
+                "BackendConfig backend_base_url must be http(s)")
+        # standards-config-10: this public constructor is the LAST place a
+        # caller can name the three production facts the cloud root already
+        # refuses. Without them a direct caller could point the dedicated 8110
+        # child at a production port, a non-loopback upstream, or a gateway
+        # directory outside the package.
+        if port in _BACKEND_FORBIDDEN_PORTS:
+            raise ValueError(
+                "BackendConfig backend_port must not be a production port "
+                "(%d is in %s)"
+                % (port, ", ".join(str(p) for p in
+                                   sorted(_BACKEND_FORBIDDEN_PORTS))))
+        from urllib.parse import urlsplit
+        host = (urlsplit(url).hostname or "").lower()
+        if host not in _BACKEND_LOOPBACK_HOSTS:
+            raise ValueError(
+                "BackendConfig backend_base_url must name a loopback host")
+        gateway_dir = self.backend_gateway_dir
+        if os.path.basename(gateway_dir.rstrip("/\\")) != "chat2api":
+            raise ValueError(
+                "BackendConfig backend_gateway_dir must be the in-package "
+                "chat2api source directory")
+        try:
+            resolved = Path(gateway_dir).resolve()
+            package = Path(__file__).resolve().parents[1]
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                "BackendConfig backend_gateway_dir is not usable: %s" % exc)
+        if resolved != package and package not in resolved.parents:
+            raise ValueError(
+                "BackendConfig backend_gateway_dir must be inside the package")
+
+
 class _ProductionBackendOps:
     """Start/stop/verify the dedicated share-backend process.
 
@@ -1289,14 +1616,38 @@ class _ProductionBackendOps:
     """
 
     def __init__(self, gateway_dir=None, port=None, base_url=None,
-                 spawner=None, stopper=None):
+                 spawner=None, stopper=None, config=None):
         self._gateway_dir = gateway_dir   # chat2api source dir
         self._port = port
         self._base_url = base_url
         self._spawner = spawner           # test seam: (cmdline, env) -> proc
         self._stopper = stopper           # test seam: (pid) -> None|True
+        self._config = config             # explicit BackendConfig or None
 
     def _paths(self):
+        if self._config is not None:
+            # Explicit cloud configuration: every value comes from the
+            # BackendConfig object — no environment read, no repository
+            # default. The profile is the configured private browser state
+            # (a deployment may place it outside the backend dir).
+            config = self._config
+            d = _backend_dir(config)
+            return {
+                "dir": d,
+                "port": self._port or _backend_port(config),
+                "token": config.token,
+                "profile": config.profile,
+                "log": config.service_log,
+                "ledger": config.usage_log,
+                "control_token": config.control_token,
+                "reauth_slot": config.reauth_slot,
+                "attribution_key": config.attribution_key,
+                "pid": config.pid,
+                "share_run_root": config.share_run_root,
+                "share_secret_key": config.share_secret_key,
+                "revoke_state_file": config.revoke_state_file,
+                "price_table_file": config.price_table_file,
+            }
         d = _backend_dir()
         port = self._port or _backend_port()
         return {
@@ -1307,6 +1658,14 @@ class _ProductionBackendOps:
             "log": os.path.join(d, "share-backend.log"),
             "ledger": os.path.join(d, "usage-share-backend.jsonl"),
             "control_token": os.path.join(d, "control-token"),
+            # D15-4: the cross-instance reauthentication slot MUST live in a
+            # persistent WRITABLE path. The release <dir>/data is read-only
+            # under the console unit's ProtectSystem=strict, which made every
+            # session start fail with slot_unavailable. This directory is the
+            # console's own ReadWritePaths state dir (the same one that already
+            # holds token/log/ledger/pid), so both the console and its 8110
+            # child can coordinate the lease there.
+            "reauth_slot": os.path.join(d, "chat2api-reauth.state"),
             # The ONE key file BOTH ends point at (8100 reads it once at
             # startup; this instance re-stats it per request). Resolved by the
             # SAME function the status read surface uses, so the injected path
@@ -1316,17 +1675,17 @@ class _ProductionBackendOps:
         }
 
     def _child_cmdline(self, paths):
-        # --login-timeout 600 (chat2api.py:6330 default 180): the dedicated
-        # instance's SSO window stays open 10 minutes instead of 3 — the
-        # first real attempt timed out exactly at 180s while the maintainer
-        # was away (share-backend.log 19:14:22 RuntimeError). Production
+        # --login-timeout 1800 (chat2api.py:9681 default 180): D18-6 fixes
+        # the dedicated instance's human login window at 30 minutes. The
+        # browser is on the private Xvfb display, never public. Production
         # chat2api (port 8000) is unaffected: this flag only reaches THIS
-        # dedicated child's command line.
+        # dedicated child's command line; N3 adds the aggregate switch here.
         return [sys.executable, "chat2api.py",
-                "--base-url", self._base_url or _backend_base_url(),
-                "--port", str(paths["port"]),
-                "--profile", paths["profile"],
-                "--login-timeout", str(_BACKEND_LOGIN_TIMEOUT_S)]
+                "--base-url", self._base_url or _backend_base_url(
+                    self._config),
+                "--port", str(paths["port"]), "--profile", paths["profile"],
+                "--login-timeout", str(_BACKEND_LOGIN_TIMEOUT_S),
+                "--nonstream-upstream-aggregate"]
 
     def _child_env(self, paths):
         env = dict(os.environ)
@@ -1334,6 +1693,40 @@ class _ProductionBackendOps:
         env["CHAT2API_SERVICE_LOG"] = paths["log"]
         env["CHAT2API_USAGE_LOG"] = paths["ledger"]
         env["CHAT2API_CONTROL_TOKEN_FILE"] = paths["control_token"]
+        # standards-config-05: the shared run root is a real child input
+        # (``_share_run_root()`` reads this exact env var). It was carried by
+        # ``_paths()`` but never reached the child, so the 8110 process fell
+        # back to the deployment default while the console used the configured
+        # root. A caller that builds its own path map (the existing tests do)
+        # simply omits the key, and then no redirect is written.
+        if "share_run_root" in paths:
+            env[SHARE_RUN_ROOT_ENV] = paths["share_run_root"]
+        # standards-config-05: the revoke-state and price-table identity paths.
+        # Without them the 8110 child silently fell back to the deployment
+        # default (``/var/lib/um-share/share-revoke.state`` and the
+        # in-package ``data/prices.json``), so the console and the child read
+        # DIFFERENT files even though CloudConfig named one path.
+        if "revoke_state_file" in paths:
+            env[BACKEND_REVOKE_STATE_ENV] = paths["revoke_state_file"]
+        if "price_table_file" in paths:
+            env[BACKEND_PRICE_TABLE_ENV] = paths["price_table_file"]
+        if self._config is not None:
+            # Explicit cloud configuration: the child's shared secrets and
+            # reauthentication slot come from the BackendConfig object. The
+            # slot is ALWAYS redirected here (the explicit config names the
+            # writable path), independent of os.name.
+            env["CHAT2API_REAUTH_SLOT_FILE"] = paths["reauth_slot"]
+            env[BACKEND_SHARE_SECRET_KEY_ENV] = paths["share_secret_key"]
+        # D15-4: on POSIX the release <dir>/data is read-only under the
+        # console unit's ProtectSystem=strict, which made every session start
+        # fail with slot_unavailable. Point the 8110 child at the console's
+        # persistent writable state dir; the child keeps its own rolling
+        # attempt ledger and cross-process mutex unchanged.
+        # On Windows the historical default is already writable AND shared with
+        # the private 8000 chain, so it stays byte-for-byte: a second slot
+        # path here would silently split the cross-instance mutex.
+        elif os.name == "posix":
+            env["CHAT2API_REAUTH_SLOT_FILE"] = paths["reauth_slot"]
         # Same pattern as the four redirects above, but this value is NOT a
         # private state file: it is the ONE shared key file 8100 also reads
         # (chat2api.py :1525-1528 prefers this env var over the repository
@@ -1343,7 +1736,32 @@ class _ProductionBackendOps:
         # The child's startup record names who started it (chat2api.py
         # launch_source); this instance is only ever started by a console action.
         env["CHAT2API_LAUNCH_SOURCE"] = "console"
+        # R13: ONLY this dedicated 8110 child gets the aggregate scope. It is
+        # built here rather than copied from the console environment, so an
+        # unrelated parent value cannot widen the selection; the private 8000
+        # chain is not spawned by this class and never receives it.
+        env[BACKEND_AGGREGATE_SCOPE_ENV] = _backend_aggregate_scope_json()
         return env
+
+    def _spawn(self, cmdline, env, creationflags):
+        """Spawn the detached child; Windows keeps the historical flags.
+
+        The Linux adapter overrides this with its own session so the child
+        survives the console process (there is no DETACHED_PROCESS there).
+        """
+        return subprocess.Popen(
+            cmdline,
+            cwd=self._gateway_dir or ".",
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags, close_fds=True)
+
+    def _force_stop(self, pid):
+        """Force-stop one identity-verified PID; Windows keeps taskkill."""
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       capture_output=True, timeout=15)
 
     # Exit records L5/L6 (round 19): the PARENT side of this instance's life.
     # The child's own log cannot hold these: a taskkill /F never runs the
@@ -1434,14 +1852,8 @@ class _ProductionBackendOps:
                 proc = self._spawner(self._child_cmdline(paths),
                                      self._child_env(paths))
             else:
-                proc = subprocess.Popen(
-                    self._child_cmdline(paths),
-                    cwd=self._gateway_dir or ".",
-                    env=self._child_env(paths),
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=creationflags, close_fds=True)
+                proc = self._spawn(self._child_cmdline(paths),
+                                   self._child_env(paths), creationflags)
         except OSError as exc:
             raise OperationError(
                 "share_backend_failed",
@@ -1483,8 +1895,7 @@ class _ProductionBackendOps:
         if self._stopper is not None:
             self._stopper(pid)
         else:
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                           capture_output=True, timeout=15)
+            self._force_stop(pid)
         alive = self._pid_alive(pid)
         self._record(paths, "force stop pid=%d port=%d by=taskkill result=%s"
                      % (pid, paths["port"], "alive" if alive else "dead"))
@@ -1632,7 +2043,7 @@ class _ProductionBackendOps:
         creation time reads None — never a guessed identity."""
         try:
             out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
+                ["pwsh", "-NoProfile", "-Command",
                  "(Get-CimInstance Win32_Process -Filter "
                  "'ProcessId=%d') | ForEach-Object { "
                  "$_.ExecutablePath + [char]10 + $_.CommandLine + "
@@ -1851,8 +2262,7 @@ class _ProductionBackendOps:
             if self._stopper is not None:
                 self._stopper(pid_before)
             else:
-                subprocess.run(["taskkill", "/PID", str(pid_before),
-                                "/T", "/F"], capture_output=True, timeout=15)
+                self._force_stop(pid_before)
             deadline = time.monotonic() + max(0.0, float(stop_budget_s))
             while time.monotonic() < deadline:
                 if not self._pid_alive(pid_before):
@@ -1916,6 +2326,193 @@ class _ProductionBackendOps:
             return True
         except Exception:  # noqa: BLE001
             return False
+
+
+# ---------------------------------------------------------------------------
+# Linux restricted dedicated-backend gate (2026-10-30 cloud role)
+# ---------------------------------------------------------------------------
+# The SAME pid file, identity and lifecycle contract as the Windows gate above;
+# only the OS primitives differ. Nothing here calls tasklist, netstat,
+# PowerShell/CIM or taskkill, and no Windows DACL is fabricated:
+#   * liveness is os.kill(pid, 0) (ProcessLookupError = gone; EPERM = exists
+#     but not ours, which is never signalled);
+#   * identity is the REAL /proc/<pid> command line (the expected script
+#     marker plus the exact --port <port> pair) and the /proc/<pid>/exe
+#     symlink, compared with realpath so a symlinked interpreter still
+#     matches;
+#   * the listener fact is the kernel's own /proc/net/tcp{,6} LISTEN table
+#     for 127.0.0.1:<port>;
+#   * the process creation time comes from /proc/<pid>/stat starttime plus
+#     /proc/stat btime (PID reuse detection stays intact);
+#   * a force stop is SIGTERM then SIGKILL, never taskkill.
+# The instance record/pid-file writers and the graceful /admin/shutdown
+# route are inherited byte for byte.
+
+
+def _linux_proc_read(proc_root, pid, name):
+    try:
+        return Path(proc_root, str(int(pid)), name).read_text(
+            encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        return None
+
+
+def _linux_proc_root_read(proc_root, *parts):
+    """Read a file directly under the proc root (stat, net/tcp, net/tcp6)."""
+    try:
+        return Path(proc_root, *parts).read_text(
+            encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        return None
+
+
+def _linux_proc_creation_epoch(proc_root, pid):
+    """Creation epoch from /proc/<pid>/stat starttime + /proc/stat btime."""
+    stat_text = _linux_proc_read(proc_root, pid, "stat")
+    btime_text = _linux_proc_root_read(proc_root, "stat")
+    if not stat_text or not btime_text:
+        return None
+    try:
+        tail = stat_text[stat_text.rindex(")") + 2:].split()
+        start_ticks = int(tail[19])
+    except (ValueError, IndexError):
+        return None
+    btime = None
+    for line in btime_text.splitlines():
+        if line.startswith("btime "):
+            try:
+                btime = int(line.split()[1])
+            except (ValueError, IndexError):
+                btime = None
+            break
+    if btime is None:
+        return None
+    try:
+        ticks = int(os.sysconf("SC_CLK_TCK"))
+    except (ValueError, OSError, AttributeError):
+        ticks = 100
+    if ticks <= 0:
+        ticks = 100
+    return float(btime) + float(start_ticks) / float(ticks)
+
+
+class _LinuxBackendOps(_ProductionBackendOps):
+    """POSIX (Linux) dedicated-backend gate.
+
+    ``proc_root`` and ``kill_fn`` are injectable OS boundaries for offline
+    tests; production uses the real /proc and os.kill. The pid file stays the
+    pid authority, the instance record stays the identity aid, and every stop
+    re-verifies the exact command line before signalling.
+    """
+
+    def __init__(self, gateway_dir=None, port=None, base_url=None,
+                 spawner=None, stopper=None, config=None, *,
+                 proc_root="/proc",
+                 kill_fn=None, exe_reader=None,
+                 clock=time.monotonic, sleeper=time.sleep):
+        super().__init__(gateway_dir=gateway_dir, port=port,
+                         base_url=base_url, spawner=spawner,
+                         stopper=stopper, config=config)
+        self._proc_root = str(proc_root)
+        self._kill = kill_fn or os.kill
+        self._exe_reader = exe_reader or os.readlink
+        self._clock = clock
+        self._sleep = sleeper
+
+    def _spawn(self, cmdline, env, creationflags):
+        # POSIX has no DETACHED_PROCESS: the child gets its OWN session so
+        # the console process can exit without taking the backend down.
+        return subprocess.Popen(
+            cmdline, cwd=self._gateway_dir or ".", env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+            close_fds=True)
+
+    def _force_stop(self, pid):
+        # Identity was verified by the CALLER; SIGTERM first, then SIGKILL
+        # only when the process is still alive.
+        try:
+            self._kill(int(pid), 15)   # SIGTERM
+        except OSError:
+            return
+        deadline = self._clock() + 10.0
+        while self._clock() < deadline:
+            if self._pid_alive(pid) is False:
+                return
+            self._sleep(0.05)
+        try:
+            self._kill(int(pid), 9)    # SIGKILL
+        except OSError:
+            return
+
+    def _pid_alive(self, pid):
+        try:
+            self._kill(int(pid), 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+
+    def _pid_process(self, pid):
+        """(image, cmdline, creation_epoch) from the REAL /proc/<pid>."""
+        text = _linux_proc_read(self._proc_root, pid, "cmdline")
+        cmdline = None
+        if text:
+            cmdline = " ".join(part for part in text.split("\x00") if part)
+        image = None
+        try:
+            image = self._exe_reader(
+                os.path.join(self._proc_root, str(int(pid)), "exe"))
+        except OSError:
+            image = None
+        return (image, cmdline,
+                _linux_proc_creation_epoch(self._proc_root, pid))
+
+    def _identity_ok(self, paths, image, cmdline):
+        if not image or not cmdline:
+            return False
+        if os.path.realpath(image) != os.path.realpath(sys.executable):
+            return False
+        tokens = cmdline.split()
+        # The entry is the interpreter's script operand, never a script name
+        # that merely appears among the arguments (e.g. after ``python -c``).
+        entry = linux_entry_script(tokens)
+        script_ok = entry is not None and \
+            os.path.basename(entry) == "chat2api.py"
+        port_ok = False
+        for i, t in enumerate(tokens):
+            if t == "--port" and i + 1 < len(tokens) \
+                    and tokens[i + 1] == str(paths["port"]):
+                port_ok = True
+        return script_ok and port_ok
+
+    def _port_listening(self, port):
+        """Kernel LISTEN fact from /proc/net/tcp{,6} for 127.0.0.1:<port>.
+
+        The hex port is the local address' second half and state 0A is LISTEN;
+        an unreadable table is an honest False (no netstat is ever run).
+        """
+        wanted = "%04X" % int(port)
+        for name in ("tcp", "tcp6"):
+            text = _linux_proc_root_read(self._proc_root, "net", name)
+            if text is None:
+                continue
+            for line in text.splitlines()[1:]:
+                parts = line.split()
+                if len(parts) < 4 or parts[3] != "0A":
+                    continue
+                local = parts[1]
+                if ":" not in local:
+                    continue
+                address, _, hex_port = local.rpartition(":")
+                if hex_port.upper() != wanted:
+                    continue
+                if address.upper() in ("0100007F", "00000000"):
+                    return True
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -2069,7 +2666,10 @@ def production_supervision_state():
     try:
         import share_backend_supervision
         state = share_backend_supervision.read_watch_state()
-        state_path = share_backend_supervision.DEFAULT_STATE_PATH
+        # The ACTIVE state path: a composition root that injected its own
+        # watch dir (configure_supervision_paths) must be reported here too,
+        # otherwise the page would name a file the supervisor never writes.
+        state_path = share_backend_supervision.active_state_path()
     except Exception:  # noqa: BLE001 - 读面自身故障按未提供，绝不冒充监督在跑
         return None
     if not isinstance(state, dict) or state.get("unreadable"):
@@ -2153,9 +2753,10 @@ def _reauth_refusal_message(detail):
     live session in the other instance, the rolling attempt cap, an
     unavailable lock) really is transient."""
     if (detail.endswith(":slot_corrupt")
-            or detail.endswith(":slot_unreadable")):
-        return ("该实例的跨实例状态文件已损坏或不可读，重试不会改变结果："
-                "需由运维删除 data/chat2api-reauth.state 后再触发登录")
+            or detail.endswith(":slot_unreadable")
+            or detail.endswith(":slot_unavailable")):
+        return ("该实例的跨实例状态文件已损坏、不可读或不可写，重试不会改变结果："
+                "需由运维清理专用后端的 chat2api-reauth.state 并核对目录权限")
     return "请稍后重试或点「刷新状态」核对"
 
 
@@ -2223,11 +2824,28 @@ def _backend_health_snapshot(paths, opener=None):
 
 
 def _reauth_result(accepted, state, label, triggered, polled, instance,
-                    reason, note):
-    """The frozen A9-2 result shape (contract §4.2); ``note`` bounded."""
+                    reason, note, error=None, recovery=None):
+    """The frozen A9-2 result shape (contract §4.2) + A1/A2 authoritative
+    ``error``/``recovery`` fields; ``note`` bounded."""
     return {"accepted": accepted, "state": state, "label": label,
             "triggered": triggered, "polled": polled, "instance": instance,
-            "reason": reason, "note": _shorten(note)}
+            "reason": reason, "note": _shorten(note),
+            "error": error, "recovery": recovery}
+
+
+def _login_result(triggered, state, label, started_here, restored, note,
+                   error=None, recovery=None):
+    """The frozen login result shape + A1 authoritative ``error``/``recovery``.
+
+    ``state`` keeps its historical values (valid/logging_in/needs_login/
+    failed/unknown). ``error`` is None or the instance's own stable code; a
+    refusal (``reauth_refused:*``) therefore never reads as a credential
+    failure. ``recovery`` is the bounded next step (action + earliest allowed
+    retry), never a secret.
+    """
+    return {"triggered": triggered, "state": state, "label": label,
+            "started_here": started_here, "restored": restored,
+            "note": _shorten(note), "error": error, "recovery": recovery}
 
 
 def production_backend_reauth(*, ops=None, control=None, urlopen_fn=None,
@@ -2243,9 +2861,11 @@ def production_backend_reauth(*, ops=None, control=None, urlopen_fn=None,
     * a missing control token refuses with share_backend_login_unwired and
       ZERO HTTP;
     * ``valid`` = zero side effects; ``logging_in`` = no second window;
-      ``failed`` = refuse the rejected credential; ``needs_login`` = POST
-      /admin/auth/login (non-202 refuses); ``unknown``/unreadable = no
-      trigger at all (unknown is NOT expired);
+      a true credential ``failed`` refuses the rejected credential, while
+      ``superseded``/``BrowserDisabled``/``manual_takeover:*`` are reported
+      as non-credential failures (no refusal, no trigger);
+      ``needs_login`` = POST /admin/auth/login (non-202 refuses);
+      ``unknown``/unreadable = no trigger at all (unknown is NOT expired);
     * the poll window (``poll_attempts`` x ``poll_interval_s``) reports
       valid/logging_in, preserves a ``reauth_refused:`` reason verbatim and
       raises share_backend_reauth_refused, raises
@@ -2282,22 +2902,41 @@ def production_backend_reauth(*, ops=None, control=None, urlopen_fn=None,
     payload = _auth_status_payload(paths, token, opener=opener)
     if payload is None:
         # Unreadable != expired: NEVER trigger on an unknown state.
+        error, recovery = _auth_outcome(
+            "unconfirmed", "auth_status_unreadable", None)
         return _reauth_result(
             True, "unconfirmed", None, False, 0, instance,
             "auth_status_unreadable",
             "专用后端认证状态不可读：未触发认证（未知 ≠ 过期）；"
-            "请稍后重试或点「刷新状态」核对")
+            "请稍后重试或点「刷新状态」核对",
+            error=error, recovery=recovery)
     current = payload["state"]
     label = payload.get("label")
     error = payload.get("error")
     error = error if isinstance(error, str) and error else None
+    instance_recovery = payload.get("recovery")
+    if not isinstance(instance_recovery, dict):
+        instance_recovery = None
     if current == "valid":
         return _reauth_result(True, "valid", label, False, 0, instance,
-                              None, "专用后端上游认证已有效（零副作用）")
+                              None, "专用后端上游认证已有效（零副作用）",
+                              error=None, recovery=None)
     if current == "logging_in":
+        _error, recovery = _auth_outcome("logging_in", error,
+                                         instance_recovery)
         return _reauth_result(True, "logging_in", label, False, 0,
-                              instance, None, "登录已在进行中：不重复开窗")
+                              instance, None, "登录已在进行中：不重复开窗",
+                              error=_error, recovery=recovery)
     if current == "failed":
+        note = _non_credential_failure_note(error)
+        if note is not None:
+            # Not a credential verdict: no trigger, no refusal, no restart.
+            _error, recovery = _auth_outcome(
+                "failed", error, instance_recovery)
+            return _reauth_result(
+                True, "failed", label, False, 0, instance,
+                "instance_state_failed", note,
+                error=_error, recovery=recovery)
         raise OperationError(
             "share_backend_reauth_refused",
             "专用后端上次认证已被拒绝（%s）：绝不重试已被拒绝的凭据"
@@ -2305,11 +2944,14 @@ def production_backend_reauth(*, ops=None, control=None, urlopen_fn=None,
     if current != "needs_login":
         # A readable state outside the frozen branches (e.g. "invalid"):
         # unknown != expired — never trigger on it.
+        reason = "instance_state_%s" % current
+        _error, recovery = _auth_outcome("unconfirmed", reason,
+                                         instance_recovery)
         return _reauth_result(
-            True, "unconfirmed", label, False, 0, instance,
-            "instance_state_%s" % current,
+            True, "unconfirmed", label, False, 0, instance, reason,
             "专用后端报告认证状态 %s：未触发（未知 ≠ 过期），"
-            "请点「刷新状态」核对" % current)
+            "请点「刷新状态」核对" % current,
+            error=_error, recovery=recovery)
     if cancel_check is not None:
         cancel_check()
     trigger = urllib.request.Request(
@@ -2354,20 +2996,38 @@ def production_backend_reauth(*, ops=None, control=None, urlopen_fn=None,
         label = payload.get("label")
         error = payload.get("error")
         error = error if isinstance(error, str) and error else None
+        instance_recovery = payload.get("recovery")
+        if not isinstance(instance_recovery, dict):
+            instance_recovery = None
         if current == "valid":
             return _reauth_result(True, "valid", label, True, polled,
-                                  instance, None, "登录完成（上游认证有效）")
+                                  instance, None, "登录完成（上游认证有效）",
+                                  error=None, recovery=None)
         if current == "logging_in":
+            _error, recovery = _auth_outcome("logging_in", error,
+                                             instance_recovery)
             return _reauth_result(
                 True, "logging_in", label, True, polled, instance, None,
-                "登录进行中——请在专用实例浏览器窗口完成上游登录，"
-                "然后点「刷新状态」确认")
+                "登录进行中——请在专用实例浏览器窗口完成 UM 登录，"
+                "然后点「刷新状态」确认",
+                error=_error, recovery=recovery)
         if error is not None and error.startswith("reauth_refused:"):
             raise OperationError(
                 "share_backend_reauth_refused",
                 "专用实例拒绝了本次登录会话（%s）——未开启新的提交窗口；%s"
                 % (error, _reauth_refusal_message(error)))
         if current == "failed":
+            note = _non_credential_failure_note(error)
+            if note is not None:
+                # The trigger was accepted, but the terminal failure never
+                # judged the credential: report it as such, never as a
+                # credential rejection.
+                _error, recovery = _auth_outcome(
+                    "failed", error, instance_recovery)
+                return _reauth_result(
+                    True, "failed", label, True, polled, instance,
+                    "instance_state_failed", note,
+                    error=_error, recovery=recovery)
             raise OperationError(
                 "share_backend_reauth_failed",
                 "专用后端登录失败（%s）" % (error or label or "failed"))
@@ -2377,7 +3037,7 @@ def production_backend_reauth(*, ops=None, control=None, urlopen_fn=None,
     raise OperationError(
         "share_backend_reauth_manual",
         "认证窗口结束仍未见有效会话（最后状态=%s）：需人工在本机完成 "
-        "上游 SSO 后点「刷新状态」核对" % (last_state or "unknown"))
+        "UM SSO 后点「刷新状态」核对" % (last_state or "unknown"))
 
 
 def _production_intent_write(state, *, source):
@@ -2454,6 +3114,7 @@ def production_backend_observe(forget_stale=True):
     running = ops.verify_running(forget_stale=forget_stale)
     out = {"running": running, "auth_state": None, "auth_label": None,
            "observed_at": None, "auth_evidence": None, "auth_gate": None,
+           "auth_error": None, "auth_recovery": None,
            "health_reachable": None, "upstream_reachability": None,
            "attribution": share_attribution_status(
                paths["attribution_key"], ledger_path=paths["ledger"])}
@@ -2473,6 +3134,10 @@ def production_backend_observe(forget_stale=True):
         out["auth_evidence"] = evidence if isinstance(evidence, dict) else None
         gate = payload.get("gate")
         out["auth_gate"] = gate if isinstance(gate, dict) else None
+        error = payload.get("error")
+        out["auth_error"] = error if isinstance(error, str) else None
+        recovery = payload.get("recovery")
+        out["auth_recovery"] = recovery if isinstance(recovery, dict) else None
     reachable, health = _backend_health_snapshot(paths)
     out["health_reachable"] = reachable
     if isinstance(health, dict):
@@ -2493,33 +3158,129 @@ def production_backend_pid_state():
     return production_backend_ops().backend_pid_state()
 
 
-def _backend_auth_state(paths, opener=None):
-    """``(state, label, error)`` from the dedicated instance's auth/status.
+def _backend_auth_observation(paths, opener=None):
+    """``(state, label, error, recovery)`` from the dedicated instance's
+    auth/status.
 
     ``error`` is the instance's own reason string (for example
     ``manual_takeover:umpass_prefill_missing`` or
     ``reauth_refused:global_session_active``), or None when it reports no
-    failure. A missing/unreadable status endpoint stays "unknown" and is never
+    failure. ``recovery`` is the instance's OWN recovery summary
+    (``{state, next_attempt_epoch, pause_reason, ...}``) or None; it names
+    the next allowed attempt instead of making the console guess a wait.
+    A missing/unreadable status endpoint stays "unknown" and is never
     turned into a fabricated state. The read is the SAME
     :func:`_auth_status_payload` the A9-2/A9-1 readers use (one parser,
     byte-for-byte behaviour)."""
     token, _reason = _backend_control_token(paths)
     if token is None:
-        return ("unknown", None, None)
+        return ("unknown", None, None, None)
     payload = _auth_status_payload(paths, token, opener=opener)
     if payload is None:
-        return ("unknown", None, None)
+        return ("unknown", None, None, None)
     error = payload.get("error")
+    recovery = payload.get("recovery")
     return (payload["state"], payload.get("label"),
-            error if isinstance(error, str) and error else None)
+            error if isinstance(error, str) and error else None,
+            recovery if isinstance(recovery, dict) else None)
+
+
+def _non_credential_failure_note(error):
+    """The honest note for a ``failed`` state that never judged the credential.
+
+    The MFA/manual takeover, closed-window, exhausted-recovery, missing
+    browser/display/edge, browser config and token-save failures are NOT
+    authentication rejections. Returns None for every other failure (a real
+    credential/auth failure).
+    """
+    if not isinstance(error, str):
+        return None
+    if error.startswith("superseded"):
+        return "本次登录流程已被新流程取代；未判凭据失败"
+    if error == "BrowserDisabled":
+        return "专用实例浏览器不可用；未判凭据失败"
+    if error.startswith("manual_takeover:"):
+        return "专用实例已转入人工接管；未判凭据失败"
+    if error in ("umpass_mfa_required", "umpass_prefill_missing"):
+        return "UM 登录需要本人完成 MFA 或人工接管；未判凭据失败"
+    if error == "timeout":
+        return "UM 登录窗口等待超时；未判凭据失败，请按原身份回查"
+    if error in ("window_closed", "attempts_exhausted"):
+        return "登录窗口已关闭或自动恢复尝试已用尽；未判凭据失败，请按原身份回查"
+    if error in ("edge_missing", "browser_missing", "display_missing",
+                  "browser_config_error", "token_save_failed"):
+        return "专用实例的浏览器/显示或凭据保存环境不可用；未判凭据失败，请修复环境后重试"
+    return None
+
+
+def _auth_outcome(state, error, recovery):
+    """``(error, recovery)`` — the authoritative A1 pair for the console.
+
+    A refused NEW session (``reauth_refused:*``) is NOT an authentication
+    failure: the credential was never judged, so ``state`` stays whatever the
+    instance reported (usually ``needs_login``) and the pair names the wait
+    (or the operator cleanup) instead of pretending a credential failed.
+    The same discipline applies to a ``failed`` state whose error is
+    ``superseded``, ``BrowserDisabled`` or ``manual_takeover:*``: none of
+    them is a credential verdict.
+    ``error`` is the instance's own stable code; ``recovery`` is a bounded
+    machine-readable next step carrying the earliest allowed retry. No
+    credential, token, password or page content is ever copied here.
+    """
+    next_at = None
+    if isinstance(recovery, dict):
+        raw = recovery.get("next_attempt_epoch")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            next_at = float(raw)
+    if isinstance(error, str) and error.startswith("reauth_refused:"):
+        reason = error.split(":", 1)[1]
+        if reason in ("slot_corrupt", "slot_unreadable", "slot_unavailable"):
+            return error, {"action": "operator", "next_allowed_epoch": None,
+                           "detail": "跨实例状态文件损坏/不可读/不可写：需运维清理"
+                                     "专用后端的 chat2api-reauth.state 并核对目录权限"}
+        return error, {"action": "wait", "next_allowed_epoch": next_at,
+                       "detail": "登录会话被跨实例限频拒绝：等待允许时刻，"
+                                 "不要重复触发"}
+    note = _non_credential_failure_note(error)
+    if note is not None:
+        if error.startswith("superseded"):
+            action = "refresh"
+        elif error == "BrowserDisabled":
+            action = "operator"
+        elif error in ("window_closed", "attempts_exhausted", "timeout"):
+            action = "refresh"
+        elif error in ("edge_missing", "browser_missing", "display_missing",
+                        "browser_config_error", "token_save_failed"):
+            action = "operator"
+        else:
+            action = "human"
+        return error, {"action": action, "next_allowed_epoch": None,
+                       "detail": note}
+    if state == "failed":
+        return (error or "login_failed",
+                {"action": "human", "next_allowed_epoch": None,
+                 "detail": "上游认证失败：请核对凭据后重新登录"})
+    if state == "needs_login":
+        return (error, {"action": "human", "next_allowed_epoch": None,
+                        "detail": "尚未开始登录：请本人完成 UM SSO"})
+    if state == "logging_in":
+        return (error, {"action": "wait", "next_allowed_epoch": None,
+                        "detail": "登录窗口已打开：等待本人完成 UM SSO"})
+    if state == "valid":
+        return (error, None)
+    return (error or "auth_status_unreadable",
+            {"action": "refresh", "next_allowed_epoch": None,
+             "detail": "认证状态不可读：请刷新状态核对"})
 
 
 _BACKEND_LOGIN_TRIGGER_PATH = "/admin/auth/login"
+_BACKEND_LOGIN_CANCEL_PATH = "/admin/auth/cancel"
 
-# Dedicated-instance SSO window (chat2api --login-timeout): 600s instead of
-# the 180s default — the first real attempt timed out at exactly 180s with
-# the maintainer away. Production chat2api keeps its own default.
-_BACKEND_LOGIN_TIMEOUT_S = 600
+# Dedicated-instance SSO window (chat2api --login-timeout): D18-6 fixes the
+# human login window at 30 minutes (1800s). The browser is on the private Xvfb
+# display and is never exposed publicly; the operator can cancel the round from
+# the private console without stopping the instance.
+_BACKEND_LOGIN_TIMEOUT_S = 1800
 
 
 def _backend_health_ok(paths, opener=None):
@@ -2551,7 +3312,10 @@ def production_backend_login(urlopen_fn=None, ops=None,
     * an already-valid instance is a no-op; a not-running instance is
       STARTED by this flow and, when the flow then FAILS, restored to its
       original stopped state (an originally-running instance is left
-      running — we only ever undo our own change);
+      running — we only ever undo our own change); a ``failed`` state whose
+      error never judged the credential (``superseded``/``BrowserDisabled``/
+      ``manual_takeover:*``) is reported as such and NEVER stops the
+      instance;
     * COLD-START READINESS GATE (maintainer review 2026-09-17): an
       instance this flow started is polled via /health until its control
       surface actually answers (a cold-starting process would make the
@@ -2568,7 +3332,9 @@ def production_backend_login(urlopen_fn=None, ops=None,
       step, never a fabricated success.
 
     Returns {"triggered", "state", "label", "started_here", "restored",
-    "note"}; failures raise structured OperationErrors.
+    "note", "error", "recovery"}; ``error``/``recovery`` are the
+    authoritative A1 pair (a refused NEW session is not a credential
+    failure), and failures raise structured OperationErrors.
     """
     opener = urlopen_fn or urllib.request.urlopen
     ops = ops or production_backend_ops()
@@ -2621,11 +3387,14 @@ def production_backend_login(urlopen_fn=None, ops=None,
 
     # Already valid: nothing to trigger (bearer present); no restore —
     # a running+valid instance is the desired end state either way.
-    state, label, detail = _backend_auth_state(paths, opener=opener)
+    state, label, detail, instance_recovery = _backend_auth_observation(
+        paths, opener=opener)
     if state == "valid":
-        return {"triggered": False, "state": "valid", "label": label,
-                "started_here": started_here, "restored": None,
-                "note": "专用后端上游认证已有效（无需触发登录）"}
+        error, recovery = _auth_outcome("valid", detail, instance_recovery)
+        return _login_result(
+            False, "valid", label, started_here, None,
+            "专用后端上游认证已有效（无需触发登录）",
+            error=error, recovery=recovery)
 
     trigger = urllib.request.Request(
         "http://127.0.0.1:%d%s" % (paths["port"],
@@ -2658,25 +3427,30 @@ def production_backend_login(urlopen_fn=None, ops=None,
                            % trigger_status)
 
     last_state, last_label, last_detail = None, None, None
+    last_recovery = None
     observed_any = False
     for _ in range(max(1, poll_attempts)):
-        last_state, last_label, last_detail = _backend_auth_state(
-            paths, opener=opener)
+        (last_state, last_label, last_detail,
+         last_recovery) = _backend_auth_observation(paths, opener=opener)
         if last_state != "unknown":
             observed_any = True
         if last_state == "valid":
-            return {"triggered": True, "state": "valid",
-                    "label": last_label, "started_here": started_here,
-                    "restored": None, "note": "登录完成（上游认证有效）"}
+            error, recovery = _auth_outcome(
+                "valid", last_detail, last_recovery)
+            return _login_result(
+                True, "valid", last_label, started_here, None,
+                "登录完成（上游认证有效）", error=error, recovery=recovery)
         if last_state == "logging_in":
             # The ONLY state chat2api's refresh(wait=False) sets when it
             # actually starts the browser flow — here (and only here) the
             # popped window really is waiting for the human.
-            return {"triggered": True, "state": "logging_in",
-                    "label": last_label, "started_here": started_here,
-                    "restored": None,
-                    "note": "登录进行中——请在弹出的专用实例浏览器窗口完成 "
-                            "上游登录，然后点「刷新状态」确认"}
+            error, recovery = _auth_outcome(
+                "logging_in", last_detail, last_recovery)
+            return _login_result(
+                True, "logging_in", last_label, started_here, None,
+                "登录进行中——请在弹出的专用实例浏览器窗口完成 "
+                "UM 登录，然后点「刷新状态」确认",
+                error=error, recovery=recovery)
         if (last_detail or "").startswith("reauth_refused:"):
             # A refused session never started, so this is NOT a failed login:
             # leave the instance exactly as it is (never stop a healthy process
@@ -2685,13 +3459,26 @@ def production_backend_login(urlopen_fn=None, ops=None,
             # the instance in needs_login (refresh() only sets _auth_error), so a
             # state-first test would report the common refusal as "trigger
             # accepted, re-trigger if needed".
-            return {"triggered": True, "state": last_state or "failed",
-                    "label": last_label, "started_here": started_here,
-                    "restored": None,
-                    "note": "专用实例拒绝了本次登录会话（%s）——未开启新的"
-                            "提交窗口，实例保持运行；%s"
-                            % (last_detail, _reauth_refusal_message(last_detail))}
+            error, recovery = _auth_outcome(
+                last_state or "failed", last_detail, last_recovery)
+            return _login_result(
+                True, last_state or "failed", last_label, started_here, None,
+                "专用实例拒绝了本次登录会话（%s）——未开启新的"
+                "提交窗口，实例保持运行；%s"
+                % (last_detail, _reauth_refusal_message(last_detail)),
+                error=error, recovery=recovery)
         if last_state == "failed":
+            # A failed state whose error never judged the credential
+            # (superseded / BrowserDisabled / manual_takeover:*) is NOT a
+            # login failure: keep the instance exactly as it is and report
+            # the instance's own reason with the honest recovery step.
+            note = _non_credential_failure_note(last_detail)
+            if note is not None:
+                error, recovery = _auth_outcome(
+                    "failed", last_detail, last_recovery)
+                return _login_result(
+                    True, "failed", last_label, started_here, None,
+                    note, error=error, recovery=recovery)
             # Plan-Revision 13: the instance also reports WHY it stopped
             # (for example a window left to a human), so the failure text
             # carries it instead of a bare "failed" nobody can act on.
@@ -2704,27 +3491,117 @@ def production_backend_login(urlopen_fn=None, ops=None,
     # at all means the status endpoint stayed unreachable — neither may be
     # presented as "browser waiting for the human".
     if last_state == "needs_login" and observed_any:
-        return {"triggered": True, "state": "needs_login",
-                "label": last_label, "started_here": started_here,
-                "restored": None,
-                "note": "登录触发已受理；专用实例报告「需要登录」——尚未"
-                        "观察到登录会话（logging_in）%s。请点「刷新状态」"
-                        "核对，必要时再次触发"
-                        % (("；实例自报原因：%s" % last_detail)
-                           if last_detail else "")}
-    return {"triggered": True, "state": last_state or "unknown",
-            "label": last_label, "started_here": started_here,
-            "restored": None,
-            "note": "登录触发已受理（HTTP 202）；当前认证状态未确认"
-                    "（状态接口未观察到可读状态）——请稍后点「刷新状态」"
-                    "核对"}
+        error, recovery = _auth_outcome(
+            "needs_login", last_detail, last_recovery)
+        return _login_result(
+            True, "needs_login", last_label, started_here, None,
+            "登录触发已受理；专用实例报告「需要登录」——尚未"
+            "观察到登录会话（logging_in）%s。请点「刷新状态」"
+            "核对，必要时再次触发"
+            % (("；实例自报原因：%s" % last_detail)
+               if last_detail else ""),
+            error=error, recovery=recovery)
+    error, recovery = _auth_outcome(
+        "unknown", last_detail, last_recovery)
+    return _login_result(
+        True, last_state or "unknown", last_label, started_here, None,
+        "登录触发已受理（HTTP 202）；当前认证状态未确认"
+        "（状态接口未观察到可读状态）——请稍后点「刷新状态」"
+        "核对",
+        error=error, recovery=recovery)
 
 
-def production_backend_ops():
+def backend_login_cancel(*, ops=None, urlopen_fn=None):
+    """Cancel THIS login round on the dedicated 8110 instance (D18-6).
+
+    POSTs the control-token-gated ``/admin/auth/cancel``. The instance ends
+    the current login round and closes its browser context; it is NEVER stopped,
+    restarted or reconfigured here, and ordinary requests never reopen the
+    round. A later explicit login may start a new one.
+
+    Returns ``{"cancelled": bool, "state": str, "detail": str|None}`` with
+    ``state`` in ``{"cancelled", "no_login_in_progress"}``. A missing control
+    token or an unreachable/refused endpoint raises ``OperationError`` and never
+    reports a fabricated success.
+    """
+    opener = urlopen_fn or urllib.request.urlopen
+    ops = ops or production_backend_ops()
+    paths = ops._paths()
+    token, reason = _backend_control_token(paths)
+    if token is None:
+        raise OperationError(
+            "share_backend_login_cancel_failed",
+            "专用后端控制令牌缺失或为空（未部署或已清理）；未取消登录")
+    request = urllib.request.Request(
+        "http://127.0.0.1:%d%s" % (paths["port"],
+                                   _BACKEND_LOGIN_CANCEL_PATH),
+        data=b"", method="POST",
+        headers={"X-Admin-Control": token})
+    try:
+        with opener(request, timeout=8) as resp:
+            status = resp.status
+            body = resp.read()
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        body = b""
+        try:
+            exc.read()
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                exc.close()
+            except Exception:  # noqa: BLE001
+                pass
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise OperationError(
+            "share_backend_login_cancel_failed",
+            "登录取消失败（%s: %s）；未停止服务"
+            % (type(exc).__name__, exc))
+    if status != 200:
+        # Report only the status code — no response body, and never the
+        # control secret.
+        raise OperationError(
+            "share_backend_login_cancel_failed",
+            "登录取消被拒（HTTP %s）；服务未停止" % status)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeError):
+        raise OperationError(
+            "share_backend_login_cancel_failed",
+            "登录取消响应不可读；请刷新状态核对")
+    if not isinstance(payload, dict) or not isinstance(
+            payload.get("state"), str):
+        raise OperationError(
+            "share_backend_login_cancel_failed",
+            "登录取消响应不符合契约；请刷新状态核对")
+    detail = payload.get("detail")
+    return {
+        "cancelled": bool(payload.get("cancelled")),
+        "state": payload["state"],
+        "detail": detail if isinstance(detail, str) else None,
+    }
+
+
+def production_backend_ops(config=None):
     """Production dedicated-backend gate (fresh instance per call; the
-    paths/port resolve lazily so assembly never touches the filesystem)."""
-    return _ProductionBackendOps(gateway_dir=str(
-        (Path(__file__).resolve().parent / "chat2api")))
+    paths/port resolve lazily so assembly never touches the filesystem).
+
+    ``config`` is the explicit ``BackendConfig`` the cloud composition root
+    passes (E19-1-06): the gateway source dir, every state path, the port and
+    the base URL then come from the object, never from the process
+    environment. Without it the historical environment-driven behavior is kept
+    byte for byte.
+
+    Windows keeps ``_ProductionBackendOps``; POSIX uses the pid-file +
+    /proc identity gate (no tasklist/netstat/CIM/taskkill)."""
+    if config is not None:
+        gateway_dir = config.backend_gateway_dir
+    else:
+        gateway_dir = str((Path(__file__).resolve().parent / "chat2api"))
+    if os.name == "posix":
+        return _LinuxBackendOps(gateway_dir=gateway_dir, config=config)
+    return _ProductionBackendOps(gateway_dir=gateway_dir, config=config)
 
 
 def production_keys_confirmed(manager=None):
@@ -2825,7 +3702,8 @@ def production_keys_diagnosis(manager=None):
 
 def production_seams(*, broker=None, task_name=None,
                      exe_path=None, runner=None, sleeper=None,
-                     status_path=None, keys_manager=None):
+                     status_path=None, keys_manager=None,
+                     cloud=False, linux_state_dir=None):
     """Assemble the console_share_actions seam dict, key-by-key.
 
     Keys ARE the orchestration's injection seam globals exactly
@@ -2864,6 +3742,8 @@ def production_seams(*, broker=None, task_name=None,
     the deployment fact for callers that build a gate explicitly, but the
     gate itself no longer runs host evidence in-process.
     """
+    # An injected broker ALWAYS wins (the cloud composition root passes its
+    # own); only a caller without one falls back to the configured loader.
     if broker is None:
         broker = _default_broker()
     ops = production_broker_ops(broker=broker)
@@ -2879,7 +3759,7 @@ def production_seams(*, broker=None, task_name=None,
     drain_bind = {"sleeper": sleeper} if sleeper is not None else {}
     reader_bind = {"status_path": status_path} if status_path is not None \
         else {}
-    return {
+    seams = {
         "_BROKER_OPS": ops,
         "_TS_SERVICE_CONTROL": partial(production_ts_service_control,
                                        broker=broker),
@@ -2939,3 +3819,92 @@ def production_seams(*, broker=None, task_name=None,
         # state file; the page then writes 未提供.
         "_SUPERVISION_STATE": production_supervision_state,
     }
+    if cloud:
+        # Explicit cloud (Linux) role: ONLY the UM share stack is assembled.
+        # Tailscale/Funnel and the Windows broker lifecycle record do not
+        # exist on this deployment, so those seams stay UNWIRED (None) — the
+        # orchestration reports them honestly unavailable and never calls a
+        # Windows binary. The persistent stop intent is the Linux file the
+        # pid-file host ops write.
+        for name in ("_TS_SERVICE_CONTROL", "_TS_SERVICE_STATUS",
+                      "_CONNECTIVITY_OK", "_CONNECTIVITY_STATE",
+                      "_FUNNEL_CONTROL", "_FUNNEL_OBSERVED"):
+            seams.pop(name, None)
+        seams["_DESIRED_STOP_READER"] = partial(
+            production_linux_desired_stop_reader, state_dir=linux_state_dir)
+    return seams
+
+
+# R13: the dedicated 8110 child's aggregate transport is gated by an explicit
+# startup scope. The gray release is NOT enabled: every list is empty, so the
+# child's nonstream_aggregate_allowed() is False for every verified key, model and
+# protocol and ALL 8110 non-stream requests keep the native transport. The empty
+# value is sent explicitly (not omitted) so the startup record says the operator
+# decided not to select a scope instead of leaving an ambiguous absence. Only
+# _child_env (the 8110 child) receives this scope; the private 8000 chain is never
+# started here and never inherits it. Do NOT add a key id/model here without the
+# matching N3 acceptance evidence: the temporary N3 key is deleted, the four existing
+# user keys are not verified for this transport, and the key id must always be the
+# share ledger's verified identity, never a client-supplied request field.
+#
+# Kept at the END of the module on purpose: test_share_gate_citations.py pins the
+# line numbers of _paths/_child_env and the surrounding comments, so adding these
+# definitions before them would silently re-point every citation.
+BACKEND_AGGREGATE_SCOPE_ENV = "CHAT2API_NONSTREAM_AGGREGATE_SCOPE"
+
+
+def _backend_aggregate_scope_json():
+    """The explicit, empty startup scope handed to the dedicated 8110 child."""
+    return json.dumps({
+        "key_ids": [],
+        "models": [],
+        "protocols": [],
+    }, separators=(",", ":"))
+
+
+# ------------------------------------------------- Linux stop intent (cloud)
+# Kept at the END of the module on purpose: test_share_gate_citations.py pins
+# the line numbers of _paths/_child_env and their comments, so definitions
+# added before them would silently re-point every citation.
+# On the Linux deployment the broker's broker-status.json does not exist; the
+# persistent operator/budget stop intent is the ONE file ``LinuxHostOps`` writes
+# BEFORE it signals the share host. Reading it here never writes, never starts a
+# process and never clears the intent: a watchdog start can never resurrect a
+# deliberate stop.
+LINUX_SHARE_HOST_STATE_DIR_ENV = "UM_SHARE_HOST_STATE_DIR"
+DEFAULT_LINUX_SHARE_HOST_STATE_DIR = "/run/um-share"
+LINUX_SHARE_HOST_INTENT_FILE = "share-host-desired.json"
+
+
+def production_linux_desired_stop_record(*, state_dir=None):
+    """Read the Linux persistent stop intent, or None when unreadable.
+
+    Returns ``{"state": "running"|"stopped", "reason": str|None}``. An absent,
+    unreadable or malformed record is None (no authority here) — never a
+    fabricated stop/run state.
+    """
+    root = state_dir or os.environ.get(LINUX_SHARE_HOST_STATE_DIR_ENV) \
+        or DEFAULT_LINUX_SHARE_HOST_STATE_DIR
+    path = os.path.join(root, LINUX_SHARE_HOST_INTENT_FILE)
+    try:
+        record = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("schema_version") != 1:
+        return None
+    state = record.get("state")
+    if state not in ("running", "stopped"):
+        return None
+    reason = record.get("reason")
+    return {"state": state,
+            "reason": reason if isinstance(reason, str) else None}
+
+
+def production_linux_desired_stop_reader(*, state_dir=None):
+    """The orchestration _DESIRED_STOP_READER seam over the Linux intent:
+    stopped -> True (a stop intent is in force), running -> False, no record
+    -> None (no authority; the honest default). Read-only."""
+    record = production_linux_desired_stop_record(state_dir=state_dir)
+    if record is None:
+        return None
+    return record["state"] == "stopped"

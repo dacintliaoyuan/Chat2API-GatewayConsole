@@ -304,7 +304,7 @@ class PowerShellStageExecutor:
             raise BrokerError(f"unknown deploy stage: {stage}")
         ps_stage = self.stage_map[stage]
         cmd = [
-            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-File", str(self.wrapper_ps1), "-Stage", ps_stage,
         ]
         if stage == "start":
@@ -320,6 +320,7 @@ class PowerShellStageExecutor:
                 "writer; not invoked in this offline phase")
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace",
                                   timeout=self.timeout_ms / 1000)
         except subprocess.TimeoutExpired as exc:
             raise BrokerError(f"deploy stage timed out: {ps_stage}") from exc

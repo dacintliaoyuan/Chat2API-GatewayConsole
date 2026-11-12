@@ -2,7 +2,7 @@
 param(
     [ValidateSet('Register', 'Unregister')]
     [string]$Action = 'Register',
-    [string]$TaskName = 'AI Gateway Public Chat2API Watch'
+    [string]$TaskName = 'SelfUseAI AI Gateway Chat2API Watch'
 )
 
 Set-StrictMode -Version 2.0
@@ -99,7 +99,7 @@ $task = New-ScheduledTask -Action $taskAction -Trigger $trigger `
         'console/CLI stop, never for 401/5xx; at most 3 starts per hour. The runtime arms this ' +
         'task when chat2api is started and releases it on a deliberate stop; the watch disarms ' +
         'itself when this boot authorizes no recovery. ' +
-        'Log: %LOCALAPPDATA%\AIGatewayPublic\watch\chat2api-watch.log')
+        'Log: %LOCALAPPDATA%\SelfUseAI\ai-gateway\watch\chat2api-watch.log')
 
 if ($PSCmdlet.ShouldProcess($TaskName,
         'Register scheduled task and enable watch lifecycle control')) {

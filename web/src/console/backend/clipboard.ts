@@ -26,13 +26,18 @@ export interface ClipboardWriter {
   writeText(value: string): Promise<void>;
 }
 
-const copyFields = new Set<GatewayConnectionCopyField>(["baseUrl", "keyPlaintext"]);
+const copyFields = new Set<GatewayConnectionCopyField>([
+  "baseUrl",
+  "keyPlaintext",
+]);
 
 /** A write failure keeps only the error class name, so a copied value can never
  *  escape through an error text (same discipline as the read face reasons). */
 function copyFailureReason(error: unknown): string {
   const name = error instanceof Error ? error.name : "";
-  return name && name !== "Error" ? `clipboard_write_failed:${name}` : "clipboard_write_failed";
+  return name && name !== "Error"
+    ? `clipboard_write_failed:${name}`
+    : "clipboard_write_failed";
 }
 
 /** Copy one field of the current read result.
@@ -45,15 +50,26 @@ function copyFailureReason(error: unknown): string {
 export async function copyGatewayConnectionField(
   view: GatewayConnection | null,
   field: GatewayConnectionCopyField,
-  clipboard: ClipboardWriter | null | undefined,
+  clipboard: ClipboardWriter | null | undefined
 ): Promise<GatewayConnectionCopyResult> {
   if (!copyFields.has(field))
-    throw new ContractError("connection copy field must be baseUrl or keyPlaintext");
-  const value = field === "baseUrl"
-    ? (view?.baseUrl && view.baseUrl.trim() ? view.baseUrl : null)
-    : (view && view.keyState === "present" && view.keyPlaintext?.trim() ? view.keyPlaintext : null);
+    throw new ContractError(
+      "connection copy field must be baseUrl or keyPlaintext"
+    );
+  const value =
+    field === "baseUrl"
+      ? view?.baseUrl && view.baseUrl.trim()
+        ? view.baseUrl
+        : null
+      : view && view.keyState === "present" && view.keyPlaintext?.trim()
+        ? view.keyPlaintext
+        : null;
   if (value === null)
-    return { field, ok: false, reason: field === "baseUrl" ? "no_base_url" : "no_plaintext_key" };
+    return {
+      field,
+      ok: false,
+      reason: field === "baseUrl" ? "no_base_url" : "no_plaintext_key",
+    };
   if (!clipboard || typeof clipboard.writeText !== "function")
     return { field, ok: false, reason: "clipboard_unavailable" };
   try {

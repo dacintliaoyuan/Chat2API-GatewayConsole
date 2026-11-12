@@ -1,4 +1,4 @@
-﻿# install-share-broker.ps1 - elevated install/uninstall entry for the SYSTEM
+# install-share-broker.ps1 - elevated install/uninstall entry for the SYSTEM
 # broker host (D4 prerequisite; executed only under explicit L2/D4
 # authorization, NEVER by offline tests).
 #
@@ -42,19 +42,19 @@
 # (deliberate fail-closed until L2 calibration).
 
 param(
-    [string]$RunRoot = 'C:\ProgramData\AIGatewayPublicShareRun',
-    [string]$SourceRoot = (Split-Path -Parent $PSScriptRoot),
-    [string]$TaskName = 'umshare-public-broker',
-    [string]$ShareTaskName = 'umshare-public-live',
-    [string]$BrokerPipeName = '\\.\pipe\um-share-public-broker',
-    [string]$InstancePipePrefix = '\\.\pipe\um-share-public-instance-',
-    [string]$OperatorAccount = ([Security.Principal.WindowsIdentity]::GetCurrent().Name),
+    [string]$RunRoot = 'C:\ProgramData\UMShareRun',
+    [string]$SourceRoot = 'D:\git\github\personal_files\SelfUseAI\ai-gateway',
+    [string]$TaskName = 'umshare-broker',
+    [string]$ShareTaskName = 'umshare-live',
+    [string]$BrokerPipeName = '\\.\pipe\um-share-broker',
+    [string]$InstancePipePrefix = '\\.\pipe\um-share-instance-',
+    [string]$OperatorAccount = 'dacint',
     [string]$InstanceOwnerSid = '',
     [string]$BrokerPipeSddl = '',
-    [Parameter(Mandatory = $true)][string]$PythonHome,
+    [string]$PythonHome = 'C:\Users\dacint\AppData\Local\Programs\Python\Python314',
     [int]$SharePort = 8100,
     [string]$ShareImage = 'um-share-python.exe',
-    [string]$ExpectedOwnerAccount = 'um_share_public',
+    [string]$ExpectedOwnerAccount = '',
     [ValidateSet('ONSTART', 'ONDEMAND')][string]$TaskTrigger = 'ONSTART',
     [switch]$Uninstall
 )

@@ -24,12 +24,33 @@ if ($Mode -eq 'Scheduled') {
     }
 }
 
+# B0（2026-11-01）：默认同步装配只剩 UM。Qoder 国内/国际、CLIProxy 与 M365
+# 已随源码退役（服务描述符、端点与 token 文件一并删除），不再作为来源键；
+# 显式点名退役来源由 model_sync.py 在边界处拒绝，绝不拉起或读取旧上游。
 $sourceKeys = @('chat2api')
 $startedHere = New-Object System.Collections.Generic.List[string]
 $warnings = New-Object System.Collections.Generic.List[string]
 
+# R1/D1（2026-10-11）：定时/手动全源路径同样遵守「显式停用取消自动上游查询」。
+# 人工停用（desired state = stopped）的来源不拉起、也不进本轮同步来源集合，
+# 因此不会向上游读目录。意图未知（标记缺席/不可读）不在这里剔除——未知不能
+# 伪装成已停止，异常退出仍按原守护契约由启动逻辑恢复。
+$manuallyStopped = Get-GatewayManuallyStoppedKeys -Keys $sourceKeys
+$syncSources = New-Object System.Collections.Generic.List[string]
+foreach ($key in $sourceKeys) {
+    if ($key -in $manuallyStopped) {
+        $desc = (Get-GatewayServiceDescriptors)[$key]
+        Write-Host "[跳过] $($desc.DisplayName)：人工停用，本轮不拉起、不读上游。"
+        continue
+    }
+    # chat2api 是 UM 会话适配的宿主，模型来源名固定为 um（model_sync 的
+    # ACTIVE_SOURCES 也只有 um）。
+    $syncSources.Add('um')
+}
+
 try {
     foreach ($key in $sourceKeys) {
+        if ($key -in $manuallyStopped) { continue }
         $desc = (Get-GatewayServiceDescriptors)[$key]
         $inspection = Get-GatewayServiceInspection -Key $key
         if ($inspection.State -eq 'Conflict') {
@@ -51,7 +72,19 @@ try {
         }
     }
 
+    # R1/D1 空集合分支（2026-10-11 返修）：本轮无可同步来源时明确正常返回，
+    # 不调用 Python、不读上一次结果（避免把上一轮读数误报成本轮同步）。
+    if ($syncSources.Count -eq 0) {
+        Write-Host '[跳过] 本轮无可同步来源（人工停用已剔除），不读取任何上游。'
+        exit 0
+    }
+
     $arguments = @((Join-Path $gatewayRoot 'model_sync.py'))
+    # 同步来源集合：只含本轮应同步的来源（人工停用的已剔除）。空集合已在上面
+    # 正常返回，绝不会传成「全部来源」。
+    # PS 5.1 的 native 参数编组会丢弃空字符串参数，所以用单参数 `--sources=<值>`
+    # 形式跨边界（`--sources=` 与值同在一个参数里，不会被丢掉）。
+    $arguments += ('--sources=' + ($syncSources -join ','))
     # Scheduled 的明确内部语义（Rev8 契约 3）：启用面全量同步、零模型请求
     # （不传 --probe；探测等待集中批准，见下方 pendingProbeCount 提示）。
     if ($Mode -ne 'Preview') { $arguments += '--apply' }

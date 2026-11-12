@@ -1,0 +1,157 @@
+/* Shared design tokens for both consoles (local and cloud, ADR 0025).
+
+   Direction (maintainer 2026-10-31): Apple Liquid Glass (macOS 26) for the
+   navigation layer only — the sidebar and the toolbar capsules float as one
+   "regular", fairly opaque glass over a solid content layer — and Material 3
+   Expressive for the content: M3 colour roles, tonal containers, large radii,
+   emphasized type on the key figure, one hero card per page at most.
+
+   Contrast (measured 2026-10-31, light and dark): every text role here reads
+   >= 4.5:1 on every surface tier it is used on (surface .. surface-high and
+   its own container); --md-outline, the control-identification edge, >= 3:1.
+   State is never carried by hue alone: a dot or icon always sits next to text.
+
+   This file is the one declaration site of the --md-* family. The dark switch is
+   html[data-dark-surface="true"], written by paintTheme (theme-ui.ts). */
+
+:root {
+  --md-font:
+    MiSans, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui,
+    sans-serif;
+  --md-mono:
+    "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  --md-surface: #f4f6fa;
+  --md-surface-lowest: #ffffff;
+  --md-surface-low: #eef1f6;
+  --md-surface-container: #e8ecf3;
+  --md-surface-high: #e1e6ee;
+  --md-on-surface: #181c22;
+  --md-on-surface-variant: #434955;
+  --md-outline: #737a87;
+  --md-outline-variant: #c4cad6;
+  --md-hairline: #e2e6ee;
+
+  --md-primary: #1b5ccc;
+  --md-on-primary: #ffffff;
+  --md-primary-container: #d9e3ff;
+  --md-on-primary-container: #0a2a66;
+  --md-secondary-container: #dde3f2;
+  --md-on-secondary-container: #18243c;
+  --md-tertiary: #00726a;
+  --md-tertiary-container: #c2eee7;
+  --md-on-tertiary-container: #00201d;
+
+  --md-success: #17723a;
+  --md-success-container: #cfeed8;
+  --md-on-success-container: #00391a;
+  --md-warning: #94500a;
+  --md-warning-container: #ffe2c2;
+  --md-on-warning-container: #3d2200;
+  --md-error: #b3261e;
+  --md-error-container: #ffdad5;
+  --md-on-error-container: #410002;
+  /* Unknown / not read / not assembled: the neutral fourth state. */
+  --md-neutral: #5d6470;
+  --md-neutral-container: #e4e8ef;
+
+  /* Chart marks, in fixed slot order. Validated 2026-10-31 with the dataviz
+     palette check (light on #ffffff, dark on #151920): lightness band, chroma,
+     adjacent CVD ΔE >= 12, normal-vision ΔE >= 17, >= 3:1 on the card. Colour is
+     never the only key: every drawn series is also named in its legend and tooltip. */
+  --md-chart-1: #1b5ccc;
+  --md-chart-2: #00897b;
+  --md-chart-3: #c2410c;
+  --md-chart-4: #7c4dcc;
+  --md-chart-grid: var(--md-outline-variant);
+
+  /* Navigation glass: tinted, blurred and edge-lit; never used under content. */
+  --md-glass: rgba(255, 255, 255, 0.64);
+  --md-glass-edge: var(--md-outline-variant);
+  --md-glass-shade: rgba(23, 35, 70, 0.12);
+  --md-glass-shine: rgba(255, 255, 255, 0.72);
+  --md-glass-filter: blur(28px) saturate(170%);
+
+  --md-r-xs: 8px;
+  --md-r-s: 12px;
+  --md-r-m: 16px;
+  --md-r-l: 22px;
+  --md-r-xl: 28px;
+  --md-r-full: 999px;
+
+  --md-fs-label: 12px;
+  --md-fs-body: 14px;
+  --md-fs-title: 16px;
+  --md-fs-title-l: 18px;
+  --md-fs-kpi: 26px;
+  --md-fs-headline: 28px;
+
+  --md-shadow-float: 0 16px 40px rgba(20, 30, 60, 0.18);
+  --md-shadow-modal: 0 24px 64px rgba(20, 30, 60, 0.3);
+  --md-dur-short: 140ms;
+  --md-dur-medium: 240ms;
+  --md-ease: cubic-bezier(0.2, 0, 0, 1);
+  color-scheme: light;
+}
+
+:root[data-dark-surface="true"] {
+  --md-surface: #0f1217;
+  --md-surface-lowest: #151920;
+  --md-surface-low: #191d24;
+  --md-surface-container: #21252d;
+  --md-surface-high: #2a2e37;
+  --md-on-surface: #e3e6ed;
+  --md-on-surface-variant: #c0c6d1;
+  --md-outline: #8c93a0;
+  --md-outline-variant: #3d434e;
+  --md-hairline: #282c35;
+
+  --md-primary: #a8c2ff;
+  --md-on-primary: #082a6a;
+  --md-primary-container: #22448c;
+  --md-on-primary-container: #dbe5ff;
+  --md-secondary-container: #313a4f;
+  --md-on-secondary-container: #dbe2f7;
+  --md-tertiary: #6dd2c2;
+  --md-tertiary-container: #004b43;
+  --md-on-tertiary-container: #bff3ea;
+
+  --md-success: #85d69e;
+  --md-success-container: #0f4f29;
+  --md-on-success-container: #c1f4cf;
+  --md-warning: #ffb86b;
+  --md-warning-container: #4c2e00;
+  --md-on-warning-container: #ffdcb5;
+  --md-error: #ffb4ab;
+  --md-error-container: #7a1712;
+  --md-on-error-container: #ffdad5;
+  --md-neutral: #aeb5c1;
+  --md-neutral-container: #2b3039;
+
+  --md-chart-1: #5f8ae8;
+  --md-chart-2: #2fa595;
+  --md-chart-3: #e0703f;
+  --md-chart-4: #9b7be0;
+  --md-chart-grid: var(--md-outline-variant);
+
+  --md-glass: rgba(30, 34, 44, 0.62);
+  --md-glass-edge: rgba(255, 255, 255, 0.1);
+  --md-glass-shade: rgba(0, 0, 0, 0.45);
+  --md-glass-shine: rgba(255, 255, 255, 0.07);
+
+  --md-shadow-float: 0 18px 44px rgba(0, 0, 0, 0.55);
+  --md-shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.62);
+  color-scheme: dark;
+}
+
+/* 「降低透明度」 (and the system's prefers-reduced-transparency, folded into the
+   same attribute by appearance.ts): the glass turns into an opaque tonal panel,
+   the panel shadow goes away, and the navigation layer is separated from the
+   content by its edge alone. */
+:root[data-console-transparency="reduced"] {
+  --md-glass: var(--md-surface-lowest);
+  --md-glass-edge: var(--md-outline-variant);
+  --md-glass-shade: transparent;
+  --md-glass-shine: transparent;
+  --md-glass-filter: none;
+}

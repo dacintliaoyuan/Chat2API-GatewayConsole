@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """ai-gateway/share_backend_supervision.py - 8110 bounded crash recovery.
 
-Independent of 8096 (the console) and of 8110 (the dedicated backend): this
+Independent of 8001 (the console) and of 8110 (the dedicated backend): this
 module makes NO side effect beyond the decision logic (read-only intent and
 evidence reads) plus the ONE shared recovery handler
 ``_ProductionBackendOps.start()`` (contract Rev9 A9-5, section 7). It NEVER
 constructs an OperationManager - a second manager over the shared SQLite marks
-the 8096 in-flight operations interrupted at construction
+the 8001 in-flight operations interrupted at construction
 (console_operations.py :243, :306-314; regression pin
 tests/test_console_operations.py:254-281), so this process would corrupt the
 console's state just by starting.
@@ -66,7 +66,7 @@ from console_operations import LockBusy, ResourceFileLock
 
 STATE_VERSION = 1
 DEFAULT_WATCH_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""),
-                                 "AIGatewayPublic", "watch")
+                                 "SelfUseAI", "ai-gateway", "watch")
 DESIRED_FILE_NAME = "share-backend-desired.json"
 STATE_FILE_NAME = "share-backend-watch-state.json"
 LOG_FILE_NAME = "share-backend-watch.log"
@@ -110,6 +110,94 @@ _BENIGN_CODES = frozenset(("instance_alive", "awaiting_confirmation",
 _BOOT_ID_READER = None        # () -> str|None
 _DESIRED_STOP_READER = None    # () -> dict|None (broker-status.json lifecycle)
 _LOCAL_TZ = None               # tzinfo for naive log stamps; None = system local
+
+# Path injection seam (E19-1-03 / plan §4.3 correction 10). ``None`` means
+# "use the production default above"; a composition root that owns its own
+# state tree (the cloud root) calls ``configure_paths`` ONCE so no supervision
+# read/write ever lands in the LOCALAPPDATA watch dir or the in-package
+# ``data/console-locks``. The defaults are kept byte-for-byte: an unconfigured
+# host behaves exactly as before.
+_WATCH_DIR = None              # explicit watch dir override, or None
+_LOCK_DIR = None               # explicit lock dir override, or None
+
+
+def configure_paths(*, watch_dir=None, lock_dir=None):
+    """Install the supervision state/lock roots (one explicit injection).
+
+    ``watch_dir`` holds the desired/state/log files (fixed names inside it);
+    ``lock_dir`` holds the ``share:orchestration`` resource lock. Passing
+    ``None`` restores the production default for that root. Every later
+    ``read_desired_state``/``write_desired_state``/``read_watch_state``/
+    ``write_watch_state``/``check_preconditions``/``run_once`` call that does
+    not receive an explicit ``path``/``state_dir``/``lock_dir`` uses the
+    injected value instead of the module default.
+    """
+    global _WATCH_DIR, _LOCK_DIR
+    _WATCH_DIR = _normalize_dir(watch_dir, "watch_dir")
+    _LOCK_DIR = _normalize_dir(lock_dir, "lock_dir")
+
+
+def _normalize_dir(value, field):
+    """Absolute normalized directory for an injection, or None."""
+    if value is None:
+        return None
+    raw = str(value)
+    if not raw.strip():
+        raise ValueError("%s must not be empty" % field)
+    if ".." in re.split(r"[\\/]+", raw):
+        raise ValueError("%s must not contain '..'" % field)
+    return os.path.normpath(os.path.abspath(raw))
+
+
+def _default_watch_dir():
+    """The active watch dir: the injected one, else the production default."""
+    return _WATCH_DIR if _WATCH_DIR is not None else DEFAULT_WATCH_DIR
+
+
+def _default_lock_dir():
+    """The active lock dir: the injected one, else the production default."""
+    return _LOCK_DIR if _LOCK_DIR is not None else LOCK_DIR
+
+
+def _desired_path():
+    return os.path.join(_default_watch_dir(), DESIRED_FILE_NAME)
+
+
+def _state_path():
+    return os.path.join(_default_watch_dir(), STATE_FILE_NAME)
+
+
+def _log_path():
+    return os.path.join(_default_watch_dir(), LOG_FILE_NAME)
+
+
+# Public accessors for the ACTIVE (injected or default) paths. The console
+# read face must report the file the supervisor actually writes, never the
+# module constant (a cloud root that injected its own watch dir would
+# otherwise name a file nobody touches).
+def active_watch_dir():
+    """The watch dir every read/write resolves against (injected or default)."""
+    return _default_watch_dir()
+
+
+def active_lock_dir():
+    """The lock dir every acquisition resolves against (injected or default)."""
+    return _default_lock_dir()
+
+
+def active_desired_path():
+    """The desired-intent file the supervisor actually reads/writes."""
+    return _desired_path()
+
+
+def active_state_path():
+    """The watch-state file the supervisor actually reads/writes."""
+    return _state_path()
+
+
+def active_log_path():
+    """The decision-log file the supervisor actually appends to."""
+    return _log_path()
 
 
 def _bounded(text, limit=200):
@@ -195,7 +283,7 @@ def _watch_paths(state_dir=None):
     the fixed-name check guarantees a hostile ``state_dir`` can never make the
     supervisor touch a file outside its own watch directory.
     """
-    base = os.path.normpath(os.path.abspath(state_dir or DEFAULT_WATCH_DIR))
+    base = os.path.normpath(os.path.abspath(state_dir or _default_watch_dir()))
     desired = _fixed_name_path(os.path.join(base, DESIRED_FILE_NAME),
                               DESIRED_FILE_NAME)
     state = _fixed_name_path(os.path.join(base, STATE_FILE_NAME),
@@ -222,7 +310,7 @@ def current_boot_id():
                "LastBootUpTime.ToUniversalTime().ToString('o')")
     try:
         out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", command],
+            ["pwsh", "-NoProfile", "-Command", command],
             capture_output=True, timeout=BOOT_QUERY_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -241,7 +329,7 @@ def read_desired_state(path=None):
     foreign or damaged marker is never read as an intent (fail-closed).
     """
     target = _fixed_name_path(path, DESIRED_FILE_NAME) if path \
-        else DEFAULT_DESIRED_PATH
+        else _desired_path()
     try:
         with open(target, encoding="utf-8") as f:
             record = json.load(f)
@@ -281,7 +369,7 @@ def write_desired_state(state, *, source, path=None, boot_id=None):
     if state not in DESIRED_STATES:
         raise ValueError("desired state must be running/stopped")
     target = _fixed_name_path(path, DESIRED_FILE_NAME) if path \
-        else DEFAULT_DESIRED_PATH
+        else _desired_path()
     if boot_id is None:
         boot_id = current_boot_id()
     if not boot_id:
@@ -321,7 +409,7 @@ def read_watch_state(path=None):
     REFUSED (``watch_state_unreadable``) and never overwritten.
     """
     target = _fixed_name_path(path, STATE_FILE_NAME) if path \
-        else DEFAULT_STATE_PATH
+        else _state_path()
     if not os.path.exists(target):
         return {"unreadable": True, "reason": "missing"}
     try:
@@ -369,7 +457,7 @@ def write_watch_state(state, path=None):
     the consumed quota).
     """
     target = _fixed_name_path(path, STATE_FILE_NAME) if path \
-        else DEFAULT_STATE_PATH
+        else _state_path()
     payload = {
         "version": STATE_VERSION,
         "boot_id": state.get("boot_id"),
@@ -946,7 +1034,8 @@ def check_preconditions(*, now=None, ops=None, broker=None, state_dir=None,
             "本小时启动预算已耗尽（%d/%d）：只报告并给人工入口——"
             "查看监督日志 %s 或 console「分享」面板后人工决定"
             % (len(attempts), MAX_STARTS_PER_HOUR,
-               os.path.join(state_dir or DEFAULT_WATCH_DIR, LOG_FILE_NAME)))
+               os.path.join(state_dir or _default_watch_dir(),
+                            LOG_FILE_NAME)))
     base["ok"] = True
     base["reason"] = "instance_absent"
     base["detail"] = "8110 已确认消失且退出证据可裁定（%s）；候选启动" \
@@ -1078,7 +1167,8 @@ def run_once(*, apply=False, now=None, ops=None, broker=None,
     #    console lock means "busy, do nothing" (never a nested acquisition).
     lock = None
     try:
-        lock = ResourceFileLock(lock_dir or LOCK_DIR, LOCK_RESOURCE,
+        lock = ResourceFileLock(lock_dir or _default_lock_dir(),
+                                LOCK_RESOURCE,
                                 owner=WATCH_OWNER, timeout_s=LOCK_TIMEOUT_S)
         lock.acquire()
     except LockBusy:
@@ -1344,7 +1434,7 @@ def _selftest():
     global VERIFY_BUDGET_S, VERIFY_POLL_INTERVAL_S
 
     root = tempfile.mkdtemp(
-        prefix="AIGatewayPublic-share-backend-supervision-selftest-")
+        prefix="SelfUseAI-share-backend-supervision-selftest-")
     saved_boot = _BOOT_ID_READER
     saved_stop = _DESIRED_STOP_READER
     saved_verify = VERIFY_BUDGET_S

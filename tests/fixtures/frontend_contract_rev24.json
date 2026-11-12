@@ -1,0 +1,5742 @@
+{
+  "metadata": {
+    "fixture": true,
+    "generatedFrom": "generate_frontend_contract_fixture.py:real handlers/private fixtures",
+    "sourceHashEncoding": "utf8-lf",
+    "sourceHashes": {
+      "model_sync.py": "341d7cba1953593811afb6236f587ac9fcbe2cee36ce59c96b9bbd60d9d43d83",
+      "model_sync_core.py": "ca881af779d6ededb56095a49e0a4e18e7fc43ffec9a72dc4e1bd6a5e4b588be",
+      "console_model_actions.py": "b6efc0f0db16c29b2679a9901978e4c5ed5114b8aec0f2ab391f7462538d4cd5",
+      "console_adapters.py": "5cf9980eed681f0a68b999bf196e2d0b7c3b2ad15011ce545881c53da3a7331b",
+      "console_operations.py": "8f34b8d8b057c2750d0d3d7c94f8e8771d7031c0b42cc947ed8cf72c5761b9bf",
+      "share_metering.py": "152a4cc8d38074c0e9d2829315e995fd0eb7d8054592e951ae43d2b5442b1e57",
+      "console_stats.py": "92770da5d2de533b7e7f0ff249fa86c15229e5c8d13c1c2cc6be4322fdb44447",
+      "console_log_reader.py": "c8f74a73ec8b69efa5339a6bcbff7e5faccdb06c2eeb7eefd8f1a25c10c71768",
+      "usagesrv.py": "548506c927b7ac6ef57d16a4875cb09057db61bb5c6f7fa80f10f0556d8a1e97",
+      "console_share_actions.py": "36defd89d7473c3f7a39da0f9630d35b91f7f10b712a2d1489b6ec2a0a4f6343",
+      "console_share_production.py": "dce45e942bb9c0aa6fcc5683bb6a838e74753e5c90b44ce68f15a0938408b508"
+    }
+  },
+  "actions": {
+    "actions": [
+      {
+        "action": "account.login",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "账号登录/重新授权（UM 编排）",
+        "param_schema": {
+          "start_wait_s": {
+            "type": "int",
+            "min": 1,
+            "max": 120
+          },
+          "login_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 3600
+          },
+          "poll_interval_s": {
+            "type": "int",
+            "min": 1,
+            "max": 10
+          }
+        }
+      },
+      {
+        "action": "account.um_status",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 认证状态查询（内存态只读，未主动核验）",
+        "param_schema": {}
+      },
+      {
+        "action": "account.um_verify",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 账号主动核验（向上游探测凭据有效性）",
+        "param_schema": {}
+      },
+      {
+        "action": "m365.candidate_status",
+        "enabled": false,
+        "disabled_reason": "M365 源码已归档；该管理动作已停用，历史费用继续保留",
+        "cancelable": true,
+        "description": "M365 候选状态查询（只读，经管理会话桥）",
+        "param_schema": {}
+      },
+      {
+        "action": "m365.candidate_verify",
+        "enabled": false,
+        "disabled_reason": "M365 源码已归档；该管理动作已停用，历史费用继续保留",
+        "cancelable": true,
+        "description": "M365 候选验证（每次调用一次真实计费探测）",
+        "param_schema": {}
+      },
+      {
+        "action": "m365.mapping_publish",
+        "enabled": false,
+        "disabled_reason": "M365 源码已归档；该管理动作已停用，历史费用继续保留",
+        "cancelable": true,
+        "description": "M365 候选映射发布（写入公开目录映射）",
+        "param_schema": {
+          "public_model": {
+            "type": "str",
+            "max_len": 128
+          },
+          "tone": {
+            "type": "str",
+            "max_len": 64
+          },
+          "display_name": {
+            "type": "str",
+            "max_len": 128
+          },
+          "effort": {
+            "type": "str",
+            "max_len": 16
+          }
+        }
+      },
+      {
+        "action": "m365.settings_save",
+        "enabled": false,
+        "disabled_reason": "M365 源码已归档；该管理动作已停用，历史费用继续保留",
+        "cancelable": true,
+        "description": "M365 高级设置保存",
+        "param_schema": {
+          "chatTimeoutSeconds": {
+            "type": "int",
+            "min": 5,
+            "max": 3600
+          },
+          "imageTimeoutSeconds": {
+            "type": "int",
+            "min": 5,
+            "max": 3600
+          },
+          "maxToolCallsPerTurn": {
+            "type": "int",
+            "min": 1,
+            "max": 64
+          },
+          "maxToolRounds": {
+            "type": "int",
+            "min": 1,
+            "max": 512
+          },
+          "rateLimitCooldownSeconds": {
+            "type": "int",
+            "min": 5,
+            "max": 3600
+          },
+          "maxConversationMessages": {
+            "type": "int",
+            "min": 1,
+            "max": 10000
+          },
+          "accountConcurrencyLimit": {
+            "type": "int",
+            "min": 1,
+            "max": 64
+          },
+          "logLevel": {
+            "type": "str",
+            "max_len": 16
+          },
+          "outboundProxy": {
+            "type": "str",
+            "max_len": 256
+          }
+        }
+      },
+      {
+        "action": "m365.speedtest_key_setup",
+        "enabled": false,
+        "disabled_reason": "M365 源码已归档；该管理动作已停用，历史费用继续保留",
+        "cancelable": true,
+        "description": "创建控制台托管测速 API 密钥（管理会话写入）",
+        "param_schema": {}
+      },
+      {
+        "action": "m365.supply_status",
+        "enabled": false,
+        "disabled_reason": "M365 源码已归档；该管理动作已停用，历史费用继续保留",
+        "cancelable": true,
+        "description": "M365 凭据供给状态查询（只读元数据）",
+        "param_schema": {}
+      },
+      {
+        "action": "model.catalog",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "模型目录只读查询（各来源 /v1/models；无探测、无计费、无启停）",
+        "param_schema": {}
+      },
+      {
+        "action": "model.context_override_clear",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "恢复默认＝删除人工 context 覆盖（探测历史证据保留）",
+        "param_schema": {
+          "source": {
+            "type": "str",
+            "max_len": 128
+          },
+          "model_id": {
+            "type": "str",
+            "max_len": 128
+          },
+          "expected_set_at": {
+            "type": "str",
+            "max_len": 64
+          }
+        }
+      },
+      {
+        "action": "model.context_override_set",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "设置人工 context 覆盖（仅写 model-sync 状态文件；客户端应用须经同步 apply）",
+        "param_schema": {
+          "source": {
+            "type": "str",
+            "max_len": 128
+          },
+          "model_id": {
+            "type": "str",
+            "max_len": 128
+          },
+          "context": {
+            "type": "int",
+            "min": 1,
+            "max": 10000000
+          },
+          "expected_set_at": {
+            "type": "str",
+            "max_len": 64
+          }
+        }
+      },
+      {
+        "action": "model.context_overrides",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "人工 context 覆盖读面（声明/覆盖/有效值/来源；只读）",
+        "param_schema": {}
+      },
+      {
+        "action": "model.context_probe_preview",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "上下文探测队列预览（只读：队列+计划+估算，零请求零写入）",
+        "param_schema": {
+          "sources": {
+            "type": "str",
+            "max_len": 512
+          },
+          "models": {
+            "type": "object"
+          },
+          "retest": {
+            "type": "bool"
+          }
+        }
+      },
+      {
+        "action": "model.context_probe_run",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "执行上下文探测队列（真实长输入计费请求，集中批准后启用；支持 sources/models 显式选择与 retest 重测）",
+        "param_schema": {
+          "max_requests": {
+            "type": "int",
+            "min": 1,
+            "max": 20
+          },
+          "max_tokens": {
+            "type": "int",
+            "min": 1,
+            "max": 64
+          },
+          "sources": {
+            "type": "str",
+            "max_len": 512
+          },
+          "models": {
+            "type": "object"
+          },
+          "retest": {
+            "type": "bool"
+          }
+        }
+      },
+      {
+        "action": "model.settings_apply",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "应用模型设置草稿（提交草稿版本+预览绑定；ZCode 主配置与规则库同事务）",
+        "param_schema": {
+          "selection": {
+            "type": "object"
+          },
+          "preview_token": {
+            "type": "str",
+            "max_len": 64
+          },
+          "source": {
+            "type": "str",
+            "max_len": 128
+          },
+          "model_id": {
+            "type": "str",
+            "max_len": 128
+          }
+        }
+      },
+      {
+        "action": "model.settings_preview",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "预览模型设置草稿（绑定版本、证据和客户端快照；不写客户端）",
+        "param_schema": {
+          "selection": {
+            "type": "object"
+          }
+        }
+      },
+      {
+        "action": "model.settings_save",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "保存模型设置草稿（alias/context/defaultEffort；只写草稿）",
+        "param_schema": {
+          "source": {
+            "type": "str",
+            "max_len": 128
+          },
+          "model_id": {
+            "type": "str",
+            "max_len": 128
+          },
+          "alias": {
+            "type": "str",
+            "max_len": 128
+          },
+          "contextSource": {
+            "type": "str",
+            "max_len": 16
+          },
+          "contextTokens": {
+            "type": "int",
+            "min": 1,
+            "max": 10000000
+          },
+          "defaultEffort": {
+            "type": "str",
+            "max_len": 32
+          },
+          "expected_draft_version": {
+            "type": "int",
+            "min": 0
+          }
+        }
+      },
+      {
+        "action": "model.speedtest",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "独立模型测速（流式短请求，首字+总耗时）",
+        "param_schema": {
+          "source": {
+            "type": "str",
+            "max_len": 16
+          },
+          "model": {
+            "type": "str",
+            "max_len": 128
+          },
+          "max_tokens": {
+            "type": "int",
+            "min": 1,
+            "max": 512
+          }
+        }
+      },
+      {
+        "action": "model.sync_apply",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "执行模型同步（写入受管客户端配置）",
+        "param_schema": {
+          "scope_mode": {
+            "type": "str",
+            "max_len": 16
+          },
+          "sources": {
+            "type": "str",
+            "max_len": 512
+          },
+          "consumers": {
+            "type": "str",
+            "max_len": 512
+          },
+          "models": {
+            "type": "object"
+          }
+        }
+      },
+      {
+        "action": "model.sync_history",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "模型同步历史（只读，有界）",
+        "param_schema": {
+          "limit": {
+            "type": "int",
+            "min": 1,
+            "max": 50
+          }
+        }
+      },
+      {
+        "action": "model.sync_pending",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "模型同步待处理清单（只读）",
+        "param_schema": {}
+      },
+      {
+        "action": "model.sync_preview",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "模型同步预览（无写入）",
+        "param_schema": {
+          "scope_mode": {
+            "type": "str",
+            "max_len": 16
+          },
+          "sources": {
+            "type": "str",
+            "max_len": 512
+          },
+          "consumers": {
+            "type": "str",
+            "max_len": 512
+          },
+          "models": {
+            "type": "object"
+          }
+        }
+      },
+      {
+        "action": "model.task_disable",
+        "enabled": false,
+        "disabled_reason": "计划任务禁用属真实系统写入（每日 06:00 目录镜像在用）；部署授权包节 5 文本未含禁用——维护者明确批准后启用",
+        "cancelable": true,
+        "description": "禁用模型同步计划任务（真实系统写入）",
+        "param_schema": {}
+      },
+      {
+        "action": "model.task_install",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "模型同步任务安装/修复",
+        "param_schema": {}
+      },
+      {
+        "action": "model.task_status",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "模型同步任务状态（只读）",
+        "param_schema": {}
+      },
+      {
+        "action": "qoder.credential_bridge",
+        "enabled": false,
+        "disabled_reason": "P2-R2 未关闭：两文件连续写入不保证 gateway 读取时配对一致（user 与 id 独立先后读取，错配窗口内请求失败），自动修复复制需消费者配合的原子切换或获授权的受控停用窗口；当前仅提供只读来源诊断（qoder.source_diagnostics）",
+        "cancelable": true,
+        "description": "Qoder 国内凭据桥接",
+        "param_schema": {}
+      },
+      {
+        "action": "qoder.models",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "Qoder 国内实时模型目录查询（只读）",
+        "param_schema": {}
+      },
+      {
+        "action": "qoder.poc",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "Qoder 国内连通性 PoC（每次一发真实计费小请求）",
+        "param_schema": {
+          "model": {
+            "type": "str",
+            "max_len": 128
+          }
+        }
+      },
+      {
+        "action": "qoder.quota_read",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "Qoder 国内积分额度查询（只读）",
+        "param_schema": {}
+      },
+      {
+        "action": "qoder.source_diagnostics",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "Qoder 国内凭据来源只读诊断（元数据，不读取凭据内容）",
+        "param_schema": {}
+      },
+      {
+        "action": "qoder.status",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "Qoder 国内登录状态查询（只读）",
+        "param_schema": {}
+      },
+      {
+        "action": "qoderglobal.login",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "打开国际版官方登录窗口（本机交互，用户完成登录）",
+        "param_schema": {}
+      },
+      {
+        "action": "qoderglobal.models",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "Qoder 国际版实时模型目录查询（只读）",
+        "param_schema": {}
+      },
+      {
+        "action": "qoderglobal.quota",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "Qoder 国际版分桶额度查询（只读）",
+        "param_schema": {}
+      },
+      {
+        "action": "qoderglobal.status",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "Qoder 国际版登录状态查询（只读）",
+        "param_schema": {}
+      },
+      {
+        "action": "service.restart",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "重启一个网关服务（停止后立即重新启动；中断该服务在途工作）",
+        "param_schema": {}
+      },
+      {
+        "action": "service.start",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "启动一个网关服务（经 runtime 权威）",
+        "param_schema": {}
+      },
+      {
+        "action": "service.stop",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "停止一个网关服务（经 runtime 权威）",
+        "param_schema": {}
+      },
+      {
+        "action": "share.backend_login",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "登录分享专用后端（触发独立 profile 浏览器 UM 登录）",
+        "param_schema": {}
+      },
+      {
+        "action": "share.backend_reauthenticate",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "仅重新认证分享专用后端 8110（不冷启动、不重启进程、不绕过人工认证）",
+        "param_schema": {}
+      },
+      {
+        "action": "share.backend_restart",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "重启分享专用后端 8110（单层：暂停 8100 接收→有界排空→重启→恢复接收；不动 8100 实例与私人 8000）",
+        "param_schema": {
+          "drain_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "poll_interval_s": {
+            "type": "int",
+            "min": 1,
+            "max": 10
+          },
+          "stop_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 120
+          },
+          "start_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 180
+          },
+          "lease_s": {
+            "type": "int",
+            "min": 60,
+            "max": 600
+          }
+        }
+      },
+      {
+        "action": "share.diagnostics",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 分享八层分层诊断（只读、无副作用；八层证据含维护视图与故障留证）",
+        "param_schema": {}
+      },
+      {
+        "action": "share.estop",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 分享紧急停止（立即撤入口，不排空）",
+        "param_schema": {
+          "poll_interval_s": {
+            "type": "int",
+            "min": 1,
+            "max": 10
+          },
+          "ts_confirm_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "connectivity_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "backend_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "drain_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "backend_confirm_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          }
+        }
+      },
+      {
+        "action": "share.gateway_restart",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "重启分享入口 8100（单层：经受限 broker 宿主协议；不动 8110 实例）",
+        "param_schema": {
+          "restart_budget_s": {
+            "type": "int",
+            "min": 10,
+            "max": 180
+          }
+        }
+      },
+      {
+        "action": "share.retry_stop",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 分享残留关闭重试（按剩余步骤）",
+        "param_schema": {
+          "poll_interval_s": {
+            "type": "int",
+            "min": 1,
+            "max": 10
+          },
+          "ts_confirm_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "connectivity_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "backend_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "drain_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "backend_confirm_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "step_interval_ms": {
+            "type": "int",
+            "min": 1,
+            "max": 60000
+          }
+        }
+      },
+      {
+        "action": "share.start",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 分享开启链（TS 服务→连接→后端→Funnel）",
+        "param_schema": {
+          "poll_interval_s": {
+            "type": "int",
+            "min": 1,
+            "max": 10
+          },
+          "ts_confirm_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "connectivity_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "backend_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "drain_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "backend_confirm_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          }
+        }
+      },
+      {
+        "action": "share.status",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 分享分层状态观察（只读）",
+        "param_schema": {}
+      },
+      {
+        "action": "share.stop",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 分享正常关闭链（撤入口→排空→后端→TS）",
+        "param_schema": {
+          "poll_interval_s": {
+            "type": "int",
+            "min": 1,
+            "max": 10
+          },
+          "ts_confirm_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "connectivity_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "backend_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "drain_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "backend_confirm_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          }
+        }
+      }
+    ]
+  },
+  "catalog": {
+    "catalogs": {
+      "um": [
+        {
+          "id": "fixture-model",
+          "display_name": null,
+          "context": 131072,
+          "context_state": "declared",
+          "output_token_cap": {
+            "value": 16384,
+            "source": "compat_default"
+          },
+          "efforts": [
+            "low",
+            "high"
+          ],
+          "default_effort": "low",
+          "publish": true,
+          "efforts_source": "upstream"
+        }
+      ],
+      "cliproxy": [
+        {
+          "id": "fixture-unknown-model",
+          "display_name": null,
+          "context": null,
+          "context_state": "unknown",
+          "output_token_cap": {
+            "value": 16384,
+            "source": "compat_default"
+          },
+          "efforts": [],
+          "default_effort": null,
+          "publish": true,
+          "efforts_source": null
+        }
+      ]
+    },
+    "warnings": [],
+    "checked_epoch": 1790942400
+  },
+  "context_overrides": {
+    "overrides": [
+      {
+        "source": "cliproxy",
+        "model_id": "fixture-unknown-model",
+        "declared_context": null,
+        "override_context": null,
+        "effective_context": null,
+        "effective_source": "unknown",
+        "declared_at": null,
+        "override_at": null,
+        "override_applied": false,
+        "override_state": "none",
+        "client_context": null,
+        "client_readback_consumer": null,
+        "settings_draft": null,
+        "settings_applied": null,
+        "settings_draft_version": null,
+        "settings_applied_version": null,
+        "settings_applied_at": null,
+        "settings_applied_evidence": null,
+        "settings_held": false,
+        "client_readback_state": "absent",
+        "client_matches_applied": null,
+        "client_readbacks": [
+          {
+            "consumer": "ZCode",
+            "state": "absent",
+            "contextTokens": null,
+            "alias": null,
+            "defaultEffort": null,
+            "outputTokenCap": {
+              "value": null,
+              "source": null
+            },
+            "matchesApplied": {
+              "context": null,
+              "alias": null,
+              "defaultEffort": null
+            }
+          }
+        ],
+        "client_alias": null,
+        "client_default_effort": null,
+        "client_output_token_cap": {
+          "value": null,
+          "source": null
+        }
+      },
+      {
+        "source": "um",
+        "model_id": "fixture-model",
+        "declared_context": 131072,
+        "override_context": null,
+        "effective_context": 131072,
+        "effective_source": "declared",
+        "declared_at": null,
+        "override_at": null,
+        "override_applied": false,
+        "override_state": "none",
+        "settings_draft": {
+          "alias": "Demo 模型",
+          "contextSource": "measured",
+          "contextTokens": 4096,
+          "defaultEffort": "high"
+        },
+        "settings_applied": null,
+        "settings_draft_version": 1,
+        "settings_applied_version": null,
+        "settings_applied_at": null,
+        "settings_applied_evidence": null,
+        "settings_held": true,
+        "client_context": null,
+        "client_readback_consumer": null,
+        "client_readback_state": "absent",
+        "client_matches_applied": null,
+        "client_readbacks": [
+          {
+            "consumer": "DSH",
+            "state": "absent",
+            "contextTokens": null,
+            "alias": null,
+            "defaultEffort": null,
+            "outputTokenCap": {
+              "value": null,
+              "source": null
+            },
+            "matchesApplied": {
+              "context": null,
+              "alias": null,
+              "defaultEffort": null
+            }
+          },
+          {
+            "consumer": "ZCode",
+            "state": "absent",
+            "contextTokens": null,
+            "alias": null,
+            "defaultEffort": null,
+            "outputTokenCap": {
+              "value": null,
+              "source": null
+            },
+            "matchesApplied": {
+              "context": null,
+              "alias": null,
+              "defaultEffort": null
+            }
+          }
+        ],
+        "client_alias": null,
+        "client_default_effort": null,
+        "client_output_token_cap": {
+          "value": null,
+          "source": null
+        }
+      }
+    ],
+    "note": "Synthetic private-client snapshot"
+  },
+  "context_probe_preview": {
+    "records": [
+      {
+        "source": "um",
+        "model_id": "fixture-model",
+        "declared_context": 131072,
+        "declared_context_known": true,
+        "declared_note": null,
+        "declared_at": null,
+        "status": "verified",
+        "observed_floor": 16000,
+        "observed_ceiling": null,
+        "attempts": null,
+        "last_run": null,
+        "last_success": "2026-10-02T11:00:00+00:00",
+        "last_error": null,
+        "evidence_revision": 1,
+        "stale_reason": null,
+        "token_evidence": 4096,
+        "scheme_revision": 1,
+        "history_count": 1,
+        "history": [
+          {
+            "evidence_revision": 0,
+            "observed_floor": 8000,
+            "observed_ceiling": null,
+            "token_evidence": null,
+            "attempts": null,
+            "status": "verified",
+            "last_run": null,
+            "last_success": null,
+            "last_error": null,
+            "stale_reason": null,
+            "reason": "retest",
+            "archived_at": "2026-10-01T12:00:00+00:00",
+            "character_unit": "chars",
+            "token_unit": "tokens"
+          }
+        ],
+        "probe_endpoint": true,
+        "paused": false,
+        "executable": false,
+        "estimate_note": null,
+        "input_unit": "chars",
+        "output_unit": "tokens",
+        "estimated_requests": 0,
+        "input_chars_estimate": 0,
+        "output_token_cap": 64
+      },
+      {
+        "source": "cliproxy",
+        "model_id": "fixture-unknown-model",
+        "declared_context": null,
+        "declared_context_known": false,
+        "declared_note": "声明未知，探测仍可测量实际可用长度",
+        "declared_at": "2026-10-02T12:00:00+00:00",
+        "status": "pending",
+        "observed_floor": null,
+        "observed_ceiling": null,
+        "attempts": 0,
+        "last_run": null,
+        "last_success": null,
+        "last_error": null,
+        "evidence_revision": 1,
+        "stale_reason": null,
+        "token_evidence": null,
+        "scheme_revision": 1,
+        "history_count": 0,
+        "history": [],
+        "probe_endpoint": true,
+        "paused": false,
+        "executable": false,
+        "estimate_note": "该来源凭据不可读（token 缺失），实际零请求",
+        "input_unit": "chars",
+        "output_unit": "tokens",
+        "estimated_requests": 0,
+        "input_chars_estimate": 0,
+        "output_token_cap": 64
+      }
+    ],
+    "steps": [
+      4000,
+      16000,
+      64000,
+      256000
+    ],
+    "totals": {
+      "estimated_requests": 0,
+      "estimated_input_chars": 0,
+      "runnable_records": 0,
+      "blocked_records": 1,
+      "idle_records": 1
+    },
+    "unit_note": "步进与 input_chars_estimate 为字符数（input_unit=chars），输出上限为 token（output_unit=tokens）；observed_floor/observed_ceiling 是历史字符步进证据，不是 token 容量；token_evidence 为某次成功请求的上游输入 Token 报告（下界证据），不是容量；0 是合法值，判断未知须用 is None（缺席即 Token 容量未知）；不做字符→token 换算；scheme_revision 缺字段=引入修订号前的祖传记录，按修订 1 解释；evidence_revision None=引入修订号前的祖传证据；declared_context 为空即声明未知（declared_context_known=False），探测仍可测量实际可用长度；记录缺席表示未知，不表示已实测或零容量",
+    "budget_note": "估算按固定步进表 [4000, 16000, 64000, 256000]（输入为字符数，不做字符→token 换算）；无探测端点或凭据不可读的来源（含已暂停）runner 零请求跳过，其记录估算为 0，totals 可核对总额；totals 三分口径 runnable+blocked+idle=records 条数：runnable=本轮会消耗请求（pending/stale 或 retest 下的 verified/failed，且有端点且凭据可读），blocked=本轮有资格但无端点或凭据不可读，idle=本轮不消耗请求（verified/failed 未 retest、未选中，或 pending 但既有证据已覆盖全梯——runner 零请求直接 verified）；全局请求预算口径：run 动作单次 max_requests ≤ 20、单请求输出 max_tokens ≤ 64；未定价来源不做金额估算",
+    "cost_note": "费用未定价/无法核算：本地网关无计价依据，不编造金额",
+    "note": "队列在每次目录同步后播种；本预览不发请求、不写状态（凭据文件只读读一次）"
+  },
+  "settings_save": {
+    "source": "um",
+    "model_id": "fixture-model",
+    "draft": {
+      "alias": "Demo 模型",
+      "contextSource": "measured",
+      "contextTokens": 4096,
+      "defaultEffort": "high"
+    },
+    "draft_version": 1,
+    "draft_saved_at": "2026-10-02T12:00:00+00:00",
+    "applied_version": null,
+    "note": "设置草稿已保存（保存≠已应用）：预览绑定 draftVersion 后用 model.settings_apply 显式应用"
+  },
+  "settings_preview": {
+    "timestamp": "2026-10-02T20:00:00+08:00",
+    "code_stamp": "810b047d202e",
+    "status": "preview",
+    "applied": [],
+    "pending": [],
+    "appliedDetails": [],
+    "pendingDetails": [],
+    "pendingRetirement": [],
+    "overrideNotices": [
+      "别名已应用：um|fixture-model 显示名 → Demo 模型",
+      "context 已应用：um|fixture-model → 4096（目录声明 131072）",
+      "默认档已应用：um|fixture-model → high"
+    ],
+    "warnings": [],
+    "dshChanged": false,
+    "zcodeChanged": false,
+    "selection": {
+      "um|fixture-model": 1
+    },
+    "preview_token": "10af8b2fa1ff2f2d3d20e97076befc603ded0ca02fab5a0593c1366dd1362acd",
+    "changes": [
+      {
+        "key": "um|fixture-model",
+        "source": "um",
+        "model_id": "fixture-model",
+        "before": null,
+        "draft": {
+          "alias": "Demo 模型",
+          "contextSource": "measured",
+          "contextTokens": 4096,
+          "defaultEffort": "high"
+        }
+      }
+    ],
+    "settingsApplied": [],
+    "settingsDeferred": [],
+    "plan": [
+      "DSH 发布 fixture-model",
+      "ZCode 发布 fixture-model",
+      "（应用时）ZCode 供应商规则库将对齐（provider_config.json）"
+    ],
+    "note": "设置草稿预览：应用时带回 selection 和 preview_token；不发模型请求"
+  },
+  "settings_apply": {
+    "applied": [
+      "um|fixture-model"
+    ],
+    "deferred": [],
+    "skipped": [],
+    "deferred_restored": [],
+    "status": "changed",
+    "warnings": [],
+    "pendingDetails": [],
+    "selection": {
+      "um|fixture-model": 1
+    },
+    "preview_token": "10af8b2fa1ff2f2d3d20e97076befc603ded0ca02fab5a0593c1366dd1362acd",
+    "note": "已应用 1 项设置（草稿已转已应用，草稿清空）"
+  },
+  "client_readback": {
+    "overrides": [
+      {
+        "source": "cliproxy",
+        "model_id": "fixture-unknown-model",
+        "declared_context": null,
+        "override_context": null,
+        "effective_context": null,
+        "effective_source": "unknown",
+        "declared_at": "2026-10-02T12:00:00+00:00",
+        "override_at": null,
+        "override_applied": false,
+        "override_state": "none",
+        "client_context": null,
+        "client_readback_consumer": null,
+        "settings_draft": null,
+        "settings_applied": null,
+        "settings_draft_version": null,
+        "settings_applied_version": null,
+        "settings_applied_at": null,
+        "settings_applied_evidence": null,
+        "settings_held": false,
+        "client_readback_state": "absent",
+        "client_matches_applied": null,
+        "client_readbacks": [
+          {
+            "consumer": "ZCode",
+            "state": "absent",
+            "contextTokens": null,
+            "alias": null,
+            "defaultEffort": null,
+            "outputTokenCap": {
+              "value": null,
+              "source": null
+            },
+            "matchesApplied": {
+              "context": null,
+              "alias": null,
+              "defaultEffort": null
+            }
+          }
+        ],
+        "client_alias": null,
+        "client_default_effort": null,
+        "client_output_token_cap": {
+          "value": null,
+          "source": null
+        }
+      },
+      {
+        "source": "um",
+        "model_id": "fixture-model",
+        "declared_context": 131072,
+        "override_context": 4096,
+        "effective_context": 4096,
+        "effective_source": "override",
+        "declared_at": null,
+        "override_at": "2026-10-02T12:00:00+00:00",
+        "override_applied": true,
+        "override_state": "applied",
+        "settings_draft": null,
+        "settings_applied": {
+          "alias": "Demo 模型",
+          "contextSource": "measured",
+          "contextTokens": 4096,
+          "defaultEffort": "high"
+        },
+        "settings_draft_version": 1,
+        "settings_applied_version": 1,
+        "settings_applied_at": "2026-10-02T12:00:00+00:00",
+        "settings_applied_evidence": "applied",
+        "settings_held": false,
+        "client_readback_consumer": "DSH",
+        "client_context": 4096,
+        "client_readback_state": "ok",
+        "client_matches_applied": true,
+        "client_readbacks": [
+          {
+            "consumer": "DSH",
+            "state": "ok",
+            "contextTokens": 4096,
+            "alias": "Demo 模型",
+            "defaultEffort": null,
+            "outputTokenCap": {
+              "value": 16384,
+              "source": "client_config"
+            },
+            "matchesApplied": {
+              "context": true,
+              "alias": true,
+              "defaultEffort": null
+            }
+          },
+          {
+            "consumer": "ZCode",
+            "state": "ok",
+            "contextTokens": 4096,
+            "alias": "Demo 模型",
+            "defaultEffort": "high",
+            "outputTokenCap": {
+              "value": 16384,
+              "source": "client_config"
+            },
+            "matchesApplied": {
+              "context": true,
+              "alias": true,
+              "defaultEffort": true
+            }
+          }
+        ],
+        "client_alias": "Demo 模型",
+        "client_default_effort": "high",
+        "client_output_token_cap": {
+          "value": 16384,
+          "source": "client_config"
+        }
+      }
+    ]
+  },
+  "client_readback_unavailable": {
+    "overrides": [
+      {
+        "source": "cliproxy",
+        "model_id": "fixture-unknown-model",
+        "declared_context": null,
+        "override_context": null,
+        "effective_context": null,
+        "effective_source": "unknown",
+        "declared_at": "2026-10-02T12:00:00+00:00",
+        "override_at": null,
+        "override_applied": false,
+        "override_state": "none",
+        "client_context": null,
+        "client_readback_consumer": null,
+        "settings_draft": null,
+        "settings_applied": null,
+        "settings_draft_version": null,
+        "settings_applied_version": null,
+        "settings_applied_at": null,
+        "settings_applied_evidence": null,
+        "settings_held": false,
+        "client_readback_state": "unavailable",
+        "client_matches_applied": null,
+        "client_readbacks": [
+          {
+            "consumer": "ZCode",
+            "state": "unavailable",
+            "contextTokens": null,
+            "alias": null,
+            "defaultEffort": null,
+            "outputTokenCap": {
+              "value": null,
+              "source": null
+            },
+            "matchesApplied": {
+              "context": null,
+              "alias": null,
+              "defaultEffort": null
+            }
+          }
+        ],
+        "client_alias": null,
+        "client_default_effort": null,
+        "client_output_token_cap": {
+          "value": null,
+          "source": null
+        }
+      },
+      {
+        "source": "um",
+        "model_id": "fixture-model",
+        "declared_context": 131072,
+        "override_context": 4096,
+        "effective_context": 4096,
+        "effective_source": "override",
+        "declared_at": null,
+        "override_at": "2026-10-02T12:00:00+00:00",
+        "override_applied": true,
+        "override_state": "applied",
+        "settings_draft": null,
+        "settings_applied": {
+          "alias": "Demo 模型",
+          "contextSource": "measured",
+          "contextTokens": 4096,
+          "defaultEffort": "high"
+        },
+        "settings_draft_version": 1,
+        "settings_applied_version": 1,
+        "settings_applied_at": "2026-10-02T12:00:00+00:00",
+        "settings_applied_evidence": "applied",
+        "settings_held": false,
+        "client_context": null,
+        "client_readback_consumer": null,
+        "client_readback_state": "unavailable",
+        "client_matches_applied": null,
+        "client_readbacks": [
+          {
+            "consumer": "DSH",
+            "state": "unavailable",
+            "contextTokens": null,
+            "alias": null,
+            "defaultEffort": null,
+            "outputTokenCap": {
+              "value": null,
+              "source": null
+            },
+            "matchesApplied": {
+              "context": null,
+              "alias": null,
+              "defaultEffort": null
+            }
+          },
+          {
+            "consumer": "ZCode",
+            "state": "unavailable",
+            "contextTokens": null,
+            "alias": null,
+            "defaultEffort": null,
+            "outputTokenCap": {
+              "value": null,
+              "source": null
+            },
+            "matchesApplied": {
+              "context": null,
+              "alias": null,
+              "defaultEffort": null
+            }
+          }
+        ],
+        "client_alias": null,
+        "client_default_effort": null,
+        "client_output_token_cap": {
+          "value": null,
+          "source": null
+        }
+      }
+    ]
+  },
+  "settings_deferred_preview": {
+    "timestamp": "2026-10-02T20:00:00+08:00",
+    "code_stamp": "810b047d202e",
+    "status": "preview",
+    "applied": [],
+    "pending": [],
+    "appliedDetails": [],
+    "pendingDetails": [],
+    "pendingRetirement": [],
+    "overrideNotices": [
+      "别名已应用：um|fixture-model 显示名 → Demo 待同步",
+      "context 已应用：um|fixture-model → 4096（目录声明 131072）",
+      "默认档已应用：um|fixture-model → high"
+    ],
+    "warnings": [],
+    "dshChanged": false,
+    "zcodeChanged": false,
+    "selection": {
+      "um|fixture-model": 2
+    },
+    "preview_token": "cedcbbc3626aef4d822252f622996c916eddc81973e6ba3414a13a12bf4f45ad",
+    "changes": [
+      {
+        "key": "um|fixture-model",
+        "source": "um",
+        "model_id": "fixture-model",
+        "before": {
+          "alias": "Demo 模型",
+          "contextSource": "measured",
+          "contextTokens": 4096,
+          "defaultEffort": "high"
+        },
+        "draft": {
+          "alias": "Demo 待同步",
+          "contextSource": "measured",
+          "contextTokens": 4096,
+          "defaultEffort": "high"
+        }
+      }
+    ],
+    "settingsApplied": [],
+    "settingsDeferred": [],
+    "plan": [
+      "DSH 更新 fixture-model",
+      "ZCode 更新 fixture-model"
+    ],
+    "note": "设置草稿预览：应用时带回 selection 和 preview_token；不发模型请求"
+  },
+  "settings_deferred_apply": {
+    "applied": [],
+    "deferred": [
+      "um|fixture-model"
+    ],
+    "skipped": [],
+    "deferred_restored": [
+      "um|fixture-model"
+    ],
+    "status": "pending",
+    "warnings": [],
+    "pendingDetails": [
+      {
+        "consumer": "DSH",
+        "kind": "update",
+        "model_id": "fixture-model",
+        "description": "DSH 更新 fixture-model"
+      },
+      {
+        "consumer": "ZCode",
+        "kind": "update",
+        "model_id": "fixture-model",
+        "description": "ZCode 更新 fixture-model"
+      },
+      {
+        "consumer": "ZCode",
+        "kind": "provider_write_deferred",
+        "model_id": null,
+        "description": "ZCode 侧写集合整体延期（ZCode 运行中，客户端配置不热写）：本轮不写 config.json / provider_config.json，待条件就绪后按完整事务重跑"
+      }
+    ],
+    "selection": {
+      "um|fixture-model": 2
+    },
+    "preview_token": "cedcbbc3626aef4d822252f622996c916eddc81973e6ba3414a13a12bf4f45ad",
+    "note": "客户端写集合整体延期：新草稿保留，原已应用值和所有客户端未变更"
+  },
+  "settings_conflict_error": {
+    "code": "version_conflict",
+    "message": "预览已过期：草稿、目录证据或客户端配置已变化；请重新预览"
+  },
+  "share_usage": {
+    "requests": 6,
+    "keys": [
+      {
+        "key_id": "fixture-key",
+        "requests": 4,
+        "inputTokens": 145,
+        "outputTokens": 15,
+        "unknownRequests": 0,
+        "unpricedRequests": 1,
+        "costUsd": 0.00016,
+        "knownCostUsd": 0.00011,
+        "estimatedCostUsd": 5e-05,
+        "coverage": {
+          "records": 4,
+          "pricedRequests": 3,
+          "unknownTimeRequests": 0,
+          "pricingUnavailableRequests": 0,
+          "costComplete": false,
+          "completeUsageRequests": 2,
+          "partialUsageRequests": 1,
+          "estimatedUsageRequests": 1,
+          "unknownUsageRequests": 0
+        },
+        "tokenUsage": {
+          "completeRequests": 2,
+          "lowerBoundRequests": 1,
+          "estimatedRequests": 1,
+          "unknownRequests": 0,
+          "inputTokens": 100,
+          "outputTokens": 10,
+          "totalTokens": 110,
+          "lowerBoundInputTokens": 20,
+          "lowerBoundOutputTokens": null,
+          "lowerBoundTokens": 20,
+          "estimatedInputTokens": 25,
+          "estimatedOutputTokens": 5,
+          "estimatedTokens": 30,
+          "complete": false
+        },
+        "priceVersions": [
+          "fixture-price-version"
+        ],
+        "models": [
+          {
+            "model": "fixture-model",
+            "requests": 3,
+            "inputTokens": 145,
+            "outputTokens": 15,
+            "unknownRequests": 0,
+            "unpricedRequests": 0,
+            "costUsd": 0.00016,
+            "knownCostUsd": 0.00011,
+            "estimatedCostUsd": 5e-05,
+            "coverage": {
+              "records": 3,
+              "pricedRequests": 3,
+              "unknownTimeRequests": 0,
+              "pricingUnavailableRequests": 0,
+              "costComplete": false,
+              "completeUsageRequests": 1,
+              "partialUsageRequests": 1,
+              "estimatedUsageRequests": 1,
+              "unknownUsageRequests": 0
+            },
+            "tokenUsage": {
+              "completeRequests": 1,
+              "lowerBoundRequests": 1,
+              "estimatedRequests": 1,
+              "unknownRequests": 0,
+              "inputTokens": 100,
+              "outputTokens": 10,
+              "totalTokens": 110,
+              "lowerBoundInputTokens": 20,
+              "lowerBoundOutputTokens": null,
+              "lowerBoundTokens": 20,
+              "estimatedInputTokens": 25,
+              "estimatedOutputTokens": 5,
+              "estimatedTokens": 30,
+              "complete": false
+            },
+            "priceVersions": [
+              "fixture-price-version"
+            ]
+          },
+          {
+            "model": "unknown-priced-model",
+            "requests": 1,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "unknownRequests": 0,
+            "unpricedRequests": 1,
+            "costUsd": 0.0,
+            "knownCostUsd": 0.0,
+            "estimatedCostUsd": 0.0,
+            "coverage": {
+              "records": 1,
+              "pricedRequests": 0,
+              "unknownTimeRequests": 0,
+              "pricingUnavailableRequests": 0,
+              "costComplete": false,
+              "completeUsageRequests": 1,
+              "partialUsageRequests": 0,
+              "estimatedUsageRequests": 0,
+              "unknownUsageRequests": 0
+            },
+            "tokenUsage": {
+              "completeRequests": 1,
+              "lowerBoundRequests": 0,
+              "estimatedRequests": 0,
+              "unknownRequests": 0,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "totalTokens": 0,
+              "lowerBoundInputTokens": null,
+              "lowerBoundOutputTokens": null,
+              "lowerBoundTokens": null,
+              "estimatedInputTokens": null,
+              "estimatedOutputTokens": null,
+              "estimatedTokens": null,
+              "complete": true
+            },
+            "priceVersions": [
+              "fixture-price-version"
+            ]
+          }
+        ],
+        "days": [
+          {
+            "day": "2026-10-02",
+            "requests": 4,
+            "inputTokens": 145,
+            "outputTokens": 15,
+            "unknownRequests": 0,
+            "unpricedRequests": 1,
+            "costUsd": 0.00016,
+            "knownCostUsd": 0.00011,
+            "estimatedCostUsd": 5e-05,
+            "coverage": {
+              "records": 4,
+              "pricedRequests": 3,
+              "unknownTimeRequests": 0,
+              "pricingUnavailableRequests": 0,
+              "costComplete": false,
+              "completeUsageRequests": 2,
+              "partialUsageRequests": 1,
+              "estimatedUsageRequests": 1,
+              "unknownUsageRequests": 0
+            },
+            "tokenUsage": {
+              "completeRequests": 2,
+              "lowerBoundRequests": 1,
+              "estimatedRequests": 1,
+              "unknownRequests": 0,
+              "inputTokens": 100,
+              "outputTokens": 10,
+              "totalTokens": 110,
+              "lowerBoundInputTokens": 20,
+              "lowerBoundOutputTokens": null,
+              "lowerBoundTokens": 20,
+              "estimatedInputTokens": 25,
+              "estimatedOutputTokens": 5,
+              "estimatedTokens": 30,
+              "complete": false
+            },
+            "priceVersions": [
+              "fixture-price-version"
+            ]
+          }
+        ],
+        "undated": null,
+        "keyName": "Demo 名称",
+        "deleted": false
+      },
+      {
+        "key_id": "deleted-fixture-key",
+        "requests": 1,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "unknownRequests": 1,
+        "unpricedRequests": 0,
+        "costUsd": 0.0,
+        "knownCostUsd": 0.0,
+        "estimatedCostUsd": 0.0,
+        "coverage": {
+          "records": 1,
+          "pricedRequests": 0,
+          "unknownTimeRequests": 1,
+          "pricingUnavailableRequests": 0,
+          "costComplete": false,
+          "completeUsageRequests": 0,
+          "partialUsageRequests": 0,
+          "estimatedUsageRequests": 0,
+          "unknownUsageRequests": 1
+        },
+        "tokenUsage": {
+          "completeRequests": 0,
+          "lowerBoundRequests": 0,
+          "estimatedRequests": 0,
+          "unknownRequests": 1,
+          "inputTokens": null,
+          "outputTokens": null,
+          "totalTokens": null,
+          "lowerBoundInputTokens": null,
+          "lowerBoundOutputTokens": null,
+          "lowerBoundTokens": null,
+          "estimatedInputTokens": null,
+          "estimatedOutputTokens": null,
+          "estimatedTokens": null,
+          "complete": false
+        },
+        "priceVersions": [],
+        "models": [
+          {
+            "model": "unknown-model",
+            "requests": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "unknownRequests": 1,
+            "unpricedRequests": 0,
+            "costUsd": 0.0,
+            "knownCostUsd": 0.0,
+            "estimatedCostUsd": 0.0,
+            "coverage": {
+              "records": 1,
+              "pricedRequests": 0,
+              "unknownTimeRequests": 1,
+              "pricingUnavailableRequests": 0,
+              "costComplete": false,
+              "completeUsageRequests": 0,
+              "partialUsageRequests": 0,
+              "estimatedUsageRequests": 0,
+              "unknownUsageRequests": 1
+            },
+            "tokenUsage": {
+              "completeRequests": 0,
+              "lowerBoundRequests": 0,
+              "estimatedRequests": 0,
+              "unknownRequests": 1,
+              "inputTokens": null,
+              "outputTokens": null,
+              "totalTokens": null,
+              "lowerBoundInputTokens": null,
+              "lowerBoundOutputTokens": null,
+              "lowerBoundTokens": null,
+              "estimatedInputTokens": null,
+              "estimatedOutputTokens": null,
+              "estimatedTokens": null,
+              "complete": false
+            },
+            "priceVersions": []
+          }
+        ],
+        "days": [],
+        "undated": {
+          "day": null,
+          "requests": 0,
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "unknownRequests": 1,
+          "unpricedRequests": 0,
+          "costUsd": 0.0,
+          "knownCostUsd": 0.0,
+          "estimatedCostUsd": 0.0,
+          "coverage": {
+            "records": 1,
+            "pricedRequests": 0,
+            "unknownTimeRequests": 1,
+            "pricingUnavailableRequests": 0,
+            "costComplete": false,
+            "completeUsageRequests": 0,
+            "partialUsageRequests": 0,
+            "estimatedUsageRequests": 0,
+            "unknownUsageRequests": 1
+          },
+          "tokenUsage": {
+            "completeRequests": 0,
+            "lowerBoundRequests": 0,
+            "estimatedRequests": 0,
+            "unknownRequests": 1,
+            "inputTokens": null,
+            "outputTokens": null,
+            "totalTokens": null,
+            "lowerBoundInputTokens": null,
+            "lowerBoundOutputTokens": null,
+            "lowerBoundTokens": null,
+            "estimatedInputTokens": null,
+            "estimatedOutputTokens": null,
+            "estimatedTokens": null,
+            "complete": false
+          },
+          "priceVersions": []
+        },
+        "keyName": "Demo 已删除",
+        "deleted": true
+      }
+    ],
+    "unattributed": {
+      "key_id": null,
+      "requests": 1,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "unknownRequests": 1,
+      "unpricedRequests": 0,
+      "costUsd": 0.0,
+      "knownCostUsd": 0.0,
+      "estimatedCostUsd": 0.0,
+      "coverage": {
+        "records": 1,
+        "pricedRequests": 0,
+        "unknownTimeRequests": 0,
+        "pricingUnavailableRequests": 0,
+        "costComplete": false,
+        "completeUsageRequests": 0,
+        "partialUsageRequests": 0,
+        "estimatedUsageRequests": 0,
+        "unknownUsageRequests": 1
+      },
+      "tokenUsage": {
+        "completeRequests": 0,
+        "lowerBoundRequests": 0,
+        "estimatedRequests": 0,
+        "unknownRequests": 1,
+        "inputTokens": null,
+        "outputTokens": null,
+        "totalTokens": null,
+        "lowerBoundInputTokens": null,
+        "lowerBoundOutputTokens": null,
+        "lowerBoundTokens": null,
+        "estimatedInputTokens": null,
+        "estimatedOutputTokens": null,
+        "estimatedTokens": null,
+        "complete": false
+      },
+      "priceVersions": [],
+      "models": [
+        {
+          "model": "fixture-model",
+          "requests": 0,
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "unknownRequests": 1,
+          "unpricedRequests": 0,
+          "costUsd": 0.0,
+          "knownCostUsd": 0.0,
+          "estimatedCostUsd": 0.0,
+          "coverage": {
+            "records": 1,
+            "pricedRequests": 0,
+            "unknownTimeRequests": 0,
+            "pricingUnavailableRequests": 0,
+            "costComplete": false,
+            "completeUsageRequests": 0,
+            "partialUsageRequests": 0,
+            "estimatedUsageRequests": 0,
+            "unknownUsageRequests": 1
+          },
+          "tokenUsage": {
+            "completeRequests": 0,
+            "lowerBoundRequests": 0,
+            "estimatedRequests": 0,
+            "unknownRequests": 1,
+            "inputTokens": null,
+            "outputTokens": null,
+            "totalTokens": null,
+            "lowerBoundInputTokens": null,
+            "lowerBoundOutputTokens": null,
+            "lowerBoundTokens": null,
+            "estimatedInputTokens": null,
+            "estimatedOutputTokens": null,
+            "estimatedTokens": null,
+            "complete": false
+          },
+          "priceVersions": []
+        }
+      ],
+      "days": [
+        {
+          "day": "2026-10-02",
+          "requests": 0,
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "unknownRequests": 1,
+          "unpricedRequests": 0,
+          "costUsd": 0.0,
+          "knownCostUsd": 0.0,
+          "estimatedCostUsd": 0.0,
+          "coverage": {
+            "records": 1,
+            "pricedRequests": 0,
+            "unknownTimeRequests": 0,
+            "pricingUnavailableRequests": 0,
+            "costComplete": false,
+            "completeUsageRequests": 0,
+            "partialUsageRequests": 0,
+            "estimatedUsageRequests": 0,
+            "unknownUsageRequests": 1
+          },
+          "tokenUsage": {
+            "completeRequests": 0,
+            "lowerBoundRequests": 0,
+            "estimatedRequests": 0,
+            "unknownRequests": 1,
+            "inputTokens": null,
+            "outputTokens": null,
+            "totalTokens": null,
+            "lowerBoundInputTokens": null,
+            "lowerBoundOutputTokens": null,
+            "lowerBoundTokens": null,
+            "estimatedInputTokens": null,
+            "estimatedOutputTokens": null,
+            "estimatedTokens": null,
+            "complete": false
+          },
+          "priceVersions": []
+        }
+      ],
+      "undated": null
+    },
+    "checkedAt": "2026-10-02T12:00:00+00:00",
+    "coverage": {
+      "ledgerPresent": true,
+      "ledgerReadable": true,
+      "recordsTotal": 6,
+      "unparsedLines": 0,
+      "truncated": false,
+      "ledger": "usage-share-backend.jsonl",
+      "limit": 200000,
+      "records": 6,
+      "attributed": 5,
+      "unattributed": 1,
+      "incompleteRequests": 1,
+      "unknownUsageRequests": 2,
+      "unknownTimeRequests": 1,
+      "unpricedRequests": 1,
+      "peakRequests": 0,
+      "unpricedModels": [
+        "unknown-priced-model"
+      ],
+      "priceVersions": [
+        "fixture-price-version"
+      ],
+      "priceFn": true,
+      "attributionReasons": {
+        "legacy": 1
+      },
+      "keyNames": 2
+    }
+  },
+  "log_entries": {
+    "status": "ok",
+    "rows": [
+      {
+        "ts": "2026-10-02 12:00:00,000",
+        "level": "INFO",
+        "message": "request summary request=fixture-request final=HTTP400 physical_attempts=1/1 duration_ms=1000\r",
+        "parse_ok": true,
+        "cut": false,
+        "event": {
+          "timestamp": "2026-10-02 12:00:00,000",
+          "model": null,
+          "request_id": "fixture-request",
+          "phase": null,
+          "outcome": "error",
+          "error_code": "HTTP400",
+          "duration_ms": 1000,
+          "token_rate": null,
+          "token_rate_kind": null
+        }
+      },
+      {
+        "ts": "2026-10-02 12:01:00,000",
+        "level": "INFO",
+        "message": "stream end model=fixture-model status=ok duration_ms=1000 token_rate=0\r",
+        "parse_ok": true,
+        "cut": false,
+        "event": {
+          "timestamp": "2026-10-02 12:01:00,000",
+          "model": "fixture-model",
+          "request_id": null,
+          "phase": null,
+          "outcome": null,
+          "error_code": null,
+          "duration_ms": 1000,
+          "token_rate": null,
+          "token_rate_kind": null
+        }
+      }
+    ],
+    "scanned_bytes": 224,
+    "window_start_offset": 0,
+    "truncated": false,
+    "next_cursor": null,
+    "reset_hint": false,
+    "file_key": "10696049115366360:7231255117160515654:224"
+  },
+  "share_maintenance": {
+    "generatedFrom": "console_share_actions handlers via the real registry + OperationManager, and share_backend_supervision.run_once for the supervision decision; every seam value is a private fixture",
+    "components": {
+      "share_gateway": "8100 分享入口进程（um-share-python.exe + share_gateway.py）",
+      "share_backend": "8110 专用后端进程（chat2api.py --port 8110 --profile <dir>\\edge-profile）"
+    },
+    "actions": [
+      {
+        "action": "share.diagnostics",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 分享八层分层诊断（只读、无副作用；八层证据含维护视图与故障留证）",
+        "param_schema": {},
+        "components": [
+          "share_gateway",
+          "share_backend"
+        ],
+        "side_effects": [
+          "read_only"
+        ],
+        "target": "share"
+      },
+      {
+        "action": "share.backend_reauthenticate",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "仅重新认证分享专用后端 8110（不冷启动、不重启进程、不绕过人工认证）",
+        "param_schema": {},
+        "components": [
+          "share_backend"
+        ],
+        "side_effects": [
+          "trigger_backend_login"
+        ],
+        "target": "share"
+      },
+      {
+        "action": "share.backend_restart",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "重启分享专用后端 8110（单层：暂停 8100 接收→有界排空→重启→恢复接收；不动 8100 实例与私人 8000）",
+        "param_schema": {
+          "drain_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 600
+          },
+          "poll_interval_s": {
+            "type": "int",
+            "min": 1,
+            "max": 10
+          },
+          "stop_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 120
+          },
+          "start_budget_s": {
+            "type": "int",
+            "min": 1,
+            "max": 180
+          },
+          "lease_s": {
+            "type": "int",
+            "min": 60,
+            "max": 600
+          }
+        },
+        "components": [
+          "share_backend"
+        ],
+        "side_effects": [
+          "pause_gateway_acceptance",
+          "restart_share_backend",
+          "resume_gateway_acceptance"
+        ],
+        "target": "share"
+      },
+      {
+        "action": "share.gateway_restart",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "重启分享入口 8100（单层：经受限 broker 宿主协议；不动 8110 实例）",
+        "param_schema": {
+          "restart_budget_s": {
+            "type": "int",
+            "min": 10,
+            "max": 180
+          }
+        },
+        "components": [
+          "share_gateway"
+        ],
+        "side_effects": [
+          "restart_share_gateway"
+        ],
+        "target": "share"
+      }
+    ],
+    "scenarios": [
+      {
+        "case": "normal",
+        "operation": {
+          "id": "fixture-normal-op",
+          "action": "share.diagnostics",
+          "target": "share",
+          "state": "succeeded",
+          "resource": "share:orchestration",
+          "generation": 0,
+          "cancel_requested": false,
+          "created_at": "2026-10-02T12:00:01.250000+00:00",
+          "started_at": "2026-10-02T12:00:01.750000+00:00",
+          "finished_at": "2026-10-02T12:00:05.750000+00:00",
+          "created_epoch": 1790942401.25,
+          "started_epoch": 1790942401.75,
+          "finished_epoch": 1790942405.75,
+          "steps": [
+            {
+              "at": 1790942402.0,
+              "note": "分层只读诊断：八层证据；任一缝失败只让该层 unavailable，整体不抛"
+            }
+          ],
+          "result": {
+            "checked_at": 1790942402.25,
+            "layers": {
+              "share_gateway": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "broker:host-verify{running}+instance-probe+attribution",
+                "checked_at": 1790942402.5,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "instance_probe": {
+                    "pid": 54300,
+                    "started_at": 1790942400.0,
+                    "reason": "ok"
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    },
+                    "gateway_pid": 54300,
+                    "gateway_started_at": 1790942400.0,
+                    "key_file_mtime": 1790942400.0
+                  },
+                  "faults": {
+                    "check": "faults",
+                    "verdict": {
+                      "last_fault": {
+                        "at": 1790942400.25,
+                        "phase": "upstream",
+                        "status": 502,
+                        "code": "um_unavailable",
+                        "upstream_status": 503,
+                        "exception_type": null,
+                        "duration_ms": 120.5,
+                        "request_id": "fixture-request-0001"
+                      },
+                      "counts_by_phase": {
+                        "auth": 0,
+                        "config": 0,
+                        "body": 0,
+                        "limit": 1,
+                        "upstream": 3,
+                        "stream": 0
+                      },
+                      "file": {
+                        "present": true,
+                        "size": 4096,
+                        "mtime": 1790942400.25
+                      }
+                    },
+                    "detail": "read tail ok",
+                    "checked_at": 1790942400
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "share_backend": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "backend:observe(forget_stale=False)+pid-state",
+                "checked_at": 1790942403.0,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "observe": {
+                    "running": true,
+                    "auth_state": "valid",
+                    "auth_label": "认证有效",
+                    "observed_at": 1790942400.5,
+                    "upstream_reachability": {
+                      "state": "ok",
+                      "checked_epoch": 1790942400.5,
+                      "changed": false,
+                      "outage_started": null,
+                      "last_ok": 1790942400.5
+                    },
+                    "attribution": {
+                      "file_ready": true,
+                      "reason": "ok",
+                      "instance_loaded": {
+                        "value": "yes",
+                        "basis": "inference"
+                      }
+                    }
+                  },
+                  "pid_state": {
+                    "state": "running",
+                    "pid": 54300,
+                    "port": 8110,
+                    "identity": "verified",
+                    "identity_reason": "ok"
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "backend_auth": {
+                "state": "valid",
+                "verdict": "confirmed",
+                "source": "backend:admin/auth/status",
+                "checked_at": 1790942400.5,
+                "age_s": 3.0,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "auth_label": "认证有效",
+                  "running": true,
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  },
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "connectivity": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "ts:status",
+                "checked_at": 1790942404.25,
+                "age_s": 0.25,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "upstream": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "backend:health.upstream_reachability",
+                "checked_at": 1790942400.5,
+                "age_s": 4.25,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "upstream": {
+                    "state": "ok",
+                    "checked_epoch": 1790942400.5,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790942400.5
+                  },
+                  "health_reachable": true,
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "ts_service": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "sc:query-ts",
+                "checked_at": 1790942403.75,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "funnel": {
+                "state": "on",
+                "verdict": "confirmed",
+                "source": "ts:serve-status",
+                "checked_at": 1790942405.0,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "security_gate": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "broker:host-evidence{limits}",
+                "checked_at": 1790942400.0,
+                "age_s": 5.5,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "check": "limits",
+                  "verdict": true,
+                  "detail": "ok",
+                  "timestamp_basis": "local_read"
+                }
+              }
+            },
+            "maintenance": {
+              "lease": null,
+              "instance": {
+                "instance_id": "fixture-instance-1",
+                "state": "running",
+                "active_count": 0,
+                "last_seen_generation": 12
+              },
+              "last_outcome": null
+            },
+            "desired_stop_in_force": false,
+            "last_error": null,
+            "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收"
+          },
+          "error": null,
+          "idempotency_key": null
+        },
+        "result": {
+          "checked_at": 1790942402.25,
+          "layers": {
+            "share_gateway": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "broker:host-verify{running}+instance-probe+attribution",
+              "checked_at": 1790942402.5,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "instance_probe": {
+                  "pid": 54300,
+                  "started_at": 1790942400.0,
+                  "reason": "ok"
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  },
+                  "gateway_pid": 54300,
+                  "gateway_started_at": 1790942400.0,
+                  "key_file_mtime": 1790942400.0
+                },
+                "faults": {
+                  "check": "faults",
+                  "verdict": {
+                    "last_fault": {
+                      "at": 1790942400.25,
+                      "phase": "upstream",
+                      "status": 502,
+                      "code": "um_unavailable",
+                      "upstream_status": 503,
+                      "exception_type": null,
+                      "duration_ms": 120.5,
+                      "request_id": "fixture-request-0001"
+                    },
+                    "counts_by_phase": {
+                      "auth": 0,
+                      "config": 0,
+                      "body": 0,
+                      "limit": 1,
+                      "upstream": 3,
+                      "stream": 0
+                    },
+                    "file": {
+                      "present": true,
+                      "size": 4096,
+                      "mtime": 1790942400.25
+                    }
+                  },
+                  "detail": "read tail ok",
+                  "checked_at": 1790942400
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "share_backend": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "backend:observe(forget_stale=False)+pid-state",
+              "checked_at": 1790942403.0,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "observe": {
+                  "running": true,
+                  "auth_state": "valid",
+                  "auth_label": "认证有效",
+                  "observed_at": 1790942400.5,
+                  "upstream_reachability": {
+                    "state": "ok",
+                    "checked_epoch": 1790942400.5,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790942400.5
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  }
+                },
+                "pid_state": {
+                  "state": "running",
+                  "pid": 54300,
+                  "port": 8110,
+                  "identity": "verified",
+                  "identity_reason": "ok"
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "backend_auth": {
+              "state": "valid",
+              "verdict": "confirmed",
+              "source": "backend:admin/auth/status",
+              "checked_at": 1790942400.5,
+              "age_s": 3.0,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "auth_label": "认证有效",
+                "running": true,
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                },
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "connectivity": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "ts:status",
+              "checked_at": 1790942404.25,
+              "age_s": 0.25,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "upstream": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "backend:health.upstream_reachability",
+              "checked_at": 1790942400.5,
+              "age_s": 4.25,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "upstream": {
+                  "state": "ok",
+                  "checked_epoch": 1790942400.5,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942400.5
+                },
+                "health_reachable": true,
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "ts_service": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "sc:query-ts",
+              "checked_at": 1790942403.75,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "funnel": {
+              "state": "on",
+              "verdict": "confirmed",
+              "source": "ts:serve-status",
+              "checked_at": 1790942405.0,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "security_gate": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "broker:host-evidence{limits}",
+              "checked_at": 1790942400.0,
+              "age_s": 5.5,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "check": "limits",
+                "verdict": true,
+                "detail": "ok",
+                "timestamp_basis": "local_read"
+              }
+            }
+          },
+          "maintenance": {
+            "lease": null,
+            "instance": {
+              "instance_id": "fixture-instance-1",
+              "state": "running",
+              "active_count": 0,
+              "last_seen_generation": 12
+            },
+            "last_outcome": null
+          },
+          "desired_stop_in_force": false,
+          "last_error": null,
+          "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收"
+        },
+        "readback": {
+          "share_gateway": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "broker:host-verify{running}+instance-probe+attribution",
+            "checked_at": 1790942402.5,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "instance_probe": {
+                "pid": 54300,
+                "started_at": 1790942400.0,
+                "reason": "ok"
+              },
+              "attribution": {
+                "file_ready": true,
+                "reason": "ok",
+                "instance_loaded": {
+                  "value": "yes",
+                  "basis": "inference"
+                },
+                "gateway_pid": 54300,
+                "gateway_started_at": 1790942400.0,
+                "key_file_mtime": 1790942400.0
+              },
+              "faults": {
+                "check": "faults",
+                "verdict": {
+                  "last_fault": {
+                    "at": 1790942400.25,
+                    "phase": "upstream",
+                    "status": 502,
+                    "code": "um_unavailable",
+                    "upstream_status": 503,
+                    "exception_type": null,
+                    "duration_ms": 120.5,
+                    "request_id": "fixture-request-0001"
+                  },
+                  "counts_by_phase": {
+                    "auth": 0,
+                    "config": 0,
+                    "body": 0,
+                    "limit": 1,
+                    "upstream": 3,
+                    "stream": 0
+                  },
+                  "file": {
+                    "present": true,
+                    "size": 4096,
+                    "mtime": 1790942400.25
+                  }
+                },
+                "detail": "read tail ok",
+                "checked_at": 1790942400
+              },
+              "timestamp_basis": "local_read"
+            }
+          },
+          "share_backend": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "backend:observe(forget_stale=False)+pid-state",
+            "checked_at": 1790942403.0,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "observe": {
+                "running": true,
+                "auth_state": "valid",
+                "auth_label": "认证有效",
+                "observed_at": 1790942400.5,
+                "upstream_reachability": {
+                  "state": "ok",
+                  "checked_epoch": 1790942400.5,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942400.5
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                }
+              },
+              "pid_state": {
+                "state": "running",
+                "pid": 54300,
+                "port": 8110,
+                "identity": "verified",
+                "identity_reason": "ok"
+              },
+              "timestamp_basis": "local_read"
+            }
+          }
+        },
+        "before": null,
+        "after": null,
+        "last_error": null,
+        "note": "八层全部 confirmed（只读、无副作用）；维护视图无租约、无 last_error；观察缝 forget_stale=False（不删 backend.pid）。"
+      },
+      {
+        "case": "unknown",
+        "operation": {
+          "id": "fixture-unknown-op",
+          "action": "share.diagnostics",
+          "target": "share",
+          "state": "succeeded",
+          "resource": "share:orchestration",
+          "generation": 0,
+          "cancel_requested": false,
+          "created_at": "2026-10-02T12:00:07+00:00",
+          "started_at": "2026-10-02T12:00:07.500000+00:00",
+          "finished_at": "2026-10-02T12:00:11.250000+00:00",
+          "created_epoch": 1790942407.0,
+          "started_epoch": 1790942407.5,
+          "finished_epoch": 1790942411.25,
+          "steps": [
+            {
+              "at": 1790942407.75,
+              "note": "分层只读诊断：八层证据；任一缝失败只让该层 unavailable，整体不抛"
+            }
+          ],
+          "result": {
+            "checked_at": 1790942408.0,
+            "layers": {
+              "share_gateway": {
+                "state": "unavailable",
+                "verdict": "unavailable",
+                "source": "broker:host-verify{running}+instance-probe+attribution",
+                "checked_at": null,
+                "age_s": null,
+                "ttl_s": 60,
+                "stale": true,
+                "reason": "share_broker_unwired",
+                "evidence": {}
+              },
+              "share_backend": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "backend:observe(forget_stale=False)+pid-state",
+                "checked_at": 1790942408.5,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "observe": {
+                    "running": true,
+                    "auth_state": "valid",
+                    "auth_label": "认证有效",
+                    "observed_at": 1790942406.25,
+                    "upstream_reachability": {
+                      "state": "ok",
+                      "checked_epoch": 1790942406.25,
+                      "changed": false,
+                      "outage_started": null,
+                      "last_ok": 1790942406.25
+                    },
+                    "attribution": {
+                      "file_ready": true,
+                      "reason": "ok",
+                      "instance_loaded": {
+                        "value": "yes",
+                        "basis": "inference"
+                      }
+                    }
+                  },
+                  "pid_state": {
+                    "state": "running",
+                    "pid": 54300,
+                    "port": 8110,
+                    "identity": "verified",
+                    "identity_reason": "ok"
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "backend_auth": {
+                "state": "valid",
+                "verdict": "confirmed",
+                "source": "backend:admin/auth/status",
+                "checked_at": 1790942406.25,
+                "age_s": 2.75,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "auth_label": "认证有效",
+                  "running": true,
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  },
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "connectivity": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "ts:status",
+                "checked_at": 1790942409.75,
+                "age_s": 0.25,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "upstream": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "backend:health.upstream_reachability",
+                "checked_at": 1790942406.25,
+                "age_s": 4.0,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "upstream": {
+                    "state": "ok",
+                    "checked_epoch": 1790942406.25,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790942406.25
+                  },
+                  "health_reachable": true,
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "ts_service": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "sc:query-ts",
+                "checked_at": 1790942409.25,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "funnel": {
+                "state": "on",
+                "verdict": "confirmed",
+                "source": "ts:serve-status",
+                "checked_at": 1790942410.5,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "security_gate": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "broker:host-evidence{limits}",
+                "checked_at": 1790942406.0,
+                "age_s": 5.0,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "check": "limits",
+                  "verdict": true,
+                  "detail": "ok",
+                  "timestamp_basis": "local_read"
+                }
+              }
+            },
+            "maintenance": {
+              "lease": null,
+              "instance": {
+                "instance_id": "fixture-instance-1",
+                "state": "running",
+                "active_count": 0,
+                "last_seen_generation": 12
+              },
+              "last_outcome": null
+            },
+            "desired_stop_in_force": false,
+            "last_error": null,
+            "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收；证据不可得层：share_gateway"
+          },
+          "error": null,
+          "idempotency_key": null
+        },
+        "result": {
+          "checked_at": 1790942408.0,
+          "layers": {
+            "share_gateway": {
+              "state": "unavailable",
+              "verdict": "unavailable",
+              "source": "broker:host-verify{running}+instance-probe+attribution",
+              "checked_at": null,
+              "age_s": null,
+              "ttl_s": 60,
+              "stale": true,
+              "reason": "share_broker_unwired",
+              "evidence": {}
+            },
+            "share_backend": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "backend:observe(forget_stale=False)+pid-state",
+              "checked_at": 1790942408.5,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "observe": {
+                  "running": true,
+                  "auth_state": "valid",
+                  "auth_label": "认证有效",
+                  "observed_at": 1790942406.25,
+                  "upstream_reachability": {
+                    "state": "ok",
+                    "checked_epoch": 1790942406.25,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790942406.25
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  }
+                },
+                "pid_state": {
+                  "state": "running",
+                  "pid": 54300,
+                  "port": 8110,
+                  "identity": "verified",
+                  "identity_reason": "ok"
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "backend_auth": {
+              "state": "valid",
+              "verdict": "confirmed",
+              "source": "backend:admin/auth/status",
+              "checked_at": 1790942406.25,
+              "age_s": 2.75,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "auth_label": "认证有效",
+                "running": true,
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                },
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "connectivity": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "ts:status",
+              "checked_at": 1790942409.75,
+              "age_s": 0.25,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "upstream": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "backend:health.upstream_reachability",
+              "checked_at": 1790942406.25,
+              "age_s": 4.0,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "upstream": {
+                  "state": "ok",
+                  "checked_epoch": 1790942406.25,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942406.25
+                },
+                "health_reachable": true,
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "ts_service": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "sc:query-ts",
+              "checked_at": 1790942409.25,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "funnel": {
+              "state": "on",
+              "verdict": "confirmed",
+              "source": "ts:serve-status",
+              "checked_at": 1790942410.5,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "security_gate": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "broker:host-evidence{limits}",
+              "checked_at": 1790942406.0,
+              "age_s": 5.0,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "check": "limits",
+                "verdict": true,
+                "detail": "ok",
+                "timestamp_basis": "local_read"
+              }
+            }
+          },
+          "maintenance": {
+            "lease": null,
+            "instance": {
+              "instance_id": "fixture-instance-1",
+              "state": "running",
+              "active_count": 0,
+              "last_seen_generation": 12
+            },
+            "last_outcome": null
+          },
+          "desired_stop_in_force": false,
+          "last_error": null,
+          "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收；证据不可得层：share_gateway"
+        },
+        "readback": {
+          "share_gateway": {
+            "state": "unavailable",
+            "verdict": "unavailable",
+            "source": "broker:host-verify{running}+instance-probe+attribution",
+            "checked_at": null,
+            "age_s": null,
+            "ttl_s": 60,
+            "stale": true,
+            "reason": "share_broker_unwired",
+            "evidence": {}
+          },
+          "share_backend": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "backend:observe(forget_stale=False)+pid-state",
+            "checked_at": 1790942408.5,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "observe": {
+                "running": true,
+                "auth_state": "valid",
+                "auth_label": "认证有效",
+                "observed_at": 1790942406.25,
+                "upstream_reachability": {
+                  "state": "ok",
+                  "checked_epoch": 1790942406.25,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942406.25
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                }
+              },
+              "pid_state": {
+                "state": "running",
+                "pid": 54300,
+                "port": 8110,
+                "identity": "verified",
+                "identity_reason": "ok"
+              },
+              "timestamp_basis": "local_read"
+            }
+          }
+        },
+        "before": null,
+        "after": null,
+        "last_error": null,
+        "note": "share_gateway 证据不可得（verdict=unavailable + reason=share_broker_unwired）；整体仍返回，其余层照常给出证据。"
+      },
+      {
+        "case": "stale",
+        "operation": {
+          "id": "fixture-stale-op",
+          "action": "share.diagnostics",
+          "target": "share",
+          "state": "succeeded",
+          "resource": "share:orchestration",
+          "generation": 0,
+          "cancel_requested": false,
+          "created_at": "2026-10-02T12:00:12.500000+00:00",
+          "started_at": "2026-10-02T12:00:13+00:00",
+          "finished_at": "2026-10-02T12:00:17+00:00",
+          "created_epoch": 1790942412.5,
+          "started_epoch": 1790942413.0,
+          "finished_epoch": 1790942417.0,
+          "steps": [
+            {
+              "at": 1790942413.25,
+              "note": "分层只读诊断：八层证据；任一缝失败只让该层 unavailable，整体不抛"
+            }
+          ],
+          "result": {
+            "checked_at": 1790942413.5,
+            "layers": {
+              "share_gateway": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "broker:host-verify{running}+instance-probe+attribution",
+                "checked_at": 1790942413.75,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "instance_probe": {
+                    "pid": 54300,
+                    "reason": "ok"
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok"
+                  },
+                  "faults": {
+                    "check": "faults",
+                    "verdict": {
+                      "last_fault": null,
+                      "counts_by_phase": {
+                        "auth": 0,
+                        "config": 0,
+                        "body": 0,
+                        "limit": 1,
+                        "upstream": 3,
+                        "stream": 0
+                      },
+                      "file": {
+                        "present": true,
+                        "size": 4096,
+                        "mtime": 1790942411.5
+                      }
+                    },
+                    "detail": "read tail ok",
+                    "checked_at": 1790942411
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "share_backend": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "backend:observe(forget_stale=False)+pid-state",
+                "checked_at": 1790942414.25,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "observe": {
+                    "running": true,
+                    "auth_state": "valid",
+                    "auth_label": "认证有效",
+                    "observed_at": 1790941411.5,
+                    "upstream_reachability": {
+                      "state": "ok",
+                      "checked_epoch": 1790941411.5,
+                      "changed": false,
+                      "outage_started": null,
+                      "last_ok": 1790941411.5
+                    },
+                    "attribution": {
+                      "file_ready": true,
+                      "reason": "ok",
+                      "instance_loaded": {
+                        "value": "yes",
+                        "basis": "inference"
+                      }
+                    }
+                  },
+                  "pid_state": {
+                    "state": "running",
+                    "pid": 54300,
+                    "port": 8110,
+                    "identity": "verified",
+                    "identity_reason": "ok"
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "backend_auth": {
+                "state": "valid",
+                "verdict": "confirmed",
+                "source": "backend:admin/auth/status",
+                "checked_at": 1790941411.5,
+                "age_s": 1003.25,
+                "ttl_s": 300,
+                "stale": true,
+                "reason": null,
+                "evidence": {
+                  "auth_label": "认证有效",
+                  "running": true,
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  },
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "connectivity": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "ts:status",
+                "checked_at": 1790942415.5,
+                "age_s": 0.25,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "upstream": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "backend:health.upstream_reachability",
+                "checked_at": 1790941411.5,
+                "age_s": 1004.5,
+                "ttl_s": 300,
+                "stale": true,
+                "reason": null,
+                "evidence": {
+                  "upstream": {
+                    "state": "ok",
+                    "checked_epoch": 1790941411.5,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790941411.5
+                  },
+                  "health_reachable": true,
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "ts_service": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "sc:query-ts",
+                "checked_at": 1790942415.0,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "funnel": {
+                "state": "on",
+                "verdict": "confirmed",
+                "source": "ts:serve-status",
+                "checked_at": 1790942416.25,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "security_gate": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "broker:host-evidence{limits}",
+                "checked_at": 1790941111.0,
+                "age_s": 1305.75,
+                "ttl_s": 600,
+                "stale": true,
+                "reason": null,
+                "evidence": {
+                  "check": "limits",
+                  "verdict": true,
+                  "detail": "ok",
+                  "timestamp_basis": "local_read"
+                }
+              }
+            },
+            "maintenance": {
+              "lease": null,
+              "instance": {
+                "instance_id": "fixture-instance-1",
+                "state": "running",
+                "active_count": 0,
+                "last_seen_generation": 12
+              },
+              "last_outcome": null
+            },
+            "desired_stop_in_force": false,
+            "last_error": null,
+            "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收"
+          },
+          "error": null,
+          "idempotency_key": null
+        },
+        "result": {
+          "checked_at": 1790942413.5,
+          "layers": {
+            "share_gateway": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "broker:host-verify{running}+instance-probe+attribution",
+              "checked_at": 1790942413.75,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "instance_probe": {
+                  "pid": 54300,
+                  "reason": "ok"
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok"
+                },
+                "faults": {
+                  "check": "faults",
+                  "verdict": {
+                    "last_fault": null,
+                    "counts_by_phase": {
+                      "auth": 0,
+                      "config": 0,
+                      "body": 0,
+                      "limit": 1,
+                      "upstream": 3,
+                      "stream": 0
+                    },
+                    "file": {
+                      "present": true,
+                      "size": 4096,
+                      "mtime": 1790942411.5
+                    }
+                  },
+                  "detail": "read tail ok",
+                  "checked_at": 1790942411
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "share_backend": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "backend:observe(forget_stale=False)+pid-state",
+              "checked_at": 1790942414.25,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "observe": {
+                  "running": true,
+                  "auth_state": "valid",
+                  "auth_label": "认证有效",
+                  "observed_at": 1790941411.5,
+                  "upstream_reachability": {
+                    "state": "ok",
+                    "checked_epoch": 1790941411.5,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790941411.5
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  }
+                },
+                "pid_state": {
+                  "state": "running",
+                  "pid": 54300,
+                  "port": 8110,
+                  "identity": "verified",
+                  "identity_reason": "ok"
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "backend_auth": {
+              "state": "valid",
+              "verdict": "confirmed",
+              "source": "backend:admin/auth/status",
+              "checked_at": 1790941411.5,
+              "age_s": 1003.25,
+              "ttl_s": 300,
+              "stale": true,
+              "reason": null,
+              "evidence": {
+                "auth_label": "认证有效",
+                "running": true,
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                },
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "connectivity": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "ts:status",
+              "checked_at": 1790942415.5,
+              "age_s": 0.25,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "upstream": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "backend:health.upstream_reachability",
+              "checked_at": 1790941411.5,
+              "age_s": 1004.5,
+              "ttl_s": 300,
+              "stale": true,
+              "reason": null,
+              "evidence": {
+                "upstream": {
+                  "state": "ok",
+                  "checked_epoch": 1790941411.5,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790941411.5
+                },
+                "health_reachable": true,
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "ts_service": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "sc:query-ts",
+              "checked_at": 1790942415.0,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "funnel": {
+              "state": "on",
+              "verdict": "confirmed",
+              "source": "ts:serve-status",
+              "checked_at": 1790942416.25,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "security_gate": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "broker:host-evidence{limits}",
+              "checked_at": 1790941111.0,
+              "age_s": 1305.75,
+              "ttl_s": 600,
+              "stale": true,
+              "reason": null,
+              "evidence": {
+                "check": "limits",
+                "verdict": true,
+                "detail": "ok",
+                "timestamp_basis": "local_read"
+              }
+            }
+          },
+          "maintenance": {
+            "lease": null,
+            "instance": {
+              "instance_id": "fixture-instance-1",
+              "state": "running",
+              "active_count": 0,
+              "last_seen_generation": 12
+            },
+            "last_outcome": null
+          },
+          "desired_stop_in_force": false,
+          "last_error": null,
+          "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收"
+        },
+        "readback": {
+          "backend_auth": {
+            "state": "valid",
+            "verdict": "confirmed",
+            "source": "backend:admin/auth/status",
+            "checked_at": 1790941411.5,
+            "age_s": 1003.25,
+            "ttl_s": 300,
+            "stale": true,
+            "reason": null,
+            "evidence": {
+              "auth_label": "认证有效",
+              "running": true,
+              "attribution": {
+                "file_ready": true,
+                "reason": "ok",
+                "instance_loaded": {
+                  "value": "yes",
+                  "basis": "inference"
+                }
+              },
+              "timestamp_basis": "source_checked_epoch"
+            }
+          },
+          "upstream": {
+            "state": "ok",
+            "verdict": "confirmed",
+            "source": "backend:health.upstream_reachability",
+            "checked_at": 1790941411.5,
+            "age_s": 1004.5,
+            "ttl_s": 300,
+            "stale": true,
+            "reason": null,
+            "evidence": {
+              "upstream": {
+                "state": "ok",
+                "checked_epoch": 1790941411.5,
+                "changed": false,
+                "outage_started": null,
+                "last_ok": 1790941411.5
+              },
+              "health_reachable": true,
+              "timestamp_basis": "source_checked_epoch"
+            }
+          },
+          "security_gate": {
+            "state": "ok",
+            "verdict": "confirmed",
+            "source": "broker:host-evidence{limits}",
+            "checked_at": 1790941111.0,
+            "age_s": 1305.75,
+            "ttl_s": 600,
+            "stale": true,
+            "reason": null,
+            "evidence": {
+              "check": "limits",
+              "verdict": true,
+              "detail": "ok",
+              "timestamp_basis": "local_read"
+            }
+          }
+        },
+        "before": null,
+        "after": null,
+        "last_error": null,
+        "note": "checked_at 取证据自身观测时间（timestamp_basis=source_checked_epoch）；backend_auth/upstream/security_gate age_s > ttl_s → stale=true；其余层新鲜。"
+      },
+      {
+        "case": "partial_failure",
+        "operation": {
+          "id": "fixture-partial_failure-op",
+          "action": "share.diagnostics",
+          "target": "share",
+          "state": "succeeded",
+          "resource": "share:orchestration",
+          "generation": 0,
+          "cancel_requested": false,
+          "created_at": "2026-10-02T12:00:18.250000+00:00",
+          "started_at": "2026-10-02T12:00:18.750000+00:00",
+          "finished_at": "2026-10-02T12:00:22.500000+00:00",
+          "created_epoch": 1790942418.25,
+          "started_epoch": 1790942418.75,
+          "finished_epoch": 1790942422.5,
+          "steps": [
+            {
+              "at": 1790942419.0,
+              "note": "分层只读诊断：八层证据；任一缝失败只让该层 unavailable，整体不抛"
+            }
+          ],
+          "result": {
+            "checked_at": 1790942419.25,
+            "layers": {
+              "share_gateway": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "broker:host-verify{running}+instance-probe+attribution",
+                "checked_at": 1790942419.5,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "instance_probe": {
+                    "pid": 54300,
+                    "reason": "ok"
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok"
+                  },
+                  "faults": {
+                    "check": "faults",
+                    "verdict": {
+                      "last_fault": null,
+                      "counts_by_phase": {
+                        "auth": 0,
+                        "config": 0,
+                        "body": 0,
+                        "limit": 1,
+                        "upstream": 3,
+                        "stream": 0
+                      },
+                      "file": {
+                        "present": true,
+                        "size": 4096,
+                        "mtime": 1790942417.25
+                      }
+                    },
+                    "detail": "read tail ok",
+                    "checked_at": 1790942417
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "share_backend": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "backend:observe(forget_stale=False)+pid-state",
+                "checked_at": 1790942420.0,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "observe": {
+                    "running": true,
+                    "auth_state": "valid",
+                    "auth_label": "认证有效",
+                    "observed_at": 1790942417.5,
+                    "upstream_reachability": {
+                      "state": "ok",
+                      "checked_epoch": 1790942417.5,
+                      "changed": false,
+                      "outage_started": null,
+                      "last_ok": 1790942417.5
+                    },
+                    "attribution": {
+                      "file_ready": true,
+                      "reason": "ok",
+                      "instance_loaded": {
+                        "value": "yes",
+                        "basis": "inference"
+                      }
+                    }
+                  },
+                  "pid_state": {
+                    "state": "running",
+                    "pid": 54300,
+                    "port": 8110,
+                    "identity": "verified",
+                    "identity_reason": "ok"
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "backend_auth": {
+                "state": "valid",
+                "verdict": "confirmed",
+                "source": "backend:admin/auth/status",
+                "checked_at": 1790942417.5,
+                "age_s": 3.0,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "auth_label": "认证有效",
+                  "running": true,
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  },
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "connectivity": {
+                "state": "unavailable",
+                "verdict": "unavailable",
+                "source": "ts:status",
+                "checked_at": null,
+                "age_s": null,
+                "ttl_s": 300,
+                "stale": true,
+                "reason": "connectivity_query_failed",
+                "evidence": {
+                  "error_code": "share_status_unknown"
+                }
+              },
+              "upstream": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "backend:health.upstream_reachability",
+                "checked_at": 1790942417.5,
+                "age_s": 4.0,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "upstream": {
+                    "state": "ok",
+                    "checked_epoch": 1790942417.5,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790942417.5
+                  },
+                  "health_reachable": true,
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "ts_service": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "sc:query-ts",
+                "checked_at": 1790942420.75,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "funnel": {
+                "state": "on",
+                "verdict": "confirmed",
+                "source": "ts:serve-status",
+                "checked_at": 1790942421.75,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "security_gate": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "broker:host-evidence{limits}",
+                "checked_at": 1790942417.0,
+                "age_s": 5.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "check": "limits",
+                  "verdict": true,
+                  "detail": "ok",
+                  "timestamp_basis": "local_read"
+                }
+              }
+            },
+            "maintenance": {
+              "lease": null,
+              "instance": {
+                "instance_id": "fixture-instance-1",
+                "state": "running",
+                "active_count": 0,
+                "last_seen_generation": 12
+              },
+              "last_outcome": null
+            },
+            "desired_stop_in_force": false,
+            "last_error": null,
+            "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收；证据不可得层：connectivity"
+          },
+          "error": null,
+          "idempotency_key": null
+        },
+        "result": {
+          "checked_at": 1790942419.25,
+          "layers": {
+            "share_gateway": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "broker:host-verify{running}+instance-probe+attribution",
+              "checked_at": 1790942419.5,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "instance_probe": {
+                  "pid": 54300,
+                  "reason": "ok"
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok"
+                },
+                "faults": {
+                  "check": "faults",
+                  "verdict": {
+                    "last_fault": null,
+                    "counts_by_phase": {
+                      "auth": 0,
+                      "config": 0,
+                      "body": 0,
+                      "limit": 1,
+                      "upstream": 3,
+                      "stream": 0
+                    },
+                    "file": {
+                      "present": true,
+                      "size": 4096,
+                      "mtime": 1790942417.25
+                    }
+                  },
+                  "detail": "read tail ok",
+                  "checked_at": 1790942417
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "share_backend": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "backend:observe(forget_stale=False)+pid-state",
+              "checked_at": 1790942420.0,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "observe": {
+                  "running": true,
+                  "auth_state": "valid",
+                  "auth_label": "认证有效",
+                  "observed_at": 1790942417.5,
+                  "upstream_reachability": {
+                    "state": "ok",
+                    "checked_epoch": 1790942417.5,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790942417.5
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  }
+                },
+                "pid_state": {
+                  "state": "running",
+                  "pid": 54300,
+                  "port": 8110,
+                  "identity": "verified",
+                  "identity_reason": "ok"
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "backend_auth": {
+              "state": "valid",
+              "verdict": "confirmed",
+              "source": "backend:admin/auth/status",
+              "checked_at": 1790942417.5,
+              "age_s": 3.0,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "auth_label": "认证有效",
+                "running": true,
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                },
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "connectivity": {
+              "state": "unavailable",
+              "verdict": "unavailable",
+              "source": "ts:status",
+              "checked_at": null,
+              "age_s": null,
+              "ttl_s": 300,
+              "stale": true,
+              "reason": "connectivity_query_failed",
+              "evidence": {
+                "error_code": "share_status_unknown"
+              }
+            },
+            "upstream": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "backend:health.upstream_reachability",
+              "checked_at": 1790942417.5,
+              "age_s": 4.0,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "upstream": {
+                  "state": "ok",
+                  "checked_epoch": 1790942417.5,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942417.5
+                },
+                "health_reachable": true,
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "ts_service": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "sc:query-ts",
+              "checked_at": 1790942420.75,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "funnel": {
+              "state": "on",
+              "verdict": "confirmed",
+              "source": "ts:serve-status",
+              "checked_at": 1790942421.75,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "security_gate": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "broker:host-evidence{limits}",
+              "checked_at": 1790942417.0,
+              "age_s": 5.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "check": "limits",
+                "verdict": true,
+                "detail": "ok",
+                "timestamp_basis": "local_read"
+              }
+            }
+          },
+          "maintenance": {
+            "lease": null,
+            "instance": {
+              "instance_id": "fixture-instance-1",
+              "state": "running",
+              "active_count": 0,
+              "last_seen_generation": 12
+            },
+            "last_outcome": null
+          },
+          "desired_stop_in_force": false,
+          "last_error": null,
+          "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收；证据不可得层：connectivity"
+        },
+        "readback": {
+          "connectivity": {
+            "state": "unavailable",
+            "verdict": "unavailable",
+            "source": "ts:status",
+            "checked_at": null,
+            "age_s": null,
+            "ttl_s": 300,
+            "stale": true,
+            "reason": "connectivity_query_failed",
+            "evidence": {
+              "error_code": "share_status_unknown"
+            }
+          },
+          "ts_service": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "sc:query-ts",
+            "checked_at": 1790942420.75,
+            "age_s": 0.25,
+            "ttl_s": 600,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "timestamp_basis": "local_read"
+            }
+          },
+          "security_gate": {
+            "state": "ok",
+            "verdict": "confirmed",
+            "source": "broker:host-evidence{limits}",
+            "checked_at": 1790942417.0,
+            "age_s": 5.25,
+            "ttl_s": 600,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "check": "limits",
+              "verdict": true,
+              "detail": "ok",
+              "timestamp_basis": "local_read"
+            }
+          }
+        },
+        "before": null,
+        "after": null,
+        "last_error": null,
+        "note": "单层 connectivity 缝抛异常 → 只该层 unavailable + reason；整体不抛，其余层照常给出证据。"
+      },
+      {
+        "case": "authenticating",
+        "operation": {
+          "id": "fixture-authenticating-op",
+          "action": "share.backend_reauthenticate",
+          "target": "share",
+          "state": "succeeded",
+          "resource": "share:orchestration",
+          "generation": 0,
+          "cancel_requested": false,
+          "created_at": "2026-10-02T12:00:28.750000+00:00",
+          "started_at": "2026-10-02T12:00:29.250000+00:00",
+          "finished_at": "2026-10-02T12:00:30+00:00",
+          "created_epoch": 1790942428.75,
+          "started_epoch": 1790942429.25,
+          "finished_epoch": 1790942430.0,
+          "steps": [
+            {
+              "at": 1790942429.5,
+              "note": "仅重新认证 8110：不冷启动、不重启进程、不绕过人工认证"
+            },
+            {
+              "at": 1790942429.75,
+              "note": "重新认证结果：state=logging_in，triggered=False，polled=0"
+            }
+          ],
+          "result": {
+            "accepted": true,
+            "state": "logging_in",
+            "label": "认证中（人工窗口已开启）",
+            "triggered": false,
+            "polled": 0,
+            "instance": {
+              "pid": 54300,
+              "port": 8110,
+              "identity": "verified"
+            },
+            "reason": null,
+            "note": "已在认证中：不重复开窗、不冷启动、不重启进程"
+          },
+          "error": null,
+          "idempotency_key": null
+        },
+        "result": {
+          "accepted": true,
+          "state": "logging_in",
+          "label": "认证中（人工窗口已开启）",
+          "triggered": false,
+          "polled": 0,
+          "instance": {
+            "pid": 54300,
+            "port": 8110,
+            "identity": "verified"
+          },
+          "reason": null,
+          "note": "已在认证中：不重复开窗、不冷启动、不重启进程"
+        },
+        "readback": {
+          "backend_auth": {
+            "state": "logging_in",
+            "verdict": "confirmed",
+            "source": "backend:admin/auth/status",
+            "checked_at": 1790942423.0,
+            "age_s": 3.0,
+            "ttl_s": 300,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "auth_label": "认证中（人工窗口已开启）",
+              "running": true,
+              "attribution": {
+                "file_ready": true,
+                "reason": "ok",
+                "instance_loaded": {
+                  "value": "yes",
+                  "basis": "inference"
+                }
+              },
+              "timestamp_basis": "source_checked_epoch"
+            }
+          },
+          "share_backend": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "backend:observe(forget_stale=False)+pid-state",
+            "checked_at": 1790942425.5,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "observe": {
+                "running": true,
+                "auth_state": "logging_in",
+                "auth_label": "认证中（人工窗口已开启）",
+                "observed_at": 1790942423.0,
+                "upstream_reachability": {
+                  "state": "ok",
+                  "checked_epoch": 1790942423.0,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942423.0
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                }
+              },
+              "pid_state": {
+                "state": "running",
+                "pid": 54300,
+                "port": 8110,
+                "identity": "verified",
+                "identity_reason": "ok"
+              },
+              "timestamp_basis": "local_read"
+            }
+          }
+        },
+        "before": null,
+        "after": null,
+        "last_error": null,
+        "note": "backend_auth.state=logging_in；share.backend_reauthenticate 返回 state=logging_in、triggered=false（不重复开窗、不冷启动、不重启进程）。"
+      },
+      {
+        "case": "maintenance",
+        "operation": {
+          "id": "fixture-maintenance-op",
+          "action": "share.backend_restart",
+          "target": "share",
+          "state": "failed",
+          "resource": "share:orchestration",
+          "generation": 0,
+          "cancel_requested": false,
+          "created_at": "2026-10-02T12:00:36+00:00",
+          "started_at": "2026-10-02T12:00:36.500000+00:00",
+          "finished_at": "2026-10-02T12:00:39.750000+00:00",
+          "created_epoch": 1790942436.0,
+          "started_epoch": 1790942436.5,
+          "finished_epoch": 1790942439.75,
+          "steps": [
+            {
+              "at": 1790942436.75,
+              "note": "8110 单层重启：五项身份核实 → 暂停 8100 接收 → 有界排空 → 重启 → 恢复接收"
+            }
+          ],
+          "result": null,
+          "error": {
+            "code": "share_maintenance_refused",
+            "message": "fixture: 已有维护租约在force（component=share_gateway）；停止优先，拒绝重启（迟到结果不得重开）"
+          },
+          "idempotency_key": null
+        },
+        "result": null,
+        "readback": {
+          "share_gateway": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "broker:host-verify{running}+instance-probe+attribution",
+            "checked_at": 1790942432.25,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "instance_probe": {
+                "pid": 54300,
+                "reason": "ok"
+              },
+              "attribution": {
+                "file_ready": true,
+                "reason": "ok"
+              },
+              "faults": {
+                "check": "faults",
+                "verdict": {
+                  "last_fault": null,
+                  "counts_by_phase": {
+                    "auth": 0,
+                    "config": 0,
+                    "body": 0,
+                    "limit": 1,
+                    "upstream": 3,
+                    "stream": 0
+                  },
+                  "file": {
+                    "present": true,
+                    "size": 4096,
+                    "mtime": 1790942430.25
+                  }
+                },
+                "detail": "read tail ok",
+                "checked_at": 1790942430
+              },
+              "timestamp_basis": "local_read"
+            }
+          },
+          "share_backend": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "backend:observe(forget_stale=False)+pid-state",
+            "checked_at": 1790942432.75,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "observe": {
+                "running": true,
+                "auth_state": "valid",
+                "auth_label": "认证有效",
+                "observed_at": 1790942430.5,
+                "upstream_reachability": {
+                  "state": "ok",
+                  "checked_epoch": 1790942430.5,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942430.5
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                }
+              },
+              "pid_state": {
+                "state": "running",
+                "pid": 54300,
+                "port": 8110,
+                "identity": "verified",
+                "identity_reason": "ok"
+              },
+              "timestamp_basis": "local_read"
+            }
+          }
+        },
+        "before": null,
+        "after": null,
+        "last_error": {
+          "at": 1790000000,
+          "action": "gateway-restart",
+          "ok": false,
+          "code": "unconfirmed",
+          "detail": "fixture: 上次维护未确认（恢复不擦除失败）"
+        },
+        "note": "maintenance.lease 非 null（last_outcome.ok=false → last_error 如实透出，恢复不擦除失败）；share.backend_restart 被拒绝 share_maintenance_refused（不调 restart、不冷启动）。",
+        "maintenance": {
+          "lease": {
+            "lease_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "component": "share_gateway",
+            "instance_id": "fixture-instance-1",
+            "round": 7,
+            "created_at": 1790000000,
+            "expires_at": 1790000300,
+            "active_count_at_begin": 3
+          },
+          "instance": {
+            "instance_id": "fixture-instance-1",
+            "state": "running",
+            "active_count": 0,
+            "last_seen_generation": 12
+          },
+          "last_outcome": {
+            "at": 1790000000,
+            "action": "gateway-restart",
+            "ok": false,
+            "code": "unconfirmed",
+            "detail": "fixture: 上次维护未确认（恢复不擦除失败）"
+          }
+        },
+        "desired_stop_in_force": false
+      },
+      {
+        "case": "timeout",
+        "operation": {
+          "id": "fixture-timeout-op",
+          "action": "share.backend_restart",
+          "target": "share",
+          "state": "failed",
+          "resource": "share:orchestration",
+          "generation": 0,
+          "cancel_requested": false,
+          "created_at": "2026-10-02T12:00:40.500000+00:00",
+          "started_at": "2026-10-02T12:00:41+00:00",
+          "finished_at": "2026-10-02T12:00:44.250000+00:00",
+          "created_epoch": 1790942440.5,
+          "started_epoch": 1790942441.0,
+          "finished_epoch": 1790942444.25,
+          "steps": [
+            {
+              "at": 1790942441.25,
+              "note": "8110 单层重启：五项身份核实 → 暂停 8100 接收 → 有界排空 → 重启 → 恢复接收"
+            },
+            {
+              "at": 1790942443.75,
+              "note": "维护租约已建立（component=share_gateway，lease_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa，round=7，active_count=3）：8100 已暂停接收"
+            },
+            {
+              "at": 1790942444.0,
+              "note": "恢复 8100 接收（drain_timeout）：resumed=True，state=running，active_count=0"
+            }
+          ],
+          "result": null,
+          "error": {
+            "code": "share_backend_drain_timeout",
+            "message": "8110 有界排空超时（drain_budget_s=1，active_left=3，lease_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa）；drain.resumed=true；未强停目标、未重启；人工入口：share.diagnostics / share.status 复验后重试 share.backend_restart"
+          },
+          "idempotency_key": null
+        },
+        "result": null,
+        "readback": {
+          "instance_id": "fixture-instance-1",
+          "state": "running",
+          "active_count": 3
+        },
+        "before": null,
+        "after": null,
+        "last_error": null,
+        "note": "有界排空超时：恢复 8100 接收（resumed=true，恢复不擦除失败）、未强停目标、未调 restart；active_left 为注入维护视图的在途数量。",
+        "drain": {
+          "state": "timed_out",
+          "active_left": 3,
+          "lease_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "instance_id": "fixture-instance-1",
+          "round": 7,
+          "resumed": true
+        },
+        "error": {
+          "code": "share_backend_drain_timeout",
+          "message": "8110 有界排空超时（drain_budget_s=1，active_left=3，lease_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa）；drain.resumed=true；未强停目标、未重启；人工入口：share.diagnostics / share.status 复验后重试 share.backend_restart"
+        }
+      },
+      {
+        "case": "cancelled",
+        "operation": {
+          "id": "fixture-cancelled-op",
+          "action": "share.gateway_restart",
+          "target": "share",
+          "state": "succeeded",
+          "resource": "share:orchestration",
+          "generation": 0,
+          "cancel_requested": true,
+          "created_at": "2026-10-02T12:00:45.500000+00:00",
+          "started_at": "2026-10-02T12:00:46+00:00",
+          "finished_at": "2026-10-02T12:00:54+00:00",
+          "created_epoch": 1790942445.5,
+          "started_epoch": 1790942446.0,
+          "finished_epoch": 1790942454.0,
+          "steps": [
+            {
+              "at": 1790942446.25,
+              "note": "8100 单层重启：八层只读快照 → 安全门（host-evidence limits） → broker gateway-restart"
+            },
+            {
+              "at": 1790942450.0,
+              "note": "取消已请求，但 8100 重启副作用已提交：按实际结果返回（不伪报回退）"
+            },
+            {
+              "at": 1790942453.75,
+              "note": "cancel was requested but the operation finished"
+            }
+          ],
+          "result": {
+            "restarted": true,
+            "gateway": {
+              "component": "share_gateway",
+              "stopped_confirmed": true,
+              "running_confirmed": true,
+              "elapsed_s": 41.2,
+              "maintenance_state": "idle"
+            },
+            "maintenance": {
+              "lease": null,
+              "instance": {
+                "instance_id": "fixture-instance-1",
+                "state": "running",
+                "active_count": 0,
+                "last_seen_generation": 12
+              },
+              "last_outcome": null
+            },
+            "before": {
+              "share_gateway": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "broker:host-verify{running}+instance-probe+attribution",
+                "checked_at": 1790942446.75,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "instance_probe": {
+                    "pid": 54300,
+                    "reason": "ok"
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok"
+                  },
+                  "faults": {
+                    "check": "faults",
+                    "verdict": {
+                      "last_fault": null,
+                      "counts_by_phase": {
+                        "auth": 0,
+                        "config": 0,
+                        "body": 0,
+                        "limit": 1,
+                        "upstream": 3,
+                        "stream": 0
+                      },
+                      "file": {
+                        "present": true,
+                        "size": 4096,
+                        "mtime": 1790942444.5
+                      }
+                    },
+                    "detail": "read tail ok",
+                    "checked_at": 1790942444
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "share_backend": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "backend:observe(forget_stale=False)+pid-state",
+                "checked_at": 1790942447.25,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "observe": {
+                    "running": true,
+                    "auth_state": "valid",
+                    "auth_label": "认证有效",
+                    "observed_at": 1790942444.75,
+                    "upstream_reachability": {
+                      "state": "ok",
+                      "checked_epoch": 1790942444.75,
+                      "changed": false,
+                      "outage_started": null,
+                      "last_ok": 1790942444.75
+                    },
+                    "attribution": {
+                      "file_ready": true,
+                      "reason": "ok",
+                      "instance_loaded": {
+                        "value": "yes",
+                        "basis": "inference"
+                      }
+                    }
+                  },
+                  "pid_state": {
+                    "state": "running",
+                    "pid": 54300,
+                    "port": 8110,
+                    "identity": "verified",
+                    "identity_reason": "ok"
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "backend_auth": {
+                "state": "valid",
+                "verdict": "confirmed",
+                "source": "backend:admin/auth/status",
+                "checked_at": 1790942444.75,
+                "age_s": 3.0,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "auth_label": "认证有效",
+                  "running": true,
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  },
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "connectivity": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "ts:status",
+                "checked_at": 1790942448.5,
+                "age_s": 0.25,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "upstream": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "backend:health.upstream_reachability",
+                "checked_at": 1790942444.75,
+                "age_s": 4.25,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "upstream": {
+                    "state": "ok",
+                    "checked_epoch": 1790942444.75,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790942444.75
+                  },
+                  "health_reachable": true,
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "ts_service": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "sc:query-ts",
+                "checked_at": 1790942448.0,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "funnel": {
+                "state": "on",
+                "verdict": "confirmed",
+                "source": "ts:serve-status",
+                "checked_at": 1790942449.25,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "security_gate": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "broker:host-evidence{limits}",
+                "checked_at": 1790942444.0,
+                "age_s": 5.75,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "check": "limits",
+                  "verdict": true,
+                  "detail": "ok",
+                  "timestamp_basis": "local_read"
+                }
+              }
+            },
+            "after": {
+              "share_gateway": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "broker:host-verify{running}+instance-probe+attribution",
+                "checked_at": 1790942450.5,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "instance_probe": {
+                    "pid": 54300,
+                    "reason": "ok"
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok"
+                  },
+                  "faults": {
+                    "check": "faults",
+                    "verdict": {
+                      "last_fault": null,
+                      "counts_by_phase": {
+                        "auth": 0,
+                        "config": 0,
+                        "body": 0,
+                        "limit": 1,
+                        "upstream": 3,
+                        "stream": 0
+                      },
+                      "file": {
+                        "present": true,
+                        "size": 4096,
+                        "mtime": 1790942444.5
+                      }
+                    },
+                    "detail": "read tail ok",
+                    "checked_at": 1790942444
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "share_backend": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "backend:observe(forget_stale=False)+pid-state",
+                "checked_at": 1790942451.0,
+                "age_s": 0.25,
+                "ttl_s": 60,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "observe": {
+                    "running": true,
+                    "auth_state": "valid",
+                    "auth_label": "认证有效",
+                    "observed_at": 1790942444.75,
+                    "upstream_reachability": {
+                      "state": "ok",
+                      "checked_epoch": 1790942444.75,
+                      "changed": false,
+                      "outage_started": null,
+                      "last_ok": 1790942444.75
+                    },
+                    "attribution": {
+                      "file_ready": true,
+                      "reason": "ok",
+                      "instance_loaded": {
+                        "value": "yes",
+                        "basis": "inference"
+                      }
+                    }
+                  },
+                  "pid_state": {
+                    "state": "running",
+                    "pid": 54300,
+                    "port": 8110,
+                    "identity": "verified",
+                    "identity_reason": "ok"
+                  },
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "backend_auth": {
+                "state": "valid",
+                "verdict": "confirmed",
+                "source": "backend:admin/auth/status",
+                "checked_at": 1790942444.75,
+                "age_s": 6.75,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "auth_label": "认证有效",
+                  "running": true,
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  },
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "connectivity": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "ts:status",
+                "checked_at": 1790942452.25,
+                "age_s": 0.25,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "upstream": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "backend:health.upstream_reachability",
+                "checked_at": 1790942444.75,
+                "age_s": 8.0,
+                "ttl_s": 300,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "upstream": {
+                    "state": "ok",
+                    "checked_epoch": 1790942444.75,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790942444.75
+                  },
+                  "health_reachable": true,
+                  "timestamp_basis": "source_checked_epoch"
+                }
+              },
+              "ts_service": {
+                "state": "running",
+                "verdict": "confirmed",
+                "source": "sc:query-ts",
+                "checked_at": 1790942451.75,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "funnel": {
+                "state": "on",
+                "verdict": "confirmed",
+                "source": "ts:serve-status",
+                "checked_at": 1790942453.0,
+                "age_s": 0.25,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "timestamp_basis": "local_read"
+                }
+              },
+              "security_gate": {
+                "state": "ok",
+                "verdict": "confirmed",
+                "source": "broker:host-evidence{limits}",
+                "checked_at": 1790942444.0,
+                "age_s": 9.5,
+                "ttl_s": 600,
+                "stale": false,
+                "reason": null,
+                "evidence": {
+                  "check": "limits",
+                  "verdict": true,
+                  "detail": "ok",
+                  "timestamp_basis": "local_read"
+                }
+              }
+            },
+            "last_error": null,
+            "note": "8100 单层重启完成（component=share_gateway）：经 broker 受限宿主协议，未以 share.stop→share.start 代替；8110 实例、私人 8000、TS/Funnel 配置、Key/名称/身份及发布配置不变；入口重启期间业务可能暂时不可用"
+          },
+          "error": null,
+          "idempotency_key": null
+        },
+        "result": {
+          "restarted": true,
+          "gateway": {
+            "component": "share_gateway",
+            "stopped_confirmed": true,
+            "running_confirmed": true,
+            "elapsed_s": 41.2,
+            "maintenance_state": "idle"
+          },
+          "maintenance": {
+            "lease": null,
+            "instance": {
+              "instance_id": "fixture-instance-1",
+              "state": "running",
+              "active_count": 0,
+              "last_seen_generation": 12
+            },
+            "last_outcome": null
+          },
+          "before": {
+            "share_gateway": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "broker:host-verify{running}+instance-probe+attribution",
+              "checked_at": 1790942446.75,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "instance_probe": {
+                  "pid": 54300,
+                  "reason": "ok"
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok"
+                },
+                "faults": {
+                  "check": "faults",
+                  "verdict": {
+                    "last_fault": null,
+                    "counts_by_phase": {
+                      "auth": 0,
+                      "config": 0,
+                      "body": 0,
+                      "limit": 1,
+                      "upstream": 3,
+                      "stream": 0
+                    },
+                    "file": {
+                      "present": true,
+                      "size": 4096,
+                      "mtime": 1790942444.5
+                    }
+                  },
+                  "detail": "read tail ok",
+                  "checked_at": 1790942444
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "share_backend": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "backend:observe(forget_stale=False)+pid-state",
+              "checked_at": 1790942447.25,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "observe": {
+                  "running": true,
+                  "auth_state": "valid",
+                  "auth_label": "认证有效",
+                  "observed_at": 1790942444.75,
+                  "upstream_reachability": {
+                    "state": "ok",
+                    "checked_epoch": 1790942444.75,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790942444.75
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  }
+                },
+                "pid_state": {
+                  "state": "running",
+                  "pid": 54300,
+                  "port": 8110,
+                  "identity": "verified",
+                  "identity_reason": "ok"
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "backend_auth": {
+              "state": "valid",
+              "verdict": "confirmed",
+              "source": "backend:admin/auth/status",
+              "checked_at": 1790942444.75,
+              "age_s": 3.0,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "auth_label": "认证有效",
+                "running": true,
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                },
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "connectivity": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "ts:status",
+              "checked_at": 1790942448.5,
+              "age_s": 0.25,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "upstream": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "backend:health.upstream_reachability",
+              "checked_at": 1790942444.75,
+              "age_s": 4.25,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "upstream": {
+                  "state": "ok",
+                  "checked_epoch": 1790942444.75,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942444.75
+                },
+                "health_reachable": true,
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "ts_service": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "sc:query-ts",
+              "checked_at": 1790942448.0,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "funnel": {
+              "state": "on",
+              "verdict": "confirmed",
+              "source": "ts:serve-status",
+              "checked_at": 1790942449.25,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "security_gate": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "broker:host-evidence{limits}",
+              "checked_at": 1790942444.0,
+              "age_s": 5.75,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "check": "limits",
+                "verdict": true,
+                "detail": "ok",
+                "timestamp_basis": "local_read"
+              }
+            }
+          },
+          "after": {
+            "share_gateway": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "broker:host-verify{running}+instance-probe+attribution",
+              "checked_at": 1790942450.5,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "instance_probe": {
+                  "pid": 54300,
+                  "reason": "ok"
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok"
+                },
+                "faults": {
+                  "check": "faults",
+                  "verdict": {
+                    "last_fault": null,
+                    "counts_by_phase": {
+                      "auth": 0,
+                      "config": 0,
+                      "body": 0,
+                      "limit": 1,
+                      "upstream": 3,
+                      "stream": 0
+                    },
+                    "file": {
+                      "present": true,
+                      "size": 4096,
+                      "mtime": 1790942444.5
+                    }
+                  },
+                  "detail": "read tail ok",
+                  "checked_at": 1790942444
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "share_backend": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "backend:observe(forget_stale=False)+pid-state",
+              "checked_at": 1790942451.0,
+              "age_s": 0.25,
+              "ttl_s": 60,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "observe": {
+                  "running": true,
+                  "auth_state": "valid",
+                  "auth_label": "认证有效",
+                  "observed_at": 1790942444.75,
+                  "upstream_reachability": {
+                    "state": "ok",
+                    "checked_epoch": 1790942444.75,
+                    "changed": false,
+                    "outage_started": null,
+                    "last_ok": 1790942444.75
+                  },
+                  "attribution": {
+                    "file_ready": true,
+                    "reason": "ok",
+                    "instance_loaded": {
+                      "value": "yes",
+                      "basis": "inference"
+                    }
+                  }
+                },
+                "pid_state": {
+                  "state": "running",
+                  "pid": 54300,
+                  "port": 8110,
+                  "identity": "verified",
+                  "identity_reason": "ok"
+                },
+                "timestamp_basis": "local_read"
+              }
+            },
+            "backend_auth": {
+              "state": "valid",
+              "verdict": "confirmed",
+              "source": "backend:admin/auth/status",
+              "checked_at": 1790942444.75,
+              "age_s": 6.75,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "auth_label": "认证有效",
+                "running": true,
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                },
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "connectivity": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "ts:status",
+              "checked_at": 1790942452.25,
+              "age_s": 0.25,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "upstream": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "backend:health.upstream_reachability",
+              "checked_at": 1790942444.75,
+              "age_s": 8.0,
+              "ttl_s": 300,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "upstream": {
+                  "state": "ok",
+                  "checked_epoch": 1790942444.75,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942444.75
+                },
+                "health_reachable": true,
+                "timestamp_basis": "source_checked_epoch"
+              }
+            },
+            "ts_service": {
+              "state": "running",
+              "verdict": "confirmed",
+              "source": "sc:query-ts",
+              "checked_at": 1790942451.75,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "funnel": {
+              "state": "on",
+              "verdict": "confirmed",
+              "source": "ts:serve-status",
+              "checked_at": 1790942453.0,
+              "age_s": 0.25,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "timestamp_basis": "local_read"
+              }
+            },
+            "security_gate": {
+              "state": "ok",
+              "verdict": "confirmed",
+              "source": "broker:host-evidence{limits}",
+              "checked_at": 1790942444.0,
+              "age_s": 9.5,
+              "ttl_s": 600,
+              "stale": false,
+              "reason": null,
+              "evidence": {
+                "check": "limits",
+                "verdict": true,
+                "detail": "ok",
+                "timestamp_basis": "local_read"
+              }
+            }
+          },
+          "last_error": null,
+          "note": "8100 单层重启完成（component=share_gateway）：经 broker 受限宿主协议，未以 share.stop→share.start 代替；8110 实例、私人 8000、TS/Funnel 配置、Key/名称/身份及发布配置不变；入口重启期间业务可能暂时不可用"
+        },
+        "readback": {
+          "share_gateway": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "broker:host-verify{running}+instance-probe+attribution",
+            "checked_at": 1790942450.5,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "instance_probe": {
+                "pid": 54300,
+                "reason": "ok"
+              },
+              "attribution": {
+                "file_ready": true,
+                "reason": "ok"
+              },
+              "faults": {
+                "check": "faults",
+                "verdict": {
+                  "last_fault": null,
+                  "counts_by_phase": {
+                    "auth": 0,
+                    "config": 0,
+                    "body": 0,
+                    "limit": 1,
+                    "upstream": 3,
+                    "stream": 0
+                  },
+                  "file": {
+                    "present": true,
+                    "size": 4096,
+                    "mtime": 1790942444.5
+                  }
+                },
+                "detail": "read tail ok",
+                "checked_at": 1790942444
+              },
+              "timestamp_basis": "local_read"
+            }
+          },
+          "share_backend": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "backend:observe(forget_stale=False)+pid-state",
+            "checked_at": 1790942451.0,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "observe": {
+                "running": true,
+                "auth_state": "valid",
+                "auth_label": "认证有效",
+                "observed_at": 1790942444.75,
+                "upstream_reachability": {
+                  "state": "ok",
+                  "checked_epoch": 1790942444.75,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942444.75
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                }
+              },
+              "pid_state": {
+                "state": "running",
+                "pid": 54300,
+                "port": 8110,
+                "identity": "verified",
+                "identity_reason": "ok"
+              },
+              "timestamp_basis": "local_read"
+            }
+          }
+        },
+        "before": {
+          "share_gateway": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "broker:host-verify{running}+instance-probe+attribution",
+            "checked_at": 1790942446.75,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "instance_probe": {
+                "pid": 54300,
+                "reason": "ok"
+              },
+              "attribution": {
+                "file_ready": true,
+                "reason": "ok"
+              },
+              "faults": {
+                "check": "faults",
+                "verdict": {
+                  "last_fault": null,
+                  "counts_by_phase": {
+                    "auth": 0,
+                    "config": 0,
+                    "body": 0,
+                    "limit": 1,
+                    "upstream": 3,
+                    "stream": 0
+                  },
+                  "file": {
+                    "present": true,
+                    "size": 4096,
+                    "mtime": 1790942444.5
+                  }
+                },
+                "detail": "read tail ok",
+                "checked_at": 1790942444
+              },
+              "timestamp_basis": "local_read"
+            }
+          },
+          "share_backend": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "backend:observe(forget_stale=False)+pid-state",
+            "checked_at": 1790942447.25,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "observe": {
+                "running": true,
+                "auth_state": "valid",
+                "auth_label": "认证有效",
+                "observed_at": 1790942444.75,
+                "upstream_reachability": {
+                  "state": "ok",
+                  "checked_epoch": 1790942444.75,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942444.75
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                }
+              },
+              "pid_state": {
+                "state": "running",
+                "pid": 54300,
+                "port": 8110,
+                "identity": "verified",
+                "identity_reason": "ok"
+              },
+              "timestamp_basis": "local_read"
+            }
+          },
+          "backend_auth": {
+            "state": "valid",
+            "verdict": "confirmed",
+            "source": "backend:admin/auth/status",
+            "checked_at": 1790942444.75,
+            "age_s": 3.0,
+            "ttl_s": 300,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "auth_label": "认证有效",
+              "running": true,
+              "attribution": {
+                "file_ready": true,
+                "reason": "ok",
+                "instance_loaded": {
+                  "value": "yes",
+                  "basis": "inference"
+                }
+              },
+              "timestamp_basis": "source_checked_epoch"
+            }
+          },
+          "connectivity": {
+            "state": "ok",
+            "verdict": "confirmed",
+            "source": "ts:status",
+            "checked_at": 1790942448.5,
+            "age_s": 0.25,
+            "ttl_s": 300,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "timestamp_basis": "local_read"
+            }
+          },
+          "upstream": {
+            "state": "ok",
+            "verdict": "confirmed",
+            "source": "backend:health.upstream_reachability",
+            "checked_at": 1790942444.75,
+            "age_s": 4.25,
+            "ttl_s": 300,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "upstream": {
+                "state": "ok",
+                "checked_epoch": 1790942444.75,
+                "changed": false,
+                "outage_started": null,
+                "last_ok": 1790942444.75
+              },
+              "health_reachable": true,
+              "timestamp_basis": "source_checked_epoch"
+            }
+          },
+          "ts_service": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "sc:query-ts",
+            "checked_at": 1790942448.0,
+            "age_s": 0.25,
+            "ttl_s": 600,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "timestamp_basis": "local_read"
+            }
+          },
+          "funnel": {
+            "state": "on",
+            "verdict": "confirmed",
+            "source": "ts:serve-status",
+            "checked_at": 1790942449.25,
+            "age_s": 0.25,
+            "ttl_s": 600,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "timestamp_basis": "local_read"
+            }
+          },
+          "security_gate": {
+            "state": "ok",
+            "verdict": "confirmed",
+            "source": "broker:host-evidence{limits}",
+            "checked_at": 1790942444.0,
+            "age_s": 5.75,
+            "ttl_s": 600,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "check": "limits",
+              "verdict": true,
+              "detail": "ok",
+              "timestamp_basis": "local_read"
+            }
+          }
+        },
+        "after": {
+          "share_gateway": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "broker:host-verify{running}+instance-probe+attribution",
+            "checked_at": 1790942450.5,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "instance_probe": {
+                "pid": 54300,
+                "reason": "ok"
+              },
+              "attribution": {
+                "file_ready": true,
+                "reason": "ok"
+              },
+              "faults": {
+                "check": "faults",
+                "verdict": {
+                  "last_fault": null,
+                  "counts_by_phase": {
+                    "auth": 0,
+                    "config": 0,
+                    "body": 0,
+                    "limit": 1,
+                    "upstream": 3,
+                    "stream": 0
+                  },
+                  "file": {
+                    "present": true,
+                    "size": 4096,
+                    "mtime": 1790942444.5
+                  }
+                },
+                "detail": "read tail ok",
+                "checked_at": 1790942444
+              },
+              "timestamp_basis": "local_read"
+            }
+          },
+          "share_backend": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "backend:observe(forget_stale=False)+pid-state",
+            "checked_at": 1790942451.0,
+            "age_s": 0.25,
+            "ttl_s": 60,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "observe": {
+                "running": true,
+                "auth_state": "valid",
+                "auth_label": "认证有效",
+                "observed_at": 1790942444.75,
+                "upstream_reachability": {
+                  "state": "ok",
+                  "checked_epoch": 1790942444.75,
+                  "changed": false,
+                  "outage_started": null,
+                  "last_ok": 1790942444.75
+                },
+                "attribution": {
+                  "file_ready": true,
+                  "reason": "ok",
+                  "instance_loaded": {
+                    "value": "yes",
+                    "basis": "inference"
+                  }
+                }
+              },
+              "pid_state": {
+                "state": "running",
+                "pid": 54300,
+                "port": 8110,
+                "identity": "verified",
+                "identity_reason": "ok"
+              },
+              "timestamp_basis": "local_read"
+            }
+          },
+          "backend_auth": {
+            "state": "valid",
+            "verdict": "confirmed",
+            "source": "backend:admin/auth/status",
+            "checked_at": 1790942444.75,
+            "age_s": 6.75,
+            "ttl_s": 300,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "auth_label": "认证有效",
+              "running": true,
+              "attribution": {
+                "file_ready": true,
+                "reason": "ok",
+                "instance_loaded": {
+                  "value": "yes",
+                  "basis": "inference"
+                }
+              },
+              "timestamp_basis": "source_checked_epoch"
+            }
+          },
+          "connectivity": {
+            "state": "ok",
+            "verdict": "confirmed",
+            "source": "ts:status",
+            "checked_at": 1790942452.25,
+            "age_s": 0.25,
+            "ttl_s": 300,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "timestamp_basis": "local_read"
+            }
+          },
+          "upstream": {
+            "state": "ok",
+            "verdict": "confirmed",
+            "source": "backend:health.upstream_reachability",
+            "checked_at": 1790942444.75,
+            "age_s": 8.0,
+            "ttl_s": 300,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "upstream": {
+                "state": "ok",
+                "checked_epoch": 1790942444.75,
+                "changed": false,
+                "outage_started": null,
+                "last_ok": 1790942444.75
+              },
+              "health_reachable": true,
+              "timestamp_basis": "source_checked_epoch"
+            }
+          },
+          "ts_service": {
+            "state": "running",
+            "verdict": "confirmed",
+            "source": "sc:query-ts",
+            "checked_at": 1790942451.75,
+            "age_s": 0.25,
+            "ttl_s": 600,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "timestamp_basis": "local_read"
+            }
+          },
+          "funnel": {
+            "state": "on",
+            "verdict": "confirmed",
+            "source": "ts:serve-status",
+            "checked_at": 1790942453.0,
+            "age_s": 0.25,
+            "ttl_s": 600,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "timestamp_basis": "local_read"
+            }
+          },
+          "security_gate": {
+            "state": "ok",
+            "verdict": "confirmed",
+            "source": "broker:host-evidence{limits}",
+            "checked_at": 1790942444.0,
+            "age_s": 9.5,
+            "ttl_s": 600,
+            "stale": false,
+            "reason": null,
+            "evidence": {
+              "check": "limits",
+              "verdict": true,
+              "detail": "ok",
+              "timestamp_basis": "local_read"
+            }
+          }
+        },
+        "last_error": null,
+        "note": "取消在阻塞 broker 调用期间到达：handler 按实际结果返回（不伪报回退）；排队阶段取消的真实记录见 cancelled_operation（state=cancelled）。",
+        "cancellation": {
+          "requested": true,
+          "arrived_during": "blocking_broker_call",
+          "side_effect_committed": true,
+          "actual_result_returned": true,
+          "operation_state": "succeeded",
+          "note": "契约 §10.2 场景 8 写作 operation state=cancelled；交付的 handler（§6.1/§9.5、测试 test_44）在阻塞调用返回后按实际结果返回，故 cancel 请求记录在 cancel_requested、结果按实际返回；排队阶段取消的 operation 记录见 cancelled_operation。"
+        },
+        "cancelled_operation": {
+          "id": "fixture-cancelled-queued-op",
+          "action": "share.gateway_restart",
+          "target": "share",
+          "state": "cancelled",
+          "resource": "share:orchestration",
+          "generation": 0,
+          "cancel_requested": true,
+          "created_at": "2026-10-02T12:00:55+00:00",
+          "started_at": null,
+          "finished_at": "2026-10-02T12:00:55.250000+00:00",
+          "created_epoch": 1790942455.0,
+          "started_epoch": null,
+          "finished_epoch": 1790942455.25,
+          "steps": [],
+          "result": null,
+          "error": {
+            "code": "cancelled",
+            "message": "cancelled while queued; never executed"
+          },
+          "idempotency_key": null
+        }
+      },
+      {
+        "case": "budget_exhausted",
+        "operation": null,
+        "result": null,
+        "readback": null,
+        "before": null,
+        "after": null,
+        "last_error": null,
+        "note": "监督决策记录由真实 share_backend_supervision.run_once(apply=True) 生成：action=none、code=budget_exhausted、attempts_this_hour=3、idle_reason=budget_exhausted；本段无 console 动作（不与动作名混用）。",
+        "supervision": {
+          "generatedFrom": "share_backend_supervision.run_once(apply=True) via the real handler; private fixture inputs (temp watch dir, fake boot id, fake broker view, fake ops gate)",
+          "decision": {
+            "at_utc": "2026-10-02T12:00:56.250000+00:00",
+            "action": "none",
+            "code": "budget_exhausted",
+            "detail": "本小时启动预算已耗尽（3/3）：只报告并给人工入口——查看监督日志 <watch-dir>\\share-backend-watch.log 或 console「分享」面板后人工决定",
+            "confirmations": 2,
+            "attempts_this_hour": 3,
+            "instance": {
+              "pid": null,
+              "identity": "unknown"
+            },
+            "duration_ms": 250.0
+          },
+          "state": {
+            "version": 1,
+            "boot_id": "FIXTURE-HOST|2026-10-02T09:00:00.0000000Z",
+            "consecutive_failures": 2,
+            "restart_attempts_utc": [
+              "2026-10-02T11:45:55.750000+00:00",
+              "2026-10-02T11:50:55.750000+00:00",
+              "2026-10-02T11:55:55.750000+00:00"
+            ],
+            "idle_reason": "budget_exhausted"
+          }
+        }
+      }
+    ],
+    "supervision": {
+      "generatedFrom": "share_backend_supervision.run_once(apply=True) via the real handler; private fixture inputs (temp watch dir, fake boot id, fake broker view, fake ops gate)",
+      "decision": {
+        "at_utc": "2026-10-02T12:00:56.250000+00:00",
+        "action": "none",
+        "code": "budget_exhausted",
+        "detail": "本小时启动预算已耗尽（3/3）：只报告并给人工入口——查看监督日志 <watch-dir>\\share-backend-watch.log 或 console「分享」面板后人工决定",
+        "confirmations": 2,
+        "attempts_this_hour": 3,
+        "instance": {
+          "pid": null,
+          "identity": "unknown"
+        },
+        "duration_ms": 250.0
+      },
+      "state": {
+        "version": 1,
+        "boot_id": "FIXTURE-HOST|2026-10-02T09:00:00.0000000Z",
+        "consecutive_failures": 2,
+        "restart_attempts_utc": [
+          "2026-10-02T11:45:55.750000+00:00",
+          "2026-10-02T11:50:55.750000+00:00",
+          "2026-10-02T11:55:55.750000+00:00"
+        ],
+        "idle_reason": "budget_exhausted"
+      }
+    }
+  }
+}

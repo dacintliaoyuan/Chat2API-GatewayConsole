@@ -1,0 +1,111 @@
+[Unit]
+Description=UM share broker host (single authority for the 8100 child)
+Documentation=file:///opt/um-share/current/um-cloud-deploy/README.md
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/um-share/current/share_broker_ops.py
+ConditionPathExists=/etc/um-share/broker-control.key
+
+[Service]
+Type=simple
+User=um-share
+Group=um-share
+WorkingDirectory=/opt/um-share/current
+EnvironmentFile=/etc/um-share/broker.env
+# The 8100 gateway persists its revoke state under the state directory, never
+# inside the release: ProtectSystem=strict keeps /opt/um-share/current read-only.
+# install.sh appends
+# CHAT2API_SHARE_REVOKE_STATE_FILE=/var/lib/um-share/share-revoke.state
+# to broker.env, and the 8100 child inherits this EnvironmentFile.
+# The 8100 child stamps the price-table version on every ledger row; the table
+# is deployment configuration under /etc, not a file inside the release.
+Environment=CHAT2API_PRICE_TABLE_FILE=/etc/um-share/prices.json
+# The gateway child runs as a script (sys.path[0]=chat2api); the shared
+# projection parser lives one level up at the release root.
+Environment=PYTHONPATH=/opt/um-share/current
+UMask=0077
+# Fail the START, never silently run without metering: the installed unit must
+# still name the price table, and broker.env must set UM_SHARE_UID.
+ExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly broker /etc/systemd/system/um-share-broker.service /etc/um-share/broker.env
+ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share_broker_ops.py \
+  --socket-path /run/um-share/broker.sock \
+  --key-file /etc/um-share/broker-control.key \
+  --instance-key-file /etc/um-share/instance.key \
+  --registration-file /var/lib/um-share/run/instance-registration.json \
+  --instance-socket-prefix /run/um-share/instance- \
+  --projection-path /var/lib/um-share/run/share-projection.json \
+  --broker-dir /var/lib/um-share/broker \
+  --host-pid-file /run/um-share/share-gateway.pid \
+  --state-dir /run/um-share \
+  --expected-uid ${UM_SHARE_UID} \
+  --expect-instance-image /opt/um-share/venv/bin/python \
+  --expect-instance-cmdline-marker share_gateway.py \
+  --expect-instance-port 8100 \
+  --host-command /opt/um-share/venv/bin/python /opt/um-share/current/chat2api/share_gateway.py \
+    --config /var/lib/um-share/run/share-projection.json \
+    --port 8100 \
+    --upstream-port 8110 \
+    --auth-mode projection \
+    --attribution-key-file /etc/um-share/share-attribution.key \
+    --instance-key-file /etc/um-share/instance.key \
+    --instance-pipe-prefix /run/um-share/instance- \
+    --registration-file /var/lib/um-share/run/instance-registration.json \
+    --fault-log /var/log/um-share/share-faults.jsonl
+# The broker host owns the ONLY Popen that starts share_gateway.py.  The
+# console unit is fenced with InaccessiblePaths for the same script, so a
+# console "service.start" can never become a second launcher.
+# The broker creates its AF_UNIX socket asynchronously after ExecStart, so an
+# immediate start races it and answers not_installed.  Wait up to 10 s
+# (50 x 0.2 s) for the socket, then retry the restricted start; success
+# exits 0.  The leading "-" keeps the broker unit active when a persisted
+# stop intent correctly refuses the automatic start; an operator start uses
+# `brokerctl start-explicit`.
+ExecStartPost=-/bin/sh -c 'i=0; while [ $$i -lt 50 ]; do \
+  if [ -S /run/um-share/broker.sock ] && \
+     /opt/um-share/bin/um-share-brokerctl.py start; then exit 0; fi; \
+  i=$$((i+1)); sleep 0.2; done; exit 1'
+# A 15-minute total drain is enforced by the helper: wait for ESTABLISHED
+# connections to 8100 to reach zero, then send the broker drain verb (its own
+# bounded in-flight wait + final stop + closure verification).  A timed-out
+# update never switches the current symlink.
+ExecStop=/opt/um-share/bin/um-share-brokerctl.py --drain-budget ${UM_DRAIN_BUDGET_S} --poll-interval 5 stop
+TimeoutStartSec=120
+TimeoutStopSec=960
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+# The 8100 child is spawned with start_new_session=True but stays in this
+# service cgroup: control-group is the final cleanup fence.
+LimitNOFILE=65536
+TasksMax=512
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=um-share
+StateDirectoryMode=0750
+RuntimeDirectory=um-share
+RuntimeDirectoryMode=0700
+# The display unit keeps its Xvfb auth cookie under /run/um-share.  Without
+# preserve, this unit's stop wipes the directory out from under the RUNNING Xvfb
+# and the login window dies with "(EE) Failed to open authorization file".
+RuntimeDirectoryPreserve=yes
+LogsDirectory=um-share
+LogsDirectoryMode=0750
+ConfigurationDirectory=um-share
+ConfigurationDirectoryMode=0750
+# /var/lib/um-share is the persistent state fence (StateDirectory=um-share);
+# the 8100 gateway's revoke state lives there.  Do not widen this to the
+# release tree: /opt/um-share/current must stay read-only at runtime.
+ReadWritePaths=/var/lib/um-share /run/um-share /var/log/um-share
+
+[Install]
+WantedBy=multi-user.target

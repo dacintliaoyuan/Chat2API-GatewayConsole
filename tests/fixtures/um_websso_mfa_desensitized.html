@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<!--
+  SYNTHETIC, DESENSITIZED fixture — NOT a captured production page.
+
+  同一份 ADFS/UMPASS 表单形状加上一个可见的一次性验证码控件（MFA 标记），
+  与 UMPASS_MFA_SELECTORS 的 `input[autocomplete="one-time-code"]` /
+  `input[name*=otp]` / `input[name*=code]` 对应。账号/密码是明显的占位值；
+  两个可点控件的 onclick 只做本机导航，由测试的路由处理器离线应答。
+-->
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>UMPASS 多因素验证（脱敏夹具）</title>
+</head>
+<body>
+  <form method="post" action="/adfs/ls/" onsubmit="return false;">
+    <label for="userNameInput">用户名</label>
+    <input id="userNameInput" name="UserName" type="text"
+           value="uc000000@um.edu.mo" autocomplete="username">
+    <label for="passwordInput">密码</label>
+    <input id="passwordInput" name="Password" type="password"
+           value="offline-placeholder" autocomplete="current-password">
+    <label for="oneTimePasscodeInput">验证码</label>
+    <input id="oneTimePasscodeInput" name="OneTimePasscode" type="text"
+           autocomplete="one-time-code"
+           onclick="location.href='/adfs/ls/otp-clicked';">
+    <span id="submitButton" role="button" tabindex="0"
+          onclick="localStorage.setItem('token', 'dom-submit-token'); location.href='/adfs/ls/submitted';">登录</span>
+  </form>
+</body>
+</html>

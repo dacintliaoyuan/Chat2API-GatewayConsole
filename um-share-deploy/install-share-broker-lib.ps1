@@ -196,8 +196,8 @@ function Test-AclOutput {
         [string[]]$Output,
         [string]$TargetPath,         # the queried path (echo-header match)
         [string[]]$AllowedFull,      # e.g. 'SYSTEM', 'BUILTIN\Administrators'
-        [string]$ReadOnlyIdentity,   # the configured 8096 operator
-        [string[]]$Forbidden,        # e.g. 'um_share_public'
+        [string]$ReadOnlyIdentity,   # e.g. 'dacint' (the 8096 operator)
+        [string[]]$Forbidden,        # e.g. 'um_share'
         # R67-B: a LIMITED-WRITE identity map (name -> allowed write codes):
         # a matching principal must hold EXACTLY the allowed read+write set
         # (any code outside the allowed set refuses) and is exempt from the
@@ -330,7 +330,7 @@ function Test-AclOutput {
         if ($nA.ok -and $nB.ok) { return ($nA.sid -ceq $nB.sid) }
         return ([string]$A -eq [string]$B -or [string]$A -like ('*\' + $B) -or [string]$B -like ('*\' + $A))
     }.GetNewClosure()
-    # icacls re-exports principals as ACCOUNT NAMES (HOST\um_share_public,
+    # §210 W2: icacls re-exports principals as ACCOUNT NAMES (DAICNT\um_share_d4,
     # NT AUTHORITY\SYSTEM) while expected matrix identities may be SID literals
     # ('*S-1-5-21-...-1007'). Compare identities by CANONICAL SID (real Windows
     # resolution; a SID literal resolves to itself; a name resolves via NTAccount).
@@ -429,7 +429,7 @@ function Test-BrokerDirAcl {
     if ($result.ExitCode -ne 0) {
         return @{ Ok = $false; Reason = ("icacls exit " + $result.ExitCode + ": " + ($result.Output -join ' ')) }
     }
-    return (Test-AclOutput -Output @($result.Output) -TargetPath $BrokerDir -AllowedFull @('SYSTEM', 'Administrators') -ReadOnlyIdentity $OperatorAccount -Forbidden @('um_share_public'))
+    return (Test-AclOutput -Output @($result.Output) -TargetPath $BrokerDir -AllowedFull @('SYSTEM', 'Administrators') -ReadOnlyIdentity $OperatorAccount -Forbidden @('um_share'))
 }
 
 function New-BrokerWrapperContent {
@@ -464,7 +464,7 @@ setlocal
 set "PYTHONHOME=__PYTHONHOME__"
 set "PYTHONDONTWRITEBYTECODE=1"
 set "PYTHONPATH="
-"%~dp0um-share-python.exe" "%~dp0share_broker_server.py" --broker-dir "%~dp0broker" --key-file "%~dp0broker\broker-control-key" --instance-key-file "%~dp0instance-channel-key" --registration-file "%~dp0run\live\instance-registration.json" --pipe-name "__BROKER_PIPE__" --instance-pipe-prefix "__INSTANCE_PREFIX__" --projection-path "%~dp0um-share-projection.json" --share-task "__SHARE_TASK__" --share-port __SHARE_PORT__ --expected-owner-account "__EXPECTED_OWNER__" --expect-image "%~dp0um-share-python.exe" --watchdog-script "%~dp0watchdog-umshare.ps1" --run-root "%~dp0\" --firewall-rule "um-share-public-outbound-block" --share-faults-file "%~dp0run\live\share-faults.jsonl" --dispatch-deadline 130__SDDL____SID__ %*
+"%~dp0um-share-python.exe" "%~dp0share_broker_server.py" --broker-dir "%~dp0broker" --key-file "%~dp0broker\broker-control-key" --instance-key-file "%~dp0instance-channel-key" --registration-file "%~dp0run\live\instance-registration.json" --pipe-name "__BROKER_PIPE__" --instance-pipe-prefix "__INSTANCE_PREFIX__" --projection-path "%~dp0um-share-projection.json" --share-task "__SHARE_TASK__" --share-port __SHARE_PORT__ --expected-owner-account "__EXPECTED_OWNER__" --expect-image "%~dp0um-share-python.exe" --watchdog-script "%~dp0watchdog-umshare.ps1" --run-root "%~dp0\" --firewall-rule "um-share-outbound-block" --share-faults-file "%~dp0run\live\share-faults.jsonl" --dispatch-deadline 130__SDDL____SID__ %*
 endlocal
 '@
     $content = $template.Replace('__PYTHONHOME__', $Cfg['PythonHome']).Replace('__BROKER_PIPE__', $Cfg['BrokerPipeName']).Replace('__INSTANCE_PREFIX__', $Cfg['InstancePipePrefix']).Replace('__SHARE_TASK__', $Cfg['ShareTaskName']).Replace('__SHARE_PORT__', [string]$Cfg['SharePort']).Replace('__EXPECTED_OWNER__', $OwnerArg).Replace('__SDDL__', $sddlArg).Replace('__SID__', $sidArg)
@@ -861,7 +861,7 @@ function Get-BrokerProcessPids {
                'ConvertTo-Json -Compress } catch { exit 1 }')
     $script = -join $parts
     $result = Invoke-CommandRunner -Runner $Runner -ArgumentList @(
-        'powershell', '-NoProfile', '-Command', $script)
+        'pwsh', '-NoProfile', '-Command', $script)
     # Returns a STRUCTURED record (an empty array would be unrolled to
     # $null by PowerShell, making 'evidence failure' indistinguishable
     # from 'no broker'): @{ Unconfirmed = bool; Pids = int[] }.

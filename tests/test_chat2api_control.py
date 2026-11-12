@@ -10,7 +10,6 @@ import os
 import tempfile
 import threading
 import unittest
-from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,7 +29,6 @@ class StubProxy:
 
     def __init__(self):
         self.call_log = []
-        self.close_response = mock.Mock()
 
     def auth_status(self):
         return {"state": "valid", "label": "认证有效", "error": None}
@@ -45,9 +43,11 @@ class StubProxy:
             status_code=200,
             headers={"Content-Type": "application/json",
                      "Content-Length": str(len(body))},
-            content=body, close=self.close_response)
+            content=body)
 
-    def list_models(self, force=True, raw_only=False, fresh_required=False):
+    def list_models(self, force=True, raw_only=False, fresh_required=False,
+                    auth_wait_budget=None, request_deadline=None,
+                    cancel_check=None):
         self.call_log.append(("GET", "/api/models"))
         return {"data": []}
 
@@ -129,7 +129,6 @@ class HandlerBoundaryTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["proxied"], True)
         self.assertEqual(self.proxy.call_log, [("GET", "/api/version")])
-        self.proxy.close_response.assert_called_once()
 
     def test_business_alias_endpoints_stay_open(self):
         # /api/models and /api/chat/completions are /v1-equivalent business

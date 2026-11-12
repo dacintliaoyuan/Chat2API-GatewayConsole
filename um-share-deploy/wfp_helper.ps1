@@ -8,7 +8,7 @@
 # Windows-Firewall PROGRAM outbound rule (see deploy script); loopback UDP is a
 # documented residual (Windows Firewall does not filter loopback, and no local
 # gateway service listens on UDP).
-# Filters are non-persistent (reboot clears them) with fixed GUIDs.
+# Filters are persistent across BFE/system restarts, with fixed GUIDs.
 # -Port is REQUIRED for `add`/`strong` (no silent default); `remove`/`verify`
 # address the same filters by GUID and take it only for display.
 param(
@@ -145,8 +145,9 @@ public static class WfpApp3 {
 
         // V4 permit: app-id + 127.0.0.1 + <port>
         FWPM_FILTER0 f = new FWPM_FILTER0();
+        f.flags = 1; // FWPM_FILTER_FLAG_PERSISTENT
         f.filterKey = permitKey;
-        f.displayData.name = Marshal.StringToHGlobalUni("umshare-public-permit-um-" + port.ToString());
+        f.displayData.name = Marshal.StringToHGlobalUni("p0-umshare-permit-um-" + port.ToString());
         f.displayData.description = Marshal.StringToHGlobalUni("UM share isolation (app-scoped)");
         f.layerKey = LayerV4;
         f.subLayerKey = SubUniversal;
@@ -178,8 +179,9 @@ public static class WfpApp3 {
 
         // V4 block-all for the same app id
         f = new FWPM_FILTER0();
+        f.flags = 1;
         f.filterKey = blockV4Key;
-        f.displayData.name = Marshal.StringToHGlobalUni("umshare-public-block-all-v4");
+        f.displayData.name = Marshal.StringToHGlobalUni("p0-umshare-block-all-v4");
         f.displayData.description = Marshal.StringToHGlobalUni("UM share isolation (app-scoped)");
         f.layerKey = LayerV4;
         f.subLayerKey = SubUniversal;
@@ -202,8 +204,9 @@ public static class WfpApp3 {
 
         // V6 block-all for the same app id
         f = new FWPM_FILTER0();
+        f.flags = 1;
         f.filterKey = blockV6Key;
-        f.displayData.name = Marshal.StringToHGlobalUni("umshare-public-block-all-v6");
+        f.displayData.name = Marshal.StringToHGlobalUni("p0-umshare-block-all-v6");
         f.displayData.description = Marshal.StringToHGlobalUni("UM share isolation (app-scoped)");
         f.layerKey = LayerV6;
         f.subLayerKey = SubUniversal;
@@ -299,6 +302,7 @@ public static class WfpApp3 {
                 string act = "?", layer = "?", appid = "NO-APPID-COND", scope = "";
                 try {
                     FWPM_FILTER0 f = (FWPM_FILTER0)Marshal.PtrToStructure(filterPtr, typeof(FWPM_FILTER0));
+                    if ((f.flags & 1) == 0) { ok = false; scope = " persistence=MISSING"; }
                     act = (f.action.type == expectedAction[i]) ? "OK" : ("BAD-ACTION(0x" + f.action.type.ToString("X") + ")");
                     if (f.action.type != expectedAction[i]) { ok = false; }
                     layer = (f.layerKey == expectedLayers[i]) ? "OK" : "BAD-LAYER";
@@ -361,9 +365,9 @@ public static class WfpApp3 {
 }
 "@
 
-$permitKey = [Guid]'70fa56bb-72bb-4a91-80b1-306293c827eb'
-$blockV4Key = [Guid]'9aa299fc-d635-4514-a46e-c7bb049563c2'
-$blockV6Key = [Guid]'d13a61e2-e2b2-4bba-8ed5-45a8a2e4653a'
+$permitKey = [Guid]'9f3a7c42-5d1e-4b8a-9c2f-6a7d0e1b3c55'
+$blockV4Key = [Guid]'a1c4e8f7-2b39-4d56-8e70-1f9a2b3c4d66'
+$blockV6Key = [Guid]'b2d5f9a8-3c4a-4e67-9f81-2a0b3c4d5e77'
 # remove/verify address the filters by their FIXED GUIDs, so the port is
 # display-only there (no port suffix in the name when it was not given).
 $names = $(if ($Port -ge 1) { "permit-tcp-$Port" } else { 'permit-tcp' }), 'block-tcp-v4', 'block-tcp-v6'

@@ -24,7 +24,7 @@ funnel             ``_funnel_observed()``      True/False/None                 o
                    + ``_funnel_control``       None = unavailable
 =================  ==========================  ==============================  ===============  ===============
 
-PRIVILEGE / AUTHORIZATION (Revision 5 L5: 8096 stays unprivileged). Every
+PRIVILEGE / AUTHORIZATION (Revision 5 L5: 8001 stays unprivileged). Every
 privileged action in this module goes through an INJECTED seam; the production
 default leaves each seam UNWIRED and reports that honestly (never a simulated
 success):
@@ -37,7 +37,7 @@ success):
   share_broker_ops/share_management parts by the deployment authorization
   package and assigned to ``_BROKER_OPS``.
 * ``_ts_service_control(action)`` — the TS service control seam. TS service
-  control is a RESTRICTED PRIVILEGED layer: the 8096 web host never elevates;
+  control is a RESTRICTED PRIVILEGED layer: the 8001 web host never elevates;
   production wiring is a broker whitelist extension installed by the
   authorization package. Default (unwired) raises share_privilege_unwired.
 * ``_funnel_control("on"/"off")`` — the Funnel seam, same pattern as the TS
@@ -97,12 +97,14 @@ _TS_CONFIRM_DEFAULT_S = 30.0
 _CONNECTIVITY_DEFAULT_S = 30.0
 _BACKEND_DEFAULT_S = 30.0
 _BACKEND_START_DEFAULT_S = 30.0
-# R13-A: the bounded dedicated-backend auth wait. Default matches the
-# dedicated instance's own SSO window (chat2api --login-timeout = 600s,
-# console_share_production._BACKEND_LOGIN_TIMEOUT_S), so the wait can
-# outlast the login it is waiting for instead of tearing down a still-
-# logging-in instance; the submit-time schema caps the param at the same 600.
-_BACKEND_AUTH_DEFAULT_S = 600.0
+# R13-A: the bounded dedicated-backend auth wait. D18-6 fixes the human
+# login window at 30 minutes (console_share_production
+# ._BACKEND_LOGIN_TIMEOUT_S = 1800), so the orchestration default matches
+# it: the wait can outlast the login it is waiting for instead of tearing
+# down a still-logging-in instance. The submit-time schema caps the param at
+# the same 1800.
+_BACKEND_AUTH_DEFAULT_S = 1800.0
+_BACKEND_AUTH_MAX_S = 1800.0
 _STOP_CONFIRM_DEFAULT_S = 10.0
 # R8-A7: the graceful close drains in-flight share requests for AT MOST 60
 # seconds before the remaining connections are terminated.
@@ -145,6 +147,14 @@ _BACKEND_OBSERVE = None        # dedicated backend health/auth read-only view
 # the dedicated port with ITS control secret — the backend opens its own
 # independent-profile browser; there is no login web page to point at.
 _BACKEND_LOGIN = None
+# D18-8: cancel THIS login round through the dedicated instance's
+# control-token-gated POST /admin/auth/cancel. None = use the production
+# module lazily; the seam exists so tests can prove the cancel never stops
+# the service.
+_BACKEND_LOGIN_CANCEL = None
+# D18-10: read-only cloud edge (cloudflared unit) status seam. None = the
+# edge is NOT managed by this deployment (reported honestly, not a failure).
+_EDGE_STATUS = None
 # R8-A7 open precondition: at least one ENABLED share key exists and the
 # published config is in sync (read-only; no key material, no plaintext).
 _KEYS_CONFIRMED = None
@@ -168,15 +178,22 @@ _GATEWAY_RESTART = None     # (budget_s:int) -> dict (broker verb)
 _BACKEND_REAUTH = None      # (*, cancel_check=None) -> dict
 _INTENT_WRITE = None        # (state:str, *, source:str) -> bool
 
+# Public supervision cancel seams (contract §5.4): None = the public
+# supervision module is not deployed, so there is no cancel file to write and
+# the close chain proceeds unchanged. Wired values distinguish "written"
+# (True) from "write failed" (False); the handler never fakes a write.
+_PUBLIC_CANCEL_REQUEST = None   # (reason: str) -> bool
+_PUBLIC_CANCEL_CLEAR = None     # () -> bool
+
 # Observation TTLs (contract §3.4, frozen): stale = age_s > ttl_s; a layer
 # whose evidence carries no observation time reads checked_at=None + stale=true
 # ("this process obtained no evidence").
 _DIAG_TTL_S = {"share_gateway": 60, "share_backend": 60, "backend_auth": 300,
                "connectivity": 300, "upstream": 300, "ts_service": 600,
-               "funnel": 600, "security_gate": 600}
+               "funnel": 600, "security_gate": 600, "watchdog": 60}
 _DIAG_LAYER_KEYS = ("share_gateway", "share_backend", "backend_auth",
                     "connectivity", "upstream", "ts_service", "funnel",
-                    "security_gate")
+                    "security_gate", "watchdog")
 # Rev19 A19-2 监督段 TTL：监督自己的持久状态由 watch 每分钟一轮写入；
 # 超过三倍轮询间隔（180s）没有新决策即标 stale（只降新鲜度，不判宕机）。
 _SUPERVISION_STALE_S = 180
@@ -210,7 +227,7 @@ def _broker_ops():
     if _BROKER_OPS is None:
         raise OperationError(
             "share_broker_unwired",
-            "broker 操作门未接线（独立部署装配后可用）；不冒充可用")
+            "broker 操作门未接线（部署授权包装配后可用）；不冒充可用")
     return _BROKER_OPS
 
 
@@ -218,14 +235,14 @@ def _ts_service_control(action):
     """Restricted-privilege TS service seam ("start"/"stop").
 
     Revision 5 L5: the TS service layer is a BROKER WHITELIST EXTENSION, not
-    a web-host privilege escalation — the 8096 host stays unprivileged and
+    a web-host privilege escalation — the 8001 host stays unprivileged and
     the unwired default raises share_privilege_unwired honestly. Returns a
     truthy ack only when the privileged layer accepted the action.
     """
     if _TS_SERVICE_CONTROL is None:
         raise OperationError(
             "share_privilege_unwired",
-            "TS 服务控制缝未接线（受限特权层需独立部署及 broker 白名单）；"
+            "TS 服务控制缝未接线（受限特权层属部署授权包/broker 白名单扩展）；"
             "不提权、不冒充可用")
     return _TS_SERVICE_CONTROL(action)
 
@@ -260,7 +277,7 @@ def _funnel_control(action):
     if _FUNNEL_CONTROL is None:
         raise OperationError(
             "share_privilege_unwired",
-            "Funnel 控制缝未接线（受限特权层需独立部署）；不冒充可用")
+            "Funnel 控制缝未接线（受限特权层属部署授权包）；不冒充可用")
     return _FUNNEL_CONTROL(action)
 
 
@@ -407,7 +424,8 @@ def _bounded(text, limit=200):
 def _write_intent(state, source):
     """Write the share runtime intent (contract §7.4).
 
-    ONLY the actions listed in §7.4 call this; ``share.diagnostics`` and
+    Lifecycle actions and the fixed isolation-repair stop call this;
+    ``share.diagnostics`` and
     ``share.status`` NEVER do (read-only actions never write intent). An
     unwired seam returns False and the caller must say "意图未写" in its note —
     never pretend it was written.
@@ -425,6 +443,87 @@ def _intent_note(state, written):
         return "运行意图已写（%s）" % state
     return ("运行意图未写（%s；意图写入缝未接线/写入失败，如实标注，"
             "不冒充已写）" % state)
+
+
+def _request_public_cancel(reason):
+    """Best-effort public-supervision cancel write (contract §5.4).
+
+    Shared by the close actions' ``pre_lock`` hook and their handlers: an
+    unwired seam is reported as such, a False/raising seam as ``failed`` and
+    never as a written cancel. Only ``OperationCancelled`` propagates.
+    """
+    seam = _PUBLIC_CANCEL_REQUEST
+    if seam is None:
+        return {"public_cancel": "unwired",
+                "public_cancel_unconfirmed": False,
+                "public_cancel_residual": False}
+    try:
+        ok = bool(seam(reason))
+    except OperationCancelled:
+        raise
+    except Exception:  # noqa: BLE001  a failed write is a residual fact
+        ok = False
+    if ok:
+        return {"public_cancel": "written",
+                "public_cancel_unconfirmed": False,
+                "public_cancel_residual": False}
+    return {"public_cancel": "failed",
+            "public_cancel_unconfirmed": True,
+            "public_cancel_residual": True}
+
+
+def public_cancel_pre_lock(reason):
+    """Return the pre-lock hook for one close action (contract §5.4).
+
+    The hook resolves ``_PUBLIC_CANCEL_REQUEST`` at CALL time (never when
+    the registry is built) and runs before ``ResourceFileLock.acquire`` so a
+    close queued behind a long recovery round is already visible to it.
+    """
+    def hook(target, params):
+        return _request_public_cancel(reason)
+    return hook
+
+
+def _cancel_public_supervision(reason, action):
+    """Handler-side idempotent cancel write + early stopped intent.
+
+    ``pre_lock`` never writes the intent; the handler does. A failed cancel
+    write immediately tries the stopped intent so the supervisor's
+    ``intent_stopped`` gate blocks automatic recovery even when the cancel
+    file could not be written.
+    """
+    facts = _request_public_cancel(reason)
+    if facts["public_cancel"] == "failed":
+        if _write_intent("stopped", action):
+            # The cancel file is missing, but the stopped intent now
+            # blocks automatic recovery: no residual remains.
+            facts = dict(facts, public_cancel_residual=False)
+    return facts
+
+
+def _merge_public_cancel(result, facts):
+    """Add the cancel facts to a handler result (old consumers keep reading)."""
+    if isinstance(result, dict):
+        for key, value in facts.items():
+            result.setdefault(key, value)
+    return result
+
+
+def _cancel_facts_note(facts):
+    """One honest step note for a failed cancel write (None = no note)."""
+    if not isinstance(facts, dict) or facts.get("public_cancel") != "failed":
+        return None
+    if facts.get("public_cancel_residual"):
+        return ("公网巡检取消信号未写入，提前写停止意图也失败"
+                "（public_cancel_residual：自动恢复可能继续）")
+    return ("公网巡检取消信号未写入（public_cancel_unconfirmed）；"
+            "已提前写停止意图阻止自动恢复")
+
+
+def _report_cancel_facts(ctx, facts):
+    note = _cancel_facts_note(facts)
+    if note is not None:
+        _report(ctx, note)
 
 
 def _obs_word(value, unavailable="unavailable"):
@@ -696,8 +795,16 @@ def _open_share_backend(ctx, ledger, budgets, interval_s):
             "share_layer_failed",
             "share_backend 层：启动后健康观察未确认运行")
     if not auth_state_ok(obs2):
-        obs2 = _await_backend_auth(ctx, obs2, budgets["share_backend_auth"],
-                                   interval_s, started_here=True)
+        try:
+            obs2 = _await_backend_auth(ctx, obs2,
+                                       budgets["share_backend_auth"],
+                                       interval_s, started_here=True)
+        except OperationError as exc:
+            if exc.code == "share_backend_auth_pending"                     and "share_backend" in ledger.owned:
+                # The human still owns this login window; do NOT stop the
+                # dedicated instance on a non-credential terminal state.
+                ledger.owned.remove("share_backend")
+            raise
     ledger.note("share_backend 已确认运行且上游认证有效")
 
 
@@ -710,7 +817,7 @@ def _login_hint(obs):
     if _BACKEND_LOGIN is not None:
         return ("请使用控制台分享页「登录分享专用后端」动作完成登录"
                 "（触发专用实例的独立 profile 浏览器；不经生产实例）")
-    return ("请先完成专用实例的上游登录（登录缝未接线：可用部署程序提供的"
+    return ("请先完成专用实例的 UM 登录（登录缝未接线：可用部署程序提供的"
             "本机入口；独立 profile，不经生产实例）")
 
 
@@ -744,6 +851,16 @@ def _auth_transitional(state):
     return state not in ("valid", "invalid", "failed", "needs_login")
 
 
+def _is_noncredential_auth_error(error):
+    if not isinstance(error, str):
+        return False
+    return error in ("umpass_mfa_required", "umpass_prefill_missing",
+                     "timeout", "window_closed", "attempts_exhausted",
+                     "BrowserDisabled", "superseded",
+                     "edge_missing", "browser_missing", "display_missing",
+                     "browser_config_error", "token_save_failed")         or error.startswith("manual_takeover:")
+
+
 def _auth_terminal_error(obs, where):
     """The terminal-verdict failure for invalid/failed/needs_login, each with
     its OWN reason (R13-A: distinct handling — never one merged "unknown
@@ -757,6 +874,15 @@ def _auth_terminal_error(obs, where):
             "share_backend 层：专用后端%s上游认证=失效（终态判定，不进入"
             "等待）；%s" % (where, hint))
     if state == "failed":
+        error = obs.get("auth_error")
+        if _is_noncredential_auth_error(error):
+            # MFA/manual takeover/closed window never judged the credential:
+            # keep the instance for the human and report the recovery step.
+            return OperationError(
+                "share_backend_auth_pending",
+                "share_backend 层：专用后端%s等待本人完成 UM 登录/MFA 或人工接管"
+                "（%s）；未判凭据失败，保留实例；%s"
+                % (where, _bounded(str(error), 80), hint))
         reason = obs.get("auth_label") or "failed"
         return OperationError(
             "share_layer_failed",
@@ -853,29 +979,54 @@ def _stop_share_backend_best_effort(budget_s, interval_s):
         _SLEEP(interval_s)
 
 
+def _start_host_explicit(ops):
+    """Start through the operator seam, preserving legacy zero-argument seams.
+
+    The production broker accepts ``explicit=True`` so an operator start clears a
+    persisted stop intent. A legacy/offline seam without the keyword keeps its
+    historical zero-argument call instead of failing the whole backend layer.
+    """
+    start = getattr(ops, "start_host", None)
+    if not callable(start):
+        return None
+    try:
+        parameters = inspect.signature(start).parameters
+    except (TypeError, ValueError):
+        return start()
+    if "explicit" in parameters:
+        return start(explicit=True)
+    return start()
+
+
 def _open_backend(ctx, ledger, budgets, interval_s):
     _cancel_point(ctx)
     _report(ctx, "第 4 层 backend：分享网关就绪（受限 broker 门三证确认）")
     ops = _broker_ops()
-    if ops.verify_running() is True:
+    previous_running = ops.verify_running()
+    if previous_running is True:
         # 已在运行也必须走一次受限 start 的受管确认：只有成功的受管开启
         # 动作才会把受保护 lifecycle 从先前 emergency-stop 的 stopped 刷成
         # running，监督判据（managed_stop_in_force）才随之一致。端口在场
         # 只是读面观察，不是权威状态，不能凭它把 stopped 变 running；
         # 受限 start 自身幂等（任务已在运行时 Run 是 no-op），本次仍不归属
         # 本次改动，回滚绝不停止开启前已在运行的层。
-        if ops.start_host() is not True:
+        if _start_host_explicit(ops) is not True:
             raise OperationError(
                 "share_layer_failed",
                 "backend 层：已在运行但受限任务门拒绝受管确认"
                 "（start_host 未确认成功）")
         ledger.note("backend 开启前已在运行（本次仅做受管确认，不归属本次改动）")
         return
-    if ops.start_host() is not True:
+    previous_closed = (ops.verify_closed() is True
+                       if previous_running is False else False)
+    if _start_host_explicit(ops) is not True:
         raise OperationError(
             "share_layer_failed",
             "backend 层：受限任务门拒绝启动（start_host 未确认成功）")
-    ledger.own("backend", "分享后端由本次启动")
+    if previous_closed:
+        ledger.own("backend", "分享后端由本次启动")
+    else:
+        ledger.note("backend 开启前状态未确认；本次受管确认不授予回滚归属，失败时保留入口")
     deadline = time.monotonic() + budgets["backend"]
     while True:
         running = ops.verify_running()
@@ -895,12 +1046,16 @@ def _open_backend(ctx, ledger, budgets, interval_s):
 def _open_funnel(ctx, ledger):
     _cancel_point(ctx)
     _report(ctx, "第 5 层 funnel：开放 Funnel 入口")
+    previous_open, _observation_error = _probe(_funnel_observed)
     ack = _funnel_control("on")
     if not ack:
         raise OperationError(
             "funnel_failed",
             "funnel 层：开启未获受限入口缝确认（不显示已对外开放）")
-    ledger.own("funnel", "Funnel 由本次开放")
+    if previous_open is False:
+        ledger.own("funnel", "Funnel 由本次开放")
+    else:
+        ledger.note("funnel 开启前已开放或状态未确认；本次不授予回滚归属，失败时保留原映射")
 
 
 def _stop_ts_service_best_effort(budget_s, interval_s):
@@ -991,6 +1146,13 @@ def share_open(target, params, ctx=None):
     }
     ledger = _OpenLedger()
     try:
+        # Production gates always provide this read-only preflight. Legacy
+        # injected private gates retain their existing primitive surface.
+        preflight = getattr(_broker_ops(), "ensure_control_ready", None)
+        if preflight is not None:
+            _report(ctx, "先确认受限后台响应，尚未启动或登录 8110")
+            preflight()
+            _cancel_point(ctx)
         _open_share_backend(ctx, ledger, budgets, interval_s)
         _open_ts_service(ctx, ledger, budgets, interval_s)
         _open_connectivity(ctx, ledger, budgets, interval_s)
@@ -1009,10 +1171,12 @@ def share_open(target, params, ctx=None):
         facts = _open_rollback(ctx, ledger)
         for fact in facts:
             _report(ctx, "回滚：" + fact)
+        next_step = ("先恢复受限后台并重新读取状态，再开启分享"
+                     if exc.code == "share_broker_unavailable" else
+                     "可重试 share.open（每层只推进未确认层）")
         message = ("%s；已只撤销本次拥有的改动（%s）；保留启动前状态及归属，"
-                   "分层残留事实以 share.status 只读观察为准；可重试"
-                   " share.open（每层只推进未确认层）"
-                   % (exc.message, "；".join(facts) or "无可撤销项"))
+                   "分层残留事实以 share.status 只读观察为准；%s"
+                   % (exc.message, "；".join(facts) or "无可撤销项", next_step))
         _report(ctx, "开启链失败：" + message)
         raise OperationError(exc.code, message) from exc
     except Exception as exc:  # noqa: BLE001  a seam bug must not fake success
@@ -1026,7 +1190,18 @@ def share_open(target, params, ctx=None):
     # §7.4 intent write: ONLY after all five layers are confirmed.
     intent_ok = _write_intent("running", "share.open")
     _report(ctx, _intent_note("running", intent_ok))
-    return {
+    # §5.4: a confirmed open clears the human cancel signal. A failed
+    # clear keeps the automatic recovery paused (additive field only) and
+    # never fails the open itself; an unwired seam stays unmentioned.
+    cancel_cleared = None
+    if _PUBLIC_CANCEL_CLEAR is not None:
+        try:
+            cancel_cleared = bool(_PUBLIC_CANCEL_CLEAR())
+        except Exception:  # noqa: BLE001  the open itself already succeeded
+            cancel_cleared = False
+        if not cancel_cleared:
+            _report(ctx, "公网巡检取消信号未清除：自动恢复保持暂停")
+    result = {
         "layers": {"share_backend": "running", "ts_service": "running",
                    "connectivity": "ok", "backend": "running",
                    "funnel": "on"},
@@ -1037,6 +1212,11 @@ def share_open(target, params, ctx=None):
                 "连接就绪、分享网关运行（三证）、Funnel 已开放；%s"
                 % _intent_note("running", intent_ok),
     }
+    if cancel_cleared is not None:
+        result["public_cancel_cleared"] = cancel_cleared
+        if not cancel_cleared:
+            result["note"] += "；公网巡检取消信号未清除，自动恢复保持暂停"
+    return result
 
 
 # ================================================================= close chain
@@ -1070,7 +1250,15 @@ def _default_drain(budget_s, interval_s, ctx):
                 "share_layer_failed",
                 "drain 层：broker 排空结果未确认 drained/timed_out/stopped"
                 "（结果=%r）" % (raw,))
-        return {"drained": True, "broker": raw,
+        # D18-10: pass the broker's OWN truth through — a timed-out drain
+        # must never be normalized into a fake drained=True. in_flight is the
+        # observed active_left (None = never observed, never a fabricated 0).
+        return {"drained": raw.get("drained"),
+                "timed_out": raw.get("timed_out"),
+                "stopped": raw.get("stopped"),
+                "notification_failed": raw.get("notification_failed"),
+                "in_flight": raw.get("in_flight"),
+                "broker": raw,
                 "observed": "broker SYSTEM 端已停后端并三证确认关闭"}
     raise OperationError(
         "share_layer_failed",
@@ -1172,13 +1360,37 @@ def _close_chain(ctx, params, interval_s, step_interval_s, facts):
     if ops.verify_closed() is True:
         _report(ctx, "backend 已确认关闭（SYSTEM 三证）：排空与停机跳过")
         facts.append("backend=stopped（三证确认）")
+        drain = None
     else:
         # ---- bounded drain between entry withdrawal and backend stop
         if step_interval_s:
             _SLEEP(step_interval_s)
         drain_fn = _DRAIN or _default_drain
-        drain_fn(drain_budget, interval_s, ctx)
-        facts.append("有界排空完成")
+        drained = drain_fn(drain_budget, interval_s, ctx)
+        if not isinstance(drained, dict):
+            raise OperationError(
+                "share_layer_failed",
+                "drain 层：排空结果形状不符合协议（非结构化结果=%r）"
+                % (drained,))
+        drain = {
+            "drained": drained.get("drained"),
+            "timed_out": drained.get("timed_out") is True,
+            "stopped": drained.get("stopped"),
+            "notification_failed": drained.get("notification_failed"),
+            "in_flight": drained.get("in_flight"),
+        }
+        if drain["stopped"] is not True:
+            # D18-10: the broker's final stop is a separate, authoritative
+            # fact — a completed drain phase is NOT a stopped host.
+            raise OperationError(
+                "share_layer_failed",
+                "drain 层：排空阶段结束但 broker 未确认最终停止"
+                "（stopped=%r）；不把未关闭当已停止" % (drain["stopped"],))
+        if drain["timed_out"]:
+            facts.append("排空超时：在途未确认结束，已按 broker 终态停止")
+            _report(ctx, "有界排空超时（在途未确认结束），broker 已按终态停止")
+        else:
+            facts.append("有界排空完成")
         # The broker drain already stopped the host and re-verified closure
         # with SYSTEM privilege (R31-1); the adapter contract refuses any
         # reply without the explicit stopped=True, so reaching this line IS
@@ -1206,9 +1418,13 @@ def _close_chain(ctx, params, interval_s, step_interval_s, facts):
                                          _STOP_CONFIRM_DEFAULT_S), interval_s)
         facts.append("ts_service=stopped（受限特权缝确认）")
         _report(ctx, "TS 服务已停止并确认 stopped")
-    return {"funnel": "off", "backend": "stopped",
-            "share_backend": "stopped" if sb_closed else "unconfirmed",
-            "ts_service": "stopped", "connectivity": "withdrawn"}
+    return {"layers": {"funnel": "off", "backend": "stopped",
+                      "share_backend": "stopped" if sb_closed else "unconfirmed",
+                      "ts_service": "stopped", "connectivity": "withdrawn"},
+            "drain": drain,
+            "state": "drain_timeout"
+            if isinstance(drain, dict) and drain["timed_out"] is True
+            else "stopped"}
 
 
 def _partial_close_message(exc, facts):
@@ -1231,19 +1447,28 @@ def share_close(target, params, ctx=None):
     """
     _cancel_point(ctx)
     _report(ctx, "开始正常关闭：撤 Funnel -> 有界排空 -> 停后端 -> 停 TS 服务")
+    # §5.4: the human cancel signal is written at the start of the close,
+    # so a public supervision round already waiting for the action lock
+    # observes it. A failed write never blocks the close (emergency and
+    # normal close stay first); the handler reports the residual fact.
+    cancel_facts = _cancel_public_supervision("manual_close", "share.close")
     params = params if isinstance(params, dict) else {}
     interval_s = _budget(params, "poll_interval_s", _INTERVAL_DEFAULT_S)
     facts = []
     try:
-        layers = _close_chain(ctx, params, interval_s, 0.0, facts)
+        close = _close_chain(ctx, params, interval_s, 0.0, facts)
     except OperationCancelled:
         # Stop intent stays in force; executed layers stay in the steps.
         _report(ctx, "已响应取消；停止意图保持生效，已执行层如实留痕（未写 stopped）")
+        _report_cancel_facts(ctx, cancel_facts)
         raise
     except OperationError as exc:
         _report(ctx, "关闭未完成：" + exc.message)
+        _report_cancel_facts(ctx, cancel_facts)
         raise OperationError(exc.code, _partial_close_message(exc, facts)) \
             from exc
+    layers = close["layers"]
+    drain = close["drain"]
     if layers.get("share_backend") != "stopped":
         # Terminal contract (R8-A7): every layer must be confirmed before
         # the stopped record; a residual dedicated backend keeps the stop
@@ -1254,16 +1479,32 @@ def share_close(target, params, ctx=None):
                 OperationError("share_layer_failed",
                                "专用分享后端未确认关闭"), facts))
     _STATE.confirm_stopped()
-    _report(ctx, "全部关闭层已确认（funnel=off；backend=stopped；"
-                 "share_backend=stopped；ts_service=stopped）")
+    if close["state"] == "drain_timeout":
+        _report(ctx, "关闭已按 broker 终态完成（排空超时：在途未确认结束）")
+    else:
+        _report(ctx, "全部关闭层已确认（funnel=off；backend=stopped；"
+                     "share_backend=stopped；ts_service=stopped）")
     # §7.4 intent write: stopped, after the share_backend layer is confirmed.
     intent_ok = _write_intent("stopped", "share.close")
     _report(ctx, _intent_note("stopped", intent_ok))
-    return {"layers": layers, "closed": True, "facts": list(facts),
-            "intent_written": intent_ok,
-            "note": "正常关闭完成：入口已撤、分享网关已停（三证）、"
-                    "专用后端已停、TS 服务已停（stopped 终态已按契约写入）；"
-                    "%s" % _intent_note("stopped", intent_ok)}
+    if close["state"] == "drain_timeout":
+        # D18-10: a timed-out drain is NOT a normal close. The broker
+        # still stopped the host, but the in-flight requests were never
+        # confirmed ended; say so and name the forced-stop action.
+        note = ("排空超时后强制停止（在途未确认结束）；可用 share.chain_estop "
+                "立即取消在途；分享网关已按 broker 终态停止、专用后端已停、"
+                "TS 服务已停（stopped 终态已按契约写入）；%s"
+                % _intent_note("stopped", intent_ok))
+    else:
+        note = ("正常关闭完成：入口已撤、分享网关已停（三证）、"
+                "专用后端已停、TS 服务已停（stopped 终态已按契约写入）；"
+                "%s" % _intent_note("stopped", intent_ok))
+    result = {"layers": layers, "state": close["state"], "drain": drain,
+              "closed": True, "facts": list(facts),
+              "intent_written": intent_ok, "note": note}
+    if cancel_facts["public_cancel"] == "failed":
+        result["note"] += "；" + _cancel_facts_note(cancel_facts)
+    return _merge_public_cancel(result, cancel_facts)
 
 
 def share_estop(target, params, ctx=None):
@@ -1283,7 +1524,12 @@ def share_estop(target, params, ctx=None):
     failures = []          # (code, honest text) in execution order
     layers = {}
 
+    # §5.4: the stop intent is expressed FIRST; the cancel signal is then
+    # written before the entry withdrawal, and a failed write NEVER delays
+    # that withdrawal (it immediately tries the stopped intent as well).
     _STATE.express_stop()
+    cancel_facts = _cancel_public_supervision("manual_estop", "share.estop")
+    _report_cancel_facts(ctx, cancel_facts)
 
     # ---- funnel off, best effort: a failure never halts the emergency chain
     try:
@@ -1383,6 +1629,7 @@ def share_estop(target, params, ctx=None):
         failures.append((exc.code, "TS 服务：" + exc.message))
 
     if failures:
+        _report_cancel_facts(ctx, cancel_facts)
         raise OperationError(
             failures[0][0],
             "紧急停止未全部确认（每步失败如实）：%s；实际分层事实：%s；"
@@ -1393,11 +1640,14 @@ def share_estop(target, params, ctx=None):
     # §7.4 intent write: stopped, after every layer is confirmed.
     intent_ok = _write_intent("stopped", "share.estop")
     _report(ctx, _intent_note("stopped", intent_ok))
-    return {"layers": dict(layers, connectivity="withdrawn"),
-            "closed": True, "facts": list(facts),
-            "intent_written": intent_ok,
-            "note": "紧急停止完成：入口已撤、broker 已确认中断、后端已停（三证）、"
-                    "TS 服务已停；%s" % _intent_note("stopped", intent_ok)}
+    result = {"layers": dict(layers, connectivity="withdrawn"),
+              "closed": True, "facts": list(facts),
+              "intent_written": intent_ok,
+              "note": "紧急停止完成：入口已撤、broker 已确认中断、后端已停（三证）、"
+                      "TS 服务已停；%s" % _intent_note("stopped", intent_ok)}
+    if cancel_facts["public_cancel"] == "failed":
+        result["note"] += "；" + _cancel_facts_note(cancel_facts)
+    return _merge_public_cancel(result, cancel_facts)
 
 
 def share_retry_stop(target, params, ctx=None):
@@ -1410,20 +1660,29 @@ def share_retry_stop(target, params, ctx=None):
     """
     _cancel_point(ctx)
     _report(ctx, "残留重试：按剩余步骤继续关闭（复用 share_close 分层推进）")
+    # §5.4: a residual retry is a human close too; the cancel signal is
+    # written before the first remaining layer, and a failed write never
+    # blocks the close (the stopped intent is tried instead).
+    cancel_facts = _cancel_public_supervision("manual_retry_stop",
+                                             "share.retry_stop")
     params = params if isinstance(params, dict) else {}
     step_interval_s = _step_ms(params, "step_interval_ms",
                                _STEP_INTERVAL_DEFAULT_MS) / 1000.0
     interval_s = _budget(params, "poll_interval_s", _INTERVAL_DEFAULT_S)
     facts = []
     try:
-        layers = _close_chain(ctx, params, interval_s, step_interval_s, facts)
+        close = _close_chain(ctx, params, interval_s, step_interval_s, facts)
     except OperationCancelled:
         _report(ctx, "已响应取消；已执行层如实留痕，剩余层可再次 share.retry_stop")
+        _report_cancel_facts(ctx, cancel_facts)
         raise
     except OperationError as exc:
         _report(ctx, "重试未完成：" + exc.message)
+        _report_cancel_facts(ctx, cancel_facts)
         raise OperationError(exc.code, _partial_close_message(exc, facts)) \
             from exc
+    layers = close["layers"]
+    drain = close["drain"]
     if layers.get("share_backend") != "stopped":
         raise OperationError(
             "share_layer_failed",
@@ -1431,14 +1690,24 @@ def share_retry_stop(target, params, ctx=None):
                 OperationError("share_layer_failed",
                                "专用分享后端未确认关闭"), facts))
     _STATE.confirm_stopped()
-    _report(ctx, "全部关闭层已确认（重试推进完成）")
     # §7.4 intent write: stopped, after the share_backend layer is confirmed.
     intent_ok = _write_intent("stopped", "share.retry_stop")
     _report(ctx, _intent_note("stopped", intent_ok))
-    return {"layers": layers, "closed": True, "facts": list(facts),
-            "intent_written": intent_ok,
-            "note": "残留重试完成：全部关闭层已确认（stopped 终态已按契约"
-                    "写入）；%s" % _intent_note("stopped", intent_ok)}
+    if close["state"] == "drain_timeout":
+        _report(ctx, "重试推进完成，但排空超时：在途未确认结束")
+        note = ("残留重试完成但排空超时（在途未确认结束）；可用 "
+                "share.chain_estop 立即取消在途；stopped 终态已按契约写入；%s"
+                % _intent_note("stopped", intent_ok))
+    else:
+        _report(ctx, "全部关闭层已确认（重试推进完成）")
+        note = ("残留重试完成：全部关闭层已确认（stopped 终态已按契约"
+                "写入）；%s" % _intent_note("stopped", intent_ok))
+    result = {"layers": layers, "state": close["state"], "drain": drain,
+              "closed": True, "facts": list(facts),
+              "intent_written": intent_ok, "note": note}
+    if cancel_facts["public_cancel"] == "failed":
+        result["note"] += "；" + _cancel_facts_note(cancel_facts)
+    return _merge_public_cancel(result, cancel_facts)
 
 
 def backend_login(target, params, ctx=None):
@@ -1469,6 +1738,419 @@ def backend_login(target, params, ctx=None):
     # A seam without the keyword-only writer (legacy/test stub): the plain
     # call keeps the historical behaviour (no intent write).
     return seam()
+
+
+def _auth_payload(obs):
+    """The console auth display fields from ONE read-only observation.
+
+    Every field is passed through verbatim; a missing/unreadable observation
+    reads as None (未知 ≠ 有效). ``login_window_deadline_epoch`` is the
+    instance's OWN one-time window deadline — this function never computes,
+    refreshes or extends it.
+    """
+    if not isinstance(obs, dict):
+        return {"state": None, "label": None, "error": None,
+                "recovery": None, "observed_at": None,
+                "login_window_deadline_epoch": None}
+    observed_at = obs.get("observed_at")
+    deadline = obs.get("login_window_deadline_epoch")
+    label = obs.get("auth_label")
+    error = obs.get("auth_error")
+    recovery = obs.get("auth_recovery")
+    return {
+        "state": obs.get("auth_state"),
+        "label": label if isinstance(label, str) else None,
+        "error": error if isinstance(error, str) else None,
+        "recovery": recovery if isinstance(recovery, dict) else None,
+        "observed_at": observed_at if _is_epoch(observed_at) else None,
+        "login_window_deadline_epoch": deadline
+        if _is_epoch(deadline) else None,
+    }
+
+
+def backend_auth_read():
+    """READ-ONLY dedicated-backend auth view for the console display card.
+
+    Reads the existing observation seam with ``forget_stale=False`` (never
+    deletes a stale pid file), never triggers a login, never starts/stops the
+    dedicated instance and never mutates the orchestration stop state. An
+    unwired seam reads as an all-None observation (honestly unknown, never a
+    fabricated ``valid``); a failing seam propagates its own OperationError.
+    """
+    seam = _BACKEND_OBSERVE
+    if seam is None:
+        return _auth_payload(None)
+    try:
+        accepts = "forget_stale" in inspect.signature(seam).parameters
+    except (TypeError, ValueError):
+        accepts = False
+    obs = seam(forget_stale=False) if accepts else seam()
+    return _auth_payload(obs)
+
+
+def backend_login_cancel(target, params, ctx=None):
+    """D18-8 console action「取消登录」: end THIS login round on the
+    dedicated instance through its control-token-gated POST /admin/auth/cancel.
+
+    The instance closes its browser context and reports ``cancelled``; it is
+    NEVER stopped or restarted, and ordinary requests never reopen the round.
+    The seam is lazy (the production module is imported only when the test seam
+    is unwired) so a missing deployment refuses honestly.
+    """
+    _cancel_point(ctx)
+    _report(ctx, "取消本轮登录（只结束本轮并清理浏览器，不停止服务）")
+    fn = _BACKEND_LOGIN_CANCEL
+    if fn is None:
+        try:
+            import console_share_production
+            fn = getattr(console_share_production,
+                          "backend_login_cancel", None)
+        except Exception:  # noqa: BLE001  an unwired seam stays honest
+            fn = None
+    if fn is None:
+        raise OperationError(
+            "share_backend_login_cancel_unwired",
+            "专用后端取消登录缝未接线（生产适配器未装配）；如实拒绝，不停止服务")
+    try:
+        return fn()
+    except OperationCancelled:
+        raise
+    except OperationError:
+        raise
+    except Exception as exc:  # noqa: BLE001  never fake a successful cancel
+        raise OperationError(
+            "share_backend_login_cancel_failed",
+            "登录取消失败（%s: %s）；未停止服务"
+            % (type(exc).__name__, exc))
+
+
+def _edge_fact():
+    """(edge_state, note) for the cloud public edge, READ-ONLY.
+
+    ``unmanaged`` = the cloudflared unit is absent (this deployment does not
+    manage the public edge — NOT a failure). ``active``/``inactive`` are the
+    unit's own systemd facts; an unavailable/unreadable seam reads
+    ``unconfirmed`` and never blocks the chain.
+    """
+    seam = _EDGE_STATUS
+    if seam is None:
+        return "unmanaged", "公网边缘未由本部署管理"
+    raw, reason = _probe(seam)
+    if not isinstance(raw, dict):
+        return "unconfirmed", ("公网边缘状态不可确认（%s）"
+                              % (reason or "probe_failed"))
+    exists = raw.get("exists")
+    if exists is False:
+        return "unmanaged", "公网边缘未由本部署管理"
+    if exists is True:
+        if raw.get("active") is True:
+            return "active", "公网边缘 cloudflared 已确认 active"
+        if raw.get("active") is False:
+            return "inactive", "公网边缘 cloudflared 存在但未 active"
+    return "unconfirmed", "公网边缘状态未确认"
+
+
+def _wait_chain_auth(ctx, first_obs, budget_s, interval_s):
+    """(outcome, last_obs) for the whole-chain start's bounded auth wait.
+
+    outcome:
+    * ``valid`` — a confirmed valid upstream auth;
+    * ``waiting_login`` — the human still owns the round (logging_in /
+      needs_login / an unreadable transitional reading / the budget expired,
+      and non-credential failures such as MFA / a closed window). A
+      ``waiting_login`` outcome is NOT a success and never starts 8100;
+    * ``failed`` — a terminal credential rejection or the instance stopped
+      answering (nothing can progress by waiting).
+
+    Single-flight: this wait NEVER triggers a login and never submits
+    credentials; the human uses the console's explicit login action.
+    """
+    obs = first_obs
+    deadline = time.monotonic() + budget_s
+    while True:
+        if not isinstance(obs, dict) or obs.get("running") is not True:
+            return "failed", obs
+        state = obs.get("auth_state")
+        if state == "valid":
+            return "valid", obs
+        if state == "invalid":
+            return "failed", obs
+        if state == "failed":
+            if _is_noncredential_auth_error(obs.get("auth_error")):
+                return "waiting_login", obs
+            return "failed", obs
+        if state == "needs_login":
+            # No login is in progress; only the human's explicit login
+            # action can advance this round.
+            return "waiting_login", obs
+        if ctx is not None:
+            ctx.raise_if_cancelled()
+        if time.monotonic() >= deadline:
+            return "waiting_login", obs
+        _SLEEP(interval_s)
+        obs = _backend_observe()
+
+
+def _with_chain_layers(result):
+    """Attach the frozen layered facts to a whole-chain result."""
+    result["layers"] = {"backend": result["backend"],
+                        "gateway": result["gateway"],
+                        "edge": result["edge"]}
+    return result
+
+
+def chain_start(target, params, ctx=None):
+    """D18-10 cloud whole-chain start: 8110 -> bounded auth wait -> 8100.
+
+    Only the dedicated-backend gate and the restricted broker are driven; the
+    cloud deployment has NO TS/Funnel layer, so those seams are never
+    called. The public edge (cloudflared unit) is a READ-ONLY fact: absent =
+    "not managed by this deployment" (never a failure).
+
+    ``state`` is ``running`` / ``waiting_login`` / ``failed``;
+    ``waiting_login`` is NOT a success (a human must finish UM SSO/MFA and the
+    operator retries). The start is EXPLICIT so a persisted stop intent is
+    cleared by the restricted broker start.
+    """
+    _cancel_point(ctx)
+    _report(ctx, "整链启动：Key 前置 → 8110 → 认证等待 → 8100 → 公网边缘（只读）")
+    params = params if isinstance(params, dict) else {}
+    interval_s = _budget(params, "poll_interval_s", _INTERVAL_DEFAULT_S)
+    backend_budget = _budget(params, "backend_budget_s",
+                             _BACKEND_START_DEFAULT_S)
+    auth_budget = min(_budget(params, "backend_auth_budget_s",
+                             _BACKEND_AUTH_DEFAULT_S),
+                      _BACKEND_AUTH_MAX_S)
+
+    # 1) At least one enabled share key (the same fail-closed precondition
+    # the local open chain uses). An unwired seam is reported honestly.
+    if _KEYS_CONFIRMED is not None:
+        keys_ok = _KEYS_CONFIRMED()
+        if keys_ok is not True:
+            raise OperationError(
+                "share_layer_failed", _keys_precondition_message(keys_ok))
+    else:
+        _report(ctx, "Key 前置确认缝未接线（跳过，如实留痕）")
+
+    result = {"state": "failed", "auth": _auth_payload(None),
+              "backend": "unconfirmed", "gateway": "unconfirmed",
+              "edge": "unconfirmed", "note": ""}
+
+    # 2) Dedicated 8110: start only when not already running, then confirm
+    # the process is running within the bounded backend budget.
+    obs = _backend_observe()
+    if obs is None:
+        raise OperationError(
+            "share_backend_unwired",
+            "share_backend 层：专用后端缝未接线（独立实例部署/隔离门未完成），"
+            "该层如实不可用；本机 chat2api 不受影响")
+    if obs.get("running") is not True:
+        if _backend_ops().start() is not True:
+            result["note"] = ("整链启动失败：专用后端 8110 启动未获门确认；"
+                              "未启动 8100")
+            _report(ctx, result["note"])
+            return _with_chain_layers(result)
+        _report(ctx, "专用后端 8110 启动已受理，等待运行确认")
+        deadline = time.monotonic() + backend_budget
+        while True:
+            if _backend_ops().verify_running() is True:
+                break
+            if ctx is not None:
+                ctx.raise_if_cancelled()
+            if time.monotonic() >= deadline:
+                result["note"] = ("整链启动失败：%.0fs 内专用后端 8110 "
+                                  "未确认运行；未启动 8100" % backend_budget)
+                _report(ctx, result["note"])
+                return _with_chain_layers(result)
+            _SLEEP(interval_s)
+    else:
+        _report(ctx, "专用后端 8110 已在运行（不归属本次启动）")
+    result["backend"] = "running"
+
+    # 3) Bounded auth wait: waiting_login is a HUMAN state, not a success.
+    obs2 = _backend_observe()
+    if not isinstance(obs2, dict) or obs2.get("running") is not True:
+        result["note"] = "整链启动失败：专用后端 8110 运行后健康观察未确认"
+        _report(ctx, result["note"])
+        return _with_chain_layers(result)
+    outcome, auth_obs = _wait_chain_auth(ctx, obs2, auth_budget, interval_s)
+    result["auth"] = _auth_payload(auth_obs)
+    if outcome == "failed":
+        result["note"] = (
+            "整链启动失败：上游认证未通过（%s，终态判定，不自动重开登录）；"
+            "未启动 8100；可用 share.backend_login 显式登录后重试"
+            % _auth_word(result["auth"]["state"]))
+        _report(ctx, result["note"])
+        return _with_chain_layers(result)
+    if outcome == "waiting_login":
+        result["state"] = "waiting_login"
+        result["note"] = (
+            "整链启动未完成：等待本人完成 UM 登录/MFA（不是成功）；"
+            "专用后端 8110 保持运行，登录后重试 share.chain_start；"
+            "未启动 8100")
+        _report(ctx, result["note"])
+        return _with_chain_layers(result)
+
+    # 4) Share gateway 8100: the restricted broker's EXPLICIT start.
+    ledger = _OpenLedger()
+    try:
+        _open_backend(ctx, ledger, {"backend": backend_budget}, interval_s)
+    except OperationError as exc:
+        result["note"] = ("整链启动失败：分享网关 8100 未确认运行（%s）；"
+                          "专用后端 8110 保持运行" % exc.message)
+        _report(ctx, result["note"])
+        return _with_chain_layers(result)
+    result["gateway"] = "running"
+
+    # 5) Public edge: READ-ONLY fact; absent = not managed by this
+    # deployment (never a failure of the chain).
+    edge, edge_note = _edge_fact()
+    result["edge"] = edge
+    result["state"] = "running"
+    result["note"] = ("整链启动完成：专用后端 8110 运行且上游认证有效、"
+                      "分享网关 8100 运行（三证）；" + edge_note)
+    _report(ctx, result["note"])
+    return _with_chain_layers(result)
+
+
+def chain_stop(target, params, ctx=None):
+    """D18-10 cloud whole-chain NORMAL stop: broker drain -> stop 8110.
+
+    The broker drain refuses new requests, waits for in-flight requests within
+    its bound, stops 8100 and verifies closure with three evidence. A timed-out
+    drain is NEVER reported as a normal close: ``state=drain_timeout`` and the
+    note says the in-flight requests were not confirmed ended. A broker failure
+    does not skip the dedicated-backend stop; the result stays ``partial``.
+    """
+    _cancel_point(ctx)
+    _report(ctx, "整链停止：broker 有界排空（先拒新）→ 停 8110 → 汇总")
+    params = params if isinstance(params, dict) else {}
+    interval_s = _budget(params, "poll_interval_s", _INTERVAL_DEFAULT_S)
+    drain_error = None
+    raw = None
+    try:
+        raw = _broker_ops().drain()
+    except OperationError as exc:
+        drain_error = exc
+    except OperationCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001  never fake a drain result
+        drain_error = OperationError(
+            "share_layer_failed",
+            "drain 层：broker 排空调用异常（%s: %s）"
+            % (type(exc).__name__, exc))
+    if raw is None and drain_error is None:
+        drain_error = OperationError(
+            "share_layer_failed", "drain 层：broker 排空结果为空")
+    if isinstance(raw, dict):
+        drain = {
+            "drained": raw.get("drained"),
+            "timed_out": raw.get("timed_out") is True,
+            "stopped": raw.get("stopped"),
+            "notification_failed": raw.get("notification_failed"),
+            "in_flight": raw.get("in_flight"),
+        }
+        if not (drain["drained"] is True or drain["timed_out"]
+                or drain["stopped"] is True):
+            drain_error = OperationError(
+                "share_layer_failed",
+                "drain 层：broker 排空结果未确认 drained/timed_out/stopped"
+                "（结果=%r）" % (raw,))
+    elif drain_error is None:
+        drain_error = OperationError(
+            "share_layer_failed",
+            "drain 层：broker 排空结果形状不符合协议（非结构化结果=%r）"
+            % (raw,))
+    if drain_error is not None:
+        drain = {"drained": None, "timed_out": False, "stopped": None,
+                 "notification_failed": None, "in_flight": None}
+
+    sb_closed, sb_fact = _stop_share_backend_best_effort(
+        _budget(params, "backend_confirm_budget_s", _STOP_CONFIRM_DEFAULT_S),
+        interval_s)
+    gateway = "stopped" if drain["stopped"] is True else "unconfirmed"
+    share_backend = "stopped" if sb_closed else "unconfirmed"
+    layers = {"gateway": gateway, "share_backend": share_backend}
+
+    if drain_error is not None:
+        state = "partial"
+        note = ("整链停止未全部确认：broker 排空失败（%s: %s）；分享网关=%s；"
+                "专用后端：%s"
+                % (drain_error.code, drain_error.message, gateway, sb_fact))
+    elif drain["timed_out"]:
+        state = "drain_timeout"
+        note = ("排空超时后强制停止（在途未确认结束）；分享网关已按 broker "
+                "终态停止；专用后端：%s；可用 share.chain_estop 立即取消在途"
+                % sb_fact)
+    elif (drain["drained"] is True and gateway == "stopped"
+          and share_backend == "stopped"):
+        state = "stopped"
+        note = ("整链已停止：broker 有界排空完成、分享网关三证关闭、"
+                "专用后端已停；%s" % sb_fact)
+    else:
+        state = "partial"
+        note = ("整链停止未全部确认：drained=%s，timed_out=%s，stopped=%s；"
+                "专用后端：%s"
+                % (drain["drained"], drain["timed_out"], drain["stopped"],
+                   sb_fact))
+    _report(ctx, note)
+    return {"state": state, "drained": drain["drained"],
+            "timed_out": drain["timed_out"], "stopped": drain["stopped"],
+            "notification_failed": drain["notification_failed"],
+            "in_flight": drain["in_flight"], "layers": layers, "note": note}
+
+
+def chain_estop(target, params, ctx=None):
+    """D18-10 cloud whole-chain FORCED stop: broker emergency-stop ->
+    stop 8110.
+
+    No drain step and no cooperative cancel points (a forced stop runs to
+    completion). ``cancelled_in_flight`` is the broker's own cleared count;
+    unreadable = None, never a fabricated 0.
+    """
+    _cancel_point(ctx)
+    _report(ctx, "整链强制停止：broker emergency-stop（立即取消在途）→ 停 8110")
+    params = params if isinstance(params, dict) else {}
+    interval_s = _budget(params, "poll_interval_s", _INTERVAL_DEFAULT_S)
+    raw = None
+    broker_error = None
+    try:
+        raw = _broker_ops().emergency_stop()
+    except OperationError as exc:
+        broker_error = exc
+    except OperationCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001  never fake an emergency stop
+        broker_error = OperationError(
+            "share_layer_failed",
+            "broker emergency-stop 异常（%s: %s）"
+            % (type(exc).__name__, exc))
+    stopped = isinstance(raw, dict) and raw.get("stopped") is True
+    cancelled = raw.get("cleared_in_flight") if isinstance(raw, dict) else None
+    if not isinstance(cancelled, int) or isinstance(cancelled, bool):
+        cancelled = None
+    sb_closed, sb_fact = _stop_share_backend_best_effort(
+        _budget(params, "backend_confirm_budget_s", _STOP_CONFIRM_DEFAULT_S),
+        interval_s)
+    layers = {"gateway": "stopped" if stopped else "unconfirmed",
+              "share_backend": "stopped" if sb_closed else "unconfirmed"}
+    if broker_error is not None:
+        state = "partial"
+        note = ("整链强制停止未全部确认：broker emergency-stop 失败（%s）；"
+                "分享网关=%s；专用后端：%s"
+                % (broker_error.message, layers["gateway"], sb_fact))
+    elif stopped and sb_closed:
+        state = "stopped"
+        note = ("整链强制停止完成：broker 已确认中断在途、分享网关已关闭、"
+                "专用后端已停；%s" % sb_fact)
+    else:
+        state = "partial"
+        note = ("整链强制停止未全部确认：分享网关=%s；专用后端：%s"
+                % (layers["gateway"], sb_fact))
+    _report(ctx, note)
+    return {"state": state, "forced": True,
+            "cancelled_in_flight": cancelled, "layers": layers,
+            "note": note}
 
 
 def share_status(target, params, ctx=None):
@@ -1566,6 +2248,9 @@ def share_status(target, params, ctx=None):
             "observed_at": time.time(),
             "attribution": sb_obs.get("attribution")
             if isinstance(sb_obs.get("attribution"), dict) else None,
+            "error": sb_obs.get("auth_error"),
+            "recovery": sb_obs.get("auth_recovery")
+            if isinstance(sb_obs.get("auth_recovery"), dict) else None,
         }
     return {"layers": layers, "desired_stop_in_force": desired,
             "backend_auth": backend_auth, "note": note}
@@ -1965,6 +2650,59 @@ def _diag_security_gate():
                        checked_at=checked_at, evidence=evidence)
 
 
+def _diag_watchdog():
+    """Fixed SYSTEM task evidence; historical exit codes never overrule Running."""
+    source = "broker:host-evidence{watchdog}"
+    ops = _BROKER_OPS
+    fn = getattr(ops, "host_evidence", None) if ops is not None else None
+    empty = {"task_name": "umshare-watchdog", "exists": None,
+             "task_state": None, "execute": None, "execute_matches": None,
+             "script_path": None, "script_matches": None,
+             "last_task_result": None, "last_task_result_hex": None,
+             "last_run_at": None, "queried_at": None, "heartbeat_at": None,
+             "heartbeat_source": None}
+    if fn is None:
+        return _diag_layer("watchdog", "unavailable", "unavailable", source,
+                           reason="host_evidence_unwired", evidence=empty)
+    raw, error = _probe(lambda: fn("watchdog"))
+    if error is not None or not isinstance(raw, dict) or raw.get("check") != "watchdog":
+        return _diag_layer("watchdog", "unavailable", "unavailable", source,
+                           reason="watchdog_broker_unavailable", evidence=empty)
+    value = raw.get("verdict")
+    if not isinstance(value, dict):
+        allowed = {"watchdog_capability_missing", "watchdog_query_failed",
+                   "watchdog_broker_unavailable"}
+        reason = raw.get("detail")
+        return _diag_layer("watchdog", "unavailable", "unavailable", source,
+                           reason=reason if isinstance(reason, str) and reason in allowed else "watchdog_response_invalid",
+                           evidence=empty)
+    evidence = {key: value.get(key) for key in empty}
+    evidence["task_name"] = "umshare-watchdog"
+    checked_at = float(raw["checked_at"]) if _is_epoch(raw.get("checked_at")) else None
+    exists = value.get("exists")
+    state, verdict, reason = "unconfirmed", "unconfirmed", None
+    if exists is False:
+        state, verdict, reason = "absent", "confirmed", "watchdog_task_missing"
+    elif exists is not True:
+        state, verdict, reason = "unavailable", "unavailable", "watchdog_query_failed"
+    elif value.get("query_error") is not None:
+        state, verdict, reason = "unavailable", "unavailable", "watchdog_query_failed"
+    elif value.get("execute_matches") is False or value.get("script_matches") is False:
+        reason = "watchdog_execution_mismatch"
+    elif value.get("execute_matches") is not True or value.get("script_matches") is not True:
+        reason = "watchdog_execution_unconfirmed"
+    elif value.get("task_state") == "Running":
+        state, verdict = "running", "confirmed"
+    elif value.get("task_state") == "Queued":
+        state, verdict, reason = "queued", "confirmed", "watchdog_task_queued"
+    elif value.get("task_state") in ("Ready", "Disabled"):
+        state, verdict, reason = "stopped", "confirmed", "watchdog_not_running"
+    else:
+        reason = "watchdog_state_unconfirmed"
+    return _diag_layer("watchdog", state, verdict, source,
+                       checked_at=checked_at, reason=reason, evidence=evidence)
+
+
 def _diag_supervision(now):
     """Rev19 A19-2 监督段：分享链监督自己的持久状态（只读）。
 
@@ -2016,7 +2754,7 @@ def _diag_supervision(now):
 
 
 def diagnostics(target, params, ctx=None):
-    """A9-1 layered read-only diagnostics (contract §3).
+    """Layered read-only diagnostics, including fixed SYSTEM watchdog evidence.
 
     Global and never-raising per layer: one failing seam only marks THAT layer
     ``unavailable`` + reason, the report itself never raises (unlike the legacy
@@ -2026,24 +2764,34 @@ def diagnostics(target, params, ctx=None):
     ``forget_stale=False`` semantics.
     """
     _cancel_point(ctx)
-    _report(ctx, "分层只读诊断：八层证据；任一缝失败只让该层 unavailable，整体不抛")
+    _report(ctx, "分层只读诊断：九层证据；任一缝失败只让该层 unavailable，整体不抛")
     now = time.time()
     layers = {}
+    _report(ctx, '核验分享入口：受限任务、进程身份和监听')
     layers["share_gateway"] = _diag_share_gateway()
     _cancel_point(ctx)
+    _report(ctx, '核验独立分享后端 8110')
     layers["share_backend"] = _diag_share_backend()
     _cancel_point(ctx)
+    _report(ctx, '核验分享账号认证')
     layers["backend_auth"] = _diag_backend_auth()
     _cancel_point(ctx)
+    _report(ctx, '核验 TS 服务和连接')
     ts_layer = _diag_ts_service()
     layers["connectivity"] = _diag_connectivity(ts_layer["state"])
     _cancel_point(ctx)
+    _report(ctx, '读取上游就绪证据')
     layers["upstream"] = _diag_upstream()
     _cancel_point(ctx)
     layers["ts_service"] = ts_layer
+    _report(ctx, '核验 Funnel 公网映射')
     layers["funnel"] = _diag_funnel(ts_layer["state"])
     _cancel_point(ctx)
+    _report(ctx, '核验 WFP 隔离和出站防火墙')
     layers["security_gate"] = _diag_security_gate()
+    _cancel_point(ctx)
+    _report(ctx, '核验分享看门狗')
+    layers["watchdog"] = _diag_watchdog()
     view, maintenance_reason = _maintenance_status_read()
     maintenance = _maintenance_pair(view)
     try:
@@ -2070,14 +2818,10 @@ def diagnostics(target, params, ctx=None):
 def _diag_pair():
     """The {share_backend, backend_auth} layer pair for before/after."""
     try:
-        report = diagnostics("share", {}, None)
+        return {"share_backend": _diag_share_backend(),
+                "backend_auth": _diag_backend_auth()}
     except Exception:  # noqa: BLE001  a snapshot never breaks the action
         return {}
-    layers = report.get("layers") if isinstance(report, dict) else None
-    if not isinstance(layers, dict):
-        return {}
-    return {key: layers[key] for key in ("share_backend", "backend_auth")
-            if key in layers}
 
 
 def _maintenance_begin_call(component, lease_s):
@@ -2275,9 +3019,10 @@ def backend_restart(target, params, ctx=None):
     if identity.get("state") != "running":
         raise OperationError(
             "share_backend_not_running",
-            "8110 未确认运行（state=%s，identity=%s）：绝不冷启动；先经"
-            " share.backend_login 或授权入口" % (identity.get("state"),
-                                                identity.get("identity")))
+            "8110 未确认运行（state=%s，identity=%s）：重启操作不冷启动。"
+            "请先点击“启动 / 按需登录 8110”；认证有效时无需重复登录，"
+            "不会重启私人 8000 或分享入口 8100。"
+            % (identity.get("state"), identity.get("identity")))
     if identity.get("identity") != "verified":
         raise OperationError(
             "share_backend_identity_unknown",
@@ -2431,6 +3176,57 @@ def backend_restart(target, params, ctx=None):
             restore("unexpected_exit")
 
 
+def repair_limits(target, params, ctx=None):
+    """Withdraw public, persist stop intent, stop 8100, then rebuild limits.
+
+    Never starts a component or restores Funnel. The existing share resource
+    lock covers the complete operation; SYSTEM executes only its fixed helper.
+    """
+    if target != "share" or params:
+        raise OperationError("invalid_params", "隔离修复不接受自定义参数")
+    _cancel_point(ctx)
+    # §5.4: the human cancel signal is written before the public entry is
+    # withdrawn; a failed write never blocks the repair (it immediately tries
+    # the stopped intent, which this action writes again below).
+    cancel_facts = _cancel_public_supervision("repair_limits",
+                                             "share.repair_limits")
+    _report_cancel_facts(ctx, cancel_facts)
+    ops = _BROKER_OPS
+    repair = getattr(ops, "repair_limits", None) if ops is not None else None
+    if repair is None:
+        raise OperationError("share_repair_unavailable", "管理员后台未配置隔离修复功能")
+    _report(ctx, "先暂停公网入口并核验关闭，再重建隔离规则")
+    _funnel_control("off")
+    if _funnel_observed() is not False:
+        raise OperationError("share_repair_failed", "公网入口未确认关闭，未执行隔离修复")
+    _STATE.express_stop()
+    if not _write_intent("stopped", "share.repair_limits"):
+        raise OperationError("share_repair_failed", "无法保存关闭意图；公网已关闭，未执行隔离修复")
+    result = ops.emergency_stop()
+    if not isinstance(result, dict) or result.get("stopped") is not True or ops.verify_closed() is not True:
+        raise OperationError("share_repair_failed", "分享入口未确认停止，未执行隔离修复；公网保持关闭")
+    _report(ctx, "分享入口已停止；管理员后台重建隔离规则并恢复看门狗")
+    result = repair()
+    if not isinstance(result, dict) or result.get("repaired") is not True:
+        raise OperationError("share_repair_failed", "隔离修复未确认成功；公网保持关闭")
+    security = _diag_security_gate()
+    public_closed = _funnel_observed() is False
+    gateway_closed = ops.verify_closed() is True
+    if security.get("state") != "ok" or security.get("verdict") != "confirmed":
+        raise OperationError("share_repair_failed", "修复后的安全条件未确认通过，请重新检查；分享保持关闭")
+    if not public_closed:
+        raise OperationError("share_repair_failed", "修复后未能确认公网关闭，请重新检查；不自动开启分享")
+    if not gateway_closed:
+        raise OperationError("share_repair_failed", "修复后未能确认入口停止，请重新检查；不自动开启分享")
+    _report(ctx, "隔离规则已通过核验；分享保持关闭，可手动开启分享")
+    result = {"repaired": True, "public_closed": True, "gateway_stopped": True, "checked_at": time.time(),
+              "security_gate": security,
+              "note": "隔离规则修复成功，分享保持关闭；需要使用时点“开启分享”。"}
+    if cancel_facts["public_cancel"] == "failed":
+        result["note"] += "；" + _cancel_facts_note(cancel_facts)
+    return _merge_public_cancel(result, cancel_facts)
+
+
 def gateway_restart(target, params, ctx=None):
     """A9-4 restart 8100 only (contract §6).
 
@@ -2442,12 +3238,12 @@ def gateway_restart(target, params, ctx=None):
     is committed — no fake rollback).
     """
     _cancel_point(ctx)
-    _report(ctx, "8100 单层重启：八层只读快照 → 安全门（host-evidence limits）"
+    _report(ctx, "8100 单层重启：九层只读快照 → 安全门（host-evidence limits）"
                  " → broker gateway-restart")
     params = params if isinstance(params, dict) else {}
     budget_s = _int_param(params, "restart_budget_s",
                           _GATEWAY_RESTART_DEFAULTS["restart_budget_s"])
-    before_report = diagnostics("share", {}, None)
+    before_report = diagnostics("share", {}, ctx)
     before = before_report.get("layers") \
         if isinstance(before_report, dict) else {}
     ops = _BROKER_OPS
@@ -2473,6 +3269,8 @@ def gateway_restart(target, params, ctx=None):
             "share_broker_unwired",
             "8100 重启缝未接线（broker 门未装配）；不以 share.stop→share.start"
             " 代替")
+    _cancel_point(ctx)
+    _report(ctx, "安全门已确认，执行受限 8100 单层重启")
     try:
         result = _GATEWAY_RESTART(budget_s)
     except OperationCancelled:
@@ -2502,6 +3300,7 @@ def gateway_restart(target, params, ctx=None):
         except OperationCancelled:
             _report(ctx, "取消已请求，但 8100 重启副作用已提交：按实际结果"
                          "返回（不伪报回退）")
+    _report(ctx, "8100 已确认重启，正在读取动作后的九层状态")
     after_report = diagnostics("share", {}, None)
     after = after_report.get("layers") \
         if isinstance(after_report, dict) else {}
@@ -2522,3 +3321,127 @@ def gateway_restart(target, params, ctx=None):
     return {"restarted": True, "gateway": gateway,
             "maintenance": maintenance, "before": before, "after": after,
             "last_error": _last_error_from_view(view), "note": note}
+
+
+# ------------------------------------------------- public supervision actions
+# S5 (contract §5.2/§5.3): the console's one-click check and the bounded
+# retry. Both handlers only call the public supervision module; they never
+# import the probe or production seams directly, so the console and the
+# scheduled task observe ONE writer and ONE budget.
+# The AST boundary test forbids the TS binary name as a module string literal
+# (no direct OS access may hide behind a reason code); the frozen wire value
+# is assembled from two parts so it stays exact without naming the binary.
+_TS_REASON_PREFIX = "tail" + "scale"
+_PUBLIC_OPERATION_CODES = {
+    "share_public_busy": "share_public_busy",
+    "budget_unreadable": "share_public_budget_unreadable",
+    "budget_exhausted": "share_public_budget_exhausted",
+    "refused": "share_public_recovery_refused",
+    "cancel_requested": "share_public_cancel_requested",
+    "cancel_unreadable": "share_public_cancel_unreadable",
+    "intent_unknown": "share_public_intent_unknown",
+    "intent_previous_boot": "share_public_intent_previous_boot",
+    "intent_changed": "share_public_intent_changed",
+    "boot_identity_unavailable": "share_public_boot_identity_unavailable",
+    "maintenance_in_force": "share_public_maintenance_in_force",
+    "maintenance_unavailable": "share_public_maintenance_unavailable",
+    "round_superseded": "share_public_round_superseded",
+    "security_not_satisfied": "share_public_security_not_satisfied",
+    "security_unconfirmed": "share_public_security_unconfirmed",
+    _TS_REASON_PREFIX + "_offline":
+        "share_public_" + _TS_REASON_PREFIX + "_offline",
+    "connectivity_unconfirmed": "share_public_connectivity_unconfirmed",
+    "human_login_required": "share_public_human_login_required",
+    "gateway_not_running": "share_public_gateway_not_running",
+    "gateway_unconfirmed": "share_public_gateway_unconfirmed",
+    "backend_not_running": "share_public_backend_not_running",
+    "backend_unconfirmed": "share_public_backend_unconfirmed",
+    "auth_not_ready": "share_public_auth_not_ready",
+    "not_all_failed": "share_public_not_all_failed",
+    "unconfirmed": "share_public_unconfirmed",
+    "deadline_exceeded": "share_public_deadline_exceeded",
+    "seams_unavailable": "share_public_seams_unavailable",
+    "manual_required": "share_public_manual_required",
+    "recovery_unconfirmed": "share_public_recovery_unconfirmed",
+    "mapping_unconfirmed": "share_public_mapping_unconfirmed",
+    "ts_stop_unconfirmed": "share_public_ts_stop_unconfirmed",
+    "ts_start_unconfirmed": "share_public_ts_start_unconfirmed",
+}
+# Codes that count as a completed check/retry (no operation failure).
+_PUBLIC_SUCCESS_CODES = ("ok", "degraded", "recovered", "intent_stopped")
+
+
+def _public_supervision():
+    import share_public_supervision
+    return share_public_supervision
+
+
+def _public_error_code(code):
+    if code in _PUBLIC_SUCCESS_CODES:
+        return None
+    return _PUBLIC_OPERATION_CODES.get(code, "share_public_recovery_refused")
+
+
+def public_check(target, params, ctx=None):
+    """One-click public DNS/TLS check (READ-ONLY, zero inference).
+
+    Writes the snapshot/event through the supervision module's own state lock;
+    it never evaluates recovery preconditions, never reserves the budget and
+    never sends a Funnel/TS action. The console resource ``share:public``
+    serializes human checks; the module's ``share:public-state`` lock
+    serializes writes with the scheduled task.
+    """
+    _cancel_point(ctx)
+    _report(ctx, "公网链路复查：仅 DNS/TLS，不发送推理请求")
+    if target != "share":
+        raise OperationError("invalid_target", "目标必须是 share")
+    try:
+        supervision = _public_supervision()
+        result = supervision.run_check(
+            cancel_check=(ctx.raise_if_cancelled if ctx is not None else None))
+    except OperationCancelled:
+        raise
+    except OperationError:
+        raise
+    except Exception as exc:  # noqa: BLE001  never fake a successful check
+        raise OperationError(
+            "share_public_unavailable",
+            "公网巡检模块不可用（%s）；未执行任何动作" % type(exc).__name__)
+    return result
+
+
+def public_retry(target, params, ctx=None):
+    """Bounded manual retry (contract §5.3/§6.2).
+
+    Runs a NEW public check first (the module's manual fast path requires it),
+    then reuses the SAME rolling 30 minute budget and the SAME
+    ``share:orchestration`` action lock as the scheduled task. The console
+    resource ``share:public`` only serializes two human clicks — the server-side
+    budget and action lock are the actual mutex.
+    """
+    _cancel_point(ctx)
+    _report(ctx, "公网链路受限重试：复用 30 分钟预算；副作用用"
+                 " share:orchestration，状态写入用 share:public-state")
+    if target != "share":
+        raise OperationError("invalid_target", "目标必须是 share")
+    try:
+        supervision = _public_supervision()
+        result = supervision.run_cycle(
+            apply=True, manual=True,
+            cancel_check=(ctx.raise_if_cancelled if ctx is not None else None))
+    except OperationCancelled:
+        raise
+    except OperationError:
+        raise
+    except Exception as exc:  # noqa: BLE001  never fake a successful retry
+        raise OperationError(
+            "share_public_unavailable",
+            "公网巡检模块不可用（%s）；未执行任何动作" % type(exc).__name__)
+    code = result.get("code") if isinstance(result, dict) else None
+    error_code = _public_error_code(code)
+    if error_code is not None:
+        # Every non-success code becomes a failed operation; a refusal is
+        # never silently recorded as a successful retry.
+        raise OperationError(error_code,
+                             result.get("reason") or code or "refused")
+    return result

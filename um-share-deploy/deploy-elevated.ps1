@@ -1,57 +1,62 @@
-﻿# deploy-elevated.ps1 — privileged stages of the UM share deployment.
+# deploy-elevated.ps1 — privileged stages of the UM share deployment.
 #
 # Runs ONLY elevated (UAC). It is the single sanctioned way to start the share
 # process, so the "no share without verified limits" invariant holds:
 #   Stage Prep   : refresh run copy, hardlink image, install+verify WFP,
 #                  create the um-share writable run/ dir.
+#   Stage Canary : run boundary probes AS um_share (files/network) and the Job
+#                  escape probe (control + under-job); stops before any share.
 #   Stage Start  : verify WFP present -> start share via guard (Job) as um_share
 #                  -> verify listener/owner/image -> enter watchdog loop that
 #                  stops the share the moment any filter disappears.
 #   Stage Stop   : kill the exact share pid (image+owner checked) + task.
 #
 # Execute with:  .\deploy-elevated.ps1 -Stage Prep
+#                .\deploy-elevated.ps1 -Stage Canary
 #                .\deploy-elevated.ps1 -Stage Start -Mode probe|real
 #                .\deploy-elevated.ps1 -Stage Stop
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('Prep', 'Start', 'Stop', 'DrainStop', 'PublishProjection', 'Watchdog')][string]$Stage,
+    [Parameter(Mandatory = $true)][ValidateSet('Prep', 'Canary', 'Start', 'Stop', 'DrainStop', 'PublishProjection', 'Watchdog')][string]$Stage,
     [ValidateSet('probe', 'real')][string]$Mode = 'probe',
-    [string]$Root = (Split-Path -Parent $PSScriptRoot),
-    [string]$RunRoot = 'C:\ProgramData\AIGatewayPublicShareRun',
-    [string]$DeployDir = $PSScriptRoot,
-    [string]$WfpHelper = (Join-Path $PSScriptRoot 'wfp_helper.ps1'),
+    [string]$Root = 'D:\git\github\personal_files\SelfUseAI',
+    [string]$RunRoot = 'C:\ProgramData\UMShareRun',
+    [string]$DeployDir = 'D:\git\github\personal_files\SelfUseAI\ai-gateway\um-share-deploy',
+    [string]$WfpHelper = 'D:\git\github\personal_files\SelfUseAI\ai-gateway\um-share-deploy\wfp_helper.ps1',
+    # The running broker task on this host is the SYSTEM `umshare-broker`
+    # (installed from the recovery install-state). The operator-interactive
+    # `umshare-broker-ops` task was retired after the SYSTEM broker took over;
+    # a caller may override the task name for an experiment or recovery.
+    [string]$BrokerTask = 'umshare-broker',
     # Dedicated share backend listen port (Revision 6 R6-A1). The share
     # gateway forwards here (never to the production chat2api port); the WFP
     # permit filter is keyed to this loopback port. Default keeps the
     # historical single-backend wiring until the isolation gate passes.
-    [int]$ShareBackendPort = 8110,
-    [string]$PythonHome = '',
-    [string]$ShareAccount = ($env:COMPUTERNAME + '\um_share_public'),
-    [System.Management.Automation.PSCredential]$ShareCredential
+    [int]$ShareBackendPort = 8110
 )
 $ErrorActionPreference = 'Stop'
+# Every deployment child check uses this host, independent of the caller PATH.
+$env:PATH = $PSHOME + [IO.Path]::PathSeparator + $env:PATH
+
+function Select-ShareWatchdogProcesses {
+    param([object[]]$Processes, [string]$WatchdogPath, [int]$CurrentProcessId = $PID)
+    $escapedPath = [regex]::Escape($WatchdogPath)
+    $pattern = '(?i)(?:^|\s)-File\s+(?:"' + $escapedPath + '"|' + $escapedPath + ')(?=\s|$)'
+    foreach ($process in $Processes) {
+        if ($process.Name -in @('powershell.exe', 'pwsh.exe') -and
+            $process.ProcessId -ne $CurrentProcessId -and
+            [string]$process.CommandLine -match $pattern) { $process }
+    }
+}
 
 $appExe = Join-Path $RunRoot 'um-share-python.exe'
 # The dedicated image is a hardlink of python.exe in the run copy, which has NO
-# stdlib: python resolves its home from the exe path at C:\ProgramData\AIGatewayPublicShareRun
+# stdlib: python resolves its home from the exe path at C:\ProgramData\UMShareRun
 # and aborts with "Failed to import encodings". Every um_share execution is
-# therefore wrapped in a .cmd that sets PYTHONHOME to the configured CPython dir
+# therefore wrapped in a .cmd that sets PYTHONHOME to the real Python314 dir
 # (um_share has RX there) before running.
-if (-not $PythonHome) {
-    $pythonCommand = Get-Command python -ErrorAction Stop
-    $PythonHome = Split-Path -Parent $pythonCommand.Source
-}
-$PythonHome = [IO.Path]::GetFullPath($PythonHome)
-if (-not (Test-Path -LiteralPath (Join-Path $PythonHome 'python.exe'))) { throw 'Provide -PythonHome pointing to a real Windows CPython installation.' }
-$shareUserName = ($ShareAccount -split '\\')[-1]
-if ($shareUserName -ne 'um_share_public') { throw 'This public deployment requires its dedicated um_share_public account; existing private share accounts are refused.' }
-if ($ShareCredential -and $ShareCredential.UserName -ne $ShareAccount) { throw 'ShareCredential must identify ShareAccount.' }
-$publicRunRoot = [IO.Path]::GetFullPath('C:\ProgramData\AIGatewayPublicShareRun')
-$RunRoot = [IO.Path]::GetFullPath($RunRoot)
-if (-not $RunRoot.Equals($publicRunRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'The public deployment uses only C:\ProgramData\AIGatewayPublicShareRun.' }
-# A separately prepared protected run root is required; this script never creates an account or resets a password.
-if (-not (Test-Path -LiteralPath $RunRoot -PathType Container)) { throw 'Prepare the protected public RunRoot and dedicated account first.' }
+$PythonHome = 'C:\Users\dacint\AppData\Local\Programs\Python\Python314'
 # The operation log must be readable by the non-elevated driver, so it lives in
-# the deployment log dir (the protected public RunRoot is unreadable by the
+# the repo tmp/ dir (ProgramData\UMShareRun is deliberately unreadable by the
 # non-elevated user). Everything observational (log + result copies) is mirrored
 # here.
 $ReadableDir = $DeployDir
@@ -81,6 +86,20 @@ function Write-Log($msg) {
     try { Add-Content -LiteralPath $log -Value $line -Encoding UTF8 } catch { }
 }
 
+function Write-Console($msg) {
+    # explicit console line for the CLI; never call this inside a fn returning a value
+    Write-Output $msg
+}
+
+function Copy-ReadableResult($sourceJson, $name) {
+    # admin can read ProgramData\UMShareRun; mirror the result for the driver.
+    $dest = Join-Path $ReadableDir ("logs\$name")
+    try {
+        Copy-Item -LiteralPath $sourceJson -Destination $dest -Force
+        Write-Log "result mirrored: $dest"
+    } catch { Write-Log ("WARN: could not mirror $name : " + $_.Exception.Message) }
+}
+
 function Assert-Admin {
     $principal = New-Object Security.Principal.WindowsPrincipal(
         [Security.Principal.WindowsIdentity]::GetCurrent())
@@ -89,7 +108,7 @@ function Assert-Admin {
     }
 }
 
-$FirewallRuleName = 'um-share-public-outbound-block'
+$FirewallRuleName = 'um-share-outbound-block'
 
 function Add-UmFirewallBlockRule {
     # Program-scoped outbound block for the share image. This is what covers
@@ -120,7 +139,7 @@ function Restart-BrokerAndVerify {
     # R6-A6 (maintainer review 2026-09-17, finding 4): Prep copies new
     # modules over RunRoot, but the RUNNING broker process keeps the OLD
     # code until it restarts — disk-hash equality proves nothing about what
-    # the process actually loaded. This helper restarts the umshare-public-broker
+    # the process actually loaded. This helper restarts the umshare-broker
     # task and proves the refreshed protocol is live with THREE checks
     # (fail-closed: the share must not open against a stale or absent
     # broker; a plain ok status would prove only that a pipe answers):
@@ -137,12 +156,12 @@ function Restart-BrokerAndVerify {
     #      finding R1 (2026-09-17): share_max_concurrency is a
     #      ShareManager.status() field and NEVER crosses the broker pipe.
     # The control key lives in the broker dir and is never printed.
-    param([string]$BrokerTask = 'umshare-public-broker',
-          [string]$BrokerPipe = '\\.\pipe\um-share-public-broker',
+    param([string]$BrokerTask = 'umshare-broker',
+          [string]$BrokerPipe = '\\.\pipe\um-share-broker',
           [string]$ControlKeyPath = (Join-Path $RunRoot 'broker\broker-control-key'))
     $task = Get-ScheduledTask -TaskName $BrokerTask -ErrorAction SilentlyContinue
     if (-not $task) {
-        throw 'umshare-public-broker task not installed; refusing to start the share (projection mode requires the broker)'
+        throw 'umshare-broker task not installed; refusing to start the share (projection mode requires the broker)'
     }
     $restartAt = Get-Date
     Write-Log "restarting broker task $BrokerTask to load refreshed modules"
@@ -151,7 +170,7 @@ function Restart-BrokerAndVerify {
     Start-ScheduledTask -TaskName $BrokerTask -ErrorAction Stop
     # Check 1: fresh broker process identity (command line + start time),
     # anchored to THIS RunRoot image so a foreign broker process (e.g. the
-    # umshare-public-broker-exp experiment task under another run root) can never
+    # umshare-broker-exp experiment task under another run root) can never
     # satisfy the check (reviewer finding R4).
     $brokerProc = $null
     $procDeadline = (Get-Date).AddSeconds(45)
@@ -211,7 +230,7 @@ json.dump({"status": frame(status), "hostverify": frame(hostverify)},
                     # value: only the refreshed decorator understands
                     # host-verify at all (pre-extension brokers reject it).
                     # The verdict itself may honestly be False or None here —
-                    # at this stage the umshare-public-live task is NOT yet
+                    # at this stage the umshare-live task is NOT yet
                     # registered, so WindowsHostOps.verify_running answers
                     # None (unresolvable evidence, never a fake success,
                     # share_broker_ops.py:91-97). Requiring non-null here made
@@ -275,7 +294,7 @@ function Remove-Limits {
 
 function Invoke-WfpAdd {
     Write-Log "installing WFP app-id filters for $appExe (permit port $ShareBackendPort)"
-    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $WfpHelper -Action add -AppExePath $appExe -Port $ShareBackendPort 2>&1
+    $out = & pwsh -NoProfile -ExecutionPolicy Bypass -File $WfpHelper -Action add -AppExePath $appExe -Port $ShareBackendPort 2>&1
     foreach ($line in $out) { Write-Log "  wfp: $line" }
     if ($LASTEXITCODE -ne 0) { throw "wfp_helper add failed (exit $LASTEXITCODE)" }
 }
@@ -284,7 +303,7 @@ function Test-WfpInstalled {
     # Strong check: presence + action/layer + app-id condition == current image
     # path (same standard the SYSTEM watchdog uses). Detection failure (helper
     # error/non-zero/no STRONG=OK) is treated as NOT installed.
-    $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $WfpHelper -Action strong -AppExePath $appExe -Port $ShareBackendPort 2>&1
+    $output = & pwsh -NoProfile -ExecutionPolicy Bypass -File $WfpHelper -Action strong -AppExePath $appExe -Port $ShareBackendPort 2>&1
     $text = ($output -join ' ')
     $output | ForEach-Object { Write-Log "  wfp: $_" }
     if ($LASTEXITCODE -ne 0 -or $text -notlike '*STRONG=OK*') { return $false }
@@ -293,7 +312,7 @@ function Test-WfpInstalled {
 
 function Invoke-WfpRemove {
     Write-Log "removing WFP app-id filters"
-    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $WfpHelper -Action remove -AppExePath $appExe 2>&1
+    $out = & pwsh -NoProfile -ExecutionPolicy Bypass -File $WfpHelper -Action remove -AppExePath $appExe 2>&1
     foreach ($line in $out) { Write-Log "  wfp: $line" }
 }
 
@@ -351,7 +370,7 @@ function Assert-ProjectionPayloadValid {
 }
 
 function Copy-ShareSource {
-    $pythonExe = (Join-Path $PythonHome 'python.exe')
+    $pythonExe = 'C:\Users\dacint\AppData\Local\Programs\Python\Python314\python.exe'
 
     # 0. deployment mode gate FIRST (R35-2): read the explicit mode and, in
     # projection mode, FULL-validate the derived projection BEFORE any
@@ -368,7 +387,7 @@ function Copy-ShareSource {
                    "silently re-introduce the old authorizations)")
         }
         Assert-ProjectionPayloadValid -ProjectionFile $derived `
-            -GatewaySrcDir $Root -PythonExe $pythonExe
+            -GatewaySrcDir (Join-Path $Root 'ai-gateway') -PythonExe $pythonExe
         Write-Log 'projection mode: skipping legacy um-share.json copy (SQLite is the single authority)'
         # The gateway's instance-control channel needs the FULL share-side
         # module closure in the run copy (share_gateway imports
@@ -400,7 +419,7 @@ function Copy-ShareSource {
         # plaintext or non-64-hex value and any known test identity so a test
         # key can never be shipped in the copy.
         Write-Log 'legacy mode (explicit): copying digest config'
-        $srcDigests = Join-Path $Root 'data\um-share.json'
+        $srcDigests = Join-Path $Root 'ai-gateway\data\um-share.json'
         $raw = Get-Content -LiteralPath $srcDigests -Raw
         if ($raw -match 'um-share-') { throw 'refusing to copy: um-share.json contains a plaintext key' }
         $clients = (($raw | ConvertFrom-Json).clients)
@@ -419,9 +438,11 @@ function Copy-ShareSource {
     }
 
     # 1. refresh the run-copy scripts from the (already reviewed) source.
-    $srcShare = Join-Path $Root 'chat2api\share_gateway.py'
+    $srcShare = Join-Path $Root 'ai-gateway\chat2api\share_gateway.py'
     $pairs = New-Object System.Collections.ArrayList
     [void]$pairs.Add(@((Join-Path $DeployDir 'share_guard.py'), (Join-Path $RunRoot 'share_guard.py')))
+    [void]$pairs.Add(@((Join-Path $DeployDir 'canary_um.py'), (Join-Path $RunRoot 'canary_um.py')))
+    [void]$pairs.Add(@((Join-Path $DeployDir 'escape_probe.py'), (Join-Path $RunRoot 'escape_probe.py')))
     [void]$pairs.Add(@($srcShare, (Join-Path $RunRoot 'share_gateway.py')))
     foreach ($pair in $pairs) {
         Copy-Item -LiteralPath $pair[0] -Destination $pair[1] -Force
@@ -443,11 +464,11 @@ function Copy-ShareSource {
 
     # 3b. Python runtime DLLs. um-share-python.exe is a hardlink of python.exe,
     # so the loader must find python314.dll/vcruntime*.dll next to it (the run
-    # copy is self-contained; the dedicated account's PATH may lack Python). Missing DLL =
+    # copy is self-contained; um_share's PATH has no Python314). Missing DLL =
     # the scheduled task exits 0xC0000135 STATUS_DLL_NOT_FOUND before any probe
     # runs. Copy + hash-verify every DLL (idempotent).
-    $pythonDir = $PythonHome
-    foreach ($dllName in @(Get-ChildItem -LiteralPath $pythonDir -Filter '*.dll' -File | Select-Object -ExpandProperty Name)) {
+    $pythonDir = 'C:\Users\dacint\AppData\Local\Programs\Python\Python314'
+    foreach ($dllName in @('python3.dll', 'python314.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
         $srcDll = Join-Path $pythonDir $dllName
         $dstDll = Join-Path $RunRoot $dllName
         if (-not (Test-Path -LiteralPath $srcDll)) { throw "python runtime DLL missing: $srcDll" }
@@ -472,7 +493,7 @@ function Copy-ShareSource {
     # 4. writable run/ dir owned by um_share (guard status/canary results).
     $runDir = Join-Path $RunRoot 'run'
     if (-not (Test-Path -LiteralPath $runDir)) { New-Item -ItemType Directory -Path $runDir | Out-Null }
-    icacls $runDir /inheritance:r /grant:r ("{0}:(OI)(CI)RW" -f $ShareAccount) /grant:r 'SYSTEM:(OI)(CI)F' /grant:r 'BUILTIN\Administrators:(OI)(CI)F' | Out-Null
+    icacls $runDir /inheritance:r /grant:r 'DAICNT\um_share:(OI)(CI)RW' /grant:r 'SYSTEM:(OI)(CI)F' /grant:r 'BUILTIN\Administrators:(OI)(CI)F' | Out-Null
     Write-Log "run/ dir ready (um_share RW, admin/SYSTEM full)"
     # 4b. deployment-side attribution visibility: report whether the shared
     # attribution key FILE IS READY (warning only - the share starts either way;
@@ -487,16 +508,22 @@ function Start-UmTask {
     param([Parameter(Mandatory = $true)][string]$Name,
           [Parameter(Mandatory = $true)][string]$AsCmd,
           [string]$WorkDir = $RunRoot)
-    if (-not $ShareCredential) { throw 'Starting the public share task requires an explicit -ShareCredential for the prepared dedicated account.' }
-    $taskPassword = $ShareCredential.GetNetworkCredential().Password
+    # Reset the account to a fresh random password, then register with
+    # -User/-Password so the secret goes straight into the Task Scheduler LSA
+    # store (nothing written to disk/logs). Same recipe setup-elevated.ps1 used.
+    $randBytes = [byte[]]::new(28)
+        [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($randBytes)
+        $rand = -join ($randBytes | ForEach-Object { "{0:x2}" -f $_ })
+    $netOut = net user um_share $rand 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ("net user um_share reset failed: " + ($netOut -join ' ')) }
     # run the wrapper batch through %ComSpec%; batch path has no spaces so
     # /d /c <path> is safe
-    $action = New-ScheduledTaskAction -Execute "$env:ComSpec" -Argument ('/d /c ""' + $AsCmd + '""') -WorkingDirectory $WorkDir
+    $action = New-ScheduledTaskAction -Execute "$env:ComSpec" -Argument ("/d /c " + $AsCmd) -WorkingDirectory $WorkDir
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
     try {
-        Register-ScheduledTask -TaskName $Name -Action $action -User $ShareAccount -Password $taskPassword `
+        Register-ScheduledTask -TaskName $Name -Action $action -User 'DAICNT\um_share' -Password $rand `
             -Settings $settings -Description 'UM share one-shot (LSA password)' -Force -ErrorAction Stop | Out-Null
-        Write-Log "registered task $Name (um_share, explicit dedicated-account credential)"
+        Write-Log "registered task $Name (um_share, LSA password recipe)"
     } catch {
         throw ("Register-ScheduledTask($Name) failed: " + $_.Exception.Message)
     }
@@ -531,7 +558,7 @@ function New-UmCaptureScript {
     }
     $body += "exit /b %errorlevel%`r`n"
     [IO.File]::WriteAllText($cmdPath, $body, (New-Object Text.UTF8Encoding($false)))
-    icacls $cmdPath /grant:r ("{0}:(RX)" -f $ShareAccount) | Out-Null
+    icacls $cmdPath /grant:r 'DAICNT\um_share:(RX)' | Out-Null
     Write-Log "wrote capture script $cmdPath"
     return $cmdPath
 }
@@ -543,6 +570,16 @@ function Remove-UmTask {
         Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction SilentlyContinue
         Write-Log "removed task $Name"
     }
+}
+
+function Wait-UmResult {
+    param([Parameter(Mandatory = $true)][string]$JsonPath, [int]$TimeoutSeconds = 60, [string]$GuardPidPath = $null)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path -LiteralPath $JsonPath) { return }
+        Start-Sleep -Milliseconds 400
+    }
+    throw "timed out waiting for $JsonPath (task may have failed)"
 }
 
 function Get-AttributionKeyPath {
@@ -610,9 +647,9 @@ function Stop-ShareProcess {
             $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$pidToKill" -ErrorAction SilentlyContinue
             if ($null -ne $proc) {
                 $owner = Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction SilentlyContinue
-                if (-not ($proc.ExecutablePath -and $proc.ExecutablePath.Equals($appExe, [StringComparison]::OrdinalIgnoreCase))) {
+                if (-not ($proc.ExecutablePath -and $proc.ExecutablePath.EndsWith('um-share-python.exe'))) {
                     Write-Log "WARN: pid $pidToKill image not um-share-python.exe ($($proc.ExecutablePath)); refusing to kill"
-                } elseif (-not $owner -or $owner.User -ne $shareUserName) {
+                } elseif (-not $owner -or $owner.User -ne 'um_share') {
                     Write-Log "WARN: pid $pidToKill owner not confirmed as um_share; refusing to kill"
                 } else {
                     Stop-Process -Id $pidToKill -Force
@@ -631,16 +668,134 @@ New-Item -ItemType Directory -Path (Join-Path $ReadableDir 'logs') -Force | Out-
 $ErrorFile = Join-Path $ReadableDir 'logs\last-error.txt'
 try {
     Assert-Admin
-    if ($Stage -eq 'Start' -and -not $ShareCredential) {
-        throw 'Stage Start requires an explicit -ShareCredential for the prepared dedicated account.'
-    }
     switch ($Stage) {
         'Prep' {
+            $recoveries = @(Get-ChildItem -LiteralPath $RunRoot -Directory -Filter 'recovery-*' -ErrorAction SilentlyContinue)
+            if (-not $recoveries) { throw 'no recovery backup under RunRoot; refusing to deploy' }
+            Write-Log ('recovery backups: ' + (($recoveries | ForEach-Object Name) -join ', '))
             Copy-ShareSource
+            $repairSource = Join-Path $DeployDir 'repair-limits.ps1'
+            $repairTarget = Join-Path $RunRoot 'repair-limits.ps1'
+            Copy-Item -LiteralPath $repairSource -Destination $repairTarget -Force
+            if ((Get-FileHash -LiteralPath $repairSource).Hash -ne (Get-FileHash -LiteralPath $repairTarget).Hash) { throw 'repair helper copy hash mismatch' }
             Install-Limits
             if (-not (Test-LimitsInstalled)) { throw 'limit install verification FAILED after add' }
             Write-Log 'Prep OK: run copy + WFP filters + firewall rule installed and verified'
         }
+        'Canary' {
+            Copy-ShareSource
+            if (-not (Test-LimitsInstalled)) {
+                Write-Log 'limits missing; installing before canary'
+                Install-Limits
+                if (-not (Test-LimitsInstalled)) { throw 'limit verification failed before canary' }
+            }
+        # seed a user-profile canary (created then removed after the probe)
+        $docs = Join-Path $env:USERPROFILE 'Documents\_um_share_canary.txt'
+        Set-Content -LiteralPath $docs -Value 'um_share must not read this' -Encoding UTF8
+
+        # 0) Python bootstrap self-test as um_share: isolates whether the
+        #    dedicated image can even START Python (the 0x80070001 mystery).
+        $selftestRun = Join-Path $RunRoot 'run\pyselftest'
+        if (Test-Path -LiteralPath $selftestRun) { Remove-Item -LiteralPath $selftestRun -Recurse -Force }
+        New-Item -ItemType Directory -Path $selftestRun -Force | Out-Null
+        icacls $selftestRun /grant:r 'DAICNT\um_share:(OI)(CI)RW' | Out-Null
+        $stCode = "import sys,os;open(r'$selftestRun\pyselftest.txt','w').write(sys.version+'|'+os.getcwd());print('PYOK',sys.version)"
+        $stCmd = New-UmCaptureScript -Label 'pyselftest' -Inner ('-c "' + $stCode + '"') -RunDir $selftestRun
+        Start-UmTask -Name 'umshare-pyselftest' -AsCmd $stCmd -WorkDir $RunRoot
+        Wait-UmResult -JsonPath (Join-Path $selftestRun 'raw.txt') -TimeoutSeconds 30
+        Remove-UmTask 'umshare-pyselftest'
+        Copy-ReadableResult (Join-Path $selftestRun 'raw.txt') 'pyselftest-raw.txt'
+        $stRaw = Get-Content -LiteralPath (Join-Path $selftestRun 'raw.txt') -Raw -ErrorAction SilentlyContinue
+        Write-Log "== PYTHON SELFTEST RAW: $($stRaw -replace '\s+',' ')"
+        if (-not (Test-Path -LiteralPath (Join-Path $selftestRun 'pyselftest.txt'))) {
+            Write-Log 'py selftest wrote no marker -> python itself failed to bootstrap as um_share'
+        }
+
+        # 1) file/network boundary as um_share (no job needed), with cmd capture
+        $canaryRun = Join-Path $RunRoot 'run\canary'
+        if (Test-Path -LiteralPath $canaryRun) { Remove-Item -LiteralPath $canaryRun -Recurse -Force }
+        New-Item -ItemType Directory -Path $canaryRun -Force | Out-Null
+        icacls $canaryRun /grant:r 'DAICNT\um_share:(OI)(CI)RW' | Out-Null
+        $canaryCmd = New-UmCaptureScript -Label 'canary' -Inner ('canary_um.py "' + $canaryRun + '"') -RunDir $canaryRun
+        Start-UmTask -Name 'umshare-canary' -AsCmd $canaryCmd -WorkDir $RunRoot
+        try {
+            Wait-UmResult -JsonPath (Join-Path $canaryRun 'canary-results.json')
+        } finally {
+            # always mirror whatever the canary produced for diagnosis
+            Get-ChildItem -LiteralPath $canaryRun -File -ErrorAction SilentlyContinue | ForEach-Object {
+                Copy-ReadableResult $_.FullName ('canary-' + $_.Name)
+            }
+        }
+        Remove-UmTask 'umshare-canary'
+        # raw.txt carries the task's full stdout/stderr (even a boot crash)
+        $canaryRaw = Join-Path $canaryRun 'raw.txt'
+        if (Test-Path -LiteralPath $canaryRaw) {
+            Write-Log '== CANARY RAW (stdout+stderr) =='
+            Get-Content -LiteralPath $canaryRaw -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Log "  c| $_" }
+        }
+        $canaryStdout = Join-Path $canaryRun 'canary-stdout.txt'
+        if (Test-Path -LiteralPath $canaryStdout) {
+            Write-Log '== CANARY STDOUT =='
+            Get-Content -LiteralPath $canaryStdout -Encoding UTF8 | ForEach-Object { Write-Log "  c| $_" }
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $canaryRun 'canary-results.json'))) {
+            throw 'canary produced no results file (see mirrored canary-* logs)'
+        }
+        Copy-ReadableResult (Join-Path $canaryRun 'canary-results.json') 'canary-results.json'
+        $canaryJson = Get-Content -LiteralPath (Join-Path $canaryRun 'canary-results.json') -Raw
+        Write-Log "== CONCISE CANARY: $($canaryJson -replace '\s+',' ')"
+
+        # 2) escape probe CONTROL (bare, as um_share): must be able to spawn
+        $ectlRun = Join-Path $RunRoot 'run\escape-control'
+        if (Test-Path -LiteralPath $ectlRun) { Remove-Item -LiteralPath $ectlRun -Recurse -Force }
+        New-Item -ItemType Directory -Path $ectlRun -Force | Out-Null
+        icacls $ectlRun /grant:r 'DAICNT\um_share:(OI)(CI)RW' | Out-Null
+        $ectlCmd = New-UmCaptureScript -Label 'escctl' -Inner ('escape_probe.py "' + $ectlRun + '"') -RunDir $ectlRun
+        Start-UmTask -Name 'umshare-escctl' -AsCmd $ectlCmd -WorkDir $RunRoot
+        Wait-UmResult -JsonPath (Join-Path $ectlRun 'escape-results.json')
+        Remove-UmTask 'umshare-escctl'
+        Copy-ReadableResult (Join-Path $ectlRun 'escape-results.json') 'escape-control.json'
+        Write-Log ("== CONCISE ESCAPE CONTROL: " +
+            (((Get-Content -LiteralPath (Join-Path $ectlRun 'escape-results.json') -Raw) -replace '\s+', ' ')))
+
+        # 3) escape probe UNDER JOB (guard): every spawn must fail
+        $ejobRun = Join-Path $RunRoot 'run\escape-job'
+        if (Test-Path -LiteralPath $ejobRun) { Remove-Item -LiteralPath $ejobRun -Recurse -Force }
+        New-Item -ItemType Directory -Path $ejobRun -Force | Out-Null
+        icacls $ejobRun /grant:r 'DAICNT\um_share:(OI)(CI)RW' | Out-Null
+        $ejobCmd = New-UmCaptureScript -Label 'escjob' `
+            -Inner ('share_guard.py --run-dir "' + $ejobRun + '" --child escape_probe.py --child-args "' + $ejobRun + '"') `
+            -RunDir $ejobRun
+        Start-UmTask -Name 'umshare-escjob' -AsCmd $ejobCmd -WorkDir $RunRoot
+        try {
+            Wait-UmResult -JsonPath (Join-Path $ejobRun 'escape-results.json') -TimeoutSeconds 90
+        } catch {
+            Write-Log 'escape-job produced NO results (wait timed out)'
+        }
+        Get-ChildItem -LiteralPath $ejobRun -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-ReadableResult $_.FullName ('escjob-' + $_.Name)
+        }
+        Remove-UmTask 'umshare-escjob'
+        $ejRaw = Join-Path $ejobRun 'raw.txt'
+        if (Test-Path -LiteralPath $ejRaw) {
+            Write-Log '== ESCJOB RAW (guard+probe stdout/stderr) =='
+            Get-Content -LiteralPath $ejRaw -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Log "  j| $_" }
+        }
+        $ejStatus = Join-Path $ejobRun 'guard-status.json'
+        if (Test-Path -LiteralPath $ejStatus) {
+            Write-Log ("== ESCJOB GUARD-STATUS: " + ((Get-Content -LiteralPath $ejStatus -Raw -ErrorAction SilentlyContinue) -replace '\s+', ' '))
+        }
+        if (Test-Path -LiteralPath (Join-Path $ejobRun 'escape-results.json')) {
+            Copy-ReadableResult (Join-Path $ejobRun 'escape-results.json') 'escape-job.json'
+            Write-Log ("== CONCISE ESCAPE UNDER JOB: " +
+                (((Get-Content -LiteralPath (Join-Path $ejobRun 'escape-results.json') -Raw) -replace '\s+', ' ')))
+        } else {
+            Write-Log 'CONCISE ESCAPE UNDER JOB: NO RESULTS (see escjob-* mirrors)'
+        }
+
+        Remove-Item -LiteralPath $docs -Force -ErrorAction SilentlyContinue
+        Write-Log 'Canary stage complete'
+    }
     'Start' {
         if (-not (Test-LimitsInstalled)) {
             Write-Log 'limits missing; refusing to start the share (fail closed)'
@@ -649,10 +804,10 @@ try {
         # Monitoring (SYSTEM watchdog) must be READY before the share is opened:
         # registering + starting the watchdog, then confirming it is Running,
         # then starting the share. No share without an armed watcher.
-        $wdTask = Get-ScheduledTask -TaskName 'umshare-public-watchdog' -ErrorAction SilentlyContinue
+        $wdTask = Get-ScheduledTask -TaskName 'umshare-watchdog' -ErrorAction SilentlyContinue
         if (-not $wdTask -or $wdTask.State -ne 'Running') {
             if ($wdTask) { Write-Log ('watchdog state=' + $wdTask.State) }
-            throw 'umshare-public-watchdog not running; refusing to open the share (monitoring must be armed first)'
+            throw 'umshare-watchdog not running; refusing to open the share (monitoring must be armed first)'
         }
         Write-Log 'watchdog armed (Running); proceeding to start share'
         # Broker expected-owner-SID refresh (ROOT CAUSE 2026-09-17, evidence:
@@ -665,7 +820,7 @@ try {
         # account, so the deploy refreshes the wrapper before restarting the
         # broker (admin F on RunRoot; the task re-runs this wrapper on every
         # start, so the fresh broker loads the refreshed expectation).
-        $shareSidNow = (New-Object Security.Principal.NTAccount($ShareAccount)).Translate([Security.Principal.SecurityIdentifier]).Value
+        $shareSidNow = (New-Object Security.Principal.NTAccount('DAICNT', 'um_share')).Translate([Security.Principal.SecurityIdentifier]).Value
         $rbPath = Join-Path $RunRoot 'run-broker.cmd'
         $rb = Get-Content -LiteralPath $rbPath -Raw
         $rbNew = [regex]::Replace($rb, '--expect-owner-sid\s+S-1-5-21-\S+',
@@ -679,13 +834,13 @@ try {
         # Broker restart + live-protocol verification (maintainer finding 4):
         # the running broker must have loaded the refreshed modules BEFORE
         # the share registers with it; a stale pipe is a fail-closed stop.
-        Restart-BrokerAndVerify
+        Restart-BrokerAndVerify -BrokerTask $BrokerTask
         # Record the dedicated-backend permit port for the SYSTEM watchdog
         # (it re-reads this file each round to verify the WFP strong check).
         Set-Content -LiteralPath (Join-Path $RunRoot 'backend-port.txt') `
             -Value ([string]$ShareBackendPort) -Encoding ascii
         # one live share at a time
-        Remove-UmTask 'umshare-public-live'
+        Remove-UmTask 'umshare-live'
         Stop-ShareProcess
         $liveRun = Join-Path $RunRoot 'run\live'
         if (Test-Path -LiteralPath $liveRun) { Remove-Item -LiteralPath $liveRun -Recurse -Force }
@@ -695,7 +850,7 @@ try {
         # source file (or FILE_DELETE_CHILD on this directory). The inherited
         # RW ACE carries neither, so the rename died with Access Denied and
         # left the .tmp orphan (2026-09-17 21:52 production evidence).
-        icacls $liveRun /grant:r ("{0}:(OI)(CI)M" -f $ShareAccount) | Out-Null
+        icacls $liveRun /grant:r 'DAICNT\um_share:(OI)(CI)M' | Out-Null
         # Instance channel wiring (2026-09-17 production gap): the gateway
         # self-publishes its registration ONLY when launched with the
         # instance-channel args (chat2api/share_gateway.py:838 — key without
@@ -705,10 +860,10 @@ try {
         # DACL discipline as the D4 calibration (experiment-config-notes):
         # instance pipe = share GA + SYSTEM GRGW — the pipe is hosted by the
         # share child (um_share); the broker (SYSTEM) is its only client.
-        $shareSid = (New-Object Security.Principal.NTAccount($ShareAccount)).Translate([Security.Principal.SecurityIdentifier]).Value
+        $shareSid = (New-Object Security.Principal.NTAccount('DAICNT', 'um_share')).Translate([Security.Principal.SecurityIdentifier]).Value
         $instancePipeSddl = ('D:P(A;;GA;;;' + $shareSid + ')(A;;GRGW;;;SY)')
         $umShareArgs = ('--instance-key-file "' + (Join-Path $RunRoot 'instance-channel-key') +
-            '" --instance-pipe-prefix "\\.\pipe\um-share-public-instance-" ' +
+            '" --instance-pipe-prefix "\\.\pipe\um-share-instance-" ' +
             '--registration-file "' + (Join-Path $liveRun 'instance-registration.json') +
             '" --instance-pipe-sddl "' + $instancePipeSddl + '"')
         $liveEnv = 'set "UM_SHARE_ARGS=' + $umShareArgs + '"' + "`r`n" +
@@ -723,14 +878,14 @@ try {
         # the state line below is what makes "file not ready" visible here.
         [void](Write-AttributionKeyState -Where 'Start')
         Write-Log ("live wrapper: instance channel wired (prefix=" +
-            '\\.\pipe\um-share-public-instance-' + ", sddl=" + $instancePipeSddl + ")")
+            '\\.\pipe\um-share-instance-' + ", sddl=" + $instancePipeSddl + ")")
         $liveCmd = New-UmCaptureScript -Label 'live' `
             -Inner ("share_guard.py --run-dir `"$liveRun`" --port 8100 " +
                     "--upstream-port $ShareBackendPort " +
                     $(if ($Mode -eq 'probe') { '--probe' }) ) `
             -RunDir $liveRun `
             -ExtraEnv $liveEnv
-        Start-UmTask -Name 'umshare-public-live' -AsCmd $liveCmd -WorkDir $RunRoot
+        Start-UmTask -Name 'umshare-live' -AsCmd $liveCmd -WorkDir $RunRoot
 
         # wait for listener on 8100
         $deadline = (Get-Date).AddSeconds(30)
@@ -742,13 +897,13 @@ try {
         }
         if (-not $sharePid) { throw 'share did not start listening on 8100 within 30s' }
         $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$sharePid" -ErrorAction Stop
-        $imageOk = $proc.ExecutablePath -and $proc.ExecutablePath.Equals($appExe, [StringComparison]::OrdinalIgnoreCase)
+        $imageOk = $proc.ExecutablePath -and $proc.ExecutablePath.EndsWith('um-share-python.exe')
         $ownerOk = $false
         $ownerLabel = 'unknown'
         try {
             $owner = Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction Stop
             $ownerLabel = "$($owner.Domain)\$($owner.User)"
-            $ownerOk = $owner.User -eq $shareUserName
+            $ownerOk = $owner.User -eq 'um_share'
         } catch {
             Write-Log ('owner lookup failed: ' + $_.Exception.Message)
         }
@@ -758,7 +913,7 @@ try {
         # Limit-loss protection is now owned by the SYSTEM watchdog task
         # (already verified Running above); the share must NOT open if it is not
         # armed. This Start stage returns once the share is up and verified.
-        Write-Log "share started in $Mode mode; SYSTEM watchdog (umshare-public-watchdog) is armed and monitoring; stop with Stage Stop"
+        Write-Log "share started in $Mode mode; SYSTEM watchdog (umshare-watchdog) is armed and monitoring; stop with Stage Stop"
         exit 0
     }
     'Watchdog' {
@@ -776,11 +931,11 @@ try {
         # stop any OLD watchdog process first (precise command-line match) so a
         # stale watcher can never double-act or act with outdated logic
         try {
-            Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-                Where-Object { $_.CommandLine -and $_.CommandLine.Contains($wdPath) -and $_.ProcessId -ne $PID } |
+            $watchdogProcesses = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue)
+            Select-ShareWatchdogProcesses -Processes $watchdogProcesses -WatchdogPath $wdPath -CurrentProcessId $PID |
                 ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         } catch { }
-        try { Unregister-ScheduledTask -TaskName 'umshare-public-watchdog' -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+        try { Unregister-ScheduledTask -TaskName 'umshare-watchdog' -Confirm:$false -ErrorAction SilentlyContinue } catch { }
         # Write the dedicated-backend permit port BEFORE arming: the watcher's
         # FIRST limits round reads this file. An absent/stale file is now a
         # detection failure (backend-port-unavailable) -> the design-correct
@@ -791,12 +946,27 @@ try {
         Set-Content -LiteralPath (Join-Path $RunRoot 'backend-port.txt') `
             -Value $ShareBackendPort -Encoding ASCII
         Write-Log "backend-port.txt written before arming (port $ShareBackendPort)"
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"$wdPath`" -RunRoot `"$RunRoot`" -RequireOwner um_share_public") -WorkingDirectory $RunRoot
+        # Task Scheduler can retain a PATH from before PowerShell 7 was installed.
+        # Register the actual host path instead of relying on that environment.
+        $watchdogPowerShell = Join-Path $PSHOME 'pwsh.exe'
+        if (-not (Test-Path -LiteralPath $watchdogPowerShell -PathType Leaf)) { throw 'PowerShell 7 host unavailable for watchdog' }
+        $action = New-ScheduledTaskAction -Execute $watchdogPowerShell -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"$wdPath`"") -WorkingDirectory $RunRoot
         $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
-        Register-ScheduledTask -TaskName 'umshare-public-watchdog' -Action $action -Principal $principal -Settings $settings -Description 'UM share limit watchdog (SYSTEM)' -Force | Out-Null
-        Start-ScheduledTask -TaskName 'umshare-public-watchdog'
-        Write-Log 'watchdog SYSTEM task registered + started'
+        $bootTrigger = New-ScheduledTaskTrigger -AtStartup
+        Register-ScheduledTask -TaskName 'umshare-watchdog' -Action $action -Principal $principal -Settings $settings -Trigger $bootTrigger -Description 'UM share limit watchdog (SYSTEM)' -Force | Out-Null
+        Start-ScheduledTask -TaskName 'umshare-watchdog'
+        $armedDeadline = (Get-Date).AddSeconds(10)
+        do {
+            $armed = Get-ScheduledTask -TaskName 'umshare-watchdog' -ErrorAction Stop
+            if ($armed.State -eq 'Running') { break }
+            Start-Sleep -Milliseconds 250
+        } while ((Get-Date) -lt $armedDeadline)
+        if ($armed.State -ne 'Running') {
+            $taskInfo = Get-ScheduledTaskInfo -TaskName 'umshare-watchdog' -ErrorAction Stop
+            throw ('watchdog failed to run (last result 0x{0:X8}); cannot proceed to Start' -f $taskInfo.LastTaskResult)
+        }
+        Write-Log ('watchdog SYSTEM task confirmed Running (host=' + $watchdogPowerShell + ')')
     }
     'DrainStop' {
         # Normal graceful stop = refuse new requests, wait for in-flight to
@@ -813,13 +983,13 @@ try {
             Write-Log 'drain hook not installed: refusing to kill the share; graceful drain NOT performed'
             throw 'DrainStop requires the authorized drain control hook (not installed in this offline phase). The share was NOT stopped; use Stage Stop for emergency/teardown.'
         }
-        $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $drainHook 2>&1
+        $out = & pwsh -NoProfile -ExecutionPolicy Bypass -File $drainHook 2>&1
         foreach ($line in $out) { Write-Log "  drain: $line" }
         if ($LASTEXITCODE -ne 0) {
             throw "drain hook failed (exit $LASTEXITCODE); share NOT stopped"
         }
         Stop-ShareProcess
-        Remove-UmTask 'umshare-public-live'
+        Remove-UmTask 'umshare-live'
         Write-Log 'DrainStop complete: bounded drain finished, share stopped, watchdog/limits retained'
     }
     'PublishProjection' {
@@ -831,8 +1001,11 @@ try {
     }
     'Stop' {
         Stop-ShareProcess
-        Remove-UmTask 'umshare-public-live'
-        try { Unregister-ScheduledTask -TaskName 'umshare-public-watchdog' -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+        Remove-UmTask 'umshare-live'
+        Remove-UmTask 'umshare-canary'
+        Remove-UmTask 'umshare-escctl'
+        Remove-UmTask 'umshare-escjob'
+        try { Unregister-ScheduledTask -TaskName 'umshare-watchdog' -Confirm:$false -ErrorAction SilentlyContinue } catch { }
         Remove-Limits
         Write-Log 'Stop complete: share stopped, tasks removed, WFP filters + firewall rule removed'
     }

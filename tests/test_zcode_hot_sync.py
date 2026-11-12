@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import zcode_hot_sync
 import zcode_hot_sync_protocol
+from tests import zcode_current_protocol_fixture as current_fixture
 from tests.zcode_protocol_fixture import sources, profile
 
 BUNDLE_A = "out/host/index.js"
@@ -500,16 +501,38 @@ class ZcodeHotSyncAdmissionTests(unittest.TestCase):
     # ---- 真实安装只读核对 ----
 
     def test_real_installation_matches_the_evidence_table(self):
+        # 运行中的安装必须能按运行时命名解析：每个区域都要定位到唯一 bundle 并
+        # 提取全部元素。摘要与证据表一致时必须准入；不一致（尚未复核的新布局）
+        # 必须按具体区域延期——既不静默放行，也不把它当成无法解析。
         root = zcode_hot_sync.zcode_client_root()
         if root is None:
             self.skipTest("未找到 ZCode 安装根：跳过真实安装只读核对")
         asar = root / "resources" / "app.asar"
         if not asar.is_file():
             self.skipTest("resources/app.asar 不在场：跳过真实安装只读核对")
+        records = zcode_hot_sync_protocol.inspect_installed_regions(
+            asar,
+            lambda archive, entry: zcode_hot_sync.read_asar_entry(
+                archive, entry, max_bytes=8 * 1024 * 1024),
+            zcode_hot_sync.list_asar_entries(asar, "out/host/"))
+        self.assertIsNotNone(records, "运行中的安装必须能按运行时命名解析")
+        for record in records:
+            self.assertIsNone(
+                record["missing"],
+                "区域 %s 无法解析：%s" % (record["region"], record["missing"]))
         admitted, detail = zcode_hot_sync.zcode_hot_sync_admission()
-        self.assertTrue(
-            admitted,
-            "真实安装与证据表不一致，请重新取证并更新证据表：%s" % detail)
+        if all(record["matches"] for record in records):
+            self.assertTrue(
+                admitted,
+                "全部区域摘要与证据表一致时必须准入：%s" % detail)
+        else:
+            self.assertFalse(
+                admitted,
+                "摘要与证据表不一致时必须延期而不是放行：%s" % detail)
+            self.assertIn("协议兼容性待确认", detail)
+            self.assertIn(
+                next(record["region"] for record in records
+                     if not record["matches"]), detail)
 
 
 class _Win32Call:
@@ -698,6 +721,345 @@ class ZcodeProcessScanApiFaultTests(unittest.TestCase):
         failed = self._scan("snapshot_failed")
         self.assertEqual(failed.paths, ())
         self.assertEqual(failed.snapshot_error, 5)
+
+
+class ZcodeCurrentHotSyncAdmissionTests(unittest.TestCase):
+    """3.15.1 当前布局的准入回归（合成安装包，私有临时目录）。
+
+    夹具按当前打包构造：锁/持久化闭包在自己的 chunk，配置格式/
+    repository/运行时装配在宿主，共享 model/selection schema 在共享 chunk。
+    区域按运行时命名定位并按别名规范化后比较摘要：等价改名/换 chunk 必须
+    仍兼容，任何语义变化、原生依赖错误绑定、元素缺失或歧义一律拒绝。
+    每个用例只写自己的临时 asar，绝不读写真实安装或用户配置。
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.asar = self.root / "resources" / "app.asar"
+
+    def _write(self, bundles):
+        entries = dict(bundles)
+        entries["package.json"] = (
+            '{"name":"@zcode/desktop","version":"3.15.1"}').encode()
+        self.asar.parent.mkdir(parents=True, exist_ok=True)
+        self.asar.write_bytes(_asar_bytes(entries))
+
+    def _admission(self, bundles, admitted):
+        with mock.patch.object(zcode_hot_sync, "zcode_process_scan",
+                               return_value=_scan(self.root)), \
+                mock.patch.object(zcode_hot_sync_protocol,
+                                  "CURRENT_PROTOCOL_PROFILE", admitted):
+            return zcode_hot_sync.zcode_hot_sync_admission()
+
+    def _regions(self, bundles):
+        """按区域提取证据（只读；不写入任何东西）。"""
+        self._write(bundles)
+        return zcode_hot_sync_protocol.inspect_installed_regions(
+            self.asar,
+            lambda archive, entry: zcode_hot_sync.read_asar_entry(
+                archive, entry, max_bytes=8 * 1024 * 1024),
+            zcode_hot_sync.list_asar_entries(self.asar, "out/host/"))
+
+    def _record(self, bundles, region):
+        records = self._regions(bundles)
+        self.assertIsNotNone(records)
+        return next(record for record in records
+                    if record["region"] == region)
+
+    def test_current_layout_is_admitted(self):
+        bundles = current_fixture.sources()
+        self._write(bundles)
+        admitted, detail = self._admission(
+            bundles, current_fixture.profile(bundles))
+        self.assertTrue(admitted, detail)
+        self.assertIn("3.15.1", detail)
+        self.assertIn("仅展示", detail)
+
+    def test_renamed_bindings_and_chunks_stay_compatible(self):
+        # 等价改名（每个压缩符号与 chunk 名都换掉，函数体不动）后摘要不变：
+        # 这正是 3.15.1 相对 3.14.5 的打包变化形态，必须仍被准入。
+        bundles = current_fixture.sources()
+        renamed = current_fixture.renamed()
+        self.assertEqual(current_fixture.profile(renamed),
+                         current_fixture.profile(bundles))
+        self._write(renamed)
+        admitted, detail = self._admission(
+            renamed, current_fixture.profile(bundles))
+        self.assertTrue(admitted, detail)
+
+    def test_changed_lock_or_format_or_listener_is_pending(self):
+        bundles = current_fixture.sources()
+        trusted = current_fixture.profile(bundles)
+        # 关键实现变化（函数体/常量）必须延期，且如实给出原因：函数体改动
+        # 走「协议兼容性待确认」，常量取值改动让区域结构不再匹配、按
+        # 「协议证据无法解析或不支持」延期——两者都不放行。
+        for old, new, expected in (
+                (b'return!0}i(Jo,"isProcessAlive")',
+                 b'return!1}i(Jo,"isProcessAlive")', "协议兼容性待确认"),
+                (b"function Y(r){return typeof r.code==",
+                 b"function Y(r){return typeof r.status==",
+                 "协议兼容性待确认"),
+                (b"var jo=5*6e4;", b"var jo=5*6e3;",
+                 "协议证据无法解析或不支持"),
+                (b"[25,50,100,200,400]", b"[20,50,100,200,400]",
+                 "协议证据无法解析或不支持")):
+            with self.subTest(change=old):
+                changed = dict(bundles)
+                changed[current_fixture.LOCK_CHUNK] = changed[
+                    current_fixture.LOCK_CHUNK].replace(old, new)
+                self._write(changed)
+                admitted, detail = self._admission(changed, trusted)
+                self.assertFalse(admitted, detail)
+                self.assertIn(expected, detail)
+
+    def test_misbound_native_dependency_is_pending(self):
+        # 原生依赖必须按真实绑定解析：把 mkdir 换成 rmdir（同名局部变量）后
+        # 规范化摘要改变，准入拒绝——只看名字存在不算证据。
+        bundles = current_fixture.sources()
+        trusted = current_fixture.profile(bundles)
+        for old, new in ((b"mkdir as Ko", b"rmdir as Ko"),
+                         (b"writeFile as qo", b"readFile as qo")):
+            with self.subTest(change=old):
+                changed = dict(bundles)
+                changed[current_fixture.LOCK_CHUNK] = changed[
+                    current_fixture.LOCK_CHUNK].replace(old, new)
+                self._write(changed)
+                admitted, detail = self._admission(changed, trusted)
+                self.assertFalse(admitted, detail)
+
+    def test_missing_element_or_layout_is_rejected(self):
+        bundles = current_fixture.sources()
+        trusted = current_fixture.profile(bundles)
+        changed = dict(bundles)
+        del changed[current_fixture.SHARED_CHUNK]
+        self._write(changed)
+        admitted, detail = self._admission(changed, trusted)
+        self.assertFalse(admitted)
+        # 三个 bundle 全不在场：两种布局都无法确认，必须拒绝。
+        self.asar.parent.mkdir(parents=True, exist_ok=True)
+        self.asar.write_bytes(_asar_bytes({
+            "out/host/index.js": b"not-a-bundle"}))
+        admitted, detail = self._admission(bundles, trusted)
+        self.assertFalse(admitted)
+        self.assertIn("协议", detail)
+
+    def test_missing_or_decoy_cross_chunk_dependency_is_rejected(self):
+        # P1（2026-10-11 返修）：实际被消费的跨 chunk 依赖必须解析。缺失目标模块、
+        # 导出找不到、或把同名导出换成另一份实现（诱饵），一律 unknown（fail closed）
+        # ——只用 export 名的回退会让「把 import 改到缺失文件」保持同一摘要。
+        bundles = current_fixture.sources()
+        trusted = current_fixture.profile(bundles)
+        shared = current_fixture.SHARED_CHUNK
+        host = current_fixture.HOST_CHUNK
+        # 缺失目标模块：宿主导入改到不存在的文件（旧 chunk 仍在场，区域内容不变）。
+        missing = dict(bundles)
+        missing[host] = missing[host].replace(
+            b'"./chunk-SHARED00.js"', b'"./chunk-AUDITMISS.js"')
+        self.assertNotEqual(missing[host], bundles[host])
+        self._write(missing)
+        admitted, detail = self._admission(missing, trusted)
+        self.assertFalse(admitted, detail)
+        self.assertIn("协议证据无法解析", detail)
+        # 同名诱饵：目标导出改到另一份同名实现的 chunk，真实导出改到别的名字。
+        decoy = dict(bundles)
+        decoy[host] = decoy[host].replace(b"$f as $f", b"$f as Zz")
+        decoy[shared] = decoy[shared].replace(
+            b"static fromData(t){return t}", b"static fromData(t){return 0}")
+        self._write(decoy)
+        admitted, detail = self._admission(decoy, trusted)
+        self.assertFalse(admitted, detail)
+        # 错误 export：目标导出名不存在。
+        wrong = dict(bundles)
+        wrong[shared] = wrong[shared].replace(
+            b"export{Ub as Ub,$f as $f,timeoutCode as Sr};",
+            b"export{Ub as Ub,timeoutCode as Sr};")
+        self._write(wrong)
+        admitted, detail = self._admission(wrong, trusted)
+        self.assertFalse(admitted, detail)
+
+    def test_duplicate_runtime_name_is_disambiguated_by_reference_chain(self):
+        # 同一 bundle 内两个同名函数（3.16.2 的 persistence 区域）：只有可证明的
+        # 消歧才可解析——区域锚点 atomicWritePrivateTextFile 的引用链唯一命中本
+        # 区域的声明；未被任何区域锚点引用的同名声明不得改变任何区域摘要，
+        # 判定依据必须作为证据给出。
+        bundles = current_fixture.sources()
+        duplicated = current_fixture.duplicated()
+        self.assertEqual(current_fixture.profile(duplicated),
+                         current_fixture.profile(bundles))
+        record = self._record(duplicated, "persistence")
+        self.assertIsNone(record["missing"])
+        self.assertEqual(
+            [label for label, _ in record["elements"]
+             if label.startswith("root:")],
+            ["root:isRetryableRenameError", "root:renameWithRetry",
+             "root:withFileLock", "root:atomicWritePrivateTextFile"])
+        self.assertEqual(len(record["notes"]), 1)
+        self.assertIn("renameWithRetry", record["notes"][0])
+        self.assertIn("Si", record["notes"][0])
+        self.assertIn("root:atomicWritePrivateTextFile", record["notes"][0])
+        # 消歧后摘要不变：仍按原证据表准入。
+        self._write(duplicated)
+        admitted, detail = self._admission(
+            duplicated, current_fixture.profile(bundles))
+        self.assertTrue(admitted, detail)
+
+    def test_duplicate_runtime_name_without_a_reference_chain_is_pending(self):
+        # 两个同名声明都没有被本区域锚点引用：无法证明哪个属于本区域，
+        # 一律 fail-closed（不得按位置或长度猜测）。
+        bundles = current_fixture.sources()
+        trusted = current_fixture.profile(bundles)
+        unreferenced = current_fixture.unreferenced()
+        record = self._record(unreferenced, "persistence")
+        self.assertIn("协议同名声明无法消歧", record["missing"])
+        self._write(unreferenced)
+        admitted, detail = self._admission(unreferenced, trusted)
+        self.assertFalse(admitted, detail)
+        self.assertIn("协议证据无法解析或不支持", detail)
+
+    def test_duplicate_runtime_name_reachable_from_two_anchors_is_pending(self):
+        # 两个同名声明都被本区域锚点引用：可达性无法唯一判定，仍须 fail-closed。
+        bundles = current_fixture.sources()
+        trusted = current_fixture.profile(bundles)
+        ambiguous = current_fixture.ambiguous()
+        record = self._record(ambiguous, "persistence")
+        self.assertIn("协议同名声明无法消歧", record["missing"])
+        self._write(ambiguous)
+        admitted, detail = self._admission(ambiguous, trusted)
+        self.assertFalse(admitted, detail)
+        self.assertIn("协议证据无法解析或不支持", detail)
+
+    def test_duplicate_class_runtime_name_without_a_region_reference_is_pending(
+            self):
+        # 同名类的消歧同样只能由本区域锚点证明：运行期装配构造了该 repository
+        # 类，但那条引用属于另一个区域，不构成本区域锚点的证据——仍 fail-closed。
+        bundles = current_fixture.sources()
+        trusted = current_fixture.profile(bundles)
+        duplicated = current_fixture.class_duplicated()
+        record = self._record(duplicated, "repository")
+        self.assertIn("协议同名声明无法消歧", record["missing"])
+        self.assertIn("NodePersonalProviderConfigRepository", record["missing"])
+        self._write(duplicated)
+        admitted, detail = self._admission(duplicated, trusted)
+        self.assertFalse(admitted, detail)
+        self.assertIn("协议证据无法解析或不支持", detail)
+
+    def test_real_installation_regions_are_extractable(self):
+        # 运行中安装的只读解析核对：每个区域都必须定位到唯一 bundle 并提取
+        # 全部元素；摘要与证据表一致时准入，不一致时必须按具体区域延期
+        # （3.16.2 的实现变化需要下一轮语义复核与新证据表，不在这里放行）。
+        import zcode_hot_sync_protocol as proto
+        root = zcode_hot_sync.zcode_client_root()
+        if root is None:
+            self.skipTest("未找到 ZCode 安装根：跳过真实安装只读核对")
+        asar = root / "resources" / "app.asar"
+        if not asar.is_file():
+            self.skipTest("resources/app.asar 不在场：跳过真实安装只读核对")
+        records = proto.inspect_installed_regions(
+            asar,
+            lambda archive, entry: zcode_hot_sync.read_asar_entry(
+                archive, entry, max_bytes=8 * 1024 * 1024),
+            zcode_hot_sync.list_asar_entries(asar, "out/host/"))
+        self.assertIsNotNone(records, "运行中的安装必须能按运行时命名解析")
+        self.assertEqual(len(records),
+                         len(zcode_hot_sync_protocol._CURRENT_REGIONS))
+        for record in records:
+            self.assertIsNone(
+                record["missing"],
+                "区域 %s 无法解析：%s" % (record["region"], record["missing"]))
+            self.assertTrue(record["elements"],
+                            "区域 %s 未提取到任何元素" % record["region"])
+        persistence = next(record for record in records
+                           if record["region"] == "persistence")
+        declared = (
+            len(zcode_hot_sync_protocol._CURRENT_REGIONS["persistence"]["roots"])
+            + len(zcode_hot_sync_protocol._CURRENT_REGIONS[
+                "persistence"]["constants"]))
+        self.assertGreaterEqual(len(persistence["elements"]), declared)
+        self.assertLessEqual(len(persistence["elements"]), 4 * declared)
+        if not persistence["matches"]:
+            self.assertTrue(
+                any("renameWithRetry" in note
+                    for note in persistence["notes"]),
+                "运行中的 persistence 区域既不匹配证据表，也没有给出同名消歧依据")
+        admitted, detail = zcode_hot_sync.zcode_hot_sync_admission()
+        if all(record["matches"] for record in records):
+            self.assertTrue(admitted, detail)
+        else:
+            self.assertFalse(admitted)
+            self.assertIn("协议兼容性待确认", detail)
+
+    def test_real_installation_repointed_import_is_rejected(self):
+        # P1 真实安装只读核对（内存副本，不写安装）：把 index.js 里任一条实际被
+        # 消费的跨 chunk 导入改到缺失文件，其余导入与原 chunk 保留；改动后至少
+        # 一个区域必须变成依赖无法解析——只按 export 名回退的旧实现会给出同一
+        # 摘要并保持同一结论。基线不得已经是依赖解析失败，否则检查是空的。
+        import re
+        import zcode_hot_sync_protocol as proto
+        root = zcode_hot_sync.zcode_client_root()
+        if root is None:
+            self.skipTest("未找到 ZCode 安装根：跳过真实安装只读核对")
+        asar = root / "resources" / "app.asar"
+        reader = lambda archive, entry: zcode_hot_sync.read_asar_entry(
+            archive, entry, max_bytes=8 * 1024 * 1024)
+        entries = zcode_hot_sync.list_asar_entries(asar, "out/host/")
+        bundles = proto._bundles(asar, reader, entries)
+        host_name = "index.js"
+        host_text = bundles[host_name]
+
+        def region_evidence(candidate):
+            self._write({"out/host/" + name: text.encode("utf-8")
+                         for name, text in candidate.items()})
+            records = proto.inspect_installed_regions(
+                self.asar, reader, entries)
+            if records is None:
+                return None
+            return {record["region"]: record["missing"] for record in records}
+
+        baseline = region_evidence(bundles)
+        self.assertIsNotNone(baseline, "运行中的安装必须能按运行时命名解析")
+        self.assertFalse(
+            [region for region, missing in baseline.items()
+             if missing and "协议依赖" in missing],
+            "基线不得已是依赖解析失败：%s" % baseline)
+
+        def mutated_bundles(module):
+            mutated = dict(bundles)
+            mutated[host_name] = host_text.replace(
+                'from"' + module + '"', 'from"./AUDIT-MISSING.js"')
+            self.assertNotEqual(mutated[host_name], host_text, module)
+            return mutated
+
+        modules = sorted(set(re.findall(r'from"(\./[^"]+\.js)"', host_text)))
+        self.assertTrue(modules, "真实宿主应有相对 chunk 导入")
+        rejected = []
+        for module in modules:
+            evidence = region_evidence(mutated_bundles(module))
+            self.assertIsNotNone(evidence, module)
+            broken = [(region, missing)
+                      for region, missing in evidence.items()
+                      if missing and "协议依赖" in missing]
+            if broken:
+                rejected.append((module, broken))
+        self.assertTrue(
+            rejected,
+            "把实际消费的跨 chunk 导入改到缺失文件后必须至少有一个区域"
+            "变成依赖无法解析：%s" % modules)
+
+    def test_corrupt_header_or_missing_installation_is_rejected(self):
+        bundles = current_fixture.sources()
+        trusted = current_fixture.profile(bundles)
+        self.asar.parent.mkdir(parents=True, exist_ok=True)
+        self.asar.write_bytes(b"not an asar")
+        admitted, detail = self._admission(bundles, trusted)
+        self.assertFalse(admitted)
+        self.assertIn("头部", detail)
+        with mock.patch.object(zcode_hot_sync, "zcode_process_scan",
+                               return_value=_scan(self.root, image_paths=[])):
+            admitted, detail = zcode_hot_sync.zcode_hot_sync_admission()
+        self.assertFalse(admitted)
+        self.assertIn("安装", detail)
 
 
 if __name__ == "__main__":

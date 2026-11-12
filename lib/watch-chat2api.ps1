@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$ReadyUrl = 'http://127.0.0.1:8000/ready',
     [ValidateRange(1, 30)][int]$ProbeTimeoutSeconds = 3,
@@ -74,9 +74,9 @@ $script:RuntimePath = Join-Path $PSScriptRoot 'gateway-runtime.ps1'
 $script:BridgePath = Join-Path $PSScriptRoot 'console-runtime-bridge.ps1'
 . $script:RuntimePath
 
-$script:WatchRoot = [string]$env:AIGATEWAY_PUBLIC_WATCH_DIR
+$script:WatchRoot = [string]$env:SELFUSEAI_GATEWAY_WATCH_DIR
 if (-not $script:WatchRoot) {
-    $script:WatchRoot = Join-Path $env:LOCALAPPDATA 'AIGatewayPublic\watch'
+    $script:WatchRoot = Join-Path $env:LOCALAPPDATA 'SelfUseAI\ai-gateway\watch'
 }
 if (-not $StatePath) { $StatePath = Join-Path $script:WatchRoot 'chat2api-watch-state.json' }
 if (-not $LogPath) { $LogPath = Join-Path $script:WatchRoot 'chat2api-watch.log' }
@@ -419,7 +419,7 @@ function Invoke-GatewayStart {
 
     # Same runtime primitive as the console and CLI; the start records
     # "running" with source=watch, and chat2api's startup line says so too.
-    $env:AIGATEWAY_PUBLIC_ACTION_SOURCE = 'watch'
+    $env:SELFUSEAI_GATEWAY_ACTION_SOURCE = 'watch'
     Enable-GatewayDesiredState
     $restartArgs = @{ Key = $script:ServiceKey }
     if ($HttpChecker) { $restartArgs.HttpChecker = $HttpChecker }
@@ -563,7 +563,7 @@ function Invoke-Chat2ApiWatch {
     try {
         if (-not $SkipMutex) {
             $mutex = New-Object -TypeName System.Threading.Mutex -ArgumentList `
-                $false, 'Local\AIGatewayPublic.Chat2API.Watch'
+                $false, 'Local\SelfUseAI.Chat2API.Watch'
             $locked = $mutex.WaitOne(0)
             if (-not $locked) {
                 Write-WatchLog 'INFO' 'skip reason=another_watch_instance_running'
@@ -771,13 +771,13 @@ function Invoke-Chat2ApiWatch {
 
 function Invoke-WatchSelfTest {
     $testRoot = Join-Path $env:TEMP (
-        'AIGatewayPublic-chat2api-watch-selftest-{0}' -f [Guid]::NewGuid().ToString('N'))
+        'SelfUseAI-chat2api-watch-selftest-{0}' -f [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
     $script:StatePath = Join-Path $testRoot 'state.json'
     $script:LogPath = Join-Path $testRoot 'watch.log'
     $script:SkipServiceLock = $true
-    $savedWatchDir = $env:AIGATEWAY_PUBLIC_WATCH_DIR
-    $env:AIGATEWAY_PUBLIC_WATCH_DIR = $testRoot
+    $savedWatchDir = $env:SELFUSEAI_GATEWAY_WATCH_DIR
+    $env:SELFUSEAI_GATEWAY_WATCH_DIR = $testRoot
     # The control marker decides the recovery semantics below; the self-test must
     # only ever touch its own copy. The guard runs BEFORE the first enable - a
     # guard placed after the action it protects would create (or delete) the real
@@ -1044,19 +1044,19 @@ function Invoke-WatchSelfTest {
         throw 'self-test failed: cross-boot watch state was not reset'
     }
 
-    # Closing the usage console (8096) or its web page is invisible to this
+    # Closing the usage console (8001) or its web page is invisible to this
     # watch: it reads only the operator intent and the private 8000 signals,
-    # so a console-page/8096 exit neither disarms the watch nor restarts 8000,
+    # so a console-page/8001 exit neither disarms the watch nor restarts 8000,
     # and an armed watch over a healthy service stays quiet.
     $script:selfTestDesired = [pscustomobject]@{
         state = 'running'; boot_id = 'selftest-boot'; source = 'console'
         at_utc = '2026-09-21T11:00:00Z'; start_outcome = 'succeeded' }
     $script:selfTestProcessState = 'verified'
     $script:selfTestProbeReady = $true
-    Assert-StartsNone -Why 'an 8096/console-page exit restarted 8000' -Body {
+    Assert-StartsNone -Why 'an 8001/console-page exit restarted 8000' -Body {
         [void](Invoke-Chat2ApiWatch -SkipMutex)
     }
-    Assert-Releases 11 'an 8096/console-page exit disarmed the watch'
+    Assert-Releases 11 'an 8001/console-page exit disarmed the watch'
     $state = Get-Content -LiteralPath $script:StatePath -Raw -Encoding UTF8 |
         ConvertFrom-Json
     if ([int]$state.consecutive_failures -ne 0) {
@@ -1222,7 +1222,7 @@ function Invoke-WatchSelfTest {
     $ServiceLogPath = $savedServiceLogPath
     $script:ExitEvidenceProvider = { $script:selfTestEvidence }
 
-    $env:AIGATEWAY_PUBLIC_WATCH_DIR = $savedWatchDir
+    $env:SELFUSEAI_GATEWAY_WATCH_DIR = $savedWatchDir
     Write-Host 'watch-chat2api self-test: PASS'
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
     return 0

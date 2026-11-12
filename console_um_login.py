@@ -5,8 +5,11 @@ Semantics reuse the legacy console ``Invoke-Chat2ApiReauthentication``:
 chat2api's ``POST /admin/auth/login`` is the ONLY force re-login entry and
 the backend login thread has no cancel endpoint. This adapter therefore:
 
+* verifies current credentials through the restricted verify endpoint;
+  valid credentials skip the login POST, while unknown verification
+  refuses to open a login browser;
 * never calls refresh and never sends any billing request (the login POST
-  is the established force re-entry);
+  remains the established force re-entry for credentials needing login);
 * treats the console-side wait budgets as bounds on WAITING, not as proof
   about the backend thread: on budget exhaustion it rechecks the status
   once and reports honestly that a console timeout does not prove the
@@ -37,8 +40,9 @@ Injected params (bounded, optional; defaults match the console contract):
   values are capped at 3600s so a bad injection cannot wait unbounded.
 
 Error codes: status_unavailable / start_failed / login_unreachable /
-login_timeout_not_settled / stop_failed (cancellation propagates as
-OperationCancelled and is mapped by the task layer). The control token is
+login_verification_unknown / login_timeout_not_settled / stop_failed, plus
+restricted verification errors from console_um_adapter. Cancellation
+propagates as OperationCancelled and is mapped by the task layer. The token is
 never included in messages or results.
 
 Decision recorded here: a definitive-looking intermediate state (e.g.
@@ -304,9 +308,10 @@ def _reraise_after_restore(exc, kind, fact):
     raise exc
 
 
-def _success_note(waited, at_recheck, fact):
-    parts = ["登录完成（state=valid）"]
-    if waited is not None:
+def _success_note(waited, at_recheck, fact, login_skipped):
+    parts = (["当前账号有效，无需重新登录（state=valid）"] if login_skipped
+             else ["登录完成（state=valid）"])
+    if waited is not None and not login_skipped:
         parts.append("等待 %.1fs" % waited)
     if at_recheck:
         parts.append("预算耗尽后的复查确认")
@@ -322,16 +327,17 @@ def _timeout_message(final_state, waited, fact):
 
 
 def relogin_um(target, params, ctx=None):
-    """Orchestrate one UM force re-login with full service-state restore.
+    """Verify UM credentials and re-login only when needed, restoring state.
 
     See the module docstring for the lock order, cancel semantics and the
-    honest-timeout contract. Returns only on full success (login settled to
-    valid AND the service state is back to its pre-operation shape or the
+    honest-timeout contract. Returns only on full success (credentials
+    verified valid or login settled to valid, AND the service state is back
+    to its pre-operation shape or the
     service was left untouched because it was already running).
     """
     if ctx is not None:
         ctx.raise_if_cancelled()
-    _report(ctx, "开始上游重新登录编排（chat2api 登录接口为唯一 force 重入口）")
+    _report(ctx, "开始 UM 登录编排：先核验当前认证，仅在需要时重新登录")
 
     # Token errors (absent/unreadable/empty) pass through unchanged; the
     # token value itself never enters messages, steps or results.
@@ -353,14 +359,37 @@ def relogin_um(target, params, ctx=None):
         started_by_us = True
         _report(ctx, "chat2api 已启动（快照确认 Running）")
 
+    login_skipped = False
     try:
         base_url = console_um_adapter.resolve_chat2api_base_url()
-        # Phase 3: the single force re-login entry.
-        _post_force_login(base_url, token)
-        _report(ctx, "登录请求已被 chat2api 接受（202），开始等待登录完成")
-        # Phase 4 + 5: bounded cooperative polling with a final recheck.
-        state, waited, at_recheck = _wait_login_valid(
-            base_url, token, ctx, login_budget_s, interval_s)
+        if ctx is not None:
+            ctx.raise_if_cancelled()
+        _report(ctx, "通过受限核验端点确认当前认证，尚未发送登录请求")
+        try:
+            verification = console_um_adapter._verify_account(base_url, token)
+        except OperationError as exc:
+            raise OperationError(
+                exc.code, "无法确认当前认证，暂不打开登录：" + exc.message)
+        if ctx is not None:
+            ctx.raise_if_cancelled()
+        verify_state = verification["verify"]
+        if verify_state == "valid":
+            login_skipped = True
+            state, waited, at_recheck = "valid", 0.0, False
+            _report(ctx, "当前账号有效，无需重新登录，未发送登录请求")
+        elif verify_state in ("needs_login", "rejected"):
+            # Phase 3: the single force re-login entry, only after a
+            # definitive credential result. A rejected credential/access
+            # is not necessarily expired, but the user may reauthenticate.
+            _post_force_login(base_url, token)
+            _report(ctx, "登录请求已被 chat2api 接受（202），开始等待登录完成")
+            # Phase 4 + 5: bounded cooperative polling with a final recheck.
+            state, waited, at_recheck = _wait_login_valid(
+                base_url, token, ctx, login_budget_s, interval_s)
+        else:
+            raise OperationError(
+                "login_verification_unknown",
+                "无法确认当前认证，暂不打开登录；受限核验结果为 unknown")
     except BaseException as exc:
         kind, fact = _restore_service_state(ctx, started_by_us)
         _report(ctx, fact)
@@ -376,15 +405,16 @@ def relogin_um(target, params, ctx=None):
             "login_timeout_not_settled",
             _timeout_message(state, waited, fact))
     if kind == _RESTORE_FAILED:
-        # Login completed but the restore could not be confirmed: report the
-        # residual instead of a fake full success.
-        raise OperationError(
-            "stop_failed",
-            "登录已完成（state=valid），但" + fact)
+        # Authentication is valid but restore could not be confirmed:
+        # report the residual instead of a fake full success.
+        outcome = ("当前账号有效，无需重新登录" if login_skipped
+                   else "登录已完成（state=valid）")
+        raise OperationError("stop_failed", outcome + "，但" + fact)
     return {
         "was_running": was_running,
         "restored": kind == _RESTORE_RESTORED,
         "final_state": "valid",
+        "login_skipped": login_skipped,
         "login_waited_s": waited,
-        "note": _success_note(waited, at_recheck, fact),
+        "note": _success_note(waited, at_recheck, fact, login_skipped),
     }

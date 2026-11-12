@@ -1,0 +1,4937 @@
+{
+  "closures": {
+    "cloud_only": [],
+    "cloud_runtime": {
+      "count": 27,
+      "files": [
+        "chat2api/chat2api.py",
+        "chat2api/nonstream_aggregate.py",
+        "chat2api/share_dispatch.py",
+        "chat2api/share_gateway.py",
+        "console_adapters.py",
+        "console_display_proxy.py",
+        "console_log_reader.py",
+        "console_magpie_prices.py",
+        "console_operations.py",
+        "console_public_probe.py",
+        "console_share_actions.py",
+        "console_share_probe.py",
+        "console_share_production.py",
+        "console_stats.py",
+        "console_tailnet.py",
+        "share_broker_client.py",
+        "share_broker_host.py",
+        "share_broker_ops.py",
+        "share_broker_protocol.py",
+        "share_broker_server.py",
+        "share_instance_pipe.py",
+        "share_management.py",
+        "share_metering.py",
+        "share_runtime.py",
+        "share_secret_protection.py",
+        "share_store.py",
+        "usagesrv.py"
+      ],
+      "roots": [
+        "usagesrv.py",
+        "console_tailnet.py",
+        "console_display_proxy.py",
+        "console_adapters.py",
+        "console_operations.py",
+        "console_public_probe.py",
+        "console_share_actions.py",
+        "console_share_probe.py",
+        "console_share_production.py",
+        "console_stats.py",
+        "console_log_reader.py",
+        "console_magpie_prices.py",
+        "share_management.py",
+        "share_store.py",
+        "share_broker_client.py",
+        "share_broker_host.py",
+        "share_broker_ops.py",
+        "share_broker_protocol.py",
+        "share_broker_server.py",
+        "share_runtime.py",
+        "share_metering.py",
+        "share_secret_protection.py",
+        "share_instance_pipe.py",
+        "chat2api/share_gateway.py",
+        "chat2api/chat2api.py",
+        "chat2api/nonstream_aggregate.py",
+        "chat2api/share_dispatch.py"
+      ]
+    },
+    "static_only": [
+      "console_gateway_connection.py",
+      "console_model_actions.py",
+      "console_public_url.py",
+      "console_speedtest.py",
+      "console_um_adapter.py",
+      "console_um_login.py",
+      "model_config_adapters.py",
+      "model_reconcile.py",
+      "model_sync.py",
+      "model_sync_core.py",
+      "share_admin.py",
+      "share_backend_supervision.py",
+      "share_public_supervision.py",
+      "shared/__init__.py",
+      "shared/nonstream_aggregate.py",
+      "shared/pricing_rules.py",
+      "shared/responses_protocol.py",
+      "zcode_file_lock.py",
+      "zcode_hot_sync.py",
+      "zcode_hot_sync_protocol.py"
+    ],
+    "static_superset": {
+      "count": 47,
+      "files": [
+        "chat2api/chat2api.py",
+        "chat2api/nonstream_aggregate.py",
+        "chat2api/share_dispatch.py",
+        "chat2api/share_gateway.py",
+        "console_adapters.py",
+        "console_display_proxy.py",
+        "console_gateway_connection.py",
+        "console_log_reader.py",
+        "console_magpie_prices.py",
+        "console_model_actions.py",
+        "console_operations.py",
+        "console_public_probe.py",
+        "console_public_url.py",
+        "console_share_actions.py",
+        "console_share_probe.py",
+        "console_share_production.py",
+        "console_speedtest.py",
+        "console_stats.py",
+        "console_tailnet.py",
+        "console_um_adapter.py",
+        "console_um_login.py",
+        "model_config_adapters.py",
+        "model_reconcile.py",
+        "model_sync.py",
+        "model_sync_core.py",
+        "share_admin.py",
+        "share_backend_supervision.py",
+        "share_broker_client.py",
+        "share_broker_host.py",
+        "share_broker_ops.py",
+        "share_broker_protocol.py",
+        "share_broker_server.py",
+        "share_instance_pipe.py",
+        "share_management.py",
+        "share_metering.py",
+        "share_public_supervision.py",
+        "share_runtime.py",
+        "share_secret_protection.py",
+        "share_store.py",
+        "shared/__init__.py",
+        "shared/nonstream_aggregate.py",
+        "shared/pricing_rules.py",
+        "shared/responses_protocol.py",
+        "usagesrv.py",
+        "zcode_file_lock.py",
+        "zcode_hot_sync.py",
+        "zcode_hot_sync_protocol.py"
+      ],
+      "roots": [
+        "usagesrv.py",
+        "chat2api/share_gateway.py",
+        "chat2api/chat2api.py",
+        "share_broker_ops.py",
+        "share_backend_supervision.py",
+        "share_admin.py"
+      ]
+    }
+  },
+  "dependencies": {
+    "apt": {
+      "packages": {
+        "ca-certificates": "20260816ubuntu0.26.04.1",
+        "curl": "8.18.0-1ubuntu2.8",
+        "dbus-x11": "1.16.2-2ubuntu4",
+        "fluxbox": "1.3.7-1build3",
+        "fonts-liberation": "1:2.1.5-3build1",
+        "fonts-noto-cjk": "1:20240730+repack1-1build1",
+        "fonts-noto-color-emoji": "2.051-1build1",
+        "gcc-14-base": "14.3.0-14ubuntu1",
+        "libacl1": "2.3.2-2",
+        "libasound2t64": "1.2.15.3-1ubuntu1.1",
+        "libatk-bridge2.0-0t64": "2.60.4-0ubuntu0.1",
+        "libatk1.0-0t64": "2.60.4-0ubuntu0.1",
+        "libatspi2.0-0t64": "2.60.4-0ubuntu0.1",
+        "libattr1": "1:2.5.2-4ubuntu0.1",
+        "libavahi-client3": "0.8-18ubuntu1.1",
+        "libavahi-common3": "0.8-18ubuntu1.1",
+        "libblkid1": "2.41.3-3ubuntu2.2",
+        "libbsd0": "0.12.2-2build2",
+        "libc6": "2.43-2ubuntu2.4",
+        "libcairo-gobject2": "1.18.4-3",
+        "libcairo2": "1.18.4-3",
+        "libcap2": "1:2.75-10ubuntu2",
+        "libcom-err2": "1.47.2-3ubuntu4",
+        "libcups2t64": "2.4.16-1ubuntu1.3",
+        "libdatrie1": "0.2.14-1",
+        "libdbus-1-3": "1.16.2-2ubuntu4",
+        "libdrm-common": "2.4.131-1",
+        "libdrm2": "2.4.131-1",
+        "libegl1": "1.7.0-3",
+        "libexpat1": "2.7.4-1ubuntu0.2",
+        "libfontconfig1": "2.17.1-3ubuntu1",
+        "libfontenc1": "1:1.1.8-1build2",
+        "libfreetype6": "2.14.2+dfsg-1ubuntu0.2",
+        "libfribidi0": "1.0.16-5",
+        "libgbm1": "26.0.8-1ubuntu0.3",
+        "libgcc-s1": "16-20260322-1ubuntu1",
+        "libgcrypt20": "1.12.0-2ubuntu1.1",
+        "libgdk-pixbuf-2.0-0": "2.44.5+dfsg-4ubuntu1",
+        "libgl1": "1.7.0-3",
+        "libgles2": "1.7.0-3",
+        "libglib2.0-0t64": "2.88.0-1ubuntu0.1",
+        "libglvnd0": "1.7.0-3",
+        "libglx0": "1.7.0-3",
+        "libgpg-error0": "1.58-2",
+        "libgraphite2-3": "1.3.14-11ubuntu1.1",
+        "libgssapi-krb5-2": "1.22.1-2ubuntu4.1",
+        "libharfbuzz0b": "12.3.2-2",
+        "libice6": "2:1.1.1-1build1",
+        "libjpeg-turbo8": "2.1.5-4ubuntu4",
+        "libk5crypto3": "1.22.1-2ubuntu4.1",
+        "libkeyutils1": "1.6.3-6ubuntu3",
+        "libkrb5-3": "1.22.1-2ubuntu4.1",
+        "liblzma5": "5.8.3-1ubuntu0.1",
+        "libmount1": "2.41.3-3ubuntu2.2",
+        "libnspr4": "2:4.38.2-1ubuntu1",
+        "libnss3": "2:3.120-1ubuntu2.2",
+        "libopengl0": "1.7.0-3",
+        "libpango-1.0-0": "1.57.0-1",
+        "libpangocairo-1.0-0": "1.57.0-1",
+        "libpangoft2-1.0-0": "1.57.0-1",
+        "libpcre2-8-0": "10.46-1build1",
+        "libpixman-1-0": "0.46.4-1",
+        "libpng16-16t64": "1.6.57-1ubuntu0.1",
+        "libselinux1": "3.9-4build1",
+        "libsm6": "2:1.2.6-1build1",
+        "libstdc++6": "16-20260322-1ubuntu1",
+        "libsystemd0": "259.9-0ubuntu0.1",
+        "libthai0": "0.1.30-1",
+        "libtiff6": "4.7.0-3ubuntu5",
+        "libuuid1": "2.41.3-3ubuntu2.2",
+        "libvulkan1": "1.4.341.0-1",
+        "libwayland-client0": "1.24.0-2",
+        "libwayland-server0": "1.24.0-2",
+        "libwebp7": "1.5.0-0.1build1",
+        "libx11-6": "2:1.8.13-1ubuntu0.1",
+        "libx11-xcb1": "2:1.8.13-1ubuntu0.1",
+        "libxau6": "1:1.0.11-1build2",
+        "libxcb-dri2-0": "1.17.0-2ubuntu1",
+        "libxcb-dri3-0": "1.17.0-2ubuntu1",
+        "libxcb-glx0": "1.17.0-2ubuntu1",
+        "libxcb-present0": "1.17.0-2ubuntu1",
+        "libxcb-randr0": "1.17.0-2ubuntu1",
+        "libxcb-render0": "1.17.0-2ubuntu1",
+        "libxcb-shape0": "1.17.0-2ubuntu1",
+        "libxcb-shm0": "1.17.0-2ubuntu1",
+        "libxcb-sync1": "1.17.0-2ubuntu1",
+        "libxcb-xfixes0": "1.17.0-2ubuntu1",
+        "libxcb-xkb1": "1.17.0-2ubuntu1",
+        "libxcb1": "1.17.0-2ubuntu1",
+        "libxcomposite1": "1:0.4.6-1build1",
+        "libxdamage1": "1:1.1.7-1",
+        "libxdmcp6": "1:1.1.5-2",
+        "libxext6": "2:1.3.4-1build3",
+        "libxfixes3": "1:6.0.0-2build2",
+        "libxfont2": "1:2.0.6-2ubuntu0.2",
+        "libxi6": "2:1.8.2-2",
+        "libxkbcommon-x11-0": "1.13.1-1",
+        "libxkbcommon0": "1.13.1-1",
+        "libxmu6": "2:1.1.3-4",
+        "libxpm4": "1:3.5.17-1ubuntu0.26.04.2",
+        "libxrandr2": "2:1.5.4-1build1",
+        "libxrender1": "1:0.9.12-1build1",
+        "libxss1": "1:1.2.3-1build4",
+        "libxt6t64": "1:1.2.1-1.3build1",
+        "libxtst6": "2:1.2.5-1ubuntu0.1",
+        "libzstd1": "1.5.7+dfsg-3",
+        "novnc": "1:1.6.0-2",
+        "python3-pip": "25.1.1+dfsg-1ubuntu2",
+        "python3.14": "3.14.4-1ubuntu0.2",
+        "python3.14-venv": "3.14.4-1ubuntu0.2",
+        "unzip": "6.0-29ubuntu1",
+        "x11-utils": "7.7+7build1",
+        "x11vnc": "0.9.17-2",
+        "xauth": "1:1.1.2-1.1build1",
+        "xvfb": "2:21.1.22-1ubuntu1.3",
+        "xz-utils": "5.8.3-1ubuntu0.1",
+        "zlib1g": "1:1.3.dfsg+really1.3.1-1ubuntu3.2"
+      },
+      "resolved_at": "2026-11-01",
+      "sources": [
+        "http://archive.ubuntu.com/ubuntu",
+        "http://security.ubuntu.com/ubuntu"
+      ],
+      "suites": [
+        "resolute",
+        "resolute-updates",
+        "resolute-security"
+      ]
+    },
+    "generated_at": "2026-11-01",
+    "notes": [
+      "Exact apt versions were resolved from the Ubuntu 26.04 (resolute) main/universe indexes on 2026-11-01; install.sh installs by package name and does not force these versions unless --apt-locked is used.",
+      "The target image must be Ubuntu 26.04 with python3.14; the WSL bootstrap-wsl.sh (Ubuntu 24.04 / Python 3.12) is not used on the cloud host.",
+      "Playwright 1.64.1 resolves chromium revision 1248 / Chrome for Testing 156.0.8078.4 on amd64; the browser is downloaded into /opt/um-share/pw-browsers, never into a release directory.",
+      "web/dist must be built separately with the frontend task and carried as the whole tree; this lock does not claim a built dist exists."
+    ],
+    "playwright": {
+      "browsers_path": "/opt/um-share/pw-browsers",
+      "chromium": {
+        "install": "playwright install chromium",
+        "revision": "1248",
+        "version": "156.0.8078.4"
+      },
+      "chromium_headless_shell": {
+        "revision": "1248",
+        "version": "156.0.8078.4"
+      },
+      "ffmpeg": {
+        "revision": "1013"
+      },
+      "version": "1.64.1"
+    },
+    "python_packages": {
+      "PyYAML": "6.0.3",
+      "cryptography": "50.0.2",
+      "playwright": "1.64.1",
+      "requests": "2.34.2"
+    },
+    "python_transitive": {
+      "certifi": "2026.10.19",
+      "cffi": "2.1.1",
+      "charset-normalizer": "3.5.2",
+      "greenlet": "3.5.6",
+      "idna": "3.20",
+      "pycparser": "3.12",
+      "pyee": "14.0.0",
+      "typing-extensions": "4.16.0",
+      "urllib3": "2.8.0"
+    },
+    "schema_version": 1,
+    "target": {
+      "arch": "amd64",
+      "codename": "resolute",
+      "os": "Ubuntu 26.04 LTS",
+      "python": "3.14",
+      "python_package": "python3.14",
+      "python_version": "3.14.4-1ubuntu0.2"
+    },
+    "web_build": {
+      "build_command": "cd web && npm ci && npm run build",
+      "lockfile": "web/package-lock.json",
+      "node": "26.12.1 (local build evidence; target build host must match package-lock)",
+      "npm": "12.2.1 (local build evidence)",
+      "packages": {
+        "@kitlangton/rolling-number": "0.4.1",
+        "prettier": "3.9.6",
+        "typescript": "5.9.3",
+        "vite": "7.3.6"
+      },
+      "production_output": "web/dist",
+      "role": "build-time only; web/dist is not part of the runtime Python closure"
+    }
+  },
+  "dependencies_lock_sha256": "95a4c69a5fa5d085c60e5d0c6facdca76f393104881a60f6072def8b8b4875ae",
+  "deployment_files": [
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/backup_restore.py",
+      "sha256": "654ba68e5bd81797739a66eb2a13baf92a820299e7424d396234aa2aeb6b2d6f",
+      "size": 137502
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/bin/um-share-brokerctl.py",
+      "sha256": "1126f00643062d0095329be683655b9278998c7bad272d06888833ea1b063028",
+      "size": 13398
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/bootstrap-wsl.sh",
+      "sha256": "41da27b63b906e3bfc9dd06b012de7c6e28f54d3790f70dddce5cccd7f02eb94",
+      "size": 10090
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/Caddyfile.example",
+      "sha256": "9986fefb9e41ab6e298733dd5fe47e440d1c39d11680453776526221e48a2fff",
+      "size": 1397
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/cloudflared/check-ingress.py",
+      "sha256": "a5af66e152e35171ecf8bb1a812f5733cffe44513f8912acdccfda5d9abebcf4",
+      "size": 5240
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/config/broker.env.example",
+      "sha256": "c004d5b79518c059863245c22a75e17587be9a95de46034cf26ccaf5e4f0f13c",
+      "size": 864
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/config/cloudflared.yml.example",
+      "sha256": "5b1676200486258b677160959fb9d7d127fd662ede47f8ffb0778f0d0168f736",
+      "size": 881
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/config/console.env.example",
+      "sha256": "b9fdb65072025be2e75fa7404a21c2d035f4e224d2d5ba6a4600bd4e8c3b424c",
+      "size": 3851
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/config/share-management.json.example",
+      "sha256": "60e1e13b6421849ad08c948a3bfa6e2b3f1abfe777e1a6ff196cc18ac26ad173",
+      "size": 179
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/config/um-share.json.example",
+      "sha256": "a7609c81f09040f47a93e8236c5f51688d1f5aeb4b970a4d8b7afc58c0911aa8",
+      "size": 97
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/dependencies.lock.json",
+      "sha256": "95a4c69a5fa5d085c60e5d0c6facdca76f393104881a60f6072def8b8b4875ae",
+      "size": 7071
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/DEPENDENCIES.md",
+      "sha256": "7895629d255df38440538cbae83158484e11e44ee83145c8ef441185b406170e",
+      "size": 1849
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/display/configure-tailscale-serve.sh",
+      "sha256": "34f070eaa3841e1aadadd6bd27bf59f47f585b306e6ed66c2b30733a11fe1778",
+      "size": 5363
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/display/fluxbox-init",
+      "sha256": "dc1c39cacb5bac00de930367b97a5f5cf95cab683734acec3d335927c39e9ae2",
+      "size": 1014
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/display/issue-display-grant.py",
+      "sha256": "11161e5b033e4f7152c3a3183addad85b5ce40293c902722a1e90f57e6edae23",
+      "size": 6353
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/display/novnc-launcher-state.mjs",
+      "sha256": "225d1e56d909bffe46063e9ee0c129d33b06d1cc49a4c2ba10babf00b97040e5",
+      "size": 2308
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/display/novnc-launcher.html",
+      "sha256": "c7f4ac2e478ba9c8ac7c2ab2bb3b981d80c1fe70b52b4d81d7e8ac88a6167001",
+      "size": 2753
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/display/novnc-launcher.js",
+      "sha256": "44d5e2d0f22b5552c084c8e72c2b6ae5a3cfb4b8d7f8f19bd8d9bff03dfb40d5",
+      "size": 13080
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/display/README.md",
+      "sha256": "838591decfe1bcb3d320b3bbbbe40b602f151a3316a9f568d4159bc14b0f0eab",
+      "size": 11680
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/display/start-loopback-display.sh",
+      "sha256": "d8ac92f1f7811a67d9aee6b1808a2792fd5917004d968f02e737e2cd0800379e",
+      "size": 6248
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/display/tailscale_serve_policy.py",
+      "sha256": "4dcb27bf95692ec0efa3b4c9c0f54a93c643470a3b0ab94f70656eb67f49ac15",
+      "size": 3632
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/display/vnc-auth-helper.py",
+      "sha256": "46c58c41fcd92e7910bbe520afc46d8c0e8fa43d0b3593db96206d6dacb54f2a",
+      "size": 3366
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/install.sh",
+      "sha256": "f0363111a31e0908064f6af27849908e26b6296cc05f17829847db5d6e978462",
+      "size": 28681
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/lib/common.sh",
+      "sha256": "7294c3fd5949acea7976832504e217eea365da95bd3f448880fd575468b36b35",
+      "size": 21901
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/make-manifest.py",
+      "sha256": "89333df3dc1c3c5ff5794393f78e0e69b6a3c35df5a69069a6612e43b079dc5f",
+      "size": 19448
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/package-release.sh",
+      "sha256": "ded8630453be0a98523f50ab5fecf84a04ba742723d4b833ce1d7a90da781152",
+      "size": 10226
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/README.md",
+      "sha256": "b0942dffe69671e4c56f39c864d5a28d1ff22e92d26a566d860f94a7d72fd383",
+      "size": 44325
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/requirements.lock",
+      "sha256": "61546827bb8b270296ed6da3ba11141ea2f4314b4d26bd25e05c42d628ffaca7",
+      "size": 621
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/rollback.sh",
+      "sha256": "3fec280787fc4f35c1722a5473c34a14488b06530e75a9f7440d125523f76d14",
+      "size": 26306
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/run-linux-checks.sh",
+      "sha256": "3e55056318377fa4acbd195399401efd4989056a2ae8ee2cf17d74ea5d7f7a09",
+      "size": 3851
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/systemd/cloudflared.service",
+      "sha256": "9d96096893552375460cd74ce24866dcb8faa603503bd9cf0b47f440c1594ff7",
+      "size": 1235
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/systemd/um-share-broker.service",
+      "sha256": "ce7580d93df630cb6731c9ab1b6445c32a19eae44276e24ccbf5fe128330bf02",
+      "size": 5320
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/systemd/um-share-console.service",
+      "sha256": "776320b069389feb32a46cacbce1fc2210d4c6fd1bb79111f77cdc415086884f",
+      "size": 2144
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/systemd/um-share-display.service",
+      "sha256": "cbbc33d08297741094f6dd444a1de49a49e5c662a6128e6f9a76ddd362c86fb0",
+      "size": 2087
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/update.sh",
+      "sha256": "02a7baae5154e2ed7b0ceaafaa2911b9910dfd2eff758ddf93c4d2b769222e6f",
+      "size": 30915
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/verify-release.ps1",
+      "sha256": "a0696b78abaa72f268df0856faca7ddc60461abf3d5ce08b74f50e1fa81e57cd",
+      "size": 7290
+    }
+  ],
+  "files": [
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "chat2api/chat2api.py",
+      "sha256": "faa6f1c5b6e3017dcf37cbe19a94db56da174eb1a419a69e2f5c29d4cb1bd0e1",
+      "size": 492520
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "chat2api/nonstream_aggregate.py",
+      "sha256": "c6d81a0c3cee0b64fb5cf7831f989b0380a7eeca82d6fc28a48fb34f11cd1698",
+      "size": 736
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "chat2api/share_dispatch.py",
+      "sha256": "5239ad961b620865d67f45b46dc0d9cdb75a2354efdccbdfba2e72d55ab82c78",
+      "size": 23780
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "chat2api/share_gateway.py",
+      "sha256": "57eb9702a8a86809a722ab73a5c6af411935b47c1e6fc7553703a421835b4b77",
+      "size": 199374
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_adapters.py",
+      "sha256": "413c936d992203b95a93c581ee6482c01a2e690c992605548da223b72f6ff7de",
+      "size": 73981
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_display_proxy.py",
+      "sha256": "43af4fcc6311bdaafe2f9f591b67fa9521c75b4854d897e6c3c52d464e64a864",
+      "size": 81096
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "console_gateway_connection.py",
+      "sha256": "b2febf8d0d5d615b94bee5a468b0df80e5f39dba2ad1407674573cf75f6193de",
+      "size": 25757
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_log_reader.py",
+      "sha256": "a3484a89cf2029ef5ccbf8289077921245c30315f4f84ca6ffee84d2caa0533a",
+      "size": 61754
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_magpie_prices.py",
+      "sha256": "81cc5551870866fa6a35b131ce384f3e5eba596332522353bf876e43f5faa7a9",
+      "size": 68466
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "console_model_actions.py",
+      "sha256": "eae7ecfe00328ca40a8bce8660f3e71bb4c3c7316a523dc0e7f5c2caedb5c1e7",
+      "size": 86248
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_operations.py",
+      "sha256": "638fc4c83cb36fd19feb9fd251918f016e60432f8e5f3d21bcb71a2b63a8191a",
+      "size": 37160
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_public_probe.py",
+      "sha256": "828465fc9144b6f99b550a17dc7807f2f2f5004349775a0f973c95a173f4ddbe",
+      "size": 38911
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "console_public_url.py",
+      "sha256": "e94b436d7018ca2fe214b45cdaba6972c66bf55f2256e56e63221d8f232b57c5",
+      "size": 3885
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_share_actions.py",
+      "sha256": "2eff46720a9b929d838d01124bb9899248a159a49a401cb562e39fb1ab51a904",
+      "size": 161184
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_share_probe.py",
+      "sha256": "7a6934d98fd195cc1b27498efddca8a964f04c9b82e4cc2b5809e426193f8001",
+      "size": 12514
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_share_production.py",
+      "sha256": "23297f8b7d6efa56b3b4e57e97e023c076b0e6cc5a3e5cdca2aa9e5a7f5e69e7",
+      "size": 196694
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "console_speedtest.py",
+      "sha256": "e7d27e6a6b070c24e367c5153bca623b6e902cb6699e1f05a7fd72598e67ebf8",
+      "size": 28943
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_stats.py",
+      "sha256": "7f91305e7973f5eed7be2e1c35e767e7c8db051df26d0b8f4a59ead6ea8ca03f",
+      "size": 156788
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "console_tailnet.py",
+      "sha256": "41b1890b508229cfeedb86642e70a57b3de6e725b518d05accb962aaa18e8dca",
+      "size": 5790
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "console_um_adapter.py",
+      "sha256": "f826f756f4bd784d885a6e7e7b779209bba954e32c30a6c2a69402b367623522",
+      "size": 13371
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "console_um_login.py",
+      "sha256": "f4e52a83cedca6b15a51dd1c2f77aa8989c96d9da37857ea688b2f78b4042d1e",
+      "size": 18220
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "model_config_adapters.py",
+      "sha256": "eee397e6b90ff1a333030e6dcccd82dbd4167e902b69e200b8bc8c4bc7688011",
+      "size": 25458
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "model_reconcile.py",
+      "sha256": "933164edbce50e3492f74b20038e8f883522c3dbefd40c30ab40099c74328640",
+      "size": 8589
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "model_sync.py",
+      "sha256": "efb892b26bc50fa4fa311255ff684fae83882ec1760815958e5529a45c101b25",
+      "size": 240987
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "model_sync_core.py",
+      "sha256": "eb6bf1601da6f7752765dd08e830c80d7b87126b2a1554fa9059b4013508bcb0",
+      "size": 37830
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "share_admin.py",
+      "sha256": "0844bdfdcceb0ca8b7d377642f9b310733173f31e0cb4e68e20c9e22a726547c",
+      "size": 13576
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "share_backend_supervision.py",
+      "sha256": "4e568ac2bdcf1db99f3c57c9eeb98bff3ecada30069d1a8bcafc652fad63d905",
+      "size": 80775
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_broker_client.py",
+      "sha256": "8bcfc762c4648ff453a6c7efdddf03528e7e2a288b97305f0b079932614cbf1f",
+      "size": 51773
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_broker_host.py",
+      "sha256": "b1c4b35f67fe945e6f8e3af39c07f83437004142f0e7ca8431588c919e4fa445",
+      "size": 58310
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_broker_ops.py",
+      "sha256": "c982c0dcbcebccc85f6cadcc8863641c7a86a868508f0de8136015a3241443c4",
+      "size": 129929
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_broker_protocol.py",
+      "sha256": "f6af661ad49658ffdcc2f776c8fb4d04cd18f74220f937630cf368a55832adc7",
+      "size": 35252
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_broker_server.py",
+      "sha256": "649711eedb1968dcf307eac9d4943cdcdc5db8af6cc01779d5ba1981460b49d9",
+      "size": 83995
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_instance_pipe.py",
+      "sha256": "c5db16887526e15ee6a8fcfc81e240ca4df62a8df083e54d0033d66802f772d1",
+      "size": 11204
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_management.py",
+      "sha256": "311529368190defc13dd6b597217f429409070e7a911efedb78afc68b6bf091c",
+      "size": 72774
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_metering.py",
+      "sha256": "5a64b300339009a2c742d4cda26df3d3d440217e82c726df1b26fb459748f3d0",
+      "size": 48652
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "share_public_supervision.py",
+      "sha256": "e112c792354e9ae4bf586558c40df19f2444c575b5c8d7e4721abda8df7d0b9a",
+      "size": 197815
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_runtime.py",
+      "sha256": "c06989db8a0b637d33bbaff87a48eb3474c20cc4237ba0da58fc972f8c0ef597",
+      "size": 15240
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_secret_protection.py",
+      "sha256": "9bad6c813b1c763f219486c7c31911577457a2002e2f513be194f839b205e2bd",
+      "size": 13924
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "share_store.py",
+      "sha256": "29c768c8288930c633f9d654b44bc4e3e5e3d4838507836e853822a257de6d75",
+      "size": 80549
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "shared/__init__.py",
+      "sha256": "bd19d3171394e71c03d8ec9c2e113f34dac2ea4cc3f919171a437c3f7c2996e6",
+      "size": 312
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "shared/nonstream_aggregate.py",
+      "sha256": "daeb8474bcee80f227ab81fb182587471b760f569fa9114bb1f2824c25b1b17c",
+      "size": 45926
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "shared/pricing_rules.py",
+      "sha256": "213745c549e9f72da486d69eb690b0f75d4be443e170840c01a7808f1dd74d44",
+      "size": 26340
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "shared/responses_protocol.py",
+      "sha256": "eafa7d6735fe7d99eed81160084e887644022ec159ab27cac62f03463e8092fe",
+      "size": 46702
+    },
+    {
+      "closures": [
+        "static_superset",
+        "cloud_runtime"
+      ],
+      "path": "usagesrv.py",
+      "sha256": "1ef788973dbcab0e3a29670501249a6980c02bdf281e492d3097ab6fe5110a19",
+      "size": 238824
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "zcode_file_lock.py",
+      "sha256": "cb49b471fc742dd94c96156e460a3f90953efd7b593ea11d1efafbe1cbbefd31",
+      "size": 15914
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "zcode_hot_sync.py",
+      "sha256": "e2750864a0d1d28e9a01ccbabe1177c103d403dd21f9f0ab0a977c7cd673361b",
+      "size": 20713
+    },
+    {
+      "closures": [
+        "static_superset"
+      ],
+      "path": "zcode_hot_sync_protocol.py",
+      "sha256": "c40fddc3e9e454250b4f26a0ad1e7510ee72428a7cf0158741ad14e44233145c",
+      "size": 44957
+    }
+  ],
+  "generated_at": "2026-11-10T11:43:34.102001+00:00",
+  "generator": "um-cloud-deploy/make-manifest.py",
+  "python": {
+    "implementation": "CPython",
+    "major_minor": "3.14",
+    "matches_target": true,
+    "target": "3.14",
+    "version": "3.14.7"
+  },
+  "release_version": "s2-20261110g",
+  "schema_version": 2,
+  "source_root": ".",
+  "web_dist": {
+    "build": {
+      "builtAt": "2026-11-10T08:35:40.786Z",
+      "entryAssets": [
+        "assets/cloud-console-6EMS9K9p.css",
+        "assets/cloud-console-P2gacuM_.js",
+        "assets/index-D93HueS7.css",
+        "assets/index-DHRgPFZH.js"
+      ],
+      "gitHead": "f93bc0d2139bc95e41676c0cc61e2c54276ef59c",
+      "line": "production",
+      "mode": "production",
+      "role": "cloud",
+      "sourceHash": "78a5f0828c4112da82272557e2426df88a63c36957f8e1907da563802c3985e8"
+    },
+    "entry": "assets/index-DHRgPFZH.js",
+    "file_count": 787,
+    "files": [
+      {
+        "path": "web/dist-cloud/assets/cloud-console-6EMS9K9p.css",
+        "sha256": "47bf037c5df437e362f3cab5d7d3ede0139ec67f7329350acc6b3c1bd3ab3052",
+        "size": 26227
+      },
+      {
+        "path": "web/dist-cloud/assets/cloud-console-P2gacuM_.js",
+        "sha256": "70302195f225b0574a4bd0a909419b39dfc5eaa29529d9ab313eb5757e4179c3",
+        "size": 207612
+      },
+      {
+        "path": "web/dist-cloud/assets/index-D93HueS7.css",
+        "sha256": "72d0cfd1013a9a291c9286a5426005a2aa24c046a4ebf629d90f7890301d09f0",
+        "size": 608202
+      },
+      {
+        "path": "web/dist-cloud/assets/index-DHRgPFZH.js",
+        "sha256": "700ef969f128aaddacfa95a53fbba5bcf51be0b0829fd320fa0419661fb265de",
+        "size": 11768
+      },
+      {
+        "path": "web/dist-cloud/candidate-build.json",
+        "sha256": "b4f921d8e70ae546eb2a11b7b214fe56df0edb9816fb25ad1c07ae5d9586f379",
+        "size": 154119
+      },
+      {
+        "path": "web/dist-cloud/favicon.ico",
+        "sha256": "1d469bfa08db76ae7153c753ac744f1e2409ea56fefb2f75793662aaa7f8fe3b",
+        "size": 161905
+      },
+      {
+        "path": "web/dist-cloud/fonts/jetbrains-mono/JetBrainsMono-wght.ttf",
+        "sha256": "48715a42ec242c21e9f02692891e147d022299a52e48d5e413e1a942193ffeda",
+        "size": 187208
+      },
+      {
+        "path": "web/dist-cloud/fonts/jetbrains-mono/OFL.txt",
+        "sha256": "b2fe5e8987594e9ffd1d2ca52a2f5d73eb8335243893c5d6254b5ad69269591d",
+        "size": 4399
+      },
+      {
+        "path": "web/dist-cloud/fonts/jetbrains-mono/source.json",
+        "sha256": "8728c113633de4052b10506474b347012e52e9c107bfb6c3a36febf676d2b6b3",
+        "size": 982
+      },
+      {
+        "path": "web/dist-cloud/fonts/MiSans-license.pdf",
+        "sha256": "4a93a27cd2bd81b3b5ecfd0a853144a876fa26938a93a68443c67d74172fcb86",
+        "size": 79535
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/0.woff2",
+        "sha256": "a2b0b0bf4b486ae0763e452b1d8fa4d90aa3a2bacf524afaa2b86423cb103904",
+        "size": 41840
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/1.woff2",
+        "sha256": "35c4e140bb0378872edefaff2e0bdc460d594a8d1bdbd4b6d7698652ee753957",
+        "size": 1624
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/10.woff2",
+        "sha256": "8b9071d066255b9622bb280b211cefd8ffa852d485603de2403c6bed9dbd9f3d",
+        "size": 2052
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/100.woff2",
+        "sha256": "e82b54cddb79f1594523b074c31aa46d92a4b62db9ae288ddd6e004fc68693b9",
+        "size": 29972
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/101.woff2",
+        "sha256": "06ac0d4158d93dd69f2badfcb5f337f58f0c458f19efe8339bf46dc2614eaff0",
+        "size": 30272
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/102.woff2",
+        "sha256": "8f188d34c55c468e81de52636f25d08bf651f4c0b8e082c4b6f38a6a1bbda51b",
+        "size": 34132
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/103.woff2",
+        "sha256": "1876342b1de3bd5992b63f36e4ce0619a05781900542f8d45cdd2edb8273a63f",
+        "size": 26320
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/104.woff2",
+        "sha256": "c9848aaef83937522877a90b21cf36d951c44a58d6f05f219be2dad266b7fc40",
+        "size": 28660
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/105.woff2",
+        "sha256": "f740a626b6f0cdb077eb0453587f08e8550e4a04fce2c831006b22a351846962",
+        "size": 36164
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/106.woff2",
+        "sha256": "b71074ca0e220547c01cd64e05260b5ad26392d7e02250945971b15428b46bc4",
+        "size": 32476
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/107.woff2",
+        "sha256": "de21438cbb102f1deaf6839a89bbaa929117d6b05ff54da6f289a0567acf61ae",
+        "size": 37908
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/108.woff2",
+        "sha256": "08cb48781b905fce834101da3afc9f7d857df3dabf21cf1f87bd640b515dbca6",
+        "size": 34596
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/109.woff2",
+        "sha256": "5986c7baf0264be730ad53a90a5f7f4ba0af95799ecae3ccfe50b9fa430ed216",
+        "size": 34824
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/11.woff2",
+        "sha256": "71298c68815d9d8ad9343740477232d8f6d974e147c1ae9da7d38c28991d8295",
+        "size": 10612
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/110.woff2",
+        "sha256": "7c1e23eb3817bfad557d8fd67b18990f330e4321de2be51145a7dd6a4758bad6",
+        "size": 35972
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/111.woff2",
+        "sha256": "0f21d47171e6706dc0b78ffc1399bad0c4b339410fd130095c4c3d898ee0b764",
+        "size": 34216
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/112.woff2",
+        "sha256": "abb8e786f57c07145290a76b2e900cb9217bf834ffc775ef2807fd7c133f9b05",
+        "size": 30484
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/113.woff2",
+        "sha256": "62929f649ee3018bccdbdeeaf659e10bb708684f85398d82a038a968e32e5d0a",
+        "size": 34404
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/114.woff2",
+        "sha256": "2346aefe34f1bc6f19f32fb1fe3ad41f70a2c89b024b2c8e6a2781960d34bc67",
+        "size": 36796
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/115.woff2",
+        "sha256": "f450dc12bed02e268c7ce42fae11696922a531633e5e25fa29825783dcec513f",
+        "size": 43556
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/116.woff2",
+        "sha256": "665fb495785d4d103d070a72453bf9e7b109e9a04191370fe4e2b3710eafb7c3",
+        "size": 45556
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/117.woff2",
+        "sha256": "dcfb583c01e5e7b94b05d23682dcd94ecf26006482cfa95eefa50751db3589c8",
+        "size": 36868
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/118.woff2",
+        "sha256": "17d9a3c8beadaa0e778a1dd27a286c8ca1196140dc363052f99c8143078a2d1e",
+        "size": 36792
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/119.woff2",
+        "sha256": "8fd3ea2be10c9ae90e5193d385d9ea8a6a553b68535e8fb0c2e14d18aeb01376",
+        "size": 30420
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/12.woff2",
+        "sha256": "fea7e4946725fc1ab0078808016e69e05bae8e4d7ec729172c30ebca818fc82e",
+        "size": 13612
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/120.woff2",
+        "sha256": "07236902b8727286694460827250f98531569762841da6c0c30b8ad67225806c",
+        "size": 41272
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/121.woff2",
+        "sha256": "9b8e624aaf0a325a6731f6fde5e4a5c1a772baf0db2c18c39cb76c1d29a16342",
+        "size": 43772
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/122.woff2",
+        "sha256": "8fb31210fa61486bef2270969bca12989ed3faf067a5459d96617fa3686c37f6",
+        "size": 36976
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/123.woff2",
+        "sha256": "04232f8876f37ce10317ce8e36e9cbb9f2fd0d68d52f7cc5711d3a40465f1862",
+        "size": 41724
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/124.woff2",
+        "sha256": "047d7b9f082fad81ba914a60a9f422172e034afba2e809b22043f2acd1c1d425",
+        "size": 37396
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/125.woff2",
+        "sha256": "25e8effbcdfe1acc136b9a90920560998419ffa18592c51fd7615c08275a292f",
+        "size": 39244
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/126.woff2",
+        "sha256": "5a3be430942903656ca3e0324d4773f98f88c7813bd25fd12da2bb3ac15bca93",
+        "size": 42820
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/127.woff2",
+        "sha256": "efec8bc5868dbac88c596caa52dee6b3e33409cdfbd9f0795ae9d5f6c8831822",
+        "size": 39900
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/128.woff2",
+        "sha256": "71d40e715972d17e79fa70d7f7ad366a4f0f35a1c9a831c2c1010fbdc2670e35",
+        "size": 46592
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/129.woff2",
+        "sha256": "93fb16f57f60d15b6134705a7c4e498843ae3e615783d791dd8cfbe472fec098",
+        "size": 50464
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/13.woff2",
+        "sha256": "cb7657d1de5cd401a4ae2469a172e9493b960045f38cf0d9cd9f51372a9832ed",
+        "size": 15776
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/130.woff2",
+        "sha256": "79264e56d954930ef46b290833822428643974c171a7123bb9dc98fc3c551a5f",
+        "size": 54364
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/131.woff2",
+        "sha256": "7c415afef3efbd7d7082dc23548201e2028060fa4381a1f9d295bfd73ab19b2d",
+        "size": 58252
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/132.woff2",
+        "sha256": "d374a5fb20dd691c564cfea2b389cae040d477b668aaddb2187b0250140b3806",
+        "size": 32428
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/133.woff2",
+        "sha256": "42107e638c15c1cfb0d741a1641f273ec34e525c9692c52023a877a4173eeeb8",
+        "size": 32988
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/134.woff2",
+        "sha256": "419d7b585519959c1259eb32cef6fca38bf54cd76ad2a9441395a1141a03455f",
+        "size": 38856
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/135.woff2",
+        "sha256": "bd58aa5e656244e476dded83e0ac834aca0dbc2a1d843d5e1feaa5d68bb89910",
+        "size": 35436
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/136.woff2",
+        "sha256": "260cb031d24a8847ba149837cfe3b0d187ec683c610153338e8634555fc57b64",
+        "size": 28288
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/137.woff2",
+        "sha256": "dd1cc661b75ec6439433bd329833481f8478cdb3ff8d40fa7a39616eedc6bb88",
+        "size": 36756
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/138.woff2",
+        "sha256": "0a02eef0d2e861cbaca5c262069de82910907b234ba5199ffb6d9d14305765e4",
+        "size": 33404
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/139.woff2",
+        "sha256": "9ac142e214c95a04c5f83967eb18e584d9d76a8c078b56f0a8b894b111fb5375",
+        "size": 39160
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/14.woff2",
+        "sha256": "efd5c33f3d2b7cfd8ce8ac13358d834af397ee8ab1f1841c8384e29aa0dd0a6b",
+        "size": 18548
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/140.woff2",
+        "sha256": "f55a0abe2613f7b58f4f3f30d3240f5b1f1299381d770b2d8ad089175401835d",
+        "size": 41312
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/141.woff2",
+        "sha256": "a06c710eec74a0bf91d50c0e3d714b25514d335b1d8cd97fcf98ca8f9f17aeac",
+        "size": 50704
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/142.woff2",
+        "sha256": "42801b7eca415dbd5b0d933accac7e56620aa48bdea156922690d84165d3c17f",
+        "size": 31416
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/143.woff2",
+        "sha256": "436f6c3baf42f352956f3be84a3394bdbbede47f0d8f8bc7fa5180adbb5200f1",
+        "size": 39484
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/144.woff2",
+        "sha256": "d68c7feb392dfe5c4e2272db7a217e8e7ce3a961cba99bd14cf2ffa328089fb1",
+        "size": 38640
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/145.woff2",
+        "sha256": "6298f6c938c8fefbe744f3b1019a847bb3bb3a4844f577db2f505f54327fda3a",
+        "size": 39112
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/146.woff2",
+        "sha256": "2e2c59d0935f5d452f022df655a02926fc1d2b8cfafcb3de50b3bee584a868cc",
+        "size": 47352
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/147.woff2",
+        "sha256": "655c2f980ca0efa17ee39fedcf3d1eba101213d10b8fb36a33a9127e57895002",
+        "size": 41844
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/148.woff2",
+        "sha256": "a93e10c3ecc0484f8952c59f9f61d61de12d6985fc099c2e34a247aa872f7bfd",
+        "size": 52600
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/149.woff2",
+        "sha256": "64bd0cb60150233e49576534c21a927f40ea93c821fb3991ea8270fc4d74d8df",
+        "size": 37768
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/15.woff2",
+        "sha256": "df098a736ea22131afa042acdd3620e4f13dcc91d9e0bc643d4bd9526d762cd2",
+        "size": 20448
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/150.woff2",
+        "sha256": "f48c276bf8e37b3c992dac20ae6efa4da6f86b0ef883e35d2c04a7a517f4946f",
+        "size": 33772
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/151.woff2",
+        "sha256": "8c0f14365cf6b45e425757f46273c3727d2b6264488d1bb73d45e1886da03ad9",
+        "size": 40336
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/152.woff2",
+        "sha256": "dbd3b867d9001393e8f625b672750fe19b10cc2c6a0709c15435de21e3a92619",
+        "size": 49208
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/153.woff2",
+        "sha256": "37565463753dfdf618a41da080649d399e1a63c5884a65c2784e4489c01615b1",
+        "size": 51424
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/154.woff2",
+        "sha256": "c9bdca33fc29539537a162bbee4864293d56858d339157e0886b2ac211136620",
+        "size": 37256
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/155.woff2",
+        "sha256": "ba83f0ad2c4c6a25137c4faa4381515351a05a6b2a3e9f14ccceec1ca40b36a8",
+        "size": 46880
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/156.woff2",
+        "sha256": "1e60c691028c8a9172f2654080e7211717753fb4d00f4384c6cccd4c74a4ce3c",
+        "size": 56140
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/157.woff2",
+        "sha256": "605c8f5c5510921f9f9011b606d9d564ba00096a6b5959b4c8e22941abc54f54",
+        "size": 45684
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/158.woff2",
+        "sha256": "5535d2193258730b3a6401475fc3abf36c3c0d6b2533dfe138e8e6428fc72a7a",
+        "size": 53196
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/159.woff2",
+        "sha256": "2caea9984dc56edce3fa80d3259ba6850512e9590785bbded9e8b6828a2c95d6",
+        "size": 42880
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/16.woff2",
+        "sha256": "974640a632476b46dd9c86ac8a3c81dd767d12a795c0ccaa5d07cad093c9fd9c",
+        "size": 21284
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/160.woff2",
+        "sha256": "071ebc0fa81c2df836666abd92ded485dd25bfd807cf2618c5c0e234510bcfbd",
+        "size": 45468
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/161.woff2",
+        "sha256": "52f042c49bc9ff929fec8c38379f5eef8a43d3f07b5c78dea0b3db98f9e3a11b",
+        "size": 43556
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/162.woff2",
+        "sha256": "2d9e5d91fc01f082bb1251cf17eb9fdf0134baa776948f66af318207c94bef62",
+        "size": 41652
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/163.woff2",
+        "sha256": "3b53c1c671647eacc1ecdb21c76ea7267bb3295e7d861565e71f343e9d3c4e82",
+        "size": 46464
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/164.woff2",
+        "sha256": "91d9c330ad73ddb8c161b03d5fdeda2d020e3bbf839a4ffe68910ba3fd9b503d",
+        "size": 50264
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/165.woff2",
+        "sha256": "c5f38ed2ddaab383f1f38d78787d08e529e6c76ecd7182efad99565167177c94",
+        "size": 57136
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/166.woff2",
+        "sha256": "fd1062d8d00e9b6e2dce2b2df1bb549602ff5f733c9000295b35cbb57c015060",
+        "size": 61580
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/167.woff2",
+        "sha256": "f17bbf8e845d2cfa3e336e01031d932d8754a50a36b1895cbf6eefd0cca3a111",
+        "size": 54464
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/168.woff2",
+        "sha256": "fd0be95edd20d44bffb722ad9f93300447ae2aff4849e7c224a10950ac5ebf4b",
+        "size": 48692
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/169.woff2",
+        "sha256": "9119e802349af74d78cba0de4072b222013718d2723df3285d35585ed773263e",
+        "size": 40256
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/17.woff2",
+        "sha256": "d6b0e3b902a840d619e6165cc371fd570b1bde057e55db5a43655b4c040599fa",
+        "size": 22740
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/170.woff2",
+        "sha256": "e2f4dfdbf2a276cb86e438446cc8fbcdc178e3d4085dfbc1080288a3171d0088",
+        "size": 45392
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/171.woff2",
+        "sha256": "928c38ccc97a3761dd3fc7eaec23de623b14cf60beb3c8f6de2a99261192e032",
+        "size": 56628
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/172.woff2",
+        "sha256": "c16616a37031a213107810e35750223684c91033f07f2829bd97dc273e756344",
+        "size": 52192
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/173.woff2",
+        "sha256": "773dc0aa65a9c78e0018ec5106a2fe0959c4eca1137d4907e8fd917fc1d1fdde",
+        "size": 53824
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/174.woff2",
+        "sha256": "f40379e9c78218771e37c00794c23ebc8fb9f9007f1d28b6dc043f3148f421d7",
+        "size": 48184
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/175.woff2",
+        "sha256": "935091ebf2bbad8346a8f6059b3ed53ccd0bc8a1c09b690cda99f321777cb89e",
+        "size": 55156
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/176.woff2",
+        "sha256": "0a2c1dc59dc4a69990a488fa2095c75e750ce3a30d28db6927f64602b677e839",
+        "size": 49568
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/177.woff2",
+        "sha256": "84eef47ca186b2e82415c7c0e386691a74e14dd6064ff2c51741fc6bd22c2eea",
+        "size": 45768
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/178.woff2",
+        "sha256": "33323187390df6ce448f2fbdca94828150c1d0faab86c22177688a1b0b45df7a",
+        "size": 48856
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/179.woff2",
+        "sha256": "73e0c5064a77090f631cc017c6e1710d88f729648e951611aa881742ddf50356",
+        "size": 50336
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/18.woff2",
+        "sha256": "2b58f1b0bdb9aba44a7957f6557a78760b656dd2f7c4096f487abc18eb6a4f16",
+        "size": 25260
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/180.woff2",
+        "sha256": "0fdec1a66d130c0fe5cd8fdb9eb5b28c4062af9b487c4bfbd1e8ac85d85a33aa",
+        "size": 61672
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/181.woff2",
+        "sha256": "c7cb66ae7cd9aed1a858b5f7924244c1a475052efe43928970e0baf4b93032bb",
+        "size": 49080
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/182.woff2",
+        "sha256": "f37b2849a5f8b6a0f457b17529eca71dd87a32c581306693bd375816a89841ad",
+        "size": 58132
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/183.woff2",
+        "sha256": "433bb204af00d5cee35ea16b43a33e59d4c09f2d46b6fdfd458367f2cda9d01a",
+        "size": 62976
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/184.woff2",
+        "sha256": "547233c314bbe6cbb2bf8fd3f5596f87320719ce31b3d770f06b35840a95ba0e",
+        "size": 65380
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/185.woff2",
+        "sha256": "e7c82bdf2b1d81beaab0bada98f98dcc42844b204d9b3971d113f42ff1270c85",
+        "size": 68644
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/186.woff2",
+        "sha256": "cc0f03e3cbe1f1ce791e70deac58b99098db2a9403213f04213020083b30c3de",
+        "size": 74432
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/187.woff2",
+        "sha256": "2f4fa3eb6607a747a5b726dbc0d1a6a1c37a52ce345703634602aad834823c3a",
+        "size": 56056
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/188.woff2",
+        "sha256": "5686f6cc407dbb3f16caa241f16895dc38f921f96883eb1c7b5673d5ecb6403d",
+        "size": 45352
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/19.woff2",
+        "sha256": "c1391d9748ffc65b32019dbda12b3da9b0208e1eb0861a23f2413d6fcf7150a9",
+        "size": 25452
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/2.woff2",
+        "sha256": "8595e8927eab33fc0fbe5c35759b3ef3cebd12c910caed68451702d57c8ab2d0",
+        "size": 3312
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/20.woff2",
+        "sha256": "58019aeea16aa9c93909f28775bba68268075bc6ea9005982a17afb0591ce331",
+        "size": 26552
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/21.woff2",
+        "sha256": "46b6b6ae963e25aa1ddc86645dc6d5bf71d0b99a30643fba1f79c16639d69f5d",
+        "size": 26304
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/22.woff2",
+        "sha256": "3160a41246dfd1308f3614ec6a063f2e2fb70385c1bb1df22cdc3eec8626c135",
+        "size": 28948
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/23.woff2",
+        "sha256": "816422726156aa6f29542691c3d817316191cc30893b2f0aacef855acf40d61d",
+        "size": 31800
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/24.woff2",
+        "sha256": "f6469e8556cc3f1d34c3b5184ff74f55fb93bfe3f1132aaf0eb4e6988e66b62b",
+        "size": 32544
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/25.woff2",
+        "sha256": "3f6fd8ce1e808ed14ffaa1261425de953efc5be26fc722671ffc8ec5fce800cf",
+        "size": 33736
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/26.woff2",
+        "sha256": "1b8f9f9fc365fbd7b11ccd16183c6aadc97abb29247dd2a2b17506f0514d1719",
+        "size": 34612
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/27.woff2",
+        "sha256": "64cf99812f19276a2094875486004c075ac1264079173616c2da60aa220a954b",
+        "size": 35636
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/28.woff2",
+        "sha256": "5551e2f693e1229f87f1b4234f1a4572e1ef30595e7e738abbab3e57129c5be8",
+        "size": 35992
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/29.woff2",
+        "sha256": "1500b585aacc4663f34a767306b116f82ab967848e7a25b9850ef7b7bf9d093e",
+        "size": 37592
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/3.woff2",
+        "sha256": "4a2034bd6f729a1eaea9039f3b47a605a74f1c179d7ec22d3be9f51c74d27c66",
+        "size": 1044
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/30.woff2",
+        "sha256": "192d18b5f79180637e04c1d75ff0bc3f9833cc1fe45838ca87ff2c0abd0ad01e",
+        "size": 38084
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/31.woff2",
+        "sha256": "27062bd667363232eb56b666385d83574bd264fa2482ce44043de9b54d7c86db",
+        "size": 39436
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/32.woff2",
+        "sha256": "053b2efd22dd4d09baa8b85ffbf1d997cfca13457666496fb0104c5c0e378ce0",
+        "size": 37696
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/33.woff2",
+        "sha256": "d1c984f33b110edb4fd0834ded4744bb1ffa07c10f171a8fba5a5695840c430b",
+        "size": 40256
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/34.woff2",
+        "sha256": "be366b905bf6b537c3cd24f0a16a925aa746a635fe515a217ba8ef53292a0785",
+        "size": 40184
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/35.woff2",
+        "sha256": "e350aa568b49019d05b72182276fc7370ea37cd615c299bde3d74e240a80775f",
+        "size": 42168
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/36.woff2",
+        "sha256": "5760df1cc06db800795b76f7bf2eabdc45900edb5de3cf6d5178bc2b5eda0738",
+        "size": 42548
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/37.woff2",
+        "sha256": "da2540d6b39407fd93fac04e1247c60df3f33b7f87fb0c71421e12776891c7b3",
+        "size": 42484
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/38.woff2",
+        "sha256": "b78f39a4ec95c8571f85f8570d4d29a5aad34f51a499b213c20902bbb0cc9a22",
+        "size": 43064
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/39.woff2",
+        "sha256": "1d9bcf4eca522a9775ce1d6dc208d421b36138e1f932fcbce9bfa47269625e57",
+        "size": 42940
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/4.woff2",
+        "sha256": "02e3662a12299257624d578eba9b02d23ac7dc4f89cd361ad832f3f035b995a4",
+        "size": 892
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/40.woff2",
+        "sha256": "26b626f4fba30ce0af15ab68472cf911aebd5a821e19e10dcd5f5a8ffc3a7f76",
+        "size": 44980
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/41.woff2",
+        "sha256": "edd46fcded8ba8f944162855f944bf2a4cfa9c192175f4cfb6bcf576cdb7ca0f",
+        "size": 44980
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/42.woff2",
+        "sha256": "40533797506aa21d8a2f00fd8410c9d6b3131e0758cf37619920b732e02a5773",
+        "size": 47464
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/43.woff2",
+        "sha256": "0b6b1839e2f8ce27909a6a71cbd78a94c6b93e5a588036c6958ca15831a2d9ce",
+        "size": 46260
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/44.woff2",
+        "sha256": "2526ce4978bc8edca0c2a18b7908bbd58dcd0881ab63c9fbe199720de4ce13fd",
+        "size": 50420
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/45.woff2",
+        "sha256": "c52c37e2646cfc939f9a4b48b0bbc4e3dc9064f799ebdbe9b5c841c50ca9e7a2",
+        "size": 49824
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/46.woff2",
+        "sha256": "4d3650fee471326a47da0398a0ebaa95ab4c119fcc674690a2541bd24319dcf6",
+        "size": 48052
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/47.woff2",
+        "sha256": "f0ca5248784bacd3afea540ebcdddfa33058044fe66f084766db07bc255f6e5b",
+        "size": 48516
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/48.woff2",
+        "sha256": "7d0e0c58be8bc23266639dcc448746e65d77887da9849b2f7445075acaf7abd7",
+        "size": 8188
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/49.woff2",
+        "sha256": "a1344fcb42d72375ca8399043c2137d499cd7801a8e1eb30d0faf700ba01b111",
+        "size": 10540
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/5.woff2",
+        "sha256": "f088b42c310e15ddf503f39dbf0eb234b05244e21ffe73e9c4b14d3ce72f5ff4",
+        "size": 964
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/50.woff2",
+        "sha256": "d4ce79e587b78734fa9ca139768a73aa35e79ef3ea2f57c7c3a9a63e44cb96db",
+        "size": 12596
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/51.woff2",
+        "sha256": "2bab2c9ab1598d60ac357ce7af7c0669a1f40a18ff720fcbb8ef227e0b8456b7",
+        "size": 13832
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/52.woff2",
+        "sha256": "e7f1c5e1a9bb08a3680d06ca76eac3aa39be3461558b18a631921db6c9388f63",
+        "size": 14432
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/53.woff2",
+        "sha256": "697521a66255e8244c80d19badf949ae099acbd5884b3bdfe24b194109d678f1",
+        "size": 15920
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/54.woff2",
+        "sha256": "6cdcf3656814cc96bbf532a9c9d853006535b248067c509add7d3df95e03eee7",
+        "size": 16332
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/55.woff2",
+        "sha256": "343368ec035c5f1a248e7d4594dd15172b52973b7a47b1987395d25f062573ae",
+        "size": 16808
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/56.woff2",
+        "sha256": "a7f3a813f4ee758a37c043ffccbd5e5b4c158dc6dbc5cdee0d84e98d25a8470f",
+        "size": 18280
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/57.woff2",
+        "sha256": "b5f4cf25535db073ee77762a79fffa0568b3d4c71a8e5a90fba628b2b865f1c4",
+        "size": 19120
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/58.woff2",
+        "sha256": "a6ecec45f2e7ee801148bbc08f96f6337027f7de84eb3ea0fec1ecb42f313367",
+        "size": 20040
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/59.woff2",
+        "sha256": "6002b9031495600e9f7b0a7984bc2b7d134f8f75e78f3f8e2ea10619aa171845",
+        "size": 20856
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/6.woff2",
+        "sha256": "ac588090d5d7068159aa19d54ca5a74f4f8c0cd58671c3ebfb9a28c47bcca738",
+        "size": 1832
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/60.woff2",
+        "sha256": "1f72e258c817d3745e171cf5cb308561e11455acaa87db7593d7ef295cfbe9bc",
+        "size": 22028
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/61.woff2",
+        "sha256": "8d955afd2457b426467e9ba906d5d2786305872662528d82b521a99ade43d341",
+        "size": 22256
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/62.woff2",
+        "sha256": "3bb80dd096ad8d4e641a6aac3d20a18b7fbe2436a0a2bfe9ec5f36fa9f6d674b",
+        "size": 23288
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/63.woff2",
+        "sha256": "23a646265730f631d01dba322069a3457a925e703a82be83155e42305ec130b5",
+        "size": 23688
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/64.woff2",
+        "sha256": "2b800cf8fd2056c5ac859a4bca54a28da16c5b31c3c1e633f407d7df0f8f1dba",
+        "size": 23188
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/65.woff2",
+        "sha256": "e60aa8b9f9cf93cc7c114b93223314a8a2dc1e4c16b8db944fa19d4b197fa9ce",
+        "size": 25000
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/66.woff2",
+        "sha256": "ada588450f4192898704d3c0df1e55c25e2a3d96f19e4729718123925b5e9b39",
+        "size": 25204
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/67.woff2",
+        "sha256": "7da7df992aadb9a848521d58f1307ccc1ec56a556ab53dce7134dd5eb27f9be3",
+        "size": 25644
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/68.woff2",
+        "sha256": "4f0c6d3a777735c0674bc2a919c492d480b1c2b99d44b47d8429585b7a093cda",
+        "size": 25312
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/69.woff2",
+        "sha256": "9d5950ae38c72b7e0da2942ab1c0635300403d81d703a695713d3c1e2ec98787",
+        "size": 26420
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/7.woff2",
+        "sha256": "8d5870210632dd46e335efd8bc6e9eaeea70c9ed514835a44df1ab6161d04a45",
+        "size": 6496
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/70.woff2",
+        "sha256": "8add58e5697f1a1a91afab2f261a70ededda3ecd16bbfe7a38e1507ee2130d72",
+        "size": 26668
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/71.woff2",
+        "sha256": "e996798d1c2ef0fe37bc34b4368ed93f9fb052c5c0a8ec43cb1850605f1ff2ad",
+        "size": 26888
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/72.woff2",
+        "sha256": "a5f50aee8fcf99ab7840f49aedc0974b234042e500a9a6d4d82a4ce9e329b548",
+        "size": 28304
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/73.woff2",
+        "sha256": "a0386110a57b460e9b0e367390103ce0d71a832a47adf2fb181150fa8be61bf6",
+        "size": 31048
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/74.woff2",
+        "sha256": "3f0281a003ce995cfc3bc724df1c5ccaa127f732edf5e91aab18fd61a48288af",
+        "size": 28576
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/75.woff2",
+        "sha256": "ef597477fac6bb0fbe3f4766ad76a97954f7539a14a952bb7f733b69990b3c73",
+        "size": 17592
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/76.woff2",
+        "sha256": "98494fa32065a9474ff8ed8f444a5c750d3dd86d996c650634897f47ef18be36",
+        "size": 8380
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/77.woff2",
+        "sha256": "20d1867c1f929813bd65d653828f99b4be911f958c31b92cdddfe6eab140f0af",
+        "size": 7252
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/78.woff2",
+        "sha256": "bce2571994d5a00bc92ac30687fd850f370e5c15245b7706069db1f8dba2dcce",
+        "size": 2128
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/79.woff2",
+        "sha256": "2836b4614e90836b62b26ffb443c14e8724bf9a9d3d02215be79d86d8692e308",
+        "size": 884
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/8.woff2",
+        "sha256": "1db927f8e9acefb9736891123c001ce9b6ecc9d8c444dabb7c8788fd41d3be2d",
+        "size": 968
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/80.woff2",
+        "sha256": "9184726160fd57d4b2d260e7af1228071e1a6d6d7d2a2b5d168f509f847516b9",
+        "size": 4504
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/81.woff2",
+        "sha256": "f5bb69b1e57bebb7f5ca7afddf061a5e775e5e7b2a790f06268f52b932aee3f0",
+        "size": 3352
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/82.woff2",
+        "sha256": "318420dded571729af2722f0bf866538d506c28e6b86696da8937bb7ecefeb17",
+        "size": 2412
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/83.woff2",
+        "sha256": "f8ea39eb9224181c6f517fbaf10874ceafc30a2ad8172e67c99ae242f0e55d9a",
+        "size": 2404
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/84.woff2",
+        "sha256": "b2f9a30ec25aebe4c95420305031d633fa0cab7bd3dca152c429d63cd3b83779",
+        "size": 5316
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/85.woff2",
+        "sha256": "0c61d56af8661a67ca97e9f5764fa3092775b56f860cb07602e47fbf4221a114",
+        "size": 5784
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/86.woff2",
+        "sha256": "eaf574d97221182b09e4e01f083c861473ffdc6b714046a446333df9cca657e7",
+        "size": 3080
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/87.woff2",
+        "sha256": "e96e112b6c0935ef569c149912af0ed9157cb6bca75287a6d845cec3272a9718",
+        "size": 3960
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/88.woff2",
+        "sha256": "21524136a0f4d08e475585ad63bc70c68f2551be6f1b569cabdb8409169b5c48",
+        "size": 7576
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/89.woff2",
+        "sha256": "66829e90fda83a431ef8877f046495ceb92d5fafa6170943e2608d03e9dbabe5",
+        "size": 15844
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/9.woff2",
+        "sha256": "eead9b05e1708e9f2647bfe2577bd8f15448ed8a3e84256de29589958c9e523a",
+        "size": 1116
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/90.woff2",
+        "sha256": "d4b44f929355707dc7abf4b9372490f0a40cd8ed1c54194d0e83832f488de0c5",
+        "size": 22316
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/91.woff2",
+        "sha256": "605f0a0b26d2c7099ab22c89a4cfdda73272b7e7901262cb471d11eb530a1616",
+        "size": 21680
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/92.woff2",
+        "sha256": "0ae9f4c24b4ad12055fec2d35ce9a39e9807923c31eea2d6d6a137acece05663",
+        "size": 17768
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/93.woff2",
+        "sha256": "c6a765e4fa2df79c277e4eb7cdf4524af7601ea13ab7989a28b74ae07758ef3e",
+        "size": 24408
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/94.woff2",
+        "sha256": "28e14ce6273d43df9c0b371f5a4ad90a304d53e84474b1a068386ed503a65c06",
+        "size": 23980
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/95.woff2",
+        "sha256": "8fd02d9ed35766821f21c97a1fbcb7aebdfd46a91843895339d44a104672285a",
+        "size": 27700
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/96.woff2",
+        "sha256": "89f8a9b8aa755a1cc9a749fce61e0dbe69e57779702555241613d1d86c3972ff",
+        "size": 27964
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/97.woff2",
+        "sha256": "b7abf5044d8d5aecf080073d16bb69291c585b06cabc0e8bb0f39a37ff4dcc08",
+        "size": 21312
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/98.woff2",
+        "sha256": "7cc8f5937d688ee89cbe4405a21498db830bc7dd61bee7668b54607658e19df7",
+        "size": 26044
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/99.woff2",
+        "sha256": "2beae03b8e5ee9664d8ad3be8c85ff675b885493661ad27e4a817d1ea9b7f626",
+        "size": 25988
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/bold/upstream.css.txt",
+        "sha256": "d78ea850fee5553ac558aa3a8f86a975b1b18c84f2aeb355bfc0be19423da062",
+        "size": 145624
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/0.woff2",
+        "sha256": "c453965f2d97503c4684dccf8d4ad7c572cd506fa06f5eb5ecd8c85a3a3a4dfc",
+        "size": 41404
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/1.woff2",
+        "sha256": "979b2dddbfd9e84f700cdf3918057b3b94c1fd0968cb41fd46addf2f8f1f2c79",
+        "size": 1676
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/10.woff2",
+        "sha256": "5b2033e2c513dfe3375a14df22ab564bda1f99ec6be442cc06c4b0cffd9b68a3",
+        "size": 2028
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/100.woff2",
+        "sha256": "3c57dd235d25a48974e500e81f5a19a2676526d48b1c7d28e67fe8b050c7ef17",
+        "size": 32300
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/101.woff2",
+        "sha256": "35eb013482fd6e31657ad91f2968c3583760e25a29df1d3960c1db898237506c",
+        "size": 31216
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/102.woff2",
+        "sha256": "3c90ddcebec0aef905e68c86ca8ce342197de8825ed422b08f3c8428a8f0a2e1",
+        "size": 30304
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/103.woff2",
+        "sha256": "da81850c048c614ea19b680a2d37c08f432aaf4c7f9a7d33658420d42ec44e0a",
+        "size": 26848
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/104.woff2",
+        "sha256": "cff1c7b4afa25a3f17c69ae98fd58ea8bad483e40fe32384b0bef6777217da94",
+        "size": 33548
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/105.woff2",
+        "sha256": "af46f59eff421e494891c7622012eb6a484b6c14fdfb18b352be2e911c4b0a2c",
+        "size": 35316
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/106.woff2",
+        "sha256": "17b39e4ac761b4842d7710e62c1f2c6b5166282b4e28b9de9562390f4fc4b256",
+        "size": 31704
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/107.woff2",
+        "sha256": "b41a86f6ffca315c39bc0a1540962d740766dd5d72bd5a42e6423d7aac8a20ec",
+        "size": 38400
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/108.woff2",
+        "sha256": "69078f30caffb71c63c28a8a78cd525d66b180d7f5809f54a4a6879dccdc46b3",
+        "size": 34944
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/109.woff2",
+        "sha256": "0b90c2cb8dc702edd45b8ed2d365a0009909cfb5b1ff6abb11516de2c7d21ad9",
+        "size": 34780
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/11.woff2",
+        "sha256": "c0374b1d25b5991634cec0635b4b51e61394ca15aaa1b4f2fe1979ebc686e06b",
+        "size": 10564
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/110.woff2",
+        "sha256": "f9de4047c838b995b2dd742264caae81866827e1039da88365ebc4ec788fc57f",
+        "size": 34824
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/111.woff2",
+        "sha256": "5e843967bd41363c1cdbbf98beab05b8936dc3576f87c54f138f1eebb027efdf",
+        "size": 32748
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/112.woff2",
+        "sha256": "faecceef472ac3389b2c680e3136a91e64d6e1d5f45fe4c9c169ebb7e2621255",
+        "size": 34192
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/113.woff2",
+        "sha256": "66a2287371a7fb37bab6f0b4c246d2addfd5c21bb9ed050985797e724bfb449f",
+        "size": 36928
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/114.woff2",
+        "sha256": "00662da6bb518190bcb052b0b3bf542b339af2b98a3d159218a147da076af5b6",
+        "size": 37520
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/115.woff2",
+        "sha256": "c5192e8fb75f871087d931cba404a93b0f888afebfc5f5d02995a03ce989a0fd",
+        "size": 44268
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/116.woff2",
+        "sha256": "ff7b7edb4d5e6de72d33b5706c2b02a424710f6c00fec1e75ee35172ed9c6177",
+        "size": 43992
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/117.woff2",
+        "sha256": "cf5176f3425efd59e70aa548bae7d33aa3f21da50b30649fd7616caccb6e4566",
+        "size": 35360
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/118.woff2",
+        "sha256": "a3acec344cb84ec886379f29b58c5d011c0b662c4fecbf2fa119db30f7f726c1",
+        "size": 33392
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/119.woff2",
+        "sha256": "8daafdc7543a0772ed440838dfe0dcba36d05178d21fc4131c404a70d5236961",
+        "size": 39028
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/12.woff2",
+        "sha256": "55f0a4fdffe9d5d7fc549c94879de28fc0f0c156a5452d3f17fc5c056e345966",
+        "size": 13440
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/120.woff2",
+        "sha256": "aa967d8122811c020a3e15a8e91c25e4e8f0c462797e65f33df582372aed161f",
+        "size": 41784
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/121.woff2",
+        "sha256": "ad5912a33618e4686ef5dc8fb8582ee0b499f26e56c1ed506fef4171ca53165e",
+        "size": 39340
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/122.woff2",
+        "sha256": "eae6aa4333d10071727f18c4ef425a69a7e924a023a7762ca1810ac6d972190e",
+        "size": 42300
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/123.woff2",
+        "sha256": "ba1354c5ebc9762d2ec85565f1851c2707403496b0217e3cefddf1ea878dd6c7",
+        "size": 38112
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/124.woff2",
+        "sha256": "d708eaa81c3faf20f99e60cc366c5462f709b8d550fea7e245112b485cedfb9c",
+        "size": 36396
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/125.woff2",
+        "sha256": "19ab8129aa94a291af6f8754113ff78ddc2bd0b7361867653470978c2a244445",
+        "size": 45832
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/126.woff2",
+        "sha256": "46bb70e4c219d6ebea227736b028269b99b30c55f3a255c243eea7d4a2a39a09",
+        "size": 38552
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/127.woff2",
+        "sha256": "3d19f92c966fdde69eef0642147998474baa853338a711fa42ccb961eef2a3aa",
+        "size": 47172
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/128.woff2",
+        "sha256": "b476e1cdbe3c72ccc123524785ed4423949cdcc7877f98833694f4e07ecc4c3d",
+        "size": 49216
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/129.woff2",
+        "sha256": "e466f7b4699a4794fed33d0c214af8844e6f2abd93e7bd7f67a25f7bc110f9fc",
+        "size": 55492
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/13.woff2",
+        "sha256": "78ab22b7030bcf54f33fcebdee55650e71a0342933429018bef8a816e2be8aaf",
+        "size": 15736
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/130.woff2",
+        "sha256": "ab72bb40a0e0a225f4a9398b8746f25d3d484d34c25089bc5f3f98c21c9b0db8",
+        "size": 56720
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/131.woff2",
+        "sha256": "253ba2fe2cdf1c30ea009a7f9cac1e9f980c20c3120f7bf7051fa3acd7829753",
+        "size": 40424
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/132.woff2",
+        "sha256": "327b31be26128f25cccacae9d1b0a1e1526fe91fa26f4c08666e55cc2a7e32bc",
+        "size": 30424
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/133.woff2",
+        "sha256": "7e951bfbae0c227f78a9ffc2c4923f296b203f825fec71371c8cfef4039fec08",
+        "size": 40192
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/134.woff2",
+        "sha256": "a48e9805d6a05d241dca0ce086365287a9c6bac6414fe17c45c0088a46b56d32",
+        "size": 36484
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/135.woff2",
+        "sha256": "e3a489a79d78a1c7bc76aee6df99fcbb14fcf4e7eb94bcfb494435e802d63d6b",
+        "size": 27168
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/136.woff2",
+        "sha256": "c7de189b997c81704c998556aa569aa049433d60d3fdee83df0d712616420b5b",
+        "size": 34876
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/137.woff2",
+        "sha256": "dcc56aa6d3e5a2d9366151b97cfb99ab4bf4abea9019551d24d7b4d40989dca6",
+        "size": 34656
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/138.woff2",
+        "sha256": "359de70719bd53e581260c9444bdbea6abd73dd9e4ec72be8aedcf15d768e543",
+        "size": 39240
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/139.woff2",
+        "sha256": "512d373a82eb1010711ae4ebafb54628887d69d4c146fdf3ebf0e7845ef0564e",
+        "size": 40804
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/14.woff2",
+        "sha256": "d37b4e2ecb8172ac981d4551c5834ea9e6387432c6889f2b709db6abf5c4d462",
+        "size": 18420
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/140.woff2",
+        "sha256": "f8f00ba7ff7324e47199239a0f0332ead0d9e233254b1da4f4efb4740d0471f0",
+        "size": 52136
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/141.woff2",
+        "sha256": "3d57256ae02f8a2e9b22c05eda9e089a2d444bdc0e5c95765d1aeefc115be26c",
+        "size": 32052
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/142.woff2",
+        "sha256": "2305a46efa73b70994a84f9bf1dee78274cc7b8282b3ad247100a58ec8b58b7b",
+        "size": 39196
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/143.woff2",
+        "sha256": "78a7c3a4c26a20b95b4f36adf2c4e76af982391fe3368c4ae272fa64c0d20bcc",
+        "size": 38392
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/144.woff2",
+        "sha256": "cb296c216260af6b477b28d490e24fba7c6355ca0f63fc6719a8544a59fd2f97",
+        "size": 38852
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/145.woff2",
+        "sha256": "1671b70ba672d17f56e80aec08fba6ae21ceaa04544b0bf2885495fdfefca8d3",
+        "size": 47728
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/146.woff2",
+        "sha256": "62f0cb928b04e539c41c7e7cae1d6877ddf1d3da1b11e5d651d2f30013e1b916",
+        "size": 41852
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/147.woff2",
+        "sha256": "1637f83cf2190220acf3b6608f2614691a4de0b6715b014db4cd99a9b0b1853d",
+        "size": 52720
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/148.woff2",
+        "sha256": "652b9ede007aa2219712ea114a35e49d9b865275a263b5ceeaaddeddb7f4a8df",
+        "size": 37760
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/149.woff2",
+        "sha256": "3652cdb0e20cd08a24e8baa8f485e39b7b0f687f1b92193d45b4dddf74f38177",
+        "size": 34088
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/15.woff2",
+        "sha256": "b1967d6f58689946cf127780eab2578eb05a7054dd3ce50d53cd055fd5444f6c",
+        "size": 20296
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/150.woff2",
+        "sha256": "d432799eaa7763bb6878a5003f7bae6ed41c2026db5caa12efe50e31ba3a1c9f",
+        "size": 40544
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/151.woff2",
+        "sha256": "386b768b8cab16f0b810a0a685f9fd1f0642515f498bfc53b513458192f7fbd5",
+        "size": 50636
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/152.woff2",
+        "sha256": "fb1d69dfb6ef1fbe7972c6b1c8a1af393de3b3cc751020388930e648521c3925",
+        "size": 50240
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/153.woff2",
+        "sha256": "9c9a869f7536f06ed124217cc737ab313654b59973af3d04ba777159654c0b1f",
+        "size": 38416
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/154.woff2",
+        "sha256": "efab6f940a071e714809da79a66effd85e909b3692e697b56bb20c309010d87f",
+        "size": 47984
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/155.woff2",
+        "sha256": "0eb465b3d679235b4fd3d2a4f08ecfb9dba2165d5ee811da72ddbe277a800421",
+        "size": 54668
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/156.woff2",
+        "sha256": "f98b3dc901d7f5acf5d36960ad3e3412d3f45cda6f7d042a78eece23d060452f",
+        "size": 49064
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/157.woff2",
+        "sha256": "8363dd64c99cd32fcf9b3435498a24691c3280335705b07a034a12bf98a304ff",
+        "size": 53196
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/158.woff2",
+        "sha256": "ebb7de486dbebd803b8379bead342f5584c476eba7b2bb39914ea302ab2eac97",
+        "size": 41300
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/159.woff2",
+        "sha256": "f2c809a8b799130c12132aa43b9e8f60f906d1cbde718b946d6be8356dfc1f64",
+        "size": 46040
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/16.woff2",
+        "sha256": "73c02fcdbd965a1cba130c6a1d361cbeb587ce2b11e2ec6f9aab04e09c571427",
+        "size": 21696
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/160.woff2",
+        "sha256": "c320d95c610b1678e4ada531c6cb2aea7839340e940ee18d2e15b0312c9d403f",
+        "size": 42312
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/161.woff2",
+        "sha256": "836756b3fc867b58ee841239052a80e9112e166972cef10854ac82d887812c75",
+        "size": 43964
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/162.woff2",
+        "sha256": "d805bfb2f3d004cffdad7583ea5b5a77e8f68aaba0ad416af9b1c55809ddb5de",
+        "size": 48328
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/163.woff2",
+        "sha256": "1fae062feaa13e717431ca8e3854104058c0d39ed33d6561a3754f3f6d195c10",
+        "size": 49548
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/164.woff2",
+        "sha256": "a40ceabf9189f33df3a74cf13d3372020019911623599f6aab10498dfeaee876",
+        "size": 57888
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/165.woff2",
+        "sha256": "460c3cd1d3d3863cd20b284fb7c0ffaaa8c8e2a2db4eec206665664254d7edf5",
+        "size": 66624
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/166.woff2",
+        "sha256": "c4ee7860cb63daca37710922d973ba0f4034e6b59d4d74a9ae0dc4c0440d6b72",
+        "size": 47152
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/167.woff2",
+        "sha256": "ce388462e7b22acdcb8fd542bf2017fae50db4a3523e1d83198f7ad46e0dfc9e",
+        "size": 50844
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/168.woff2",
+        "sha256": "7aa0c3bbb0dfe737cf5b1b14d158c27866ce2c7ad660d6c6a12a2e55262e5a6a",
+        "size": 36400
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/169.woff2",
+        "sha256": "2b91986f019faa1a97efe6feec1260d235366905735aff3d478fdb7be5fd483d",
+        "size": 48772
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/17.woff2",
+        "sha256": "3f6c8ae24b9f7b82706d373d1100a68a96ebabb43bdfb17bd287ae30e5b4d083",
+        "size": 22948
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/170.woff2",
+        "sha256": "eaecd8bfadb4500d974f52e4d936e3cc4ba28952c10bc8a056ab64db6e08b250",
+        "size": 54616
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/171.woff2",
+        "sha256": "455bfe5465a843c9bea44de1cc98bac1ae7ff5a72f79deac6cb237076c1ceba4",
+        "size": 55516
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/172.woff2",
+        "sha256": "869446d91fe0cd98994cd5b0168dce092112b4bb06a20da997e1a685ead95eb2",
+        "size": 56632
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/173.woff2",
+        "sha256": "b4462ea43f8715cfbf2457678f84f26e04af3a80ca1c288b36b7e92cdf1a56c4",
+        "size": 47172
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/174.woff2",
+        "sha256": "f36c5af2533466980a9af1f81eeba29a6c91268662913282fb45bba5d67b059b",
+        "size": 54144
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/175.woff2",
+        "sha256": "042a1686ffe24101e63c525901bd60324782d3f153a913cb2ae302d5d0a50c09",
+        "size": 48656
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/176.woff2",
+        "sha256": "4aef42573c820358ec2abe1d10ccdce3e68afd0110c8429393a0669b913fa844",
+        "size": 44780
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/177.woff2",
+        "sha256": "d70c87f0a6c21b393146234311b44d0597324865dd9648d15531e1351110e283",
+        "size": 50024
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/178.woff2",
+        "sha256": "59706723efe12ebf3eaa2973e41f7c3ea1f77cae2e5ab87fca3f4d702f43bd6f",
+        "size": 59496
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/179.woff2",
+        "sha256": "e9aeab5c58dfb90e3acf4454cc342205b148084d37163fe9631de56d86aa2754",
+        "size": 54204
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/18.woff2",
+        "sha256": "953e7b75141d57c1defd895a0e6d9d2bfa1914033d9f7f9f7e94d44567c55b1c",
+        "size": 25072
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/180.woff2",
+        "sha256": "6d92af70f9fca9adb58e85b5e80599ff340d7ba7c7d301982fe685afc6b78463",
+        "size": 51432
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/181.woff2",
+        "sha256": "cf6647e47f454a33d5605719bea5ef076c7bbebc7b47507d1460bbe6734799e1",
+        "size": 61460
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/182.woff2",
+        "sha256": "a17bab54ac17c12030cbd4d8d086f0d63b6a1fe9819492ba15a41a643f5ab66f",
+        "size": 66920
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/183.woff2",
+        "sha256": "8a03e46d80cb81d398e49a0fbc3b34a3aeab56debbf176a0af7469def029c5ff",
+        "size": 69064
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/184.woff2",
+        "sha256": "c906b4648882372b708abc51bd4cbd74c1441cc58f4b257f62fa34e222364a7e",
+        "size": 73044
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/185.woff2",
+        "sha256": "e3952cee4324109917f3c7e46382c320bf1216bd319c6822a3dd7b1a47d3a652",
+        "size": 69224
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/186.woff2",
+        "sha256": "b7bb51dd2d54fd5b08e5ee3bec8b87c7ead81776e512477fd5f50f688872178e",
+        "size": 46528
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/187.woff2",
+        "sha256": "6a0f5e132b397c3ef0e9c6435f3d752060fc356c289d32b6646e7eca4448c22d",
+        "size": 17876
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/19.woff2",
+        "sha256": "b4d6b94efaf8299229ca63f2b365a2820681705a8e6b54ebcf4fdf75edb769e8",
+        "size": 24980
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/2.woff2",
+        "sha256": "da44280570b4ef308dfa8d8c0b78370f8d203d0e26133b3f1da5c41c72aae467",
+        "size": 3372
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/20.woff2",
+        "sha256": "c5ed664d2356b163eae3e90e1e5c9cf46e959129d27404353e51858cf6e6c6a3",
+        "size": 26296
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/21.woff2",
+        "sha256": "1c0599d19069a0af09f22c829a369084ee592b893c4f53da48cb20d1a3c3bd78",
+        "size": 26320
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/22.woff2",
+        "sha256": "88203db14aae8fc1ac33a9db7bebcfbca71fe9b079cfa447c47ba2d2fba8d61e",
+        "size": 29312
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/23.woff2",
+        "sha256": "63c5b1729a58a3ff97c9323adbcccfd863e2481a7cd2b265b39f97f4ebf161b7",
+        "size": 31736
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/24.woff2",
+        "sha256": "02bac9d015acdf5244b726f6fbb6232b5540e768ba6bf5528066cd21a31a8d99",
+        "size": 31940
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/25.woff2",
+        "sha256": "94836b6a120c8595d9cd594dd5bb31b1580de3654245772f2fa170e587fc1001",
+        "size": 33472
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/26.woff2",
+        "sha256": "1b8ce02554b2fa3ea0ebe3a953a3a772d008956e8f05ae4ca5f1e55163d62455",
+        "size": 35636
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/27.woff2",
+        "sha256": "934f2fb227e5ac509666766e19ae108a02092e71e12d3430b10035eb7b5982f0",
+        "size": 35332
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/28.woff2",
+        "sha256": "391d7613e3acfc1968647156f390afd3965171e0aa26e6f61026af4ebc52fcc4",
+        "size": 36188
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/29.woff2",
+        "sha256": "a13625336ea2598e974a634267fa6dfddaf1a620aa565d78e8f01ba9b3cd04ed",
+        "size": 36848
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/3.woff2",
+        "sha256": "75a155b6021c709e8f85754eae967d52ca1a3089ad756c49e808f04140f8b67e",
+        "size": 1048
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/30.woff2",
+        "sha256": "85df94b52c9cde1a52dfea5621af41da198710d04cae1cb0ef38aa4598ecc56c",
+        "size": 38400
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/31.woff2",
+        "sha256": "d662a155cb7f6be23f7816288602549fa34144e4f8ea2115ff4325b662d97dd9",
+        "size": 39420
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/32.woff2",
+        "sha256": "4b8add00ca710a00ebd45c0d8515f1c51bc30bb6b444b7c73682e00d6f6ead85",
+        "size": 38144
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/33.woff2",
+        "sha256": "9a9bd1e8022546089c7baf079c0cc8033b85bd25b5804f6fc0c62c88cba4a05f",
+        "size": 40920
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/34.woff2",
+        "sha256": "14dfa60935fc0a3df6b870822658ccf810832134b52a7a586e53b467451d7624",
+        "size": 41448
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/35.woff2",
+        "sha256": "fdc4fa9c33941361ab56685ff27a9f4e72369b9c5849c2722bb02f52cfa34513",
+        "size": 41168
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/36.woff2",
+        "sha256": "ad1e1428a40f870b85e67ed4235e0b472507754a42581405d56aa37192ed582d",
+        "size": 42820
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/37.woff2",
+        "sha256": "667fdf750714110b42d427a7d03ec650bb518915291ee382877e7f844a068efb",
+        "size": 42328
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/38.woff2",
+        "sha256": "44a60ef471993e594f85948c5e0c04dbbb7c3f6ac646cbcc9bd31dbfe31bb105",
+        "size": 42556
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/39.woff2",
+        "sha256": "3947b4d50d2532c4e8d14633f41ba8fd56aa7746c82cef83097a2b8fec1769ef",
+        "size": 44132
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/4.woff2",
+        "sha256": "4c8115b8618b8c5948496cddb56507317dcebda10210eda3aeef248225afe871",
+        "size": 904
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/40.woff2",
+        "sha256": "ede12877d54579ce0d54ca301e3add43872382b3bb26cfa8421ea334f3a911b7",
+        "size": 44128
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/41.woff2",
+        "sha256": "08afd4b7caf4beec948f550c652dbc1147daf65b50d00af350da6a6dca90bbfd",
+        "size": 46432
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/42.woff2",
+        "sha256": "1eeb5e9a06d674dff634388e9aa7d1c3dc2f74a94e7cc20d0728d457545309a3",
+        "size": 46440
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/43.woff2",
+        "sha256": "20a228b2d4888587334da3377616bfb4b4def48862f4aad342311b3684c93d23",
+        "size": 48184
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/44.woff2",
+        "sha256": "c790ec286c95c43d0695d165524707cfaedcfe10816ac226c1adaeae81c4534e",
+        "size": 49344
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/45.woff2",
+        "sha256": "e468ca171886c9a4488fdc91b2a2f87f1ac8ad4a803b7368927b222addcaca67",
+        "size": 50296
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/46.woff2",
+        "sha256": "64ea2c8afb561aa277daf66d94a9b50a8baae252361fd8c06af69cd13f708736",
+        "size": 48484
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/47.woff2",
+        "sha256": "89514f9af6e1152b46ba076b004f63f103d38a5899e2d43f26bccd3795462f44",
+        "size": 30380
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/48.woff2",
+        "sha256": "8159dd9d007b5421e06e76061eab4824b86146762a56751a7d4917df6b589412",
+        "size": 8152
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/49.woff2",
+        "sha256": "e6c09446e61234fc62b37d6a0971ed6a77faecb52e30ac9d80a6e776f8f44f3e",
+        "size": 10504
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/5.woff2",
+        "sha256": "c9902f635f53b2d4b3d2321e713484c5cf4c9eabbc7babe7d689eab94d3e15f3",
+        "size": 968
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/50.woff2",
+        "sha256": "381547b645007a686a8bcc03c54038365091538a6e2e205b62e47add41fd5bd3",
+        "size": 12476
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/51.woff2",
+        "sha256": "c42c8c138a665abd5dd681bebd84f538eb0bf98887b56e53f6f2a8d20b6eedcf",
+        "size": 13748
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/52.woff2",
+        "sha256": "c0f6798267ae79291a4d1bf0689aec55608d836e9f7b151968238dd66d1a7c6c",
+        "size": 14532
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/53.woff2",
+        "sha256": "81e29ef4ff4bf7bc64b2fe9734e4f585ea6b536fa0851c2708b845abb08179ba",
+        "size": 15836
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/54.woff2",
+        "sha256": "67f447dbb9a4da2f0ee69095058eadacadd46a65f23c57a8a65b7a2d9b2349c8",
+        "size": 16196
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/55.woff2",
+        "sha256": "7349e96d89fc48933ef29c0ad870104451a84cac11a77364ff992bbc96f5b13a",
+        "size": 16736
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/56.woff2",
+        "sha256": "ab77da808f42f5a7a1f6658f9f709c3699b9a47060597fedb9dbbdd9ded2c18e",
+        "size": 18292
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/57.woff2",
+        "sha256": "4503ef1aea1200aee41f67d5107283bd57d799af23f4bc4b74d02ca6c6aef32b",
+        "size": 18732
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/58.woff2",
+        "sha256": "6b91821dd2c8e5eb36937856b6e5bbc605e2ebf23d7dba6414c89286f2171dca",
+        "size": 20068
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/59.woff2",
+        "sha256": "384942855aa4384c2ba907aff843af394cc76cd8a66e0f1aa6c9c5a568407c09",
+        "size": 20448
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/6.woff2",
+        "sha256": "b1ed448e9dabba9d7b613d823388dad473927375f01a22ebeb9e7c58f1cae74d",
+        "size": 1832
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/60.woff2",
+        "sha256": "7e1d741609e88e44df9e3dd000969924cc21fdf8d91bb4d331c8736f9cdfe4b4",
+        "size": 21492
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/61.woff2",
+        "sha256": "ee4df2fb73b77ccf71ffab2aee076814bf992f889fd77ccb2361ebe4b7e7de4e",
+        "size": 22048
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/62.woff2",
+        "sha256": "8c9e507b1bfbdbada83e6f195b0c1f4f1fcdaff7baaaf12f0adcbf86b2e19755",
+        "size": 22808
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/63.woff2",
+        "sha256": "f126a1933d24805c90ce9eab3604b8c8af968dbef308e54bb9f44fe7de9f8eab",
+        "size": 23384
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/64.woff2",
+        "sha256": "e0ec8dec80ca1cacdab71f9e0d74d15efdb48ad9d1f56505973e2a2592e783a4",
+        "size": 23312
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/65.woff2",
+        "sha256": "582e0ed5cea9f0d30f05f7d24d68abc96def2e06a2fb56887689043e4d4ed670",
+        "size": 24236
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/66.woff2",
+        "sha256": "52f1024eef9d98ce0347033216e9c51a5a574d867120d19d25fba356442e3c39",
+        "size": 24780
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/67.woff2",
+        "sha256": "5b9b09e21d8adfa6c08c4ea873d361f26c576afadbfae44bee2a7b4e41b9772c",
+        "size": 25184
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/68.woff2",
+        "sha256": "88843c4f6f2cd8da3c12631f765c2a643bce1676c5c477f9b600fe18ef63490f",
+        "size": 25236
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/69.woff2",
+        "sha256": "4884729421ecb28ce524179c34c8c1a8fe0d7e9316a67c0d91ae7f7be6d6df12",
+        "size": 26548
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/7.woff2",
+        "sha256": "940308e077f76a08d6eb13c3520bb41348a67e0e7be749def868ee28cd2ec9ce",
+        "size": 6536
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/70.woff2",
+        "sha256": "bea03d39318350af5a78df501cb373ff3b801335d986e2c9d893556f2ad53f15",
+        "size": 26436
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/71.woff2",
+        "sha256": "22f91a39fa3c2200ddf37ed96c7a2bf8f0cf6212f03f44d7cf3a8dbd7069852a",
+        "size": 26404
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/72.woff2",
+        "sha256": "8b8d103ed0e92ea53c53ad076e6a9c62f79d8862922f5cbb820ad66ed9e46db5",
+        "size": 28336
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/73.woff2",
+        "sha256": "c850b3ede330469e72042e83dd0d64bb2dc3d2725e4f38f3edf3e62224b189c4",
+        "size": 31052
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/74.woff2",
+        "sha256": "f879be32ff267919b143892002a12ecc801406201e0a5324a91912c85081a44b",
+        "size": 28472
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/75.woff2",
+        "sha256": "f23305c7fc850274afb10b891afbfade342af871c3abedc861af171f96d147fa",
+        "size": 17452
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/76.woff2",
+        "sha256": "fb89e02cf62d483bf7e1c3e15347dbf2c8beca4bcbbac0aefe9d2f56c6eb50ac",
+        "size": 8580
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/77.woff2",
+        "sha256": "e457fec662c6a9b948a14767f2f37d6a7d14689b4d6940f142e3b424c7b8f3fe",
+        "size": 7896
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/78.woff2",
+        "sha256": "e3dc1f8ebe89766d26d38ab1eb06d973d0c59b95b72f73d0ec0169deb95c18a1",
+        "size": 2040
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/79.woff2",
+        "sha256": "fb2067731a75c5949363239ec320707777727aba6ffafd1bf903170c59679685",
+        "size": 892
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/8.woff2",
+        "sha256": "3513ee2309a1755635fba660705e642f5680d17356cc0a3d6241949880aff244",
+        "size": 976
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/80.woff2",
+        "sha256": "a0614b0707498cb1f59281ca6ae6ea9998a92ebf494fc8c9c855960d0389dbfd",
+        "size": 4440
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/81.woff2",
+        "sha256": "9f0c920ed8cf97e1334e45cc39ad8e3cad8498c1617df7a5812d449c89d659dc",
+        "size": 3272
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/82.woff2",
+        "sha256": "ed27c7e91cd8fba40b1da66fb1b9dcf6d6a39b08a0dc0005c8e07c59411f58d8",
+        "size": 2440
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/83.woff2",
+        "sha256": "74b7774e21bee29c2818d7aa2d2d5f14ab8aa062c00d8a34aa3b977b371c5a9f",
+        "size": 2496
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/84.woff2",
+        "sha256": "ba57923bef04393d725421b365578a103f771d0dc977d18480999ac313bec5a5",
+        "size": 5520
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/85.woff2",
+        "sha256": "ebc19e8d84ca7162789c8355ce79036c9dc7fe40d05a4ee199a51718ea2fec0b",
+        "size": 6036
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/86.woff2",
+        "sha256": "ba5cffccc66100f65e08d415518c8ef694ad768f276823a17fda005731931ee2",
+        "size": 2744
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/87.woff2",
+        "sha256": "8ec4cb0b4ad656e9693b252641149db969c7b42168a7a1d551873016a034606b",
+        "size": 4780
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/88.woff2",
+        "sha256": "5a839c2d982ed31c5ca5eefb85425bd2970001d3b9d728aea59ab196321c5372",
+        "size": 8140
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/89.woff2",
+        "sha256": "121c7b7193ef71b5a82d2d55c9360506eaa3c71ce01c7d43eaa52d5d750bc336",
+        "size": 16320
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/9.woff2",
+        "sha256": "91027ca3fae340a52c9dc27a25e81d5fab77974f54d49e665ad569a17768d496",
+        "size": 1160
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/90.woff2",
+        "sha256": "00a638a81159c387cde2347e365d9c885e8e93f4d616dcefdb714cf15b09729f",
+        "size": 22352
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/91.woff2",
+        "sha256": "d0e5ff19590faf0fadc3a2f3a9e188574fe950e9bdb267c4f0e9122f48d387cf",
+        "size": 21276
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/92.woff2",
+        "sha256": "a82978813a1a0445f7773ea1c3848af0e969717397c1f989398d591f161d232d",
+        "size": 18544
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/93.woff2",
+        "sha256": "f10568d5b8746dae8d190269418eae97e2ac16945967bf6bb100ad0c87653390",
+        "size": 23920
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/94.woff2",
+        "sha256": "9464c8a3e0491c2b9abed32b9d558ebc4235b9da0af4e51d6a5a911c6d65f164",
+        "size": 25100
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/95.woff2",
+        "sha256": "8193741b1ba8b4a6f91b9c2c5980c68aba0909128584ae81c7dd57f84f8acc60",
+        "size": 30092
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/96.woff2",
+        "sha256": "1c14ed3f4367848b949fbe1a139b2be7cd4e1eef549a89897cd07993fa33135c",
+        "size": 25364
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/97.woff2",
+        "sha256": "c8ba47eb88cc68598504fc9ac305451e23ef822f0f023f92b0e632a418cf266c",
+        "size": 23324
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/98.woff2",
+        "sha256": "622e7bacba3d76f712983816a01b138b94cdb5bc9f69fd8b61c1f8418c5ab1e6",
+        "size": 25376
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/99.woff2",
+        "sha256": "6c19a3cac624b3497c4e676535233faede34eb0ceb494bf490835e03064c9841",
+        "size": 26184
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/demibold/upstream.css.txt",
+        "sha256": "1980b406a02aac342a3fc54b29973972ed562b463f94de94162b349824c8b4f7",
+        "size": 148978
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/0.woff2",
+        "sha256": "cacd10ee5a7dce4a17abce73d2a2f95156ed1c3c69ade4d4d094daab041164bb",
+        "size": 41164
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/1.woff2",
+        "sha256": "c2be68d54f1f0b951d5519ddee5f18b5bc93633bf78b037445d5b3c4afe84628",
+        "size": 1632
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/10.woff2",
+        "sha256": "ab2fc13569a5d059708a3f2071675c7115b11f6b1af8771689d8e58d75634273",
+        "size": 1956
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/100.woff2",
+        "sha256": "991767dc82ead23ef5076160e41640c712a42e3ecc8cb94cadefcc0e2cb52ca0",
+        "size": 32244
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/101.woff2",
+        "sha256": "bdd02281a594dd5a4c97b7e2475033d392dd568c4719fe31dda719cb90a30fb8",
+        "size": 31196
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/102.woff2",
+        "sha256": "4d1103428a8c6b34772488e1d6e033207ba934d23c6870def45c86c1e46e7012",
+        "size": 30312
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/103.woff2",
+        "sha256": "7a8cd5a0cba3b380ec3547b0041f9432f03192e40c30617cadd5c51020c4071e",
+        "size": 27004
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/104.woff2",
+        "sha256": "765dadaa44d0e0bdc90ce4c20fefe035489d7c16dd6c1cba1f8630ade0f7ce78",
+        "size": 33744
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/105.woff2",
+        "sha256": "d30a51fe45712ef435f6708d1357e4d20628bb43d0341985b89f54ad89e9f7e5",
+        "size": 35668
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/106.woff2",
+        "sha256": "16c9ad04bf6622b6422b5e478fb02ba78195c2e2b899742365a380c2ac750cdd",
+        "size": 31552
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/107.woff2",
+        "sha256": "03c9a6f8a8a46fca187424a3e764315892b35456930689b3be2160a1b45933c8",
+        "size": 38280
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/108.woff2",
+        "sha256": "d1e7d028086fdc109c7db9152d23604d89963daddeb74f6d32684f7dcfab3811",
+        "size": 35128
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/109.woff2",
+        "sha256": "17e9462bffbf984444888fcc62601037989c28629f7c13613ece5658d981b76e",
+        "size": 34756
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/11.woff2",
+        "sha256": "a825443864d0324b0ca51a6e4352f22d739f5477c054f05f26d7f7a48ac5c745",
+        "size": 10636
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/110.woff2",
+        "sha256": "90ce485d8d890fe8357a997d5c0d31f2ce878ad45e33be0a123007f87b8b6b79",
+        "size": 34376
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/111.woff2",
+        "sha256": "0eb33e32e8ed4499df62c60f36711f43ba80b3b4ccd3f852a11cac1351bad027",
+        "size": 32852
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/112.woff2",
+        "sha256": "64f33dd013ae05b9c5c9cb661db029479808de6cb2fb9904b41c4168db5b3ecf",
+        "size": 34272
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/113.woff2",
+        "sha256": "7430087a5a065450298817b42416bfa3743f3c20e0c2222c9c7c8c9189682c1d",
+        "size": 37156
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/114.woff2",
+        "sha256": "a7f17278c65d54d869eb528d05aab467bb4c21de58d197ec25231b74ed91f872",
+        "size": 36904
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/115.woff2",
+        "sha256": "ddcb2db43c1bded5bf9447f585f4ced407caba3f965509f021d60e8f00f2d25d",
+        "size": 43984
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/116.woff2",
+        "sha256": "4a9031800213246a9104047b8becbdb130275ff60f3b5de033f68b5fd96755ef",
+        "size": 43872
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/117.woff2",
+        "sha256": "21456c1c137c3685be4511fdc1bff2e5580fb90b473bc154a666e41301cfabaf",
+        "size": 35504
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/118.woff2",
+        "sha256": "57897f773527e0130d27ee34c3f7419c3fd5d7e556203a6ddc4561f66b110de0",
+        "size": 33656
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/119.woff2",
+        "sha256": "3a4838510cd6ef346c28779c43315bf983d73e4c9307e2c567069e605fb61540",
+        "size": 38932
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/12.woff2",
+        "sha256": "aa47f4dfacbcd4dcb00647e0e40593f77eb456169d6fc3f9ea3a50a728607561",
+        "size": 13484
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/120.woff2",
+        "sha256": "1bca1ed7197ad415461cb8e2c3a8069d2faf3acea2bcd5004d73c14e19a46c84",
+        "size": 41468
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/121.woff2",
+        "sha256": "45ee960c71146f2dcc6ee0e8346035c90029d0eff620d852505b658f7aca6bec",
+        "size": 39824
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/122.woff2",
+        "sha256": "607fc2f8fd88ef0968ddef23c0dd897c5e3a36ca989935ebba93e8fc4ab00fad",
+        "size": 41928
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/123.woff2",
+        "sha256": "b4a841acf7f6259b95c638ceddda67cf223be44cb98acd6b158e1b463072ec3b",
+        "size": 38196
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/124.woff2",
+        "sha256": "10e89aa9144103182f8e29f0c3f9e2a31c254979814783add468a8c8282faae0",
+        "size": 36484
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/125.woff2",
+        "sha256": "5f118c633e57c6475db9126a7ecfb18ddb18c15287e37f6a4d2cf563b5fa80e8",
+        "size": 44628
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/126.woff2",
+        "sha256": "8adb291aee4b9d5816ae30deb7ba1c8a77ed0711677638601c16640ae667e5a6",
+        "size": 38684
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/127.woff2",
+        "sha256": "1244a33a62ba9ef9a2c4f9f1e91b4fa792e42fab8fe31984b2d04188c0ce79df",
+        "size": 46924
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/128.woff2",
+        "sha256": "469cc2ed501256a0e1615e3b323b580a9d4105828c5397a0aadfe58cb58a0386",
+        "size": 48940
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/129.woff2",
+        "sha256": "f26aeb971bc629040246542832b4a2d2688ee679bda988537be4235e1645e084",
+        "size": 55720
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/13.woff2",
+        "sha256": "bfa0ab4d7bacbe6cb3f5491825b0eecaa45ae104c76cf71debd8e1163752630d",
+        "size": 15816
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/130.woff2",
+        "sha256": "91ea44801ea1cffdc26bb1ae82785ae46569f7d9d9ea38faf14fdaf6fa0f9453",
+        "size": 56864
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/131.woff2",
+        "sha256": "c3155157084ed1933433043acad2d4bf2bf64ee2bab64835195649182d1e611f",
+        "size": 40060
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/132.woff2",
+        "sha256": "4ca98253504dce7ee2541ea4ca1e7d3fa8dba79e9e7f21060517833f5ba82e5e",
+        "size": 30664
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/133.woff2",
+        "sha256": "39e2532e5b9f2f8c077741b3da608d5f64054b261597e955cdac3e94e9a996f7",
+        "size": 39968
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/134.woff2",
+        "sha256": "ee37b2ab2b90a5c468ed3375d42817928ff0100b7d2a6d4b1918bf8d25370ed4",
+        "size": 36628
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/135.woff2",
+        "sha256": "86fa8bb00d9872e6e85deead461d17c2c8db14cb17f57daba0333442fd74c2b1",
+        "size": 27232
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/136.woff2",
+        "sha256": "39d4bfb5764a74e8b2f4b5a13565ff0cffad45a62e0e5e73254d5bb5fc54c7ef",
+        "size": 34900
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/137.woff2",
+        "sha256": "28032bb3c5abfd08b6ad5ec143653d7552b7d38b4c8c38cbba28e8291f9d4174",
+        "size": 34772
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/138.woff2",
+        "sha256": "b147e3272c2e19aa832eb8273dbe4d514ab7120f418dbea29e77694199181883",
+        "size": 39100
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/139.woff2",
+        "sha256": "1bb45830a591749701366f0630c7f1f63f6c5aeae5bee0ff0f388501a57cae29",
+        "size": 41188
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/14.woff2",
+        "sha256": "2d4f73742d6da3995be8e3196dba316d6176ed25a7abb7902e46c8f30e159cd9",
+        "size": 18508
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/140.woff2",
+        "sha256": "4e6b189842688f9901c57181d0617dfcffd8269af234a034d7eb12954be9b9da",
+        "size": 52508
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/141.woff2",
+        "sha256": "da33a75c20b7272fd119cbdb7dd057c32f3a0553605f94a3332dae334e950678",
+        "size": 31972
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/142.woff2",
+        "sha256": "28a9728dbe8b24a4f43799aae0ced6ef2be3bb78260ce0a48ebbcde3e23893d1",
+        "size": 39044
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/143.woff2",
+        "sha256": "4957add95e18dbef218cff0ef68f9ac9717ae21bf0cddb98be803b4c25e486c4",
+        "size": 38528
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/144.woff2",
+        "sha256": "b44dc78d6d25e402270f9e5ea6b9df0b069fc956db2b2cac0c051613c9661b9f",
+        "size": 38936
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/145.woff2",
+        "sha256": "db4bbde3b18041142de51540c46b252a947b5f7956972ecda23c251c2194c693",
+        "size": 47792
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/146.woff2",
+        "sha256": "baff7345451b383a37aabb818b09889658a38607d6e99c0f50f78edfb2a5755b",
+        "size": 41996
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/147.woff2",
+        "sha256": "af96248571a18322b70f966f717ae412fa57ab9396c85807428450beef65c481",
+        "size": 52684
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/148.woff2",
+        "sha256": "fb59b37d7e8de226dd6da3fea25485ff314ab05e7a9de1cbae044ca93d81f47e",
+        "size": 37964
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/149.woff2",
+        "sha256": "074838c95ef7cc0336fe7de144197d3b0facdd7f3f363c9ed5e6e122e4d661f1",
+        "size": 34356
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/15.woff2",
+        "sha256": "27fd9aee2459d810c07f92f269daab13b949358e4df40676699a2941a12b7917",
+        "size": 20372
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/150.woff2",
+        "sha256": "205ba864e553aa007be66606501b6602c5b6196d511f190ba7193f1c21e87fcd",
+        "size": 40868
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/151.woff2",
+        "sha256": "edd2e668f13477dec6e216695604ff5c321bef1631bbe2d740b8974c013a31b6",
+        "size": 50748
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/152.woff2",
+        "sha256": "de19fe9419ed32de9df896b2fdf11222b7d1f8edade96d182d21a866f5e4232d",
+        "size": 50480
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/153.woff2",
+        "sha256": "9e7cf3c8f2b4d2e5e0eed2d5f87c8be81db6c24fa82d6cb6c1a5a00de1ffcb29",
+        "size": 38496
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/154.woff2",
+        "sha256": "377ffbcd88f853d0e9819a66dd0ac2473b8b3b0d4470b3d9505244fc73cc5c54",
+        "size": 47828
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/155.woff2",
+        "sha256": "1ef8a5d74d2dd07b71fd03b53e8e277ce8ab1b0e95504012d5b5a2aadd16db7a",
+        "size": 54472
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/156.woff2",
+        "sha256": "5dcca7591f50bed6058895f09c0b2891309d2333fc04e14d3330fdfc25a56ff6",
+        "size": 49260
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/157.woff2",
+        "sha256": "a3528639deb3e5a5516fac5ef755c638a8d47af42bf4128029049c42c8e58b73",
+        "size": 53012
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/158.woff2",
+        "sha256": "eba6dc4c4969a96e136136bf8b7bffd47a6e18eb6c0e6f507d932e096863f565",
+        "size": 41240
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/159.woff2",
+        "sha256": "f13c255a57074efe2eb3b8c45b5ff6f3c06a8331abeccfefe38bd1cdea62b7cf",
+        "size": 45864
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/16.woff2",
+        "sha256": "0c485d437f61f00c4cb65e51c097ff86c1f291a617f97ceaa5abc7db81267cc6",
+        "size": 21840
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/160.woff2",
+        "sha256": "53488714afad388bff65f1463f992976e1ee979cf11454681105ce1c0b1f9c3e",
+        "size": 42452
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/161.woff2",
+        "sha256": "a1360d15a57a25b6e3b2d2d9dbc6416ad1ed0271938b41a0138aa1963d457441",
+        "size": 44292
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/162.woff2",
+        "sha256": "e501eaa22a7bf2e082958a032b400761ad83a30a0a2e606219d7c24545234324",
+        "size": 48484
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/163.woff2",
+        "sha256": "48351c165e34627f0194e095d3b8a8a77210dd215bb14b66a422eb48839fbc0c",
+        "size": 49060
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/164.woff2",
+        "sha256": "1b8029d13afbd15156ea15bb102bbc000f4ecbb6df53eb00b443d3c24cee88eb",
+        "size": 57608
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/165.woff2",
+        "sha256": "9e78e8fac57e899ab1c1f6bddddf81898fb8825e5ea6b38d23315b36adcc5416",
+        "size": 66660
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/166.woff2",
+        "sha256": "bfa332b0de87c0ca634d522bbcda0d5bcf582b8b0ab7d99d4a43170fd00c51a3",
+        "size": 47104
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/167.woff2",
+        "sha256": "5a712d32d7c659a6a0ec88459203cceafbd0b6ca22bcdcf497ff5f87621280f8",
+        "size": 51404
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/168.woff2",
+        "sha256": "d1d1de41047e4da434209dffe755a954608c2da946fa4dacb23f4aa30fc5977d",
+        "size": 36580
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/169.woff2",
+        "sha256": "dad9c6e40adbd6c1fbd4ebc78cb64bd6b5b2ed308b33ef6f8c92931390613e1d",
+        "size": 48620
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/17.woff2",
+        "sha256": "8982f20b16a03e30948c7adcc3ef7f463833b6b92592ebce6a5eb048de038d96",
+        "size": 22712
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/170.woff2",
+        "sha256": "61cdc3e005d619232f3802267816fe9d45289516d89c39da31b2de6de329ebf6",
+        "size": 54216
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/171.woff2",
+        "sha256": "73cc9fdd338682d82ada7a9f0203d6db45b09275b54e94f4c3baa2620ef9bdbb",
+        "size": 55380
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/172.woff2",
+        "sha256": "f6930cd86f6c6286a693c40de97dbbb3ad04ad8224290cdc08b7ef0c5de3c748",
+        "size": 57132
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/173.woff2",
+        "sha256": "96c5af9126aa5892ea88a440f53faafa38522d9142cf41999096b6bead3b3b76",
+        "size": 47240
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/174.woff2",
+        "sha256": "849eddaa37648d786fc39dade9e9da2e979e56c2ad6c53bbb91c22bdae3b12e9",
+        "size": 54216
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/175.woff2",
+        "sha256": "d32b922256199103f196519b0c5ffe1af5787e50061005f03fdf90f74ecd5326",
+        "size": 48772
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/176.woff2",
+        "sha256": "93ee576c5422d4f0fb05c296bcb86b32022c5292472ccf715c80d728de0b0e98",
+        "size": 44872
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/177.woff2",
+        "sha256": "11a4897136f914fea533092f6985d189ed0eb1dce8830e4f4b7cef0619ab6631",
+        "size": 48004
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/178.woff2",
+        "sha256": "f803a2dcca648dc824e802379e2a2612873feda4d742b63c8ee3c6ac1c2d662c",
+        "size": 55768
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/179.woff2",
+        "sha256": "702ed22ba1fbf2f40475f5b723de5a58ba7036ffe8ae32cc6313aecad28c1185",
+        "size": 52652
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/18.woff2",
+        "sha256": "2291a08919df1fd2a1656b89083d2b4132f6d83a00ee303eced3ecf27f20ee85",
+        "size": 25500
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/180.woff2",
+        "sha256": "6cf8be9aeb08cb39925eff1d2a41f59a4897f0d01b006832d6500f79b0d2acd9",
+        "size": 51476
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/181.woff2",
+        "sha256": "8c4fce8406f07da61c07fc114538428ac6d898a3277d322361e9e45a24036b4a",
+        "size": 60300
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/182.woff2",
+        "sha256": "d487ff72497432af6058542b9960ae5bc638ebc5272843f30c7f7b735f30b46b",
+        "size": 67260
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/183.woff2",
+        "sha256": "22556757262db53248173049dff1a4384d543b81fc9f283fcf1db07786c6748d",
+        "size": 69068
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/184.woff2",
+        "sha256": "2b5f0bc91deff54de1c0a8960f695e6d7fcf4d1af5a37803a9be16493ed43a40",
+        "size": 72588
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/185.woff2",
+        "sha256": "e3895b796b99a858f2a842ace101e24bcb2061615c25afd9b889a9bac381e2a2",
+        "size": 68884
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/186.woff2",
+        "sha256": "202e0b37ad56abbfd0d479292a69e79ae4635e47b08e68716f85cbb71067e36f",
+        "size": 46356
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/187.woff2",
+        "sha256": "5e8bd4524192651ec527162c515a20d8dd2597014cc96be412358ba0e782dec8",
+        "size": 18012
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/19.woff2",
+        "sha256": "78c207ccabeaefed938d469a3a8effb62481a37942f782763838bdffe793e9a4",
+        "size": 24996
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/2.woff2",
+        "sha256": "3a40477324478d42adaaa22befce00cfa5ef3e0c5f7ae1f93c35cfde9e2116be",
+        "size": 3376
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/20.woff2",
+        "sha256": "fadb79d92e641ebae72ad787625fde77301288b32be2fbdbde3efbc218425527",
+        "size": 26440
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/21.woff2",
+        "sha256": "53560728901017cb2a06b8125d7586fd65af04dd302296eb820a133627c88910",
+        "size": 26004
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/22.woff2",
+        "sha256": "f35f9a1fef6c0906defabe5c2b3ae83a58966dc47d81b8b017e4081ef7cb7efe",
+        "size": 29900
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/23.woff2",
+        "sha256": "4e252f29e5e0f59ccd4b8f2c28d7a8e689365ed5e1e116c491de8c284e60a3eb",
+        "size": 31704
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/24.woff2",
+        "sha256": "cfec01eac7013c37ea3c7665933c858120fbbd7027ab2178bee1708dab71855b",
+        "size": 31980
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/25.woff2",
+        "sha256": "a8c36e6350282ec5c7433d1fa2c348323eacdfe6115274c0f44b9e904bb0a438",
+        "size": 33676
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/26.woff2",
+        "sha256": "f4d3b9cd0806378fd3801ea1864a0735bf7d5ab971adad088ded92ce63a1848f",
+        "size": 35736
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/27.woff2",
+        "sha256": "06ad7ccc4bbeb111c8dea64fed3a77f114e54d2e82acc733170f57d2f2fa9fe9",
+        "size": 35452
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/28.woff2",
+        "sha256": "1d4009c312bc99f565a5550b16239cda24b4ddd45c1da7a7337565c423e9fde5",
+        "size": 36248
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/29.woff2",
+        "sha256": "ac240a6915920ac2c5c2ae0d09a0072a0442a60d49433ae40c7a92a58731f191",
+        "size": 37236
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/3.woff2",
+        "sha256": "d61c0cd4367436d05ec441d495aeb4f76827a7e9bb38b350fac65efe213cae60",
+        "size": 1000
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/30.woff2",
+        "sha256": "7a600488f5f92dd568dabafdf6e3b04723c9d01d278733d2233abe8d6faaa261",
+        "size": 38576
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/31.woff2",
+        "sha256": "f27eadc6470cbf6ff80bfb6e1ea71ffb87a3f7b47f8f28a80aae2f60d582c5f1",
+        "size": 39176
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/32.woff2",
+        "sha256": "1621c8894b22fdc625ba9a88e32ce2c5219c7c46168c469cd9e7f4ab097b76b2",
+        "size": 38152
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/33.woff2",
+        "sha256": "d792914a227e49a18b56ddad954f4b2c75adbbead213fafbe4192083479ffbec",
+        "size": 40704
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/34.woff2",
+        "sha256": "d2e2864c21cd566462b81114c3c868a6ca1b72557d08da8ac28b290efe849458",
+        "size": 41408
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/35.woff2",
+        "sha256": "f1553a9bb14d607fc66fc010463fcd67a5501891ba1373f41b4efd6003cbac8a",
+        "size": 41344
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/36.woff2",
+        "sha256": "122354484f7aa7bedb3720a0f6601504011d25d1cdbe9ad511d266d82c000864",
+        "size": 42936
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/37.woff2",
+        "sha256": "e1a406098c09ab97d889c66d289b33b965714296d234e28d94aefa5c81877b23",
+        "size": 42416
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/38.woff2",
+        "sha256": "e5cb3833c44b521448889a421d754a03f1783695c8463bc241e4db191c06f0a1",
+        "size": 42580
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/39.woff2",
+        "sha256": "60a8783b87bfda65d776e04983b94c3aebc01f0a7ab52ff4dc6b4d4e8fb4b82a",
+        "size": 44380
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/4.woff2",
+        "sha256": "fa851e42b8dbdb1906d1538fbd470073e117ca40bbdab5f16f96e030fe101ac0",
+        "size": 884
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/40.woff2",
+        "sha256": "3f20b1632991a0177e05eb0b9589450d0cfb2794bb19f9e03c8c5664b8a1f657",
+        "size": 44156
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/41.woff2",
+        "sha256": "cbb3ce0521c2c297a4cde13ff44e78dd1a6fe37e24de85fab9b3b4e2a4e33c71",
+        "size": 46560
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/42.woff2",
+        "sha256": "5efcf853bc32f0d9ee2f26888069cab0a729cd3852d0c026b6d6bc6a038640f1",
+        "size": 46584
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/43.woff2",
+        "sha256": "3b1b1fdf2dc391839eede383ce9262cd08a67d3a61514d65cda288b629fb4028",
+        "size": 48292
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/44.woff2",
+        "sha256": "ea7a98eba35426039d4a75857951636ac615df774e1b2069c295c3156525825d",
+        "size": 49476
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/45.woff2",
+        "sha256": "f3c43af4b33eadb22d13fe285525d84aba1603de8d5cdbac73e471fd9cc6cf29",
+        "size": 50580
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/46.woff2",
+        "sha256": "7de4b1771c2ddcd7ffed073c5749d95b038f593832d8f1039f080673d289c9a2",
+        "size": 48664
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/47.woff2",
+        "sha256": "aee0bf921a254f63c78706dd2c88573070492eb5a0ff529922390e7ed4d51ab7",
+        "size": 30504
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/48.woff2",
+        "sha256": "288e16df2f65f50f7a9782888ee4fdda13cfc546fb5e55838b20c562e38546d0",
+        "size": 8152
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/49.woff2",
+        "sha256": "f276e7ca3f9216955830c6e5efcf24796075ca8a24bf848f767b3510851f84c6",
+        "size": 10464
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/5.woff2",
+        "sha256": "0575d37e477397e004b6ba01b219725f871245097f41eafa4915454e054baee3",
+        "size": 960
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/50.woff2",
+        "sha256": "2260ed5aeeffb1ff63986770cf92965805fe861b98b06428f690b9699a9bd5f6",
+        "size": 12456
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/51.woff2",
+        "sha256": "0f57fd7b8f0010f918a76f4ae1d283a8a792ea134c341313c3cc1d9072819cf7",
+        "size": 13816
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/52.woff2",
+        "sha256": "7126f70711c15ed131fb23937aa89b49e75469733c6cb92ef44f5caff984eccb",
+        "size": 14368
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/53.woff2",
+        "sha256": "fcdbd051ffe90b53cffb0d46f041ff9fdc3525de50f97554fe85dd5ff3fcd4e4",
+        "size": 15844
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/54.woff2",
+        "sha256": "c682b5b8048eb63924ead2b12115bf2aba12750368bc3f1481c563e104ddb437",
+        "size": 16404
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/55.woff2",
+        "sha256": "87b3e00796d246d0e467ab8c48d5a610c8ada6aad6811b0433410cb7d49fbde8",
+        "size": 16572
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/56.woff2",
+        "sha256": "e49bf6e3aef2bb03e8bc2bd58dd74547a2cbee3d8ad5d53d99cb4d7321eda1c5",
+        "size": 18232
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/57.woff2",
+        "sha256": "c3af8a76b8a6a9b793515c98376a1938ffb6f5aa892ad174cb2f39029c78df43",
+        "size": 18784
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/58.woff2",
+        "sha256": "9521d19e37685f95158aa5a85de4a37e105a498a76199f31c78825b6a2a65344",
+        "size": 19948
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/59.woff2",
+        "sha256": "82feb541a2befd29f1dc77baee5a3a8b25183d18742b29810d1d37b2b5505ad8",
+        "size": 20592
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/6.woff2",
+        "sha256": "635217d6cdc741b90a1f4e6513354f78b614b39a81f1c327607054316336e6ec",
+        "size": 1800
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/60.woff2",
+        "sha256": "c7f8841c6fb0cf16dbddbbcb26be1326d486d22fd75e9f4e1c1a85ec578cce55",
+        "size": 21528
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/61.woff2",
+        "sha256": "bf5291f4ad810528483c2796af4986346c76976d0267eac6633df19d2ef5442a",
+        "size": 21780
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/62.woff2",
+        "sha256": "fe36f281ef7dd97ab47bd88d8fa94ba12ac96540114817f4d92fe3453f7df1fb",
+        "size": 23036
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/63.woff2",
+        "sha256": "1b9de8b3965db040122c499fc463878341cf3b9525fa3983cf9206628ef511e5",
+        "size": 23352
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/64.woff2",
+        "sha256": "b024816d64e675a8c52a650132882b0b11e700b660bf202d657b5d0d01109fb2",
+        "size": 22948
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/65.woff2",
+        "sha256": "03efdab7a23a8bfe73a1f5e1adaf86748e3574493c0f7bf72125eb0ac3135949",
+        "size": 24092
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/66.woff2",
+        "sha256": "0a31e7463b5e936eadc827c9a3befe55f5b87e1a035b064995ed8fe8d5c2535e",
+        "size": 24668
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/67.woff2",
+        "sha256": "377cbd3183002ae1dfd151cbc672b61db5a61baab99b383ba34375397aca0a8c",
+        "size": 25484
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/68.woff2",
+        "sha256": "0ecfacea65b705d6f8e74580821dac4af060be9de8fe2156fcb183bbbf3ec6ea",
+        "size": 25100
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/69.woff2",
+        "sha256": "8396486ecd258344b4fab04f9e78b689a08983ee2b56229aee90fbbe1b1c8f65",
+        "size": 26548
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/7.woff2",
+        "sha256": "d7c742912081a1ca6ecf3a2c0fc12c8f1440ff304c9f5aa91b54130c5c18822f",
+        "size": 6340
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/70.woff2",
+        "sha256": "1cf16f44303ad12a14a49db89910284e13a6cc5314b2b8748a1396eecb8fa0e7",
+        "size": 26152
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/71.woff2",
+        "sha256": "3eaf20b11366a9013c1c8b5ee61b7514d890a21b379af8f37b4244289301f7bb",
+        "size": 26320
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/72.woff2",
+        "sha256": "6e5a90ecaa205442508c11170810b85541b69c132fe460e6160f80c9d2a28249",
+        "size": 27972
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/73.woff2",
+        "sha256": "176bd2fb99396c84347bbc30d31da01c0b1fce9319b7d2b72076a299b191d908",
+        "size": 31000
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/74.woff2",
+        "sha256": "5b0f76077202e4a62e6e887c37f96977c291feb1b0764508a85ae59258d32ac1",
+        "size": 28428
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/75.woff2",
+        "sha256": "c00efa9261624cdf07839185cadbf1c93b95a7a902f0373602892d78894c554d",
+        "size": 17372
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/76.woff2",
+        "sha256": "970851390c4fc1ac4320670bdf1fcb91a77cf2d37759089692f3ba38631e5df5",
+        "size": 7880
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/77.woff2",
+        "sha256": "060421e1c167af4e4c97829e71b99463eace1d4241d40f7bd42dc94c59c919fa",
+        "size": 6944
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/78.woff2",
+        "sha256": "47657fd416edb4189495030d4c97c20c1a3cefe1d0bf52d30f0d472b2ac5ec13",
+        "size": 1988
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/79.woff2",
+        "sha256": "6df60eb248aa1518c0777c6ff4b7693d79cd10738a8510371f529a4ac988f8d7",
+        "size": 868
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/8.woff2",
+        "sha256": "7450fb09ae8bdd8b6ccd9fb2930960c3cf02b07db63275187998f4cb4da946c9",
+        "size": 936
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/80.woff2",
+        "sha256": "79088251612ff4fa38fe8cf793567191a992dd506dadc8f0174bb3674e8b6f7a",
+        "size": 4376
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/81.woff2",
+        "sha256": "28cfcebaecf203f6baad0dddaeaa211c143d287be7d4f7494a2533a688a59c44",
+        "size": 3312
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/82.woff2",
+        "sha256": "9f18195082cae46f33ae67f2343b0380bdfb88d4524d5389b1f0a739b84fb6f5",
+        "size": 2400
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/83.woff2",
+        "sha256": "bc481a60f8d7946b442395ee1e75c08ef6792a85829d2f68e6d0f291f812a5ed",
+        "size": 2304
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/84.woff2",
+        "sha256": "f4ac910d19a02b27c9b1d0ba333ef553391d5258ef5666862d8e490fe8567e7f",
+        "size": 5524
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/85.woff2",
+        "sha256": "74d592658403ca945fc16239e6534488ad9c0accbc74793e9361d1520d1e0272",
+        "size": 5476
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/86.woff2",
+        "sha256": "156f3d19d03c74ef6cad84c627910a47a2f41f6e4701f0500459265938ce450e",
+        "size": 2692
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/87.woff2",
+        "sha256": "3f620760f905977f8a9d7e5a5e8e5bc228cc4183b8b971475eaf8d379d546533",
+        "size": 4744
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/88.woff2",
+        "sha256": "2222458a597e0c417e076ead5c99dda394dfb21f6e7c7d18ddb8c11b98933e5d",
+        "size": 8100
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/89.woff2",
+        "sha256": "377170bb9443b0dfdc3ea7560c0d1be8b75126e8fa22e7afee6daa39b0cfeec2",
+        "size": 16276
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/9.woff2",
+        "sha256": "0a705f73dfa333bd3be14dcf40b44beae2d790afc30d7b54c6f1d85000db2666",
+        "size": 1120
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/90.woff2",
+        "sha256": "0ed5c7bd06955f8779a7ce48c7d5814adf4cc557f72764328f515f6c03a5402f",
+        "size": 22320
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/91.woff2",
+        "sha256": "2150140109ae7f5fc084b470ecfc7944177f4d9970ea1f87ab8ad355e8902a75",
+        "size": 21252
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/92.woff2",
+        "sha256": "428d29dbfdad54b643aa2efc356d26b4c6f68275f727aafba2d420d0a658e08b",
+        "size": 18480
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/93.woff2",
+        "sha256": "27608b78c981186db7517b48fa41c7205a953a5535290a943e076b0c04eb9a59",
+        "size": 23980
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/94.woff2",
+        "sha256": "563f0d42ab153cb3d6804f7b14d892f9f947cc5bbc0e0414a3e6b80d6461781d",
+        "size": 25228
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/95.woff2",
+        "sha256": "d69976f30b07ed4441ca8a14691e0d03bb98344e0354db079dca7c6a865c83f4",
+        "size": 30624
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/96.woff2",
+        "sha256": "aaac839ebabd2b8bc726942bf7ff9d319ef445033d63b3755cd331bbb34a67c2",
+        "size": 25400
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/97.woff2",
+        "sha256": "e574cee6fcaaa4917f2d1da2a20395e3c6dd1a88dc6f5aa812cc87f24442afdf",
+        "size": 23260
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/98.woff2",
+        "sha256": "192a101efd99ae1e37ef62710f9d4b1abb969d322f3350ff33f7d357687dc6b1",
+        "size": 25280
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/99.woff2",
+        "sha256": "d08a3a72edb5f45534955d113ef8cac3643dd8eff5f469de986cce766181f8ee",
+        "size": 26272
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/light/upstream.css.txt",
+        "sha256": "316eda6d1fe3f8956b348effe75f0f17d58624c20961a74e765a41a3cd8fc400",
+        "size": 147814
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/0.woff2",
+        "sha256": "b52b8f31e52594ea26ffdf0bd5f56094c5ea8672de5707e5770a94d4584124ec",
+        "size": 36932
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/1.woff2",
+        "sha256": "d9ed2bb9857b0d1e2afa3eefeba915954c86ff483b92846396599ad48ee5f317",
+        "size": 1636
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/10.woff2",
+        "sha256": "9cc707866413b458e25d73f3c001495340367848df6c499702aa6288c09b8640",
+        "size": 1880
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/100.woff2",
+        "sha256": "1ab660ca09101706b773f19ed94b57a0c8ae5bdab5b41eb3c3dad3ea3d95c15a",
+        "size": 32272
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/101.woff2",
+        "sha256": "fcdca15ff8026b53059442c672c6f42a58a221364acd7929621f4aeb2f724964",
+        "size": 31208
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/102.woff2",
+        "sha256": "a4bd26cf4c9fcec3b2822e915ebd881e9354389d5727af2faaa5cbc7afae5aae",
+        "size": 30584
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/103.woff2",
+        "sha256": "be2d6aac38b1dcc3c4cb9e9b609bb61926d3991609fc4960d6dbce5717cd8762",
+        "size": 26924
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/104.woff2",
+        "sha256": "d95ab6ad55207942c2215c687197100cfe8fad8f67f8e024f93eabe8b7bbb971",
+        "size": 33732
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/105.woff2",
+        "sha256": "c0b7b6a1548997d8e08a208fa4e8d744aedf2d311c8e6b234438bfadb0d51e83",
+        "size": 35260
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/106.woff2",
+        "sha256": "d94958455cadba83aaeb66e96de4b73908abedfb5c5939b00858edf36cd393cb",
+        "size": 31424
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/107.woff2",
+        "sha256": "6d28e43beaaadaa3b2988f0db61783e5c31349680d0e1759030c73ac8fe53cf9",
+        "size": 38220
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/108.woff2",
+        "sha256": "915c94ee0a43d6e147bc3e0567651e40029653a0dd0d3ea3ff187b37cbb40d52",
+        "size": 34936
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/109.woff2",
+        "sha256": "c1c64a1bdc5665ea1f3f1096999ae3fc07942d142dfda421168f1ea1aa85f0de",
+        "size": 34672
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/11.woff2",
+        "sha256": "f90cfd77ed2b9cbdc6a253550f4cde95825b81dcbdc6d7836372aec67a98fce1",
+        "size": 10552
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/110.woff2",
+        "sha256": "f95cc8c4acfc864c017bbcc1a1583048ff2073e9b607e5cdc643dad385e33129",
+        "size": 34576
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/111.woff2",
+        "sha256": "b82b115a44f9832cd982c969a40d2e0b87b0d7e4d9d4013845d9c1bef8e153dd",
+        "size": 32708
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/112.woff2",
+        "sha256": "3abbf0e30162c290baa3a32340e76690d2ccb5d93fc53a3128f6b5764e8b9df8",
+        "size": 34180
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/113.woff2",
+        "sha256": "96e8a9cd7e19a6b677f4d593cb8aa5a081b02efb4ac93e4f163a5482d4f7693a",
+        "size": 36992
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/114.woff2",
+        "sha256": "58223f722d2b99021e6af8332490f1904dbb587ec153ce0403ca18b064c65ab2",
+        "size": 36864
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/115.woff2",
+        "sha256": "ebf59d8b8326df6e7029d0f1d7e1f85f3938613fba898a5320b2596fee35211a",
+        "size": 44092
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/116.woff2",
+        "sha256": "198680bcb847f3f857c2362f996a94b5498e69cd7db694b28e8094f39533ffac",
+        "size": 43880
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/117.woff2",
+        "sha256": "0e62eb8b2da68bc7c89d67b32dc39bffb350d987d7d964018453dae9b2cdef4a",
+        "size": 35492
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/118.woff2",
+        "sha256": "d0d3b66f0a237782cd9eb226e67d315357705edc9ba17c62f0e052acd153aca8",
+        "size": 33444
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/119.woff2",
+        "sha256": "a25e42cece5e334d01e49c0ff25a5391ff8a0f5edb25a87f4147a4097192a117",
+        "size": 38736
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/12.woff2",
+        "sha256": "e120594c005591d719d72d40d94bbd1cfc8dc9f5b179cbc52794c94cf06d343e",
+        "size": 13464
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/120.woff2",
+        "sha256": "b2d25e97af5d95b7242890c8d2fe5570626f2a9fcf3baa286085e645855f7496",
+        "size": 41656
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/121.woff2",
+        "sha256": "d19584ce17f7b9b3307e950c71d8cd3c31e6481849fadd700c2ce6e0d32840d3",
+        "size": 39348
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/122.woff2",
+        "sha256": "4b84119370f58bd972532e18332a323b2ea139978e4aa7907da3ffe1769ded2f",
+        "size": 42200
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/123.woff2",
+        "sha256": "1ac3a200bd568c75941d6149659efcd71236cf6756e0c488177e190133083832",
+        "size": 38172
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/124.woff2",
+        "sha256": "5998cc6adaf1b16cbc745ae65f1d062d24310fda22292db25b8c6a0467807550",
+        "size": 36356
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/125.woff2",
+        "sha256": "09e28333866d8450c300161ae4043a03ba2e7dd4041cf3f5ec4b4bbfe203b0e1",
+        "size": 44276
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/126.woff2",
+        "sha256": "6677e09117a5264245be68b06facd6badd902d7ae30941062d444cfc9c3a7d5d",
+        "size": 38600
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/127.woff2",
+        "sha256": "8b3ee4bc1c6a7c7c07899e1b2008a19bbaf7fa7ca0ebe42565138f7c64e572b4",
+        "size": 47064
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/128.woff2",
+        "sha256": "47b9215d6ff1d8434f33b4133b41edcda51d300a3397cb01e1889a39d82acc26",
+        "size": 48828
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/129.woff2",
+        "sha256": "15e8eccfdc1962fbb1058cdfa245d4e9ce15ea013b3a5b29dd8024266d1d5e19",
+        "size": 55648
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/13.woff2",
+        "sha256": "58871f4aaa40c68944384ee0b1b7cdf494eac64b68065456ebdf91c6cbf05ca2",
+        "size": 15724
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/130.woff2",
+        "sha256": "907334c730a992133ad185501ac3e4c8bf20979cc17199c57999a38a10f6e7aa",
+        "size": 56596
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/131.woff2",
+        "sha256": "501cf7907a332ae25cd38396e779d264b0c6384063b693204d3c1c2a7cabc7fd",
+        "size": 40256
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/132.woff2",
+        "sha256": "1ca3f69cfc5ed6f21819e6c78f0a0237e51138e214814c4f20e8cec65888714d",
+        "size": 30460
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/133.woff2",
+        "sha256": "4c5b0f5fa6c66eac6b6a601c4432897139f6f118b5f2d716e28000afe261b2bc",
+        "size": 39880
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/134.woff2",
+        "sha256": "cc42107fe665e3500a77f4e08591d098c32e0914d2822a60d546756cfe4d42eb",
+        "size": 36476
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/135.woff2",
+        "sha256": "e2c8a5a0e8bd646876a1fc9ca25975f8904da52479d47f4655787665ca7ffde9",
+        "size": 27176
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/136.woff2",
+        "sha256": "2a26a608cd921d03c0bbb59f640dd7586900d9390f162cf1d5cd80723239cefc",
+        "size": 34792
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/137.woff2",
+        "sha256": "20ef99ec6a3712a5d150606afa73af09e0314c5e45587e7325cf9b0bc723232f",
+        "size": 34688
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/138.woff2",
+        "sha256": "5d0d1f11866aea217831880c865ae1aa4b307c7f3e671fed84c599f75b37aaa0",
+        "size": 39080
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/139.woff2",
+        "sha256": "d3a310ad4d37401b16cc766210df9e6585576a1c257fdd1c00e52dc8b5bdaca8",
+        "size": 40940
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/14.woff2",
+        "sha256": "de156ccfcaed21524e11d4d4cfc4b43fb2c8bad53f7322dc30ec17a9ba7168da",
+        "size": 18468
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/140.woff2",
+        "sha256": "6372dee55801a65059f54fe36faffbba7f7780244a8710c5ea248e7074c7f42b",
+        "size": 52288
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/141.woff2",
+        "sha256": "68ebedbc80e6b0d64ac6eac4fe43b689c934056ab8989d6d2b9ab929deea1c08",
+        "size": 31988
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/142.woff2",
+        "sha256": "e6166dd02cc17b578a6da528f318b217b46c42e0041f15d5b106d7bdaf51dcaf",
+        "size": 39084
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/143.woff2",
+        "sha256": "d378d82cd21302370f27642c50325b5e24cb7c64b03a705803debf3a4287fd2d",
+        "size": 38432
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/144.woff2",
+        "sha256": "2244d9936efd98296a53ae873467bbca4ce27bb670fef048a9375fa3b02748b8",
+        "size": 38864
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/145.woff2",
+        "sha256": "b828e49008b4994f935e391f4cc8aea72dbe28b75293d30c618bb5e9d71f6f87",
+        "size": 47720
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/146.woff2",
+        "sha256": "f0a5deeb3cd800dab3e3137451192b8b67c73a8de991eb9ea03642c4551e67c8",
+        "size": 41948
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/147.woff2",
+        "sha256": "cadd66cb93c932707d39a545b4428fd0171576b6c99068fe4efaa03af07e1075",
+        "size": 52624
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/148.woff2",
+        "sha256": "a13a31b858fd1038e6c2783b2ed0bb00e58f14796457e9c41b19462fdfb49417",
+        "size": 37772
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/149.woff2",
+        "sha256": "e93593cc0328447a0000eaa76e260ceea7ef1dc340c427aef231e26d8ca25110",
+        "size": 34112
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/15.woff2",
+        "sha256": "a9c934db0ec78e46a49123df98ea6cc4e663474ee21e738b87925875d35bddd3",
+        "size": 20368
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/150.woff2",
+        "sha256": "eb50d1978c72238bb577a02c724e9ae77afe328e006983b40ccfda275f640e26",
+        "size": 40848
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/151.woff2",
+        "sha256": "0bfe1b06160590610fb1a339f57aeafcc5d67786adfdd39858370d08073bd64d",
+        "size": 50652
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/152.woff2",
+        "sha256": "dd821ebeb383efecd03b4e88510846d7e48c3a9be1c5e4f5980ef9239563b6e1",
+        "size": 50216
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/153.woff2",
+        "sha256": "5b7ec6ffa3797cb626b29207ce39ddc400a7122a86123679d07a02c89eed4952",
+        "size": 38440
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/154.woff2",
+        "sha256": "bd465f45bd26a9053e055295593b1c327594fd9f00bb8de94afa9277d5cbe619",
+        "size": 47840
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/155.woff2",
+        "sha256": "04968abb5c13628cf6a457f49486eaec2625f4d5f8aa35d56d690e304cfda1b5",
+        "size": 54516
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/156.woff2",
+        "sha256": "f28941ee1bd0a936b0b06aafea4ca7b1f82b33414dcbb3427e02fdcbfc18a56f",
+        "size": 49088
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/157.woff2",
+        "sha256": "57fc85df3d00b7496c048cebcd59ec5ba0be8a64d04d8270ef4d92de84147fe5",
+        "size": 53092
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/158.woff2",
+        "sha256": "4c121879fb377c5c0cfd745bb77b988bdc19ba996d1781a4e57901adbf15bc84",
+        "size": 41228
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/159.woff2",
+        "sha256": "9f07c4271f066d1b25f5772c760e7bd10bc5ef552023c8f2e652b95481bc1ff1",
+        "size": 45888
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/16.woff2",
+        "sha256": "88560e3fcd79cd04ca70f6712a013b6fccc5f68a572feb110ef8356b3dd840ae",
+        "size": 21424
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/160.woff2",
+        "sha256": "34eee867032e8330d4aab4020ab1463db0d0ceee618afbf53ad0e7cb3037e07f",
+        "size": 42392
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/161.woff2",
+        "sha256": "b7701e3358f7ed28e2aa47ac1580f8b0d2b465f8aab5c7edb929ef50be37c35b",
+        "size": 43964
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/162.woff2",
+        "sha256": "571f8df193bfd6a9d1f70ec6b584f059fac1774641d91619ecb961e54db62b9d",
+        "size": 48320
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/163.woff2",
+        "sha256": "de7685aab2177b598f7900e0e413023796399a783889b694499b4740ae8a04d4",
+        "size": 49008
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/164.woff2",
+        "sha256": "3e27cff2b85f2fc085c364105e3e42eca2de4f0d44bbe6c109245915ad93a244",
+        "size": 57480
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/165.woff2",
+        "sha256": "c2932f8a23d5caa879bbec63d9cb8655adbff7b1f8be48d8efc824fa9f0886c5",
+        "size": 66488
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/166.woff2",
+        "sha256": "b3a590dc663e248e5bd3212e933ab8af646b0ab65804f75c3a2ff16f8a74f7e2",
+        "size": 47016
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/167.woff2",
+        "sha256": "cfe72febb0ec5a12c810cc9e0cf0196f69f19b6c76f99558fdf588e00b2202f8",
+        "size": 50832
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/168.woff2",
+        "sha256": "0f1e61c276b8c5152b00162f194ab2041dccb22c1819ac9affed8eb453b93950",
+        "size": 36404
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/169.woff2",
+        "sha256": "b90ea967b92d6bafd5783cd146b0ae87a2ca7bb1c4f7ffe37a479e07e5aad518",
+        "size": 48620
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/17.woff2",
+        "sha256": "46c63805698eb007860e5faa6b3d077b6bf38c6d80c60b1524c6e7cb43668f40",
+        "size": 22660
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/170.woff2",
+        "sha256": "8050be6d63e044d5e63a66144926ea3e73fe99a1dbc8fdffa5a1577fd0b023a2",
+        "size": 54284
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/171.woff2",
+        "sha256": "28bd951d16bbccf4699b1e8e79c794e6ae5788fa96a0c8545e36a5ce34285240",
+        "size": 55352
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/172.woff2",
+        "sha256": "ab17278281266a02d2f9dd04e528143280c11eba85ce13d80f85e0a326a585de",
+        "size": 56836
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/173.woff2",
+        "sha256": "85aebfaf6fb9867745cc1f26d2f744fc419d142da3e9dc035d5731d40fe1ad31",
+        "size": 47200
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/174.woff2",
+        "sha256": "b09e3b9825e4de9723cac1ac8e56fce822219fd4031bfd0715c6f66bdde92878",
+        "size": 54036
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/175.woff2",
+        "sha256": "ec4eb2f7451e1fbc7a9344d234986d0c1359dbb297a44f876381acb3270cfff4",
+        "size": 48776
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/176.woff2",
+        "sha256": "8b6d795581ecce353da792d55850ae6561d2b5e11db39fd2c007b69a118eb5e6",
+        "size": 44632
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/177.woff2",
+        "sha256": "1d81aced703126a5eda314509499ede99d835c6a77a153e4d922b9678142d0e0",
+        "size": 49124
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/178.woff2",
+        "sha256": "9bedc197e41dc2d3cf0d308afdc1d80c35b67441d2c15ea620ea120827197105",
+        "size": 57348
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/179.woff2",
+        "sha256": "5f78c22691b30b09410d027b0744e3f39f91f99d0488e2f16af406d8f5dd8b51",
+        "size": 53432
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/18.woff2",
+        "sha256": "50e37b31d8c5bf2bc3f8382e87de0400af79e8b3a6094b58b3b5ebbd6ed8d88f",
+        "size": 25028
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/180.woff2",
+        "sha256": "0c313005710eec3b897ab7f79ff849e4c5248ee00d96bcad243c2107df17bdd3",
+        "size": 51336
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/181.woff2",
+        "sha256": "06ffdf399afe33faa7b1a604240a1487ce6c8fd9803e8b0656f02aa235345426",
+        "size": 61084
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/182.woff2",
+        "sha256": "703d1ebff4f8571c9c617e613ff70e9b7f873a17d9f944d6f364f952ea877cfc",
+        "size": 67116
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/183.woff2",
+        "sha256": "9c2ba62aa2026d2a12d4f7ac9a79aed5a0a9332cb1f213831f29d2b7262f19ff",
+        "size": 69460
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/184.woff2",
+        "sha256": "1d86f087b2e8070362f0d35564b9514b7188d8be859d5283415b22246e2319ad",
+        "size": 72420
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/185.woff2",
+        "sha256": "1386df1fae231b819a92252af7f9d87f6135d71ea18cc936d4a799b5e202df25",
+        "size": 69040
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/186.woff2",
+        "sha256": "587431578accc2dd416ae9c3a629867c5a84b0a6191a97580a7026bd38e36522",
+        "size": 45984
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/187.woff2",
+        "sha256": "4b00581e6a2f52c4bafb45b3d603e55856bb0eb2b9377c7c5f38e547595b40bc",
+        "size": 17360
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/19.woff2",
+        "sha256": "9d4643a0f2fc3cdef9ae2d16024a6990c132927ed9d8f98461a3fd9e0622ce9f",
+        "size": 24988
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/2.woff2",
+        "sha256": "ecd01e33485b9d7d1c53479302a9cbfa08909f1c689b9ab4ec7848ce98cb9bb5",
+        "size": 3364
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/20.woff2",
+        "sha256": "8bf91237c8d06ad31a185dfb3976d723f41779ff1b983e69c7489a7d20d89669",
+        "size": 26244
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/21.woff2",
+        "sha256": "2c55c54e50cd0d1c7581c89fae5216095f1d92dfc83595bfa38ba88b6f185069",
+        "size": 25948
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/22.woff2",
+        "sha256": "16a6bf50ac3d7050b1d62c0dc7b24de0dfaee43b7f18c2b378da48f268e58d95",
+        "size": 29312
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/23.woff2",
+        "sha256": "f3bc366a5deac33f6b645b6fe69e4f0905edfe777e47f53b058c385fc969fb7a",
+        "size": 31684
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/24.woff2",
+        "sha256": "0221a5606e448ec94b37496fc0c46896d79f196de558a2be7172d6a03f904f09",
+        "size": 31788
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/25.woff2",
+        "sha256": "fa3cca6ced1e57b17c595948242acc06b2157408932c667257bca88002b5b906",
+        "size": 33552
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/26.woff2",
+        "sha256": "117405182ed9094110c6ac4e9de4730a1805efb3e8f53ab5d5d1a90c9c641b4f",
+        "size": 35564
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/27.woff2",
+        "sha256": "6079efa4e91d9d20506174acabed569c579b61a3c9fdc0a1b936be5e9da49a68",
+        "size": 35152
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/28.woff2",
+        "sha256": "5864c0348e930d5ae279b2584015b0d41ef02ebaff221c64b6d0c30f2ac76d79",
+        "size": 36140
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/29.woff2",
+        "sha256": "ed254cfcb9e7b1104e88e2b82299173a5a3093efdaeb92c02eaa4db9039556d5",
+        "size": 37120
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/3.woff2",
+        "sha256": "8b50127bc209eda864a69065906de988ba9ea087a93bbecf5d6268548dbbb5b9",
+        "size": 1028
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/30.woff2",
+        "sha256": "bf4479ab4eac757c7898737bedfeb8beaf29f38b3ccda7b292355ef2c65e24bd",
+        "size": 38512
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/31.woff2",
+        "sha256": "207f32a01ea6535c3dc127b6234426bc8067f6ffc8928d3107e2804eaba032ea",
+        "size": 39516
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/32.woff2",
+        "sha256": "75d18e5f402f30b0ebf5c4da4ab4255801c01689da3c076482fe15609841fb1f",
+        "size": 38096
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/33.woff2",
+        "sha256": "775a3e7b3ab2d780abda489efc23ee14860766aaa94b3a65abc6b166884c991c",
+        "size": 41048
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/34.woff2",
+        "sha256": "1e7cea3ded60d0b95ff4193b4b0d460c0dea25662560af22671df773caf8a99c",
+        "size": 41404
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/35.woff2",
+        "sha256": "845651dea077980d2ac6f3ae2f7c71e6cc1eb00b371d4a04117e870365c5b5c5",
+        "size": 41152
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/36.woff2",
+        "sha256": "aac0375a0bfe752b44499679b68d6befbf08241b4e95178dd3e182b1bc1f3be2",
+        "size": 42932
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/37.woff2",
+        "sha256": "bac40446b3db304d6d316cda67005d6c387f44c5d86d82657c595a9821b64d69",
+        "size": 42264
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/38.woff2",
+        "sha256": "7485d7a86547989b7c1955bb13f262307dcb1e290d8889401e712c937a835ecd",
+        "size": 42524
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/39.woff2",
+        "sha256": "3e212c9b81256cd9dfe0dc8c4f345525e469d4df0ae2e7ef4df9082ad4903ab6",
+        "size": 44296
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/4.woff2",
+        "sha256": "ec1900b82252aeb25f97b3d1bd0dae3630f78bc2823726ea78ae6a839924d145",
+        "size": 880
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/40.woff2",
+        "sha256": "7f8da5b14fdd333087988906ffc8b14c9b17ede34bc51683d6514ab89786117b",
+        "size": 43944
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/41.woff2",
+        "sha256": "2493fd4590c087be0799e570323914fac142340d7047db23d91c9b3d7e0f379c",
+        "size": 46372
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/42.woff2",
+        "sha256": "dbb05d8d4e223cae1b38a15c1090357afe298cd05a2e46d697f4170ada7bcb6d",
+        "size": 46424
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/43.woff2",
+        "sha256": "c30a21a544f226573eb22b42f879d50b978acde706871ba40bea08c03bd23f29",
+        "size": 48156
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/44.woff2",
+        "sha256": "aa002572a5e724986684d3ea9ff02dd4162f3f0c5adc08f00ff0fb8d0f31902b",
+        "size": 48788
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/45.woff2",
+        "sha256": "45212dc0364aaac30ce05e5f0f3ebcd340792a1aef849642f2c1b1a49b69fda7",
+        "size": 50376
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/46.woff2",
+        "sha256": "afc625a1b889ed9d5f54a5e60aa8a321b1e701bca3c380bc95801767d07d05f8",
+        "size": 48628
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/47.woff2",
+        "sha256": "daafe7cea11eadd7b1707b09d1aa55dffb23bbfe51b161c44b0a2cf4cf7fc0cb",
+        "size": 30448
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/48.woff2",
+        "sha256": "aca2a5c053209ced98d0aa5a9589e806cffd7bd551a7622710fb0099c3c6a9c8",
+        "size": 8112
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/49.woff2",
+        "sha256": "6a9d618a38c420e2458cdc481709e1fbd6f2f56e5fa720047bc50dab0a50fe02",
+        "size": 10404
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/5.woff2",
+        "sha256": "efc6cdce49c4839c0302bc1ea506f61dc1051ba67d8f6eb3e01c870281ebd018",
+        "size": 956
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/50.woff2",
+        "sha256": "bb6f05c00b8a29f8787aa05960d6a18e05050395c116a3dec8d78de55ceda188",
+        "size": 12460
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/51.woff2",
+        "sha256": "b8f951f4b49ee032d97409310e407e709cb7138af22a055a91b03c9501143a96",
+        "size": 13696
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/52.woff2",
+        "sha256": "8e99377b061d8b308774ff0b21b2df2a3d5270fb1b0640b4741808e9ec1034d1",
+        "size": 14428
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/53.woff2",
+        "sha256": "686f05f7bd1d39fdf5e4491316e05af64d86b8bd4cc30a7c1dee6aa02e2d41bb",
+        "size": 15692
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/54.woff2",
+        "sha256": "33f0bdf0b63658b6e8ba26a5299bc346b999fa813199c0e7fe7a870df86eb9df",
+        "size": 16360
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/55.woff2",
+        "sha256": "66d73cb9de1c070a8c6693183e260c910441e7d7baaf467677bf3e5cf487eda2",
+        "size": 16764
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/56.woff2",
+        "sha256": "f771cad5e8e96388e9617c03191971eacef6e28bd9c3b01e0cba99f0f6a0bb66",
+        "size": 18280
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/57.woff2",
+        "sha256": "7a34218ddb5693772b7e2563ece9d3cdb374de59c851e73ef391955fb99ae531",
+        "size": 18668
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/58.woff2",
+        "sha256": "b0fabf91cf3d740eceae2f5cf16cbb17244e58da683456895583d844e0fb8e11",
+        "size": 20048
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/59.woff2",
+        "sha256": "ee94a4954f832ff2baf1ecaa987e42b78a604c9c0a047e3a8ad43e8994390f08",
+        "size": 20632
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/6.woff2",
+        "sha256": "c348201fe8894b493e610396410fe9e26e27a3f41e69cda68558fd51bb0be336",
+        "size": 1796
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/60.woff2",
+        "sha256": "c9463e5d0aba6155cc4f6e50ba5b521e8cea3f486c03945982ef2c2954fe6e34",
+        "size": 21476
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/61.woff2",
+        "sha256": "707042a34da4c7695864f1544734799d90fba0162f03909bc1e1dd648b5baae4",
+        "size": 22024
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/62.woff2",
+        "sha256": "29f07b7bf25c65e20136021f5480da48d136d6619162a4287814710b8f6c3c0f",
+        "size": 22656
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/63.woff2",
+        "sha256": "70b0268e6c97115f64f806798efde2aa9c75fd305f3e80c33df7a732eda0c693",
+        "size": 23340
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/64.woff2",
+        "sha256": "601cc284e4f8f52f28cfecdb5ed8595997d39bcd3cd12000062da2a17da22abe",
+        "size": 23316
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/65.woff2",
+        "sha256": "bf82f18f6aeb63b043dc469d39e177cf6fa334339912adc5f2c4d24bedb09b2b",
+        "size": 24004
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/66.woff2",
+        "sha256": "ff0c8bc53f48b1c09978b14d89b8bef338c0637f7c6be1c635e4495365d28b4d",
+        "size": 24936
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/67.woff2",
+        "sha256": "c97a8821bb2f32e3c7f39024a890bb6dbf63773076540868530b6ca7a4529b15",
+        "size": 25480
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/68.woff2",
+        "sha256": "9551793a6c9d1cbf7adfd42137063332a67b3374ff4585cccda93a70dde38109",
+        "size": 25132
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/69.woff2",
+        "sha256": "b6df7e1d6831d7acddbe7ca0bb3fe5110754c89dd2fe8ef20a3c61bc7cae6e22",
+        "size": 26492
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/7.woff2",
+        "sha256": "1bc8a03cb37ccfd3aba00d5beb271d6216600dfac133eb8b1e0e87da7adc54b2",
+        "size": 6316
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/70.woff2",
+        "sha256": "5ed1c0b994ea67ee785a3f749f05fd5bd0a77da47ddb9726f86606775f4bfcb0",
+        "size": 26444
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/71.woff2",
+        "sha256": "f11e0eba95a740fdca4ed265d1e7dd1473eeb84c007b0281fddba572f9362e5b",
+        "size": 26372
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/72.woff2",
+        "sha256": "e1be5c1d0799133807eb17c02ae079ab0054be4c49e389a8fe71a31382a30f5a",
+        "size": 27892
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/73.woff2",
+        "sha256": "adef4ab678a8dbbb3e195f4a4a2df4f8de786b9a67640d5aa584a119e4b02ecb",
+        "size": 30956
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/74.woff2",
+        "sha256": "66a824d326af8ef74e9fa8a751b2b654a45da12eb7af9e06b2ac334db721f9b8",
+        "size": 28596
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/75.woff2",
+        "sha256": "679a81e3bb240849d13af5f6cafbdb2ef0d5749e06eb201d966e45755368de46",
+        "size": 17516
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/76.woff2",
+        "sha256": "b6ed1a3d8593e7a8511d90694653ff9420973e667d9b8506872d991f7943e216",
+        "size": 7876
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/77.woff2",
+        "sha256": "12b62db1a14eeb5af4fee4c3f2c531162fd484475c7f01f75790251bbaaa38ed",
+        "size": 7636
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/78.woff2",
+        "sha256": "0f0d5e45d66d53aaddd9d200f597bbcf502cb9822316506b2718cb24fda6c9ea",
+        "size": 2020
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/79.woff2",
+        "sha256": "0478535716d342651910d214c645a7e86752a9816ccaf5af4bb35cc5e4735821",
+        "size": 880
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/8.woff2",
+        "sha256": "59b21e7bebfab36943277e9ab1a2db5e0fa6ece14822ae3197e75b73e493e6f5",
+        "size": 936
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/80.woff2",
+        "sha256": "3124e8042fdc61dec1e2094d9a7d949d8609c354fa131d1b8b8ced46e1807342",
+        "size": 4344
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/81.woff2",
+        "sha256": "980c6a97389122863bc80a134f85886543c87479754a80976b7952d468dab4f6",
+        "size": 3264
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/82.woff2",
+        "sha256": "3c0bfc24b76ef093a48d920438ffcc4a87858311282564beb7b0e6c061c77e1c",
+        "size": 2392
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/83.woff2",
+        "sha256": "6b8c9a73ef65951f4d261cb898a265a82c6f3f0fbbbc44c6cfa2e2c66d933a8a",
+        "size": 2276
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/84.woff2",
+        "sha256": "e86bb88897ca1fe2d6ea4ed4685b81cf3d3f35e8c91a84ff7e82b6fbd9b55508",
+        "size": 5144
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/85.woff2",
+        "sha256": "352a80c7ac4a5255829b993a7f051bd5e74bc61058b05336cd7ec57be2b22774",
+        "size": 5436
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/86.woff2",
+        "sha256": "c1c0599d22e83c69f6ab002652639be05605441aff790fbec56214270af26514",
+        "size": 2692
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/87.woff2",
+        "sha256": "61607e5f70609381ec7fafb3c47feeebd6e35f3e41408c048b3aa3c6e3a8834e",
+        "size": 4744
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/88.woff2",
+        "sha256": "e2af53dedc3c64785a1b7e7dca80354ca312c00fbc09647230742356384e9231",
+        "size": 8016
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/89.woff2",
+        "sha256": "6b5299081fd8fcf363f555378d8cb72bd2b1c308a3441427f2450d19474153a5",
+        "size": 16296
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/9.woff2",
+        "sha256": "76a2c5854e3375630f48cd260a6ca60d84e2a0ad34375be62746ec0162f6608b",
+        "size": 1100
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/90.woff2",
+        "sha256": "7441158513e19ed481ab8d921f481ab2f2f0ae425930f293d93d32a862372820",
+        "size": 22264
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/91.woff2",
+        "sha256": "c72ef4415d26194f27da28346b63eed2d29d55f0c655f6e7c36a9c642e9fc976",
+        "size": 21264
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/92.woff2",
+        "sha256": "ef2467dc865cf3b1159f6897ae944f6cc538c3d953646b8c4b9eb2084b8c5d7f",
+        "size": 18452
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/93.woff2",
+        "sha256": "0c9676594d57a2a53ff25ea305f916db527035bba7e82977bd58d130fcb13017",
+        "size": 23932
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/94.woff2",
+        "sha256": "e032600ef9e519f5caeabbd90926ef46c60376ddad6a2b80a61a135401e9a245",
+        "size": 25024
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/95.woff2",
+        "sha256": "046457809643d8389741aaf1974a5854dbcffa48da202d587b9986823982e465",
+        "size": 30200
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/96.woff2",
+        "sha256": "af65a694bb4c8398aa97e4fba8f3bb54ef0dc569294a29140c5cb3121043b355",
+        "size": 25256
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/97.woff2",
+        "sha256": "90fba098c1dc64a3b0cb9263a1cff44728461f3b35b4a613df030d32b8615799",
+        "size": 23172
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/98.woff2",
+        "sha256": "2b2e9e47607caa0d694e1515265acf55fc765be8faa5c0a53086e373603db06e",
+        "size": 25268
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/99.woff2",
+        "sha256": "021ef199d4094002233aaa86d0e3c7ce46945db9fda9339ece2e9c7144a2d8f7",
+        "size": 26200
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/regular/upstream.css.txt",
+        "sha256": "cf7a351fc44ed8d06d87211f3740c4e09d1ff14d3858e01ddfee78072beed020",
+        "size": 145370
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/source.json",
+        "sha256": "4fac5e72df871dbedceb7ab83a38878f50015fadcd04ba96154a61eee84e794a",
+        "size": 118234
+      },
+      {
+        "path": "web/dist-cloud/fonts/misans-webfont-4.3.1/UPSTREAM-README.md",
+        "sha256": "e583b1778a58e065f0abcad2592a4b6069a4688990bec788ca6387f9c42b45c7",
+        "size": 4816
+      },
+      {
+        "path": "web/dist-cloud/fonts/NOTICE.txt",
+        "sha256": "2616273ba292b57ad1f6f6db3af96dfbc1e9a3adf355829f2cdf5ef03cc8ab7e",
+        "size": 1510
+      },
+      {
+        "path": "web/dist-cloud/icons/apple-touch-icon.png",
+        "sha256": "0358615ff30f8ea09274d60b73b4c6d00222ba1175dcdeb9f2df83fdb9b58196",
+        "size": 52046
+      },
+      {
+        "path": "web/dist-cloud/icons/cloud/apple-touch-icon.png",
+        "sha256": "60754b6ad5f85274defe976dde1ec8d4cf087780fdeb1d791bc7249e2ab9ddee",
+        "size": 41644
+      },
+      {
+        "path": "web/dist-cloud/icons/cloud/brand.css",
+        "sha256": "f8a3cd3c5744bbc5c1ca56b7e2d9e630ed6a61b8ccb82c1ee67781437c6cb681",
+        "size": 701
+      },
+      {
+        "path": "web/dist-cloud/icons/cloud/favicon.ico",
+        "sha256": "a812de25f0ea3196ef0e1cf536692f99c263c503b3d0e9e4f3ad0c7de973555f",
+        "size": 131533
+      },
+      {
+        "path": "web/dist-cloud/icons/cloud/icon-192.png",
+        "sha256": "b4351a6b200caa00db678dd0499f6a00a85a3eef2dca841eaca8530c8a529cb0",
+        "size": 46394
+      },
+      {
+        "path": "web/dist-cloud/icons/cloud/icon-512.png",
+        "sha256": "7aece36d32f1a3ce3fe3771e7e9a1c0aff473adc4470fc264e96c7a880abf6a0",
+        "size": 248963
+      },
+      {
+        "path": "web/dist-cloud/icons/cloud/icon-brand.png",
+        "sha256": "231906dd6518cc17fe6da5bea4d9cd42a7bf02ca782299e4a508f731ea58be1b",
+        "size": 76951
+      },
+      {
+        "path": "web/dist-cloud/icons/cloud/manifest.webmanifest",
+        "sha256": "407e819be195f03d8c93d284289fdf24a71f44c853fa885f4990e1ec57b72efb",
+        "size": 430
+      },
+      {
+        "path": "web/dist-cloud/icons/desktop-brand.css",
+        "sha256": "9c8aacc81decdb686f3319b0fdf44fcdea16f94adfcaa2c9378ee898c2fd299a",
+        "size": 281
+      },
+      {
+        "path": "web/dist-cloud/icons/icon-192.png",
+        "sha256": "76530c0941853a5da441ac342ee5757fbae35ae8bf1ac65347b1f91731c9a294",
+        "size": 58277
+      },
+      {
+        "path": "web/dist-cloud/icons/icon-512.png",
+        "sha256": "48d778812e08772fcfd0df223dbd36359fc9f2d6ac1b1d29fb662bf19d7c06ef",
+        "size": 336065
+      },
+      {
+        "path": "web/dist-cloud/icons/icon-brand.png",
+        "sha256": "0ad8308d81e2af90e998390d34134154f0fd9eb7134c7d56e10e8aa3cfbb02b3",
+        "size": 95216
+      },
+      {
+        "path": "web/dist-cloud/icons/icon-maskable-512.png",
+        "sha256": "e0e1e7b0c743179600643f140bc0285ded838cef825817579445cbe63fb17ad2",
+        "size": 236457
+      },
+      {
+        "path": "web/dist-cloud/index.html",
+        "sha256": "00d5c87f01cfd96e65d45d558cd4b07d62db04cb64a15656187e858d2876a3a2",
+        "size": 1317
+      },
+      {
+        "path": "web/dist-cloud/licenses/rolling-number.txt",
+        "sha256": "eec0989c3e8c8234c9c9af074a6e9800eda4c34f4f355c9476d42dcabd7f7f7a",
+        "size": 1089
+      },
+      {
+        "path": "web/dist-cloud/manifest.webmanifest",
+        "sha256": "d28b1b187a98d1253861d7912153c89a5230b5f41116a3e3cb26706a2b1710e1",
+        "size": 793
+      },
+      {
+        "path": "web/dist-cloud/sw.js",
+        "sha256": "eca66d7a8bfe13a868d7ec308032e18e044b81a07224926014438aa818242b34",
+        "size": 549
+      }
+    ],
+    "included": true,
+    "root": "web/dist-cloud"
+  }
+}

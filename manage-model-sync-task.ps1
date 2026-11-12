@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$taskName = 'AI Gateway Public Model Sync'
+$taskName = 'SelfUseAI AI Gateway Model Sync'
 $gatewayRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $entry = Join-Path $gatewayRoot 'invoke-model-sync.ps1'
 
@@ -18,7 +18,7 @@ if ($Action -eq 'Disable') {
 }
 
 if ($Action -in @('Install', 'Repair')) {
-    $pwsh = (Get-Command powershell.exe).Source
+    $pwsh = (Get-Command pwsh.exe).Source
     $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$entry`" -Mode Scheduled"
     $taskAction = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments `
         -WorkingDirectory $gatewayRoot

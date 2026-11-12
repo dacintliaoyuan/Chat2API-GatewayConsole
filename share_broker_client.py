@@ -1,6 +1,6 @@
 r"""share_broker_client.py — ordinary-privilege client for the REAL broker.
 
-The 8096 management process (and, through ShareManager, every mutating
+The 8001 management process (and, through ShareManager, every mutating
 command) reaches the SYSTEM broker host through this client. It binds a
 fixed loopback endpoint chosen by the injected transport, enforces the
 protocol schema v2 (HMAC, total-deadline read, associated request id) and
@@ -14,15 +14,23 @@ Transports are replaceable adapters (D0 §27):
   (ctypes, DACL by SID); its wiring depends on UNVERIFIED OS assumptions
   (§27.7 H1–H6) and must be verified in the authorized L2 experiment before
   it is used outside fixtures.
+* ``UnixSocketBrokerTransport`` — the POSIX (Linux) production transport:
+  an AF_UNIX SOCK_STREAM endpoint at an absolute path whose parent directory
+  is 0700 and whose socket file is 0600. Peer identity is kernel evidence
+  (SO_PEERCRED), never a status file or a self-reported PID.
 
 When no broker component is installed the client reports ``not_installed``
 instead of falling back to any test broker (A4: no fake success).
 """
 from __future__ import annotations
 
+import errno
 import inspect
 import math
+import os
 import socket
+import stat
+import struct
 import threading
 import time
 
@@ -53,6 +61,262 @@ class BrokerTransport:
 
     def recv_line(self, deadline) -> bytes:    # pragma: no cover - abstract
         raise NotImplementedError
+
+
+def declare_synchronous_io_cancellation(kernel):
+    """Declare the thread-handle APIs on a real Win32 facade only."""
+    import ctypes
+    kernel.OpenThread.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    kernel.OpenThread.restype = ctypes.c_void_p
+    kernel.CancelSynchronousIo.argtypes = [ctypes.c_void_p]
+    kernel.CancelSynchronousIo.restype = ctypes.c_int
+
+
+def cancel_synchronous_worker_io(kernel, worker):
+    """Cancel this process-owned worker's pending I/O before handle cleanup.
+
+    The cancellation request is not completion evidence: callers still observe
+    the worker's exit within their existing bounded finalization window.
+    """
+    open_thread = getattr(kernel, 'OpenThread', None)
+    cancel_io = getattr(kernel, 'CancelSynchronousIo', None)
+    thread_id = getattr(worker, 'native_id', None)
+    if open_thread is None or cancel_io is None or thread_id is None:
+        return False
+    handle = open_thread(0x0001, False, thread_id)  # THREAD_TERMINATE
+    if not handle or handle in (-1, 0xFFFFFFFFFFFFFFFF):
+        return False
+    try:
+        # Hold the handle before rechecking liveness: an exited worker may
+        # have had its numeric thread ID reused, but can never cancel it.
+        if not worker.is_alive():
+            return False
+        return bool(cancel_io(handle))
+    finally:
+        kernel.CloseHandle(handle)
+
+
+# Linux AF_UNIX sun_path is 108 bytes including the trailing NUL; 107 bytes
+# is the longest usable absolute path. The bound is checked HERE so a bad
+# deployment path fails with a clear ValueError before any syscall.
+UNIX_SOCKET_MAX_PATH_BYTES = 107
+UNIX_SOCKET_DIRECTORY_MODE = 0o700
+UNIX_SOCKET_FILE_MODE = 0o600
+_UNIX_CREDENTIAL_SIZE = struct.calcsize("3i")   # struct ucred: pid, uid, gid
+
+
+def validate_unix_socket_path(path) -> str:
+    """Validate the POSIX control-endpoint path contract (client + server).
+
+    The path must be ABSOLUTE and fit the Linux AF_UNIX ``sun_path`` bound.
+    Permission bits are checked at the endpoint itself: the server creates the
+    parent 0700 / socket 0600, and the client refuses a wider endpoint before
+    connecting.
+    """
+    try:
+        text = os.fspath(path)
+    except TypeError as exc:
+        raise ValueError("unix socket path must be a filesystem path") from exc
+    if isinstance(text, bytes):
+        text = os.fsdecode(text)
+    if not isinstance(text, str) or not text or not os.path.isabs(text):
+        raise ValueError("unix socket path must be an absolute path")
+    if len(os.fsencode(text)) > UNIX_SOCKET_MAX_PATH_BYTES:
+        raise ValueError(
+            f"unix socket path exceeds the AF_UNIX bound of "
+            f"{UNIX_SOCKET_MAX_PATH_BYTES} bytes")
+    return text
+
+
+def _private_directory_error(path):
+    return PermissionError(
+        errno.EACCES,
+        f"unix socket parent directory must be 0700: {path}")
+
+
+def _socket_mode_error(path):
+    return PermissionError(
+        errno.EACCES, f"unix socket file must be 0600: {path}")
+
+
+def assert_private_unix_endpoint(path):
+    """Refuse an endpoint another local user could reach BEFORE connecting.
+
+    The parent directory must be 0700 (no group/other access) and the endpoint
+    must be a 0600 socket. A wider mode is an explicit access refusal, never a
+    silent connection to an exposed control channel. Returns the endpoint stat
+    so the caller can keep the observed identity if needed.
+    """
+    parent = os.path.dirname(path)
+    parent_stat = os.stat(parent)
+    if not stat.S_ISDIR(parent_stat.st_mode):
+        raise NotADirectoryError(
+            errno.ENOTDIR,
+            f"unix socket parent is not a directory: {parent}")
+    if stat.S_IMODE(parent_stat.st_mode) & 0o077:
+        raise _private_directory_error(parent)
+    endpoint_stat = os.stat(path)
+    if not stat.S_ISSOCK(endpoint_stat.st_mode):
+        raise OSError(errno.ENOTSOCK,
+                      f"unix socket endpoint is not a socket: {path}")
+    if stat.S_IMODE(endpoint_stat.st_mode) != UNIX_SOCKET_FILE_MODE:
+        raise _socket_mode_error(path)
+    return endpoint_stat
+
+
+def unix_peer_credentials(sock):
+    """SO_PEERCRED kernel evidence for a connected AF_UNIX socket.
+
+    Returns ``{"pid", "uid", "gid"}`` or None when the platform does not
+    expose SO_PEERCRED or the query fails. Callers MUST treat None as a
+    refusal, never as a verified peer.
+    """
+    option = getattr(socket, "SO_PEERCRED", None)
+    if option is None:
+        return None
+    try:
+        raw = sock.getsockopt(socket.SOL_SOCKET, option, _UNIX_CREDENTIAL_SIZE)
+    except OSError:
+        return None
+    if len(raw) != _UNIX_CREDENTIAL_SIZE:
+        return None
+    pid, uid, gid = struct.unpack("3i", raw)
+    return {"pid": int(pid), "uid": int(uid), "gid": int(gid)}
+
+
+class UnixSocketBrokerTransport(BrokerTransport):
+    """POSIX (Linux) AF_UNIX SOCK_STREAM production adapter.
+
+    The endpoint is an ABSOLUTE path. Its parent directory must be 0700 and the
+    socket file 0600; a wider endpoint is refused BEFORE connecting, so a
+    control channel another local user can reach is never used silently.
+
+    The transport only moves bounded bytes: framing, HMAC, replay and the
+    exchange deadlines stay in the protocol layer and BrokerClient. The
+    remaining time is re-applied before EVERY blocking send/recv (the same
+    R29-6 semantics as the loopback adapter), so a slow peer cannot park the
+    exchange beyond its total deadline. Failure classification follows the
+    existing client rules: ENOENT/ECONNREFUSED -> ``not_installed``,
+    EACCES/EPERM -> ``access_denied``, connect timeout ->
+    ``deadline_exceeded``.
+
+    Peer identity is KERNEL evidence: ``peer_credentials()`` and
+    ``peer_server_pid()`` read SO_PEERCRED from the connected socket. There is
+    no status file and no caller-supplied PID path - the same contract the
+    named-pipe adapter exposes to the instance identity verifier (R41-2).
+    """
+
+    def __init__(self, path):
+        if os.name != "posix":
+            raise OSError("unix domain sockets require a POSIX platform")
+        if not hasattr(socket, "AF_UNIX"):
+            raise OSError("AF_UNIX sockets are unavailable on this platform")
+        self.path = validate_unix_socket_path(path)
+        self._sock = None
+
+    def open(self, deadline=None):
+        if self._sock is not None:
+            raise OSError("unix socket transport is already open")
+        assert_private_unix_endpoint(self.path)
+        timeout = DEFAULT_DEADLINE_SECONDS
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("exchange deadline exceeded before connect")
+            timeout = min(timeout, remaining)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            sock.connect(self.path)
+        except socket.timeout as exc:
+            sock.close()
+            raise TimeoutError(
+                "unix socket connect exceeded the exchange deadline") from exc
+        except BaseException:
+            sock.close()
+            raise
+        sock.settimeout(None)
+        self._sock = sock
+        return self
+
+    def close(self):
+        try:
+            if self._sock is not None:
+                self._sock.close()
+        finally:
+            self._sock = None
+
+    def send_all(self, data: bytes, deadline=None):
+        if deadline is None:
+            raise ValueError("send_all requires an explicit exchange deadline")
+        sock = self._sock
+        if sock is None:
+            raise OSError("unix socket transport is not open")
+        total = 0
+        while total < len(data):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("exchange deadline exceeded during send")
+            sock.settimeout(remaining)
+            try:
+                sent = sock.send(data[total:])
+            except socket.timeout as exc:
+                raise TimeoutError(
+                    "exchange deadline exceeded during send") from exc
+            if sent <= 0:
+                raise OSError("unix socket write failed")
+            total += sent
+        return total
+
+    def recv_line(self, deadline) -> bytes:
+        sock = self._sock
+        if sock is None:
+            raise OSError("unix socket transport is not open")
+        reader = sock.makefile("rb")
+        try:
+            # R29-6: re-apply the remaining time before EVERY blocking read
+            # so the total deadline also bounds reads parked inside one recv.
+            return read_bounded_line(
+                reader, deadline,
+                on_before_recv=lambda remaining: sock.settimeout(
+                    max(remaining, 0.01)))
+        finally:
+            reader.close()
+
+    def peer_credentials(self):
+        if self._sock is None:
+            return None
+        return unix_peer_credentials(self._sock)
+
+    def peer_server_pid(self):
+        """The named-pipe adapter's interface: the instance-channel client
+        verifies the peer's real process identity before trusting the
+        connection. SO_PEERCRED is kernel evidence; None (unsupported or
+        failed) is a refusal, never a verified peer."""
+        credentials = self.peer_credentials()
+        if credentials is None or credentials["pid"] <= 0:
+            return None
+        return credentials["pid"]
+
+    def prepare_peer(self, verifier, *, deadline, **expectations):
+        """Bounded connect + identity query before any request is sent.
+
+        Mirrors the named-pipe adapter's seam: the peer identity comes from
+        the kernel, a failed query returns None (refusal), and the verifier
+        decides. SO_PEERCRED is a local option, so the query itself cannot
+        block; the deadline still gates connect and the hand-off.
+        """
+        if time.monotonic() >= deadline:
+            raise TimeoutError("instance preparation deadline exceeded")
+        self.open(deadline=deadline)
+        if time.monotonic() >= deadline:
+            raise TimeoutError("instance preparation deadline exceeded")
+        pid = self.peer_server_pid()
+        evidence = (None if pid is None
+                    else verifier.verify(pid, **expectations))
+        if time.monotonic() >= deadline:
+            raise TimeoutError("instance preparation deadline exceeded")
+        return pid, evidence
 
 
 class LoopbackTcpBrokerTransport(BrokerTransport):
@@ -103,7 +367,7 @@ class NamedPipeBrokerTransport(BrokerTransport):
     signatures are declared once and tests may substitute a fake kernel to
     exercise blocking reads/writes, deadline expiry, cancellation, failure
     and chunked transfers OFFLINE (R31-5). The real Windows pipe semantics
-    (DACL, blocking-release via CloseHandle) remain D4-verified.
+    (DACL and the explicit cancellation/handle cleanup path) are native-tested.
 
     Total-deadline semantics: every blocking ReadFile/WriteFile runs on a
     daemon worker while the caller waits the REMAINING deadline; on expiry
@@ -151,7 +415,7 @@ class NamedPipeBrokerTransport(BrokerTransport):
     # so DACL semantics are never retried into a false success. The retry runs
     # BEFORE any connection exists: one exchange still owns exactly one
     # connection (R44-1).
-    _TRANSIENT_OPEN_ERRORS = (2, 3, 231)
+    _TRANSIENT_OPEN_ERRORS = (2, 3, 109, 231, 232, 233)
     _OPEN_RETRY_SECONDS = 2.0
     _OPEN_RETRY_BASE_DELAY = 0.01
     _OPEN_RETRY_MAX_DELAY = 0.05
@@ -177,7 +441,7 @@ class NamedPipeBrokerTransport(BrokerTransport):
     _reserved_worker_slots = 0
     _accounting_lock = threading.Lock()
 
-    def __init__(self, pipe_name=r"\\.\pipe\um-share-public-broker", kernel=None):
+    def __init__(self, pipe_name=r"\\.\pipe\um-share-broker", kernel=None):
         self.pipe_name = pipe_name
         self._handle = None
         self._handle_lock = threading.Lock()
@@ -223,6 +487,7 @@ class NamedPipeBrokerTransport(BrokerTransport):
         kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
         kernel32.CloseHandle.restype = ctypes.c_int
         kernel32.GetLastError.restype = ctypes.c_ulong
+        declare_synchronous_io_cancellation(kernel32)
         return kernel32
 
     def _bounded_call(self, fn, cancel, deadline):
@@ -281,11 +546,12 @@ class NamedPipeBrokerTransport(BrokerTransport):
                 raise outcome["error"]
             return outcome["value"]
         # 到期放弃：先置取消（fn 在每块 I/O 前检查，迟到成功不再发下
-        # 一块），再关闭句柄释放阻塞调用（真实 OS 释放语义 D4 验证）。
+        # 一块），先请求 CancelSynchronousIo，再关闭句柄，避免清理自身阻塞。
         # 放弃调用的结果被丢弃；worker 收尾在有界窗口内观察——调用方最迟
         # 在 exchange 期限 + 该有界收尾窗口内返回，不声称严格在期限内。
         cancel.set()
         self._abandoned = True
+        cancel_synchronous_worker_io(self._kernel(), worker)
         # R48-1: the abandon close and any worker reopen both mutate the
         # handle; serializing them removes the double-close / stale-close
         # race. After this, open() refuses (abandoned), so no new handle is
@@ -369,6 +635,7 @@ class NamedPipeBrokerTransport(BrokerTransport):
         if deadline is not None:
             open_deadline = min(open_deadline, deadline)
         delay = self._OPEN_RETRY_BASE_DELAY
+        saw_busy = False
         while True:
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError("instance preparation deadline exceeded")
@@ -398,12 +665,21 @@ class NamedPipeBrokerTransport(BrokerTransport):
             # kernels without GetLastError fail fast exactly as before.
             get_last_error = getattr(kernel32, "GetLastError", None)
             last_error = get_last_error() if get_last_error else 0
+            # Once busy has proved a live serving instance, its transition
+            # gap must retain the SAME exchange deadline. Returning to the
+            # already-expired installation window would misreport absence.
+            # A pipe never observed serving still uses the short open bound.
+            saw_busy = saw_busy or last_error == self._ERROR_PIPE_BUSY
+            retry_deadline = (deadline if saw_busy and deadline is not None
+                              else open_deadline)
             if (last_error not in self._TRANSIENT_OPEN_ERRORS
-                    or time.monotonic() >= open_deadline):
+                    or time.monotonic() >= retry_deadline):
                 if deadline is not None and time.monotonic() >= deadline:
                     raise TimeoutError("instance preparation deadline exceeded")
-                raise OSError("broker pipe not available")
-            time.sleep(min(delay, max(0.0, open_deadline - time.monotonic())))
+                error = OSError("broker pipe not available")
+                error.winerror = last_error
+                raise error
+            time.sleep(min(delay, max(0.0, retry_deadline - time.monotonic())))
             delay = min(delay * 2, self._OPEN_RETRY_MAX_DELAY)
 
     def prepare_peer(self, verifier, *, deadline, **expectations):
@@ -617,9 +893,19 @@ class BrokerClient:
             return BrokerResult.err("deadline_exceeded",
                                     "connection exceeded the exchange deadline")
         except OSError as exc:
-            return BrokerResult.err("not_installed",
+            winerror = getattr(exc, "winerror", None)
+            error_number = getattr(exc, "errno", None)
+            # Windows keeps its winerror==5 mapping byte for byte; on POSIX a
+            # denied connect (0700 directory / 0600 socket) is the SAME explicit
+            # access refusal, never folded into "not_installed".
+            access_refused = winerror == 5 or (
+                winerror is None
+                and error_number in (errno.EACCES, errno.EPERM))
+            code = "access_denied" if access_refused else "not_installed"
+            suffix = f" (winerror={winerror})" if type(winerror) is int else ""
+            return BrokerResult.err(code,
                                     f"broker component unavailable: "
-                                    f"{type(exc).__name__}")
+                                    f"{type(exc).__name__}{suffix}")
         try:
             if time.monotonic() >= deadline:
                 raise TimeoutError("exchange deadline exceeded before I/O")
@@ -669,9 +955,27 @@ class BrokerClient:
         return self.call("publish", fields)
 
     def status(self) -> BrokerResult:
-        return self.call("status")
+        # Read-only: a queued 25s security check plus the 6s task query and
+        # reply margin must fit one bounded exchange. Mutations keep 10s.
+        return self.call("status", timeout_s=35)
 
-    def start(self) -> BrokerResult:
+    def start(self, explicit: bool = False) -> BrokerResult:
+        """Start the host.
+
+        ``explicit=True`` is the OPERATOR's own start: it is the only start
+        allowed to supersede a persisted stop intent. The field is omitted for
+        a watchdog/systemd start so old brokers keep the historical wire
+        shape (and the persisted intent still refuses it).
+        """
+        if explicit:
+            result = self.call("start", {"explicit": True})
+            if result.ok or result.error_code != "bad_request":
+                return result
+            # An OLD broker rejects the unknown `explicit` field before running
+            # anything; retry the historical wire shape. The retry can never
+            # double-start a new broker: it only accepts `explicit`, and an old
+            # broker's persisted stop intent still refuses the plain start.
+            return self.call("start")
         return self.call("start")
 
     def drain(self) -> BrokerResult:
@@ -692,10 +996,20 @@ class BrokerClient:
         answers with its SYSTEM-privilege verdict (True/False/None). The
         check enum is validated by the protocol whitelist; the task name,
         image and port never cross the wire."""
-        return self.call("host-verify", {"check": check})
+        # Up to three bounded 10s OS evidence reads plus reply margin.
+        # This read budget does not change mutation/start deadlines.
+        return self.call("host-verify", {"check": check}, timeout_s=35)
 
     def host_stop(self) -> BrokerResult:
-        return self.call("host-stop")
+        # The broker's closure check can make up to three bounded 10s evidence
+        # reads; the default 10s exchange would report deadline_exceeded before
+        # that check can answer.
+        return self.call("host-stop", timeout_s=45)
+
+    def repair_limits(self) -> BrokerResult:
+        # No caller-selected path/command/port. The broker pins the protected
+        # maintenance helper and owns its bounded execution.
+        return self.call("host-repair-limits", timeout_s=120)
 
     def maintenance_begin(self, component: str, lease_s: int) -> BrokerResult:
         """Begin a bounded maintenance lease (pause 8100 acceptance): the
@@ -728,12 +1042,13 @@ class BrokerClient:
                          timeout_s=min(budget + 15, 180))
 
     def host_evidence(self, check: str) -> BrokerResult:
-        """Restricted READ-ONLY host evidence verb (limits/faults): the
+        """Restricted READ-ONLY host evidence verb (limits/faults/watchdog): the
         broker-side WindowsHostOps answers with its SYSTEM-privilege verdict
         (True/False/None or a bounded fault-tail dict); the check enum is
         validated by the protocol whitelist and the object stays broker-side
         deployment configuration."""
-        return self.call("host-evidence", {"check": check})
+        # The one pipe may already be completing another evidence read.
+        return self.call("host-evidence", {"check": check}, timeout_s=35)
 
     def ts_service_control(self, action: str) -> BrokerResult:
         """Restricted TS service control verb ("start"/"stop"): the action enum

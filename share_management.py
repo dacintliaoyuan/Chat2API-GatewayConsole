@@ -14,15 +14,20 @@ is NoopBroker, which therefore also refuses revoking operations offline.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
+import inspect
 import json
 import os
 import threading
 from pathlib import Path
 
 from share_store import (Conflict, Disabled, KEY_MAX_CONCURRENCY_MAX,
-                         KEY_MAX_CONCURRENCY_MIN, NotFound, ShareStore,
-                         StoreError, VersionMismatch)
+                         KEY_MAX_CONCURRENCY_MIN,
+                         NEW_KEY_DEFAULT_MAX_CONCURRENCY, NotFound,
+                         SHARE_MAX_CONCURRENCY_MAX,
+                         SHARE_MAX_CONCURRENCY_MIN, ShareStore, StoreError,
+                         VersionMismatch)
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_STORE_FILE = Path(
@@ -30,7 +35,10 @@ DEFAULT_STORE_FILE = Path(
 
 
 class BrokerError(Exception):
-    pass
+    def __init__(self, message, *, code=None, stage=None):
+        super().__init__(message)
+        self.code = code
+        self.stage = stage
 
 
 class NoopBroker:
@@ -47,7 +55,7 @@ class NoopBroker:
         return {"name": self.name, "state": "offline",
                 "note": "未安装/未授权高权限 broker；变更已保存但未在线发布"}
 
-    def start(self):
+    def start(self, explicit=False):
         raise BrokerError("no broker installed")
 
     def graceful_stop(self):
@@ -60,6 +68,9 @@ class NoopBroker:
         raise BrokerError("no broker installed")
 
     def host_stop(self):
+        raise BrokerError("no broker installed")
+
+    def repair_limits(self):
         raise BrokerError("no broker installed")
 
     # Rev9 console control surface: the offline placeholder refuses the six
@@ -87,16 +98,76 @@ def _name_valid(name):
     return isinstance(name, str) and 1 <= len(name) <= 64
 
 
+def _reply_count(reply, name):
+    """Read one instance ACK count from either reply shape.
+
+    Returns None when the field is absent or not a plain integer: a missing
+    count is never read as zero, and a bool is not a count.
+    """
+    if isinstance(reply, dict):
+        value = reply.get(name)
+    else:
+        result = getattr(reply, "result", None)
+        value = result.get(name) if isinstance(result, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
 def _reply_terminated(reply):
     """R8-A7: extract the instance ACK's one-shot ``terminated`` count from
     either reply shape (adapter dict / BrokerResult); None when absent —
     a missing count is never read as zero."""
+    return _reply_count(reply, "terminated")
+
+
+_ACK_FIELD_MISSING = object()
+
+
+def _reply_field(reply, name):
+    """Read one optional ACK field from either reply shape.
+
+    ``_ACK_FIELD_MISSING`` distinguishes "the ACK predates the field" from a
+    real value (including 0); callers must never fold the two together.
+    """
     if isinstance(reply, dict):
-        value = reply.get("terminated")
+        container = reply
     else:
         result = getattr(reply, "result", None)
-        value = result.get("terminated") if isinstance(result, dict) else None
-    return value if isinstance(value, int) else None
+        container = result if isinstance(result, dict) else None
+    if container is None or name not in container:
+        return _ACK_FIELD_MISSING
+    return container[name]
+
+
+def _reply_instance_id(reply):
+    """The acking runtime identity from either reply shape, or None.
+
+    Only a non-empty string is an identity; an absent/malformed value stays
+    None instead of being coerced into one."""
+    value = _reply_field(reply, "instance_id")
+    if value is _ACK_FIELD_MISSING:
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def _security_watermark(value):
+    """Normalise the ACK's ``security_generation`` to a watermark int or None.
+
+    The runtime's per-Key journal entry carries ``generation``; a plain int is
+    also accepted. Anything else (missing marker, bool, negative, string) is NOT
+    a watermark — the caller treats it as unconfirmed, never as 0.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, dict):
+        generation = value.get("generation")
+        if isinstance(generation, int) and not isinstance(generation, bool) \
+                and generation >= 0:
+            return generation
+    return None
 
 
 def _fingerprint(projection):
@@ -153,18 +224,43 @@ class BrokerClientAdapter:
             # (None when the running instance predates the field — never
             # fabricated).
             out["terminated"] = ack.get("terminated")
+        # D18-3: the instance ACK also separates the 8110 released/aborted
+        # tickets and the 8100 closed upstream connections. Pass each field
+        # through verbatim; a missing field stays missing.
+        for name in ("released", "aborted", "upstream_closed"):
+            if name in ack:
+                out[name] = ack.get(name)
+        if "security_generation" in ack:
+            # S2 security fence: carry the runtime's own applied revoke
+            # watermark through verbatim. A missing field stays missing — the
+            # management layer then refuses to confirm a security journal
+            # intent from an ACK that never stated it (never read as 0).
+            out["security_generation"] = ack.get("security_generation")
         return out
 
-    def start(self):
+    def start(self, explicit=False):
         # R29-2: the broker must EXPLICITLY confirm `started: True`; an ok
         # with an empty/contradictory result is a failed start, never a
         # success, and no state string is fabricated to cover it.
-        result = self.client.start()
+        # ``explicit`` is the operator's own start; a legacy client without
+        # the keyword keeps the historical zero-argument start.
+        start = self.client.start
+        try:
+            parameters = inspect.signature(start).parameters
+        except (TypeError, ValueError):
+            result = start()
+        else:
+            if "explicit" in parameters:
+                result = start(explicit=explicit)
+            else:
+                result = start()
         if not result.ok:
-            raise BrokerError(f"start rejected: {result.error_code}")
-        if result.result.get("started") is not True:
+            raise BrokerError(f"start rejected: {result.error_code}",
+                              code=result.error_code, stage="broker_start")
+        if not isinstance(result.result, dict) or result.result.get("started") is not True:
             raise BrokerError(
-                "start result did not explicitly confirm started=True")
+                "start result did not explicitly confirm started=True",
+                code="unconfirmed", stage="broker_start_confirmation")
         return {"state": "ok", "started": True,
                 "broker": result.result}
 
@@ -224,6 +320,9 @@ class BrokerClientAdapter:
         if not result.ok:
             raise BrokerError(f"host stop rejected: {result.error_code}")
         return result.result.get("host_stopped") is True
+
+    def repair_limits(self):
+        return self.client.repair_limits()
 
     # ------------------------------------------------------------------
     # Rev9 console control surface (A9-1..A9-4)
@@ -332,6 +431,12 @@ class ShareManager:
         self._publish_lock = threading.Lock()
         self._last_published = None
         self._last_terminated = None  # R8-A7: one-shot per publish
+        # D18-3: the same publish also reports the backend's released/aborted
+        # ticket counts and the gateway's closed upstream connections. Each is
+        # one-shot and None when the ACK does not carry it.
+        self._last_released = None
+        self._last_aborted = None
+        self._last_upstream_closed = None
         # D2 lifecycle coordination: a monotonic epoch and the desired share
         # state. start/drain/emergency-stop are coordinated against the
         # epoch so an emergency stop can never be reopened by a start that
@@ -601,10 +706,67 @@ class ShareManager:
                                        {"error": error, "ack": acked})
                 self._note_failure("publish", error)
                 return False, None, error, op_id
-            store.commit_applied(generation)
+            # S2 security fence: a revoke/rotate intent recorded at or below
+            # this generation may be marked applied ONLY by an ACK that states
+            # the runtime's own applied revoke watermark AND covers every such
+            # intent. Missing/invalid/stale watermark = FAILED publication
+            # (fail-closed): the journal row stays pending, never falsely
+            # confirmed and never read as 0.
+            security_field = _reply_field(reply, "security_generation")
+            security_generation = _security_watermark(security_field)
+            security_invalid = (
+                security_field is not _ACK_FIELD_MISSING
+                and security_generation is None)
+            pending_security = [
+                record for record in store.security_records()
+                if record["status"] == "pending"
+                and record["generation"] <= generation]
+            pending_generations = sorted(
+                {record["generation"] for record in pending_security})
+            error = None
+            if security_invalid:
+                # A malformed watermark is a broken ACK even when nothing
+                # is pending: it can never be read as a confirmation.
+                error = (
+                    "broker ack security_generation "
+                    f"{security_field!r} is not a non-negative integer "
+                    "watermark; the ACK cannot confirm any security journal "
+                    "intent")
+            elif pending_security:
+                if security_field is _ACK_FIELD_MISSING:
+                    error = (
+                        "broker ack carries no security_generation; security "
+                        "journal intent(s) at generation(s) "
+                        f"{pending_generations} cannot be confirmed applied "
+                        "(never assumed 0)")
+                else:
+                    uncovered = sorted(
+                        {record["generation"] for record in pending_security
+                         if record["generation"] > security_generation})
+                    if uncovered:
+                        error = (
+                            "broker ack security_generation "
+                            f"{security_generation} does not cover security "
+                            "journal intent(s) at generation(s) "
+                            f"{uncovered}; refusing to mark them applied")
+            if error is not None:
+                store.update_operation(op_id, "failed", {
+                    "error": error,
+                    "security_unconfirmed": True,
+                    "ack_security_generation": (
+                        None if security_field is _ACK_FIELD_MISSING
+                        else security_field),
+                    "pending_security_generations": pending_generations})
+                self._note_failure("publish", error)
+                return False, None, error, op_id
+            store.commit_applied(
+                generation, instance_id=_reply_instance_id(reply),
+                security_generation=security_generation)
             self._last_published = {"generation": generation,
                                     "fingerprint": fingerprint}
-            store.update_operation(op_id, "applied", {"generation": generation})
+            store.update_operation(op_id, "applied", {
+                "generation": generation,
+                "security_generation": security_generation})
             # R8-A7: the instance ACK reports how many live connections the
             # terminate list actually closed (best-effort count for the
             # caller; a missing field stays None, never a fabricated 0).
@@ -612,6 +774,12 @@ class ShareManager:
             # at top level) or BrokerResult (raw client, count under
             # .result) — read both, never assume one.
             self._last_terminated = _reply_terminated(reply)
+            # D18-3: the same ACK also separates what 8110 released and
+            # aborted from what 8100 closed upstream. Absent fields stay
+            # None (an older runtime cannot answer for them).
+            self._last_released = _reply_count(reply, "released")
+            self._last_aborted = _reply_count(reply, "aborted")
+            self._last_upstream_closed = _reply_count(reply, "upstream_closed")
             return True, generation, None, op_id
 
     def _response(self, store, payload):
@@ -620,6 +788,8 @@ class ShareManager:
         out["desired_generation"] = gen["config_generation"]
         out["applied_generation"] = gen["applied_generation"]
         out["in_sync"] = gen["in_sync"]
+        out["security_pending"] = gen["security_pending"]
+        out["security_in_sync"] = gen["security_in_sync"]
         return out
 
     def _fail_closed(self, store, op_id, publish_error):
@@ -648,6 +818,12 @@ class ShareManager:
 
         ``terminate_keys`` (R8-A7) rides the fail-closed publication so a
         revoke-and-terminate disables AND interrupts in one confirmed step."""
+        # Each revoke result is one-shot: a failed publish must never expose a
+        # previous publication's counts.
+        self._last_terminated = None
+        self._last_released = None
+        self._last_aborted = None
+        self._last_upstream_closed = None
         published, applied, error, op_id = self._publish(
             store, terminate_keys=terminate_keys)
         payload["published"] = published
@@ -672,12 +848,26 @@ class ShareManager:
             with self._failure_lock:
                 failure = self._last_failure
             blocked = self._publication_blockers(store)
+            stored_share_max = store.get_share_max_concurrency()
+            clamped_keys = [r for r in rows
+                            if r["max_concurrency"] > KEY_MAX_CONCURRENCY_MAX]
             return {
                 "schema_version": gen["schema_version"],
-                "share_max_concurrency": store.get_share_max_concurrency(),
+                # D18-4: the EFFECTIVE value the share side runs is the
+                # clamped one; the stored value is reported separately and
+                # the normalization flag never pretends the two agree.
+                "share_max_concurrency": min(
+                    stored_share_max, SHARE_MAX_CONCURRENCY_MAX),
+                "share_max_concurrency_stored": stored_share_max,
+                "limits_normalization_required": (
+                    stored_share_max > SHARE_MAX_CONCURRENCY_MAX
+                    or bool(clamped_keys)),
+                "limits_clamped_keys": len(clamped_keys),
                 "desired_generation": gen["config_generation"],
                 "applied_generation": gen["applied_generation"],
                 "in_sync": gen["in_sync"],
+                "security_pending": gen["security_pending"],
+                "security_in_sync": gen["security_in_sync"],
                 "pending_revocation": gen["config_generation"] > gen["applied_generation"],
                 "active_keys": len([r for r in rows if r["enabled"]]),
                 "total_keys": len(rows),
@@ -747,17 +937,18 @@ class ShareManager:
             store.close()
 
     # ------------------------------------------------------------- mutations
-    def create_key(self, name, max_concurrency=8, idempotency_key=None):
+    def create_key(self, name, max_concurrency=NEW_KEY_DEFAULT_MAX_CONCURRENCY,
+                   idempotency_key=None):
         """Create a share key; the plaintext is returned EXACTLY ONCE here.
 
-        New keys default to a per-key concurrency limit of 8 (R6-A2 product
-        default, adjustable 1..64); idempotency replay semantics are
-        unchanged — a replayed create never replays the plaintext.
+        D18-4: new keys default to 16 concurrent requests (adjustable
+        1..48); idempotency replay semantics are unchanged — a replayed
+        create never replays the plaintext.
         """
         if not _name_valid(name):
             raise StoreError("invalid name")
         if max_concurrency is None:
-            max_concurrency = 8
+            max_concurrency = NEW_KEY_DEFAULT_MAX_CONCURRENCY
         if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int) \
                 or not (KEY_MAX_CONCURRENCY_MIN <= max_concurrency
                         <= KEY_MAX_CONCURRENCY_MAX):
@@ -790,21 +981,33 @@ class ShareManager:
         finally:
             store.close()
 
-    def update_key(self, key_id, name=None, enabled=None,
+    def update_key(self, key_id, name=None,
                    max_concurrency=None, expected_row_version=None,
-                   idempotency_key=None):
-        """Atomic PATCH. Lowering ``max_concurrency`` is a REVOCATION-direction
-        change and takes the SAME fail-closed path as ``enabled=False``
-        (``_require_applied``): the projection must be confirmed online or
-        the call raises BrokerError (503). Raising the limit is the safe
-        direction and publishes best-effort. The direction is decided from
-        the publish intent recorded INSIDE the mutation transaction (a
-        generation bump plus a revoking intent), not from a pre-read —
-        no race window between read and write."""
+                   idempotency_key=None, enabled=None):
+        """Atomic PATCH: rename and/or change the per-key concurrency limit.
+
+        D18-3: ``enabled`` is no longer a writable field — a disabled or
+        revoked identity can only be disabled again (via
+        ``revoke_and_terminate_key``), never re-enabled. The keyword stays
+        only as a compatibility seam for the HTTP layer while it drops the
+        field: ``None`` is accepted and any explicit value is refused.
+
+        Lowering ``max_concurrency`` is a REVOCATION-direction change and
+        takes the SAME fail-closed path as a revoke (``_require_applied``):
+        the projection must be confirmed online or the call raises
+        BrokerError (503). Raising the limit is the safe direction and
+        publishes best-effort. The direction is decided from the publish
+        intent recorded INSIDE the mutation transaction (a generation bump
+        plus a revoking intent), not from a pre-read — no race window
+        between read and write."""
+        if enabled is not None:
+            raise StoreError(
+                "enabled is not writable: a disabled or revoked identity "
+                "cannot be re-enabled; use revoke-and-terminate")
         store = self._open()
         try:
             gen_before = store.generation()["config_generation"]
-            result = store.update_key(key_id, new_name=name, enabled=enabled,
+            result = store.update_key(key_id, new_name=name,
                                       max_concurrency=max_concurrency,
                                       expected_row_version=expected_row_version)
             gen_after = store.generation()["config_generation"]
@@ -823,7 +1026,12 @@ class ShareManager:
 
     def set_share_limits(self, share_max_concurrency, expected_share_max=None,
                          idempotency_key=None):
-        """Adjust the global share concurrency limit (1..64).
+        """Adjust the GLOBAL share concurrency limit (1..64, D18-4).
+
+        The global bound is SEPARATE from the per-key 1..48 cap: all keys
+        and every entry point together may not exceed it. The store
+        re-validates the same 1..64 bound inside the mutation transaction,
+        so this command-layer check is not the only gate.
 
         * ``expected_share_max`` is an optimistic gate on the CURRENT value;
           a mismatch raises VersionMismatch, which the existing
@@ -839,11 +1047,11 @@ class ShareManager:
         """
         if isinstance(share_max_concurrency, bool) \
                 or not isinstance(share_max_concurrency, int) \
-                or not (KEY_MAX_CONCURRENCY_MIN <= share_max_concurrency
-                        <= KEY_MAX_CONCURRENCY_MAX):
+                or not (SHARE_MAX_CONCURRENCY_MIN <= share_max_concurrency
+                        <= SHARE_MAX_CONCURRENCY_MAX):
             raise StoreError(
                 f"share_max_concurrency must be an integer in "
-                f"{KEY_MAX_CONCURRENCY_MIN}..{KEY_MAX_CONCURRENCY_MAX}")
+                f"{SHARE_MAX_CONCURRENCY_MIN}..{SHARE_MAX_CONCURRENCY_MAX}")
         if expected_share_max is not None:
             if isinstance(expected_share_max, bool) \
                     or not isinstance(expected_share_max, int):
@@ -860,6 +1068,68 @@ class ShareManager:
             result["published"] = published
             result["publication_error"] = pub_error
             return self._response(store, result)
+        finally:
+            store.close()
+
+    def normalize_limits(self):
+        """Explicitly normalize stored limits to the D18-4 caps.
+
+        This is an OPERATOR action, never a silent startup migration:
+
+        * stored global > 64 -> lower to 64 through
+          ``set_share_max_concurrency(64, expected=stored)`` (a
+          ``limit_lower`` revocation direction that requires the runtime
+          security ACK; an unconfirmed ACK keeps ``blocked=True``);
+        * stored global < 64 -> raise to 64 (safe direction, no security
+          generation);
+        * every Key above 48 -> lower to 48 through ``update_key``
+          (``limit_lower``; an unconfirmed ACK keeps ``blocked=True``).
+
+        The stored values are never rewritten silently: a lowering that the
+        runtime did not confirm leaves the published projection unconfirmed
+        and is reported through ``blocked``. Returns
+        ``{changed, global:{before,after}, keys:[{id,before,after}], blocked}``.
+        """
+        store = self._open()
+        try:
+            stored = store.get_share_max_concurrency()
+            global_before = stored
+            global_after = stored
+            blocked = False
+            changed = False
+            if stored > SHARE_MAX_CONCURRENCY_MAX:
+                try:
+                    self.set_share_limits(SHARE_MAX_CONCURRENCY_MAX,
+                                           expected_share_max=stored)
+                except BrokerError:
+                    blocked = True
+                global_after = SHARE_MAX_CONCURRENCY_MAX
+                changed = True
+            elif stored < SHARE_MAX_CONCURRENCY_MAX:
+                self.set_share_limits(SHARE_MAX_CONCURRENCY_MAX)
+                global_after = SHARE_MAX_CONCURRENCY_MAX
+                changed = True
+            keys = []
+            for row in store.list_keys():
+                before = row["max_concurrency"]
+                if before <= KEY_MAX_CONCURRENCY_MAX:
+                    continue
+                try:
+                    self.update_key(
+                        row["key_id"],
+                        max_concurrency=KEY_MAX_CONCURRENCY_MAX,
+                        expected_row_version=row["row_version"])
+                except BrokerError:
+                    blocked = True
+                keys.append({"id": row["key_id"], "before": before,
+                              "after": KEY_MAX_CONCURRENCY_MAX})
+                changed = True
+            return {
+                "changed": changed,
+                "global": {"before": global_before, "after": global_after},
+                "keys": keys,
+                "blocked": blocked,
+            }
         finally:
             store.close()
 
@@ -902,8 +1172,16 @@ class ShareManager:
                                              terminate_keys=[key_id])
             # _last_terminated is the instance ACK's closed-connection count
             # from the publication this call drove (one-shot; None when the
-            # ack shape carries no count — never fabricated).
-            return dict(disabled, terminated=self._last_terminated)
+            # ack shape carries no count — never fabricated). D18-3: the same
+            # publication reports the 8110 released/aborted counts and the
+            # 8100 closed-upstream count; each stays None when absent.
+            return dict(
+                disabled,
+                terminated=self._last_terminated,
+                released=self._last_released,
+                aborted=self._last_aborted,
+                upstream_closed=self._last_upstream_closed,
+            )
         finally:
             store.close()
 
@@ -1171,9 +1449,18 @@ class ShareManager:
                          daemon=True).start()
         return {"operation_id": op_id, "status": "pending", "broker": None}
 
-    def start(self, idempotency_key=None):
-        return self._launch_host_action("start", self.broker.start,
-                                        idempotency_key)
+    def start(self, explicit=False, idempotency_key=None):
+        # The operator's explicit start rides an OPTIONAL keyword: a legacy
+        # broker seam without ``explicit`` keeps its historical call.
+        method = self.broker.start
+        try:
+            parameters = inspect.signature(method).parameters
+        except (TypeError, ValueError):
+            fn = method
+        else:
+            fn = (functools.partial(method, explicit=explicit)
+                  if "explicit" in parameters else method)
+        return self._launch_host_action("start", fn, idempotency_key)
 
     def graceful_stop(self, idempotency_key=None):
         return self._launch_host_action("graceful_stop",

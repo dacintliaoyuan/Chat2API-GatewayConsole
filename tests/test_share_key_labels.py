@@ -35,8 +35,10 @@ class ReadOnlyKeyLabelsTests(unittest.TestCase):
         before = self.digest()
         actual = share_store.read_key_labels(self.path, ["a", "b", "unknown"])
         self.assertEqual(actual, {
-            "a": {"key_id": "a", "name": "当前名称", "deleted_at": None},
-            "b": {"key_id": "b", "name": "删除前名称", "deleted_at": "2026-10-07"}})
+            "a": {"key_id": "a", "name": "当前名称", "deleted_at": None,
+                  "deleted": False},
+            "b": {"key_id": "b", "name": "删除前名称",
+                  "deleted_at": "2026-10-07", "deleted": True}})
         self.assertEqual(self.digest(), before)
         self.assertEqual(sorted(p.name for p in self.path.parent.iterdir()),
                          [self.path.name])
@@ -89,8 +91,9 @@ class ReadOnlyKeyLabelsTests(unittest.TestCase):
                                side_effect=connect):
             actual = share_store.read_key_labels(self.path, expected)
         self.assertEqual(set(actual), expected)
-        self.assertTrue(all(set(row) == {"key_id", "name", "deleted_at"}
-                            for row in actual.values()))
+        self.assertTrue(all(
+            set(row) == {"key_id", "name", "deleted_at", "deleted"}
+            for row in actual.values()))
         # 名字里的「chunked」也要有证据对象：1001 个 key 必须分成多条
         # SELECT（每批 ≤ 400 个 id），否则单条 1001 参数的语句也会通过。
         selects = [stmt for stmt in statements if "SELECT key_id" in stmt]
@@ -100,6 +103,20 @@ class ReadOnlyKeyLabelsTests(unittest.TestCase):
                          "1001 个 key 应分成 3 条 SELECT：%r" % selects)
         self.assertLessEqual(max(counts), 400,
                             "每批不得超过 400 个 id：%r" % counts)
+
+    def test_revoked_enabled_zero_row_reads_deleted(self):
+        # 迁移重放后的存量行：delete 与 revoke 同一条路，只置 enabled=0，
+        # deleted_at 为空；它仍要按「已删除」归因。旧 schema 的库没有
+        # enabled 列，读面必须照旧工作而不是要求迁移。
+        with closing(sqlite3.connect(self.path)) as conn, conn:
+            conn.execute("ALTER TABLE keys ADD COLUMN enabled INTEGER")
+            conn.execute("UPDATE keys SET enabled=1")
+            conn.execute("UPDATE keys SET enabled=0 WHERE key_id='a'")
+        actual = share_store.read_key_labels(self.path, ["a", "b"])
+        self.assertEqual(actual["a"]["deleted"], True)
+        self.assertIsNone(actual["a"]["deleted_at"])
+        self.assertEqual(actual["b"]["deleted"], True)
+        self.assertTrue(all("enabled" not in row for row in actual.values()))
 
     def test_sql_connection_is_read_only_and_closed(self):
         real_connect = sqlite3.connect

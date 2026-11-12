@@ -1,9 +1,11 @@
 /** Liveness-evidence shape shared by the workbench's service cards.
  *
- *  R11-6/B2 (2026-09-23) moved liveness evidence to the 8096 backend's
+ *  R11-6/B2 (2026-09-23) moved liveness evidence to the 8001 backend's
  *  server-side loopback probes (GET /api/console/health): the browser no longer
- *  probes static fallthrough paths that can answer with 404. A static resource
- *  response must never count as a service heartbeat. The rule is documented where the evidence
+ *  probes dev-only /gw/* paths that the static origin answers with 404, so the
+ *  former browser-side probe() was removed from this module. Its 404 rule (ADR 0021
+ *  review finding: a same-origin static fallthrough answering an unknown /gw/*
+ *  path with 404 must never count as a heartbeat) is documented where the evidence
  *  is now produced — workbench.ts's probeTick. */
 
 export interface ProbeResult {

@@ -7,7 +7,13 @@ export function fmtCny(n: number | null): string {
   if (n == null) return "—";
   if (n === 0) return "¥0.00";
   if (n < 0.01) return "<¥0.01";
-  return "¥" + n.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (
+    "¥" +
+    n.toLocaleString("zh-CN", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  );
 }
 export function fmtTokens(n: number): string {
   if (n == null) return "—";
@@ -29,11 +35,21 @@ export function pill(label: string, cls?: string): HTMLSpanElement {
   s.textContent = label;
   return s;
 }
-export function pillOk(label: string): HTMLSpanElement { return pill(label, "pill-ok"); }
-export function pillWarn(label: string): HTMLSpanElement { return pill(label, "pill-warn"); }
-export function pillErr(label: string): HTMLSpanElement { return pill(label, "pill-err"); }
-export function pillNeutral(label: string): HTMLSpanElement { return pill(label, ""); }
-export function pillAccent(label: string): HTMLSpanElement { return pill(label, "pill-accent"); }
+export function pillOk(label: string): HTMLSpanElement {
+  return pill(label, "pill-ok");
+}
+export function pillWarn(label: string): HTMLSpanElement {
+  return pill(label, "pill-warn");
+}
+export function pillErr(label: string): HTMLSpanElement {
+  return pill(label, "pill-err");
+}
+export function pillNeutral(label: string): HTMLSpanElement {
+  return pill(label, "");
+}
+export function pillAccent(label: string): HTMLSpanElement {
+  return pill(label, "pill-accent");
+}
 
 // CheckedAt badge in muted style
 export function checkedAt(text: string): HTMLElement {
@@ -44,7 +60,11 @@ export function checkedAt(text: string): HTMLElement {
 }
 
 // Section builder with title + aux
-export function section(host: HTMLElement, title: string, aux?: string): HTMLElement {
+export function section(
+  host: HTMLElement,
+  title: string,
+  aux?: string
+): HTMLElement {
   const s = document.createElement("section");
   const h = document.createElement("div");
   h.className = "section-h";
@@ -84,7 +104,10 @@ export function kvRow(k: string, v: string | HTMLElement): HTMLElement {
 }
 
 // proxyLine renderer for system/custom/direct modes
-export function proxyLine(p: { mode: "system" | "custom"; custom?: string }): string {
+export function proxyLine(p: {
+  mode: "system" | "custom";
+  custom?: string;
+}): string {
   if (p.mode === "system") return "跟随系统代理（未设置自定义代理）";
   if (p.mode === "custom") return "自定义代理：" + (p.custom ?? "（未填写）");
   return "直连（不使用代理）";
@@ -100,7 +123,11 @@ export function toast(msg: string, kind: "ok" | "err" = "ok"): void {
 }
 
 // simBusy: spinner+disable button during async flow (1100ms then done callback)
-export function simBusy(btn: HTMLButtonElement, busyText: string, done: () => void): void {
+export function simBusy(
+  btn: HTMLButtonElement,
+  busyText: string,
+  done: () => void
+): void {
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = busyText;
@@ -121,7 +148,8 @@ export function skeletonFor(hero: boolean, cards: boolean): HTMLElement {
   if (hero) w.appendChild(skeletonItem("hero"));
   if (cards) {
     const row = document.createElement("div");
-    row.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:14px";
+    row.style.cssText =
+      "display:grid;grid-template-columns:repeat(3,1fr);gap:14px";
     row.appendChild(skeletonItem("card"));
     row.appendChild(skeletonItem("card"));
     row.appendChild(skeletonItem("card"));

@@ -1,0 +1,57 @@
+# Historical fallback material: this link uses Cloudflare Tunnel as the public
+# edge; Caddy is NOT a required component of the current deployment.
+#
+# Public edge for the UM cloud share.
+#
+# Only the share whitelist is exposed, and only to the loopback 8100 entry:
+#   GET  /v1/models
+#   POST /v1/chat/completions
+#   POST /v1/messages
+#   POST /v1/responses
+#
+# 8110 (share backend) and 18096 (private management console) are NEVER
+# reverse-proxied here.  8100 itself is also not opened in the cloud security
+# group; Caddy is the only public listener.
+#
+# Replace the site address and email before enabling.  Keep DNS-only in
+# Cloudflare (no orange cloud) and keep 80/443 as the only public ingress.
+{
+	admin off
+	email ops@example.invalid
+}
+
+(um_share_proxy) {
+	reverse_proxy 127.0.0.1:8100 {
+		# SSE must flush every event immediately, not after a buffer.
+		flush_interval -1
+		transport http {
+			# Streaming responses are bounded by the gateway's own
+			# activity/silence/total deadlines, not by Caddy's read timeout.
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+}
+
+dacintapi.de5.net {
+	encode zstd gzip
+
+	@share_models {
+		method GET
+		path /v1/models
+	}
+	@share_infer {
+		method POST
+		path /v1/chat/completions /v1/messages /v1/responses
+	}
+
+	handle @share_models {
+		import um_share_proxy
+	}
+	handle @share_infer {
+		import um_share_proxy
+	}
+	handle {
+		respond "Not Found" 404
+	}
+}

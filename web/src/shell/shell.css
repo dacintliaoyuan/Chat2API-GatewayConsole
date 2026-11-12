@@ -1,0 +1,761 @@
+/* Shared shell and base components for both consoles (ADR 0025).
+   Tokens: shell/tokens.css (--md-*). The navigation layer (sidebar, toolbar
+   capsules) is glass; everything that carries information sits on the solid
+   content layer. Role-specific page styles live with their console and never
+   reference each other. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html {
+  font-family: var(--md-font);
+  color: var(--md-on-surface);
+  background: var(--md-surface);
+}
+body {
+  margin: 0;
+  font-size: var(--md-fs-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+[hidden] {
+  display: none !important;
+}
+:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+}
+::selection {
+  background: color-mix(in srgb, var(--md-primary) 26%, transparent);
+}
+#viewport,
+#stage {
+  position: relative;
+  width: 100%;
+  height: 100dvh;
+  min-height: 400px;
+  overflow: hidden;
+}
+/* Figures line up in columns; JetBrains Mono carries keys, IDs and ports. */
+.num,
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+.mono,
+code,
+kbd {
+  font-family: var(--md-mono);
+  font-size: 0.92em;
+}
+
+/* ---------- App frame ---------- */
+/* One solid surface fills the viewport (#stage): the page ground, the scrollbar
+   gutter, the page's top/bottom padding and the sidebar's margins all read as the
+   same plane. The navigation layer is the only translucent material on top. */
+.app-shell {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: var(--shell-rail-w, 248px) minmax(0, 1fr);
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+}
+html[data-console-rail="collapsed"] .app-shell {
+  --shell-rail-w: 84px;
+}
+.shell-glass {
+  background: var(--md-glass);
+  -webkit-backdrop-filter: var(--md-glass-filter);
+  backdrop-filter: var(--md-glass-filter);
+  border: 1px solid var(--md-glass-edge);
+  box-shadow:
+    0 12px 32px var(--md-glass-shade),
+    inset 0 1px 0 var(--md-glass-shine);
+}
+
+.shell-sidebar {
+  position: relative;
+  z-index: 3;
+  min-height: 0;
+  padding: 10px 0 10px 10px;
+}
+.shell-side-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 14px 10px 10px;
+  border-radius: 24px;
+}
+.shell-env {
+  display: grid;
+  gap: 2px;
+  padding: 4px 10px 14px;
+  min-width: 0;
+}
+.shell-env-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.shell-env-name > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shell-env-mark {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--md-neutral);
+  box-shadow: 0 0 0 3px var(--md-neutral-container);
+}
+.shell-env[data-role-state="confirmed"] .shell-env-mark {
+  background: var(--md-tertiary);
+  box-shadow: 0 0 0 3px var(--md-tertiary-container);
+}
+.shell-env[data-role-state="mismatch"] .shell-env-mark,
+.shell-env[data-role-state="unconfirmed"] .shell-env-mark {
+  background: var(--md-warning);
+  box-shadow: 0 0 0 3px var(--md-warning-container);
+}
+.shell-env-sub {
+  padding-left: 20px;
+  font-size: var(--md-fs-label);
+  color: var(--md-on-surface-variant);
+}
+.shell-nav {
+  display: grid;
+  gap: 2px;
+  align-content: start;
+}
+.shell-nav-label {
+  padding: 12px 14px 4px;
+  font-size: var(--md-fs-label);
+  font-weight: 600;
+  color: var(--md-on-surface-variant);
+}
+.shell-nav button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--md-r-m);
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  transition:
+    background-color var(--md-dur-short) var(--md-ease),
+    color var(--md-dur-short) var(--md-ease);
+}
+.shell-nav button:hover {
+  background: color-mix(in srgb, var(--md-on-surface) 7%, transparent);
+  color: var(--md-on-surface);
+}
+.shell-nav button[aria-current="page"],
+.shell-nav button[aria-pressed="true"] {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  font-weight: 700;
+}
+.shell-nav svg,
+.shell-icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.shell-side-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
+  padding: 10px 2px 0;
+  border-top: 1px solid var(--md-hairline);
+}
+.shell-side-foot .shell-icon-btn {
+  margin-left: auto;
+}
+
+/* Collapsed sidebar: icons only, the names stay in aria-label and title. */
+html[data-console-rail="collapsed"] .shell-nav button {
+  justify-content: center;
+  padding: 0;
+}
+html[data-console-rail="collapsed"]
+  :is(
+    .shell-nav-text,
+    .shell-env-sub,
+    .shell-env-name > span:last-child,
+    .shell-nav-label,
+    .shell-side-text
+  ) {
+  display: none;
+}
+html[data-console-rail="collapsed"] .shell-env-name {
+  justify-content: center;
+}
+html[data-console-rail="collapsed"] .shell-side-foot {
+  flex-direction: column;
+}
+html[data-console-rail="collapsed"] .shell-side-foot .shell-icon-btn {
+  margin-left: 0;
+}
+@media (max-width: 1180px) {
+  [data-action="rail-toggle"] {
+    display: none !important;
+  }
+}
+
+.shell-main {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.shell-page {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 8px 28px 40px;
+}
+.shell-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 16px;
+  padding: 18px 0 20px;
+}
+/* Opaque behind the title and its subtitle, so text scrolling under the sticky
+   bar never shows through. It paints the shell's own surface, so the cover draws no
+   edge of its own: no square corner or band where it meets the sidebar, the top of
+   the window or a wide page's margin. The cover ends exactly at the bar's bottom
+   edge: content under the bar is hidden, content below it is fully opaque. The bar's
+   20px bottom padding is a solid 4px safe edge: at the bottom of a page a text line
+   can otherwise be cut into a 3px sliver by the hard edge. A fade below the bar
+   would instead leave the bottom half of a line semi-transparent (and a second line
+   in the same paragraph at a different grey), so there is none. */
+.shell-toolbar::before {
+  content: "";
+  position: absolute;
+  inset: 0 -28px 0;
+  z-index: -1;
+  background: var(--md-surface);
+  pointer-events: none;
+}
+/* The title keeps a readable width; on a narrow window the capsules wrap
+   under it instead of squeezing it to one character per line. */
+.shell-title {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.shell-title h1 {
+  margin: 0;
+  font-size: var(--md-fs-headline);
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.shell-title p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--md-on-surface-variant);
+}
+.shell-capsules {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.shell-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: var(--md-r-full);
+}
+.shell-capsule button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--md-r-full);
+  background: transparent;
+  color: var(--md-on-surface);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.shell-capsule button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--md-on-surface) 8%, transparent);
+}
+.shell-capsule button:disabled {
+  color: var(--md-on-surface-variant);
+}
+.shell-capsule-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--md-outline-variant);
+}
+.shell-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--md-r-full);
+  background: transparent;
+  color: var(--md-on-surface-variant);
+}
+.shell-icon-btn:hover {
+  background: color-mix(in srgb, var(--md-on-surface) 8%, transparent);
+  color: var(--md-on-surface);
+}
+.shell-icon-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Role notice: shown while the backend role is unconfirmed or contradicts the build. */
+.shell-role-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border-radius: var(--md-r-l);
+  background: var(--md-warning-container);
+  color: var(--md-on-warning-container);
+}
+.shell-role-notice[data-state="checking"] {
+  background: var(--md-neutral-container);
+  color: var(--md-on-surface);
+}
+.shell-role-notice strong {
+  display: block;
+  font-weight: 700;
+}
+.shell-role-notice p {
+  margin: 2px 0 0;
+  font-size: 13px;
+}
+
+/* ---------- Content components ---------- */
+.card {
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-r-xl);
+  background: var(--md-surface-lowest);
+}
+.card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+.card-head h2,
+.card-head h3 {
+  margin: 0;
+  font-size: var(--md-fs-title);
+  font-weight: 700;
+}
+.card-meta {
+  font-size: var(--md-fs-label);
+  color: var(--md-on-surface-variant);
+}
+.card-grow {
+  flex: 1;
+}
+.card-foot {
+  margin: 10px 0 0;
+  font-size: var(--md-fs-label);
+  color: var(--md-on-surface-variant);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--md-r-full);
+  font-size: var(--md-fs-body);
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color var(--md-dur-short) var(--md-ease),
+    box-shadow var(--md-dur-short) var(--md-ease);
+}
+.btn-sm {
+  height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+.btn-primary {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+}
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--md-primary) 35%, transparent);
+}
+.btn-tonal {
+  background: var(--md-secondary-container);
+  color: var(--md-on-secondary-container);
+}
+.btn-tonal:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--md-on-secondary-container) 10%,
+    var(--md-secondary-container)
+  );
+}
+.btn-outline {
+  border: 1px solid var(--md-outline);
+  background: transparent;
+  color: var(--md-on-surface);
+}
+.btn-outline:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--md-on-surface) 6%, transparent);
+}
+.btn-danger {
+  border: 1px solid var(--md-error);
+  background: transparent;
+  color: var(--md-error);
+}
+.btn:disabled {
+  background: color-mix(in srgb, var(--md-on-surface) 10%, transparent);
+  color: color-mix(in srgb, var(--md-on-surface) 55%, transparent);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-r-s);
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  font-size: 13px;
+}
+.chip[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--md-secondary-container);
+  color: var(--md-on-secondary-container);
+  font-weight: 600;
+}
+
+/* Status: a dot or icon plus words, never hue alone. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--md-neutral);
+}
+[data-tone="ok"] {
+  --tone: var(--md-success);
+  --tone-container: var(--md-success-container);
+  --on-tone-container: var(--md-on-success-container);
+}
+[data-tone="warn"] {
+  --tone: var(--md-warning);
+  --tone-container: var(--md-warning-container);
+  --on-tone-container: var(--md-on-warning-container);
+}
+[data-tone="err"] {
+  --tone: var(--md-error);
+  --tone-container: var(--md-error-container);
+  --on-tone-container: var(--md-on-error-container);
+}
+[data-tone="neutral"] {
+  --tone: var(--md-neutral);
+  --tone-container: var(--md-neutral-container);
+  --on-tone-container: var(--md-on-surface);
+}
+.status[data-tone] {
+  color: var(--tone);
+}
+[data-tone] > .dot,
+.dot[data-tone] {
+  background: var(--tone);
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--md-r-full);
+  background: var(--md-neutral-container);
+  color: var(--md-on-surface);
+  font-size: var(--md-fs-label);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pill[data-tone] {
+  background: var(--tone-container);
+  color: var(--on-tone-container);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.data-table th {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--md-outline-variant);
+  font-size: var(--md-fs-label);
+  font-weight: 600;
+  color: var(--md-on-surface-variant);
+  text-align: left;
+  white-space: nowrap;
+}
+.data-table td {
+  padding: 11px 10px;
+  border-bottom: 1px solid var(--md-hairline);
+  vertical-align: middle;
+}
+.data-table tr:last-child td {
+  border-bottom: 0;
+}
+.data-table .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.btn-danger-fill {
+  background: var(--md-error);
+  color: var(--md-surface-lowest);
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Name plates of icon-only controls (the collapsed sidebar, the footer icons):
+   shown on hover / keyboard focus beside the control, never relying on title. */
+.shell-hint {
+  display: none;
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 10px);
+  z-index: 6;
+  transform: translateY(-50%);
+  padding: 3px 10px;
+  border-radius: var(--md-r-xs);
+  background: var(--md-on-surface);
+  color: var(--md-surface);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.shell-icon-btn,
+.shell-nav button {
+  position: relative;
+}
+.shell-icon-btn:is(:hover, :focus-visible) > .shell-hint,
+html[data-console-rail="collapsed"]
+  .shell-nav
+  button:is(:hover, :focus-visible)
+  > .shell-hint {
+  display: block;
+}
+
+/* Confirmation dialog for writes: names the target and the effect. */
+.shell-confirm {
+  width: min(460px, calc(100vw - 48px));
+  padding: 22px;
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-r-xl);
+  background: var(--md-surface-lowest);
+  color: var(--md-on-surface);
+  box-shadow: var(--md-shadow-modal);
+}
+.shell-confirm::backdrop {
+  background: rgba(8, 12, 20, 0.44);
+}
+.shell-confirm h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+}
+.shell-confirm-body {
+  margin: 10px 0 0;
+  line-height: 1.7;
+}
+.shell-confirm-target {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.shell-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* ---------- Appearance dialog (both consoles; appended to <body>) ---------- */
+.console-appearance {
+  width: min(520px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-r-xl);
+  background: var(--md-surface-lowest);
+  color: var(--md-on-surface);
+  box-shadow: var(--md-shadow-modal);
+}
+.console-appearance::backdrop {
+  background: rgba(8, 12, 20, 0.44);
+}
+.console-appearance header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.console-appearance h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+.console-appearance fieldset {
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+}
+.console-appearance legend {
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.appearance-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.appearance-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-r-full);
+  color: var(--md-on-surface-variant);
+  cursor: pointer;
+}
+.appearance-options label:hover {
+  background: color-mix(in srgb, var(--md-on-surface) 6%, transparent);
+  color: var(--md-on-surface);
+}
+.appearance-options label:has(:checked) {
+  border-color: transparent;
+  background: var(--md-secondary-container);
+  color: var(--md-on-secondary-container);
+  font-weight: 600;
+}
+.appearance-options label:has(:focus-visible) {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+}
+.appearance-options input {
+  margin: 0;
+  accent-color: var(--md-primary);
+}
+.appearance-options input:focus-visible {
+  outline: none;
+}
+.appearance-reason,
+.appearance-hint,
+.appearance-status {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--md-on-surface-variant);
+}
+.appearance-hint {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--md-hairline);
+}
+
+/* Reduced motion: the system setting or the dialog's 「减少动效」. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+html[data-console-motion="reduced"] *,
+html[data-console-motion="reduced"] *::before,
+html[data-console-motion="reduced"] *::after {
+  animation: none !important;
+  transition: none !important;
+}

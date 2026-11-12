@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 
 import ctypes
+import errno
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -113,17 +114,40 @@ class ResourceFileLock:
     def acquire(self, cancel_event=None):
         """Block up to timeout_s for exclusive ownership.
 
+        Windows uses a no-share-mode file handle (the handle IS the lock).
+        POSIX uses ``fcntl.flock`` on an exclusively opened descriptor: the
+        descriptor is the lock, so process death releases it and no stale-marker
+        heuristic exists on either platform.
+
         Raises LockBusy when the deadline passes and OperationCancelled when
         the cancel event fires while waiting.
         """
+        deadline = time.monotonic() + self._timeout
+        os.makedirs(self._dir, exist_ok=True)
+        if os.name == "nt":
+            self._acquire_windows(deadline, cancel_event)
+        else:
+            self._acquire_posix(deadline, cancel_event)
+        info = json.dumps({
+            "pid": os.getpid(), "owner": self._owner,
+            "resource": self._resource,
+            "created_epoch": round(time.time(), 3),
+        }, ensure_ascii=False).encode("utf-8")
+        try:
+            os.lseek(self._fd, 0, os.SEEK_SET)
+            os.truncate(self._fd, 0)
+            os.write(self._fd, info)
+        except OSError:
+            pass  # diagnostics only; the descriptor/handle is the lock
+        return self
+
+    def _acquire_windows(self, deadline, cancel_event):
         import msvcrt
         k32 = ctypes.windll.kernel32
         k32.CreateFileW.restype = wintypes.HANDLE
         k32.CreateFileW.argtypes = [
             wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
             wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-        deadline = time.monotonic() + self._timeout
-        os.makedirs(self._dir, exist_ok=True)
         while True:
             if cancel_event is not None and cancel_event.is_set():
                 raise OperationCancelled()
@@ -145,18 +169,45 @@ class ResourceFileLock:
         except OSError:
             k32.CloseHandle(handle)
             raise
-        info = json.dumps({
-            "pid": os.getpid(), "owner": self._owner,
-            "resource": self._resource,
-            "created_epoch": round(time.time(), 3),
-        }, ensure_ascii=False).encode("utf-8")
+
+    def _acquire_posix(self, deadline, cancel_event):
+        """POSIX exclusive lock via ``fcntl.flock``.
+
+        The lock file is opened 0600 and the SAME descriptor is kept for the
+        lifetime of the lock. A separate open file description (another
+        process, or another ``ResourceFileLock`` in this process) contends on
+        ``LOCK_EX | LOCK_NB``; a non-contention error fails loudly instead
+        of spinning.
+        """
+        import fcntl
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            os.lseek(self._fd, 0, os.SEEK_SET)
-            os.truncate(self._fd, 0)
-            os.write(self._fd, info)
-        except OSError:
-            pass  # diagnostics only; the handle is the lock
-        return self
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError:
+                pass  # diagnostics/permissions hardening, not the lock
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise OperationCancelled()
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                        raise OperationError(
+                            "lock_open_failed",
+                            "console lock open failed (errno=%s)"
+                            % (exc.errno,))
+                    if time.monotonic() >= deadline:
+                        raise LockBusy(self._resource)
+                    time.sleep(self._interval)
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+        self._fd = fd
 
     def __exit__(self, exc_type, exc, tb):
         if self._fd is not None:
@@ -173,11 +224,16 @@ class ActionSpec:
 
     ``enabled`` is an explicit production fact; disabled actions carry a
     human-readable reason and can never execute (no fake success path).
+    ``pre_lock`` (default None) runs after the queued operation row exists and
+    BEFORE ``ResourceFileLock.acquire`` — the share close actions use it to
+    publish the public-supervision cancel file while they still wait for the
+    action lock. A hook must never take the action resource itself.
     """
 
     def __init__(self, name, description, handler=None, resource_fn=None,
                  param_schema=None, enabled=True, disabled_reason=None,
-                 bump_generation_on_success=False, cancelable=True):
+                 bump_generation_on_success=False, cancelable=True,
+                 pre_lock=None):
         self.name = name
         self.description = description
         self.handler = handler
@@ -187,6 +243,7 @@ class ActionSpec:
         self.disabled_reason = disabled_reason
         self.bump_generation_on_success = bump_generation_on_success
         self.cancelable = cancelable
+        self.pre_lock = pre_lock
 
 
 class OperationContext:
@@ -393,11 +450,13 @@ class OperationManager:
                 existing = self._find_by_idempotency(idempotency_key)
                 if existing is not None:
                     if (existing["action"] != action
-                            or existing["target"] != target):
+                            or existing["target"] != target
+                            or not _same_params(
+                                existing["params_json"], params)):
                         raise OperationError(
                             "idempotency_key_conflict",
                             "idempotency key already used for a different"
-                            " action/target")
+                            " action/target/params")
                     view = self._view(existing)
                     view["deduplicated"] = True
                     return view
@@ -542,6 +601,30 @@ class OperationManager:
             if row is None or row["state"] != "queued":
                 return
             spec = self._specs[row["action"]]
+            # §3.5 (contract): the optional pre-lock hook runs while the
+            # operation is still queued and BEFORE the action resource is
+            # acquired, so a close queued behind a long recovery can publish
+            # its cancel signal. A hook failure is a residual fact and never
+            # blocks the action; OperationCancelled is honoured as a cancel.
+            pre_lock_facts = None
+            if spec.pre_lock is not None:
+                try:
+                    pre_lock_facts = spec.pre_lock(
+                        row["target"], json.loads(row["params_json"]))
+                except OperationCancelled:
+                    raise
+                except Exception as exc:  # noqa: BLE001  residual, never blocks
+                    self._add_step(op_id, "pre_lock_failed: %s"
+                                   % type(exc).__name__)
+                else:
+                    if isinstance(pre_lock_facts, dict):
+                        try:
+                            note = "pre_lock: " + json.dumps(
+                                pre_lock_facts, ensure_ascii=False,
+                                sort_keys=True)
+                        except (TypeError, ValueError):
+                            note = "pre_lock: <unserializable>"
+                        self._add_step(op_id, note)
             lock = ResourceFileLock(
                 self._lock_dir, row["resource"],
                 owner="console-op:%s" % op_id,
@@ -560,7 +643,7 @@ class OperationManager:
                     "code": "cancelled",
                     "message": "adapter honoured the cancel request"})
                 return
-            self._complete(op_id, spec, result)
+            self._complete(op_id, spec, result, pre_lock_facts)
         except OperationCancelled:
             self._finish_state(op_id, "cancelled", error={
                 "code": "cancelled", "message": "cancelled before execution"})
@@ -584,12 +667,14 @@ class OperationManager:
             with self._state_lock:
                 self._cancel_events.pop(op_id, None)
 
-    def _complete(self, op_id, spec, result):
+    def _complete(self, op_id, spec, result, pre_lock_facts=None):
         """Record success with late-result protection.
 
         A stale generation discards the result: old callbacks must not write
         back after the resource moved on. A completed-but-cancel-requested
         task keeps its result and records that the cancel arrived too late.
+        A dict result carries the pre-lock facts under ``pre_lock`` (the
+        handler's own keys are never overwritten).
         """
         with self._state_lock:
             with self._db_lock:
@@ -606,6 +691,9 @@ class OperationManager:
                 return
             if isinstance(result, dict):
                 result = {str(k): v for k, v in result.items()}
+                if isinstance(pre_lock_facts, dict) \
+                        and "pre_lock" not in result:
+                    result["pre_lock"] = pre_lock_facts
             else:
                 result = {"value": result}
             if row["cancel_requested"]:
@@ -724,3 +812,38 @@ def _bounded_param_schema(schema):
         if entry:
             out[str(key)[:64]] = entry
     return out
+
+
+def _same_params(stored_params_json, submitted_params):
+    """Whether an existing row and a new submit carry the SAME params.
+
+    Old rows stored their JSON text in insertion order, so raw text comparison
+    would falsely conflict (or falsely dedupe) after a key-order change.  Both
+    sides are parsed and re-serialized with sorted keys; ``None``/absent params
+    mean the empty object, the same normalization ``_validate_params`` applies.
+    A stored value that is not a JSON object returns False, so the caller fails
+    closed with an explicit conflict instead of reusing an intent it cannot verify.
+    """
+    def canonical(value):
+        if value is None:
+            value = {}
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return None
+        if not isinstance(value, dict):
+            return None
+        try:
+            # Round-trip first so JSON's own key coercion applies to nested
+            # objects, then sorted keys make object order irrelevant.
+            value = json.loads(json.dumps(value, ensure_ascii=False,
+                                         allow_nan=False))
+            return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                              separators=(",", ":"))
+        except (TypeError, ValueError):
+            return None
+
+    stored = canonical(stored_params_json)
+    submitted = canonical(submitted_params)
+    return stored is not None and submitted is not None and stored == submitted

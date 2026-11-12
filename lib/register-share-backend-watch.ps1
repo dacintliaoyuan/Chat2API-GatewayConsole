@@ -2,15 +2,18 @@
 param(
     [ValidateSet('Register', 'Unregister')]
     [string]$Action = 'Register',
-    [string]$TaskName = 'AI Gateway Public Share Backend Watch',
+    [string]$TaskName = 'SelfUseAI AI Gateway Share Backend Watch',
     [switch]$SelfTest
 )
 
-# Registration entry for the dedicated share backend (8110) watch - contract
-# Rev9 section 7.5. It records the FIXED paths and the current identity, never
-# a credential; the task itself only runs the hidden VBS launcher, and -SelfTest
-# only CONSTRUCTS the task object (no registration, no ACL change, no recovery
-# enablement).
+# Registration entry for the dedicated share backend (8110) watch and the optional
+# public Funnel supervision - contract share-resilience-contract-4 sections 4.1 / 4.2.
+# The public lane is OFF by default; S7 authorization creates
+# %LOCALAPPDATA%\SelfUseAI\ai-gateway\watch\share-public-enabled.json and
+# re-registers this task, which keeps the PT15M run limit for the enabled lane.
+# It records the FIXED paths and the current identity, never a credential; the task
+# itself only runs the hidden VBS launcher, and -SelfTest only CONSTRUCTS the task
+# object (no registration, no ACL change, no recovery enablement).
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
@@ -49,19 +52,26 @@ function New-ShareBackendWatchTask {
     $principal = New-ScheduledTaskPrincipal -UserId $currentIdentity `
         -LogonType Interactive -RunLevel Limited
 
-    # IgnoreNew: never two watch runs at once. The five-minute limit bounds
-    # the watch run itself; a started 8110 keeps running after the task ends.
+    # IgnoreNew: never two watch runs at once. The fifteen-minute limit covers
+    # the wrapper's 840 s budget (backend 180 s + public 600 s + overhead) with
+    # 60 s of margin; a started 8110 keeps running after the task ends.
     $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
-        -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -StartWhenAvailable `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -StartWhenAvailable `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
     return New-ScheduledTask -Action $taskAction -Trigger $trigger `
         -Principal $principal -Settings $settings `
-        -Description ('Dedicated share backend (8110) watch, every 60s: starts only a ' +
+        -Description ('Dedicated share backend (8110) watch every 60s: recovers a ' +
             'vanished dedicated backend whose operator intent is "running" for this ' +
-            'boot, after two confirmations and within the hourly budget; never after ' +
-            'a console stop, never for a live instance, never a whole-chain restart. ' +
-            'Log: %LOCALAPPDATA%\AIGatewayPublic\watch\share-backend-watch.log')
+            'boot (two confirmations, hourly budget); never after a console stop, ' +
+            'never for a live instance, never a whole-chain restart. Public Funnel ' +
+            'supervision is OFF by default; only S7 authorization creates ' +
+            '%LOCALAPPDATA%\SelfUseAI\ai-gateway\watch\share-public-enabled.json ' +
+            'and re-registers this task, which keeps the PT15M run limit and then ' +
+            'probes the public share DNS/TLS with an in-process 10s re-check plus ' +
+            'a bounded 30-minute recovery budget. ' +
+            'Log: %LOCALAPPDATA%\SelfUseAI\ai-gateway\watch\share-backend-watch.log; ' +
+            'public: %LOCALAPPDATA%\SelfUseAI\ai-gateway\watch\share-public-watch.log')
 }
 
 function Invoke-RegisterSelfTest {
@@ -88,8 +98,20 @@ function Invoke-RegisterSelfTest {
         [string]$task.Settings.MultipleInstances -eq 'IgnoreNew') $true `
         'the task ignores a new instance'
     Assert-SelfTestEqual (
-        [string]$task.Settings.ExecutionTimeLimit -eq 'PT5M') $true `
-        'the run is bounded to five minutes'
+        [string]$task.Settings.ExecutionTimeLimit -eq 'PT15M') $true `
+        'the run is bounded to fifteen minutes (PT15M, 840s wrapper + 60s margin)'
+    Assert-SelfTestEqual (
+        [string]$task.Description -match 'OFF by default') $true `
+        'the task description states public supervision is off by default'
+    Assert-SelfTestEqual (
+        [string]$task.Description -match 'share-public-enabled\.json') $true `
+        'the task description names the S7 enable marker'
+    Assert-SelfTestEqual (
+        [string]$task.Description -match 'S7') $true `
+        'the task description ties public enablement to S7 authorization'
+    Assert-SelfTestEqual (
+        [string]$task.Description -match 're-registers') $true `
+        'the task description requires re-registration after enabling the marker'
     Assert-SelfTestEqual ([bool]$task.Settings.StartWhenAvailable) $true `
         'a missed run starts when available'
     Assert-SelfTestEqual ([bool]$task.Settings.DisallowStartIfOnBatteries) $false `

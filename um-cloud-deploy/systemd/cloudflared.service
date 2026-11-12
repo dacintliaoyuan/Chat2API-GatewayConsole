@@ -1,0 +1,35 @@
+[Unit]
+Description=Cloudflare Tunnel for the UM cloud share API
+Documentation=file:///opt/um-share/current/um-cloud-deploy/README.md
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/um-share/cloudflared.yml
+ConditionPathExists=/etc/um-share/cloudflared.env
+
+[Service]
+Type=simple
+# The tunnel token is an environment value, never a command-line argument, so it
+# does not appear in the process list.  install.sh writes the file 0600 root:root.
+EnvironmentFile=/etc/um-share/cloudflared.env
+ExecStart=/usr/bin/cloudflared tunnel --config /etc/um-share/cloudflared.yml run
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/etc/um-share/cloudflared.yml /etc/um-share/cloudflared.env
+# The ingress file is the only exposure control: four API paths to
+# http://127.0.0.1:8100 and a catch-all http_status:404.
+# 18096 (console), 8110 (share backend) and 5901 (display) are never routed.
+
+[Install]
+WantedBy=multi-user.target

@@ -20,7 +20,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here 'lib\gateway-runtime.ps1')
 . (Join-Path $here 'lib\console-runtime-bridge.ps1')
 
-$base = 'http://127.0.0.1:8096'
+$base = 'http://127.0.0.1:8001'
 
 function Wait-UsageReady {
     # Bounded recheck after a start attempt: the runtime's own health
@@ -40,9 +40,6 @@ function Wait-UsageReady {
 #    single-acquirer rule as invoke-gateway-service.ps1 — never the
 #    wrapper).
 $state = Get-GatewayServiceStatus -Key 'usage'
-if ($state -eq 'Conflict') {
-    throw '8096 belongs to another process or checkout. Stop that instance explicitly or change the public configuration before opening.'
-}
 if ($state -ne 'Running') {
     Write-Host '[入口] 管理宿主未运行，正在启动（约需数秒）…'
     $lock = Enter-ConsoleResourceLock -Resource 'service:usage' -Owner 'cli-console-entry'
@@ -52,7 +49,7 @@ if ($state -ne 'Running') {
         Exit-ConsoleResourceLock -Lock $lock
     }
     if (-not (Wait-UsageReady)) {
-        Write-Warning '管理宿主（8096）未能就绪，暂不打开控制台。'
+        Write-Warning '管理宿主（8001）未能就绪，暂不打开控制台。'
         Write-Warning '可稍后重试；应急入口：同目录 invoke-gateway-service.ps1 -Key usage -Action Start。'
         exit 1
     }

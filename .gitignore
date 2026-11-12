@@ -1,10 +1,39 @@
+# 依赖与构建缓存
+node_modules/
+**/node_modules/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+build/
+**/dist/
+**/dist-cloud/
+web/release/
+.tools/
+.worktrees/
+.vercel/
+.wrangler/
+
+# 运行时数据：凭据、账本、浏览器资料、部署状态，一律不入库
 data/
+profile/
 tmp/
 output/
-release/
-build/
-**/__pycache__/
-*.py[cod]
+chat2api/token.json
+chat2api/token.json.*.tmp
+chat2api/.edge-profile/
+chat2api/chat2api.log.*
+
+# 本机诊断与前端临时产物
+web/tmp/
+web/art/
+web/reference/
+web/verification/
+web/verify-shots/
+web/docs/
+
+# 通用
 *.log
 *.log.*
 *.jsonl
@@ -17,15 +46,5 @@ build/
 .env
 .env.*
 !.env.example
-token.json
-**/token.json
-**/.edge-profile/
-**/edge-profile/
-**/*profile*/
-**/node_modules/
-**/dist/
-.venv/
-.mimosa/
-.zcode/
 *.zip
-
+.zcode/

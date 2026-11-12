@@ -1,0 +1,17 @@
+# Fluxbox resources for the single private login window.
+#
+# The display is a tool, not a desktop: one workspace, no toolbar and no
+# workspace switcher.  The browser window is maximized by the 8110 child.
+# start-loopback-display.sh passes this file with an absolute ``-rc`` path because
+# the service user has no writable home for ``~/.fluxbox``.
+session.screen0.workspaces: 1
+session.screen0.workspaceNames: UM
+session.screen0.toolbar.visible: false
+session.screen0.toolbar.height: 0
+# Belt and braces: ask fluxbox not to run a root command at all.  fluxbox 1.3.7
+# still runs ``fbsetbg`` for the style background regardless of this resource, so
+# the REAL fix is the no-op fbsetbg/xsetbg shim start-loopback-display.sh puts in
+# PATH: without it fbsetbg finds no wallpaper setter on this minimal image, pops a
+# CENTERED xmessage dialog ("fbsetbg: I can't find an app to set the wallpaper
+# with") and BLOCKS waiting for the OK click, hiding the UM login page behind it.
+session.screen0.rootCommand: /bin/true

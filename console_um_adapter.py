@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """Read-only UM (chat2api) authentication-state adapter for the console.
 
-Scope: P2 unified console read adapters. This module only reads the
-in-memory authentication state that chat2api itself maintains. It never
-triggers the upstream re-login verification path (planning decision: the
-"raw-fresh" active verification has side effects and is intentionally not
-used here), so ``verified`` is always False and an unreachable service is
-reported as "unknown", never as "invalid".
+Scope: unified console authentication adapters. ``um_auth_status`` only
+reads chat2api's in-memory state, so its ``verified`` is always False.
+``um_verify_account`` performs the separate restricted credential check;
+neither path refreshes credentials or opens the login browser. An
+unreachable service is reported as unknown, never as invalid.
 
 Endpoint facts (verified against chat2api source):
 * ``GET /admin/auth/status`` is a pure memory read (``proxy.auth_status()``);
@@ -15,17 +14,16 @@ Endpoint facts (verified against chat2api source):
   content; client IP must be loopback; an ``Origin`` header is rejected;
   Host must be 127.0.0.1/localhost/::1. Token mismatch -> 403.
 
-Restricted verify endpoint (contract agreed with chat2api; NOT yet shipped
-in production): ``GET /admin/auth/verify`` reuses the same control auth
+Restricted verify endpoint (shipped in chat2api): ``GET /admin/auth/verify``
+reuses the same control auth
 (loopback + ``X-Admin-Control``, ``Origin`` refused) and performs ONE
 classification probe of the upstream ``/api/models`` directory via
 ``proxy.bearer()``; it never calls refresh and never mutates chat2api's
 auth state. 200 JSON is ``{"verify": "valid|rejected|needs_login|unknown",
 "reason": <str|null>, "upstream_status": <int|null>, "checked_epoch": <int>,
-"note": <str>}``. ``um_verify_account`` is the console-side consumer and
-lands BEFORE the endpoint exists in production: the registry action stays
-disabled, so this path cannot execute against a real service until the
-endpoint ships and the action is explicitly enabled.
+"note": <str>}``. ``um_verify_account`` is the console-side consumer;
+the login orchestration reuses the same verification request before it
+decides whether a browser login is needed.
 
 Handler contract matches the task layer: ``handler(target, params, ctx)``.
 Pure stdlib plus the shared console error type; import has no side effects.
@@ -89,16 +87,16 @@ def _read_control_token():
     except FileNotFoundError:
         raise OperationError(
             "control_token_absent",
-            "管理控制令牌文件缺席，无法查询上游认证状态")
+            "管理控制令牌文件缺席，无法查询 UM 认证状态")
     except (OSError, UnicodeDecodeError) as exc:
         raise OperationError(
             "control_token_unreadable",
-            "管理控制令牌文件不可读（%s）；状态未知，上游认证状态查询拒绝执行"
+            "管理控制令牌文件不可读（%s）；状态未知，UM 认证状态查询拒绝执行"
             % type(exc).__name__)
     if not value:
         raise OperationError(
             "control_token_empty",
-            "管理控制令牌文件为空，无法查询上游认证状态")
+            "管理控制令牌文件为空，无法查询 UM 认证状态")
     return value
 
 
@@ -137,6 +135,38 @@ def resolve_chat2api_base_url():
 def _coerce_text(value):
     """Normalize an optional response field to str|None."""
     return value if isinstance(value, str) else None
+
+
+_RECOVERY_STATES = ("idle", "waiting", "running", "exhausted", "stopped")
+
+
+def _recovery_summary(value):
+    """Whitelist the additive recovery summary from chat2api (A7).
+
+    Only the progress fields the console may display are copied; the reason a
+    manual takeover stopped the cycle stays in the ``error`` field and is never
+    passed through as page content. A missing or malformed summary is ``None``
+    rather than a fabricated zero.
+    """
+    if not isinstance(value, dict):
+        return None
+    state = value.get("state")
+    if not isinstance(state, str) or state not in _RECOVERY_STATES:
+        return None
+    summary = {"state": state}
+    for key in ("round", "session_starts", "max_sessions"):
+        number = value.get(key)
+        if isinstance(number, bool) or not isinstance(number, int):
+            return None
+        summary[key] = number
+    next_attempt = value.get("next_attempt_epoch")
+    if isinstance(next_attempt, bool) or not isinstance(next_attempt, (int, float)):
+        summary["next_attempt_epoch"] = None
+    else:
+        summary["next_attempt_epoch"] = float(next_attempt)
+    pause_reason = value.get("pause_reason")
+    summary["pause_reason"] = _coerce_text(pause_reason)
+    return summary
 
 
 def um_auth_status(target, params, ctx=None):
@@ -199,6 +229,10 @@ def um_auth_status(target, params, ctx=None):
         "state": state,
         "label": _coerce_text(payload.get("label")),
         "error": _coerce_text(payload.get("error")),
+        # A7 additive recovery summary: explicitly whitelisted fields only.
+        # The full recovery dict is never passed through, so a future private
+        # field cannot leak through this read face.
+        "recovery": _recovery_summary(payload.get("recovery")),
         "source": "memory-state",
         "verified": False,
         "state_known": state in _KNOWN_STATES,
@@ -210,8 +244,8 @@ def um_auth_status(target, params, ctx=None):
 def um_verify_account(target, params, ctx=None):
     """One-shot restricted credential verification via chat2api.
 
-    Consumes the future ``GET /admin/auth/verify`` restricted endpoint (see
-    the module docstring for the contract). The adapter never sends an
+    Consumes the ``GET /admin/auth/verify`` restricted endpoint (see the
+    module docstring for the contract). The adapter never sends an
     Origin header, never calls refresh and never mutates auth state.
     ``rejected`` means the upstream refused the credential/access and must
     not be read as "expired". The result never contains the control token
@@ -222,7 +256,15 @@ def um_verify_account(target, params, ctx=None):
 
     token = _read_control_token()
     base_url = resolve_chat2api_base_url()
+    return _verify_account(base_url, token)
 
+
+def _verify_account(base_url, token):
+    """Verify one resolved instance with an already-read control token.
+
+    Shared by the read action and guarded login orchestration so both use
+    the same restricted HTTP boundary, time budget and response checks.
+    """
     request = urllib.request.Request(
         base_url.rstrip("/") + "/admin/auth/verify",
         headers={"X-Admin-Control": token})
