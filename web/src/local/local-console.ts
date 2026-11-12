@@ -1,6 +1,6 @@
 import type { RoleGate, RoleVerdict } from "../console/role-gate";
 
-/** The local console (ADR 0025; frontend handoff r3).
+/** The local console (ADR 0001; frontend handoff r3).
  *
  *  Candidate builds show the UM console (um-ui/: 总览 / 请求与诊断 / 模型与设置).
  *  `?um-preview=<scenario>` swaps in the labelled offline preview, which never

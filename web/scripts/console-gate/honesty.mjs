@@ -963,7 +963,7 @@ export async function runHonesty(c, { fixtures, binding = "candidate" }) {
       );
   }
 
-  // H2 — since the 2026-10-31 redesign (ADR 0025) the entry is shared: it
+  // H2 — since the 2026-10-31 redesign (ADR 0001) the entry is shared: it
   // installs the role gate and the appearance, then loads the role's console;
   // the local console still mounts the Workbench (production and
   // `?console=workbench`). The backdrop levels are retired (Plan-Revision 2 #7):

@@ -5,7 +5,7 @@ import "./shell/shell.css";
 import { initAppearance } from "./shell/appearance";
 import { BUILD_ROLE, RoleGate, installRoleGate } from "./console/role-gate";
 
-/** Shared boot for both consoles (ADR 0025). The role is a build-time
+/** Shared boot for both consoles (ADR 0001). The role is a build-time
  *  constant, so each build carries only its own console: the other branch and
  *  its chunk drop out. The role gate is installed before any console code runs,
  *  so no write can leave the page before the backend's role is confirmed. */

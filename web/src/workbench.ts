@@ -2210,7 +2210,7 @@ export class Workbench {
     // The label preference is owned by console-entry.ts and lands here as
     // html[data-console-rail] (collapsed = icons only). The compatibility clock
     // node stays hidden in the console.
-    // 2026-10-31 redesign (ADR 0025): the console is the local role of a shared
+    // 2026-10-31 redesign (ADR 0001): the console is the local role of a shared
     // shell — a glass sidebar (environment marker, grouped navigation, appearance
     // and sidebar toggle) beside a solid content column whose sticky head carries
     // the page name, the console-wide run verdict, the evidence time and the

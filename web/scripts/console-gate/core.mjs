@@ -19,7 +19,7 @@ export const paths = {
   candidateDir: resolve(here, "../../release/candidate"),
   fixtures: resolve(here, "fixtures/api.json"),
 };
-/** Role candidates (ADR 0025, vite --mode candidate-local / candidate-cloud) and
+/** Role candidates (ADR 0001, vite --mode candidate-local / candidate-cloud) and
  *  the synthetic fixtures each role is checked against. */
 export const ROLE_BUILDS = {
   local: resolve(here, "../../release/candidate/local"),

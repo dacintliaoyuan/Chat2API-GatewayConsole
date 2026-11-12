@@ -1,4 +1,4 @@
-/** Console role gate (ADR 0025: one front end, two consoles, role chosen at
+/** Console role gate (ADR 0001: one front end, two consoles, role chosen at
  *  build time).
  *
  *  The build fixes the role; the page opens writes only once the backend's own

@@ -24,7 +24,7 @@ const GW_TARGETS: readonly { prefix: string; target: string }[] = [
  *  `--mode candidate` refuses any other outDir. */
 const CANDIDATE_OUT_DIR = "release/candidate";
 
-/** One code base, two consoles (ADR 0025): the role is fixed at build time and
+/** One code base, two consoles (ADR 0001): the role is fixed at build time and
  *  checked against the backend's own report once the page loads. */
 type ConsoleRole = "local" | "cloud";
 const CONSOLE_ROLES: readonly ConsoleRole[] = ["local", "cloud"];
@@ -97,7 +97,7 @@ function candidateLineFor(root: string, outDir: string) {
     .find(([, line]) => resolve(root, line.outDir) === outDir) ?? null;
 }
 
-/** Production output, one directory per console role (ADR 0025). The local
+/** Production output, one directory per console role (ADR 0001). The local
  *  console is hosted by 8001 from `dist`; the cloud console is built to
  *  `dist-cloud` and carried into the release package as `web/dist`. Neither
  *  directory may receive the other role's tree. Writing either one is the
