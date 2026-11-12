@@ -41,6 +41,8 @@ def _http(port, method, path, *, body=None, headers=None, timeout=10.0):
         response = connection.getresponse()
         raw = response.read()
         return response.status, raw
+    except (ConnectionRefusedError, OSError):
+        return 0, b""
     finally:
         connection.close()
 
@@ -62,6 +64,7 @@ class _Chain:
         self.control_token = root / "control-token"
         self.control_token.write_text("control-" + secrets.token_hex(16),
                                       encoding="utf-8")
+        self.control_token.chmod(0o600)
         self.projection = root / "projection.json"
         self.projection.write_text(json.dumps({
             "schema_version": 2,
@@ -125,6 +128,7 @@ class _Chain:
                     output = self.process.communicate(timeout=5)[0]
                 except (OSError, subprocess.SubprocessError):
                     pass
+            print(output, file=sys.stderr)
             raise SystemExit("merged 8100 did not start:\n" + output)
 
     def stop(self):
