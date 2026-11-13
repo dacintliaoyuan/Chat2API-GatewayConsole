@@ -7,17 +7,14 @@ import type {
   Intent,
   JsonObject,
   LogPage,
-  ModelSettings,
   Operation,
   OperationResult,
   PublicShareEventsPage,
   PublicShareExport,
   PublicShareStatus,
   ReadResult,
-  SettingsPreview,
   ShareUsage,
   ShareUsageRequestsPage,
-  SyncScope,
   Transport,
   TransportResponse,
   UmCatalogPayload,
@@ -36,7 +33,6 @@ import type {
 } from "./types.ts";
 import {
   ContractError,
-  encodeSyncScope,
   normalizeCapabilities,
   normalizeCatalog,
   normalizeContextEvidence,
@@ -69,13 +65,6 @@ const actionIntents: Readonly<Record<string, Intent>> = Object.freeze({
   "model.catalog": "read",
   "model.context_overrides": "read",
   "model.context_probe_preview": "read",
-  "model.sync_preview": "read",
-  "model.sync_pending": "read",
-  "model.sync_history": "read",
-  "model.settings_preview": "read",
-  "model.settings_save": "draft",
-  "model.settings_apply": "client-write",
-  "model.sync_apply": "client-write",
   "model.context_probe_run": "probe",
   "model.speedtest": "probe",
   // UM maintenance (B6): the status query is a read; verify probes the
@@ -181,33 +170,6 @@ function responseReason(status: number, body: unknown): string {
     ? `${reason}${reason.includes(`HTTP ${status}`) ? "" : ` (HTTP ${status})`}`
     : `HTTP ${status}`;
 }
-function selectionSnapshot(
-  selection: Readonly<Record<string, number>>
-): Record<string, number> {
-  if (!object(selection) || !Object.keys(selection).length)
-    throw new ContractError("settings selection cannot be empty");
-  const copied: Record<string, number> = {};
-  for (const [key, version] of Object.entries(selection)) {
-    if (!/^[^|]+\|.+$/.test(key) || positiveCount(version) === null)
-      throw new ContractError(
-        "settings selection requires real model identities and positive draft versions"
-      );
-    copied[key] = version;
-  }
-  return copied;
-}
-function selectionsMatch(
-  left: Readonly<Record<string, number>>,
-  right: Readonly<Record<string, number>>
-): boolean {
-  const keys = Object.keys(left).sort();
-  const other = Object.keys(right).sort();
-  return (
-    keys.length === other.length &&
-    keys.every((key, index) => key === other[index] && left[key] === right[key])
-  );
-}
-
 export interface RunActionOptions {
   /** A caller must explicitly distinguish evidence reads, drafts, client writes and billed probes. */
   intent: Intent;
@@ -459,132 +421,6 @@ export class BackendClient {
       normalizeContextEvidence,
       signal
     );
-  }
-
-  async saveSettings(
-    source: string,
-    modelId: string,
-    fields: Partial<ModelSettings>,
-    expectedVersion: number | null,
-    signal?: AbortSignal
-  ): Promise<OperationResult> {
-    if (
-      !source ||
-      !modelId ||
-      (expectedVersion !== null &&
-        (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0))
-    )
-      throw new ContractError("settings identity/version is invalid");
-    if (
-      !object(fields) ||
-      !Object.keys(fields).length ||
-      Object.keys(fields).some(
-        (key) =>
-          ![
-            "alias",
-            "contextSource",
-            "contextTokens",
-            "defaultEffort",
-          ].includes(key)
-      )
-    )
-      throw new ContractError(
-        "settings patch must contain only supported fields"
-      );
-    return this.runAction(
-      "model.settings_save",
-      "model",
-      {
-        source,
-        model_id: modelId,
-        ...clone(fields),
-        ...(expectedVersion !== null
-          ? { expected_draft_version: expectedVersion }
-          : {}),
-      },
-      { intent: "draft", signal, resourceKey: `settings|${source}|${modelId}` }
-    );
-  }
-
-  async previewSettings(
-    selection: Readonly<Record<string, number>>,
-    signal?: AbortSignal
-  ): Promise<SettingsPreview> {
-    const snapshot = selectionSnapshot(selection);
-    const result = await this.runAction(
-      "model.settings_preview",
-      "model",
-      { selection: snapshot },
-      { intent: "read", signal }
-    );
-    if (result.state !== "succeeded" || !result.operation?.result)
-      throw new ContractError(result.reason ?? `preview ${result.state}`);
-    const raw = result.operation.result;
-    const returned = selectionSnapshot(
-      raw.selection as Readonly<Record<string, number>>
-    );
-    if (!selectionsMatch(snapshot, returned))
-      throw new ContractError(
-        "preview selection does not match the submitted draft versions"
-      );
-    const token = text(raw.preview_token);
-    if (!token || !/^[a-f0-9]{64}$/i.test(token))
-      throw new ContractError("preview binding token is missing/invalid");
-    if (!Array.isArray(raw.changes) || raw.changes.some((row) => !object(row)))
-      throw new ContractError("preview changes must be an object array");
-    return Object.freeze({
-      selection: Object.freeze(returned),
-      previewToken: token,
-      changes: clone(raw.changes) as JsonObject[],
-      plan: clone(raw.plan),
-      warnings: Array.isArray(raw.warnings)
-        ? raw.warnings.filter((row): row is string => typeof row === "string")
-        : [],
-      status: text(raw.status),
-    });
-  }
-
-  applySettings(
-    preview: SettingsPreview,
-    currentSelection: Readonly<Record<string, number>>,
-    signal?: AbortSignal
-  ): Promise<OperationResult> {
-    const selection = selectionSnapshot(currentSelection);
-    if (!selectionsMatch(selectionSnapshot(preview.selection), selection))
-      throw new ContractError(
-        "draft selection changed after preview; preview again"
-      );
-    if (!/^[a-f0-9]{64}$/i.test(preview.previewToken))
-      throw new ContractError("a valid settings preview is required");
-    return this.runAction(
-      "model.settings_apply",
-      "model",
-      { selection, preview_token: preview.previewToken },
-      {
-        intent: "client-write",
-        signal,
-        resourceKey: "settings-apply",
-      }
-    );
-  }
-
-  previewSync(
-    scope: SyncScope,
-    signal?: AbortSignal
-  ): Promise<OperationResult> {
-    return this.runAction(
-      "model.sync_preview",
-      "model",
-      encodeSyncScope(scope),
-      { intent: "read", signal }
-    );
-  }
-
-  applySync(scope: SyncScope, signal?: AbortSignal): Promise<OperationResult> {
-    return this.runAction("model.sync_apply", "model", encodeSyncScope(scope), {
-      intent: "client-write",
-      signal,
-    });
   }
 
   /** One bounded share-usage read. The path carries the backend's own filters

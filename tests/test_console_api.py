@@ -686,8 +686,9 @@ class ConsoleReadTests(ConsoleApiTestBase):
         status, raw = self.req("GET", "/api/console/operations")
         self.assertEqual(status, 200)
         status, raw = self.req("GET", "/api/console/model-pending")
-        self.assertEqual(status, 200)
-        self.assertIn("pending", json.loads(raw))
+        # Ticket #32: the sync-pending read face is retired with the model
+        # sync actions; the unknown GET route answers 404.
+        self.assertEqual(status, 404)
         status, raw = self.req("POST", "/api/console/operations",
                                body={"action": "no.such", "target": "x"})
         self.assertEqual(status, 404)
@@ -1292,51 +1293,49 @@ class RegistryHonestyTests(ConsoleApiTestBase):
     def test_production_registry_enablement_is_explicit(self):
         infos = usagesrv.get_console_manager().action_info()
         # B0 (2026-11-01): retired M365 / Qoder CN / Qoder Global /
-        # CLIProxy management actions are absent. Active actions retain their
-        # exact enablement and disabled reasons below.
-        self.assertEqual(len(infos), 36)
+        # CLIProxy management actions are absent. Ticket #32 retires the
+        # model sync/settings/task actions as well: model.catalog, the context
+        # probe and the context overrides are the only model actions left.
+        self.assertEqual(len(infos), 26)
         by_name = {i["action"]: i for i in infos}
         enabled = {n for n, i in by_name.items() if i["enabled"]}
         # The deployment authorization package (2026-09-16, section 5) plus
         # user instruction A3 flipped the approved actions live: the four-
         # layer share orchestration, the model speedtest, the service start/stop
         # target (chat2api only after B0 — usage stays excluded as the
-        # console's own web host), the UM login orchestration, the managed
-        # model-sync writes (sync_apply/task_install — the pin writes were
-        # removed with the pin mechanism, Rev8 2026-10-02), since the
+        # console's own web host), the UM login orchestration, since the
         # maintainer's 2026-09-22 budget approval the billed long-input
         # context probe RUN within its registered caps (≤20 requests,
         # ≤64 tokens), and since Plan-Revision 7 step 6 the state-only
-        # context override set/clear (client application stays behind
-        # sync_apply). Scheduled-task DISABLE stays disabled with its
-        # precise reason.
+        # context override set/clear.
         self.assertEqual(
             enabled,
             {"account.um_status",
-             "model.sync_preview", "model.sync_pending",
-             "model.sync_history", "model.task_status",
              "share.status",
              "share.start", "share.stop", "share.estop", "share.retry_stop",
              "share.backend_login",
              "model.speedtest",
              "service.start", "service.stop", "service.restart",
              "account.login",
-             "model.sync_apply",
-             "model.task_install",
              "model.catalog", "model.context_probe_preview",
              "model.context_probe_run",
              "model.context_overrides", "model.context_override_set",
              "model.context_override_clear",
              "account.um_verify",
-             "model.settings_save", "model.settings_preview", "model.settings_apply",
              # Rev9 A9-8 (2026-10-03): the four maintenance actions.
              "share.diagnostics", "share.repair_limits", "share.backend_reauthenticate",
              "share.backend_restart", "share.gateway_restart",
              # S5（契约 §5.2）：公网巡检一键复查与受限重试。
              "share.public_check", "share.public_retry"})
-        self.assertEqual(len(enabled), 35)
-        self.assertEqual(len(infos) - len(enabled), 1)
+        self.assertEqual(len(enabled), 26)
+        self.assertEqual(len(infos) - len(enabled), 0)
         for retired in (
+                "model.sync_preview", "model.sync_pending",
+                "model.sync_history", "model.sync_apply",
+                "model.settings_save", "model.settings_preview",
+                "model.settings_apply",
+                "model.task_status", "model.task_install",
+                "model.task_disable",
                 "qoder.credential_bridge", "qoder.source_diagnostics",
                 "qoder.quota_read", "qoder.status", "qoder.models",
                 "qoder.poc", "qoderglobal.status", "qoderglobal.models",
@@ -1363,12 +1362,20 @@ class RegistryHonestyTests(ConsoleApiTestBase):
         for retired in ("qoderglobal.status", "qoderglobal.models",
                         "qoderglobal.quota", "qoderglobal.login"):
             self.assertNotIn(retired, by_name)
-        # task_disable stays disabled with its precise real-write reason.
-        disabled_spec = by_name["model.task_disable"]
-        self.assertFalse(disabled_spec["enabled"])
-        self.assertIn("真实系统写入", disabled_spec["disabled_reason"])
-        self.assertIn("06:00", disabled_spec["disabled_reason"])
-        self.assertIn("节 5", disabled_spec["disabled_reason"])
+        # Ticket #32: the model sync/settings/task actions are gone; the
+        # catalog, context probe and context overrides stay registered.
+        for retired in ("model.sync_preview", "model.sync_pending",
+                        "model.sync_history", "model.sync_apply",
+                        "model.settings_save", "model.settings_preview",
+                        "model.settings_apply", "model.task_status",
+                        "model.task_install", "model.task_disable"):
+            self.assertNotIn(retired, by_name)
+        for kept in ("model.catalog", "model.context_probe_preview",
+                     "model.context_probe_run", "model.context_overrides",
+                     "model.context_override_set",
+                     "model.context_override_clear"):
+            self.assertIn(kept, by_name)
+            self.assertTrue(by_name[kept]["enabled"], kept)
 
     def test_um_verify_enabled_after_endpoint_live(self):
         # B-2 (2026-09-20): the RUNNING production chat2api instance ships
@@ -1671,53 +1678,29 @@ class ConsoleHealthEndpointTests(ConsoleApiTestBase):
 
 
 class ConsoleModelScopeContractTests(ConsoleApiTestBase):
-    """模型同步 scope 契约（2026-09-26 后端控制台 API 线）。
+    """Ticket #32: the model sync/settings/task actions are retired.
 
-    维护者报告「应用同步 model · 失败／被拒绝：invalid_params」的确定性触发链是
-    scope 参数形状：网页发数组，后端要求 JSON 数组字符串
-    （console/adapters.py:155-159 的 _MODEL_SYNC_SCOPE_SCHEMA）。本类锁定
-    两件事：
-
-    1. 拒绝说明：已知的参数形状错误在 400 机器码之外补一个受控 detail（不含
-       路径/密钥/长 token），且拒绝不入操作账本（提交前抛出，无操作行）。
-    2. 预览/应用同范围：两个动作对同一 scope 参数的判定与归一化逐字段一致，
-       合法 scope 传到 model_sync.run_sync 的 scope 完全相同。
-
-    model_sync 的全部路径常量与 run_sync 都被替换/替身化：不取上游目录、不写
-    任何客户端配置、不动真实 data/ 与锁文件。
+    The old scope/selection contract belonged to model.sync_preview/apply; both
+    action ids now follow the existing unknown-action contract (404
+    invalid_action) and create no operation row. The kept model actions stay
+    registered with their exact schemas.
     """
 
-    PREVIEW = "model.sync_preview"
-    APPLY = "model.sync_apply"
+    RETIRED = (
+        "model.sync_preview", "model.sync_pending",
+        "model.sync_history", "model.sync_apply",
+        "model.settings_save", "model.settings_preview",
+        "model.settings_apply",
+        "model.task_status", "model.task_install",
+        "model.task_disable",
+    )
+    KEPT = (
+        "model.catalog", "model.context_probe_preview",
+        "model.context_probe_run", "model.context_overrides",
+        "model.context_override_set", "model.context_override_clear",
+    )
 
-    @classmethod
-    def setUpClass(cls):
-        # 本类必须提交真实操作（拒绝与成功路径都要走真 HTTP 提交），故把控制台
-        # 状态库与锁目录也指到本类私有临时目录：同一模块内其他用例断言
-        # 「操作列表为空」不会被本类产生的操作行污染。
-        super().setUpClass()
-
-    @contextlib.contextmanager
-    def _isolated_sync(self):
-        from model_sync import sync as model_sync
-        with tempfile.TemporaryDirectory() as directory:
-            data = Path(directory) / "data"
-            data.mkdir(parents=True, exist_ok=True)
-            paths = {
-                "DATA_DIR": data,
-                "STATE_FILE": data / "model-sync-state.json",
-                "RESULT_FILE": data / "model-sync-last-result.json",
-                "PREVIEW_FILE": data / "model-sync-last-preview.json",
-                "HISTORY_FILE": data / "model-sync-history.jsonl",
-                "BACKUP_DIR": data / "model-sync-backups",
-                "LOCK_FILE": data / "model-sync.lock",
-            }
-            with contextlib.ExitStack() as stack:
-                for name, value in paths.items():
-                    stack.enter_context(mock.patch.object(model_sync, name, value))
-                yield paths
-
-    def _submit(self, action, params):
+    def _submit(self, action, params=None):
         body = {"action": action, "target": "model"}
         if params is not None:
             body["params"] = params
@@ -1725,170 +1708,49 @@ class ConsoleModelScopeContractTests(ConsoleApiTestBase):
                               headers={"X-Admin-Control": _CONTROL_TOKEN})
         return status, json.loads(raw)
 
-    def _wait(self, op_id, timeout=20.0):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            status, raw = self.req(
-                "GET", "/api/console/operations/%s" % op_id,
-                headers={"X-Admin-Control": _CONTROL_TOKEN})
-            self.assertEqual(status, 200)
-            op = json.loads(raw)["operation"]
-            if op["state"] in ("succeeded", "failed", "cancelled",
-                               "interrupted"):
-                return op
-            time.sleep(0.05)
-        self.fail("operation %s did not finish in %.0fs" % (op_id, timeout))
-
     def _operation_count(self):
         status, raw = self.req("GET", "/api/console/operations?limit=200",
                               headers={"X-Admin-Control": _CONTROL_TOKEN})
         self.assertEqual(status, 200)
         return len(json.loads(raw)["operations"])
 
-    def test_scope_array_shapes_are_refused_with_controlled_detail(self):
-        """网页的提交形状（数组）在提交即 400，带机器码 + 受控说明，不入账本。"""
-        cases = (
-            ("sources", {"sources": ["um"]}, "sources"),
-            ("consumers", {"consumers": ["ZCode"]}, "consumers"),
-            ("models", {"models": ["um"]}, "models"),
-        )
-        for action in (self.PREVIEW, self.APPLY):
-            for name, params, token in cases:
-                with self.subTest(action=action, case=name):
-                    before = self._operation_count()
-                    status, data = self._submit(action, params)
-                    self.assertEqual(status, 400)
-                    self.assertEqual(data["error"], "invalid_params")
-                    self.assertEqual(before, self._operation_count(),
-                                     "拒绝不得入操作账本")
-                    detail = data.get("detail")
-                    self.assertIsInstance(detail, str)
-                    self.assertIn(token, detail)
-                    # 受控：说明不含路径分隔符、盘符或长 token（密钥形态）。
-                    self.assertNotIn("\\", detail)
-                    self.assertNotIn("/", detail)
-                    self.assertLessEqual(len(detail), 200)
+    def test_retired_model_sync_actions_are_unknown_and_create_no_row(self):
+        """退役动作按既有未知动作契约诚实拒绝（404 invalid_action）。"""
+        for action in self.RETIRED:
+            with self.subTest(action=action):
+                before = self._operation_count()
+                status, data = self._submit(action, {"scope_mode": "all"})
+                self.assertEqual(status, 404, action)
+                self.assertEqual(data["error"], "invalid_action", action)
+                self.assertEqual(before, self._operation_count(),
+                                 "拒绝不得入操作账本")
 
-    def test_scope_refusals_are_identical_for_preview_and_apply(self):
-        """同一非法 scope 参数必须在预览与应用两处同样被拒（码与说明逐字段相同）。
-
-        Rev8（2026-10-02）：缺 scope_mode 也属于「同一非法 scope 参数」——两个
-        动作都必须拒绝，且码与说明逐字段相同（缺失模式不再默认全量）。
-        """
-        cases = (
-            {"sources": ["um"]},
-            {"consumers": ["ZCode"]},
-            {"models": ["um"]},
-            {"sources": 5},
-            {"consumers": {"ZCode": True}},
-        )
-        for params in cases:
-            with self.subTest(params=params):
-                _, preview = self._submit(self.PREVIEW, params)
-                _, apply = self._submit(self.APPLY, params)
-                self.assertEqual(preview, apply)
-        # Rev8：缺失 scope_mode（连 params 都不带）同样两处同码同文拒绝；
-        # 操作行元数据（action 名）天然不同，只比较错误字段。
-        outcomes = []
-        for action in (self.PREVIEW, self.APPLY):
-            with self._isolated_sync():
-                status, data = self._submit(action, None)
-                self.assertEqual(status, 201)
-                op = self._wait(data["operation"]["id"])
-                self.assertEqual(op["state"], "failed")
-                self.assertEqual(op["error"]["code"], "invalid_params")
-                self.assertIn("scope_mode", op["error"]["message"])
-                outcomes.append((op["error"]["code"], op["error"]["message"]))
-        self.assertEqual(outcomes[0], outcomes[1])
-
-    def test_handler_level_scope_refusals_match_across_preview_and_apply(self):
-        """通过 schema、由 handler 内 _console_scope 拒绝的同一非法参数在两处一致。
-
-        这类值形状合法（str/object），内层规则由 model_sync._normalize_scope
-        判定（带 scope_mode=selected 走到内层；末例是非法模式本身），故提交行
-        已建立、拒绝落在操作行（state=failed + error.code）。两个动作的判定与
-        说明必须逐字段相同。
-        """
-        cases = (
-            {"scope_mode": "selected", "sources": "[]"},
-            {"scope_mode": "selected", "sources": '["um","um"]'},
-            {"scope_mode": "selected", "sources": "not json"},
-            {"scope_mode": "selected", "consumers": '["M365"]'},
-            {"scope_mode": "selected", "models": {"um": "m"}},
-            {"scope_mode": "selected", "models": {"bogus": ["m"]}},
-            {"scope_mode": "selected", "sources": '["qoder_cn"]',
-             "models": {"um": ["m"]}},
-            {"scope_mode": "everything"},
-        )
-        for params in cases:
-            with self.subTest(params=params):
-                outcomes = []
-                for action in (self.PREVIEW, self.APPLY):
-                    with self._isolated_sync():
-                        status, data = self._submit(action, params)
-                        self.assertEqual(status, 201)
-                        op = self._wait(data["operation"]["id"])
-                        self.assertEqual(op["state"], "failed")
-                        self.assertEqual(op["error"]["code"], "invalid_params")
-                        outcomes.append((op["error"]["code"],
-                                         op["error"]["message"]))
-                self.assertEqual(outcomes[0], outcomes[1])
-                self.assertNotIn("\n", outcomes[0][1])
-                self.assertNotEqual(outcomes[0][1], "")
-
-    def test_valid_scope_normalizes_identically_and_reaches_run_sync(self):
-        """合法 scope 在两处归一化到同一字典，并原样传给 run_sync。"""
-        from model_sync import sync as model_sync
-        params = {"scope_mode": "selected", "sources": '["um"]',
-                  "consumers": '["ZCode"]', "models": {"um": ["model-a"]}}
-        expected = {"sources": ["um"], "consumers": ["ZCode"],
-                    "models": {"um": ["model-a"]}}
-        seen = {}
-        for action in (self.PREVIEW, self.APPLY):
-            with self._isolated_sync():
-                calls = []
-
-                def _record(*args, **kwargs):
-                    calls.append(kwargs)
-                    return {"status": "preview", "applied": [],
-                            "pending": [], "appliedDetails": [],
-                            "pendingDetails": [], "warnings": []}
-
-                with mock.patch.object(model_sync, "run_sync",
-                                       side_effect=_record):
-                    status, data = self._submit(action, params)
-                    self.assertEqual(status, 201)
-                    op = self._wait(data["operation"]["id"])
-                self.assertEqual(op["state"], "succeeded")
-                self.assertEqual(len(calls), 1)
-                seen[action] = calls[0]["scope"]
-                self.assertEqual(calls[0]["scope"], expected)
-                self.assertNotIn("detail", data)
-        self.assertEqual(seen[self.PREVIEW], seen[self.APPLY])
-
-    def test_preview_and_apply_accept_the_same_scope_keys(self):
-        """参数集本身：scope_mode + scope 三键在两处一致；probe 已随组合动作移除。
-
-        §11.3 组合窗口（2026-10-10）：两处都接受 selection（草稿版本），
-        应用另需带回组合预览的 preview_token；范围四键仍逐项一致。
-        """
-        from console import adapters as console_adapters
+    def test_retired_model_actions_are_not_registered(self):
         specs = {spec.name: spec for spec in console_adapters.build_registry()}
-        preview = specs[self.PREVIEW].param_schema
-        apply_ = specs[self.APPLY].param_schema
-        for key in ("scope_mode", "sources", "consumers", "models"):
-            self.assertEqual(preview[key], apply_[key])
-        self.assertEqual(set(preview),
-                         {"scope_mode", "sources", "consumers", "models",
-                          "selection"})
-        self.assertEqual(set(apply_), set(preview) | {"preview_token"})
-        self.assertEqual(preview["selection"], apply_["selection"])
-        self.assertNotIn("preview_token", preview)
-        # Rev8 契约 2：组合动作「应用并探测」移除——probe 不再属于任何同步动作。
-        self.assertNotIn("probe", set(apply_))
-        self.assertEqual(specs[self.PREVIEW].resource_fn, specs[self.APPLY].resource_fn)
-        self.assertEqual(specs[self.PREVIEW].resource_fn("model", {}),
-                         specs[self.APPLY].resource_fn("model", {}))
+        for action in self.RETIRED:
+            self.assertNotIn(action, specs)
+
+    def test_kept_model_actions_are_registered_with_their_schemas(self):
+        specs = {spec.name: spec for spec in console_adapters.build_registry()}
+        for kept in self.KEPT:
+            self.assertIn(kept, specs)
+        self.assertEqual(set(specs["model.catalog"].param_schema),
+                         {"sources", "fresh"})
+        probe_schema = specs["model.context_probe_preview"].param_schema
+        self.assertEqual(set(probe_schema), {"sources", "models", "retest"})
+        run_schema = specs["model.context_probe_run"].param_schema
+        self.assertTrue(set(probe_schema) <= set(run_schema))
+        self.assertEqual(set(run_schema),
+                         {"sources", "models", "retest",
+                          "max_requests", "max_tokens"})
+        self.assertEqual(specs["model.context_probe_preview"].resource_fn,
+                         specs["model.context_probe_run"].resource_fn)
+        self.assertEqual(
+            set(specs["model.context_override_set"].param_schema),
+            {"source", "model_id", "context", "expected_set_at"})
+        self.assertEqual(
+            set(specs["model.context_override_clear"].param_schema),
+            {"source", "model_id", "expected_set_at"})
 
     def test_disabled_action_keeps_machine_code_and_reason(self):
         """既有 403 语义不变：机器码 + reason 仍在（detail 不覆盖 reason）。"""
@@ -1912,10 +1774,10 @@ class ConsoleModelScopeContractTests(ConsoleApiTestBase):
 
     def test_unknown_parameter_is_still_refused(self):
         """不放宽校验：未知参数仍 400，且说明只点名参数、不回显路径。"""
-        status, data = self._submit(self.PREVIEW, {"probe": False})
+        status, data = self._submit("model.catalog", {"bogus": True})
         self.assertEqual(status, 400)
         self.assertEqual(data["error"], "invalid_params")
-        self.assertIn("probe", data["detail"])
+        self.assertIn("bogus", data["detail"])
         self.assertNotIn("\\", data["detail"])
 
 

@@ -14,8 +14,7 @@ runtime fact the local application needs. Validation is fail-closed:
 * the UM runtime source directory must be the in-package ``chat2api`` directory;
 * the UM runtime ``home_dir`` is required and must equal ``LocalConfig.home_dir``
   or live under it: the child's ``HOME``/``USERPROFILE``/``TMPDIR`` come from
-  that field, so a value outside the isolated root would place ``~/.dsh``/
-  ``~/.zcode``/temp back in the operator's real profile;
+  that field, so a value outside the isolated root would place temp files back in the operator's real profile;
 * the runtime-control mode is either the explicit ``fixture`` child-process owner
   or the configured ``powershell`` wrapper (which then requires a script).
 
@@ -370,7 +369,7 @@ def _require_um_home(um_runtime, home_dir):
     ``um_runtime.home_dir`` is required (a missing one is refused by
     ``from_mapping``), must be absolute, and must equal ``home_dir`` or live
     under it. The child gets ``HOME``/``USERPROFILE``/``TMPDIR`` from it, so a
-    value outside the isolated root would place ``~/.dsh``/``~/.zcode``/temp
+    value outside the isolated root would place temp files
     back in the operator's real profile.
     """
     try:
@@ -665,7 +664,7 @@ class LocalConfig:
         _reject_real_home(values["home_dir"], values)
         # E19-1-04 step 8: the UM child HOME must be the SAME isolated root the
         # application uses (equal or below it). Anything else would let the
-        # child resolve ``~/.dsh``/``~/.zcode``/temp outside the isolation.
+        # child resolve temp files outside the isolation.
         _require_um_home(um_runtime, values["home_dir"])
         # standards-config-06 / spec-local-006: the ledger the summary READS
         # and the ledger the 8110 child WRITES are one identity, not two

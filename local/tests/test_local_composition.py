@@ -53,8 +53,8 @@ from local.backend.registry import build_registry  # noqa: E402
 from local.backend.stats_env import build_stats_environment  # noqa: E402
 
 _RUNTIME_GLOBALS = (
-    "DATA_DIR", "STATE_FILE", "RESULT_FILE", "PREVIEW_FILE", "HISTORY_FILE",
-    "BACKUP_DIR", "LOCK_FILE", "UM_MODELS_URL", "UM_CHAT_URL",
+    "DATA_DIR", "STATE_FILE", "BACKUP_DIR", "LOCK_FILE",
+    "UM_MODELS_URL", "UM_CHAT_URL",
     "UM_MODELS_HOST", "UM_MODELS_PORT", "UM_MODELS_PATH",
     "_CATALOG_ENDPOINTS", "CONTEXT_PROBE_ENDPOINTS",
 )
@@ -254,12 +254,6 @@ class ConfigureRuntimeTests(unittest.TestCase):
         self.assertEqual(model_sync.DATA_DIR, data_dir)
         self.assertEqual(model_sync.STATE_FILE,
                          data_dir / "model-sync-state.json")
-        self.assertEqual(model_sync.RESULT_FILE,
-                         data_dir / "model-sync-last-result.json")
-        self.assertEqual(model_sync.PREVIEW_FILE,
-                         data_dir / "model-sync-last-preview.json")
-        self.assertEqual(model_sync.HISTORY_FILE,
-                         data_dir / "model-sync-history.jsonl")
         self.assertEqual(model_sync.BACKUP_DIR,
                          data_dir / "model-sync-backups")
         self.assertEqual(model_sync.LOCK_FILE, data_dir / "model-sync.lock")
@@ -288,69 +282,10 @@ class ConfigureRuntimeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     model_sync.configure_runtime(**values)
 
-    def test_configure_runtime_leaves_the_client_config_paths_alone(self):
-        """E19-1-04 step 12: the three client-config paths are import-time.
-
-        ``configure_runtime`` rewrites ONLY the state directory, its five files,
-        the lock file and the UM endpoints. ``DSH_YAML``/``ZCODE_JSON``/
-        ``ZCODE_PROVIDER_CONFIG`` stay whatever ``Path.home()`` resolved at
-        import time, so the isolation of those paths comes from the isolated HOME
-        the entry point applies — not from this call.
-        """
-        before = (model_sync.DSH_YAML, model_sync.ZCODE_JSON,
-                  model_sync.ZCODE_PROVIDER_CONFIG)
-        root = Path(tempfile.mkdtemp(prefix="r19-local-runtime-"))
-        self.addCleanup(shutil.rmtree, root, True)
-        model_sync.configure_runtime(
-            data_dir=root / "model-sync",
-            um_models_url="http://127.0.0.1:28000/v1/models",
-            um_chat_url="http://127.0.0.1:28000/v1/chat/completions")
-        self.assertEqual(
-            (model_sync.DSH_YAML, model_sync.ZCODE_JSON,
-             model_sync.ZCODE_PROVIDER_CONFIG), before)
-
-
-class ClientConfigPathIsolationTests(unittest.TestCase):
-    """E19-1-04 step 12: observe the three import-time paths in a CHILD.
-
-    ``DSH_YAML``/``ZCODE_JSON``/``ZCODE_PROVIDER_CONFIG`` are evaluated when
-    ``model_sync`` is imported, so asserting them inside this process would only
-    measure whatever HOME the test runner inherited. The observation must run in a
-    child with the isolated HOME, exactly as the real entry point does.
-    """
-
-    PATHS = ("DSH_YAML", "ZCODE_JSON", "ZCODE_PROVIDER_CONFIG")
-
-    def test_client_config_paths_live_under_the_isolated_home(self):
-        home = Path(tempfile.mkdtemp(prefix="r19-model-sync-home-"))
-        self.addCleanup(shutil.rmtree, home, True)
-        code = (
-            "import sys\n"
-            "sys.path.insert(0, %r)\n"
-            "import model_sync\n"
-            "for name in %r:\n"
-            "    print(name, getattr(model_sync, name))\n"
-        ) % (str(AI_GATEWAY), self.PATHS)
-        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-        env.pop("PYTHONPATH", None)
-        env["HOME"] = str(home)
-        env["USERPROFILE"] = str(home)
-        completed = subprocess.run(
-            [sys.executable, "-I", "-c", code], capture_output=True,
-            text=True, timeout=120, env=env)
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        seen = {}
-        for line in completed.stdout.splitlines():
-            name, _, value = line.partition(" ")
-            seen[name] = value
-        self.assertEqual(set(seen), set(self.PATHS), completed.stdout)
-        for name, value in seen.items():
-            with self.subTest(name=name):
-                path = Path(value)
-                self.assertTrue(
-                    path == home or home in path.parents,
-                    "%s=%s is outside the isolated home %s"
-                    % (name, path, home))
+    def test_client_config_paths_are_gone(self):
+        """Ticket #32: the DSH/ZCode client config paths are retired."""
+        for name in ("DSH_YAML", "ZCODE_JSON", "ZCODE_PROVIDER_CONFIG"):
+            self.assertFalse(hasattr(model_sync, name), name)
 
 
 # ------------------------------------------------------------- UM child env

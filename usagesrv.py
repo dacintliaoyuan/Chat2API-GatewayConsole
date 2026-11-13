@@ -4044,7 +4044,7 @@ class Handler(BaseHTTPRequestHandler):
             blocked = rest[0] if rest[:1] and rest[0] in (
                 "usage-tokens", "usage-rates", "gateway-connection",
                 "logs", "log-sources", "log-entries",
-                "log-overview", "model-pending", "stats", "um") else None
+                "log-overview", "stats", "um") else None
             if blocked is not None:
                 self._send_json(503, {
                     "error": "capability_not_assembled",
@@ -4504,21 +4504,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(502, {"error": "log_reader_failed"})
                 return
             self._send_json(200, {"ok": True, **result})
-            return
-        if method == "GET" and rest == ["model-pending"]:
-            # R9-R34 模型页概览直读：与 model.sync_pending 动作同形状
-            # （load_state + 最近应用结果），只读、无 SyncLock、无探测、
-            # 不记操作账本行（与 prices/logs 的高频只读直读同款）。写入类
-            # 动作（preview/apply/pin/catalog/task）仍走 POST 操作行。
-            from console import model_actions as console_model_actions
-            try:
-                payload = console_model_actions.model_sync_pending("", {}, None)
-            except Exception as exc:
-                print("[usagesrv] model-pending error: %s"
-                      % type(exc).__name__, flush=True)
-                self._send_json(502, {"error": "model_state_unavailable"})
-                return
-            self._send_json(200, payload)
             return
         if method == "GET" and rest == ["operations"]:
             limit = 50
