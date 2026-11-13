@@ -8,7 +8,7 @@
 
 `make-manifest.py` 用 AST 从当前字节冻结闭包，不导入产品模块：
 
-- **静态超集**从 `usagesrv.py`、`chat2api/chat2api.py`、`chat2api/chat2api.py`、`share/broker_ops.py`、`share/backend_supervision.py` 出发，跟随所有函数体内的 `import`，并补上 4 个 `importlib.util.spec_from_file_location` 目标。
+- **静态超集**从 `usagesrv.py`、`chat2api/chat2api.py`、`chat2api/chat2api.py`、`share/broker_ops.py` 出发，跟随所有函数体内的 `import`，并补上 4 个 `importlib.util.spec_from_file_location` 目标。
 - **云端动态装配**只列云端角色实际导入的产品模块；manifest 校验 `cloud_runtime ⊆ static_superset`，并列出 `static_only` / `cloud_only`。
 - **部署材料**在 `deployment_files` 单独列出，不与产品闭包混为一谈；`RELEASE-MANIFEST.json`、`SHA256SUMS`、解释器缓存与本地工具状态按规则排除。
 
@@ -62,7 +62,7 @@ systemd
 
 1. **8100 只由 broker 拉起**：`um-share-broker.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`，这是唯一允许的 8100 Popen 路径。
 2. **控制台不直接执行 8100 入口**：`NoExecPaths` 阻止直接执行 `chat2api.py`，`ReadOnlyPaths` 阻止写停止意图；云端注册表里 `share.start/stop/estop/retry_stop` 是 `enabled=False`。
-3. **云端不安装第二套 watchdog**：8100 合并进程由 broker 唯一拉起；`share.backend_restart` 走 broker restart，`share.backend_login` 走 8100 控制令牌端点。
+3. **云端不安装第二套 watchdog**：8100 合并进程由 broker 唯一拉起；`share.gateway_restart` 走 broker restart。
 4. **systemd 是最终 cgroup 围栏**：两个 unit 都是 `KillMode=control-group`；`systemctl stop` 不会留下孤儿进程。
 5. **停止意图持久化**：`LinuxHostOps.stop_host()` 在发信号前写 `/run/um-share/share-host-desired.json`；只有 `um-share-brokerctl.py start-explicit` 能清停止意图。
 6. **broker 管理通道**是 `/run/um-share/broker.sock`（目录 0700、socket 0600，HMAC 密钥 `/etc/um-share/broker-control.key`）；8100 入口由 `SO_PEERCRED` 与 `/proc/<pid>/cmdline` 验证。

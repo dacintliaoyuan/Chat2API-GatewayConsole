@@ -32,7 +32,6 @@ from console import log_reader as console_log_reader
 from console import model_actions as actions
 from console import share_actions as console_share_actions
 from console import share_production as console_share_production
-import share.backend_supervision as supervision
 from console.operations import (OperationCancelled, OperationError,
                                OperationManager, ResourceFileLock)
 from model_sync import sync as sync
@@ -162,7 +161,6 @@ def generate():
                  + console_adapters.build_cloud_registry())
         capabilities = {"actions": OperationManager.action_info(
             SimpleNamespace(_specs={s.name: s for s in specs}))}
-        share_maintenance = generate_share_maintenance(specs)
         root = Path(__file__).parents[1]
         names = ["model_sync/sync.py", "model_sync/sync_core.py", "console/model_actions.py", "console/adapters.py",
                  "console/operations.py", "share/metering.py", "console/stats.py",
@@ -190,7 +188,7 @@ def generate():
             "context_probe_preview": probe_preview,
             "share_usage": share_usage, "log_entries": logs,
             "log_sources": log_sources, "log_overview": log_overview,
-            "share_maintenance": share_maintenance}
+            }
 
 
 # ===========================================================================

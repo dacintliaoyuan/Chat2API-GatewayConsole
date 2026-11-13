@@ -177,7 +177,7 @@ _Avoid_: 分享无人值守能力（旧称）、进程常驻、自动重启、�
 _Avoid_: 分享连接自检（旧称）、公网全面可用、永久可用
 
 **分享可用性证据 (Sharing availability evidence)**:
-本机链路、Funnel 映射、公网 DNS 和真实模型调用分别显示。本机就绪要求入口进程、8110 进程、专用账号认证和发布同步均有肯定证据；Funnel 开启不能覆盖后端停止或缺失的读数。公网 DNS/TLS 来自每轮 Cloudflare/Google 双源检查（逐源状态、rcode/分类、TTL/负缓存与检查时间），模型回复来自手动密钥测试，均标出检查时间；缺少字段保持未确认，不推断为关闭或已连通。
+本机链路、Funnel 映射、公网 DNS 和真实模型调用分别显示。本机就绪要求入口进程和发布同步均有肯定证据；Funnel 开启不能覆盖后端停止或缺失的读数。公网 DNS/TLS 来自每轮 Cloudflare/Google 双源检查（逐源状态、rcode/分类、TTL/负缓存与检查时间），模型回复来自手动密钥测试，均标出检查时间；缺少字段保持未确认，不推断为关闭或已连通。
 
 **分享公网链路检查 (Sharing public connection check)**:
 确认 API 入口的公网域名解析与 TLS 连通性的动作，不包含模型推理；其结果与本机服务状态及最近一次模型返回结果分别表达。
@@ -346,7 +346,7 @@ _Avoid_: 用前端隐藏卡片代替后端隔离、云端照搬整个私人 data
 _Avoid_: 把 Unix 路径当 Named Pipe、只改前端、用 root 掩盖权限问题
 
 **云端发送调度 (Cloud dispatch)**:
-8110 在请求带 `verified` 归属事实时，于真实发送前按 Key 轮转并保持同 Key FIFO，累计等待默认 10 秒（`CHAT2API_SHARE_DISPATCH_MAX_WAIT_S`）；到期仍放行发送，请求级期限到期则释放且不发送。等待期间仍占用 8100 已分配的 API 并发名额；8000 主链与未验证归属不装配调度器。
+
 _Avoid_: 云端分享发送调度（旧称）、入口外额外排队、把调度当上游限流、到期即拒绝
 
 **云端运维隔离件 (Cloud operations isolation)**:
@@ -362,5 +362,5 @@ _Avoid_: 只拷源码即发布、依赖版本靠环境现状、把 dist-cloud �
 _Avoid_: 单项 core 绿即全套通过、跳过 Windows 全量
 
 **云端 P1 收口约束 (Cloud P1 closure constraints)**:
-Linux 进程归属只认解释器的入口脚本操作数（`linux_entry_script`：跳过解释器选项，`-c`/`-m`/`-` 返回 `None`），脚本名仅作为参数出现时绝不匹配，`/proc/<pid>/cmdline` 为空或不可读时 fail-closed；`--port` 配对与 uid 检查仍保留。云端控制台的 `share.start/stop/estop/retry_stop` 以 `enabled=False` 注册并带「Tailscale/Funnel 编排未装配」原因，提交在创建操作行前以 `action_disabled` 拒绝（HTTP 403），本地注册表四项仍启用。`share_dispatch.revoke_key` 关闭 PENDING 与 GRANTED、保留 COMMITTED，重复撤销返回 0。`chat2api.py` 按父目录文件加载 `share_secret_protection`（不改 `sys.path`）；`--instance-pipe-prefix` 缺省按平台解析，实例模块不可用时返回 `None` 并报未就绪而不是猜测。`um-cloud-deploy/run-linux-checks.sh` 是 Linux-only 入口（Windows Git Bash 下 `/mnt/d` 路径解析失败），`tests/test_cloud_ops.py` 按平台写独立报告文件，`tests/fake_um/fake_um_server.py` 在 bind 前设置 `request_queue_size`。
+Linux 进程归属只认解释器的入口脚本操作数（`linux_entry_script`：跳过解释器选项，`-c`/`-m`/`-` 返回 `None`），脚本名仅作为参数出现时绝不匹配，`/proc/<pid>/cmdline` 为空或不可读时 fail-closed；`--port` 配对与 uid 检查仍保留。云端控制台的 `share.start/stop/estop/retry_stop` 以 `enabled=False` 注册并带「Tailscale/Funnel 编排未装配」原因，提交在创建操作行前以 `action_disabled` 拒绝（HTTP 403），本地注册表四项仍启用。`chat2api.py` 按父目录文件加载 `share_secret_protection`（不改 `sys.path`）；`--instance-pipe-prefix` 缺省按平台解析，实例模块不可用时返回 `None` 并报未就绪而不是猜测。`um-cloud-deploy/run-linux-checks.sh` 是 Linux-only 入口（Windows Git Bash 下 `/mnt/d` 路径解析失败），`tests/test_cloud_ops.py` 按平台写独立报告文件，`tests/fake_um/fake_um_server.py` 在 bind 前设置 `request_queue_size`。
 _Avoid_: 用 argv 末位或参数中的脚本名判定归属、用前端隐藏代替后端 disabled、把 PENDING 撤销当成已撤销在途发送、在 Windows 上运行 Linux 检查脚本

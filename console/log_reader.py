@@ -8,7 +8,7 @@ Contract (handoff A38-2, extended by P3/R3):
   (``chat2api.log.1`` …) are part of the fixed registry, not client paths.
   The registry is inventoried from the launchers/supervisors actually in use
   (``lib/gateway-runtime.ps1`` descriptors, ``start_chat2api.bat``,
-  ``lib/watch-*.ps1``, ``share/backend_supervision.py``,
+  ``lib/watch-*.ps1``,
   the retired Windows deploy script, ``share/broker_server.py``) — never by
   walking
   directories. Only the chat2api (UM) and share producers are registered.
@@ -706,13 +706,12 @@ def read_entries(
 
 
 def _share_backend_paths() -> dict[str, str | None]:
-    """Resolve the dedicated share-backend (8110) deployment files.
+    """Resolve the merged 8100 share process's deployment files.
 
-    Path contract mirrors ``console_share_production._backend_dir``: an env
-    override must be absolute, otherwise the fixed LOCALAPPDATA deployment
-    directory applies. An unresolvable deployment directory yields ``None``
-    per path (registered but unconfigured) instead of guessing a location;
-    the caller keeps the categories so the gap stays visible.
+    An env override must be absolute, otherwise the fixed LOCALAPPDATA deployment
+    directory applies. An unresolvable deployment directory yields ``None`` per
+    path (registered but unconfigured) instead of guessing a location; the caller
+    keeps the categories so the gap stays visible.
     """
     override = os.environ.get("CONSOLE_SHARE_BACKEND_DIR")
     root = None
@@ -723,25 +722,21 @@ def _share_backend_paths() -> dict[str, str | None]:
         local = os.environ.get("LOCALAPPDATA")
         if local:
             root = os.path.join(local, "SelfUseAI", "ai-gateway", "share-backend")
-    # The dedicated backend runs the SAME chat2api.py source with env-redirected
-    # state paths (console_share_production._ProductionBackendOps._child_env),
-    # so its service log rotates like the main instance and its ledger is the
-    # same JSONL shape. ``backend-lifecycle.log`` is the PARENT side's start /
-    # stop record (console/share_production.py:1353, README §「退出记录」).
+    # The merged 8100 process writes its service log and ledger with the same
+    # env-redirected state paths, so its service log rotates like the main
+    # instance and its ledger is the same JSONL shape.
     return {
         "service": (os.path.join(root, "share-backend.log")
                     if root else None),
         "ledger": (os.path.join(root, "usage-share-backend.jsonl")
                    if root else None),
-        "lifecycle": (os.path.join(root, "backend-lifecycle.log")
-                      if root else None),
     }
 
 
 def _watch_root() -> Path | None:
     """Watch directory of the supervision entries, or None when unknown.
 
-    Mirrors lib/watch-chat2api.ps1:82-83 / share_backend_supervision.
+    Mirrors lib/watch-chat2api.ps1:82-83.
     DEFAULT_WATCH_DIR: the SELFUSEAI_GATEWAY_WATCH_DIR override wins (it
     must be absolute — a relative override would resolve against the reader's
     cwd, not the producer's), otherwise the fixed LOCALAPPDATA directory.
@@ -768,10 +763,8 @@ def build_registry(ledger_paths: dict[str, str] | None = None) -> dict:
     * console (8001): the host writes no line log (start_usage_service.bat
       has no redirect), so it stays registered with zero targets and an
       explicit ``note``;
-    * share: the 8110 child log/ledger/lifecycle, its watch log, and the
-      fixed SYSTEM artifacts of the 8100 share chain + broker (raw.txt,
-      share-faults.jsonl, lifecycle.json — the retired Windows deploy
-      script :820, chat2api.py:247, share/broker_server.py:817-818).
+    * share: the merged 8100 process log/ledger and the fixed broker
+      artifacts (share-faults.jsonl, lifecycle.json).
 
     A path that cannot be resolved is registered as ``None`` (read_entries
     answers ``unconfigured``); it is never silently dropped and never
@@ -817,7 +810,7 @@ def build_registry(ledger_paths: dict[str, str] | None = None) -> dict:
                  "usagesrv 的输出只到隐藏窗口）；控制台自身的操作记录在"
                  "「操作记录」页签（data/console-state.sqlite3），此处不伪造"
                  "日志文件。"},
-        {"source": "share", "display": "分享链 8100 / 8110（独立实例，非 8000 主链）",
+        {"source": "share", "display": "分享链 8100（合并进程，非 8000 主链）",
          "categories": [
              {"category": "service", "display": "运行日志 share-backend.log",
               "path": share_paths.get("service"),
@@ -825,11 +818,6 @@ def build_registry(ledger_paths: dict[str, str] | None = None) -> dict:
               "level_filter": True},
              {"category": "ledger", "display": "调用账本 usage-share-backend.jsonl",
               "path": share_paths.get("ledger"),
-              "rotating": False},
-             # console/share_production.py:1353 + README §「退出记录」— the
-             # parent side's start/stop/exit record for the 8110 child.
-             {"category": "lifecycle", "display": "父侧启停记录 backend-lifecycle.log",
-              "path": share_paths.get("lifecycle"),
               "rotating": False},
              # the retired Windows deploy script :820-861 — the 8100 SYSTEM
              # task's full stdout/stderr capture (run\live\raw.txt).

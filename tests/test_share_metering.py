@@ -44,7 +44,7 @@ _REDIRECTED_ENV = {
     "USAGE_PRICE_FILE": str(_SUMMARY_DIR / "prices.json"),
     "USAGE_SESSION_CODE_FILE": str(_SUMMARY_DIR / "session-code"),
     "USAGE_CONTROL_TOKEN_FILE": str(_SUMMARY_DIR / "control-token"),
-    # 归因共享密钥同样夹具化：8110 的默认密钥文件路径在导入时读取。
+    # 归因共享密钥同样夹具化：8100 的默认密钥文件路径在导入时读取。
     "CHAT2API_SHARE_ATTRIBUTION_KEY_FILE": str(
         Path(_ATTRIBUTION_TMP.name) / "share-attribution.key"),
 }

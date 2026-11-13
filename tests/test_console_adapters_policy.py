@@ -174,38 +174,27 @@ class RuntimePolicyTests(unittest.TestCase):
 
 
 class Rev9ShareMaintenanceRegistryTests(unittest.TestCase):
-    """Rev9 A9-8: the four frozen maintenance actions are registered in the
-    existing catalog with the frozen param/return schemas (contract §1.2/§10.1)."""
+    """Rev9 A9-1/A9-4: the read-only diagnostics and the 8100 restart stay
+    registered with the frozen param/return schemas (contract §1.2/§10.1)."""
 
     def _specs(self):
         return {s.name: s for s in console_adapters.build_cloud_registry()}
 
-    def test_four_rev9_actions_registered_enabled(self):
+    def test_retained_actions_registered_enabled(self):
         specs = self._specs()
-        for name in ("share.diagnostics", "share.backend_reauthenticate",
-                     "share.backend_restart", "share.gateway_restart"):
+        for name in ("share.diagnostics", "share.gateway_restart"):
             with self.subTest(action=name):
                 spec = specs[name]
                 self.assertTrue(spec.enabled)
                 self.assertIsNone(spec.disabled_reason)
                 self.assertTrue(spec.cancelable)
                 self.assertTrue(spec.description)
-                # ONE main mutex: share:orchestration for all four.
                 self.assertEqual(spec.resource_fn("share", {}),
                                  "share:orchestration")
 
     def test_frozen_param_schemas(self):
         specs = self._specs()
         self.assertEqual(specs["share.diagnostics"].param_schema, {})
-        self.assertEqual(
-            specs["share.backend_reauthenticate"].param_schema, {})
-        self.assertEqual(
-            specs["share.backend_restart"].param_schema,
-            {"drain_budget_s": {"type": "int", "min": 1, "max": 600},
-             "poll_interval_s": {"type": "int", "min": 1, "max": 10},
-             "stop_budget_s": {"type": "int", "min": 1, "max": 120},
-             "start_budget_s": {"type": "int", "min": 1, "max": 180},
-             "lease_s": {"type": "int", "min": 60, "max": 600}})
         self.assertEqual(
             specs["share.gateway_restart"].param_schema,
             {"restart_budget_s": {"type": "int", "min": 10, "max": 180}})
@@ -217,69 +206,22 @@ class Rev9ShareMaintenanceRegistryTests(unittest.TestCase):
             "poll_interval_s",
             specs["share.gateway_restart"].param_schema)
 
-    def test_restart_actions_bump_generation_only(self):
+    def test_restart_bumps_generation_only(self):
         specs = self._specs()
         self.assertTrue(
-            specs["share.backend_restart"].bump_generation_on_success)
-        self.assertTrue(
             specs["share.gateway_restart"].bump_generation_on_success)
-        # Read-only / reauth never cancel queued work on success.
+        # Read-only / diagnostics never cancels queued work on success.
         self.assertFalse(
             specs["share.diagnostics"].bump_generation_on_success)
-        self.assertFalse(
-            specs["share.backend_reauthenticate"].bump_generation_on_success)
         self.assertFalse(specs["share.status"].bump_generation_on_success)
 
     def test_handlers_are_the_module_functions(self):
         specs = self._specs()
         self.assertIs(specs["share.diagnostics"].handler,
                       console_share_actions.diagnostics)
-        self.assertIs(specs["share.backend_reauthenticate"].handler,
-                      console_share_actions.backend_reauth)
-        self.assertIs(specs["share.backend_restart"].handler,
-                      console_share_actions.backend_restart)
         self.assertIs(specs["share.gateway_restart"].handler,
                       console_share_actions.gateway_restart)
 
-    def test_submit_refuses_out_of_frozen_bounds(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        manager = OperationManager(
-            os.path.join(tmp.name, "state.sqlite3"),
-            console_adapters.build_cloud_registry(),
-            os.path.join(tmp.name, "locks"))
-        self.addCleanup(manager.close)
-        for action, params in (
-                ("share.backend_restart", {"lease_s": 6000}),
-                ("share.backend_restart", {"lease_s": 59}),
-                ("share.backend_restart", {"drain_budget_s": 0}),
-                ("share.backend_restart", {"stop_budget_s": 121}),
-                ("share.backend_restart", {"start_budget_s": 181}),
-                ("share.backend_restart", {"poll_interval_s": 11}),
-                ("share.gateway_restart", {"restart_budget_s": 181}),
-                ("share.gateway_restart", {"restart_budget_s": 9}),
-                # Rev9 §6.1/§6.3: the broker polls internally at its own
-                # fixed cadence and the frozen seam takes the budget only, so
-                # poll_interval_s is NOT part of this action's schema — any
-                # value must be refused as an unknown param (no dead knob).
-                ("share.gateway_restart", {"poll_interval_s": 1}),
-                ("share.diagnostics", {"bogus": 1}),
-                ("share.backend_reauthenticate", {"bogus": 1})):
-            with self.subTest(action=action, params=params):
-                with self.assertRaises(OperationError) as caught:
-                    manager.submit(action, target="share", params=params)
-                self.assertEqual(caught.exception.code, "invalid_params")
-        # The frozen bounds themselves are accepted at submit time.
-        specs = {s.name: s for s in console_adapters.build_cloud_registry()}
-        validated = manager._validate_params(
-            specs["share.backend_restart"],
-            {"lease_s": 60, "drain_budget_s": 600, "poll_interval_s": 10,
-             "stop_budget_s": 120, "start_budget_s": 180})
-        self.assertEqual(validated["lease_s"], 60)
-        validated = manager._validate_params(
-            specs["share.gateway_restart"], {"restart_budget_s": 180})
-        # The budget is the ONLY console knob on this action (Rev9 §6.3).
-        self.assertEqual(validated, {"restart_budget_s": 180})
 
 
 class RetiredSourceRegistryTests(unittest.TestCase):

@@ -48,7 +48,6 @@ GLOBAL_OPTIONS = frozenset({
     "--key-file",
     "--timeout",
     "--port",
-    "--backend-port",
     "--drain-budget",
     "--broker-drain-max",
     "--poll-interval",
@@ -1163,7 +1162,7 @@ readlink() {
     def test_an_unconfirmed_stop_in_the_health_fallback_keeps_the_edge_closed(self):
         # R10-a: the forward switch starts both units; a failed health gate must
         # confirm they are stopped before restoring the links and reopening
-        # cloudflared.  An unconfirmed console stop, an open 8110, or an unconfirmed
+        # cloudflared.  An unconfirmed console stop, an open share entry, or an unconfirmed
         # broker stop leaves the links on the new release, the edge closed and
         # the actual residue readable.
         for name in SHELL_SCRIPTS:
@@ -1171,7 +1170,6 @@ readlink() {
                     ("console-stop", {
                         "FAIL_UNIT_STOP_AFTER_START":
                             "um-share-console.service"}),
-                    ("console-port", {"FAIL_CLOSE_AFTER_START": "8110"}),
                     ("broker-stop", {
                         "FAIL_BROKER_STOP": "1",
                         "FAIL_UNIT_STOP_AFTER_START":

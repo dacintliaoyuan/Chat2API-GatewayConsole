@@ -29,7 +29,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadOnlyPaths=/etc/um-share/cloudflared.yml /etc/um-share/cloudflared.env
 # The ingress file is the only exposure control: four API paths to
 # http://127.0.0.1:8100 and a catch-all http_status:404.
-# 18096 (console), 8110 (share backend) and 5901 (display) are never routed.
+# 18096 (console) and 5901 (display) are never routed.
 
 [Install]
 WantedBy=multi-user.target

@@ -1575,7 +1575,6 @@ class MaintenanceProtocolTests(unittest.TestCase):
         self.assertEqual(bp.HOST_EVIDENCE_CHECKS,
                          frozenset(("limits", "faults", "watchdog")))
         self.assertEqual(bp.COMPONENT_SHARE_GATEWAY, "share_gateway")
-        self.assertEqual(bp.COMPONENT_SHARE_BACKEND, "share_backend")
         self.assertEqual(bp.MAINTENANCE_COMPONENTS,
                          frozenset(("share_gateway",)))
         self.assertEqual(bp.GATEWAY_RESTART_COMPONENTS,

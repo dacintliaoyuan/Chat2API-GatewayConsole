@@ -109,45 +109,20 @@ def runtime_target_enabled(action, target, cloud=False):
     if target in allowed:
         return True, None
     return False, RUNTIME_ACTIONS_DISABLED_REASON
-_LOGIN_SCHEMA = {
-    "start_wait_s": {"type": "int", "min": 1, "max": 120},
-    "login_budget_s": {"type": "int", "min": 1, "max": 3600},
-    "poll_interval_s": {"type": "int", "min": 1, "max": 10},
-}
-_SHARE_BUDGET_SCHEMA = {
-    "poll_interval_s": {"type": "int", "min": 1, "max": 10},
-    "ts_confirm_budget_s": {"type": "int", "min": 1, "max": 600},
-    "connectivity_budget_s": {"type": "int", "min": 1, "max": 600},
-    "backend_budget_s": {"type": "int", "min": 1, "max": 600},
-    "drain_budget_s": {"type": "int", "min": 1, "max": 600},
-    "backend_confirm_budget_s": {"type": "int", "min": 1, "max": 600},
-}
-# R13-A / D18-6: the whole-chain start publishes the bounded
-# dedicated-backend auth wait budget (logging_in / unknown observations after a
-# fresh start). The upper bound 1800 == the dedicated instance's own human
-# login window (chat2api --login-timeout,
-# console_share_production._BACKEND_LOGIN_TIMEOUT_S), so the wait can outlast
-# the login it is waiting for.
-_SHARE_OPEN_BUDGET_SCHEMA = dict(
-    _SHARE_BUDGET_SCHEMA,
-    backend_auth_budget_s={"type": "int", "min": 1, "max": 1800})
-# Rev9 A9-3/A9-4 (contract §1.3): the two single-layer restart schemas,
-# bounded ints; defaults live in the handlers (缺省即默认).  lease_s upper
-# bound 600 == protocol MAINTENANCE_LEASE_MAX_S; restart_budget_s upper bound
-# 180 == protocol GATEWAY_RESTART_BUDGET_MAX_S.
+# Rev9 A9-4 (contract §1.3): the single-layer 8100 restart schema,
+# bounded int; the default lives in the handler (缺省即默认).
+# restart_budget_s upper bound 180 == protocol GATEWAY_RESTART_BUDGET_MAX_S.
 # share.gateway_restart publishes NO poll_interval_s: §6.1/§6.3 freeze the
 # broker seam call to the budget only and §6.2/the wire give the broker's
 # internal poll cadence no field, so the console would only be offering a knob
 # that cannot take effect (no dead knob).
-_SHARE_BACKEND_RESTART_SCHEMA = {
-    "drain_budget_s": {"type": "int", "min": 1, "max": 600},
-    "poll_interval_s": {"type": "int", "min": 1, "max": 10},
-    "stop_budget_s": {"type": "int", "min": 1, "max": 120},
-    "start_budget_s": {"type": "int", "min": 1, "max": 180},
-    "lease_s": {"type": "int", "min": 60, "max": 600},
-}
 _SHARE_GATEWAY_RESTART_SCHEMA = {
     "restart_budget_s": {"type": "int", "min": 10, "max": 180},
+}
+_LOGIN_SCHEMA = {
+    "start_wait_s": {"type": "int", "min": 1, "max": 120},
+    "login_budget_s": {"type": "int", "min": 1, "max": 3600},
+    "poll_interval_s": {"type": "int", "min": 1, "max": 10},
 }
 
 
@@ -233,11 +208,9 @@ CLOUD_GATEWAY_TARGET = "share-gateway"
 CLOUD_GATEWAY_PID_FILE_ENV = "UM_SHARE_GATEWAY_PID_FILE"
 CLOUD_GATEWAY_STATE_DIR_ENV = "UM_SHARE_HOST_STATE_DIR"
 CLOUD_GATEWAY_PORT_ENV = "UM_SHARE_GATEWAY_PORT"
-CLOUD_GATEWAY_BACKEND_PORT_ENV = "UM_SHARE_BACKEND_PORT"
 DEFAULT_CLOUD_GATEWAY_PID_FILE = "/run/um-share/share-gateway.pid"
 DEFAULT_CLOUD_GATEWAY_STATE_DIR = "/run/um-share"
 DEFAULT_CLOUD_GATEWAY_PORT = 8100
-DEFAULT_CLOUD_BACKEND_PORT = 8110
 
 
 def _strict_port(name, default):
@@ -566,8 +539,9 @@ def wire_share_production_seams(keys_manager=None, cloud=False):
     """Bind the REAL share seams — PRODUCTION ASSEMBLY ONLY.
 
     console_share_production.production_seams() returns the orchestration's
-    seam globals by name (broker restricted protocol, dedicated backend and
-    maintenance verbs); the retired Windows TS/Funnel seams are gone. Called
+    seam globals by name (broker restricted protocol and maintenance verbs);
+    the retired Windows TS/Funnel seams (#33) and dedicated-backend seams
+    (#34) are gone. Called
     from usagesrv's production console-manager assembly ONLY — never from
     build_registry (a pure factory that tests must be able to call without
     any OS-level side effect).
@@ -584,11 +558,6 @@ def wire_share_production_seams(keys_manager=None, cloud=False):
     for key, value in (seams or {}).items():
         if value is not None:
             setattr(console_share_actions, key, value)
-    # D18-10: the cloud edge is a READ-ONLY systemd fact. On the local
-    # Windows role there is no such unit, so the seam stays unwired (the
-    # orchestration then reports "not managed by this deployment").
-    console_share_actions._EDGE_STATUS = \
-        production_cloud_edge_status if cloud else None
 
 CLOUDFLARED_UNIT = "cloudflared"
 
@@ -637,19 +606,12 @@ def _share_action_specs(cloud=False):
 
     The retired Windows local chain actions (``share.start`` / ``share.stop`` /
     ``share.estop`` / ``share.retry_stop``) and their Funnel / TS public
-    checks are gone with the old chain (#33). The cloud catalogue keeps the
-    read-only status/diagnostics, the dedicated-backend actions and the
-    restricted broker gateway-restart.
+    checks are gone with the old chain (#33); the dedicated-backend lifecycle,
+    login/reauth and whole-chain actions are gone too (#34). The cloud
+    catalogue keeps the read-only status/diagnostics and the restricted broker
+    gateway-restart.
     """
     return [
-        ActionSpec(
-            "share.backend_login", "登录分享专用后端（触发独立 profile 浏览器 UM 登录）",
-            handler=console_share_actions.backend_login,
-            resource_fn=_share_resource,
-            # 用户指令（2026-09-17）：专用实例登录必须经控制台触发——
-            # 专用控制秘密调 POST /admin/auth/login，由后端拉起其独立
-            # profile 浏览器；不触本机 8000，不回显秘密，不预开 Funnel。
-            enabled=True),
         ActionSpec(
             "share.status", "UM 分享分层状态观察（只读）",
             handler=console_share_actions.share_status,
@@ -659,7 +621,7 @@ def _share_action_specs(cloud=False):
             enabled=True, bump_generation_on_success=False),
         ActionSpec(
             "share.diagnostics",
-            "UM 分享分层诊断（只读；含看门狗、维护视图与故障留证）",
+            "UM 分享分层诊断（只读；含维护视图与故障留证）",
             handler=console_share_actions.diagnostics,
             resource_fn=_share_resource,
             param_schema={},
@@ -668,27 +630,8 @@ def _share_action_specs(cloud=False):
             enabled=True, disabled_reason=None,
             bump_generation_on_success=False, cancelable=True),
         ActionSpec(
-            "share.backend_reauthenticate",
-            "仅重新认证分享专用后端 8110（不冷启动、不重启进程、不绕过人工认证）",
-            handler=console_share_actions.backend_reauth,
-            resource_fn=_share_resource,
-            param_schema={},
-            enabled=True, disabled_reason=None,
-            bump_generation_on_success=False, cancelable=True),
-        ActionSpec(
-            "share.backend_restart",
-            "重启分享专用后端 8110（单层：暂停 8100 接收→有界排空→重启→恢复接收；"
-            "不动 8100 实例与私人 8000）",
-            handler=console_share_actions.backend_restart,
-            resource_fn=_share_resource,
-            param_schema=_SHARE_BACKEND_RESTART_SCHEMA,
-            enabled=True, disabled_reason=None,
-            # A restart tears the managed process down and relaunches it:
-            # queued work on the same resource is honestly invalidated.
-            bump_generation_on_success=True, cancelable=True),
-        ActionSpec(
             "share.gateway_restart",
-            "重启分享入口 8100（单层：经受限 broker 宿主协议；不动 8110 实例）",
+            "重启分享入口 8100（单层：经受限 broker 宿主协议）",
             handler=console_share_actions.gateway_restart,
             resource_fn=_share_resource,
             param_schema=_SHARE_GATEWAY_RESTART_SCHEMA,
@@ -715,8 +658,7 @@ def build_cloud_registry():
     The non-UM cards (model_sync / zcode) and the retired Windows local
     share chain are NOT assembled: this factory never imports their modules.
     Real service start/stop/restart drive the Linux pid-file adapter for
-    ``share-gateway`` only; the whole-chain start/stop/estop actions drive
-    the restricted broker and the dedicated 8110.
+    ``share-gateway`` only.
     """
     runtime = RuntimeServiceAdapter(cloud=True)
     specs = [
@@ -740,45 +682,6 @@ def build_cloud_registry():
             bump_generation_on_success=True),
     ]
     specs.extend(_share_action_specs(cloud=True))
-    # D18-10: the CLOUD-ONLY whole-chain lifecycle actions. They drive the
-    # restricted broker + the dedicated 8110 only; the retired Windows local
-    # layered actions are not registered at all.
-    specs.extend([
-        ActionSpec(
-            "share.chain_start",
-            "启动整条 API 链（8110 运行→有界认证等待→8100 三证启动→公网边缘只读核对）",
-            handler=console_share_actions.chain_start,
-            resource_fn=_share_resource,
-            param_schema=_SHARE_OPEN_BUDGET_SCHEMA,
-            enabled=True, disabled_reason=None,
-            bump_generation_on_success=False, cancelable=True),
-        ActionSpec(
-            "share.chain_stop",
-            "普通停止整条 API 链（先拒新请求，有界等待在途；排空超时明确显示）",
-            handler=console_share_actions.chain_stop,
-            resource_fn=_share_resource,
-            param_schema=_SHARE_BUDGET_SCHEMA,
-            enabled=True, disabled_reason=None,
-            bump_generation_on_success=False, cancelable=False),
-        ActionSpec(
-            "share.chain_estop",
-            "强制停止整条 API 链（立即取消在途请求并停 8110）",
-            handler=console_share_actions.chain_estop,
-            resource_fn=_share_resource,
-            param_schema=_SHARE_BUDGET_SCHEMA,
-            enabled=True, disabled_reason=None,
-            bump_generation_on_success=False, cancelable=False),
-        ActionSpec(
-            "share.backend_login_cancel",
-            "取消本轮登录（只结束本轮并清理浏览器；不停止服务）",
-            handler=console_share_actions.backend_login_cancel,
-            resource_fn=_share_resource,
-            param_schema={},
-            # D18-8：取消只结束本轮登录，不停止/重启专用实例；普通请求
-            # 不自动重开，只有显式登录动作可以重开。
-            enabled=True, disabled_reason=None,
-            bump_generation_on_success=False, cancelable=False),
-    ])
     return specs
 
 

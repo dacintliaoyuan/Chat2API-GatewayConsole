@@ -896,26 +896,16 @@ class _InflightCtx:
     ``terminate`` closes the socket ONCE (shutdown then close, both
     guarded); the owning handler observes the closure and unwinds through
     its own ``finally`` — the counter decrement happens exactly there, so
-    termination and release never double-account.
+    termination and release never double-account.  A revoke always closes the
+    client socket and the upstream connection, and never sends a second HTTP
+    status after the response started."""
 
-    Review #13: a dispatch request that has not sent its response header is
-    different.  The 8110 closes its PENDING/GRANTED ticket and answers the
-    retryable 429; only a COMMITTED send keeps the original cancel
-    contract (close the client socket).  The 8100 cannot read the 8110 ticket
-    state, so it uses the backend's OWN ``released`` count: the forwarded
-    contexts it does NOT close are exactly the ones still live minus the
-    released tickets, i.e. the committed sends.  A request that has not been
-    forwarded yet is left to the handler's pre-send 429 check.  Once response
-    headers went out (a streaming cancel), the original contract stays: close
-    the socket and never send a second HTTP status."""
-
-    def __init__(self, connection, retryable_refusal=False):
+    def __init__(self, connection):
         self._connection = connection
         self._closed = False
         self._response_started = False
         self._forwarded = False
         self._socket_closed = False
-        self._retryable_refusal = bool(retryable_refusal)
         # D18-3: the live upstream connection this request is blocked on.
         # A revoke closes it so a blocked ``upstream.getresponse()`` (or a
         # streaming read) unwinds immediately instead of holding the 8100
@@ -933,19 +923,14 @@ class _InflightCtx:
 
         The relay checks it immediately before forwarding upstream: a request
         that 8100 admitted before the revoke but had not yet sent must not
-        register a new 8110 ticket or reach the UM after the notice.
+        register a new ticket or reach the UM after the notice.
         """
         return self._closed
 
     @property
     def forwarded(self):
-        """True once the request reached the 8110 backend."""
+        """True once the request reached the 8100 gateway."""
         return self._forwarded
-
-    @property
-    def retryable_refusal(self):
-        """True for a dispatch request that may answer a retryable 429."""
-        return self._retryable_refusal
 
     @property
     def socket_closed(self):
@@ -1003,29 +988,22 @@ class _InflightCtx:
         self._response_started = True
 
     def mark_forwarded(self):
-        """Record that the request was sent to the 8110 backend."""
+        """Record that the request reached the 8100 gateway."""
         self._forwarded = True
 
     def revoke(self):
         """Terminate for a revoke; return True when this context was live.
 
-        A started response (streaming cancel) or a non-dispatch request keeps
-        the original close of BOTH the client socket and the upstream
-        connection, so a blocked ``getresponse()`` unwinds immediately.  A
-        forwarded dispatch request is closed later by the backend's released
-        count, so a PENDING/GRANTED request can still answer the retryable
-        429; closing its upstream here would turn that 429 into a 502.  A
-        not-yet-forwarded dispatch request is left to the handler's pre-send
-        429 check.
+        A revoke closes BOTH the client socket and the upstream connection, so
+        a blocked ``getresponse()`` unwinds immediately, and never sends a
+        second HTTP status after the response started.
         """
         with self._state_lock:
             if self._closed:
                 return False
             self._closed = True
-            close_now = not self._retryable_refusal or self._response_started
-        if close_now:
-            self._close_socket()
-            self.close_upstream()
+        self._close_socket()
+        self.close_upstream()
         return True
 
     def terminate(self):

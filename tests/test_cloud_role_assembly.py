@@ -276,39 +276,15 @@ class CloudAssemblyTests(unittest.TestCase):
             self.assertNotIn(name, specs)
         # The remaining share cards are genuinely usable on the cloud.
         for name in ("share.status", "share.diagnostics",
-                      "share.backend_login", "share.backend_login_cancel",
-                      "share.backend_reauthenticate",
-                      "share.backend_restart", "share.gateway_restart"):
+                      "share.gateway_restart"):
             self.assertTrue(specs[name].enabled, name)
             self.assertIsNone(specs[name].disabled_reason, name)
-        # D18-10: the whole-chain lifecycle actions are CLOUD-ONLY and
-        # enabled; they drive the broker + 8110 only (no TS/Funnel seams).
-        for name in ("share.chain_start", "share.chain_stop",
-                      "share.chain_estop"):
-            self.assertTrue(specs[name].enabled, name)
-            self.assertIsNone(specs[name].disabled_reason, name)
-        self.assertIs(specs["share.chain_start"].handler,
-                      console_share_actions.chain_start)
-        self.assertIs(specs["share.chain_stop"].handler,
-                      console_share_actions.chain_stop)
-        self.assertIs(specs["share.chain_estop"].handler,
-                      console_share_actions.chain_estop)
-        self.assertIs(specs["share.backend_login_cancel"].handler,
-                      console_share_actions.backend_login_cancel)
-        # D18-6: the bounded auth wait accepts the full 30 minute human
-        # login window (1800s), not the old 600s cap.
-        auth_budget = specs["share.chain_start"].param_schema[
-            "backend_auth_budget_s"]
-        self.assertEqual(auth_budget["max"], 1800)
-        self.assertEqual(
-            console_adapters._SHARE_OPEN_BUDGET_SCHEMA[
-                "backend_auth_budget_s"]["max"], 1800)
-        # The cloud-only chain actions do not leak into the local catalogue.
-        local_names = {spec.name for spec in
-                       console_adapters.build_registry()}
-        for name in ("share.chain_start", "share.chain_stop",
-                       "share.chain_estop"):
-            self.assertNotIn(name, local_names)
+        self.assertIs(specs["share.status"].handler,
+                      console_share_actions.share_status)
+        self.assertIs(specs["share.diagnostics"].handler,
+                      console_share_actions.diagnostics)
+        self.assertIs(specs["share.gateway_restart"].handler,
+                      console_share_actions.gateway_restart)
         self.assertEqual(specs["service.start"].resource_fn(
             "share-gateway", {}), "share:orchestration")
         with self.assertRaises(Exception):
@@ -334,39 +310,6 @@ class CloudAssemblyTests(unittest.TestCase):
             self.assertNotIn(name, local)
         self.assertIn("service.start", local)
         self.assertIn("account.um_status", local)
-
-    def test_cloud_backend_login_keeps_the_wired_control_channel(self):
-        specs = {spec.name: spec for spec in
-                 console_adapters.build_cloud_registry()}
-        login = specs["share.backend_login"]
-        self.assertTrue(login.enabled)
-        self.assertIsNone(login.disabled_reason)
-        self.assertIs(login.handler, console_share_actions.backend_login)
-        # The cloud production assembly keeps the dedicated-backend control
-        # channel (_BACKEND_LOGIN + _BACKEND_OPS) and drops ONLY the
-        # Tailscale/Funnel seams.
-        seams = console_share_production.production_seams(
-            broker=_SnapshotBroker(), cloud=True)
-        self.assertIs(seams["_BACKEND_LOGIN"],
-                      console_share_production.production_backend_login)
-        self.assertIn("_BACKEND_OPS", seams)
-        for name in ("_TS_SERVICE_CONTROL", "_TS_SERVICE_STATUS",
-                      "_CONNECTIVITY_OK", "_CONNECTIVITY_STATE",
-                      "_FUNNEL_CONTROL", "_FUNNEL_OBSERVED"):
-            self.assertNotIn(name, seams)
-        # The wired handler reaches the control-channel seam (stubbed here):
-        # neither a fake success nor an unwired refusal.
-        sentinel = {"triggered": True, "state": "logging_in"}
-        with mock.patch.object(console_share_actions, "_BACKEND_LOGIN",
-                                lambda **_kwargs: sentinel):
-            self.assertIs(console_share_actions.backend_login("share", {}),
-                          sentinel)
-        # An unwired control channel stays an explicit, honest refusal.
-        with mock.patch.object(console_share_actions, "_BACKEND_LOGIN", None):
-            with self.assertRaises(OperationError) as cm:
-                console_share_actions.backend_login("share", {})
-            self.assertEqual(cm.exception.code,
-                             "share_backend_login_unwired")
 
     def test_cloud_edge_status_is_a_read_only_systemd_probe(self):
         # D18-10: the whole-chain start reports the public edge as a LAYER
@@ -790,30 +733,6 @@ class LinuxHostOpsTests(unittest.TestCase):
         self.assertEqual(observed["detail"], "limits_net_unreadable")
         self.assertIsNone(self._ops().verify_limits())
 
-    def test_linux_backend_ops_use_proc_identity(self):
-        backend_dir = self.root / "backend"
-        os.environ["CONSOLE_SHARE_BACKEND_DIR"] = str(backend_dir)
-        self.addCleanup(os.environ.pop, "CONSOLE_SHARE_BACKEND_DIR", None)
-
-        def spawner(command, env):
-            self.table.add(5002, command, port=8110)
-            self.spawned.append(list(command))
-            return SimpleNamespace(pid=5002)
-
-        ops = console_share_production._LinuxBackendOps(
-            gateway_dir=str(self.root / "chat2api"), port=8110,
-            spawner=spawner, proc_root=str(self.proc),
-            kill_fn=self.table.kill,
-            exe_reader=lambda _path: sys.executable,
-            clock=lambda: 0.0, sleeper=lambda _seconds: None)
-        self.assertTrue(ops.start())
-        self.assertTrue(ops.start())          # idempotent: no second spawn
-        self.assertEqual(len(self.spawned), 1)
-        state = ops.backend_pid_state()
-        self.assertEqual(state["state"], "running")
-        self.assertTrue(ops.stop())
-        self.assertTrue(ops.verify_closed())
-        self.assertIn((5002, 15), self.table.signals)
 
 
 # ------------------------------------------------ Linux instance identity
@@ -843,7 +762,7 @@ class LinuxInstanceIdentityTests(unittest.TestCase):
         self.assertEqual(evidence["uid"], os.stat(self.proc / "7001").st_uid)
         self.assertGreater(evidence["creation_epoch"], 0)
         for overrides in (
-                {"expected_port": 8110},
+                {"expected_port": 28110},
                 {"expected_cmdline_marker": "share_entry.py"},
                 {"expected_image": "/usr/bin/other-python"}):
             with self.subTest(overrides=overrides):

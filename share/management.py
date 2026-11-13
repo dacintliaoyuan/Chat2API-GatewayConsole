@@ -224,7 +224,7 @@ class BrokerClientAdapter:
             # (None when the running instance predates the field — never
             # fabricated).
             out["terminated"] = ack.get("terminated")
-        # D18-3: the instance ACK also separates the 8110 released/aborted
+        # D18-3: the instance ACK also separates the 8100 released/aborted
         # tickets and the 8100 closed upstream connections. Pass each field
         # through verbatim; a missing field stays missing.
         for name in ("released", "aborted", "upstream_closed"):
@@ -431,7 +431,7 @@ class ShareManager:
         self._publish_lock = threading.Lock()
         self._last_published = None
         self._last_terminated = None  # R8-A7: one-shot per publish
-        # D18-3: the same publish also reports the backend's released/aborted
+        # D18-3: the same publish also reports the gateway's released/aborted
         # ticket counts and the gateway's closed upstream connections. Each is
         # one-shot and None when the ACK does not carry it.
         self._last_released = None
@@ -774,7 +774,7 @@ class ShareManager:
             # at top level) or BrokerResult (raw client, count under
             # .result) — read both, never assume one.
             self._last_terminated = _reply_terminated(reply)
-            # D18-3: the same ACK also separates what 8110 released and
+            # D18-3: the same ACK also separates what 8100 released and
             # aborted from what 8100 closed upstream. Absent fields stay
             # None (an older runtime cannot answer for them).
             self._last_released = _reply_count(reply, "released")
@@ -1173,7 +1173,7 @@ class ShareManager:
             # _last_terminated is the instance ACK's closed-connection count
             # from the publication this call drove (one-shot; None when the
             # ack shape carries no count — never fabricated). D18-3: the same
-            # publication reports the 8110 released/aborted counts and the
+            # publication reports the 8100 released/aborted counts and the
             # 8100 closed-upstream count; each stays None when absent.
             return dict(
                 disabled,

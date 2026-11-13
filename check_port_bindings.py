@@ -33,7 +33,6 @@ PORT_ALLOCATIONS: dict[int, tuple[str, str]] = {
     8000: ("chat2api", "loopback"),
     8001: ("usagesrv console backend", "loopback"),
     8100: ("um-share gateway", "loopback"),
-    8110: ("share backend", "loopback"),
     5173: ("Console dev server (vite)", "loopback"),
 }
 

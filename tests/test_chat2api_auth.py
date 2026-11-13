@@ -1153,7 +1153,7 @@ class TestCrossInstanceGate(unittest.TestCase):
         # still has hours to run, so only a liveness probe can tell a live holder
         # from a dead one. Without it every login is refused with
         # global_session_active until the TTL runs out (observed live: an ECS
-        # restart left owner_pid pointing at the previous 8110 for 24 hours).
+        # restart left owner_pid pointing at the previous 8100 for 24 hours).
         chat2api.acquire_reauth_slot(self.slot, pid=111, ttl_s=86400, now=1000.0)
         with mock.patch.object(chat2api, "_owner_pid_alive",
                               return_value=False):

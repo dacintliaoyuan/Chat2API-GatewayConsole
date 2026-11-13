@@ -40,6 +40,14 @@ from share.broker_client import (BrokerClient, UnixSocketBrokerTransport)
 from share.broker_protocol import DEFAULT_DEADLINE_SECONDS
 
 
+# The 8100 host is launched by the broker and tracked by a pid file plus the
+# persistent operator/budget stop intent (the console's start supersedes it).
+LINUX_HOST_DEFAULT_PID_FILE = "/run/um-share/share-host.pid"
+LINUX_HOST_INTENT_SCHEMA = 1
+LINUX_HOST_INTENT_FILE = "share-host-desired.json"
+LINUX_HOST_STOP_SIGNAL = 15      # SIGTERM
+LINUX_HOST_KILL_SIGNAL = 9       # SIGKILL
+
 # WFP and firewall run together; their read must fit the 35-second RPC.
 LIMITS_CHECK_TIMEOUT_SECONDS = 25.0
 

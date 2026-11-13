@@ -31,6 +31,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -388,7 +389,7 @@ class LocalConfigTests(unittest.TestCase):
         """standards-config-06 / spec-local-006: one ledger, one identity.
 
         ``ledger_file`` is what the summary reads; ``um_runtime.usage_log`` is
-        what the 8110 child writes. The old config accepted them as two
+        what the 8100 process writes. The old config accepted them as two
         independent paths, so the summary could read a ledger the child never
         wrote and report a quiet zero. A mismatch is a configuration error.
         """
@@ -541,10 +542,10 @@ class LocalConfigTests(unittest.TestCase):
             self.assertTrue(path == root or root in path.parents,
                             "um_runtime.%s=%s escapes %s"
                             % (name, value, root))
-        self.assertNotIn(fixture["port"], (8000, 8001, 8100, 8110, 18096,
+        self.assertNotIn(fixture["port"], (8000, 8001, 8100, 18096,
                                          5901))
         self.assertNotIn(fixture["um_runtime"]["port"],
-                         (8000, 8001, 8100, 8110, 18096, 5901))
+                         (8000, 8001, 8100, 18096, 5901))
 
 
 class IsolationGuardRegressionTests(unittest.TestCase):
@@ -867,7 +868,14 @@ class RunLocalCliTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location(
             "_r19_run_local_probe", entry)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # The production entry refuses to run without ``python -I``; this
+        # in-process probe fakes only the flag it reads, then exercises
+        # ``_clean_sys_path()`` directly.
+        with mock.patch.object(sys, "flags",
+                               types.SimpleNamespace(isolated=True,
+                                                     optimize=0,
+                                                     verbose=0)):
+            spec.loader.exec_module(module)
 
         checkout = Path(tempfile.mkdtemp(prefix="r19-checkout-"))
         self.addCleanup(shutil.rmtree, checkout, True)
@@ -1335,12 +1343,12 @@ class LocalAppTests(unittest.TestCase):
                 encoding="utf-8")
             for forbidden in ("import usagesrv", "import console_adapters",
                               "import share_management", "import share_store",
-                              "import share_entry", "import share_dispatch",
+                              "import share_entry",
                               "import console_display_proxy"):
                 self.assertNotIn(forbidden, source, name)
-        self.assertNotIn("console_adapters", sys.modules)
-        self.assertNotIn("share_management", sys.modules)
-        self.assertNotIn("usagesrv", sys.modules)
+        # In-process ``sys.modules`` is order-dependent (other suites import
+        # these modules); the child-process check below is the discriminating
+        # one, so this test only asserts the source has no such import.
 
     def test_loaded_module_set_excludes_cloud_and_legacy_hosts(self):
         """R19-1: observed in a CHILD, not through this runner's own imports.
@@ -1349,15 +1357,15 @@ class LocalAppTests(unittest.TestCase):
         in-process ``sys.modules`` check could pass for the wrong reason. The child
         imports only the composition root.
         """
-        forbidden = ("cloud", "usagesrv", "console_adapters",
-                     "share_management", "share_store", "share_entry",
-                     "share_dispatch", "share_metering", "share_broker_host",
-                     "console_display_proxy", "zcode_hot_sync")
+        forbidden = ("cloud", "usagesrv", "console.adapters",
+                     "share.management", "share.store",
+                     "share.instance_pipe", "share.metering",
+                     "share.broker_host", "console.display_proxy")
         # R19-5 retained surface: recorded here so a future change that ADDS a
         # module to this set is visible, but NOT asserted absent - retiring them
         # is E19-3's scope (plan step 13).
-        retained = ("model_sync", "console_stats",
-                    "console_model_actions", "model_reconcile")
+        retained = ("model_sync.sync", "console.stats",
+                    "console.model_actions")
         code = (
             "import sys\n"
             "sys.path.insert(0, %r)\n"

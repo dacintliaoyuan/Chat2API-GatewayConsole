@@ -150,7 +150,7 @@ class UmRuntime:
             "SHARE_ATTRIBUTION_KEY_FILE": os.path.join(
                 home, "share-attribution.key"),
             # Explicitly NOT the share backend: the local runtime must not load
-            # share_entry/share_dispatch (E19-1-02).
+            # share_entry (E19-1-02).
             "CHAT2API_SHARE_BACKEND": "0",
             "CHAT2API_MAX_REQUEST_SECONDS": str(self.config.request_max_s),
             "CHAT2API_AUTH_WAIT_BUDGET_S": str(

@@ -29,7 +29,7 @@ Chat2API 网关控制台：同一套前端按构建期角色产出本机与云�
 - `share/`：分享存储、管理、运行链、broker 与监督；边界见 [AGENTS.md](AGENTS.md) 的分享链边界。
 - `model_sync/`：模型目录镜像、受管合并与客户端适配。
 - `zcode/`：ZCode 热同步与文件锁。
-- `local/`、`cloud/`、`shared/`：两个角色的组合根与双端纯规则；见各自的 README。
+- `local/`、`shared/`：本机组合根与双端纯规则；见各自的 README。
 - `web/`：TypeScript/Vite 前端；`tests/`：Python 回归与隔离包。
 - `um-cloud-deploy/`：云端部署/运维材料。旧 Windows 本机分享链的部署材料已从仓库删除。
 

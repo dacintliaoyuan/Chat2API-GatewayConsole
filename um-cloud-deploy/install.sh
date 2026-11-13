@@ -679,8 +679,6 @@ if [ "$NO_START" -eq 0 ]; then
     die "console 18096 did not open" "$EX_UNAVAILABLE"
   wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || \
     die "share gateway 8100 did not open (check broker start)" "$EX_UNAVAILABLE"
-  wait_port_open 127.0.0.1 8110 "$UM_HEALTH_TIMEOUT_S" || \
-    log "WARNING: 8110 is not listening yet; start it with share.backend_restart"
   health_gate || die "health gate failed (18096/8100 HTTP)" "$EX_UNAVAILABLE"
 else
   log "services were not started (--no-start)"

@@ -21,7 +21,6 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPONENT_KEY_FILES = (
     "console/share_actions.py",
     "share/broker_protocol.py",
-    "share/backend_supervision.py",
     "web/scripts/backend-contract/check-generated.mjs",
     "tests/fixtures/frontend_contract_rev25.json",
     "web/scripts/console-gate/fixtures/api.json",
@@ -35,7 +34,6 @@ PRODUCTION_FILES = (
     "console/adapters.py",
     "share/broker_ops.py",
     "share/management.py",
-    "share/backend_supervision.py",
     "web/scripts/backend-contract/check-generated.mjs",
 )
 
