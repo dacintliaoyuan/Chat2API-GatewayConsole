@@ -18,7 +18,6 @@ import type {
   LogQuery,
   RequestQuery,
   RequestsView,
-  TestKind,
   TrendRange,
   UmAccess,
   UmCatalog,
@@ -49,7 +48,6 @@ import {
   maintenanceFrom,
   readingNumber,
   serviceFrom,
-  speedtestEntries,
   thinkingSource,
   todayFrom,
   trendFrom,
@@ -434,8 +432,7 @@ export class UmDataReads extends UmDataState {
       this.run === null
         ? this.operations.find(
             (op) =>
-              (op.action === "model.speedtest" ||
-                op.action === "model.context_probe_run") &&
+              op.action === "model.context_probe_run" &&
               (op.state === "running" || op.state === "queued")
           )
         : undefined;
@@ -443,7 +440,7 @@ export class UmDataReads extends UmDataState {
       this.reconnectNoticeFor = active.id;
       this.notice(
         "warn",
-        `操作记录里还有一次${active.action === "model.speedtest" ? "批量测速" : "上下文探测"}（${active.id}）没有结束；` +
+        `操作记录里还有一次上下文探测（${active.id}）没有结束；` +
           "本页不重建它的进度，结束后可在历史里看到结果，也不会自动重放。"
       );
     }
@@ -474,20 +471,12 @@ export class UmDataReads extends UmDataState {
     const all: UmTestRecord[] = [];
     for (const op of this.operations) {
       if (!TERMINAL.has(op.state)) continue;
-      const kind: TestKind | null =
-        op.action === "model.speedtest"
-          ? "speedtest"
-          : op.action === "model.context_probe_run"
-            ? "context"
-            : null;
-      if (kind === null) continue;
-      const entries =
-        kind === "speedtest" ? speedtestEntries(op) : contextEntries(op);
+      if (op.action !== "model.context_probe_run") continue;
+      const entries = contextEntries(op);
       for (const entry of entries) {
         all.push({
           key: `${op.id}|${entry.model}`,
           model: entry.model,
-          kind,
           at: op.finishedAt ?? op.createdAt ?? this.operationsAt ?? this.now(),
           result: entry.state,
           summary: entry.summary,
@@ -498,16 +487,12 @@ export class UmDataReads extends UmDataState {
     all.sort((a, b) => b.at - a.at || a.key.localeCompare(b.key));
     const newest = new Map<string, string>();
     for (const record of all) {
-      const key = `${record.kind}|${record.model}`;
-      if (!newest.has(key)) newest.set(key, record.key);
+      if (!newest.has(record.model)) newest.set(record.model, record.key);
     }
     for (const record of all)
-      if (newest.get(`${record.kind}|${record.model}`) !== record.key)
-        record.archived = true;
+      if (newest.get(record.model) !== record.key) record.archived = true;
     return all.filter(
-      (record) =>
-        (filter.model === null || record.model === filter.model) &&
-        (filter.kind === null || record.kind === filter.kind)
+      (record) => filter.model === null || record.model === filter.model
     );
   }
 
@@ -896,8 +881,7 @@ export class UmDataReads extends UmDataState {
           source: thinkingSource(model.effortsSource),
           defaultLevel: model.defaultEffort,
         },
-        lastSpeed: this.lastTest(model.id, "speedtest"),
-        lastContext: this.lastTest(model.id, "context"),
+        lastContext: this.lastTest(model.id),
       };
     });
     const data: UmCatalog = {
@@ -915,19 +899,14 @@ export class UmDataReads extends UmDataState {
   }
 
   protected lastTest(
-    model: string,
-    kind: TestKind
+    model: string
   ): { at: number; ok: boolean; summary: string } | null {
     for (const op of this.operations) {
       if (!TERMINAL.has(op.state)) continue;
-      if (
-        op.action !==
-        (kind === "speedtest" ? "model.speedtest" : "model.context_probe_run")
-      )
-        continue;
-      const entry = (
-        kind === "speedtest" ? speedtestEntries(op) : contextEntries(op)
-      ).find((candidate) => candidate.model === model);
+      if (op.action !== "model.context_probe_run") continue;
+      const entry = contextEntries(op).find(
+        (candidate) => candidate.model === model
+      );
       if (entry) {
         return {
           at: op.finishedAt ?? op.createdAt ?? this.operationsAt ?? this.now(),

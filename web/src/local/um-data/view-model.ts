@@ -35,7 +35,6 @@ import type {
   MaintenanceAction,
   ModelTestState,
   Reading,
-  TestKind,
   UmAccess,
   UmCost,
   UmLogin,
@@ -461,86 +460,6 @@ export function thinkingSource(
   return "unknown";
 }
 
-function speedState(status: string): ModelTestState {
-  if (status === "ok") return "done";
-  if (status === "failed" || status === "timeout") return "failed";
-  return "partial";
-}
-
-function speedSummary(row: JsonObject): string {
-  const status = rowText(row, "status") ?? "unknown";
-  const output = rowCount(row, "output_tokens");
-  const whole = rowNumber(row, "whole_avg_tokens_per_s");
-  const total = rowNumber(row, "total_s");
-  const ttfb = rowNumber(row, "ttfb_s");
-  const error = object(row.error);
-  const bits: string[] = [];
-  if (status !== "ok") {
-    const code = error ? text(error.code) : null;
-    const message = error ? text(error.message) : null;
-    bits.push(
-      [code, message].filter(Boolean).join("：") || `测速结果：${status}`
-    );
-    return bits.join(" · ");
-  }
-  if (whole !== null)
-    bits.push(`${formatSpeed(whole)} token/秒（整次平均，含等待）`);
-  else bits.push("完成，但没有可计算的速度");
-  if (output !== null) bits.push(`输出 ${output} Token`);
-  if (total !== null && total > 0) bits.push(`耗时 ${total.toFixed(1)} 秒`);
-  if (ttfb !== null) bits.push(`首字 ${ttfb.toFixed(2)} 秒`);
-  return bits.join(" · ");
-}
-
-function formatSpeed(value: number): string {
-  return value < 10
-    ? value.toFixed(1).replace(/\.0$/, "")
-    : String(Math.round(value));
-}
-
-function speedDetail(row: JsonObject): UmTestDetail {
-  const status = rowText(row, "status") ?? "unknown";
-  const output = rowCount(row, "output_tokens");
-  const whole = rowNumber(row, "whole_avg_tokens_per_s");
-  const total = rowNumber(row, "total_s");
-  const ttfb = rowNumber(row, "ttfb_s");
-  const error = object(row.error);
-  const lines: string[] = [`测速结果：${status}`];
-  if (total !== null) lines.push(`整次耗时 ${total.toFixed(2)} 秒`);
-  if (ttfb !== null) lines.push(`首字实测 ${ttfb.toFixed(2)} 秒`);
-  if (output !== null) lines.push(`输出 ${output} Token（上游报告的整段输出）`);
-  if (whole !== null)
-    lines.push(`整次平均 ${formatSpeed(whole)} token/秒（含首字等待）`);
-  return {
-    durationMs:
-      total === null
-        ? missing("没有记录耗时")
-        : { kind: "exact", value: Math.round(total * 1000) },
-    firstTokenMs:
-      ttfb === null
-        ? missing("这次没有实测首字")
-        : { kind: "exact", value: Math.round(ttfb * 1000) },
-    outputTokens:
-      output === null
-        ? missing("上游没有报告输出 Token")
-        : { kind: "exact", value: output },
-    speed:
-      whole === null
-        ? missing(status === "ok" ? "没有可计算的速度" : "请求未成功，不计速度")
-        : { kind: "exact", value: whole },
-    speedBasis: "whole_request",
-    contextChars: missing("测速不探测上下文"),
-    contextTokenLowerBound: missing("测速不探测上下文"),
-    error:
-      status === "ok"
-        ? null
-        : [error ? text(error.code) : null, error ? text(error.message) : null]
-            .filter(Boolean)
-            .join("：") || `测速结果：${status}`,
-    lines,
-  };
-}
-
 function contextState(status: string, requests: number): ModelTestState {
   if (status === "verified") return "done";
   if (status === "failed") return "failed";
@@ -592,35 +511,9 @@ export function contextEntries(op: { result: JsonObject | null }): TestEntry[] {
   });
 }
 
-export function speedtestEntries(op: {
-  result: JsonObject | null;
-}): TestEntry[] {
-  const raw = op.result;
-  if (!raw) return [];
-  const rows = rowsOf(raw.results);
-  const list = rows.length ? rows : [raw];
-  return list.flatMap((row) => {
-    const model = rowText(row, "model");
-    if (model === null) return [];
-    const status = rowText(row, "status") ?? "unknown";
-    return [
-      {
-        model,
-        state: speedState(status),
-        summary: speedSummary(row),
-        detail: speedDetail(row),
-      },
-    ];
-  });
-}
-
-export function resultEntries(
-  kind: TestKind,
-  result: OperationResult
-): TestEntry[] {
+export function resultEntries(result: OperationResult): TestEntry[] {
   if (result.state !== "succeeded" || !result.operation?.result) return [];
-  const raw = { result: result.operation.result };
-  return kind === "speedtest" ? speedtestEntries(raw) : contextEntries(raw);
+  return contextEntries({ result: result.operation.result });
 }
 
 export function resultBudget(
@@ -634,14 +527,12 @@ export function resultBudget(
   return used === null || limit === null ? null : { used, limit };
 }
 
-export function runNote(kind: TestKind, result: OperationResult): string {
+export function runNote(result: OperationResult): string {
   if (result.state === "succeeded") {
     const raw = result.operation?.result ?? null;
     return (
       rowText(raw, "summary") ??
-      (kind === "speedtest"
-        ? "每个所选模型最多 1 次短请求，不自动重试；速度为整次平均（含等待）。"
-        : "整批共用一份请求预算；字符步进按字符计，Token 是上游报告的已验证下界，不是最大上下文。")
+      "整批共用一份请求预算；字符步进按字符计，Token 是上游报告的已验证下界，不是最大上下文。"
     );
   }
   if (result.state === "cancelled")

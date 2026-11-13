@@ -77,7 +77,6 @@ const actionIntents: Readonly<Record<string, Intent>> = Object.freeze({
   "model.settings_apply": "client-write",
   "model.sync_apply": "client-write",
   "model.context_probe_run": "probe",
-  "model.speedtest": "probe",
   // UM maintenance (B6): the status query is a read; verify probes the
   // upstream credential; login and service actions change local state.
   "account.um_status": "read",
@@ -1098,7 +1097,7 @@ export class BackendClient {
   }
 
   /** Original console operation records; the UM maintenance view and the
-   *  speedtest history read the same bounded table. */
+   *  model test history read the same bounded table. */
   async readOperations(
     limit: number,
     signal?: AbortSignal

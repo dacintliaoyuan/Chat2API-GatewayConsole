@@ -66,7 +66,7 @@ TARGET_MAX = 64
 IDEMPOTENCY_KEY_MAX = 128
 LOCAL_ACTIONS = ("model.catalog",)
 # The UM maintenance table reads these original console actions only; a
-# non-UM action (model.speedtest, share.*) is never mixed in.
+# non-UM action (share.*) is never mixed in.
 UM_MAINTENANCE_ACTIONS = frozenset((
     "account.um_status", "account.um_verify", "account.login",
     "service.start", "service.stop", "service.restart"))

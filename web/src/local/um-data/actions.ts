@@ -14,7 +14,6 @@ import type {
   ActionProgress,
   Failure,
   MaintenanceAction,
-  TestKind,
   UmEvent,
   UmTestRun,
 } from "../um-ui/contract";
@@ -117,7 +116,7 @@ export class UmDataActions extends UmDataReads {
         void this.refreshCatalog();
         return;
       case "models.test":
-        this.startTest(event.kind, event.models);
+        this.startTest(event.models);
         return;
       case "models.stop":
         void this.cancelRun(event.runId);
@@ -191,7 +190,7 @@ export class UmDataActions extends UmDataReads {
 
   // ---------------------------------------------------------------- tests
 
-  protected startTest(kind: TestKind, requested: string[]): void {
+  protected startTest(requested: string[]): void {
     if (this.runActive()) {
       this.notice("warn", "已有测试在进行，这次点击没有发起新测试");
       return;
@@ -216,20 +215,17 @@ export class UmDataActions extends UmDataReads {
       this.notice("warn", "所选模型已不在当前目录里，这次没有发起测试");
       return;
     }
-    const gate = this.actionEnabled(
-      kind === "speedtest" ? "model.speedtest" : "model.context_probe_run"
-    );
+    const gate = this.actionEnabled("model.context_probe_run");
     if (!gate.ok) {
       this.notice("err", `无法发起测试：${gate.reason}`);
       return;
     }
     this.run = {
       id: `local-${this.now()}`,
-      kind,
       startedAt: this.now(),
       state: "submitting",
       stopRequested: false,
-      budget: kind === "context" ? { used: 0, limit: MAX_BATCH_MODELS } : null,
+      budget: { used: 0, limit: MAX_BATCH_MODELS },
       items: models.map((model) => ({
         model,
         state: "waiting",
@@ -257,20 +253,15 @@ export class UmDataActions extends UmDataReads {
   protected async runTest(models: string[]): Promise<void> {
     const run = this.run;
     if (!run) return;
-    const params: JsonObject =
-      run.kind === "speedtest"
-        ? { source: UM_SOURCE, models: JSON.stringify(models) }
-        : { models: { [UM_SOURCE]: models } };
+    const params: JsonObject = { models: { [UM_SOURCE]: models } };
     try {
       const result = await this.client.runAction(
-        run.kind === "speedtest"
-          ? "model.speedtest"
-          : "model.context_probe_run",
+        "model.context_probe_run",
         "model",
         params,
         {
           intent: "probe",
-          timeoutMs: run.kind === "speedtest" ? 660_000 : 1_200_000,
+          timeoutMs: 1_200_000,
           pollIntervalMs: 1_500,
           onProgress: (progress) => {
             if (this.run?.id !== run.id) return;
@@ -348,50 +339,29 @@ export class UmDataActions extends UmDataReads {
   }
 
   protected applySteps(run: UmTestRun, op: UmOperationPayload): void {
-    if (run.kind === "speedtest") {
-      for (const step of op.steps) {
-        const match = step.note.match(
-          /^批量测速 \d+\/\d+：(.+) → (ok|failed|timeout)$/
-        );
-        if (!match) continue;
-        const item = run.items.find(
-          (candidate) => candidate.model === match[1]
-        );
-        if (!item) continue;
-        item.state = match[2] === "ok" ? "done" : "failed";
-        item.stage = null;
-        item.summary = `测速结果：${match[2]}`;
-        const next = run.items[run.items.indexOf(item) + 1];
-        if (next && next.state === "waiting") {
-          next.state = "running";
-          next.stage = "已发出 1 次短请求，等待回复…";
-        }
-      }
-    } else {
-      const seen = new Map<string, number>();
-      for (const step of op.steps) {
-        const match = step.note.match(/^上下文探测 (.+?)：(\w+)，请求 (\d+)$/);
-        if (!match) continue;
-        const key = match[1];
-        const model = key.includes("|") ? key.slice(key.indexOf("|") + 1) : key;
-        const item = run.items.find((candidate) => candidate.model === model);
-        if (!item) continue;
-        item.state = match[2] === "verified" ? "done" : "partial";
-        item.stage = null;
-        item.summary = `上下文探测：${match[2]}（请求 ${match[3]} 次）`;
-        seen.set(model, Number(match[3]));
-      }
-      if (run.budget) {
-        let used = 0;
-        for (const count of seen.values()) used += count;
-        if (used > 0) run.budget.used = used;
-      }
+    const seen = new Map<string, number>();
+    for (const step of op.steps) {
+      const match = step.note.match(/^上下文探测 (.+?)：(\w+)，请求 (\d+)$/);
+      if (!match) continue;
+      const key = match[1];
+      const model = key.includes("|") ? key.slice(key.indexOf("|") + 1) : key;
+      const item = run.items.find((candidate) => candidate.model === model);
+      if (!item) continue;
+      item.state = match[2] === "verified" ? "done" : "partial";
+      item.stage = null;
+      item.summary = `上下文探测：${match[2]}（请求 ${match[3]} 次）`;
+      seen.set(model, Number(match[3]));
+    }
+    if (run.budget) {
+      let used = 0;
+      for (const count of seen.values()) used += count;
+      if (used > 0) run.budget.used = used;
     }
     this.publishRun();
   }
 
   protected finishRun(run: UmTestRun, result: OperationResult): void {
-    const entries = resultEntries(run.kind, result);
+    const entries = resultEntries(result);
     const byModel = new Map(entries.map((entry) => [entry.model, entry]));
     for (const item of run.items) {
       const entry = byModel.get(item.model);
@@ -411,14 +381,14 @@ export class UmDataActions extends UmDataReads {
     }
     run.state = "finished";
     run.stopRequested = result.state === "cancelled" || run.stopRequested;
-    run.note = runNote(run.kind, result);
+    run.note = runNote(result);
     const budget = resultBudget(result);
     if (run.budget && budget) run.budget = budget;
     this.runOperation = null;
     this.publishRun();
     this.recomputeCapabilities();
     void this.readOperations(true);
-    if (run.kind === "context") this.readEvidence();
+    this.readEvidence();
   }
 
   protected finishWithoutResult(run: UmTestRun, reason: string): void {

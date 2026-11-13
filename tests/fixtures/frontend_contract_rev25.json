@@ -7,15 +7,15 @@
       "model_sync/sync.py": "c00c0a121c5b0840bebadb5b892b1f62f3d460625e89a49382b3c9e41917943f",
       "model_sync/sync_core.py": "eb6bf1601da6f7752765dd08e830c80d7b87126b2a1554fa9059b4013508bcb0",
       "console/model_actions.py": "d0471efb872574604b3cc3684b31cefea9e600634419522d396cefed50e6ed88",
-      "console/adapters.py": "c6f179510357e4b3377d83fe176745ca3de82b5e2451a7ba3d94cb38a39d83fa",
+      "console/adapters.py": "85cb87522fb38af1f0303e304927be88c0326f935fc1463bc8e1e3100f77de44",
       "console/operations.py": "90bb9896c112c342efc9cf0430676be22c913c376c7d015b06916db91c586c58",
       "share/metering.py": "46f57c0459211c92f0ed3dc2097481bce750274ee2de8b5bfc686ae1876e5417",
       "console/stats.py": "cc8d6b2ceb3a2a6b6536fd41c67c2c7f66616dbcc1f5a8d5dfa9dacdd61b9e83",
       "console/log_reader.py": "718c2c095ab19f76323c3cae0871ae16bf59471e53d5f787b325de0a0bf977fb",
-      "usagesrv.py": "c228bc21572695548804efac7ccf955bc6b9342ba5da943a84882b5110561ee9",
+      "usagesrv.py": "42e0d17f76dc610472083a96b74e8bb837f84e486d6d2a403bf03465a71da062",
       "console/share_actions.py": "fdd2212e6acb427c71116b2beffa7a9e55c1c14931c198fee98e34217442317e",
       "console/share_production.py": "aae4b038a039d327f4bcd4812353dcd7582c2f7fdc7b12aa1e02bf6cc8fdf02b",
-      "console/gateway_connection.py": "97074be5887cf87966b5f972371441a1908f8a39e21733707d07b16e53c2f0b2"
+      "console/gateway_connection.py": "03a356fc46893f0c86fef24e92dcf02cd5492003aa6d09e4b5206c3d5c2eb4c8"
     }
   },
   "actions": {
@@ -257,32 +257,6 @@
           "expected_draft_version": {
             "type": "int",
             "min": 0
-          }
-        }
-      },
-      {
-        "action": "model.speedtest",
-        "enabled": true,
-        "disabled_reason": null,
-        "cancelable": true,
-        "description": "独立模型测速（流式短请求，首字+总耗时）",
-        "param_schema": {
-          "source": {
-            "type": "str",
-            "max_len": 16
-          },
-          "model": {
-            "type": "str",
-            "max_len": 128
-          },
-          "max_tokens": {
-            "type": "int",
-            "min": 1,
-            "max": 512
-          },
-          "models": {
-            "type": "str",
-            "max_len": 2800
           }
         }
       },

@@ -8,7 +8,6 @@ import type {
   MaintenanceAction,
   RequestQuery,
   RequestsView,
-  TestKind,
   TrendRange,
   UmConsoleHandle,
   UmEvent,
@@ -190,7 +189,6 @@ export function mountUmConsole(
   const seenOf = (s: UmViewState) => ({
     runId: s.models.run?.id ?? null,
     noticeAt: s.models.notice?.at ?? null,
-    speedtest: s.models.actions.speedtest.enabled,
     context: s.models.actions.context.enabled,
   });
   let seen = seenOf(initial);
@@ -804,14 +802,13 @@ export function mountUmConsole(
       return;
     }
     if ((el = pick("[data-um-test]"))) {
-      const kind = el.dataset.umTest as TestKind;
-      if (testBlockReason(state.models, modelsUi, kind) !== null) return;
+      if (testBlockReason(state.models, modelsUi) !== null) return;
       const ids = catalogIds(state.models).filter((id) =>
         modelsUi.selected.has(id)
       );
       modelsUi.awaiting = true;
       render();
-      emit({ type: "models.test", kind, models: ids });
+      emit({ type: "models.test", models: ids });
       return;
     }
     if ((el = pick("[data-um-stop]"))) {
@@ -840,17 +837,6 @@ export function mountUmConsole(
     }
     if ((el = pick("[data-um-copy]"))) {
       void copyUrl(el as HTMLButtonElement);
-      return;
-    }
-    if ((el = pick("[data-um-hkind]"))) {
-      const kind = el.dataset.umHkind || null;
-      emit({
-        type: "models.history",
-        filter: {
-          ...state.models.history.filter,
-          kind: kind as "speedtest" | "context" | null,
-        },
-      });
       return;
     }
   });
@@ -1123,7 +1109,6 @@ export function mountUmConsole(
         modelsUi.awaiting &&
         (newRun ||
           (now.noticeAt !== null && now.noticeAt !== seen.noticeAt) ||
-          now.speedtest !== seen.speedtest ||
           now.context !== seen.context)
       )
         modelsUi.awaiting = false;

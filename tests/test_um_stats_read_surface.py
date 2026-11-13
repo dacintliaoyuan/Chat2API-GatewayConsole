@@ -32,6 +32,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from console import adapters as console_adapters  # noqa: E402
 from console import log_reader as console_log_reader  # noqa: E402
 from console import stats as console_stats       # noqa: E402
 import usagesrv             # noqa: E402
@@ -729,7 +730,12 @@ class MaintenanceTests(unittest.TestCase):
             "error": error,
         }
 
-    def test_original_operations_filtered_to_um_actions(self):
+    def test_original_operations_filtered_to_um_actions_and_speedtest_absent(self):
+        # The retired speedtest action must not be registered, and even a
+        # historical operation row for it is not mixed into the UM table.
+        self.assertNotIn(
+            "model.speedtest",
+            {spec.name for spec in console_adapters.build_registry()})
         manager = self._manager([
             self._operation("op-verify", "account.um_verify",
                             state="succeeded", created_at=1000.0,
@@ -749,6 +755,7 @@ class MaintenanceTests(unittest.TestCase):
         res = usagesrv.um_maintenance(manager=manager)
         self.assertEqual([row["key"] for row in res["rows"]],
                          ["op-status", "op-start", "op-verify"])
+        self.assertNotIn("op-speed", [row["key"] for row in res["rows"]])
         self.assertEqual(res["rows"][0]["state"], "interrupted")
         self.assertEqual(res["rows"][1]["state"], "running")
         self.assertEqual(res["rows"][2]["steps"],

@@ -433,7 +433,7 @@ export class UmDataState {
           title: "模型测试未通过",
           detail:
             run.note ??
-            `最近一次${run.kind === "speedtest" ? "测速" : "上下文探测"}有 ${failed} 个模型失败`,
+            `最近一次上下文探测有 ${failed} 个模型失败`,
           count: failed,
           lastAt: run.startedAt,
           evidence: null,
@@ -498,10 +498,6 @@ export class UmDataState {
         value: `${this.timezone}（后端报告的账本时区）`,
       });
     facts.push({
-      label: "测速",
-      value: "每个所选模型 1 次短请求，不自动重试（后端契约）",
-    });
-    facts.push({
       label: "上下文探测预算",
       value: "整批最多 20 次请求，每次输出最多 64 Token（后端契约）",
     });
@@ -562,7 +558,6 @@ export class UmDataState {
     const closed: Capability = { enabled: false, reason };
     return {
       refresh: closed,
-      speedtest: closed,
       context: closed,
       stop: closed,
     };
@@ -616,18 +611,6 @@ export class UmDataState {
         refresh: open(
           "model.catalog",
           !known ? notKnown : running ? null : "UM 服务未运行，读不到目录"
-        ),
-        speedtest: open(
-          "model.speedtest",
-          !known
-            ? notKnown
-            : !running
-              ? "UM 服务未运行"
-              : busy
-                ? "已有测试在进行，等它结束或停止后再发起"
-                : catalog.length
-                  ? null
-                  : "目录里没有可测试的模型"
         ),
         context: open(
           "model.context_probe_run",

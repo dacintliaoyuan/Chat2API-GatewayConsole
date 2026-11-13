@@ -1294,14 +1294,13 @@ class RegistryHonestyTests(ConsoleApiTestBase):
         # B0 (2026-11-01): retired M365 / Qoder CN / Qoder Global /
         # CLIProxy management actions are absent. Active actions retain their
         # exact enablement and disabled reasons below.
-        self.assertEqual(len(infos), 36)
+        self.assertEqual(len(infos), 35)
         by_name = {i["action"]: i for i in infos}
         enabled = {n for n, i in by_name.items() if i["enabled"]}
         # The deployment authorization package (2026-09-16, section 5) plus
         # user instruction A3 flipped the approved actions live: the four-
-        # layer share orchestration, the model speedtest, the service start/stop
+        # layer share orchestration, the service start/stop
         # target (chat2api only after B0 — usage stays excluded as the
-        # console's own web host), the UM login orchestration, the managed
         # model-sync writes (sync_apply/task_install — the pin writes were
         # removed with the pin mechanism, Rev8 2026-10-02), since the
         # maintainer's 2026-09-22 budget approval the billed long-input
@@ -1318,7 +1317,6 @@ class RegistryHonestyTests(ConsoleApiTestBase):
              "share.status",
              "share.start", "share.stop", "share.estop", "share.retry_stop",
              "share.backend_login",
-             "model.speedtest",
              "service.start", "service.stop", "service.restart",
              "account.login",
              "model.sync_apply",
@@ -1334,7 +1332,7 @@ class RegistryHonestyTests(ConsoleApiTestBase):
              "share.backend_restart", "share.gateway_restart",
              # S5（契约 §5.2）：公网巡检一键复查与受限重试。
              "share.public_check", "share.public_retry"})
-        self.assertEqual(len(enabled), 35)
+        self.assertEqual(len(enabled), 34)
         self.assertEqual(len(infos) - len(enabled), 1)
         for retired in (
                 "qoder.credential_bridge", "qoder.source_diagnostics",

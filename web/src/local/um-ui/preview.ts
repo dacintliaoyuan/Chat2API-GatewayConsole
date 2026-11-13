@@ -8,7 +8,6 @@ import type {
   Reading,
   RequestQuery,
   RequestResult,
-  TestKind,
   TrendRange,
   UmBucket,
   UmEvent,
@@ -624,29 +623,6 @@ export function startPreview(
       source: spec.thinkSource,
       defaultLevel: spec.thinkDefault,
     },
-    lastSpeed: zero
-      ? null
-      : m <= 1
-        ? {
-            at: now - (m + 1) * 20 * 60 * MIN,
-            ok: true,
-            summary: `${spec.speed} token/秒 · 耗时 ${(9.8 - m * 3).toFixed(1)} 秒`,
-          }
-        : // 「需处理」 also shows a long upstream error and the long-named model's results.
-          scenario === "attention" && m === 3
-          ? {
-              at: now - 95 * MIN,
-              ok: false,
-              summary:
-                "HTTP 502：上游网关返回了错误页面，读取回复正文时连接被对方重置（Connection reset by peer）；测速不自动重试，这次不计速度",
-            }
-          : scenario === "attention" && m === 4
-            ? {
-                at: now - 3 * 60 * MIN,
-                ok: true,
-                summary: `${spec.speed} token/秒 · 耗时 8.1 秒`,
-              }
-            : null,
     lastContext: zero
       ? null
       : m === 0
@@ -667,27 +643,8 @@ export function startPreview(
     ? []
     : [
         {
-          key: "h1",
-          model: SPECS[0].id,
-          kind: "speedtest",
-          at: now - 20 * 60 * MIN,
-          result: "done",
-          summary: "46 token/秒 · 耗时 9.8 秒",
-          archived: false,
-        },
-        {
-          key: "h2",
-          model: SPECS[1].id,
-          kind: "speedtest",
-          at: now - 40 * 60 * MIN,
-          result: "done",
-          summary: "71 token/秒 · 耗时 6.8 秒",
-          archived: false,
-        },
-        {
           key: "h3",
           model: SPECS[0].id,
-          kind: "context",
           at: now - 3 * DAY,
           result: "done",
           summary: "通过 32万 字符 · 上游报告 ≥96,214 Token",
@@ -696,20 +653,10 @@ export function startPreview(
         {
           key: "h4",
           model: SPECS[2].id,
-          kind: "context",
           at: now - 3 * DAY,
           result: "done",
           summary: "通过 64万 字符 · 上游没有报告 Token",
           archived: false,
-        },
-        {
-          key: "h5",
-          model: SPECS[0].id,
-          kind: "speedtest",
-          at: now - 6 * DAY,
-          result: "failed",
-          summary: "HTTP 429：上游限流（未重试）",
-          archived: true,
         },
       ];
 
@@ -735,11 +682,6 @@ export function startPreview(
   });
   const modelCaps = (up: boolean, busy: boolean) => ({
     refresh: up ? open : closed("UM 服务未运行，读不到目录"),
-    speedtest: !up
-      ? closed("UM 服务未运行")
-      : busy
-        ? closed("已有测试在进行，等它结束或停止后再发起")
-        : open,
     context: !up
       ? closed("UM 服务未运行")
       : busy
@@ -839,7 +781,6 @@ export function startPreview(
     scenario === "attention"
       ? {
           id: "run-a1",
-          kind: "context",
           startedAt: now - 70_000,
           state: "running",
           stopRequested: false,
@@ -1042,14 +983,13 @@ export function startPreview(
       refresh: { state: "idle" },
       run: initialRun,
       history: {
-        filter: { model: null, kind: null },
+        filter: { model: null },
         records: { state: "loading" },
       },
       runtime: ready([
         { label: "服务端口", value: "8000（chat2api 主链）" },
         { label: "上游请求超时", value: "600 秒" },
         { label: "自动重试", value: "最多 2 次，只在连接失败或 5xx 时" },
-        { label: "测速", value: "每个模型 1 次短请求，不重试" },
         {
           label: "上下文探测预算",
           value: "整批 20 次请求，每次输出最多 64 Token",
@@ -1173,11 +1113,7 @@ export function startPreview(
   });
   const historyOf = (f: HistoryFilter) =>
     history
-      .filter(
-        (h) =>
-          (f.model === null || h.model === f.model) &&
-          (f.kind === null || h.kind === f.kind)
-      )
+      .filter((h) => f.model === null || h.model === f.model)
       .sort((a, b) => b.at - a.at);
 
   // Lazy first reads, like a controller would do on `page`.
@@ -1259,7 +1195,7 @@ export function startPreview(
     );
   }
 
-  function startRun(kind: TestKind, models: string[]): void {
+  function startRun(models: string[]): void {
     if (state.models.run && state.models.run.state !== "finished") {
       state.models.notice = {
         tone: "warn",
@@ -1271,11 +1207,10 @@ export function startPreview(
     }
     const run: UmTestRun = {
       id: `run-${Date.now()}`,
-      kind,
       startedAt: Date.now(),
       state: "submitting",
       stopRequested: false,
-      budget: kind === "context" ? { used: 0, limit: 20 } : null,
+      budget: { used: 0, limit: 20 },
       items: models.map((model) => ({
         model,
         state: "waiting" as ModelTestState,
@@ -1321,32 +1256,6 @@ export function startPreview(
     }
     const m = SPECS.findIndex((s) => s.id === item.model);
     item.state = "running";
-    if (run.kind === "speedtest") {
-      item.stage = "已发出 1 次短请求，等待回复…";
-      emit();
-      later(1_100, () => {
-        const spec = SPECS[m];
-        if (spec.id === "deepseek-v3.2") {
-          Object.assign(item, {
-            state: "failed",
-            stage: null,
-            summary: "HTTP 429：上游限流；测速不自动重试",
-            detail: speedDetail(m, false),
-          });
-        } else {
-          const d = speedDetail(m, true);
-          Object.assign(item, {
-            state: "done",
-            stage: null,
-            summary: `${Math.round((d.speed as { value: number }).value)} token/秒 · 耗时 ${((d.durationMs as { value: number }).value / 1000).toFixed(1)} 秒`,
-            detail: d,
-          });
-        }
-        emit();
-        later(250, () => next(run, i + 1));
-      });
-      return;
-    }
     // Context: one character step per request, sharing the batch budget.
     const steps = SPECS[m].steps;
     let k = 0;
@@ -1411,9 +1320,7 @@ export function startPreview(
   function finishRun(run: UmTestRun): void {
     run.state = "finished";
     run.note =
-      run.kind === "speedtest"
-        ? "每个所选模型最多 1 次短请求，不自动重试；速度为整次平均（含等待）。"
-        : "整批共用一份请求预算；字符步进按字符计，Token 是上游报告的已验证下界，不是最大上下文。";
+      "整批共用一份请求预算；字符步进按字符计，Token 是上游报告的已验证下界，不是最大上下文。";
     const at = Date.now();
     for (const item of run.items) {
       if (item.state === "not_run" || !item.summary) continue;
@@ -1424,24 +1331,18 @@ export function startPreview(
           ok: item.state === "done" || item.state === "partial",
           summary: item.summary,
         };
-        if (run.kind === "speedtest") row.lastSpeed = entry;
-        else row.lastContext = entry;
-        if (
-          run.kind === "context" &&
-          item.detail?.contextChars.kind === "exact"
-        )
+        row.lastContext = entry;
+        if (item.detail?.contextChars.kind === "exact")
           row.context.probedChars = {
             chars: item.detail.contextChars.value,
             at,
           };
       }
       for (const old of history)
-        if (old.model === item.model && old.kind === run.kind)
-          old.archived = true;
+        if (old.model === item.model) old.archived = true;
       history.unshift({
         key: `h-${at}-${item.model}`,
         model: item.model,
-        kind: run.kind,
         at,
         result: item.state,
         summary: item.summary,
@@ -1763,7 +1664,7 @@ export function startPreview(
         });
         return;
       case "models.test":
-        startRun(event.kind, [...new Set(event.models)]);
+        startRun([...new Set(event.models)]);
         return;
       case "models.stop":
         if (
@@ -1785,31 +1686,6 @@ export function startPreview(
   };
 }
 
-function speedDetail(m: number, ok: boolean): UmTestDetail {
-  const spec = SPECS[m];
-  const output = 420 + m * 9;
-  const durationMs = ok ? Math.round((output / spec.speed) * 1000) : 1_300;
-  return {
-    durationMs: { kind: "exact", value: durationMs },
-    firstTokenMs:
-      m === 0
-        ? { kind: "exact", value: 1_920 }
-        : { kind: "missing", note: "这次没有实测首字" },
-    outputTokens: ok
-      ? { kind: "exact", value: output }
-      : { kind: "missing", note: "没有回复" },
-    speed: ok
-      ? { kind: "exact", value: output / (durationMs / 1000) }
-      : { kind: "missing", note: "失败的请求不计速度" },
-    speedBasis: "whole_request",
-    contextChars: { kind: "missing", note: "测速不探测上下文" },
-    contextTokenLowerBound: { kind: "missing", note: "测速不探测上下文" },
-    error: ok ? null : "HTTP 429：上游限流",
-    lines: ok
-      ? [`发出 1 次短请求（输出上限按既有设置）`, `收到 ${output} 个输出 Token`]
-      : ["发出 1 次短请求", "HTTP 429：上游限流；测速不自动重试"],
-  };
-}
 function contextDetail(
   m: number,
   passed: number,
