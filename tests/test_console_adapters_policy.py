@@ -286,9 +286,9 @@ class RetiredSourceRegistryTests(unittest.TestCase):
     """B0 (2026-11-01): retired-source actions are NOT registered.
 
     The Qoder CN / Qoder Global / CLIProxy action cards are gone from the
-    default assembly: no handler can run and no fake success is possible. A
-    submit naming one is refused explicitly (``source_retired``) before the
-    operation manager creates a row.
+    default assembly: no handler can run and no fake success is possible. The
+    dedicated retirement gate is gone too; a submit naming one reaches the
+    operation manager as an unknown action (``invalid_action``).
     """
 
     RETIRED = (
@@ -304,16 +304,12 @@ class RetiredSourceRegistryTests(unittest.TestCase):
             with self.subTest(action=action):
                 self.assertNotIn(action, names)
 
-    def test_retired_action_is_refused_explicitly(self):
-        for action in self.RETIRED:
-            with self.subTest(action=action):
-                with self.assertRaises(OperationError) as caught:
-                    console_adapters.refuse_retired_action(action)
-                self.assertEqual(caught.exception.code, "source_retired")
-        # A UM/unknown action is not touched by the retirement gate.
-        console_adapters.refuse_retired_action("account.um_status")
-        console_adapters.refuse_retired_action("model.catalog")
-        console_adapters.refuse_retired_action("no.such.action")
+    def test_retired_action_gate_is_gone(self):
+        for name in ("RETIRED_ACTION_NAMES", "RETIRED_ACTION_PREFIXES",
+                     "SOURCE_RETIRED_REASON", "retired_action",
+                     "refuse_retired_action"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(console_adapters, name))
 
     def test_retired_submit_creates_no_operation_row(self):
         tmp = tempfile.TemporaryDirectory()

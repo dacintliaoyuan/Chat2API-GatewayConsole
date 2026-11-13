@@ -3,9 +3,8 @@
 
 范围：UM 主链的 chat2api（8000）一个服务，按稳定 service ID 返回客户端要
 填写的 Base URL、协议、鉴权方式、调用 Key 读取状态与明文（或 null）。B0
-（2026-11-01）起 Qoder 国内 / QoderGlobal（国际）/ CLIProxy 与已归档的 M365
-都已退役：本读面只保留 chat2api，退役来源返回明确的 ``not_assembled`` /
-HTTP 410 拒绝（``RETIRED_SERVICES``），绝不读取它们的旧路径或旧 Key 文件。
+（2026-11-01）起退役来源不再保留专用拒绝契约：本读面只保留 chat2api，退役
+来源与未知 service 同码拒绝（ValueError），绝不读取它们的旧路径或旧 Key 文件。
 上游登录 Token、管理密钥、控制通道密钥与分享 Key 都不在范围内。
 
 硬性纪律（与 ``console_speedtest`` 同一条）：
@@ -75,40 +74,6 @@ SERVICES = {
         "key_source": "env:" + CHAT2API_KEY_ENV,
     },
 }
-
-# B0（2026-11-01）：退役来源只保留明确的拒绝身份，不再读任何旧配置 / Key
-# 文件。``connection_info`` 对它们抛 ``RetiredServiceError``（HTTP 410、
-# state=not_assembled），调用方必须原样映射，绝不探测或回退。
-RETIRED_SERVICES = {
-    "Qoder": "Qoder 国内中转（8095）已退役（B0, 2026-11-01）",
-    "QoderGlobal": "Qoder 国际网关（8097）已退役（B0, 2026-11-01）",
-    "CLIProxy": "CLIProxy Gemini 网关（8320）已退役（B0, 2026-11-01）",
-    "M365": "M365 网关已归档（Archived=true、PAUSED_SOURCES）",
-}
-
-
-class RetiredServiceError(ValueError):
-    """退役来源：明确的 not_assembled / HTTP 410，绝不探测旧路径。"""
-
-    code = "source_retired"
-    http_status = 410
-
-    def __init__(self, service):
-        self.service = service
-        self.reason = RETIRED_SERVICES[service]
-        super().__init__("服务 %s 属于已退役来源：%s" % (service, self.reason))
-
-    def payload(self):
-        """调用方（``usagesrv`` 路由）应原样发送的载荷。"""
-        return {
-            "ok": False,
-            "service": self.service,
-            "state": "not_assembled",
-            "error": self.code,
-            "http_status": self.http_status,
-            "reason": self.reason,
-            "checked_epoch": int(time.time()),
-        }
 
 _HOST_FLAG_RE = re.compile(r"--host[=\s]+(\S+)", re.IGNORECASE)
 _PORT_FLAG_RE = re.compile(r"--port[=\s]+(\S+)", re.IGNORECASE)
@@ -518,11 +483,9 @@ def connection_info(service, *, snapshot=None, cmdline_reader=None, env=None,
     表示快照失败）。端口只从快照取；``health_path`` 是描述符常量。明文 Key
     只在 ``key_state == "present"`` 时非空。绝不发任何 HTTP 请求。
 
-    退役来源抛 ``RetiredServiceError``（not_assembled / HTTP 410），未知
-    service id 抛 ``ValueError``；两者都不读取任何旧配置或旧 Key 文件。
+    未知 service id（含已退役来源）抛 ``ValueError``；不读取任何旧配置或
+    旧 Key 文件。
     """
-    if service in RETIRED_SERVICES:
-        raise RetiredServiceError(service)
     spec = SERVICES.get(service)
     if spec is None:
         raise ValueError("未知或不在范围的 service：%r" % (service,))

@@ -657,10 +657,10 @@ export type ConnectionKeySourceState =
   "present" | "absent" | "unreadable" | "unknown";
 
 /** Rev15 R32-KEY-ACTIVE: how the shown key value is consumed by the running
- *  instance. `per_request` = the gateway rereads the file on every request
- *  (Qoder 国内); `startup_env` = the value was read into the process
- *  environment at launch and later file edits may not take effect (Qoder 国际);
- *  `config_consumed` = the gateway takes the key from cliproxy/config.yaml.
+ *  instance. `per_request` = the gateway rereads the file on every request;
+ *  `startup_env` = the value was read into the process environment at launch
+ *  and later file edits may not take effect; `config_consumed` = the gateway
+ *  takes the key from its own config document.
  *  `unknown` is honest and never coerced into one of the known mechanisms. */
 export type ConnectionKeyInUse =
   "per_request" | "startup_env" | "config_consumed" | "unknown";

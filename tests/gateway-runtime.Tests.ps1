@@ -167,29 +167,10 @@ if ($HealthOnly) {
 # ---------------------------------------------------------------------------
 
 $descriptors = Get-GatewayServiceDescriptors
-$expectedKeys = @('M365', 'chat2api', 'usage')
-Assert-Equal (@($descriptors.Keys) -join ',') ($expectedKeys -join ',') 'three service descriptors in stable order (B0 retires Qoder/CLIProxy)'
+$expectedKeys = @('chat2api', 'usage')
+Assert-Equal (@($descriptors.Keys) -join ',') ($expectedKeys -join ',') 'two service descriptors in stable order'
 Assert-Equal ($descriptors.Keys -notcontains 'DSH') $true 'retired DSH is absent from service descriptors'
-Assert-Equal ($descriptors.Keys -notcontains 'Qoder') $true 'retired Qoder CN is absent from service descriptors'
-Assert-Equal ($descriptors.Keys -notcontains 'QoderGlobal') $true 'retired Qoder Global is absent from service descriptors'
-Assert-Equal ($descriptors.Keys -notcontains 'CLIProxy') $true 'retired CLIProxy is absent from service descriptors'
-
-# Archived lifecycle calls refuse before HTTP, desired-state, launch or stop.
-Assert-Equal $descriptors['M365'].Archived $true 'M365 retains archival metadata'
-$originalDesiredWriter = ${function:Write-GatewayDesiredState}
-try {
-    function Write-GatewayDesiredState { throw 'archived service attempted a state write' }
-    $forbiddenEffect = { throw 'archived service attempted an external effect' }
-    $archivedStart = Start-GatewayService -Key M365 -HttpChecker $forbiddenEffect -Launcher $forbiddenEffect -Sleeper $forbiddenEffect
-    $archivedStop = Stop-GatewayService -Key M365 -HttpChecker $forbiddenEffect -Stopper $forbiddenEffect -Sleeper $forbiddenEffect
-    $archivedRestart = Restart-GatewayService -Key M365 -HttpChecker $forbiddenEffect -Launcher $forbiddenEffect -Stopper $forbiddenEffect -Sleeper $forbiddenEffect
-    foreach ($archivedResult in @($archivedStart, $archivedStop, $archivedRestart)) {
-        Assert-Equal $archivedResult.Status 'Archived' 'archived lifecycle is refused without effects'
-        Assert-Equal $archivedResult.Action 'None' 'archived lifecycle performs no action'
-    }
-} finally {
-    Set-Item -LiteralPath 'function:Write-GatewayDesiredState' -Value $originalDesiredWriter
-}
+Assert-Equal ($descriptors.Keys -notcontains 'M365') $true 'archived M365 descriptor is gone'
 
 # Unique keys and ports
 $ports = @($descriptors.Values | ForEach-Object { $_.Port })
@@ -203,24 +184,17 @@ Assert-Equal ($healthEndpoints | Select-Object -Unique).Count $healthEndpoints.C
 # ---------------------------------------------------------------------------
 
 $startOrder = Get-GatewayStartOrder
-Assert-Equal ($startOrder -join ',') 'chat2api,usage' 'startup order keeps active sources ahead of consumers and excludes archived M365'
+Assert-Equal ($startOrder -join ',') 'chat2api,usage' 'startup order keeps active sources ahead of consumers'
 Assert-Equal ($startOrder -notcontains 'DSH') $true 'retired DSH is absent from startup order'
-Assert-Equal ($startOrder -notcontains 'Qoder') $true 'retired Qoder CN is absent from startup order'
 
 $stopOrder = Get-GatewayStopOrder
 Assert-Equal ($stopOrder -join ',') 'usage,chat2api' 'stop order keeps the established consumer/source relative order'
 Assert-Equal ($stopOrder -notcontains 'DSH') $true 'retired DSH is absent from stop order'
-Assert-Equal ($stopOrder -notcontains 'CLIProxy') $true 'retired CLIProxy is absent from stop order'
 
 # ---------------------------------------------------------------------------
 # Port and health URL mapping
 # ---------------------------------------------------------------------------
 
-Assert-Equal $descriptors['M365'].Port 4141 'M365 port is 4141'
-Assert-Null $descriptors['M365'].HealthPath 'retired M365 has no health endpoint'
-Assert-Equal $descriptors['M365'].StopStrategy 'Archived' 'retired M365 has no managed lifecycle'
-Assert-Equal $descriptors['M365'].StartAction 'Archived' 'retired M365 has no start action'
-Assert-Null $descriptors['M365'].StartPath 'retired M365 has no executable path'
 Assert-Equal $descriptors['chat2api'].Port 8000 'chat2api port is 8000'
 Assert-Equal $descriptors['chat2api'].HealthPath '/health' 'chat2api health path is /health'
 Assert-Equal $descriptors['chat2api'].AuthStatusUrl 'http://127.0.0.1:8000/admin/auth/status' 'chat2api auth status URL is local'
@@ -233,14 +207,8 @@ Assert-Equal $descriptors['usage'].Port 8001 'usage port is 8001'
 Assert-Equal $descriptors['usage'].HealthPath '/health' 'usage health path is /health'
 
 # Open URLs
-Assert-Null $descriptors['M365'].OpenUrl 'retired M365 has no launchable UI'
 Assert-Equal $descriptors['usage'].OpenUrl 'http://127.0.0.1:8001/' 'usage opens 8001'
 Assert-Null $descriptors['chat2api'].OpenUrl 'chat2api has no open URL'
-
-# B0: the retired Qoder / QoderGlobal / CLIProxy descriptors are gone.
-foreach ($retiredKey in @('Qoder', 'QoderGlobal', 'CLIProxy')) {
-    Assert-Equal ($descriptors.Contains($retiredKey)) $false "$retiredKey descriptor is removed"
-}
 
 # ---------------------------------------------------------------------------
 # Start: idempotent when already healthy
@@ -382,7 +350,7 @@ $results = Start-AllGatewayServices `
     -Launcher { param($key, $path, $desc) [void]$startAllCalls.Add($key) } `
     -Sleeper { param($seconds) }
 
-Assert-Equal $results.Count 2 'start-all launches two active services, excluding archived M365'
+Assert-Equal $results.Count 2 'start-all launches the two active services'
 Assert-Equal ($startAllCalls -join ',') 'chat2api,usage' 'start-all follows the fixed startup order'
 
 # ---------------------------------------------------------------------------
@@ -400,7 +368,7 @@ $results = Stop-AllGatewayServices `
     -Stopper { param($key, $desc) [void]$stopAllCalls.Add($key) } `
     -Sleeper { param($seconds) }
 
-Assert-Equal $results.Count 2 'stop-all covers two active descriptors, excluding archived M365'
+Assert-Equal $results.Count 2 'stop-all covers the two active descriptors'
 Assert-Equal ($stopAllCalls -join ',') 'usage,chat2api' 'stop-all follows the reverse startup order'
 
 # ---------------------------------------------------------------------------
@@ -423,10 +391,6 @@ Assert-Equal $proxyEnv.Count 8 'proxy environment has 8 entries (4 cleared + 4 c
 # ---------------------------------------------------------------------------
 
 $healthCheckCalls = New-Object System.Collections.ArrayList
-$archivedHealthy = Test-GatewayServiceHealth -Key 'M365' -HttpChecker {
-    throw 'retired M365 must not perform HTTP checks'
-}
-Assert-Equal $archivedHealthy $false 'retired M365 does not probe its old port'
 Test-GatewayServiceHealth -Key 'chat2api' -HttpChecker {
     param($url, $timeout)
     [void]$healthCheckCalls.Add($url)
@@ -435,7 +399,7 @@ Test-GatewayServiceHealth -Key 'chat2api' -HttpChecker {
 Assert-Equal $healthCheckCalls[0] 'http://127.0.0.1:8000/health' 'active gateway health URL is correct'
 
 $runtimeSource = Get-Content -LiteralPath $runtimeLibrary -Raw
-Assert-Equal ($runtimeSource -notmatch 'M365Managed|python manage\.py') $true 'retired managed launch and stop implementation is removed'
+Assert-Equal ($runtimeSource -notmatch 'python manage\.py') $true 'retired managed launch and stop implementation is removed'
 # HTTP error reachability is exercised above with real 403/500 responses;
 # requiring the old Exception.Response spelling would reintroduce the bug.
 Assert-Equal ($runtimeSource -match '\$ProgressPreference\s*=\s*''SilentlyContinue''') $true 'health checks suppress the PowerShell progress banner'
@@ -1111,7 +1075,7 @@ try {
     $syncStopped = @(Get-GatewayManuallyStoppedKeys -Keys @('chat2api', 'usage'))
     Assert-Equal ($syncStopped -join ',') 'chat2api' 'only an explicit stopped intent is dropped from the scheduled sync sources'
     Assert-Equal (@(Get-GatewayManuallyStoppedKeys -Keys @('usage')) -join ',') '' 'a running intent is never dropped'
-    Assert-Equal (@(Get-GatewayManuallyStoppedKeys -Keys @('M365')) -join ',') '' 'an absent marker is unknown, not an explicit stop'
+    Assert-Equal (@(Get-GatewayManuallyStoppedKeys -Keys @('usage-absent')) -join ',') '' 'an absent marker is unknown, not an explicit stop'
 } finally {
     $env:SELFUSEAI_GATEWAY_WATCH_DIR = $savedSyncWatchDir
     Remove-Item -LiteralPath $syncMarkerRoot -Recurse -Force -ErrorAction SilentlyContinue

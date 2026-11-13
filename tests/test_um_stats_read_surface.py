@@ -51,8 +51,6 @@ class _UsagesrvStatsEnvironment:
 
     chat2api_log = property(lambda self: usagesrv.CHAT2API_LOG)
     dsh_snapshot = property(lambda self: usagesrv.DSH_SNAPSHOT_FILE)
-    qoder_log = property(lambda self: usagesrv.QODER_LOG)
-    m365_log = property(lambda self: usagesrv.M365_LOG)
     dsh_merge_day = property(lambda self: usagesrv.DSH_MERGE_DAY)
     magpie_price_snapshot = property(
         lambda self: usagesrv.MAGPIE_PRICE_SNAPSHOT_FILE)

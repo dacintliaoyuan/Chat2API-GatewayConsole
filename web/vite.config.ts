@@ -12,9 +12,6 @@ import type { ServerResponse } from "node:http";
 const GW_TARGETS: readonly { prefix: string; target: string }[] = [
   { prefix: "/gw/usagesrv", target: "http://127.0.0.1:8001" },
   { prefix: "/gw/chat2api", target: "http://127.0.0.1:8000" },
-  { prefix: "/gw/qoder-cn", target: "http://127.0.0.1:8095" },
-  { prefix: "/gw/qoder-global", target: "http://127.0.0.1:8097" },
-  { prefix: "/gw/cliproxy", target: "http://127.0.0.1:8320" },
 ];
 
 /** The candidate line's build output. Pinned here instead of left to a
@@ -342,8 +339,6 @@ const consoleConfig = (mode: string, role: ConsoleRole): UserConfig => ({
   // Read-only liveness/summary access to the production gateway ports through
   // the dev server (same origin). GET probes only; the prototype never talks
   // to these ports from a static build (no server proxy in production output).
-  // B-A (2026-09-20): /gw/qoder-cn joins the proxy table (8095 CN gateway,
-  // ADR 0019 upline); /gw/m365 is gone with the offline chain (no consumer).
   server: {
     // A36-2: dev server binds loopback only; the Origin rewrite below
     // verifies the ORIGINAL Host/Origin before trusting it.
@@ -380,9 +375,6 @@ const consoleConfig = (mode: string, role: ConsoleRole): UserConfig => ({
         },
       },
       "/gw/chat2api": { target: "http://127.0.0.1:8000", changeOrigin: true, rewrite: p => p.replace(/^\/gw\/chat2api/, "") },
-      "/gw/qoder-cn": { target: "http://127.0.0.1:8095", changeOrigin: true, rewrite: p => p.replace(/^\/gw\/qoder-cn/, "") },
-      "/gw/qoder-global": { target: "http://127.0.0.1:8097", changeOrigin: true, rewrite: p => p.replace(/^\/gw\/qoder-global/, "") },
-      "/gw/cliproxy": { target: "http://127.0.0.1:8320", changeOrigin: true, rewrite: p => p.replace(/^\/gw\/cliproxy/, "") },
     },
   },
   // The 8099 candidate preview: real data through GET/HEAD, and nothing else —

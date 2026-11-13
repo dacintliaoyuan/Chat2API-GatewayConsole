@@ -4,8 +4,8 @@
 usagesrv — AI 网关费用统计聚合服务（127.0.0.1:8001）。
 
 B0（2026-11-01）：默认装配只保留 UM 主链（chat2api 8000）与其必要的
-记账/日志/健康配套。退役来源（Qoder 国内/国际、CLIProxy、M365）不再被
-探测、启动或读入默认汇总；历史账本文件保留可追溯，但不进入 UM 首页。
+记账/日志/健康配套。退役来源不再被探测、启动或读入默认汇总；历史账本
+文件保留可追溯，但不进入 UM 首页。
 
 读取两条本地记账来源，按统一口径聚合后通过 /api/summary 提供给
 控制台前端（根路径直接托管 web/dist/index.html 构建产物；dist 未
@@ -81,17 +81,10 @@ from shared import pricing_rules as _pricing_rules  # noqa: E402
 
 CHAT2API_LOG = os.environ.get("CHAT2API_USAGE_LOG") or \
     os.path.join(HERE, "data", "usage-chat2api.jsonl")
-# Retired source ledgers (B0, 2026-11-01). The files stay on disk for
-# historical traceability but the default assembly never reads them: they are
-# exposed only through console_stats.retired_ledgers() for an explicit
-# historical query. No token file is read for them either.
-QODER_LOG = os.environ.get("QODER_USAGE_LOG") or \
-    os.path.join(HERE, "qoder", "data", "usage.jsonl")
-M365_LOG = os.environ.get("M365_USAGE_LOG") or \
-    os.path.join(HERE, "m365", "data", "usage.jsonl")
 OVERRIDE_FILE = os.path.join(HERE, "data", "price.override.json")
-# 自持价目表与 DSH 历史日快照：输入路径可用环境变量覆盖（参照 QODER_USAGE_LOG
-# 先例），测试与迁移时重定向；默认路径读取失败按缺价/空账本降级，不崩溃。
+# 自持价目表与 DSH 历史日快照：输入路径可用环境变量覆盖（参照
+# CHAT2API_USAGE_LOG 先例），测试与迁移时重定向；默认路径读取失败按
+# 缺价/空账本降级，不崩溃。
 PRICE_FILE = os.environ.get("USAGE_PRICE_FILE") or \
     os.path.join(HERE, "data", "prices.json")
 # UM reference prices followed from Magpie (B1, 2026-11-01). This is a
@@ -678,14 +671,6 @@ def _bucket_price_estimate(rec, model, in_tok, out_tok, cache_tok, reason_tok):
                                   cache_tok, reason_tok)
 
 
-def _bucket_price_m365(rec, model, in_tok, out_tok, cache_tok, reason_tok):
-    """_bucket 计价回调（M365）：status 非 200/None 的失败请求计请求数、费用 0
-    （priced=None，既有口径不变，与版本无关）；其余按记录时刻所属版本估算。"""
-    if rec.get("status") not in (None, 200):
-        return 0.0, None, None, False, None, None, False
-    return _bucket_price_estimate(rec, model, in_tok, out_tok, cache_tok, reason_tok)
-
-
 # ------------------------------------------------------------------- 读取账本
 
 def _read_jsonl(path, limit=200000):
@@ -1184,7 +1169,7 @@ def _cloud_peak_and_versions(table):
 def _build_cloud_summary():
     """Cloud role summary: ONLY the UM share capability is assembled.
 
-    It NEVER reads the private Qoder / chat2api / M365 / DSH ledgers and NEVER
+    It NEVER reads the private chat2api / DSH ledgers and NEVER
     probes any local source port: those resources do not exist on this deployment. The
     share usage has its OWN read surface (GET /api/console/share-usage), so this
     payload honestly reports an EMPTY services object plus the explicit
@@ -1237,10 +1222,6 @@ def _build_cloud_summary():
         # 空 services 是诚实的「本部署未聚合私人账本」：前端显示缺少服务
         # 聚合的错误，而不是把「没读取」折成 0 请求 / 0 费用。
         "services": {},
-        "qoderQuota": {
-            "cn": None, "global": None,
-            "note": "云端角色未装配 Qoder 探测（不访问 8095/8097）",
-        },
         "dsh": {"url": None,
                 "note": "云端角色未装配 DSH 快照读取"},
         "dshMergedIntoTotal": {
@@ -1256,7 +1237,6 @@ def build_summary():
     rate = load_price_table()["exchangeRate"]
 
     # UM 主链 chat2api：按价目表估算（逐条按记录时刻所属版本计价与折算）。
-    # 退役来源账本（qoder / m365）保留在磁盘上供历史追溯，默认汇总绝不读取。
     c2a_records = _read_jsonl(CHAT2API_LOG)
     c2a = _bucket(c2a_records, "estimate", _bucket_price_estimate)
     _round_service(c2a, rate)
@@ -1316,8 +1296,7 @@ def build_summary():
             ],
             "note": "逐条按记录时刻取当时生效版本段的价目与汇率；缺时刻/早于首段按未知（不计 0）；改价只影响之后的请求",
         },
-        # B0：UM 主链 + 冻结的 DSH 快照。退役来源（qoder / m365）的历史
-        # 账本仍在磁盘保留，但绝不进入默认汇总；也不在这里探测 8095/8097。
+        # B0：UM 主链 + 冻结的 DSH 快照；默认汇总绝不读取未登记来源。
         "services": {"chat2api": c2a, "dsh": dsh},
         # UM reference cost uses UM's own ledger and the local Magpie snapshot,
         # not data/prices.json. It is additive and never feeds share pricing.
@@ -1520,12 +1499,12 @@ _console_status_cache = {"at": 0.0, "value": None}
 def get_console_manager():
     """Lazily build the console operation manager (never at import time).
 
-    Cloud role: ONLY the UM share registry is assembled (no Qoder/CLIProxy/
+    Cloud role: ONLY the UM share registry is assembled (no
     model_sync/zcode card or handler), and the share seams are wired for the
     Linux deployment (TS/Funnel stay unwired).
 
-    Local role (B0, 2026-11-01): the UM registry only — retired Qoder /
-    QoderGlobal / CLIProxy action modules are not imported.
+    Local role (B0, 2026-11-01): the UM registry only — no non-UM action
+    module is imported.
     """
     global _console_manager
     with _console_manager_lock:
@@ -1588,31 +1567,6 @@ _CONSOLE_HEALTH_PROBES = (
 )
 
 
-def _quota_snapshot_payload(force):
-    """Retired Qoder-CN quota read is NOT assembled (B0, 2026-11-01).
-
-    The Qoder CN source (8095) is retired: this read must never probe it, never
-    read its old token file and never reuse a previous success cache. The
-    endpoint answers an explicit ``not_assembled`` state with null readings —
-    never a fabricated 0 (未知 ≠ 0). ``force`` is accepted for wire
-    compatibility and changes nothing.
-    """
-    return {
-        "state": "not_assembled",
-        "remaining": None,
-        "used": None,
-        "total": None,
-        "expires_at": None,
-        "buckets": None,
-        "exceeded": None,
-        "checked_at": int(time.time()),
-        "error": "退役来源未装配：Qoder 国内额度探测已下线（不访问 8095/8097）",
-        "source": None,
-        "gate": {"verdict": "not_assembled", "desired_state": "unknown",
-                 "process": "unknown"},
-    }
-
-
 def _probe_service(spec):
     """One bounded loopback probe: TCP connect, then a bounded HTTP GET.
 
@@ -1668,7 +1622,7 @@ def _probe_service(spec):
 def _console_health_payload(force):
     if CLOUD_ROLE:
         # 云端角色：只报 UM 分享入口的 pid/身份事实；绝不 TCP 探测
-        # Qoder/CLIProxy/model_sync 等非 UM 端口。
+        # 非 UM 端口。
         from console import adapters as console_adapters
         snapshot = console_adapters.cloud_service_status()
         services = list(snapshot.get("services") or [])
@@ -1892,8 +1846,6 @@ def _display_path(path):
 STATS_ENV = console_stats.StatsEnvironment(
     chat2api_log=CHAT2API_LOG,
     dsh_snapshot=DSH_SNAPSHOT_FILE,
-    qoder_log=QODER_LOG,
-    m365_log=M365_LOG,
     dsh_merge_day=DSH_MERGE_DAY,
     magpie_price_snapshot=MAGPIE_PRICE_SNAPSHOT_FILE,
     magpie_price_status=MAGPIE_PRICE_STATUS_FILE,
@@ -2013,13 +1965,12 @@ def _log_int_or_none(value):
 # 取值；形状里没有的字段一律 null（未采集/未知，绝不折 0）。键=读取表里的形状名。
 _LOG_FEED_SHAPES = {
     # chat2api 账本：字段名同 usagesrv._bucket（time/input_tokens/
-    # output_tokens/duration_ms/credits）。
+    # output_tokens/duration_ms）。
     "usage_ledger": {
         "time": ("time",), "model": ("model",), "status": ("status",),
         "input": ("input_tokens",), "output": ("output_tokens",),
         "cached_input": ("cached_input_tokens",),
         "reasoning": ("reasoning_tokens",), "duration": ("duration_ms",),
-        "credits": ("credits",),
     },
 }
 
@@ -2027,10 +1978,8 @@ _LOG_FEED_SHAPES = {
 def _console_log_readers():
     """调用日志账本读取表（F4b）：请求的 source id → (账本路径, 字段形状)。
 
-    B0（2026-11-01）：默认装配只读 UM 主链（chat2api）账本。退役来源
-    （qoder / qoder-global）的历史账本仍在磁盘保留，但不在本表内：请求它们
-    时按 sources_unavailable 如实声明，绝不静默读取、也不发任何请求。未登记
-    的 id 同样进 sources_unavailable，绝不静默跳过。
+    B0（2026-11-01）：默认装配只读 UM 主链（chat2api）账本。未登记的 id
+    进 sources_unavailable，如实声明未覆盖，绝不静默跳过、也不发任何请求。
     """
     return {
         "chat2api": (CHAT2API_LOG, "usage_ledger"),
@@ -2044,8 +1993,7 @@ def _console_log_row(source, record, shape="usage_ledger"):
     「未采集/未知」，而不是折成 0——0 会被前端读成真实测得值（例如缺输出
     Token 但耗时有效的请求会显示 0 Token/s）。真实 0 是已知值：写了 0 就是 0。
     字段名按 shape（各链账本的写入形状，见 _LOG_FEED_SHAPES）取值；形状里
-    没有的字段（如国际日志的 input_tokens/credits）同样一律 null。
-    credits 保持既有 null 语义（非 int/float 一律 null，本函数不改）。
+    没有的字段同样一律 null。
     """
     fields = _LOG_FEED_SHAPES.get(shape) or _LOG_FEED_SHAPES["usage_ledger"]
 
@@ -2055,7 +2003,6 @@ def _console_log_row(source, record, shape="usage_ledger"):
                 return record[name]
         return None
 
-    credits = raw("credits")
     cache_status = record.get("cache_report_status")
     return {
         "source": source,
@@ -2070,7 +2017,6 @@ def _console_log_row(source, record, shape="usage_ledger"):
                                 else None),
         "reasoning_tokens": _log_int_or_none(raw("reasoning")),
         "duration_ms": _log_int_or_none(raw("duration")),
-        "credits": credits if isinstance(credits, (int, float)) else None,
     }
 
 
@@ -4092,12 +4038,12 @@ class Handler(BaseHTTPRequestHandler):
         ok, how = True, "local"
         rest = [s for s in parsed.path.split("/") if s][2:]  # api/console/...
         if CLOUD_ROLE:
-            # 云端角色只装配 UM 分享：非 UM 的读面（Qoder / CLIProxy /
-            # model_sync / zcode 账本与探测）明确返回未装配，绝不探测或
-            # 读取这些路径；管理面仍是 loopback + Host/Origin 门。
+            # 云端角色只装配 UM 分享：非 UM 的读面（model_sync / zcode
+            # 账本与探测）明确返回未装配，绝不探测或读取这些路径；
+            # 管理面仍是 loopback + Host/Origin 门。
             blocked = rest[0] if rest[:1] and rest[0] in (
                 "usage-tokens", "usage-rates", "gateway-connection",
-                "quota-snapshot", "logs", "log-sources", "log-entries",
+                "logs", "log-sources", "log-entries",
                 "log-overview", "model-pending", "stats", "um") else None
             if blocked is not None:
                 self._send_json(503, {
@@ -4313,14 +4259,6 @@ class Handler(BaseHTTPRequestHandler):
             from console import gateway_connection as console_gateway_connection  # noqa: WPS433 惰性装配
             query = parse_qs(parsed.query)
             service = (query.get("service") or [""])[0].strip()
-            # B0（2026-11-01）：退役来源必须在快照/装配之前按模块契约映射为
-            # HTTP 410 + source_retired（RetiredServiceError），不能先落到
-            # 400 invalid_service。这里直接复用异常携带的载荷，绝不读取旧配置、
-            # 旧 Key 文件或探测旧端口。
-            if service in console_gateway_connection.RETIRED_SERVICES:
-                retired = console_gateway_connection.RetiredServiceError(service)
-                self._send_json(retired.http_status, retired.payload())
-                return
             if service not in console_gateway_connection.SERVICES:
                 self._send_json(400, {
                     "error": "invalid_service",
@@ -4336,11 +4274,6 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = console_gateway_connection.connection_info(
                     service, snapshot=snapshot)
-            except console_gateway_connection.RetiredServiceError as exc:
-                # 防御：RETIRED_SERVICES 在两次检查之间变化时仍映射 410，
-                # 不把契约异常降级成 503/500。
-                self._send_json(exc.http_status, exc.payload())
-                return
             except Exception as exc:  # noqa: BLE001 — 读面自身故障按 unknown 上报，不 500
                 print("[usagesrv] gateway connection read failed: %s"
                       % type(exc).__name__, flush=True)
@@ -4400,16 +4333,6 @@ class Handler(BaseHTTPRequestHandler):
                 checked_stale = True
             self._send_json(200, {"ok": True, **table,
                                   "checkedStale": checked_stale})
-            return
-        if method == "GET" and rest == ["quota-snapshot"]:
-            # B0 (2026-11-01): the Qoder-CN source is retired, so this
-            # read face answers an explicit ``not_assembled`` state without
-            # probing 8095, reading its old token or reusing an old snapshot.
-            # Null readings are never folded into 0; ?refresh=1 changes
-            # nothing. The historical ledger value stays on the cost page.
-            query = parse_qs(parsed.query)
-            force = (query.get("refresh") or [""])[0] in ("1", "true")
-            self._send_json(200, _quota_snapshot_payload(force))
             return
         if method == "GET" and rest == ["health"]:
             # R11-6/B2: server-side loopback probes of the five services —
@@ -4639,10 +4562,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid idempotency_key"})
                 return
             try:
-                # B0: a retired-source action is refused explicitly before the
-                # manager looks it up, so no handler runs and no row is created.
-                from console import adapters as console_adapters
-                console_adapters.refuse_retired_action(action)
                 op = manager.submit(action, target=target, params=params,
                                     idempotency_key=idem)
             except Exception as exc:
@@ -4856,7 +4775,7 @@ def main():
         print(f"  私网管理   : 已拒绝；{TAILNET_POLICY.error}")
     if CLOUD_ROLE:
         # 云端角色只装配 UM 分享：不打印、不读取本地私人账本路径。
-        print("  云端角色   : 只装配 UM 分享（Qoder/CLIProxy/model_sync 未装配）")
+        print("  云端角色   : 只装配 UM 分享（非 UM 模块未装配）")
         print("  管理面     : 仅 loopback；Host/Origin/CSRF 门保留")
     else:
         print(f"  chat2api   : {CHAT2API_LOG}")

@@ -273,10 +273,6 @@ class LocalHandler(RoleHandler):
             payload = console_gateway_connection.connection_info(service)
         except Exception as exc:  # noqa: BLE001 - reported, never silent
             name = type(exc).__name__
-            if name == "RetiredServiceError":
-                self._send_json(410, {"error": "source_retired",
-                                       "service": service})
-                return
             if name == "ValueError":
                 self._send_json(400, {"error": "invalid_service",
                                        "service": service})

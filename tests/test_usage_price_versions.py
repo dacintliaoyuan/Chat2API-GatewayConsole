@@ -54,8 +54,6 @@ SPEC.loader.exec_module(usage_service)
 _STATS_ENV_PATHS = {
     "chat2api_log": usage_service.CHAT2API_LOG,
     "dsh_snapshot": usage_service.DSH_SNAPSHOT_FILE,
-    "qoder_log": usage_service.QODER_LOG,
-    "m365_log": usage_service.M365_LOG,
     "dsh_merge_day": usage_service.DSH_MERGE_DAY,
     "magpie_price_snapshot": usage_service.MAGPIE_PRICE_SNAPSHOT_FILE,
     "magpie_price_status": usage_service.MAGPIE_PRICE_STATUS_FILE,
@@ -194,21 +192,16 @@ class PriceFixture(unittest.TestCase):
         base = Path(tmp.name)
         self.prices_path = base / "prices.json"
         self.override_path = base / "price.override.json"
-        self.qoder_log = base / "qoder-usage.jsonl"
         self.chat2api_log = base / "usage-chat2api.jsonl"
-        self.m365_log = base / "usage-m365.jsonl"
         self.dsh_snapshot = base / "dsh-ledger-20260902.json"
-        for name, path in (("qoder_log", "[]"), ("chat2api_log", "[]"),
-                           ("m365_log", "[]"), ("dsh_snapshot", "{}")):
+        for name, path in (("chat2api_log", "[]"), ("dsh_snapshot", "{}")):
             getattr(self, name).write_text(path, encoding="utf-8")
         self.write_prices(self.old_shape_prices())
         session_dir = base / "session"
         session_dir.mkdir(parents=True, exist_ok=True)
         for attr, path in (("PRICE_FILE", self.prices_path),
                            ("OVERRIDE_FILE", self.override_path),
-                           ("QODER_LOG", self.qoder_log),
                            ("CHAT2API_LOG", self.chat2api_log),
-                           ("M365_LOG", self.m365_log),
                            ("DSH_SNAPSHOT_FILE", self.dsh_snapshot),
                            # 会话/管理令牌文件按属性重定向：不改全局 env
                            # （多个测试模块共用同一环境变量，改 env 会互相踩）。
@@ -361,11 +354,11 @@ class OldShapeCompatibilityTest(PriceFixture):
 
     def test_override_still_wins_and_carries_the_record_time(self):
         self.override_path.write_text(json.dumps(
-            {"m365:my-alias": {"target": "deepseek-v4-flash"}}), encoding="utf-8")
+            {"fixture:my-alias": {"target": "deepseek-v4-flash"}}), encoding="utf-8")
         usage_service._price_cache["at"] = 0.0
         usage_service._price_cache["data"] = None
         entry, mode, matched, source = usage_service.resolve_price(
-            "m365:my-alias", TS_PEAK)
+            "fixture:my-alias", TS_PEAK)
         self.assertEqual((matched, source), ("deepseek-v4-flash", "prices"))
         self.assertEqual(entry["cacheMiss"], 0.22)
 
@@ -375,10 +368,6 @@ class SummaryOldShapeUnchangedTest(PriceFixture):
 
     def setUp(self):
         super().setUp()
-        self.write_ledger(self.qoder_log, [
-            record("2026-09-24T12:00:00Z", "qwen3-max", credits=1.5,
-                   input_tokens=100, output_tokens=20, billable=True),
-        ])
         self.write_ledger(self.chat2api_log, [
             record("2026-09-25T12:00:00Z", "openwebui:DeepSeek-V4-Flash-0731",
                    input_tokens=1000000, output_tokens=100000,
@@ -386,12 +375,6 @@ class SummaryOldShapeUnchangedTest(PriceFixture):
             record("2026-09-25T02:00:00Z", "openwebui:DeepSeek-V4-Flash-0731",
                    input_tokens=1000000, output_tokens=100000,
                    cached_input_tokens=500000, reasoning_tokens=0),
-        ])
-        self.write_ledger(self.m365_log, [
-            record("2026-09-25T12:00:00Z", "gpt-5.6-luna",
-                   input_tokens=1000000, output_tokens=0, status=200),
-            record("2026-09-25T12:00:00Z", "gpt-5.6-luna",
-                   input_tokens=1000000, output_tokens=0, status=500),
         ])
         self.write_dsh_snapshot({"2026-09-02": {
             "calls": 2, "cost": 1.5, "input": 10, "output": 20,
@@ -403,7 +386,7 @@ class SummaryOldShapeUnchangedTest(PriceFixture):
         payload = self.summary()
         self.assertEqual(payload["exchangeRate"], 7.2)
         self.assertEqual(payload["currency"], "CNY")
-        # B0：退役来源账本（qoder / m365）仍在磁盘保留，但不进 UM 首页汇总。
+        # B0：默认汇总只装配 UM 主链与冻结的 DSH 快照。
         self.assertEqual(sorted(payload["services"]), ["chat2api", "dsh"])
         self.assertEqual(payload["sources"]["priceMeta"], {
             "pricesFound": True, "checkedAt": today_iso(), "checkedAgeDays": 0,
@@ -809,21 +792,12 @@ class UnknownStateTest(PriceFixture):
         usd = 0.22 + 10 * 0.66 / 1000000
         self.assertEqual(svc["costCny"], round(round(usd, 6) * 7.2, 4))
 
-    def test_m365_failed_requests_stay_zero_cost(self):
-        records = [
-            record("2026-09-25T00:00:00Z", "gpt-5.6-luna", input_tokens=1000000,
-                   status=500),
-            record("2026-09-25T00:00:00Z", "gpt-5.6-luna", input_tokens=1000000,
-                   status=200),
-        ]
-        svc = usage_service._round_service(
-            usage_service._bucket(records, "estimate",
-                                 usage_service._bucket_price_m365), 7.2)
-        self.assertEqual(svc["requests"], 2)
-        self.assertEqual(svc["pricedRequests"], 1)
-        self.assertEqual(svc["unpricedRequests"], 0)   # 失败请求的 0 是已知值
-        self.assertEqual(svc["costCny"], round(0.2 * 7.2, 4))
-        self.assertNotIn("costCnyPartial", svc)
+    def test_m365_pricing_callback_is_gone(self):
+        # B0: the M365 source (and its failure-status price callback) is
+        # retired with the UM-only assembly; only the chat2api estimator
+        # remains, so a retired ledger can never reach the fee summary.
+        self.assertFalse(hasattr(usage_service, "_bucket_price_m365"))
+        self.assertFalse(hasattr(usage_service, "M365_LOG"))
 
     def test_versioned_table_without_usable_segment_prices_nothing(self):
         self.write_prices({
@@ -851,8 +825,6 @@ class SummaryAcrossRestartTest(PriceFixture):
             record("2026-09-25T00:00:00Z", input_tokens=1000000),
             record("2026-10-05T00:00:00Z", input_tokens=1000000),
         ])
-        self.write_ledger(self.m365_log, [])
-        self.write_ledger(self.qoder_log, [])
         self.write_dsh_snapshot({})
 
     def test_same_payload_after_a_module_reload(self):
@@ -861,9 +833,7 @@ class SummaryAcrossRestartTest(PriceFixture):
         reload_usage_service()
         for attr, path in (("PRICE_FILE", self.prices_path),
                            ("OVERRIDE_FILE", self.override_path),
-                           ("QODER_LOG", self.qoder_log),
                            ("CHAT2API_LOG", self.chat2api_log),
-                           ("M365_LOG", self.m365_log),
                            ("DSH_SNAPSHOT_FILE", self.dsh_snapshot)):
             patcher = mock.patch.object(usage_service, attr, str(path))
             patcher.start()
@@ -1010,8 +980,6 @@ class ShareLedgerIsolationTest(PriceFixture):
         self.write_ledger(self.chat2api_log, [
             record("2026-09-25T00:00:00Z", input_tokens=1000000),
         ])
-        self.write_ledger(self.m365_log, [])
-        self.write_ledger(self.qoder_log, [])
         self.write_dsh_snapshot({})
         with mock.patch.dict(os.environ,
                              {"CONSOLE_SHARE_BACKEND_DIR": str(share_dir)}):

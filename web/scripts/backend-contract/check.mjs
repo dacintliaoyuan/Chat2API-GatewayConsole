@@ -8,7 +8,6 @@ import {
   ContractError,
   FixtureTransport,
   FIXTURE_CONNECTION_BODIES,
-  FIXTURE_CONNECTION_CONFIG_UNCONFIRMED,
   FIXTURE_CONNECTION_KEY,
   FIXTURE_CONNECTION_STATES,
   GATEWAY_ORDER_FORMAT_VERSION,
@@ -395,10 +394,10 @@ test("model joins use source + real model identity and separate character/Token 
   zero.records[0].token_evidence = 0;
   assert.equal(normalizeContextEvidence(zero)[0].verifiedTokenFloor, 0);
   const other = structuredClone(contexts);
-  other.overrides[0].source = "qoder_global";
+  other.overrides[0].source = "bogus_source";
   assert.equal(
     joinModelDetails(normalized, normalizeContexts(other), []).find(
-      (row) => row.key === "qoder_global|test-model"
+      (row) => row.key === "bogus_source|test-model"
     ).catalog,
     null
   );
@@ -1400,45 +1399,75 @@ test("an external update between moves is a complete sequence swap, not a corrup
   assert.throws(() => first.save(["gw-a"], ["gw-a", "gw-b"]), ContractError);
 });
 
-// Rev15 connection info read face: the five fixtures below carry invented
-// values; the sentinel is not a real key and no case reads a real file or gateway.
+// Rev15 connection info read face: the fixture carries only the chat2api
+// absent shape; the sentinel is not a real key and no case reads a real file or
+// gateway. The other key states are synthetic bodies built inline, never a live
+// read face.
+function presentConnectionBody(overrides = {}) {
+  return {
+    ok: true,
+    service: "chat2api",
+    display_name: "chat2api",
+    port: 8000,
+    health_path: "/health",
+    health_path_source: "descriptor",
+    base_url: "http://127.0.0.1:8000/v1",
+    protocol: "openai-compatible",
+    protocol_path: "/v1",
+    runtime_state: "Running",
+    runtime_healthy: true,
+    auth: "bearer",
+    key_state: "present",
+    key_plaintext: FIXTURE_CONNECTION_KEY,
+    key_source: "env:CHAT2API_LOCAL_API_KEY",
+    key_source_state: "present",
+    key_in_use: "per_request",
+    reason: "合成夹具：权威环境变量可读且非空",
+    evidence: ["合成夹具：进程环境可读"],
+    checked_epoch: 1790920800,
+    ...overrides,
+  };
+}
+
+function needsKeyConnectionBody() {
+  return presentConnectionBody({
+    key_state: "needs_key_unconfigured",
+    key_plaintext: null,
+    key_source_state: "absent",
+    key_in_use: "startup_env",
+  });
+}
+
+function unreadableConnectionBody() {
+  return presentConnectionBody({
+    key_state: "unreadable",
+    key_plaintext: null,
+    key_source_state: "unreadable",
+    key_in_use: "config_consumed",
+  });
+}
+
+function unknownConnectionBody() {
+  return presentConnectionBody({
+    key_state: "unknown",
+    key_plaintext: null,
+    key_source_state: "unknown",
+    key_in_use: "config_consumed",
+  });
+}
+
+function connectionResponse(service, body) {
+  return { status: 200, body: { ...structuredClone(body), service } };
+}
+
 test("connection key states mirror the read face and never degrade to a no-key state", () => {
-  assert.deepEqual(
-    [...FIXTURE_CONNECTION_STATES],
-    ["present", "absent", "needs_key_unconfigured", "unreadable", "unknown"]
-  );
-  for (const state of FIXTURE_CONNECTION_STATES) {
-    const view = normalizeGatewayConnection(
-      gatewayConnectionFixtureResponse("Qoder", state).body
-    );
-    assert.equal(view.keyState, state);
-    assert.equal(
-      view.keyPlaintext,
-      state === "present" ? FIXTURE_CONNECTION_KEY : null
-    );
-    assert.ok(
-      ["per_request", "startup_env", "config_consumed", "unknown"].includes(
-        view.keyInUse
-      )
-    );
-  }
-  const unknown = normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.unknown);
-  assert.equal(unknown.keyState, "unknown");
-  assert.notEqual(unknown.keyState, "absent");
-  assert.notEqual(unknown.keyState, "needs_key_unconfigured");
-  assert.equal(unknown.keyPlaintext, null);
-  assert.equal(unknown.baseUrl, null);
-  assert.equal(unknown.port, null);
-  assert.equal(unknown.auth, "unknown");
+  assert.deepEqual([...FIXTURE_CONNECTION_STATES], ["absent"]);
   const absent = normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.absent);
+  assert.equal(absent.keyState, "absent");
   assert.equal(absent.auth, "loopback_no_key");
   assert.equal(absent.keySourceState, "absent");
   assert.equal(absent.keyPlaintext, null);
-  const unreadable = normalizeGatewayConnection(
-    FIXTURE_CONNECTION_BODIES.unreadable
-  );
-  assert.equal(unreadable.keySourceState, "unreadable");
-  assert.equal(unreadable.alternateProtocols[0].path, "/v1beta");
+  assert.equal(absent.keyInUse, "startup_env");
   // An out-of-contract state is a contract error, never a silent "no key".
   for (const [field, value] of [
     ["key_state", "auth_free_loopback"],
@@ -1448,9 +1477,7 @@ test("connection key states mirror the read face and never degrade to a no-key s
     ["key_in_use", "file_value"],
     ["key_in_use", null],
   ]) {
-    const body = structuredClone(
-      gatewayConnectionFixtureResponse("Qoder", "present").body
-    );
+    const body = structuredClone(FIXTURE_CONNECTION_BODIES.absent);
     body[field] = value;
     assert.throws(() => normalizeGatewayConnection(body), ContractError);
   }
@@ -1461,68 +1488,59 @@ test("the key-in-use mechanism keeps file value and in-use value apart", () => {
   // Rev15 R32-KEY-ACTIVE: the read face must say how the shown value is
   // consumed; an unknown mechanism stays "unknown" instead of being coerced.
   assert.equal(
-    normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.present).keyInUse,
+    normalizeGatewayConnection(presentConnectionBody()).keyInUse,
     "per_request"
   );
   assert.equal(
-    normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.needs_key_unconfigured)
-      .keyInUse,
+    normalizeGatewayConnection(needsKeyConnectionBody()).keyInUse,
     "startup_env"
   );
   assert.equal(
-    normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.unreadable).keyInUse,
+    normalizeGatewayConnection(unreadableConnectionBody()).keyInUse,
     "config_consumed"
   );
   assert.equal(
-    normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.unknown).keyInUse,
-    "unknown"
+    normalizeGatewayConnection(unknownConnectionBody()).keyInUse,
+    "config_consumed"
   );
-  const late = normalizeGatewayConnection(
-    FIXTURE_CONNECTION_BODIES.needs_key_unconfigured
-  );
-  assert.ok(late.reason.includes("启动后"));
-  assert.ok(late.reason.includes("可能不生效"));
 });
 
 test("a known key state must name a mechanism and absent stays startup_env", () => {
   // Rev15 R32-KEY-ACTIVE cross-field mirror: a state that carries (or needs)
-  // a value always names how the instance consumes it, while `unknown` keeps
-  // both `unknown` and a mechanism the file source confirmed
-  // (console/gateway_connection.py:596 then :637 for the only `absent`).
-  for (const state of FIXTURE_CONNECTION_STATES)
-    assert.equal(
-      normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES[state]).keyInUse,
-      FIXTURE_CONNECTION_BODIES[state].key_in_use
-    );
-  for (const state of ["present", "needs_key_unconfigured", "unreadable"]) {
-    for (const value of ["unknown", null, "file_value"]) {
-      const body = structuredClone(FIXTURE_CONNECTION_BODIES[state]);
-      body.key_in_use = value;
-      assert.throws(() => normalizeGatewayConnection(body), ContractError);
-    }
-  }
+  // a value always names how the instance consumes it, while `unknown` keeps a
+  // mechanism the file source confirmed.
+  assert.equal(
+    normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.absent).keyInUse,
+    "startup_env"
+  );
   for (const value of ["unknown", "per_request", "config_consumed"]) {
     const body = structuredClone(FIXTURE_CONNECTION_BODIES.absent);
     body.key_in_use = value;
     assert.throws(() => normalizeGatewayConnection(body), ContractError);
   }
-  // `unknown` stays honest: the CLIProxy config-unconfirmed read keeps
+  for (const state of ["present", "needs_key_unconfigured", "unreadable"]) {
+    for (const value of ["unknown", null, "file_value"]) {
+      const body = structuredClone(presentConnectionBody());
+      body.key_state = state;
+      body.key_plaintext =
+        state === "present" ? FIXTURE_CONNECTION_KEY : null;
+      body.key_in_use = value;
+      assert.throws(() => normalizeGatewayConnection(body), ContractError);
+    }
+  }
+  // `unknown` stays honest: the config-unconfirmed read keeps
   // `bearer`/`config_consumed` instead of being coerced into "no key".
-  const cliproxy = normalizeGatewayConnection(
-    FIXTURE_CONNECTION_CONFIG_UNCONFIRMED
-  );
-  assert.equal(cliproxy.keyState, "unknown");
-  assert.equal(cliproxy.auth, "bearer");
-  assert.equal(cliproxy.keyInUse, "config_consumed");
-  assert.equal(cliproxy.keyPlaintext, null);
+  const unknown = normalizeGatewayConnection(unknownConnectionBody());
+  assert.equal(unknown.keyState, "unknown");
+  assert.equal(unknown.auth, "bearer");
+  assert.equal(unknown.keyInUse, "config_consumed");
+  assert.equal(unknown.keyPlaintext, null);
 });
 
 test("the connection copy helper copies baseUrl/keyPlaintext and reports the real outcome", async () => {
   // Synthetic values only: the clipboard is an injected stub that records what
   // it was asked to write; nothing here touches the DOM or a real clipboard.
-  const view = normalizeGatewayConnection(
-    gatewayConnectionFixtureResponse("Qoder", "present").body
-  );
+  const view = normalizeGatewayConnection(presentConnectionBody());
   const written = [];
   const clipboard = {
     writeText: async (value) => {
@@ -1546,9 +1564,7 @@ test("the connection copy helper copies baseUrl/keyPlaintext and reports the rea
 });
 
 test("a refused clipboard write is an explicit failure, never a success", async () => {
-  const view = normalizeGatewayConnection(
-    gatewayConnectionFixtureResponse("Qoder", "present").body
-  );
+  const view = normalizeGatewayConnection(presentConnectionBody());
   const denied = {
     writeText: async () => {
       throw new DOMException("synthetic denial", "NotAllowedError");
@@ -1594,13 +1610,13 @@ test("copying a state without a plaintext key is refused instead of claiming suc
       calls += 1;
     },
   };
-  for (const state of [
-    "absent",
-    "needs_key_unconfigured",
-    "unreadable",
-    "unknown",
+  for (const body of [
+    FIXTURE_CONNECTION_BODIES.absent,
+    needsKeyConnectionBody(),
+    unreadableConnectionBody(),
+    unknownConnectionBody(),
   ]) {
-    const view = normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES[state]);
+    const view = normalizeGatewayConnection(body);
     assert.equal(view.keyPlaintext, null);
     assert.deepEqual(
       await copyGatewayConnectionField(view, "keyPlaintext", clipboard),
@@ -1618,7 +1634,7 @@ test("copying a state without a plaintext key is refused instead of claiming suc
   );
   // A plaintext key that does not belong to a `present` state is refused.
   const smuggled = {
-    ...normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.present),
+    ...normalizeGatewayConnection(presentConnectionBody()),
     keyState: "needs_key_unconfigured",
   };
   assert.deepEqual(
@@ -1631,13 +1647,23 @@ test("copying a state without a plaintext key is refused instead of claiming suc
 test("a switched or cleared binding never copies the dropped key or a late response", async () => {
   const gate = deferred();
   const started = deferred();
-  const inner = new FixtureTransport(connectionScenario());
+  const reads = {
+    "/gateway-connection?service=chat2api": connectionResponse(
+      "chat2api",
+      presentConnectionBody()
+    ),
+    "/gateway-connection?service=chat2api-alt": connectionResponse(
+      "chat2api-alt",
+      unreadableConnectionBody()
+    ),
+  };
+  const inner = new FixtureTransport(connectionScenario(reads));
   const transport = {
     request: async (request) => {
-      if (request.path === "/gateway-connection?service=Qoder") {
+      if (request.path === "/gateway-connection?service=chat2api") {
         started.resolve();
         await gate.promise; // deliberately ignores abort
-        return gatewayConnectionFixtureResponse("Qoder", "present");
+        return connectionResponse("chat2api", presentConnectionBody());
       }
       return inner.request(request);
     },
@@ -1651,10 +1677,10 @@ test("a switched or cleared binding never copies the dropped key or a late respo
   const binding = new GatewayConnectionBinding(
     new BackendClient(transport, clock())
   );
-  const pending = binding.select("Qoder");
+  const pending = binding.select("chat2api");
   await started.promise;
-  const switched = await binding.select("CLIProxy");
-  assert.equal(switched.service, "CLIProxy");
+  const switched = await binding.select("chat2api-alt");
+  assert.equal(switched.service, "chat2api-alt");
   assert.equal(switched.result.value.keyState, "unreadable");
   assert.equal(switched.result.value.keyPlaintext, null);
   const refused = await copyGatewayConnectionField(
@@ -1669,7 +1695,7 @@ test("a switched or cleared binding never copies the dropped key or a late respo
   });
   gate.resolve();
   assert.equal(await pending, null);
-  assert.equal(binding.current.service, "CLIProxy");
+  assert.equal(binding.current.service, "chat2api-alt");
   assert.equal(binding.current.result.value.keyPlaintext, null);
   assert.equal(written.length, 0);
 });
@@ -1686,14 +1712,18 @@ test("a key state and auth pair the read face never produces is refused", () => 
     ["unknown", "loopback_no_key"],
     ["unreadable", "loopback_no_key"],
   ]) {
-    const body = structuredClone(FIXTURE_CONNECTION_BODIES[keyState]);
+    const body =
+      keyState === "absent"
+        ? structuredClone(FIXTURE_CONNECTION_BODIES.absent)
+        : presentConnectionBody();
+    body.key_state = keyState;
     body.auth = auth;
     assert.throws(() => normalizeGatewayConnection(body), ContractError);
   }
 });
 
 test("the plaintext connection key lives only in the read result, never in errors", async () => {
-  const body = gatewayConnectionFixtureResponse("Qoder", "present").body;
+  const body = presentConnectionBody();
   const view = normalizeGatewayConnection(body);
   assert.equal(view.keyPlaintext, FIXTURE_CONNECTION_KEY);
   assert.ok(!view.reason.includes(FIXTURE_CONNECTION_KEY));
@@ -1724,30 +1754,38 @@ test("the plaintext connection key lives only in the read result, never in error
     ContractError
   );
   const reads = {
-    "/gateway-connection?service=Qoder": {
+    "/gateway-connection?service=chat2api": {
       status: 400,
       body: { error: "service_out_of_scope" },
     },
   };
-  const result = await connectionClient(reads).readGatewayConnection("Qoder");
+  const result = await connectionClient(reads).readGatewayConnection(
+    "chat2api"
+  );
   assert.equal(result.state, "error");
   assert.equal(result.value, null);
   assert.ok(!result.reason.includes(FIXTURE_CONNECTION_KEY));
 });
 
 test("the connection read is one narrow GET bound to the requested service", async () => {
-  const transport = new FixtureTransport(connectionScenario());
+  const reads = {
+    "/gateway-connection?service=chat2api": connectionResponse(
+      "chat2api",
+      presentConnectionBody()
+    ),
+  };
+  const transport = new FixtureTransport(connectionScenario(reads));
   const client = new BackendClient(transport, clock());
-  const result = await client.readGatewayConnection("Qoder");
+  const result = await client.readGatewayConnection("chat2api");
   assert.equal(result.state, "ready");
-  assert.equal(result.value.service, "Qoder");
-  assert.equal(result.value.baseUrl, "http://127.0.0.1:8095/v1");
+  assert.equal(result.value.service, "chat2api");
+  assert.equal(result.value.baseUrl, "http://127.0.0.1:8000/v1");
   assert.equal(result.value.keyState, "present");
   assert.equal(result.value.keyPlaintext, FIXTURE_CONNECTION_KEY);
   assert.equal(result.value.alternateProtocols.length, 0);
   assert.equal(transport.calls.length, 1);
   assert.equal(transport.calls[0].method, "GET");
-  assert.equal(transport.calls[0].path, "/gateway-connection?service=Qoder");
+  assert.equal(transport.calls[0].path, "/gateway-connection?service=chat2api");
   assert.equal(transport.calls[0].access, "session");
   await assert.rejects(client.readGatewayConnection("  "), ContractError);
   const failing = {
@@ -1758,7 +1796,7 @@ test("the connection read is one narrow GET bound to the requested service", asy
   const timedOut = await new BackendClient(
     failing,
     clock()
-  ).readGatewayConnection("Qoder");
+  ).readGatewayConnection("chat2api");
   assert.equal(timedOut.state, "error");
   assert.equal(timedOut.value, null);
   assert.equal(timedOut.reason, "request_timeout");
@@ -1767,13 +1805,23 @@ test("the connection read is one narrow GET bound to the requested service", asy
 test("switching gateways clears the previous key and a late response is never installed", async () => {
   const gate = deferred();
   const started = deferred();
-  const inner = new FixtureTransport(connectionScenario());
+  const reads = {
+    "/gateway-connection?service=chat2api": connectionResponse(
+      "chat2api",
+      presentConnectionBody()
+    ),
+    "/gateway-connection?service=chat2api-alt": connectionResponse(
+      "chat2api-alt",
+      unreadableConnectionBody()
+    ),
+  };
+  const inner = new FixtureTransport(connectionScenario(reads));
   const transport = {
     request: async (request) => {
-      if (request.path === "/gateway-connection?service=Qoder") {
+      if (request.path === "/gateway-connection?service=chat2api") {
         started.resolve();
         await gate.promise; // deliberately ignores abort
-        return gatewayConnectionFixtureResponse("Qoder", "present");
+        return connectionResponse("chat2api", presentConnectionBody());
       }
       return inner.request(request);
     },
@@ -1781,30 +1829,36 @@ test("switching gateways clears the previous key and a late response is never in
   const binding = new GatewayConnectionBinding(
     new BackendClient(transport, clock())
   );
-  const first = binding.select("Qoder");
+  const first = binding.select("chat2api");
   await started.promise;
   assert.equal(binding.current, null);
-  const second = await binding.select("CLIProxy");
-  assert.equal(second.service, "CLIProxy");
+  const second = await binding.select("chat2api-alt");
+  assert.equal(second.service, "chat2api-alt");
   assert.equal(second.result.state, "ready");
   assert.equal(second.result.value.keyState, "unreadable");
   assert.equal(second.result.value.keyPlaintext, null);
   gate.resolve();
   assert.equal(await first, null);
-  assert.equal(binding.current.service, "CLIProxy");
+  assert.equal(binding.current.service, "chat2api-alt");
   assert.equal(binding.current.result.value.keyPlaintext, null);
 });
 
 test("clearing a binding drops the key immediately and refuses a later response", async () => {
   const gate = deferred();
   const started = deferred();
-  const inner = new FixtureTransport(connectionScenario());
+  const reads = {
+    "/gateway-connection?service=chat2api": connectionResponse(
+      "chat2api",
+      presentConnectionBody()
+    ),
+  };
+  const inner = new FixtureTransport(connectionScenario(reads));
   const transport = {
     request: async (request) => {
-      if (request.path === "/gateway-connection?service=Qoder") {
+      if (request.path === "/gateway-connection?service=chat2api") {
         started.resolve();
         await gate.promise;
-        return gatewayConnectionFixtureResponse("Qoder", "present");
+        return connectionResponse("chat2api", presentConnectionBody());
       }
       return inner.request(request);
     },
@@ -1812,7 +1866,7 @@ test("clearing a binding drops the key immediately and refuses a later response"
   const binding = new GatewayConnectionBinding(
     new BackendClient(transport, clock())
   );
-  const pending = binding.select("Qoder");
+  const pending = binding.select("chat2api");
   await started.promise;
   binding.clear();
   assert.equal(binding.current, null);
@@ -1823,29 +1877,33 @@ test("clearing a binding drops the key immediately and refuses a later response"
 
 test("a failed read for the new gateway never retains the previous key", async () => {
   const reads = gatewayConnectionFixtureReads();
-  reads["/gateway-connection?service=CLIProxy"] = {
+  reads["/gateway-connection?service=chat2api-alt"] = {
     status: 503,
     body: { error: "runtime status unavailable" },
   };
+  reads["/gateway-connection?service=chat2api"] = connectionResponse(
+    "chat2api",
+    presentConnectionBody()
+  );
   const binding = new GatewayConnectionBinding(connectionClient(reads));
-  const first = await binding.select("Qoder");
+  const first = await binding.select("chat2api");
   assert.equal(first.result.value.keyPlaintext, FIXTURE_CONNECTION_KEY);
-  const second = await binding.select("CLIProxy");
+  const second = await binding.select("chat2api-alt");
   assert.equal(second.result.state, "error");
   assert.equal(second.result.value, null);
-  assert.equal(binding.current.service, "CLIProxy");
+  assert.equal(binding.current.service, "chat2api-alt");
   assert.equal(binding.current.result.value, null);
 });
 
 test("a response bound to another service identity is refused, not installed", async () => {
   const reads = {
-    "/gateway-connection?service=Qoder": gatewayConnectionFixtureResponse(
-      "CLIProxy",
-      "present"
+    "/gateway-connection?service=chat2api": connectionResponse(
+      "chat2api-alt",
+      presentConnectionBody()
     ),
   };
   const binding = new GatewayConnectionBinding(connectionClient(reads));
-  const view = await binding.select("Qoder");
+  const view = await binding.select("chat2api");
   assert.equal(view.result.state, "error");
   assert.equal(view.result.value, null);
   assert.match(view.result.reason, /different service/);
