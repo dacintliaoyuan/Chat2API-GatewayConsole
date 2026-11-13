@@ -217,29 +217,6 @@ export async function runUm(c) {
     );
     const all = await text(page, "body");
     check("F2", !/命中率/.test(all), "页面不应出现缓存命中率");
-    const place = await page.evaluate(() => {
-      const card = document.querySelector(".um-usage")?.getBoundingClientRect(),
-        cost = document
-          .querySelector(".um-usage-head .um-cost")
-          ?.getBoundingClientRect(),
-        kpis = document.querySelector(".um-kpis")?.getBoundingClientRect();
-      return card && cost && kpis
-        ? {
-            rightGap: Math.round(card.right - cost.right),
-            aboveKpis: cost.bottom <= kpis.top + 1,
-          }
-        : null;
-    });
-    check(
-      "F2",
-      !!place && place.rightGap <= 24 && place.aboveKpis,
-      `人民币参考费用应在用量区右上角、五项之上：${JSON.stringify(place)}`
-    );
-    check(
-      "F2",
-      /≈¥/.test(await text(page, ".um-cost")),
-      "正常情景的参考费用应带 ≈（参考估算）"
-    );
     check(
       "F2",
       /排行与图表同一时段/.test(await text(page, ".um-trend")),
@@ -350,9 +327,6 @@ export async function runUm(c) {
           bars.scope.replace(/ · (≥ 下界为短虚线|≈ 估算见悬浮明细)/g, ""),
       "切换柱/线不应改变时段、排行与数值（线型质量说明可不同）"
     );
-    await page.click('[data-um-metric="cost"]');
-    await page.waitForTimeout(300);
-    check("F2", (await shape()).lines > 0, "折线模式下费用也应画线");
     await page.click('[data-um-metric="tokens"]');
     await page.click('[data-um-toggle="line"]');
     await page.waitForTimeout(300);
@@ -370,16 +344,6 @@ export async function runUm(c) {
       (await page.getAttribute('[data-um-range="30d"]', "aria-pressed")) ===
         "true" && (await text(page, ".um-trend-scope")) !== scope7,
       "切到 30 天后图表与排行的时段应一起变化"
-    );
-    await page.click('[data-um-toggle="cost"]');
-    await page.waitForTimeout(200);
-    const costDetail = await text(page, "#um-cost-detail");
-    check(
-      "F2",
-      /价格来源/.test(costDetail) &&
-        /汇率/.test(costDetail) &&
-        /覆盖范围/.test(costDetail),
-      "费用详情应列出价格来源、汇率与覆盖范围"
     );
     // Keyboard: the chart takes focus and steps day by day with the tooltip.
     await page.focus("[data-um-chart]");
@@ -498,33 +462,18 @@ export async function runUm(c) {
     await ctx.close();
 
     for (const [scenario, expect] of [
-      ["zero", { kpi: /^0$/, cost: /¥0/, why: "零用量应显示明确的 0 与 ¥0" }],
-      [
-        "attention",
-        {
-          kpi: /未报告/,
-          cost: /≥¥/,
-          why: "需处理情景应显示未报告与 ≥ 下界（有未定价请求）",
-        },
-      ],
-      [
-        "down",
-        {
-          kpi: /./,
-          cost: /缺失/,
-          why: "服务停止情景的费用应为缺失（价格从未同步），不是零",
-        },
-      ],
+      ["zero", { kpi: /^0$/, why: "零用量应显示明确的 0" }],
+      ["attention", { kpi: /未报告/, why: "需处理情景应显示未报告" }],
+      ["down", { kpi: /./, why: "服务停止情景仍显示原始用量读面" }],
     ]) {
       const s = await open({ scenario });
       const kpis = await s.page.$$eval(".um-kpi-value", (vs) =>
         vs.map((v) => v.innerText.trim())
       );
-      const cost = await text(s.page, ".um-cost");
       check(
         "F2",
-        kpis.some((v) => expect.kpi.test(v)) && expect.cost.test(cost),
-        `${expect.why}：五项 ${JSON.stringify(kpis)}，费用「${cost.replace(/\s+/g, " ")}」`
+        kpis.some((v) => expect.kpi.test(v)),
+        `${expect.why}：五项 ${JSON.stringify(kpis)}`
       );
       if (scenario === "down") {
         check(
@@ -532,7 +481,6 @@ export async function runUm(c) {
           (await s.page.$$(".um-usage .um-stale")).length > 0,
           "读取失败时今日用量应沿用旧数据并标明时间"
         );
-        check("F2", /不是零费用/.test(cost), "价格未同步应注明不是零费用");
         check(
           "F2",
           /启动 UM 服务/.test(await text(s.page, ".um-status-row")),
@@ -654,11 +602,10 @@ export async function runUm(c) {
           "模型",
           "结果",
           "输入 / 输出 Token",
-          "参考费用",
           "耗时",
           "速度",
         ]),
-      `请求表列应为 时间／模型／结果／输入/输出 Token／参考费用／耗时／速度，实际 ${JSON.stringify(heads)}`
+      `请求表列应为 时间／模型／结果／输入/输出 Token／耗时／速度，实际 ${JSON.stringify(heads)}`
     );
     await page.click('[data-um-rwin="7d"]');
     await page.waitForTimeout(500);
@@ -1265,8 +1212,8 @@ export async function runUm(c) {
     await ctx.close();
   }
 
-  // The r5 review's other three points: the cost button must not fall back to a
-  // native outset border; the preview banner's links keep the banner ink in both
+  // The r5 review's other points: buttons must not fall back to a native
+  // outset border; the preview banner's links keep the banner ink in both
   // themes; and the y-axis label (12px in CSS, measured at 12px) stays inside the
   // SVG's left edge.
   for (const theme of c.THEMES) {

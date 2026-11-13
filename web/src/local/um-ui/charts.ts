@@ -1,7 +1,5 @@
 import type { Reading, UmBucket, UmTrend } from "./contract";
 import {
-  cny,
-  cnyShort,
   dayKey,
   dayTitle,
   drawable,
@@ -27,38 +25,33 @@ import {
  *  the request records. Missing / unreported / unknown never becomes 0, and no
  *  curve bridges a gap or joins two models. */
 
-export type Metric = "tokens" | "cost" | "requests" | "speed";
+export type Metric = "tokens" | "requests" | "speed";
 /** How Token / 费用 / 请求 are drawn; 速度 is always a line. */
 export type Shape = "bar" | "line";
 export const METRICS: readonly { id: Metric; label: string }[] = [
   { id: "tokens", label: "Token" },
-  { id: "cost", label: "费用" },
   { id: "requests", label: "请求" },
   { id: "speed", label: "速度" },
 ];
 const FIELD: Readonly<Record<Metric, keyof UmBucket>> = {
   tokens: "tokens",
-  cost: "costCny",
   requests: "requests",
   speed: "speed",
 };
 const AXIS: Readonly<Record<Metric, (n: number) => string>> = {
   tokens,
-  cost: cnyShort,
   requests: full,
   speed: (n) => full(n),
 };
 /** Tooltip / value shapes; the ranking reads whole counts (`RANK_VALUE`). */
 export const VALUE: Readonly<Record<Metric, (n: number) => string>> = {
   tokens,
-  cost: cny,
   requests: (n) => `${full(n)} 次`,
   speed,
 };
 /** The ranking prefers complete thousands for counts; money and speed keep units. */
 const RANK_VALUE: Readonly<Record<Metric, (n: number) => string>> = {
   tokens: full,
-  cost: cny,
   requests: (n) => `${full(n)} 次`,
   speed,
 };
@@ -699,7 +692,6 @@ export class TrendView {
           this.metric === "requests"
             ? null
             : readingHtml(m.total.requests, (n) => `${full(n)} 个请求`),
-          this.metric === "cost" ? null : readingHtml(m.total.costCny, cny),
           this.metric === "speed"
             ? readingHtml(m.total.tokens, (n) => `${full(n)} Token`)
             : speedReading(m.total.speed),

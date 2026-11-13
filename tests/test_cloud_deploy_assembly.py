@@ -1,9 +1,9 @@
-"""r18 deployment assembly: price/security fence and share-key recovery.
+"""r18 deployment assembly: security fence and share-key recovery.
 
 The default assembly no longer contains a budget guard or an encrypted backup
-timer.  The broker/console units must still fail closed when the metering price
+timer.  The broker/console units must still fail closed when the security
 table or the console read face is missing, and the explicit recovery path must keep
-the AES-GCM share key and the Magpie price closure.
+the AES-GCM share key.
 
 Run from ``ai-gateway``:
 
@@ -37,8 +37,6 @@ sys.path.insert(0, str(DEPLOY))
 import backup_restore  # noqa: E402
 from share.store import ShareStore  # noqa: E402
 
-MAGPIE_SNAPSHOT = "magpie-prices.snapshot.json"
-MAGPIE_STATUS = "magpie-prices.status.json"
 SHARE_SECRET_ENV = "CHAT2API_SHARE_SECRET_KEY_FILE"
 AESGCM_AAD = b"aesgcm-file-key-v1"
 
@@ -66,57 +64,6 @@ def _backup_key(root):
     path = root / "backup.key"
     backup_restore.write_backup_key(path)
     return path, backup_restore.load_backup_key(path)
-
-
-def _price_table(path, version="price-v1"):
-    path.write_text(json.dumps({
-        "version": version,
-        "exchangeRate": 7.2,
-        "models": {},
-        "providers": {},
-    }), encoding="utf-8")
-    return path
-
-
-def _magpie_snapshot(path, *, version="magpie-v1"):
-    path.write_text(json.dumps({
-        "format": "um-magpie-price-snapshot-v1",
-        "schemaVersion": 1,
-        "generatedAt": "2026-11-01T00:00:00Z",
-        "currentVersion": version,
-        "source": {"kind": "magpie", "baseUrl": "http://127.0.0.1:3425"},
-        "versions": [{
-            "version": version,
-            "effectiveAt": "2026-11-01T00:00:00Z",
-            "sourceObservedAt": "2026-11-01T00:00:00Z",
-            "exchangeRate": 7.2,
-            "fxVersion": "fx-v1",
-            "models": {
-                "um-model": {
-                    "input": 1.0,
-                    "output": 2.0,
-                    "unit": "per_million_tokens",
-                    "currency": "USD",
-                },
-            },
-        }],
-    }), encoding="utf-8")
-    return path
-
-
-def _magpie_status(path, *, version="magpie-v1"):
-    path.write_text(json.dumps({
-        "format": "um-magpie-price-status-v1",
-        "state": "synced",
-        "lastAttemptAt": "2026-11-01T00:00:00Z",
-        "lastSuccessAt": "2026-11-01T00:00:00Z",
-        "snapshotVersion": version,
-        "snapshotAt": "2026-11-01T00:00:00Z",
-        "failure": None,
-        "modelCount": 1,
-        "unpricedModels": [],
-    }), encoding="utf-8")
-    return path
 
 
 @contextlib.contextmanager
@@ -194,19 +141,14 @@ def _aesgcm_store(path, share_key, secret="synthetic-secret"):
 
 
 def _source_layout(root, share_key, *, share_secret_path=None,
-                    include_share_secret=True,
-                    include_magpie=True):
+                    include_share_secret=True):
     layout = _deployment_layout(
         root, "source", share_secret_key=share_secret_path)
     synthetic = _aesgcm_store(layout["store"], share_key)
     Path(layout["ledger"]).parent.mkdir(parents=True, exist_ok=True)
     Path(layout["ledger"]).write_text("", encoding="utf-8")
-    _price_table(Path(layout["price_table"]))
     Path(layout["config"]).write_text(
         json.dumps({"schema_version": 2, "enabled": False}), encoding="utf-8")
-    if include_magpie:
-        _magpie_snapshot(Path(layout["magpie_snapshot"]))
-        _magpie_status(Path(layout["magpie_status"]))
     backup_restore.write_security_state(
         layout["security_state"], synthetic["security"])
     backup_restore.write_backup_key(Path(layout["key_file"]))
@@ -225,45 +167,37 @@ def _destination_layout(root, security, *, share_secret_path=None):
     return layout
 
 
-def _seal_deployment_backup(layout, backup_key, *, magpie=True):
+def _seal_deployment_backup(layout, backup_key):
     store = ShareStore(layout["store"])
     try:
         return backup_restore.create_backup(
             store, layout["ledger"], backup_key,
             Path(layout["remote_dir"]),
-            price_table_path=layout["price_table"],
             config_paths=[layout["config"]],
             security_state=backup_restore.read_security_state(
                 layout["security_state"]),
-            magpie_snapshot_path=(
-                layout["magpie_snapshot"] if magpie else None),
-            magpie_status_path=(
-                layout["magpie_status"] if magpie else None),
             share_secret_key_path=layout["share_secret_key"])
     finally:
         store.close()
 
 
 class DeploymentTextAssemblyTests(unittest.TestCase):
-    def test_broker_unit_names_the_price_fence_without_budget_args(self):
+    def test_broker_unit_has_no_price_fence_or_budget_args(self):
         unit = _read("systemd/um-share-broker.service")
-        self.assertIn(
-            "Environment=CHAT2API_PRICE_TABLE_FILE=/etc/um-share/prices.json",
-            unit)
-        self.assertIn("CHAT2API_PRICE_TABLE_FILE", unit)
+        self.assertNotIn("CHAT2API_PRICE_TABLE_FILE", unit)
+        self.assertNotIn("prices.json", unit)
         self.assertIn("--check-deployment-assembly broker", unit)
         self.assertIn("ExecStartPre=", unit)
         self.assertNotIn("--budget-db", unit)
         self.assertNotIn("--budget-config", unit)
         self.assertNotIn("budget.json", unit)
 
-    def test_console_env_wires_the_security_price_and_magpie_read_face(self):
+    def test_console_env_wires_the_security_read_face(self):
         unit = _read("systemd/um-share-console.service")
         env = _with_uid(_read("config/console.env.example"))
         values = _env_values(env)
-        for key in ("UM_CLOUD_SECURITY_STATE", "USAGE_PRICE_FILE",
-                     "CHAT2API_PRICE_TABLE_FILE", "MAGPIE_PRICE_SNAPSHOT",
-                     "MAGPIE_PRICE_STATUS", "CHAT2API_SHARE_SECRET_KEY_FILE"):
+        for key in ("UM_CLOUD_SECURITY_STATE",
+                     "CHAT2API_SHARE_SECRET_KEY_FILE"):
             self.assertTrue(values.get(key), key)
         for key in ("UM_CLOUD_BUDGET_DB", "UM_CLOUD_BACKUP_STATE",
                      "UM_CLOUD_BACKUP_REMOTE_DIR"):
@@ -283,11 +217,9 @@ class DeploymentTextAssemblyTests(unittest.TestCase):
         values = _env_values(_read("config/console.env.example"))
         paths = backup_restore.deployment_paths()
         self.assertEqual(values["UM_CLOUD_SECURITY_STATE"], paths["security_state"])
-        self.assertEqual(values["USAGE_PRICE_FILE"], paths["price_table"])
-        self.assertEqual(
-            values["CHAT2API_PRICE_TABLE_FILE"], paths["price_table"])
-        self.assertEqual(values["MAGPIE_PRICE_SNAPSHOT"], paths["magpie_snapshot"])
-        self.assertEqual(values["MAGPIE_PRICE_STATUS"], paths["magpie_status"])
+        for key in ("USAGE_PRICE_FILE", "CHAT2API_PRICE_TABLE_FILE",
+                    "MAGPIE_PRICE_SNAPSHOT", "MAGPIE_PRICE_STATUS"):
+            self.assertNotIn(key, values)
 
     def test_console_env_names_the_cloudflare_origin_and_browser_path(self):
         values = _env_values(_read("config/console.env.example"))
@@ -296,56 +228,36 @@ class DeploymentTextAssemblyTests(unittest.TestCase):
         self.assertTrue(values["CHAT2API_BROWSER_PATH"])
         self.assertEqual("0", values["CHAT2API_SHARE_DISPATCH_MAX_WAIT_S"])
 
-    def test_missing_price_table_fails_the_start_check(self):
-        broker_unit = _read("systemd/um-share-broker.service")
-        broker_env = _with_uid(_read("config/broker.env.example"))
-        no_price = "\n".join(
-            line for line in broker_unit.splitlines()
-            if "CHAT2API_PRICE_TABLE_FILE" not in line)
-        problems = backup_restore.deployment_assembly_problems(
-            "broker", no_price, broker_env)
-        self.assertTrue(any("CHAT2API_PRICE_TABLE_FILE" in item
-                            for item in problems))
-
-    def test_missing_magpie_price_paths_fail_the_console_start_check(self):
-        # The console read face and the offline backup closure both consume
-        # the Magpie snapshot/status paths; dropping either key must fail the
-        # ExecStartPre assembly check instead of starting with a drifting face.
+    def test_missing_security_state_fails_the_console_start_check(self):
         console_unit = _read("systemd/um-share-console.service")
         console_env = _with_uid(_read("config/console.env.example"))
-        for key in ("MAGPIE_PRICE_SNAPSHOT", "MAGPIE_PRICE_STATUS"):
-            with self.subTest(key=key):
-                self.assertIn(key, backup_restore.CONSOLE_REQUIRED_ENV)
-                missing = "\n".join(
-                    line for line in console_env.splitlines()
-                    if not line.startswith(key + "="))
-                problems = backup_restore.deployment_assembly_problems(
-                    "console", console_unit, missing)
-                self.assertTrue(any(key in item for item in problems))
-                with tempfile.TemporaryDirectory(
-                        prefix="assembly-magpie-") as tmp:
-                    root = Path(tmp)
-                    unit_path = root / "console.service"
-                    env_path = root / "console.env"
-                    unit_path.write_text(console_unit, encoding="utf-8")
-                    env_path.write_text(missing, encoding="utf-8")
-                    proc = subprocess.run(
-                        [sys.executable, str(DEPLOY / "backup_restore.py"),
-                         "--check-deployment-assembly", "console",
-                         str(unit_path), str(env_path)],
-                        capture_output=True, text=True)
-                    self.assertEqual(proc.returncode, 1,
-                                     proc.stdout + proc.stderr)
-                    payload = json.loads(proc.stdout)
-                    self.assertFalse(payload["ok"])
-                    self.assertTrue(any(key in item
-                                        for item in payload["problems"]))
+        missing = "\n".join(
+            line for line in console_env.splitlines()
+            if not line.startswith("UM_CLOUD_SECURITY_STATE="))
+        problems = backup_restore.deployment_assembly_problems(
+            "console", console_unit, missing)
+        self.assertTrue(any("UM_CLOUD_SECURITY_STATE" in item
+                            for item in problems))
+        with tempfile.TemporaryDirectory(prefix="assembly-security-") as tmp:
+            root = Path(tmp)
+            unit_path = root / "console.service"
+            env_path = root / "console.env"
+            unit_path.write_text(console_unit, encoding="utf-8")
+            env_path.write_text(missing, encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(DEPLOY / "backup_restore.py"),
+                 "--check-deployment-assembly", "console",
+                 str(unit_path), str(env_path)],
+                capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertFalse(payload["ok"])
 
-    def test_cli_start_check_refuses_a_unit_without_the_price_table(self):
+    def test_cli_start_check_refuses_a_broker_unit_without_env_file(self):
         unit = _read("systemd/um-share-broker.service")
         broken = "\n".join(
             line for line in unit.splitlines()
-            if "CHAT2API_PRICE_TABLE_FILE" not in line)
+            if "EnvironmentFile=" not in line)
         env = _with_uid(_read("config/broker.env.example"))
         with tempfile.TemporaryDirectory(prefix="assembly-cli-") as tmp:
             root = Path(tmp)
@@ -387,7 +299,7 @@ class DeploymentTextAssemblyTests(unittest.TestCase):
         self.assertNotIn("budget.json", install)
         self.assertNotIn("um-share-backup.timer", install)
         self.assertNotIn("backup.key", install)
-        self.assertIn("--price-table", install)
+        self.assertNotIn("--price-table", install)
         self.assertIn("check_deployment_assembly", install)
         self.assertNotIn("--no-backup", update)
         self.assertNotIn("--no-backup", rollback)
@@ -418,7 +330,7 @@ class DeploymentTextAssemblyTests(unittest.TestCase):
         self.assertIn('(cd "$OUTPUT_DIR" && sha256sum '
                       '"$(basename "$ARCHIVE")")', text)
         self.assertNotIn('sha256sum "$ARCHIVE" >', text)
-        self.assertIn('chmod 0755 "$PAYLOAD/console/magpie_prices.py"', text)
+        self.assertNotIn("magpie_prices.py", text)
 
     def test_release_packaging_requires_a_production_console_line(self):
         # usagesrv.py answers 500 for every line other than production, so a
@@ -731,20 +643,6 @@ class DeploymentShareSecretRecoveryTests(unittest.TestCase):
         source, synthetic, backup_key = _source_layout(
             self.root, self.share_key)
         normal = _seal_deployment_backup(source, backup_key)
-        cases = {
-            "magpie": _seal_deployment_backup(
-                source, backup_key, magpie=False),
-        }
-        for name, backup in cases.items():
-            with self.subTest(material=name):
-                destination = _destination_layout(
-                    self.root / name, synthetic["security"])
-                before = Path(destination["store"]).read_bytes()
-                with self.assertRaises(backup_restore.BackupError):
-                    backup_restore.deployment_restore(
-                        backup["backup_path"], key=backup_key,
-                        paths=destination)
-                self.assertEqual(Path(destination["store"]).read_bytes(), before)
 
         missing_state = _destination_layout(
             self.root / "security-state", synthetic["security"])

@@ -132,16 +132,12 @@ class SecurityFenceTests(unittest.TestCase):
         key_path, key = _backup_key(self.root)
         ledger = self.root / "usage.jsonl"
         ledger.write_text("", encoding="utf-8")
-        price = self.root / "prices.json"
-        price.write_text(json.dumps({"version": "price-v1",
-                                     "models": {}, "providers": {}}),
-                          encoding="utf-8")
         config = self.root / "share-management.json"
         config.write_text(json.dumps({"schema_version": 2,
                                       "enabled": False}), encoding="utf-8")
         backup = backup_restore.create_backup(
             self.store, ledger, key, self.root / "remote-sim",
-            price_table_path=price, config_paths=[config],
+            config_paths=[config],
             security_state=before)
         self.store.delete_key(alpha["key_id"])
         newer = self.store.security_state()
@@ -152,7 +148,7 @@ class SecurityFenceTests(unittest.TestCase):
             backup_restore.restore_for_recovery(
                 backup["backup_path"], key, target_dir=target,
                 security_state_path=security_path,
-                price_table_path=price, config_paths=[config])
+                config_paths=[config])
         self.assertFalse((target / "share.db").exists())
 
         forced = self.root / "forced"
@@ -175,22 +171,18 @@ class SecurityFenceTests(unittest.TestCase):
         key_path, key = _backup_key(self.root)
         ledger = self.root / "usage.jsonl"
         ledger.write_text("", encoding="utf-8")
-        price = self.root / "prices.json"
-        price.write_text(json.dumps({"version": "price-v1",
-                                     "models": {}, "providers": {}}),
-                          encoding="utf-8")
         config = self.root / "share-management.json"
         config.write_text(json.dumps({"schema_version": 2,
                                       "enabled": False}), encoding="utf-8")
         backup = backup_restore.create_backup(
             self.store, ledger, key, self.root / "remote-sim",
-            price_table_path=price, config_paths=[config],
+            config_paths=[config],
             security_state=self.store.security_state())
         with self.assertRaises(backup_restore.BackupSecurityError):
             backup_restore.restore_for_recovery(
                 backup["backup_path"], key,
                 target_dir=self.root / "recovery",
-                price_table_path=price, config_paths=[config])
+                config_paths=[config])
 
 
 class CloudOpsReadFaceTests(unittest.TestCase):

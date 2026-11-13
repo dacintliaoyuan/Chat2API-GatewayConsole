@@ -53,11 +53,11 @@ def deployment_paths(*, current="/opt/um-share/current",
                      console_var="/var/lib/um-share-console") -> dict:
     """The ONE deployment layout shared by the scripts and the offline tools.
 
-    Price table and release code stay in the release directory; every mutable
-    file (Magpie snapshot/status, backup state/spool/remote, security journal,
-    console store and its AES-GCM share-key file) lives under the writable state
-    directories.  ``budget_db`` remains only so an older offline package can be
-    inspected/restored explicitly; D18-11 removed it from the default assembly.
+    Release code stays in the release directory; every mutable file (backup
+    state/spool/remote, security journal, console store and its AES-GCM share-key
+    file) lives under the writable state directories.  ``budget_db`` remains only
+    so an older offline package can be inspected/restored explicitly; D18-11
+    removed it from the default assembly.
     """
     return {
         "current": current,
@@ -72,9 +72,6 @@ def deployment_paths(*, current="/opt/um-share/current",
         "state": f"{var}/backup-freshness.json",
         "spool": f"{var}/backup-spool",
         "budget_db": f"{var}/budget.db",
-        "price_table": f"{etc}/prices.json",
-        "magpie_snapshot": f"{var}/magpie-prices.snapshot.json",
-        "magpie_status": f"{var}/magpie-prices.status.json",
         "config": f"{etc}/share-management.json",
         "security_state": f"{var}/security-state.json",
         # The POSIX AES-GCM share-key file is persistent deployment state; it
@@ -86,13 +83,9 @@ def deployment_paths(*, current="/opt/um-share/current",
     }
 
 
-BROKER_REQUIRED_ARGS = ("CHAT2API_PRICE_TABLE_FILE",)
+BROKER_REQUIRED_ARGS = ()
 CONSOLE_REQUIRED_ENV = (
     "UM_CLOUD_SECURITY_STATE",
-    "USAGE_PRICE_FILE",
-    "CHAT2API_PRICE_TABLE_FILE",
-    "MAGPIE_PRICE_SNAPSHOT",
-    "MAGPIE_PRICE_STATUS",
     # The share store rows are AES-GCM encrypted with this file.  An env that
     # omits it would make the console fall back to the release-relative
     # default, which vanishes on the next version switch.
@@ -116,12 +109,11 @@ def _env_assignments(text):
 
 
 def deployment_assembly_problems(role, unit_text, env_text) -> list:
-    """Return every missing price/security fence item for one unit role.
+    """Return every missing security fence item for one unit role.
 
     The service must fail its START when the installed unit/env no longer names
-    the metering price table (broker) or the security/price/Magpie read face
-    (console).  Silently starting without those facts would make a drifting
-    deployment look like a working one.
+    the security read face (console).  Silently starting without those facts
+    would make a drifting deployment look like a working one.
     """
     problems = []
     if not isinstance(unit_text, str):
@@ -130,11 +122,6 @@ def deployment_assembly_problems(role, unit_text, env_text) -> list:
         raise DeploymentAssemblyError("env text must be a string")
     values = _env_assignments(env_text)
     if role == "broker":
-        for flag in BROKER_REQUIRED_ARGS:
-            if flag not in unit_text:
-                problems.append(
-                    f"broker unit does not pass {flag}; the 8100 gateway "
-                    "would start without a metering price table")
         if "EnvironmentFile=" not in unit_text:
             problems.append(
                 "broker unit does not load an EnvironmentFile")
@@ -216,9 +203,6 @@ def deployment_backup(paths=None, *, key=None, now=None,
             store, layout["ledger"], material,
             LocalObjectStore(layout["remote_dir"]),
             state_path=layout["state"], spool_dir=layout["spool"],
-            price_table_path=layout["price_table"],
-            magpie_snapshot_path=layout["magpie_snapshot"],
-            magpie_status_path=layout["magpie_status"],
             config_paths=[layout["config"]],
             security_state=security_state, now=now, backup_id=backup_id,
             share_secret_key_path=share_secret_key_path)
@@ -252,12 +236,10 @@ def deployment_restore(backup_path, *, key=None, paths=None,
         target_ledger_path=layout["ledger"],
         target_budget_db_path=layout["budget_db"],
         target_extra_dir=layout["etc"],
-        target_price_table_path=layout["price_table"],
-        target_magpie_dir=layout["var"],
         target_security_state_path=layout["security_state"],
         target_share_secret_key_path=layout.get("share_secret_key"),
         target_share_secret_owner=share_secret_owner,
         target_share_secret_group=share_secret_group,
         security_state_path=state_path,
-        allow_existing=True, require_magpie=True,
+        allow_existing=True,
         require_share_secret=True, now=now)

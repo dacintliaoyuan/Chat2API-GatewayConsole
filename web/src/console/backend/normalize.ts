@@ -55,8 +55,6 @@ import type {
   UmBucketPayload,
   UmCatalogModelPayload,
   UmCatalogPayload,
-  UmCostPayload,
-  UmFxPayload,
   UmLogLevel,
   UmLogLinePayload,
   UmLogPagePayload,
@@ -64,7 +62,6 @@ import type {
   UmMaintenanceRowPayload,
   UmOperationPayload,
   UmOperationsPayload,
-  UmPricePayload,
   UmReading,
   UmReadingKind,
   UmRequestLogsPayload,
@@ -75,7 +72,6 @@ import type {
   UmServiceEntry,
   UmServicesPayload,
   UmSummaryPayload,
-  UmSummaryReferencePayload,
   UmTodayPayload,
   UmTodayResponse,
   UmTrendModelPayload,
@@ -1401,44 +1397,8 @@ function umBucket(value: unknown, name: string): UmBucketPayload {
   if (!row) throw new ContractError(`${name} must be an object`);
   return {
     tokens: normalizeUmReading(row.tokens, `${name}.tokens`),
-    costCny: normalizeUmReading(row.costCny, `${name}.costCny`),
     requests: normalizeUmReading(row.requests, `${name}.requests`),
     speed: normalizeUmReading(row.speed, `${name}.speed`),
-  };
-}
-function umPrice(value: unknown): UmPricePayload {
-  const row = object(value) ?? {};
-  const state = row.state;
-  return {
-    state:
-      state === "synced" || state === "unsynced" || state === "failed"
-        ? state
-        : "failed",
-    source: text(row.source),
-    snapshotAt: count(row.snapshotAt),
-    version: text(row.version),
-    failure: text(row.failure),
-  };
-}
-function umFx(value: unknown): UmFxPayload {
-  const row = object(value) ?? {};
-  return { rate: nonnegative(row.rate), version: text(row.version) };
-}
-export function normalizeUmCostPayload(value: unknown): UmCostPayload {
-  const row = object(value) ?? {};
-  return {
-    label: text(row.label),
-    cny: normalizeUmReading(row.cny, "参考费用"),
-    cnyPartial: boolean(row.cnyPartial),
-    costUsd: nonnegative(row.costUsd),
-    price: umPrice(row.price),
-    fx: umFx(row.fx),
-    unpricedRequests: count(row.unpricedRequests),
-    estimatedRequests: count(row.estimatedRequests),
-    coverage: object(row.coverage) ?? {},
-    models: Array.isArray(row.models)
-      ? (row.models.filter((item) => object(item)) as JsonObject[])
-      : [],
   };
 }
 export function normalizeUmTodayResponse(value: unknown): UmTodayResponse {
@@ -1478,7 +1438,6 @@ export function normalizeUmTodayResponse(value: unknown): UmTodayResponse {
         samples: count(speed.samples),
       },
     },
-    cost: normalizeUmCostPayload(root.cost),
     coverage: object(root.coverage) ?? {},
     timezone: text(root.timezone),
     checkedAt: epochMs(root.checked_epoch),
@@ -1581,7 +1540,6 @@ function umRequestRow(value: unknown): UmRequestRowPayload {
     output: normalizeUmReading(row.output, "输出 Token"),
     cacheRead: normalizeUmReading(row.cacheRead, "缓存读取"),
     reasoning: normalizeUmReading(row.reasoning, "思考 Token"),
-    costCny: normalizeUmReading(row.costCny, "参考费用"),
     durationMs: normalizeUmReading(row.durationMs, "耗时"),
     firstTokenMs: normalizeUmReading(row.firstTokenMs, "首字耗时"),
     speed: normalizeUmReading(row.speed, "速度"),
@@ -1839,31 +1797,10 @@ export function normalizeUmOperations(value: unknown): UmOperationsPayload {
   });
   return { operations };
 }
-export function normalizeUmSummaryReference(
-  value: unknown
-): UmSummaryReferencePayload {
-  const row = object(value) ?? {};
-  return {
-    label: text(row.label),
-    cny: nonnegative(row.cny),
-    cnyPartial: boolean(row.cnyPartial),
-    costUsd: nonnegative(row.costUsd),
-    price: umPrice(row.price),
-    fx: umFx(row.fx),
-    snapshotSha256: text(row.snapshotSha256),
-    coverage: object(row.coverage) ?? {},
-    models: Array.isArray(row.models)
-      ? (row.models.filter((item) => object(item)) as JsonObject[])
-      : [],
-  };
-}
 export function normalizeUmSummary(value: unknown): UmSummaryPayload {
   const root = requiredObject(value, "UM summary response");
   const assembly = object(root.assembly) ?? {};
   return {
     role: text(root.role) ?? text(assembly.role),
-    umReference: object(root.umReference)
-      ? normalizeUmSummaryReference(root.umReference)
-      : null,
   };
 }

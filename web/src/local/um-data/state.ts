@@ -184,7 +184,6 @@ export class UmDataState {
       login: beginLoad(this.state.overview.login),
       verify: beginLoad(this.state.overview.verify),
       today: beginLoad(this.state.overview.today),
-      cost: beginLoad(this.state.overview.cost),
       trend: beginLoad(this.state.overview.trend),
       issues: { state: "loading" },
     });
@@ -254,7 +253,6 @@ export class UmDataState {
       login: { state: "failed", failure },
       verify: { state: "failed", failure },
       today: { state: "failed", failure },
-      cost: { state: "failed", failure },
       trend: { state: "failed", failure },
       issues: { state: "failed", failure },
       actions: this.closedActions(reason),
@@ -387,32 +385,6 @@ export class UmDataState {
         });
       }
     }
-    const cost = this.state.overview.cost;
-    if (cost.state === "ready" || cost.state === "stale") {
-      const data = cost.data;
-      if (data.price.state === "failed" || data.price.state === "unsynced") {
-        items.push({
-          kind: "price",
-          title:
-            data.price.state === "failed" ? "价格同步失败" : "价格尚未同步",
-          detail:
-            data.price.failure ??
-            "参考金额只按已定价部分计算；未同步不是零费用",
-          count: 1,
-          lastAt: cost.at,
-          evidence: null,
-        });
-      } else if (data.unpricedRequests !== null && data.unpricedRequests > 0) {
-        items.push({
-          kind: "price",
-          title: "有请求未定价",
-          detail: `${data.unpricedRequests} 个请求未定价，未计入参考金额`,
-          count: data.unpricedRequests,
-          lastAt: cost.at,
-          evidence: null,
-        });
-      }
-    }
     const refresh = this.state.models.refresh;
     if (refresh.state === "failed") {
       items.push({
@@ -464,33 +436,6 @@ export class UmDataState {
     if (access.state === "ready" || access.state === "stale") {
       if (access.data.baseUrl)
         facts.push({ label: "UM 接口地址", value: access.data.baseUrl });
-    }
-    const reference = this.summary?.umReference;
-    if (reference) {
-      const price = reference.price;
-      facts.push({
-        label: "参考价格来源",
-        value:
-          price.state === "synced"
-            ? `${price.source ?? "Magpie"}${price.version ? ` · 版本 ${price.version}` : ""}`
-            : price.state === "unsynced"
-              ? "价格尚未同步（不是零费用）"
-              : "价格同步失败，沿用上次快照",
-      });
-      facts.push({
-        label: "参考价快照",
-        value:
-          price.snapshotAt !== null
-            ? `${when(price.snapshotAt)}${price.failure ? ` · ${price.failure}` : ""}`
-            : "还没有成功的价格快照",
-      });
-      facts.push({
-        label: "汇率",
-        value:
-          reference.fx.rate !== null
-            ? `1 美元 = ${reference.fx.rate} 元${reference.fx.version ? ` · 版本 ${reference.fx.version}` : ""}`
-            : "汇率未就绪，金额不完整",
-      });
     }
     if (this.timezone !== null)
       facts.push({

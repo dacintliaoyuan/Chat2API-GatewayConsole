@@ -189,8 +189,8 @@ def main(argv=None):
     try:
         config = LocalConfig.from_file(config_path)
         # ``config_dir`` must be the ``--config`` document's parent: otherwise
-        # the deployment would read one config and write its session code /
-        # price document somewhere else.
+        # the deployment would read one config and write its session code
+        # somewhere else.
         config.validate_config_dir(config_path)
     except LocalConfigError as exc:
         print("local config invalid: %s" % exc, file=sys.stderr)

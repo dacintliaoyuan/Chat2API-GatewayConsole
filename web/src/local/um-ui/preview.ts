@@ -28,7 +28,7 @@ import { dayKey } from "./format";
  *  driver that answers the console's events inside the browser. It never
  *  sends a request. local-console loads it only in a candidate build opened
  *  with `?um-preview=<scenario>`, and the page labels it as synthetic.
- *  Scenarios cover the honesty cases: exact zero, unreported, unpriced,
+ *  Scenarios cover the honesty cases: exact zero, unreported,
  *  stale, estimated, failed / refused reads and partial test results. */
 
 export const SCENARIOS = [
@@ -64,8 +64,6 @@ type Spec = {
   id: string;
   weight: number;
   speed: number;
-  pin: number;
-  pout: number;
   declared: number | null;
   compat: number | null;
   think: string[];
@@ -80,8 +78,6 @@ const SPECS: Spec[] = [
     id: "claude-sonnet-4-6",
     weight: 1,
     speed: 46,
-    pin: 21.6,
-    pout: 108,
     declared: 200_000,
     compat: null,
     think: ["low", "medium", "high"],
@@ -93,8 +89,6 @@ const SPECS: Spec[] = [
     id: "gpt-5.2-codex",
     weight: 0.55,
     speed: 71,
-    pin: 9,
-    pout: 72,
     declared: 400_000,
     compat: null,
     think: ["minimal", "low", "medium", "high"],
@@ -106,8 +100,6 @@ const SPECS: Spec[] = [
     id: "gemini-3-pro-preview",
     weight: 0.22,
     speed: 88,
-    pin: 9,
-    pout: 54,
     declared: 1_048_576,
     compat: null,
     think: ["low", "high"],
@@ -119,8 +111,6 @@ const SPECS: Spec[] = [
     id: "deepseek-v3.2",
     weight: 0.09,
     speed: 31,
-    pin: 2,
-    pout: 3,
     declared: null,
     compat: 128_000,
     think: [],
@@ -132,8 +122,6 @@ const SPECS: Spec[] = [
     id: "um-extended-context-model-with-a-very-long-identifier-2026-10-15",
     weight: 0.04,
     speed: 52,
-    pin: 14,
-    pout: 70,
     declared: 256_000,
     compat: null,
     think: ["standard", "extended"],
@@ -151,7 +139,6 @@ type Raw = {
   reasoning: number;
   requests: number;
   failed: number;
-  cost: number;
   speed: number;
 };
 
@@ -195,11 +182,6 @@ export function startPreview(
         : 0;
       const failed =
         requests && rand() < 0.3 ? Math.round(requests * rand() * 0.06) : 0;
-      const cost =
-        ((input - cache) * spec.pin +
-          cache * spec.pin * 0.1 +
-          output * spec.pout) /
-        1e6;
       return {
         input,
         output,
@@ -207,37 +189,23 @@ export function startPreview(
         reasoning,
         requests,
         failed,
-        cost,
         speed: spec.speed * (0.8 + rand() * 0.4),
       };
     })
   );
-  // Readings per scenario: costs are reference estimates; 「需处理」 has one
-  // unparsable day and an unpriced model; 「服务停止」 never synced a price.
-  const unpriced = (m: number) =>
-    scenario === "attention" && SPECS[m].id === "deepseek-v3.2";
+  // Readings per scenario: 「需处理」 has one unparsable day; 「服务停止」 has
+  // no usable readings. Cost/price fields were retired with #30.
   const bucket = (m: number, i: number): UmBucket => {
     const r = raw[m][i];
     if (scenario === "attention" && m === 1 && i === 25) {
       return {
         tokens: { kind: "unknown", note: "这天的账本行无法解析" },
-        costCny: { kind: "unknown", note: "Token 未知，无法计价" },
         requests: { kind: "atLeast", value: r.requests },
         speed: { kind: "unknown" },
       };
     }
     return {
       tokens: exact(r.input + r.output),
-      costCny:
-        scenario === "down"
-          ? missing("价格从未同步")
-          : unpriced(m)
-            ? r.requests
-              ? missing("该模型不在价格快照里，未定价")
-              : exact(0)
-            : r.requests
-              ? est(r.cost)
-              : exact(0),
       requests: exact(r.requests),
       speed: r.requests ? exact(r.speed) : missing("当天没有请求"),
     };
@@ -281,7 +249,6 @@ export function startPreview(
   };
   const merge = (list: UmBucket[]): UmBucket => ({
     tokens: sum(list.map((b) => b.tokens)),
-    costCny: sum(list.map((b) => b.costCny)),
     requests: sum(list.map((b) => b.requests)),
     speed: weightedSpeed(list),
   });
@@ -393,12 +360,6 @@ export function startPreview(
           scenario === "attention" && m === 1
             ? { kind: "unreported", note: "上游没有报告思考 Token" }
             : exact(Math.round(output * 0.3)),
-        costCny:
-          scenario === "down"
-            ? missing("价格从未同步")
-            : unpriced(m)
-              ? missing("未定价")
-              : est((input * spec.pin + output * spec.pout) / 1e6),
         durationMs: exact(durationMs),
         firstTokenMs:
           k % 3 === 0
@@ -737,14 +698,6 @@ export function startPreview(
               },
             },
             {
-              kind: "price",
-              title: "有请求未定价",
-              detail: "deepseek-v3.2 不在价格快照里，金额只算已定价部分",
-              count: t[3].requests,
-              lastAt: now - 40 * MIN,
-              evidence: null,
-            },
-            {
               kind: "catalog",
               title: "目录刷新失败",
               detail: "UM 返回了登录页，模型列表沿用旧目录",
@@ -884,54 +837,6 @@ export function startPreview(
             },
           }
         : ready(todayOf()),
-      cost: ready({
-        cny: down
-          ? missing("价格从未同步：不显示金额，也不按零计")
-          : zero
-            ? exact(0)
-            : scenario === "attention"
-              ? {
-                  kind: "atLeast",
-                  value: t.reduce(
-                    (a, r, m) => a + (unpriced(m) ? 0 : r.cost),
-                    0
-                  ),
-                  note: "未定价请求没有计入",
-                }
-              : est(t.reduce((a, r) => a + r.cost, 0)),
-        price: down
-          ? {
-              state: "unsynced",
-              source: null,
-              snapshotAt: null,
-              version: null,
-              failure: null,
-            }
-          : scenario === "attention"
-            ? {
-                state: "failed",
-                source: "Magpie（本机）",
-                snapshotAt: now - 26 * 60 * MIN,
-                version: "magpie-1031-2210",
-                failure: "Magpie 没有在运行，读不到新价格（12 分钟前）",
-              }
-            : {
-                state: "synced",
-                source: "Magpie（本机）",
-                snapshotAt: now - 3 * 60 * MIN,
-                version: "magpie-1101-0912",
-                failure: null,
-              },
-        fx: down
-          ? { rate: null, version: null }
-          : { rate: 7.12, version: "2026-10-31" },
-        unpricedRequests: down
-          ? todayReq
-          : scenario === "attention"
-            ? t[3].requests
-            : 0,
-        estimatedRequests: zero || down ? 0 : scenario === "attention" ? 2 : 0,
-      }),
       trend: ready(trendFor("7d")),
       issues: ready({ window: "近 24 小时", items: issues }),
       actions: maintenanceCaps(serviceUp),
@@ -1384,7 +1289,6 @@ export function startPreview(
                 "login",
                 "verify",
                 "today",
-                "cost",
                 "trend",
                 "issues",
               ] as const)

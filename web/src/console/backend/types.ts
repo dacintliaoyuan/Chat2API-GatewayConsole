@@ -746,36 +746,8 @@ export interface UmTodayPayload {
   };
 }
 
-export interface UmPricePayload {
-  state: "synced" | "unsynced" | "failed";
-  source: string | null;
-  /** Epoch milliseconds. */
-  snapshotAt: number | null;
-  version: string | null;
-  failure: string | null;
-}
-
-export interface UmFxPayload {
-  rate: number | null;
-  version: string | null;
-}
-
-export interface UmCostPayload {
-  label: string | null;
-  cny: UmReading;
-  cnyPartial: boolean | null;
-  costUsd: number | null;
-  price: UmPricePayload;
-  fx: UmFxPayload;
-  unpricedRequests: number | null;
-  estimatedRequests: number | null;
-  coverage: JsonObject;
-  models: JsonObject[];
-}
-
 export interface UmTodayResponse {
   today: UmTodayPayload;
-  cost: UmCostPayload;
   coverage: JsonObject;
   timezone: string | null;
   /** Epoch milliseconds; the backend reports seconds. */
@@ -787,7 +759,6 @@ export type UmReadWindow = "today" | "24h" | "7d" | "30d";
 
 export interface UmBucketPayload {
   tokens: UmReading;
-  costCny: UmReading;
   requests: UmReading;
   speed: UmReading;
 }
@@ -834,7 +805,6 @@ export interface UmRequestRowPayload {
   output: UmReading;
   cacheRead: UmReading;
   reasoning: UmReading;
-  costCny: UmReading;
   durationMs: UmReading;
   firstTokenMs: UmReading;
   speed: UmReading;
@@ -956,20 +926,7 @@ export interface UmOperationsPayload {
   operations: UmOperationPayload[];
 }
 
-export interface UmSummaryReferencePayload {
-  label: string | null;
-  cny: number | null;
-  cnyPartial: boolean | null;
-  costUsd: number | null;
-  price: UmPricePayload;
-  fx: UmFxPayload;
-  snapshotSha256: string | null;
-  coverage: JsonObject;
-  models: JsonObject[];
-}
-
 export interface UmSummaryPayload {
   /** `cloud` when the backend is the cloud role; the local role omits it. */
   role: string | null;
-  umReference: UmSummaryReferencePayload | null;
 }

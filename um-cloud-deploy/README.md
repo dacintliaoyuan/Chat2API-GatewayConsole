@@ -100,11 +100,10 @@ bash um-cloud-deploy/package-release.sh \
   --release-dir /root/um-share-<version> \
   --version <version> \
   --wheelhouse /root/wheelhouse \
-  --price-table /root/prices.json \
   --with-display
 ```
 
-安装脚本幂等：已存在的 release 若 manifest 相同则复用；已存在的配置、密钥与数据不覆盖；venv 与浏览器缓存已存在则复用；unit 已存在则重装模板并 `daemon-reload`。`--price-table` 是安装输入，缺失时安装失败。
+安装脚本幂等：已存在的 release 若 manifest 相同则复用；已存在的配置、密钥与数据不覆盖；venv 与浏览器缓存已存在则复用；unit 已存在则重装模板并 `daemon-reload`。
 
 更新必须运行新 release 自己的 `update.sh`，不能运行 `/opt/um-share/current/um-cloud-deploy/update.sh`：
 

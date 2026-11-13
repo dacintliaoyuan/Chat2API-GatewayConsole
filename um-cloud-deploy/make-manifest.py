@@ -63,7 +63,6 @@ CLOUD_RUNTIME = [
     "console/share_production.py",
     "console/stats.py",
     "console/log_reader.py",
-    "console/magpie_prices.py",
     "share/management.py",
     "share/store.py",
     "share/broker_client.py",
@@ -117,7 +116,7 @@ def _module_map(root: Path) -> dict[str, Path]:
         for path in sorted(chat.glob("*.py")):
             modules["chat2api/" + path.stem] = path
     # r19 E19-1: ``shared`` is a real package both ends import
-    # (``from shared import pricing_rules``).  Without it here the closure
+    # (``from shared import nonstream_aggregate``).  Without it here the closure
     # silently omitted the whole package and the deployed console died with
     # ``ModuleNotFoundError: No module named 'shared'``.  The package
     # initializer is registered under ``shared/__init__`` and resolved through
@@ -131,9 +130,10 @@ def _module_map(root: Path) -> dict[str, Path]:
 
 
 def _resolve(name: str, modules: dict[str, Path]) -> str | None:
-    # A dotted module (``shared.pricing_rules``) resolves through the package
-    # prefix FIRST: ``shared.pricing_rules`` -> ``shared/pricing_rules``.  The
-    # bare ``shared`` package alone would drop the concrete submodule.
+    # A dotted module (``shared.nonstream_aggregate``) resolves through the
+    # package prefix FIRST: ``shared.nonstream_aggregate`` ->
+    # ``shared/nonstream_aggregate``.  The bare ``shared`` package alone would
+    # drop the concrete submodule.
     dotted = name.replace(".", "/")
     if dotted in modules:
         return dotted
@@ -168,11 +168,11 @@ def _imported_names(path: Path) -> set[str]:
                 continue
             if node.module:
                 names.add(node.module)
-                # ``from shared import pricing_rules`` names the PACKAGE as
+                # ``from shared import nonstream_aggregate`` names the PACKAGE as
                 # ``module`` and the concrete submodule in ``names``.  Both
                 # edges are required: the package alone resolves to
                 # ``shared/__init__.py`` and would silently drop
-                # ``shared/pricing_rules.py`` from the release.
+                # ``shared/nonstream_aggregate.py`` from the release.
                 for alias in node.names:
                     if alias.name == "*":
                         continue

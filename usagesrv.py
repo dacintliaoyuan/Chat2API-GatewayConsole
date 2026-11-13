@@ -11,47 +11,17 @@ B0（2026-11-01）：默认装配只保留 UM 主链（chat2api 8000）与其必
 控制台前端（根路径直接托管 web/dist/index.html 构建产物；dist 未
 就绪时根路径返回诚实 500，绝不回退旧静态页——2026-09-23 维护者裁定）：
 
-  1. data/usage-chat2api.jsonl    UM 主链 chat2api（按价目表估算）
+  1. data/usage-chat2api.jsonl    UM 主链 chat2api（原始用量与请求记录）
   2. data/dsh-ledger-20260902.json（DSH_MERGE_DAY 账本日快照）
-                                 DSH 2026-09-02 一天的真实记账冻结快照
-                                 （USD 计价，页面按 exchangeRate 换 CNY）
+                                 DSH 2026-09-02 一天的冻结快照
 
-价格引擎移植自 dsh-cost-meter v1.7.7 的计费语义（模型匹配/峰谷判定/选档），
-但价目表已与该插件解耦（2026-09-11 用户决定）：两级读取链——
-  ① data/prices.json（自持价目表，用户查官网后手工维护；文件内 _说明 键
-     记录维护方法，checkedAt 供页面过期提醒，超 PRICE_STALE_DAYS 天黄条）
-  ② data/price.override.json（补缺，可手工编辑，最高优先级）
-不再读取插件账本或插件包内任何文件；插件升级与本服务计价无关。
-路径可用环境变量 USAGE_PRICE_FILE / DSH_LEDGER_SNAPSHOT_FILE 覆盖。
-
-E19-1-04B（2026-11-07）：纯计价规则在 shared/pricing_rules.py（随两端
-包携带）；本模块保留价目表读取、60 秒缓存与同名兼容包装，统计读面通过
-console_stats.StatsEnvironment 显式注入本模块的路径、计价与加载器。
-
-价目表按生效时刻版本化（2026-09-25 C1）：prices.json 可带一个可选的顶层
-"versions" 数组，每段自带生效时刻与当时的模型价、汇率、峰谷规则：
-  {"versions": [
-     {"versionId": "2026-08-01", "effectiveAt": "2026-08-01T00:00:00Z",
-      "checkedAt": "2026-09-11", "exchangeRate": 7.2,
-      "peak": {"enabled": true, "effectiveAt": "...", "windows": [...]},
-      "models": {...}, "providers": {...}},
-     {"versionId": "2026-10-01", "effectiveAt": "2026-10-01T00:00:00Z", ...}]}
-判定规则：记录时刻 → 生效时刻不大于该时刻的最近一段；每段的价格**自持**，
-不继承顶层当前表（否则改当前表会重算历史）。记录时刻缺失/不可解析，或早于
-首段生效时刻时，该记录的价格是「未知」——绝不默默按最新表计价。段内可缺省的
-字段用同一兜底：缺 exchangeRate 用 7.2，缺 peak 视为该段无峰谷（按基础档），
-缺 models/providers 即该段无价。旧形状（无 "versions" 键）映射为一段恒生效的
-默认段，任何时刻（含时刻缺失）都取它——与版本化前逐字段一致，历史金额不变。
-
-全站展示 CNY（汇率取当时生效版本的 exchangeRate）；峰谷口径与 cost-meter
-一致：高峰按该版本 peak 子档计价（官方 DeepSeek 为谷价 2 倍；缺子档按基础价
-不加倍），北京时间周六/周日全天谷价，逐条按请求时刻判定，时刻无效按基础价。
-模型名匹配（精确→归一化→包含→前缀→家族相似）同源移植。历史金额不重算：
-每条记录只按它当时生效版本的价目与汇率折算，改价只影响改价之后的请求。
+费用/价格口径已随 #30 退役：本服务只汇总原始用量（请求数、Token、
+缓存报告），不读价目表、不折算金额，也不再暴露价格环境变量。
+路径可用环境变量 CHAT2API_USAGE_LOG / DSH_LEDGER_SNAPSHOT_FILE 覆盖。
 
 DSH（DeepSeek Harness, 3080）流量经 chat2api 网关时已由 data/usage-chat2api.jsonl
 逐条记账；DSH_MERGE_DAY 快照仅为用户 2026-09-04 决定保留的一个历史日
-（2026-09-02），并入顶部累计参考费用；其他日期不进入任何 DSH 口径。
+（2026-09-02），并入顶部累计；其他日期不进入任何 DSH 口径。
 """
 
 import importlib
@@ -77,24 +47,9 @@ from share.store import (Disabled, StoreError, SecretUnavailable,  # noqa: E402
                          SecretUndecryptable, VersionMismatch, read_key_labels)
 from console import public_url as console_public_url  # noqa: E402
 from console import stats as console_stats  # noqa: E402
-from shared import pricing_rules as _pricing_rules  # noqa: E402
 
 CHAT2API_LOG = os.environ.get("CHAT2API_USAGE_LOG") or \
     os.path.join(HERE, "data", "usage-chat2api.jsonl")
-OVERRIDE_FILE = os.path.join(HERE, "data", "price.override.json")
-# 自持价目表与 DSH 历史日快照：输入路径可用环境变量覆盖（参照
-# CHAT2API_USAGE_LOG 先例），测试与迁移时重定向；默认路径读取失败按
-# 缺价/空账本降级，不崩溃。
-PRICE_FILE = os.environ.get("USAGE_PRICE_FILE") or \
-    os.path.join(HERE, "data", "prices.json")
-# UM reference prices followed from Magpie (B1, 2026-11-01). This is a
-# read-only snapshot; it never feeds resolve_price or share metering.
-MAGPIE_PRICE_SNAPSHOT_FILE = os.environ.get("MAGPIE_PRICE_SNAPSHOT") or \
-    os.path.join(HERE, "data", "magpie-prices.snapshot.json")
-MAGPIE_PRICE_STATUS_FILE = os.environ.get("MAGPIE_PRICE_STATUS") or (
-    MAGPIE_PRICE_SNAPSHOT_FILE[:-len(".snapshot.json")] + ".status.json"
-    if MAGPIE_PRICE_SNAPSHOT_FILE.endswith(".snapshot.json")
-    else os.path.splitext(MAGPIE_PRICE_SNAPSHOT_FILE)[0] + ".status.json")
 DSH_SNAPSHOT_FILE = os.environ.get("DSH_LEDGER_SNAPSHOT_FILE") or \
     os.path.join(HERE, "data", "dsh-ledger-20260902.json")
 # 根路径 / 托管的唯一页面：控制台前端构建产物。dist 未构建/缺失时根路径
@@ -264,139 +219,28 @@ def _console_build_identity_error():
 # DSH 全部口径只统计这一天，其余日期不纳入。换日在此修改并重启 8001）。
 DSH_MERGE_DAY = "2026-09-02"
 
-# dsh-cost-meter pricing.js 的两个历史分界（峰谷时代前按 legacyBase 计、
-# 北京时间周末全天谷价），保持与其账本口径一致。纯规则常量在
-# shared.pricing_rules；这里保留模块级别名，既有读取端不受影响。
-LEGACY_BASE_BOUNDARY = _pricing_rules.LEGACY_BASE_BOUNDARY
-WEEKEND_OFFPEAK_AT = _pricing_rules.WEEKEND_OFFPEAK_AT
+def _parse_ts(value):
+    """ISO 时间 → epoch ms；失败返回 None。"""
+    if not value:
+        return None
+    try:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp() * 1000
+    except Exception:
+        return None
 
-# 价目表过期提醒：prices.json 的 checkedAt 距今超过该天数时页面黄条提示
-# 查官网核对价格（用户手工维护价目表的时效提醒，替代原插件版本漂移黄条）。
-PRICE_STALE_DAYS = 30
 
-# 汇率兜底：价目表（或某个版本段）没写 exchangeRate / 写了非正数时一律用
-# 该值——与版本化前 load_price_table 内的硬编码兜底逐字段一致。
-DEFAULT_EXCHANGE_RATE = _pricing_rules.DEFAULT_EXCHANGE_RATE
 
-# 账本记录里可能出现的用量字段（C1 2026-09-25）：整条记录一个都没有时，
+# 账本记录里可能出现的用量字段：整条记录一个都没有时，
 # 该请求的用量是「未知」而不是真实 0。
 USAGE_TOKEN_FIELDS = ("input_tokens", "output_tokens", "cached_input_tokens",
                       "cache_tokens", "reasoning_tokens", "total_tokens")
 
-_price_lock = threading.Lock()
-_price_cache = {"at": 0.0, "data": None}
-
-# ------------------------------------------------------------------ 价格引擎
-
-def canon_model_id(model_id):
-    """归一化：小写、去括号附注、只留字母数字（'GLM-5.2 (go)' → 'glm52'）。"""
-    return _pricing_rules.canon_model_id(model_id)
-
-
-def _strip_id_decor(model_id):
-    """去日期快照（-20260101 / -2026-01-01）与版本后缀（-v2 / -v1.5）。"""
-    return _pricing_rules.strip_id_decor(model_id)
-
-
-def _tokens_of(model_id):
-    return _pricing_rules.tokens_of(model_id)
-
-
-# match_model_id 的记忆化（2026-09-26 /api/console/stats 性能修复）：
-# 该函数只依赖 (model_id, candidates) 两个入参——不读价目表、不读时钟——
-# 是纯函数；但每次调用都要对全部候选做 canon/strip/token 三轮正则归一化。
-# 账本按记录逐条计价时同一模型被重复匹配上万次（实测 3 天窗口 22671 条
-# 记录只有 4 个不同模型名 → 单次请求 22.6 万次以上正则归一化，占
-# /api/console/stats 总耗时的 97%）。按 (model_id, 候选序列) 记忆化后，
-# 候选集合变化自然 miss；缓存有界，超出容量整表清空（宁可少命中，不无界增长）。
-# E19-1-04B：统计计价改走 shared.pricing_rules，其 resolve_price 使用未缓存
-# 匹配（纯规则不持全局状态）；本缓存保留为 usagesrv.match_model_id 的宿主
-# 兼容入口，直接调用该函数的读取端仍享受记忆化。
-_MATCH_CACHE_MAX = 4096
-_match_cache = {}
-_match_cache_lock = threading.Lock()
-
-
-def match_model_id(model_id, candidates):
-    """dsh-cost-meter matchModelId 的 Python 移植：
-    精确 → 归一化等价 → 宽泛包含（最长候选）→ 去后缀精确 → 前缀 → 家族相似。
-    数字分叉守卫（glm-5 vs glm-5.3）与之同口径。
-
-    带记忆化（见 _match_cache 注释）：只对 list/tuple 候选启用，键为
-    (model_id, 候选序列)——命中与未命中返回同一个值，调用方不依赖返回对象
-    的身份，只读其内容。其他候选类型（字符串、集合、生成器……）的 ``in``
-    与迭代语义不同，一律走未缓存路径，保证与记忆化前逐字段一致。"""
-    if not model_id or not candidates:
-        return None
-    if not isinstance(candidates, (list, tuple)):
-        return _match_model_id_uncached(model_id, candidates)
-    try:
-        key = (model_id, tuple(candidates))
-        hash(key)
-    except TypeError:
-        # 候选不可哈希（非字符串）时退化为未缓存路径，不因缓存失败而拒绝。
-        return _match_model_id_uncached(model_id, candidates)
-    with _match_cache_lock:
-        if key in _match_cache:
-            return _match_cache[key]
-    hit = _match_model_id_uncached(model_id, candidates)
-    with _match_cache_lock:
-        if len(_match_cache) >= _MATCH_CACHE_MAX:
-            _match_cache.clear()
-        _match_cache[key] = hit
-    return hit
-
-
-def _match_model_id_uncached(model_id, candidates):
-    """match_model_id 的未缓存实现（纯函数；带记忆化的入口见上）。"""
-    return _pricing_rules.match_model_id_uncached(model_id, candidates)
-
-
-def complete_tier(raw):
-    """补齐一档价格：cacheMiss←input，cacheHit←cachedInput/cacheRead，output←0。"""
-    return _pricing_rules.complete_tier(raw)
-
-
-def normalize_price(raw):
-    """对应插件 normalizePrice：complete_tier 补齐基础三桶后保留峰谷子档
-    （offPeak/peak/legacyBase），供 tier_for 按时刻选档；其余展示字段不移植。
-    此前解析链直接用 complete_tier 会剥掉子档，导致 DeepSeek 峰谷与
-    legacyBase 档位失真（2026-09-05 随 D1 对齐一并修复）。"""
-    return _pricing_rules.normalize_price(raw)
-
-
-def _parse_ts(value):
-    """ISO 时间 → epoch ms；失败返回 None。"""
-    return _pricing_rules.parse_ts(value)
-
-
-def _beijing_weekday(day_index):
-    """北京时间日序 → 星期（0=周日…6=周六；1970-01-01 为周四）。"""
-    return _pricing_rules.beijing_weekday(day_index)
-
-
-def weekend_zone_at(at_ms):
-    """北京时间周六/周日全谷价区间；非周末、生效前或时刻无效返回 None
-    （插件对非有限时刻同样返回 null）。"""
-    return _pricing_rules.weekend_zone_at(at_ms)
-
-
-def is_peak_hour(at_ms, effective_at_ms, windows):
-    return _pricing_rules.is_peak_hour(at_ms, effective_at_ms, windows)
-
-
-def tier_for(entry, at_ms, peak_cfg):
-    """选档：生效后峰时段 → peak（缺子档按基础价，与插件 tierFor 一致）；
-    生效后谷时段 → offPeak；生效前、禁用或时刻无效 → 基础价；峰谷时代前 → legacyBase。"""
-    return _pricing_rules.tier_for(entry, at_ms, peak_cfg)
-
-
-def cost_of(tokens, entry, at_ms, peak_cfg):
-    """一次调用的 USD 成本。tokens 各桶相互独立（缓存部分须先从 input 里扣除）。"""
-    return _pricing_rules.cost_of(tokens, entry, at_ms, peak_cfg)
-
-
-# ------------------------------------------------------------- 价格源与查找
 
 def _load_json(path):
     try:
@@ -404,271 +248,6 @@ def _load_json(path):
             return json.load(f)
     except Exception:
         return None
-
-
-def _tiers_of(models_table, providers_table):
-    """价表扁平成 [(models_dict, billingMode, source)]，按精确度打分择优。"""
-    return _pricing_rules.tiers_of(models_table, providers_table)
-
-
-def _rate_of(raw_rate):
-    """汇率：非数值/非正数一律退回 DEFAULT_EXCHANGE_RATE（既有兜底口径）。"""
-    return _pricing_rules.rate_of(raw_rate)
-
-
-def _peak_of(raw_peak):
-    """峰谷规则：缺 enabled/windows 即无峰谷（按基础档），effectiveAt 解析失败为 None。"""
-    return _pricing_rules.peak_of(raw_peak)
-
-
-def _checked_age_days(checked_at, now):
-    """checkedAt（人工核对日期）距今天数；缺失/不可解析返回 None（不猜）。"""
-    return _pricing_rules.checked_age_days(checked_at, now)
-
-
-def _version_id(raw, effective_at_ms):
-    """版本标识：显式 versionId 优先，缺省用生效时刻字符串（便于按版本归组）。"""
-    return _pricing_rules.version_id(raw, effective_at_ms)
-
-
-def _price_version(raw, effective_at_ms, now):
-    """一个显式版本段 → 内部查找结构（价格自持，不继承顶层当前表）。"""
-    return _pricing_rules.price_version(raw, effective_at_ms, now)
-
-
-def _current_version(versions, versioned, now_ms):
-    """当前生效段：显式版本段按现时刻选；无可用段返回 None。"""
-    return _pricing_rules.current_version(versions, versioned, now_ms)
-
-
-def load_price_table():
-    """自持价目链聚合为统一查找结构；mtime 60 秒内直接用缓存。
-
-    主源 data/prices.json（用户手工维护，checkedAt 供过期提醒），
-    补缺层 data/price.override.json 最高优先级（resolve_price 内处理）。
-
-    版本段（C1 2026-09-25）：文件带可选顶层 "versions" 时按段解析，价格只
-    取记录时刻生效的那一段；无 "versions" 键的旧形状映射为一段恒生效的默认段，
-    顶层 exchangeRate/peak/tiers 与版本化前逐字段一致。table["versions"] /
-    ["versioned"] / ["versionMeta"] 是新增的加性字段，既有读取端不受影响。
-    """
-    now = time.time()
-    with _price_lock:
-        if _price_cache["data"] is not None and now - _price_cache["at"] < 60:
-            return _price_cache["data"]
-
-    prices = _load_json(PRICE_FILE) or {}
-    top_rate = _rate_of(prices.get("exchangeRate"))
-    top_peak = _peak_of(prices.get("peak"))
-    top_tiers = _tiers_of(prices.get("models"), prices.get("providers"))
-    checked_at = prices.get("checkedAt")
-    checked_age_days = _checked_age_days(checked_at, now)
-
-    raw_versions = prices.get("versions")
-    versioned = isinstance(raw_versions, list)
-    versions, invalid_versions = [], 0
-    if versioned:
-        for raw in raw_versions:
-            if not isinstance(raw, dict):
-                invalid_versions += 1
-                continue
-            effective_at_ms = _parse_ts(raw.get("effectiveAt") or "")
-            if effective_at_ms is None:
-                # 没有可用生效时刻的段不能被任何记录时刻命中：忽略并计数，
-                # 绝不把它当成「一直生效」（否则等于用现价算历史）。
-                invalid_versions += 1
-                continue
-            versions.append(_price_version(raw, effective_at_ms, now))
-        versions.sort(key=lambda v: v["effectiveAtMs"])
-    else:
-        # 旧形状：单一默认段，恒生效（任何时刻，含时刻缺失）——兼容红线。
-        versions = [{
-            "versionId": None,
-            "effectiveAt": None,
-            "effectiveAtMs": None,
-            "exchangeRate": top_rate,
-            "peak": top_peak,
-            "tiers": top_tiers,
-            "checkedAt": checked_at if isinstance(checked_at, str) else None,
-            "checkedAgeDays": checked_age_days,
-        }]
-
-    # 顶层「现行」视图：版本化时取当前生效段（现时刻早于首段时取最早一段），
-    # 无可用段时退回顶层值仅供展示与既有单值口径读取；价格解析一律走版本段。
-    current = _current_version(versions, versioned, now * 1000)
-    if current is None:
-        rate, peak_cfg, tiers = top_rate, top_peak, top_tiers
-    else:
-        rate, peak_cfg, tiers = (current["exchangeRate"], current["peak"],
-                                current["tiers"])
-
-    override = _load_json(OVERRIDE_FILE) or {}
-    override_models = {k: v for k, v in override.items() if not k.startswith("_")}
-
-    data = {
-        "exchangeRate": rate,
-        "peak": peak_cfg,
-        "tiers": tiers,
-        "override": override_models,
-        "versions": versions,
-        "versioned": versioned,
-        "versionMeta": {
-            "versioned": versioned,
-            "count": len(versions),
-            "invalidCount": invalid_versions,
-            "current": None if current is None else {
-                "versionId": current["versionId"],
-                "effectiveAt": current["effectiveAt"],
-                "exchangeRate": current["exchangeRate"],
-                "checkedAt": current["checkedAt"],
-                "checkedStale": (current["checkedAgeDays"] > PRICE_STALE_DAYS)
-                                if current["checkedAgeDays"] is not None else None,
-            },
-        },
-        "meta": {
-            "pricesFound": bool(tiers),
-            "checkedAt": checked_at if isinstance(checked_at, str) else None,
-            "checkedAgeDays": checked_age_days,
-            "checkedStale": (checked_age_days > PRICE_STALE_DAYS)
-                            if checked_age_days is not None else None,
-            "overrideFound": os.path.exists(OVERRIDE_FILE),
-        },
-    }
-    _price_cache["at"] = now
-    _price_cache["data"] = data
-    return data
-
-
-def version_at(table, at_ms):
-    """记录时刻 → 当时生效的版本段；无法证明时返回 None（不猜最新版本）。
-
-    旧形状（无显式版本段）只有一段恒生效的默认段：任何时刻（含时刻缺失/
-    不可解析）都取它——与版本化前逐字段一致。显式版本段下，时刻缺失、不可
-    解析或早于首段生效时刻时返回 None，调用方据此按「未知」处理（不返回 0
-    冒充，也不默默按最新价计）。纯规则在 shared.pricing_rules。
-    """
-    return _pricing_rules.version_at(table, at_ms)
-
-
-def version_rate(table, at_ms):
-    """记录时刻 → 当时生效版本的汇率；版本未知返回 None（不猜现价）。"""
-    return _pricing_rules.version_rate(table, at_ms)
-
-
-def current_version(table=None):
-    """当前生效版本段（展示与既有单值口径）；无可用段时返回 None。"""
-    table = table if table is not None else load_price_table()
-    return _current_version(table.get("versions") or [], table.get("versioned"),
-                            time.time() * 1000)
-
-
-def resolve_price(model_id, at_ms=None):
-    """返回 (entry, billingMode, matched_model, source)；未定价/版本未知返回 (None, ...)。
-
-    at_ms = 记录时刻：按当时生效的版本段取价（含该段的峰谷与 override 优先级）。
-    旧形状价表只有一段恒生效的默认段，时刻（含缺失/不可解析）不影响结果——
-    与版本化前逐字段一致。补缺层 price.override.json 没有生效时刻，仍是最高
-    优先级的手工修补层（要按时刻分段请写进版本段）。纯规则在 shared.pricing_rules。
-    逐条计价走本模块的记忆化 ``match_model_id``（2026-09-26 性能修复），
-    不在 shared 里持全局缓存。
-    """
-    return _pricing_rules.resolve_price(
-        model_id, at_ms, load_price_table(), matcher=match_model_id)
-
-
-def estimate_record(model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok):
-    """单条记录估算：返回 (cost_usd, priced, matched_model, peak_used)。
-
-    既有 4 元组契约（console_stats 依赖）：按记录时刻所属版本计价，版本标识
-    不进返回值；需要版本标识用 estimate_record_with_version。
-    """
-    return _pricing_rules.estimate_record(
-        model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok,
-        load_price_table(), matcher=match_model_id)
-
-
-def estimate_record_with_version(model_id, at_ms, input_tok, output_tok,
-                                 cache_tok, reasoning_tok):
-    """单条记录估算（版本化契约）：返回 (cost_usd, priced, matched, peak, version_id)。
-
-    既有五元组契约（console_stats 等依赖）：version_id 为记录时刻生效版本段的
-    标识，旧形状价表/版本未知时为 None。priced=False 表示价格或版本未知
-    （cost 为 0 是「未知」的占位，不是真实 0）。分享计量的人民币折算入口
-    见 ``estimate_record_with_version_and_rate``（同一金额，额外带汇率）。
-    """
-    return _pricing_rules.estimate_record_detail(
-        model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok,
-        load_price_table(), matcher=match_model_id)[:5]
-
-
-def _estimate_record_detail(model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok):
-    """内部估算：返回
-    (cost_usd, priced, matched, peak, version_id, exchange_rate, cache_unknown)。
-
-    exchange_rate 为该记录所属版本的汇率，None 表示版本未知（不折算、不猜
-    现价）。版本化价表下记录时刻缺失/不可解析/早于首段时返回
-    (0.0, False, None, False, None, None, False)。
-    ``cache_tok is None`` 表示缓存量未报告（Q11）：此时不把未知缓存折成 0，
-    而是按全部输入都是 cache-miss 计算上界，并由 cache_unknown=True 告诉
-    调用方金额不是精确值。旧记录调用方始终传数值，历史金额不变。
-    纯规则在 shared.pricing_rules。
-    """
-    return _pricing_rules.estimate_record_detail(
-        model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok,
-        load_price_table(), matcher=match_model_id)
-
-
-def estimate_record_with_version_and_rate(model_id, at_ms, input_tok, output_tok,
-                                         cache_tok, reasoning_tok):
-    """单条记录估算（含汇率契约）：返回
-    (cost_usd, priced, matched, peak, version_id, exchange_rate)。
-
-    分享计量（share_metering.price_fn）的人民币折算入口：USD 金额、版本标识与
-    ``estimate_record_with_version`` 同源（同一个 shared ``estimate_record_detail``），
-    额外返回该记录所属版本的汇率。``exchange_rate`` 为 None 表示版本未知
-    （不折算、不猜现价）；旧形状价表只有恒生效的默认段，因此任何时刻
-    （含时刻缺失）都返回默认段汇率。既有五元组契约
-    ``estimate_record_with_version`` 保持不变，其消费者不受影响。
-    """
-    return _pricing_rules.estimate_record_detail(
-        model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok,
-        load_price_table(), matcher=match_model_id)[:6]
-
-
-MICROS_PER_YUAN = 1_000_000
-
-
-def budget_cost_micros(model, at_ms, input_tok, output_tok, cache_tok,
-                        reasoning_tok):
-    """S2 预算人民币微元：返回 ``(cost_micros, facts)``。
-
-    ``cost_micros`` 为 None 表示模型未定价或价目版本未知——不返回 0 冒充
-    免费。facts 带实际价目版本/汇率/命中模型，供预算事件审计。
-    """
-    (cost_usd, priced, matched, peak, version_id, rate) = \
-        estimate_record_with_version_and_rate(
-            model, at_ms, input_tok, output_tok, cache_tok, reasoning_tok)
-    facts = {
-        "priced": bool(priced),
-        "matched_model": matched,
-        "peak": bool(peak),
-        "price_version": version_id,
-        "exchange_rate": rate,
-    }
-    if not priced or rate is None:
-        return None, facts
-    return int(round(float(cost_usd) * float(rate) * MICROS_PER_YUAN)), facts
-
-
-def _bucket_price_estimate(rec, model, in_tok, out_tok, cache_tok, reason_tok):
-    """_bucket 计价回调（chat2api）：按记录时刻所属版本估算。
-
-    返回 (cost_usd, priced, matched, peak, version_id, rate, cache_unknown)；
-    rate 为该记录所属版本的汇率，None = 版本未知（不折算、不猜现价）；
-    cache_unknown=True 表示缓存量未报告，金额是 cache-miss 上界。
-    """
-    return _estimate_record_detail(model, rec.get("_ms"), in_tok, out_tok,
-                                  cache_tok, reason_tok)
 
 
 # ------------------------------------------------------------------- 读取账本
@@ -698,12 +277,18 @@ def _read_jsonl(path, limit=200000):
 
 
 def _beijing_day(ms):
-    return _pricing_rules.beijing_day(ms)
+    if ms is None:
+        return None
+    return datetime.fromtimestamp(ms / 1000, tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
 
 
 def _day_start_ms(day):
     """北京时间某日 00:00 → epoch ms；缺失/不可解析返回 None（不猜）。"""
-    return _pricing_rules.day_start_ms(day)
+    try:
+        dt = datetime.strptime(str(day), "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return None
+    return dt.replace(tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000
 
 
 def _usage_known(rec):
@@ -746,63 +331,19 @@ def _cache_report_status(rec):
     return "unknown"
 
 
-class _Money:
-    """USD 小计 + 按版本汇率分组（同一版本的小计只乘一次汇率）。
+def _bucket(records, kind):
+    """按 (服务, 模型, 日) 聚合原始用量。
 
-    旧形状价表只有一段恒生效的默认段，分组恒为单组，换算与版本化前逐位一致：
-    服务级沿用既有的「先 round(usd, 6) 再乘汇率」（_bucket 的 costUsd 就是
-    该四舍五入值，_round_service 消费的正是它），模型/日级用未取整小计。
-    版本化价表下各版本小计各自按自己的汇率换算后相加——历史金额不重算。
-    partial=True 表示有记录的金额未纳入本合计（无价格/用量未知/版本未知）；
-    此时 cny() 在没有任何可折算记录时返回 None（未知，不折 0）。
-    """
-
-    __slots__ = ("usd", "by_rate", "partial", "round_usd")
-
-    def __init__(self, round_usd=False):
-        self.usd = 0.0
-        self.by_rate = {}
-        self.partial = False
-        self.round_usd = round_usd
-
-    def add(self, usd, rate):
-        self.usd += usd
-        if rate is not None:
-            self.by_rate[rate] = self.by_rate.get(rate, 0.0) + usd
-
-    def cny(self):
-        if not self.by_rate:
-            return None if self.partial else 0.0
-        if self.round_usd:
-            return sum(round(usd, 6) * rate for rate, usd in self.by_rate.items())
-        return sum(usd * rate for rate, usd in self.by_rate.items())
-
-
-def _bucket(records, kind, cost_fn):
-    """按 (服务, 模型, 日) 聚合。
-
-    cost_fn(rec, model, i, o, c, r) → (cost_usd, priced, matched, peak,
-    version_id, rate[, cache_unknown])；rate 为该记录所属版本的汇率，None =
-    版本未知（不折算、不猜现价）。未知一律显式分列、不折零：用量未知的请求不进
-    token 合计（unknownUsageRequests），无价格的进 unpricedRequests，版本
-    未知的进 unknownVersionRequests；cache 未报告的请求不进 cache token 合计，
-    单独计数（cacheUnreportedRequests），其金额是 cache-miss 上界并让
-    costCnyPartial=true（Q11）。costCnyPartial=true 表示 costCny 只含
-    可折算的记录（下界，不是总额），只有整节点的金额全部无法折算时
-    costCny=null（未知，绝不折 0）。既有字段的取值不变：旧形状下服务级
-    costCny 与版本化前逐位一致，只有全无价格的模型行从 0 变成 null。
+    只汇总账本里的事实：请求数、Token（输入/输出/缓存/思考）与缓存报告
+    状态；用量未知的请求不进 token 合计（unknownUsageRequests），缓存未报告
+    的请求不进 cache token 合计，单独计数（cacheUnreportedRequests），绝不
+    折成 0。费用/价格口径已随 #30 退役，这里不派生任何金额。
     """
     models, days = {}, {}
-    total = {"requests": 0, "cost_usd": 0.0, "input": 0, "output": 0,
-             "cache": 0, "reasoning": 0, "priced": 0, "peak_requests": 0,
-             "unknown_usage": 0, "unpriced": 0, "unknown_version": 0,
+    total = {"requests": 0, "input": 0, "output": 0, "cache": 0,
+             "reasoning": 0, "unknown_usage": 0,
              "cache_reported": 0, "cache_unreported": 0,
-             "cache_unknown": 0, "cache_unknown_priced": 0}
-    money = _Money(round_usd=True)  # 服务级：沿用既有先 round(usd, 6) 再乘汇率
-    model_money = {}
-    day_money = {}
-    unpriced_models = set()
-    versioned = bool(load_price_table().get("versioned"))
+             "cache_unknown": 0}
     for rec in records:
         ms = rec.get("_ms")
         model = str(rec.get("model") or "unknown")
@@ -812,14 +353,6 @@ def _bucket(records, kind, cost_fn):
         reason_tok = int(rec.get("reasoning_tokens") or 0)
         cache_status = _cache_report_status(rec)
         usage_known = _usage_known(rec)
-        priced_cache_tok = None if cache_status == "unreported" else cache_tok
-        result = cost_fn(rec, model, in_tok, out_tok, priced_cache_tok, reason_tok)
-        if isinstance(result, (tuple, list)) and len(result) >= 7:
-            cost_usd, priced, matched, peak, version_id, rate = result[:6]
-            cache_unknown = bool(result[6])
-        else:
-            cost_usd, priced, matched, peak, version_id, rate = result
-            cache_unknown = False
 
         total["requests"] += 1
         if cache_status == "reported":
@@ -828,8 +361,6 @@ def _bucket(records, kind, cost_fn):
             total["cache_unreported"] += 1
         else:
             total["cache_unknown"] += 1
-        if cache_unknown:
-            total["cache_unknown_priced"] += 1
         if usage_known:
             total["input"] += in_tok
             total["output"] += out_tok
@@ -838,41 +369,20 @@ def _bucket(records, kind, cost_fn):
             total["reasoning"] += reason_tok
         else:
             total["unknown_usage"] += 1
-        total["cost_usd"] += cost_usd
-        if priced:
-            total["priced"] += 1
-        else:
-            unpriced_models.add(model)
-            if priced is False:
-                total["unpriced"] += 1
-                if versioned and version_id is None:
-                    total["unknown_version"] += 1
-        if not usage_known or priced is False or cache_unknown:
-            money.partial = True
-        money.add(cost_usd, rate)
-        if peak:
-            total["peak_requests"] += 1
 
-        key = matched or model
-        m = models.setdefault(key, {"model": key, "requests": 0, "cost_usd": 0.0,
-                                   "input": 0, "output": 0, "cache": 0, "reasoning": 0,
-                                   "priced": 0, "peak_requests": 0,
-                                   "unknown_usage": 0, "unpriced": 0,
-                                   "unknown_version": 0,
-                                   "cache_reported": 0, "cache_unreported": 0,
-                                   "cache_unknown": 0,
-                                   "cache_unknown_priced": 0})
-        m_money = model_money.setdefault(key, _Money())
+        m = models.setdefault(model, {"model": model, "requests": 0,
+                                     "input": 0, "output": 0, "cache": 0,
+                                     "reasoning": 0, "unknown_usage": 0,
+                                     "cache_reported": 0,
+                                     "cache_unreported": 0,
+                                     "cache_unknown": 0})
         m["requests"] += 1
-        m["cost_usd"] += cost_usd
         if cache_status == "reported":
             m["cache_reported"] += 1
         elif cache_status == "unreported":
             m["cache_unreported"] += 1
         else:
             m["cache_unknown"] += 1
-        if cache_unknown:
-            m["cache_unknown_priced"] += 1
         if usage_known:
             m["input"] += in_tok
             m["output"] += out_tok
@@ -881,165 +391,45 @@ def _bucket(records, kind, cost_fn):
             m["reasoning"] += reason_tok
         else:
             m["unknown_usage"] += 1
-        if priced:
-            m["priced"] += 1
-        elif priced is False:
-            m["unpriced"] += 1
-            if versioned and version_id is None:
-                m["unknown_version"] += 1
-        if not usage_known or priced is False or cache_unknown:
-            m_money.partial = True
-        m_money.add(cost_usd, rate)
-        if peak:
-            m["peak_requests"] += 1
 
         day = _beijing_day(ms)
         if day:
-            d = days.setdefault(day, {"day": day, "requests": 0, "cost_usd": 0.0})
-            d_money = day_money.setdefault(day, _Money())
+            d = days.setdefault(day, {"day": day, "requests": 0, "input": 0,
+                                     "output": 0, "cache": 0,
+                                     "reasoning": 0})
             d["requests"] += 1
-            d["cost_usd"] += cost_usd
-            if not usage_known or priced is False or cache_unknown:
-                d_money.partial = True
-            d_money.add(cost_usd, rate)
-    for key, m in models.items():
-        m["_money"] = model_money[key]
-    for day, d in days.items():
-        d["_money"] = day_money[day]
+            d["input"] += in_tok
+            d["output"] += out_tok
+            d["cache"] += cache_tok
+            d["reasoning"] += reason_tok
     return {
         "kind": kind,
         "requests": total["requests"],
-        "costUsd": round(total["cost_usd"], 6),
         "tokens": {"input": total["input"], "output": total["output"],
                    "cache": total["cache"], "reasoning": total["reasoning"]},
         "cacheReportedRequests": total["cache_reported"],
         "cacheUnreportedRequests": total["cache_unreported"],
         "cacheUnknownRequests": total["cache_unknown"],
-        "cacheUnknownPricedRequests": total["cache_unknown_priced"],
-        "pricedRequests": total["priced"],
-        "peakRequests": total["peak_requests"],
         "unknownUsageRequests": total["unknown_usage"],
-        "unpricedRequests": total["unpriced"],
-        "unknownVersionRequests": total["unknown_version"],
-        "models": sorted(models.values(), key=lambda m: -m["cost_usd"]),
+        "models": sorted(models.values(),
+                         key=lambda m: (-m["requests"], m["model"])),
         "days": [days[k] for k in sorted(days)],
-        "unpricedModels": sorted(unpriced_models),
-        "_money": money,
     }
-
-
-def _um_reference_unavailable(failure, state="unsynced", records=None):
-    """Honest UM reference-cost shape when no local ledger can be read.
-
-    ``records=None`` means the caller did not read the ledger at all (cloud
-    role); the counts stay unknown instead of becoming zero.
-    """
-    count = records if isinstance(records, int) and records >= 0 else None
-    return {
-        "label": "参考",
-        "cny": None,
-        "cnyPartial": True,
-        "costUsd": None,
-        "price": {
-            "state": state,
-            "source": None,
-            "snapshotAt": None,
-            "version": None,
-            "failure": failure,
-        },
-        "fx": {"rate": None, "version": None},
-        "snapshotSha256": None,
-        "coverage": {
-            "records": count, "pricedRequests": None,
-            "unpricedRequests": count, "estimatedRequests": None,
-            "incompleteRequests": count,
-            "unknownEffectiveRequests": None, "fxMissingRequests": None,
-            "preEffectiveRequests": None,
-            "costUsd": None, "cny": None, "cnyPartial": True,
-        },
-        "models": [],
-    }
-
-
-def _um_reference_summary(records):
-    """Price UM's own ledger with the local Magpie snapshot.
-
-    This is a separate read-only reference path: it never calls resolve_price,
-    never writes the shared price table and never changes share metering. A
-    missing module, bad snapshot or bad status stays explicit; it never becomes
-    zero. The caller already read ``CHAT2API_LOG`` once and passes those records
-    here, so no second ledger read is issued.
-    """
-    try:
-        from console import magpie_prices as console_magpie_prices
-    except Exception as exc:  # noqa: BLE001 - the service must still start
-        return _um_reference_unavailable(
-            "价格同步模块不可用（%s）" % type(exc).__name__,
-            records=len(records))
-    try:
-        return console_magpie_prices.compute_reference(
-            records, MAGPIE_PRICE_SNAPSHOT_FILE, MAGPIE_PRICE_STATUS_FILE)
-    except Exception as exc:  # noqa: BLE001 - report, never fold to zero
-        return _um_reference_unavailable(
-            "参考费用计算失败（%s）" % type(exc).__name__,
-            records=len(records))
-
-
-def _round_service(svc, exchange_rate):
-    """USD 小计 → CNY：按记录所属版本汇率逐段换算后合计（C1 2026-09-25）。
-
-    节点带 _money（_bucket / read_dsh_ledger 写入）时按版本分组换算：同一
-    版本的小计只乘一次汇率，历史金额不重算。旧形状价表恒为单组，与既有换算
-    逐位一致（服务级沿用既有先 round(usd, 6) 再乘汇率的口径，模型/日级用
-    未取整小计）。partial 的节点 costCnyPartial=true，costCny 只含可折算
-    部分；只有整节点金额全部无法折算时 costCny=null（未知，绝不折 0、绝不按
-    现价）。没有 _money 的节点沿用单一汇率换算（与版本化前同一公式）。
-    """
-    def money(node):
-        raw = node.pop("_money", None)
-        # 各节点只用其中一种键名：service 级 costUsd、models/days cost_usd。
-        usd = node.pop("cost_usd", None)
-        camel = node.pop("costUsd", None)
-        if usd is None:
-            usd = camel
-        if raw is None:
-            node["costCny"] = round((usd or 0.0) * exchange_rate, 4)
-            return
-        raw_cny = raw.cny()
-        node["costCny"] = None if raw_cny is None else round(raw_cny, 4)
-        if raw.partial:
-            node["costCnyPartial"] = True
-
-    money(svc)
-    for m in svc.get("models", []):
-        money(m)
-    for d in svc.get("days", []):
-        money(d)
-    return svc
 
 
 def read_dsh_ledger():
     """读 DSH 账本日快照（data/dsh-ledger-20260902.json）的 days 按日汇总。
 
     快照由 2026-09-11 解耦迁移时从账本存档冻结生成（现行插件账本已丢失该日，
-    存档仍保有；生成方法见快照文件内 _说明）。与原插件记账口径一致：
-    cost 以 config.pricingCurrency（USD）计价，按日、按 provider:model 汇总，
-    cacheRead 计入缓存 token。只统计 DSH_MERGE_DAY 一天。文件缺失或损坏时
-    返回空服务对象，页面显示"暂无记账数据"。
-
-    折算（C1 2026-09-25）：金额是真实记账的 USD，按**该日生效版本段**的汇率
-    折 CNY（逐日各自换算后相加），历史金额不重算；版本化价表下该日无版本可归属
-    时该日 costCny=null（未知，不折 0、不按现价）。"""
+    存档仍保有；生成方法见快照文件内 _说明）。只统计 DSH_MERGE_DAY 一天，
+    只汇总原始用量（calls/input/output/cacheRead/reasoning）；文件缺失或损坏时
+    返回空服务对象，页面显示"暂无记账数据"。费用/价格口径已随 #30 退役。
+    """
     snapshot = _load_json(DSH_SNAPSHOT_FILE) or {}
     days = snapshot.get("days") or {}
-    pricing_currency = (snapshot.get("config") or {}).get("pricingCurrency") or "USD"
     models, day_totals = {}, {}
-    total = {"requests": 0, "cost": 0.0, "input": 0, "output": 0,
+    total = {"requests": 0, "input": 0, "output": 0,
              "cache": 0, "reasoning": 0}
-    money = _Money()
-    model_money = {}
-    day_money = {}
-    day_rate = None
     for day, e in days.items():
         if not isinstance(e, dict):
             continue
@@ -1047,54 +437,35 @@ def read_dsh_ledger():
         if day != DSH_MERGE_DAY:
             continue
         calls = int(e.get("calls") or 0)
-        cost = float(e.get("cost") or 0)
-        rate = day_rate = version_rate(load_price_table(), _day_start_ms(day))
         total["requests"] += calls
-        total["cost"] += cost
         total["input"] += int(e.get("input") or 0)
         total["output"] += int(e.get("output") or 0)
         total["cache"] += int(e.get("cacheRead") or 0)
         total["reasoning"] += int(e.get("reasoning") or 0)
-        d_money = day_money.setdefault(day, _Money())
-        if rate is None:
-            d_money.partial = True
-        d_money.add(cost, rate)
-        day_totals[day] = {"day": day, "requests": calls, "cost_usd": cost}
+        day_totals[day] = {"day": day, "requests": calls,
+                           "input": int(e.get("input") or 0),
+                           "output": int(e.get("output") or 0),
+                           "cache": int(e.get("cacheRead") or 0),
+                           "reasoning": int(e.get("reasoning") or 0)}
         for pm, m in (e.get("byProviderModel") or {}).items():
             if not isinstance(m, dict):
                 continue
-            mm = models.setdefault(pm, {"model": pm, "requests": 0, "cost_usd": 0.0,
-                                       "input": 0, "output": 0, "cache": 0, "reasoning": 0})
-            m_money = model_money.setdefault(pm, _Money())
-            if rate is None:
-                m_money.partial = True
-            m_money.add(float(m.get("cost") or 0), rate)
+            mm = models.setdefault(pm, {"model": pm, "requests": 0,
+                                       "input": 0, "output": 0,
+                                       "cache": 0, "reasoning": 0})
             mm["requests"] += int(m.get("calls") or 0)
-            mm["cost_usd"] += float(m.get("cost") or 0)
             mm["input"] += int(m.get("input") or 0)
             mm["output"] += int(m.get("output") or 0)
             mm["cache"] += int(m.get("cacheRead") or 0)
             mm["reasoning"] += int(m.get("reasoning") or 0)
-    if day_rate is None and total["requests"]:
-        # 有纳入日但没有可归属的版本：金额未折算（未知），不按现价、不折 0。
-        money.partial = True
-    if day_rate is not None:
-        money.add(total["cost"], day_rate)
-    for key, m in models.items():
-        m["_money"] = model_money[key]
-    for day, d in day_totals.items():
-        d["_money"] = day_money[day]
     return {
         "kind": "dsh-ledger",
-        "pricingCurrency": pricing_currency,
         "requests": total["requests"],
-        "costUsd": total["cost"],
         "tokens": {"input": total["input"], "output": total["output"],
                    "cache": total["cache"], "reasoning": total["reasoning"]},
-        "models": sorted(models.values(), key=lambda m: -m["cost_usd"]),
+        "models": sorted(models.values(),
+                         key=lambda m: (-m["requests"], m["model"])),
         "days": [day_totals[k] for k in sorted(day_totals)],
-        "unpricedModels": [],
-        "_money": money,
     }
 
 
@@ -1155,35 +526,18 @@ def _summary_cache_reset_for_tests() -> None:
         _SUMMARY_CACHE["at"] = 0.0
 
 
-def _cloud_peak_and_versions(table):
-    """The price-shape fields shared with the local summary (no ledger read)."""
-    peak_cfg = table["peak"]
-    peak_windows_beijing = []
-    for w in peak_cfg["windows"]:
-        peak_windows_beijing.append(
-            {"beijing": f"{(w['start'] + 8) % 24:02d}:00-{(w['end'] + 8) % 24:02d}:00",
-             "rate": 2.0})
-    return peak_cfg, peak_windows_beijing
-
-
 def _build_cloud_summary():
     """Cloud role summary: ONLY the UM share capability is assembled.
 
-    It NEVER reads the private chat2api / DSH ledgers and NEVER
-    probes any local source port: those resources do not exist on this deployment. The
+    It NEVER reads the private chat2api / DSH ledgers and NEVER probes any
+    local source port: those resources do not exist on this deployment. The
     share usage has its OWN read surface (GET /api/console/share-usage), so this
-    payload honestly reports an EMPTY services object plus the explicit
-    assembly facts instead of fabricating zero rows for absent chains. Only the
-    price table (data/prices.json, the same file the share metering prices
-    against) is read for its metadata/versions/peak shape.
+    payload honestly reports an EMPTY services object plus the explicit assembly
+    facts instead of fabricating zero rows for absent chains. Price fields were
+    retired with #30.
     """
-    table = load_price_table()
-    rate = table["exchangeRate"]
-    peak_cfg, peak_windows_beijing = _cloud_peak_and_versions(table)
     return {
         "generatedAt": datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
-        "exchangeRate": rate,
-        "currency": "CNY",
         "role": ROLE_CLOUD,
         "assembly": {
             "role": ROLE_CLOUD,
@@ -1192,40 +546,13 @@ def _build_cloud_summary():
             "note": "云端角色只装配 UM 分享：不读取本地私人账本、不探测 Qoder/"
                     "CLIProxy/model_sync；分享用量见 GET /api/console/share-usage",
         },
-        "sources": {"priceMeta": table["meta"]},
-        # The cloud role never reads the local UM ledger, so it cannot show a
-        # local CNY reference cost. The shape is explicit, not zero.
-        "umReference": _um_reference_unavailable(
-            "云端角色不读取本地 UM 账本", "unsynced", records=None),
-        "peak": {
-            "enabled": peak_cfg["enabled"],
-            "effectiveAt": time.strftime("%Y-%m-%d", time.gmtime(peak_cfg["effectiveAtMs"] / 1000)) if peak_cfg["effectiveAtMs"] else None,
-            "windows": peak_windows_beijing,
-            "weekendOffpeak": True,
-            "note": "高峰按价表 peak 子档计价；北京时间周六/周日全天谷价（与分享计价同一价目表）",
-        },
-        "priceVersions": {
-            "versioned": table["versioned"],
-            "invalidCount": table["versionMeta"]["invalidCount"],
-            "current": table["versionMeta"]["current"],
-            "versions": [
-                {"versionId": v["versionId"],
-                 "effectiveAt": v["effectiveAt"],
-                 "exchangeRate": v["exchangeRate"],
-                 "checkedAt": v["checkedAt"],
-                 "checkedStale": (v["checkedAgeDays"] > PRICE_STALE_DAYS)
-                                 if v["checkedAgeDays"] is not None else None}
-                for v in table["versions"]
-            ],
-            "note": "逐条按记录时刻取当时生效版本段的价目与汇率",
-        },
         # 空 services 是诚实的「本部署未聚合私人账本」：前端显示缺少服务
-        # 聚合的错误，而不是把「没读取」折成 0 请求 / 0 费用。
+        # 聚合的错误，而不是把「没读取」折成 0 请求。
         "services": {},
         "dsh": {"url": None,
                 "note": "云端角色未装配 DSH 快照读取"},
         "dshMergedIntoTotal": {
-            "day": None, "costCny": 0.0,
+            "day": None,
             "note": "云端角色不并入任何本地 DSH 账本",
         },
     }
@@ -1234,80 +561,23 @@ def _build_cloud_summary():
 def build_summary():
     if CLOUD_ROLE:
         return _build_cloud_summary()
-    rate = load_price_table()["exchangeRate"]
 
-    # UM 主链 chat2api：按价目表估算（逐条按记录时刻所属版本计价与折算）。
-    c2a_records = _read_jsonl(CHAT2API_LOG)
-    c2a = _bucket(c2a_records, "estimate", _bucket_price_estimate)
-    _round_service(c2a, rate)
+    # UM 主链 chat2api：只汇总原始用量（请求数与 Token）。
+    c2a = _bucket(_read_jsonl(CHAT2API_LOG), "estimate")
 
-    # DSH：cost-meter 账本按日汇总的真实记账（USD→CNY，非估算）。
+    # DSH：冻结日快照的原始用量。
     dsh = read_dsh_ledger()
-    _round_service(dsh, rate)
-
-    # DSH 并入顶部累计：只并入 DSH_MERGE_DAY 这一天，不做每日自动并入。
-    dsh_merge_cny, dsh_merge_day = 0.0, None
-    for d in dsh["days"]:
-        if d["day"] == DSH_MERGE_DAY:
-            dsh_merge_cny, dsh_merge_day = d["costCny"], d["day"]
-            break
-
-    table = load_price_table()
-    peak_cfg = table["peak"]
-    peak_windows_beijing = []
-    for w in peak_cfg["windows"]:
-        peak_windows_beijing.append(
-            {"beijing": f"{(w['start'] + 8) % 24:02d}:00-{(w['end'] + 8) % 24:02d}:00",
-             "rate": 2.0})
 
     return {
         "generatedAt": datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
-        "exchangeRate": rate,
-        "currency": "CNY",
         "sources": {
             "chat2apiLog": _display_path(CHAT2API_LOG),
             "dshLedger": _display_path(DSH_SNAPSHOT_FILE),
-            "priceMeta": table["meta"],
-            "magpiePriceSnapshot": _display_path(MAGPIE_PRICE_SNAPSHOT_FILE),
-        },
-        "peak": {
-            "enabled": peak_cfg["enabled"],
-            "effectiveAt": time.strftime("%Y-%m-%d", time.gmtime(peak_cfg["effectiveAtMs"] / 1000)) if peak_cfg["effectiveAtMs"] else None,
-            "windows": peak_windows_beijing,
-            "weekendOffpeak": True,
-            "note": "高峰按价表 peak 子档计价（官方 DeepSeek 为谷价 2 倍；缺子档按基础价不加倍）；北京时间周六/周日全天谷价（与 dsh-cost-meter 口径一致）",
-        },
-        # 价目表版本段（C1 2026-09-25）：versioned=false 表示旧形状（无 versions
-        # 键，单一恒生效默认段）；versions 列出每段生效时刻与该段核对时间，供页面
-        # 区分「当前生效版本」「本段核对时间」「本段是否过期」；invalidCount 是
-        # 无可用生效时刻被忽略的段数（既不生效也不参与计价）。
-        "priceVersions": {
-            "versioned": table["versioned"],
-            "invalidCount": table["versionMeta"]["invalidCount"],
-            "current": table["versionMeta"]["current"],
-            "versions": [
-                {"versionId": v["versionId"],
-                 "effectiveAt": v["effectiveAt"],
-                 "exchangeRate": v["exchangeRate"],
-                 "checkedAt": v["checkedAt"],
-                 "checkedStale": (v["checkedAgeDays"] > PRICE_STALE_DAYS)
-                                 if v["checkedAgeDays"] is not None else None}
-                for v in table["versions"]
-            ],
-            "note": "逐条按记录时刻取当时生效版本段的价目与汇率；缺时刻/早于首段按未知（不计 0）；改价只影响之后的请求",
         },
         # B0：UM 主链 + 冻结的 DSH 快照；默认汇总绝不读取未登记来源。
         "services": {"chat2api": c2a, "dsh": dsh},
-        # UM reference cost uses UM's own ledger and the local Magpie snapshot,
-        # not data/prices.json. It is additive and never feeds share pricing.
-        "umReference": _um_reference_summary(c2a_records),
         "dsh": {"url": "http://127.0.0.1:3080",
-                "note": "费用为 2026-09-02 账本日快照的真实记账（USD→CNY）；快照生成方法见 data/dsh-ledger-20260902.json 内 _说明"},
-        "dshMergedIntoTotal": {
-            "day": dsh_merge_day,
-            "costCny": dsh_merge_cny,
-            "note": "仅此日 DSH 账本费用并入顶部累计参考费用",
-        },
+                "note": "用量为 2026-09-02 账本日快照的原始用量；快照生成方法见 data/dsh-ledger-20260902.json 内 _说明"},
     }
 
 
@@ -1812,22 +1082,17 @@ def _display_path(path):
 
 
 # console_stats 的进程级显式注入环境（E19-1-04B）：路径取本模块启动时
-# 解析出的常量，计价走 shared.pricing_rules，价目表加载走本模块的 60 秒
-# 缓存链。main() 在启动时 configure 一次，让 um_today/um_trend 等不显式
+# 解析出的常量。main() 在启动时 configure 一次，让 um_today/um_trend 等不显式
 # 传 environment 的函数也走同一注入；console_stats._FILE_CACHE 是 reader
-# 端内缓存，不属于这个环境，也不上提 shared。
+# 端内缓存，不属于这个环境。
 STATS_ENV = console_stats.StatsEnvironment(
     chat2api_log=CHAT2API_LOG,
     dsh_snapshot=DSH_SNAPSHOT_FILE,
     dsh_merge_day=DSH_MERGE_DAY,
-    magpie_price_snapshot=MAGPIE_PRICE_SNAPSHOT_FILE,
-    magpie_price_status=MAGPIE_PRICE_STATUS_FILE,
     parse_ts=_parse_ts,
     beijing_day=_beijing_day,
     day_start_ms=_day_start_ms,
     display_path=_display_path,
-    estimate_record=estimate_record,
-    price_table_loader=load_price_table,
 )
 
 
@@ -2529,13 +1794,8 @@ class Handler(BaseHTTPRequestHandler):
 
         可选筛选 ``window``/``key``/``model``/``result`` 由同一 reader 应用，
         默认不筛（完整历史），``filters`` 原样回显。share_metering 缺席、
-        账本路径解析不出、读取失败一律如实返回错误码，绝不以 0 请求 /
-        0 费用冒充。price_fn 是版本化计价器（固定签名
-        (model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok) →
-        (cost_usd, priced, matched, peak, version_id, exchange_rate)），分享
-        参考费用与个人费用走同一条版本链；汇率让人民币金额按每条记录自己的
-        版本折算，而不是先聚合 USD 再乘现行汇率。顶层载荷形状不新增
-        currency/exchangeRate（人民币字段落在各分组节点与 coverage）。"""
+        账本路径解析不出、读取失败一律如实返回错误码，绝不以 0 请求冒充。
+        只读原始用量；费用/价格派生已随 #30 退役。"""
         reader, error = share_usage_reader()
         if reader is None:
             return 503, {"error": error}
@@ -2550,8 +1810,7 @@ class Handler(BaseHTTPRequestHandler):
         if "key" in filters:
             filters["key_id"] = filters.pop("key")
         try:
-            payload = reader(ledger, estimate_record_with_version_and_rate,
-                             limit=SHARE_USAGE_LIMIT, **filters)
+            payload = reader(ledger, limit=SHARE_USAGE_LIMIT, **filters)
         except ValueError:
             # The reader rejects an invalid window/key/model/result value; this
             # is caller input, not a ledger failure.
@@ -2567,9 +1826,10 @@ class Handler(BaseHTTPRequestHandler):
         """逐请求分页读面：与汇总同一账本、同一筛选、同一计价链。
 
         返回 ``{rows, nextCursor, truncated, filters, coverage, checkedAt}``；
-        ``rows`` 逐条保留未归属/未知/未报告/未定价，缺失值保持 null。
+        ``rows`` 逐条保留未归属/未知/未报告，缺失值保持 null。
         分页按账本追加顺序（新→旧）用 cursor 行号前进；读取窗口本身被
         截断时 coverage.truncated/olderRecordsUnread 如实说明更旧记录未读。
+        费用/价格派生已随 #30 退役。
         """
         reader, error = share_usage_requests_reader()
         if reader is None:
@@ -2591,8 +1851,7 @@ class Handler(BaseHTTPRequestHandler):
         if "key" in filters:
             filters["key_id"] = filters.pop("key")
         try:
-            payload = reader(ledger, estimate_record_with_version_and_rate,
-                             **filters)
+            payload = reader(ledger, **filters)
         except ValueError:
             return 400, {"error": "invalid_share_usage_query"}
         except Exception as exc:  # noqa: BLE001 — 读不到是错误，不是空页
@@ -3826,7 +3085,7 @@ class Handler(BaseHTTPRequestHandler):
                 # _discard_unread_body：关闭仍有未读数据的连接会让真实
                 # 客户端看到连接重置，而不是下面这个码）。写方法按未知路径
                 # 拒绝，与 /api/share/usage 及控制台面其余只读路由
-                # （usage-tokens / usage-rates / prices…）同一既有行为，
+                # （usage-tokens / usage-rates…）同一既有行为，
                 # 不新增一套 405 语义。
                 self.close_connection = True
                 self._discard_unread_body()
@@ -3842,7 +3101,7 @@ class Handler(BaseHTTPRequestHandler):
             # B5 UM read surface: today/trend/requests/logs/request-logs
             # read UM's own chat2api ledger/logs; maintenance reads the
             # ORIGINAL console operation records. None of these touch the
-            # share ledger, share pricing or the cloud share role.
+            # share ledger or the cloud share role.
             if method != "GET" or len(rest) != 2:
                 self.close_connection = True
                 self._discard_unread_body()
@@ -4044,35 +3303,6 @@ class Handler(BaseHTTPRequestHandler):
                 meta["cache_age_seconds"] = cache_age
             payload["meta"] = meta
             self._send_json(200, payload)
-            return
-        if method == "GET" and rest == ["prices"]:
-            # R9-R29 费用页价目表：prices.json 原样透出（剥离 _说明 内部
-            # 注释键），stale 判定与页面提醒共用 PRICE_STALE_DAYS 阈值；
-            # 只读，读写口径与计价器完全一致（同一文件、同一过期判定）。
-            try:
-                with open(PRICE_FILE, encoding="utf-8") as f:
-                    table = json.load(f)
-            except OSError:
-                self._send_json(502, {"error": "price_table_unavailable"})
-                return
-            except ValueError:
-                self._send_json(502, {"error": "price_table_corrupt"})
-                return
-            if not isinstance(table, dict):
-                self._send_json(502, {"error": "price_table_corrupt"})
-                return
-            table.pop("_说明", None)
-            checked_stale = False
-            checked_at = str(table.get("checkedAt") or "")
-            try:
-                import datetime as _dt
-                age = (_dt.datetime.now() - _dt.datetime.strptime(
-                    checked_at, "%Y-%m-%d")).days
-                checked_stale = age > PRICE_STALE_DAYS
-            except ValueError:
-                checked_stale = True
-            self._send_json(200, {"ok": True, **table,
-                                  "checkedStale": checked_stale})
             return
         if method == "GET" and rest == ["health"]:
             # R11-6/B2: server-side loopback probes of the five services —
@@ -4505,7 +3735,6 @@ def main():
     else:
         print(f"  chat2api   : {CHAT2API_LOG}")
         print(f"  DSH 快照   : {DSH_SNAPSHOT_FILE}")
-        print(f"  价格主源   : {PRICE_FILE}")
         print("  退役账本   : 仅保留历史追溯（默认不读取/不探测）")
     print("  Ctrl+C 退出")
     print("-" * 60)

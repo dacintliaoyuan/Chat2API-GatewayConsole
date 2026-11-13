@@ -343,8 +343,8 @@ class Chat2apiUpstreamTokenEnvTests(unittest.TestCase):
     explicit ``--token`` > ``CHAT2API_UPSTREAM_TOKEN`` > the ``TokenStore``
     file. ``--no-browser`` accepts either source. Every case runs the REAL
     ``main()`` in a child interpreter against a fake upstream, with HOME, the
-    token store, service log, usage ledger, control token, reauth slot, price
-    table and attribution key all redirected into a temp directory; PYTHONPATH
+    token store, service log, usage ledger, control token, reauth slot and
+    attribution key all redirected into a temp directory; PYTHONPATH
     is dropped so the repo cannot be reached through an inherited path.
     """
 
@@ -397,7 +397,6 @@ class Chat2apiUpstreamTokenEnvTests(unittest.TestCase):
             "CHAT2API_USAGE_LOG": str(self.dir / "usage.jsonl"),
             "CHAT2API_CONTROL_TOKEN_FILE": str(self.dir / "control-token"),
             "CHAT2API_REAUTH_SLOT_FILE": str(self.dir / "reauth.state"),
-            "CHAT2API_PRICE_TABLE_FILE": str(self.dir / "prices.json"),
             "CHAT2API_SHARE_ATTRIBUTION_KEY_FILE": str(self.dir / "attr.key"),
         })
         if upstream_token is not None:
@@ -410,7 +409,7 @@ class Chat2apiUpstreamTokenEnvTests(unittest.TestCase):
 
         A missing override would send the real ``main()`` at a production file (the
         service log, the token store, the ledger, the control token, the reauth
-        slot, the price table or the attribution key) - exactly the accident this
+        slot or the attribution key) - exactly the accident this
         suite exists to prevent. Every one of those variables is set by the dict
         above, so a future edit that drops one fails here instead of touching
         real state.
@@ -418,7 +417,7 @@ class Chat2apiUpstreamTokenEnvTests(unittest.TestCase):
         required = (
             "CHAT2API_TOKEN_FILE", "CHAT2API_SERVICE_LOG",
             "CHAT2API_USAGE_LOG", "CHAT2API_CONTROL_TOKEN_FILE",
-            "CHAT2API_REAUTH_SLOT_FILE", "CHAT2API_PRICE_TABLE_FILE",
+            "CHAT2API_REAUTH_SLOT_FILE",
             "CHAT2API_SHARE_ATTRIBUTION_KEY_FILE",
         )
         missing = [name for name in required if not env.get(name)]

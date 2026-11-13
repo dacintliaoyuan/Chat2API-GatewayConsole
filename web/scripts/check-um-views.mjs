@@ -98,7 +98,6 @@ test("request rows with out-of-contract values render, escaped, without throwing
     output: exact(2),
     cacheRead: { kind: "unreported" },
     reasoning: { kind: "unknown" },
-    costCny: exact(0.5),
     durationMs: exact(1200),
     firstTokenMs: { kind: "missing" },
     speed: exact(12.5),
@@ -337,7 +336,6 @@ test("retired 测速 has no action, no button and no read face", () => {
 test("trend colours follow the models in the window; no speed series is dropped", () => {
   const day = (v = 10) => ({
     tokens: exact(v),
-    costCny: exact(1),
     requests: exact(1),
     speed: exact(v),
   });
@@ -525,7 +523,6 @@ test("only consecutive known values form a run; a lone value is not one", () => 
 test("a line window of lone values says so instead of 0 or 没有用量", () => {
   const bucket = (v, o = {}) => ({
     tokens: exact(o.tokens ?? v),
-    costCny: exact(1),
     requests: exact(1),
     speed: o.speed ?? exact(40),
   });
@@ -567,7 +564,6 @@ test("a line window of lone values says so instead of 0 or 没有用量", () => 
 test("ranking keeps whole counts, names the bar scale and flags folded series", () => {
   const bucket = (v, o = {}) => ({
     tokens: exact(o.tokens ?? v),
-    costCny: o.cost ?? exact(1),
     requests: o.requests ?? exact(1),
     speed: o.speed ?? exact(40),
   });
@@ -675,8 +671,7 @@ test("ranking keeps whole counts, names the bar scale and flags folded series", 
 test("the scope only claims a dashed curve when one is actually drawn", () => {
   const bucket = (o = {}) => ({
     tokens: o.tokens ?? exact(10),
-    costCny: o.cost ?? exact(1),
-    requests: exact(1),
+    requests: o.requests ?? exact(1),
     speed: o.speed ?? exact(40),
   });
   const model = (name, days) => ({
@@ -717,12 +712,12 @@ test("the scope only claims a dashed curve when one is actually drawn", () => {
   assert.equal(view.quality.lower, false, "a lone value is not drawn");
   // Same rule for an estimate, which stays solid and is named in the tooltip.
   const estimated = model("est", [
-    { cost: { kind: "estimate", value: 1 } },
-    { cost: { kind: "estimate", value: 2 } },
+    { requests: { kind: "estimate", value: 1 } },
+    { requests: { kind: "estimate", value: 2 } },
   ]);
-  view.set(trend([estimated]), "cost");
+  view.set(trend([estimated]), "requests");
   assert.equal(view.quality.estimated, false);
-  view.set(trend([estimated]), "cost", "line");
+  view.set(trend([estimated]), "requests", "line");
   assert.equal(view.quality.estimated, true);
 });
 

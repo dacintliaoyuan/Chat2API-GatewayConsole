@@ -92,7 +92,6 @@ def _fixture_mapping(root):
         "lock_dir": str(root / "locks"),
         "pid_file": str(root / "state" / "local-app.pid"),
         "ledger_file": str(root / "state" / "usage-chat2api.jsonl"),
-        "price_file": str(root / "config" / "prices.json"),
         "session_code_file": str(root / "config" / "usage-session-code"),
         "control_token_file": str(root / "config" / "admin-control-token"),
         "console_state_file": str(root / "state" / "console-state.sqlite3"),
@@ -576,7 +575,7 @@ class IsolationGuardRegressionTests(unittest.TestCase):
                 self.assertIn("must not be a production port", message)
 
     def test_the_real_deployment_state_is_refused(self):
-        for field in ("ledger_file", "price_file", "state_root"):
+        for field in ("ledger_file", "state_root"):
             with self.subTest(field=field):
                 message = self._refused(
                     lambda values, f=field: values.update(
@@ -929,12 +928,6 @@ class LocalAppTests(unittest.TestCase):
         if os.name == "posix":
             os.chmod(token_file, 0o600)
             os.chmod(self.root, 0o700)
-        Path(values["price_file"]).parent.mkdir(parents=True, exist_ok=True)
-        Path(values["price_file"]).write_text(json.dumps({
-            "exchangeRate": 7.2,
-            "checkedAt": "2026-11-07T00:00:00+08:00",
-            "models": {"fake-um-model": {"input": 1.0, "output": 2.0}},
-        }), encoding="utf-8")
         Path(values["ledger_file"]).parent.mkdir(parents=True, exist_ok=True)
         Path(values["ledger_file"]).write_text(
             json.dumps({"time": "2026-11-07T10:00:00+08:00",

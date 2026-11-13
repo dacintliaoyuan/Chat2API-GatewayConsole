@@ -11,49 +11,31 @@ Sourcing rule (Revision 5): statistics are always computed from the raw
 ledgers. The per-(day, model) granularity required for cross filtering does
 not exist in usagesrv's service-level output (models and days are aggregated
 along separate axes), so this module re-buckets raw records itself. All
-record-field extraction, time parsing, day assignment and price conversion is
-taken from the host's injected StatsEnvironment (usagesrv in the local
-application) — no second parsing implementation lives here:
+record-field extraction, time parsing and day assignment is taken from the
+host's injected StatsEnvironment (usagesrv in the local application) — no
+second parsing implementation lives here:
 
-  - time -> epoch ms:        environment.parse_ts (usagesrv._parse_ts,
-                             usagesrv.py:266-279)
-  - epoch ms -> Beijing day: environment.beijing_day (usagesrv._beijing_day,
-                             usagesrv.py:524-527; fixed UTC+8, same constant
-                             as usagesrv — Asia/Shanghai has no DST since 1991)
-  - model matching + pricing + peak tiers: environment.estimate_record
-                             (usagesrv.py:483-495) via resolve_price/tier_for
-  - price table / checkedAt: environment.price_table_loader
-                             (usagesrv.load_price_table, usagesrv.py:379-434)
+  - time -> epoch ms:        environment.parse_ts (usagesrv._parse_ts)
+  - epoch ms -> Beijing day: environment.beijing_day (usagesrv._beijing_day;
+                             fixed UTC+8, same constant as usagesrv —
+                             Asia/Shanghai has no DST since 1991)
   - ledger paths + env redirect: environment.chat2api_log / dsh_snapshot
-                             (usagesrv module constants,
-                             usagesrv.py:54-66), the same constants that
-                             build_summary consumes (usagesrv.py:659-710)
+                             (usagesrv module constants), the same constants
+                             that build_summary consumes.
 
 Per-field extraction mirrors (line refs at each site):
-  - estimate records (chat2api): _bucket loop, usagesrv.py:539-544 —
-    cached_input_tokens with cache_tokens fallback, reasoning_tokens; cost
-    from usagesrv.estimate_record; group key `matched or model`
-    (usagesrv.py:559).
-  - DSH snapshot: read_dsh_ledger, usagesrv.py:602-652 — only the frozen
-    DSH_MERGE_DAY (usagesrv.py:113, "2026-09-02") participates; cost is real
-    ledger money in config.pricingCurrency (USD) converted with exchangeRate,
-    never re-estimated. Deliberate deviation: usagesrv reads day-level totals
-    directly (usagesrv.py:622-629) while this module derives per-day totals
-    from the day's byProviderModel rows (usagesrv.py:631-641), because the
-    snapshot's native granularity is exactly per-(day, provider:model); in
-    the production snapshot the day-level fields are the sum of those rows.
+  - estimate records (chat2api): _bucket loop, usagesrv — cached_input_tokens
+    with cache_tokens fallback, reasoning_tokens.
+  - DSH snapshot: read_dsh_ledger — only the frozen DSH_MERGE_DAY
+    ("2026-09-02") participates; this module derives per-day totals from the
+    day's byProviderModel rows, because the snapshot's native granularity is
+    exactly per-(day, provider:model).
 
-Rounding: money = round(raw_usd_sum * exchangeRate, 4), identical to
-usagesrv._round_service (usagesrv.py:593-599) and build_summary
-(usagesrv.py:687, 696-698). To keep the console invariant
-totals == sum(day_totals) == sum(source_totals) == sum(models), each parent
-level emits the rounded sum of its children's emitted values instead of
-rounding its own raw sum independently; per-model raw sums equal usagesrv's
-and parent values agree with the sum of their children up to float dust
-(< 1e-9 CNY from adding already-rounded children).
+Cost/price fields and price-table loading were retired with #30: only raw
+usage (requests, tokens, cache evidence) is reported.
 
 "Missing is not zero": a day with no records does not appear in `days` and is
-never counted as zero cost; coverage.missing_days lists it. An absent ledger
+never counted as zero usage; coverage.missing_days lists it. An absent ledger
 file is reported via coverage.sources[...].ledger_present=False and
 contributes nothing (no fabricated zeros). Malformed lines / reader errors /
 bad records mark the source with coverage error info while keeping whatever
@@ -66,16 +48,16 @@ without a day — documented deviation for bounded queries).
 
 Filters: sources/models None means "all". Unknown requested sources produce
 an empty result plus a coverage annotation, not an error. Model filtering
-matches the raw ledger `model` field exactly (before price-name matching);
-aggregation then groups by the usagesrv key (`matched or model`). For the dsh
-snapshot the filter applies to the composite "provider:model" key.
+matches the raw ledger `model` field exactly; aggregation then groups by the
+raw model name. For the dsh snapshot the filter applies to the composite
+"provider:model" key.
 
 A12-1 addition (Plan-Revision 12): `usage_tokens` / `usage_rates` below are
 the bounded, read-only query layer behind the two new console endpoints
 (`/api/console/usage-tokens`, `/api/console/usage-rates`). Their contract,
 source vocabulary, per-source field mapping and honesty rules are documented in
 the "A12-1 bounded token / rate query layer" section at the end of this file;
-`bounded_stats` keeps its Revision 5 fee fields. Additive complete-token
+`bounded_stats` reports raw usage only. Additive complete-token
 metrics/ranking use strict integer evidence and separate estimates/lower
 bounds; the legacy input/output sums are not their denominator.
 """
@@ -101,10 +83,10 @@ if HERE not in sys.path:
 class StatsNotConfigured(RuntimeError):
     """A statistics read ran without an injected StatsEnvironment.
 
-    The local host builds one environment from its own path constants and
-    price loader at startup. There is deliberately no implicit fallback to a
-    host module: a missing injection fails loudly instead of reading another
-    application's ledgers or price table.
+    The local host builds one environment from its own path constants at
+    startup. There is deliberately no implicit fallback to a host module: a
+    missing injection fails loudly instead of reading another application's
+    ledgers.
     """
 
 
@@ -112,25 +94,18 @@ class StatsNotConfigured(RuntimeError):
 class StatsEnvironment:
     """Explicit dependencies of the statistics read surface.
 
-    ``chat2api_log`` / ``dsh_snapshot`` are
-    the ledger paths owned by the host; ``dsh_merge_day`` is its frozen DSH
-    day. ``parse_ts`` / ``beijing_day`` / ``day_start_ms`` / ``display_path``
-    are the host's pure time and display rules, ``estimate_record`` keeps the
-    historical four-tuple contract (cost_usd, priced, matched_model,
-    peak_used), and ``price_table_loader`` returns the host's normalized price
-    table. This module owns no host constants of its own.
+    ``chat2api_log`` / ``dsh_snapshot`` are the ledger paths owned by the
+    host; ``dsh_merge_day`` is its frozen DSH day. ``parse_ts`` /
+    ``beijing_day`` / ``day_start_ms`` / ``display_path`` are the host's pure
+    time and display rules. This module owns no host constants of its own.
     """
     chat2api_log: str
     dsh_snapshot: str
     dsh_merge_day: str
-    magpie_price_snapshot: str
-    magpie_price_status: str
     parse_ts: Callable[[object], Optional[float]]
     beijing_day: Callable[[Optional[float]], Optional[str]]
     day_start_ms: Callable[[object], Optional[float]]
     display_path: Callable[[object], str]
-    estimate_record: Callable[..., tuple]
-    price_table_loader: Callable[[], dict]
 
 
 _STATS_ENVIRONMENT = None
@@ -402,26 +377,24 @@ def _emit_token_evidence(evidence, kind):
 
 
 def _new_entry():
-    return {"requests": 0, "input": 0, "output": 0, "cache": 0, "reasoning": 0,
-            "cost_usd": 0.0, "priced": 0,
-            "token_evidence": _new_token_evidence()}
+    return {"requests": 0, "input": 0, "output": 0, "cache": 0,
+            "reasoning": 0, "token_evidence": _new_token_evidence()}
 
 
 def _empty_agg():
-    return {"days": {}, "undated": 0, "unpriced": set(), "error": None}
+    return {"days": {}, "undated": 0, "error": None}
 
 
 def _collect_jsonl_records(records, models_filter, lo_iso, hi_iso,
                            environment=None):
     """Bucket raw JSONL records into per-(day, model) accumulators.
 
-    Field extraction and cost semantics are usagesrv build_summary/_bucket
-    同源 (line refs inline); the finer (day x model) granularity is the point
-    of this module, not a second parsing implementation.
+    Field extraction mirrors usagesrv build_summary/_bucket; the finer
+    (day x model) granularity is the point of this module, not a second
+    parsing implementation. Cost/price fields were retired with #30.
     """
     days = {}
     undated = 0
-    unpriced = set()
     failed = 0
     last_error = None
     environment = _environment() if environment is None else environment
@@ -439,21 +412,17 @@ def _collect_jsonl_records(records, models_filter, lo_iso, hi_iso,
                 continue
             if day < lo_iso or day > hi_iso:
                 continue
-            raw_model = str(rec.get("model") or "unknown")  # 口径=usagesrv.py:539/663
+            raw_model = str(rec.get("model") or "unknown")
             if models_filter is not None and raw_model not in models_filter:
                 continue
             token_group = (day, raw_model)
-            # 口径=usagesrv _bucket（usagesrv.py:540-544）：缓存命中视为
-            # input 的子集，不重复累计（estimate_record 内部做 input-cache）。
+            # 口径=usagesrv _bucket：缓存命中视为 input 的子集，不重复累计。
             in_tok = int(rec.get("input_tokens") or 0)
             out_tok = int(rec.get("output_tokens") or 0)
             cache_tok = int(rec.get("cached_input_tokens")
                             or rec.get("cache_tokens") or 0)
             reason_tok = int(rec.get("reasoning_tokens") or 0)
-            cost_usd, priced, matched, _peak = environment.estimate_record(
-                raw_model, ms, in_tok, out_tok, cache_tok, reason_tok)
-            key = matched or raw_model  # 口径=usagesrv.py:559
-            acc = days.setdefault(day, {}).setdefault(key, _new_entry())
+            acc = days.setdefault(day, {}).setdefault(raw_model, _new_entry())
             _accumulate_token_evidence(acc, rec)
             token_seen = True
             acc["requests"] += 1
@@ -461,13 +430,6 @@ def _collect_jsonl_records(records, models_filter, lo_iso, hi_iso,
             acc["output"] += out_tok
             acc["cache"] += cache_tok
             acc["reasoning"] += reason_tok
-            acc["cost_usd"] += cost_usd
-            if priced:
-                acc["priced"] += 1
-            else:
-                # priced False（价表无此模型）在 usagesrv 中落入
-                # unpricedModels（usagesrv.py:552-555）。
-                unpriced.add(key)
         except Exception as exc:  # 单条坏记录不拖垮整个源，coverage 如实标注
             if token_group is not None and not token_seen:
                 day, raw_model = token_group
@@ -479,36 +441,34 @@ def _collect_jsonl_records(records, models_filter, lo_iso, hi_iso,
     if failed:
         error = {"type": "record_error", "failed_records": failed,
                  "detail": last_error}
-    return {"days": days, "undated": undated, "unpriced": unpriced,
-            "error": error}
+    return {"days": days, "undated": undated, "error": error}
 
 
 def _collect_dsh_records(snapshot, models_filter, lo_iso, hi_iso,
                          environment=None):
     """口径=usagesrv read_dsh_ledger（usagesrv.py:602-652）同源：只统计冻结的
-    DSH_MERGE_DAY（usagesrv.py:113）；cost 为真实记账（config.pricingCurrency，
-    USD），按 exchangeRate 折 CNY，不做估算。偏差：逐日汇总取自该日
-    byProviderModel 行加和（usagesrv.py:631-641 的字段口径）而非日级字段
-    （usagesrv.py:622-629），因为快照原生粒度即 (day, provider:model)，生产
-    快照两者一致；模型筛选作用于 "provider:model" 复合键。"""
+    DSH_MERGE_DAY；只汇总原始用量（calls/input/output/cacheRead/reasoning）。
+    偏差：逐日汇总取自该日 byProviderModel 行加和而非日级字段，因为快照原生
+    粒度即 (day, provider:model)，生产快照两者一致；模型筛选作用于
+    "provider:model" 复合键。"""
     days = {}
     if not isinstance(snapshot, dict):
-        return {"days": days, "undated": 0, "unpriced": set(), "error": None}
+        return {"days": days, "undated": 0, "error": None}
     environment = _environment() if environment is None else environment
     days_root = snapshot.get("days")
     if days_root is not None and not isinstance(days_root, dict):
         # 形状不对不是空账本：记入 coverage errors，不抛异常（同 A12-1 覆盖口径）。
-        return {"days": days, "undated": 0, "unpriced": set(),
+        return {"days": days, "undated": 0,
                 "error": {"type": "corrupt_snapshot",
                           "detail": "snapshot days is not a JSON object: %s"
                                     % type(days_root).__name__}}
     merge_day = environment.dsh_merge_day
     day_e = (days_root or {}).get(merge_day)
     if not isinstance(day_e, dict) or not (lo_iso <= merge_day <= hi_iso):
-        return {"days": days, "undated": 0, "unpriced": set(), "error": None}
+        return {"days": days, "undated": 0, "error": None}
     by_provider_model = day_e.get("byProviderModel")
     if by_provider_model is not None and not isinstance(by_provider_model, dict):
-        return {"days": days, "undated": 0, "unpriced": set(),
+        return {"days": days, "undated": 0,
                 "error": {"type": "corrupt_snapshot",
                           "detail": "byProviderModel is not a JSON object: %s"
                                     % type(by_provider_model).__name__}}
@@ -523,9 +483,8 @@ def _collect_dsh_records(snapshot, models_filter, lo_iso, hi_iso,
             acc = days.setdefault(merge_day, {}).setdefault(
                 str(pm), _new_entry())
             _accumulate_token_evidence(acc, m, snapshot=True)
-            # 字段口径=usagesrv.py:636-641（calls/cost/input/output/cacheRead/reasoning）。
+            # 字段口径=usagesrv（calls/input/output/cacheRead/reasoning）。
             acc["requests"] += int(m.get("calls") or 0)
-            acc["cost_usd"] += float(m.get("cost") or 0)
             acc["input"] += int(m.get("input") or 0)
             acc["output"] += int(m.get("output") or 0)
             acc["cache"] += int(m.get("cacheRead") or 0)
@@ -537,29 +496,16 @@ def _collect_dsh_records(snapshot, models_filter, lo_iso, hi_iso,
     if failed:
         error = {"type": "record_error", "failed_rows": failed,
                  "detail": last_error}
-    return {"days": days, "undated": 0, "unpriced": set(), "error": error}
+    return {"days": days, "undated": 0, "error": error}
 
 
-def _emit_models(kind, entries, rate):
-    """Emit per-model rows sorted by money desc then model name（排序对齐
-    usagesrv models 列表 usagesrv.py:587/691，附加名称决胜保证确定性）。
-    Money rounding mirrors usagesrv（_round_service usagesrv.py:593-599
-    / build_summary usagesrv.py:696）; parent levels emit rounded sums of
-    their children to keep totals == sum(day_totals) exact up to float dust
-    (see module docstring)."""
+def _emit_models(kind, entries):
+    """Emit per-model rows sorted by requests desc then model name."""
     rows = []
     for key, acc in entries.items():
-        # New token metrics use their own evidence accumulator. The existing
-        # money/input/output fields retain the legacy fee API's conversion.
         tokens = _emit_token_evidence(
             acc.get("token_evidence", _new_token_evidence()), kind)
-        if kind == "dsh-ledger":
-            cost = round(acc["cost_usd"] * rate, 4)  # 真实记账折算，非估算
-        elif acc["priced"] > 0:
-            cost = round(acc["cost_usd"] * rate, 4)
-        else:
-            cost = None  # 未定价：不产生费用数字，unpriced_models 另行标注
-        rows.append(((-(cost or 0.0), key), {
+        rows.append(((-acc["requests"], key), {
             "model": key,
             "requests": acc["requests"],
             "input_tokens": acc["input"],
@@ -567,7 +513,6 @@ def _emit_models(kind, entries, rate):
             **tokens,
             "cache_tokens": acc["cache"],
             "reasoning_tokens": acc["reasoning"],
-            "estimated_cost_cny": cost,
         }))
     rows.sort(key=lambda pair: pair[0])
     return [row for _, row in rows]
@@ -582,29 +527,19 @@ def _emit_source_totals(models_out):
         "output_tokens": sum(m["output_tokens"] for m in models_out),
         "cache_tokens": sum(m["cache_tokens"] for m in models_out),
         "reasoning_tokens": sum(m["reasoning_tokens"] for m in models_out),
-        "estimated_cost_cny": round(sum(m["estimated_cost_cny"] or 0.0
-                                        for m in models_out), 4),
     }
 
 
 def _new_totals():
     return {"requests": 0, "input_tokens": 0, "output_tokens": 0,
-            "cache_tokens": 0, "reasoning_tokens": 0,
-            "estimated_cost_cny": 0.0}
+            "cache_tokens": 0, "reasoning_tokens": 0}
 
 
 def _add_totals(totals, other):
-    """Accumulate a source/day totals dict into a parent totals dict.
-    None money is skipped, never treated as a fabricated 0."""
+    """Accumulate a source/day totals dict into a parent totals dict."""
     for key in ("requests", "input_tokens", "output_tokens", "cache_tokens",
-                "reasoning_tokens", "estimated_cost_cny"):
-        value = other.get(key)
-        totals[key] += 0 if value is None else value
-
-
-def _normalize_totals(totals):
-    totals["estimated_cost_cny"] = round(totals["estimated_cost_cny"], 4)
-    return totals
+                "reasoning_tokens"):
+        totals[key] += other.get(key) or 0
 
 
 def _load_source(source, handle, models_filter, lo_iso, hi_iso,
@@ -694,9 +629,8 @@ def bounded_stats(ledgers, date_from, date_to, sources=None, models=None,
     an empty result annotated in coverage, not an error.
 
     Returns the unified dict documented in the module docstring: days[],
-    totals, coverage, meta. Money (estimated_cost_cny) stays in its own
-    field; missing days are reported in coverage.missing_days and never
-    treated as zero cost.
+    totals, coverage, meta. Missing days are reported in
+    coverage.missing_days and never treated as zero usage.
 
     environment: the injected StatsEnvironment. When None, the process-wide
     environment installed by ``configure`` is used; an unconfigured process
@@ -708,8 +642,6 @@ def bounded_stats(ledgers, date_from, date_to, sources=None, models=None,
     lo, hi, range_days = _parse_range(date_from, date_to)
     models_filter = None if models is None else {str(m) for m in models}
     selected = sorted(set(sources) if sources is not None else set(ledgers))
-    table = environment.price_table_loader()
-    rate = table["exchangeRate"]
     lo_iso, hi_iso = lo.isoformat(), hi.isoformat()
 
     per_source = {}
@@ -744,7 +676,7 @@ def bounded_stats(ledgers, date_from, date_to, sources=None, models=None,
             if not entries:
                 continue
             kind = _SOURCE_KINDS[source]
-            models_out = _emit_models(kind, entries, rate)
+            models_out = _emit_models(kind, entries)
             src_totals = _emit_source_totals(models_out)
             blocks.append({"source": source, "kind": kind,
                            "models": models_out,
@@ -781,29 +713,22 @@ def bounded_stats(ledgers, date_from, date_to, sources=None, models=None,
                              "complete": token_coverage["records"] > 0
                              and token_coverage["complete_records"]
                              == token_coverage["records"]},
-                         "day_total": _normalize_totals(day_total)})
+                         "day_total": day_total})
         _add_totals(totals, day_total)
 
     in_range = {d.isoformat() for d in _iter_dates(lo, hi)}
     missing_days = sorted(in_range - set(day_keys))
 
-    unpriced = set()
-    for agg in per_source.values():
-        unpriced |= agg["unpriced"]
-
-    checked_at = table["meta"].get("checkedAt")
     return {
         "days": days_out,
-        "totals": _normalize_totals(totals),
+        "totals": totals,
         "coverage": {
             "sources": coverage_sources,
             "missing_days": missing_days,
-            "unpriced_models": sorted(unpriced),
         },
         "meta": {
             "timezone": TIMEZONE_NAME,
             "range_days": range_days,
-            "price_checked_at": checked_at if isinstance(checked_at, str) else None,
         },
     }
 
@@ -978,14 +903,11 @@ def _events_trusted(coverage):
 # 规范化事件：ms=None 表示时间戳无效（进 missing，不丢弃）。
 # The trailing fields are additive (B5 UM read surface): existing A12-1 readers
 # keep using the first seven fields; defaults keep every other producer working.
-# A2-8: request_started_at is the request START in epoch ms (None when the row
-# has no usable start evidence). It never replaces ms, which stays the completion
-# time used for price-version selection.
 _Event = namedtuple(
     "_Event",
     "ms model input_tokens output_tokens duration_ms duration_state status"
     " cache_tokens reasoning_tokens cache_report_status request_id"
-    " usage_source estimated request_started_at",
+    " usage_source estimated",
     defaults=(None, None, None, None, None, False, None))
 
 
@@ -1109,21 +1031,6 @@ def _event_cache_report_status(record, spec):
     return raw if raw in ("reported", "unreported") else None
 
 
-def _event_request_start(record):
-    """A2-8 请求 START → epoch ms；缺失或不可解析一律 None。
-
-    chat2api 写端写入 ISO-8601 字符串（不可用时为 null），价格契约同时接受
-    epoch ms 数值。坏值按缺失处理：既不能凭它产生新的定价资格，也不能用
-    ``time - duration_ms`` 倒推一个开始时刻。
-    """
-    value = record.get("request_started_at")
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value) if value == value else None
-    return _environment().parse_ts(value)
-
-
 def _event_from_record(source, spec, record):
     """一条账本记录 → 规范化事件（字段口径见 _SOURCE_SPECS；不抛异常）。"""
     ms = _environment().parse_ts(_first_value(record, spec["time"]))
@@ -1148,7 +1055,6 @@ def _event_from_record(source, spec, record):
         request_id=request_id,
         usage_source=usage_source,
         estimated=record.get("estimated") is True,
-        request_started_at=_event_request_start(record),
     )
 
 
@@ -1743,7 +1649,7 @@ def usage_rates(ledgers=None, hours=24, now=None):
 # 契约（B5；前端 r3 的 UmToday/UmCost/UmTrend/UmRequestPage 由 B6 映射）：
 #
 #   um_today(ledger, now) ->
-#     {today, cost, coverage, timezone, checked_epoch}
+#     {today, coverage, timezone, checked_epoch}
 #   um_trend(ledger, range, now) ->
 #     {trend, coverage, timezone, checked_epoch}
 #   um_requests(ledger, window, model, result, search, cursor, limit, now) ->
@@ -1755,14 +1661,13 @@ def usage_rates(ledgers=None, hours=24, now=None):
 #   - 请求数 = 逻辑请求数：chat2api 的物理重试若单独写了一条
 #     status="upstream_transient_retried" / "degenerate_repetition_retried"
 #     记录，它不是一次新请求，不重复计数；它只作为该逻辑请求的 retries 证据
-#     （有可靠 request_id 时）与 token/费用合计的一部分（它记录的是被丢弃
+#     （有可靠 request_id 时）与 token 合计的一部分（它记录的是被丢弃
 #     尝试的真实消耗，不包含在最终记录的累计值里）。
 #   - Token 合计 = 输入 + 输出；缓存读取已含在输入、思考 Token 已含在输出，
 #     绝不再次相加。0 是已知值；缺失/未报告/估算/未知分别用 Reading 的
 #     kind 表达，不折成 0。
-#   - 费用 = 参考：复用 B1 的 console_magpie_prices.compute_reference
-#     （Magpie 有效价快照 + 汇率版本），不是 UM 实际扣款；未同步/未定价/
-#     不完整覆盖一律如实披露，绝不当作 0。
+#   - 费用/价格口径已随 #30 退役：本读面只给原始用量（Token/请求），
+#     不派生任何金额。
 #   - 速度 = 输出 Token ÷ 整次耗时（含首字等待），只由逻辑请求中有真实输出
 #     Token 与正耗时的记录聚合；无法确认就 missing，绝不推算首字。
 #   - 日志沿 console_log_reader 的有界尾读；只有 32 位小写十六进制
@@ -1894,7 +1799,7 @@ def _um_sample_reading(reading):
     return reading
 
 
-def _um_mark_partial(today, cost):
+def _um_mark_partial(today):
     note = "账本有损坏行/截断，合计为下界"
     for key in ("total", "input", "output"):
         today["tokens"][key] = _um_lower_bound(
@@ -1906,8 +1811,6 @@ def _um_mark_partial(today, cost):
         today["requests"][key] = _um_lower_bound(
             today["requests"][key], note)
     today["speed"]["value"] = _um_sample_reading(today["speed"]["value"])
-    cost["cny"] = _um_lower_bound(cost["cny"], note)
-    cost["cnyPartial"] = True
 
 
 def _um_mark_trend_partial(trend):
@@ -1919,7 +1822,6 @@ def _um_mark_trend_partial(trend):
         row["failed"] = _um_lower_bound(row["failed"], note)
     for bucket in buckets:
         bucket["tokens"] = _um_lower_bound(bucket["tokens"], note)
-        bucket["costCny"] = _um_lower_bound(bucket["costCny"], note)
         bucket["requests"] = _um_lower_bound(bucket["requests"], note)
         bucket["speed"] = _um_sample_reading(bucket["speed"])
 
@@ -2125,287 +2027,6 @@ def _um_speed_payload(events, logical, empty_note="该时段没有请求"):
     }
 
 
-def _um_event_record(event):
-    """Normalized event -> the ledger dict B1's pricing contract reads.
-
-    ``cache_report_status`` is passed as "unreported" for historical rows that
-    lack Q11 status, so the compatibility zero is never read as a measured
-    cache hit. Thinking tokens are already part of output and are not added.
-    ``request_started_at`` carries A2-8 start evidence so this path applies the
-    same first-effective eligibility as ``usagesrv``'s raw-ledger summary.
-    """
-    return {
-        "_ms": event.ms,
-        "model": event.model,
-        "input_tokens": event.input_tokens,
-        "output_tokens": event.output_tokens,
-        "cached_input_tokens": event.cache_tokens,
-        "cache_report_status": (event.cache_report_status
-                                or "unreported"),
-        "reasoning_tokens": event.reasoning_tokens,
-        "duration_ms": event.duration_ms,
-        "status": event.status,
-        "request_id": event.request_id,
-        "usage_source": event.usage_source,
-        "estimated": event.estimated,
-        "request_started_at": event.request_started_at,
-    }
-
-
-def _um_price_paths(snapshot_path=None, status_path=None):
-    if snapshot_path is None or status_path is None:
-        environment = _environment()
-        if snapshot_path is None:
-            snapshot_path = environment.magpie_price_snapshot
-        if status_path is None:
-            status_path = environment.magpie_price_status
-    return snapshot_path, status_path
-
-
-def _um_price_one(record, snapshot_path, status_path):
-    """Price one ledger record with B1's public compute_reference.
-
-    The B1 module is the single UM pricing implementation; this read surface
-    only maps its honest coverage into a per-row Reading. A missing module,
-    snapshot or status stays explicit (never zero).
-    """
-    try:
-        from console import magpie_prices as console_magpie_prices
-    except Exception as exc:  # noqa: BLE001 - the console must still start
-        return {"priced": False,
-                "reason": "价格同步模块不可用（%s）" % type(exc).__name__,
-                "estimated": False, "costUsd": None, "cny": None,
-                "priceVersion": None, "fxRate": None, "fxVersion": None,
-                "cnyPartial": True}
-    if not snapshot_path:
-        return {"priced": False, "reason": "价格快照路径未装配",
-                "estimated": False, "costUsd": None, "cny": None,
-                "priceVersion": None, "fxRate": None, "fxVersion": None,
-                "cnyPartial": True}
-    try:
-        result = console_magpie_prices.compute_reference(
-            [record], snapshot_path, status_path)
-    except Exception as exc:  # noqa: BLE001 - report, never fold to zero
-        return {"priced": False,
-                "reason": "参考费用计算失败（%s）" % type(exc).__name__,
-                "estimated": False, "costUsd": None, "cny": None,
-                "priceVersion": None, "fxRate": None, "fxVersion": None,
-                "cnyPartial": True}
-    coverage = result.get("coverage") or {}
-    priced = coverage.get("pricedRequests") == 1
-    model_rows = result.get("models") or []
-    model_row = model_rows[0] if model_rows and isinstance(
-        model_rows[0], dict) else {}
-    reason = None
-    if not priced:
-        if coverage.get("preEffectiveRequests"):
-            reason = "请求开始于首次价格生效前，保持未定价"
-        elif coverage.get("unknownEffectiveRequests"):
-            reason = "请求时刻不在价格快照有效范围"
-        elif coverage.get("fxMissingRequests"):
-            reason = "汇率未就绪"
-        elif coverage.get("unpricedRequests"):
-            reason = "未定价或用量不完整"
-        else:
-            reason = "未定价"
-    return {
-        "priced": priced,
-        "reason": reason,
-        "estimated": bool(model_row.get("estimatedRequests")),
-        "costUsd": result.get("costUsd") if priced else None,
-        "cny": result.get("cny") if priced else None,
-        "priceVersion": model_row.get("priceVersion"),
-        "fxRate": model_row.get("fxRate"),
-        "fxVersion": model_row.get("fxVersion"),
-        "cnyPartial": bool(result.get("cnyPartial")),
-    }
-
-
-def _um_price_meta(price):
-    state = price.get("state") if isinstance(price, dict) else None
-    if state not in ("synced", "unsynced", "failed"):
-        state = "failed"
-    raw_snapshot_at = price.get("snapshotAt") \
-        if isinstance(price, dict) else None
-    if isinstance(raw_snapshot_at, (int, float)) \
-            and not isinstance(raw_snapshot_at, bool):
-        snapshot_at = int(raw_snapshot_at)
-    else:
-        parsed = _environment().parse_ts(raw_snapshot_at)
-        snapshot_at = int(parsed) if parsed is not None else None
-    return {
-        "state": state,
-        "source": price.get("source") if isinstance(price, dict) else None,
-        "snapshotAt": snapshot_at,
-        "version": price.get("version") if isinstance(price, dict) else None,
-        "failure": price.get("failure") if isinstance(price, dict) else None,
-    }
-
-
-def _um_cost_reading(cost):
-    """B1 reference result -> one Reading; never turns unsynced into zero.
-
-    ``cost["cny"]`` is a number on B1's result and already a Reading on
-    this module's cost payload; both shapes are accepted so the trend can
-    reuse the same helper.
-    """
-    cny = cost.get("cny")
-    if isinstance(cny, dict):
-        return cny
-    if cny is None:
-        failure = (cost.get("price") or {}).get("failure")
-        return _um_reading("missing", note=failure or
-                           "没有可定价的请求；不是零费用")
-    if cost.get("cnyPartial"):
-        return _um_reading("atLeast", cny,
-                           "参考下界：部分请求未定价/用量未知/缓存未报告")
-    if (cost.get("coverage") or {}).get("estimatedRequests"):
-        return _um_reading("estimate", cny, "按价格快照估算")
-    return _um_exact(cny)
-
-
-def _um_cost_model_reading(cost, model):
-    rows = [row for row in cost.get("models") or []
-            if isinstance(row, dict) and row.get("model") == model]
-    if not rows:
-        return _um_exact(0)  # no records for this model -> legal zero
-    row = rows[0]
-    cny = row.get("cny")
-    if cny is None:
-        return _um_reading("missing", note="未定价，未计入金额")
-    if row.get("cnyPartial"):
-        return _um_reading("atLeast", cny,
-                           "部分请求未定价/用量未知，金额为下界")
-    if row.get("estimatedRequests"):
-        return _um_reading("estimate", cny, "按价格快照估算")
-    return _um_exact(cny)
-
-
-def _um_cost_unavailable(failure, records=None, events=None):
-    """Honest cost shape when no B1 reference can be read.
-
-    ``records=None`` means the ledger itself could not be read: the counts stay
-    unknown, never 0. A legal empty day (records == 0) is exact 0.
-    """
-    events = events or []
-    count = records if isinstance(records, int) and records >= 0 else None
-    empty = count == 0
-    return {
-        "label": "参考",
-        "cny": _um_exact(0) if empty else _um_reading(
-            "missing", note=failure),
-        "cnyPartial": not empty,
-        "costUsd": 0.0 if empty else None,
-        "price": {
-            "state": "failed" if not empty else "unsynced",
-            "source": None, "snapshotAt": None, "version": None,
-            "failure": failure,
-        },
-        "fx": {"rate": None, "version": None},
-        "unpricedRequests": 0 if empty else None,
-        "estimatedRequests": 0 if empty else None,
-        "coverage": {
-            "records": count,
-            "pricedRequests": 0 if empty else None,
-            "unpricedRequests": 0 if empty else count,
-            "estimatedRequests": 0 if empty else None,
-            "incompleteRequests": 0 if empty else count,
-            "unknownEffectiveRequests": None,
-            "preEffectiveRequests": None,
-            "fxMissingRequests": None,
-            "costUsd": 0.0 if empty else None,
-            "cny": 0.0 if empty else None,
-            "cnyPartial": not empty,
-            "usageUnknownRequests": sum(
-                1 for ev in events if ev.usage_source == "none") or None,
-            "cacheUnknownRequests": sum(
-                1 for ev in events if ev.cache_report_status is None)
-            or None,
-            "retryRecords": sum(1 for ev in events if _um_is_retry(ev)),
-            "logicalRecords": sum(
-                1 for ev in events if not _um_is_retry(ev)),
-            "label": "参考",
-        },
-        "models": [],
-    }
-
-
-def _um_cost_payload(events, snapshot_path, status_path):
-    """UM's own ledger -> B1 reference cost + per-model coverage."""
-    records = [_um_event_record(ev) for ev in events]
-    usage_unknown = sum(1 for ev in events
-                        if ev.usage_source == "none")
-    cache_unknown = sum(1 for ev in events
-                        if ev.cache_report_status is None)
-    cache_unreported = sum(1 for ev in events
-                            if ev.cache_report_status == "unreported")
-    retry_records = sum(1 for ev in events if _um_is_retry(ev))
-    logical_records = len(events) - retry_records
-    try:
-        from console import magpie_prices as console_magpie_prices
-    except Exception as exc:  # noqa: BLE001 - the console must still start
-        return _um_cost_unavailable(
-            "价格同步模块不可用（%s）" % type(exc).__name__, len(records),
-            events)
-    if not snapshot_path:
-        return _um_cost_unavailable("价格快照路径未装配", len(records),
-                                     events)
-    try:
-        reference = console_magpie_prices.compute_reference(
-            records, snapshot_path, status_path)
-    except Exception as exc:  # noqa: BLE001 - report, never fold to zero
-        return _um_cost_unavailable(
-            "参考费用计算失败（%s）" % type(exc).__name__, len(records),
-            events)
-    coverage = dict(reference.get("coverage") or {})
-    coverage["usageUnknownRequests"] = usage_unknown
-    coverage["cacheUnknownRequests"] = cache_unknown
-    coverage["cacheUnreportedRequests"] = cache_unreported
-    coverage["retryRecords"] = retry_records
-    coverage["logicalRecords"] = logical_records
-    coverage["label"] = "参考"
-    price = reference.get("price") or {}
-    cny = reference.get("cny")
-    if not events:
-        # Legal empty day: no requests to price -> exact 0, regardless of
-        # whether a snapshot exists (the zero is about usage, not price).
-        cny_reading = _um_exact(0)
-        cny_partial = False
-    elif cny is None:
-        cny_reading = _um_reading(
-            "missing", note=price.get("failure") or
-            "没有可定价的请求；不是零费用")
-        cny_partial = True
-    elif reference.get("cnyPartial") or usage_unknown or cache_unknown \
-            or cache_unreported:
-        cny_reading = _um_reading(
-            "atLeast", cny,
-            "参考下界：部分请求未定价/用量未知/缓存未报告")
-        cny_partial = True
-    elif coverage.get("estimatedRequests"):
-        cny_reading = _um_reading("estimate", cny,
-                                   "按价格快照估算")
-        cny_partial = False
-    else:
-        cny_reading = _um_exact(cny)
-        cny_partial = False
-    return {
-        "label": "参考",
-        "cny": cny_reading,
-        "cnyPartial": cny_partial,
-        "costUsd": reference.get("costUsd"),
-        "price": _um_price_meta(price),
-        "fx": {
-            "rate": (reference.get("fx") or {}).get("rate"),
-            "version": (reference.get("fx") or {}).get("version"),
-        },
-        "unpricedRequests": coverage.get("unpricedRequests"),
-        "estimatedRequests": coverage.get("estimatedRequests"),
-        "coverage": coverage,
-        "models": reference.get("models") or [],
-    }
-
-
 def _um_read(ledger=None):
     """Read UM's own chat2api ledger through the shared bounded reader."""
     path = _environment().chat2api_log if ledger is None else ledger
@@ -2521,23 +2142,7 @@ def _um_occurrence_keys(events):
     return keys
 
 
-def _um_price_reading(price):
-    if price is None:
-        return _um_reading("missing", note="价格同步不可用，未计价")
-    if not price.get("priced"):
-        return _um_reading("missing",
-                            note=price.get("reason") or "未定价")
-    if price.get("cny") is None:
-        return _um_reading("missing", note="汇率未就绪，金额无法折算")
-    if price.get("cnyPartial"):
-        return _um_reading("atLeast", price["cny"],
-                            "参考下界：未定价/用量未知/缓存未报告")
-    if price.get("estimated"):
-        return _um_reading("estimate", price["cny"], "按价格快照估算")
-    return _um_exact(price["cny"])
-
-
-def _um_request_row(event, key, retries, price, retry_prices=None):
+def _um_request_row(event, key, retries):
     result, result_note, http_status = _um_result(event)
     events = [event] + list(retries or [])
     input_reading = _um_sum_readings(
@@ -2548,13 +2153,6 @@ def _um_request_row(event, key, retries, price, retry_prices=None):
         [_um_event_cache_reading(ev) for ev in events])
     reasoning_reading = _um_sum_readings(
         [_um_event_reasoning_reading(ev) for ev in events])
-    cost_reading = _um_sum_readings(
-        [_um_price_reading(price)]
-        + [_um_price_reading(item) for item in retry_prices or []])
-    if len(events) > 1 and cost_reading.get("kind") in ("exact", "estimate"):
-        cost_reading = _um_reading(
-            cost_reading["kind"], cost_reading.get("value", 0),
-            "参考：含物理重试记录的估算")
     if event.duration_state == "ok":
         duration_reading = _um_exact(event.duration_ms)
     elif event.duration_state == "invalid":
@@ -2591,7 +2189,6 @@ def _um_request_row(event, key, retries, price, retry_prices=None):
         "output": output_reading,
         "cacheRead": cache_reading,
         "reasoning": reasoning_reading,
-        "costCny": cost_reading,
         "durationMs": duration_reading,
         "firstTokenMs": _um_reading(
             "missing", note="账本没有记录首字耗时，不推算"),
@@ -2603,7 +2200,7 @@ def _um_request_row(event, key, retries, price, retry_prices=None):
     }
 
 
-def _um_empty_today(read, status, note, now_ms):
+def _um_empty_today(status, note, now_ms):
     """No events in the window: exact zero only when the ledger is complete."""
     day = _window_day_keys(1, now_ms)[0]
     start = int(_environment().day_start_ms(day))
@@ -2628,7 +2225,6 @@ def _um_empty_today(read, status, note, now_ms):
                        "basis": "whole_request", "samples": 0},
             "boundaries": boundaries,
         }
-        cost = _um_cost_payload([], *_um_price_paths())
     elif status == "partial":
         reading = _um_reading("atLeast", 0, "账本不完整，合计为下界")
         today = {
@@ -2644,10 +2240,6 @@ def _um_empty_today(read, status, note, now_ms):
                        "basis": "whole_request", "samples": 0},
             "boundaries": boundaries,
         }
-        cost = _um_cost_payload([], *_um_price_paths())
-        cost["cny"] = _um_reading("atLeast", 0,
-                                    "账本不完整，金额为下界")
-        cost["cnyPartial"] = True
     else:
         missing = _um_reading("missing", note=note)
         today = {
@@ -2662,24 +2254,22 @@ def _um_empty_today(read, status, note, now_ms):
                        "samples": None},
             "boundaries": boundaries,
         }
-        cost = _um_cost_unavailable(note, records=None)
-    return today, cost
+    return today
 
 
-def um_today(ledger=None, now=None, snapshot_path=None, status_path=None):
-    """Today's five readings + reference cost from UM's own ledger.
+def um_today(ledger=None, now=None):
+    """Today's five readings from UM's own ledger.
 
     The window is the Beijing natural day [00:00, next 00:00). Request counts
-    are logical requests (a physical retry row is not counted twice); token and
-    cost totals include the retry rows' recorded consumption, because those are
+    are logical requests (a physical retry row is not counted twice); token
+    totals include the retry rows' recorded consumption, because those are
     real consumption not included in the final row's cumulative values. Cache
     reads are part of input and thinking tokens part of output; neither is added
     again. A missing ledger or a failed/corrupt read is missing, never zero.
+    Cost/price fields were retired with #30.
     """
     read = _um_read(ledger)
     now_ms = _now_ms(now)
-    snapshot_path, status_path = _um_price_paths(
-        snapshot_path, status_path)
     status, note = _um_ledger_status(read)
     if status in ("missing", "unavailable", "partial"):
         if status == "partial":
@@ -2687,10 +2277,8 @@ def um_today(ledger=None, now=None, snapshot_path=None, status_path=None):
             # every sum as a lower bound.
             pass
         else:
-            today, cost = _um_empty_today(read, status, note, now_ms)
             return {
-                "today": today,
-                "cost": cost,
+                "today": _um_empty_today(status, note, now_ms),
                 "coverage": {
                     "status": status,
                     "note": note,
@@ -2708,10 +2296,8 @@ def um_today(ledger=None, now=None, snapshot_path=None, status_path=None):
     start = int(_environment().day_start_ms(day))
     events, undated = _um_window_events(read, start, start + 86_400_000)
     if not events and status == "partial":
-        today, cost = _um_empty_today(read, status, note, now_ms)
         return {
-            "today": today,
-            "cost": cost,
+            "today": _um_empty_today(status, note, now_ms),
             "coverage": {
                 "status": status,
                 "note": note,
@@ -2737,12 +2323,6 @@ def um_today(ledger=None, now=None, snapshot_path=None, status_path=None):
         [_um_event_reasoning_reading(ev) for ev in events])
     recorded, failed, result_counts = _um_requests_reading(logical)
     speed = _um_speed_payload(events, logical, "今天没有请求")
-    cost = _um_cost_payload(events, snapshot_path, status_path)
-    if status == "partial" and cost["cny"].get("kind") == "exact":
-        cost["cny"] = _um_reading(
-            "atLeast", cost["cny"].get("value", 0),
-            "账本不完整，金额为下界")
-        cost["cnyPartial"] = True
     boundaries = {
         "timezone": TIMEZONE_NAME,
         "start": _um_iso(start),
@@ -2763,10 +2343,9 @@ def um_today(ledger=None, now=None, snapshot_path=None, status_path=None):
         "results": result_counts,
     }
     if status == "partial":
-        _um_mark_partial(today, cost)
+        _um_mark_partial(today)
     return {
         "today": today,
-        "cost": cost,
         "coverage": {
             "status": status,
             "note": note,
@@ -2785,11 +2364,10 @@ def um_today(ledger=None, now=None, snapshot_path=None, status_path=None):
     }
 
 
-def _um_trend_bucket(events, logical, cost_reading):
+def _um_trend_bucket(events, logical):
     return {
         "tokens": _um_sum_readings(
             [_um_event_total_reading(ev) for ev in events]),
-        "costCny": cost_reading,
         "requests": _um_exact(len(logical)),
         "speed": _um_speed_payload(events, logical)["value"],
     }
@@ -2798,7 +2376,6 @@ def _um_trend_bucket(events, logical, cost_reading):
 def _um_merge_buckets(buckets):
     return {
         "tokens": _um_sum_readings([b["tokens"] for b in buckets]),
-        "costCny": _um_sum_readings([b["costCny"] for b in buckets]),
         "requests": _um_sum_readings([b["requests"] for b in buckets]),
         "speed": _um_reading("missing", note="按请求加权的整次平均"),
     }
@@ -2811,8 +2388,7 @@ def _um_trend_speed(events, logical):
 def _um_empty_trend(days, range, status, note, start, end, now_ms,
                     ledger_present=False, errors=None):
     missing = _um_reading("missing", note=note)
-    bucket = {"tokens": missing, "costCny": missing,
-              "requests": missing, "speed": missing}
+    bucket = {"tokens": missing, "requests": missing, "speed": missing}
     daily = [{key: value for key, value in bucket.items()}
               for _day in days]
     total = {key: value for key, value in bucket.items()}
@@ -2849,16 +2425,15 @@ def _um_empty_trend(days, range, status, note, start, end, now_ms,
     }
 
 
-def um_trend(ledger=None, range="7d", now=None, snapshot_path=None,
-              status_path=None):
+def um_trend(ledger=None, range="7d", now=None):
     """Near-N Beijing natural-day trend + same-window model ranking.
 
-    Token/cost sums include every ledger row (including the physical retry
-    rows' recorded consumption); the request series counts logical requests
-    only, so a physical retry is never counted twice. Speed is the
-    request-weighted whole-request average over the logical requests with real
-    output-token and positive-duration evidence; a bucket without evidence is
-    missing, never 0.
+    Token sums include every ledger row (including the physical retry rows'
+    recorded consumption); the request series counts logical requests only, so a
+    physical retry is never counted twice. Speed is the request-weighted
+    whole-request average over the logical requests with real output-token and
+    positive-duration evidence; a bucket without evidence is missing, never 0.
+    Cost/price fields were retired with #30.
     """
     if range not in UM_TREND_RANGES:
         raise ValueError(
@@ -2866,8 +2441,6 @@ def um_trend(ledger=None, range="7d", now=None, snapshot_path=None,
             % (range, ", ".join(UM_TREND_RANGES)))
     read = _um_read(ledger)
     now_ms = _now_ms(now)
-    snapshot_path, status_path = _um_price_paths(
-        snapshot_path, status_path)
     status, note = _um_ledger_status(read)
     days = _window_day_keys(
         {"7d": 7, "14d": 14, "30d": 30}[range], now_ms)
@@ -2888,18 +2461,11 @@ def um_trend(ledger=None, range="7d", now=None, snapshot_path=None,
         if day in by_day:
             by_day[day].append(ev)
     model_names = sorted({ev.model for ev in events})
-    day_costs, day_buckets = {}, {}
+    day_buckets = {}
     for day in days:
         day_events = by_day.get(day) or []
-        if not day_events:
-            day_costs[day] = _um_cost_payload(
-                [], snapshot_path, status_path)
-        else:
-            day_costs[day] = _um_cost_payload(
-                day_events, snapshot_path, status_path)
         day_logical = [ev for ev in day_events if not _um_is_retry(ev)]
-        day_buckets[day] = _um_trend_bucket(
-            day_events, day_logical, _um_cost_reading(day_costs[day]))
+        day_buckets[day] = _um_trend_bucket(day_events, day_logical)
     model_rows = []
     for model in model_names:
         daily = []
@@ -2916,9 +2482,7 @@ def um_trend(ledger=None, range="7d", now=None, snapshot_path=None,
             for ev in day_logical:
                 if _um_result(ev)[0] in ("failed", "truncated"):
                     failed_total += 1
-            daily.append(_um_trend_bucket(
-                day_events, day_logical,
-                _um_cost_model_reading(day_costs[day], model)))
+            daily.append(_um_trend_bucket(day_events, day_logical))
         total = _um_merge_buckets(daily)
         total["speed"] = _um_trend_speed(model_events, model_logical)
         model_rows.append({
@@ -2994,8 +2558,7 @@ def _um_encode_cursor(at, key):
 
 
 def um_requests(ledger=None, window="today", model=None, result="all",
-                  search="", cursor=None, limit=50, now=None,
-                  snapshot_path=None, status_path=None):
+                  search="", cursor=None, limit=50, now=None):
     """Bounded UM request list from UM's own ledger.
 
     Filtering is by Beijing time window, exact model, real result and a
@@ -3025,8 +2588,6 @@ def um_requests(ledger=None, window="today", model=None, result="all",
         cursor_at, cursor_key = _um_decode_cursor(cursor)
     read = _um_read(ledger)
     now_ms = _now_ms(now)
-    snapshot_path, status_path = _um_price_paths(
-        snapshot_path, status_path)
     bounds = _um_window_bounds(window, now_ms)
     status, note = _um_ledger_status(read)
     if status in ("missing", "unavailable"):
@@ -3063,23 +2624,6 @@ def um_requests(ledger=None, window="today", model=None, result="all",
     logical = [ev for ev in events if not _um_is_retry(ev)]
     retry_map = _um_retry_map(read["events"])
     keys = _um_occurrence_keys(logical)
-    price_records = []
-    price_index = {}
-    for ev in logical:
-        record = _um_event_record(ev)
-        price_records.append(record)
-        price_index[id(ev)] = record
-    for ev in retries:
-        if id(ev) not in price_index:
-            record = _um_event_record(ev)
-            price_records.append(record)
-            price_index[id(ev)] = record
-    priced = []
-    for record in price_records:
-        priced.append(_um_price_one(
-            record, snapshot_path, status_path))
-    price_by_record = {id(record): price for record, price
-                        in zip(price_records, priced)}
     logical_ids = {rid for ev in logical
                    for rid in (_um_request_id(ev.request_id),)
                    if rid is not None}
@@ -3106,12 +2650,7 @@ def um_requests(ledger=None, window="today", model=None, result="all",
                 request_id or "", row_note))
             if search.lower() not in haystack.lower():
                 continue
-        price = price_by_record.get(id(price_index.get(id(ev))))
-        retry_prices = [
-            price_by_record.get(id(price_index.get(id(retry))))
-            for retry in attached]
-        row = _um_request_row(ev, keys[id(ev)], attached, price,
-                               retry_prices)
+        row = _um_request_row(ev, keys[id(ev)], attached)
         rows.append(row)
     rows.sort(key=lambda row: (-int(row["at"]), row["key"]))
     if cursor is not None:

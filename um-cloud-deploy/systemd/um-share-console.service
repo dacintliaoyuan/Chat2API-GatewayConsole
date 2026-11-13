@@ -13,8 +13,8 @@ Group=um-share
 WorkingDirectory=/opt/um-share/current
 EnvironmentFile=/etc/um-share/console.env
 UMask=0077
-# Fail the START when console.env no longer wires the security/price/Magpie
-# read face: an unconfigured console must not look like a healthy one.
+# Fail the START when console.env no longer wires the security read face: an
+# unconfigured console must not look like a healthy one.
 ExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly console /etc/systemd/system/um-share-console.service /etc/um-share/console.env
 ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/usagesrv.py
 # Single-authority fence: the console may READ the broker pid/intent for

@@ -227,7 +227,6 @@ DELEGATED = {
     },
     "estimate_record_with_version": {
         "read_only": True,
-        "surface": "usagesrv.py:751 → load_price_table()（:549）只读价目文件；无写。",
         "citation": "ai-gateway/usagesrv.py:549-645, :751-766",
     },
     "get_share_manager": {

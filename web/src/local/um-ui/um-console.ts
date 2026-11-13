@@ -138,11 +138,7 @@ export function mountUmConsole(
   let route = routeFromHash();
   const colors = new SeriesColors();
   const chart = new TrendView(colors);
-  const overviewUi: OverviewUi = {
-    metric: "tokens",
-    line: false,
-    costOpen: false,
-  };
+  const overviewUi: OverviewUi = { metric: "tokens", line: false };
   const requestsUi = {
     view: route.view,
     search: initial.requests.query.search,
@@ -715,11 +711,6 @@ export function mountUmConsole(
         overviewUi.line = !overviewUi.line;
         render();
       }
-      return;
-    }
-    if ((el = pick('[data-um-toggle="cost"]'))) {
-      overviewUi.costOpen = !overviewUi.costOpen;
-      render();
       return;
     }
     // 请求与诊断

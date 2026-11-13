@@ -26,16 +26,6 @@ BACKUP_SUFFIX = ".umbak"
 SECURITY_FORMAT = "um-share-security-state-v1"
 SECURITY_PREFIX = "security/"
 BACKUP_PREFIX = "backups/"
-# Magpie reference prices are a separate, read-only price source.  The backup
-# carries the snapshot AND its status file so a restore never pairs an old ledger
-# with a newer price version (or vice versa).  The product module owns the format;
-# this module only records its version closure and re-validates it on restore.
-MAGPIE_SNAPSHOT_NAME = "magpie-prices.snapshot.json"
-MAGPIE_STATUS_NAME = "magpie-prices.status.json"
-MAGPIE_SNAPSHOT_FORMAT = "um-magpie-price-snapshot-v1"
-MAGPIE_STATUS_FORMAT = "um-magpie-price-status-v1"
-MAGPIE_CLOSURE_FORMAT = "um-magpie-price-backup-closure-v1"
-PRICE_TABLE_NAME = "prices.json"
 # The POSIX share-key encryption key (AES-GCM) is deployment state, not release
 # material.  A backup that does not carry it cannot decrypt the store rows on
 # another machine, so the deployment closure includes it by name.

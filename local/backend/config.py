@@ -83,15 +83,13 @@ PATH_FIELDS = (
     "lock_dir",
     "pid_file",
     "ledger_file",
-    "price_file",
     "session_code_file",
     "control_token_file",
     "console_state_file",
     "model_sync_dir",
 )
-# Optional explicit paths: when present they must still be absolute, but a
-# deployment that has no manual price override file simply omits the field.
-OPTIONAL_PATH_FIELDS = ("price_override_file",)
+# Optional explicit paths: when present they must still be absolute.
+OPTIONAL_PATH_FIELDS = ()
 UM_PATH_FIELDS = (
     "source_dir",
     "python",
@@ -582,8 +580,6 @@ class LocalConfig:
     lock_dir: str
     pid_file: str
     ledger_file: str
-    price_file: str
-    price_override_file: str | None
     session_code_file: str
     control_token_file: str
     console_state_file: str
@@ -630,10 +626,6 @@ class LocalConfig:
         values = {}
         for field in PATH_FIELDS:
             values[field] = _require_text(raw, field, absolute=True)
-        price_override_file = raw.get("price_override_file")
-        if price_override_file is not None:
-            price_override_file = _require_text(
-                raw, "price_override_file", absolute=True)
         um_runtime = UmRuntimeConfig.from_mapping(
             _require_mapping(raw, "um_runtime"))
         runtime_control = RuntimeControlConfig.from_mapping(
@@ -656,8 +648,6 @@ class LocalConfig:
         _reject_production_port(upstream_port, "um_runtime.base_url")
         for field, value in values.items():
             _reject_real_state(value, field)
-        if price_override_file is not None:
-            _reject_real_state(price_override_file, "price_override_file")
         for field in UM_STATE_PATH_FIELDS:
             _reject_real_state(
                 getattr(um_runtime, field), "um_runtime.%s" % field)
@@ -686,7 +676,6 @@ class LocalConfig:
             schema_version=schema_version,
             host=host,
             port=port,
-            price_override_file=price_override_file,
             um_runtime=um_runtime,
             runtime_control=runtime_control,
             **values,
@@ -710,7 +699,7 @@ class LocalConfig:
         """``config_dir`` must be the ``--config`` document's parent.
 
         A config that names one directory but is read from another would write
-        its session code / price document somewhere the operator did not name, so
+        its session code somewhere the operator did not name, so
         the mismatch is refused at ``--check-config`` time (exit 2).
         """
         try:
@@ -729,8 +718,6 @@ class LocalConfig:
     def config_paths(self):
         """Every configured state path (never the interpreter/source dir)."""
         paths = {field: getattr(self, field) for field in PATH_FIELDS}
-        if self.price_override_file is not None:
-            paths["price_override_file"] = self.price_override_file
         for field in UM_STATE_PATH_FIELDS:
             paths["um_runtime.%s" % field] = getattr(self.um_runtime, field)
         return paths

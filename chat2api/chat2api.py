@@ -2166,11 +2166,6 @@ def resolve_effort(requested: str):
 
 # ------------------------------------------------------------ usage accounting
 
-# Price table identity stamped on each row (see _price_table_version); the
-# cost itself is a READ-SIDE derivation, never computed here.
-PRICE_TABLE_FILE = (os.environ.get("CHAT2API_PRICE_TABLE_FILE")
-                    or os.path.join(HERE, os.pardir, "data", "prices.json"))
-
 # Request-scoped attribution facts for record_usage. One request is served by one
 # thread and the handler installs the facts BEFORE any ledger row can be written,
 # ALWAYS with the full fact set (a request without a verified marker installs
@@ -2179,7 +2174,6 @@ _request_facts = threading.local()
 _attribution_seen = {}
 _attribution_seen_lock = threading.Lock()
 _attribution_key_cache = {"stat": None, "secret": None}
-_price_version_cache = {"stat": None, "version": None}
 _stat_cache_lock = threading.Lock()
 
 
@@ -2199,12 +2193,6 @@ def set_request_facts(protocol, key_id=None, request_id=None,
 
 def _request_fact(name):
     return getattr(_request_facts, name, None)
-
-
-
-
-
-
 
 
 
@@ -2318,42 +2306,6 @@ def _share_auth_module():
             sys.modules.pop("share_auth", None)
         raise
     return module
-
-
-def _price_table_version():
-    """Identity of the price table present when a row is written; None if unknown.
-
-    Records WHICH price table content was in effect, not that this row's cost was
-    computed under it - the cost is a read-side derivation (share_metering with
-    the record's own time), so a later reader can tell rows written under
-    different tables apart. An explicit version field wins (the versioned price
-    structure); otherwise the file's content digest is used. Any failure yields
-    None - never a guessed or fabricated version.
-    """
-    try:
-        info = os.stat(PRICE_TABLE_FILE)
-        stamp = (PRICE_TABLE_FILE, info.st_mtime_ns, info.st_size)
-    except OSError:
-        return None
-    with _stat_cache_lock:
-        if _price_version_cache["stat"] == stamp:
-            return _price_version_cache["version"]
-    version = None
-    try:
-        with open(PRICE_TABLE_FILE, "rb") as handle:
-            payload = handle.read()
-        explicit = json.loads(payload.decode("utf-8")).get("version")
-        if isinstance(explicit, (str, int)) and not isinstance(explicit, bool) \
-                and str(explicit).strip():
-            version = str(explicit).strip()
-        else:
-            version = hashlib.sha256(payload).hexdigest()[:16]
-    except (OSError, UnicodeError, ValueError, AttributeError):
-        version = None
-    with _stat_cache_lock:
-        _price_version_cache["stat"] = stamp
-        _price_version_cache["version"] = version
-    return version
 
 
 def _est_tokens(text) -> int:
@@ -2523,10 +2475,6 @@ def record_usage(model, stream, started_at, usage, in_est, out_est, status="ok",
     cache_details = fields.get("prompt_tokens_details") or {}
     rec = {
         "time": datetime.now().astimezone().isoformat(timespec="seconds"),
-        # A2-8: the request START is the eligibility boundary for the FIRST
-        # effective Magpie snapshot; ``time`` stays the completion time. Old
-        # rows without this field keep their historical completion-time pricing.
-        "request_started_at": _ledger_request_start(started_at),
         "service": "chat2api",
         "model": model,
         "stream": stream,
@@ -2550,7 +2498,6 @@ def record_usage(model, stream, started_at, usage, in_est, out_est, status="ok",
         "key_id": _request_fact("key_id"),
         "request_id": _request_fact("request_id"),
         "attribution": _request_fact("attribution") or "absent",
-        "price_version": _price_table_version(),
     }
     if _usage_disabled:
         return
@@ -9706,20 +9653,6 @@ def resolve_auth_wait_budget(cli_value=None, share_gateway=False):
     if share_gateway is True:
         return 180.0
     return 30.0
-
-
-def _ledger_request_start(started_at):
-    """The request START as an ISO timestamp for the A2-8 eligibility boundary.
-
-    ``record_usage`` keeps ``time`` as the completion instant; this additive
-    field is written only for new rows. An unusable value stays ``None`` so a
-    historical row is never priced with a fabricated start.
-    """
-    try:
-        return datetime.fromtimestamp(float(started_at)).astimezone().isoformat(
-            timespec="milliseconds")
-    except (TypeError, ValueError, OSError, OverflowError):
-        return None
 
 
 def _claim_pre_output_verification(auth_wait_budget):

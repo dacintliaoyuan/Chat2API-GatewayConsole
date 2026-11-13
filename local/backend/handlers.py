@@ -120,19 +120,15 @@ class LocalHandler(RoleHandler):
         """The UM summary read face.
 
         The frontend's ``readSummary(signal?)`` passes NO date range and
-        ``normalizeUmSummary`` reads only ``role``/``assembly.role``/
-        ``umReference``, so a bare call must succeed with those facts. A caller
-        that DOES pass ``from``/``to`` additionally gets the bounded stats
-        (kept for compatibility with the previous contract).
+        ``normalizeUmSummary`` reads only ``role``/``assembly.role``, so a bare
+        call must succeed with those facts. A caller that DOES pass
+        ``from``/``to`` additionally gets the bounded stats.
         """
         params = parse_qs(query)
         date_from = params.get("from", [None])[0]
         date_to = params.get("to", [None])[0]
         if not date_from and not date_to:
-            self._send_json(200, {
-                "role": "local",
-                "umReference": self.app.um_reference(),
-            })
+            self._send_json(200, {"role": "local"})
             return
         if not date_from or not date_to:
             self._send_json(
@@ -153,7 +149,6 @@ class LocalHandler(RoleHandler):
         else:
             payload = dict(payload)
             payload["role"] = "local"
-            payload.setdefault("umReference", self.app.um_reference())
             self._send_json(200, payload)
 
     def _send_session(self, body):

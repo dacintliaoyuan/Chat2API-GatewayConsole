@@ -120,10 +120,6 @@ run_recovery() {
     chown root:"$UM_BROKER_GROUP" "$UM_ETC/share-management.json"
     chmod 0640 "$UM_ETC/share-management.json"
   fi
-  if [ -f "$UM_ETC/prices.json" ]; then
-    chown root:"$UM_BROKER_GROUP" "$UM_ETC/prices.json"
-    chmod 0640 "$UM_ETC/prices.json"
-  fi
 }
 
 exec 9>"$UM_DEPLOY_LOCK"
