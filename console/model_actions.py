@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Console adapters for the retained model-sync surfaces.
 
-Ticket #32 retires the model sync/settings/task actions and the DSH/ZCode
+Ticket #32 retires the model sync/settings/task actions and the retired
 consumer chain. The module now serves only the retained read/write surfaces:
 
 * ``model.catalog`` reads the current sources' model directory through
@@ -85,7 +85,7 @@ def _serialize_catalogs(catalogs):
                 # 来源标注（目录声明 vs 本地 KNOWN_MODELS 回退）。
                 "context_state": ("declared" if model.context is not None
                                   else "unknown"),
-                # 只读输出上限：与 DSH maxTokens / ZCode limit.output 的
+                # 只读输出上限：与既有客户端输出上限的
                 # 既有 setdefault(16384) 兼容默认同源——16,384 标兼容默认，
                 # 不新增手动编辑接口，也绝不静默缩短输出或截断输入。
                 "output_token_cap": {"value": 16384,

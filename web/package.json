@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
-    "check:contracts": "node --experimental-strip-types --test scripts/backend-contract/check.mjs scripts/backend-contract/check-generated.mjs scripts/backend-contract/check-model-demo.mjs scripts/backend-contract/check-share-readiness.mjs scripts/backend-contract/check-share-public.mjs scripts/backend-contract/check-cloud-usage-ledger.mjs",
+    "check:contracts": "node --experimental-strip-types --test scripts/backend-contract/check.mjs scripts/backend-contract/check-generated.mjs scripts/backend-contract/check-share-readiness.mjs scripts/backend-contract/check-share-public.mjs scripts/backend-contract/check-cloud-usage-ledger.mjs",
     "check:logs": "node --experimental-strip-types --test scripts/check-log-presentation.mjs",
     "check:cloud-console": "node --test scripts/check-cloud-console.mjs",
     "check:um": "node --test scripts/check-um-views.mjs",

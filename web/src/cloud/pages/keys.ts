@@ -695,7 +695,7 @@ export function createKeysPage(ctx: KeysPageContext) {
             return;
           }
           // D18-3: the revoke answer separates what the management side
-          // released (8110 PENDING/GRANTED), what it aborted (8110 COMMITTED)
+          // released (PENDING/GRANTED), what it aborted (COMMITTED)
           // and what 8100 closed upstream. A missing count stays 未知, never 0.
           const count = (name: string) => {
             const value = outcome.data[name];

@@ -774,7 +774,7 @@
 .um-line[data-quality="lower"] {
   stroke-dasharray: 2 3;
 }
-/* An estimate stays solid — every cost bucket is one — and the tooltip says ≈. */
+/* An estimate stays solid and the tooltip says ≈. */
 .um-line[data-quality="estimated"] {
   stroke-opacity: 0.88;
 }

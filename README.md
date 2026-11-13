@@ -27,8 +27,7 @@ Chat2API 网关控制台：同一套前端按构建期角色产出本机与云�
 - `chat2api/`：UM 网关（8000）与合并后的分享入口（8100）；纯分享 helper 在 `share_auth.py`。
 - `console/`：本机管理路由、任务队列、统计、日志与分享动作。
 - `share/`：分享存储、管理、运行链、broker 与监督；边界见 [AGENTS.md](AGENTS.md) 的分享链边界。
-- `model_sync/`：模型目录镜像、受管合并与客户端适配。
-- `zcode/`：ZCode 热同步与文件锁。
+- `model_sync/`：模型目录与 context probe。
 - `local/`、`shared/`：本机组合根与双端纯规则；见各自的 README。
 - `web/`：TypeScript/Vite 前端；`tests/`：Python 回归与隔离包。
 - `um-cloud-deploy/`：云端部署/运维材料。旧 Windows 本机分享链的部署材料已从仓库删除。

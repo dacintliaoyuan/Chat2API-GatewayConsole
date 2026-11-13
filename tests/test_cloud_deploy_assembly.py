@@ -184,7 +184,6 @@ def _seal_deployment_backup(layout, backup_key):
 class DeploymentTextAssemblyTests(unittest.TestCase):
     def test_broker_unit_has_no_price_fence_or_budget_args(self):
         unit = _read("systemd/um-share-broker.service")
-        self.assertNotIn("CHAT2API_PRICE_TABLE_FILE", unit)
         self.assertNotIn("prices.json", unit)
         self.assertIn("--check-deployment-assembly broker", unit)
         self.assertIn("ExecStartPre=", unit)
@@ -217,16 +216,12 @@ class DeploymentTextAssemblyTests(unittest.TestCase):
         values = _env_values(_read("config/console.env.example"))
         paths = backup_restore.deployment_paths()
         self.assertEqual(values["UM_CLOUD_SECURITY_STATE"], paths["security_state"])
-        for key in ("USAGE_PRICE_FILE", "CHAT2API_PRICE_TABLE_FILE",
-                    "MAGPIE_PRICE_SNAPSHOT", "MAGPIE_PRICE_STATUS"):
-            self.assertNotIn(key, values)
 
     def test_console_env_names_the_cloudflare_origin_and_browser_path(self):
         values = _env_values(_read("config/console.env.example"))
         self.assertEqual("https://dacintapi.de5.net",
                          values["CONSOLE_PUBLIC_ORIGIN"])
         self.assertTrue(values["CHAT2API_BROWSER_PATH"])
-        self.assertEqual("0", values["CHAT2API_SHARE_DISPATCH_MAX_WAIT_S"])
 
     def test_missing_security_state_fails_the_console_start_check(self):
         console_unit = _read("systemd/um-share-console.service")
@@ -320,7 +315,6 @@ class DeploymentTextAssemblyTests(unittest.TestCase):
         self.assertIn("cloudflared.yml", install)
         self.assertIn("CONSOLE_PUBLIC_ORIGIN", install)
         self.assertIn("CHAT2API_BROWSER_PATH", install)
-        self.assertIn("CHAT2API_SHARE_DISPATCH_MAX_WAIT_S", install)
         self.assertTrue((DEPLOY / "config" / "cloudflared.yml.example").is_file())
         self.assertTrue((DEPLOY / "systemd" / "cloudflared.service").is_file())
         self.assertTrue((DEPLOY / "cloudflared" / "check-ingress.py").is_file())
@@ -330,7 +324,6 @@ class DeploymentTextAssemblyTests(unittest.TestCase):
         self.assertIn('(cd "$OUTPUT_DIR" && sha256sum '
                       '"$(basename "$ARCHIVE")")', text)
         self.assertNotIn('sha256sum "$ARCHIVE" >', text)
-        self.assertNotIn("magpie_prices.py", text)
 
     def test_release_packaging_requires_a_production_console_line(self):
         # usagesrv.py answers 500 for every line other than production, so a

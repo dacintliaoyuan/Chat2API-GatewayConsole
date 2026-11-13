@@ -21,4 +21,4 @@
 
 ## 解释器预加载
 
-导入 `shared` 的运行时纯净性检查断言 `usagesrv`／`chat2api`／`console`／`share`／`model_sync`／`zcode` 不在 `sys.modules`，但不断言 `threading` 缺席：原版 Ubuntu 的 Python 会在用户代码执行前由 `sitecustomize`／`apport_python_hook` 预导入 `threading`。这是解释器启动行为，不是本模块的副作用。源码层面的规则仍然绝对：`shared` 的任何 `.py` 不得出现 `import threading`。
+导入 `shared` 的运行时纯净性检查断言 `usagesrv`／`chat2api`／`console`／`share`／`model_sync` 不在 `sys.modules`，但不断言 `threading` 缺席：原版 Ubuntu 的 Python 会在用户代码执行前由 `sitecustomize`／`apport_python_hook` 预导入 `threading`。这是解释器启动行为，不是本模块的副作用。源码层面的规则仍然绝对：`shared` 的任何 `.py` 不得出现 `import threading`。

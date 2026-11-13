@@ -22,7 +22,6 @@ import {
 import {
   clock,
   overviewHtml,
-  PRIMARY_FORCE,
   PRIMARY_START,
   PRIMARY_STOP,
   primaryAction,
@@ -99,33 +98,40 @@ const TERMINAL = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
 /** Local wait per submitted operation; past it the result is reported as
  *  unconfirmed with its id — the page never re-sends a write. */
 const WAIT_MS: Readonly<Record<string, number>> = {
-  "share.backend_login": 15 * 60_000,
-  "share.backend_reauthenticate": 5 * 60_000,
+  "service.start": 3 * 60_000,
+  "service.stop": 3 * 60_000,
+  "service.restart": 3 * 60_000,
+  "share.gateway_restart": 3 * 60_000,
 };
 
 /** Confirmation copy for every write this console offers: target and effect. */
 const CONFIRM: Readonly<Record<string, ConfirmCopy>> = {
-  "share.backend_login|share": {
-    title: "启动 UM 登录流程？",
-    confirm: "开始登录",
-    body: "登录窗口在云机上打开，需要私有显示通道；未接入时会超时并占用一次登录启动配额。登录/MFA 必须由你本人完成。",
+  "service.start|share-gateway": {
+    title: "启动 API 服务？",
+    confirm: "启动",
+    body: "启动 UM 分享入口；未接入时会如实报告失败，不冒充已启动。",
   },
-  "share.backend_reauthenticate|share": {
-    title: "重新认证 UM？",
+  "service.stop|share-gateway": {
+    title: "停止 API 服务？",
     danger: true,
-    confirm: "重新认证",
-    body: "只重新认证分享专用后端 8110；不冷启动、不重启进程、不绕过人工认证。需要显示会话时请先打开私有登录窗口。",
+    confirm: "停止",
+    body: "停止会先拒绝新请求，等待在途请求结束；停止意图由云端持久化。确定停止？",
   },
   "share.status|share": {
     title: "分层检查（只读）？",
     confirm: "开始检查",
     body: "只读取当前服务各层状态并记录一次检查，不改变、不重启云端 API 服务。",
   },
-  "share.chain_stop|share": {
-    title: "停止 API 服务？",
+  "share.diagnostics|share": {
+    title: "分层诊断（只读）？",
+    confirm: "开始检查",
+    body: "只读取当前服务各层状态并记录一次检查，不改变、不重启云端 API 服务。",
+  },
+  "share.gateway_restart|share": {
+    title: "重启分享入口 8100？",
     danger: true,
-    confirm: "停止",
-    body: "停止会先拒绝新请求，等待在途请求结束。若有请求未结束，会提示可以强制停止。确定停止？",
+    confirm: "重启",
+    body: "经受限 broker 执行一次单层重启；暂停接收、有界排空、重启后恢复接收。确定重启？",
   },
 };
 export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
@@ -261,7 +267,7 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
     <div class="cloud-scrim" data-cloud-drawer-close aria-hidden="true" hidden></div>
   </section>
   <div class="cloud-tip" role="tooltip" hidden></div>
-  <dialog class="shell-confirm" aria-labelledby="cloud-confirm-title"><form method="dialog"><h2 id="cloud-confirm-title"></h2><p class="shell-confirm-body"></p><p class="shell-confirm-target mono"></p><div class="shell-confirm-actions"><button value="cancel" class="btn btn-outline">取消</button><button value="force" class="btn btn-danger-fill" data-cloud-confirm-force hidden>强制停止</button><button value="confirm" class="btn btn-primary"></button></div></form></dialog>
+  <dialog class="shell-confirm" aria-labelledby="cloud-confirm-title"><form method="dialog"><h2 id="cloud-confirm-title"></h2><p class="shell-confirm-body"></p><p class="shell-confirm-target mono"></p><div class="shell-confirm-actions"><button value="cancel" class="btn btn-outline">取消</button><button value="confirm" class="btn btn-primary"></button></div></form></dialog>
   <dialog class="cloud-key-create" aria-labelledby="cloud-key-create-title">
     <form data-cloud-key-create-form novalidate>
       <h2 id="cloud-key-create-title">新建长期 API Key</h2>
@@ -846,9 +852,7 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
         renderFeedback();
       }
       const deadline = Date.now() + (WAIT_MS[action] ?? 3 * 60_000);
-      const isLogin =
-        action === "share.backend_login" ||
-        action === "share.backend_reauthenticate";
+      const isLogin = action === "account.login";
       while (!TERMINAL.has(operation.state)) {
         row.text =
           operation.state === "queued"
@@ -898,11 +902,7 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
       void refresh();
     }
   }
-  function confirmWith(
-    copy: ConfirmCopy,
-    run: () => void,
-    force?: { label: string; run: () => void }
-  ): void {
+  function confirmWith(copy: ConfirmCopy, run: () => void): void {
     confirmDialog.querySelector("h2")!.textContent = copy.title;
     confirmDialog.querySelector(".shell-confirm-body")!.textContent = copy.body;
     confirmDialog.querySelector(".shell-confirm-target")!.textContent =
@@ -912,15 +912,9 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
     )!;
     ok.textContent = copy.confirm;
     ok.className = copy.danger ? "btn btn-danger-fill" : "btn btn-primary";
-    const forceButton = confirmDialog.querySelector<HTMLButtonElement>(
-      "[data-cloud-confirm-force]"
-    )!;
-    forceButton.hidden = !force;
-    forceButton.textContent = force?.label ?? "";
     confirmDialog.returnValue = "";
     confirmDialog.onclose = () => {
       if (confirmDialog.returnValue === "confirm") run();
-      else if (confirmDialog.returnValue === "force") force?.run();
     };
     confirmDialog.showModal();
     confirmDialog
@@ -934,17 +928,9 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
       confirm: "继续",
       danger: true,
     };
-    const force =
-      action === PRIMARY_STOP && primaryAction(model).force
-        ? {
-            label: "强制停止",
-            run: () => void submit(PRIMARY_FORCE, target),
-          }
-        : undefined;
     confirmWith(
       { ...copy, detail: `动作 ${action} · 目标 ${target}` },
-      () => void submit(action, target),
-      force
+      () => void submit(action, target)
     );
   }
   root.addEventListener("click", (event) => {
@@ -976,8 +962,8 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
     const primary = target.closest<HTMLButtonElement>("[data-cloud-primary]");
     if (primary && !primary.disabled) {
       const action = primaryAction(model).action;
-      if (action === PRIMARY_START) void submit(PRIMARY_START, "share");
-      else if (action === PRIMARY_STOP) confirmThen(PRIMARY_STOP, "share");
+      if (action === PRIMARY_START) void submit(PRIMARY_START, "share-gateway");
+      else if (action === PRIMARY_STOP) confirmThen(PRIMARY_STOP, "share-gateway");
       return;
     }
     if (target.closest("[data-cloud-status-toggle]")) {

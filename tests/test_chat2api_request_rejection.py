@@ -4,7 +4,7 @@
 2026-09-18 production incident: UM returned HTTP 400 ~270 times in one day
 against three giant "接手" conversations (3.5-6.2 MB histories) while
 healthy conversations ran fine. chat2api used to map EVERY upstream non-200
-to a downstream 502, so ZCode kept replaying the same payload as a transient
+to a downstream 502, so a local client kept replaying the same payload as a transient
 failure and re-rejecting it forever. Contract now: upstream 400/422 surface
 as their real status, never enter transient retry, and emit structure-only
 diagnostics (counts/ids/role shape/shape hash) with an upstream error

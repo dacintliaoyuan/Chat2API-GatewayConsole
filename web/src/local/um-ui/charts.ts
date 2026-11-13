@@ -12,7 +12,7 @@ import {
   tokens,
 } from "./format";
 
-/** The overview trend: stacked daily bars by model for Token / 费用 / 请求, or
+/** The overview trend: stacked daily bars by model for Token / 请求, or
  *  one line per model when the reader switches to 折线图, and always lines for
  *  速度 (a speed is never summed), with a compact ranking over the very same
  *  window. Drawn at the host's real pixel width so text is never scaled.
@@ -26,7 +26,7 @@ import {
  *  curve bridges a gap or joins two models. */
 
 export type Metric = "tokens" | "requests" | "speed";
-/** How Token / 费用 / 请求 are drawn; 速度 is always a line. */
+/** How Token / 请求 are drawn; 速度 is always a line. */
 export type Shape = "bar" | "line";
 export const METRICS: readonly { id: Metric; label: string }[] = [
   { id: "tokens", label: "Token" },
@@ -317,7 +317,7 @@ export class TrendView {
   private cursorAt: number | null = null;
   constructor(readonly colors: SeriesColors) {}
 
-  /** Lines: 速度 always, Token / 费用 / 请求 when the reader asked for 折线图. */
+  /** Lines: 速度 always, Token / 请求 when the reader asked for 折线图. */
   get lines(): boolean {
     return this.metric === "speed" || this.shape === "line";
   }

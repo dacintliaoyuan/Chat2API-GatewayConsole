@@ -29,7 +29,7 @@ $script:GatewayServiceDescriptors = [ordered]@{
         StopProcessName = 'python.exe'
         StopCommandLinePattern = '(^|\s)chat2api\.py(\s|$)'
         # Round 18 (2026-09-29) stop-scope identity. The entrypoint token above
-        # also matched the dedicated share backend (chat2api.py --port 8110
+        # also matched another chat2api.py instance
         # --profile <share>\edge-profile, started by
         # console/share_production.py:1226-1234), so a private stop force-stopped
         # a share instance. The private launcher (start_chat2api.bat) passes only
@@ -427,7 +427,7 @@ function Stop-GatewayScopedProcesses {
 
     Round 18 (2026-09-29): the GracefulHttp/CommandLine branches used to
     force-stop every python.exe whose command line carried the entrypoint token,
-    which selected the dedicated share backend (chat2api.py --port 8110) too. Now
+    which selected another chat2api.py instance too. Now
     the scope is classified first, each selected PID is re-verified against its
     startup identity right before the kill, and an unconfirmable scope terminates
     NOTHING and reports StopRefused instead of a broad force-stop or a fake

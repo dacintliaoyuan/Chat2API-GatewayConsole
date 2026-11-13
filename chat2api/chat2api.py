@@ -404,7 +404,7 @@ _UPSTREAM_QUEUE_MAX = 256
 # Browser-origin gate. A page in ANY website can fire requests at
 # 127.0.0.1:8000 from the user's own browser and would otherwise borrow the
 # stored UM identity (the CORS "Access-Control-Allow-Origin: *" reply makes
-# such reads work). Non-browser local programs (curl, ZCode, SDKs) never send
+# such reads work). Non-browser local programs (curl, SDKs) never send
 # an Origin header, so POST endpoints reject any request that CARRIES one
 # unless it is explicitly listed in CHAT2API_ALLOWED_ORIGINS (comma
 # separated). Read-only GET endpoints (/health, /ready) stay open.
@@ -6103,7 +6103,7 @@ class Handler(BaseHTTPRequestHandler):
 
         A web page in ANY site can POST to 127.0.0.1 and would otherwise
         borrow the stored UM identity through this proxy. Local programs
-        (curl, ZCode, SDKs) never send Origin, so only requests that CARRY
+        (curl, SDKs) never send Origin, so only requests that CARRY
         one are gated; explicitly allowed origins may be listed in the
         CHAT2API_ALLOWED_ORIGINS env (comma separated).
         """
@@ -7767,7 +7767,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._reauthentication_error("upstream_rejected")
                 elif status_code in (400, 422):
                     # Request-validation failure: mapping it to 502 would let
-                    # ZCode replay the SAME payload as a transient failure and
+                    # a retry-capable client replay the SAME payload as a transient failure and
                     # re-reject it forever. Surface the real status, never
                     # enter transient retry, and log structure-only
                     # diagnostics (counts/ids/shape hash, no content) through
@@ -8666,7 +8666,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     # Nothing was streamed: the 200 never went out, so a
                     # non-2xx is still honest and lets retry-capable clients
-                    # (ZCode classifies HTTP 502 as retryable) recover a
+                    # (a retry-capable client treats HTTP 502 as retryable) recover a
                     # transient upstream failure themselves.
                     try:
                         self._error(502, STREAM_ERROR_MESSAGES.get(

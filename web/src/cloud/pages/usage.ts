@@ -1,5 +1,5 @@
 import { escapeHtml } from "../../html";
-import { fmtCny, fmtNum, fmtTokens } from "../../console/ui";
+import { fmtNum, fmtTokens } from "../../console/ui";
 import { FAILURE_WORD, lastValue } from "../cloud-reads";
 import {
   aggregateRows,
@@ -15,17 +15,6 @@ import {
   type SummaryRow,
 } from "../cloud-format";
 import type { CloudModel } from "../model";
-
-/** A partial CNY total is a lower bound. "<¥0.01" already means "below
- *  ¥0.01", so it never gets a second "≥" prefix (which would read
- *  ≥<¥0.01). A lower bound below ¥0.01 keeps enough precision to stay
- *  honest (≥¥0.005), and a partial 0 is still 0. */
-export function cnyBound(value: number, partial: boolean): string {
-  if (!partial || value === 0) return fmtCny(value);
-  const text = fmtCny(value);
-  if (text.startsWith("<")) return `≥¥${Number(value.toPrecision(2))}`;
-  return `≥${text}`;
-}
 
 export function usageKpis(model: CloudModel): string {
   const usageRead = lastValue(model.usage);
@@ -105,11 +94,6 @@ export function usageKpis(model: CloudModel): string {
       : `${measuredToday.tokensComplete ? "" : "≥"}${fmtTokens(measuredToday.tokens)}`
     : "未知";
   const failedValue = failed === null ? "未知" : fmtNum(failed);
-  const costValue = measuredToday
-    ? measuredToday.costCny === null
-      ? "未知"
-      : cnyBound(measuredToday.costCny, measuredToday.costPartial)
-    : "未知";
   const weekNote = week === null ? "近 7 天未知" : `近 7 天 ${fmtNum(week)}`;
   const tokenNote =
     measuredToday && !measuredToday.tokensComplete
@@ -130,7 +114,6 @@ export function usageKpis(model: CloudModel): string {
       <span class="cloud-usage-figure-value mono" data-cloud-usage-value="failed">${failedValue}</span>
     </div>
     <p class="cloud-usage-figure-note">${weekNote} · 北京时间日期${tokenNote ? ` · ${tokenNote}` : ""}${totals?.missingKeys ? ` · ${totals.missingKeys} 个 Key 没有按日明细，合计不含它们` : ""}${totals?.missingUnattributed ? " · 未归属桶没有按日明细，合计不含它" : ""}</p>
-    <p class="cloud-usage-figure-note">今日模型参考费用 <span class="mono" data-cloud-usage-cost>${costValue}</span> · 按模型参考价估算，不是云账单${measuredToday?.costPartial ? "；部分记录未完成，实际可能更高" : ""}</p>
     ${usageNote ? `<p class="cloud-usage-figure-note" data-tone="warn">${escapeHtml(usageNote)}</p>` : ""}
     ${usageNote ? `<p class="cloud-usage-figure-note" data-tone="warn">${escapeHtml(usageNote)}</p>` : ""}
     ${failedNote ? `<p class="cloud-usage-figure-note" data-tone="warn">${escapeHtml(failedNote)}</p>` : ""}
@@ -421,12 +404,9 @@ export function trendCard(model: CloudModel): string {
       : undated.count > 0
         ? `另有 ${fmtNum(undated.count)} 次请求后端无法确定日期，计入累计但不在图中。`
         : "";
-  const partialDays = values.filter(
-    (value) => value !== null && value.costPartial === true
-  ).length;
   const lowerBound =
-    partialDays > 0
-      ? `有 ${partialDays} 天的记录不完整，${metricWord}是下界（≥）。`
+    values.some((value) => value !== null && value.tokensComplete === false)
+      ? `${metricWord}含未完整记录，数值是下界（≥）。`
       : "";
   const allZeroNote = everyDayZero
     ? `所选时段内每天的${metricWord}都是 0：这是已读取到的 0，不是读取失败。`

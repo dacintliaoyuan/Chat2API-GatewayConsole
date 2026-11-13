@@ -51,7 +51,7 @@ const intent = loadCloud(bundleCloud("../../src/cloud/operation-intent.ts"));
 
 const op = (overrides = {}) => ({
   id: "op-1",
-  action: "share.backend_login",
+  action: "account.login",
   target: "share",
   state: "succeeded",
   created_at: 1793413300,
@@ -156,7 +156,7 @@ test("A2: the original identity finds the operation by key, action and target", 
   assert.equal(
     intent.findOperationByIdentity(
       rows,
-      "share.backend_login",
+      "account.login",
       "share",
       "idem-b"
     ).id,
@@ -165,7 +165,7 @@ test("A2: the original identity finds the operation by key, action and target", 
   assert.equal(
     intent.findOperationByIdentity(
       rows,
-      "share.backend_login",
+      "account.login",
       "other",
       "idem-b"
     ),

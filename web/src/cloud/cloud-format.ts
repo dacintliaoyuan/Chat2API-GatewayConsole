@@ -56,18 +56,12 @@ export const toneStatus = (tone: Tone, word: string) =>
 
 /** The fields every usage aggregate carries; a key row, the unattributed bucket
  *  and a day/model detail all satisfy this structurally. */
-export type SummaryRow = Pick<
-  CostDetail,
-  "coverage" | "tokenUsage" | "costCny" | "knownCostCny" | "estimatedCostCny"
->;
+export type SummaryRow = Pick<CostDetail, "coverage" | "tokenUsage">;
 export type UsageAggregate = {
   requests: number | null;
   tokens: number | null;
   tokensComplete: boolean;
-  costCny: number | null;
-  costPartial: boolean;
   unknownRequests: number | null;
-  unpricedRequests: number | null;
   incompleteRequests: number | null;
   unknownTimeRequests: number | null;
   tokenUnknownRequests: number | null;
@@ -104,16 +98,7 @@ export function aggregateRows(rows: readonly SummaryRow[]): UsageAggregate {
           row.tokenUsage.totalTokens !== null &&
           row.tokenUsage.complete === true
       ),
-    costCny: sumOrNull(rows.map((row) => row.costCny)),
-    costPartial: rows.some(
-      (row) =>
-        row.coverage.costCnyPartial === true ||
-        row.coverage.costComplete === false
-    ),
     unknownRequests: sumOrNull(rows.map((row) => row.coverage.unknownRequests)),
-    unpricedRequests: sumOrNull(
-      rows.map((row) => row.coverage.unpricedRequests)
-    ),
     incompleteRequests: sumOrNull(
       rows.map((row) => row.coverage.incompleteRequests)
     ),
@@ -133,10 +118,7 @@ export const zeroAggregate = (): UsageAggregate => ({
   requests: 0,
   tokens: 0,
   tokensComplete: true,
-  costCny: 0,
-  costPartial: false,
   unknownRequests: 0,
-  unpricedRequests: 0,
   incompleteRequests: 0,
   unknownTimeRequests: 0,
   tokenUnknownRequests: 0,
@@ -237,8 +219,6 @@ export type TodayUsage = {
   requests: number | null;
   tokens: number | null;
   tokensComplete: boolean;
-  costCny: number | null;
-  costPartial: boolean;
   missingKeys: number;
   missingUnattributed: boolean;
 };
@@ -249,8 +229,6 @@ export function todayUsage(usage: ShareUsage, now = Date.now()): TodayUsage {
     requests: null,
     tokens: null,
     tokensComplete: false,
-    costCny: null,
-    costPartial: false,
     missingKeys: totals.missingKeys,
     missingUnattributed: totals.missingUnattributed,
   };
@@ -268,7 +246,6 @@ export function todayUsage(usage: ShareUsage, now = Date.now()): TodayUsage {
       requests: 0,
       tokens: 0,
       tokensComplete: true,
-      costCny: 0,
     };
   }
   return {
@@ -276,8 +253,6 @@ export function todayUsage(usage: ShareUsage, now = Date.now()): TodayUsage {
     requests: day.requests,
     tokens: day.tokens,
     tokensComplete: day.tokensComplete,
-    costCny: day.costCny,
-    costPartial: day.costPartial,
     missingKeys: totals.missingKeys,
     missingUnattributed: totals.missingUnattributed,
   };

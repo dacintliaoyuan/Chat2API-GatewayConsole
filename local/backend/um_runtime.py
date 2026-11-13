@@ -108,7 +108,7 @@ class UmRuntime:
 
         ``UmRuntimeConfig.home_dir`` is required and validated to equal or live
         under ``LocalConfig.home_dir``; deriving the child HOME from the profile
-        path instead would place ``~/.dsh``/``~/.zcode``/temp wherever the
+        path instead would place client config dirs/temp wherever the
         operator happened to put the profile.
         """
         return os.path.abspath(self.config.home_dir)

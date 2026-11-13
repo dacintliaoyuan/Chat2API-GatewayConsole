@@ -88,8 +88,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 /** The newest succeeded share.status result in the operations window - the
  *  backend's own layered check. The status read folds the auth states into
- *  account.valid and leaves `account` out while 8110 is down, so the layer word
- *  and the auth label exist only here (backend cross-check, 2026-10-31). */
+ *  account.valid and leaves `account` out while the UM backend is down, so the
+ *  layer word and the auth label exist only here (backend cross-check,
+ *  2026-10-31). */
 export function lastStatusCheck(
   ops: ReadState<OperationRow[]>
 ): StatusCheck | null {
@@ -144,13 +145,9 @@ export type CurrentLogin = {
   at: number | null;
   action: string;
 };
-const LOGIN_ACTIONS: ReadonlySet<string> = new Set([
-  "share.backend_login",
-  "share.backend_reauthenticate",
-]);
+const LOGIN_ACTIONS: ReadonlySet<string> = new Set(["account.login"]);
 const LOGIN_ACTION_WORD: Readonly<Record<string, string>> = {
-  "share.backend_login": "启动 UM 登录流程",
-  "share.backend_reauthenticate": "重新认证 UM",
+  "account.login": "登录 UM",
 };
 /** The newest login/re-auth operation still in flight. A terminal row is history,
  *  and a stale operations read cannot prove the backend is still running it. */
@@ -199,8 +196,8 @@ export type UmState = {
    *  login/re-auth operation. A terminal observation never fills it. */
   currentLogin: CurrentLogin | null;
 };
-/** UM backend (8110) and its authentication. The status read carries
- *  account {running, valid}; while 8110 is down the backend leaves `account`
+/** UM backend and its authentication. The status read carries
+ *  account {running, valid}; while the backend is down it leaves `account`
  *  out rather than sending running:false, so an absent account is 未上报 and
  *  only the last layered check can say 已停止. `last_check_at` stamps THIS
  *  status read; it is not the time the auth was observed.
@@ -283,8 +280,8 @@ export function umState(
     authReported,
   };
 }
-/** 8110 is down as last seen: the status says so, or it is silent and the last
- *  layered check found the backend stopped. */
+/** The UM backend is down as last seen: the status says so, or it is silent and
+ *  the last layered check found the backend stopped. */
 export const umDown = (um: UmState) =>
   um.backend.word === "未运行" ||
   (um.backend.word === "未上报" && um.check?.backend === "stopped");
@@ -468,7 +465,7 @@ export function statusDetailHtml(model: CloudModel): string {
     </dl>
     <div class="cloud-status-detail-actions">
       ${model.actionButton("share.status", "share", "分层检查（只读）", "btn btn-outline btn-sm")}
-      ${model.actionButton("share.backend_reauthenticate", "share", "重新认证 UM", "btn btn-tonal btn-sm")}
+      ${model.actionButton("share.gateway_restart", "share", "重启分享入口 8100", "btn btn-tonal btn-sm")}
     </div>
     <p class="card-foot">打开登录窗口不等于 UM 认证成功，登录/MFA 由本人完成；上游可达不等于每次请求都成功。读数失败后保留的上次值会标为过时，不当作当前状态。</p>
   </div>`;
@@ -482,7 +479,7 @@ export function statusRowHtml(model: CloudModel): string {
   const open = `<button type="button" class="btn btn-primary btn-sm" data-cloud-login-window-open>打开登录窗口</button>`;
   const cancel = `<button type="button" class="btn btn-outline btn-sm" data-cloud-login-cancel>取消登录</button>`;
   const relogin = model.actionButton(
-    "share.backend_login",
+    "account.login",
     "share",
     "重新登录",
     "btn btn-primary btn-sm"

@@ -19,7 +19,6 @@ import {
   copyGatewayConnectionField,
   count,
   createFetchTransport,
-  encodeSyncScope,
   gatewayConnectionFixtureReads,
   gatewayConnectionFixtureResponse,
   joinModelDetails,
@@ -29,7 +28,6 @@ import {
   normalizeGatewayConnection,
   normalizeLogPage,
   normalizeShareUsage,
-  normalizeSettingsApply,
   reorderGatewaySubset,
   PaneWidthPreferences,
   PANE_WIDTH_FORMAT_VERSION,
@@ -46,11 +44,6 @@ const actions = [
   "model.catalog",
   "model.context_overrides",
   "model.context_probe_preview",
-  "model.sync_preview",
-  "model.settings_save",
-  "model.settings_preview",
-  "model.settings_apply",
-  "model.sync_apply",
   "model.context_probe_run",
 ].map((action) => ({
   action,
@@ -262,21 +255,6 @@ for (const row of [
 share.keys[0].models[0].costCnyPartial = false;
 share.keys[0].models[0].knownCostCnyPartial = false;
 share.keys[0].models[0].estimatedCostCnyPartial = false;
-const preview = {
-  selection: { "um|test-model": 2 },
-  preview_token: "a".repeat(64),
-  changes: [
-    {
-      key: "um|test-model",
-      applied: null,
-      draft: contexts.overrides[0].settings_draft,
-    },
-  ],
-  plan: { status: "ready" },
-  warnings: [],
-  status: "ready",
-};
-
 function scenario(operations = {}) {
   return {
     name: "offline-contract",
@@ -289,20 +267,6 @@ function scenario(operations = {}) {
       "model.catalog": [{ result: catalog }],
       "model.context_overrides": [{ result: contexts }],
       "model.context_probe_preview": [{ result: evidence }],
-      "model.settings_preview": [{ result: preview }],
-      "model.settings_apply": [
-        {
-          result: {
-            applied: ["um|test-model"],
-            deferred: [],
-            deferred_restored: [],
-            status: "normal",
-          },
-        },
-      ],
-      "model.settings_save": [
-        { result: { draft_version: 3, draft: { alias: "别名" } } },
-      ],
       ...operations,
     },
   };
@@ -407,7 +371,7 @@ test("history and per-client readback stay independent from the applied record",
   const snapshot = structuredClone(contexts);
   snapshot.overrides[0].client_readbacks = [
     {
-      consumer: "ZCode",
+      consumer: "fixture-client",
       state: "ok",
       contextTokens: 64000,
       alias: "old name",
@@ -456,33 +420,6 @@ test("log lookup passes an exact bounded identity independently of the text quer
       request_id: "a".repeat(65),
     }),
     ContractError
-  );
-});
-
-test("sync all/selected is explicit and empty selected scope is rejected", () => {
-  assert.deepEqual(encodeSyncScope({ mode: "all" }), { scope_mode: "all" });
-  assert.throws(() => encodeSyncScope({ mode: "selected" }), ContractError);
-  assert.throws(
-    () => encodeSyncScope({ mode: "selected", models: { um: [] } }),
-    ContractError
-  );
-  assert.throws(
-    () => encodeSyncScope({ mode: "all", sources: ["um"] }),
-    ContractError
-  );
-  assert.deepEqual(
-    encodeSyncScope({
-      mode: "selected",
-      sources: ["um", "um"],
-      consumers: ["ZCode"],
-      models: { um: ["test-model"] },
-    }),
-    {
-      scope_mode: "selected",
-      sources: '["um"]',
-      consumers: '["ZCode"]',
-      models: { um: ["test-model"] },
-    }
   );
 });
 
@@ -666,25 +603,6 @@ test("the unattributed bucket carries its own Token split and is never merged in
   assert.equal(normalizeShareUsage(share).keys.length, 1);
 });
 
-test("settings deferral is not applied success, and inconsistent overlap is rejected", () => {
-  const result = normalizeSettingsApply({
-    applied: [],
-    deferred: ["um|test-model"],
-    status: "pending",
-    pendingDetails: [{ kind: "provider_write_deferred" }],
-  });
-  assert.deepEqual(result.applied, []);
-  assert.deepEqual(result.deferred, ["um|test-model"]);
-  assert.throws(
-    () =>
-      normalizeSettingsApply({
-        applied: ["um|test-model"],
-        deferred: ["um|test-model"],
-      }),
-    ContractError
-  );
-});
-
 test("catalog shape errors do not become an empty successful directory", () => {
   assert.throws(() => normalizeCatalog({ catalogs: [] }), ContractError);
   assert.throws(
@@ -748,18 +666,11 @@ test("fixture client traverses real submit/poll envelope without fetch or model 
 
 test("unregistered/disabled actions are detected before POST", async () => {
   const fixture = scenario();
-  fixture.actions = fixture.actions.filter(
-    (row) => row.action !== "model.settings_preview"
-  );
   fixture.actions.find(
     (row) => row.action === "model.context_probe_run"
   ).enabled = false;
   const transport = new FixtureTransport(fixture);
   const client = new BackendClient(transport, clock());
-  await assert.rejects(
-    client.previewSettings({ "um|test-model": 2 }),
-    ActionUnavailableError
-  );
   await assert.rejects(
     client.runAction(
       "model.context_probe_run",
@@ -770,134 +681,6 @@ test("unregistered/disabled actions are detected before POST", async () => {
     ActionUnavailableError
   );
   assert.equal(posts(transport).length, 0);
-});
-
-test("uncertain submit is reported without retry or false failure/success", async () => {
-  const transport = new FixtureTransport(
-    scenario({
-      "model.settings_save": [{ submitError: "network_lost_after_send" }],
-    })
-  );
-  const client = new BackendClient(transport, clock());
-  const result = await client.saveSettings(
-    "um",
-    "test-model",
-    { alias: "别名" },
-    2
-  );
-  assert.equal(result.state, "unconfirmed");
-  assert.equal(result.operationId, null);
-  assert.equal(posts(transport).length, 1);
-});
-
-test("polling uncertainty retains the accepted operation ID for reconciliation", async () => {
-  const transport = new FixtureTransport(
-    scenario({ "model.settings_save": [{ pollError: "status_unavailable" }] })
-  );
-  const client = new BackendClient(transport, clock());
-  const result = await client.saveSettings(
-    "um",
-    "test-model",
-    { alias: "别名" },
-    2
-  );
-  assert.equal(result.state, "unconfirmed");
-  assert.equal(result.operationId, "fixture-1");
-  assert.equal(posts(transport).length, 1);
-});
-
-test("definitive version conflict remains a refusal, and alias patch does not erase fields", async () => {
-  const transport = new FixtureTransport(
-    scenario({
-      "model.settings_save": [
-        { rejection: { status: 409, body: { error: "version_conflict" } } },
-      ],
-    })
-  );
-  const client = new BackendClient(transport, clock());
-  const result = await client.saveSettings(
-    "um",
-    "test-model",
-    { alias: "别名" },
-    2
-  );
-  assert.equal(result.state, "refused");
-  assert.match(result.reason, /version_conflict/);
-  assert.deepEqual(posts(transport)[0].body.params, {
-    source: "um",
-    model_id: "test-model",
-    alias: "别名",
-    expected_draft_version: 2,
-  });
-});
-
-test("settings apply binds the exact preview selection and token", async () => {
-  const transport = new FixtureTransport(scenario());
-  const client = new BackendClient(transport, clock());
-  const selection = { "um|test-model": 2 };
-  const bound = await client.previewSettings(selection);
-  selection["um|test-model"] = 3;
-  assert.equal(bound.selection["um|test-model"], 2);
-  assert.throws(() => client.applySettings(bound, selection), ContractError);
-  assert.equal(posts(transport).length, 1);
-  const result = await client.applySettings(bound, { "um|test-model": 2 });
-  assert.equal(result.state, "succeeded");
-  assert.deepEqual(posts(transport)[1].body.params, {
-    selection: { "um|test-model": 2 },
-    preview_token: "a".repeat(64),
-  });
-});
-
-test("empty settings selection is never interpreted as all", async () => {
-  const transport = new FixtureTransport(scenario());
-  const client = new BackendClient(transport, clock());
-  await assert.rejects(client.previewSettings({}), ContractError);
-  assert.equal(posts(transport).length, 0);
-});
-
-test("local operation cancellation is unknown until server terminal state", async () => {
-  const fixture = scenario({
-    "model.settings_save": [{ states: ["queued", "queued"] }],
-  });
-  const transport = new FixtureTransport(fixture);
-  const client = new BackendClient(transport, clock());
-  const result = await client.runAction(
-    "model.settings_save",
-    "model",
-    { source: "um", model_id: "test-model", alias: "x" },
-    { intent: "draft", timeoutMs: 2, pollIntervalMs: 1 }
-  );
-  assert.equal(result.state, "unconfirmed");
-  assert.match(result.reason, /deadline/);
-  assert.equal(
-    transport.calls.filter((call) => call.path.endsWith("/cancel")).length,
-    0
-  );
-});
-
-test("same-resource duplicate submission is blocked while the first POST is in flight", async () => {
-  const fixtureTransport = new FixtureTransport(scenario());
-  const gate = deferred();
-  const started = deferred();
-  const transport = {
-    request: async (request) => {
-      if (request.method === "POST" && request.path === "/operations") {
-        started.resolve();
-        await gate.promise;
-      }
-      return fixtureTransport.request(request);
-    },
-  };
-  const client = new BackendClient(transport, clock());
-  const first = client.saveSettings("um", "test-model", { alias: "first" }, 2);
-  await started.promise;
-  await assert.rejects(
-    client.saveSettings("um", "test-model", { alias: "second" }, 2),
-    ActionBusyError
-  );
-  gate.resolve();
-  assert.equal((await first).state, "succeeded");
-  assert.equal(posts(fixtureTransport).length, 1);
 });
 
 test("share read errors keep version/auth/transport state separate and never invent zero", async () => {
@@ -952,27 +735,6 @@ test("fetch adapter uses same-origin session/CSRF contract and omits credentials
   );
 });
 
-test("wrong operation identity cannot be installed as a model result", async () => {
-  const transport = new FixtureTransport(scenario());
-  const guarded = {
-    request: async (request) => {
-      const response = await transport.request(request);
-      if (request.path.startsWith("/operations/") && response.body?.operation)
-        response.body.operation.action = "model.catalog";
-      return response;
-    },
-  };
-  const client = new BackendClient(guarded, clock());
-  const result = await client.saveSettings(
-    "um",
-    "test-model",
-    { alias: "x" },
-    2
-  );
-  assert.equal(result.state, "unconfirmed");
-  assert.match(result.reason, /identity/);
-});
-
 test("failed model refresh preserves last data and marks it stale", async () => {
   let fail = false;
   const sample = {
@@ -1012,109 +774,6 @@ test("model refresh discards older results even if the old read ignores cancella
   old.resolve(normalizeCatalog(catalog));
   assert.equal(await first, false);
   assert.equal(session.models.value[0].catalog.displayName, "fresh");
-});
-
-test("apply success and readback failure remain distinct", async () => {
-  const sample = {
-    applySettings: async () => ({
-      state: "succeeded",
-      operationId: "fixture",
-      operation: { result: { applied: ["um|test-model"], deferred: [] } },
-      reason: null,
-    }),
-    readCatalog: async () => {
-      throw new Error("readback_unavailable");
-    },
-    readContexts: async () => normalizeContexts(contexts),
-    readContextEvidence: async () => normalizeContextEvidence(evidence),
-  };
-  const session = new BackendSession(sample);
-  const result = await session.applySettingsAndReadback(
-    preview,
-    preview.selection
-  );
-  assert.equal(result.operation.state, "succeeded");
-  assert.deepEqual(result.application.applied, ["um|test-model"]);
-  assert.equal(result.readback, "failed");
-  assert.equal(result.models, null);
-});
-
-test("deferred application leaves actual readback unclaimed", async () => {
-  let readbackCalls = 0;
-  const sample = {
-    applySettings: async () => ({
-      state: "succeeded",
-      operationId: "fixture",
-      operation: {
-        result: {
-          applied: [],
-          deferred: ["um|test-model"],
-          note: "ZCode running",
-        },
-      },
-      reason: null,
-    }),
-    readCatalog: async () => {
-      readbackCalls++;
-      return normalizeCatalog(catalog);
-    },
-  };
-  const session = new BackendSession(sample);
-  const result = await session.applySettingsAndReadback(
-    preview,
-    preview.selection
-  );
-  assert.equal(result.readback, "not_requested");
-  assert.equal(readbackCalls, 0);
-  assert.deepEqual(result.application.deferred, ["um|test-model"]);
-});
-
-test("disposed session never starts readback after a late successful apply", async () => {
-  const accepted = deferred();
-  let reads = 0;
-  const sample = {
-    applySettings: () => accepted.promise,
-    readCatalog: async () => {
-      reads++;
-      return normalizeCatalog(catalog);
-    },
-  };
-  const session = new BackendSession(sample);
-  const waiting = session.applySettingsAndReadback(preview, preview.selection);
-  session.dispose();
-  accepted.resolve({
-    state: "succeeded",
-    operationId: "fixture",
-    operation: { result: { applied: ["um|test-model"], deferred: [] } },
-    reason: null,
-  });
-  const result = await waiting;
-  assert.equal(result.operation.state, "succeeded");
-  assert.equal(result.readback, "failed");
-  assert.equal(result.reason, "session_disposed_after_apply");
-  assert.equal(reads, 0);
-  assert.equal(await session.refreshModels(), false);
-  assert.equal(
-    (await session.applySettingsAndReadback(preview, preview.selection))
-      .operation.state,
-    "refused"
-  );
-});
-
-test("cancel during readback cannot install a returned client snapshot", async () => {
-  const pending = deferred();
-  const controller = new AbortController();
-  const sample = {
-    readCatalog: () => pending.promise,
-    readContexts: async () => normalizeContexts(contexts),
-    readContextEvidence: async () => normalizeContextEvidence(evidence),
-  };
-  const session = new BackendSession(sample);
-  const reading = session.refreshModels(controller.signal);
-  controller.abort();
-  pending.resolve(normalizeCatalog(catalog));
-  assert.equal(await reading, false);
-  assert.equal(session.models.value, null);
 });
 
 // Gateway sidebar order preference (Plan-Revision 12): every case below runs on
