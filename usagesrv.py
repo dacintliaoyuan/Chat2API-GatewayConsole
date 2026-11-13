@@ -4348,12 +4348,12 @@ class Handler(BaseHTTPRequestHandler):
             # R9-R30 调用日志：UM 主链账本 JSONL 的尾部，只读尾块 seek
             # 读取（账本文件可达数 MB，绝不整文件读入）；覆盖范围诚实声明
             # 在响应里，缺席账本=该链无日志而非错误。B0（2026-11-01）：
-            # 默认只读 chat2api；退役来源 id 不在读取表内时不再静默跳过
+            # 默认只读 chat2api；未登记来源 id 不在读取表内时不再静默跳过
             # ——该 id 进 sources_unavailable，前端据此区分「没有记录」与
             # 「该来源不在账本覆盖内」。数值字段（input/output/
             # cached_input/reasoning_tokens、duration_ms）缺失或不可解析
             # 一律 null（未知，F2 修复点），绝不折零——0 会被前端读成
-            # 真实测得值；credits 保持既有 null 语义。
+            # 真实测得值。
             query = parse_qs(parsed.query)
             try:
                 limit = max(1, min(200, int((query.get("limit") or ["80"])[0] or 80)))
