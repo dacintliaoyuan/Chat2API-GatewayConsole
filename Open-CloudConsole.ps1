@@ -617,18 +617,45 @@ function Invoke-CloudConsoleBootstrapProcess {
 
 function Get-CloudConsoleBootstrapArgumentLine {
     param([string]$ConfigPath, [string]$HostAlias, [string]$KnownHostsPath)
-    # Use Windows process-argument quoting, including trailing backslashes.
-    $quoted = @()
-    $knownHostsOption = 'UserKnownHostsFile="' + $KnownHostsPath.Replace('\', '/').Replace('"', '\"') + '"'
-    foreach ($value in @($ConfigPath, $knownHostsOption)) {
-        $escaped = [regex]::Replace($value, '(\\*)"', '$1$1\"')
-        $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
-        $quoted += '"' + $escaped + '"'
-    }
+    # The dedicated config already pins UserKnownHostsFile; pass the same path
+    # as one unquoted -o value (Windows OpenSSH rejects the escaped-quote form
+    # with "hostname contains invalid characters"). The preflight's effective
+    # config remains the source of truth for the path.
+    $quotedConfig = '"' + $ConfigPath.Replace('"', '\"') + '"'
+    $knownHosts = $KnownHostsPath.Replace('\', '/').Replace('"', '')
     return ('-T -F {0} -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes ' +
-        '-o {1} -o ClearAllForwardings=yes -o ConnectTimeout=15 ' +
+        '-o UserKnownHostsFile={1} -o ClearAllForwardings=yes -o ConnectTimeout=15 ' +
         '{2} python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant.py --console-session') -f `
-        $quoted[0], $quoted[1], $HostAlias
+        $quotedConfig, $knownHosts, $HostAlias
+}
+
+function Get-CloudConsoleDisplayGrantArgumentLine {
+    param([string]$ConfigPath, [string]$HostAlias, [string]$KnownHostsPath)
+    $quotedConfig = '"' + $ConfigPath.Replace('"', '\"') + '"'
+    $knownHosts = $KnownHostsPath.Replace('\', '/').Replace('"', '')
+    return ('-T -F {0} -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes ' +
+        '-o UserKnownHostsFile={1} -o ClearAllForwardings=yes -o ConnectTimeout=15 ' +
+        '{2} python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant.py') -f `
+        $quotedConfig, $knownHosts, $HostAlias
+}
+
+function Open-CloudConsoleDisplayGrantPage {
+    param($Adapter, $SshPreflight, [string]$ConfigPath, [string]$HostAlias)
+    $failure = New-CloudResult 1 '授权' 'open.loginfailed' '登录窗口授权失败；请检查专用 SSH 连接与云端授权服务后重试。'
+    try {
+        $knownHosts = Get-CloudEffectiveValue -Effective $SshPreflight.Effective -Key 'userknownhostsfile'
+        $arguments = Get-CloudConsoleDisplayGrantArgumentLine -ConfigPath $ConfigPath -HostAlias $HostAlias -KnownHostsPath $knownHosts
+        $response = & $Adapter.IssueConsoleBootstrap $SshPreflight.SshExe $arguments
+        if ($null -eq $response -or (Get-CloudObjectProperty $response 'ExitCode') -ne 0) { return $failure }
+        $relativeUrl = [string](Get-CloudObjectProperty $response 'Output')
+        if ($relativeUrl -cnotmatch '\A/display/grant#grant=[A-Za-z0-9_-]{16,256}(?:\r?\n)?\z') { return $failure }
+        $url = 'http://localhost:18096' + $relativeUrl.TrimEnd("`r", "`n")
+        $browser = Open-CloudConsolePage -Adapter $Adapter -Url $url
+        if (-not $browser.Ok) { return $failure }
+        return New-CloudResult 0 '入口' 'open.loginready' '已打开 UM 私有登录窗口。'
+    } catch {
+        return $failure
+    }
 }
 
 function Open-CloudConsoleAuthenticatedPage {
@@ -647,6 +674,15 @@ function Open-CloudConsoleAuthenticatedPage {
         $browser = Open-CloudConsolePage -Adapter $Adapter -Url $url
         if (-not $browser.Ok) {
             return New-CloudResult 1 '错误' 'open.browserfailed' '隧道已就绪，但打开 Edge 失败；请重新运行云端控制台入口。'
+        }
+        if ($env:UM_CLOUD_CONSOLE_OPEN_LOGIN -eq '1') {
+            $login = Open-CloudConsoleDisplayGrantPage -Adapter $Adapter -SshPreflight $SshPreflight `
+                -ConfigPath $ConfigPath -HostAlias $HostAlias
+            if ($login.ExitCode -ne 0) {
+                return New-CloudResult 1 '授权' 'open.loginfailed' `
+                    ('控制台已打开，但登录窗口未打开：' + $login.Message)
+            }
+            return New-CloudResult 0 '入口' 'open.ready' 'SSH 隧道已就绪，已打开 UM 云端控制台和私有登录窗口。'
         }
         return New-CloudResult 0 '入口' 'open.ready' 'SSH 隧道已就绪，已打开 UM 云端控制台授权页面。'
     } catch {

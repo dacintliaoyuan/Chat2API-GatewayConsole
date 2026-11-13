@@ -12,6 +12,8 @@ set "https_proxy="
 set "all_proxy="
 set "NO_PROXY=*"
 set "no_proxy=*"
+rem The desktop entry opens both the cloud console and the private login window.
+set "UM_CLOUD_CONSOLE_OPEN_LOGIN=1"
 rem PowerShell 7 is the project default; fall back to Windows PowerShell
 rem only when pwsh is not installed on this machine.
 where pwsh >nul 2>nul
