@@ -9,13 +9,10 @@ import tempfile
 import time
 from pathlib import Path
 
-from .constants import (
-    MAGPIE_SNAPSHOT_NAME, MAGPIE_STATUS_NAME, SHARE_SECRET_NAME,
-)
+from .constants import SHARE_SECRET_NAME
 from .errors import (
     BackupBudgetError, BackupConfigError, BackupError,
-    BackupIntegrityError, BackupMagpieError, BackupSecurityError,
-    RestoreTargetExists,
+    BackupIntegrityError, BackupSecurityError, RestoreTargetExists,
 )
 from .backup import inspect_backup
 from .keyfile import _validate_key
@@ -23,10 +20,7 @@ from .package import (
     _inspect_budget_bytes, _security_state_bytes,
     _validate_security_state, read_security_state,
 )
-from .products import (
-    _load_share_store, _read_magpie_snapshot_bytes,
-    _read_magpie_status_bytes,
-)
+from .products import _load_share_store
 from .security import latest_security_state
 
 def _verify_share_secret_decrypts_store(db_bytes, secret_bytes):
@@ -39,13 +33,12 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
                    require_min_generation=None, allow_existing=False,
                    target_budget_db_path=None, target_extra_dir=None,
                    target_security_state_path=None,
-                   target_price_table_path=None, target_magpie_dir=None,
                    target_share_secret_key_path=None,
                    target_share_secret_owner=None,
                    target_share_secret_group=None,
                    security_state=None, security_state_path=None,
                    require_budget=False, require_config=False,
-                   require_security=False, require_magpie=False,
+                   require_security=False,
                    require_share_secret=False) -> dict:
     """Restore a sealed backup into NEW target paths.
 
@@ -61,10 +54,7 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
       taken before a later revoke cannot be restored over that revoke.
     * ``require_budget`` refuses a package without the budget snapshot, so an
       old backup cannot silently reset the spent quota.
-    * ``require_config`` refuses a package without the price/config files.
-    * ``require_magpie`` refuses a package without the Magpie price closure;
-      a present closure is restored to ``target_magpie_dir`` and its current
-      version is re-checked against the version recorded with the ledger.
+    * ``require_config`` refuses a package without the config files.
     * ``require_share_secret`` refuses a package without the POSIX AES-GCM
       share-key file; when present it is restored to
       ``target_share_secret_key_path`` so the restored store rows stay
@@ -95,28 +85,15 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
         raise BackupBudgetError(
             "the backup has no budget snapshot; the spent quota cannot be "
             "confirmed")
-    if require_magpie and not inspected["magpie"]:
-        raise BackupMagpieError(
-            "the backup has no magpie price snapshot/status; the reference "
-            "price version cannot be restored")
-    price_name = metadata.get("price_table_name")
-    magpie_names = {MAGPIE_SNAPSHOT_NAME, MAGPIE_STATUS_NAME}
     share_secret_name = metadata.get("share_secret_name")
     if not isinstance(share_secret_name, str) or not share_secret_name:
         share_secret_name = SHARE_SECRET_NAME
-    price_bytes = (
-        inspected["extra_files"].get(price_name)
-        if metadata.get("price_table_present") and price_name else None)
     share_secret_bytes = (
         inspected["extra_files"].get(share_secret_name)
         if metadata.get("share_secret_present") else None)
     config_files = {
         name: data for name, data in inspected["extra_files"].items()
-        if name != price_name and name not in magpie_names
-        and name != share_secret_name}
-    magpie_files = {
-        name: data for name, data in inspected["extra_files"].items()
-        if name in magpie_names}
+        if name != share_secret_name}
     if require_share_secret and share_secret_bytes is None:
         raise BackupError(
             "the backup has no share secret key; the restored store rows "
@@ -128,9 +105,9 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
         # so a wrong key cannot be installed alongside an unreadable store.
         share_secret_verified_rows = _verify_share_secret_decrypts_store(
             inspected["db_bytes"], share_secret_bytes)
-    if require_config and not config_files and price_bytes is None:
+    if require_config and not config_files:
         raise BackupConfigError(
-            "the backup has no price/config payload required for restore")
+            "the backup has no config payload required for restore")
     if security is not None and metadata.get("security_present"):
         embedded = inspected["security"]
         if embedded is not None and (
@@ -147,10 +124,6 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
     extra_target = Path(target_extra_dir) if target_extra_dir is not None else None
     security_target = (Path(target_security_state_path)
                        if target_security_state_path is not None else None)
-    price_target = (Path(target_price_table_path)
-                    if target_price_table_path is not None else None)
-    magpie_target = (Path(target_magpie_dir)
-                     if target_magpie_dir is not None else None)
     share_secret_target = (Path(target_share_secret_key_path)
                            if target_share_secret_key_path is not None
                            else None)
@@ -160,13 +133,6 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
     if config_files and extra_target is None and require_config:
         raise BackupConfigError(
             "the backup carries config files but no target was named")
-    if price_bytes is not None and price_target is None \
-            and extra_target is None and require_config:
-        raise BackupConfigError(
-            "the backup carries a price table but no target was named")
-    if inspected["magpie"] and magpie_target is None:
-        raise BackupMagpieError(
-            "the backup carries magpie prices but no target was named")
     if share_secret_bytes is not None and share_secret_target is None \
             and require_share_secret:
         raise BackupError(
@@ -191,11 +157,7 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
     share_secret_mode = 0o600
     if not allow_existing:
         for path in (db_target, ledger_target, budget_target,
-                     security_target, price_target, share_secret_target,
-                     (None if magpie_target is None
-                      else magpie_target / MAGPIE_SNAPSHOT_NAME),
-                     (None if magpie_target is None
-                      else magpie_target / MAGPIE_STATUS_NAME)):
+                     security_target, share_secret_target):
             if path is not None and path.exists():
                 raise RestoreTargetExists(
                     f"restore target already exists: {path}")
@@ -204,13 +166,11 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
                 f"restore target already exists: {extra_target}")
 
     for path in (db_target, ledger_target, budget_target,
-                 security_target, price_target, share_secret_target):
+                 security_target, share_secret_target):
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
     if extra_target is not None:
         extra_target.mkdir(parents=True, exist_ok=True)
-    if magpie_target is not None:
-        magpie_target.mkdir(parents=True, exist_ok=True)
     stages = []
     installed = []
     keep_backups = False
@@ -230,14 +190,6 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
             _install(ledger_target, inspected["ledger_bytes"])
         if inspected["budget"] and budget_target is not None:
             _install(budget_target, inspected["budget_bytes"])
-        if price_bytes is not None:
-            if price_target is not None:
-                _install(price_target, price_bytes)
-            elif extra_target is not None:
-                _install(extra_target / price_name, price_bytes)
-        if magpie_files and magpie_target is not None:
-            for name in sorted(magpie_files):
-                _install(magpie_target / name, magpie_files[name])
         if config_files and extra_target is not None:
             for name, data in config_files.items():
                 _install(extra_target / name, data)
@@ -266,36 +218,6 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
                 if restored_budget[key] != inspected["budget"][key]:
                     raise BackupBudgetError(
                         f"restored budget {key} does not match the backup")
-        if price_bytes is not None:
-            if price_target is not None:
-                restored_price = price_target
-            elif extra_target is not None:
-                restored_price = extra_target / price_name
-            else:
-                restored_price = None
-            if restored_price is not None and _sha256_file(
-                    restored_price) != hashlib.sha256(
-                        price_bytes).hexdigest():
-                raise BackupIntegrityError(
-                    "restored price table SHA-256 does not match the backup")
-        if magpie_files and magpie_target is not None:
-            restored_snapshot = _read_magpie_snapshot_bytes(
-                (magpie_target / MAGPIE_SNAPSHOT_NAME).read_bytes())
-            restored_current = restored_snapshot["versions"][-1]
-            declared_version = metadata.get("magpie_current_version")
-            if declared_version is not None \
-                    and restored_current["version"] != declared_version:
-                raise BackupMagpieError(
-                    "restored magpie version does not match the version "
-                    "recorded with the ledger snapshot")
-            if metadata.get("magpie_status_present"):
-                restored_status = _read_magpie_status_bytes(
-                    (magpie_target / MAGPIE_STATUS_NAME).read_bytes())
-                if restored_status.get("snapshotVersion") != \
-                        restored_current["version"]:
-                    raise BackupMagpieError(
-                        "restored magpie status version does not match the "
-                        "restored snapshot version")
         if security is not None and security_target is not None:
             restored_security = read_security_state(security_target)
             if restored_security["generation_floor"] != security["generation_floor"]:
@@ -345,15 +267,6 @@ def restore_backup(backup_path, key, *, target_db_path, target_ledger_path,
         "budget_restored": bool(inspected["budget"] and budget_target),
         "budget": inspected["budget"],
         "budget_path": str(budget_target) if budget_target is not None else None,
-        "price_table_path": (
-            str(price_target) if price_target is not None else None),
-        "price_table_version": metadata.get("price_table_version"),
-        "magpie_restored": bool(magpie_files and magpie_target),
-        "magpie_current_version": (
-            None if not inspected["magpie"]
-            else inspected["magpie"]["current"]["version"]),
-        "magpie_dir": (
-            str(magpie_target) if magpie_target is not None else None),
         "extra_files": sorted(inspected["extra_files"]),
         "extra_dir": str(extra_target) if extra_target is not None else None,
         "share_secret_restored": bool(
@@ -487,8 +400,6 @@ def _inspect_sqlite_file(path: Path) -> dict:
 def restore_for_recovery(backup_path, key, *, target_dir=None,
                           target_db_path=None, target_ledger_path=None,
                           target_budget_db_path=None, target_extra_dir=None,
-                          target_price_table_path=None,
-                          target_magpie_dir=None,
                           target_security_state_path=None,
                           target_share_secret_key_path=None,
                           target_share_secret_owner=None,
@@ -496,8 +407,8 @@ def restore_for_recovery(backup_path, key, *, target_dir=None,
                           security_state_path=None, security_state=None,
                           security_adapter=None,
                           require_min_generation=None,
-                          price_table_path=None, config_paths=None,
-                          allow_existing=False, require_magpie=False,
+                          config_paths=None,
+                          allow_existing=False,
                           require_share_secret=False, now=None) -> dict:
     """Restore an old backup ONLY behind the independent latest fence.
 
@@ -507,9 +418,9 @@ def restore_for_recovery(backup_path, key, *, target_dir=None,
     can never resurrect a Key revoked after the backup was taken.
 
     ``target_dir`` keeps the P1 drill layout; a deployment recovery may pass
-    explicit live paths instead (store, ledger, budget, config, price table,
-    Magpie state and security state).  ``price_table_path``/``config_paths`` are
-    retained for P1 call compatibility and do NOT name restore targets.
+    explicit live paths instead (store, ledger, budget, config and security
+    state).  ``config_paths`` is retained for P1 call compatibility and does
+    NOT name a restore target.
 
     ``require_share_secret`` makes the deployment entry refuse a package that
     cannot restore the AES-GCM share-key file, before any target is replaced.
@@ -523,7 +434,6 @@ def restore_for_recovery(backup_path, key, *, target_dir=None,
         target_extra_dir = target_extra_dir or target / "config"
         target_security_state_path = (target_security_state_path
                                       or target / "security-state.json")
-        target_magpie_dir = target_magpie_dir or target / "data"
         target_share_secret_key_path = (
             target_share_secret_key_path
             or target / "data" / SHARE_SECRET_NAME)
@@ -556,15 +466,12 @@ def restore_for_recovery(backup_path, key, *, target_dir=None,
         target_ledger_path=target_ledger_path,
         target_budget_db_path=target_budget_db_path,
         target_extra_dir=target_extra_dir,
-        target_price_table_path=target_price_table_path,
-        target_magpie_dir=target_magpie_dir,
         target_share_secret_key_path=target_share_secret_key_path,
         target_share_secret_owner=target_share_secret_owner,
         target_share_secret_group=target_share_secret_group,
         target_security_state_path=target_security_state_path,
         require_min_generation=floor, require_budget=False,
         require_config=True, require_security=True,
-        require_magpie=require_magpie,
         require_share_secret=require_share_secret,
         security_state=state, allow_existing=allow_existing)
     store_module = _load_share_store()

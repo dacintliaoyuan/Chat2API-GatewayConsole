@@ -54,7 +54,6 @@ FORBIDDEN_FILES = (
     "share/public_supervision.py",
     "console/display_proxy.py",
     "console/log_reader.py",
-    "console/magpie_prices.py",
     "console/speedtest.py",
     "console/gateway_connection.py",
     "console/tailnet.py",

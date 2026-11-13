@@ -2,7 +2,6 @@ import type {
   ActionProgress,
   Load,
   MaintenanceAction,
-  UmCost,
   UmIssue,
   UmLogin,
   UmOverview,
@@ -14,7 +13,6 @@ import { METRICS, type Metric, type TrendView } from "./charts";
 import {
   blockReason,
   capButton,
-  cny,
   dayTitle,
   drawable,
   esc,
@@ -32,12 +30,12 @@ import {
   wordOf,
 } from "./format";
 
-/** 总览: UM 服务 / UM 登录 / 最近 UM 核验 side by side, today's five readings
- *  with the reference cost at the top right, the trend with a ranking of the
- *  same window, and the recent problems that lead into 请求与诊断. */
+/** 总览: UM 服务 / UM 登录 / 最近 UM 核验 side by side, today's five
+ *  readings, the trend with a ranking of the same window, and the recent
+ *  problems that lead into 请求与诊断. */
 
-/** `line`: Token / 费用 / 请求 drawn as lines instead of stacked bars. */
-export type OverviewUi = { metric: Metric; line: boolean; costOpen: boolean };
+/** `line`: Token / 请求 drawn as lines instead of stacked bars. */
+export type OverviewUi = { metric: Metric; line: boolean };
 
 type Tone = "ok" | "warn" | "err" | "neutral";
 const SERVICE_TONE: Readonly<Record<UmService["state"], Tone>> = {
@@ -259,82 +257,14 @@ function kpisHtml(t: UmToday): string {
   </div>`;
 }
 
-function costHtml(
-  load: Load<UmCost>,
-  open: boolean
-): { box: string; detail: string } {
-  const shown = loaded(load);
-  if (!shown) {
-    const word =
-      load.state === "unwired"
-        ? "未接线"
-        : load.state === "loading"
-          ? "读取中"
-          : "读取失败";
-    return {
-      box: `<div class="um-cost" data-um-state="${load.state}"><span class="um-cost-label">今日参考费用</span><span class="um-cost-value um-absent">${word}</span></div>`,
-      detail: "",
-    };
-  }
-  const c = shown.data;
-  const priceLine =
-    c.price.state === "synced"
-      ? `价格快照 ${c.price.snapshotAt !== null ? esc(when(c.price.snapshotAt)) : "时间未知"}`
-      : c.price.state === "unsynced"
-        ? "价格未同步，不是零费用"
-        : "价格同步失败，沿用上次快照";
-  const box = `<div class="um-cost"><button type="button" class="um-cost-btn" data-um-toggle="cost" aria-expanded="${open}" aria-controls="um-cost-detail">
-      <span class="um-cost-label">今日参考费用</span><span class="um-cost-value">${readingHtml(c.cny, cny)}</span>
-      <span class="um-cost-sub">${priceLine}<svg class="um-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></span></button></div>`;
-  const rows: [string, string][] = [
-    [
-      "价格来源",
-      `${esc(c.price.source ?? "未同步")}：跟随 Magpie 中 UM 模型的有效价格（含手工修正）；本页不另设改价`,
-    ],
-    [
-      "快照",
-      c.price.snapshotAt !== null
-        ? `${esc(when(c.price.snapshotAt))}${c.price.version ? ` · 版本 ${esc(c.price.version)}` : ""}`
-        : "还没有成功的价格快照",
-    ],
-    [
-      "汇率",
-      c.fx.rate !== null
-        ? `1 美元 = ${esc(String(c.fx.rate))} 元${c.fx.version ? ` · 版本 ${esc(c.fx.version)}` : ""}`
-        : "汇率未就绪，金额不完整",
-    ],
-    [
-      "覆盖范围",
-      [
-        c.unpricedRequests !== null
-          ? c.unpricedRequests > 0
-            ? `${full(c.unpricedRequests)} 个请求未定价，未计入金额`
-            : "今日请求均已定价"
-          : "未定价请求数未知",
-        c.estimatedRequests !== null && c.estimatedRequests > 0
-          ? `${full(c.estimatedRequests)} 个请求按估算计价`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    ],
-  ];
-  if (c.price.failure) rows.push(["同步失败", esc(c.price.failure)]);
-  const detail = `<div class="um-cost-detail" id="um-cost-detail"${open ? "" : " hidden"}><dl class="um-facts">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
-    <p class="um-note">参考费用用 UM 自己的账本和跟随来的价格计算，只供参考，不是 UM 的实际扣款；${shown.stale ? `沿用 ${esc(when(shown.at))} 的读取结果。` : "价格未同步时不显示金额，也不按零计。"}</p></div>`;
-  return { box, detail };
-}
-
 function usageHtml(o: UmOverview, ui: OverviewUi): string {
   const today = loaded(o.today);
-  const cost = costHtml(o.cost, ui.costOpen);
   const meta = today
     ? `${esc(dayTitle(today.data.day))} · 北京时间 · ${freshnessHtml(today.at, today.stale, today.refreshing)}`
     : "北京时间自然日";
   return `<section class="card um-usage" aria-labelledby="um-usage-title">
-    <div class="um-usage-head"><div class="um-usage-title"><h2 id="um-usage-title">今日用量</h2><p class="card-meta">${meta}</p></div>${cost.box}</div>
+    <div class="um-usage-head"><div class="um-usage-title"><h2 id="um-usage-title">今日用量</h2><p class="card-meta">${meta}</p></div></div>
     ${today ? kpisHtml(today.data) : placeholderHtml(o.today, "今日用量")}
-    ${cost.detail}
   </section>`;
 }
 
@@ -391,7 +321,6 @@ const ISSUE_TONE: Readonly<Record<UmIssue["kind"], Tone>> = {
   login: "warn",
   service: "err",
   catalog: "warn",
-  price: "warn",
   test: "warn",
 };
 

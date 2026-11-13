@@ -206,15 +206,6 @@ class LocalApp(RoleApp):
             raise failure
 
     # --------------------------------------------------------------- helpers
-    def um_reference(self):
-        """The UM endpoint facts the summary read face publishes."""
-        um = self.config.um_runtime
-        return {
-            "baseUrl": um.base_url,
-            "port": um.port,
-            "source": "local-um-runtime",
-        }
-
     def consume_session_code(self, code):
         """Consume the one-time bootstrap code (the file is cleared on match).
 

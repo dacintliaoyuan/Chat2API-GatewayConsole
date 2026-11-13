@@ -22,7 +22,6 @@ WITH_DISPLAY=0
 WITH_CLOUDFLARED=0
 CLOUDFLARED_TOKEN_FILE=""
 WHEELHOUSE=""
-PRICE_TABLE=""
 RECOVER_BACKUP=""
 RECOVER_SECURITY_STATE=""
 
@@ -46,7 +45,6 @@ Options:
                         tunnel token for --with-cloudflared (required unless
                         /etc/um-share/cloudflared.env exists)
   --wheelhouse PATH     local wheelhouse for pip --no-index
-  --price-table PATH    metering price table (required unless /etc/um-share/prices.json exists)
   --recover-backup PATH explicit recovery only: sealed backup to restore
   --recover-security-state PATH
                         independent latest security state (required with
@@ -80,7 +78,6 @@ while [ "$#" -gt 0 ]; do
     --with-display) WITH_DISPLAY=1; shift ;;
     --with-cloudflared) WITH_CLOUDFLARED=1; shift ;;
     --cloudflared-token-file) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; CLOUDFLARED_TOKEN_FILE="$2"; shift 2 ;;
-    --price-table) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; PRICE_TABLE="$2"; shift 2 ;;
     --recover-backup) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_BACKUP="$2"; shift 2 ;;
     --recover-security-state) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_SECURITY_STATE="$2"; shift 2 ;;
     -h|--help) usage; exit "$EX_OK" ;;
@@ -99,9 +96,6 @@ done
 
 if [ -n "$CLOUDFLARED_TOKEN_FILE" ] && [ ! -f "$CLOUDFLARED_TOKEN_FILE" ]; then
   die "cloudflared token file not found: $CLOUDFLARED_TOKEN_FILE" "$EX_NOINPUT"
-fi
-if [ -n "$PRICE_TABLE" ] && [ ! -f "$PRICE_TABLE" ]; then
-  die "price table not found: $PRICE_TABLE" "$EX_NOINPUT"
 fi
 if [ -n "$RECOVER_BACKUP" ] || [ -n "$RECOVER_SECURITY_STATE" ]; then
   [ -n "$RECOVER_BACKUP" ] && [ -n "$RECOVER_SECURITY_STATE" ] || \
@@ -487,37 +481,11 @@ run_recovery() {
     chown root:"$UM_BROKER_GROUP" "$UM_ETC/share-management.json"
     chmod 0640 "$UM_ETC/share-management.json"
   fi
-  if [ -f "$UM_ETC/prices.json" ]; then
-    chown root:"$UM_BROKER_GROUP" "$UM_ETC/prices.json"
-    chmod 0640 "$UM_ETC/prices.json"
-  fi
 }
 
 write_if_absent "$UM_BROKER_KEY" 0600 "$UM_BROKER_USER" "$UM_BROKER_GROUP" random_secret
 write_if_absent "$UM_INSTANCE_KEY" 0600 "$UM_BROKER_USER" "$UM_BROKER_GROUP" random_secret
 write_if_absent "$UM_ETC/admin-control-token" 0600 "$UM_BROKER_USER" "$UM_BROKER_GROUP" random_secret
-
-# The share metering price table is deployment configuration, not release
-# code.  Without it the ledger stamps no price version, so a missing table is a
-# deployment refusal.
-if [ ! -e "$UM_ETC/prices.json" ]; then
-  [ -n "$PRICE_TABLE" ] || \
-    die "price table is required: pass --price-table or pre-create $UM_ETC/prices.json" "$EX_NOINPUT"
-  install -m 0640 -o root -g "$UM_BROKER_GROUP" \
-    "$PRICE_TABLE" "$UM_ETC/prices.json"
-else
-  log "keeping existing $UM_ETC/prices.json"
-fi
-python3.14 - "$UM_ETC/prices.json" <<'PY'
-import json
-import sys
-try:
-    payload = json.load(open(sys.argv[1], encoding="utf-8"))
-except (OSError, ValueError) as exc:
-    raise SystemExit(f"price table is not valid JSON: {exc}")
-if not isinstance(payload, dict):
-    raise SystemExit("price table must be a JSON object")
-PY
 
 if [ ! -e "$UM_ETC/share-management.json" ]; then
   install -m 0640 -o root -g "$UM_BROKER_GROUP" \
@@ -562,9 +530,9 @@ ensure_env_line "$UM_ETC/broker.env" CHAT2API_SHARE_REVOKE_STATE_FILE \
 ensure_env_line "$UM_ETC/console.env" CHAT2API_SHARE_REVOKE_STATE_FILE \
   "$UM_VAR/share-revoke.state"
 # Existing operator env files are never overwritten, but a missing read-face
-# line is appended: an upgraded install must not silently lose the security,
-# price or Magpie wiring (the console unit's ExecStartPre fails closed on any
-# omission).  Budget and automatic-backup keys are deliberately absent.
+# line is appended: an upgraded install must not silently lose the security
+# wiring (the console unit's ExecStartPre fails closed on any omission).
+# Budget and automatic-backup keys are deliberately absent.
 ensure_env_line "$UM_ETC/console.env" UM_CLOUD_SECURITY_STATE "$UM_VAR/security-state.json"
 # The merged 8100 child owns the UM login token and browser profile; keep them
 # under the writable console state instead of the read-only release.
@@ -572,10 +540,6 @@ ensure_env_line "$UM_ETC/console.env" CHAT2API_TOKEN_FILE \
   "$UM_CONSOLE_VAR/share-backend/token.json"
 ensure_env_line "$UM_ETC/console.env" CHAT2API_PROFILE_DIR \
   "$UM_CONSOLE_VAR/share-backend/edge-profile"
-ensure_env_line "$UM_ETC/console.env" USAGE_PRICE_FILE "$UM_ETC/prices.json"
-ensure_env_line "$UM_ETC/console.env" CHAT2API_PRICE_TABLE_FILE "$UM_ETC/prices.json"
-ensure_env_line "$UM_ETC/console.env" MAGPIE_PRICE_SNAPSHOT "$UM_VAR/magpie-prices.snapshot.json"
-ensure_env_line "$UM_ETC/console.env" MAGPIE_PRICE_STATUS "$UM_VAR/magpie-prices.status.json"
 # Public API origin shown by the console and used by the public probe.  The
 # domain is deployment configuration; a missing line keeps the legacy TS rule.
 ensure_env_line "$UM_ETC/console.env" CONSOLE_PUBLIC_ORIGIN "https://dacintapi.de5.net"

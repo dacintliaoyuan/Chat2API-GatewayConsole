@@ -19,11 +19,9 @@ import type {
   JsonObject,
   OperationResult,
   ReadResult,
-  UmCostPayload,
   UmMaintenancePagePayload,
   UmOperationPayload,
   UmServicesPayload,
-  UmSummaryReferencePayload,
   UmTodayPayload,
   UmTrendPayload,
 } from "../../console/backend/types";
@@ -36,7 +34,6 @@ import type {
   ModelTestState,
   Reading,
   UmAccess,
-  UmCost,
   UmLogin,
   UmMaintenancePage,
   UmModelRow,
@@ -363,26 +360,6 @@ export function todayFrom(today: UmTodayPayload): UmToday {
     reasoning: today.reasoning,
     requests: today.requests,
     speed: today.speed,
-  };
-}
-
-export function costFrom(
-  cost: UmCostPayload,
-  reference: UmSummaryReferencePayload | null
-): UmCost {
-  // The day's CNY figure comes from today's own ledger; the price/fx facts are
-  // the same Magpie chain, and `/api/summary`'s whole-ledger reference is used
-  // when it holds a synced snapshot the day read did not report.
-  const useReference =
-    reference !== null &&
-    cost.price.state !== "synced" &&
-    reference.price.state === "synced";
-  return {
-    cny: cost.cny,
-    price: useReference ? reference.price : cost.price,
-    fx: useReference ? reference.fx : cost.fx,
-    unpricedRequests: cost.unpricedRequests,
-    estimatedRequests: cost.estimatedRequests,
   };
 }
 

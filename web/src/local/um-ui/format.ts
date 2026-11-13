@@ -82,21 +82,6 @@ function trim(n: number): string {
   const digits = Math.abs(n) >= 100 ? 0 : Math.abs(n) >= 10 ? 1 : 2;
   return n.toFixed(digits).replace(/\.0+$|(\.\d*?)0+$/, "$1");
 }
-export function cny(n: number): string {
-  if (n === 0) return "¥0";
-  // A single request can cost fractions of a cent: two significant figures.
-  if (Math.abs(n) < 0.000001) return "<¥0.000001";
-  if (Math.abs(n) < 0.01)
-    return `¥${n.toFixed(Math.ceil(-Math.log10(Math.abs(n))) + 1)}`;
-  return `¥${n.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-/** Axis-sized money: no cents once the scale passes ¥10. */
-export function cnyShort(n: number): string {
-  if (n === 0) return "¥0";
-  return Math.abs(n) >= 10
-    ? `¥${full(n)}`
-    : `¥${n.toFixed(2).replace(/\.?0+$/, "")}`;
-}
 export function duration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)} 毫秒`;
   const s = ms / 1000;

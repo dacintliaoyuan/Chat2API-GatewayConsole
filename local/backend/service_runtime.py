@@ -31,8 +31,7 @@ class FixtureServiceRuntime:
     def __init__(self, config, *, um_runtime=None):
         self.config = config
         self.um_runtime = (um_runtime if um_runtime is not None
-                            else UmRuntime(config.um_runtime,
-                                           price_file=config.price_file))
+                            else UmRuntime(config.um_runtime))
 
     def start(self):
         if self.um_runtime.start() is False:

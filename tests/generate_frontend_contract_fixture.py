@@ -97,12 +97,6 @@ def generate():
             {"time": "2026-10-02T12:04:00+08:00", "model": "fixture-model", "usage_source": "none"},
         ]
         ledger.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
-        # Six-tuple pricer (contract §3/§4): the sixth element is the record's
-        # own exchange rate. A five-tuple here would make every CNY field unknown
-        # and silently drop the rate from the published fixture.
-        price = lambda model, at, inp, out, cache, reason: (
-            ((inp + out) / 1000000 if model == "fixture-model" else 0),
-            model == "fixture-model", model, False, "fixture-price-version", 7.2)
         # 读面（usagesrv._share_usage_project_key_names）现走
         # share_store.read_key_labels 的只读缝：替身必须落在这个新缝上。
         # 旧替身 mock get_share_manager 已不再被读取路径调用；若沿用，
@@ -126,7 +120,7 @@ def generate():
         handler.path = "/api/console/share-usage"
         with mock.patch.object(usagesrv, "share_usage_ledger_path", return_value=str(ledger)), \
              mock.patch.object(usagesrv, "share_usage_reader", return_value=(share_metering.read_share_usage, None)), \
-             mock.patch.object(usagesrv, "estimate_record_with_version_and_rate", side_effect=price), \
+\
              mock.patch.object(usagesrv, "read_key_labels", side_effect=fixture_read_key_labels):
             status, share_usage = handler._share_usage_response()
             assert status == 200

@@ -15,7 +15,6 @@ import type {
 import { ACTION_LABEL } from "./overview";
 import {
   clock,
-  cny,
   duration,
   esc,
   freshnessHtml,
@@ -170,7 +169,6 @@ function rowHtml(
     <td class="um-req-model" role="cell" data-label="模型" title="${esc(row.model)}">${esc(row.model)}</td>
     <td role="cell" data-label="结果"><span class="status" data-tone="${result.tone}"><span class="dot" aria-hidden="true"></span>${result.word}</span></td>
     <td class="num" role="cell" data-label="输入 / 输出 Token">${readingHtml(row.input, full, true)} / ${readingHtml(row.output, full, true)}</td>
-    <td class="num" role="cell" data-label="参考费用">${readingHtml(row.costCny, cny, true)}</td>
     <td class="num" role="cell" data-label="耗时">${readingHtml(row.durationMs, duration, true)}</td>
     <td class="num" role="cell" data-label="速度">${readingHtml(row.speed, speed, true)}</td></tr>`;
   if (!open) return main;

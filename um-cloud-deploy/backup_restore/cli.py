@@ -34,9 +34,6 @@ def main(argv=None):
     parser.add_argument("--remote-prefix", default=BACKUP_PREFIX)
     parser.add_argument("--state")
     parser.add_argument("--spool")
-    parser.add_argument("--price-table")
-    parser.add_argument("--magpie-snapshot")
-    parser.add_argument("--magpie-status")
     parser.add_argument("--config", action="append", default=[])
     parser.add_argument("--security-state")
     parser.add_argument("--print-freshness", action="store_true")
@@ -56,7 +53,6 @@ def main(argv=None):
     parser.add_argument("--restore-backup")
     parser.add_argument("--restore-target")
     parser.add_argument("--restore-security-state")
-    parser.add_argument("--require-magpie", action="store_true")
     parser.add_argument("--allow-existing", action="store_true")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
@@ -114,9 +110,7 @@ def main(argv=None):
                     args.restore_backup, key,
                     target_dir=args.restore_target,
                     security_state_path=args.restore_security_state,
-                    price_table_path=args.price_table,
                     config_paths=args.config or None,
-                    require_magpie=args.require_magpie,
                     allow_existing=args.allow_existing)
             else:
                 result = restore_backup(
@@ -127,11 +121,7 @@ def main(argv=None):
                     target_budget_db_path=(Path(args.restore_target)
                                            / "budget.db"),
                     target_extra_dir=Path(args.restore_target) / "config",
-                    target_price_table_path=(Path(args.restore_target)
-                                             / "data" / "prices.json"),
-                    target_magpie_dir=Path(args.restore_target) / "data",
                     require_min_generation=None,
-                    require_magpie=args.require_magpie,
                     allow_existing=args.allow_existing)
         except (BackupError, OSError) as exc:
             print(json.dumps({"ok": False,
@@ -174,9 +164,6 @@ def main(argv=None):
             result = run_backup_cycle(
                 store, args.ledger, key, object_store,
                 state_path=args.state, spool_dir=args.spool,
-                price_table_path=args.price_table,
-                magpie_snapshot_path=args.magpie_snapshot,
-                magpie_status_path=args.magpie_status,
                 config_paths=args.config or None,
                 security_state=security_state)
         finally:

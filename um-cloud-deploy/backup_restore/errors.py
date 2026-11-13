@@ -38,11 +38,7 @@ class BackupSecurityError(BackupError):
 
 
 class BackupConfigError(BackupError):
-    """The backup does not carry the price/config required for restore."""
-
-
-class BackupMagpieError(BackupError):
-    """The Magpie price snapshot/status is missing, corrupt or inconsistent."""
+    """The backup does not carry the config required for restore."""
 
 
 class DeploymentAssemblyError(BackupError):

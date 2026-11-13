@@ -29,15 +29,12 @@ Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token
 # install.sh appends
 # CHAT2API_SHARE_REVOKE_STATE_FILE=/var/lib/um-share/share-revoke.state
 # to broker.env, and the 8100 child inherits this EnvironmentFile.
-# The 8100 child stamps the price-table version on every ledger row; the table
-# is deployment configuration under /etc, not a file inside the release.
-Environment=CHAT2API_PRICE_TABLE_FILE=/etc/um-share/prices.json
 # The gateway child runs as a script (sys.path[0]=chat2api); the shared
 # projection parser lives one level up at the release root.
 Environment=PYTHONPATH=/opt/um-share/current
 UMask=0077
-# Fail the START, never silently run without metering: the installed unit must
-# still name the price table, and broker.env must set UM_SHARE_UID.
+# Fail the START, never silently run without metering: broker.env must set
+# UM_SHARE_UID.
 ExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly broker /etc/systemd/system/um-share-broker.service /etc/um-share/broker.env
 ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share/broker_ops.py \
   --socket-path /run/um-share/broker.sock \

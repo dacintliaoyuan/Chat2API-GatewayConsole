@@ -115,27 +115,10 @@ export type UmToday = {
   speed: { value: Reading; basis: SpeedBasis; samples: number | null };
 };
 
-/** The day's reference cost: UM's own ledger priced with the effective UM
- *  prices followed from Magpie. Not synced is not zero. */
-export type UmCost = {
-  cny: Reading;
-  price: {
-    state: "synced" | "unsynced" | "failed";
-    source: string | null;
-    snapshotAt: number | null;
-    version: string | null;
-    failure: string | null;
-  };
-  fx: { rate: number | null; version: string | null };
-  unpricedRequests: number | null;
-  estimatedRequests: number | null;
-};
-
 export type TrendRange = "7d" | "14d" | "30d";
 /** All figures of one model (or of all models) over one bucket. */
 export type UmBucket = {
   tokens: Reading;
-  costCny: Reading;
   requests: Reading;
   speed: Reading;
 };
@@ -166,7 +149,6 @@ export type UmIssue = {
     | "login"
     | "service"
     | "catalog"
-    | "price"
     | "test";
   title: string;
   detail: string;
@@ -184,7 +166,6 @@ export type UmOverview = {
   login: Load<UmLogin>;
   verify: Load<UmVerify>;
   today: Load<UmToday>;
-  cost: Load<UmCost>;
   trend: Load<UmTrend>;
   /** Recent problems; the window is named in `window`, e.g. 「近 24 小时」. */
   issues: Load<{ window: string; items: UmIssue[] }>;
@@ -226,7 +207,6 @@ export type UmRequestRow = {
   output: Reading;
   cacheRead: Reading;
   reasoning: Reading;
-  costCny: Reading;
   durationMs: Reading;
   /** Only a real measurement; otherwise missing. */
   firstTokenMs: Reading;
@@ -454,7 +434,6 @@ export function unwiredState(): UmViewState {
       login: { state: "unwired" },
       verify: { state: "unwired" },
       today: { state: "unwired" },
-      cost: { state: "unwired" },
       trend: { state: "unwired" },
       issues: { state: "unwired" },
       actions: {

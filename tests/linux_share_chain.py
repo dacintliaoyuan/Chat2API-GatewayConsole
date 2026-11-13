@@ -80,9 +80,6 @@ class _Chain:
             }],
         }), encoding="utf-8")
         self.ledger = root / "usage.jsonl"
-        self.price = root / "prices.json"
-        self.price.write_text(json.dumps({"version": "test", "models": {}}),
-                              encoding="utf-8")
 
     def start_fake_um(self):
         from fake_um.fake_um_server import FakeUM
@@ -102,7 +99,6 @@ class _Chain:
         env["CHAT2API_TOKEN_FILE"] = str(self.root / "token.json")
         env["CHAT2API_SERVICE_LOG"] = str(self.root / "chat2api.log")
         env["CHAT2API_USAGE_LOG"] = str(self.ledger)
-        env["CHAT2API_PRICE_TABLE_FILE"] = str(self.price)
         env["CHAT2API_SHARE_MAX_REQUEST_BYTES"] = str(32 * 1024 * 1024)
         command = [
             sys.executable, str(HERE / "chat2api" / "chat2api.py"),

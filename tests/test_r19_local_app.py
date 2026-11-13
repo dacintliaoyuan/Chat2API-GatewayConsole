@@ -12,7 +12,7 @@ The local application is exercised as a REAL subprocess through
 * a full start creates only the fixture directories, serves the control-token
   gated local routes, runs the ``model.catalog`` operation and exits cleanly.
 
-Every path lives under the fixture temp root; no real ledger, price document,
+Every path lives under the fixture temp root; no real ledger,
 profile or credential is read.
 """
 from __future__ import annotations
@@ -111,14 +111,6 @@ class LocalConfigTests(unittest.TestCase):
         with self.assertRaises(LocalConfigError) as caught:
             LocalConfig.from_mapping(values)
         self.assertEqual(caught.exception.field, "um_runtime.source_dir")
-
-    def test_price_override_file_is_optional_but_absolute(self):
-        values = self.fixture.config_mapping()
-        self.assertIsNone(LocalConfig.from_mapping(values).price_override_file)
-        values["price_override_file"] = "relative/price.override.json"
-        with self.assertRaises(LocalConfigError) as caught:
-            LocalConfig.from_mapping(values)
-        self.assertEqual(caught.exception.field, "price_override_file")
 
     def test_print_runtime_info_is_isolated_and_does_not_load_cloud(self):
         polluted = self.fixture.root / "polluted"
@@ -322,13 +314,13 @@ class LocalEndToEndTests(unittest.TestCase):
         self.assertEqual(payload["role"], "local")
 
         # E19-1-04 step 8 / G5: the frontend's readSummary(signal?) passes
-        # NO date range and normalizeUmSummary reads only role/
-        # assembly.role/umReference — so the bare call must succeed.
+        # NO date range and normalizeUmSummary reads only role/assembly.role,
+        # so the bare call must succeed; price facts were retired with #30.
         status, payload = self.fixture.request(
             "GET", "/api/summary", token=self.fixture.control_token)
         self.assertEqual(status, 200, payload)
         self.assertEqual(payload["role"], "local")
-        self.assertIsInstance(payload.get("umReference"), dict, payload)
+        self.assertNotIn("umReference", payload)
 
         # E19-1-04 step 7: the session code file is really consumed.
         status, payload = self.fixture.request(

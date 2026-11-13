@@ -8,7 +8,6 @@
  *  - `/api/console/um/today|trend|requests|logs|request-logs|maintenance`
  *  - `/api/console/services` (runtime snapshot, the authority for chat2api)
  *  - `/api/console/gateway-connection?service=chat2api` (access facts)
- *  - `/api/summary` (`umReference`: Magpie reference price facts)
  *  - the operation registry for `account.um_status`, `account.um_verify`,
  *    `account.login`, `service.start|stop|restart`, `model.catalog`,
  *    `model.context_probe_preview` and `model.context_probe_run`.

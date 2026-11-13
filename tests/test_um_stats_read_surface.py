@@ -2,9 +2,8 @@
 """B5 UM statistics / requests / logs / maintenance read surface.
 
 Every fixture is written to a temp directory with the SAME field shape the
-production chat2api writer (``record_usage``) and the B1 Magpie snapshot
-produce; no real ledger, price table, service log or console database is read
-or written. The cases pin:
+production chat2api writer (``record_usage``) produces; no real ledger, service
+log or console database is read or written. The cases pin:
 
 * today's five readings, with cache part of input and thinking part of output;
 * Q11 cache report status: reported / unreported / historical unknown / zero;
@@ -12,11 +11,12 @@ or written. The cases pin:
 * missing / corrupt / unreadable ledger is not a legal empty list;
 * the Beijing day boundary and a 7-day trend with the same-window ranking;
 * physical retry rows are not logical requests (request count, speed);
-* per-request price/FX version, unpriced/incomplete coverage;
 * request filters (time/model/result/search) and opaque pagination;
 * logs are bounded and only a reliable 32-hex request id is associated;
 * maintenance reads the ORIGINAL operation records, not request rows;
 * the cloud role keeps the read surface explicitly unavailable.
+
+Cost/price fields were retired with #30: the read surface reports raw usage only.
 """
 
 import json
@@ -33,7 +33,6 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from console import adapters as console_adapters  # noqa: E402
-from console import log_reader as console_log_reader  # noqa: E402
 from console import stats as console_stats       # noqa: E402
 import usagesrv             # noqa: E402
 
@@ -53,17 +52,10 @@ class _UsagesrvStatsEnvironment:
     chat2api_log = property(lambda self: usagesrv.CHAT2API_LOG)
     dsh_snapshot = property(lambda self: usagesrv.DSH_SNAPSHOT_FILE)
     dsh_merge_day = property(lambda self: usagesrv.DSH_MERGE_DAY)
-    magpie_price_snapshot = property(
-        lambda self: usagesrv.MAGPIE_PRICE_SNAPSHOT_FILE)
-    magpie_price_status = property(
-        lambda self: usagesrv.MAGPIE_PRICE_STATUS_FILE)
     parse_ts = staticmethod(lambda value: usagesrv._parse_ts(value))
     beijing_day = staticmethod(lambda ms: usagesrv._beijing_day(ms))
     day_start_ms = staticmethod(lambda day: usagesrv._day_start_ms(day))
     display_path = staticmethod(lambda path: usagesrv._display_path(path))
-    estimate_record = staticmethod(
-        lambda *args: usagesrv.estimate_record(*args))
-    price_table_loader = staticmethod(lambda: usagesrv.load_price_table())
 
 
 def _record(time, model="GLM-Test", input_tokens=1000, output_tokens=500,
@@ -90,63 +82,10 @@ def _record(time, model="GLM-Test", input_tokens=1000, output_tokens=500,
         "key_id": None,
         "request_id": request_id,
         "attribution": "verified" if request_id else "absent",
-        "price_version": "share-v1",
     }
     for key in drop:
         rec.pop(key, None)
     return rec
-
-
-def _model_entry(input_price=2.0, output_price=10.0, cache_price=0.1,
-                  tiers=()):
-    return {
-        "umModel": "GLM-Test",
-        "magpieModel": "zcode/glm-test",
-        "displayName": "GLM Test",
-        "aliases": ["GLM-Test"],
-        "currency": "USD",
-        "unit": "per_million_tokens",
-        "sourceUnit": "per_million_tokens",
-        "input": input_price,
-        "output": output_price,
-        "cacheRead": cache_price,
-        "cacheWrite": 0.0,
-        "tiers": list(tiers) if tiers is not None else [],
-        "tiersReported": True,
-        "manualPrice": True,
-        "correctionSource": "magpie-manual",
-        "priceSource": "magpie-cli-effective",
-        "source": "magpie:/v1/models",
-        "complete": True,
-        "catalogMismatch": False,
-    }
-
-
-def _version(version="magpie-20261101T000000Z-test", exchange_rate=7.2,
-             effective="2026-10-01T00:00:00+08:00",
-             model=None):
-    return {
-        "version": version,
-        "effectiveAt": effective,
-        "sourceObservedAt": effective,
-        "exchangeRate": exchange_rate,
-        "fxVersion": "fx-20261101",
-        "correctionSource": "magpie-manual",
-        "source": "magpie:/v1/models",
-        "models": {"GLM-Test": model or _model_entry()},
-        "unpricedModels": [],
-    }
-
-
-def _snapshot(versions=None):
-    return {
-        "format": "um-magpie-price-snapshot-v1",
-        "schemaVersion": 1,
-        "generatedAt": "2026-11-01T00:00:00Z",
-        "source": {"kind": "fixture"},
-        "currentVersion": None,
-        "versions": versions or [_version()],
-    }
 
 
 class _UmFixture(unittest.TestCase):
@@ -155,16 +94,10 @@ class _UmFixture(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.dir = Path(self._tmp.name)
         self.ledger = self.dir / "usage-chat2api.jsonl"
-        self.snapshot = self.dir / "magpie-prices.snapshot.json"
-        self.status = self.dir / "magpie-prices.status.json"
         self._saved = {
-            name: getattr(usagesrv, name) for name in (
-                "CHAT2API_LOG", "MAGPIE_PRICE_SNAPSHOT_FILE",
-                "MAGPIE_PRICE_STATUS_FILE")}
+            name: getattr(usagesrv, name) for name in ("CHAT2API_LOG",)}
         self.addCleanup(self._restore)
         usagesrv.CHAT2API_LOG = str(self.ledger)
-        usagesrv.MAGPIE_PRICE_SNAPSHOT_FILE = str(self.snapshot)
-        usagesrv.MAGPIE_PRICE_STATUS_FILE = str(self.status)
         console_stats.configure(_UsagesrvStatsEnvironment())
         console_stats._reset_cache_for_tests()
         self.addCleanup(console_stats._reset_cache_for_tests)
@@ -180,29 +113,16 @@ class _UmFixture(unittest.TestCase):
                        for rec in records) + ("\n" if records else ""),
             encoding="utf-8")
 
-    def write_snapshot(self, snapshot=None, status="synced"):
-        self.snapshot.write_text(
-            json.dumps(snapshot or _snapshot(), ensure_ascii=False),
-            encoding="utf-8")
-        self.status.write_text(json.dumps({
-            "format": "um-magpie-price-status-v1",
-            "state": status,
-        }), encoding="utf-8")
-
-    def today(self, records, now=NOW, snapshot=None, status="synced"):
+    def today(self, records, now=NOW):
         self.write_ledger(records)
-        self.write_snapshot(snapshot, status)
         return console_stats.um_today(now=now)
 
-    def trend(self, records, range="7d", now=NOW, snapshot=None,
-              status="synced"):
+    def trend(self, records, range="7d", now=NOW):
         self.write_ledger(records)
-        self.write_snapshot(snapshot, status)
         return console_stats.um_trend(range=range, now=now)
 
     def requests(self, records, now=NOW, **kwargs):
         self.write_ledger(records)
-        self.write_snapshot()
         return console_stats.um_requests(now=now, **kwargs)
 
 
@@ -219,7 +139,6 @@ class TodayReadingsTests(_UmFixture):
                     duration_ms=1000),
         ])
         today = res["today"]
-        # Cache reads are part of input: input stays 1200, total 1800.
         self.assertEqual(today["tokens"]["input"],
                          {"kind": "exact", "value": 1200})
         self.assertEqual(today["tokens"]["output"],
@@ -230,7 +149,6 @@ class TodayReadingsTests(_UmFixture):
                          {"kind": "exact", "value": 600})
         self.assertEqual(today["cacheRead"]["report"], "reported")
         self.assertIn("已含在输入中", today["cacheRead"]["detail"])
-        # Thinking is part of output: the sum is a lower bound, not added.
         self.assertEqual(today["reasoning"]["kind"], "atLeast")
         self.assertEqual(today["reasoning"]["value"], 200)
         self.assertIn("已计入输出", today["reasoning"]["note"])
@@ -238,7 +156,6 @@ class TodayReadingsTests(_UmFixture):
                          {"kind": "exact", "value": 2})
         self.assertEqual(today["requests"]["failed"],
                          {"kind": "exact", "value": 0})
-        # 600 output tokens / 3 s = 200 token/s (whole request average).
         self.assertEqual(today["speed"]["value"],
                          {"kind": "exact", "value": 200.0})
         self.assertEqual(today["speed"]["basis"], "whole_request")
@@ -248,18 +165,7 @@ class TodayReadingsTests(_UmFixture):
         self.assertEqual(today["boundaries"]["end"],
                          "2026-11-02T00:00:00+08:00")
         self.assertTrue(today["boundaries"]["half_open"])
-
-        cost = res["cost"]
-        self.assertEqual(cost["label"], "参考")
-        self.assertEqual(cost["cny"], {"kind": "exact", "value": 0.0523})
-        self.assertEqual(cost["price"]["state"], "synced")
-        self.assertEqual(cost["price"]["version"],
-                         "magpie-20261101T000000Z-test")
-        self.assertEqual(cost["fx"]["rate"], 7.2)
-        self.assertEqual(cost["fx"]["version"], "fx-20261101")
-        self.assertIsInstance(cost["price"]["snapshotAt"], int)
-        self.assertEqual(cost["coverage"]["pricedRequests"], 2)
-        self.assertEqual(cost["coverage"]["unpricedRequests"], 0)
+        self.assertNotIn("cost", res)
 
     def test_explicit_zero_is_zero_not_unreported(self):
         res = self.today([
@@ -280,8 +186,6 @@ class TodayReadingsTests(_UmFixture):
                          {"kind": "exact", "value": 1})
         self.assertEqual(today["speed"]["value"],
                          {"kind": "exact", "value": 0.0})
-        self.assertEqual(res["cost"]["cny"],
-                         {"kind": "exact", "value": 0})
 
     def test_unreported_cache_is_not_a_measured_zero(self):
         res = self.today([
@@ -289,19 +193,14 @@ class TodayReadingsTests(_UmFixture):
                     output_tokens=500, cache_tokens=0,
                     cache_status="unreported", reasoning_tokens=0,
                     duration_ms=1000),
-        ], snapshot=_snapshot([_version(model=_model_entry(cache_price=0.0))]))
+        ])
         today = res["today"]
         self.assertEqual(today["cacheRead"]["report"], "unreported")
         self.assertEqual(today["cacheRead"]["tokens"]["kind"], "unreported")
         self.assertNotEqual(today["cacheRead"]["tokens"],
                             {"kind": "exact", "value": 0})
-        # Input/output themselves are reported and stay exact.
         self.assertEqual(today["tokens"]["input"],
                          {"kind": "exact", "value": 1000})
-        # The cost is a lower bound because cache usage is unknown.
-        self.assertEqual(res["cost"]["cny"]["kind"], "atLeast")
-        self.assertEqual(res["cost"]["coverage"]["cacheUnreportedRequests"], 1)
-        self.assertEqual(res["cost"]["coverage"]["cacheUnknownRequests"], 0)
 
     def test_historical_unknown_cache_and_reasoning_are_unknown(self):
         res = self.today([
@@ -315,7 +214,6 @@ class TodayReadingsTests(_UmFixture):
         self.assertIn("Q11", today["cacheRead"]["detail"])
         self.assertEqual(today["reasoning"]["kind"], "unknown")
         self.assertIn("旧记录", today["reasoning"]["note"])
-        # Historical input/output fields are still real values.
         self.assertEqual(today["tokens"]["input"],
                          {"kind": "exact", "value": 1000})
 
@@ -332,8 +230,6 @@ class TodayReadingsTests(_UmFixture):
         self.assertEqual(today["tokens"]["output"]["kind"], "unknown")
         self.assertEqual(today["requests"]["recorded"],
                          {"kind": "exact", "value": 1})
-        self.assertEqual(res["cost"]["coverage"]["usageUnknownRequests"], 1)
-        self.assertEqual(res["cost"]["cny"]["kind"], "atLeast")
 
     def test_missing_ledger_is_missing_not_zero(self):
         res = console_stats.um_today(now=NOW)
@@ -341,12 +237,10 @@ class TodayReadingsTests(_UmFixture):
         self.assertEqual(res["today"]["tokens"]["total"]["kind"], "missing")
         self.assertEqual(res["today"]["requests"]["recorded"]["kind"],
                          "missing")
-        self.assertEqual(res["cost"]["cny"]["kind"], "missing")
         self.assertNotEqual(res["today"]["tokens"]["total"],
                             {"kind": "exact", "value": 0})
 
     def test_corrupt_ledger_is_partial_lower_bound(self):
-        self.write_snapshot()
         self.ledger.write_text(
             "not-json{{\n" + json.dumps(_record(
                 "2026-11-01T10:00:00+08:00", input_tokens=10,
@@ -360,13 +254,10 @@ class TodayReadingsTests(_UmFixture):
                           "note": "账本有损坏行/截断，合计为下界"})
 
     def test_unreadable_ledger_is_unavailable_not_zero(self):
-        self.write_snapshot()
-        # A directory cannot be opened as a JSONL file: read_error, not empty.
         res = console_stats.um_today(str(self.dir), now=NOW)
         self.assertEqual(res["coverage"]["status"], "unavailable")
         self.assertEqual(res["today"]["tokens"]["total"]["kind"],
                          "missing")
-        self.assertEqual(res["cost"]["cny"]["kind"], "missing")
 
     def test_truncated_ledger_is_partial_lower_bound(self):
         self.write_ledger([
@@ -374,7 +265,6 @@ class TodayReadingsTests(_UmFixture):
                     output_tokens=5, cache_tokens=0,
                     cache_status="reported", duration_ms=1000),
         ])
-        self.write_snapshot()
         event = console_stats._Event(
             ms=usagesrv._parse_ts("2026-11-01T10:00:00+08:00"),
             model="GLM-Test", input_tokens=10, output_tokens=5,
@@ -422,7 +312,6 @@ class TodayReadingsTests(_UmFixture):
             _record("2026-11-01T16:30:00Z", input_tokens=3,
                     output_tokens=3),
         ])
-        self.write_snapshot()
         res = console_stats.um_today(
             now=datetime(2026, 11, 2, 0, 30, tzinfo=timezone.utc))
         self.assertEqual(res["today"]["day"], "2026-11-02")
@@ -431,141 +320,21 @@ class TodayReadingsTests(_UmFixture):
         self.assertEqual(res["today"]["requests"]["recorded"],
                          {"kind": "exact", "value": 2})
 
-    def test_price_versions_are_per_record(self):
-        versions = [
-            _version(version="v-old", exchange_rate=7.0,
-                     effective="2026-10-01T00:00:00+08:00",
-                     model=_model_entry(input_price=1.0, output_price=2.0,
-                                         cache_price=0.0)),
-            _version(version="v-new", exchange_rate=8.0,
-                     effective="2026-11-01T12:00:00+08:00",
-                     model=_model_entry(input_price=4.0, output_price=20.0,
-                                         cache_price=0.0)),
-        ]
-        res = self.today([
-            _record("2026-11-01T11:00:00+08:00", input_tokens=1000,
-                    output_tokens=500, cache_tokens=0,
-                    cache_status="reported", reasoning_tokens=0,
-                    duration_ms=1000),
-            _record("2026-11-01T13:00:00+08:00", input_tokens=1000,
-                    output_tokens=500, cache_tokens=0,
-                    cache_status="reported", reasoning_tokens=0,
-                    duration_ms=1000),
-        ], snapshot=_snapshot(versions))
-        # old: (1*1 + 0.5*2) = 2 USD * 7 = 14 CNY
-        # new: (1*4 + 0.5*20) = 14 USD * 8 = 112 CNY
-        self.assertEqual(res["cost"]["cny"],
-                         {"kind": "exact", "value": 0.126})
-        self.assertEqual(res["cost"]["price"]["version"], "v-new")
-        self.assertEqual(res["cost"]["fx"]["rate"], 8.0)
 
-    def test_unpriced_model_is_disclosed_and_cost_is_partial(self):
-        snapshot = _snapshot([_version(model=_model_entry())])
-        snapshot["versions"][0]["models"] = {
-            "GLM-Test": _model_entry(),
-        }
-        res = self.today([
-            _record("2026-11-01T10:00:00+08:00", model="GLM-Test",
-                    input_tokens=1000, output_tokens=500,
-                    cache_tokens=0, cache_status="reported"),
-            _record("2026-11-01T10:10:00+08:00", model="Unpriced",
-                    input_tokens=1000, output_tokens=500,
-                    cache_tokens=0, cache_status="reported"),
-        ], snapshot=snapshot)
-        self.assertEqual(res["cost"]["coverage"]["unpricedRequests"], 1)
-        self.assertEqual(res["cost"]["cny"]["kind"], "atLeast")
-        self.assertIn("未定价", res["cost"]["cny"]["note"])
-
-    def test_missing_snapshot_is_not_zero_cost(self):
-        res = self.today([
-            _record("2026-11-01T10:00:00+08:00", input_tokens=1000,
-                    output_tokens=500, cache_tokens=0,
-                    cache_status="reported"),
-        ], snapshot=None)
-        # The snapshot file is absent in this case.
-        self.snapshot.unlink()
-        self.status.unlink()
-        res = console_stats.um_today(now=NOW)
-        self.assertEqual(res["cost"]["price"]["state"], "unsynced")
-        self.assertEqual(res["cost"]["cny"]["kind"], "missing")
-        self.assertNotEqual(res["cost"]["cny"],
-                            {"kind": "exact", "value": 0})
-
-    def test_started_before_first_effective_stays_unpriced(self):
-        """A2-8: every UM read surface carries the request START.
-
-        This request completed after the first effective snapshot but STARTED
-        before it, so today/trend/requests must all keep it unpriced instead
-        of repricing it by completion time. The summary path already reads the
-        raw ledger record; the normalized event must not drop the field.
-        """
-        record = _record("2026-11-01T11:00:00+08:00",
-                         input_tokens=1000000, output_tokens=0,
-                         cache_tokens=0, cache_status="reported")
-        record["request_started_at"] = "2026-11-01T09:00:00+08:00"
-        event = console_stats._event_from_record(
-            console_stats.UM_LEDGER_SOURCE,
-            console_stats._SOURCE_SPECS[console_stats.UM_LEDGER_SOURCE],
-            record)
-        self.assertEqual(
-            console_stats._um_event_record(event)["request_started_at"],
-            usagesrv._parse_ts(record["request_started_at"]),
-            "_um_event_record 必须把 request_started_at 转发给价格契约")
-        snapshot = _snapshot([_version(
-            effective="2026-11-01T10:00:00+08:00")])
-
-        res = self.today([record], snapshot=snapshot)
-        summary = usagesrv._um_reference_summary([record])
-        self.assertIsNone(summary["cny"])
-        self.assertEqual(
-            summary["coverage"]["preEffectiveRequests"], 1)
-        self.assertEqual(res["cost"]["cny"]["kind"], "missing")
-        self.assertEqual(
-            res["cost"]["coverage"]["preEffectiveRequests"], 1)
-
-        trend = self.trend([record], snapshot=snapshot)
-        day_index = trend["trend"]["days"].index("2026-11-01")
-        model = trend["trend"]["models"][0]
-        self.assertEqual(model["daily"][day_index]["costCny"]["kind"],
-                         "missing")
-        self.assertEqual(
-            trend["trend"]["all"]["daily"][day_index]["costCny"]["kind"],
-            "missing")
-
-        self.write_ledger([record])
-        self.write_snapshot(snapshot)
+class RetiredPriceReadFaceTests(_UmFixture):
+    def test_today_and_requests_have_no_price_fields(self):
+        self.write_ledger([_record("2026-11-01T10:00:00+08:00")])
+        today = console_stats.um_today(now=NOW)
+        trend = console_stats.um_trend(range="7d", now=NOW)
         page = console_stats.um_requests(now=NOW, window="today")
-        self.assertEqual(len(page["page"]["rows"]), 1)
-        row = page["page"]["rows"][0]
-        self.assertEqual(row["costCny"]["kind"], "missing")
-        self.assertIn("首次价格生效前", row["costCny"]["note"])
-
-    def test_historical_row_without_start_keeps_completion_pricing(self):
-        """A2-8: a row without start evidence keeps completion-time pricing.
-
-        The read surface must not infer a start from ``time - duration_ms``:
-        the normalized event and the ledger dict forwarded to the pricing
-        contract both carry ``request_started_at=None``.
-        """
-        record = _record("2026-11-01T11:00:00+08:00",
-                         input_tokens=1000000, output_tokens=0,
-                         cache_tokens=0, cache_status="reported")
-        self.assertNotIn("request_started_at", record)
-        event = console_stats._event_from_record(
-            console_stats.UM_LEDGER_SOURCE,
-            console_stats._SOURCE_SPECS[console_stats.UM_LEDGER_SOURCE],
-            record)
-        self.assertIsNone(event.request_started_at)
-        self.assertIsNone(
-            console_stats._um_event_record(event)["request_started_at"])
-        snapshot = _snapshot([_version(
-            effective="2026-11-01T10:00:00+08:00")])
-
-        res = self.today([record], snapshot=snapshot)
-        self.assertEqual(res["cost"]["cny"],
-                         {"kind": "exact", "value": 14.4})
-        self.assertEqual(
-            res["cost"]["coverage"]["preEffectiveRequests"], 0)
+        self.assertNotIn("cost", today)
+        self.assertNotIn("costCny", trend["trend"]["all"]["total"])
+        self.assertNotIn("costCny", page["page"]["rows"][0])
+        self.assertNotIn("priceVersion", page["page"]["rows"][0])
+        for name in ("_um_reference_summary", "_um_cost_payload",
+                      "_um_price_paths", "_um_event_record"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(console_stats, name), name)
 
 
 class RetryAndRequestTests(_UmFixture):
@@ -699,6 +468,7 @@ class RetryAndRequestTests(_UmFixture):
                          {"kind": "exact", "value": 1650})
         self.assertEqual(trend["all"]["total"]["requests"],
                          {"kind": "exact", "value": 2})
+        self.assertNotIn("costCny", trend["all"]["total"])
 
 
 class MaintenanceTests(unittest.TestCase):
@@ -731,8 +501,6 @@ class MaintenanceTests(unittest.TestCase):
         }
 
     def test_original_operations_filtered_to_um_actions_and_speedtest_absent(self):
-        # The retired speedtest action must not be registered, and even a
-        # historical operation row for it is not mixed into the UM table.
         self.assertNotIn(
             "model.speedtest",
             {spec.name for spec in console_adapters.build_registry()})
@@ -794,26 +562,16 @@ class UmHttpRouteTests(unittest.TestCase):
         cls.addClassCleanup(cls._tmp.cleanup)
         root = Path(cls._tmp.name)
         cls.ledger = root / "usage-chat2api.jsonl"
-        cls.snapshot = root / "magpie-prices.snapshot.json"
-        cls.status = root / "magpie-prices.status.json"
         cls.ledger.write_text(json.dumps(_record(
             "2026-11-01T10:00:00+08:00", input_tokens=1000,
             output_tokens=500, cache_tokens=0, cache_status="reported",
             request_id="a" * 32)) + "\n", encoding="utf-8")
-        cls.snapshot.write_text(json.dumps(_snapshot()), encoding="utf-8")
-        cls.status.write_text(json.dumps({
-            "format": "um-magpie-price-status-v1",
-            "state": "synced",
-        }), encoding="utf-8")
         cls._saved = {
             name: getattr(usagesrv, name) for name in (
-                "CHAT2API_LOG", "MAGPIE_PRICE_SNAPSHOT_FILE",
-                "MAGPIE_PRICE_STATUS_FILE", "CONSOLE_STATE_FILE",
+                "CHAT2API_LOG", "CONSOLE_STATE_FILE",
                 "CONSOLE_LOCK_DIR", "CLOUD_ROLE", "get_console_manager")}
         cls.addClassCleanup(cls._restore)
         usagesrv.CHAT2API_LOG = str(cls.ledger)
-        usagesrv.MAGPIE_PRICE_SNAPSHOT_FILE = str(cls.snapshot)
-        usagesrv.MAGPIE_PRICE_STATUS_FILE = str(cls.status)
         usagesrv.CONSOLE_STATE_FILE = str(root / "console.sqlite3")
         usagesrv.CONSOLE_LOCK_DIR = str(root / "console-locks")
         console_stats.configure(_UsagesrvStatsEnvironment())
@@ -825,9 +583,6 @@ class UmHttpRouteTests(unittest.TestCase):
         })
         cls._env.start()
         cls.addClassCleanup(cls._env.stop)
-        # The HTTP routes read the wall clock; pin their "now" to NOW so the
-        # fixed 2026-11-01 ledger row stays inside the "today" window on any
-        # run date (the assertion itself is unchanged).
         cls._now_ms_original = console_stats._now_ms
         cls._now_patch = mock.patch.object(
             console_stats, "_now_ms",
@@ -860,7 +615,7 @@ class UmHttpRouteTests(unittest.TestCase):
         status, payload = self._get("/api/console/um/today")
         self.assertEqual(status, 200)
         self.assertIn("today", payload)
-        self.assertIn("cost", payload)
+        self.assertNotIn("cost", payload)
         status, payload = self._get("/api/console/um/trend?range=7d")
         self.assertEqual(status, 200)
         self.assertEqual(len(payload["trend"]["days"]), 7)
@@ -899,130 +654,6 @@ class UmHttpRouteTests(unittest.TestCase):
         self.assertEqual(payload["error"], "capability_not_assembled")
         self.assertEqual(payload["capability"], "um")
 
-    def test_unconfigured_environment_is_a_502_never_an_empty_payload(self):
-        """E19-1-03: the HTTP face inherits the read surface's refusal.
-
-        With no injected ``StatsEnvironment`` the route must NOT answer 200 with an
-        empty "no requests today" payload (that would be a fabricated real zero).
-        The read surface raises ``StatsNotConfigured``; the route maps it to its
-        documented 502 failure shape.
-        """
-        saved = console_stats._STATS_ENVIRONMENT
-        console_stats._STATS_ENVIRONMENT = None
-        try:
-            for path in ("/api/console/um/today", "/api/console/um/trend?range=7d",
-                         "/api/console/um/requests?window=today"):
-                status, payload = self._get(path)
-                self.assertEqual(status, 502, path)
-                self.assertEqual(payload["error"], "um_query_failed", path)
-        finally:
-            console_stats._STATS_ENVIRONMENT = saved
-
-
-class LogReadSurfaceTests(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self.dir = Path(self._tmp.name)
-        self.service = self.dir / "chat2api.log"
-        self.ledger = self.dir / "usage-chat2api.jsonl"
-        self.ledger.write_text("", encoding="utf-8")
-        self._saved = os.environ.get("CHAT2API_SERVICE_LOG")
-        self.addCleanup(self._restore)
-        os.environ["CHAT2API_SERVICE_LOG"] = str(self.service)
-
-    def _restore(self):
-        if self._saved is None:
-            os.environ.pop("CHAT2API_SERVICE_LOG", None)
-        else:
-            os.environ["CHAT2API_SERVICE_LOG"] = self._saved
-
-    def _write_log(self, lines):
-        self.service.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    def test_bounded_window_and_reliable_request_id(self):
-        self._write_log([
-            "2026-11-01 10:00:00 INFO request=%s model=GLM-Test start"
-            % ("a" * 32),
-            "2026-11-01 10:00:01 INFO request=%s model=GLM-Test short"
-            % ("b" * 12),
-            "2026-11-01 10:00:02 INFO Authorization: Bearer "
-            "sk-supersecretvalue12345 token=abc model=GLM-Test",
-        ])
-        res = console_log_reader.read_um_logs(
-            window="today", now=NOW,
-            ledger_paths={"chat2api": str(self.ledger)})
-        self.assertEqual(res["status"], "ok")
-        self.assertEqual(len(res["lines"]), 3)
-        by_text = {line["text"]: line for line in res["lines"]}
-        full = next(line for line in res["lines"]
-                    if "aaaaaaaa" in line["text"])
-        short = next(line for line in res["lines"]
-                     if "bbbbbbbb" in line["text"])
-        self.assertEqual(full["requestId"], "a" * 32)
-        self.assertIsNone(short["requestId"])
-        secret = next(line for line in res["lines"]
-                      if "Authorization" in line["text"])
-        self.assertNotIn("supersecretvalue", secret["text"])
-        self.assertIn("<redacted>", secret["text"])
-        self.assertEqual(res["coverage"]["rows_read"], 3)
-
-    def test_missing_source_and_cursor_are_distinct(self):
-        res = console_log_reader.read_um_logs(
-            window="today", now=NOW,
-            ledger_paths={"chat2api": str(self.ledger)})
-        self.assertEqual(res["status"], "missing")
-        self.assertEqual(res["lines"], [])
-        self.assertEqual(res["coverage"]["status"], "missing")
-        bad = console_log_reader.read_um_logs(
-            window="today", source="bogus", now=NOW,
-            ledger_paths={"chat2api": str(self.ledger)})
-        self.assertEqual(bad["status"], "error")
-        self.assertEqual(bad["error"], "unknown_log_source")
-        self.assertEqual(bad["lines"], [])
-        self._write_log(["2026-11-01 10:00:00 INFO request=%s" % ("a" * 32)])
-        bad_cursor = console_log_reader.read_um_logs(
-            window="today", cursor="not-a-cursor", now=NOW,
-            ledger_paths={"chat2api": str(self.ledger)})
-        self.assertEqual(bad_cursor["status"], "error")
-        self.assertEqual(bad_cursor["error"], "invalid_cursor")
-
-    def test_log_pagination(self):
-        self._write_log([
-            "2026-11-01 10:00:00 INFO request=%s first" % ("a" * 32),
-            "2026-11-01 10:00:01 INFO request=%s second" % ("a" * 32),
-        ])
-        page = console_log_reader.read_um_logs(
-            window="today", limit=1, now=NOW,
-            ledger_paths={"chat2api": str(self.ledger)})
-        self.assertEqual(len(page["lines"]), 1)
-        self.assertIn("second", page["lines"][0]["text"])
-        self.assertIsNotNone(page["earlier"])
-        older = console_log_reader.read_um_logs(
-            window="today", limit=1, cursor=page["earlier"], now=NOW,
-            ledger_paths={"chat2api": str(self.ledger)})
-        self.assertEqual(len(older["lines"]), 1)
-        self.assertIn("first", older["lines"][0]["text"])
-
-    def test_request_logs_require_reliable_id(self):
-        self._write_log([
-            "2026-11-01 10:00:00 INFO request=%s model=GLM-Test start"
-            % ("a" * 32),
-            "2026-11-01 10:00:01 INFO request=%s model=GLM-Test short"
-            % ("b" * 12),
-        ])
-        res = console_log_reader.read_um_request_logs(
-            "a" * 32, ledger_paths={"chat2api": str(self.ledger)})
-        self.assertEqual(len(res["lines"]), 1)
-        self.assertEqual(res["lines"][0]["requestId"], "a" * 32)
-        with self.assertRaises(ValueError):
-            console_log_reader.read_um_request_logs(
-                "b" * 12, ledger_paths={"chat2api": str(self.ledger)})
-        empty = console_log_reader.read_um_request_logs(
-            "c" * 32, ledger_paths={"chat2api": str(self.ledger)})
-        self.assertEqual(empty["lines"], [])
-        self.assertIn("bounded", empty["coverage"])
-
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)

@@ -78,16 +78,11 @@ _ISOLATION_PATCHERS = []
 _ISOLATION_MODULES = []
 _ISOLATION_TEMP = None
 
-_STATS_PRICE_TABLE = {"exchangeRate": 7.2, "meta": {"checkedAt": None}}
-
-
 class _ConsoleApiStatsEnvironment:
     """StatsEnvironment fixture for this module's statistics routes.
 
-    Paths point into this module's fixture directory and the price loader is a
-    minimal fixture table, so the console_stats reads behind the HTTP routes never
-    touch a production ledger or price file. The price rate is irrelevant to the
-    route-contract cases.
+    Paths point into this module's fixture directory, so the console_stats reads
+    behind the HTTP routes never touch a production ledger.
     """
 
     chat2api_log = property(
@@ -95,17 +90,10 @@ class _ConsoleApiStatsEnvironment:
     dsh_snapshot = property(
         lambda self: os.path.join(_TMP, "dsh-snapshot.json"))
     dsh_merge_day = property(lambda self: usagesrv.DSH_MERGE_DAY)
-    magpie_price_snapshot = property(
-        lambda self: os.path.join(_TMP, "magpie-prices.snapshot.json"))
-    magpie_price_status = property(
-        lambda self: os.path.join(_TMP, "magpie-prices.status.json"))
     parse_ts = staticmethod(lambda value: usagesrv._parse_ts(value))
     beijing_day = staticmethod(lambda ms: usagesrv._beijing_day(ms))
     day_start_ms = staticmethod(lambda day: usagesrv._day_start_ms(day))
     display_path = staticmethod(lambda path: usagesrv._display_path(path))
-    estimate_record = staticmethod(
-        lambda *args: usagesrv.estimate_record(*args))
-    price_table_loader = staticmethod(lambda: _STATS_PRICE_TABLE)
 
 
 def _guard_usage_module(module, root=None, patchers=None, modules=None):
@@ -766,33 +754,13 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
     share_metering 缺席时如实返回错误码，绝不折成 0 请求 / 0 费用。
     """
 
-    PRICED_MODEL = "zfpricedfixture"
-    UNPRICED_MODEL = "qquunpricedfixture"
+    MODEL_A = "fixture-model-a"
+    MODEL_B = "fixture-model-b"
     LEDGER_NAME = "usage-share-backend.jsonl"
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="console-share-usage-")
         self.addCleanup(self._tmp.cleanup)
-        # 价目链按生产同款注入点重定向（照 tests/test_console/stats.py 先例），
-        # 夹具价表只有 PRICED_MODEL 一条：无价模型因此必然无价，不读生产价表。
-        self._orig_price_file = usagesrv.PRICE_FILE
-        self._orig_override_file = usagesrv.OVERRIDE_FILE
-        self._orig_price_cache = dict(usagesrv._price_cache)
-        prices = {
-            "_说明": "console share-usage route fixture",
-            "checkedAt": "2026-09-25",
-            "exchangeRate": 7.2,
-            "models": {},
-            "providers": {"fixture": {"models": {
-                self.PRICED_MODEL: {"input": 1.0, "output": 2.0}}}},
-        }
-        self.prices_path = os.path.join(self._tmp.name, "prices.json")
-        with open(self.prices_path, "w", encoding="utf-8") as handle:
-            json.dump(prices, handle, ensure_ascii=False)
-        usagesrv.PRICE_FILE = self.prices_path
-        usagesrv.OVERRIDE_FILE = os.path.join(self._tmp.name, "no-override.json")
-        usagesrv._price_cache["data"] = None
-        self.addCleanup(self._restore_price_chain)
         self.ledger_dir = os.path.join(self._tmp.name, "share-backend")
         os.makedirs(self.ledger_dir)
         # Rev8 B8-6：费用读面把每个 Key 的白名单名称/删除状态从管理库投影
@@ -827,12 +795,6 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         else:
             os.environ["SHARE_STORE_FILE"] = self._orig_share_store
 
-    def _restore_price_chain(self):
-        usagesrv.PRICE_FILE = self._orig_price_file
-        usagesrv.OVERRIDE_FILE = self._orig_override_file
-        usagesrv._price_cache.clear()
-        usagesrv._price_cache.update(self._orig_price_cache)
-
     def _ledger_records(self):
         """夹具账本：已归因（上游用量 / 本地估算）、无价、未归因各一条。"""
         base = {
@@ -842,21 +804,21 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         }
         return [
             {**base, "time": "2026-09-25T10:00:00+08:00",
-             "model": self.PRICED_MODEL, "input_tokens": 1000000,
+             "model": self.MODEL_A, "input_tokens": 1000000,
              "output_tokens": 0, "total_tokens": 1000000, "estimated": False,
              "usage_source": "upstream", "key_id": self.key_a, "request_id": "r1"},
             {**base, "time": "2026-09-25T11:00:00+08:00",
-             "model": self.PRICED_MODEL, "input_tokens": 1000000,
+             "model": self.MODEL_A, "input_tokens": 1000000,
              "output_tokens": 0, "total_tokens": 1000000, "estimated": True,
              "usage_source": "estimated", "key_id": self.key_a, "request_id": "r2"},
             {**base, "time": "2026-09-25T12:00:00+08:00",
-             "model": self.UNPRICED_MODEL, "input_tokens": 10,
+             "model": self.MODEL_B, "input_tokens": 10,
              "output_tokens": 5, "total_tokens": 15, "estimated": False,
              "usage_source": "upstream", "key_id": self.key_b, "request_id": "r3"},
             {**base, "time": "2026-09-25T13:00:00+08:00",
              # 7,000 input tokens × 1.0 USD/1M = 0.007 USD → × 7.2 = 0.0504 CNY；
              # 与两条 1.0 USD 记录合计 2.007 USD → 14.4504 CNY（逐条换算后相加）。
-             "model": self.PRICED_MODEL, "input_tokens": 7000, "output_tokens": 0,
+             "model": self.MODEL_A, "input_tokens": 7000, "output_tokens": 0,
              "total_tokens": 7000, "estimated": False, "usage_source": "upstream",
              "request_id": "r4"},
         ]
@@ -908,43 +870,19 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertEqual(coverage["ledger"], self.LEDGER_NAME)
         self.assertIs(coverage["ledgerPresent"], True)
         self.assertIs(coverage["ledgerReadable"], True)
-        self.assertIs(coverage["priceFn"], True)
         self.assertEqual(coverage["attributed"], 3)
         self.assertEqual(coverage["unattributed"], 1)
-        self.assertEqual(coverage["unpricedRequests"], 1)
-        self.assertEqual(coverage["unpricedModels"], [self.UNPRICED_MODEL])
-        self.assertIs(coverage["priceFn"], True)
         # 人民币口径：计价器是六元组（带每条记录所属版本的汇率）。
-        self.assertIs(coverage["rateFn"], True)
         # 有记录无法折算（key_b 的无价行）→ 整页金额是下界，不是确定总额。
-        self.assertIs(coverage["costCnyPartial"], True)
         key_a = self._key(console_payload, self.key_a)
         self.assertEqual(key_a["requests"], 2)
-        self.assertEqual(key_a["knownCostUsd"], 1.0)
-        self.assertEqual(key_a["estimatedCostUsd"], 1.0)
         # 旧形状价表只有恒生效的默认段（7.2）：已知/估算各自逐条换算。
-        self.assertEqual(key_a["knownCostCny"], 7.2)
-        self.assertEqual(key_a["estimatedCostCny"], 7.2)
-        self.assertEqual(key_a["costCny"], 14.4)
-        self.assertIs(key_a["costCnyPartial"], False)
         # B8-6：白名单名称投影——活动 Key 名字可读、deleted=False。
         self.assertEqual(key_a["keyName"], "甲钥匙")
         self.assertIs(key_a["deleted"], False)
         key_b = self._key(console_payload, self.key_b)
-        self.assertEqual(key_b["unpricedRequests"], 1)
         # 无价记录不折 0：人民币总额未知且显式标 partial；唯一记录是
         # upstream，估算侧没有记录，因此 estimatedCostCny 是真实 0.0。
-        self.assertIsNone(key_b["costCny"])
-        self.assertIsNone(key_b["knownCostCny"])
-        self.assertEqual(key_b["estimatedCostCny"], 0.0)
-        self.assertIs(key_b["costCnyPartial"], True)
-        # 整页人民币总额（载荷没有顶层金额字段，按各 Key + 未归属求和）：
-        # 14.4 + 0.0504 = 14.4504；key_b 的未知不计入。
-        buckets = console_payload["keys"] + [console_payload["unattributed"]]
-        page_cny = sum(row["costCny"] for row in buckets
-                       if row["costCny"] is not None)
-        self.assertEqual(page_cny, 14.4504)
-        self.assertEqual(console_payload["unattributed"]["costCny"], 0.0504)
         # 删除过的 Key：名字仍可读，deleted=True；密钥明文/密文/哈希不在响应里。
         self.assertEqual(key_b["keyName"], "乙钥匙")
         self.assertIs(key_b["deleted"], True)
@@ -986,8 +924,8 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         real_reader = usagesrv.share_usage_reader()[0]
         self.assertIsNotNone(real_reader)
 
-        def reader(ledger, price_fn=None, *, limit=200000):
-            payload = real_reader(ledger, price_fn, limit=limit)
+        def reader(ledger, *, limit=200000):
+            payload = real_reader(ledger, limit=limit)
             payload["keys"].append({"key_id": "k-unknown", "requests": 1})
             return payload
 
@@ -1023,7 +961,7 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
     def test_write_methods_and_subpaths_never_reach_the_reader(self):
         calls = []
 
-        def reader(ledger, price_fn=None, *, limit=200000):
+        def reader(ledger, *, limit=200000):
             calls.append(ledger)
             return {"requests": 0, "keys": [], "unattributed": {},
                     "checkedAt": "2026-09-25T12:00:00+00:00", "coverage": {}}
@@ -1116,7 +1054,7 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertEqual([row["requestId"] for row in json.loads(raw)["rows"]],
                          ["r2", "r1"])
         status, raw = self.req(
-            "GET", f"/api/console/share-usage/requests?model={self.UNPRICED_MODEL}")
+            "GET", f"/api/console/share-usage/requests?model={self.MODEL_B}")
         self.assertEqual(status, 200)
         self.assertEqual([row["requestId"] for row in json.loads(raw)["rows"]],
                          ["r3"])

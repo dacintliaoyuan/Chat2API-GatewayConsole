@@ -42,11 +42,10 @@ from pathlib import Path
 
 from .constants import (
     AAD, BACKUP_PREFIX, BACKUP_SUFFIX, FINGERPRINT_SIZE, FORMAT, HEX_KEY_SIZE,
-    KEY_SIZE, MAGIC, MAGPIE_CLOSURE_FORMAT, MAGPIE_SNAPSHOT_FORMAT,
-    MAGPIE_SNAPSHOT_NAME, MAGPIE_STATUS_FORMAT, MAGPIE_STATUS_NAME,
+    KEY_SIZE, MAGIC,
     MAX_BUDGET_BYTES, MAX_EXTRA_BYTES, MAX_HEADER_BYTES,
     MAX_KEY_FILE_BYTES, MAX_LEDGER_BYTES, MAX_SECURITY_BYTES,
-    MIN_PASSPHRASE_CHARS, NONCE_SIZE, PRICE_TABLE_NAME,
+    MIN_PASSPHRASE_CHARS, NONCE_SIZE,
     RECOVERY_KIT_FORMAT, RECOVERY_KIT_MAGIC, SALT_SIZE, SCRYPT_N,
     SCRYPT_P, SCRYPT_R, SECURITY_FORMAT, SECURITY_PREFIX,
     SHARE_SECRET_KEY_ENV, SHARE_SECRET_NAME, TAG_SIZE, _RELEASE_ROOT,
@@ -54,7 +53,7 @@ from .constants import (
 from .errors import (
     BackupAuthenticationError, BackupBudgetError, BackupConfigError,
     BackupError, BackupGenerationError, BackupIntegrityError,
-    BackupKeyError, BackupKeyMismatch, BackupMagpieError,
+    BackupKeyError, BackupKeyMismatch,
     BackupSecurityError, BackupUploadError, DeploymentAssemblyError,
     ObjectStoreError, RecoveryKitError, RestoreTargetExists,
 )
@@ -72,9 +71,7 @@ from .package import (
     read_security_state, snapshot_ledger, write_security_state,
 )
 from .products import (
-    _load_magpie_prices, _load_share_secret_protection, _load_share_store,
-    _magpie_closure, _read_magpie_snapshot_bytes,
-    _read_magpie_status_bytes,
+    _load_share_secret_protection, _load_share_store,
 )
 from .objectstore import (
     LocalObjectStore, MemoryObjectStore, ObjectStore, _object_key,
@@ -131,11 +128,6 @@ __all__ = [
     "HEX_KEY_SIZE",
     "KEY_SIZE",
     "MAGIC",
-    "MAGPIE_CLOSURE_FORMAT",
-    "MAGPIE_SNAPSHOT_FORMAT",
-    "MAGPIE_SNAPSHOT_NAME",
-    "MAGPIE_STATUS_FORMAT",
-    "MAGPIE_STATUS_NAME",
     "MAX_BUDGET_BYTES",
     "MAX_EXTRA_BYTES",
     "MAX_HEADER_BYTES",
@@ -144,7 +136,6 @@ __all__ = [
     "MAX_SECURITY_BYTES",
     "MIN_PASSPHRASE_CHARS",
     "NONCE_SIZE",
-    "PRICE_TABLE_NAME",
     "RECOVERY_KIT_FORMAT",
     "RECOVERY_KIT_MAGIC",
     "SALT_SIZE",
@@ -164,7 +155,6 @@ __all__ = [
     "BackupIntegrityError",
     "BackupKeyError",
     "BackupKeyMismatch",
-    "BackupMagpieError",
     "BackupSecurityError",
     "BackupUploadError",
     "DeploymentAssemblyError",

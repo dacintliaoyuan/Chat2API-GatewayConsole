@@ -160,54 +160,24 @@ assert.deepEqual(share.filters, {
   model: null,
   result: null,
 });
-// CNY amounts are additive per row; they never introduce a top-level currency or
-// exchangeRate field. A null amount means unknown (the row is a lower bound when
-// its costCnyPartial flag is true), while a real zero survives.
-const cnyKey = share.keys.find((row) => row.keyId === "fixture-key");
-assert.equal(cnyKey.costCny, 0.0012);
-assert.equal(cnyKey.knownCostCny, 0.0008);
-assert.equal(cnyKey.estimatedCostCny, 0.0004);
-assert.equal(cnyKey.coverage.costCnyPartial, true);
-assert.equal(cnyKey.coverage.knownCostCnyPartial, true);
-assert.equal(cnyKey.coverage.estimatedCostCnyPartial, false);
-assert.equal(cnyKey.models[0].costCny, 0.0012);
-assert.equal(cnyKey.models[0].coverage.costCnyPartial, false);
-assert.equal(cnyKey.models[0].coverage.knownCostCnyPartial, false);
-assert.equal(cnyKey.models[0].coverage.estimatedCostCnyPartial, false);
-assert.equal(cnyKey.models[1].costCny, null);
-assert.equal(cnyKey.models[1].knownCostCny, null);
-assert.equal(cnyKey.models[1].estimatedCostCny, 0);
-assert.equal(cnyKey.models[1].coverage.costCnyPartial, true);
-assert.equal(cnyKey.models[1].coverage.knownCostCnyPartial, true);
-assert.equal(cnyKey.models[1].coverage.estimatedCostCnyPartial, false);
-assert.equal(cnyKey.days[0].costCny, 0.0012);
-assert.equal(cnyKey.days[0].coverage.costCnyPartial, true);
-const cnyDeleted = share.keys.find(
-  (row) => row.keyId === "deleted-fixture-key"
-);
-assert.equal(cnyDeleted.costCny, null);
-assert.equal(cnyDeleted.knownCostCny, 0);
-// Unknown usage has no estimated side: its estimated subtotal is a real zero,
-// not null (only the group total is a lower bound).
-assert.equal(cnyDeleted.estimatedCostCny, 0);
-assert.equal(cnyDeleted.coverage.costCnyPartial, true);
-// Unknown usage has no known/estimated attribution: both subtotals stay complete
-// real zeros; only the group total is a lower bound.
-assert.equal(cnyDeleted.coverage.knownCostCnyPartial, false);
-assert.equal(cnyDeleted.coverage.estimatedCostCnyPartial, false);
-assert.equal(cnyDeleted.undated.costCny, null);
-assert.equal(cnyDeleted.undated.knownCostCny, 0);
-assert.equal(cnyDeleted.undated.estimatedCostCny, 0);
-assert.equal(cnyDeleted.undated.coverage.costCnyPartial, true);
-assert.equal(cnyDeleted.undated.coverage.knownCostCnyPartial, false);
-assert.equal(cnyDeleted.undated.coverage.estimatedCostCnyPartial, false);
+// Cost/price fields were retired with #30: the raw share-usage payload carries
+// no amount, and the normalized view leaves every amount null.
+const usageRow = share.keys.find((row) => row.keyId === "fixture-key");
+for (const field of ["costCny", "knownCostCny", "estimatedCostCny"]) {
+  assert.equal(usageRow[field], null);
+}
+assert.equal(usageRow.coverage.costCnyPartial, null);
+assert.equal(usageRow.models[0].costCny, null);
+assert.equal(usageRow.days[0].costCny, null);
 assert.equal(share.unattributed.costCny, null);
-assert.equal(share.unattributed.knownCostCny, 0);
-assert.equal(share.unattributed.estimatedCostCny, 0);
-assert.equal(share.unattributed.coverage.costCnyPartial, true);
-assert.equal(share.unattributed.coverage.knownCostCnyPartial, false);
-assert.equal(share.unattributed.coverage.estimatedCostCnyPartial, false);
+assert.equal(share.unattributed.knownCostCny, null);
+assert.equal(share.unattributed.estimatedCostCny, null);
 assert.equal(share.unattributed.undated, null);
+assert.equal(share.coverage.unpricedRequests, undefined);
+assert.equal(share.coverage.priceFn, undefined);
+assert.equal(share.coverage.priceVersions, undefined);
+assert.equal(share.coverage.costCnyPartial, undefined);
+assert.equal(share.coverage.rateFn, undefined);
 console.log(
   JSON.stringify(
     {

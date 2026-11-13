@@ -42,7 +42,6 @@ import {
   UM_SOURCE,
   accessFrom,
   contextEntries,
-  costFrom,
   failureFrom,
   loginFrom,
   maintenanceFrom,
@@ -144,7 +143,6 @@ export class UmDataReads extends UmDataState {
       login: beginLoad(this.state.overview.login),
       verify: beginLoad(this.state.overview.verify),
       today: beginLoad(this.state.overview.today),
-      cost: beginLoad(this.state.overview.cost),
       trend: beginLoad(this.state.overview.trend),
       issues: { state: "loading" },
     });
@@ -194,7 +192,6 @@ export class UmDataReads extends UmDataState {
       this.state.overview.login,
       this.state.overview.verify,
       this.state.overview.today,
-      this.state.overview.cost,
       this.state.overview.trend,
     ];
     const unread = loads.some(
@@ -248,19 +245,15 @@ export class UmDataReads extends UmDataState {
 
   protected async readTodayTask(): Promise<void> {
     const previousToday = this.state.overview.today;
-    const previousCost = this.state.overview.cost;
     const token = this.nextLane("um-today");
-    this.patchOverview({
-      today: beginLoad(previousToday),
-      cost: beginLoad(previousCost),
-    });
+    this.patchOverview({ today: beginLoad(previousToday) });
     try {
       const outcome = await this.requests.run("um-today", (signal) =>
         this.client.readUmToday(signal)
       );
       if (outcome.state === "cancelled") {
         if (this.isCurrentLane("um-today", token))
-          this.patchOverview({ today: previousToday, cost: previousCost });
+          this.patchOverview({ today: previousToday });
         return;
       }
       if (
@@ -273,11 +266,6 @@ export class UmDataReads extends UmDataState {
       this.timezone = response.timezone ?? this.timezone;
       this.patchOverview({
         today: { state: "ready", data: todayFrom(response.today), at },
-        cost: {
-          state: "ready",
-          data: costFrom(response.cost, this.summary?.umReference ?? null),
-          at,
-        },
       });
       this.rebuildRuntime();
       this.refreshFailedLatest();
@@ -286,7 +274,6 @@ export class UmDataReads extends UmDataState {
       const failure = failureFrom(error, this.now());
       this.patchOverview({
         today: failedOrStale(previousToday, failure),
-        cost: failedOrStale(previousCost, failure),
       });
       this.recomputeIssues();
     }

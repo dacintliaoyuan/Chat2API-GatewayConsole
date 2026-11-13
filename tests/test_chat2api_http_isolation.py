@@ -372,9 +372,7 @@ class TestChat2ApiHttpHarnessIsolation(unittest.TestCase):
         second = _FakeTest()
         with tempfile.TemporaryDirectory(prefix="chat2api-cleanup-proof-") as root:
             sentinel = Path(root) / "synthetic-production.jsonl"
-            with mock.patch.object(chat2api, "USAGE_LOG", str(sentinel)), \
-                    mock.patch.object(chat2api, "_price_table_version",
-                                      return_value="test-price-version"):
+            with mock.patch.object(chat2api, "USAGE_LOG", str(sentinel)):
                 outer = self
 
                 class CleanupCase(unittest.TestCase):

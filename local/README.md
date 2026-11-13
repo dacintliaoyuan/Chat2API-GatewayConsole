@@ -22,7 +22,7 @@ python -I local/run_local.py --config <绝对路径.json> [--check-config | --pr
 
 `local/backend/app.py` 拥有自己的路由、鉴权、配置与生命周期，不 import `console.adapters`、`share.management`、`share.store`、`chat2api.share_auth`、`chat2api.share_dispatch`、`console.display_proxy`、`usagesrv`、`cloud`。唯一的 `share` 依赖是控制令牌校验器 `share.secret_protection`，隔离包会携带它。
 
-`local/backend/stats_env.py` 只用 `shared.pricing_rules` 的公开名；价目缓存与文件读取留在端内。
+`local/backend/stats_env.py` 只装配原始统计环境；费用/价格面已随 #30 退役。
 
 ## UM 子进程契约
 

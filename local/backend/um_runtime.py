@@ -79,10 +79,8 @@ def _port_is_listening(host, port):
 class UmRuntime:
     """Start/stop/status the in-package chat2api child process."""
 
-    def __init__(self, config, *, price_file=None, popen=None,
-                 clock=time.monotonic):
+    def __init__(self, config, *, popen=None, clock=time.monotonic):
         self.config = config
-        self.price_file = price_file
         self._popen = popen or subprocess.Popen
         self._clock = clock
         self._process = None
@@ -140,8 +138,6 @@ class UmRuntime:
             "CHAT2API_USAGE_LOG": self.config.usage_log,
             "CHAT2API_CONTROL_TOKEN_FILE": self.config.control_token_file,
             "CHAT2API_REAUTH_SLOT_FILE": self.config.reauth_slot_file,
-            "CHAT2API_PRICE_TABLE_FILE": self.price_file or os.path.join(
-                home, "prices.json"),
             # The private role never verifies a share marker; pointing the
             # attribution key at the isolated home keeps even a crafted marker
             # from reading the production key file.

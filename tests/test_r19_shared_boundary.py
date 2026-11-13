@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """E19-1-01B: total boundary test for the three bundled ``shared`` modules.
 
-``shared.nonstream_aggregate``, ``shared.responses_protocol`` and
-``shared.pricing_rules`` are the three modules both gateway applications bundle.
-This file pins the shared boundary for all three together:
+``shared.nonstream_aggregate`` and ``shared.responses_protocol`` are the two
+modules both gateway applications bundle (``shared.pricing_rules`` was retired
+with #30). This file pins the shared boundary for both together:
 
 * their import statements reference no host or business module
   (``chat2api``/``usagesrv``/``console_*``/``share_*``/``model_*``/
@@ -11,9 +11,6 @@ This file pins the shared boundary for all three together:
 * a fresh interpreter that imports all three loads none of those modules into
   ``sys.modules`` -- the in-process check would be invalid once the full suite has
   imported host modules, so it runs in a clean subprocess;
-* ``pricing_rules.estimate_record`` is a pure calculation over an explicitly
-  supplied price table, requires that table (no default, no file lookup) and opens
-  no file -- ``load_price_table`` and its cache stay in the host;
 * the Responses admission field set is an immutable ``frozenset`` and the caller can
   pass its own ``allowed_fields`` without touching module state;
 * the non-stream response identity (``id``/``created_at``) defaults to a fresh
@@ -44,18 +41,15 @@ SHARED_DIR = AI_GATEWAY_ROOT / "shared"
 sys.path.insert(0, str(AI_GATEWAY_ROOT))
 
 from shared import nonstream_aggregate  # noqa: E402
-from shared import pricing_rules as pricing  # noqa: E402
 from shared import responses_protocol  # noqa: E402
 
-SHARED_MODULES = (nonstream_aggregate, responses_protocol, pricing)
+SHARED_MODULES = (nonstream_aggregate, responses_protocol)
 
 FORBIDDEN_EXACT_MODULES = ("chat2api", "usagesrv", "local", "cloud",
                            "console", "share", "model_sync", "zcode")
 FORBIDDEN_PREFIXES = ("console_", "share_", "model_", "zcode_")
 
 # 2026-09-25T12:00:00Z, after LEGACY_BASE_BOUNDARY; hand-computed epoch ms.
-TS_OFF = 1790337600000
-
 FORBIDDEN_IMPORT_SOURCE = """
 import json
 import chat2api
@@ -73,7 +67,6 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from shared import pricing_rules
 from . import nonstream_aggregate
 """
 
@@ -87,7 +80,6 @@ for entry in sys.argv[1:]:
 
 import shared.nonstream_aggregate
 import shared.responses_protocol
-import shared.pricing_rules
 
 print(json.dumps({
     "files": {
@@ -95,8 +87,6 @@ print(json.dumps({
             Path(shared.nonstream_aggregate.__file__).resolve()),
         "responses_protocol": str(
             Path(shared.responses_protocol.__file__).resolve()),
-        "pricing_rules": str(
-            Path(shared.pricing_rules.__file__).resolve()),
     },
     "modules": sorted(sys.modules),
 }))
@@ -143,31 +133,6 @@ def _relative_import_escapes(tree):
 def _forbidden_modules(modules):
     return sorted(name for name in modules
                   if _is_forbidden_module(name))
-
-
-def _pricing_table(cache_hit=0.007, cache_miss=0.22, output=0.66):
-    """A price table in the shape ``usagesrv.load_price_table`` returns."""
-    peak = {"enabled": False, "effectiveAtMs": None, "windows": []}
-    tier = {"cacheHit": cache_hit, "cacheMiss": cache_miss,
-            "output": output}
-    version = {
-        "versionId": None,
-        "effectiveAt": None,
-        "effectiveAtMs": None,
-        "exchangeRate": 7.2,
-        "peak": peak,
-        "tiers": [({"pricing-model": dict(tier)}, "deepseek-peak", "prices")],
-        "checkedAt": None,
-        "checkedAgeDays": None,
-    }
-    return {
-        "exchangeRate": 7.2,
-        "peak": peak,
-        "tiers": version["tiers"],
-        "override": {},
-        "versions": [version],
-        "versioned": False,
-    }
 
 
 class ImportScannerTests(unittest.TestCase):
@@ -241,7 +206,6 @@ class SharedSourceBoundaryTests(unittest.TestCase):
         expected = {
             "shared.nonstream_aggregate": SHARED_DIR / "nonstream_aggregate.py",
             "shared.responses_protocol": SHARED_DIR / "responses_protocol.py",
-            "shared.pricing_rules": SHARED_DIR / "pricing_rules.py",
         }
         for module in SHARED_MODULES:
             with self.subTest(module=module.__name__):
@@ -298,12 +262,11 @@ class FreshInterpreterBoundaryTests(unittest.TestCase):
         self.assertTrue(lines, "fresh interpreter probe printed nothing")
         return json.loads(lines[-1])
 
-    def test_fresh_interpreter_importing_all_three_loads_no_business_module(self):
+    def test_fresh_interpreter_importing_both_loads_no_business_module(self):
         payload = self._run_probe()
         expected = {
             "nonstream_aggregate": SHARED_DIR / "nonstream_aggregate.py",
             "responses_protocol": SHARED_DIR / "responses_protocol.py",
-            "pricing_rules": SHARED_DIR / "pricing_rules.py",
         }
         for key, path in expected.items():
             with self.subTest(module=key):
@@ -311,62 +274,13 @@ class FreshInterpreterBoundaryTests(unittest.TestCase):
         modules = payload["modules"]
         for name in ("shared",
                       "shared.nonstream_aggregate",
-                      "shared.responses_protocol",
-                      "shared.pricing_rules"):
+                      "shared.responses_protocol"):
             self.assertIn(name, modules)
         self.assertEqual(
             _forbidden_modules(modules), [],
-            "importing the three shared modules loaded host/business "
+            "importing the shared modules loaded host/business "
             "modules: {}".format(", ".join(_forbidden_modules(modules))),
         )
-
-
-class PricingRulesPurityTests(unittest.TestCase):
-
-    def test_estimate_record_computes_from_the_explicit_table(self):
-        result = pricing.estimate_record(
-            "pricing-model", TS_OFF, 1_000_000, 100_000, 500_000, 0,
-            _pricing_table())
-        self.assertEqual(result[1:], (True, "pricing-model", False))
-        self.assertAlmostEqual(result[0], 0.1795, places=9)
-
-    def test_estimate_record_uses_the_table_argument_not_ambient_state(self):
-        result = pricing.estimate_record(
-            "pricing-model", TS_OFF, 1_000_000, 100_000, 500_000, 0,
-            _pricing_table(cache_hit=0.1, cache_miss=1.0, output=2.0))
-        self.assertEqual(result[1:], (True, "pricing-model", False))
-        self.assertAlmostEqual(result[0], 0.75, places=9)
-
-    def test_estimate_record_requires_the_table_argument(self):
-        with self.assertRaises(TypeError):
-            pricing.estimate_record(
-                "pricing-model", TS_OFF, 1_000_000, 100_000, 500_000, 0)
-
-    def test_estimate_record_opens_no_file(self):
-        table = _pricing_table()
-        with contextlib.ExitStack() as stack:
-            for target in ("builtins.open", "io.open", "os.open",
-                           "pathlib.Path.open"):
-                stack.enter_context(mock.patch(
-                    target,
-                    side_effect=AssertionError(
-                        "shared pricing opened a file: " + target),
-                ))
-            result = pricing.estimate_record(
-                "pricing-model", TS_OFF, 1_000_000, 100_000, 500_000, 0,
-                table)
-        self.assertEqual(result[1:], (True, "pricing-model", False))
-        self.assertAlmostEqual(result[0], 0.1795, places=9)
-
-    def test_pricing_rules_exposes_no_file_loader_or_host_cache(self):
-        for name in ("load_price_table", "PRICE_FILE", "OVERRIDE_FILE",
-                      "_price_cache", "_match_cache", "_match_cache_lock",
-                      "threading"):
-            with self.subTest(name=name):
-                self.assertFalse(
-                    hasattr(pricing, name),
-                    "shared pricing must not expose " + name,
-                )
 
 
 class ResponsesAdmissionFieldSetTests(unittest.TestCase):
@@ -622,7 +536,7 @@ class DualEndConsumptionTests(unittest.TestCase):
     still fails.
     """
 
-    END_DIRS = {"local": AI_GATEWAY_ROOT / "local"}
+    END_DIRS = {"chat2api": AI_GATEWAY_ROOT / "chat2api"}
 
     @staticmethod
     def _shared_imports(path):

@@ -1,6 +1,6 @@
 # shared：双端共用的纯协议与纯规则
 
-`shared/` 随本机（local）与云端（cloud）两个应用分别打包，只放双端实际消费、导入时没有运行时副作用的代码：请求/响应映射、SSE 解析与聚合、每请求独立的有界解析器、数据类型与错误类型、纯计算规则（时间、模型标识、计价）。
+`shared/` 随本机（local）与云端（cloud）两个应用分别打包，只放双端实际消费、导入时没有运行时副作用的代码：请求/响应映射、SSE 解析与聚合、每请求独立的有界解析器、数据类型与错误类型、纯计算规则（时间、模型标识）。
 
 ## 边界
 
@@ -19,23 +19,6 @@
 - **准入字段集合不可变**：`responses_protocol.RESPONSES_FIELDS` 与 `MESSAGES_FIELDS` 是 `frozenset`。需要不同准入面的调用者给 `valid_responses_request(data, allowed_fields=...)` 传自己的集合，模块常量不受影响。
 - **响应身份可注入**：`chat_to_responses_response` / `messages_to_responses_response` 接受可选关键字参数 `created_at=None, response_id=None`。默认逐次用 `time`／`secrets` 生成；注入范围仅限响应对象自身的顶层 `id`／`created_at`，`output[].id` 与流式事件内层 id 仍逐次随机。逐字节比对的 fixture/replay 断言必须排除这些字段，或只比对顶层 `id`／`created_at`。
 
-## 跨端公开名
-
-`pricing_rules` 的每个跨模块函数都有公开名；旧私有名保留为同一函数对象的别名（不是包装、不是复制），改名前后行为逐字节一致。本机端 `local/backend/stats_env.py` 与云端 `cloud/backend/summary.py` 使用其中的公开名。
-
-| 公开名 | 私有别名 | 用途 |
-|---|---|---|
-| `beijing_weekday` | `_beijing_weekday` | 北京时间日序 → 星期 |
-| `checked_age_days` | `_checked_age_days` | `checkedAt` 距今天数 |
-| `current_version` | `_current_version` | 当前生效的价目表版本段 |
-| `peak_of` | `_peak_of` | 峰谷规则归一化 |
-| `price_version` | `_price_version` | 版本段 → 查找结构 |
-| `rate_of` | `_rate_of` | 汇率兜底 |
-| `strip_id_decor` | `_strip_id_decor` | 去模型 id 的日期快照与版本后缀 |
-| `tiers_of` | `_tiers_of` | 价表扁平成档位 |
-| `tokens_of` | `_tokens_of` | 模型 id 按分隔符切词 |
-| `version_id` | `_version_id` | 版本标识（显式 `versionId` 优先） |
-
 ## 解释器预加载
 
-导入 `shared.pricing_rules` 的运行时纯净性检查断言 `usagesrv`／`chat2api`／`console`／`share`／`model_sync`／`zcode` 不在 `sys.modules`，但不断言 `threading` 缺席：原版 Ubuntu 的 Python 会在用户代码执行前由 `sitecustomize`／`apport_python_hook` 预导入 `threading`。这是解释器启动行为，不是本模块的副作用。源码层面的规则仍然绝对：`shared` 的任何 `.py` 不得出现 `import threading`。
+导入 `shared` 的运行时纯净性检查断言 `usagesrv`／`chat2api`／`console`／`share`／`model_sync`／`zcode` 不在 `sys.modules`，但不断言 `threading` 缺席：原版 Ubuntu 的 Python 会在用户代码执行前由 `sitecustomize`／`apport_python_hook` 预导入 `threading`。这是解释器启动行为，不是本模块的副作用。源码层面的规则仍然绝对：`shared` 的任何 `.py` 不得出现 `import threading`。
