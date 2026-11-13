@@ -26,7 +26,7 @@ case "${1:-}" in
     run python -m unittest \
       tests.test_share_gate_merged \
       tests.test_share_gate_citations \
-      tests.test_share_chain_window \
+      tests.test_check_gate \
       tests.test_r19_um_imports \
       tests.test_console_share_production \
       tests.test_cloud_deploy_assembly \
