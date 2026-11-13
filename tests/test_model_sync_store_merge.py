@@ -31,6 +31,11 @@ class RetiredStoreMergeTests(unittest.TestCase):
         self.assertNotIn("from zcode", source)
         self.assertNotIn("import zcode", source)
 
+    def test_zcode_package_is_gone(self):
+        self.assertIsNone(importlib.util.find_spec("zcode"))
+        self.assertFalse(
+            (Path(__file__).resolve().parents[1] / "zcode").exists())
+
     def test_context_overrides_remain_state_only(self):
         from model_sync.sync_core import empty_state
         state = empty_state()
