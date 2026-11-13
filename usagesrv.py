@@ -3377,9 +3377,20 @@ class Handler(BaseHTTPRequestHandler):
                 "expires_at": None, "mode": "novnc",
                 "operator": self._console_operator_default(),
             }
+        status, grant = self._console_display_grant_payload()
+        if status != 200 or not isinstance(grant, dict) \
+                or not isinstance(grant.get("url"), str):
+            return {
+                "available": False, "url": None,
+                "reason": (grant.get("error")
+                           if isinstance(grant, dict) else None)
+                          or "display_grant_unavailable",
+                "expires_at": None, "mode": "novnc",
+                "operator": self._console_operator_default(),
+            }
         return {
-            "available": True, "url": "/display/", "reason": "",
-            "expires_at": int(time.time() + config.max_session_seconds),
+            "available": True, "url": grant["url"], "reason": "",
+            "expires_at": grant.get("expires_at"),
             "mode": "novnc",
             "operator": self._console_operator_state(),
         }

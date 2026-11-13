@@ -644,8 +644,8 @@
         "cloud_runtime"
       ],
       "path": "chat2api/chat2api.py",
-      "sha256": "5c3ad1e52c15140c8dc6bf0434f7cbb66c74d2398b408bac615e7144099cdf8b",
-      "size": 502996
+      "sha256": "6ea95526f6a5d3f902a2b1d638fd4a0e557a4c5e9c77c0940f000bee554be37c",
+      "size": 503507
     },
     {
       "closures": [
@@ -1022,8 +1022,8 @@
         "cloud_runtime"
       ],
       "path": "usagesrv.py",
-      "sha256": "515cdc51d2e4343d4d20d87d0d8a34e92035dea0035c1738c205b467ec0bb2b6",
-      "size": 240092
+      "sha256": "058603e39dcd66e8793ba1e1d71e56b0f605b240457a48f0d622129fb9d8c64a",
+      "size": 240628
     },
     {
       "closures": [
@@ -1058,7 +1058,7 @@
       "size": 46032
     }
   ],
-  "generated_at": "2026-11-13T02:28:32.690453+00:00",
+  "generated_at": "2026-11-13T03:04:00.718556+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",

@@ -132,7 +132,7 @@ class DisplayRouteTest(unittest.TestCase):
         self.assertEqual(status, 200)
         payload = json.loads(body)
         self.assertTrue(payload["available"])
-        self.assertEqual(payload["url"], "/display/")
+        self.assertTrue(payload["url"].startswith("/display/grant#grant="))
         self.assertNotIn("?", payload["url"])
         self.assertEqual(payload["mode"], "novnc")
         self.assertIsInstance(payload["expires_at"], int)

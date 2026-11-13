@@ -298,19 +298,27 @@ OPENWEBUI_SSO_BUTTON_SELECTORS = (
     'button:has-text("Continue with UMPASS")',
 )
 UMPASS_SSO_HOST = "websso.um.edu.mo"
+# The UMPASS form moved to login.um.edu.mo (Keycloak websso); keep the legacy
+# websso.um.edu.mo form accepted so an older deployment and its tests still work.
+UMPASS_SSO_HOSTS = (UMPASS_SSO_HOST, "login.um.edu.mo")
 UMPASS_ACCOUNT_SELECTORS = (
     'input[name="UserName"]',
     'input[id="userNameInput"]',
+    'input[name="username"]',
+    'input[id="username"]',
 )
 UMPASS_PASSWORD_SELECTORS = (
     'input[name="Password"]',
     'input[id="passwordInput"]',
+    'input[name="password"]',
+    'input[id="password"]',
     'input[type="password"]',
 )
 UMPASS_SUBMIT_SELECTORS = (
     'input[type="submit"]',
     'button[type="submit"]',
     'span#submitButton[role="button"]',
+    '#kc-login',
 )
 UMPASS_MFA_SELECTORS = (
     'input[autocomplete="one-time-code"]',
@@ -332,6 +340,9 @@ UMPASS_ERROR_SELECTORS = (
     '.error',
     '#usernameError',
     '#passwordError',
+    '#input-error',
+    '[id$="-error"]',
+    '.pf-c-form__helper-text.pf-m-error',
 )
 # Recognized pages the state machine only WAITS on. The Duo prompt passes on
 # its own for a trusted device; a Duo prompt that asks for a code is the
@@ -1811,7 +1822,8 @@ def _umpass_credential_rejected(page) -> bool:
     value. Anything else (a changed site, a missing field, a slow render) is left
     to a human instead of being guessed as a wrong password.
     """
-    if _page_host(page.url()) != UMPASS_SSO_HOST:
+    if not any(_host_matches(_page_host(page.url()), h)
+               for h in UMPASS_SSO_HOSTS):
         return False
     if not page.any_visible(UMPASS_ERROR_SELECTORS):
         return False
@@ -1957,7 +1969,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                 host = _page_host(url)
                 if url and _page_origin(url) == expected_origin:
                     stage = "openwebui"
-                elif _host_matches(host, UMPASS_SSO_HOST):
+                elif any(_host_matches(host, h) for h in UMPASS_SSO_HOSTS):
                     stage = "umpass"
                 elif any(_host_matches(host, h) for h in DUO_WAIT_HOSTS):
                     stage = "duo"

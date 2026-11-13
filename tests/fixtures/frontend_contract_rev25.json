@@ -12,7 +12,7 @@
       "share/metering.py": "46f57c0459211c92f0ed3dc2097481bce750274ee2de8b5bfc686ae1876e5417",
       "console/stats.py": "7b11c9f16b994c440fe0f3b1067cfd76d95d404423e81ae693de39710c6ea4e4",
       "console/log_reader.py": "9d61e080286d8c6b234a6b7657734e38af05ea8d89b066be412196c0657eae60",
-      "usagesrv.py": "8cd3f0963c251cfbb64b45a56b26431bb28f6e686a30a6dbf1892a31f8644ceb",
+      "usagesrv.py": "224026adf682820e566816ec77de36c972df7262b6a998c664eb3f678e2abc77",
       "console/share_actions.py": "fdd2212e6acb427c71116b2beffa7a9e55c1c14931c198fee98e34217442317e",
       "console/share_production.py": "aae4b038a039d327f4bcd4812353dcd7582c2f7fdc7b12aa1e02bf6cc8fdf02b",
       "console/gateway_connection.py": "b156114ce66f9bf05857dcb9134455b94719d8ba2a30981d7b912ae7a3549dd9"
