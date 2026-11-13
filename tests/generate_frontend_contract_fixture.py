@@ -25,7 +25,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 sys.path[:0] = [str(Path(__file__).parent), str(Path(__file__).parents[1])]
-from test_console_model_actions import temp_sync_env, _aligned_store, _Ctx
+from test_console_model_actions import temp_sync_env, _Ctx
 from test_console_api import usagesrv
 from console import adapters as console_adapters
 from console import log_reader as console_log_reader
@@ -67,66 +67,18 @@ def generate():
          mock.patch.object(sync, "collect_catalogs", side_effect=lambda sources=None:
              ({key: value for key, value in catalogs.items()
                if sources is None or key in sources}, [])), \
-         mock.patch.object(sync, "zcode_running", return_value=False), \
-         mock.patch.object(sync, "endpoint_credential", return_value=("", None, False)), \
          mock.patch.object(sync, "datetime", FixedDatetime), \
-         mock.patch.object(actions.time, "time", return_value=1790942400), \
          mock.patch.object(share_metering, "datetime", FixedDatetime), \
          contextlib.redirect_stdout(io.StringIO()):
-        paths["ZCODE_PROVIDER_CONFIG"].write_text(
-            json.dumps(_aligned_store(catalogs)), encoding="utf-8")
-        save = actions.model_settings_save("", {"source": "um", "model_id": "fixture-model",
-            "alias": "Demo 模型", "contextSource": "measured", "contextTokens": 4096,
-            "defaultEffort": "high", "expected_draft_version": 0}, _Ctx())
-        snapshot = sync.load_state()
-        consumers, _, _ = sync.collect_consumers(selected_consumers=["DSH", "ZCode"])
-        contexts = {"overrides": sync.context_override_surface(snapshot, catalogs, consumers),
-                    "note": "Synthetic private-client snapshot"}
-        selection = {"um|fixture-model": save["draft_version"]}
-        preview = actions.model_settings_preview("", {"selection": selection}, _Ctx())
-        applied = actions.model_settings_apply("", dict(selection=selection,
-            preview_token=preview["preview_token"]), _Ctx())
-        consumers, _, _ = sync.collect_consumers(selected_consumers=["DSH", "ZCode"])
-        client_readback = {"overrides": sync.context_override_surface(sync.load_state(), catalogs, consumers)}
         model_catalog = actions.model_catalog("", {}, _Ctx())
         # R7（2026-10-10）：显式 sources 只读该来源——夹具固定「单来源」形状，
         # 与「全部模型」聚合入口（上面的 model_catalog）并列。
         scoped_catalog = actions.model_catalog("", {"sources": json.dumps(["um"])}, _Ctx())
         probe_preview = actions.model_context_probe_preview("", {}, _Ctx())
-        unavailable_readback = {"overrides": sync.context_override_surface(sync.load_state(), catalogs, None)}
-        deferred_save = actions.model_settings_save("", {"source": "um", "model_id": "fixture-model",
-            "alias": "Demo 待同步", "expected_draft_version": 1}, _Ctx())
-        deferred_selection = {"um|fixture-model": deferred_save["draft_version"]}
-        deferred_preview = actions.model_settings_preview("", {"selection": deferred_selection}, _Ctx())
-        # R27-HOT：运行中会真的调用安装版兼容准入；夹具场景固定为
-        # 「未准入」的延期形态（真实准入见 tests/test_zcode/hot_sync.py）。
-        with mock.patch.object(sync, "zcode_running", return_value=True), \
-             mock.patch.object(sync, "zcode_hot_sync_admission",
-                               return_value=(False, "Demo 夹具：安装版未通过取证准入")):
-            deferred_apply = actions.model_settings_apply("", dict(selection=deferred_selection,
-                preview_token=deferred_preview["preview_token"]), _Ctx())
-        conflict_preview = actions.model_settings_preview("", {"selection": deferred_selection}, _Ctx())
-        client_config = json.loads(paths["ZCODE_JSON"].read_text("utf-8"))
-        client_config["synthetic_external_edit"] = True
-        paths["ZCODE_JSON"].write_text(json.dumps(client_config), encoding="utf-8")
-        try:
-            actions.model_settings_apply("", dict(selection=deferred_selection,
-                preview_token=conflict_preview["preview_token"]), _Ctx())
-        except OperationError as exc:
-            conflict = {"code": exc.code, "message": str(exc)}
-        else:
-            raise AssertionError("changed private client snapshot did not conflict")
-        # §11.3 组合窗口（2026-10-10）：一次预览把草稿版本与目录差异绑在同一
-        # preview_token；确认后同一受控发布轮同时消费草稿与目录变化，结果返回
-        # 实际应用/延期/冲突/读回。夹具固定该形状（草稿版本、token、读回）。
-        combined_save = actions.model_settings_save("", {"source": "um", "model_id": "fixture-model",
-            "alias": "Demo 组合", "expected_draft_version": 2}, _Ctx())
-        combined_selection = {"um|fixture-model": combined_save["draft_version"]}
-        combined_preview = actions.model_sync_preview("", {"scope_mode": "all",
-            "selection": combined_selection}, _Ctx())
-        combined_apply = actions.model_sync_apply("", {"scope_mode": "all",
-            "selection": combined_selection,
-            "preview_token": combined_preview["preview_token"]}, _Ctx())
+        # 只读读回：context overrides 只经 state + catalog 计算，不触碰
+        # 已退役的 model sync/settings 动作。
+        contexts = {"overrides": sync.context_override_surface(sync.load_state(), catalogs),
+                    "note": "Synthetic private-client snapshot"}
         ledger = paths["DATA_DIR"] / "usage-share-backend.jsonl"
         records = [
             {"time": "2026-10-02T12:00:00+08:00", "model": "fixture-model",
@@ -232,16 +184,7 @@ def generate():
             "actions": capabilities, "catalog": model_catalog,
             "scoped_catalog": scoped_catalog,
             "context_overrides": contexts,
-            "context_probe_preview": probe_preview, "settings_save": save,
-            "settings_preview": preview, "settings_apply": applied,
-            "client_readback": client_readback,
-            "client_readback_unavailable": unavailable_readback,
-            "settings_deferred_preview": deferred_preview, "settings_deferred_apply": deferred_apply,
-            "settings_conflict_error": conflict,
-            # §11.3 组合窗口（2026-10-10）：组合预览/发布的形状（草稿版本 +
-            # 目录差异绑同一 token；确认后同一受控发布轮）。
-            "sync_combined_preview": combined_preview,
-            "sync_combined_apply": combined_apply,
+            "context_probe_preview": probe_preview,
             "share_usage": share_usage, "log_entries": logs,
             "log_sources": log_sources, "log_overview": log_overview,
             "share_maintenance": share_maintenance}

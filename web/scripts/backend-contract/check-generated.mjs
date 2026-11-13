@@ -12,7 +12,6 @@ import {
   normalizeContextEvidence,
   normalizeLogPage,
   normalizeOperation,
-  normalizeSettingsApply,
   normalizeShareUsage,
 } from "../../src/console/backend/index.ts";
 
@@ -77,12 +76,9 @@ assert.deepEqual(
   "scoped refresh excludes unselected sources"
 );
 assert.ok(
-  fixture.sync_combined_preview.preview.changes.some(
-    (row) => row.key === "um|fixture-model" && row.draft.alias === "Demo 组合"
-  ),
-  "combined changes live inside preview.changes"
+  fixture.scoped_catalog.catalogs.um,
+  "scoped refresh keeps the selected source"
 );
-assert.match(fixture.sync_combined_preview.preview_token, /^[a-f0-9]{64}$/);
 const contexts = normalizeContexts(fixture.context_overrides);
 const evidence = normalizeContextEvidence(fixture.context_probe_preview);
 const details = joinModelDetails(catalog, contexts, evidence);
@@ -101,40 +97,6 @@ assert.ok(
     (row) => row.status === "unconfigured" && row.rows === null
   )
 );
-const applied = normalizeSettingsApply(fixture.settings_apply);
-const readback = normalizeContexts(fixture.client_readback);
-const appliedModel = readback.find((row) => row.key === "um|fixture-model");
-// Rev11 单文件发布：ZCode 侧的实时权威文件（provider_config.json）只携带
-// contextWindow；逐模型显示名/默认档位不在该 store schema 里（只在旧版
-// config.json 迁移路径）。读回以「可发布的 context」为准，显示名/档位如实为
-// 空，绝不把无法落盘的设置伪装成客户端已生效。
-assert.equal(appliedModel.clientContextTokens, 4096);
-assert.equal(appliedModel.clientAlias, null);
-assert.equal(appliedModel.clientDefaultEffort, null);
-assert.ok(
-  appliedModel.clientReadbacks.some(
-    (row) => row.consumer === "ZCode" && row.matchesApplied.context === true
-  )
-);
-assert.equal(
-  evidence.find((row) => row.key === "um|fixture-model").history[0]
-    .verifiedTokenFloor,
-  null
-);
-const deferred = normalizeSettingsApply(fixture.settings_deferred_apply);
-assert.equal(deferred.applied.length, 0);
-assert.deepEqual(deferred.deferred, ["um|fixture-model"]);
-assert.equal(fixture.settings_conflict_error.code, "version_conflict");
-assert.ok(
-  normalizeContexts(fixture.client_readback_unavailable).every(
-    (row) => row.clientReadbackState === "unavailable"
-  )
-);
-assert.equal(
-  applied.applied.some((key) => applied.deferred.includes(key)),
-  false
-);
-
 const fixtureTransport = new FixtureTransport({
   name: "generated-python-contract",
   actions: capabilities,
@@ -146,10 +108,6 @@ const fixtureTransport = new FixtureTransport({
     "model.catalog": [{ result: fixture.catalog }],
     "model.context_overrides": [{ result: fixture.context_overrides }],
     "model.context_probe_preview": [{ result: fixture.context_probe_preview }],
-    "model.settings_preview": [{ result: fixture.settings_preview }],
-    "model.settings_apply": [{ result: fixture.settings_apply }],
-    // This fixture reuses the isolated context readback; it never claims that
-    // a client has read a setting merely because the apply operation succeeded.
   },
 });
 let time = 0;
@@ -162,12 +120,6 @@ const client = new BackendClient(fixtureTransport, {
 assert.deepEqual(await client.readCatalog(), catalog);
 assert.deepEqual(await client.readContexts(), contexts);
 assert.deepEqual(await client.readContextEvidence(), evidence);
-const preview = await client.previewSettings(
-  fixture.settings_preview.selection
-);
-const operation = await client.applySettings(preview, preview.selection);
-assert.equal(operation.state, "succeeded");
-assert.deepEqual(normalizeSettingsApply(operation.operation.result), applied);
 assert.deepEqual((await client.readShareUsage()).value, share);
 assert.deepEqual(
   await client.readLogs({ source: "fixture", category: "runtime" }),
@@ -176,7 +128,7 @@ assert.deepEqual(
 assert.ok(fixtureTransport.calls.every((call) => !call.path.includes("://")));
 assert.equal(
   fixtureTransport.calls.filter((call) => call.method === "POST").length,
-  5
+  3
 );
 
 // Rev9 A9-8: the share_maintenance segment is consumed through the SAME

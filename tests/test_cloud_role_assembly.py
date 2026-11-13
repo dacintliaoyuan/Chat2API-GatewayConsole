@@ -542,7 +542,6 @@ class CloudHttpGateTests(unittest.TestCase):
 
     def test_non_um_read_faces_are_explicitly_not_assembled(self):
         for path in ("/api/console/stats", "/api/console/logs",
-                      "/api/console/model-pending",
                       "/api/console/gateway-connection?service=Qoder"):
             with self.subTest(path=path):
                 status, payload = self._request(

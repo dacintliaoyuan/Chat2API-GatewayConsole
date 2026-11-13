@@ -43,11 +43,7 @@ export interface FeedbackEntry {
 export type FeedbackListener = (entries: FeedbackEntry[]) => void;
 
 const CN_ACTION: Record<string, string> = {
-  "model.sync_preview": "同步预览",
-  "model.sync_apply": "应用同步",
   "model.catalog": "刷新目录",
-  "model.task_status": "同步任务状态",
-  "model.sync_pending": "同步概览",
   "service.start": "启动服务",
   "service.stop": "停止服务",
   "service.restart": "重启服务",
@@ -86,25 +82,15 @@ export function stateDot(state: FeedbackState): string {
 /** Chinese name for a registry action; falls back to the raw action id. */
 export function actionLabel(action: string): string {
   const CN_ACTION: Record<string, string> = {
-    "model.sync_preview": "同步预览",
-    "model.sync_apply": "应用同步",
     "model.catalog": "刷新目录",
-    "model.task_status": "同步任务状态",
     "service.start": "启动服务",
     "service.stop": "停止服务",
     "service.restart": "重启服务",
-    "model.sync_history": "同步历史",
-    "model.sync_pending": "同步概览",
     "model.context_probe_preview": "探测队列预览",
     "model.context_probe_run": "执行上下文探测",
     "model.context_overrides": "读取上下文设置",
     "model.context_override_set": "设置上下文覆盖",
     "model.context_override_clear": "恢复默认上下文",
-    "model.settings_save": "保存设置草稿",
-    "model.settings_preview": "预览模型设置",
-    "model.settings_apply": "应用模型设置",
-    "model.task_install": "安装同步任务",
-    "model.task_disable": "禁用同步任务",
     "account.login": "账号登录",
     "account.um_status": "UM 认证状态",
     "account.um_verify": "核验登录是否有效",

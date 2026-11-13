@@ -23,8 +23,7 @@ Production facts wired here:
   side-effect freedom is proven from source (no refresh, no credential
   access): ``account.um_status`` reads chat2api's in-memory auth state
   (chat2api.py:511-517 does not touch the upstream).
-* Managed-client writes (model.sync_apply / task_install) and
-  ``account.login`` are enabled per the deployment authorization package
+* ``account.login`` is enabled per the deployment authorization package
   section 5 (approved 2026-09-16; Rev8 2026-10-02 removed the pin actions
   from this set — model.pin_add/model.pin_remove now follow the
   unknown-action contract); every action still carries its precise reason
@@ -168,48 +167,9 @@ _SHARE_GATEWAY_RESTART_SCHEMA = {
 }
 
 
-# Scope params for model.sync_preview / model.sync_apply (2026-09-22 sync
-# contract: the backend must restrict the write surface).  The shared schema
-# vocabulary (str/int/bool/object) has no list type, so the list-shaped
-# sources/consumers travel as JSON array strings on the HTTP submit path and
-# are parsed + subset-validated inside the handler
-# (console_model_actions._console_scope -> model_sync._normalize_scope);
-# models is a plain object {source: [model_id, ...]} whose per-entry rules
-# (known sources, non-empty ids, <=64 per source, <=256 total) are enforced
-# by the same validator.  Scopes only ever NARROW the sync write surface.
-# Rev8 契约 3（2026-10-02）：同步范围显式化。scope_mode 必填（all/selected）：
-# selected 必须至少给出 sources/consumers/models 之一（空选拒绝、不回退全量）；
-# all 即启用面全集且不再接受收窄参数。sources/consumers 仍以 JSON 数组字符串
-# 编码（HTTP 提交路径），models 为 {source: [model_id]} 对象——逐项语义
-# （已知来源、非空 id、每源 ≤64、总量 ≤256）在 handler 内经
-# model_sync._normalize_scope 校验。
-_MODEL_SYNC_SCOPE_SCHEMA = {
-    "scope_mode": {"type": "str", "max_len": 16},
-    "sources": {"type": "str", "max_len": 512},
-    "consumers": {"type": "str", "max_len": 512},
-    "models": {"type": "object"},
-}
-
-# §11.3 组合窗口（2026-10-10）：selection（{source|model_id: 草稿版本}）把
-# 已保存草稿纳入同一次预览/发布；应用还必须带回组合预览的 preview_token
-# （64 hex，绑定范围/目标集合/草稿版本/目录/客户端快照）。缺席 selection 时
-# 两者都不接受（普通同步语义），由 handler 明确拒绝，绝不静默消费全部草稿。
-_MODEL_SYNC_COMBINED_SCHEMA = dict(
-    _MODEL_SYNC_SCOPE_SCHEMA,
-    selection={"type": "object"},
-)
-_MODEL_SYNC_APPLY_SCHEMA = dict(
-    _MODEL_SYNC_SCOPE_SCHEMA,
-    selection={"type": "object"},
-    preview_token={"type": "str", "max_len": 64},
-)
-
 UNWIRED_REASON = UNWIRED_REASON = "功能未接线（后续阶段）；当前版本明确不提供该动作"
 
 
-MODEL_TASK_DISABLE_DISABLED_REASON = (
-    "计划任务禁用属真实系统写入（每日 06:00 目录镜像在用）；部署授权包节 5 "
-    "文本未含禁用——维护者明确批准后启用")
 SHARE_ORCH_DISABLED_REASON = (
     "分享编排已实现且生产适配器已接线（broker 受限协议/Funnel 命令/连接观察；"
     "TS 特权层经 broker 白名单扩展部署后开放——部署授权包节 5）；真实启停属"
@@ -599,16 +559,16 @@ def _um_account_resource(target, params):
     return "account:um"
 
 
-def _model_sync_resource(target, params):
-    # All model-sync operations serialize on model_sync's own SyncLock
+def _model_context_resource(target, params):
+    # All retained context operations serialize on model_sync's own SyncLock
     # inside the adapter; the console resource groups them for cancel/
     # generation semantics.
-    return "model:sync"
+    return "model:context"
 
 
 def _model_catalog_resource(target, params):
     # Pure catalog read: no shared state is written, so it gets its own
-    # resource and never serializes against sync/apply writes.
+    # resource and never serializes against context writes.
     return "model:catalog"
 
 
@@ -757,7 +717,7 @@ def _share_action_specs(include_public=True, cloud=False):
 
     Extracted verbatim from ``build_registry`` so the explicit cloud role can
     assemble exactly these actions without importing or touching any non-UM
-    subsystem (model_sync / zcode).
+    subsystem.
 
     ``include_public=False`` omits the three Tailscale/WFP-specific actions
     (``share.public_check``, ``share.public_retry``, ``share.repair_limits``):
@@ -933,7 +893,7 @@ def _cloud_service_resource(action):
 def build_cloud_registry():
     """Explicit cloud role registry: ONLY the UM share stack.
 
-    The non-UM cards (model_sync / zcode) and the
+    The non-UM cards and the
     Tailscale/WFP-specific public repair are NOT assembled: this factory never
     imports their modules. The four layered open/close chain actions stay in the
     catalogue but are DISABLED (``CLOUD_SHARE_ORCH_DISABLED_REASON``): the
@@ -1022,8 +982,8 @@ def build_registry(cloud=False):
     """
     if cloud:
         return build_cloud_registry()
-    # LOCAL (Windows) assembly: UM actions + the UM model-sync management
-    # surface. No retired-source action module is imported here
+    # LOCAL (Windows) assembly: UM actions + the UM catalog/context
+    # management surface. No retired-source action module is imported here
     # (B0, 2026-11-01).
     from console import model_actions as console_model_actions
     from console import um_adapter as console_um_adapter
@@ -1089,65 +1049,10 @@ def build_registry(cloud=False):
             # 恢复/超时复验/协作取消已隔离验证。
             enabled=True),
         ActionSpec(
-            "model.sync_preview",
-            "模型同步预览（可选 selection 纳入待同步草稿；无写入）",
-            handler=console_model_actions.model_sync_preview,
-            resource_fn=_model_sync_resource,
-            # Enabled: model_sync preview performs no client-config write
-            # (its own preview artifact aside — documented in the module).
-            # Rev8: scope_mode is REQUIRED (all/selected). selected narrows
-            # this plan (backend write-surface restriction) and an empty
-            # selection is rejected instead of widening to a full sync; the
-            # schema vocabulary has no list type, so the list-shaped
-            # sources/consumers travel as JSON array strings on the HTTP
-            # submit path and are parsed + subset-validated inside the
-            # handler (model_sync._normalize_scope); models is a plain
-            # object {source: [model_id, ...]} whose per-entry rules (known
-            # sources, non-empty ids, <=64/source, <=256 total) are enforced
-            # in the same validator.
-            # §11.3 组合窗口：可选 selection 把已保存草稿纳入同一次预览
-            # （与目录差异绑定同一 preview_token）；缺席保持普通同步语义。
-            param_schema=_MODEL_SYNC_COMBINED_SCHEMA,
-            enabled=True, bump_generation_on_success=False),
-        ActionSpec(
-            "model.sync_pending", "模型同步待处理清单（只读）",
-            handler=console_model_actions.model_sync_pending,
-            resource_fn=_model_sync_resource,
-            enabled=True, bump_generation_on_success=False),
-        ActionSpec(
-            "model.sync_history", "模型同步历史（只读，有界）",
-            handler=console_model_actions.model_sync_history,
-            resource_fn=_model_sync_resource,
-            param_schema={"limit": {"type": "int", "min": 1, "max": 50}},
-            enabled=True, bump_generation_on_success=False),
-        ActionSpec(
-            "model.task_status", "模型同步任务状态（只读）",
-            handler=console_model_actions.model_task_status,
-            resource_fn=_model_sync_resource,
-            enabled=True, bump_generation_on_success=False),
-        ActionSpec(
-            "model.sync_apply",
-            "执行模型同步（可选 selection 纳入待同步草稿；写入受管客户端配置）",
-            handler=console_model_actions.model_sync_apply,
-            resource_fn=_model_sync_resource,
-            # 节5 批准记录（2026-09-16）：受管客户端写入动作启用（model_sync
-            # 既有 SyncLock/备份/解析校验链内）。Rev8（2026-10-02）：组合动作
-            # 「应用并探测」已移除——本动作从不发模型请求，probe 参数从
-            # schema 删除且 handler 对任何 probe 传入明确拒绝；探测走独立的
-            # model.context_probe_run。scope_mode 必填，见
-            # _MODEL_SYNC_SCOPE_SCHEMA 注释（selected 空选拒绝、all 不接受
-            # 收窄参数，校验在 handler 内）。
-            # §11.3 组合窗口（2026-10-10）：可选 selection + 应用必须带回
-            # preview_token——草稿与目录差异在同一受控发布轮发布，token 绑定
-            # 范围/目标集合/草稿版本/目录/客户端快照；缺席 selection 保持
-            # 普通同步语义（不消费任何草稿），由 handler 明确拒绝 token。
-            param_schema=_MODEL_SYNC_APPLY_SCHEMA,
-            enabled=True),
-        ActionSpec(
             "model.context_probe_preview",
             "上下文探测队列预览（只读：队列+计划+估算，零请求零写入）",
             handler=console_model_actions.model_context_probe_preview,
-            resource_fn=_model_sync_resource,
+            resource_fn=_model_context_resource,
             # Enabled: pure read of the persisted contextProbes state (no
             # SyncLock, no seeding, no model request, no fabricated cost
             # figures — unpriced capacity is reported as 未定价/无法核算).
@@ -1170,12 +1075,12 @@ def build_registry(cloud=False):
             "执行上下文探测队列（真实长输入计费请求，集中批准后启用；支持 "
             "sources/models 显式选择与 retest 重测）",
             handler=console_model_actions.model_context_probe_run,
-            resource_fn=_model_sync_resource,
+            resource_fn=_model_context_resource,
             param_schema={
                 "max_requests": {"type": "int", "min": 1, "max": 20},
                 "max_tokens": {"type": "int", "min": 1, "max": 64},
                 # 显式选择（Plan-Revision 7 第 3 步）：sources 为来源子集
-                # （列表或 JSON 字符串，与 sync_apply 的 scope 约定一致）、
+                # （列表或 JSON 字符串，与目录动作的 sources 约定一致）、
                 # models 为 {source: [model_id]}、retest 为布尔。选择无法
                 # 确认（未知来源/空集合/非法类型/不在队列的模型）在 handler
                 # 内明确拒绝，绝不静默退回全队列。
@@ -1198,7 +1103,7 @@ def build_registry(cloud=False):
             "model.context_overrides",
             "人工 context 覆盖读面（声明/覆盖/有效值/来源；只读）",
             handler=console_model_actions.model_context_overrides,
-            resource_fn=_model_sync_resource,
+            resource_fn=_model_context_resource,
             param_schema={
                 "local_only": {"type": "bool"},
                 "models": {"type": "object"},
@@ -1209,9 +1114,9 @@ def build_registry(cloud=False):
             disabled_reason=None),
         ActionSpec(
             "model.context_override_set",
-            "设置人工 context 覆盖（仅写 model-sync 状态文件；客户端应用须经同步 apply）",
+            "设置人工 context 覆盖（仅写 model-sync 状态文件；覆盖保存≠客户端已应用）",
             handler=console_model_actions.model_context_override_set,
-            resource_fn=_model_sync_resource,
+            resource_fn=_model_context_resource,
             param_schema={
                 "source": {"type": "str", "max_len": 128},
                 "model_id": {"type": "str", "max_len": 128},
@@ -1225,17 +1130,16 @@ def build_registry(cloud=False):
             # Positive-int validation, model identity against the CURRENT
             # catalog (collected read-only), and the expected_set_at version
             # rule (conflicts raise version_conflict, never silent clobber).
-            # Saving does NOT apply to clients: the effective value enters
-            # mirror+probe seeding at run_sync's single application point;
-            # the real client write is the existing sync_apply transaction
-            # (rule store unavailable defers the whole ZCode set, R20-2).
+            # Saving is state-only: the client synchronization that used to
+            # publish the effective value is retired; saving never writes a
+            # client configuration.
             enabled=True,
             disabled_reason=None),
         ActionSpec(
             "model.context_override_clear",
             "恢复默认＝删除人工 context 覆盖（探测历史证据保留）",
             handler=console_model_actions.model_context_override_clear,
-            resource_fn=_model_sync_resource,
+            resource_fn=_model_context_resource,
             param_schema={
                 "source": {"type": "str", "max_len": 128},
                 "model_id": {"type": "str", "max_len": 128},
@@ -1245,69 +1149,6 @@ def build_registry(cloud=False):
             # measured probe history is never deleted by a clear.
             enabled=True,
             disabled_reason=None),
-        ActionSpec(
-            "model.settings_save",
-            "保存模型设置草稿（alias/context/defaultEffort；只写草稿）",
-            handler=console_model_actions.model_settings_save,
-            resource_fn=_model_sync_resource,
-            param_schema={
-                "source": {"type": "str", "max_len": 128},
-                "model_id": {"type": "str", "max_len": 128},
-                # Rev8 契约 5/6：alias 只改显示名（真实模型身份不变）；
-                # contextSource=declared|manual|measured 或 None（恢复声明）；
-                # contextTokens 与 model_sync 同源（1..CONTEXT_OVERRIDE_MAX）；
-                # defaultEffort 只能是上游明示档位或 None（恢复上游默认）。
-                "alias": {"type": "str", "max_len": 128, "nullable": True},
-                "contextSource": {"type": "str", "max_len": 16, "nullable": True},
-                "contextTokens": {"type": "int", "min": 1,
-                                  "max": 10_000_000, "nullable": True},
-                "defaultEffort": {"type": "str", "max_len": 32, "nullable": True},
-                "expected_draft_version": {"type": "int", "min": 0},
-            },
-            # Enabled: state-only draft write (the model-sync state file
-            # under the existing lock + transaction). Saving NEVER touches
-            # the applied values or any client; publication is the explicit
-            # model.settings_apply (Rev8 契约 6: 保存→待同步→预览→应用).
-            enabled=True,
-            disabled_reason=None),
-        ActionSpec(
-            "model.settings_preview",
-            "预览模型设置草稿（绑定版本、证据和客户端快照；不写客户端）",
-            handler=console_model_actions.model_settings_preview,
-            resource_fn=_model_sync_resource,
-            param_schema={"selection": {"type": "object"}},
-            enabled=True,
-            disabled_reason=None),
-        ActionSpec(
-            "model.settings_apply",
-            "应用模型设置草稿（提交草稿版本+预览绑定；ZCode 主配置与规则库"
-            "同事务）",
-            handler=console_model_actions.model_settings_apply,
-            resource_fn=_model_sync_resource,
-            param_schema={
-                # selection 为 {"source|model_id": draftVersion}（与读面逐
-                # 模型版本绑定，过期即 version_conflict）；非空发布须提交
-                # 完整选择及预览 token，绝不以空选代替全部。
-                "selection": {"type": "object"},
-                "preview_token": {"type": "str", "max_len": 64},
-                "source": {"type": "str", "max_len": 128},
-                "model_id": {"type": "str", "max_len": 128},
-            },
-            # Enabled: the ONLY publication channel for settings drafts —
-            # the promotion lands via run_sync(state_override=...)'s single
-            # transaction (ZCode config.json + provider rule store in one
-            # batch; a failed group defers as one). A deferral preserves
-            # every client's old applied state and all selected drafts.
-            # Scheduled syncs never publish drafts.
-            enabled=True,
-            disabled_reason=None),
-        ActionSpec(
-            "model.task_install", "模型同步任务安装/修复",
-            handler=console_model_actions.model_task_install,
-            resource_fn=_model_sync_resource,
-            # 节5 批准记录（2026-09-16）：受管客户端写入动作启用（真实计划
-            # 任务注册经现有 manage-model-sync-task.ps1 幂等入口）。
-            enabled=True),
         ActionSpec(
             "model.catalog", "模型目录只读查询（各来源 /v1/models；无探测、无计费、无启停）",
             handler=console_model_actions.model_catalog,
@@ -1327,15 +1168,6 @@ def build_registry(cloud=False):
                 "fresh": {"type": "bool"},
             },
             enabled=True, bump_generation_on_success=False),
-        ActionSpec(
-            "model.task_disable", "禁用模型同步计划任务（真实系统写入）",
-            handler=console_model_actions.model_task_disable,
-            resource_fn=_model_sync_resource,
-            # Handler wired through the existing script (-Action Disable)
-            # but the ACTION stays disabled: Disable-ScheduledTask is a real
-            # system write and the daily 06:00 catalog mirror relies on the
-            # task; the section-5 approval text does not cover disabling.
-            enabled=False, disabled_reason=MODEL_TASK_DISABLE_DISABLED_REASON),
         # UM 分享动作目录（含 TS/Funnel 专用公网巡检与 WFP 隔离修复）
         # 抽到 _share_action_specs()：云端角色只装配其中的非 TS/WFP 子集，
         # 本地 Windows 装配保持全部动作不变。

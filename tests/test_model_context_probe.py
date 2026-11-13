@@ -1044,46 +1044,6 @@ class TestSeedContextProbes(unittest.TestCase):
         self.assertEqual(record["history"][0]["token_evidence"], "61234")
 
 
-class TestRunSyncSeedsQueueIntoNextState(unittest.TestCase):
-    def test_apply_writes_seeded_queue_into_state_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            catalogs = {"um": [CatalogModel("um", "a", context=128000)]}
-            consumers = {"um|DSH|openwebui": {"providerName": "UM",
-                                              "models": {}}}
-            dsh_raw = ("llm-pi-ai:\n  providers:\n    openwebui:\n"
-                       "      displayName: UM\n      models:\n")
-            with mock.patch.object(
-                    model_sync, "collect_catalogs",
-                    return_value=(catalogs, [])), \
-                mock.patch.object(
-                    model_sync, "collect_consumers",
-                    return_value=(consumers, dsh_raw, "{}")), \
-                mock.patch.object(model_sync, "DSH_YAML",
-                                  root / "settings.yaml"), \
-                mock.patch.object(model_sync, "ZCODE_PROVIDER_CONFIG",
-                                  root / "provider_config.json"), \
-                mock.patch.object(model_sync, "STATE_FILE",
-                                  root / "state.json"), \
-                mock.patch.object(model_sync, "RESULT_FILE",
-                                  root / "result.json"), \
-                mock.patch.object(model_sync, "HISTORY_FILE",
-                                  root / "history.jsonl"), \
-                mock.patch.object(model_sync, "BACKUP_DIR",
-                                  root / "backups"), \
-                mock.patch.object(model_sync, "zcode_running",
-                                  return_value=False):
-                (root / "settings.yaml").write_text(dsh_raw, encoding="utf-8")
-                model_sync.run_sync(apply=True, run_probes=False,
-                                    confirm=False)
-            state = json.loads((root / "state.json").read_text("utf-8"))
-        self.assertEqual(state["contextProbes"]["um|a"]["status"], "pending")
-        self.assertEqual(state["contextProbes"]["um|a"]["declared_context"],
-                         128000)
-        self.assertEqual(
-            state["contextProbes"]["um|a"]["evidence_revision"], 1)
-
-
 class _Ctx:
     """OperationContext stand-in with the real public cancel/report surface."""
 
@@ -1122,9 +1082,6 @@ def _temp_probe_env(state=None):
             for name, value in {
                     "DATA_DIR": data,
                     "STATE_FILE": state_file,
-                    "RESULT_FILE": data / "result.json",
-                    "PREVIEW_FILE": data / "preview.json",
-                    "HISTORY_FILE": data / "history.jsonl",
                     "BACKUP_DIR": data / "backups",
                     "LOCK_FILE": data / "model-sync.lock"}.items():
                 stack.enter_context(mock.patch.object(model_sync, name, value))
@@ -1256,17 +1213,12 @@ class TestIndependentProbeRun(unittest.TestCase):
         with _FakeCatalogServer(body=_um_catalog_body("new")) as server, \
              _um_endpoint(server), _temp_probe_env() as paths, \
              mock.patch.object(model_sync, "_post_json",
-                               _fake_probe_post(calls)), \
-             mock.patch.object(
-                 model_sync, "run_sync",
-                 side_effect=AssertionError("old sync must not run")) as run_sync, \
-             mock.patch.object(
-                 model_sync, "collect_consumers",
-                 side_effect=AssertionError("client config must not be read")):
+                               _fake_probe_post(calls)):
             result = console_model_actions.model_context_probe_run(
                 "", {"sources": ["um"], "models": {"um": ["new"]}}, _Ctx())
             after = json.loads(paths["state"].read_text("utf-8"))
-        run_sync.assert_not_called()
+        self.assertFalse(hasattr(model_sync, "run_sync"))
+        self.assertFalse(hasattr(model_sync, "collect_consumers"))
         self.assertEqual(len(server.requests), 1)
         self.assertEqual(result["requests_used"],
                          len(model_sync.PROBE_INPUT_STEPS))

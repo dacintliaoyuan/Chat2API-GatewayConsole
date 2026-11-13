@@ -1,66 +1,34 @@
 # -*- coding: utf-8 -*-
 """Isolated tests for console_model_actions (Revision 5 L3/L1).
 
-All model_sync state files and client configs (DSH settings.yaml / ZCode
-config.json) are redirected into a temporary directory by mock.patching the
-module constants (model_sync's injectable surface is exactly those module
-constants). No real ~/.dsh, ~/.zcode, gateway data directory, catalog HTTP
-endpoint or Windows scheduled task is ever touched. The scheduled-task
-boundary is faked at ``subprocess.run`` so the real argument-list build,
-output decode and exit-code handling in ``_run_task_script`` stay under test;
-the fake child simulates ``Register-ScheduledTask -Force`` idempotency with
-one registration slot.
+All model_sync state files are redirected into a temporary directory by
+mock.patching the module constants (model_sync's injectable surface is exactly
+those module constants). No real client config, gateway data directory, catalog
+HTTP endpoint or Windows scheduled task is ever touched.
 
-The preview zero-write assertion covers the real write targets (DSH/ZCode
-client configs, state, last-result, history). ``model_sync``'s existing
-preview semantics persist its own preview artifact inside its own DATA_DIR;
-that artifact is asserted to round-trip the returned preview verbatim instead
-of being counted as a client write.
+Ticket #32 retires the model sync/settings/task actions and the DSH/ZCode
+consumer chain. These tests assert the retired surfaces stay gone while the kept
+catalog, context probe and context override actions keep working.
 """
 
 import contextlib
 import json
 import re
-import subprocess
 import sys
 import tempfile
 import threading
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import yaml  # noqa: E402  (same requirement as model_sync itself)
-
 from console import adapters as console_adapters  # noqa: E402
 from console import model_actions as console_model_actions  # noqa: E402
-from model_sync import config_adapters as model_config_adapters  # noqa: E402
 from model_sync import sync as model_sync  # noqa: E402
 from model_sync import sync_core as model_sync_core  # noqa: E402
 from model_sync.sync_core import CatalogModel  # noqa: E402
 from console.operations import OperationCancelled, OperationError  # noqa: E402
-
-DSH_VALID = """\
-llm-pi-ai:
-  providers:
-    openwebui:
-      displayName: UM
-      models:
-    m365:
-      displayName: M365
-      models:
-"""
-
-ZCODE_VALID = """{
-  "provider": {
-    "local:openwebui": {"name": "UM", "models": {}},
-    "local:m365": {"name": "M365", "models": {}},
-    "local:lingma-proxy": {"name": "Qoder（国内）", "models": {}}
-  }
-}
-"""
 
 PIN_KEY = "um|DSH|openwebui|model-a"
 
@@ -69,101 +37,36 @@ def _stub_catalogs(source="um", model_id="model-a", context=32768):
     return {source: [CatalogModel(source, model_id, context=context)]}
 
 
-def _aligned_store(catalogs):
-    """规则库正常且与目录对齐——R20-2「写主配置」路径的前提。
-
-    规则库不可用（缺席／不可读／无法解析）时整个 ZCode 写集合会延期，所以
-    「写主配置」类用例必须给出一个正常的规则库；这里按目录构造每个受管
-    ZCode provider 的规则块（白名单/排序取目录发布面、模型规则带 context），
-    渲染结果与原文档相等，本轮不产生规则库变化。
-    """
-    order: list = []
-    provider_rules: list = []
-    model_rules: list = []
-    for binding in model_sync.ACTIVE_BINDINGS:
-        catalog = catalogs.get(binding.source)
-        if binding.consumer != "ZCode" or not catalog:
-            continue
-        order.append(binding.provider)
-        provider_rules.append({
-            "providerId": binding.provider,
-            "providerName": binding.provider_name,
-            "enabled": True,
-            "config": {
-                "group": "standard-personal",
-                "personalModelIds": [m.model_id for m in catalog],
-                "modelOrder": [m.model_id for m in catalog],
-            },
-        })
-        for model in catalog:
-            properties = {}
-            if model.context is not None:
-                properties["contextWindow"] = int(model.context)
-            model_rules.append({
-                "modelId": model.model_id,
-                "config": {"properties": properties},
-                "providerId": binding.provider,
-            })
-    return {"schemaVersion": 1, "config": {
-        "providerOrder": order,
-        "providerConfigRules": {"providerRules": provider_rules},
-        "modelConfigRules": {"providerModelRules": model_rules},
-    }}
-
-
 @contextlib.contextmanager
-def temp_sync_env(dsh_text=DSH_VALID, zcode_text=ZCODE_VALID,
-                  state_text=None, history_text=None):
+def temp_sync_env(state_text=None):
     """Point every model_sync path constant at an isolated temp layout."""
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         data = root / "data"
-        dsh = root / "home" / ".dsh" / "settings.yaml"
-        zcode = root / "home" / ".zcode" / "v2" / "config.json"
-        dsh.parent.mkdir(parents=True, exist_ok=True)
-        zcode.parent.mkdir(parents=True, exist_ok=True)
         data.mkdir(parents=True, exist_ok=True)
-        dsh.write_text(dsh_text, encoding="utf-8")
-        zcode.write_text(zcode_text, encoding="utf-8")
         paths = {
             "DATA_DIR": data,
             "STATE_FILE": data / "model-sync-state.json",
-            "RESULT_FILE": data / "model-sync-last-result.json",
-            "PREVIEW_FILE": data / "model-sync-last-preview.json",
-            "HISTORY_FILE": data / "model-sync-history.jsonl",
             "BACKUP_DIR": data / "model-sync-backups",
             "LOCK_FILE": data / "model-sync.lock",
-            "DSH_YAML": dsh,
-            "ZCODE_JSON": zcode,
-            # The plan path also reads the ZCode provider rule store, and the
-            # apply path rewrites it when the plan changes it: without this entry
-            # the fixture would read the operator's real
-            # ~/.zcode/v2/provider_config.json (polluting every plan with its
-            # live rule-library orphans) and an apply would rewrite that
-            # production client config.
-            "ZCODE_PROVIDER_CONFIG": zcode.parent / "provider_config.json",
         }
         if state_text is not None:
             paths["STATE_FILE"].write_text(state_text, encoding="utf-8")
-        if history_text is not None:
-            paths["HISTORY_FILE"].write_text(history_text, encoding="utf-8")
         with contextlib.ExitStack() as stack:
             for name, value in paths.items():
                 stack.enter_context(mock.patch.object(model_sync, name, value))
             yield paths
 
 
-# Real write targets of the sync chain; snapshots assert byte+mtime identity.
-_SNAPSHOT_TARGETS = ("STATE_FILE", "RESULT_FILE", "HISTORY_FILE",
-                     "DSH_YAML", "ZCODE_JSON")
+# Real write targets of the retained chain; snapshots assert byte+mtime identity.
+_SNAPSHOT_TARGETS = ("STATE_FILE",)
 
 
 def _snapshot(paths, names=_SNAPSHOT_TARGETS):
     snap = {}
     for name in names:
         path = paths[name]
-        snap[name] = (path.read_bytes(), path.stat().st_mtime_ns) \
-            if path.exists() else None
+        snap[name] = (path.read_bytes(), path.stat().st_mtime_ns)             if path.exists() else None
     return snap
 
 
@@ -195,562 +98,6 @@ class _Ctx:
 
     def report_step(self, note):
         pass
-
-
-class _FakeTaskProcess:
-    """In-memory stand-in for the powershell child process.
-
-    Patched at ``subprocess.run`` so the real ``_run_task_script`` stays in
-    the tested path (argument-list build, decode, exit-code handling). The
-    fake reproduces the script's observable idempotency contract: Repair
-    uses ``Register-ScheduledTask -Force`` (re-registration overwrites one
-    task slot; no duplicate is ever created) and Status is a pure read.
-    """
-
-    def __init__(self):
-        self.commands = []
-        self.task = None
-        self.registrations = 0
-        self.disables = 0
-        self.fail = False
-
-    def __call__(self, cmd, capture_output=True, timeout=None):
-        self.commands.append(list(cmd))
-        action = cmd[-1]
-        if action == "Repair":
-            self.registrations += 1
-            self.task = {"name": "SelfUseAI AI Gateway Model Sync"}
-        if action == "Disable":
-            # The script's real write (Disable-ScheduledTask); tracked so
-            # the adapter-level tests can assert the task was "disabled"
-            # only inside the fake, never on the real system.
-            self.disables += 1
-            self.task = None
-        if self.fail:
-            return types.SimpleNamespace(
-                returncode=1, stdout=b"", stderr=b"boom: register failed\n")
-        state = "未安装" if self.task is None else "Ready"
-        return types.SimpleNamespace(
-            returncode=0,
-            stdout=("状态：%s\n下次运行：2026-09-16 06:00\n" % state).encode("utf-8"),
-            stderr=b"")
-
-    def assert_command(self, test, cmd, action):
-        """The adapter must call the fixed script via an argument list."""
-        test.assertEqual(action, cmd[-1])
-        test.assertEqual("-Action", cmd[-2])
-        test.assertEqual(str(console_model_actions.TASK_SCRIPT),
-                         cmd[cmd.index("-File") + 1])
-        test.assertNotIn("cmd.exe", cmd[0])
-
-
-class ModelSyncPreviewTests(unittest.TestCase):
-    def test_preview_returns_verbatim_result_and_writes_nothing(self):
-        with temp_sync_env() as paths:
-            before = _snapshot(paths)
-            # zcode_running=True is the old-console "pending" fixture flavour;
-            # it only manifests on the apply path, preview stays zero-write.
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(_stub_catalogs(), [])), \
-                    mock.patch.object(model_sync, "zcode_running",
-                                      return_value=True):
-                result = console_model_actions.model_sync_preview(
-                    "", {"scope_mode": "all"}, _Ctx())
-            _assert_unchanged(self, paths, before)
-            preview = result["preview"]
-            self.assertEqual(preview["status"], "preview")
-            self.assertEqual(preview["applied"], [])
-            # The stub catalog publishes model-a against empty consumers, so
-            # the recomputed plan is the only real signal here (applied and
-            # pending are both empty by construction in preview mode).
-            self.assertTrue(preview["plan"], "preview must carry the plan")
-            self.assertTrue(any("发布 model-a" in line for line in preview["plan"]))
-            self.assertIn("未写入", result["note"])
-            # model_sync's existing preview artifact round-trips verbatim.
-            persisted = json.loads(paths["PREVIEW_FILE"].read_text("utf-8"))
-            self.assertEqual(preview, persisted)
-            self.assertFalse(paths["RESULT_FILE"].exists())
-            self.assertFalse(paths["HISTORY_FILE"].exists())
-            self.assertFalse(paths["STATE_FILE"].exists())
-
-    def test_preview_scope_params_reach_run_sync(self):
-        with temp_sync_env() as paths:
-            before = _snapshot(paths)
-            with mock.patch.object(
-                    model_sync, "run_sync",
-                    return_value={"status": "preview"}) as run:
-                console_model_actions.model_sync_preview(
-                    "", {"scope_mode": "selected", "sources": ["um"]}, _Ctx())
-            scope = run.call_args[1]["scope"]
-            self.assertEqual(scope["sources"], ["um"])
-            self.assertIsNone(scope["consumers"])
-            self.assertEqual(scope["models"], {})
-            _assert_unchanged(self, paths, before)
-        with self.assertRaises(OperationError) as caught:
-            console_model_actions.model_sync_preview(
-                "", {"scope_mode": "selected", "sources": ["bogus"]}, _Ctx())
-        self.assertEqual("invalid_params", caught.exception.code)
-
-    def test_preview_failure_maps_to_sync_failed(self):
-        with temp_sync_env() as paths:
-            before = _snapshot(paths)
-            with mock.patch.object(model_sync, "run_sync",
-                                   side_effect=RuntimeError("boom\nline2")):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_sync_preview(
-                        "", {"scope_mode": "all"}, _Ctx())
-            self.assertEqual("sync_failed", caught.exception.code)
-            self.assertNotIn("\n", caught.exception.message)
-            _assert_unchanged(self, paths, before)
-
-
-class ModelSyncApplyTests(unittest.TestCase):
-    def test_combined_selection_is_validated_fail_closed(self):
-        # §11.3 组合窗口：selection 缺席 = 既有普通同步语义（不消费草稿）；
-        # 空对象/非法版本/非 source|model_id 键一律 invalid_params，绝不
-        # 静默退回普通同步（否则草稿永远不发布或误消费）。
-        catalogs = _stub_catalogs()
-        with temp_sync_env() as paths:
-            paths["ZCODE_PROVIDER_CONFIG"].write_text(
-                json.dumps(_aligned_store(catalogs), ensure_ascii=False),
-                encoding="utf-8")
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(catalogs, [])), \
-                    mock.patch.object(model_sync, "zcode_running",
-                                      return_value=False), \
-                    mock.patch.object(model_sync, "run_sync",
-                                      return_value={"status": "normal"}) as run:
-                for bad in ({}, {"um|model-a": 0}, {"um|model-a": True},
-                            {"um|model-a": "1"}, {"no-separator": 1},
-                            {"|": 1}, {"um|": 1}):
-                    with self.subTest(selection=bad):
-                        with self.assertRaises(OperationError) as caught:
-                            console_model_actions.model_sync_apply(
-                                "", {"scope_mode": "all",
-                                      "selection": bad}, _Ctx())
-                        self.assertEqual("invalid_params",
-                                         caught.exception.code)
-                run.assert_not_called()
-                # A malformed ordinary-preview token is rejected before run_sync.
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_sync_apply(
-                        "", {"scope_mode": "all",
-                              "preview_token": "invalid"}, _Ctx())
-                self.assertEqual("invalid_params", caught.exception.code)
-                run.assert_not_called()
-                # 组合发布必须带回组合预览的 token。
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_sync_apply(
-                        "", {"scope_mode": "all",
-                              "selection": {"um|model-a": 1}}, _Ctx())
-                self.assertEqual("invalid_params", caught.exception.code)
-                run.assert_not_called()
-
-    def test_selection_outside_the_scope_is_rejected(self):
-        # §11.3.2：范围外草稿保留——selection 绝不借组合窗口扩大写入面。
-        catalogs = _stub_catalogs()
-        with temp_sync_env() as paths:
-            paths["ZCODE_PROVIDER_CONFIG"].write_text(
-                json.dumps(_aligned_store(catalogs), ensure_ascii=False),
-                encoding="utf-8")
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(catalogs, [])), \
-                    mock.patch.object(model_sync, "zcode_running",
-                                      return_value=False), \
-                    mock.patch.object(model_sync, "run_sync",
-                                      return_value={"status": "normal"}) as run:
-                for scope in (
-                        {"scope_mode": "selected", "sources": '["m365"]',
-                         "selection": {"um|model-a": 1}},
-                        {"scope_mode": "selected", "sources": '["um"]',
-                         "models": {"um": ["other-model"]},
-                         "selection": {"um|model-a": 1}}):
-                    with self.subTest(scope=scope):
-                        with self.assertRaises(OperationError) as caught:
-                            console_model_actions.model_sync_apply("", scope, _Ctx())
-                        self.assertEqual("invalid_params",
-                                         caught.exception.code)
-                run.assert_not_called()
-
-    def test_combined_preview_returns_the_bound_token_and_selection(self):
-        # §11.3：组合预览走同一 run_sync（只读），带回 selection 与
-        # preview_token；省略 selection 保持既有普通预览语义。
-        catalogs = _stub_catalogs()
-        state = model_sync.empty_state()
-        state["modelSettings"] = {"um|model-a": {
-            "draft": {"alias": "renamed", "contextSource": None,
-                      "contextTokens": None, "defaultEffort": None},
-            "draftVersion": 1, "draftSavedAt": "t",
-            "applied": None, "appliedVersion": None,
-            "appliedAt": None, "appliedEvidence": None}}
-        with temp_sync_env(state_text=json.dumps(state, ensure_ascii=False)) as paths:
-            paths["ZCODE_PROVIDER_CONFIG"].write_text(
-                json.dumps(_aligned_store(catalogs), ensure_ascii=False),
-                encoding="utf-8")
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(catalogs, [])), \
-                    mock.patch.object(model_sync, "zcode_running",
-                                      return_value=False):
-                result = console_model_actions.model_sync_preview(
-                    "", {"scope_mode": "all",
-                          "selection": {"um|model-a": 1}}, _Ctx())
-                self.assertEqual({"um|model-a": 1}, result["selection"])
-                self.assertEqual(64, len(result["preview_token"]))
-                plain = console_model_actions.model_sync_preview(
-                    "", {"scope_mode": "all"}, _Ctx())
-                self.assertIsNone(plain["selection"])
-                self.assertRegex(plain["preview_token"], r"^[0-9a-f]{64}$")
-
-    def test_fixture_isolates_the_provider_rule_store(self):
-        # Guard for the fixture contract: the plan path reads the ZCode provider
-        # rule store. If it fell through to the real path, every plan here would
-        # inherit the operator's live rule-library orphans and an apply could
-        # rewrite a production client config.
-        real = Path.home() / ".zcode" / "v2" / "provider_config.json"
-        with temp_sync_env() as paths:
-            self.assertNotEqual(real, model_sync.ZCODE_PROVIDER_CONFIG)
-            self.assertEqual(paths["ZCODE_PROVIDER_CONFIG"],
-                             model_sync.ZCODE_PROVIDER_CONFIG)
-            self.assertEqual(paths["ZCODE_PROVIDER_CONFIG"].parents[1],
-                             paths["ZCODE_JSON"].parents[1])
-
-    def test_apply_succeeds_with_backup_and_parsed_output(self):
-        with temp_sync_env() as paths:
-            catalogs = _stub_catalogs()
-            # R20-2：规则库正常且与目录对齐（「写主配置」路径的前提）。
-            paths["ZCODE_PROVIDER_CONFIG"].write_text(
-                json.dumps(_aligned_store(catalogs), ensure_ascii=False),
-                encoding="utf-8")
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(catalogs, [])), \
-                    mock.patch.object(model_sync, "zcode_running",
-                                      return_value=False), \
-                    mock.patch.object(model_sync, "_get_json",
-                                      side_effect=OSError("offline")):
-                result = console_model_actions.model_sync_apply(
-                    "", {"scope_mode": "all"}, _Ctx())
-            # Rev11 单文件发布：规则库与目录对齐（no-op），config.json 不是
-            # 第二个实时权威——ZCode 侧本轮零写入，只有 DSH 侧发布。
-            self.assertEqual(1, len(result["applied"]))
-            self.assertEqual("changed", result["status"])
-            self.assertIn("已应用 1 项", result["summary"])
-            # Structured mirrors of the applied changes ride along additively.
-            self.assertEqual(1, len(result["appliedDetails"]))
-            self.assertEqual({"DSH"},
-                             {d["consumer"] for d in result["appliedDetails"]})
-            self.assertEqual(
-                {d["description"] for d in result["appliedDetails"]},
-                set(result["applied"]))
-            self.assertEqual([], result["pendingDetails"])
-            # Backups exist only for the replaced client config (one stamp dir):
-            # the state file is new and the rule store was not rewritten.
-            stamp_dirs = [p for p in paths["BACKUP_DIR"].iterdir()
-                          if p.is_dir()]
-            self.assertEqual(1, len(stamp_dirs))
-            backups = sorted(p.name for p in stamp_dirs[0].iterdir())
-            self.assertEqual(["settings.yaml.bak"], backups)
-            # Final files pass their own parsers (解析校验过).
-            dsh = yaml.safe_load(paths["DSH_YAML"].read_text(encoding="utf-8"))
-            models = dsh["llm-pi-ai"]["providers"]["openwebui"]["models"]
-            self.assertEqual("model-a（UM）", models[0]["name"])
-            zcode = json.loads(
-                paths["ZCODE_JSON"].read_text(encoding="utf-8"))
-            self.assertEqual(zcode["provider"]["local:openwebui"]["models"], {})
-            store = json.loads(
-                paths["ZCODE_PROVIDER_CONFIG"].read_text(encoding="utf-8"))
-            rule = next(
-                rule for rule in store["config"]["providerConfigRules"]
-                ["providerRules"] if rule["providerId"] == "local:openwebui")
-            self.assertEqual(rule["config"]["personalModelIds"], ["model-a"])
-            last = json.loads(
-                paths["RESULT_FILE"].read_text(encoding="utf-8"))
-            self.assertEqual("changed", last["status"])
-            self.assertTrue(paths["HISTORY_FILE"].exists())
-
-    def test_apply_rejects_retired_source_before_any_write(self):
-        """B0：退役来源（CLIProxy）不在默认装配内：显式选择被明确拒绝，
-        不读它的旧凭据文件、不创建 provider、不写任何客户端配置。"""
-        key = "sentinel-cliproxy-gateway-key-3a9"
-        with temp_sync_env() as paths:
-            key_file = paths["DATA_DIR"] / "gateway-api-key.txt"
-            key_file.write_text(key + "\n", encoding="utf-8")
-            before = _snapshot(paths)
-            catalogs = {"cliproxy": [CatalogModel("cliproxy", "gemini-3-flash")]}
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(catalogs, [])), \
-                    mock.patch.object(model_sync, "zcode_running",
-                                      return_value=False):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_sync_apply(
-                        "", {"scope_mode": "selected",
-                             "sources": ["cliproxy"]},
-                        _Ctx())
-            self.assertEqual("invalid_params", caught.exception.code)
-            self.assertIn("已暂停", caught.exception.message)
-            _assert_unchanged(self, paths, before)
-            self.assertFalse(paths["ZCODE_PROVIDER_CONFIG"].exists())
-
-    def test_apply_selected_empty_selection_rejected(self):
-        # 空选拒绝，不回退全量。
-        for raw in ({"scope_mode": "selected"},
-                    {"scope_mode": "selected", "sources": []},
-                    {"scope_mode": "selected", "consumers": []},
-                    {"scope_mode": "selected", "models": {}}):
-            with self.subTest(params=raw):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_sync_apply("", raw, _Ctx())
-                self.assertEqual("invalid_params", caught.exception.code)
-        with self.assertRaises(OperationError) as caught:
-            console_model_actions.model_sync_apply(
-                "", {"scope_mode": "everything"}, _Ctx())
-        self.assertEqual("invalid_params", caught.exception.code)
-
-    def test_apply_with_zcode_running_stays_pending(self):
-        with temp_sync_env() as paths:
-            before = _snapshot(paths, ("DSH_YAML", "ZCODE_JSON"))
-            catalogs = _stub_catalogs("um", "um-model", 4096)
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(catalogs, [])), \
-                    mock.patch.object(model_sync, "zcode_running",
-                                      return_value=True), \
-                    mock.patch.object(model_sync, "zcode_hot_sync_admission",
-                                      return_value=(False, "测试：未准入")), \
-                    mock.patch.object(model_sync, "_get_json",
-                                      side_effect=OSError("offline")):
-                result = console_model_actions.model_sync_apply(
-                    "", {"scope_mode": "selected",
-                         "consumers": ["ZCode"]}, _Ctx())
-            self.assertEqual([], result["applied"])
-            self.assertEqual("pending", result["status"])
-            self.assertIn("等待应用", result["summary"])
-            # 结构化镜像：第一条是延期变更，随后是延期原因条目（R20-2 起
-            # pendingDetails 与 pending 口径一致，原因不再只存在于平面列表）。
-            details = result["pendingDetails"]
-            self.assertEqual(
-                {"consumer": "ZCode", "kind": "add", "model_id": "um-model",
-                 "description": details[0]["description"]},
-                details[0])
-            self.assertTrue(any(d["kind"] == "provider_write_deferred"
-                                and "整体延期" in d["description"]
-                                for d in details))
-            self.assertTrue(any("整体延期" in line
-                                for line in result["pending"]))
-            # Deferred changes: no client config was rewritten.
-            _assert_unchanged(self, paths, before)
-            self.assertTrue(paths["RESULT_FILE"].exists())
-
-    def test_apply_scope_params_reach_run_sync(self):
-        with temp_sync_env() as paths:
-            with mock.patch.object(model_sync, "run_sync",
-                                   return_value={"status": "normal"}) as run:
-                console_model_actions.model_sync_apply(
-                    "", {"scope_mode": "selected",
-                         "sources": ["um"],
-                         "consumers": '["ZCode"]',
-                         "models": {"um": ["model-a"]}}, _Ctx())
-            scope = run.call_args[1]["scope"]
-            self.assertEqual(scope["sources"], ["um"])
-            self.assertEqual(scope["consumers"], ["ZCode"])
-            self.assertEqual(scope["models"], {"um": ["model-a"]})
-
-    def test_apply_scope_params_are_validated(self):
-        cases = [
-            {"sources": ["bogus"]},
-            {"sources": "not json"},
-            {"sources": {"um": True}},
-            {"consumers": ["Slack"]},
-            {"consumers": []},
-            {"models": {"bogus": ["m"]}},
-            {"models": {"um": [""]}},
-            {"models": {"um": "m"}},
-            {"models": {("um",): ["m"]}},
-        ]
-        for raw in cases:
-            params = dict(raw, scope_mode="selected")
-            with self.subTest(params=params):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_sync_apply("", params, _Ctx())
-                self.assertEqual("invalid_params", caught.exception.code)
-
-    def test_apply_models_entry_caps_are_enforced(self):
-        too_many = {"scope_mode": "selected",
-                    "models": {"um": ["m%d" % i for i in range(65)]}}
-        with self.assertRaises(OperationError) as caught:
-            console_model_actions.model_sync_apply("", too_many, _Ctx())
-        self.assertEqual("invalid_params", caught.exception.code)
-        oversized = {"scope_mode": "selected", "models": {
-            "um": ["m%d" % i for i in range(64)],
-            "m365": ["n%d" % i for i in range(64)],
-            "qoder_cn": ["p%d" % i for i in range(64)],
-            "qoder_global": ["q%d" % i for i in range(64)],
-            "um ": ["x%d" % i for i in range(1)],
-        }}
-        with self.assertRaises(OperationError) as caught:
-            console_model_actions.model_sync_apply("", oversized, _Ctx())
-        self.assertEqual("invalid_params", caught.exception.code)
-
-    def test_apply_with_bad_config_fails_and_leaves_targets_intact(self):
-        with temp_sync_env(dsh_text="llm-pi-ai: [broken") as paths:
-            before = _snapshot(paths)
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(_stub_catalogs(), [])):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_sync_apply(
-                        "", {"scope_mode": "all"}, _Ctx())
-            self.assertEqual("sync_failed", caught.exception.code)
-            self.assertIn("模型同步失败", caught.exception.message)
-            self.assertNotIn("\n", caught.exception.message)
-            _assert_unchanged(self, paths, before)
-            self.assertFalse(paths["BACKUP_DIR"].exists())
-
-    def test_apply_rejects_the_removed_probe_param(self):
-        # Rev8 契约 2：组合动作「应用并探测」已移除——任何 probe 传入都明确
-        # 拒绝并说明去向（独立 model.context_probe_run），绝不静默探测。
-        for probe in ("yes", True, False):
-            with self.subTest(probe=probe):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_sync_apply(
-                        "", {"scope_mode": "all", "probe": probe}, _Ctx())
-                self.assertEqual("invalid_params", caught.exception.code)
-                self.assertIn("context_probe_run", caught.exception.message)
-
-    def test_sync_lock_busy_maps_to_sync_failed(self):
-        with temp_sync_env():
-            with mock.patch.object(model_sync, "SyncLock",
-                                   side_effect=RuntimeError(
-                                       "另一个模型同步正在运行")):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_sync_apply(
-                        "", {"scope_mode": "all"}, _Ctx())
-            self.assertEqual("sync_failed", caught.exception.code)
-            self.assertIn("另一个模型同步正在运行", caught.exception.message)
-            self.assertNotIn("\n", caught.exception.message)
-
-    def test_native_exception_maps_to_single_line_chinese(self):
-        with temp_sync_env():
-            with mock.patch.object(model_sync, "run_sync",
-                                   side_effect=RuntimeError("boom\nsecond")):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_sync_apply(
-                        "", {"scope_mode": "all"}, _Ctx())
-            self.assertEqual("sync_failed", caught.exception.code)
-            message = caught.exception.message
-            self.assertTrue(message.startswith("模型同步失败："))
-            self.assertNotIn("\n", message)
-            self.assertIn("RuntimeError", message)
-            self.assertIn("boom second", message)
-
-
-class ModelSyncPendingHistoryTests(unittest.TestCase):
-    def test_pending_reads_state_and_last_result(self):
-        state = json.dumps({
-            "version": 2, "pending": ["ZCode 发布 model-a"], "pinned": []},
-            ensure_ascii=False)
-        last = json.dumps({"status": "pending", "pending": ["x"]})
-        with temp_sync_env(state_text=state) as paths:
-            paths["RESULT_FILE"].write_text(last, encoding="utf-8")
-            before = _snapshot(paths)
-            result = console_model_actions.model_sync_pending("", {}, _Ctx())
-            _assert_unchanged(self, paths, before)
-        self.assertEqual(["ZCode 发布 model-a"], result["pending"])
-        self.assertEqual({"status": "pending", "pending": ["x"]},
-                         result["last_result"])
-        self.assertIsNone(result["last_result_error"])
-
-    def test_pending_without_files_is_legal_empty(self):
-        with temp_sync_env():
-            result = console_model_actions.model_sync_pending("", {}, _Ctx())
-        self.assertEqual([], result["pending"])
-        self.assertIsNone(result["last_result"])
-        self.assertIsNone(result["last_result_error"])
-
-    def test_pending_exposes_active_state_without_erasing_paused_history(self):
-        state = json.dumps({
-            "version": 2, "pending": ["ZCode 发布 model-b"],
-            "pinned": [PIN_KEY, "m365|DSH|m365|historical"],
-            "probes": {
-                "um|DSH|openwebui|model-a": {"status": "ok"},
-                "m365|historical": {"status": "pending"}},
-            "catalogCounts": {"um": 3, "m365": 9},
-            "lastStatus": "changed", "lastRun": "2026-09-16T06:00:00",
-        }, ensure_ascii=False)
-        with temp_sync_env(state_text=state) as paths:
-            before = _snapshot(paths)
-            result = console_model_actions.model_sync_pending("", {}, _Ctx())
-            _assert_unchanged(self, paths, before)
-            migrated = model_sync.load_state()
-        # The endpoint filters its view; stored history remains unchanged.
-        self.assertEqual(
-            {"um|DSH|openwebui|model-a": {"status": "ok"}},
-            result["probes"])
-        # Rev8 B8-2: the pin mechanism is removed — the pending read no
-        # longer exposes a pinned list (the v2 state doc is migrated to v3
-        # in memory; the file itself stays untouched on a read-only path).
-        self.assertNotIn("pinned", result)
-        self.assertEqual(model_sync_core.STATE_VERSION, migrated["version"])
-        self.assertNotIn("pinned", migrated)
-        self.assertEqual({"um": 3}, result["catalog_counts"])
-        self.assertEqual(["cliproxy", "m365", "qoder_cn", "qoder_global"],
-                         result["paused_sources"])
-        self.assertEqual("changed", result["last_status"])
-        self.assertEqual("2026-09-16T06:00:00", result["last_run"])
-
-    def test_pending_additional_fields_default_when_absent(self):
-        # Absent state file: load_state falls back to empty_state(), whose
-        # probes/catalogCounts defaults pass through verbatim ({} / {}).
-        with temp_sync_env():
-            result = console_model_actions.model_sync_pending("", {}, _Ctx())
-        self.assertEqual({}, result["probes"])
-        self.assertNotIn("pinned", result)
-        self.assertEqual({}, result["catalog_counts"])
-        self.assertIsNone(result["last_status"])
-        self.assertIsNone(result["last_run"])
-        # A v2 state file without those keys forwards None verbatim
-        # (pure state.get pass-through, no fabricated defaults here).
-        legacy = json.dumps({"version": 2, "pending": []})
-        with temp_sync_env(state_text=legacy):
-            result = console_model_actions.model_sync_pending("", {}, _Ctx())
-        self.assertIsNone(result["probes"])
-        self.assertIsNone(result["last_status"])
-
-    def test_pending_reports_corrupt_result_file(self):
-        with temp_sync_env() as paths:
-            paths["RESULT_FILE"].write_text("{not json", encoding="utf-8")
-            result = console_model_actions.model_sync_pending("", {}, _Ctx())
-        self.assertIsNone(result["last_result"])
-        self.assertTrue(result["last_result_error"])
-
-    def test_history_is_bounded_and_skips_corrupt_lines(self):
-        lines = [json.dumps({"timestamp": "2026-01-%02d" % i, "n": i})
-                 for i in range(1, 26)]
-        lines.append("{corrupt")
-        history_text = "\n".join(lines) + "\n"
-        with temp_sync_env(history_text=history_text) as paths:
-            before = _snapshot(paths)
-            default = console_model_actions.model_sync_history("", {}, _Ctx())
-            self.assertEqual(25, default["total"])
-            self.assertEqual(20, len(default["history"]))
-            self.assertTrue(default["truncated"])
-            self.assertEqual(1, default["skipped"])
-            self.assertEqual(20, default["limit"])
-            full = console_model_actions.model_sync_history(
-                "", {"limit": 50}, _Ctx())
-            self.assertEqual(25, len(full["history"]))
-            self.assertFalse(full["truncated"])
-            _assert_unchanged(self, paths, before)
-
-    def test_history_without_file_is_legal_empty(self):
-        with temp_sync_env():
-            result = console_model_actions.model_sync_history("", {}, _Ctx())
-        self.assertEqual([], result["history"])
-        self.assertFalse(result["truncated"])
-
-    def test_history_rejects_out_of_range_limit(self):
-        for limit in (0, 51, "20", True):
-            with self.assertRaises(OperationError) as caught:
-                console_model_actions.model_sync_history(
-                    "", {"limit": limit}, _Ctx())
-            self.assertEqual("invalid_params", caught.exception.code)
 
 
 class ModelCatalogTests(unittest.TestCase):
@@ -912,8 +259,9 @@ class PinRemovedContractTests(unittest.TestCase):
             self.assertEqual(migrated, model_sync.migrate_state(migrated))
 
     def test_migration_keeps_everything_except_pinned(self):
-        # 失败不丢唯一状态：v2 文档迁移只丢 pinned，managed/probes 等原样保留；
-        # 迁移只发生在内存副本上，磁盘文件保持原样直到下一次事务写。
+        # 失败不丢唯一状态：v2 文档迁移只丢 pinned，managed/probes/
+        # contextOverrides 等原样保留；迁移只发生在内存副本上，磁盘文件
+        # 保持原样直到下一次事务写。
         legacy = {
             "version": 2,
             "initializedBindings": ["um|DSH|openwebui"],
@@ -924,23 +272,18 @@ class PinRemovedContractTests(unittest.TestCase):
             "probes": {"um|model-a": {"status": "ok"}},
             "retirementWatch": {},
             "contextProbes": {},
-            "contextOverrides": {},
+            "contextOverrides": {"um|model-a": {
+                "context": 200000, "set_at": "t", "source": "manual"}},
         }
         with temp_sync_env(state_text=json.dumps(legacy, ensure_ascii=False)) as paths:
             migrated = model_sync.load_state()
-            # Rev8 B8-2/B8-3：v4 —— pinned 丢弃 + contextOverrides 迁移为
-            # modelSettings 草稿（本夹具无覆盖 → 建空档）。
-            self.assertEqual(4, migrated["version"])
-            self.assertNotIn("pinned", migrated)
-            self.assertNotIn("contextOverrides", migrated)
-            self.assertEqual({}, migrated["modelSettings"])
-            for key, value in legacy.items():
-                if key in ("pinned", "version", "contextOverrides"):
-                    continue
-                self.assertEqual(value, migrated[key], key)
             self.assertEqual(model_sync_core.STATE_VERSION,
                              migrated["version"])
             self.assertNotIn("pinned", migrated)
+            for key, value in legacy.items():
+                if key in ("pinned", "version"):
+                    continue
+                self.assertEqual(value, migrated[key], key)
             # 迁移只发生在内存副本上：磁盘文件保持 v2 原样（直到下一次事务写）。
             self.assertEqual(
                 json.dumps(legacy, ensure_ascii=False),
@@ -955,113 +298,12 @@ class PinRemovedContractTests(unittest.TestCase):
         self.assertEqual(migrated, model_sync.migrate_state(dict(migrated)))
 
     def test_cli_pin_arguments_are_gone(self):
-        # 用模块绝对路径调用 CLI：discover 从仓库根跑，相对路径 "model_sync/sync.py"
-        # 会被解析到仓库根（文件打不开），测不到 argparse 的拒绝语义。
-        with temp_sync_env():
-            proc = subprocess.run(
-                [sys.executable, model_sync.__file__, "--pin", PIN_KEY],
-                capture_output=True, timeout=60)
-        self.assertEqual(2, proc.returncode)
-        stderr = proc.stderr.decode("utf-8", "replace")
-        self.assertIn("--pin", stderr)
-        self.assertIn("unrecognized arguments", stderr)
-
-
-class TaskActionTests(unittest.TestCase):
-    def _run_patched(self, fake, handler):
-        with mock.patch("console.model_actions.subprocess.run", fake):
-            return handler()
-
-    def test_task_status_is_read_only(self):
-        fake = _FakeTaskProcess()
-        result = self._run_patched(
-            fake,
-            lambda: console_model_actions.model_task_status("", {}, _Ctx()))
-        self.assertEqual(1, len(fake.commands))
-        fake.assert_command(self, fake.commands[0], "Status")
-        self.assertFalse(result["installed"])
-        self.assertEqual("未安装", result["state"])
-        self.assertIsNone(fake.task)
-
-    def test_task_status_failure_maps_to_task_failed(self):
-        fake = _FakeTaskProcess()
-        fake.fail = True
-        with self.assertRaises(OperationError) as caught:
-            self._run_patched(
-                fake,
-                lambda: console_model_actions.model_task_status("", {}, _Ctx()))
-        self.assertEqual("task_failed", caught.exception.code)
-        self.assertIn("boom", caught.exception.message)
-
-    def test_task_install_is_idempotent(self):
-        fake = _FakeTaskProcess()
-
-        def install_twice():
-            first = console_model_actions.model_task_install("", {}, _Ctx())
-            second = console_model_actions.model_task_install("", {}, _Ctx())
-            return first, second
-
-        first, second = self._run_patched(fake, install_twice)
-        self.assertEqual(2, len(fake.commands))
-        for cmd in fake.commands:
-            fake.assert_command(self, cmd, "Repair")
-        # Register-ScheduledTask -Force semantics: exactly one task slot,
-        # re-registration replaces it, never duplicates.
-        self.assertEqual(2, fake.registrations)
-        self.assertEqual(1, len(fake.task))
-        self.assertTrue(first["installed"])
-        self.assertTrue(second["installed"])
-
-    def test_task_install_failure_maps_to_task_failed(self):
-        fake = _FakeTaskProcess()
-        fake.fail = True
-        with self.assertRaises(OperationError) as caught:
-            self._run_patched(
-                fake,
-                lambda: console_model_actions.model_task_install("", {}, _Ctx()))
-        self.assertEqual("task_failed", caught.exception.code)
-        self.assertIn("计划任务安装/修复失败", caught.exception.message)
-
-    def test_task_disable_forwards_script_result_and_writes_nothing(self):
-        fake = _FakeTaskProcess()
-        with temp_sync_env() as paths:
-            before = _snapshot(paths)
-            result = self._run_patched(
-                fake,
-                lambda: console_model_actions.model_task_disable("", {}, _Ctx()))
-            _assert_unchanged(self, paths, before)
-        self.assertEqual(1, len(fake.commands))
-        fake.assert_command(self, fake.commands[0], "Disable")
-        self.assertEqual(1, fake.disables)
-        self.assertTrue(result["disabled"])
-        self.assertEqual(0, result["exit_code"])
-        self.assertTrue(result["output"])
-        self.assertNotIn("state", result)
-
-    def test_task_disable_failure_maps_to_task_failed(self):
-        fake = _FakeTaskProcess()
-        fake.fail = True
-        with temp_sync_env() as paths:
-            before = _snapshot(paths)
-            with self.assertRaises(OperationError) as caught:
-                self._run_patched(
-                    fake,
-                    lambda: console_model_actions.model_task_disable(
-                        "", {}, _Ctx()))
-            _assert_unchanged(self, paths, before)
-        self.assertEqual("task_failed", caught.exception.code)
-        self.assertIn("计划任务禁用失败", caught.exception.message)
-        self.assertEqual(1, len(fake.commands))
-        self.assertEqual("Disable", fake.commands[0][-1])
-
-    def test_task_timeout_maps_to_task_timeout(self):
-        def timeout_run(cmd, capture_output=True, timeout=None):
-            raise subprocess.TimeoutExpired("powershell", timeout)
-        with mock.patch("console.model_actions.subprocess.run",
-                        side_effect=timeout_run):
-            with self.assertRaises(OperationError) as caught:
-                console_model_actions.model_task_install("", {}, _Ctx())
-        self.assertEqual("task_timeout", caught.exception.code)
+        # The sync CLI itself is retired with the DSH/ZCode consumer chain:
+        # no main()/argparse entry remains to accept --pin or --unpin.
+        self.assertFalse(hasattr(model_sync, "main"))
+        source = Path(model_sync.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("--pin", source)
+        self.assertNotIn("--unpin", source)
 
 
 class ContextProbeActionTests(unittest.TestCase):
@@ -1875,15 +1117,15 @@ class ContextProbeActionTests(unittest.TestCase):
 class ContextOverrideActionTests(unittest.TestCase):
     """Plan-Revision 7 step 6: the manual context override actions write
     ONLY the model-sync state file (isolated temp layout); identity is
-    validated against the CURRENT catalog (collected read-only via the
-    mocked collector), version conflicts surface as version_conflict, and
-    the honest boundary 覆盖保存≠客户端已应用 stays on every result."""
+    validated against the CURRENT catalog (collected read-only via the mocked
+    collector), version conflicts surface as version_conflict, and the read
+    surface reports declared/override/effective honestly."""
 
     def _catalogs(self):
         return {"um": [CatalogModel("um", "model-a", context=128000),
                        CatalogModel("um", "model-b", context=None)]}
 
-    def test_set_writes_override_and_reports_apply_boundary(self):
+    def test_set_writes_override_and_reports_effective_value(self):
         with temp_sync_env() as paths:
             before = _snapshot(paths)
             with mock.patch.object(
@@ -1894,23 +1136,18 @@ class ContextOverrideActionTests(unittest.TestCase):
                          "context": 200000}, _Ctx())
             after = json.loads(paths["STATE_FILE"].read_text("utf-8"))
             collect.assert_called_once()
-            # Rev8 契约 6：保存只写 modelSettings 草稿（draftVersion 递增），
-            # 绝不写旧 contextOverrides 键，也绝不触碰客户端配置。
-            record = after["modelSettings"]["um|model-a"]
-            self.assertEqual(record["draft"]["contextTokens"], 200000)
-            self.assertEqual(record["draft"]["contextSource"], "manual")
-            datetime_like = record["draftSavedAt"]
-            self.assertIsInstance(datetime_like, str)  # ISO stamp
+            record = after["contextOverrides"]["um|model-a"]
+            self.assertEqual(record["context"], 200000)
+            self.assertEqual(record["source"], "manual")
+            self.assertIsInstance(record["set_at"], str)  # ISO stamp
             self.assertEqual(result["source"], "um")
             self.assertEqual(result["context"], 200000)
-            self.assertEqual(result["set_at"], record["draftSavedAt"])
-            self.assertEqual(result["draft_version"], 1)
-            self.assertIn("保存≠已应用", result["note"])
-            self.assertIn("草稿", result["note"])
-            # Client configs are untouched: this action is state-only.
-            self.assertEqual((paths["DSH_YAML"].read_bytes(),
-                              paths["ZCODE_JSON"].read_bytes()),
-                             (before["DSH_YAML"][0], before["ZCODE_JSON"][0]))
+            self.assertEqual(result["set_at"], record["set_at"])
+            self.assertIn("覆盖保存≠客户端已应用", result["note"])
+            # The state file is the only write target.
+            self.assertTrue(paths["STATE_FILE"].exists())
+            self.assertEqual(after["contextOverrides"]["um|model-a"]["context"],
+                             200000)
 
     def test_set_rejects_invalid_context_before_catalog_fetch(self):
         for context in (0, -5, "big", True, 1.5, None):
@@ -2007,16 +1244,9 @@ class ContextOverrideActionTests(unittest.TestCase):
                              "expected_set_at": "2020-01-01T00:00:00+00:00"},
                         _Ctx())
                 self.assertEqual("version_conflict", caught.exception.code)
-                # 冲突是纯拒绝：磁盘文件保持夹具原样字节（迁移只发生在
-                # load_state 的内存副本上，写路径才落盘）。
+                # 冲突是纯拒绝：磁盘文件保持夹具原样字节。
                 self.assertEqual(
                     paths["STATE_FILE"].read_text("utf-8"), state_text)
-                # 内存迁移结果：v4 草稿保留 200000（draftSavedAt 继承 set_at）。
-                migrated = model_sync.load_state()
-                self.assertEqual(
-                    migrated["modelSettings"]["um|model-a"]
-                    ["draft"]["contextTokens"], 200000)
-                self.assertNotIn("contextOverrides", migrated)
                 # Matching version → update allowed.
                 result = console_model_actions.model_context_override_set(
                     "", {"source": "um", "model_id": "model-a",
@@ -2024,7 +1254,8 @@ class ContextOverrideActionTests(unittest.TestCase):
                          "expected_set_at": "2026-09-30T08:00:00+00:00"},
                     _Ctx())
                 self.assertEqual(result["context"], 64000)
-                self.assertEqual(result["draft_version"], 2)
+                self.assertNotEqual(result["set_at"],
+                                    "2026-09-30T08:00:00+00:00")
 
     def test_clear_idempotent_and_keeps_probe_history(self):
         state = model_sync.empty_state()
@@ -2049,13 +1280,10 @@ class ContextOverrideActionTests(unittest.TestCase):
                      "expected_set_at": "2026-09-30T08:00:00+00:00"}, _Ctx())
             self.assertTrue(result["existed"])
             self.assertTrue(result["changed"])
-            # Rev8 契约 6：恢复也形成可预览草稿（contextSource=None），
-            # 绝不静默删除存储；探测历史证据原样保留。
-            self.assertIn("恢复草稿已保存", result["note"])
+            self.assertIn("已清除", result["note"])
             after = json.loads(paths["STATE_FILE"].read_text("utf-8"))
-            record = after["modelSettings"]["um|model-a"]
-            self.assertIsNone(record["draft"]["contextSource"])
-            self.assertIsNone(record["draft"]["contextTokens"])
+            self.assertNotIn("um|model-a", after["contextOverrides"])
+            # 探测历史证据原样保留：恢复默认不删除实测记录。
             self.assertEqual(after["contextProbes"]["um|model-a"]["history"],
                              [{"observed_floor": 64000, "reason": "retest"}])
             self.assertEqual(after["contextProbes"]["um|model-a"]
@@ -2068,62 +1296,44 @@ class ContextOverrideActionTests(unittest.TestCase):
             self.assertNotIn("已恢复默认", again["note"])
             self.assertIn("不存在", again["note"])
 
-    def test_read_surface_normalizes_applied_fallback_and_draft_version(self):
-        # R5 读面归一化：已应用恒为全四键（缺键补 None），无记录时草稿版本为
-        # 0（合法的「没有草稿记录」）——前端据此回退已应用值并携带版本。
+    def test_read_surface_reports_malformed_and_missing_entries(self):
         state = model_sync.empty_state()
-        state["modelSettings"] = {
-            "um|partial": {
-                "draft": None, "draftVersion": 1, "draftSavedAt": None,
-                "applied": {"alias": "kept"}, "appliedVersion": 1,
-                "appliedAt": "t"},
-            # 垃圾记录（非字典）不炸只读读面：字段如实为 None。
-            "um|junk": {"draft": "junk", "draftVersion": "junk",
-                        "applied": "junk", "appliedVersion": True},
+        state["contextOverrides"] = {
+            # 垃圾记录（非字典）不炸只读读面：如实标 malformed，绝不应用。
+            "um|model-a": "junk",
+            # 模型不在当前目录：inert 的唯一合法原因之一（另一是值损坏）。
+            "um|ghost": {"context": 64000,
+                         "set_at": "2026-09-30T08:00:00+00:00",
+                         "source": "manual"},
         }
-        catalogs = {"um": [CatalogModel("um", "partial", context=128000),
-                          CatalogModel("um", "fresh", context=128000),
-                          CatalogModel("um", "junk", context=128000)]}
+        catalogs = {"um": [CatalogModel("um", "model-a", context=128000),
+                           CatalogModel("um", "model-b", context=None)]}
         rows = {row["model_id"]: row
                 for row in model_sync.context_override_surface(
                     state, catalogs)}
-        partial = rows["partial"]
-        self.assertEqual(partial["settings_applied"], {
-            "alias": "kept", "contextSource": None,
-            "contextTokens": None, "defaultEffort": None})
-        self.assertEqual(partial["settings_draft_version"], 1)
-        self.assertEqual(partial["settings_applied_version"], 1)
-        # 无记录的行：草稿版本读作 0（保存时按 expected=0 做并发检查），
-        # 已应用与草稿如实为 None。
-        fresh = rows["fresh"]
-        self.assertEqual(fresh["settings_draft_version"], 0)
-        self.assertIsNone(fresh["settings_draft"])
-        self.assertIsNone(fresh["settings_applied"])
-        junk = rows["junk"]
-        self.assertIsNone(junk["settings_draft"])
-        self.assertIsNone(junk["settings_applied"])
-        self.assertEqual(junk["settings_draft_version"], 0)
+        self.assertEqual(rows["model-a"]["override_state"], "malformed")
+        self.assertEqual(rows["model-a"]["effective_source"], "declared")
+        self.assertEqual(rows["model-a"]["effective_context"], 128000)
+        self.assertEqual(rows["model-b"]["override_state"], "none")
+        self.assertEqual(rows["model-b"]["effective_source"], "unknown")
+        inert = rows["ghost"]
+        self.assertEqual(inert["override_context"], 64000)
+        self.assertIsNone(inert["effective_context"])
+        self.assertEqual(inert["effective_source"], "unknown")
+        self.assertFalse(inert["override_applied"])
+        self.assertEqual(inert["override_state"], "model_missing")
 
     def test_read_surface_reports_declared_override_and_inert(self):
         state = model_sync.empty_state()
-        state["modelSettings"] = {
+        state["contextOverrides"] = {
             "um|model-a": {
-                "draft": None, "draftVersion": 0, "draftSavedAt": None,
-                "applied": {"alias": None, "contextSource": "manual",
-                            "contextTokens": 200000,
-                            "defaultEffort": None},
-                "appliedVersion": 1,
-                "appliedAt": "2026-09-30T08:00:00+00:00",
-                "appliedEvidence": "applied"},
-            # Inert: the model left the catalog — honest unknown, never
-            # reported as applied.
+                "context": 200000,
+                "set_at": "2026-09-30T08:00:00+00:00",
+                "source": "manual"},
             "um|ghost": {
-                "draft": None, "draftVersion": 0, "draftSavedAt": None,
-                "applied": {"alias": None, "contextSource": "manual",
-                            "contextTokens": 64000, "defaultEffort": None},
-                "appliedVersion": 1,
-                "appliedAt": "2026-09-30T09:00:00+00:00",
-                "appliedEvidence": "applied"},
+                "context": 64000,
+                "set_at": "2026-09-30T09:00:00+00:00",
+                "source": "manual"},
         }
         with temp_sync_env(state_text=json.dumps(
                 state, ensure_ascii=False)) as paths:
@@ -2139,7 +1349,6 @@ class ContextOverrideActionTests(unittest.TestCase):
         self.assertEqual(rows["um|model-a"]["effective_context"], 200000)
         self.assertEqual(rows["um|model-a"]["override_at"],
                          "2026-09-30T08:00:00+00:00")
-        # F1 additive fields: applied 状态与 apply 路径同判定。
         self.assertTrue(rows["um|model-a"]["override_applied"])
         self.assertEqual(rows["um|model-a"]["override_state"], "applied")
         self.assertIsNone(rows["um|model-b"]["declared_context"])
@@ -2150,31 +1359,22 @@ class ContextOverrideActionTests(unittest.TestCase):
         self.assertEqual(inert["override_context"], 64000)
         self.assertIsNone(inert["effective_context"])
         self.assertEqual(inert["effective_source"], "unknown")
-        # 模型不在当前目录：inert 的唯一合法原因之一（另一是值损坏）。
         self.assertFalse(inert["override_applied"])
         self.assertEqual(inert["override_state"], "model_missing")
         self.assertIn("覆盖保存≠客户端已应用", result["note"])
 
     def test_read_surface_override_on_none_declaration_is_applied(self):
-        # F1: 目录声明 None + 合法人工覆盖 → 与 apply 路径同判定
-        # （200000 != None 成立）：effective_source=override、
-        # effective_context=覆盖值、override_state=applied——不再互相矛盾
-        # 地报 inert/unknown 却在 apply 时真实改写镜像。
+        # F1: 目录声明 None + 合法人工覆盖 → effective_source=override、
+        # effective_context=覆盖值、override_state=applied。
         state = model_sync.empty_state()
-        state["modelSettings"] = {"um|model-b": {
-            "draft": None, "draftVersion": 0, "draftSavedAt": None,
-            "applied": {"alias": None, "contextSource": "manual",
-                        "contextTokens": 200000, "defaultEffort": None},
-            "appliedVersion": 1, "appliedAt": "2026-09-30T10:00:00+00:00",
-            "appliedEvidence": "applied"}}
-        consumers = {"um|DSH|openwebui": {"models": {"model-b": {
-            "contextWindow": 200000}}}}
+        state["contextOverrides"] = {"um|model-b": {
+            "context": 200000, "set_at": "2026-09-30T10:00:00+00:00",
+            "source": "manual"}}
         with temp_sync_env(state_text=json.dumps(
                 state, ensure_ascii=False)) as paths:
             before = _snapshot(paths)
             with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(self._catalogs(), [])),                     mock.patch.object(model_sync, "collect_consumers",
-                                      return_value=(consumers, None, None)):
+                                   return_value=(self._catalogs(), [])):
                 result = console_model_actions.model_context_overrides(
                     "", {}, _Ctx())
             _assert_unchanged(self, paths, before)
@@ -2186,24 +1386,15 @@ class ContextOverrideActionTests(unittest.TestCase):
         self.assertEqual(row["effective_context"], 200000)
         self.assertTrue(row["override_applied"])
         self.assertEqual(row["override_state"], "applied")
-        # Rev8 契约 6：客户端实际读回值单列——读回 == 已应用时
-        # client_matches_applied=True；写入成功证据不混称客户端已生效。
-        self.assertEqual(row["client_readback_state"], "ok")
-        self.assertEqual(row["client_readback_consumer"], "DSH")
-        self.assertEqual(row["client_context"], 200000)
-        self.assertTrue(row["client_matches_applied"])
 
     def test_read_surface_equal_override_stays_declared(self):
         # F1: 合法覆盖但等于目录声明——值未改写，来源不夸大：
         # effective_source 保持 declared、effective_context 为声明值、
         # override_state=equal、override_applied=False。
         state = model_sync.empty_state()
-        state["modelSettings"] = {"um|model-a": {
-            "draft": None, "draftVersion": 0, "draftSavedAt": None,
-            "applied": {"alias": None, "contextSource": "manual",
-                        "contextTokens": 128000, "defaultEffort": None},
-            "appliedVersion": 1, "appliedAt": "2026-09-30T10:00:00+00:00",
-            "appliedEvidence": "applied"}}
+        state["contextOverrides"] = {"um|model-a": {
+            "context": 128000, "set_at": "2026-09-30T10:00:00+00:00",
+            "source": "manual"}}
         with temp_sync_env(state_text=json.dumps(
                 state, ensure_ascii=False)):
             with mock.patch.object(model_sync, "collect_catalogs",
@@ -2245,265 +1436,74 @@ class CancelTests(unittest.TestCase):
     def test_cancelled_ctx_raises_before_any_side_effect(self):
         ctx = _Ctx(cancelled=True)
         cases = [
-            (console_model_actions.model_sync_preview, {}),
-            (console_model_actions.model_sync_apply, {}),
-            (console_model_actions.model_sync_pending, {}),
-            (console_model_actions.model_sync_history, {}),
             (console_model_actions.model_catalog, {}),
-            (console_model_actions.model_task_status, {}),
-            (console_model_actions.model_task_install, {}),
-            (console_model_actions.model_task_disable, {}),
             (console_model_actions.model_context_probe_preview, {}),
             (console_model_actions.model_context_probe_run, {}),
+            (console_model_actions.model_context_overrides, {}),
+            (console_model_actions.model_context_override_set, {}),
+            (console_model_actions.model_context_override_clear, {}),
         ]
-        with mock.patch.object(model_sync, "run_sync") as run_sync, \
-                mock.patch.object(model_sync, "collect_catalogs") as collect, \
-                mock.patch.object(console_model_actions,
-                                  "_run_task_script") as task_script:
+        with mock.patch.object(model_sync, "collect_catalogs") as collect:
             for handler, params in cases:
                 with self.assertRaises(OperationCancelled):
                     handler("", params, ctx)
-            run_sync.assert_not_called()
             collect.assert_not_called()
-            task_script.assert_not_called()
 
 
-class ModelSettingsActionTests(unittest.TestCase):
-    """Rev8 契约 5/6 的 console 动作层回归：保存只写草稿、selection 版本
-    绑定、幂等零草稿、单事务发布、过期预览拒绝假发布、ZCode 延期→草稿
-    回退不标已生效（deferred_restored 分支）。
+class RetiredModelSyncSurfaceTests(unittest.TestCase):
+    """Ticket #32: DSH/ZCode consumers and the model sync/settings/task
+    actions are gone; only catalog, context probe and overrides remain."""
 
-    夹具沿用 temp_sync_env（隔离 data/home 布局）；collect_catalogs 统一
-    mock（identity 采集与 run_sync 共用同一假目录）；zcode_running 显式
-    控制以触发/绕过延期分支；ZCode 供应商规则库夹具先对齐（R20-2：
-    规则库可用是「写主配置」的前提，延期分支由 zcode_running 单独触发，
-    不与 store_problem 混杂）。
-    """
+    RETIRED_ACTIONS = (
+        "model.sync_preview", "model.sync_pending",
+        "model.sync_history", "model.sync_apply",
+        "model.settings_save", "model.settings_preview",
+        "model.settings_apply",
+        "model.task_status", "model.task_install",
+        "model.task_disable",
+    )
+    RETIRED_HANDLERS = (
+        "model_sync_preview", "model_sync_pending",
+        "model_sync_history", "model_sync_apply",
+        "model_settings_save", "model_settings_preview",
+        "model_settings_apply",
+        "model_task_status", "model_task_install",
+        "model_task_disable",
+    )
+    RETIRED_SYNC_HELPERS = (
+        "run_sync", "collect_consumers", "KNOWN_CONSUMERS",
+        "render_provider_config_sync", "render_dsh_sync",
+        "render_zcode_sync",
+    )
+    RETIRED_MODULES = ("model_sync.config_adapters", "model_sync.reconcile")
+    RETIRED_SCRIPTS = (
+        "invoke-model-sync.ps1",
+        "manage-model-sync-task.ps1",
+        "show-model-sync-notification.ps1",
+    )
 
-    @staticmethod
-    def _catalogs():
-        return {"um": [CatalogModel("um", "model-a", context=128000)]}
+    def test_retired_action_handlers_are_gone(self):
+        for name in self.RETIRED_HANDLERS:
+            self.assertFalse(hasattr(console_model_actions, name), name)
 
-    def test_save_writes_draft_only_and_leaves_clients_untouched(self):
-        with temp_sync_env() as paths:
-            before = _snapshot(paths)
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(self._catalogs(), [])):
-                result = self._save_save({"alias": "别名A"})
-            after = json.loads(paths["STATE_FILE"].read_text("utf-8"))
-            client_bytes = (paths["DSH_YAML"].read_bytes(),
-                            paths["ZCODE_JSON"].read_bytes())
-        record = after["modelSettings"]["um|model-a"]
-        self.assertEqual(
-            record["draft"],
-            {"alias": "别名A", "contextSource": None,
-             "contextTokens": None, "defaultEffort": None})
-        self.assertEqual(record["draftVersion"], 1)
-        self.assertIsNone(record["applied"])
-        self.assertEqual(result["draft_version"], 1)
-        self.assertIn("保存≠已应用", result["note"])
-        # 保存绝不触碰客户端配置。
-        self.assertEqual(client_bytes,
-                         (before["DSH_YAML"][0], before["ZCODE_JSON"][0]))
+    def test_retired_actions_are_not_registered(self):
+        specs = {s.name for s in console_adapters.build_registry()}
+        for action in self.RETIRED_ACTIONS:
+            self.assertNotIn(action, specs)
 
-    def _save_save(self, fields, extra=None):
-        params = {"source": "um", "model_id": "model-a"}
-        params.update(fields or {})
-        params.update(extra or {})
-        return console_model_actions.model_settings_save("", params, _Ctx())
+    def test_consumer_collection_and_sync_helpers_are_gone(self):
+        for name in self.RETIRED_SYNC_HELPERS:
+            self.assertFalse(hasattr(model_sync, name), name)
 
-    def test_save_rejects_unknown_and_invalid_fields(self):
-        with temp_sync_env():
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(self._catalogs(), [])):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_settings_save(
-                        "", {"source": "um", "model_id": "model-a",
-                             "bogus": 1}, _Ctx())
-                self.assertEqual("invalid_params", caught.exception.code)
-                self.assertIn("未知设置字段", caught.exception.message)
-                for fields in ({"alias": ""}, {"alias": "x" * 129},
-                               {"contextSource": "psychic"},
-                               {"contextSource": "manual"},
-                               {"contextSource": "declared",
-                                "contextTokens": 5}):
-                    with self.subTest(fields=fields):
-                        params = dict(fields, source="um",
-                                      model_id="model-a")
-                        with self.assertRaises(OperationError) as caught:
-                            console_model_actions.model_settings_save(
-                                "", params, _Ctx())
-                        self.assertEqual("invalid_params",
-                                         caught.exception.code)
+    def test_retired_modules_are_gone(self):
+        import importlib.util
+        for name in self.RETIRED_MODULES:
+            self.assertIsNone(importlib.util.find_spec(name), name)
 
-    def test_save_rejects_effort_outside_catalog(self):
-        # 默认档校验针对当前目录 efforts：目录只声明 low/medium 时，"max"
-        # 被拒（绝不让未经校验的档位进入草稿）。
-        with temp_sync_env():
-            with mock.patch.object(
-                    model_sync, "collect_catalogs",
-                    return_value=({"um": [CatalogModel(
-                        "um", "model-a", context=128000,
-                        efforts=("low", "medium"))]}, [])):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_settings_save(
-                        "", {"source": "um", "model_id": "model-a",
-                             "defaultEffort": "max"}, _Ctx())
-        self.assertEqual("invalid_params", caught.exception.code)
-
-    def test_save_version_conflict_maps_to_version_conflict(self):
-        with temp_sync_env() as paths:
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(self._catalogs(), [])):
-                self._save_save({"contextSource": "manual",
-                                 "contextTokens": 200000})
-            saved = json.loads(paths["STATE_FILE"].read_text("utf-8"))
-            version = saved["modelSettings"]["um|model-a"]["draftVersion"]
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(self._catalogs(), [])):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_settings_save(
-                        "", {"source": "um", "model_id": "model-a",
-                             "contextSource": "manual",
-                             "contextTokens": 64000,
-                             "expected_draft_version": version + 1}, _Ctx())
-            after = json.loads(paths["STATE_FILE"].read_text("utf-8"))
-        self.assertEqual("version_conflict", caught.exception.code)
-        # 冲突是纯拒绝：磁盘草稿版本与值都不变。
-        self.assertEqual(
-            after["modelSettings"]["um|model-a"]["draftVersion"], version)
-        self.assertEqual(
-            after["modelSettings"]["um|model-a"]
-            ["draft"]["contextTokens"], 200000)
-
-    def test_settings_apply_rejects_invalid_selection_shape(self):
-        with temp_sync_env():
-            for selection in ("um|model-a", {"um|model-a": "1"}, {"": 1}):
-                with self.subTest(selection=selection):
-                    with self.assertRaises(OperationError) as caught:
-                        console_model_actions.model_settings_apply(
-                            "", {"selection": selection}, _Ctx())
-                    self.assertEqual("invalid_params",
-                                     caught.exception.code)
-
-    def test_settings_apply_idempotent_when_no_draft(self):
-        with temp_sync_env() as paths:
-            before = _snapshot(paths, ("DSH_YAML", "ZCODE_JSON"))
-            with mock.patch.object(model_sync, "zcode_running",
-                                   return_value=False):
-                result = console_model_actions.model_settings_apply(
-                    "", {"source": "um"}, _Ctx())
-            self.assertEqual(result["applied"], [])
-            self.assertEqual(result["status"], "normal")
-            self.assertIn("幂等", result["note"])
-            _assert_unchanged(self, paths, before)
-
-    def test_settings_apply_publishes_via_single_transaction(self):
-        # promote → run_sync(state_override=…) 单事务：DSH 侧 contextWindow
-        # 按已应用值写入，草稿清空、applied 元数据落盘；deferred_restored 空。
-        state = model_sync.empty_state()
-        state["modelSettings"] = self._seed_state(1)
-        result, after, dsh_text, _ = self._apply(
-            state, {"selection": {"um|model-a": 1}})
-        self.assertEqual(result["applied"], ["um|model-a"])
-        self.assertEqual(result["deferred_restored"], [])
-        self.assertEqual(result["status"], "changed")
-        record = after["modelSettings"]["um|model-a"]
-        self.assertEqual(record["applied"]["contextTokens"], 200000)
-        self.assertIsNone(record["draft"])
-        self.assertEqual(record["appliedVersion"], 1)
-        self.assertEqual(record["appliedEvidence"], "applied")
-        # 同一事务里客户端配置真实携带已应用值（DSH contextWindow）。
-        self.assertIn("200000", dsh_text)
-
-    @staticmethod
-    def _seed_state(version):
-        return {"um|model-a": {
-            "draft": {"alias": None, "contextSource": "manual",
-                      "contextTokens": 200000, "defaultEffort": None},
-            "draftVersion": version, "draftSavedAt": "t0",
-            "applied": None, "appliedVersion": None, "appliedAt": None,
-            "appliedEvidence": None}}
-
-    def test_settings_apply_stale_selection_conflicts_without_publish(self):
-        # 过期预览绑定：selection 版本与存储 draftVersion 不一致 →
-        # version_conflict，绝不假发布（客户端零写入、磁盘保持夹具原样）。
-        state = model_sync.empty_state()
-        state["modelSettings"] = self._seed_state(2)
-        state_text = json.dumps(state, ensure_ascii=False)
-        with temp_sync_env(state_text=state_text) as paths:
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(self._catalogs(), [])):
-                with self.assertRaises(OperationError) as caught:
-                    console_model_actions.model_settings_apply(
-                        "", {"selection": {"um|model-a": 99}}, _Ctx())
-            # 过期绑定是纯拒绝：磁盘保持夹具原样字节（绝不假发布）。
-            self.assertEqual(paths["STATE_FILE"].read_text("utf-8"),
-                             state_text)
-        self.assertEqual("version_conflict", caught.exception.code)
-
-    def test_settings_apply_deferral_restores_zcode_drafts(self):
-        # ZCode 运行中：整组 ZCode 写入延期——被提升的草稿必须回退为草稿
-        # （同版本保留），已应用元数据清除，绝不标已生效；deferred_restored
-        # 如实列出回退键；ZCode 主配置未被写（延期）。
-        state = model_sync.empty_state()
-        state["modelSettings"] = self._seed_state(2)
-        result, after, zcode_bytes, before_zcode = self._apply_deferral()
-        self.assertEqual(result["status"], "pending")
-        self.assertEqual(result["deferred_restored"], ["um|model-a"])
-        record = after["modelSettings"]["um|model-a"]
-        self.assertEqual(record["draft"]["contextTokens"], 200000)
-        self.assertEqual(record["draftVersion"], 2)
-        self.assertIsNone(record["applied"])
-        self.assertIsNone(record["appliedVersion"])
-        self.assertIsNone(record["appliedEvidence"])
-        self.assertEqual(zcode_bytes, before_zcode)
-
-    def _apply_deferral(self):
-        state = model_sync.empty_state()
-        state["modelSettings"] = self._seed_state(2)
-        with temp_sync_env(state_text=json.dumps(state, ensure_ascii=False)) \
-                as paths:
-            before = _snapshot(paths)
-            paths["ZCODE_PROVIDER_CONFIG"].write_text(
-                json.dumps(_aligned_store(self._catalogs()),
-                           ensure_ascii=False), encoding="utf-8")
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(self._catalogs(), [])), \
-                    mock.patch.object(model_sync, "zcode_running",
-                                      return_value=True), \
-                    mock.patch.object(model_sync, "zcode_hot_sync_admission",
-                                      return_value=(False, "测试：未准入")), \
-                    mock.patch.object(model_sync, "_get_json",
-                                      side_effect=OSError("offline")):
-                params = {"selection": {"um|model-a": 2}}
-                preview = console_model_actions.model_settings_preview("", params, _Ctx())
-                result = console_model_actions.model_settings_apply(
-                    "", dict(params, preview_token=preview["preview_token"]), _Ctx())
-            after = json.loads(paths["STATE_FILE"].read_text("utf-8"))
-            zcode_bytes = paths["ZCODE_JSON"].read_bytes()
-            before_zcode = before["ZCODE_JSON"][0]
-        return result, after, zcode_bytes, before_zcode
-
-    def _apply(self, state, params):
-        state_text = json.dumps(state, ensure_ascii=False)
-        with temp_sync_env(state_text=state_text) as paths:
-            paths["ZCODE_PROVIDER_CONFIG"].write_text(
-                json.dumps(_aligned_store(self._catalogs()),
-                           ensure_ascii=False), encoding="utf-8")
-            with mock.patch.object(model_sync, "collect_catalogs",
-                                   return_value=(self._catalogs(), [])), \
-                    mock.patch.object(model_sync, "zcode_running",
-                                      return_value=False), \
-                    mock.patch.object(model_sync, "_get_json",
-                                      side_effect=OSError("offline")):
-                preview = console_model_actions.model_settings_preview("", params, _Ctx())
-                result = console_model_actions.model_settings_apply(
-                    "", dict(params, preview_token=preview["preview_token"]), _Ctx())
-            after = json.loads(paths["STATE_FILE"].read_text("utf-8"))
-            dsh_text = paths["DSH_YAML"].read_text("utf-8")
-            zcode_bytes = paths["ZCODE_JSON"].read_bytes()
-        return result, after, dsh_text, zcode_bytes
+    def test_retired_sync_scripts_are_gone(self):
+        root = Path(__file__).resolve().parents[1]
+        for name in self.RETIRED_SCRIPTS:
+            self.assertFalse((root / name).exists(), name)
 
 
 if __name__ == "__main__":
