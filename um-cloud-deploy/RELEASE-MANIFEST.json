@@ -662,8 +662,8 @@
         "cloud_runtime"
       ],
       "path": "chat2api/share_auth.py",
-      "sha256": "efb1b41e7225b88a815334d1e50b0a60183a62fe28729048212a8cba8a0999da",
-      "size": 63619
+      "sha256": "252c1aedd9ae7a29b9531b7bb441178299003f04a9e213ee165c72fa92526096",
+      "size": 63615
     },
     {
       "closures": [
@@ -1058,7 +1058,7 @@
       "size": 46032
     }
   ],
-  "generated_at": "2026-11-13T00:17:02.435296+00:00",
+  "generated_at": "2026-11-13T00:39:19.627344+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",
@@ -1072,35 +1072,35 @@
   "source_root": ".",
   "web_dist": {
     "build": {
-      "builtAt": "2026-11-12T12:41:09.750Z",
+      "builtAt": "2026-11-13T00:39:12.483Z",
       "entryAssets": [
+        "assets/cloud-console-1tdZAIvR.js",
         "assets/cloud-console-DJeJbvbP.css",
-        "assets/cloud-console-Dy0dFiJV.js",
-        "assets/index-Bf-L4atr.js",
+        "assets/index-B778VurT.js",
         "assets/index-D93HueS7.css"
       ],
-      "gitHead": "256c71920ac161631e56d794e6986071bf24a7ad",
+      "gitHead": "bd37c16de7ce43f50b949ff7d88af6d74327af2b",
       "line": "production",
       "mode": "production",
       "role": "cloud",
-      "sourceHash": "372148262f277ab1ccf98c87185d4773186983482db865549235e5c6b384247f"
+      "sourceHash": "5ab3bb20cc54c7f0fa3ac876bb9f5c895b3fd21edcb8f733bbb6ac53014e954c"
     },
-    "entry": "assets/index-Bf-L4atr.js",
+    "entry": "assets/index-B778VurT.js",
     "file_count": 787,
     "files": [
+      {
+        "path": "web/dist-cloud/assets/cloud-console-1tdZAIvR.js",
+        "sha256": "01e79af07e84f6b40e445fdf068bacc990a686b24d5a5158bc3432704c210d98",
+        "size": 146815
+      },
       {
         "path": "web/dist-cloud/assets/cloud-console-DJeJbvbP.css",
         "sha256": "7a6a271cef2dca67409943ce02069744be9cfde195e43f4bb4cf71ec2dff2bdb",
         "size": 30696
       },
       {
-        "path": "web/dist-cloud/assets/cloud-console-Dy0dFiJV.js",
-        "sha256": "09a0bc5b807397f6889d3ceea9352fa0597e044d05f1f0bb50275d256216f74f",
-        "size": 145458
-      },
-      {
-        "path": "web/dist-cloud/assets/index-Bf-L4atr.js",
-        "sha256": "1f32064f7794b140cb89c7dc5907dd41f6a6f38e05247aefdfb8e40c1df2c27c",
+        "path": "web/dist-cloud/assets/index-B778VurT.js",
+        "sha256": "e1f47b506bace343b7e0bd0194b8533e50cc2b6789524b1a50128e3b9128d6e8",
         "size": 11768
       },
       {
@@ -1110,8 +1110,8 @@
       },
       {
         "path": "web/dist-cloud/candidate-build.json",
-        "sha256": "8bccfc0b784b0e1accb5aa1e2d4014d350e4c9b492ab92da2ca2fc10c785e917",
-        "size": 153348
+        "sha256": "2d5170f8f3246a6161049558386849fba2e1df219f09991466a73bd5deabdb2f",
+        "size": 155451
       },
       {
         "path": "web/dist-cloud/favicon.ico",
@@ -5005,7 +5005,7 @@
       },
       {
         "path": "web/dist-cloud/index.html",
-        "sha256": "04189f06039c8473d04a96f75d3f1287aeb088b022ef2f15466f86d1e1af8a15",
+        "sha256": "faa02b2001b44de5d8c767475ef45535546c970ead752e2f327ecf40898be575",
         "size": 1353
       },
       {
