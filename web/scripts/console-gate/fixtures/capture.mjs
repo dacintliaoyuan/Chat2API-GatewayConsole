@@ -2,17 +2,18 @@
 //
 //   node scripts/console-gate/fixtures/capture.mjs --out <dir under SelfUseAI/output/> [--origin http://127.0.0.1:8001] [--build <dir>]
 //
-// Opens the candidate build on the offline fixture server and lets the page issue
-// its own reads; every GET /gw/* the page makes is fetched from --origin by Node
-// and recorded as { "<path>?<query>": { status, body } } (paths relative to
-// /gw/usagesrv). Nothing else is forwarded: non-GET is answered 403 locally by
-// core.mjs before this hook runs, foreign hosts are aborted, and per-key share
-// endpoints (single key, secret, plaintext) are refused here. The output holds
-// REAL data: keep it under the gitignored output/ tree and feed it to
-// sanitize.mjs; never commit it.
+// Opens the local UM candidate build on the offline fixture server and lets the
+// page issue its own reads; every GET /gw/* the page makes is fetched from
+// --origin by Node and recorded as { "<path>?<query>": { status, body } } (paths
+// relative to /gw/usagesrv). It walks the UM pages so each page's reads are
+// issued. Nothing else is forwarded: non-GET is answered 403 locally by core.mjs
+// before this hook runs, foreign hosts are aborted, and per-key share endpoints
+// (single key, secret, plaintext) are refused here. The output holds REAL data:
+// keep it under the gitignored output/ tree and feed it to sanitize.mjs; never
+// commit it.
 import { writeFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { createContext, LANES, paths } from "../core.mjs";
+import { createContext, paths } from "../core.mjs";
 import { startFixtureServer } from "../fixture-server.mjs";
 
 const argv = process.argv.slice(2);
@@ -95,34 +96,25 @@ const c = await createContext({
   base: server.url,
   out: OUT,
   settle: 9000,
-  laneWait: 4500,
 });
 try {
-  const { ctx, page } = await c.newPage({ override, settle: 9000 });
-  for (const L of LANES) {
-    await c.gotoLane(page, L.lane);
-    if (L.key === "models") {
-      for (const s of ["catalog", "sync", "probe"]) {
-        const b = await page.$(`[data-wb-model-section="${s}"]`);
-        if (b) {
-          await b.click();
-          await page.waitForTimeout(3500);
-        }
-      }
-    }
-    if (L.key === "logs") {
-      const open = await page.$("[data-log-open]");
-      if (open) {
-        await open.click();
-        await page.waitForTimeout(4500);
-      }
-    }
-    if (L.key === "accounts") {
-      for (const item of await page.$$("[data-wb-md-item]")) {
-        await item.click();
-        await page.waitForTimeout(1200);
-      }
-    }
+  const { ctx, page } = await c.newPage({
+    override,
+    settle: 9000,
+    ready: ".um-content > .um-page",
+  });
+  // The overview reads on mount; the other pages read when the hash changes.
+  for (const hash of [
+    "overview",
+    "requests/records",
+    "requests/logs",
+    "requests/maintenance",
+    "models",
+  ]) {
+    await page.evaluate((h) => {
+      location.hash = h;
+    }, hash);
+    await page.waitForTimeout(3500);
   }
   await ctx.close();
 } finally {

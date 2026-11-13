@@ -22,7 +22,6 @@ COMPONENT_KEY_FILES = (
     "console/share_actions.py",
     "share/broker_protocol.py",
     "share/backend_supervision.py",
-    "web/src/workbench.ts",
     "web/scripts/backend-contract/check-generated.mjs",
     "tests/fixtures/frontend_contract_rev25.json",
     "web/scripts/console-gate/fixtures/api.json",
@@ -37,7 +36,6 @@ PRODUCTION_FILES = (
     "share/broker_ops.py",
     "share/management.py",
     "share/backend_supervision.py",
-    "web/src/workbench.ts",
     "web/scripts/backend-contract/check-generated.mjs",
 )
 

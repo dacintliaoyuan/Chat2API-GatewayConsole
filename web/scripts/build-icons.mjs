@@ -1,5 +1,5 @@
-// Console icons from the desktop shortcut icon (Rev12 F12-1: the browser tab, the
-// installed app and the desktop shortcut show one image). Source:
+// Console icons from the desktop shortcut icon (Rev12 F12-1: the browser tab and
+// the installed app show one image). Source:
 // ai-gateway/assets/AI网关控制台.ico, whose frames are PNG (16-256 px).
 // - public/favicon.ico: the .ico copied byte for byte (the browser picks a frame).
 // - public/icons/*.png: the 256 px frame scaled in Chrome. The maskable icon keeps
@@ -77,26 +77,8 @@ for (const [name, size, inset] of [
     `public/icons/${name}.png`,
     Buffer.from(await render(size, inset), "base64")
   );
-// Keep the desktop art transparent inside the existing 42px brand slot.
-writeFileSync("public/icons/icon-brand.png", best.data);
-writeFileSync(
-  "public/icons/desktop-brand.css",
-  [
-    ".workbench .wb-brand-mark {",
-    "  background-color: transparent !important;",
-    `  background-image: url(\"./icon-brand.png?v=${iconVersion}\");`,
-    "  background-size: contain;",
-    "  background-position: center;",
-    "  background-repeat: no-repeat;",
-    "}",
-    ".workbench .wb-brand-mark > svg { visibility: hidden; }",
-    "",
-  ].join("\n")
-);
-
 function updateIconLinks(path) {
   let html = readFileSync(path, "utf8");
-  const newline = html.includes("\r\n") ? "\r\n" : "\n";
   for (const asset of [
     "/favicon.ico",
     "/icons/apple-touch-icon.png",
@@ -108,11 +90,6 @@ function updateIconLinks(path) {
       `href="${asset}?v=${iconVersion}"`
     );
   }
-  const link = `    <link rel="stylesheet" data-desktop-brand href="/icons/desktop-brand.css?v=${iconVersion}" />`;
-  const existing = /^.*<link[^>]*data-desktop-brand[^>]*>[^\r\n]*/m;
-  html = existing.test(html)
-    ? html.replace(existing, link)
-    : html.replace("  </head>", `${link}${newline}  </head>`);
   writeFileSync(path, html);
 }
 
@@ -140,8 +117,6 @@ if (process.argv.includes("--sync-hosted-icons")) {
       "icon-192.png",
       "icon-512.png",
       "icon-maskable-512.png",
-      "icon-brand.png",
-      "desktop-brand.css",
     ])
       copyFileSync(`public/icons/${name}`, `${output}/icons/${name}`);
     updateIconLinks(`${output}/index.html`);
@@ -149,5 +124,5 @@ if (process.argv.includes("--sync-hosted-icons")) {
 }
 await browser.close();
 console.log(
-  `Console desktop icon ${iconVersion} exported (brand, favicon and home-screen icons).`
+  `Console icon ${iconVersion} exported (favicon and home-screen icons).`
 );

@@ -1,5 +1,4 @@
-import "./theme.css";
-/** The --theme-* family the local workbench styles read, written inline on <html>.
+/** The --theme-* family is written inline on <html>.
  *  Since 2026-10-31 the values are the M3 roles of shell/tokens.css (ink =
  *  on-surface, muted = on-surface-variant, line = outline-variant, paper =
  *  surface, panel = surface-lowest, field = surface-low / container, accent =

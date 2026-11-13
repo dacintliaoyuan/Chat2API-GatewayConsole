@@ -1,5 +1,5 @@
 /* Local UM console pages (handoff r3). Shell, tokens and base components come
-   from shell/; nothing here is read by the cloud console or the old workbench.
+   from shell/; nothing here is read by the cloud console.
    Content stays on solid surfaces; only the shell's navigation layer is glass. */
 
 /* The tooltip sits outside .um-console (it is appended to the stage). */
@@ -1650,8 +1650,7 @@ tr.is-archived td {
    rail still leaves only 220px after the page's padding), so the three entries
    become a top bar with their names: the current page stays a word, every tab is
    at least 44px tall, and the content keeps the window's full width. The rules
-   are scoped to .um-console, so the cloud console and the old workbench keep
-   their own shell. Desktop 1280px never matches this block. */
+   are scoped to .um-console, so the cloud console keeps its own shell. Desktop 1280px never matches this block. */
 @media (max-width: 720px) {
   .um-console.app-shell {
     grid-template-columns: minmax(0, 1fr);

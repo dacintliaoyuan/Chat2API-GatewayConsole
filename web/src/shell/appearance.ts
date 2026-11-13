@@ -179,7 +179,7 @@ export function applyAppearance(): void {
       const name = collapsed ? "展开侧栏" : "收起侧栏";
       toggle.setAttribute("aria-label", name);
       toggle.setAttribute("aria-expanded", String(!collapsed));
-      const hint = toggle.querySelector(".wb-icon-hint, .shell-hint");
+      const hint = toggle.querySelector(".shell-hint");
       if (hint) hint.textContent = name;
     });
   if (!settings) return;

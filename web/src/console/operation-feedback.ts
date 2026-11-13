@@ -1,5 +1,5 @@
 /**
- * Shared operation-feedback state for the gateway console workbench (R9-R37).
+ * Shared operation-feedback state for the gateway consoles (R9-R37).
  *
  * Layers (handoff A37-1 + the maintainer's four-layer design):
  *  - button level: the triggering button flips into an explicit action state;
