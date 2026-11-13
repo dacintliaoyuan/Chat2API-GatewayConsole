@@ -471,8 +471,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/config/console.env.example",
-      "sha256": "24246de09534cbb45edcd2f6e08118ea49116207575a0ee5bf1437b74c06b578",
-      "size": 4140
+      "sha256": "31c304a54a57a36708ffbbb37d23ae8fe3f8b541f5a5cbcdaa23fa1f7d495402",
+      "size": 4179
     },
     {
       "kind": "deployment",
@@ -609,8 +609,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/systemd/um-share-broker.service",
-      "sha256": "44ccdadfb65ce1d5cbe212ee8682facc90ab449cbdb9d14855910e16e41963cb",
-      "size": 6186
+      "sha256": "2ea09c328216062c32074c4032301ff26512706c179aaf7e01442b53dba38f21",
+      "size": 6261
     },
     {
       "kind": "deployment",
@@ -1058,7 +1058,7 @@
       "size": 46032
     }
   ],
-  "generated_at": "2026-11-13T00:54:12.683107+00:00",
+  "generated_at": "2026-11-13T02:28:32.690453+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",
