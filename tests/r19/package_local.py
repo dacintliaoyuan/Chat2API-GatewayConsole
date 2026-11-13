@@ -36,11 +36,6 @@ COPY_FILES = (
     "console/model_actions.py",
     "model_sync/sync.py",
     "model_sync/sync_core.py",
-    "model_sync/config_adapters.py",
-    "model_sync/reconcile.py",
-    "zcode/file_lock.py",
-    "zcode/hot_sync.py",
-    "zcode/hot_sync_protocol.py",
     "tests/fake_um/__init__.py",
     "tests/fake_um/fake_um_server.py",
 )

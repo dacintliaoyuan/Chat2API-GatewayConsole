@@ -1352,11 +1352,11 @@ class LocalAppTests(unittest.TestCase):
         forbidden = ("cloud", "usagesrv", "console_adapters",
                      "share_management", "share_store", "share_entry",
                      "share_dispatch", "share_metering", "share_broker_host",
-                     "console_display_proxy")
+                     "console_display_proxy", "zcode_hot_sync")
         # R19-5 retained surface: recorded here so a future change that ADDS a
         # module to this set is visible, but NOT asserted absent - retiring them
         # is E19-3's scope (plan step 13).
-        retained = ("zcode_hot_sync", "model_sync", "console_stats",
+        retained = ("model_sync", "console_stats",
                     "console_model_actions", "model_reconcile")
         code = (
             "import sys\n"

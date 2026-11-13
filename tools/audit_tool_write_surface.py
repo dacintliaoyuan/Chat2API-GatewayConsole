@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""um-share / zcode-config 工具集写面的静态审计（只读；不写文件、不联网、不起进程）。
+"""um-share 工具集写面的静态审计（只读；不写文件、不联网、不起进程）。
 
 背景：维护者 2026-09-28 复审执行轮 9 指出「标为只读的检查有条件写入」——
 验收采集必须真正无写副作用（不能经 ``console_share_production`` 的条件删除 stale
@@ -74,7 +74,6 @@ AUDITED_FILES = frozenset((
     "tools/um-share/readonly/share_chain_snapshot.py",
     "tools/um-share/actions/test_key_ops.py",
     "tools/um-share/readonly/watchdog_forensics.py",
-    "tools/zcode-config/keepset_apply.py",
     "tools/handoff_anchor_audit.py",
 ))
 
@@ -263,11 +262,6 @@ DELEGATED = {
         "surface": "model_sync/sync.py:468；纯函数（解析 + 返回新文本），无写。",
         "citation": "ai-gateway/model_sync/sync.py:468-610",
     },
-    "zcode_running": {
-        "read_only": True,
-        "surface": "model_sync/config_adapters.py:455；只读 tasklist 查询，无写。",
-        "citation": "ai-gateway/model_sync/config_adapters.py:455-464",
-    },
     "CHAT2API_LOG": {
         "read_only": True,
         "surface": "usagesrv.py:75；模块级路径常量，读取不改状态。",
@@ -403,34 +397,6 @@ DECLARED = {
          "citation": "share/management.py:797-803; share/store.py:859-877",
          "note": "启发式把 apply_revoke 归 (c)：--apply 门在 main 的提前返回里；"
                     "人工审计按 --apply 判 (b)。"},
-    ("tools/zcode-config/keepset_apply.py",
-     "write_bytes", "tempfile.NamedTemporaryFile", 1):
-        {"tier": "b", "line": 141, "trigger": "--apply / --revert（先写同目录临时文件）"},
-    ("tools/zcode-config/keepset_apply.py",
-     "write_bytes", "write", 1):
-        {"tier": "b", "line": 145, "trigger": "同上（写临时文件）"},
-    ("tools/zcode-config/keepset_apply.py",
-     "write_bytes", "os.replace", 1):
-        {"tier": "b", "line": 150, "trigger": "同上（受控替换到 --config）"},
-    ("tools/zcode-config/keepset_apply.py",
-     "apply_keepset", "write_bytes", 1):
-        {"tier": "b", "line": 711,
-         "trigger": "--apply 且投影与当前规则库有差异（调用本地 write_bytes 写规则库）"},
-    ("tools/zcode-config/keepset_apply.py",
-     "revert_backup", "write_bytes", 1):
-        {"tier": "b", "line": 804,
-         "trigger": "--revert --backup <path>（调用本地 write_bytes 恢复规则库）"},
-    ("tools/zcode-config/keepset_apply.py",
-     "write_backup", "mkdir", 1):
-        {"tier": "b", "line": 740,
-         "trigger": "--apply（备份目录已存在即拒绝，不覆盖既有备份）"},
-    ("tools/zcode-config/keepset_apply.py",
-     "write_backup", "write_bytes", 1):
-        {"tier": "b", "line": 743, "trigger": "--apply（写 provider_config.json.bak）"},
-    ("tools/zcode-config/keepset_apply.py",
-     "write_backup", "write_text", 1):
-        {"tier": "b", "line": 748,
-         "trigger": "--apply（写 sha256 记录，不含配置内容）"},
 }
 
 
@@ -1033,11 +999,11 @@ def _row(item):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="um-share / zcode-config 工具集写面静态审计（默认只读；不写文件、不联网）")
+        description="um-share 工具集写面静态审计（默认只读；不写文件、不联网）")
     parser.add_argument("--root", default=REPO_ROOT,
                         help="仓库根（默认按脚本位置推断）")
     parser.add_argument("--target", action="append", metavar="PATH",
-                        help="被审脚本（仓库相对路径；可重复；默认 11 个已审计脚本）")
+                        help="被审脚本（仓库相对路径；可重复；默认 10 个已审计脚本）")
     parser.add_argument("--json", action="store_true",
                         help="以 JSON 打印机器可读的表")
     args = parser.parse_args(argv)
@@ -1065,7 +1031,7 @@ def main(argv=None):
         }, ensure_ascii=False, indent=2))
         return exit_code
 
-    print("== um-share / zcode-config 工具集写面静态审计（只读；不写文件、不联网） ==")
+    print("== um-share 工具集写面静态审计（只读；不写文件、不联网） ==")
     print("被审脚本 %d 个；机械层发现写动作 %d 条；只读动作 %d 条"
           % (len(targets), len(findings), len(reads)))
     print("")
