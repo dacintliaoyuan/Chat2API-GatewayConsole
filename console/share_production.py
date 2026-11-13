@@ -1,144 +1,43 @@
 # -*- coding: utf-8 -*-
-"""console/share_production.py — production adapters for the share layered
-orchestration seams (console_share_actions injection points).
+"""console/share_production.py - production adapters for the cloud share seams.
 
-Each adapter mirrors a REAL local product surface, honestly:
+Each adapter mirrors a REAL product surface, honestly:
 
-* ``production_broker_ops()`` — the restricted broker operations gate, the
-  narrow wrapper the orchestration's ``_broker_ops()`` contract expects
-  (console/share_actions.py :106-121). Surface mapping (ALL host evidence
-  and the task gate execute INSIDE the SYSTEM broker — the in-process
-  WindowsHostOps path was removed: the usagesrv operator account cannot
-  resolve any schtasks evidence for the SYSTEM task):
-  - ``start_host``  -> broker ``start`` verb (share/management.py :110 —
-    SYSTEM start plus the broker-side three-evidence re-confirmation);
-  - ``stop_host``   -> broker ``host-stop`` verb (the SYSTEM-side task gate);
-  - ``verify_running``/``verify_closed`` -> broker ``host-verify`` verb,
-    verdict True/False/None passed through verbatim (share/management.py
-    :155 adapter; the SYSTEM-privileged WindowsHostOps runs inside the
-    broker, share/broker_ops.py :91/:110);
-  - ``drain``        -> BrokerClientAdapter.graceful_stop
-    (share/management.py :66 class, :79 ``__init__(client)``; :123 graceful
-    stop returns a dict that carries drained/timed_out/stopped plus the
-    explicit final-stop confirmation — matches the orchestration drain
-    protocol shape consumed at console/share_actions.py :519-531);
-  - ``emergency_stop`` -> BrokerClientAdapter.emergency_stop
-    (share/management.py :142 — the explicit ``stopped`` flag contract).
-  The default broker construction uses the EXPLICIT loader the host wires
-  through ``configure_broker_loader`` (the old implicit
-  ``usagesrv._load_share_management_deployment`` import was removed in
-  E19-1-06). The loader builds the share-management adapter in its actual
-  construction shape — ``BrokerClientAdapter(BrokerClient(lambda:
-  NamedPipeBrokerTransport(pipe_name), secret))`` (usagesrv.py :1000-1001).
-  With no loader configured, or a loader returning None (absent/disabled
-  deployment config), the refusal is share_broker_unwired; a corrupt config
-  keeps the loader's fail-closed BrokerError (never a fallback).
-* ``production_funnel_control("on"/"off")`` — tailscale.exe argument-array
-  calls ONLY (no shell, no interpolation, fixed argument shapes):
-  - "off" strictly mirrors the retired Windows watchdog Close-Public
-    three steps (see Git history): ``funnel --https=443
-    off`` (:235) with the exit code checked (:237), the 2s settle (:238),
-    then a ``serve status`` re-check (:239-245) where rc failure, EMPTY
-    output ("cannot confirm mapping state", :243) or a still-present HTTPS
-    mapping (:244-245) are each an honest failure;
-  - "on" uses the SHARING.md open command (SHARING.md :33:
-    ``funnel --bg --https=443 http://127.0.0.1:8100``) and re-checks the
-    mapping IS present via ``serve status``.
-  Returns a ``{ok, detail}`` ack whose TRUTHINESS is the ``ok`` field — the
-  orchestration consumes the ack through a plain truthy check
-  (console/share_actions.py :377-381, :606-611, :714-722), so a failure ack
-  must be falsy, never a fake success. tailscale.exe absent raises
-  share_privilege_unwired (same convention as the connectivity seam).
-* ``production_connectivity_ok()`` — read-only ``tailscale status --json``
-  parsing (see the second entry below for the structured contract).
-* ``production_share_public_url()`` — read-only public Funnel URL from the
-  SAME ``tailscale status --json`` surface: BackendState "Running" plus a
-  non-empty ``Self.DNSName`` -> ``https://<name>``; every unreadable,
-  non-Running or off-contract reading -> None (the public check reports
-  ``public_url_unavailable`` instead of probing a guessed host).
-* ``production_ts_service_control("start"/"stop")`` — the TS privileged
-  layer executed THROUGH the broker adapter's public ``ts_service_control``
-  verb over the restricted ``ts-service-control`` whitelist extension (the
-  wire action is pinned by BrokerClient.ts_service_control). Four honest
-  shapes, each noting its deployment pointer:
-  - broker unwired/unreachable (deployment config absent/disabled, pipe
-    not_installed) -> OperationError(share_broker_unwired) - the broker
-    task itself is not deployed (see um-cloud-deploy/README.md);
-  - the broker REJECTS the unknown verb (bad_request) -> the broker task
-    predates the extension -> OperationError(share_broker_extension_missing)
-    (update/restart the broker task per the deployment package);
-  - the broker executed the command but its immediate re-query did not yet
-    confirm the target state (STOP_PENDING/START_PENDING) ->
-    OperationError(share_ts_pending_confirmation) - the orchestration's
-    bounded confirmation poll over the read-only sc observation decides;
-  - execution rejected (any other broker error, missing explicit
-    confirmation flag) -> OperationError(share_layer_failed).
-  No net start / Stop-Service / local sc call, never a simulated ack.
-* ``production_ts_service_status()`` — read-only ``sc.exe query Tailscale``
-  argument-array parse (the same restricted primitive the broker runs,
-  shared parser): RUNNING->"running", STOPPED->"stopped", exit 1060
-  (service absent) ->"absent", failed/unparseable -> None (unavailable).
-* ``production_funnel_observed()`` — read-only ``serve status`` mapping
-  presence: mapping -> True; clean query without a mapping -> False;
-  failed/unresolvable query -> None (unavailable).
-* ``production_drain(...)`` — the drain over the production broker gate:
-  the gate's ``drain`` (BrokerClientAdapter.graceful_stop) result must
-  carry drained/timed_out/stopped (the orchestration drain protocol
-  shape, console/share_actions.py :519-531); the adapter contract refuses
-  any reply without the explicit stopped=True, so a returned result IS
-  the broker's SYSTEM-verified backend closure (bounded in-flight wait,
-  host stop and three-evidence check all ran inside the broker).
-* ``production_desired_stop_reader()`` — read-only lifecycle view of the
-  broker's protected record (broker-status.json "lifecycle",
-  share/broker_server.py :495/:535-565): the record function returns
-  {state, stopped_at} or None (absent/malformed file -> None, never a
-  fabricated state); the SEAM reader maps it to the orchestration's
-  bool|None contract (console/share_actions.py :225-232: state stopped ->
-  True, running -> False, no record -> None).
-* ``production_connectivity_ok()`` — real Tailscale CONNECTIVITY from
-  ``tailscale status --json`` (structured fields, NOT serve status and NOT
-  free-text IP matching): BackendState "Running" with a non-empty
-  Self.TailscaleIPs list -> True (explicitly online); the known
-  disconnected states (NeedsLogin/NoState/Stopped/RequiresAuth) or an
-  empty/None Self.TailscaleIPs -> False (explicitly not connected); bad
-  JSON, missing keys, type anomalies or an off-contract state raise
-  OperationError(share_status_unknown) — an untrusted reading is never
-  folded into a confirmed offline fact. Peer addresses and an offline
-  self row keeping stale IPs can no longer read True (the old full-text
-  IP regex path is deleted). tailscale.exe absent raises
-  share_privilege_unwired (a wiring fact, not a reading).
-* ``production_seams()`` — the seam dict for console_share_actions
-  (key-by-key match with the module's injection seams, ALL NINETEEN
-  delivered: the broker gate, TS service control/status, connectivity,
-  funnel control/observation, bounded drain, the desired-stop reader, the
-  dedicated backend, the key preconditions and the Rev9 seams).
-* ``share_attribution_key_path()`` / ``share_attribution_status()`` — the
-  ONE shared attribution key file BOTH ends must point at (C2 verified
-  attribution). The path is a deployment fact, not a second state store:
-  8100 reads the file once at startup (chat2api.py :1247-1251), 8110
-  re-stats it per request (chat2api.py :1587-1590); the dedicated-backend child env
-  and ``_paths()["attribution_key"]`` carry the SAME resolved path. The
-  status helper reports THREE DIFFERENT facts under three different names
-  (2026-09-26 review: the single ``wired`` boolean proved only that THIS
-  caller could read a long-enough file, and it read as "已接线"):
-  ``file_ready`` (this process, now), ``instance_loaded`` (whether the
-  RUNNING 8100 instance loaded the CURRENT content — an INFERENCE from the
-  process start time vs the file mtime, never a proof, "unknown" when the
-  process cannot be found) and ``request_attribution`` (the runtime fact this
-  read surface does NOT observe: a pointer to the 8110 ledger). The secret
-  itself never leaves the helper.
+* ``production_broker_ops()`` - the restricted broker operations gate, the
+  narrow wrapper the orchestration's ``_broker_ops()`` contract expects.
+  Host evidence and the task gate execute INSIDE the restricted broker; this
+  process never runs a privileged OS command.
+* ``production_desired_stop_reader()`` - read-only lifecycle view of the
+  broker's protected record (broker-status.json "lifecycle"): the record
+  function returns {state, stopped_at} or None (absent/malformed file -> None,
+  never a fabricated state); the SEAM reader maps it to the orchestration's
+  bool|None contract (stopped -> True, running -> False, no record -> None).
+* ``production_seams()`` - the seam dict for console_share_actions (key-by-key
+  match with the module's injection seams): the broker gate, the desired-stop
+  reader, the dedicated backend, the key preconditions, the Rev9 maintenance /
+  reauth seams and the supervision read face. The retired Windows TS/Funnel
+  seams are NOT delivered any more (#33).
+* ``share_attribution_key_path()`` / ``share_attribution_status()`` - the ONE
+  shared attribution key file BOTH ends must point at (C2 verified
+  attribution). The path is a deployment fact, not a second state store: 8100
+  reads the file once at startup, 8110 re-stats it per request; the
+  dedicated-backend child env and ``_paths()["attribution_key"]`` carry the
+  SAME resolved path. The status helper reports THREE DIFFERENT facts under
+  three different names: ``file_ready`` (this process, now), ``instance_loaded``
+  (an INFERENCE from the process start time vs the file mtime, "unknown" when
+  the process cannot be found) and ``request_attribution`` (the runtime fact
+  this read surface does NOT observe: a pointer to the 8110 ledger).
 
-Privacy: no credential content passes through this module — the broker
-control secret stays inside the share-management loader, tailscale
-arguments are fixed shapes, and the file surfaces are the TWO fixed
-deployment reads below: broker-status.json (paths/state only, no secrets)
-and the shared attribution key (opened ONLY to read its presence/stripped
-length — the secret is never returned, printed, logged or compared here).
-The attribution-key path / run-root environment variables are read
-(``share_attribution_key_path``) and ONE non-secret warning line is
-printed when the key FILE is not ready (path + reason code only). The
-8100 running-instance probe is read-only: the port table and one process
-start time — never any file content, and never a write/signal/restart.
+Privacy: no credential content passes through this module - the broker
+control secret stays inside the share-management loader, and the file surfaces
+are the TWO fixed deployment reads below: broker-status.json (paths/state only,
+no secrets) and the shared attribution key (opened ONLY to read its
+presence/stripped length - the secret is never returned, printed, logged or
+compared here). The attribution-key path / run-root environment variables are
+read (``share_attribution_key_path``) and ONE non-secret warning line is
+printed when the key FILE is not ready (path + reason code only). The 8100
+running-instance probe is read-only: the port table and one process start time
+- never any file content, and never a write/signal/restart.
 """
 
 import csv
@@ -156,57 +55,22 @@ from functools import partial
 from pathlib import Path
 
 from console.operations import OperationError
-from share.broker_ops import TailscaleServiceOps, linux_entry_script
+from share.broker_ops import linux_entry_script
 from share.broker_protocol import RESULT_CODES
 from share.management import BrokerError
 
 # ---- fixed production defaults (deployment facts; injectable for tests) ----
-DEFAULT_TAILSCALE_EXE = r"C:\Program Files\Tailscale\tailscale.exe"  # retired watchdog :36
-DEFAULT_SHARE_TASK = "umshare-live"        # retired Windows installer :48
-DEFAULT_RUNNER_TIMEOUT_S = 10.0
-FUNNEL_OFF_SETTLE_S = 2.0                  # watchdog Close-Public settle (:238)
-_FUNNEL_UPSTREAM = "http://127.0.0.1:8100"  # SHARING.md :33 target
-DETAIL_MAX_CHARS = 200
-# The broker's protected status record (the retired Windows watchdog resolved
-# the same default: <RunRoot>\broker\broker-status.json; the retired installer
-# had the same RunRoot default). The broker writes it atomically per cycle
-# (share/broker_server.py :484-506) with the lifecycle record mirrored at
-# :495. Deployment facts stay injectable — tests never read the real path.
 DEFAULT_BROKER_STATUS_PATH = r"C:\ProgramData\UMShareRun\broker\broker-status.json"
+DEFAULT_RUNNER_TIMEOUT_S = 10.0
+DETAIL_MAX_CHARS = 200
 
-# Retired Windows watchdog verification token (:244 `$out -match
-# 'https://[^\s]+'`): an HTTPS mapping token in the serve status output.
-_HTTPS_MAPPING_RE = re.compile(r"https://\S+")
-
-# `tailscale status --json` connectivity contract (authorized-environment
-# calibration: the observed disconnected machine reports
-# BackendState="NoState", Self.TailscaleIPs=None and NO Self Online field,
-# so the parse keys ONLY on BackendState + Self.TailscaleIPs):
-# * BackendState "Running" AND a non-empty Self.TailscaleIPs list -> True
-#   (the self node holds a live tailnet address; peer IPs never decide);
-# * one of the explicit disconnected states below (or an empty/None
-#   TailscaleIPs under a known state) -> False — a Stopped node keeping
-#   stale addresses is still offline;
-# * bad JSON / missing keys / off-contract types / unknown states stay
-#   share_status_unknown — never folded into a definite answer.
-_TAILSCALE_OFFLINE_STATES = frozenset(("NeedsLogin", "NoState", "Stopped",
-                                       "RequiresAuth"))
+_BROKER_LOADER = None
 
 _CODE_UNWIRED = "share_privilege_unwired"
 _CODE_UNWIRED_BROKER = "share_broker_unwired"
 _CODE_EXTENSION_MISSING = "share_broker_extension_missing"
 _CODE_LAYER_FAILED = "share_layer_failed"
 _CODE_STATUS_UNKNOWN = "share_status_unknown"
-
-
-def _default_runner(args, timeout):
-    """Controlled argument-array runner, no shell (same shape as
-    share_broker_ops.WindowsHostOps._default_runner :80-82)."""
-    # Tailscale emits UTF-8 JSON. On Windows the locale may be CP936; using
-    # the locale decoder can leave stdout empty after a reader-thread decode
-    # error even when the CLI exits 0 and produced valid JSON.
-    return subprocess.run(args, shell=False, capture_output=True, text=True,
-                          encoding="utf-8", timeout=timeout)
 
 
 def _default_bytes_runner(args, timeout):
@@ -245,465 +109,6 @@ def _shorten(text):
     if len(text) <= DETAIL_MAX_CHARS:
         return text
     return text[:DETAIL_MAX_CHARS] + "..."
-
-
-def _run_tailscale(args, exe_path, runner, timeout_s):
-    """``runner([exe] + args, timeout)`` -> ``(rc, merged_output)``.
-
-    tailscale.exe absent (FileNotFoundError) raises OperationError
-    share_privilege_unwired — the tailscale privilege surface itself is
-    missing, an honest refusal, never a fabricated state. Any other runner
-    failure (OSError, timeout) returns ``(None, "")`` so each seam reports
-    its own honest failure shape."""
-    try:
-        proc = (runner or _default_runner)([exe_path] + list(args), timeout_s)
-    except FileNotFoundError:
-        raise OperationError(
-            _CODE_UNWIRED,
-            "tailscale.exe 缺席（%s）：tailscale 特权面不可用，不冒充可用"
-            % (exe_path,))
-    except (OSError, subprocess.SubprocessError):
-        return None, ""
-    return proc.returncode, _merged_text(proc)
-
-
-def _serve_status(exe_path, runner, timeout_s):
-    """The only observation command, fixed argument shape
-    (``[exe, "serve", "status"]``, retired watchdog :239)."""
-    return _run_tailscale(["serve", "status"], exe_path, runner, timeout_s)
-
-
-class _FunnelAck(dict):
-    """``{ok, detail}`` seam ack whose TRUTHINESS is the ``ok`` field.
-
-    The orchestration seams consume these acks through a plain truthy check
-    (console/share_actions.py :378, :607, :715 for the funnel; the TS
-    service seam follows the same contract); a non-empty failure dict would
-    read truthy and fake a success, so ``__bool__`` is bound to the ok
-    field — the documented {ok, detail} shape stays intact (the dict
-    remains serializable) while the truthy contract stays honest."""
-
-    def __bool__(self):
-        return self.get("ok") is True
-
-
-def _funnel_off(exe_path, runner, sleeper, timeout_s):
-    """Strict retired watchdog Close-Public mirror (:234-251):
-    funnel off with rc check (:235-237) -> 2s settle (:238) -> serve status
-    re-check (:239-245); rc failure, empty output and a still-present HTTPS
-    mapping are each an honest failure."""
-    rc, _out = _run_tailscale(["funnel", "--https=443", "off"], exe_path,
-                              runner, timeout_s)
-    if rc is None:
-        return _FunnelAck(
-            ok=False,
-            detail="tailscale 调用失败（funnel off 未执行/超时），映射状态未知")
-    if rc != 0:
-        return _FunnelAck(ok=False,
-                          detail="funnel off 命令失败 rc=%s，不冒充已撤" % (rc,))
-    sleeper(FUNNEL_OFF_SETTLE_S)
-    rc, out = _serve_status(exe_path, runner, timeout_s)
-    if rc is None:
-        return _FunnelAck(ok=False,
-                          detail="serve status 查询失败，无法确认映射已移除")
-    if rc != 0:
-        return _FunnelAck(ok=False,
-                          detail="serve status 复核失败 rc=%s，不冒充已撤" % (rc,))
-    if not out:
-        return _FunnelAck(ok=False,
-                          detail="serve status 输出为空，无法确认映射状态"
-                                 "（镜像 watchdog :243，不算撤回成功）")
-    if _HTTPS_MAPPING_RE.search(out):
-        return _FunnelAck(ok=False,
-                          detail="复核仍见 HTTPS 映射，入口可能仍开放："
-                                 + _shorten(out))
-    return _FunnelAck(ok=True,
-                      detail="funnel off 已执行且 serve status 复核确认映射已移除")
-
-
-def _funnel_on(exe_path, runner, timeout_s):
-    """SHARING.md open command + presence re-check: run
-    ``funnel --bg --https=443 http://127.0.0.1:8100`` (SHARING.md
-    :33), check the exit code, then ``serve status`` must SHOW an HTTPS
-    mapping — an empty or unconfirmable query is never counted as open."""
-    rc, _out = _run_tailscale(
-        ["funnel", "--bg", "--https=443", _FUNNEL_UPSTREAM], exe_path,
-        runner, timeout_s)
-    if rc is None:
-        return _FunnelAck(ok=False,
-                          detail="tailscale 调用失败（funnel 开启未执行/超时）")
-    if rc != 0:
-        return _FunnelAck(ok=False,
-                          detail="funnel 开启命令失败 rc=%s，不冒充已开放" % (rc,))
-    rc, out = _serve_status(exe_path, runner, timeout_s)
-    if rc is None or rc != 0:
-        return _FunnelAck(ok=False,
-                          detail="serve status 复核失败（rc=%s），无法确认映射在场"
-                                 % (rc,))
-    if not out:
-        return _FunnelAck(ok=False, detail="serve status 输出为空，无法确认映射在场")
-    if not _HTTPS_MAPPING_RE.search(out):
-        return _FunnelAck(ok=False, detail="复核未见 HTTPS 映射，入口未确认开放")
-    return _FunnelAck(ok=True,
-                      detail="funnel 开启已执行且 serve status 复核确认映射在场")
-
-
-def production_funnel_control(action, *, exe_path=DEFAULT_TAILSCALE_EXE,
-                              runner=None, sleeper=time.sleep,
-                              timeout_s=DEFAULT_RUNNER_TIMEOUT_S):
-    """Privileged Funnel seam ("on"/"off") over tailscale.exe ONLY.
-
-    Fixed argument shapes (no shell, no caller-supplied strings beyond the
-    two actions). Returns a ``{ok, detail}`` ack (falsy when not confirmed);
-    tailscale.exe absence raises share_privilege_unwired; an unknown action
-    is refused without running anything.
-    """
-    if action == "off":
-        return _funnel_off(exe_path, runner, sleeper, timeout_s)
-    if action == "on":
-        return _funnel_on(exe_path, runner, timeout_s)
-    raise OperationError(
-        "invalid_params",
-        "funnel 控制缝仅接受 on/off（收到 %r）；不执行未知动作" % (action,))
-
-
-def production_funnel_observed(*, exe_path=DEFAULT_TAILSCALE_EXE, runner=None,
-                               timeout_s=DEFAULT_RUNNER_TIMEOUT_S):
-    """Read-only Funnel observation (console_share_actions._funnel_observed
-    contract: True(on)/False(off), None = unavailable).
-
-    The SAME ``serve status`` mapping parse as the funnel control re-checks:
-    a mapping token in the output -> True (on); a SUCCEEDED query without a
-    mapping (empty status) -> False (off); a failed/unresolvable query ->
-    None (unavailable, never a fabricated off); tailscale.exe absent ->
-    OperationError(share_privilege_unwired) — the privilege surface itself
-    is missing, a wiring fact rather than an observation.
-    """
-    rc, out = _serve_status(exe_path, runner, timeout_s)
-    if rc is None or rc != 0:
-        return None
-    if not out:
-        return False
-    return _HTTPS_MAPPING_RE.search(out) is not None
-
-
-def production_connectivity_ok(*, exe_path=DEFAULT_TAILSCALE_EXE, runner=None,
-                               timeout_s=DEFAULT_RUNNER_TIMEOUT_S):
-    """Read-only Tailscale CONNECTIVITY from ``tailscale status --json``
-    (NOT serve status; console_share_actions._connectivity_ok contract:
-    True/False, honest).
-
-    Structured contract over the CLI's own JSON fields (calibrated on the
-    authorized environment: the observed disconnected machine reports
-    BackendState="NoState" with Self.TailscaleIPs=None and no Self Online
-    field, so the parse keys ONLY on BackendState + Self.TailscaleIPs):
-    * BackendState "Running" AND a non-empty Self.TailscaleIPs list -> True
-      (explicitly online; peer addresses never decide this);
-    * BackendState in {NeedsLogin, NoState, Stopped, RequiresAuth}, or an
-      empty/None Self.TailscaleIPs -> False (explicitly not connected — a
-      Stopped node keeping stale addresses is still offline);
-    * bad JSON / missing BackendState or Self / off-contract types or an
-      unknown BackendState raise OperationError(share_status_unknown) —
-      an untrusted reading is NEVER reported as a confirmed offline fact.
-    The free-text self-node IP scan is deleted: peer IPs or an offline
-    self row can no longer fabricate a True. The JSON body is read from
-    stdout (the --json surface; stderr is never mixed in, mirroring the
-    CLI contract that errors go to stderr); a query that yields no
-    parseable JSON body (failure, timeout, empty, garbage) stays unknown
-    with the rc in the detail. tailscale.exe absent ->
-    OperationError(share_privilege_unwired) (wiring fact).
-
-    Real ``tailscale status --json`` shapes stay authorized-environment
-    calibrated; the fixtures in tests pin the parsed contract.
-    """
-    try:
-        proc = (runner or _default_runner)(
-            [exe_path, "status", "--json"], timeout_s)
-    except FileNotFoundError:
-        raise OperationError(
-            _CODE_UNWIRED,
-            "tailscale.exe 缺席（%s）：tailscale 特权面不可用，不冒充可用"
-            % (exe_path,))
-    except (OSError, subprocess.SubprocessError):
-        proc = None
-    if proc is None:
-        raise OperationError(
-            _CODE_STATUS_UNKNOWN,
-            "tailscale status --json 调用失败/超时：连接状态未知，"
-            "不冒充离线确定事实")
-    body = (getattr(proc, "stdout", "") or "").strip()
-    try:
-        payload = json.loads(body)
-    except ValueError:
-        raise OperationError(
-            _CODE_STATUS_UNKNOWN,
-            "tailscale status --json 输出不可解析（rc=%s，非 JSON）：连接"
-            "状态未知，不冒充离线确定事实"
-            % (getattr(proc, "returncode", None),))
-    if not isinstance(payload, dict):
-        raise OperationError(
-            _CODE_STATUS_UNKNOWN,
-            "tailscale status --json 输出不是 JSON 对象：连接状态未知，"
-            "不冒充离线确定事实")
-    state = payload.get("BackendState")
-    self_node = payload.get("Self")
-    if not isinstance(state, str) or not isinstance(self_node, dict):
-        raise OperationError(
-            _CODE_STATUS_UNKNOWN,
-            "tailscale status --json 缺少 BackendState/Self 结构化键："
-            "连接状态未知，不冒充离线确定事实")
-    ips = self_node.get("TailscaleIPs")
-    rc_ok = getattr(proc, "returncode", None) == 0
-    ips_assigned = isinstance(ips, list) and bool(ips)
-
-    # Verdict ORDER (planner L6-3 follow-up): a non-zero CLI exit can never
-    # produce a True from stdout alone, and an unrecognized BackendState is
-    # never folded into a confirmed offline fact — regardless of the IPs.
-    if not rc_ok:
-        # Error exit: only an EXPLICIT negative state is trusted; a Running
-        # claim under an error exit is contradictory evidence (unknown).
-        if state in _TAILSCALE_OFFLINE_STATES:
-            return False
-        raise OperationError(
-            _CODE_STATUS_UNKNOWN,
-            "tailscale status --json 以错误码退出（rc=%s）且状态不可信"
-            "（BackendState=%r）：连接状态未知，不冒充在线或离线确定事实"
-            % (getattr(proc, "returncode", None), _shorten(str(state))))
-    if state == "Running":
-        if ips_assigned:
-            return True
-        if ips is None or (isinstance(ips, list) and not ips):
-            # Backend up but no tailnet address assigned: explicitly not
-            # connected yet (a known state, not an unknown reading).
-            return False
-        raise OperationError(
-            _CODE_STATUS_UNKNOWN,
-            "tailscale status --json 的 Self.TailscaleIPs 形状超出契约"
-            "（%s）：连接状态未知，不冒充离线确定事实"
-            % _shorten(str(ips)))
-    if state in _TAILSCALE_OFFLINE_STATES:
-        return False
-    # Unknown BackendState: unknown, regardless of any addresses present
-    # (an unrecognized state can never be an online/offline proof).
-    raise OperationError(
-        _CODE_STATUS_UNKNOWN,
-        "tailscale status --json 形状超出契约（BackendState=%r，"
-        "Self.TailscaleIPs=%s）：连接状态未知，不冒充离线确定事实"
-        % (state, _shorten(str(ips))))
-
-
-def production_connectivity_state(*, exe_path=DEFAULT_TAILSCALE_EXE,
-                                  runner=None,
-                                  timeout_s=DEFAULT_RUNNER_TIMEOUT_S):
-    """Read-only Tailscale BackendState channel for the connectivity wait
-    (R13-T). The SAME ``tailscale status --json`` surface as the verdict
-    seam (``production_connectivity_ok`` stays the ONLY verdict authority);
-    this channel carries the CLI's own structured BackendState so the
-    orchestration can stop EXPLICITLY on a 需人工登录 reading instead of
-    burning the whole wait budget on a generic "not ready" poll.
-
-    Trust rule mirrors the verdict contract's verdict ORDER:
-
-    * rc==0 with a KNOWN BackendState ("Running" or an explicit offline
-      fact from _TAILSCALE_OFFLINE_STATES) -> the state verbatim;
-    * an error exit trusts ONLY an explicit offline fact (BackendState in
-      _TAILSCALE_OFFLINE_STATES — NeedsLogin stays trusted under rc≠0,
-      exactly like the verdict seam); a Running claim under an error exit
-      is contradictory evidence -> None;
-    * an unrecognized BackendState (e.g. the daemon's transitional
-      "Starting") reads None — an unknown state can never become ANY
-      confirmed fact through this channel (the verdict seam raises
-      share_status_unknown for it; here it is simply unreadable);
-    * ANY unreadable reading (absent exe, launch failure, timeout, bad or
-      non-object JSON, missing/non-string BackendState) -> None — the
-      channel NEVER fabricates a state; the orchestration keeps polling
-      and the verdict seam decides.
-
-    Self/peers/IPs are deliberately NOT read here: this channel answers
-    "which backend state is the node in", never "is it connected".
-    """
-    try:
-        proc = (runner or _default_runner)(
-            [exe_path, "status", "--json"], timeout_s)
-    except (FileNotFoundError, OSError, subprocess.SubprocessError):
-        return None
-    body = (getattr(proc, "stdout", "") or "").strip()
-    try:
-        payload = json.loads(body)
-    except ValueError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    state = payload.get("BackendState")
-    if not isinstance(state, str):
-        return None
-    if state != "Running" and state not in _TAILSCALE_OFFLINE_STATES:
-        return None
-    if getattr(proc, "returncode", None) != 0 \
-            and state not in _TAILSCALE_OFFLINE_STATES:
-        return None
-    return state
-
-
-def production_share_public_url(*, exe_path=DEFAULT_TAILSCALE_EXE, runner=None,
-                               timeout_s=DEFAULT_RUNNER_TIMEOUT_S):
-    """Read-only public Funnel URL from ``tailscale status --json``.
-
-    The SAME status surface as the connectivity verdict, but the Funnel host is
-    taken from the self node's DNS name (``usagesrv._share_funnel_url`` uses the
-    same field). Returns ``https://<Self.DNSName>`` only when the backend is
-    Running and the name is non-empty; EVERY other reading (absent exe, launch
-    failure, non-zero exit, bad or non-object JSON, non-Running backend,
-    missing/empty DNSName) returns None. The public check then reports
-    ``public_url_unavailable`` and never probes a guessed host.
-    """
-    try:
-        proc = (runner or _default_runner)(
-            [exe_path, "status", "--json"], timeout_s)
-    except (FileNotFoundError, OSError, subprocess.SubprocessError):
-        return None
-    if getattr(proc, "returncode", None) != 0:
-        return None
-    try:
-        payload = json.loads(_proc_text(proc))
-    except ValueError:
-        return None
-    if not isinstance(payload, dict) \
-            or payload.get("BackendState") != "Running":
-        return None
-    self_node = payload.get("Self")
-    if not isinstance(self_node, dict):
-        return None
-    name = self_node.get("DNSName")
-    if not isinstance(name, str):
-        return None
-    name = name.strip().strip(".").strip()
-    if not name:
-        return None
-    return "https://%s" % name
-
-
-def production_ts_service_status(*, runner=None,
-                                 timeout_s=DEFAULT_RUNNER_TIMEOUT_S):
-    """Read-only TS service observation (console_share_actions
-    ._ts_service_status contract: "running"/"stopped", None = unavailable).
-
-    ``sc.exe query Tailscale`` argument array ONLY (the fixed restricted
-    primitive, shared parser with the broker's TailscaleServiceOps): no
-    privilege is needed for the query. "absent" (exit 1060, service not
-    installed) and any failed/unparseable query read None (unavailable).
-    """
-    ops = TailscaleServiceOps(runner=runner, timeout=timeout_s)
-    return ops.status()
-
-
-def production_ts_service_control(action, *, broker=None):
-    """TS service seam ("start"/"stop") executed THROUGH the real broker.
-
-    The privileged action runs on the SYSTEM broker via the restricted
-    ``ts-service-control`` management verb (protocol whitelist extension;
-    the service name is the protocol literal, never a wire parameter). The
-    honest fail-closed shapes, each fail-closed with its deployment pointer
-    in the message:
-
-    * broker unwired/unreachable — deployment config absent/disabled or the
-      pipe answers not_installed -> share_broker_unwired (the broker task
-      is not deployed: see um-cloud-deploy/README.md);
-    * the broker rejects the UNKNOWN VERB (bad_request) — the broker task
-      predates the extension -> share_broker_extension_missing (update and
-      restart the broker task per the deployment authorization package);
-    * the OS refused the control command (rc 5 ERROR_ACCESS_DENIED) ->
-      share_ts_access_denied (R13-T: a PERMANENT 权限不足 refusal — the
-      command never executed, never the pending shape, never a fake
-      success);
-    * execution failed — any other broker rejection, or an ok reply without
-      the explicit confirmation flag -> share_layer_failed.
-
-    Returns a truthy ``{ok, detail}`` ack ONLY for a confirmed start/stop;
-    an invalid action is refused before anything is sent.
-    """
-    if action not in ("start", "stop"):
-        raise OperationError(
-            "invalid_params",
-            "TS 服务控制缝仅接受 start/stop（收到 %r）；不执行未知动作"
-            % (action,))
-    if broker is None:
-        broker = _default_broker()
-    control = getattr(broker, "ts_service_control", None)
-    if control is None:
-        raise OperationError(
-            _CODE_UNWIRED_BROKER,
-            "TS 服务控制：broker 适配器无 ts_service_control 控制方法"
-            "（部署配置与适配器形状不符）；部署指针："
-            "um-cloud-deploy/README.md；旧 Windows 脚本 "
-            "install-share-broker.ps1 已随旧链删除；不冒充可用")
-    try:
-        result = control(action)
-    except Exception as exc:  # noqa: BLE001 - transport failures stay honest
-        raise OperationError(
-            _CODE_UNWIRED_BROKER,
-            "TS 服务控制：broker 管道不可达（%s: %s）：broker 任务未部署或"
-            "未运行；部署指针：um-cloud-deploy/README.md；旧 Windows "
-            "脚本 install-share-broker.ps1 已删除；"
-            "不冒充可用" % (type(exc).__name__, exc)) from exc
-    code = result.error_code
-    if result.ok:
-        flag = ("ts_service_started" if action == "start"
-                else "ts_service_stopped")
-        if result.result.get(flag) is True:
-            return _FunnelAck(
-                ok=True,
-                detail="TS 服务 %s 已由 broker 受限原语执行并复核确认"
-                       % ("启动" if action == "start" else "停止"))
-        raise OperationError(
-            _CODE_LAYER_FAILED,
-            "TS 服务控制执行失败：broker 结果未显式确认（result=%r），"
-            "不冒充成功" % (result.result,))
-    if code == "not_installed":
-        raise OperationError(
-            _CODE_UNWIRED_BROKER,
-            "TS 服务控制：broker 管道不可达/未部署（error_code=%s）："
-            "部署指针 um-cloud-deploy/README.md"
-            "（部署授权包节 5）；旧 Windows 脚本 install-share-broker.ps1 "
-            "已删除；不冒充可用" % (code,))
-    elif code == "bad_request":
-        raise OperationError(
-            _CODE_EXTENSION_MISSING,
-            "TS 服务控制：broker 拒绝未知动词 ts-service-control = broker "
-            "白名单扩展未部署（broker 任务代码早于扩展）；部署指针：按部署"
-            "授权包节 5 更新并重启 broker 任务后开放；不冒充可用")
-    elif code == "access_denied":
-        # R13-T: the OS refused the control command itself (sc.exe rc 5,
-        # ERROR_ACCESS_DENIED) - the command NEVER executed, so this is a
-        # PERMANENT 权限不足 report with its own frozen code, never the
-        # pending-confirmation shape (a bounded poll could only burn its
-        # budget on a misleading "已执行" story) and never a fake success.
-        raise OperationError(
-            "share_ts_access_denied",
-            "TS 服务控制被系统拒绝（权限不足，%s 命令未执行，%s）；"
-            "需要承载 broker 任务的账户具备服务控制权限后重试；"
-            "实际服务状态未改变，不冒充成功"
-            % (action,
-               _shorten(result.result.get("detail") or "")))
-    elif code == "unconfirmed" and \
-            "did not re-confirm" in (result.result.get("detail") or ""):
-        # The broker EXECUTED the control command but its single immediate
-        # re-query did not yet see the target state (sc.exe stop/start is
-        # asynchronous: the service sits in STOP_PENDING/START_PENDING for
-        # seconds). The command is in flight - the orchestration layer's
-        # bounded confirmation poll over the read-only sc observation
-        # decides; this is a pending-confirmation shape, not a failure.
-        raise OperationError(
-            "share_ts_pending_confirmation",
-            "TS 服务控制命令已执行但立即复查未确认目标态（服务可能处于 "
-            "STOP_PENDING/START_PENDING 过渡态）：交由编排层有界确认轮询"
-            "裁定（只读服务状态观察）")
-    else:
-        raise OperationError(
-            _CODE_LAYER_FAILED,
-            "TS 服务控制执行失败：broker 拒绝（error_code=%s, detail=%s）；"
-            "实际服务状态未知，不冒充成功"
-            % (code, _shorten(result.result.get("detail") or "")))
 
 
 def production_desired_stop_record(*, status_path=DEFAULT_BROKER_STATUS_PATH):
@@ -751,57 +156,6 @@ def production_desired_stop_reader(*, status_path=DEFAULT_BROKER_STATUS_PATH):
     if record is None:
         return None
     return record["state"] == "stopped"
-
-
-def _drain_with(ops, budget_s, interval_s, ctx, sleeper=time.sleep):
-    """Production drain over the production gate: the SAME protocol as the
-    orchestration's default drain (console/share_actions.py :519-531).
-
-    The broker-side drain already performs the bounded in-flight wait, the
-    SYSTEM-privileged host stop and the three-evidence closure check, and
-    the adapter contract (graceful_stop) refuses any reply without the
-    explicit ``stopped=True`` — a returned result IS the SYSTEM-verified
-    backend closure. (The previous in-process verify_running observation
-    was removed: the usagesrv operator account cannot resolve schtasks
-    evidence for the SYSTEM task, so that poll could never terminate on
-    real evidence. budget_s/interval_s stay in the seam signature — they
-    are the orchestration's drain budget contract, consumed by the
-    broker-side deadline and injected alternatives.)"""
-    try:
-        raw = ops.drain()
-    except OperationError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise OperationError(
-            _CODE_LAYER_FAILED,
-            "drain 层：broker 排空调用异常（%s: %s）"
-            % (type(exc).__name__, exc))
-    if isinstance(raw, dict):
-        if not (raw.get("drained") is True or raw.get("timed_out") is True
-                or raw.get("stopped") is True):
-            raise OperationError(
-                _CODE_LAYER_FAILED,
-                "drain 层：broker 排空结果未确认 drained/timed_out/stopped"
-                "（结果=%r）" % (raw,))
-        return {"drained": True, "broker": raw,
-                "observed": "broker SYSTEM 端已停后端并三证确认关闭"}
-    raise OperationError(
-        _CODE_LAYER_FAILED,
-        "drain 层：broker 排空结果形状不符合协议（非结构化结果=%r），"
-        "不继续关闭" % (raw,))
-
-
-def production_drain(budget_s, interval_s, ctx, *, broker=None,
-                     sleeper=time.sleep):
-    """Public production drain seam: build the REAL restricted broker gate
-    (or accept an injected one) and run the bounded drain protocol over it.
-    Wired into the orchestration via production_seams (the SAME gate
-    instance backs _BROKER_OPS and _DRAIN there)."""
-    ops = production_broker_ops(broker=broker)
-    return _drain_with(ops, budget_s, interval_s, ctx, sleeper=sleeper)
-
-
-_BROKER_LOADER = None
 
 
 def configure_supervision_paths(*, watch_dir=None, lock_dir=None):
@@ -913,9 +267,9 @@ class _ProductionBrokerOps:
         raise OperationError(
             "share_broker_unavailable",
             "受限后台响应未确认（code=%s）；尚未启动或登录 8110。"
-            "请在本机控制台目录运行 Recover-ShareControl.bat，"
-            "允许 Windows 管理员确认后重新读取分层状态；"
-            "任务及账号状态未知，不据此判为已停止或失效" % code)
+            "请先确认 um-share-broker 服务与 broker 控制通道可用，"
+            "再重新读取分层状态；任务及账号状态未知，"
+            "不据此判为已停止或失效" % code)
 
     def start_host(self, explicit=False):
         try:
@@ -2585,7 +1939,7 @@ class _HostEvidence(dict):
     whose TRUTHINESS is ``verdict is True``.
 
     The security gate consumes host evidence through a truthy check in the
-    orchestration (the _FunnelAck precedent in this module): a plain dict
+    orchestration: a plain dict
     would read truthy even when ``verdict`` is False, faking a pass on a
     FAILED limits check. Binding ``__bool__`` to ``verdict is True`` keeps
     the frozen wire shape (a dict: serializable, indexable, JSON-safe) while
@@ -3745,28 +3099,16 @@ def production_keys_diagnosis(manager=None):
 
 
 def production_seams(*, broker=None, task_name=None,
-                     exe_path=None, runner=None, sleeper=None,
-                     status_path=None, keys_manager=None,
-                     cloud=False, linux_state_dir=None):
+                     status_path=None, keys_manager=None, cloud=False,
+                     linux_state_dir=None):
     """Assemble the console_share_actions seam dict, key-by-key.
 
     Keys ARE the orchestration's injection seam globals exactly
-    (console/share_actions.py :108-150), so wiring is a direct
-    ``setattr(console_share_actions, key, value)`` per entry. ALL NINETEEN
-    seams are delivered (Revision 8 adds the dedicated-backend gate and
-    observation plus the open-precondition key check; the 2026-09-22
-    diagnosis split adds the structured WHY behind the same key
-    precondition; Rev9 adds the six A9 seams — the maintenance lease
-    pair + status view, the 8100 gateway restart, the 8110 reauth and the
-    runtime-intent writer):
+    (console/share_actions.py :40-90), so wiring is a direct
+    ``setattr(console_share_actions, key, value)`` per entry:
 
-    * _BROKER_OPS / _DRAIN share ONE real gate instance (the drain seam is
-      the bounded protocol over the same restricted primitives);
-    * _TS_SERVICE_CONTROL runs through the same broker adapter's control
-      client over the restricted ts-service-control verb;
-    * _TS_SERVICE_STATUS / _CONNECTIVITY_OK / _FUNNEL_CONTROL /
-      _FUNNEL_OBSERVED bind the injected tailscale/sc runners (None keeps
-      the production defaults);
+    * _BROKER_OPS / _BACKEND_OPS / _BACKEND_OBSERVE are the restricted
+      broker gate, the dedicated-backend gate and its read-only observation;
     * _DESIRED_STOP_READER reads the broker's protected lifecycle record
       (injectable status_path, default the deployment path);
     * _MAINTENANCE_BEGIN / _MAINTENANCE_END / _MAINTENANCE_STATUS /
@@ -3779,73 +3121,32 @@ def production_seams(*, broker=None, task_name=None,
       (lazy: it imports the supervision module only when the segment is
       requested, and reads the supervisor's OWN state file).
 
-    The broker gate is assembled EAGERLY (an absent deployment config
-    raises share_broker_unwired at assembly — the same honest refusal the
+    The retired Windows TS/Funnel seams are NOT delivered any more (#33):
+    the cloud deployment has no Tailscale/Funnel layer. The broker gate is
+    assembled EAGERLY (an absent deployment config raises
+    share_broker_unwired at assembly — the same honest refusal the
     production wiring already propagates); the observation seams are lazy
-    partials and never run at assembly time. ``task_name`` is retained as
-    the deployment fact for callers that build a gate explicitly, but the
-    gate itself no longer runs host evidence in-process.
+    partials and never run at assembly time.
     """
-    # An injected broker ALWAYS wins (the cloud composition root passes its
-    # own); only a caller without one falls back to the configured loader.
     if broker is None:
         broker = _default_broker()
     ops = production_broker_ops(broker=broker)
-    bind = {}
-    if exe_path is not None:
-        bind["exe_path"] = exe_path
-    if runner is not None:
-        bind["runner"] = runner
-    funnel_bind = dict(bind)
-    if sleeper is not None:
-        funnel_bind["sleeper"] = sleeper
-    status_bind = {"runner": runner} if runner is not None else {}
-    drain_bind = {"sleeper": sleeper} if sleeper is not None else {}
-    reader_bind = {"status_path": status_path} if status_path is not None \
-        else {}
+    reader_bind = {"status_path": status_path} if status_path is not None         else {}
     seams = {
         "_BROKER_OPS": ops,
-        "_TS_SERVICE_CONTROL": partial(production_ts_service_control,
-                                       broker=broker),
-        "_TS_SERVICE_STATUS": partial(production_ts_service_status,
-                                      **status_bind),
-        "_CONNECTIVITY_OK": partial(production_connectivity_ok, **bind),
-        # R13-T: the BackendState channel for the connectivity wait (same
-        # runner/exe binding as the verdict seam) - the explicit
-        # 需人工登录 stop point reads the node's own structured state.
-        "_CONNECTIVITY_STATE": partial(production_connectivity_state,
-                                       **bind),
-        "_FUNNEL_CONTROL": partial(production_funnel_control, **funnel_bind),
-        "_FUNNEL_OBSERVED": partial(production_funnel_observed, **bind),
-        "_DRAIN": partial(_drain_with, ops, **drain_bind),
         "_DESIRED_STOP_READER": partial(production_desired_stop_reader,
                                         **reader_bind),
-        # Dedicated share backend (R6-A1/R8-A7): the five-layer chain's
-        # first layer; unwired-equivalent behaviour only when the backend
-        # dir cannot resolve (the gate object itself is always delivered).
         "_BACKEND_OPS": production_backend_ops(),
         "_BACKEND_OBSERVE": production_backend_observe,
-        # Login trigger (2026-09-17): control-token-gated POST
-        # /admin/auth/login on the dedicated instance; its own browser
-        # carries the human SSO. Delivered eagerly like the gate — the
-        # flow itself fail-closes on a missing control token.
         "_BACKEND_LOGIN": production_backend_login,
         "_KEYS_CONFIRMED": (partial(production_keys_confirmed,
                                     manager=keys_manager)
                             if keys_manager is not None
                             else production_keys_confirmed),
-        # 2026-09-22 diagnosis split: the structured WHY behind the same
-        # key precondition (no enabled keys vs config not in sync), bound
-        # to the SAME manager so both seams observe one consistent view.
         "_KEYS_DIAGNOSIS": (partial(production_keys_diagnosis,
                                     manager=keys_manager)
                             if keys_manager is not None
                             else production_keys_diagnosis),
-        # Rev9 A9-1/A9-2/A9-3/A9-4: the six frozen seams. The four
-        # maintenance/gateway seams bind the SAME broker as the gate (the
-        # wire action names live in the wave-1 BrokerClient methods); the
-        # reauth seam carries its own lazy ops; the intent writer defers the
-        # supervision import to call time.
         "_MAINTENANCE_BEGIN": partial(production_maintenance_begin,
                                       broker=broker),
         "_MAINTENANCE_END": partial(production_maintenance_end,
@@ -3856,24 +3157,11 @@ def production_seams(*, broker=None, task_name=None,
                                    broker=broker),
         "_BACKEND_REAUTH": production_backend_reauth,
         "_INTENT_WRITE": _production_intent_write,
-        # Rev19 A19-2: the supervision segment's read face — a lazy
-        # read of the supervisor's OWN state file (the same single
-        # source the watch writes, A9-5). Unwired in tests/fixtures
-        # (the seam stays None) so no run ever reads a production
-        # state file; the page then writes 未提供.
         "_SUPERVISION_STATE": production_supervision_state,
     }
     if cloud:
-        # Explicit cloud (Linux) role: ONLY the UM share stack is assembled.
-        # Tailscale/Funnel and the Windows broker lifecycle record do not
-        # exist on this deployment, so those seams stay UNWIRED (None) — the
-        # orchestration reports them honestly unavailable and never calls a
-        # Windows binary. The persistent stop intent is the Linux file the
-        # pid-file host ops write.
-        for name in ("_TS_SERVICE_CONTROL", "_TS_SERVICE_STATUS",
-                      "_CONNECTIVITY_OK", "_CONNECTIVITY_STATE",
-                      "_FUNNEL_CONTROL", "_FUNNEL_OBSERVED"):
-            seams.pop(name, None)
+        # Explicit cloud (Linux) role: the persistent stop intent is the
+        # Linux file the pid-file host ops write.
         seams["_DESIRED_STOP_READER"] = partial(
             production_linux_desired_stop_reader, state_dir=linux_state_dir)
     return seams

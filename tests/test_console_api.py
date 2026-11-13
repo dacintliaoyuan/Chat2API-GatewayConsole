@@ -108,11 +108,6 @@ class _ConsoleApiStatsEnvironment:
     price_table_loader = staticmethod(lambda: _STATS_PRICE_TABLE)
 
 
-def _refuse_real_kernel(*args, **kwargs):
-    _ISOLATION_ATTEMPTS.append("real_named_pipe_kernel")
-    raise AssertionError("offline test attempted a real named-pipe kernel")
-
-
 def _guard_usage_module(module, root=None, patchers=None, modules=None):
     """Patch ONE usagesrv module object into an offline sandbox.
 
@@ -180,12 +175,9 @@ def setUpModule():
     _ISOLATION_SAVED_SEAMS = {
         name: value for name, value in vars(console_share_actions).items()
         if name.startswith("_") and name.upper() == name}
-    for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                         "_declare_real_kernel"),
-                        (share_broker_server, "_declared_kernel")):
-        patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-        patcher.start()
-        _ISOLATION_PATCHERS.append(patcher)
+    # The retired Windows named-pipe transport is gone with the old local
+    # share chain (#33); the POSIX socket transport needs no kernel facade.
+    _ = (share_broker_client, share_broker_server)
 
 
 def tearDownModule():
@@ -293,12 +285,9 @@ class ConsoleApiTestBase(unittest.TestCase):
             cls.addClassCleanup(cls._isolation_env.stop)
         import share.broker_client as share_broker_client
         import share.broker_server as share_broker_server
-        for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                             "_declare_real_kernel"),
-                            (share_broker_server, "_declared_kernel")):
-            patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-            patcher.start()
-            cls._isolation_patchers.append(patcher)
+        # The retired Windows named-pipe transport is gone with the old
+        # local share chain (#33).
+        _ = (share_broker_client, share_broker_server)
         cls._isolation_seams = {
             name: value for name, value in vars(orch).items()
             if name.startswith("_") and name.upper() == name}
@@ -759,9 +748,9 @@ class LogOverviewRouteTests(ConsoleApiTestBase):
             targets = {(t["source"], t["category"]): t
                        for t in payload["targets"]}
             # 缺失目标如实上报，行数不计为 0。
-            self.assertEqual(targets[("share", "watch")]["status"],
+            self.assertEqual(targets[("share", "faults")]["status"],
                              "missing")
-            self.assertIsNone(targets[("share", "watch")]["rows"])
+            self.assertIsNone(targets[("share", "faults")]["rows"])
             self.assertGreaterEqual(
                 payload["coverage"]["targets_missing"], 1)
 
@@ -967,8 +956,6 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertEqual(coverage["keyNames"], 2)
 
     def test_usage_read_never_assembles_management_or_opens_broker(self):
-        from share.broker_client import NamedPipeBrokerTransport
-
         # 每次拒绝都记进 _ISOLATION_ATTEMPTS：若路由把异常吞掉，入口仍会
         # 因累计 attempts 失败（与 58-63 行的设计一致），证据不再只剩
         # assert_not_called 的连接错误。
@@ -980,17 +967,10 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
             _ISOLATION_ATTEMPTS.append("production_deployment_loader")
             raise AssertionError("deployment read")
 
-        def _refuse_pipe(*args, **kwargs):
-            _ISOLATION_ATTEMPTS.append("real_named_pipe_kernel")
-            raise AssertionError("real pipe opened")
-
         before = Path(self.share_db).read_bytes()
         with mock.patch.object(usagesrv, "get_share_manager",
-                               side_effect=_refuse_assembly) as manager, \
-             mock.patch.object(usagesrv, "_load_share_management_deployment",
-                               side_effect=_refuse_deployment) as deployment, \
-             mock.patch.object(NamedPipeBrokerTransport, "open",
-                               side_effect=_refuse_pipe) as pipe:
+                               side_effect=_refuse_assembly) as manager,              mock.patch.object(usagesrv, "_load_share_management_deployment",
+                               side_effect=_refuse_deployment) as deployment:
             status, raw = self.req("GET", "/api/console/share-usage")
         self.assertEqual(status, 200)
         payload = json.loads(raw)
@@ -999,7 +979,6 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertIs(self._key(payload, self.key_b)["deleted"], True)
         manager.assert_not_called()
         deployment.assert_not_called()
-        pipe.assert_not_called()
         self.assertEqual(Path(self.share_db).read_bytes(), before)
 
     def test_unknown_names_and_unreadable_store_stay_unknown(self):
@@ -1294,14 +1273,15 @@ class RegistryHonestyTests(ConsoleApiTestBase):
         infos = usagesrv.get_console_manager().action_info()
         # B0 (2026-11-01): retired M365 / Qoder CN / Qoder Global /
         # CLIProxy management actions are absent. Ticket #32 retires the
-        # model sync/settings/task actions as well: model.catalog, the context
-        # probe and the context overrides are the only model actions left.
-        self.assertEqual(len(infos), 25)
+        # model sync/settings/task actions and #33 retires the local share
+        # chain: model.catalog, the context probe and the context overrides
+        # are the only model actions left.
+        self.assertEqual(len(infos), 12)
         by_name = {i["action"]: i for i in infos}
         enabled = {n for n, i in by_name.items() if i["enabled"]}
         # The deployment authorization package (2026-09-16, section 5) plus
-        # user instruction A3 flipped the approved actions live: the four-
-        # layer share orchestration, the service start/stop
+        # user instruction A3 flipped the approved actions live: the service
+        # start/stop
         # target (chat2api only after B0 — usage stays excluded as the
         # console's own web host), the UM login orchestration, since the
         # maintainer's 2026-09-22 budget approval the billed long-input
@@ -1310,23 +1290,13 @@ class RegistryHonestyTests(ConsoleApiTestBase):
         # context override set/clear.
         self.assertEqual(
             enabled,
-            {"account.um_status",
-             "share.status",
-             "share.start", "share.stop", "share.estop", "share.retry_stop",
-             "share.backend_login",
-             "service.start", "service.stop", "service.restart",
-             "account.login",
-             "model.catalog", "model.context_probe_preview",
-             "model.context_probe_run",
-             "model.context_overrides", "model.context_override_set",
-             "model.context_override_clear",
-             "account.um_verify",
-             # Rev9 A9-8 (2026-10-03): the four maintenance actions.
-             "share.diagnostics", "share.repair_limits", "share.backend_reauthenticate",
-             "share.backend_restart", "share.gateway_restart",
-             # S5（契约 §5.2）：公网巡检一键复查与受限重试。
-             "share.public_check", "share.public_retry"})
-        self.assertEqual(len(enabled), 25)
+            {"account.um_status", "account.um_verify", "account.login",
+             "model.catalog", "model.context_override_clear",
+             "model.context_override_set", "model.context_overrides",
+             "model.context_probe_preview", "model.context_probe_run",
+             "service.restart", "service.start",
+             "service.stop"})
+        self.assertEqual(len(enabled), 12)
         self.assertEqual(len(infos) - len(enabled), 0)
         for retired in (
                 "model.sync_preview", "model.sync_pending",
@@ -1814,8 +1784,6 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
         patchers = [
             mock.patch.object(usagesrv, "get_share_manager",
                               lambda: self.manager),
-            # 观察缝：_FUNNEL_OBSERVED 非 None -> 跳过生产装配（零真实调用）。
-            mock.patch.object(orch, "_FUNNEL_OBSERVED", lambda: False),
             mock.patch.object(orch, "_BROKER_OPS", None),
             # The status read's capacity block is a SEPARATE read seam. A prior
             # module can leave it wired to a real broker; this class tests the
@@ -1880,11 +1848,7 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
         # D18-1: the explicit deployment origin is the address the console
         # labels and copies; the Tailscale Funnel read must not even run.
         with mock.patch.dict(os.environ, {
-                "CONSOLE_PUBLIC_ORIGIN": "https://dacintapi.de5.net"}), \
-                mock.patch.object(
-                    usagesrv.Handler, "_tailscale_funnel_url",
-                    side_effect=AssertionError(
-                        "the Tailscale URL must not be read")):
+                "CONSOLE_PUBLIC_ORIGIN": "https://dacintapi.de5.net"}):
             payload = self._status()
         self.assertEqual(payload["share_url"], "https://dacintapi.de5.net")
         self.assertEqual(payload["share_url_source"], "configured")
@@ -1892,11 +1856,7 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
 
     def test_status_invalid_public_origin_never_falls_back(self):
         with mock.patch.dict(os.environ, {
-                "CONSOLE_PUBLIC_ORIGIN": "https://dacintapi.de5.net/v1"}), \
-                mock.patch.object(
-                    usagesrv.Handler, "_tailscale_funnel_url",
-                    side_effect=AssertionError(
-                        "the Tailscale URL must not be read")):
+                "CONSOLE_PUBLIC_ORIGIN": "https://dacintapi.de5.net/v1"}):
             payload = self._status()
         self.assertNotIn("share_url", payload)
         self.assertIsNone(payload["share_url_source"])

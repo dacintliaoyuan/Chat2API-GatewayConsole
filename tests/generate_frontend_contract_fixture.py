@@ -156,7 +156,10 @@ def generate():
                 target["file_key"] = "fixture-runtime-file-v1"
         # Filesystem identity is transport metadata, not fixture content.
         logs["file_key"] = "fixture-runtime-file-v1"
-        specs = console_adapters.build_registry()
+        # The local registry keeps the local cards; the cloud registry
+        # carries the share cards (the local share chain is retired, #33).
+        specs = (console_adapters.build_registry()
+                 + console_adapters.build_cloud_registry())
         capabilities = {"actions": OperationManager.action_info(
             SimpleNamespace(_specs={s.name: s for s in specs}))}
         share_maintenance = generate_share_maintenance(specs)
@@ -613,7 +616,7 @@ def _scenario_record(case, operation, *, result, readback, before=None,
 # ------------------------------------------------------------- the scenarios
 
 def _scenario_normal(registry, clock):
-    """1. normal: all nine layers confirmed; share.diagnostics returns."""
+    """1. normal: all seven layers confirmed; share.diagnostics returns."""
     now = clock.time()
     broker = _FixtureBroker(
         verify_running=True, limits=_fixture_limits(now=now),
@@ -622,9 +625,6 @@ def _scenario_normal(registry, clock):
     observe = _FixtureObserve(_fixture_backend_obs(now=clock.time()))
     seams = {
         "_BROKER_OPS": broker,
-        "_TS_SERVICE_STATUS": lambda: "running",
-        "_CONNECTIVITY_OK": lambda: True,
-        "_FUNNEL_OBSERVED": lambda: True,
         "_BACKEND_OBSERVE": observe,
         "_BACKEND_OPS": _FixtureBackendOps(),
         "_MAINTENANCE_STATUS": _FixtureMaintenance(
@@ -646,11 +646,11 @@ def _scenario_normal(registry, clock):
     assert operation["state"] == "succeeded", operation["error"]
     assert observe.forget_stale == [False, False, False]
     assert [layer["state"] for layer in report["layers"].values()] == \
-        ["running", "running", "valid", "ok", "ok", "running", "on", "ok", "running"]
+        ["running", "running", "valid", "ok", "ok", "running"]
     return _scenario_record(
         "normal", operation, result=report,
         readback=_pair(report["layers"], "share_gateway", "share_backend"),
-        note=("九层全部 confirmed（只读、无副作用）；维护视图无租约、无 "
+        note=("七层全部 confirmed（只读、无副作用）；维护视图无租约、无 "
               "last_error；观察缝 forget_stale=False（不删 backend.pid）。"))
 
 
@@ -665,9 +665,6 @@ def _scenario_unknown(registry, clock):
     observe = _FixtureObserve(_fixture_backend_obs(now=clock.time()))
     seams = {
         "_BROKER_OPS": broker,
-        "_TS_SERVICE_STATUS": lambda: "running",
-        "_CONNECTIVITY_OK": lambda: True,
-        "_FUNNEL_OBSERVED": lambda: True,
         "_BACKEND_OBSERVE": observe,
         "_BACKEND_OPS": _FixtureBackendOps(),
         "_MAINTENANCE_STATUS": _FixtureMaintenance(
@@ -704,9 +701,6 @@ def _scenario_stale(registry, clock):
         faults=_fixture_faults(now=now))
     seams = {
         "_BROKER_OPS": broker,
-        "_TS_SERVICE_STATUS": lambda: "running",
-        "_CONNECTIVITY_OK": lambda: True,
-        "_FUNNEL_OBSERVED": lambda: True,
         "_BACKEND_OBSERVE": observe,
         "_BACKEND_OPS": _FixtureBackendOps(),
         "_MAINTENANCE_STATUS": _FixtureMaintenance(
@@ -737,50 +731,6 @@ def _scenario_stale(registry, clock):
               "age_s > ttl_s → stale=true；其余层新鲜。"))
 
 
-def _scenario_partial_failure(registry, clock):
-    """4. partial_failure: one layer unavailable, the rest confirmed; no raise."""
-    def broken_connectivity():
-        raise OperationError("share_status_unknown",
-                             "fixture: tailscale 查询失败")
-
-    now = clock.time()
-    broker = _FixtureBroker(
-        verify_running=True, limits=_fixture_limits(now=now),
-        faults=_fixture_faults(now=now))
-    observe = _FixtureObserve(_fixture_backend_obs(now=clock.time()))
-    seams = {
-        "_BROKER_OPS": broker,
-        "_TS_SERVICE_STATUS": lambda: "running",
-        "_CONNECTIVITY_OK": broken_connectivity,
-        "_FUNNEL_OBSERVED": lambda: True,
-        "_BACKEND_OBSERVE": observe,
-        "_BACKEND_OPS": _FixtureBackendOps(),
-        "_MAINTENANCE_STATUS": _FixtureMaintenance(
-            status=_fixture_maint_view(now=clock.time())).status,
-        "_DESIRED_STOP_READER": lambda: False,
-        "_share_entry_probe": lambda: {"pid": 54300, "reason": "ok"},
-        "_share_entry_attribution": lambda: {"file_ready": True,
-                                               "reason": "ok"},
-    }
-    operation = _run_console_action(registry, "share.diagnostics", {},
-                                     seams=seams)
-    report = operation["result"]
-    connectivity = report["layers"]["connectivity"]
-    assert operation["state"] == "succeeded", operation["error"]
-    assert connectivity["state"] == "unavailable"
-    assert connectivity["verdict"] == "unavailable"
-    assert connectivity["reason"] == "connectivity_query_failed"
-    assert report["layers"]["ts_service"]["state"] == "running"
-    assert report["layers"]["security_gate"]["state"] == "ok"
-    assert "connectivity" in report["note"]
-    return _scenario_record(
-        "partial_failure", operation, result=report,
-        readback=_pair(report["layers"], "connectivity", "ts_service",
-                        "security_gate"),
-        note=("单层 connectivity 缝抛异常 → 只该层 unavailable + reason；"
-              "整体不抛，其余层照常给出证据。"))
-
-
 def _scenario_authenticating(registry, clock):
     """5. authenticating: backend_auth logging_in + reauthenticate returns it."""
     now = clock.time()
@@ -799,9 +749,6 @@ def _scenario_authenticating(registry, clock):
         "note": "已在认证中：不重复开窗、不冷启动、不重启进程"}
     diag_seams = {
         "_BROKER_OPS": broker,
-        "_TS_SERVICE_STATUS": lambda: "running",
-        "_CONNECTIVITY_OK": lambda: True,
-        "_FUNNEL_OBSERVED": lambda: True,
         "_BACKEND_OBSERVE": observe,
         "_BACKEND_OPS": _FixtureBackendOps(),
         "_MAINTENANCE_STATUS": _FixtureMaintenance(
@@ -844,9 +791,6 @@ def _scenario_maintenance(registry, clock):
     observe = _FixtureObserve(_fixture_backend_obs(now=clock.time()))
     diag_seams = {
         "_BROKER_OPS": broker,
-        "_TS_SERVICE_STATUS": lambda: "running",
-        "_CONNECTIVITY_OK": lambda: True,
-        "_FUNNEL_OBSERVED": lambda: True,
         "_BACKEND_OBSERVE": observe,
         "_BACKEND_OPS": _FixtureBackendOps(),
         "_MAINTENANCE_STATUS": _FixtureMaintenance(status=view).status,
@@ -953,9 +897,6 @@ def _scenario_cancelled(registry, clock):
     observe = _FixtureObserve(_fixture_backend_obs(now=clock.time()))
     seams = {
         "_BROKER_OPS": broker,
-        "_TS_SERVICE_STATUS": lambda: "running",
-        "_CONNECTIVITY_OK": lambda: True,
-        "_FUNNEL_OBSERVED": lambda: True,
         "_BACKEND_OBSERVE": observe,
         "_BACKEND_OPS": _FixtureBackendOps(),
         "_MAINTENANCE_STATUS": _FixtureMaintenance(
@@ -1187,8 +1128,7 @@ def generate_share_maintenance(specs):
             _scenario_normal(specs, clock),
             _scenario_unknown(specs, clock),
             _scenario_stale(specs, clock),
-            _scenario_partial_failure(specs, clock),
-            _scenario_authenticating(specs, clock),
+                _scenario_authenticating(specs, clock),
             _scenario_maintenance(specs, clock),
             _scenario_timeout(specs, clock),
             _scenario_cancelled(specs, clock),

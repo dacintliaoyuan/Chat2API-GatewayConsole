@@ -16,7 +16,7 @@ Chat2API 网关控制台：同一套前端按构建期角色产出本机与云�
 
 | 角色 | 常用入口 | 生产页 |
 |---|---|---|
-| 本机 | `Open-GatewayConsole.bat` → 8001；`invoke-gateway-service.ps1` 启停；`Recover-ShareControl.bat` 分享恢复 | `web/dist` |
+| 本机 | `Open-GatewayConsole.bat` → 8001；`invoke-gateway-service.ps1` 启停 | `web/dist` |
 | 云端 | `Open-CloudConsole.bat` → SSH 隧道 → 18096；`um-cloud-deploy/` 安装/更新/回滚 | `web/dist-cloud`（打包为 `web/dist`） |
 
 控制台宿主是 `usagesrv.py`：`UM_SHARE_ROLE=local` 时监听 8001，`cloud` 时监听 18096。前端入口 `web/index.html → web/src/console-entry.ts` 按构建期角色只装入 `web/src/local/local-console.ts` 或 `web/src/cloud/cloud-console.ts`。

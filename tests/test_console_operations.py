@@ -470,18 +470,17 @@ class ShareOrchestrationResourceTests(ConsoleTestBase):
     def test_share_diagnostics_end_to_end_unwired_is_honest(self):
         # Rev9 A9-8 end-to-end: submit through the REAL registry creates an
         # operation row on share:orchestration; with every seam unwired the
-        # read-only report succeeds with eight honestly-unavailable layers
+        # read-only report succeeds with seven honestly-unavailable layers
         # (never a raise, never a fabricated state) and is JSON-persisted.
         from console import adapters as console_adapters
         from console import share_actions as console_share_actions
-        seam_names = ("_BROKER_OPS", "_TS_SERVICE_STATUS",
-                      "_CONNECTIVITY_OK", "_FUNNEL_OBSERVED", "_BACKEND_OBSERVE",
+        seam_names = ("_BROKER_OPS", "_BACKEND_OBSERVE",
                       "_BACKEND_OPS", "_MAINTENANCE_STATUS", "_INTENT_WRITE")
         saved = {n: getattr(console_share_actions, n) for n in seam_names}
         try:
             for n in seam_names:
                 setattr(console_share_actions, n, None)
-            mgr = self.manager(console_adapters.build_registry(),
+            mgr = self.manager(console_adapters.build_cloud_registry(),
                                acquire_timeout_s=2.0)
             op = mgr.submit("share.diagnostics", "share")
             op = wait_terminal(mgr, op["id"])
@@ -514,7 +513,7 @@ class SubmitIdempotencyParamTests(ConsoleTestBase):
         # share.backend_restart host action.
         from console import adapters as console_adapters
         real = {spec.name: spec
-                for spec in console_adapters.build_registry()}[
+                for spec in console_adapters.build_cloud_registry()}[
                     "share.backend_restart"]
         return ActionSpec(
             real.name, real.description, handler=handler,

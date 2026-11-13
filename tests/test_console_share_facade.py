@@ -88,12 +88,9 @@ def setUpModule():
     _ISOLATION_SAVED_SEAMS = {
         name: value for name, value in vars(console_share_actions).items()
         if name.startswith("_") and name.upper() == name}
-    for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                         "_declare_real_kernel"),
-                        (share_broker_server, "_declared_kernel")):
-        patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-        patcher.start()
-        _ISOLATION_PATCHERS.append(patcher)
+    # The retired Windows named-pipe transport is gone with the old local
+    # share chain (#33).
+    _ = (share_broker_client, share_broker_server)
 
 
 def tearDownModule():
@@ -180,7 +177,8 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         cls._saved_env = {}
         for key in ("USAGE_SESSION_CODE_FILE", "USAGE_CONTROL_TOKEN_FILE",
                     "SHARE_STORE_FILE", "SHARE_MANAGEMENT_CONFIG",
-                    "CONSOLE_STATE_FILE", "CONSOLE_LOCK_DIR"):
+                    "CONSOLE_STATE_FILE", "CONSOLE_LOCK_DIR",
+                    "CONSOLE_PUBLIC_ORIGIN"):
             cls._saved_env[key] = os.environ.get(key)
         cls.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True,
                                               prefix="console-share-facade-",
@@ -190,6 +188,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         os.environ["USAGE_CONTROL_TOKEN_FILE"] = os.path.join(
             cls.tmp.name, "usage-control-token")
         os.environ["SHARE_STORE_FILE"] = os.path.join(cls.tmp.name, "share.db")
+        os.environ["CONSOLE_PUBLIC_ORIGIN"] = "https://fixture.tailnet.ts.net"
         # The console status GET ensures the production seam wiring itself
         # (usagesrv's production console-manager assembly), so loading the
         # module mutates console_share_actions' seam globals. Snapshot them
@@ -229,11 +228,6 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.broker = FakeBroker()
         self.usagesrv.get_share_manager = lambda: ShareManager(
             store_path=db, broker=self.broker)
-        self._real_funnel_url = self.usagesrv.Handler._share_funnel_url
-        url = mock.patch.object(self.usagesrv.Handler, '_share_funnel_url',
-                                return_value='https://fixture.tailnet.ts.net')
-        url.start()
-        self.addCleanup(url.stop)
         self._install_observation_fixtures()
         self.server = self.usagesrv.ThreadingHTTPServer(
             ("127.0.0.1", 0), self.usagesrv.Handler)
@@ -260,7 +254,6 @@ class ConsoleShareFacadeTests(unittest.TestCase):
                  if name.startswith("_") and name.upper() == name}
         self.addCleanup(lambda: [_share_orchestration.__dict__.__setitem__(name, value)
                                  for name, value in saved.items()])
-        _share_orchestration._FUNNEL_OBSERVED = None
 
         def fake_runner(argv, timeout=None, **kwargs):
             return subprocess.CompletedProcess(argv, 0, "{}", "")
@@ -275,6 +268,9 @@ class ConsoleShareFacadeTests(unittest.TestCase):
                 "running": False, "auth_state": None}
             for name, value in seams.items():
                 setattr(_share_orchestration, name, value)
+            _share_orchestration._BROKER_OPS = (
+                console_share_production.production_broker_ops(
+                    broker=self.broker))
 
         patcher = mock.patch.object(console_adapters, "wire_share_production_seams",
                                     wire_fixture)
@@ -312,8 +308,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.assertIn("in_sync", data)
         self.assertNotIn("secret", body.decode())
         self.assertNotIn("um-share-", body.decode())
-        self.assertIs(data["gateway_running"], False)
-        self.assertIs(data["funnel_on"], False)
+        self.assertNotIn("funnel_on", data)
 
     def test_status_broker_snapshot_mapping(self):
         f = self.usagesrv.Handler._console_share_status_payload
@@ -711,28 +706,6 @@ class ConsoleShareFacadeTests(unittest.TestCase):
             self.assertFalse(result['connected'])
             self.assertEqual(result['reason'], 'gateway_unconfirmed')
             probe.assert_not_called()
-
-    def test_public_test_never_reuses_a_cached_domain_after_discovery_failure(self):
-        import subprocess
-        handler = self.usagesrv.Handler
-        # Call the real classmethod behind the per-test observation fixture.
-        original = self._real_funnel_url
-        handler._share_url_cache['url'] = 'https://old.tailnet.ts.net'
-        try:
-            with mock.patch.object(subprocess, 'run', side_effect=OSError('fixture failure')):
-                self.assertIsNone(original(refresh=True))
-            offline = subprocess.CompletedProcess([], 0, json.dumps({
-                'BackendState': 'Stopped', 'Self': {'Online': False,
-                    'DNSName': 'new.tailnet.ts.net.'}}).encode())
-            with mock.patch.object(subprocess, 'run', return_value=offline):
-                self.assertIsNone(original(refresh=True))
-            online = subprocess.CompletedProcess([], 0, json.dumps({
-                'BackendState': 'Running', 'Self': {'Online': False,
-                    'DNSName': 'new.tailnet.ts.net.'}}).encode())
-            with mock.patch.object(subprocess, 'run', return_value=online):
-                self.assertEqual(original(refresh=True), 'https://new.tailnet.ts.net')
-        finally:
-            handler._share_url_cache['url'] = None
 
     def test_reveal_returns_created_plaintext_credential_free(self):
         status, body = self.request(

@@ -61,12 +61,9 @@ def setUpModule():
         "CONSOLE_LOCK_DIR": str(root / "console-locks")})
     patcher.start()
     _ISOLATION_PATCHERS.append(patcher)
-    for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                         "_declare_real_kernel"),
-                        (share_broker_server, "_declared_kernel")):
-        patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-        patcher.start()
-        _ISOLATION_PATCHERS.append(patcher)
+    # The retired Windows named-pipe transport is gone with the old local
+    # share chain (#33).
+    _ = (share_broker_client, share_broker_server)
 
 
 def tearDownModule():
@@ -164,7 +161,6 @@ class SecretRedactionTests(unittest.TestCase):
         self.addCleanup(lambda: [
             _share_orchestration.__dict__.__setitem__(name, value)
             for name, value in saved.items()])
-        _share_orchestration._FUNNEL_OBSERVED = None
 
         def fake_runner(argv, timeout=None, **kwargs):
             return subprocess.CompletedProcess(argv, 0, "{}", "")

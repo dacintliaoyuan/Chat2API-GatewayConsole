@@ -105,8 +105,6 @@ class BrokerLoaderTests(_LoaderResetMixin):
         sentinel = object()
         seams = prod.production_seams(broker=sentinel)
         self.assertIs(seams["_BROKER_OPS"]._broker, sentinel)
-        self.assertIs(seams["_TS_SERVICE_CONTROL"].keywords["broker"],
-                      sentinel)
         self.assertIs(seams["_MAINTENANCE_BEGIN"].keywords["broker"],
                       sentinel)
 

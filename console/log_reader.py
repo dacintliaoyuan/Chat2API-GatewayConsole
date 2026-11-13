@@ -49,9 +49,9 @@ MAX_ROTATION_INDEX = 5
 # apply inside read_entries); rows dropped by this budget are reported.
 MAX_OVERVIEW_ROWS = 1200
 
-# Watch directory of the chat2api / share-backend supervision entries:
-# SELFUSEAI_GATEWAY_WATCH_DIR (lib/watch-chat2api.ps1:78-82,
-# lib/watch-share-backend.ps1 via share_backend_supervision.DEFAULT_WATCH_DIR).
+# Watch directory of the chat2api supervision entry:
+# SELFUSEAI_GATEWAY_WATCH_DIR (lib/watch-chat2api.ps1:78-82). The retired
+# share-backend watch script is gone with the old Windows share chain (#33).
 WATCH_DIR_ENV = "SELFUSEAI_GATEWAY_WATCH_DIR"
 # Fixed SYSTEM deployment root of the retired Windows share chain
 # (the retired Windows deploy script :820, the retired run-broker.cmd /
@@ -831,10 +831,6 @@ def build_registry(ledger_paths: dict[str, str] | None = None) -> dict:
              {"category": "lifecycle", "display": "父侧启停记录 backend-lifecycle.log",
               "path": share_paths.get("lifecycle"),
               "rotating": False},
-             # share/backend_supervision.py:72-73 + lib/watch-share-backend.ps1.
-             {"category": "watch", "display": "监督日志 share-backend-watch.log",
-              "path": watch_path("share-backend-watch.log"),
-              "rotating": True, "rotation_index": 1},
              # the retired Windows deploy script :820-861 — the 8100 SYSTEM
              # task's full stdout/stderr capture (run\live\raw.txt).
              {"category": "gateway", "display": "8100 任务输出 raw.txt",

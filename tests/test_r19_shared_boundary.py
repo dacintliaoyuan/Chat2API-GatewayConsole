@@ -540,13 +540,17 @@ class KnownDeferredBoundaryTests(unittest.TestCase):
     BROKER_CLIENT_PATH = AI_GATEWAY_ROOT / "share/broker_client.py"
     SECRET_PROTECTION_IMPORT = "share.secret_protection"
 
-    def test_named_pipe_transport_is_still_importable(self):
+    def test_named_pipe_transport_is_retired(self):
         self.assertTrue(self.BROKER_CLIENT_PATH.is_file())
         probe = (
             "import sys\n"
             "sys.path.insert(0, sys.argv[1])\n"
-            "from share.broker_client import NamedPipeBrokerTransport\n"
-            "print(NamedPipeBrokerTransport.__name__)\n"
+            "try:\n"
+            "    from share.broker_client import NamedPipeBrokerTransport\n"
+            "except ImportError:\n"
+            "    print('retired')\n"
+            "else:\n"
+            "    print('present')\n"
         )
         with tempfile.TemporaryDirectory(
                 prefix="r19-shared-deferred-") as isolated_cwd:
@@ -568,10 +572,9 @@ class KnownDeferredBoundaryTests(unittest.TestCase):
                 encoding="utf-8", timeout=60)
         self.assertEqual(
             completed.returncode, 0,
-            "E19-2 moved the Windows named-pipe transport: update this "
-            "known-deferral assertion. stderr: {}".format(completed.stderr))
+            "retired transport probe failed: {}".format(completed.stderr))
         self.assertEqual(completed.stdout.strip().splitlines()[-1],
-                         "NamedPipeBrokerTransport")
+                         "retired")
 
     def test_secret_protection_is_still_imported_by_both_ends(self):
         """The credential reader is still reachable from both ends.

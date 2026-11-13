@@ -1,52 +1,39 @@
-r"""share/broker_server.py — SYSTEM broker host entry (D4 prerequisite).
+r"""share/broker_server.py - broker host wire server (POSIX production).
 
-The broker host runs as the SYSTEM scheduled task created by
-install-share-broker.ps1 (launched through the generated wrapper). It
-listens on the FIXED management pipe ``\\.\pipe\um-share-broker`` and
-drives the product coordinator (``share_broker_host.BrokerHostCoordinator``):
-{status, publish, start, drain, emergency-stop} plus the restricted
-``ts-service-control`` whitelist extension (a dispatch decorator reusing the
-same validation pipeline; the share instance can never call these
-(A2/A4: two channels, two secrets, two whitelists).
+The broker host runs as the ``um-share`` service and drives the product
+coordinator (``share_broker_host.BrokerHostCoordinator``): {status, publish,
+start, drain, emergency-stop} plus the restricted host-verify / host-stop /
+host-evidence / host-repair-limits whitelist extension (a dispatch decorator
+reusing the same validation pipeline; the share instance can never call these).
+
+The POSIX production transport is ``UnixSocketBrokerServer``: an AF_UNIX
+SOCK_STREAM management socket at an absolute path (parent directory 0700,
+socket file 0600) whose peer identity is kernel SO_PEERCRED evidence
+(pid/uid/gid), never a status file.
 
 Design decisions fixed here:
 
-* BYTE-mode pipe + the reviewed byte-stream line framing: bounded chunks,
+* BYTE-mode socket + the reviewed byte-stream line framing: bounded chunks,
   the 1 MiB cap is checked BEFORE a complete frame is accepted (a
   newline-terminated oversized frame can never reach dispatch), "\n"
-  terminator. Message-mode framing stays an L2 option only after H5.
-* DACL from an SDDL parameter. ``PLANNED_SDDL`` is a TEMPLATE with SID
-  placeholders that intentionally FAILS conversion, so an uncalibrated
-  deployment refuses to serve instead of starting with a default ACL
-  (H2/H5 calibrate it during the authorized experiment).
-* ``FILE_FLAG_FIRST_PIPE_INSTANCE`` is ACTUALLY passed in the openMode and
-  any creation failure (NULL or INVALID_HANDLE_VALUE, both forms) is a
-  loud refusal — no silent reuse (H4).
+  terminator.
 * ONE daemon worker per connection cycle with ONE reserved process-wide
-  slot (R37 contract): the cancel event and the pipe handle are
+  slot (R37 contract): the cancel event and the accepted connection are
   cycle-owned locals, so a late worker can never operate the NEXT cycle's
   connection; cancellation is re-checked BEFORE dispatch (a late read can
-  never reach management side effects); a blocked kernel call is released
-  only by the outer abandonment path (cancel -> cancel synchronous I/O -> disconnect -> CloseHandle,
-  D4); there is NO nested worker and NO nested observation window.
+  never reach management side effects); a blocked socket call is released
+  only by the outer abandonment path (cancel -> shutdown -> close, D4);
+  there is NO nested worker and NO nested observation window.
 * The single-thread accept loop bottom-catches per-cycle exceptions
-  (§27.5): a poisoned cycle is disconnected and serving CONTINUES.
+  (S27.5): a poisoned cycle is disconnected and serving CONTINUES.
 
-The share-side instance channel wire server is ``InstancePipeServer`` in
-``share/instance_pipe.py`` (same bounded base). Deployment wiring:
-``build_server``/``main`` below; the instance identity verifier is wired
-through ``make_instance_call`` (R41-2), not trusted from a status file.
-
-POSIX (Linux): ``UnixSocketBrokerServer`` is the AF_UNIX SOCK_STREAM
-counterpart of ``BoundedPipeServer`` for the instance channel. It keeps the
-same bounded cycle contract and framing, creates the endpoint at an absolute
-path (parent directory 0700, socket file 0600) and exposes the peer identity
-as kernel SO_PEERCRED evidence (pid/uid/gid). The Windows named-pipe
-behavior is unchanged.
+The Windows scheduled-task / named-pipe production entry (``build_server`` /
+``main``) is retired with the old local share chain (#33). The named-pipe
+classes kept here are the offline wire-test fixture used by
+``tests/test_share_broker_server.py``; the Linux entry never assembles them.
 """
 from __future__ import annotations
 
-import argparse
 import errno
 import json
 import os
@@ -71,12 +58,9 @@ from share.broker_host import (BrokerDiag, BrokerHostCoordinator,
                                InstanceRegistry, MaintenanceLeaseStore,
                                ReplayRegistry)
 from share.broker_protocol import (DEFAULT_DEADLINE_SECONDS, MAX_MESSAGE,
-                                   DRAIN_WINDOW_SECONDS,
-                                   STOP_BUDGET_SECONDS,
                                    HOST_EVIDENCE_ACTION,
                                    HOST_STOP_ACTION, HOST_VERIFY_ACTION,
                                    HOST_REPAIR_LIMITS_ACTION,
-                                   TS_SERVICE_CONTROL_ACTION,
                                    ProtocolError, BrokerResult,
                                    decode_frame,
                                    validate_host_evidence_fields,
@@ -990,91 +974,6 @@ class _UnixSocketTransport(BoundedPipeServer):
             self._handle = None
 
 
-class _TsServiceControlCoordinator:
-    """Management dispatch decorator adding ONLY the restricted
-    ``ts-service-control`` verb (the whitelist extension the console TS
-    service seam drives; deployment authorization package section 5).
-
-    Identity validation follows the EXISTING pipeline - every other request
-    is delegated UNTOUCHED to the real coordinator; the new verb is
-    validated with the coordinator's OWN control key through the SAME
-    protocol validator and consumed through the SAME replay registry (no
-    second key copy, no second validation rule). The service name never
-    crosses the wire: the injected TailscaleServiceOps pins it to the
-    protocol literal, and the enum validator refuses any other field or
-    value. The result mirrors the coordinator's start contract: an ok
-    reply only with an EXPLICIT ``ts_service_started/stopped`` flag from a
-    re-confirmed state; anything else is an ``unconfirmed`` refusal - except
-    a PERMANENT permission refusal (R13-T: the ops' last_control_rc reads
-    ERROR_ACCESS_DENIED, rc 5), which answers the DISTINCT ``access_denied``
-    code so the console reports 权限不足 instead of burning its bounded
-    confirmation poll on a misleading "已执行" story.
-
-    ``__getattr__`` forwards to the inner coordinator so the decorated
-    object stays attribute-compatible with every existing consumer (the
-    server layer keeps holding ONE coordinator).
-    """
-
-    def __init__(self, inner, ts_service_ops):
-        self._inner = inner
-        self._ts = ts_service_ops
-
-    def __getattr__(self, name):
-        return getattr(self._inner, name)
-
-    def handle_management(self, body, now=None):
-        if not (isinstance(body, dict)
-                and body.get("action") == TS_SERVICE_CONTROL_ACTION):
-            return self._inner.handle_management(body, now=now)
-        try:
-            req = validate_management_request(body, self._inner.mgmt_secret,
-                                              now=now)
-        except ProtocolError as exc:
-            frame = BrokerResult.err(exc.code, str(exc)).to_dict()
-            frame["request_id"] = (body.get("request_id")
-                                   if isinstance(body, dict) else None)
-            return frame
-        try:
-            # One-time consumption BEFORE any side effect (R29-3) - the SAME
-            # registry the inner coordinator uses for its own verbs.
-            self._inner.replay.consume(req["request_id"], req["ts"], now=now)
-        except ProtocolError as exc:
-            frame = BrokerResult.err(exc.code, str(exc)).to_dict()
-            frame["request_id"] = req["request_id"]
-            return frame
-        try:
-            action = validate_ts_service_control_fields(req["fields"])["action"]
-        except ProtocolError as exc:
-            return self._reply(req, BrokerResult.err(exc.code, str(exc)))
-        accepted = self._ts.start() if action == "start" else self._ts.stop()
-        if accepted is not True:
-            # R13-T: a PERMANENT refusal (sc.exe rc 5 ERROR_ACCESS_DENIED,
-            # exposed by TailscaleServiceOps.last_control_rc) must not be
-            # folded into the pending-confirmation "did not re-confirm"
-            # shape - the command never executed, so the console's bounded
-            # poll could only burn its budget on a misleading "已执行" story.
-            # The distinct access_denied code reports 权限不足 honestly;
-            # every other rejection keeps the existing unconfirmed contract.
-            if getattr(self._ts, "last_control_rc", None) == \
-                    getattr(type(self._ts), "RC_ACCESS_DENIED", 5):
-                return self._reply(req, BrokerResult.err(
-                    "access_denied",
-                    "ts service %s denied by the OS (rc 5)" % action))
-            return self._reply(req, BrokerResult.err(
-                "unconfirmed",
-                "ts service %s did not re-confirm the %s state"
-                % (action, "running" if action == "start" else "stopped")))
-        flag = ("ts_service_started" if action == "start"
-                else "ts_service_stopped")
-        return self._reply(req, BrokerResult.ok({flag: True}))
-
-    @staticmethod
-    def _reply(req, result):
-        frame = result.to_dict()
-        frame["request_id"] = req["request_id"]
-        return frame
-
-
 class _HostOpsControlCoordinator:
     """Management dispatch decorator adding ONLY the restricted
     ``host-verify`` (read-only evidence), ``host-stop`` (task gate) and
@@ -1485,265 +1384,3 @@ def _required_host_owner(args):
             "broker assembly refused: host owner expectation missing "
             "(--expected-owner-account, DOMAIN\\user form, required)")
     return owner
-
-
-def build_server(args, kernel=None, instance_kernel_factory=None,
-                 verifier=None, host_ops=None, acl_checker=None,
-                 ts_service_ops=None, maintenance=None):
-    """Assemble the broker host from deployment arguments (offline-testable
-    injection points for every OS boundary). ``acl_checker`` overrides the
-    default IcaclsAclChecker for offline assembly tests; production leaves
-    it None so the REAL icacls-backed checker is built here.
-    ``ts_service_ops`` is the restricted TS service primitive for the
-    ``ts-service-control`` whitelist extension; production builds the REAL
-    TailscaleServiceOps here (the service name is the protocol literal).
-    ``maintenance`` optionally seeds the protected maintenance record (a
-    dict with the §11.1 shape) - tests use it to simulate a record
-    restored at startup; None loads it from the broker dir.
-
-    Registration chain (R41-2): the registration file provides the INITIAL
-    deployment fact only; every instance_call runs through the identity
-    verifier against the ACTUAL pipe peer, a verified connection REFRESHES
-    the registration (a replaced instance bumps the version, R31-3), and a
-    failed/mismatched identity can never drive a load — a forged status
-    file alone cannot make the broker serve an instance.
-    """
-    from share.broker_ops import (INSTANCE_PIPE_PREFIX, IcaclsAclChecker,
-                                  TailscaleServiceOps, WindowsHostOps,
-                                  make_instance_call,
-                                  WindowsInstanceVerifier)
-    from share.runtime import ProtectedProjectionWriter
-
-    # R41-2/R44-1: the trust chain is mandatory, and the REAL assembly
-    # refuses to run without explicit security expectations - defaulting
-    # them silently skips identity comparison, and the placeholder SDDL is
-    # NOT the protection to rely on.
-    if verifier is None:
-        if not args.expect_image or not args.expect_owner_sid:
-            raise ValueError(
-                "broker assembly refused: instance identity expectations "
-                "missing (--expect-image/--expect-owner-sid required)")
-        verifier = WindowsInstanceVerifier()
-
-    control_secret = read_control_key(args.key_file)
-    instance_secret = read_control_key(args.instance_key_file)
-    writer = ProtectedProjectionWriter(
-        Path(args.projection_path),
-        acl_checker=acl_checker or IcaclsAclChecker.default(
-            str(Path(args.projection_path))))
-    # R46.5: the registration FILE is only the deployment fact that names
-    # the addressing candidate - read exclusively by the discovery hook.
-    # An unverified candidate can never occupy the trusted registry: it
-    # starts EMPTY and is populated exclusively by on_verified AFTER the
-    # identity verifier accepted the real pipe peer (a forged file then
-    # only produces a pipe name that fails to connect, never a trusted
-    # instance; broker-before-share recovers through the same hook).
-    instances = InstanceRegistry()
-
-    # PID-reuse guard: the creation time observed on the FIRST verified
-    # connection becomes the expectation for every later connection to the
-    # same instance; a different creation time (PID reused by another
-    # process) is a refusal. Retired instances' expectations are dropped on
-    # generation change (instance_call only ever targets the current id),
-    # keeping the cache bounded without removing evidence still in use.
-    creation_by_instance = {}
-
-    def on_verified(instance_id, evidence):
-        if instances.current() != instance_id:
-            # A verified connection from a DIFFERENT instance id is a
-            # generation change: refresh the registration (version bump)
-            # and retire the replaced instance's creation expectation.
-            retired = instances.current()
-            if retired is not None:
-                creation_by_instance.pop(retired, None)
-            instances.register(instance_id)
-
-    diag = BrokerDiag()
-    instance_call = make_instance_call(
-        secret_file=args.instance_key_file,
-        pipe_prefix=getattr(args, "instance_pipe_prefix", None)
-        or INSTANCE_PIPE_PREFIX,
-        verifier=verifier,
-        expect_image=args.expect_image,
-        expect_owner_sid=args.expect_owner_sid,
-        creation_by_instance=creation_by_instance,
-        on_verified=on_verified,
-        kernel_factory=instance_kernel_factory,
-        diag_event=diag.record)
-    registration_path = args.registration_file
-
-    def discover_instance():
-        """R44-2: re-read the CURRENT registration candidate on every
-        attempt (the share may register itself AFTER the broker started,
-        or restart under a new instance id). The candidate only ADDRESSES
-        the connection; the trusted registry advances exclusively through
-        the verifier inside instance_call (on_verified)."""
-        candidate = load_registration(registration_path)
-        if candidate is None:
-            diag.record("registration-read", ok=False,
-                        error_code="registration-absent")
-            return None
-        diag.record("registration-read", ok=True,
-                    instance_id=candidate.get("instance_id"))
-        try:
-            resp = instance_call("instance-status", {},
-                                 candidate["instance_id"])
-        except Exception as exc:  # noqa: BLE001  already diaged in the call
-            diag.record("instance-status", ok=False,
-                        exception_type=type(exc).__name__,
-                        instance_id=candidate.get("instance_id"))
-            raise
-        diag.record("instance-status", ok=bool(resp.get("ok")),
-                    error_code=resp.get("error_code"),
-                    instance_id=candidate.get("instance_id"))
-        if not resp.get("ok"):
-            return None
-        return candidate["instance_id"]
-
-    resolved_host_ops = host_ops or WindowsHostOps(
-        task_name=args.share_task,
-        share_port=getattr(args, "share_port", 8100),
-        # R51.4: the REAL assembly wires the identity expectations into
-        # the host evidence - a missing owner-account config REFUSES
-        # (both forms are required; SID vs DOMAIN\\user stay separate,
-        # the account form is the host-side normalized source).
-        expected_image_path=args.expect_image,
-        expected_owner=_required_host_owner(args),
-        # Read-only host evidence (contract §2.5/§11.2): the limits check
-        # reuses the watchdog's own Get-LimitsState and the fault
-        # evidence is a bounded tail read; every path is deployment
-        # config and None means the evidence is honestly unavailable.
-        run_root=getattr(args, "run_root", None),
-        watchdog_script=getattr(args, "watchdog_script", None),
-        firewall_rule=getattr(args, "firewall_rule", None),
-        share_faults_file=getattr(args, "share_faults_file", None))
-    # The protected maintenance record is persisted by the SERVER layer;
-    # the coordinator is the only writer and calls the sink on every change.
-    # The cell breaks the coordinator -> server construction cycle (the
-    # coordinator exists before the server).
-    maintenance_cell = {}
-
-    def maintenance_sink(record):
-        server = maintenance_cell.get("server")
-        if server is not None:
-            server._set_maintenance(record)
-
-    coordinator = BrokerHostCoordinator(
-        writer=writer, mgmt_secret=control_secret,
-        instance_secret=instance_secret, instances=instances,
-        replay=ReplayRegistry(),
-        host_ops=resolved_host_ops,
-        instance_call=instance_call,
-        discover_instance=discover_instance,
-        diag=diag,
-        leases=MaintenanceLeaseStore(),
-        maintenance=maintenance_sink,
-        # R8-A7: the graceful-close drain window is up to 60 seconds (the
-        # orchestration's drain budget contract); the broker default 5.0s
-        # silently truncated it (S3-R6A3 finding R-S3-1).
-        # The final stop + closure verification get their OWN reserved budget:
-        # a drain window that times out must still stop the host. The numbers
-        # are the SHARED protocol contract (both sides read them; the client's
-        # exchange deadline covers their sum).
-        drain_timeout=DRAIN_WINDOW_SECONDS,
-        stop_timeout=STOP_BUDGET_SECONDS)
-    # The ts-service-control whitelist extension decorates the coordinator:
-    # only the new verb is intercepted, everything else delegates unchanged.
-    coordinator = _TsServiceControlCoordinator(
-        coordinator, ts_service_ops or TailscaleServiceOps())
-    # The host-evidence extension decorates on top: host-verify (read-only
-    # SYSTEM evidence), host-stop (task gate) and host-evidence (read-only
-    # limits/faults) intercept only their own verbs; every management
-    # request the coordinator already serves passes through both decorators
-    # untouched. The decorator shares the SAME WindowsHostOps instance as
-    # the coordinator (one evidence source).
-    coordinator = _HostOpsControlCoordinator(coordinator, resolved_host_ops)
-    server = ManagementPipeServer(
-        coordinator, args.pipe_name, sddl=args.sddl, kernel=kernel,
-        deadline_seconds=args.deadline, state_dir=Path(args.broker_dir),
-        # Contract §6.4: the dispatch budget is a SEPARATE bound (default
-        # 130 s in the CLI) so a slow bounded management action - the
-        # gateway-restart - is not abandoned at the 10 s pipe deadline.
-        dispatch_deadline_seconds=getattr(args, "dispatch_deadline", None))
-    maintenance_cell["server"] = server
-    if maintenance is not None:
-        # Test/deployment seam: seed the protected record before serving
-        # (the coordinator re-adopts it through startup recovery).
-        server.maintenance = dict(maintenance)
-        server._restore_maintenance_lease()
-    return server
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="UM share broker host (SYSTEM scheduled task entry)")
-    parser.add_argument("--broker-dir", required=True,
-                        help="broker state dir (RunRoot\\broker)")
-    parser.add_argument("--key-file", required=True,
-                        help="broker-control-key path")
-    parser.add_argument("--instance-key-file", required=True,
-                        help="instance channel secret (shared with the "
-                             "share instance)")
-    parser.add_argument("--registration-file", required=True,
-                        help="instance-registration.json self-published by "
-                             "the share instance (may be absent = "
-                             "explicitly not ready)")
-    parser.add_argument("--pipe-name", default=r"\\.\pipe\um-share-broker")
-    parser.add_argument("--instance-pipe-prefix",
-                        default=r"\\.\pipe\um-share-instance-",
-                        help="instance channel prefix; experiments MUST pass "
-                             "their own prefix so the two channels can never "
-                             "collide with production")
-    parser.add_argument("--sddl", default=PLANNED_SDDL,
-                        help="management pipe DACL (SDDL, L2-calibrated)")
-    parser.add_argument("--projection-path", required=True,
-                        help="protected projection landing path")
-    parser.add_argument("--share-task", required=True,
-                        help="scheduled task name of the share host")
-    parser.add_argument("--share-port", type=int, default=8100,
-                        help="share listener TCP port (closure evidence "
-                             "also checks for a listener on this port)")
-    parser.add_argument("--expect-image", default=None,
-                        help="FULL image path the instance pipe peer must "
-                             "have (deployment config, not a status file)")
-    parser.add_argument("--expect-owner-sid", default=None,
-                        help="owner SID the instance pipe peer must have")
-    parser.add_argument("--expected-owner-account", default=None,
-                        help="host-side owner expectation in DOMAIN\\user "
-                             "form (assembly refuses without it; NOT "
-                             "interchangeable with the SID form)")
-    parser.add_argument("--deadline", type=float,
-                        default=DEFAULT_DEADLINE_SECONDS)
-    # Contract §6.4/§11.2: the DISPATCH deadline is a separate bound
-    # (the wrapper passes 130 so a bounded gateway-restart is not
-    # abandoned at the 10 s pipe deadline); the read-only host evidence
-    # needs the run root + the watchdog script + the firewall rule name +
-    # the share gateway's fault file. None of these is ever a wire field.
-    parser.add_argument("--dispatch-deadline", type=float, default=130.0,
-                        help="bounded dispatch budget for ONE management "
-                             "cycle (covers a bounded gateway-restart; the "
-                             "default 130 s exceeds the 10 s read deadline)")
-    parser.add_argument("--run-root", default=r"C:\ProgramData\UMShareRun",
-                        help="protected share run root (limits check + fault "
-                             "file location)")
-    parser.add_argument("--watchdog-script", default=None,
-                        help="watchdog-umshare.ps1 path dot-sourced with "
-                             "-FunctionsOnly for the read-only limits check")
-    parser.add_argument("--firewall-rule", default="um-share-outbound-block",
-                        help="share outbound firewall rule display name")
-    parser.add_argument("--share-faults-file", default=None,
-                        help="share-faults.jsonl path (bounded tail read)")
-    args = parser.parse_args(argv)
-
-    server = build_server(args)
-    server._write_status()
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        server.stop()
-    server._write_status()
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

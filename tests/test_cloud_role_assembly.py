@@ -177,8 +177,12 @@ class DeploymentRoleTests(unittest.TestCase):
         self.assertEqual(usagesrv._resolve_port("local", {}), 8001)
         # B0：本地装配只保留 UM 卡片；退役来源卡片不注册。
         names = {spec.name for spec in console_adapters.build_registry()}
-        for name in ("model.catalog", "account.um_status", "share.start"):
+        for name in ("model.catalog", "account.um_status"):
             self.assertIn(name, names)
+        # The retired Windows local share actions are not registered (#33).
+        for absent in ("share.start", "share.stop", "share.estop",
+                        "share.retry_stop"):
+            self.assertNotIn(absent, names)
         for retired in ("qoder.status", "cliproxy.status",
                          "qoderglobal.status", "m365.settings_save"):
             self.assertNotIn(retired, names)
@@ -265,20 +269,11 @@ class CloudAssemblyTests(unittest.TestCase):
             self.assertNotIn(absent, names)
         specs = {spec.name: spec for spec in
                  console_adapters.build_cloud_registry()}
-        # The four layered open/close chain actions need the Windows TS service /
-        # Funnel orchestration. They stay in the catalogue (the console can show
-        # WHY) but NO enabled TS/Funnel action may exist in the cloud role.
-        enabled_names = {name for name, spec in specs.items() if spec.enabled}
-        self.assertFalse(
-            enabled_names & console_adapters.CLOUD_SHARE_ORCH_ACTIONS)
-        for name in sorted(console_adapters.CLOUD_SHARE_ORCH_ACTIONS):
-            self.assertIn(name, specs)
-            self.assertFalse(specs[name].enabled, name)
-            self.assertEqual(
-                specs[name].disabled_reason,
-                console_adapters.CLOUD_SHARE_ORCH_DISABLED_REASON)
-            self.assertIn("Tailscale/Funnel 编排未装配",
-                          specs[name].disabled_reason)
+        # The retired Windows local layered chain actions are NOT in the
+        # cloud catalogue at all (#33).
+        for name in ("share.start", "share.stop", "share.estop",
+                      "share.retry_stop"):
+            self.assertNotIn(name, specs)
         # The remaining share cards are genuinely usable on the cloud.
         for name in ("share.status", "share.diagnostics",
                       "share.backend_login", "share.backend_login_cancel",
@@ -328,40 +323,17 @@ class CloudAssemblyTests(unittest.TestCase):
             specs["service.restart"].resource_fn("share-gateway", {}),
             "share:orchestration")
 
-    def test_cloud_submit_refuses_unassembled_ts_funnel_actions(self):
-        with tempfile.TemporaryDirectory() as directory:
-            manager = OperationManager(
-                os.path.join(directory, "state.sqlite3"),
-                console_adapters.build_cloud_registry(),
-                os.path.join(directory, "locks"))
-            try:
-                for name in sorted(console_adapters.CLOUD_SHARE_ORCH_ACTIONS):
-                    with self.subTest(action=name):
-                        with self.assertRaises(OperationUnavailable) as cm:
-                            manager.submit(name, "share")
-                        self.assertEqual(cm.exception.code, "action_disabled")
-                        self.assertEqual(
-                            cm.exception.reason,
-                            console_adapters.CLOUD_SHARE_ORCH_DISABLED_REASON)
-                # A refused action never creates an operation row.
-                self.assertEqual(manager.list_operations(), [])
-            finally:
-                manager.close()
-
-    def test_local_registry_keeps_the_ts_funnel_chain_enabled(self):
-        # Building the cloud registry first must never mutate the local one.
-        cloud = {spec.name: spec for spec in
-                 console_adapters.build_cloud_registry()}
+    def test_local_registry_has_no_share_actions(self):
+        # The retired Windows local share chain actions are NOT registered
+        # anywhere (#33); the local registry keeps service/account/model cards.
         local = {spec.name: spec for spec in console_adapters.build_registry()}
-        for name in sorted(console_adapters.CLOUD_SHARE_ORCH_ACTIONS):
-            self.assertFalse(cloud[name].enabled, name)
-            self.assertTrue(local[name].enabled, name)
-            self.assertIsNone(local[name].disabled_reason, name)
-        # The local-only public repair cards stay present and enabled.
-        for name in ("share.public_check", "share.public_retry",
-                      "share.repair_limits"):
-            self.assertNotIn(name, cloud)
-            self.assertTrue(local[name].enabled, name)
+        for name in ("share.start", "share.stop", "share.estop",
+                      "share.retry_stop", "share.public_check",
+                      "share.public_retry", "share.repair_limits",
+                      "share.status", "share.diagnostics"):
+            self.assertNotIn(name, local)
+        self.assertIn("service.start", local)
+        self.assertIn("account.um_status", local)
 
     def test_cloud_backend_login_keeps_the_wired_control_channel(self):
         specs = {spec.name: spec for spec in
@@ -552,37 +524,10 @@ class CloudHttpGateTests(unittest.TestCase):
                 self.assertEqual(payload["error"], "capability_not_assembled")
                 self.assertEqual(payload["role"], "cloud")
 
-    def test_cloud_unassembled_chain_action_is_refused_over_http(self):
-        # The action list shows the TS/Funnel chain cards as DISABLED with the
-        # cloud reason, and a submit is refused (403 action_disabled) before any
-        # operation row exists — never a fake success or an unhandled seam error.
-        status, payload = self._request(
-            "GET", "/api/console/actions",
-            {"Host": "127.0.0.1:%d" % self.port})
-        self.assertEqual(status, 200)
-        by_name = {i["action"]: i for i in payload["actions"]}
-        for name in sorted(console_adapters.CLOUD_SHARE_ORCH_ACTIONS):
-            with self.subTest(action=name):
-                self.assertFalse(by_name[name]["enabled"], name)
-                self.assertIn("Tailscale/Funnel 编排未装配",
-                              by_name[name]["disabled_reason"])
-        status, payload = self._request(
-            "POST", "/api/console/operations",
-            {"Host": "127.0.0.1:%d" % self.port},
-            {"action": "share.start", "target": "share"})
-        self.assertEqual(status, 403)
-        self.assertEqual(payload["error"], "action_disabled")
-        self.assertIn("Tailscale/Funnel 编排未装配", payload["reason"])
-        status, payload = self._request(
-            "GET", "/api/console/operations",
-            {"Host": "127.0.0.1:%d" % self.port})
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["operations"], [])
-
     def _isolate_capacity_seams(self):
         """Keep the status read from wiring the real broker in this test."""
         saved = {name: getattr(console_share_actions, name) for name in (
-            "_MAINTENANCE_STATUS", "_BROKER_OPS", "_FUNNEL_OBSERVED")}
+            "_MAINTENANCE_STATUS", "_BROKER_OPS")}
         for name in saved:
             self.addCleanup(setattr, console_share_actions, name, saved[name])
             setattr(console_share_actions, name, None)
@@ -724,57 +669,6 @@ class CloudHttpGateTests(unittest.TestCase):
         self.assertEqual([s["key"] for s in payload["services"]],
                          ["share-gateway"])
 
-    def test_cloud_status_get_never_wires_tailscale_seams(self):
-        """The status facade's lazy self-wiring must follow the cloud role.
-
-        A bare GET /api/console/share-management/status wires the share seams
-        itself (it must not depend on the operations chain having run first).
-        That lazy wiring has to pass the CLOUD flag: a provisioned broker config
-        (the real cloud deployment) would otherwise let production_seams() install
-        the local Tailscale/Funnel seams into a cloud process.
-        """
-        watched = ("_TS_SERVICE_CONTROL", "_TS_SERVICE_STATUS",
-                   "_CONNECTIVITY_OK", "_CONNECTIVITY_STATE",
-                   "_FUNNEL_CONTROL", "_FUNNEL_OBSERVED")
-        saved = {name: getattr(console_share_actions, name)
-                 for name in watched}
-        saved_ops = console_share_actions._BROKER_OPS
-        self.addCleanup(lambda: setattr(
-            console_share_actions, "_BROKER_OPS", saved_ops))
-        for name, value in saved.items():
-            self.addCleanup(setattr, console_share_actions, name, value)
-            setattr(console_share_actions, name, None)
-        console_share_actions._BROKER_OPS = None
-
-        class _Broker:
-            def snapshot(self):
-                return {"name": "fake", "state": "ok"}
-
-            def host_verify(self, check):
-                return BrokerResult.ok({"check": check, "verdict": None,
-                                         "detail": "fake",
-                                         "checked_at": None})
-
-        with mock.patch.object(
-                console_share_production, "_default_broker",
-                return_value=_Broker()), \
-                mock.patch.object(
-                    console_share_production, "production_backend_observe",
-                    return_value={"auth_state": None, "running": None}):
-            status, payload = self._request(
-                "GET", "/api/console/share-management/status",
-                {"Host": "127.0.0.1:%d" % self.port})
-        self.assertEqual(status, 200)
-        # The cloud assembly ran (broker gate + backend observation wired)...
-        self.assertIsNotNone(console_share_actions._BROKER_OPS)
-        # ...but no Tailscale/Funnel seam was installed into this process.
-        for name in watched:
-            self.assertIsNone(getattr(console_share_actions, name), name)
-        self.assertNotIn("gateway_running", payload)
-        self.assertNotIn("funnel_on", payload)
-
-
-# ------------------------------------------------ Linux host ops (pid file)
 class LinuxHostOpsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -697,8 +697,8 @@
         "cloud_runtime"
       ],
       "path": "console/display_proxy.py",
-      "sha256": "2d2043858658e9ebdc2730c4d29259ed7e4355a3a55eda48e2b27758ed49dd1e",
-      "size": 81100
+      "sha256": "a6db652ae717c00ff5b5bc0f4da1cf1c59e32638af61461a57ab3d1e5ca07a16",
+      "size": 81092
     },
     {
       "closures": [
@@ -1058,7 +1058,7 @@
       "size": 46032
     }
   ],
-  "generated_at": "2026-11-13T03:36:30.015994+00:00",
+  "generated_at": "2026-11-13T04:01:52.334762+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",

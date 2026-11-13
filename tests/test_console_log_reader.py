@@ -273,7 +273,6 @@ class ReadEntriesTests(unittest.TestCase):
             self.assertIsNone(by_id["service"]["path"])
             self.assertIsNone(by_id["ledger"]["path"])
             self.assertIsNone(by_id["lifecycle"]["path"])
-            self.assertIsNone(by_id["watch"]["path"])
             self.assertIsNotNone(by_id["gateway"]["path"])
             self.assertIsNotNone(by_id["faults"]["path"])
             self.assertIsNotNone(by_id["broker"]["path"])
@@ -838,11 +837,6 @@ class RegistryInventoryTests(unittest.TestCase):
                 cats["lifecycle"]["path"],
                 str(root / "LocalAppData" / "SelfUseAI" / "ai-gateway"
                     / "share-backend" / "backend-lifecycle.log"))
-            self.assertEqual(
-                cats["watch"]["path"],
-                str(root / "LocalAppData" / "SelfUseAI" / "ai-gateway"
-                    / "watch" / "share-backend-watch.log"))
-            self.assertEqual(cats["watch"]["rotation_index"], 1)
             self.assertEqual(cats["gateway"]["path"],
                              str(run_root / "run" / "live" / "raw.txt"))
             self.assertEqual(cats["faults"]["path"],
@@ -902,9 +896,8 @@ class RegistryInventoryTests(unittest.TestCase):
             share = {c["category"]: c
                      for c in _source(registry, "share")["categories"]}
             self.assertIsNone(chat["watch"]["path"])
-            self.assertIsNone(share["watch"]["path"])
-            resp = read_entries("chat2api", "watch")
-        self.assertEqual(resp["status"], "unconfigured")
+            # The retired share-backend watch script is gone (#33).
+            self.assertNotIn("watch", share)
 
 
 class TimeNormalizationTests(unittest.TestCase):

@@ -178,7 +178,7 @@ class Rev9ShareMaintenanceRegistryTests(unittest.TestCase):
     existing catalog with the frozen param/return schemas (contract §1.2/§10.1)."""
 
     def _specs(self):
-        return {s.name: s for s in console_adapters.build_registry()}
+        return {s.name: s for s in console_adapters.build_cloud_registry()}
 
     def test_four_rev9_actions_registered_enabled(self):
         specs = self._specs()
@@ -246,7 +246,7 @@ class Rev9ShareMaintenanceRegistryTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         manager = OperationManager(
             os.path.join(tmp.name, "state.sqlite3"),
-            console_adapters.build_registry(),
+            console_adapters.build_cloud_registry(),
             os.path.join(tmp.name, "locks"))
         self.addCleanup(manager.close)
         for action, params in (
@@ -270,7 +270,7 @@ class Rev9ShareMaintenanceRegistryTests(unittest.TestCase):
                     manager.submit(action, target="share", params=params)
                 self.assertEqual(caught.exception.code, "invalid_params")
         # The frozen bounds themselves are accepted at submit time.
-        specs = {s.name: s for s in console_adapters.build_registry()}
+        specs = {s.name: s for s in console_adapters.build_cloud_registry()}
         validated = manager._validate_params(
             specs["share.backend_restart"],
             {"lease_s": 60, "drain_budget_s": 600, "poll_interval_s": 10,
@@ -316,7 +316,7 @@ class RetiredSourceRegistryTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         manager = OperationManager(
             os.path.join(tmp.name, "state.sqlite3"),
-            console_adapters.build_registry(),
+            console_adapters.build_cloud_registry(),
             os.path.join(tmp.name, "locks"))
         self.addCleanup(manager.close)
         for action in self.RETIRED:

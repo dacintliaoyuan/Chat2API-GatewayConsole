@@ -4,12 +4,10 @@ The management command layer treats "publish projection" and "start/stop" as
 broker operations. This module provides the offline projection-file broker and
 documents the real deployment boundary:
 
-* The real high-privilege broker is a SYSTEM named-pipe with OS identity ACL and
-  fixed actions; it has NOT been installed in this offline phase. That real
-  broker must be verified in an authorized isolation experiment before any host
-  claim is made (see handoff S0/S4).
-* A DeployBroker without an explicit executor is intentionally fail-closed:
-  start/stop raise BrokerError instead of pretending to control the host.
+* The real high-privilege broker is the POSIX AF_UNIX host entry; it is
+  assembled by ``share.broker_ops.build_linux_server``. The retired Windows
+  named-pipe broker / PowerShell stage adapters are gone with the old local
+  share chain (#33).
 * ``ProjectionFileBroker`` may be used only where a projection file can be
   written by the current process (offline fixtures / a broker-managed writable
   path). It never accepts a client-supplied path; the destination is fixed at
@@ -19,7 +17,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from pathlib import Path
 
 from share.broker_protocol import ProtocolError, parse_projection_payload
@@ -222,109 +219,3 @@ class ProtectedProjectionWriter:
             self._last_written = {"generation": generation,
                                   "fingerprint": fingerprint}
             return fingerprint
-
-
-class DeployBroker:
-    """Deployment broker skeleton for the existing guarded/elevated PowerShell
-    stages.
-
-    No subprocess is ever started unless an ``executor`` callable is supplied by
-    an authorized deployment integration. The callable receives a fixed
-    ``stage`` string (only values in ALLOWED_STAGES) and returns a status dict.
-    This keeps arbitrary commands/paths/scripts out of the broker surface.
-    """
-
-    ALLOWED_STAGES = {"start", "graceful_stop", "emergency_stop", "publish_projection"}
-    name = "deploy"
-
-    def __init__(self, executor=None, mode="real", projection_path=None):
-        self.executor = executor
-        self.mode = mode
-        self.projection_path = Path(projection_path) if projection_path else None
-
-    def _require_executor(self):
-        if self.executor is None:
-            raise BrokerError(
-                "deploy broker is not installed/authorized; no host action attempted")
-
-    def publish(self, projection, terminate_keys=None):
-        # terminate_keys accepted for broker-contract parity (R8-A7); this
-        # file broker performs no instance load, so nothing is terminated.
-        if self.projection_path is None:
-            return None
-        # Real deployments write this through the privileged executor to a
-        # fixed run-copy path; offline callers may use ProjectionFileBroker.
-        # The projection payload is passed through (never discarded) and the
-        # result must include the applied/acked generation to count as applied.
-        self._require_executor()
-        result = self.executor("publish_projection", projection=projection)
-        if isinstance(result, dict):
-            return result
-        return None
-
-    def start(self):
-        self._require_executor()
-        return self.executor("start")
-
-    def graceful_stop(self):
-        self._require_executor()
-        return self.executor("graceful_stop")
-
-    def emergency_stop(self):
-        self._require_executor()
-        return self.executor("emergency_stop")
-
-    def snapshot(self):
-        return {"name": self.name, "mode": self.mode,
-                "executor_installed": self.executor is not None,
-                "state": "deploy-not-invoked"}
-
-
-class PowerShellStageExecutor:
-    """Fixed wrapper for run-deploy-guarded.ps1 stages.
-
-    The path is set at construction (no client-supplied path). Stage names are
-    the existing guarded stages; new host actions are mapped to those exact
-    strings in the deployment layer. This class is for the later authorized
-    integration and is not used by default in this offline phase.
-    """
-
-    def __init__(self, wrapper_ps1: Path, stage_map=None, timeout_ms=120000):
-        self.wrapper_ps1 = Path(wrapper_ps1)
-        self.stage_map = stage_map or {
-            "start": "Start",
-            "graceful_stop": "DrainStop",
-            "emergency_stop": "Stop",
-            "publish_projection": "PublishProjection",
-        }
-        self.timeout_ms = timeout_ms
-
-    def __call__(self, stage, projection=None):
-        if stage not in self.stage_map:
-            raise BrokerError(f"unknown deploy stage: {stage}")
-        ps_stage = self.stage_map[stage]
-        cmd = [
-            "pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-File", str(self.wrapper_ps1), "-Stage", ps_stage,
-        ]
-        if stage == "start":
-            cmd += ["-Mode", "real"]
-        if stage == "publish_projection":
-            # The real deployment layer must write the projection to its fixed
-            # run-copy path and return the share-confirmed generation. Until an
-            # authorized writer exists this stage must not pretend success.
-            if projection is None:
-                raise BrokerError("publish_projection requires projection data")
-            raise BrokerError(
-                "publish_projection needs the authorized elevated projection "
-                "writer; not invoked in this offline phase")
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace",
-                                  timeout=self.timeout_ms / 1000)
-        except subprocess.TimeoutExpired as exc:
-            raise BrokerError(f"deploy stage timed out: {ps_stage}") from exc
-        if proc.returncode != 0:
-            raise BrokerError(
-                f"deploy stage failed ({ps_stage} exit {proc.returncode})")
-        return {"state": "ok", "stage": ps_stage}
