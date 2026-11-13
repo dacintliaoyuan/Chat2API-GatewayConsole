@@ -14,9 +14,8 @@ import { requestsCard } from "./requests";
  *  read's `gateway_running`; a start in flight keeps the button in place with
  *  the operation's own stage note, and only a completed start lets the word
  *  become 停止. An unreadable status is unknown, never a guessed 启动. */
-export const PRIMARY_START = "share.chain_start";
-export const PRIMARY_STOP = "share.chain_stop";
-export const PRIMARY_FORCE = "share.chain_estop";
+export const PRIMARY_START = "service.start";
+export const PRIMARY_STOP = "service.stop";
 
 const TERMINAL_OP = new Set([
   "succeeded",
@@ -33,8 +32,6 @@ export type PrimaryAction = {
   action: typeof PRIMARY_START | typeof PRIMARY_STOP | null;
   disabled: boolean;
   reason: string;
-  /** Ticket #6: only a drain-timed-out stop offers 强制停止. */
-  force: boolean;
 };
 
 function latestChainStart(
@@ -62,21 +59,6 @@ export function stageNote(
   return null;
 }
 
-/** The latest chain stop ended in a drain timeout and no forced stop followed:
- *  only then may the stop dialog offer 强制停止. */
-function stopDrainTimedOut(operations: ReadState<OperationRow[]>): boolean {
-  const read = lastValue(operations);
-  if (!read || read.stale) return false;
-  const latest = read.value
-    .filter(
-      (row) => row.action === PRIMARY_STOP || row.action === PRIMARY_FORCE
-    )
-    .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0];
-  if (!latest || latest.action !== PRIMARY_STOP) return false;
-  if (latest.state !== "succeeded" || !latest.result) return false;
-  return latest.result.state === "drain_timeout";
-}
-
 export function primaryAction(model: CloudModel): PrimaryAction {
   const statusRead = lastValue(model.status);
   const current = statusRead && !statusRead.stale ? statusRead.value : null;
@@ -88,10 +70,6 @@ export function primaryAction(model: CloudModel): PrimaryAction {
     current && typeof current.gateway_running === "boolean"
       ? current.gateway_running
       : null;
-  // A drain timeout already stopped the gateway but left in-flight requests
-  // unconfirmed. The primary action must stay 停止 so its confirm can offer
-  // 强制停止 even though `gateway_running` has already flipped to false.
-  const force = stopDrainTimedOut(model.operations);
   // A current status read that confirms the service is running is completion
   // evidence, so an older start row still marked running cannot keep 启动中.
   if (running === true) {
@@ -103,7 +81,6 @@ export function primaryAction(model: CloudModel): PrimaryAction {
       action: PRIMARY_STOP,
       disabled: !ready.ok,
       reason: ready.ok ? "" : ready.reason,
-      force,
     };
   }
   if (starting || pending)
@@ -114,20 +91,7 @@ export function primaryAction(model: CloudModel): PrimaryAction {
       action: null,
       disabled: true,
       reason: "启动已受理，等待后端完成；动作受理不是认证成功",
-      force: false,
     };
-  if (force) {
-    const ready = model.writeReady();
-    return {
-      kind: "stop",
-      word: "停止",
-      stage: null,
-      action: PRIMARY_STOP,
-      disabled: !ready.ok,
-      reason: ready.ok ? "" : ready.reason,
-      force: true,
-    };
-  }
   if (running === null)
     return {
       kind: "start",
@@ -136,7 +100,6 @@ export function primaryAction(model: CloudModel): PrimaryAction {
       action: null,
       disabled: true,
       reason: "服务状态未知，无法判断启动还是停止；请刷新后重试",
-      force: false,
     };
   const ready = model.writeReady();
   return {
@@ -146,7 +109,6 @@ export function primaryAction(model: CloudModel): PrimaryAction {
     action: PRIMARY_START,
     disabled: !ready.ok,
     reason: ready.ok ? "" : ready.reason,
-    force: false,
   };
 }
 
@@ -170,8 +132,8 @@ function advancedFold(model: CloudModel): string {
   return `<details class="cloud-advanced" data-cloud-advanced data-cloud-evidence>
     <summary>高级维护（分层检查与重新认证）</summary>
     <div class="cloud-actions-row">
-      ${model.actionButton("share.status", "share", "分层检查（只读）", "btn btn-outline btn-sm")}
-      ${model.actionButton("share.backend_reauthenticate", "share", "重新认证 UM…", "btn btn-tonal btn-sm")}
+      ${model.actionButton("share.diagnostics", "share", "分层诊断（只读）", "btn btn-outline btn-sm")}
+      ${model.actionButton("share.gateway_restart", "share", "重启分享入口 8100", "btn btn-tonal btn-sm")}
     </div>
   </details>`;
 }

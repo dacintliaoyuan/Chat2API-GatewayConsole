@@ -30,9 +30,7 @@ _SUMMARY_TMP = tempfile.TemporaryDirectory(prefix="share-metering-summary-")
 _SUMMARY_DIR = Path(_SUMMARY_TMP.name)
 _ATTRIBUTION_TMP = tempfile.TemporaryDirectory(prefix="share-metering-key-")
 _REDIRECTED_ENV = {
-    "QODER_USAGE_LOG": str(_SUMMARY_DIR / "usage.jsonl"),
     "CHAT2API_USAGE_LOG": str(_SUMMARY_DIR / "usage-chat2api.jsonl"),
-    "M365_USAGE_LOG": str(_SUMMARY_DIR / "usage-m365.jsonl"),
     "DSH_LEDGER_SNAPSHOT_FILE": str(_SUMMARY_DIR / "dsh.json"),
     "USAGE_SESSION_CODE_FILE": str(_SUMMARY_DIR / "session-code"),
     "USAGE_CONTROL_TOKEN_FILE": str(_SUMMARY_DIR / "control-token"),

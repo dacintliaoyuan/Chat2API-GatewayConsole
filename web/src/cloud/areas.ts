@@ -2,12 +2,12 @@ import { actionLabel } from "../console/operation-feedback";
 
 /** Cloud names for the operations this console submits (target-aware). */
 export function opLabel(action: string, target: string): string {
-  if (action === "share.chain_start") return "启动 API 服务";
-  if (action === "share.chain_stop") return "停止 API 服务";
-  if (action === "share.chain_estop") return "强制停止 API 服务";
-  if (action === "share.backend_login") return "重新登录 UM";
-  if (action === "share.backend_reauthenticate") return "重新认证 UM";
+  if (action === "service.start") return "启动 API 服务";
+  if (action === "service.stop") return "停止 API 服务";
+  if (action === "service.restart") return "重启 API 服务";
+  if (action === "account.login") return "登录 UM";
   if (action === "share.status") return "分层检查 API 服务";
+  if (action === "share.diagnostics") return "分层诊断";
   if (action === "share.key_create") return "新建 API Key";
   if (action === "share.key_update") return "更新 API Key";
   if (action === "share.key_rotate") return "轮换 API Key";

@@ -34,8 +34,6 @@ assert.equal(
 assert.equal(fixture.metadata.sourceHashEncoding, "utf8-lf");
 // Mirrors the generator's `names` (contract §10.2): the newly published action
 // shapes come from console/share_actions.py / console/share_production.py (Rev9).
-// The share_maintenance supervision segment is not source-hashed by contract, so
-// its generator (share/backend_supervision.py) is deliberately not listed here.
 const sourceNames = [
   "model_sync/sync.py",
   "model_sync/sync_core.py",

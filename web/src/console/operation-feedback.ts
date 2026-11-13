@@ -95,10 +95,7 @@ export function actionLabel(action: string): string {
     "account.um_status": "UM 认证状态",
     "account.um_verify": "核验登录是否有效",
     "share.status": "读取分享状态",
-    "share.backend_login": "启动 / 按需登录 8110",
     "share.diagnostics": "分层诊断",
-    "share.backend_reauthenticate": "仅重新认证 8110",
-    "share.backend_restart": "仅重启运行中的 8110",
     "share.gateway_restart": "仅重启 8100",
   };
   return CN_ACTION[action] ?? action;
@@ -138,7 +135,7 @@ export function summarizeResult(result: Record<string, unknown>): string {
 }
 
 /** Recovery follows the failed layer; a broker failure must not send the user
- *  through another 8110 login before the restricted control channel is usable. */
+ *  through another login before the restricted control channel is usable. */
 export function shareRecoveryHint(action: string, code: string): string {
   if (!action.startsWith("share.")) return "";
   if (
@@ -149,12 +146,9 @@ export function shareRecoveryHint(action: string, code: string): string {
       "deadline_exceeded",
     ].includes(code)
   ) {
-    return "先恢复受限后台：确认 um-share-broker 服务与 broker 控制通道可用，再重新读取状态与分层状态；再按需登录 8110、开启分享";
+    return "先恢复受限后台：确认 um-share-broker 服务与 broker 控制通道可用，再重新读取状态与分层状态；再按需登录、开启分享";
   }
-  return action === "share.backend_restart" &&
-    code === "share_backend_not_running"
-    ? "请点“启动 / 按需登录 8110”，检查认证并在需要时启动登录"
-    : "";
+  return "";
 }
 
 /** True while the entry should occupy a visible notice slot. */

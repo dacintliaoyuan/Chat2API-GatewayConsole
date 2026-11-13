@@ -655,8 +655,8 @@ def _cloud_service_resource(action):
 def build_cloud_registry():
     """Explicit cloud role registry: ONLY the UM share stack.
 
-    The non-UM cards (model_sync / zcode) and the retired Windows local
-    share chain are NOT assembled: this factory never imports their modules.
+    The retired non-UM cards and the retired Windows local share chain are
+    NOT assembled: this factory never imports their modules.
     Real service start/stop/restart drive the Linux pid-file adapter for
     ``share-gateway`` only.
     """

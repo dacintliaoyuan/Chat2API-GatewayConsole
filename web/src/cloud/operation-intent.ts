@@ -367,76 +367,13 @@ export function opGroup(state: string): OpGroup {
   return "unconfirmed";
 }
 
-/** D18-10: one whole-chain lifecycle result. `waiting_login` is a HUMAN state,
- *  not a success (the dedicated 8110 stays up and the operator retries after
- *  finishing UM SSO/MFA). A timed-out drain is a forced stop, never a normal
- *  close. The backend's own note stays verbatim. */
-export function chainOutcome(op: OperationRow): Outcome {
-  const result = isRecord(op.result) ? op.result : null;
-  const state = typeof result?.state === "string" ? result.state : null;
-  const note = typeof result?.note === "string" ? result.note : "";
-  const layers = isRecord(result?.layers) ? result.layers : null;
-  const layerText = layers
-    ? ["gateway", "share_backend"]
-        .map((key) =>
-          typeof layers[key] === "string" ? `${key}=${layers[key]}` : ""
-        )
-        .filter(Boolean)
-        .join(" · ")
-    : "";
-  const detail = clip(
-    [note, layerText].filter(Boolean).join("；") || "后端未返回简短结果"
-  );
-  if (op.action === "share.chain_start") {
-    if (state === "running")
-      return { tone: "ok", word: "整链已启动", text: detail };
-    if (state === "waiting_login") {
-      return {
-        tone: "warn",
-        word: "等待本人登录/MFA",
-        text: clip(
-          [note, "不是成功：完成 UM 登录/MFA 后重新启动整链"]
-            .filter(Boolean)
-            .join("；")
-        ),
-      };
-    }
-    return { tone: "err", word: "整链启动失败", text: detail };
-  }
-  if (op.action === "share.chain_stop") {
-    if (state === "stopped")
-      return { tone: "ok", word: "整链已停止", text: detail };
-    if (state === "drain_timeout")
-      return {
-        tone: "warn",
-        word: "排空超时 · 已强制停止",
-        text: clip(
-          [note, "在途请求未确认结束；可用强制停止立即取消在途"]
-            .filter(Boolean)
-            .join("；")
-        ),
-      };
-    return { tone: "err", word: "整链停止未全部确认", text: detail };
-  }
-  if (state === "stopped")
-    return { tone: "ok", word: "整链已强制停止", text: detail };
-  return { tone: "err", word: "整链强制停止未全部确认", text: detail };
-}
-
 /** The operation's real outcome. A login trigger is never "已完成" while the
  *  auth read face has not confirmed `valid`. */
 export function operationOutcome(op: OperationRow): Outcome {
   const state = opStateWord(op.state);
   if (op.state === "failed") {
-    if (
-      (op.action === "share.backend_login" ||
-        op.action === "share.backend_reauthenticate") &&
-      isRecord(op.result)
-    ) {
+    if (op.action === "account.login" && isRecord(op.result)) {
       return loginOutcome(op.result);
-    }
-    if (op.action.startsWith("share.chain_") && isRecord(op.result)) {
-      return chainOutcome(op);
     }
     const text = errorText(op);
     const hint = CONTENTION_HINT[op.error?.code ?? ""];
@@ -459,14 +396,8 @@ export function operationOutcome(op: OperationRow): Outcome {
   }
   if (op.state !== "succeeded")
     return { tone: state.tone, word: state.word, text: "等待后端结果" };
-  if (
-    op.action === "share.backend_login" ||
-    op.action === "share.backend_reauthenticate"
-  ) {
+  if (op.action === "account.login") {
     return loginOutcome(op.result);
-  }
-  if (op.action.startsWith("share.chain_") && isRecord(op.result)) {
-    return chainOutcome(op);
   }
   if (op.action === "share.status" && isRecord(op.result)) {
     const auth = isRecord(op.result.backend_auth)
@@ -561,10 +492,7 @@ export function lastAuthObservation(
       source = "status";
       error = typeof auth.error === "string" && auth.error ? auth.error : null;
       recovery = isRecord(auth.recovery) ? auth.recovery : null;
-    } else if (
-      op.action === "share.backend_login" ||
-      op.action === "share.backend_reauthenticate"
-    ) {
+    } else if (op.action === "account.login") {
       if (!isRecord(op.result)) continue;
       state = typeof op.result.state === "string" ? op.result.state : null;
       label =
@@ -572,7 +500,7 @@ export function lastAuthObservation(
           ? op.result.label
           : null;
       at = epochMs(op.finished_at ?? op.created_at);
-      source = op.action === "share.backend_login" ? "login" : "reauth";
+      source = "login";
     } else {
       continue;
     }
@@ -596,17 +524,13 @@ export function lastAuthObservation(
   return best?.observation ?? null;
 }
 
-/** The newest login or re-auth operation, for the services card's own line. */
+/** The newest login operation, for the services card's own line. */
 export function lastLoginOperation(
   operations: readonly OperationRow[]
 ): OperationRow | null {
   return (
     operations
-      .filter(
-        (op) =>
-          op.action === "share.backend_login" ||
-          op.action === "share.backend_reauthenticate"
-      )
+      .filter((op) => op.action === "account.login")
       .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0] ?? null
   );
 }

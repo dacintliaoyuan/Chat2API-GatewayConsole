@@ -194,7 +194,7 @@ export function startPreview(
     })
   );
   // Readings per scenario: 「需处理」 has one unparsable day; 「服务停止」 has
-  // no usable readings. Cost/price fields were retired with #30.
+  // no usable readings.
   const bucket = (m: number, i: number): UmBucket => {
     const r = raw[m][i];
     if (scenario === "attention" && m === 1 && i === 25) {

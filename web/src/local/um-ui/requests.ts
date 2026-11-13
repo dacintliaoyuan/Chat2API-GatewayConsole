@@ -149,7 +149,7 @@ function recordsHtml(r: UmRequests, ui: RequestsUi): string {
   // parts change display keeps its semantics only through them.
   return `<section class="card um-req" aria-label="请求记录">${filters}${meta}
     <div class="um-table-scroll"><table class="data-table um-req-table" role="table">
-      <thead><tr role="row"><th scope="col" role="columnheader">时间</th><th scope="col" role="columnheader">模型</th><th scope="col" role="columnheader">结果</th><th scope="col" class="num" role="columnheader">输入 / 输出 Token</th><th scope="col" class="num" role="columnheader">参考费用</th><th scope="col" class="num" role="columnheader">耗时</th><th scope="col" class="num" role="columnheader">速度</th></tr></thead>
+      <thead><tr role="row"><th scope="col" role="columnheader">时间</th><th scope="col" role="columnheader">模型</th><th scope="col" role="columnheader">结果</th><th scope="col" class="num" role="columnheader">输入 / 输出 Token</th><th scope="col" class="num" role="columnheader">耗时</th><th scope="col" class="num" role="columnheader">速度</th></tr></thead>
       <tbody>${body}</tbody></table></div>
     ${moreButton("records", earlier, "data-um-earlier", page, ui)}</section>`;
 }
@@ -172,7 +172,7 @@ function rowHtml(
     <td class="num" role="cell" data-label="耗时">${readingHtml(row.durationMs, duration, true)}</td>
     <td class="num" role="cell" data-label="速度">${readingHtml(row.speed, speed, true)}</td></tr>`;
   if (!open) return main;
-  return `${main}<tr class="um-req-detail" id="${id}" role="row"><td colspan="7" role="cell">${detailHtml(row, r, ui)}</td></tr>`;
+  return `${main}<tr class="um-req-detail" id="${id}" role="row"><td colspan="6" role="cell">${detailHtml(row, r, ui)}</td></tr>`;
 }
 
 function detailHtml(row: UmRequestRow, r: UmRequests, ui: RequestsUi): string {

@@ -12,24 +12,9 @@
     "role": "cloud",
     "services": [
      "share"
-    ],
-    "excluded": [
-     "qoder",
-     "chat2api",
-     "m365",
-     "dsh"
-    ],
-    "note": "云端角色只装配 UM 分享：不读取本地私人账本、不探测 Qoder/CLIProxy/model_sync；分享用量见 GET /api/console/share-usage"
+    ]
    },
-   "sources": {
-    "priceMeta": {
-     "pricesFound": true,
-     "checkedAt": "2026-10-27",
-     "checkedAgeDays": 4,
-     "checkedStale": false,
-     "overrideFound": false
-    }
-   },
+   "sources": {},
    "peak": {
     "enabled": true,
     "effectiveAt": "2026-08-01",
@@ -46,40 +31,7 @@
     "weekendOffpeak": true,
     "note": "高峰按价表 peak 子档计价；北京时间周六/周日全天谷价（与分享计价同一价目表）"
    },
-   "priceVersions": {
-    "versioned": true,
-    "invalidCount": 0,
-    "current": {
-     "versionId": "2026-10-27T10:00:00+08:00",
-     "effectiveAt": "2026-10-27T10:00:00+08:00",
-     "exchangeRate": 7.1,
-     "checkedAt": "2026-10-27",
-     "checkedStale": false
-    },
-    "versions": [
-     {
-      "versionId": "1970-01-01",
-      "effectiveAt": "1970-01-01T00:00:00Z",
-      "exchangeRate": 7.2,
-      "checkedAt": "2026-10-08",
-      "checkedStale": false
-     },
-     {
-      "versionId": "2026-10-27T10:00:00+08:00",
-      "effectiveAt": "2026-10-27T10:00:00+08:00",
-      "exchangeRate": 7.1,
-      "checkedAt": "2026-10-27",
-      "checkedStale": false
-     }
-    ],
-    "note": "逐条按记录时刻取当时生效版本段的价目与汇率"
-   },
    "services": {},
-   "qoderQuota": {
-    "cn": null,
-    "global": null,
-    "note": "云端角色未装配 Qoder 探测（不访问 8095/8097）"
-   },
    "dsh": {
     "url": null,
     "note": "云端角色未装配 DSH 快照读取"
@@ -172,56 +124,6 @@
      "param_schema": {}
     },
     {
-     "action": "share.backend_login",
-     "enabled": true,
-     "disabled_reason": null,
-     "cancelable": true,
-     "description": "登录分享专用后端（触发独立 profile 浏览器 UM 登录）",
-     "param_schema": {}
-    },
-    {
-     "action": "share.backend_reauthenticate",
-     "enabled": true,
-     "disabled_reason": null,
-     "cancelable": true,
-     "description": "仅重新认证分享专用后端 8110（不冷启动、不重启进程、不绕过人工认证）",
-     "param_schema": {}
-    },
-    {
-     "action": "share.backend_restart",
-     "enabled": true,
-     "disabled_reason": null,
-     "cancelable": true,
-     "description": "重启分享专用后端 8110（单层：暂停 8100 接收→有界排空→重启→恢复接收；不动 8100 实例与私人 8000）",
-     "param_schema": {
-      "drain_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "poll_interval_s": {
-       "type": "int",
-       "min": 1,
-       "max": 10
-      },
-      "stop_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 120
-      },
-      "start_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 180
-      },
-      "lease_s": {
-       "type": "int",
-       "min": 60,
-       "max": 600
-      }
-     }
-    },
-    {
      "action": "share.diagnostics",
      "enabled": true,
      "disabled_reason": null,
@@ -230,50 +132,11 @@
      "param_schema": {}
     },
     {
-     "action": "share.estop",
-     "enabled": false,
-     "disabled_reason": "云端直连 HTTPS：Tailscale/Funnel 编排未装配",
-     "cancelable": true,
-     "description": "UM 分享紧急停止（立即撤入口，不排空）",
-     "param_schema": {
-      "poll_interval_s": {
-       "type": "int",
-       "min": 1,
-       "max": 10
-      },
-      "ts_confirm_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "connectivity_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "backend_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "drain_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "backend_confirm_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      }
-     }
-    },
-    {
      "action": "share.gateway_restart",
      "enabled": true,
      "disabled_reason": null,
      "cancelable": true,
-     "description": "重启分享入口 8100（单层：经受限 broker 宿主协议；不动 8110 实例）",
+     "description": "重启分享入口 8100（单层：经受限 broker 宿主协议；不动 8100 实例）",
      "param_schema": {
       "restart_budget_s": {
        "type": "int",
@@ -283,170 +146,11 @@
      }
     },
     {
-     "action": "share.retry_stop",
-     "enabled": false,
-     "disabled_reason": "云端直连 HTTPS：Tailscale/Funnel 编排未装配",
-     "cancelable": true,
-     "description": "UM 分享残留关闭重试（按剩余步骤）",
-     "param_schema": {
-      "poll_interval_s": {
-       "type": "int",
-       "min": 1,
-       "max": 10
-      },
-      "ts_confirm_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "connectivity_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "backend_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "drain_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "backend_confirm_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "step_interval_ms": {
-       "type": "int",
-       "min": 1,
-       "max": 60000
-      }
-     }
-    },
-    {
-     "action": "share.start",
-     "enabled": false,
-     "disabled_reason": "云端直连 HTTPS：Tailscale/Funnel 编排未装配",
-     "cancelable": true,
-     "description": "UM 分享开启链（TS 服务→连接→后端→Funnel）",
-     "param_schema": {
-      "poll_interval_s": {
-       "type": "int",
-       "min": 1,
-       "max": 10
-      },
-      "ts_confirm_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "connectivity_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "backend_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "drain_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "backend_confirm_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "backend_auth_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      }
-     }
-    },
-    {
      "action": "share.status",
      "enabled": true,
      "disabled_reason": null,
      "cancelable": true,
      "description": "UM 分享分层状态观察（只读）",
-     "param_schema": {}
-    },
-    {
-     "action": "share.stop",
-     "enabled": false,
-     "disabled_reason": "云端直连 HTTPS：Tailscale/Funnel 编排未装配",
-     "cancelable": true,
-     "description": "UM 分享正常关闭链（撤入口→排空→后端→TS）",
-     "param_schema": {
-      "poll_interval_s": {
-       "type": "int",
-       "min": 1,
-       "max": 10
-      },
-      "ts_confirm_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "connectivity_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "backend_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "drain_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      },
-      "backend_confirm_budget_s": {
-       "type": "int",
-       "min": 1,
-       "max": 600
-      }
-     }
-    },
-    {
-     "action": "share.chain_start",
-     "enabled": true,
-     "disabled_reason": null,
-     "cancelable": false,
-     "description": "启动整条 API 链（8110 运行→有界认证等待→8100 三证启动→公网边缘只读核对）",
-     "param_schema": {}
-    },
-    {
-     "action": "share.chain_stop",
-     "enabled": true,
-     "disabled_reason": null,
-     "cancelable": false,
-     "description": "普通停止整条 API 链（先拒新请求，有界等待在途；排空超时明确显示）",
-     "param_schema": {}
-    },
-    {
-     "action": "share.chain_estop",
-     "enabled": true,
-     "disabled_reason": null,
-     "cancelable": false,
-     "description": "强制停止整条 API 链（立即取消在途请求并停 8110）",
-     "param_schema": {}
-    },
-    {
-     "action": "share.backend_login_cancel",
-     "enabled": true,
-     "disabled_reason": null,
-     "cancelable": false,
-     "description": "取消本轮登录（只结束本轮并清理浏览器；不停止服务）",
      "param_schema": {}
     }
    ]
@@ -475,7 +179,6 @@
      ],
      "result": {
       "layers": {
-       "share_backend": "running",
        "ts_service": "unavailable",
        "connectivity": "unavailable",
        "backend": "running",
@@ -552,7 +255,6 @@
      ],
      "result": {
       "layers": {
-       "share_backend": "running",
        "ts_service": "unavailable",
        "connectivity": "unavailable",
        "backend": "running",
@@ -591,215 +293,6 @@
      "idempotency_key": null
     }
    ]
-  }
- },
- "/api/console/prices": {
-  "status": 200,
-  "body": {
-   "ok": true,
-   "checkedAt": "2026-10-27",
-   "exchangeRate": 7.1,
-   "peak": {
-    "enabled": true,
-    "effectiveAt": "2026-08-01T00:00:00Z",
-    "windows": [
-     {
-      "start": 1,
-      "end": 4
-     },
-     {
-      "start": 6,
-      "end": 10
-     }
-    ]
-   },
-   "models": {
-    "deepseek-v4-flash": {
-     "cacheHit": 0.007,
-     "cacheMiss": 0.25,
-     "output": 0.75,
-     "offPeak": {
-      "cacheHit": 0.007,
-      "cacheMiss": 0.25,
-      "output": 0.75
-     },
-     "peak": {
-      "cacheHit": 0.014,
-      "cacheMiss": 0.5,
-      "output": 1.5
-     }
-    }
-   },
-   "providers": {
-    "z-ai": {
-     "models": {
-      "glm-5.3-flash": {
-       "input": 0.15,
-       "cachedInput": 0.03,
-       "output": 0.5,
-       "billingMode": "flat"
-      }
-     }
-    },
-    "alibaba": {
-     "models": {
-      "qwen3.5-397b-a17b": {
-       "input": 0.6,
-       "cachedInput": 0.06,
-       "output": 3.6,
-       "billingMode": "flat"
-      }
-     }
-    },
-    "google": {
-     "models": {
-      "gemma-4-31b-it": {
-       "unpriced": true,
-       "billingMode": "flat",
-       "notes": "目录未公布单价：无价不标价（夹具示例）"
-      }
-     }
-    }
-   },
-   "versions": [
-    {
-     "versionId": "1970-01-01",
-     "effectiveAt": "1970-01-01T00:00:00Z",
-     "checkedAt": "2026-10-08",
-     "exchangeRate": 7.2,
-     "peak": {
-      "enabled": true,
-      "effectiveAt": "2026-08-01T00:00:00Z",
-      "windows": [
-       {
-        "start": 1,
-        "end": 4
-       },
-       {
-        "start": 6,
-        "end": 10
-       }
-      ]
-     },
-     "models": {
-      "deepseek-v4-flash": {
-       "cacheHit": 0.007,
-       "cacheMiss": 0.22,
-       "output": 0.66,
-       "offPeak": {
-        "cacheHit": 0.007,
-        "cacheMiss": 0.22,
-        "output": 0.66
-       },
-       "peak": {
-        "cacheHit": 0.014,
-        "cacheMiss": 0.44,
-        "output": 1.32
-       }
-      }
-     },
-     "providers": {
-      "z-ai": {
-       "models": {
-        "glm-5.3-flash": {
-         "input": 0.15,
-         "cachedInput": 0.03,
-         "output": 0.5,
-         "billingMode": "flat"
-        }
-       }
-      },
-      "alibaba": {
-       "models": {
-        "qwen3.5-397b-a17b": {
-         "input": 0.6,
-         "cachedInput": 0.06,
-         "output": 3.6,
-         "billingMode": "flat"
-        }
-       }
-      },
-      "google": {
-       "models": {
-        "gemma-4-31b-it": {
-         "unpriced": true,
-         "billingMode": "flat",
-         "notes": "目录未公布单价：无价不标价（夹具示例）"
-        }
-       }
-      }
-     }
-    },
-    {
-     "versionId": "2026-10-27T10:00:00+08:00",
-     "effectiveAt": "2026-10-27T10:00:00+08:00",
-     "checkedAt": "2026-10-27",
-     "exchangeRate": 7.1,
-     "peak": {
-      "enabled": true,
-      "effectiveAt": "2026-08-01T00:00:00Z",
-      "windows": [
-       {
-        "start": 1,
-        "end": 4
-       },
-       {
-        "start": 6,
-        "end": 10
-       }
-      ]
-     },
-     "models": {
-      "deepseek-v4-flash": {
-       "cacheHit": 0.007,
-       "cacheMiss": 0.25,
-       "output": 0.75,
-       "offPeak": {
-        "cacheHit": 0.007,
-        "cacheMiss": 0.25,
-        "output": 0.75
-       },
-       "peak": {
-        "cacheHit": 0.014,
-        "cacheMiss": 0.5,
-        "output": 1.5
-       }
-      }
-     },
-     "providers": {
-      "z-ai": {
-       "models": {
-        "glm-5.3-flash": {
-         "input": 0.15,
-         "cachedInput": 0.03,
-         "output": 0.5,
-         "billingMode": "flat"
-        }
-       }
-      },
-      "alibaba": {
-       "models": {
-        "qwen3.5-397b-a17b": {
-         "input": 0.6,
-         "cachedInput": 0.06,
-         "output": 3.6,
-         "billingMode": "flat"
-        }
-       }
-      },
-      "google": {
-       "models": {
-        "gemma-4-31b-it": {
-         "unpriced": true,
-         "billingMode": "flat",
-         "notes": "目录未公布单价：无价不标价（夹具示例）"
-        }
-       }
-      }
-     }
-    }
-   ],
-   "checkedStale": false
   }
  },
  "/api/console/share-management/status": {
@@ -2175,49 +1668,6 @@
      "unknownResult": 2
     }
    }
-  }
- },
- "/api/console/share-management/public": {
-  "status": 200,
-  "body": {
-   "available": true,
-   "version": 1,
-   "checked_at": 1793413200.412,
-   "snapshot": null,
-   "events": [],
-   "events_truncated": false,
-   "events_unreadable": false,
-   "budget": {
-    "unreadable": false,
-    "reason": null,
-    "bootstrap": true,
-    "window_s": 1800,
-    "mapping_attempts_utc": [],
-    "ts_restarts_utc": [],
-    "service_starts_utc": [],
-    "mapping_used": 0,
-    "mapping_limit": 2,
-    "ts_restart_used": 0,
-    "ts_restart_limit": 1,
-    "service_start_used": 0,
-    "service_start_limit": 3,
-    "mapping_next_eligible_at_utc": null,
-    "ts_restart_next_eligible_at_utc": null,
-    "service_start_next_eligible_at_utc": null
-   },
-   "cancel": {
-    "cancelled": false,
-    "reason": null
-   },
-   "unreadable": false,
-   "reason": null,
-   "state_file": "share-public-state.json"
-  }
- },
- "/api/console/share-management/control-status": {
-  "status": 200,
-  "body": {
-   "responsive": true
   }
  },
  "/api/console/usage-tokens": {

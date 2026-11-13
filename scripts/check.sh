@@ -17,6 +17,7 @@ run() {
 
 run python -m compileall -q chat2api . -x '(^|/)(node_modules|web/node_modules|\.git)/'
 run python scripts/check_share_names.py
+run python scripts/check_retired_features.py
 run node web/scripts/backend-contract/check-generated.mjs
 run git -c core.whitespace=cr-at-eol diff --cached --check
 run git -c core.whitespace=cr-at-eol diff --check

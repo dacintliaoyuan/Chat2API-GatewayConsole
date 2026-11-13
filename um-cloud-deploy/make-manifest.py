@@ -50,7 +50,7 @@ STATIC_ROOTS = [
 
 # Modules the cloud role actually imports (directly or through the cloud
 # console registry).  This is deliberately narrower than the static superset:
-# Qoder / CLIProxy / model_sync / zcode / Windows probes are NOT here.
+# The retired source/consumer branches and Windows probes are NOT here.
 CLOUD_RUNTIME = [
     "usagesrv.py",
     "console/tailnet.py",
@@ -93,7 +93,7 @@ DYNAMIC_MODULES = {
 # (`.mimosa`) and test caches rewrite them on this machine, so hashing them would
 # change the manifest without any change to the release bytes.
 LOCAL_STATE_DIRS = {"__pycache__", ".mimosa", ".pytest_cache", ".mypy_cache",
-                    ".ruff_cache", ".zcode"}
+                    ".ruff_cache"}
 
 SKIP_DIRS = {"tests", "tools", "tmp", "output", "data", "web", "um-cloud-deploy",
              ".git"} | LOCAL_STATE_DIRS
@@ -121,7 +121,7 @@ def _module_map(root: Path) -> dict[str, Path]:
     # ``ModuleNotFoundError: No module named 'shared'``.  The package
     # initializer is registered under ``shared/__init__`` and resolved through
     # ``_resolve`` (a bare ``shared`` maps there).
-    for package in ("shared", "console", "share", "model_sync", "zcode", "app"):
+    for package in ("shared", "console", "share", "model_sync", "app"):
         directory = root / package
         if directory.is_dir():
             for path in sorted(directory.glob("*.py")):
@@ -345,7 +345,7 @@ def _build(args) -> dict:
     static = _closure(root, STATIC_ROOTS)
     # The cloud runtime is the EXPLICIT assembly list, not the transitive AST
     # closure of the static superset: following every lazy import would pull the
-    # Windows-only Qoder/CLIProxy/model_sync branches back in.
+    # Windows-only non-UM branches back in.
     cloud = sorted(CLOUD_RUNTIME)
     if not set(cloud).issubset(set(static)):
         missing = sorted(set(cloud) - set(static))

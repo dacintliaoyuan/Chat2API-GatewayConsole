@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-usagesrv — AI 网关费用统计聚合服务（127.0.0.1:8001）。
+usagesrv — AI 网关原始用量聚合服务（127.0.0.1:8001）。
 
 B0（2026-11-01）：默认装配只保留 UM 主链（chat2api 8000）与其必要的
 记账/日志/健康配套。退役来源不再被探测、启动或读入默认汇总；历史账本
@@ -542,9 +542,8 @@ def _build_cloud_summary():
         "assembly": {
             "role": ROLE_CLOUD,
             "services": ["share"],
-            "excluded": ["qoder", "chat2api", "m365", "dsh"],
-            "note": "云端角色只装配 UM 分享：不读取本地私人账本、不探测 Qoder/"
-                    "CLIProxy/model_sync；分享用量见 GET /api/console/share-usage",
+            "note": "云端角色只装配 UM 分享：不读取本地私人账本；"
+                    "分享用量见 GET /api/console/share-usage",
         },
         # 空 services 是诚实的「本部署未聚合私人账本」：前端显示缺少服务
         # 聚合的错误，而不是把「没读取」折成 0 请求。
@@ -769,9 +768,9 @@ _console_status_cache = {"at": 0.0, "value": None}
 def get_console_manager():
     """Lazily build the console operation manager (never at import time).
 
-    Cloud role: ONLY the UM share registry is assembled (no
-    model_sync/zcode card or handler), and the share seams are wired for the
-    Linux deployment (TS/Funnel stay unwired).
+    Cloud role: ONLY the UM share registry is assembled (no retired
+    non-UM card or handler), and the share seams are wired for the Linux
+    deployment.
 
     Local role (B0, 2026-11-01): the UM registry only — no non-UM action
     module is imported.
@@ -3037,8 +3036,8 @@ class Handler(BaseHTTPRequestHandler):
         ok, how = True, "local"
         rest = [s for s in parsed.path.split("/") if s][2:]  # api/console/...
         if CLOUD_ROLE:
-            # 云端角色只装配 UM 分享：非 UM 的读面（model_sync / zcode
-            # 账本与探测）明确返回未装配，绝不探测或读取这些路径；
+            # 云端角色只装配 UM 分享：非 UM 的读面明确返回未装配，
+            # 绝不探测或读取这些路径；
             # 管理面仍是 loopback + Host/Origin 门。
             blocked = rest[0] if rest[:1] and rest[0] in (
                 "usage-tokens", "usage-rates", "gateway-connection",

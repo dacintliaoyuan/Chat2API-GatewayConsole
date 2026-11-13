@@ -20,7 +20,7 @@ export type Reading =
   | { kind: "exact"; value: number }
   /** Part of the population is missing: the true figure is at least `value`. */
   | { kind: "atLeast"; value: number; note?: string }
-  /** A computed figure, e.g. reference prices applied to recorded tokens. */
+  /** A computed figure over recorded tokens. */
   | { kind: "estimate"; value: number; note?: string }
   /** The source does not report this figure (e.g. a reply without cache usage). */
   | { kind: "unreported"; note?: string }

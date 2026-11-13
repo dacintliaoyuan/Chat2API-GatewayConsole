@@ -42,7 +42,7 @@ param(
 #      to a newer watch build;
 #   3. /ready failed on FailureThreshold consecutive runs;
 #   4. no private chat2api process exists (the round 18 stop-scope identity -
-#      the dedicated share backend on 8110 and any other chat2api.py never
+#      any other chat2api.py never
 #      count as "alive") and nothing else listens on port 8000;
 #   5. the last private instance did not end in a graceful /admin/shutdown
 #      that is newer than the desired state (a deliberate stop that bypassed
@@ -249,7 +249,7 @@ function Invoke-ReadyProbe {
 
 function Invoke-DefaultProcessQuery {
     # Round 18 stop-scope identity, not the bare "chat2api.py" token: the
-    # dedicated share backend (chat2api.py --port 8110 --profile ...) must never
+    # other chat2api.py instances must never
     # make the private instance look alive. A port 8000 listener that is not a
     # private instance is a conflict the watch must not start into.
     try {

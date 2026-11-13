@@ -70,17 +70,6 @@ export type CloudSummary = {
     excluded?: string[];
     note?: string;
   } | null;
-  sources?: {
-    priceMeta?: { checkedAt?: string; checkedStale?: boolean } | null;
-  } | null;
-  priceVersions?: { versioned?: boolean; current?: PriceVersion | null } | null;
-};
-export type PriceVersion = {
-  versionId?: string;
-  effectiveAt?: string;
-  exchangeRate?: number;
-  checkedAt?: string;
-  checkedStale?: boolean;
 };
 export type HealthRow = {
   key?: string;
