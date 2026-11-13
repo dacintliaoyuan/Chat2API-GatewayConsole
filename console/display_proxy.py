@@ -1400,7 +1400,7 @@ class DisplayProxy:
             return
         max_age = max(1, int(session.expires_at - time.time()))
         cookie = (
-            "%s=%s; HttpOnly; SameSite=Strict; Path=/display/; Max-Age=%d"
+            "%s=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=%d"
             % (DISPLAY_SESSION_COOKIE, session.token, max_age))
         if origin.startswith("https://"):
             cookie += "; Secure"
