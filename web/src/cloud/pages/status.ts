@@ -619,12 +619,26 @@ export function createStatusActions(ctx: StatusActionsContext) {
       render();
       return;
     }
-    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    const opened = window.open(url, "_blank");
+    if (!opened) {
+      // A blocked popup must not leave the login stuck behind an invisible
+      // window: open the same one-time grant in this tab instead.
+      displayFeedback(
+        "neutral",
+        "弹出窗口被拦截，已在当前页打开私有登录窗口；打开窗口不等于 UM 认证成功"
+      );
+      render();
+      location.assign(url);
+      return;
+    }
+    try {
+      opened.opener = null;
+    } catch {
+      // The grant page is same-origin; a cross-origin opener is already severed.
+    }
     displayFeedback(
       "neutral",
-      opened === null
-        ? "已请求打开私有登录窗口；若没有出现，请允许本站弹出窗口后重试。打开窗口不等于 UM 认证成功"
-        : "已打开私有登录窗口；打开窗口不等于 UM 认证成功，关闭后请重新检查"
+      "已打开私有登录窗口；打开窗口不等于 UM 认证成功，关闭后请重新检查"
     );
     render();
   }

@@ -1058,7 +1058,7 @@
       "size": 46032
     }
   ],
-  "generated_at": "2026-11-13T03:04:00.718556+00:00",
+  "generated_at": "2026-11-13T03:36:30.015994+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",
@@ -1072,26 +1072,26 @@
   "source_root": ".",
   "web_dist": {
     "build": {
-      "builtAt": "2026-11-13T00:39:12.483Z",
+      "builtAt": "2026-11-13T03:34:21.287Z",
       "entryAssets": [
-        "assets/cloud-console-1tdZAIvR.js",
+        "assets/cloud-console-6mYgaXqS.js",
         "assets/cloud-console-DJeJbvbP.css",
-        "assets/index-B778VurT.js",
+        "assets/index-D7oWaHc5.js",
         "assets/index-D93HueS7.css"
       ],
-      "gitHead": "bd37c16de7ce43f50b949ff7d88af6d74327af2b",
+      "gitHead": "7d38ea92884aabe5ef8f17f51a1ba3cb87e9d0c2",
       "line": "production",
       "mode": "production",
       "role": "cloud",
-      "sourceHash": "5ab3bb20cc54c7f0fa3ac876bb9f5c895b3fd21edcb8f733bbb6ac53014e954c"
+      "sourceHash": "67c3e5b5842756cbcc04dbf1fe058572773bfae506fdc52f2298d5fb443e1891"
     },
-    "entry": "assets/index-B778VurT.js",
+    "entry": "assets/index-D7oWaHc5.js",
     "file_count": 787,
     "files": [
       {
-        "path": "web/dist-cloud/assets/cloud-console-1tdZAIvR.js",
-        "sha256": "01e79af07e84f6b40e445fdf068bacc990a686b24d5a5158bc3432704c210d98",
-        "size": 146815
+        "path": "web/dist-cloud/assets/cloud-console-6mYgaXqS.js",
+        "sha256": "5b41504d315bd7bcbda2ebce2567a2454417d56dadd5401a1cc7728f6da4bdb5",
+        "size": 146832
       },
       {
         "path": "web/dist-cloud/assets/cloud-console-DJeJbvbP.css",
@@ -1099,8 +1099,8 @@
         "size": 30696
       },
       {
-        "path": "web/dist-cloud/assets/index-B778VurT.js",
-        "sha256": "e1f47b506bace343b7e0bd0194b8533e50cc2b6789524b1a50128e3b9128d6e8",
+        "path": "web/dist-cloud/assets/index-D7oWaHc5.js",
+        "sha256": "933df885498a98358828ef8ed93b22ba1120a725f29f1c82fa7f40f50e3540be",
         "size": 11768
       },
       {
@@ -1110,7 +1110,7 @@
       },
       {
         "path": "web/dist-cloud/candidate-build.json",
-        "sha256": "2d5170f8f3246a6161049558386849fba2e1df219f09991466a73bd5deabdb2f",
+        "sha256": "82c025f5f6665fc8dd1816f33b5520ce9869fdd41c670b3742eab68780f661c7",
         "size": 155451
       },
       {
@@ -5005,7 +5005,7 @@
       },
       {
         "path": "web/dist-cloud/index.html",
-        "sha256": "faa02b2001b44de5d8c767475ef45535546c970ead752e2f327ecf40898be575",
+        "sha256": "707b1e07191ecf223df2307b607d8783476cc2f41bbad524060a5a5d05c79b7c",
         "size": 1353
       },
       {
