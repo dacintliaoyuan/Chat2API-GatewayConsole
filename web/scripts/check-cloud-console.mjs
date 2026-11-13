@@ -5000,3 +5000,33 @@ test("role gate: the cloud console's read plan keeps the role marker read", () =
   assert.match(source, /readSummary/);
   assert.match(source, /step\(\s*"summary"\s*,\s*readSummary\s*\)/);
 });
+
+test("cloud API URL: configured share origin is shown as the OpenAI base URL", () => {
+  const html = overview.overviewHtml(
+    overviewModel({
+      status: statusRead({
+        share_url: "https://dacintapi.de5.net",
+        share_url_source: "configured",
+      }),
+    })
+  );
+  assert.match(html, /https:\/\/dacintapi\.de5\.net\/v1/);
+  assert.match(
+    html,
+    /data-cloud-copy-api-url="https:\/\/dacintapi\.de5\.net\/v1"/
+  );
+});
+
+test("cloud API URL: unconfigured origin is not invented", () => {
+  const html = overview.overviewHtml(
+    overviewModel({
+      status: statusRead({
+        share_url: null,
+        share_url_source: "public_origin_unconfigured",
+        share_url_reason: "public_origin_unconfigured",
+      }),
+    })
+  );
+  assert.doesNotMatch(html, /https:\/\/dacintapi\.de5\.net/);
+  assert.match(html, /未配置公网地址/);
+});

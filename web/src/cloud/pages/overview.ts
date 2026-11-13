@@ -5,7 +5,7 @@ import {
   type ReadState,
 } from "../cloud-reads";
 import type { CloudModel } from "../model";
-import { statusRowHtml } from "./status";
+import { apiUrlHtml, statusRowHtml } from "./status";
 import { keysCard } from "./keys";
 import { rankCard, trendCard, usageKpis } from "./usage";
 import { requestsCard } from "./requests";
@@ -182,6 +182,7 @@ export function overviewHtml(model: CloudModel): string {
   // the spec's own (spec.md:92): 状态行、主动作按钮、Key 列表、今日用量数字、
   // 趋势、请求明细、高级折叠。
   return `${statusRowHtml(model)}
+    ${apiUrlHtml(model)}
     ${primaryActionHtml(model)}
     ${keysCard(model)}
     ${usageKpis(model)}
