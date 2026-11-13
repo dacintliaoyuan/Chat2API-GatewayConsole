@@ -7,10 +7,9 @@
 来源与未知 service 同码拒绝（ValueError），绝不读取它们的旧路径或旧 Key 文件。
 上游登录 Token、管理密钥、控制通道密钥与分享 Key 都不在范围内。
 
-硬性纪律（与 ``console_speedtest`` 同一条）：
+硬性纪律：
 
-* 绝不发任何 HTTP 请求（不探测、不触发登录/refresh；``console/speedtest.py:9-16``
-  记录过 401 触发真实浏览器登录的副作用）。
+* 绝不发任何 HTTP 请求（不探测、不触发登录/refresh）。
 * 端口只从 runtime 快照取（单一端口权威：``console_adapters.service_status`` →
   ``lib/console-runtime-bridge.ps1:115-123``）；快照不可用时端口与地址一律 null，
   绝不猜端口、绝不按显示名拼地址。``health_path`` 是描述符常量（快照不含此字段，

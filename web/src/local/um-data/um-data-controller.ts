@@ -11,8 +11,7 @@
  *  - `/api/summary` (`umReference`: Magpie reference price facts)
  *  - the operation registry for `account.um_status`, `account.um_verify`,
  *    `account.login`, `service.start|stop|restart`, `model.catalog`,
- *    `model.context_probe_preview`, `model.context_probe_run` and
- *    `model.speedtest` (the explicit UM batch).
+ *    `model.context_probe_preview` and `model.context_probe_run`.
  *
  *  Honesty rules kept from the frozen contract:
  *  - a real zero is `{ kind: "exact", value: 0 }`; every absent figure keeps

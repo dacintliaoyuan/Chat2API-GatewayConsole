@@ -212,9 +212,9 @@ test("request rows with out-of-contract values render, escaped, without throwing
   assert.doesNotMatch(failed, /<b>timeout/);
 });
 
-test("最近测试 is a compact summary: figures kept whole, the rest in 详情", () => {
+test("最近测试 is a compact context summary: figures kept whole, the rest in 详情", () => {
   const models = um.unwiredState().models;
-  const row = (id, lastSpeed, lastContext) => ({
+  const row = (id, lastContext) => ({
     id,
     name: id,
     context: {
@@ -224,28 +224,23 @@ test("最近测试 is a compact summary: figures kept whole, the rest in 详情"
       tokenLowerBound: null,
     },
     thinking: { levels: [], source: "catalog", defaultLevel: null },
-    lastSpeed,
     lastContext,
   });
   const at = Date.UTC(2026, 9, 31, 6, 21);
   models.catalog = ready({
     models: [
-      row(
-        "a",
-        { at, ok: true, summary: "46 token/秒 · 耗时 9.8 秒" },
-        {
-          at,
-          ok: true,
-          summary:
-            "通过 32万 字符；上游报告 ≥96,214 Token；64万 被拒（超出上下文）",
-        }
-      ),
-      row(
-        "b",
-        { at, ok: false, summary: `HTTP 502：${HOSTILE}；测速不自动重试` },
-        null
-      ),
-      row("c", null, null),
+      row("a", {
+        at,
+        ok: true,
+        summary:
+          "通过 32万 字符；上游报告 ≥96,214 Token；64万 被拒（超出上下文）",
+      }),
+      row("b", {
+        at,
+        ok: false,
+        summary: `HTTP 502：${HOSTILE}；上下文探测不自动重试`,
+      }),
+      row("c", null),
     ],
     fetchedAt: at,
     source: "UM",
@@ -264,16 +259,6 @@ test("最近测试 is a compact summary: figures kept whole, the rest in 详情"
     .slice(1)
     .map((c) => c.slice(0, c.indexOf("</td>")));
   assert.equal(cells.length, 3);
-  assert.match(
-    cells[0],
-    /<b>测速<\/b><span class="um-nb">46 token\/秒<\/span>/,
-    "the speed conclusion leads, figure and unit together"
-  );
-  assert.match(
-    cells[0],
-    /<span class="um-last-rest">耗时 <span class="um-nb">9\.8 秒<\/span><\/span>/,
-    "测速 keeps its 耗时 under it"
-  );
   assert.match(
     cells[0],
     /<b>上下文<\/b>通过 <span class="um-nb">32万 字符<\/span><\/p>/,
@@ -307,6 +292,46 @@ test("最近测试 is a compact summary: figures kept whole, the rest in 详情"
     /详情/,
     "nothing to open when nothing was tested"
   );
+});
+
+test("retired 测速 has no action, no button and no read face", () => {
+  const models = um.unwiredState().models;
+  assert.equal(
+    "speedtest" in models.actions,
+    false,
+    "the retired action is not part of the model actions"
+  );
+  const row = {
+    id: "a",
+    name: "a",
+    context: {
+      declared: null,
+      compatDefault: null,
+      probedChars: null,
+      tokenLowerBound: null,
+    },
+    thinking: { levels: [], source: "catalog", defaultLevel: null },
+    lastContext: null,
+  };
+  models.catalog = ready({
+    models: [row],
+    fetchedAt: Date.UTC(2026, 9, 31, 6, 21),
+    source: "UM",
+  });
+  models.actions = { refresh: open, context: open, stop: open };
+  const ui = {
+    selected: new Set(["a"]),
+    expanded: new Set(),
+    runDetail: new Set(),
+    historyOpen: false,
+    settingsOpen: false,
+    awaiting: false,
+  };
+  const html = um.modelsHtml(models, ui);
+  assert.doesNotMatch(html, /data-um-test="speedtest"/);
+  assert.doesNotMatch(html, /测速/);
+  assert.match(html, /data-um-test="context"/);
+  assert.equal(um.testBlockReason(models, ui, "context"), null);
 });
 
 test("trend colours follow the models in the window; no speed series is dropped", () => {
@@ -713,7 +738,6 @@ test("model views dedupe the catalog and gate each control on the reason they dr
       tokenLowerBound: null,
     },
     thinking: { levels: [], source: "elsewhere", defaultLevel: null },
-    lastSpeed: null,
     lastContext: null,
   });
   models.catalog = ready({
@@ -723,7 +747,6 @@ test("model views dedupe the catalog and gate each control on the reason they dr
   });
   models.actions = {
     refresh: open,
-    speedtest: open,
     context: open,
     stop: open,
   };
@@ -738,18 +761,17 @@ test("model views dedupe the catalog and gate each control on the reason they dr
   };
   assert.deepEqual(Array.from(um.catalogIds(models)), ["gpt-5.2", "gpt-5_2"]); // the bundle runs in its own realm
   assert.equal(
-    um.testBlockReason(models, ui, "speedtest"),
+    um.testBlockReason(models, ui, "context"),
     "先勾选至少一个模型"
   );
   ui.selected.add("gpt-5.2");
-  assert.equal(um.testBlockReason(models, ui, "speedtest"), null);
+  assert.equal(um.testBlockReason(models, ui, "context"), null);
   assert.equal(
     um.testBlockReason(models, { ...ui, awaiting: true }, "context"),
     "正在提交"
   );
   models.run = {
     id: "r1",
-    kind: "context",
     startedAt: 1,
     state: "running",
     stopRequested: false,
@@ -765,7 +787,7 @@ test("model views dedupe the catalog and gate each control on the reason they dr
     ],
     note: null,
   };
-  assert.match(um.testBlockReason(models, ui, "speedtest"), /已有测试在进行/);
+  assert.match(um.testBlockReason(models, ui, "context"), /已有测试在进行/);
   assert.equal(um.stopBlockReason(models, "r1"), null);
   assert.equal(
     um.stopBlockReason(models, "r0"),

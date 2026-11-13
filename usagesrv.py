@@ -2170,7 +2170,7 @@ def um_maintenance(manager=None, limit=50):
 
     Only the UM actions are selected: account.um_status / account.um_verify /
     account.login, plus service.start/stop/restart whose target is chat2api.
-    A non-UM operation (model.speedtest, share.*, another service target) is
+    A non-UM operation (share.*, another service target) is
     not mixed into this table. The read is bounded to the newest
     UM_MAINTENANCE_MAX_READ original rows; older rows are not claimed to be
     absent. A manager/database failure is ``unavailable``, never an empty list.

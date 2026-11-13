@@ -316,7 +316,6 @@ export type UmModelRow = {
     source: "catalog" | "local" | "unknown";
     defaultLevel: string | null;
   };
-  lastSpeed: { at: number; ok: boolean; summary: string } | null;
   lastContext: { at: number; ok: boolean; summary: string } | null;
 };
 export type UmCatalog = {
@@ -331,7 +330,6 @@ export type UmCatalogRefresh =
   /** The list keeps the last good catalog, shown as stale from `catalog.at`. */
   | { state: "failed"; at: number; reason: string };
 
-export type TestKind = "speedtest" | "context";
 export type ModelTestState =
   "waiting" | "running" | "done" | "failed" | "partial" | "not_run";
 export type UmTestDetail = {
@@ -349,7 +347,6 @@ export type UmTestDetail = {
 };
 export type UmTestRun = {
   id: string;
-  kind: TestKind;
   startedAt: number;
   state: "submitting" | "running" | "finished";
   /** Stop asked for: the request in flight may still finish. */
@@ -365,11 +362,10 @@ export type UmTestRun = {
   }[];
   note: string | null;
 };
-export type HistoryFilter = { model: string | null; kind: TestKind | null };
+export type HistoryFilter = { model: string | null };
 export type UmTestRecord = {
   key: string;
   model: string;
-  kind: TestKind;
   at: number;
   result: ModelTestState;
   summary: string;
@@ -385,7 +381,6 @@ export type UmModels = {
   runtime: Load<{ label: string; value: string }[]>;
   actions: {
     refresh: Capability;
-    speedtest: Capability;
     context: Capability;
     stop: Capability;
   };
@@ -438,7 +433,7 @@ export type UmEvent =
   | { type: "maintenance.earlier"; cursor: string }
   | { type: "models.refreshCatalog" }
   /** Explicit UM model ids, deduplicated, never empty. */
-  | { type: "models.test"; kind: TestKind; models: string[] }
+  | { type: "models.test"; models: string[] }
   | { type: "models.stop"; runId: string }
   | { type: "models.history"; filter: HistoryFilter };
 
@@ -488,13 +483,12 @@ export function unwiredState(): UmViewState {
       refresh: { state: "idle" },
       run: null,
       history: {
-        filter: { model: null, kind: null },
+        filter: { model: null },
         records: { state: "unwired" },
       },
       runtime: { state: "unwired" },
       actions: {
         refresh: closed,
-        speedtest: closed,
         context: closed,
         stop: closed,
       },

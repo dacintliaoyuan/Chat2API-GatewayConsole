@@ -95,7 +95,6 @@ export function actionLabel(action: string): string {
     "service.restart": "重启服务",
     "model.sync_history": "同步历史",
     "model.sync_pending": "同步概览",
-    "model.speedtest": "模型测速",
     "model.context_probe_preview": "探测队列预览",
     "model.context_probe_run": "执行上下文探测",
     "model.context_overrides": "读取上下文设置",

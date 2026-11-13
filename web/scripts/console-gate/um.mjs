@@ -832,8 +832,8 @@ export async function runUm(c) {
     // F5: one shared selection bar; a click runs at once, no dialog, no double submit.
     check(
       "F5",
-      await page.isDisabled('[data-um-test="speedtest"]'),
-      "未选模型时测速应关闭"
+      await page.isDisabled('[data-um-test="context"]'),
+      "未选模型时上下文探测应关闭"
     );
     await page.check('[data-um-pick="claude-sonnet-4-6"]');
     await page.check('[data-um-pick="deepseek-v3.2"]');
@@ -842,42 +842,42 @@ export async function runUm(c) {
       /已选 2 个/.test(await text(page, ".um-selbar")),
       "选择栏应显示已选 2 个"
     );
-    await page.click('[data-um-test="speedtest"]');
+    await page.click('[data-um-test="context"]');
     const after = await page.evaluate(() => ({
       dialog: !!document.querySelector("dialog[open]"),
       disabled:
-        document.querySelector('[data-um-test="speedtest"]')?.disabled ?? null,
+        document.querySelector('[data-um-test="context"]')?.disabled ?? null,
       run: !!document.querySelector(".um-run"),
     }));
     check(
       "F5",
       !after.dialog && after.disabled === true && after.run,
-      `点击测速应直接执行、无确认框且按钮立即关闭：${JSON.stringify(after)}`
+      `点击上下文探测应直接执行、无确认框且按钮立即关闭：${JSON.stringify(after)}`
     );
     const done = await until(
       page,
       () =>
-        /最近一次测速 · 已结束/.test(
+        /最近一次上下文探测 · 已结束/.test(
           document.querySelector(".um-run")?.innerText ?? ""
         ),
       null,
       15000
     );
-    check("F5", done, "测速应在合成驱动下结束");
+    check("F5", done, "上下文探测应在合成驱动下结束");
     const states = await page.$$eval(".um-run-item", (items) =>
       items.map((i) => i.getAttribute("data-state"))
     );
     check(
       "F5",
-      JSON.stringify(states) === JSON.stringify(["done", "failed"]),
-      `逐模型结果应为已完成＋失败（上游限流不重试）：${JSON.stringify(states)}`
+      JSON.stringify(states) === JSON.stringify(["done", "partial"]),
+      `逐模型结果应为已完成＋部分完成（上游限流不构成上限）：${JSON.stringify(states)}`
     );
     await page.click('[data-um-rundetail="claude-sonnet-4-6"]');
     await page.waitForTimeout(200);
     check(
       "F5",
-      /整次平均，含等待/.test(await text(page, ".um-run-detail")),
-      "测速详情应写明速度口径"
+      /字符步进/.test(await text(page, ".um-run-detail")),
+      "上下文详情应写明字符步进口径"
     );
 
     // Context probe on every model, then stop the rest.

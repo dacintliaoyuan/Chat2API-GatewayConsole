@@ -167,30 +167,6 @@ _SHARE_GATEWAY_RESTART_SCHEMA = {
     "restart_budget_s": {"type": "int", "min": 10, "max": 180},
 }
 
-_SPEEDTEST_SCHEMA = {
-    "source": {"type": "str", "max_len": 16},
-    "model": {"type": "str", "max_len": 128},
-    "max_tokens": {"type": "int", "min": 1, "max": 512},
-}
-
-
-def _speedtest_schema():
-    """Speedtest param schema including the B4 batch model set.
-
-    The batch model set travels as a JSON array string (the shared schema
-    vocabulary has no list type; same convention as the model sync
-    sources/consumers). The count/transport ceilings are owned by
-    ``console_speedtest`` (MAX_BATCH_MODELS <=20 and
-    BATCH_MODELS_MAX_CHARS) — no copied count lives in this module.
-    ``model`` and ``models`` are mutually exclusive (the handler refuses
-    both); the action name and the global model:speedtest resource stay
-    unchanged, so the batch cannot bypass the mutex.
-    """
-    from console import speedtest as console_speedtest
-    return dict(_SPEEDTEST_SCHEMA,
-                models={"type": "str",
-                        "max_len": console_speedtest.BATCH_MODELS_MAX_CHARS})
-
 
 # Scope params for model.sync_preview / model.sync_apply (2026-09-22 sync
 # contract: the backend must restrict the write surface).  The shared schema
@@ -238,10 +214,6 @@ SHARE_ORCH_DISABLED_REASON = (
     "分享编排已实现且生产适配器已接线（broker 受限协议/Funnel 命令/连接观察；"
     "TS 特权层经 broker 白名单扩展部署后开放——部署授权包节 5）；真实启停属"
     "真实特权动作，批准后按启用策略开放")
-SPEEDTEST_DISABLED_REASON = (
-    "测速模块已实现并经 stub SSE 矩阵验证（首字单调钟/取消有界释放/"
-    "逐源鉴权）；真实请求为真实计费流量——部署授权包批准并固定配额后"
-    "按启用策略开放")
 
 
 def _sanitize_detail(raw, limit=300):
@@ -625,12 +597,6 @@ def _um_account_resource(target, params):
     # Single-account actions: the resource is fixed regardless of the
     # display-only target string (prevents arbitrary resource keys).
     return "account:um"
-
-
-def _speedtest_resource(target, params):
-    # All speedtests serialize on one resource: real billing requests
-    # must never run concurrently.
-    return "model:speedtest"
 
 
 def _model_sync_resource(target, params):
@@ -1056,11 +1022,10 @@ def build_registry(cloud=False):
     """
     if cloud:
         return build_cloud_registry()
-    # LOCAL (Windows) assembly: UM actions + the UM model-sync/speedtest
-    # management surface. No retired-source action module is imported here
+    # LOCAL (Windows) assembly: UM actions + the UM model-sync management
+    # surface. No retired-source action module is imported here
     # (B0, 2026-11-01).
     from console import model_actions as console_model_actions
-    from console import speedtest as console_speedtest
     from console import um_adapter as console_um_adapter
     from console import um_login as console_um_login
     runtime = RuntimeServiceAdapter()
@@ -1123,24 +1088,6 @@ def build_registry(cloud=False):
             # 登录=用户本机交互（Edge 窗口由用户完成）；编排自身的临时启停
             # 恢复/超时复验/协作取消已隔离验证。
             enabled=True),
-        ActionSpec(
-            "model.speedtest", "独立模型测速（流式短请求，首字+总耗时）",
-            handler=console_speedtest.speedtest_action,
-            resource_fn=_speedtest_resource,
-            param_schema=_speedtest_schema(),
-            # Handler wired and stub-SSE-matrix verified (monotonic first-
-            # token timing, bounded cancel release, per-source auth). Real
-            # requests are REAL billing traffic — stays disabled until the
-            # deployment package approves the quota and per-source targets.
-            # 节3 批准记录（2026-09-16）：首轮固定清单授权执行；
-            # 配额由 max_tokens=64 与授权包预算阈值约束。
-            # B4 (2026-11-01): the SAME action and the SAME
-            # model:speedtest resource carry the narrow batch (explicit UM
-            # model set, deduplicated, <=20 models, one short request per
-            # model, serial, no retry); the legacy single-model params keep
-            # their exact contract. No second action is registered, so a UI
-            # loop cannot bypass the global mutex.
-            enabled=True, disabled_reason=None),
         ActionSpec(
             "model.sync_preview",
             "模型同步预览（可选 selection 纳入待同步草稿；无写入）",
