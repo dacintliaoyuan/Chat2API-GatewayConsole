@@ -453,8 +453,7 @@ class CloudAssemblyTests(unittest.TestCase):
                 payload = module.build_summary()
         self.assertEqual(payload["role"], "cloud")
         self.assertEqual(payload["services"], {})
-        self.assertIsNone(payload["qoderQuota"]["cn"])
-        self.assertIsNone(payload["qoderQuota"]["global"])
+        self.assertNotIn("qoderQuota", payload)
         self.assertNotIn("qoder", payload["services"])
         self.assertNotIn("chat2api", payload["services"])
         self.assertNotIn("dsh", payload["services"])
@@ -543,7 +542,6 @@ class CloudHttpGateTests(unittest.TestCase):
 
     def test_non_um_read_faces_are_explicitly_not_assembled(self):
         for path in ("/api/console/stats", "/api/console/logs",
-                      "/api/console/quota-snapshot",
                       "/api/console/model-pending",
                       "/api/console/gateway-connection?service=Qoder"):
             with self.subTest(path=path):

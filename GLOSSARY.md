@@ -5,11 +5,11 @@ AI 网关控制台及其管辖的本机服务的领域词汇。
 ## Language
 
 **费用统计 (Usage Billing)**:
-控制台中按实际账本来源聚合用量、积分与可估算费用的页面；账户实时额度快照与请求历史消耗分开表达。
+控制台中按实际账本来源聚合用量与可估算费用的页面；请求历史消耗单独表达。
 _Avoid_: 账单、消耗统计
 
 **服务 (Service)**:
-控制台可管理或观察的本机实例：当前包括 UM chat2api (8000) 和费用/管理宿主 (8001)。Qoder 国内版、Qoder 国际版、Gemini CLIProxy 与 M365 已退役，其历史服务记录与当前活动来源分开判断。
+控制台可管理或观察的本机实例：当前包括 UM chat2api (8000) 和费用/管理宿主 (8001)。
 _Avoid_: 网关（网关只是其中一类服务）、端口
 
 **服务状态 (Service state)**:
@@ -65,16 +65,12 @@ _Avoid_: 强制重新登录、重启服务
 _Avoid_: 上传模型、安装模型
 
 **模型来源 (Model source)**:
-提供权威模型目录的独立服务；当前同步来源仅 UM，退役来源（Qoder 国内版、Qoder 国际版、Gemini CLIProxy、M365）不再同步或进入默认读链。同一个模型 ID 在不同来源中是不同模型。
+提供权威模型目录的独立服务；当前同步来源仅 UM，同一模型 ID 在不同来源中是不同模型。
 _Avoid_: provider、消费方
 
 **UM**:
 由 chat2api 暴露给本机消费方的澳门大学 Open WebUI 模型来源；面向用户统一显示为「UM」。
 _Avoid_: OpenWebUI、openwebui、chat2api 模型
-
-**已退役模型来源 (Retired model sources)**:
-Qoder 国内版、Qoder 国际版与 Gemini CLIProxy 的源码、启动器与动作已于 2026-11-01 删除，不再同步、测速或出现在控制台读面；历史账本、日志与显示名后缀（「（qoder_CN）」「（qoder_Global）」）只作追溯，不再产生新记录。
-_Avoid_: 把退役来源当活动 provider、删除历史账本、复用旧凭据
 
 **受管消费方 (Managed consumer)**:
 由模型目录镜像维护可选模型配置的本机应用，当前包括 DSH 和 ZCode。
@@ -131,14 +127,6 @@ _Avoid_: 默认全量、隐式范围
 受管模型已经验证并可在消费方中公开的思考档位集合；模型退役后仍保留，重新发布时直接沿用。
 _Avoid_: 模型目录元数据、每次上线重测
 
-**积分 (Credits)**:
-Qoder 国内版上游按请求真实扣除、由国内网关记账的积分；国际版未提供可归因积分时保持未知，不与国内版合并。两个来源均已退役，历史积分只作追溯、不再产生新记录。
-_Avoid_: 配额（quota 是账户余额快照，不是历史费用）
-
-**额度快照 (Quota snapshot)**:
-上游账户在某次检查时自报的剩余、已用、总量及到期信息；它不是本机请求账本，读取失败或过期时不把上次值当现值。
-_Avoid_: 累计消耗、账单
-
 **Token 消耗量 (Token consumption)**:
 有完整输入与输出记录的请求在指定时段内的输入加输出 Token；缺失任一分量的请求单独标为部分可见，不混入完整总量。
 _Avoid_: 请求数、仅输出 Token
@@ -148,7 +136,7 @@ _Avoid_: 请求数、仅输出 Token
 _Avoid_: 纯生成速度、瞬时 Token/s
 
 **估算费用 (Estimated cost)**:
-拿不到真实积分的服务（当前为 chat2api；M365 仅历史账本）按 token 用量 × 本地价目表算出的费用，展示时始终标注「估算，以平台账单为准」。
+拿不到真实积分的服务（当前为 chat2api）按 token 用量 × 本地价目表算出的费用，展示时始终标注「估算，以平台账单为准」。
 _Avoid_: 结算价
 
 **价目表 (Price table)**:
@@ -169,7 +157,7 @@ DSH 2026-09-02 账本日的冻结快照（`data/dsh-ledger-20260902.json`，从�
 _Avoid_: DSH 账本实时读取（已解耦，ledger.json 不再被 8001 读取）
 
 **来源 (Origin)**:
-请求由哪个服务经手并记账；当前活动来源仅 chat2api（M365 与 chat2api 的端口物理分离为历史事实，M365 不再转发 chat2api），同一请求只会被一个服务记账，无需标记去重；DSH 流量走 chat2api（provider "openwebui"）由网关侧 JSONL 记账。
+请求由哪个服务经手并记账；当前活动来源仅 chat2api，同一请求只会被一个服务记账，无需标记去重；DSH 流量走 chat2api（provider "openwebui"）由网关侧 JSONL 记账。
 _Avoid_: 客户端（指绕过统一入口直连某个服务的程序，只是来源的一种）
 
 **API 入口 (API endpoint)**:
@@ -350,7 +338,7 @@ _Avoid_: 本人独立注册域名、永久稳定承诺、免费即免备案
 _Avoid_: 分享预算保护（旧称）、预算告警即自动停费、日常更新强断、允许自动加预算
 
 **云端部署角色 (Cloud deployment role)**:
-由 `UM_SHARE_ROLE`/`UM_SHARE_DEPLOYMENT` 显式选择的 `local`（Windows 本机）或 `cloud`（Linux 云机）装配身份；未设置即 `local`，冲突或非法值在导入时拒绝。`cloud` 只装配 UM 分享动作与 `share-gateway` 服务控制，model_sync/zcode 模块惰性导入、不进入云端进程（Qoder/CLIProxy 模块已删除）；管理端口 `local` 默认 8001、`cloud` 默认 18096（`USAGESRV_PORT` 严格校验）。云端 `schema_version=2` 的 `unix_socket` 管理传输与 Windows `schema_version=1` 的 Named Pipe 配置分别有效，不得把 Unix 路径塞进 `pipe_name`。
+由 `UM_SHARE_ROLE`/`UM_SHARE_DEPLOYMENT` 显式选择的 `local`（Windows 本机）或 `cloud`（Linux 云机）装配身份；未设置即 `local`，冲突或非法值在导入时拒绝。`cloud` 只装配 UM 分享动作与 `share-gateway` 服务控制，model_sync/zcode 模块惰性导入、不进入云端进程；管理端口 `local` 默认 8001、`cloud` 默认 18096（`USAGESRV_PORT` 严格校验）。云端 `schema_version=2` 的 `unix_socket` 管理传输与 Windows `schema_version=1` 的 Named Pipe 配置分别有效，不得把 Unix 路径塞进 `pipe_name`。
 _Avoid_: 用前端隐藏卡片代替后端隔离、云端照搬整个私人 data 目录
 
 **Linux 平台适配 (Linux platform adaptation)**:

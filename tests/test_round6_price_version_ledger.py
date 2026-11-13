@@ -125,21 +125,16 @@ class PriceVersionLedgerFixture(unittest.TestCase):
         base = Path(tmp.name)
         self.prices_path = base / "prices.json"
         self.override_path = base / "price.override.json"
-        self.qoder_log = base / "qoder-usage.jsonl"
         self.chat2api_log = base / "usage-chat2api.jsonl"
-        self.m365_log = base / "usage-m365.jsonl"
         self.dsh_snapshot = base / "dsh-ledger-20260902.json"
-        for name, content in (("qoder_log", "[]"), ("chat2api_log", "[]"),
-                              ("m365_log", "[]"), ("dsh_snapshot", "{}")):
+        for name, content in (("chat2api_log", "[]"), ("dsh_snapshot", "{}")):
             getattr(self, name).write_text(content, encoding="utf-8")
         self.override_path.write_text("{}", encoding="utf-8")
         session_dir = base / "session"
         session_dir.mkdir(parents=True, exist_ok=True)
         for attr, path in (("PRICE_FILE", self.prices_path),
                            ("OVERRIDE_FILE", self.override_path),
-                           ("QODER_LOG", self.qoder_log),
                            ("CHAT2API_LOG", self.chat2api_log),
-                           ("M365_LOG", self.m365_log),
                            ("DSH_SNAPSHOT_FILE", self.dsh_snapshot),
                            ("SESSION_CODE_FILE", session_dir / "session-code"),
                            ("CONTROL_TOKEN_FILE", session_dir / "control-token")):

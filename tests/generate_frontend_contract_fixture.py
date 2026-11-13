@@ -9,12 +9,6 @@ every privileged/OS/production seam injected as a private fixture (broker, TS
 service, connectivity, funnel, backend gate, maintenance lease, gateway restart,
 backend reauth, intent writer). Nothing here starts a process, opens a pipe, reads a
 real PID/token/ledger, triggers SSO or issues a model request.
-
-The ``cliproxy_status`` segment is FROZEN data, not generated here: its handler
-module was deleted with the UM-only consolidation (commit f41080d1) while the local
-console still renders the read-only shape. The generator never imports or hashes the
-retired module; it carries the committed sanitized segment forward unchanged (see
-``_frozen_cliproxy_status``).
 """
 import contextlib
 import hashlib
@@ -57,8 +51,8 @@ class FixedDatetime(datetime):
 def generate():
     # model_sync.collect_catalogs only ever reads ACTIVE_SOURCES ("um") and
     # rejects every retired source, so the private catalog input must not inject
-    # a retired source either (the old cliproxy entry made the published
-    # catalog disagree with its own ``sources`` list).
+    # a retired source either (it would make the published catalog disagree
+    # with its own ``sources`` list).
     catalogs = {"um": [CatalogModel("um", "fixture-model", context=131072,
         efforts=("low", "high"), default_effort="low", efforts_source="upstream")]}
     state = sync.empty_state()
@@ -214,8 +208,6 @@ def generate():
         capabilities = {"actions": OperationManager.action_info(
             SimpleNamespace(_specs={s.name: s for s in specs}))}
         share_maintenance = generate_share_maintenance(specs)
-        # Frozen: the retired handler module is gone; see _frozen_cliproxy_status.
-        cliproxy_status = _frozen_cliproxy_status()
         root = Path(__file__).parents[1]
         names = ["model_sync/sync.py", "model_sync/sync_core.py", "console/model_actions.py", "console/adapters.py",
                  "console/operations.py", "share/metering.py", "console/stats.py",
@@ -252,8 +244,7 @@ def generate():
             "sync_combined_apply": combined_apply,
             "share_usage": share_usage, "log_entries": logs,
             "log_sources": log_sources, "log_overview": log_overview,
-            "share_maintenance": share_maintenance,
-            "cliproxy_status": cliproxy_status}
+            "share_maintenance": share_maintenance}
 
 
 # ===========================================================================
@@ -1276,47 +1267,6 @@ def generate_share_maintenance(specs):
         "scenarios": scenarios,
         "supervision": supervision_record,
     }
-
-
-# ===========================================================================
-# Rev10 A10-5 / B0 retirement: the frozen cliproxy_status segment (§6.4)
-# ===========================================================================
-# The CLIProxy status handler module was deleted with the UM-only consolidation
-# (commit f41080d1): ``cliproxy.status`` is a retired action
-# (``console/adapters.py`` ``RETIRED_ACTION_PREFIXES``), so there is no current
-# handler to drive this segment and no source hash to record for it. No retained
-# console renders it; the last published, already-sanitized data is carried forward
-# verbatim until the CLIProxy retirement removes it from the contract instead of
-# being dropped or faked here. This generator never imports or executes the retired
-# module; it fails loudly when the committed segment is missing, so the freeze
-# cannot silently disappear.
-
-_FROZEN_CLIPROXY_KEY = "cliproxy_status"
-_FROZEN_CLIPROXY_GENERATED_FROM = (
-    "frozen: last published sanitized CLIProxy status segment; the handler"
-    " module was retired with the UM-only consolidation and this data is not"
-    " regenerated from a handler")
-
-
-def _frozen_cliproxy_status():
-    """Carry the committed, sanitized ``cliproxy_status`` segment forward.
-
-    Raises ``SystemExit`` when the committed fixture has no such segment: the
-    retired handler cannot produce one, so a silent drop would hide a contract
-    break from the offline console instead of failing loudly."""
-    if not DESTINATION.exists():
-        raise SystemExit(
-            "cannot freeze cliproxy_status: %s is missing and the retired"
-            " handler cannot regenerate it" % DESTINATION)
-    previous = json.loads(DESTINATION.read_text(encoding="utf-8"))
-    segment = previous.get(_FROZEN_CLIPROXY_KEY)
-    if not isinstance(segment, dict) or not segment.get("scenarios"):
-        raise SystemExit(
-            "cannot freeze cliproxy_status: the committed fixture has no"
-            " scenarios to carry forward")
-    segment = dict(segment)
-    segment["generatedFrom"] = _FROZEN_CLIPROXY_GENERATED_FROM
-    return segment
 
 
 if __name__ == "__main__":

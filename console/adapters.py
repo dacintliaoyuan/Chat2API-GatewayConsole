@@ -2,11 +2,10 @@
 """Narrow console adapters for the unified AI-gateway console.
 
 B0 (2026-11-01): the DEFAULT assembly is UM-only. The UM main chain is
-chat2api on port 8000; the Qoder CN / Qoder Global / CLIProxy sources and
-their action cards are RETIRED. Their action IDs are not registered here and
-are not imported here either: the retired modules are never loaded by the
-default assembly, so no handler can run for them. A submit naming one of those
-IDs is refused explicitly (``source_retired``) before any operation row exists.
+chat2api on port 8000; the non-UM source action cards were deleted with their
+modules. Their action IDs are not registered here and are not imported here
+either: no handler can run for them, and a submit naming one of those IDs
+reaches the operation manager as ``invalid_action``.
 
 Production facts wired here:
 * Read-only service status goes through the PowerShell JSON wrapper;
@@ -46,11 +45,9 @@ from console.operations import (
     OperationUnavailable,
 )
 
-# B0 (2026-11-01): the retired source modules (console_cliproxy_actions /
-# console_qoder_actions / console_qoder_global_actions / console_qoder_diagnostics)
-# are NOT imported anywhere in this module. The default assembly therefore cannot
-# touch them; a retired action ID is refused explicitly by
-# ``refuse_retired_action`` before the manager looks it up.
+# B0 (2026-11-01): the retired source action modules were deleted with the
+# UM-only assembly. This module never imports them, and the retired action IDs are
+# not registered in any registry (the manager answers ``invalid_action``).
 HERE = os.path.dirname(os.path.abspath(__file__))
 WRAPPER = os.path.join(HERE, os.pardir, "invoke-console-runtime-json.ps1")
 
@@ -62,8 +59,8 @@ WRAPPER = os.path.join(HERE, os.pardir, "invoke-console-runtime-json.ps1")
 # deliberately ABSENT from both sets: the usage web host is the process
 # serving this console itself (existing contract: stop-all excludes the
 # host). B0 (2026-11-01): only the UM main chain (chat2api 8000) is
-# runtime-managed; the retired Qoder CN / Qoder Global / CLIProxy targets
-# are not in the policy and can never be started/stopped through this console.
+# runtime-managed; no other target is in the policy and none can ever be
+# started/stopped through this console.
 # The policy is the only enablement authority; the handler re-checks at
 # execution time and the resource function refuses unauthorized targets at
 # submit time (defense in depth, fail-closed).
@@ -233,55 +230,6 @@ _MODEL_SYNC_APPLY_SCHEMA = dict(
 
 UNWIRED_REASON = UNWIRED_REASON = "功能未接线（后续阶段）；当前版本明确不提供该动作"
 
-# B0 (2026-11-01): explicit retirement boundary. These action IDs belonged
-# to the retired Qoder CN / Qoder Global / CLIProxy sources and to the archived
-# M365 source. They are NOT registered in any registry, so the manager would
-# answer ``invalid_action``; the console layer calls
-# ``refuse_retired_action`` first so the client receives a dedicated
-# ``source_retired`` code with the reason, and no handler ever runs.
-RETIRED_ACTION_NAMES: frozenset = frozenset({
-    "qoder.credential_bridge",
-    "qoder.source_diagnostics",
-    "qoder.quota_read",
-    "qoder.status",
-    "qoder.models",
-    "qoder.poc",
-    "qoderglobal.status",
-    "qoderglobal.models",
-    "qoderglobal.quota",
-    "qoderglobal.login",
-    "cliproxy.status",
-})
-RETIRED_ACTION_PREFIXES: tuple = ("qoder.", "qoderglobal.", "cliproxy.",
-                                 "m365.")
-SOURCE_RETIRED_REASON = (
-    "该动作属于已退役来源（Qoder 国内/国际、CLIProxy、M365）；"
-    "默认装配只保留 UM（chat2api 8000），退役来源不再同步/探测，"
-    "历史账本保留但不进入 UM 首页")
-
-
-def retired_action(action):
-    """True when ``action`` names a retired source (never a UM action)."""
-    if not isinstance(action, str) or not action:
-        return False
-    return (action in RETIRED_ACTION_NAMES
-            or action.startswith(RETIRED_ACTION_PREFIXES))
-
-
-def refuse_retired_action(action):
-    """Refuse a retired-source action explicitly, before any handler runs.
-
-    Raises ``OperationError("source_retired", ...)``: the caller maps it to an
-    explicit client error (the console layer uses HTTP 410) and the operation
-    manager never sees the submit, so no row is created and no fake success can
-    be produced. Unknown actions that are not retired keep the manager's
-    ``invalid_action`` contract.
-    """
-    if retired_action(action):
-        raise OperationError(
-            "source_retired",
-            "动作 %s 属于已退役来源：%s" % (action, SOURCE_RETIRED_REASON))
-
 
 MODEL_TASK_DISABLE_DISABLED_REASON = (
     "计划任务禁用属真实系统写入（每日 06:00 目录镜像在用）；部署授权包节 5 "
@@ -291,9 +239,9 @@ SHARE_ORCH_DISABLED_REASON = (
     "TS 特权层经 broker 白名单扩展部署后开放——部署授权包节 5）；真实启停属"
     "真实特权动作，批准后按启用策略开放")
 SPEEDTEST_DISABLED_REASON = (
-    "四来源测速模块已实现并经 stub SSE 矩阵验证（首字单调钟/取消有界释放/"
-    "逐源鉴权；m365 因调用密钥为哈希存储如实不可用）；真实请求为真实计费"
-    "流量——部署授权包批准并固定配额后按启用策略开放")
+    "测速模块已实现并经 stub SSE 矩阵验证（首字单调钟/取消有界释放/"
+    "逐源鉴权）；真实请求为真实计费流量——部署授权包批准并固定配额后"
+    "按启用策略开放")
 
 
 def _sanitize_detail(raw, limit=300):
@@ -355,10 +303,9 @@ def service_status(cloud=False, ops=None):
     if not isinstance(services, list):
         raise OperationError(
             "runtime_schema", "runtime snapshot has an unexpected shape")
-    # B0: surface ONLY the UM service keys. The runtime script may still carry
-    # retired descriptors (Qoder CN / Qoder Global / CLIProxy) for historical
-    # traceability; they are not part of the default assembly and must not be
-    # presented as manageable service cards here.
+    # B0: surface ONLY the UM service keys. Any other descriptor key is not
+    # part of the default assembly and must not be presented as a manageable
+    # service card here.
     filtered = [service for service in services
                 if isinstance(service, dict)
                 and service.get("key") in LOCAL_SERVICE_KEYS]
@@ -844,7 +791,7 @@ def _share_action_specs(include_public=True, cloud=False):
 
     Extracted verbatim from ``build_registry`` so the explicit cloud role can
     assemble exactly these actions without importing or touching any non-UM
-    subsystem (Qoder / CLIProxy / model_sync / zcode).
+    subsystem (model_sync / zcode).
 
     ``include_public=False`` omits the three Tailscale/WFP-specific actions
     (``share.public_check``, ``share.public_retry``, ``share.repair_limits``):
@@ -1020,7 +967,7 @@ def _cloud_service_resource(action):
 def build_cloud_registry():
     """Explicit cloud role registry: ONLY the UM share stack.
 
-    The non-UM cards (Qoder / CLIProxy / model_sync / zcode) and the
+    The non-UM cards (model_sync / zcode) and the
     Tailscale/WFP-specific public repair are NOT assembled: this factory never
     imports their modules. The four layered open/close chain actions stay in the
     catalogue but are DISABLED (``CLOUD_SHARE_ORCH_DISABLED_REASON``): the
@@ -1110,8 +1057,8 @@ def build_registry(cloud=False):
     if cloud:
         return build_cloud_registry()
     # LOCAL (Windows) assembly: UM actions + the UM model-sync/speedtest
-    # management surface. The retired Qoder CN / Qoder Global / CLIProxy action
-    # modules are never imported here (B0, 2026-11-01).
+    # management surface. No retired-source action module is imported here
+    # (B0, 2026-11-01).
     from console import model_actions as console_model_actions
     from console import speedtest as console_speedtest
     from console import um_adapter as console_um_adapter

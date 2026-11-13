@@ -155,8 +155,6 @@ class StatsEnvironmentTests(unittest.TestCase):
         return console_stats.StatsEnvironment(
             chat2api_log=str(self.ledger),
             dsh_snapshot=str(self.dir / "dsh-snapshot.json"),
-            qoder_log=str(self.dir / "qoder-usage.jsonl"),
-            m365_log=str(self.dir / "m365-usage.jsonl"),
             dsh_merge_day="2026-09-02",
             magpie_price_snapshot=str(
                 self.dir / "magpie-prices.snapshot.json"),
@@ -197,10 +195,7 @@ class StatsEnvironmentTests(unittest.TestCase):
             console_stats.default_sources(self.environment),
             {"chat2api": str(self.ledger),
              "dsh": str(self.dir / "dsh-snapshot.json")})
-        self.assertEqual(
-            console_stats.retired_ledgers(self.environment),
-            {"qoder": str(self.dir / "qoder-usage.jsonl"),
-             "m365": str(self.dir / "m365-usage.jsonl")})
+        self.assertFalse(hasattr(console_stats, "retired_ledgers"))
 
     def test_configure_installs_the_process_environment(self):
         with mock.patch.object(console_stats, "_STATS_ENVIRONMENT", None):
@@ -280,7 +275,6 @@ class StatsEnvironmentTests(unittest.TestCase):
                         {"chat2api": str(self.ledger)},
                         "2026-11-07", "2026-11-07"),
                     console_stats.default_ledgers,
-                    console_stats.retired_ledgers,
                     console_stats.default_sources,
                     console_stats._um_price_paths):
                 with self.assertRaises(console_stats.StatsNotConfigured):
@@ -322,7 +316,7 @@ class VersionedPriceTableTests(unittest.TestCase):
             table = stats_env.normalize_price_table(VERSIONED_PRICE_DOC)
             environment = console_stats.StatsEnvironment(
                 chat2api_log=str(ledger),
-                dsh_snapshot=None, qoder_log="", m365_log="",
+                dsh_snapshot=None,
                 dsh_merge_day="",
                 magpie_price_snapshot=str(directory / "snapshot.json"),
                 magpie_price_status=str(directory / "status.json"),

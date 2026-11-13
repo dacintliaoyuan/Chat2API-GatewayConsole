@@ -24,23 +24,16 @@ application) — no second parsing implementation lives here:
                              (usagesrv.py:483-495) via resolve_price/tier_for
   - price table / checkedAt: environment.price_table_loader
                              (usagesrv.load_price_table, usagesrv.py:379-434)
-  - ledger paths + env redirect: environment.chat2api_log / dsh_snapshot /
-                             qoder_log / m365_log (usagesrv module constants,
+  - ledger paths + env redirect: environment.chat2api_log / dsh_snapshot
+                             (usagesrv module constants,
                              usagesrv.py:54-66), the same constants that
                              build_summary consumes (usagesrv.py:659-710)
 
 Per-field extraction mirrors (line refs at each site):
-  - qoder credits records: build_summary loop, usagesrv.py:662-677 — model,
-    credits, input_tokens, output_tokens, billable only; cache/reasoning are
-    NOT part of the qoder credits口径, so qoder model entries omit
-    cache_tokens/reasoning_tokens and estimated_cost_cny is None.
-  - estimate records (chat2api/m365): _bucket loop, usagesrv.py:539-544 —
+  - estimate records (chat2api): _bucket loop, usagesrv.py:539-544 —
     cached_input_tokens with cache_tokens fallback, reasoning_tokens; cost
     from usagesrv.estimate_record; group key `matched or model`
-    (usagesrv.py:559). m365 status gate: records with status not in
-    (None, 200) keep requests/tokens but cost 0.0 with priced=None
-    (usagesrv.py:703-705); usagesrv counts such models in unpricedModels and
-    this module mirrors that.
+    (usagesrv.py:559).
   - DSH snapshot: read_dsh_ledger, usagesrv.py:602-652 — only the frozen
     DSH_MERGE_DAY (usagesrv.py:113, "2026-09-02") participates; cost is real
     ledger money in config.pricingCurrency (USD) converted with exchangeRate,
@@ -50,9 +43,9 @@ Per-field extraction mirrors (line refs at each site):
     snapshot's native granularity is exactly per-(day, provider:model); in
     the production snapshot the day-level fields are the sum of those rows.
 
-Rounding: money = round(raw_usd_sum * exchangeRate, 4), credits =
-round(raw_sum, 4), identical to usagesrv._round_service (usagesrv.py:593-599)
-and build_summary (usagesrv.py:687, 696-698). To keep the console invariant
+Rounding: money = round(raw_usd_sum * exchangeRate, 4), identical to
+usagesrv._round_service (usagesrv.py:593-599) and build_summary
+(usagesrv.py:687, 696-698). To keep the console invariant
 totals == sum(day_totals) == sum(source_totals) == sum(models), each parent
 level emits the rounded sum of its children's emitted values instead of
 rounding its own raw sum independently; per-model raw sums equal usagesrv's
@@ -119,7 +112,7 @@ class StatsNotConfigured(RuntimeError):
 class StatsEnvironment:
     """Explicit dependencies of the statistics read surface.
 
-    ``chat2api_log`` / ``dsh_snapshot`` / ``qoder_log`` / ``m365_log`` are
+    ``chat2api_log`` / ``dsh_snapshot`` are
     the ledger paths owned by the host; ``dsh_merge_day`` is its frozen DSH
     day. ``parse_ts`` / ``beijing_day`` / ``day_start_ms`` / ``display_path``
     are the host's pure time and display rules, ``estimate_record`` keeps the
@@ -129,8 +122,6 @@ class StatsEnvironment:
     """
     chat2api_log: str
     dsh_snapshot: str
-    qoder_log: str
-    m365_log: str
     dsh_merge_day: str
     magpie_price_snapshot: str
     magpie_price_status: str
@@ -169,12 +160,9 @@ def _environment():
 
 TIMEZONE_NAME = "Asia/Shanghai"  # 口径=usagesrv._beijing_day 固定 UTC+8
 MAX_RANGE_DAYS = 92
-CREDITS_CURRENCY = "qoder"
-# 每来源解析口径标签，与 usagesrv 各服务的 kind 一致（usagesrv.py:685/701/643）。
+# 每来源解析口径标签，与 usagesrv 各服务的 kind 一致（usagesrv.py:685/643）。
 _SOURCE_KINDS = {
-    "qoder": "credits",
     "chat2api": "estimate",
-    "m365": "estimate",
     "dsh": "dsh-ledger",
 }
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -191,29 +179,11 @@ def default_ledgers(environment=None):
     constants resolved at its import time (CHAT2API_USAGE_LOG /
     DSH_LEDGER_SNAPSHOT_FILE), so this module never maintains a second
     path-resolution implementation.
-
-    The retired source ledgers (qoder / m365) stay on disk for historical
-    traceability; they are reachable only through ``retired_ledgers()`` and never
-    enter the default UM home read chain.
     """
     environment = _environment() if environment is None else environment
     return {
         "chat2api": environment.chat2api_log,
         "dsh": environment.dsh_snapshot,
-    }
-
-
-def retired_ledgers(environment=None):
-    """Retired source ledgers kept for historical traceability ONLY.
-
-    The default read chain never consumes this mapping; an explicit historical
-    query can name one of these paths. They are never probed, never token-read
-    and never presented on the UM home page.
-    """
-    environment = _environment() if environment is None else environment
-    return {
-        "qoder": environment.qoder_log,
-        "m365": environment.m365_log,
     }
 
 
@@ -433,7 +403,7 @@ def _emit_token_evidence(evidence, kind):
 
 def _new_entry():
     return {"requests": 0, "input": 0, "output": 0, "cache": 0, "reasoning": 0,
-            "cost_usd": 0.0, "priced": 0, "credits": 0.0, "billable": 0,
+            "cost_usd": 0.0, "priced": 0,
             "token_evidence": _new_token_evidence()}
 
 
@@ -441,7 +411,7 @@ def _empty_agg():
     return {"days": {}, "undated": 0, "unpriced": set(), "error": None}
 
 
-def _collect_jsonl_records(kind, records, models_filter, lo_iso, hi_iso,
+def _collect_jsonl_records(records, models_filter, lo_iso, hi_iso,
                            environment=None):
     """Bucket raw JSONL records into per-(day, model) accumulators.
 
@@ -473,51 +443,31 @@ def _collect_jsonl_records(kind, records, models_filter, lo_iso, hi_iso,
             if models_filter is not None and raw_model not in models_filter:
                 continue
             token_group = (day, raw_model)
-            if kind == "credits":
-                # 口径=usagesrv build_summary qoder 循环（usagesrv.py:662-677）：
-                # 只取 model/credits/input_tokens/output_tokens/billable；
-                # cache/reasoning 不进入 qoder 口径（积分是计费依据）。
-                acc = days.setdefault(day, {}).setdefault(raw_model, _new_entry())
-                _accumulate_token_evidence(acc, rec)
-                token_seen = True
-                acc["requests"] += 1
-                acc["credits"] += float(rec.get("credits") or 0)
-                acc["input"] += int(rec.get("input_tokens") or 0)
-                acc["output"] += int(rec.get("output_tokens") or 0)
-                acc["billable"] += 1 if rec.get("billable") else 0
+            # 口径=usagesrv _bucket（usagesrv.py:540-544）：缓存命中视为
+            # input 的子集，不重复累计（estimate_record 内部做 input-cache）。
+            in_tok = int(rec.get("input_tokens") or 0)
+            out_tok = int(rec.get("output_tokens") or 0)
+            cache_tok = int(rec.get("cached_input_tokens")
+                            or rec.get("cache_tokens") or 0)
+            reason_tok = int(rec.get("reasoning_tokens") or 0)
+            cost_usd, priced, matched, _peak = environment.estimate_record(
+                raw_model, ms, in_tok, out_tok, cache_tok, reason_tok)
+            key = matched or raw_model  # 口径=usagesrv.py:559
+            acc = days.setdefault(day, {}).setdefault(key, _new_entry())
+            _accumulate_token_evidence(acc, rec)
+            token_seen = True
+            acc["requests"] += 1
+            acc["input"] += in_tok
+            acc["output"] += out_tok
+            acc["cache"] += cache_tok
+            acc["reasoning"] += reason_tok
+            acc["cost_usd"] += cost_usd
+            if priced:
+                acc["priced"] += 1
             else:
-                # 口径=usagesrv _bucket（usagesrv.py:540-544）：缓存命中视为
-                # input 的子集，不重复累计（estimate_record 内部做 input-cache）。
-                in_tok = int(rec.get("input_tokens") or 0)
-                out_tok = int(rec.get("output_tokens") or 0)
-                cache_tok = int(rec.get("cached_input_tokens")
-                                or rec.get("cache_tokens") or 0)
-                reason_tok = int(rec.get("reasoning_tokens") or 0)
-                gated = (kind == "m365"
-                         and rec.get("status") not in (None, 200))
-                if gated:
-                    # 口径=usagesrv.py:703-705：失败请求计请求数/token，费用 0，
-                    # priced=None（usagesrv 将其同样计入 unpricedModels）。
-                    cost_usd, priced, matched = 0.0, None, None
-                else:
-                    cost_usd, priced, matched, _peak = environment.estimate_record(
-                        raw_model, ms, in_tok, out_tok, cache_tok, reason_tok)
-                key = matched or raw_model  # 口径=usagesrv.py:559
-                acc = days.setdefault(day, {}).setdefault(key, _new_entry())
-                _accumulate_token_evidence(acc, rec)
-                token_seen = True
-                acc["requests"] += 1
-                acc["input"] += in_tok
-                acc["output"] += out_tok
-                acc["cache"] += cache_tok
-                acc["reasoning"] += reason_tok
-                acc["cost_usd"] += cost_usd
-                if priced:
-                    acc["priced"] += 1
-                else:
-                    # priced False（价表无此模型）与 None（m365 gated）在
-                    # usagesrv 中都落入 unpricedModels（usagesrv.py:552-555）。
-                    unpriced.add(key)
+                # priced False（价表无此模型）在 usagesrv 中落入
+                # unpricedModels（usagesrv.py:552-555）。
+                unpriced.add(key)
         except Exception as exc:  # 单条坏记录不拖垮整个源，coverage 如实标注
             if token_group is not None and not token_seen:
                 day, raw_model = token_group
@@ -593,7 +543,7 @@ def _collect_dsh_records(snapshot, models_filter, lo_iso, hi_iso,
 def _emit_models(kind, entries, rate):
     """Emit per-model rows sorted by money desc then model name（排序对齐
     usagesrv models 列表 usagesrv.py:587/691，附加名称决胜保证确定性）。
-    Money/credits rounding mirrors usagesrv（_round_service usagesrv.py:593-599
+    Money rounding mirrors usagesrv（_round_service usagesrv.py:593-599
     / build_summary usagesrv.py:696）; parent levels emit rounded sums of
     their children to keep totals == sum(day_totals) exact up to float dust
     (see module docstring)."""
@@ -603,52 +553,29 @@ def _emit_models(kind, entries, rate):
         # money/input/output fields retain the legacy fee API's conversion.
         tokens = _emit_token_evidence(
             acc.get("token_evidence", _new_token_evidence()), kind)
-        if kind == "credits":
-            rows.append(((-acc["credits"], key), {
-                "model": key,
-                "requests": acc["requests"],
-                "input_tokens": acc["input"],
-                "output_tokens": acc["output"],
-                **tokens,
-                "credits": round(acc["credits"], 4),
-                "credits_currency": CREDITS_CURRENCY,
-                "estimated_cost_cny": None,
-            }))
+        if kind == "dsh-ledger":
+            cost = round(acc["cost_usd"] * rate, 4)  # 真实记账折算，非估算
+        elif acc["priced"] > 0:
+            cost = round(acc["cost_usd"] * rate, 4)
         else:
-            if kind == "dsh-ledger":
-                cost = round(acc["cost_usd"] * rate, 4)  # 真实记账折算，非估算
-            elif acc["priced"] > 0:
-                cost = round(acc["cost_usd"] * rate, 4)
-            else:
-                cost = None  # 未定价：不产生费用数字，unpriced_models 另行标注
-            rows.append(((-(cost or 0.0), key), {
-                "model": key,
-                "requests": acc["requests"],
-                "input_tokens": acc["input"],
-                "output_tokens": acc["output"],
-                **tokens,
-                "cache_tokens": acc["cache"],
-                "reasoning_tokens": acc["reasoning"],
-                "estimated_cost_cny": cost,
-            }))
+            cost = None  # 未定价：不产生费用数字，unpriced_models 另行标注
+        rows.append(((-(cost or 0.0), key), {
+            "model": key,
+            "requests": acc["requests"],
+            "input_tokens": acc["input"],
+            "output_tokens": acc["output"],
+            **tokens,
+            "cache_tokens": acc["cache"],
+            "reasoning_tokens": acc["reasoning"],
+            "estimated_cost_cny": cost,
+        }))
     rows.sort(key=lambda pair: pair[0])
     return [row for _, row in rows]
 
 
-def _emit_source_totals(kind, models_out, entries):
+def _emit_source_totals(models_out):
     """Per-day per-source totals as the rounded sum of the emitted models
-    (chain consistency). qoder source_totals carry credits only with
-    estimated_cost_cny=None（口径=usagesrv qoder kind credits，无金额估算）."""
-    if kind == "credits":
-        return {
-            "requests": sum(m["requests"] for m in models_out),
-            "input_tokens": sum(m["input_tokens"] for m in models_out),
-            "output_tokens": sum(m["output_tokens"] for m in models_out),
-            "estimated_cost_cny": None,
-            "credits": round(sum(m["credits"] for m in models_out), 4),
-            "credits_currency": CREDITS_CURRENCY,
-            "billable_requests": sum(acc["billable"] for acc in entries.values()),
-        }
+    (chain consistency)."""
     return {
         "requests": sum(m["requests"] for m in models_out),
         "input_tokens": sum(m["input_tokens"] for m in models_out),
@@ -663,23 +590,20 @@ def _emit_source_totals(kind, models_out, entries):
 def _new_totals():
     return {"requests": 0, "input_tokens": 0, "output_tokens": 0,
             "cache_tokens": 0, "reasoning_tokens": 0,
-            "estimated_cost_cny": 0.0, "credits": 0.0,
-            "credits_currency": CREDITS_CURRENCY}
+            "estimated_cost_cny": 0.0}
 
 
 def _add_totals(totals, other):
     """Accumulate a source/day totals dict into a parent totals dict.
-    Fields a source kind does not carry (qoder cache/reasoning, qoder money)
-    contribute zero; None money is skipped, never treated as a fabricated 0."""
+    None money is skipped, never treated as a fabricated 0."""
     for key in ("requests", "input_tokens", "output_tokens", "cache_tokens",
-                "reasoning_tokens", "estimated_cost_cny", "credits"):
+                "reasoning_tokens", "estimated_cost_cny"):
         value = other.get(key)
         totals[key] += 0 if value is None else value
 
 
 def _normalize_totals(totals):
     totals["estimated_cost_cny"] = round(totals["estimated_cost_cny"], 4)
-    totals["credits"] = round(totals["credits"], 4)
     return totals
 
 
@@ -742,7 +666,7 @@ def _load_source(source, handle, models_filter, lo_iso, hi_iso,
         if bad:
             coverage.setdefault("errors", []).append(
                 {"type": "malformed_lines", "bad_lines": bad})
-        agg = _collect_jsonl_records(kind, records, models_filter, lo_iso, hi_iso,
+        agg = _collect_jsonl_records(records, models_filter, lo_iso, hi_iso,
                                     environment)
     if agg["error"]:
         coverage.setdefault("errors", []).append(agg["error"])
@@ -770,9 +694,9 @@ def bounded_stats(ledgers, date_from, date_to, sources=None, models=None,
     an empty result annotated in coverage, not an error.
 
     Returns the unified dict documented in the module docstring: days[],
-    totals, coverage, meta. Money (estimated_cost_cny) and qoder credits are
-    kept in separate fields and never added together; missing days are
-    reported in coverage.missing_days and never treated as zero cost.
+    totals, coverage, meta. Money (estimated_cost_cny) stays in its own
+    field; missing days are reported in coverage.missing_days and never
+    treated as zero cost.
 
     environment: the injected StatsEnvironment. When None, the process-wide
     environment installed by ``configure`` is used; an unconfigured process
@@ -821,7 +745,7 @@ def bounded_stats(ledgers, date_from, date_to, sources=None, models=None,
                 continue
             kind = _SOURCE_KINDS[source]
             models_out = _emit_models(kind, entries, rate)
-            src_totals = _emit_source_totals(kind, models_out, entries)
+            src_totals = _emit_source_totals(models_out)
             blocks.append({"source": source, "kind": kind,
                            "models": models_out,
                            "source_totals": src_totals})
@@ -942,13 +866,9 @@ def bounded_stats(ledgers, date_from, date_to, sources=None, models=None,
 #   - 身份键 = source + model（同名跨来源不混并）；时间按北京时间自然日/小时
 #     分桶（固定 UTC+8，口径=usagesrv._beijing_day，usagesrv.py:551-554）。
 #
-# 来源词表（端点契约 um|qoder_cn|qoder_global|chat2api|dsh|cliproxy）：
+# 来源词表（端点契约 um|chat2api|dsh）：
 #   * chat2api      <- data/usage-chat2api.jsonl（记录自带 service="chat2api"）
-#   * qoder_cn      <- qoder/data/usage.jsonl
-#   * qoder_global  <- qoder-global/logs/requests.log
 #   * dsh           <- data/dsh-ledger-20260902.json（冻结日快照）
-#   * cliproxy      <- Gemini 观测采集落盘（A12-2 建立；未启用时不出行）。
-#                      kind="gap" 的控制记录（缺口标记）被跳过并在 coverage 披露。
 #   * um            本轮无独立账本：UM 流量由 chat2api 账本记账，来源键即 chat2api。
 #                   词表保留 um，但本轮不产出该来源的行；不造别名、不合并同名。
 #
@@ -976,18 +896,10 @@ def bounded_stats(ledgers, date_from, date_to, sources=None, models=None,
 # 的日期，不是行）。
 #
 # 覆盖说明（coverage.sources）：逐来源给出 ledger/ledger_present/enabled/events
-# 与 note；采集链未启用（如 cliproxy 无落盘文件）时 note 明确说明「本来源不出行，
-# 也不以 0 冒充无用量」，与「该窗口确实无用量」区分。快照根、days 或
+# 与 note；账本文件缺席时 note 明确说明「本来源不出行，也不以 0 冒充无用量」，
+# 与「该窗口确实无用量」区分。快照根、days 或
 # byProviderModel 不是 JSON 对象时同样不抛异常：记入 coverage errors
 # （corrupt_ledger），可解析的部分照常保留。
-#
-# cliproxy 专用补充（只对本来源生效，其它来源的字段与判定不变）：采集落盘里可能
-# 出现 kind="gap" 的控制记录（出队成功但未落盘时写端写的缺口标记；写端
-# ai-gateway/cliproxy_usage.py 已于 2026-11-01 退役删除，历史落盘仍可追溯）。
-# 读取层按 CLIPROXY_CONTROL_KINDS 跳过它们，
-# 不当作事件（否则会变成 model="unknown" 的缺分量事件）；coverage 里如实给出
-# control_records（控制记录条数）与 gaps（至多 MAX_CLIPROXY_GAPS 条白名单摘要）；
-# 落盘在场却没有任何事件时补 note，明确「本来源不出行，也不以 0 冒充无用量」。
 #
 # 「事件集不可信」的来源（coverage errors[].type ∈ UNTRUSTED_EVENT_ERRORS）：
 # 本次读取失败（read_error，读取层退回上次缓存的事件）或结构损坏
@@ -1001,28 +913,9 @@ MAX_TOKEN_RANGE_DAYS = 31       # 近 N 日 Token 查询的窗口上限
 MAX_RATE_RANGE_HOURS = 168      # 近 N 小时速率查询的窗口上限（7 天）
 MAX_ROWS_PER_ENDPOINT = 5000     # 每端点返回行数上限
 MAX_READ_BYTES = 32 * 1024 * 1024  # 单次读取字节上限（超出只读尾部）
-# B0（2026-11-01）：以下两条是退役来源（Qoder 国际 / CLIProxy）的历史账本
-# 路径，只供显式历史追溯读取；默认读链绝不装配它们，也不探测对应端口。
-# 采集链未启用（无落盘文件）时该来源不出行，也绝不用 0 冒充无用量。
-QODER_GLOBAL_REQUESTS_LOG = os.environ.get("QODER_GLOBAL_REQUESTS_LOG") or \
-    os.path.join(HERE, os.pardir, "qoder-global", "logs", "requests.log")
-GEMINI_USAGE_LEDGER = os.environ.get("GEMINI_USAGE_LEDGER") or \
-    os.path.join(HERE, os.pardir, "data", "usage-cliproxy.jsonl")
-# cliproxy 采集落盘的「控制记录」（不是用量事件）：采集器出队成功但无法落盘时写一条缺口
-# 标记（写端 ai-gateway/cliproxy_usage.py，kind="gap"，只含时间/原因/出队条数）。读端必须
-# 跳过它们（否则会被当成 model="unknown" 的缺分量事件），并在 coverage 里如实披露：只对
-# cliproxy 生效，其它来源的记录形状与判定完全不变。
-CLIPROXY_LEDGER_SOURCE = "cliproxy"
-CLIPROXY_CONTROL_KINDS = frozenset({"gap"})
-# 披露给 API 的缺口字段白名单：账本可能被手工编辑，绝不把任意字段（含敏感字段）回显出去。
-CLIPROXY_GAP_FIELDS = ("kind", "reason", "dequeued", "recorded_at",
-                       "first_time", "last_time")
-MAX_CLIPROXY_GAPS = 20   # coverage 里最多回显的缺口记录条数（有界）
 
 # 每来源字段映射：字段名按各账本既有写入方（usagesrv._bucket / build_summary /
 # read_dsh_ledger）取值，不另造；元组为可接受的别名（按序取第一个可用值）。
-# B0（2026-11-01）：qoder_cn / qoder_global / cliproxy 的映射只为显式
-# 历史追溯保留，不在 default_sources() 内；默认 UM 首页读链绝不会读到它们。
 _SOURCE_SPECS = {
     "chat2api": {
         "kind": "jsonl",
@@ -1040,45 +933,12 @@ _SOURCE_SPECS = {
         "unknown_fields": [],
         "time_source": "账本 time 字段（ISO 8601，带偏移或 Z）",
     },
-    "qoder_cn": {
-        "kind": "jsonl",
-        "time": ("time",), "input": ("input_tokens",),
-        "output": ("output_tokens",), "duration": ("duration_ms",),
-        "unknown_fields": [],
-        "time_source": "账本 time 字段（ISO 8601，带偏移）",
-    },
-    "qoder_global": {
-        # E12-3 脱敏扫描：样本 417 行中 356 行有 out_tokens、全部有 ms、
-        # 零行有 input_tokens 或 credits —— 故 input/credits 一律 null（未知），
-        # 不得估算、不得折零（D12-1/D12-4）。status 只用于覆盖披露，不做过滤。
-        "kind": "jsonl",
-        "time": ("at",), "input": (), "output": ("out_tokens",),
-        "duration": ("ms",),
-        "unknown_fields": ["input_tokens", "credits"],
-        "time_source": "账本 at 字段（UTC，Z 结尾）",
-    },
     "dsh": {
         "kind": "snapshot",
         "time": ("date",), "input": ("input",), "output": ("output",),
         "duration": (),
         "unknown_fields": ["duration_ms"],
         "time_source": "快照日（日级聚合，事件时间取该日北京 00:00）",
-    },
-    "cliproxy": {
-        # A12-2 落盘格式已定案（原写端 ai-gateway/cliproxy_usage.py，已于
-        # 2026-11-01 退役删除；历史落盘仍按原格式读取）：规范名 time/
-        # model/input_tokens/output_tokens/duration_ms/status 逐条写出；estimated/
-        # service/corr_id 是写端新增的非敏感字段，本端点不展示也不报错（与 chat2api
-        # 账本多出的 service/stream/total_tokens 同样处理：忽略而非声明）。别名字段
-        # 仍然接受，旧格式记录照旧按缺分量计数（不估算、不折零），绝不错填 0。
-        # kind="gap" 的控制记录不是用量事件，读取层按 CLIPROXY_CONTROL_KINDS 跳过。
-        "kind": "jsonl",
-        "time": ("time", "at"),
-        "input": ("input_tokens", "prompt_tokens"),
-        "output": ("output_tokens", "completion_tokens"),
-        "duration": ("duration_ms", "ms", "duration"),
-        "unknown_fields": [],
-        "time_source": "采集落盘 time/at（A12-2 落盘格式）",
     },
 }
 # missing[].reason 的契约枚举（端点契约的封闭取值）：前三项是分量缺失原因；
@@ -1132,10 +992,8 @@ _Event = namedtuple(
 def default_sources(environment=None):
     """A12-1 账本句柄装配：默认只装配 UM 主链（chat2api + 冻结 DSH 快照）。
 
-    B0（2026-11-01）：退役来源（qoder_cn / qoder_global / cliproxy）的
-    历史账本仍在磁盘保留，但绝不进入默认读链，也绝不读取其旧令牌或探测
-    其端口。需要历史追溯时，调用方须显式传入账本路径字典（该路径仍由
-    ``_SOURCE_SPECS`` 支持），默认装配不会替调用方补上退役来源。
+    B0（2026-11-01）：默认装配只有这两个来源；调用方不能靠本装配
+    拿到未登记来源的账本，未登记来源按 unknown_source 如实披露。
     """
     environment = _environment() if environment is None else environment
     return {
@@ -1195,8 +1053,8 @@ def _non_ok_status(status):
     """status 是否可证明不是成功：数值非 2xx，或非空且非 ok 的字符串。
 
     只做披露用（既不参与估算，也不静默剔除）；不可证明的一律不算失败
-    （None、空串、非数值/非字符串类型）。chat2api 记 status="ok"，M365 记
-    数值 200，国际日志记 HTTP 状态码——三种写法都在这里归一。
+    （None、空串、非数值/非字符串类型）。chat2api 记 status="ok"，其余
+    写法在这里统一归一。
     """
     if status is None or isinstance(status, bool):
         return False
@@ -1294,19 +1152,6 @@ def _event_from_record(source, spec, record):
     )
 
 
-def _cliproxy_gap_summary(record):
-    """cliproxy 控制记录 → 只回显白名单字段的摘要（或 None）。
-
-    账本可能被手工编辑：只回显 CLIPROXY_GAP_FIELDS 里的键，绝不把账本里的任意字段
-    （可能含敏感字段）带进 API 响应。
-    """
-    summary = {}
-    for name in CLIPROXY_GAP_FIELDS:
-        if name in record and record.get(name) is not None:
-            summary[name] = record.get(name)
-    return summary or None
-
-
 def _refresh_jsonl_cache(path, source, spec):
     """增量解析一个 JSONL 账本，返回 (state, diagnostics)。
 
@@ -1314,8 +1159,6 @@ def _refresh_jsonl_cache(path, source, spec):
     ——首读、缩短、身份变化、同长度原地重写时的整体重读，以及后续大批追加，
     超限时一律只读尾部并标 bytes_truncated（丢弃起始处的残行）。尾部半行不消费，
     留给下一次。读取在 _FILE_CACHE_LOCK 内完成：并发查询不会重复解析或交叉写缓存。
-    cliproxy 的 kind="gap" 控制记录不是事件：跳过并计数（control_records /
-    control_summaries），绝不混进 events。
     """
     with _FILE_CACHE_LOCK:
         state = _FILE_CACHE.get(path)
@@ -1337,8 +1180,7 @@ def _refresh_jsonl_cache(path, source, spec):
                                            and state["mtime_ns"] != mtime_ns):
             state = {"offset": 0, "size": size, "mtime_ns": mtime_ns,
                      "dev": dev, "ino": ino, "events": [], "bad_lines": 0,
-                     "dropped_events": 0, "bytes_truncated": False,
-                     "control_records": 0, "control_summaries": []}
+                     "dropped_events": 0, "bytes_truncated": False}
         read_start = state["offset"]
         bytes_truncated = state["bytes_truncated"]
         head_skipped = 0
@@ -1368,8 +1210,6 @@ def _refresh_jsonl_cache(path, source, spec):
             new_offset = read_start + head_skipped + len(consumed)
         events = state["events"]
         bad_lines = state["bad_lines"]
-        control_records = state["control_records"]
-        control_summaries = state["control_summaries"]
         for raw in consumed.split(b"\n"):
             line = raw.strip()
             if not line:
@@ -1382,16 +1222,6 @@ def _refresh_jsonl_cache(path, source, spec):
             if not isinstance(record, dict):
                 bad_lines += 1
                 continue
-            if source == CLIPROXY_LEDGER_SOURCE \
-                    and record.get("kind") in CLIPROXY_CONTROL_KINDS:
-                # 控制记录（缺口标记）不是用量事件：跳过并计数披露，绝不把它当成
-                # model="unknown" 的缺分量事件。
-                control_records += 1
-                summary = _cliproxy_gap_summary(record)
-                if summary is not None \
-                        and len(control_summaries) < MAX_CLIPROXY_GAPS:
-                    control_summaries.append(summary)
-                continue
             try:
                 events.append(_event_from_record(source, spec, record))
             except Exception:  # 单条坏记录不拖垮整个源
@@ -1403,9 +1233,7 @@ def _refresh_jsonl_cache(path, source, spec):
         new_state = {"offset": new_offset, "size": size, "mtime_ns": mtime_ns,
                      "dev": dev, "ino": ino, "events": events,
                      "bad_lines": bad_lines, "dropped_events": dropped,
-                     "bytes_truncated": bytes_truncated,
-                     "control_records": control_records,
-                     "control_summaries": control_summaries}
+                     "bytes_truncated": bytes_truncated}
         _FILE_CACHE[path] = new_state
         return new_state, {}
 
@@ -1529,11 +1357,7 @@ def _source_coverage(source, spec, path, events, state, diag):
         "unknown_fields": list(spec["unknown_fields"]),
     }
     if not present:
-        coverage["enabled"] = source != "cliproxy"
-        coverage["note"] = (
-            "Gemini 观测采集链未启用（未发现采集落盘文件）：本来源不出行，"
-            "也不以 0 冒充无用量" if source == "cliproxy"
-            else "账本文件缺席：本来源不出行，不冒充零用量")
+        coverage["note"] = "账本文件缺席：本来源不出行，不冒充零用量"
         return coverage
     if diag.get("read_error"):
         coverage["errors"] = [{"type": ERROR_TYPE_READ,
@@ -1551,24 +1375,6 @@ def _source_coverage(source, spec, path, events, state, diag):
     if state.get("bytes_truncated"):
         coverage["bytes_truncated"] = True
         coverage["truncated"] = True
-    if source == CLIPROXY_LEDGER_SOURCE:
-        # 采集落盘的如实披露（只对本来源）：控制记录（缺口标记）不是用量事件，读端
-        # 跳过它们并在这里计数披露。落盘在场却没有任何事件时，绝不让它读成「该窗口
-        # 确实无用量」——采集可能刚启用、或全部记录都是缺口标记。
-        control_records = state.get("control_records") or 0
-        if control_records:
-            coverage["control_records"] = control_records
-            coverage["gaps"] = [dict(summary) for summary
-                                in (state.get("control_summaries") or [])]
-            if not events:
-                coverage["note"] = (
-                    "采集落盘在场但没有任何已提交用量：只有 %d 条缺口记录"
-                    "（出队成功但未落盘的区间）：本来源不出行，也不以 0 冒充无用量"
-                    % control_records)
-        elif not events:
-            coverage["note"] = (
-                "采集落盘在场但没有任何记录（尚未提交任何用量）：本来源不出行，"
-                "也不以 0 冒充无用量")
     coverage["undated_records"] = sum(1 for ev in events if ev.ms is None)
     coverage["non_ok_records"] = sum(
         1 for ev in events if _non_ok_status(ev.status))
@@ -1943,7 +1749,7 @@ def usage_rates(ledgers=None, hours=24, now=None):
 #   um_requests(ledger, window, model, result, search, cursor, limit, now) ->
 #     {page, models, coverage, timezone, checked_epoch}
 #
-# 口径（全部只读 UM 自己的 chat2api 账本；不混入 qoder/m365/dsh/cliproxy，
+# 口径（全部只读 UM 自己的 chat2api 账本；不混入 dsh，
 # 也不读云端分享账本；不新增第二套记账服务）：
 #   - 今日/趋势按北京时间自然日 [00:00, 次日 00:00)；近 24 小时是滚动窗口。
 #   - 请求数 = 逻辑请求数：chat2api 的物理重试若单独写了一条

@@ -158,8 +158,8 @@ class MagpiePriceFixture(unittest.TestCase):
         self.fake = _FakeMagpie()
         self._saved_constants = {
             name: getattr(usage_service, name) for name in (
-                "PRICE_FILE", "OVERRIDE_FILE", "QODER_LOG", "CHAT2API_LOG",
-                "M365_LOG", "DSH_SNAPSHOT_FILE", "MAGPIE_PRICE_SNAPSHOT_FILE",
+                "PRICE_FILE", "OVERRIDE_FILE", "CHAT2API_LOG",
+                "DSH_SNAPSHOT_FILE", "MAGPIE_PRICE_SNAPSHOT_FILE",
                 "MAGPIE_PRICE_STATUS_FILE")}
         self.addCleanup(self._restore_constants)
 
@@ -600,12 +600,8 @@ class HistoryAndFailureTest(MagpiePriceFixture):
 class UsageServiceReferenceTest(MagpiePriceFixture):
     def _prepare_summary_inputs(self):
         self.prices_for_usage()
-        self.qoder = self.base / "qoder.jsonl"
         self.chat = self.base / "chat2api.jsonl"
-        self.m365 = self.base / "m365.jsonl"
         self.dsh = self.base / "dsh.json"
-        self.qoder.write_text("", encoding="utf-8")
-        self.m365.write_text("", encoding="utf-8")
         self.dsh.write_text("{}", encoding="utf-8")
         record = _record("2026-11-01T00:10:00Z", input_tokens=100000,
                          output_tokens=1000, cached_input_tokens=0,
@@ -613,9 +609,7 @@ class UsageServiceReferenceTest(MagpiePriceFixture):
         self.chat.write_text(json.dumps(record) + "\n", encoding="utf-8")
         usage_service.PRICE_FILE = str(self.prices)
         usage_service.OVERRIDE_FILE = str(self.override)
-        usage_service.QODER_LOG = str(self.qoder)
         usage_service.CHAT2API_LOG = str(self.chat)
-        usage_service.M365_LOG = str(self.m365)
         usage_service.DSH_SNAPSHOT_FILE = str(self.dsh)
         usage_service.MAGPIE_PRICE_SNAPSHOT_FILE = str(self.snapshot)
         usage_service.MAGPIE_PRICE_STATUS_FILE = str(self.status)

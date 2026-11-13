@@ -129,8 +129,6 @@ def build_stats_environment(config):
         # E19-1-08: the local application has no DSH ledger snapshot; the
         # default UM read chain selects only chat2api, so this is never read.
         dsh_snapshot=None,
-        qoder_log="",
-        m365_log="",
         dsh_merge_day="",
         # Magpie price paths are owned by the UM fee read surface, which this
         # composition root does not assemble; the summary route never reads them.

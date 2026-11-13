@@ -18,11 +18,9 @@ import sys
 from dataclasses import dataclass
 
 # Governance scope: segments owned by this repository per AGENTS.md, plus the
-# individually listed ports that predate the segments.  B0 (2026-11-01): the
-# retired gateways (Qoder CN 8095, Qoder native 8097/8310, CLIProxy 8320,
-# M365 4141) hold no allocation any more, so no row is registered for them;
-# a listener inside a governed segment is reported as UNREGISTERED, and 4141 (its
-# own single port, outside every segment) is out-of-scope information.
+# individually listed ports that predate the segments. A listener inside a
+# governed segment is reported as UNREGISTERED; a port outside every segment is
+# out-of-scope information.
 GOVERNED_RANGES: tuple[tuple[int, int], ...] = (
     (8000, 8009), (8090, 8099), (8100, 8119), (8300, 8399))
 GOVERNED_SINGLETONS = frozenset({5173})

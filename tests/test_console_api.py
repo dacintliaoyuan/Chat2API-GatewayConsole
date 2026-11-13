@@ -94,8 +94,6 @@ class _ConsoleApiStatsEnvironment:
         lambda self: os.path.join(_TMP, "usage-chat2api.jsonl"))
     dsh_snapshot = property(
         lambda self: os.path.join(_TMP, "dsh-snapshot.json"))
-    qoder_log = property(lambda self: os.path.join(_TMP, "qoder-usage.jsonl"))
-    m365_log = property(lambda self: os.path.join(_TMP, "m365-usage.jsonl"))
     dsh_merge_day = property(lambda self: usagesrv.DSH_MERGE_DAY)
     magpie_price_snapshot = property(
         lambda self: os.path.join(_TMP, "magpie-prices.snapshot.json"))
@@ -1486,18 +1484,18 @@ class ConsoleWriteBoundaryTests(ConsoleApiTestBase):
         # allow-sets and is refused at submit time.
         self.assertIn("宿主", data["reason"])
 
-    def test_retired_source_action_is_refused_with_410(self):
-        # B0: a retired-source action is refused explicitly (source_retired)
-        # before the operation manager looks it up, so no handler runs and no
-        # operation row is created.
+    def test_retired_source_action_is_unknown_and_creates_no_row(self):
+        # B0: retired-source actions are not registered and have no dedicated
+        # gate any more, so the operation manager answers invalid_action and
+        # no handler runs and no operation row is created.
         for action in ("qoder.status", "qoderglobal.status",
                        "cliproxy.status", "m365.settings_save"):
             with self.subTest(action=action):
                 status, raw = self.req("POST", "/api/console/operations",
                                        body={"action": action,
                                              "target": ""})
-                self.assertEqual(status, 410)
-                self.assertEqual(json.loads(raw)["error"], "source_retired")
+                self.assertEqual(status, 404)
+                self.assertEqual(json.loads(raw)["error"], "invalid_action")
         status, raw = self.req("GET", "/api/console/operations")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw)["operations"], [])
@@ -1537,29 +1535,21 @@ class _OkHandler(BaseHTTPRequestHandler):
 
 
 class QuotaSnapshotEndpointTests(ConsoleApiTestBase):
-    """B0 (2026-11-01): the retired source quota read face is NOT assembled.
+    """B0 (2026-11-01): the retired source quota read face is removed.
 
-    The retired model source is gone from the registry: the endpoint answers an
-    explicit ``not_assembled`` state with null readings, never probes a retired
-    port and never reads an old token file or a stale success cache.
-    ``?refresh=1`` changes nothing (no dead knob).
+    The retired model source is gone, and its payload builder plus route are
+    gone with it: the path answers the same unknown-path 404 as any other
+    unregistered path, never probes a retired port and never reads an old token
+    file or a stale success cache. ``?refresh=1`` changes nothing.
     """
 
-    def test_quota_snapshot_is_not_assembled(self):
+    def test_quota_snapshot_endpoint_is_gone(self):
         for query in ("", "?refresh=1"):
             with self.subTest(query=query):
                 status, raw = self.req(
                     "GET", "/api/console/quota-snapshot" + query)
-                self.assertEqual(status, 200)
-                payload = json.loads(raw)
-                self.assertEqual(payload["state"], "not_assembled")
-                self.assertIsNone(payload["remaining"])
-                self.assertIsNone(payload["used"])
-                self.assertIsNone(payload["total"])
-                self.assertIn("error", payload)
-                self.assertNotEqual(payload["error"], "")
-                self.assertEqual(payload["gate"]["verdict"],
-                                 "not_assembled")
+                self.assertEqual(status, 404)
+                self.assertEqual(json.loads(raw)["error"], "unknown path")
 
 
 class ConsoleHealthEndpointTests(ConsoleApiTestBase):

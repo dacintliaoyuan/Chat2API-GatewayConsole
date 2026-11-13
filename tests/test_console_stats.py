@@ -16,9 +16,8 @@ the flat pricing semantics usagesrv.estimate_record applies:
   1M input + 100K output (gpt-5.6-sol)         -> 3.0  USD -> 21.6   CNY
 
 Ledger fixtures copy the production JSONL field shapes (chat2api: status ok +
-cached_input_tokens; qoder: credits/billable with cache fields that the qoder
-credits口径 ignores; m365: cache_tokens + numeric status; DSH: frozen day
-snapshot with days -> byProviderModel rows).
+cached_input_tokens; DSH: frozen day snapshot with days -> byProviderModel
+rows).
 """
 
 import importlib
@@ -54,8 +53,6 @@ class _UsagesrvStatsEnvironment:
 
     chat2api_log = property(lambda self: usagesrv.CHAT2API_LOG)
     dsh_snapshot = property(lambda self: usagesrv.DSH_SNAPSHOT_FILE)
-    qoder_log = property(lambda self: usagesrv.QODER_LOG)
-    m365_log = property(lambda self: usagesrv.M365_LOG)
     dsh_merge_day = property(lambda self: usagesrv.DSH_MERGE_DAY)
     magpie_price_snapshot = property(
         lambda self: usagesrv.MAGPIE_PRICE_SNAPSHOT_FILE)
@@ -86,16 +83,12 @@ class _FrozenStatsEnvironment(_UsagesrvStatsEnvironment):
     def __init__(self):
         self._chat2api_log = _frozen_sentinel("chat2api")
         self._dsh_snapshot = _frozen_sentinel("dsh")
-        self._qoder_log = _frozen_sentinel("qoder")
-        self._m365_log = _frozen_sentinel("m365")
         self._dsh_merge_day = "2026-01-01"
         self._magpie_price_snapshot = _frozen_sentinel("magpie-price-snapshot")
         self._magpie_price_status = _frozen_sentinel("magpie-price-status")
 
     chat2api_log = property(lambda self: self._chat2api_log)
     dsh_snapshot = property(lambda self: self._dsh_snapshot)
-    qoder_log = property(lambda self: self._qoder_log)
-    m365_log = property(lambda self: self._m365_log)
     dsh_merge_day = property(lambda self: self._dsh_merge_day)
     magpie_price_snapshot = property(lambda self: self._magpie_price_snapshot)
     magpie_price_status = property(lambda self: self._magpie_price_status)
@@ -231,25 +224,6 @@ def _c2a_record(time, model="glm-5.3", in_tok=1_000_000, out_tok=0,
             "duration_ms": 100}
 
 
-def _qoder_record(time, model="gfmodel", credits=0.5, billable=True,
-                  in_tok=1000, out_tok=200, cache_tok=500):
-    return {"time": time, "model": model, "stream": True,
-            "input_tokens": in_tok, "output_tokens": out_tok,
-            "cached_input_tokens": cache_tok, "reasoning_tokens": 10,
-            "total_tokens": in_tok + out_tok, "credits": credits,
-            "original_credits": credits * 2, "billable": billable,
-            "request_id": "req-%s" % time}
-
-
-def _m365_record(time, model="gpt-5.6-sol", in_tok=1_000_000, out_tok=100_000,
-                 cache_tok=0, status=200):
-    return {"time": time, "api_key_prefix": "m365_test...",
-            "account_email": "user@example.test", "model": model,
-            "endpoint": "/v1/chat/completions", "stream": True,
-            "input_tokens": in_tok, "output_tokens": out_tok,
-            "cache_tokens": cache_tok, "duration_ms": 500, "status": status}
-
-
 def _dsh_snapshot():
     """Frozen-day snapshot shape mirroring data/dsh-ledger-20260902.json."""
     return {
@@ -382,7 +356,6 @@ class TestBoundedStats(unittest.TestCase):
         self.assertEqual(src["source_totals"]["estimated_cost_cny"], 73.656)
         day = self._day(res, "2026-09-10")
         self.assertEqual(day["day_total"]["estimated_cost_cny"], 73.656)
-        self.assertEqual(day["day_total"]["credits"], 0.0)
         self.assertEqual(res["totals"]["estimated_cost_cny"], 73.656)
         self.assertEqual(res["totals"]["requests"], 2)
         self.assertEqual(res["meta"], {"timezone": "Asia/Shanghai",
@@ -421,12 +394,6 @@ class TestBoundedStats(unittest.TestCase):
                             out_tok=100_000),                          # sol 21.6
                 _c2a_record("2026-09-11T10:00:00+08:00"),              # glm 25.92
             ]),
-            "qoder": self._write_ledger("qoder.jsonl", [
-                _qoder_record("2026-09-10T12:00:00+08:00", credits=0.5),
-                _qoder_record("2026-09-11T12:00:00+08:00", credits=0.25),
-                _qoder_record("2026-09-10T13:00:00+08:00", model="glm-5.3",
-                              credits=1.0),
-            ]),
         }
         # 先过滤后聚合：模型过滤命中 chat2api 的两条 glm-5.3 记录。
         res = console_stats.bounded_stats(
@@ -442,19 +409,8 @@ class TestBoundedStats(unittest.TestCase):
         self.assertEqual(res["totals"]["requests"], 2)
         # 两条默认记录各为 1M input / 0 output -> 1.4 USD -> 10.08 CNY
         self.assertAlmostEqual(res["totals"]["estimated_cost_cny"], 20.16, places=9)
-        self.assertEqual(res["totals"]["credits"], 0.0)
         cov = res["coverage"]["sources"]
         self.assertEqual(cov["chat2api"]["days_with_records"], 2)
-        # coverage 只报告被选中的来源：未选择的 qoder 不出现在 coverage 里
-        self.assertNotIn("qoder", cov)
-
-        # 仅 qoder：积分单列，无金额（3 条积分记录合计 0.5+0.25+1.0）。
-        res_q = console_stats.bounded_stats(ledgers, "2026-09-10", "2026-09-11",
-                                            sources=["qoder"])
-        self.assertEqual(res_q["totals"]["credits"], 1.75)
-        self.assertEqual(res_q["totals"]["estimated_cost_cny"], 0.0)
-        for day in res_q["days"]:
-            self.assertEqual([b["source"] for b in day["sources"]], ["qoder"])
 
         # 模型无命中：无任何日数据，区间内所有日期进入 missing_days。
         res_empty = console_stats.bounded_stats(
@@ -462,6 +418,57 @@ class TestBoundedStats(unittest.TestCase):
         self.assertEqual(res_empty["days"], [])
         self.assertEqual(res_empty["coverage"]["missing_days"],
                          ["2026-09-10", "2026-09-11"])
+
+    def test_credits_are_gone_from_the_summary_contract(self):
+        """B0：退役来源的积分/历史来源已删除，汇总只有金额与 token 口径。"""
+        ledgers = {"chat2api": self._write_ledger("c2a.jsonl", [
+            _c2a_record("2026-09-10T10:00:00+08:00"),
+        ])}
+        res = console_stats.bounded_stats(ledgers, "2026-09-10", "2026-09-10")
+        self.assertNotIn("credits", res["totals"])
+        self.assertNotIn("credits", res["days"][0]["day_total"])
+        row = self._model_row(res, "2026-09-10", "chat2api", "glm-5.3")
+        self.assertNotIn("credits", row)
+        self.assertNotIn("credits_currency", row)
+        self.assertFalse(hasattr(console_stats, "CREDITS_CURRENCY"))
+        self.assertFalse(hasattr(console_stats, "retired_ledgers"))
+        self.assertEqual(set(console_stats._SOURCE_KINDS), {"chat2api", "dsh"})
+        self.assertEqual(set(console_stats._SOURCE_SPECS), {"chat2api", "dsh"})
+
+    def test_absent_ledger_coverage(self):
+        ledgers = {
+            "chat2api": os.path.join(self._tmp.name, "not-there.jsonl"),
+            "dsh": self._write_snapshot(_dsh_snapshot()),  # 冻结日 2026-09-02
+        }
+        res = console_stats.bounded_stats(ledgers, "2026-09-02", "2026-09-03")
+        cov = res["coverage"]["sources"]["chat2api"]
+        self.assertFalse(cov["ledger_present"])   # 缺席如实标注
+        self.assertEqual(cov["days_with_records"], 0)
+        # 缺席账本不冒充零：days 只含 dsh 真实记录日，无 chat2api 块。
+        self.assertEqual([d["date"] for d in res["days"]], ["2026-09-02"])
+        for day in res["days"]:
+            self.assertNotIn("chat2api",
+                             [b["source"] for b in day["sources"]])
+        self.assertEqual(res["coverage"]["missing_days"], ["2026-09-03"])
+        self.assertEqual(res["coverage"]["sources"]["dsh"]["ledger_present"],
+                         True)
+
+    def test_malformed_lines_mark_source_error(self):
+        good = _c2a_record("2026-09-10T10:00:00+08:00")
+        path = os.path.join(self._tmp.name, "c2a.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(good) + "\n")
+            f.write("not-json{{\n")
+        ledgers = {"chat2api": path}
+        res = console_stats.bounded_stats(ledgers, "2026-09-10", "2026-09-10")
+        chat_cov = res["coverage"]["sources"]["chat2api"]
+        errors = {e["type"]: e for e in chat_cov.get("errors", [])}
+        self.assertIn("malformed_lines", errors)
+        self.assertEqual(errors["malformed_lines"]["bad_lines"], 1)
+        # 坏行被如实标注；好行仍聚合，不整体失败。
+        self.assertEqual(
+            self._model_row(res, "2026-09-10", "chat2api", "glm-5.3")
+            ["requests"], 1)
 
     def test_missing_days_reported_not_zero(self):
         ledgers = {"chat2api": self._write_ledger("c2a.jsonl", [
@@ -497,81 +504,6 @@ class TestBoundedStats(unittest.TestCase):
         self.assertEqual(res["totals"]["estimated_cost_cny"], 10.08)
         self.assertEqual(res["totals"]["requests"], 2)
 
-    def test_credits_kept_separate_from_money(self):
-        ledgers = {
-            "qoder": self._write_ledger("qoder.jsonl", [
-                _qoder_record("2026-09-10T10:00:00+08:00", credits=0.5),
-                _qoder_record("2026-09-11T10:00:00+08:00", credits=0.25),
-            ]),
-            "chat2api": self._write_ledger("c2a.jsonl", [
-                _c2a_record("2026-09-10T11:00:00+08:00"),  # 10.08 CNY
-            ]),
-        }
-        res = console_stats.bounded_stats(ledgers, "2026-09-10", "2026-09-11")
-        # 积分与钱分列：credits 0.75 不折现、不并入 estimated_cost_cny。
-        self.assertAlmostEqual(res["totals"]["credits"], 0.75, places=9)
-        self.assertEqual(res["totals"]["estimated_cost_cny"], 10.08)
-        self.assertEqual(res["totals"]["credits_currency"], "qoder")
-        qrow = self._model_row(res, "2026-09-10", "qoder", "gfmodel")
-        self.assertEqual(qrow["credits"], 0.5)
-        self.assertIsNone(qrow["estimated_cost_cny"])
-        self.assertNotIn("cache_tokens", qrow)  # qoder 口径不含 cache/reasoning
-        qsrc = self._source_block(res, "2026-09-10", "qoder")
-        self.assertEqual(qsrc["source_totals"]["billable_requests"], 1)
-        self.assertIsNone(qsrc["source_totals"]["estimated_cost_cny"])
-        self.assertEqual(qsrc["source_totals"]["credits_currency"], "qoder")
-        day = self._day(res, "2026-09-10")
-        self.assertAlmostEqual(day["day_total"]["credits"], 0.5, places=9)
-        self.assertEqual(day["day_total"]["estimated_cost_cny"], 10.08)
-
-    def test_absent_ledger_coverage(self):
-        ledgers = {
-            "chat2api": os.path.join(self._tmp.name, "not-there.jsonl"),
-            "qoder": self._write_ledger("qoder.jsonl", [
-                _qoder_record("2026-09-10T10:00:00+08:00", credits=0.5),
-                _qoder_record("2026-09-12T10:00:00+08:00", credits=0.25),
-            ]),
-        }
-        res = console_stats.bounded_stats(ledgers, "2026-09-10", "2026-09-12")
-        cov = res["coverage"]["sources"]["chat2api"]
-        self.assertFalse(cov["ledger_present"])   # 缺席如实标注
-        self.assertEqual(cov["days_with_records"], 0)
-        # 缺席账本不冒充零：days 只含 qoder 真实记录日，无 chat2api 块。
-        self.assertEqual([d["date"] for d in res["days"]],
-                         ["2026-09-10", "2026-09-12"])
-        for day in res["days"]:
-            self.assertNotIn("chat2api",
-                             [b["source"] for b in day["sources"]])
-        self.assertEqual(res["coverage"]["missing_days"], ["2026-09-11"])
-        self.assertAlmostEqual(res["totals"]["credits"], 0.75, places=9)
-        self.assertEqual(res["coverage"]["sources"]["qoder"]["ledger_present"],
-                         True)
-
-    def test_malformed_lines_mark_source_error(self):
-        good = _c2a_record("2026-09-10T10:00:00+08:00")
-        path = os.path.join(self._tmp.name, "c2a.jsonl")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(json.dumps(good) + "\n")
-            f.write("not-json{{\n")
-        ledgers = {
-            "chat2api": path,
-            "qoder": self._write_ledger("qoder.jsonl", [
-                _qoder_record("2026-09-10T12:00:00+08:00", credits=0.5),
-            ]),
-        }
-        res = console_stats.bounded_stats(ledgers, "2026-09-10", "2026-09-10")
-        chat_cov = res["coverage"]["sources"]["chat2api"]
-        errors = {e["type"]: e for e in chat_cov.get("errors", [])}
-        self.assertIn("malformed_lines", errors)
-        self.assertEqual(errors["malformed_lines"]["bad_lines"], 1)
-        # 坏行被如实标注；好行仍聚合，其余源不受影响，不整体失败。
-        self.assertEqual(
-            self._model_row(res, "2026-09-10", "chat2api", "glm-5.3")
-            ["requests"], 1)
-        self.assertEqual(
-            self._model_row(res, "2026-09-10", "qoder", "gfmodel")["credits"],
-            0.5)
-
     def test_range_limit_and_invalid_range(self):
         ledgers = {"chat2api": os.path.join(self._tmp.name, "c2a.jsonl")}
         with self.assertRaises(ValueError):  # 93 天超出上限
@@ -585,7 +517,7 @@ class TestBoundedStats(unittest.TestCase):
         self.assertEqual(len(res["coverage"]["missing_days"]), 92)
 
     def test_cross_day_totals_consistency(self):
-        """跨日合计=逐日加和；积分与钱分开断言；DSH 快照单列并入金额列。"""
+        """跨日合计=逐日加和；DSH 快照单列并入金额列。"""
         ledgers = {
             "chat2api": self._write_ledger("c2a.jsonl", [
                 _c2a_record("2026-09-01T10:00:00+08:00"),             # 10.08
@@ -594,10 +526,6 @@ class TestBoundedStats(unittest.TestCase):
                             cache_tok=500_000),                       # 47.736
                 _c2a_record("2026-09-03T10:00:00+08:00",
                             in_tok=500_000),                          # 5.04
-            ]),
-            "qoder": self._write_ledger("qoder.jsonl", [
-                _qoder_record("2026-09-01T12:00:00+08:00", credits=0.5),
-                _qoder_record("2026-09-03T12:00:00+08:00", credits=0.25),
             ]),
             "dsh": self._write_snapshot(_dsh_snapshot()),  # 冻结日 2026-09-02
         }
@@ -608,18 +536,13 @@ class TestBoundedStats(unittest.TestCase):
         self.assertAlmostEqual(res["totals"]["estimated_cost_cny"],
                                sum(d["day_total"]["estimated_cost_cny"]
                                    for d in res["days"]), places=9)
-        # 积分逐日加和
-        self.assertAlmostEqual(res["totals"]["credits"],
-                               sum(d["day_total"]["credits"]
-                                   for d in res["days"]), places=9)
         for key in ("requests", "input_tokens", "output_tokens",
                     "cache_tokens", "reasoning_tokens"):
             self.assertEqual(res["totals"][key],
                              sum(d["day_total"][key] for d in res["days"]))
-        self.assertEqual(res["totals"]["requests"], 8)   # 3 chat + 2 qoder + 3 dsh
+        self.assertEqual(res["totals"]["requests"], 6)   # 3 chat + 3 dsh
         self.assertAlmostEqual(res["totals"]["estimated_cost_cny"], 73.656,
                                places=9)
-        self.assertAlmostEqual(res["totals"]["credits"], 0.75, places=9)
         # DSH 单列：models 来自 byProviderModel 行，cost=真实记账 x 汇率。
         dsh_block = self._source_block(res, "2026-09-02", "dsh")
         self.assertEqual(dsh_block["kind"], "dsh-ledger")
@@ -653,13 +576,11 @@ class TestBoundedStats(unittest.TestCase):
         self.assertEqual(set(ledgers), {"chat2api", "dsh"})
         self.assertIs(ledgers["chat2api"], usagesrv.CHAT2API_LOG)
         self.assertIs(ledgers["dsh"], usagesrv.DSH_SNAPSHOT_FILE)
-        # 退役来源账本仍在磁盘保留，仅经显式历史追溯接口可取。
-        retired = console_stats.retired_ledgers()
-        self.assertEqual(set(retired), {"qoder", "m365"})
-        self.assertIs(retired["qoder"], usagesrv.QODER_LOG)
-        self.assertIs(retired["m365"], usagesrv.M365_LOG)
-        for name in ("qoder", "m365"):
-            self.assertNotIn(name, ledgers)
+        # 退役来源账本与专用追溯接口都已删除。
+        self.assertFalse(hasattr(console_stats, "retired_ledgers"))
+        self.assertEqual(set(ledgers), {"chat2api", "dsh"})
+        for name in ("QODER_LOG", "M365_LOG"):
+            self.assertFalse(hasattr(usagesrv, name))
 
     def test_default_ledgers_env_redirect(self):
         redirect = os.path.join(self._tmp.name, "chat2api-usage.jsonl")
@@ -728,41 +649,6 @@ def _c2a_usage(time, model="m-a", in_tok=100, out_tok=50, duration_ms=1000,
     return rec
 
 
-def _qoder_cn_usage(time, model="gfmodel", in_tok=100, out_tok=50,
-                     duration_ms=1000, credits=0.5, drop=()):
-    """Qoder 国内账本记录（字段形状=qoder 网关 usagelog.go）。"""
-    rec = {"time": time, "model": model, "stream": True,
-           "input_tokens": in_tok, "output_tokens": out_tok,
-           "cached_input_tokens": 0, "reasoning_tokens": 0,
-           "total_tokens": 150, "credits": credits,
-           "original_credits": 1.0, "billable": True,
-           "request_id": "req-1", "duration_ms": duration_ms}
-    for key in drop:
-        rec.pop(key, None)
-    return rec
-
-
-def _qoder_global_usage(at, model="qfmodel", out_tok=200, ms=2000,
-                        status=200, drop=()):
-    """Qoder 国际请求日志记录（字段形状=qoder-global/logs/requests.log）。
-
-    日志从不记 input_tokens/credits（E12-3 脱敏扫描），故本 helper 也不造。
-    """
-    rec = {"at": at, "model": model, "stream": True, "max_tokens": 1000,
-           "tools": 0, "ms": ms, "status": status, "error": None,
-           "body_bytes": 100, "finish": "stop", "out_tokens": out_tok}
-    for key in drop:
-        rec.pop(key, None)
-    return rec
-
-
-def _cliproxy_usage(time, model="gemini-3-pro", in_tok=100, out_tok=50,
-                     duration_ms=1000):
-    """Gemini 观测采集落盘记录（A12-2 落盘格式，字段名同既有账本）。"""
-    return {"time": time, "model": model, "input_tokens": in_tok,
-            "output_tokens": out_tok, "duration_ms": duration_ms}
-
-
 class TestA12UsageQueries(unittest.TestCase):
     """A12-1 端点契约：临时目录 fixture，不读真实账本、不发任何请求。"""
 
@@ -802,10 +688,9 @@ class TestA12UsageQueries(unittest.TestCase):
                 _c2a_usage("2026-09-24T11:00:00+08:00", model="m-bare",
                             in_tok=None, out_tok=None,
                             drop=("input_tokens", "output_tokens")),
-            ]),
-            "qoder_global": self._write("qg.jsonl", [
-                _qoder_global_usage("2026-09-24T03:00:00.000Z", model="m-a",
-                                    out_tok=200, ms=1000),
+                _c2a_usage("2026-09-24T12:00:00+08:00", model="m-out",
+                            in_tok=None, out_tok=200,
+                            drop=("input_tokens",)),
             ]),
         }
         res = console_stats.usage_tokens(ledgers, days=1, now=NOW_1200)
@@ -819,26 +704,26 @@ class TestA12UsageQueries(unittest.TestCase):
         self.assertEqual(rows[("chat2api", "m-zero")]["input_tokens"], 0)
         self.assertEqual(rows[("chat2api", "m-zero")]["output_tokens"], 0)
         self.assertTrue(rows[("chat2api", "m-zero")]["complete"])
-        # 国际缺输入：无完整请求故完整列 null、complete=False，输出走 partial 另列
-        self.assertIsNone(rows[("qoder_global", "m-a")]["input_tokens"])
-        self.assertIsNone(rows[("qoder_global", "m-a")]["output_tokens"])
-        self.assertEqual(rows[("qoder_global", "m-a")]["partial_output_tokens"], 200)
-        self.assertIsNone(rows[("qoder_global", "m-a")]["partial_input_tokens"])
-        self.assertEqual(rows[("qoder_global", "m-a")]["complete_requests"], 0)
-        self.assertEqual(rows[("qoder_global", "m-a")]["partial_requests"], 1)
-        self.assertFalse(rows[("qoder_global", "m-a")]["complete"])
+        # 缺输入：无完整请求故完整列 null、complete=False，输出走 partial 另列
+        self.assertIsNone(rows[("chat2api", "m-out")]["input_tokens"])
+        self.assertIsNone(rows[("chat2api", "m-out")]["output_tokens"])
+        self.assertEqual(rows[("chat2api", "m-out")]["partial_output_tokens"], 200)
+        self.assertIsNone(rows[("chat2api", "m-out")]["partial_input_tokens"])
+        self.assertEqual(rows[("chat2api", "m-out")]["complete_requests"], 0)
+        self.assertEqual(rows[("chat2api", "m-out")]["partial_requests"], 1)
+        self.assertFalse(rows[("chat2api", "m-out")]["complete"])
         # 两个分量都缺：行保留（有记录）但两列皆 null，不与「无记录」混淆
         self.assertIsNone(rows[("chat2api", "m-bare")]["input_tokens"])
         self.assertIsNone(rows[("chat2api", "m-bare")]["output_tokens"])
         self.assertEqual(rows[("chat2api", "m-bare")]["partial_requests"], 1)
         missing = self._missing(res)
-        self.assertEqual(missing[("qoder_global", "m-a")]["reason"],
+        self.assertEqual(missing[("chat2api", "m-out")]["reason"],
                          "output_only")
-        self.assertEqual(missing[("qoder_global", "m-a")]["date"],
+        self.assertEqual(missing[("chat2api", "m-out")]["date"],
                          "2026-09-24")
         # missing 行带出部分请求可展示的分量（仅输出可见）
-        self.assertEqual(missing[("qoder_global", "m-a")]["output_tokens"], 200)
-        self.assertIsNone(missing[("qoder_global", "m-a")]["input_tokens"])
+        self.assertEqual(missing[("chat2api", "m-out")]["output_tokens"], 200)
+        self.assertIsNone(missing[("chat2api", "m-out")]["input_tokens"])
         self.assertEqual(missing[("chat2api", "m-bare")]["reason"], "no_tokens")
         self.assertIsNone(missing[("chat2api", "m-bare")]["output_tokens"])
         self.assertIsNone(missing[("chat2api", "m-bare")]["input_tokens"])
@@ -889,53 +774,29 @@ class TestA12UsageQueries(unittest.TestCase):
         self.assertEqual(res["coverage"]["complete_rows"], 0)
         self.assertEqual(res["coverage"]["partial_rows"], 1)
 
-    def test_cross_source_same_model_not_merged(self):
-        ledgers = {
-            "chat2api": self._write("c2a.jsonl", [
-                _c2a_usage("2026-09-24T10:00:00+08:00", model="same",
-                            in_tok=100, out_tok=10)]),
-            "qoder_cn": self._write("qcn.jsonl", [
-                _qoder_cn_usage("2026-09-24T10:00:00+08:00", model="same",
-                                in_tok=7, out_tok=3)]),
-        }
-        res = console_stats.usage_tokens(ledgers, days=1, now=NOW_1200)
-        self.assertEqual(
-            [(r["source"], r["model"], r["input_tokens"], r["output_tokens"])
-             for r in res["days"]],
-            [("chat2api", "same", 100, 10), ("qoder_cn", "same", 7, 3)])
-        self.assertEqual(res["coverage"]["complete_rows"], 2)
-
-    def test_international_missing_fields_stay_unknown(self):
-        """国际日志零行有 input_tokens/credits：一律未知，不估算不折零。"""
-        ledgers = {"qoder_global": self._write("qg.jsonl", [
-            _qoder_global_usage("2026-09-24T03:00:00.000Z", model="m-out",
-                                out_tok=300, ms=1000),
-            _qoder_global_usage("2026-09-24T04:00:00.000Z", model="m-none",
-                                out_tok=None, ms=1000, status=429),
-        ])}
-        res = console_stats.usage_tokens(ledgers, days=1, now=NOW_1200)
-        rows = self._rows(res)
-        for row in res["days"]:
-            self.assertIsNone(row["input_tokens"])
-            self.assertNotIn("credits", row)  # 可归因积分不可得：不出字段
-            self.assertFalse(row["complete"])
-        self.assertIsNone(rows[("qoder_global", "m-out")]["input_tokens"])
-        # 无完整请求：完整列 null，可展示的输出走 partial_*
-        self.assertIsNone(rows[("qoder_global", "m-out")]["output_tokens"])
-        self.assertEqual(rows[("qoder_global", "m-out")]["partial_output_tokens"],
-                         300)
-        self.assertIsNone(rows[("qoder_global", "m-none")]["output_tokens"])
-        self.assertIsNone(rows[("qoder_global", "m-none")]["partial_output_tokens"])
-        self.assertEqual({m["model"]: m["reason"] for m in res["missing"]},
-                         {"m-out": "output_only", "m-none": "no_tokens"})
-        cov = res["coverage"]["sources"]["qoder_global"]
-        self.assertEqual(cov["unknown_fields"], ["input_tokens", "credits"])
-        self.assertEqual(cov["non_ok_records"], 1)
-        rates = console_stats.usage_rates(ledgers, hours=24, now=NOW_1200)
-        self.assertEqual(rates["skipped"]["missing_output_tokens"], 1)
-        self.assertEqual(rates["skipped"]["invalid_time"], 0)
-        self.assertEqual([r["model"] for r in rates["hours"]], ["m-out"])
-        self.assertEqual(rates["hours"][0]["output_tokens"], 300)
+    def test_removed_source_is_never_read(self):
+        """B0：退役来源不在来源词表内：不读它的账本，如实标为未装配。"""
+        path = self._write("qcn.jsonl", [
+            {"time": "2026-09-24T10:00:00+08:00", "model": "same",
+             "input_tokens": 7, "output_tokens": 3},
+        ])
+        for source in ("qoder_cn", "qoder_global", "cliproxy", "m365"):
+            with self.subTest(source=source):
+                res = console_stats.usage_tokens(
+                    {source: path}, days=1, now=NOW_1200)
+                self.assertEqual(res["days"], [])
+                cov = res["coverage"]["sources"][source]
+                self.assertFalse(cov["ledger_present"])
+                self.assertFalse(cov["enabled"])
+        self.assertNotIn("qoder_cn", console_stats._SOURCE_SPECS)
+        self.assertNotIn("qoder_global", console_stats._SOURCE_SPECS)
+        self.assertNotIn("cliproxy", console_stats._SOURCE_SPECS)
+        for name in ("QODER_GLOBAL_REQUESTS_LOG", "GEMINI_USAGE_LEDGER",
+                     "CLIPROXY_LEDGER_SOURCE", "CLIPROXY_CONTROL_KINDS",
+                     "CLIPROXY_GAP_FIELDS", "MAX_CLIPROXY_GAPS",
+                     "_cliproxy_gap_summary"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(console_stats, name))
 
     def test_invalid_timestamp_goes_to_missing_not_dropped(self):
         ledgers = {"chat2api": self._write("c2a.jsonl", [
@@ -1045,12 +906,12 @@ class TestA12UsageQueries(unittest.TestCase):
         now = datetime.now(timezone.utc)
         inside = (now - timedelta(minutes=30)).strftime(
             "%Y-%m-%dT%H:%M:%S.000Z")
-        path = self._write("qg.jsonl", [
-            _qoder_global_usage(inside, model="qfmodel", out_tok=300, ms=1000),
-            _qoder_global_usage(inside, model="qfmodel", out_tok=None,
-                                ms=1000),
+        path = self._write("c2a.jsonl", [
+            _c2a_usage(inside, model="qfmodel", out_tok=300),
+            _c2a_usage(inside, model="qfmodel", out_tok=None,
+                        drop=("output_tokens",)),
         ])
-        ledgers = {"qoder_global": path}
+        ledgers = {"chat2api": path}
         first = console_stats.usage_tokens(ledgers, days=2, now=now)
         self.assertEqual([r["model"] for r in first["days"]], ["qfmodel"])
         first_rates = console_stats.usage_rates(ledgers, hours=24, now=now)
@@ -1068,7 +929,7 @@ class TestA12UsageQueries(unittest.TestCase):
             tokens = console_stats.usage_tokens(ledgers, days=2, now=now)
             rates = console_stats.usage_rates(ledgers, hours=24, now=now)
 
-        cov = tokens["coverage"]["sources"]["qoder_global"]
+        cov = tokens["coverage"]["sources"]["chat2api"]
         self.assertTrue(cov["ledger_present"])  # 退回旧缓存：账本仍算「在场」
         self.assertEqual(cov["events"], 2)     # 旧缓存确有 2 条（旧逻辑会当本次读数）
         self.assertEqual([e["type"] for e in cov["errors"]],
@@ -1076,7 +937,7 @@ class TestA12UsageQueries(unittest.TestCase):
         self.assertEqual(tokens["days"], [])
         self.assertEqual(tokens["missing"], [])
         self.assertEqual(tokens["coverage"]["scanned"], 0)
-        rate_cov = rates["coverage"]["sources"]["qoder_global"]
+        rate_cov = rates["coverage"]["sources"]["chat2api"]
         self.assertEqual([e["type"] for e in rate_cov["errors"]],
                          [console_stats.ERROR_TYPE_READ])
         self.assertEqual(rates["hours"], [])
@@ -1167,9 +1028,9 @@ class TestA12UsageQueries(unittest.TestCase):
 
         produced = set()
         # 生产分支①：本次读取失败（read_error）
-        path = self._write("qg.jsonl", [
-            _qoder_global_usage("2026-09-24T03:00:00.000Z", model="m")])
-        ledgers = {"qoder_global": path}
+        path = self._write("c2a.jsonl", [
+            _c2a_usage("2026-09-24T10:00:00+08:00", model="m")])
+        ledgers = {"chat2api": path}
         console_stats.usage_tokens(ledgers, days=1, now=NOW_1200)
         real_stat = os.stat
 
@@ -1181,7 +1042,7 @@ class TestA12UsageQueries(unittest.TestCase):
         with mock.patch("os.stat", new=fake_stat):
             res = console_stats.usage_tokens(ledgers, days=1, now=NOW_1200)
         produced.update(e["type"] for e in
-                        res["coverage"]["sources"]["qoder_global"]["errors"])
+                        res["coverage"]["sources"]["chat2api"]["errors"])
         # 生产分支②：结构损坏（corrupt_ledger）
         console_stats._reset_cache_for_tests()
         day = usagesrv.DSH_MERGE_DAY
@@ -1210,10 +1071,8 @@ class TestA12UsageQueries(unittest.TestCase):
         self.assertEqual(set(sources), {"chat2api", "dsh"})
         self.assertIs(sources["chat2api"], usagesrv.CHAT2API_LOG)
         self.assertIs(sources["dsh"], usagesrv.DSH_SNAPSHOT_FILE)
-        # 退役来源的字段映射仍保留（显式历史追溯），但不进默认装配。
-        for name in ("qoder_cn", "qoder_global", "cliproxy"):
-            self.assertIn(name, console_stats._SOURCE_SPECS)
-            self.assertNotIn(name, sources)
+        # 来源字段映射只剩默认读链的两个来源。
+        self.assertEqual(set(console_stats._SOURCE_SPECS), {"chat2api", "dsh"})
 
     # -------------------------------------------------------- rates 端点
 
@@ -1478,35 +1337,18 @@ class TestA12UsageQueries(unittest.TestCase):
         self.assertTrue(state["bytes_truncated"])
         self.assertEqual(len(state["events"]), 2)
 
-    def test_gemini_collection_disabled_returns_empty_with_note(self):
-        missing_path = os.path.join(self._tmp.name, "usage-cliproxy.jsonl")
+    def test_missing_ledger_returns_empty_with_note(self):
+        missing_path = os.path.join(self._tmp.name, "usage-chat2api.jsonl")
         ledgers = {
-            "cliproxy": missing_path,
-            "chat2api": self._write("c2a.jsonl", [
-                _c2a_usage("2026-09-24T10:00:00+08:00", model="m-a",
-                            in_tok=1, out_tok=1)]),
+            "chat2api": missing_path,
+            "dsh": self._write_snapshot("dsh.json", _dsh_snapshot()),
         }
         res = console_stats.usage_tokens(ledgers, days=1, now=NOW_1200)
-        self.assertNotIn("cliproxy", {r["source"] for r in res["days"]})
-        cov = res["coverage"]["sources"]["cliproxy"]
+        self.assertNotIn("chat2api", {r["source"] for r in res["days"]})
+        cov = res["coverage"]["sources"]["chat2api"]
         self.assertFalse(cov["ledger_present"])
-        self.assertFalse(cov["enabled"])
-        self.assertIn("采集链未启用", cov["note"])
-        self.assertIn("0 冒充", cov["note"])
-        rates = console_stats.usage_rates(ledgers, hours=24, now=NOW_1200)
-        self.assertFalse(rates["coverage"]["sources"]["cliproxy"]["enabled"])
-        # 采集链启用（落盘文件出现）后才出行；字段未对齐按缺分量计
-        path = self._write("usage-cliproxy.jsonl", [
-            _cliproxy_usage("2026-09-24T10:00:00+08:00", in_tok=None,
-                             out_tok=100, duration_ms=1000)])
-        res2 = console_stats.usage_tokens({"cliproxy": path}, days=1,
-                                           now=NOW_1200)
-        self.assertEqual([r["source"] for r in res2["days"]], ["cliproxy"])
-        self.assertIsNone(res2["days"][0]["input_tokens"])
-        # 字段未对齐（缺输入）：完整列 null，可展示输出走 partial_*
-        self.assertIsNone(res2["days"][0]["output_tokens"])
-        self.assertEqual(res2["days"][0]["partial_output_tokens"], 100)
-        self.assertTrue(res2["coverage"]["sources"]["cliproxy"]["enabled"])
+        self.assertIn("账本文件缺席", cov["note"])
+        self.assertIn("不冒充零用量", cov["note"])
 
     # --------------------------------------------------------- 载荷形状
 
@@ -1534,9 +1376,7 @@ class TestA12UsageQueries(unittest.TestCase):
             "chat2api": self._write("c2a.jsonl", [
                 _c2a_usage("2026-09-24T10:00:00+08:00", model="m-a",
                             in_tok=10, out_tok=5, duration_ms=1000)]),
-            "qoder_global": self._write("qg.jsonl", [
-                _qoder_global_usage("2026-09-24T04:00:00.000Z", out_tok=20,
-                                    ms=1000)]),
+            "dsh": self._write_snapshot("dsh.json", _dsh_snapshot()),
         }
         res = console_stats.usage_tokens(ledgers, days=1, now=NOW_1200)
         self.assertEqual(set(res),
@@ -1611,13 +1451,13 @@ class TestConsoleLogsNullPayload(unittest.TestCase):
         """行构造器：缺失/不可解析一律 None，真实 0 是已知值。"""
         row = usagesrv._console_log_row("chat2api", {
             "time": "2026-09-24T10:00:00+08:00", "model": "m-a",
-            "status": "ok", "input_tokens": 100, "credits": 0.5})
+            "status": "ok", "input_tokens": 100})
         self.assertEqual(row["input_tokens"], 100)
         self.assertIsNone(row["output_tokens"])
         self.assertIsNone(row["cached_input_tokens"])
         self.assertIsNone(row["reasoning_tokens"])
         self.assertIsNone(row["duration_ms"])
-        self.assertEqual(row["credits"], 0.5)
+        self.assertNotIn("credits", row)
         self.assertEqual(usagesrv._log_int_or_none(0), 0)
         self.assertEqual(usagesrv._log_int_or_none("12"), 12)
         self.assertEqual(usagesrv._log_int_or_none(12.0), 12)
@@ -1635,7 +1475,7 @@ class TestConsoleLogsNullPayload(unittest.TestCase):
             {"time": "2026-09-24T11:00:00+08:00", "model": "m-zero",
              "status": "ok", "input_tokens": 0, "output_tokens": 0,
              "cached_input_tokens": 0, "reasoning_tokens": 0,
-             "duration_ms": 0, "credits": 0.5},
+             "duration_ms": 0},
         ])
         with mock.patch.object(usagesrv, "CHAT2API_LOG", path):
             status, payload = self._logs()
@@ -1647,7 +1487,7 @@ class TestConsoleLogsNullPayload(unittest.TestCase):
         self.assertIsNone(partial["cached_input_tokens"])
         self.assertIsNone(partial["reasoning_tokens"])
         self.assertEqual(partial["duration_ms"], 1000)
-        self.assertIsNone(partial["credits"])
+        self.assertNotIn("credits", partial)
         # 真实 0 是已知值：写了 0 就照实返回 0
         zero = rows["m-zero"]
         self.assertEqual(zero["input_tokens"], 0)
@@ -1655,7 +1495,7 @@ class TestConsoleLogsNullPayload(unittest.TestCase):
         self.assertEqual(zero["cached_input_tokens"], 0)
         self.assertEqual(zero["reasoning_tokens"], 0)
         self.assertEqual(zero["duration_ms"], 0)
-        self.assertEqual(zero["credits"], 0.5)
+        self.assertNotIn("credits", zero)
 
     def test_endpoint_unparseable_numbers_stay_null(self):
         """不可解析的数值同样按未知披露（旧实现 int("abc") 会抛出并中断响应）。"""
@@ -1707,41 +1547,23 @@ class TestF4bLogFeedCoverage(unittest.TestCase):
         conn.close()
         return resp.status, json.loads(raw)
 
-    def test_retired_source_ids_are_unavailable_not_silently_skipped(self):
-        """B0：退役来源（国际/国内/CLIProxy）不在默认读表内，如实标为未覆盖。"""
+    def test_unknown_source_ids_are_unavailable_not_silently_skipped(self):
+        """B0：未登记来源不在默认读表内，如实标为未覆盖。"""
         c2a = _write_jsonl(self._path("usage-chat2api.jsonl"), [
             _c2a_usage("2026-09-20T12:00:00+08:00", model="m-c2a")])
         with mock.patch.object(usagesrv, "CHAT2API_LOG", c2a):
             status, payload = self._get(
                 "/api/console/logs?limit=40"
-                "&sources=chat2api,qoder-global,qoder_global,nosuch")
+                "&sources=chat2api,nosuch")
         self.assertEqual(status, 200)
-        self.assertEqual(payload["sources"],
-                         ["chat2api", "qoder-global", "qoder_global", "nosuch"])
+        self.assertEqual(payload["sources"], ["chat2api", "nosuch"])
         # 未覆盖的 id 进 sources_unavailable：前端据此区分「没有记录」与
         # 「该来源不在账本覆盖内」，不再靠硬编码猜测
-        self.assertEqual(payload["sources_unavailable"],
-                         ["qoder-global", "qoder_global", "nosuch"])
+        self.assertEqual(payload["sources_unavailable"], ["nosuch"])
         self.assertEqual([r["source"] for r in payload["logs"]], ["chat2api"])
         row = payload["logs"][0]
         self.assertEqual(row["model"], "m-c2a")
         self.assertEqual(row["time"], "2026-09-20T12:00:00+08:00")
-
-    def test_retired_source_never_reads_its_ledger(self):
-        """B0：请求退役来源 id 时不读它的历史账本，只如实声明未覆盖。"""
-        intl = _write_jsonl(self._path("requests.log"), [
-            _qoder_global_usage("2026-09-20T04:02:15.135Z", model="qfmodel",
-                                out_tok=300, ms=16658)])
-        c2a = _write_jsonl(self._path("usage-chat2api.jsonl"), [
-            _c2a_usage("2026-09-20T12:00:00+08:00")])
-        with mock.patch.object(usagesrv, "CHAT2API_LOG", c2a), \
-                mock.patch.object(console_stats, "QODER_GLOBAL_REQUESTS_LOG",
-                                  intl):
-            status, payload = self._get(
-                "/api/console/logs?limit=10&sources=chat2api,qoder_global")
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["sources_unavailable"], ["qoder_global"])
-        self.assertEqual([r["source"] for r in payload["logs"]], ["chat2api"])
 
     def test_usage_rates_recorded_requests_ledger_count(self):
         """recorded_requests 按账本记录计数：含无法计算速率的记录；空窗口 0、未读取 null。"""
@@ -1769,9 +1591,6 @@ class TestF4bLogFeedCoverage(unittest.TestCase):
         self.assertEqual(payload["skipped"]["missing_output_tokens"], 1)
         # 账本已读取但窗口内无记录 = 真实的 0（零记录 ≠ 无记录）
         self.assertEqual(recorded["dsh"], 0)
-        # 退役来源绝不进入默认读链
-        for retired in ("qoder_cn", "qoder_global", "cliproxy"):
-            self.assertNotIn(retired, recorded)
         # 与速率分桶同一窗口口径：hours 行的请求数之和 ≤ 账本计数
         self.assertLessEqual(sum(r["requests"] for r in rate_rows),
                              recorded["chat2api"])
@@ -2022,7 +1841,7 @@ class ModelTokenRankingTests(unittest.TestCase):
         records = []
         for model, requests, input_tok, output_tok in (
                 ("model-b", 2, 300, 700), ("model-a", 9, 1000, 2000)):
-            records.extend(_qoder_record("2026-09-10T12:00:00+08:00", model=model,
+            records.extend(_c2a_record("2026-09-10T12:00:00+08:00", model=model,
                                          in_tok=input_tok if i == 0 else 0,
                                          out_tok=output_tok if i == 0 else 0)
                            for i in range(requests))
@@ -2033,7 +1852,7 @@ class ModelTokenRankingTests(unittest.TestCase):
 
         with mock.patch.object(usagesrv, "estimate_record", price):
             agg = console_stats._collect_jsonl_records(
-                "estimate", records, None, "2026-09-10", "2026-09-10")
+                records, None, "2026-09-10", "2026-09-10")
         rows = _emit_models("estimate", agg["days"]["2026-09-10"], 7.2)
         by_model = {row["model"]: row for row in rows}
         # token_total = 完整输入+输出；与请求数无关（9 请求的 model-a 靠
@@ -2066,16 +1885,16 @@ class CompleteModelTokenTests(unittest.TestCase):
     _model_row = TestBoundedStats._model_row
     _source_block = TestBoundedStats._source_block
 
-    def query(self, rows, source="qoder"):
+    def query(self, rows, source="chat2api"):
         ledger = self._write_ledger("new-token-evidence.jsonl", rows)
         return console_stats.bounded_stats(
             {source: ledger}, "2026-09-10", "2026-09-10")
 
     def test_partial_only_model_is_not_ranked_as_complete_tokens(self):
-        row = _qoder_record("2026-09-10T12:00:00+08:00", in_tok=999)
+        row = _c2a_record("2026-09-10T12:00:00+08:00", in_tok=999)
         row.pop("output_tokens")
         result = self.query([row])
-        model = self._model_row(result, "2026-09-10", "qoder", "gfmodel")
+        model = self._model_row(result, "2026-09-10", "chat2api", "glm-5.3")
         self.assertEqual(model["input_tokens"], 999)  # Legacy compatibility.
         self.assertEqual(model["output_tokens"], 0)
         self.assertIsNone(model["token_total"])
@@ -2093,12 +1912,12 @@ class CompleteModelTokenTests(unittest.TestCase):
                 ("mixed", {"usage_source": "none"}),
                 ("mixed", {"status": "upstream_read_error"}),
                 ("zero", {"input_tokens": 0, "output_tokens": 0})):
-            row = _qoder_record("2026-09-10T12:00:00+08:00", model=model,
+            row = _c2a_record("2026-09-10T12:00:00+08:00", model=model,
                                 in_tok=10, out_tok=2)
             row.update(extra)
             rows.append(row)
         result = self.query(rows)
-        model = self._model_row(result, "2026-09-10", "qoder", "mixed")
+        model = self._model_row(result, "2026-09-10", "chat2api", "mixed")
         self.assertEqual(model["token_total"], 12)
         self.assertEqual(model["complete_input_tokens"], 10)
         self.assertEqual(model["complete_output_tokens"], 2)
@@ -2120,32 +1939,34 @@ class CompleteModelTokenTests(unittest.TestCase):
     def test_bool_string_negative_and_fraction_are_not_token_evidence(self):
         rows = []
         for index, value in enumerate((True, "99", -1, 1.5)):
-            row = _qoder_record("2026-09-10T12:00:00+08:00",
+            row = _c2a_record("2026-09-10T12:00:00+08:00",
                                 model=f"bad-{index}", in_tok=7)
             row["output_tokens"] = value
             rows.append(row)
         result = self.query(rows)
         for index in range(4):
-            model = self._model_row(result, "2026-09-10", "qoder", f"bad-{index}")
+            model = self._model_row(result, "2026-09-10", "chat2api", f"bad-{index}")
             self.assertIsNone(model["token_total"])
             self.assertEqual(model["partial_token_total"], 7)
             self.assertIsNone(model["partial_output_tokens"])
         self.assertEqual(result["days"][0]["model_token_ranking"], [])
 
     def test_cross_source_ranking_and_invalid_date_coverage(self):
-        qoder = self._write_ledger("qoder-partial.jsonl", [
-            {"time": "2026-09-10T12:00:00+08:00", "model": "same",
-             "input_tokens": 999, "credits": 2},
-            {"time": "invalid", "model": "undated", "input_tokens": 10}])
         chat = self._write_ledger("chat-complete.jsonl", [
             _c2a_record("2026-09-10T12:00:00+08:00", model="same",
-                        in_tok=10, out_tok=5)])
+                        in_tok=10, out_tok=5),
+            {"time": "invalid", "model": "undated", "input_tokens": 10,
+             "service": "chat2api"}])
+        dsh_path = Path(self._tmp.name) / "dsh-token-evidence.json"
+        dsh_path.write_text(json.dumps(_dsh_snapshot()), encoding="utf-8")
         result = console_stats.bounded_stats(
-            {"qoder": qoder, "chat2api": chat}, "2026-09-10", "2026-09-10")
+            {"chat2api": chat, "dsh": dsh_path},
+            "2026-09-10", "2026-09-10")
         ranking = result["days"][0]["model_token_ranking"]
         self.assertEqual([(row["source"], row["model"], row["token_total"])
                           for row in ranking], [("chat2api", "same", 15)])
-        self.assertEqual(result["coverage"]["sources"]["qoder"]["undated_records"], 1)
+        self.assertEqual(
+            result["coverage"]["sources"]["chat2api"]["undated_records"], 1)
 
     def test_estimate_fee_conversion_failure_keeps_visible_token_lower_bound(self):
         row = _c2a_record("2026-09-10T12:00:00+08:00", in_tok=7)
@@ -2178,14 +1999,13 @@ class CompleteModelTokenTests(unittest.TestCase):
 
     def test_all_missing_or_invalid_sides_are_unknown_without_a_fake_total(self):
         rows = [
-            {"time": "2026-09-10T12:00:00+08:00", "model": "absent",
-             "credits": 0},
+            {"time": "2026-09-10T12:00:00+08:00", "model": "absent"},
             {"time": "2026-09-10T12:00:00+08:00", "model": "invalid",
-             "input_tokens": True, "output_tokens": "99", "credits": 0},
+             "input_tokens": True, "output_tokens": "99"},
         ]
         result = self.query(rows)
         for model in ("absent", "invalid"):
-            row = self._model_row(result, "2026-09-10", "qoder", model)
+            row = self._model_row(result, "2026-09-10", "chat2api", model)
             self.assertIsNone(row["token_total"])
             self.assertIsNone(row["partial_token_total"])
             self.assertEqual(row["token_coverage"]["unknown_records"], 1)
@@ -2271,8 +2091,7 @@ class StatsEnvironmentInjectionTests(unittest.TestCase):
     def test_default_assemblies_raise_instead_of_reading_a_host_module(self):
         self._unconfigured()
         for call in (console_stats.default_ledgers,
-                     console_stats.default_sources,
-                     console_stats.retired_ledgers):
+                     console_stats.default_sources):
             with self.assertRaises(console_stats.StatsNotConfigured):
                 call()
 

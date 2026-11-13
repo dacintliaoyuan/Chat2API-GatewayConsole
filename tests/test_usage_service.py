@@ -648,26 +648,20 @@ class UnpricedVetoTest(PriceEngineFixtureTest):
 
 
 class RetiredQuotaSnapshotTests(unittest.TestCase):
-    """B0 (2026-11-01): the Qoder-CN quota read is NOT assembled.
+    """B0 (2026-11-01): the Qoder-CN quota read face is removed.
 
     The retired source's old token files and desired-state marker are never
     read, no request is sent to 8095 and no old snapshot is reused. The
-    endpoint answers an explicit ``not_assembled`` state with null readings —
-    never a fabricated 0.
+    payload builder and the HTTP route are gone with the source; there is no
+    read face left to assemble or fake.
     """
 
-    def test_quota_snapshot_is_not_assembled_without_any_request(self):
-        with mock.patch("socket.create_connection") as connect,                 mock.patch("urllib.request.urlopen") as urlopen:
-            payload = usage_service._quota_snapshot_payload(force=True)
+    def test_quota_snapshot_payload_is_gone(self):
+        with mock.patch("socket.create_connection") as connect, \
+                mock.patch("urllib.request.urlopen") as urlopen:
+            self.assertFalse(hasattr(usage_service, "_quota_snapshot_payload"))
         connect.assert_not_called()
         urlopen.assert_not_called()
-        self.assertEqual(payload["state"], "not_assembled")
-        self.assertIsNone(payload["remaining"])
-        self.assertIsNone(payload["used"])
-        self.assertIsNone(payload["total"])
-        self.assertIsNone(payload["source"])
-        self.assertEqual(payload["gate"]["verdict"], "not_assembled")
-        self.assertIn("退役来源", payload["error"])
 
     def test_retired_token_helpers_are_gone(self):
         for name in ("_qoder_cn_token", "_qoder_global_token",

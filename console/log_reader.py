@@ -11,8 +11,7 @@ Contract (handoff A38-2, extended by P3/R3):
   ``lib/watch-*.ps1``, ``share/backend_supervision.py``,
   the retired Windows deploy script, ``share/broker_server.py``) — never by
   walking
-  directories. Only the chat2api (UM) and share producers are registered; the
-  retired Qoder / CLIProxy producers are gone from the runtime.
+  directories. Only the chat2api (UM) and share producers are registered.
 - Bounded reads: byte/row/wall-clock budgets per request; tail reads walk
   back from EOF, older pages walk back from a validated cursor. The file is
   never locked and the whole file is never read into memory.
