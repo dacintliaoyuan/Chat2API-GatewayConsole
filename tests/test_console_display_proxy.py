@@ -997,7 +997,7 @@ class DisplayGrantRouteTests(unittest.TestCase):
             cookie = headers.get("Set-Cookie", "")
             self.assertIn("HttpOnly", cookie)
             self.assertIn("SameSite=Strict", cookie)
-            self.assertIn("Path=/display/", cookie)
+            self.assertIn("Path=/;", cookie)
             self.assertNotIn(token, cookie)
             session = cookie.split(";", 1)[0]
             display_session = proxy.grants.validate_session(
