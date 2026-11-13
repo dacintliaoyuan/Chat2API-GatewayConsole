@@ -566,6 +566,12 @@ ensure_env_line "$UM_ETC/console.env" CHAT2API_SHARE_REVOKE_STATE_FILE \
 # price or Magpie wiring (the console unit's ExecStartPre fails closed on any
 # omission).  Budget and automatic-backup keys are deliberately absent.
 ensure_env_line "$UM_ETC/console.env" UM_CLOUD_SECURITY_STATE "$UM_VAR/security-state.json"
+# The merged 8100 child owns the UM login token and browser profile; keep them
+# under the writable console state instead of the read-only release.
+ensure_env_line "$UM_ETC/console.env" CHAT2API_TOKEN_FILE \
+  "$UM_CONSOLE_VAR/share-backend/token.json"
+ensure_env_line "$UM_ETC/console.env" CHAT2API_PROFILE_DIR \
+  "$UM_CONSOLE_VAR/share-backend/edge-profile"
 ensure_env_line "$UM_ETC/console.env" USAGE_PRICE_FILE "$UM_ETC/prices.json"
 ensure_env_line "$UM_ETC/console.env" CHAT2API_PRICE_TABLE_FILE "$UM_ETC/prices.json"
 ensure_env_line "$UM_ETC/console.env" MAGPIE_PRICE_SNAPSHOT "$UM_VAR/magpie-prices.snapshot.json"

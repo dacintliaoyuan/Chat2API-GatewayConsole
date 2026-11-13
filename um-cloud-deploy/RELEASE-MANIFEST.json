@@ -471,8 +471,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/config/console.env.example",
-      "sha256": "b622cd92305f3c012c32c05e91e6ed86b5ae6790afe953ee40efe5b82217fa09",
-      "size": 3846
+      "sha256": "24246de09534cbb45edcd2f6e08118ea49116207575a0ee5bf1437b74c06b578",
+      "size": 4140
     },
     {
       "kind": "deployment",
@@ -555,8 +555,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/install.sh",
-      "sha256": "5bf3224fdac5671bc3c610eb2a756a05836e45c8fdd7566cc04e18bb0b1ecbf3",
-      "size": 28587
+      "sha256": "b5a15066594a51ca355b0fa2a6cf0b09ad067f89b9eb7c5077839d6e631a8cfd",
+      "size": 28948
     },
     {
       "kind": "deployment",
@@ -573,8 +573,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/package-release.sh",
-      "sha256": "4077b91caf1f4c1efe499f5b825081e2f4d5117f36d0361bd8e9cf85b9c21933",
-      "size": 10468
+      "sha256": "596377064a13d00f3a754dd9c530f25b8cd9703b5ce465c8d5dbc5b93a8d3c56",
+      "size": 10527
     },
     {
       "kind": "deployment",
@@ -609,8 +609,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/systemd/um-share-broker.service",
-      "sha256": "24740fdd7965bfefd73714fa05a2f5639858f9623c0a3615d1acacc3ec421972",
-      "size": 5510
+      "sha256": "44ccdadfb65ce1d5cbe212ee8682facc90ab449cbdb9d14855910e16e41963cb",
+      "size": 6186
     },
     {
       "kind": "deployment",
@@ -644,8 +644,8 @@
         "cloud_runtime"
       ],
       "path": "chat2api/chat2api.py",
-      "sha256": "2d1eecb7505ef80a1faac787df995b354a55f5ea237d53364331076d6d9126d7",
-      "size": 501844
+      "sha256": "5c3ad1e52c15140c8dc6bf0434f7cbb66c74d2398b408bac615e7144099cdf8b",
+      "size": 502996
     },
     {
       "closures": [
@@ -1058,7 +1058,7 @@
       "size": 46032
     }
   ],
-  "generated_at": "2026-11-13T00:39:19.627344+00:00",
+  "generated_at": "2026-11-13T00:54:12.683107+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",
@@ -1067,7 +1067,7 @@
     "target": "3.14",
     "version": "3.14.7"
   },
-  "release_version": "s2-20261113a",
+  "release_version": "s2-20261113b",
   "schema_version": 2,
   "source_root": ".",
   "web_dist": {

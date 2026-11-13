@@ -13,6 +13,14 @@ Group=um-share
 WorkingDirectory=/opt/um-share/current
 EnvironmentFile=/etc/um-share/broker.env
 EnvironmentFile=-/etc/um-share/console.env
+# The merged 8100 child keeps the console's token/profile under the writable
+# console state, never inside the read-only release.  The environment file also
+# carries these on an installed host; the explicit values keep the broker child
+# correct even when the optional console.env predates the merged process.
+Environment=CHAT2API_TOKEN_FILE=/var/lib/um-share-console/share-backend/token.json
+Environment=CHAT2API_PROFILE_DIR=/var/lib/um-share-console/share-backend/edge-profile
+Environment=CHAT2API_SERVICE_LOG=/var/lib/um-share-console/share-backend/share-backend.log
+Environment=CHAT2API_USAGE_LOG=/var/lib/um-share-console/share-backend/usage-share-backend.jsonl
 Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token
 EnvironmentFile=-/etc/um-share/console.env
 Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token

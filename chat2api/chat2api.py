@@ -137,16 +137,52 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # backend, Revision 6 R6-A1) run with its own state files; when the env
 # vars are absent — the production start path — the HERE-derived defaults
 # are unchanged, so the running production instance keeps its behavior.
-TOKEN_FILE = os.environ.get("CHAT2API_TOKEN_FILE") or \
-    os.path.join(HERE, "token.json")          # NEVER commit this file
-PROFILE_DIR = os.path.join(HERE, ".edge-profile")  # dedicated Edge login state
-SERVICE_LOG = os.environ.get("CHAT2API_SERVICE_LOG") or \
-    os.path.join(HERE, "chat2api.log")
+def _writable_parent(path, fallback):
+    """Keep the release-relative default when its parent is writable.
+
+    The cloud release tree is read-only, so the merged 8100 child must not
+    create its token/profile/log there.  POSIX tests run from a writable
+    temp tree and keep the release-relative defaults byte for byte.
+    """
+    if os.name != "posix":
+        return path
+    try:
+        parent = os.path.dirname(path)
+        os.makedirs(parent, exist_ok=True)
+        if os.access(parent, os.W_OK):
+            return path
+    except OSError:
+        pass
+    return fallback
+
+
+def _writable_dir(path, fallback):
+    if os.name != "posix":
+        return path
+    try:
+        os.makedirs(path, exist_ok=True)
+        if os.access(path, os.W_OK):
+            return path
+    except OSError:
+        pass
+    return fallback
+
+
+TOKEN_FILE = os.environ.get("CHAT2API_TOKEN_FILE") or _writable_parent(
+    os.path.join(HERE, "token.json"),          # NEVER commit this file
+    "/var/lib/um-share-console/share-backend/token.json")
+PROFILE_DIR = _writable_dir(
+    os.path.join(HERE, ".edge-profile"),       # dedicated Edge login state
+    "/var/lib/um-share-console/share-backend/.edge-profile")
+SERVICE_LOG = os.environ.get("CHAT2API_SERVICE_LOG") or _writable_parent(
+    os.path.join(HERE, "chat2api.log"),
+    "/var/log/um-share/chat2api.log")
 
 # Per-request usage ledger for the ai-gateway cost aggregator
 # (default ../data/usage-chat2api.jsonl, relative to this file).
-USAGE_LOG = os.environ.get("CHAT2API_USAGE_LOG") or \
-    os.path.join(HERE, os.pardir, "data", "usage-chat2api.jsonl")
+USAGE_LOG = os.environ.get("CHAT2API_USAGE_LOG") or _writable_parent(
+    os.path.join(HERE, os.pardir, "data", "usage-chat2api.jsonl"),
+    "/var/lib/um-share/usage-chat2api.jsonl")
 _usage_lock = threading.Lock()
 _usage_disabled = False
 
