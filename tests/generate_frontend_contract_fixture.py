@@ -1284,13 +1284,12 @@ def generate_share_maintenance(specs):
 # The CLIProxy status handler module was deleted with the UM-only consolidation
 # (commit f41080d1): ``cliproxy.status`` is a retired action
 # (``console/adapters.py`` ``RETIRED_ACTION_PREFIXES``), so there is no current
-# handler to drive this segment and no source hash to record for it. The local
-# console still renders the frozen read-only shape (``workbench.ts``
-# ``cliproxyLoginReading`` and the offline console-gate preview read the same
-# published segment), so the last published, already-sanitized data is carried
-# forward verbatim instead of being dropped or faked. This generator never imports
-# or executes the retired module; it fails loudly when the committed segment is
-# missing, so the freeze cannot silently disappear.
+# handler to drive this segment and no source hash to record for it. No retained
+# console renders it; the last published, already-sanitized data is carried forward
+# verbatim until the CLIProxy retirement removes it from the contract instead of
+# being dropped or faked here. This generator never imports or executes the retired
+# module; it fails loudly when the committed segment is missing, so the freeze
+# cannot silently disappear.
 
 _FROZEN_CLIPROXY_KEY = "cliproxy_status"
 _FROZEN_CLIPROXY_GENERATED_FROM = (

@@ -62,7 +62,7 @@ export async function runUm(c) {
       } catch {}
     });
     await page.goto(
-      `${c.BASE}?console=um${scenario ? `&um-preview=${scenario}` : ""}#${hash}`,
+      `${c.BASE}${scenario ? `?um-preview=${scenario}` : ""}#${hash}`,
       { waitUntil: "load" }
     );
     await page.waitForSelector(".um-content > .um-page", { timeout: 20000 });
@@ -176,20 +176,23 @@ export async function runUm(c) {
       `页面报错：${errors.slice(0, 2).join(" | ")}`
     );
     await ctx.close();
-    // The old workbench stays reachable in a candidate (its own gate drives it).
+    // The workbench escape hatch is retired: `?console=workbench` must open the
+    // UM console, and the old `.workbench` shell must never mount.
     const legacy = await c.newPage({ waitForContent: false, settle: 50 });
     await legacy.page.goto(`${c.BASE}?console=workbench`, {
       waitUntil: "load",
     });
+    const legacyUm = await legacy.page
+      .waitForSelector(".um-content > .um-page", { timeout: 20000 })
+      .then(
+        () => true,
+        () => false
+      );
+    const legacyWorkbench = await legacy.page.locator(".workbench").count();
     check(
       "F1",
-      await legacy.page
-        .waitForSelector(".workbench .wb-content", { timeout: 20000 })
-        .then(
-          () => true,
-          () => false
-        ),
-      "?console=workbench 应仍能打开旧工作台"
+      legacyUm && legacyWorkbench === 0,
+      "?console=workbench 应打开 UM 控制台，旧工作台不得再挂载"
     );
     await legacy.ctx.close();
   }

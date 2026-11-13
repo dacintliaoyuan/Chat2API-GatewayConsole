@@ -34,7 +34,7 @@ const ROLE_ENV = "CONSOLE_ROLE";
  *  both its candidate and production entry mount the UM console (B6), while the
  *  cloud console owns that management. A local production build still needs
  *  this explicit declaration so the only management entry is never dropped by
- *  mistake; `?console=workbench` remains an escape hatch, not the default. */
+ *  mistake. */
 const LOCAL_SHARE_RETIRED_ENV = "CONSOLE_LOCAL_SHARE_RETIRED";
 
 /** Candidate lines, each pinned to one directory and one role. `candidate` keeps

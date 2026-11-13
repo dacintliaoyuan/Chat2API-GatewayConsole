@@ -306,7 +306,7 @@ _Avoid_: 控制台登录、控制令牌 (X-Admin-Control)、上游登录凭据
 _Avoid_: 管理会话、私网可达即可信
 
 **本地控制台 (Local console)**:
-维护者个人电脑上管理 UM 自用实例及其他本机自用服务的控制台入口；API Key 与 API 服务归云端控制台管理。入口为 `Open-GatewayConsole.bat`（必要时启动 8001 宿主），生产页是 8001 托管的 `web/dist`（local 角色）；`?console=workbench` 保留旧工作台作为兼容入口。
+维护者个人电脑上管理 UM 自用实例及其他本机自用服务的控制台入口；API Key 与 API 服务归云端控制台管理。入口为 `Open-GatewayConsole.bat`（必要时启动 8001 宿主），生产页是 8001 托管的 `web/dist`（local 角色）。
 _Avoid_: 主控制台、统一控制台
 
 **云端控制台 (Cloud console)**:

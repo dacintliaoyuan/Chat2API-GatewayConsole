@@ -1,6 +1,6 @@
 /** API service facade shapes (GET /api/console/share-management/*), shared by the
- *  consoles that read them. Moved out of workbench.ts on 2026-10-31 so the cloud
- *  console reuses the same contract instead of restating it (ADR 0001). */
+ *  consoles that read them. The cloud console reuses the same contract instead
+ *  of restating it (ADR 0001). */
 
 export type ShareStatusPayload = {
   schema_version?: number;

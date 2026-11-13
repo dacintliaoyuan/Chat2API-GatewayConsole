@@ -9,7 +9,7 @@ npm ci
 npm run dev   # 127.0.0.1:5173
 ```
 
-入口是 `index.html → src/console-entry.ts`，按构建期角色只装入 `src/local/local-console.ts` 或 `src/cloud/cloud-console.ts` 之一。开发服务按本机角色、非候选构建运行；`?console=workbench` 打开旧工作台。开发服务只监听本机。
+入口是 `index.html → src/console-entry.ts`，按构建期角色只装入 `src/local/local-console.ts` 或 `src/cloud/cloud-console.ts` 之一。开发服务按本机角色、非候选构建运行。开发服务只监听本机。
 
 ## 构建
 

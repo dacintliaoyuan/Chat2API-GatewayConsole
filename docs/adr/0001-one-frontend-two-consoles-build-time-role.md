@@ -28,7 +28,7 @@ UM 的 API 服务迁往云机后，维护者要同时管理本机自用服务与
 - 发布方必须为每台机器构建对应角色的产物：本机生产页写 `web/dist`，云端生产页写 `web/dist-cloud` 并打包为发布包内的 `web/dist`。
 - 候选线按角色分开：`candidate-local` 写 `web/release/candidate/local/`，`candidate-cloud` 写 `web/release/candidate/cloud/`；旧默认 `candidate` 写 `web/release/candidate/` 并保留角色子目录，只用于 8099 只读预览与日志门禁。
 - 两端共享 `web/src/shell/`、`web/src/console/backend/` 与 `web/src/console/role-gate.ts`，角色专用的页面与样式互不引用。
-- 本机生产默认入口装入 UM 三页与数据控制器 `web/src/local/um-data-controller.ts`；`?console=workbench` 保留旧工作台作为兼容入口。云端使用独立的五页入口。
+- 本机生产默认入口装入 UM 三页与数据控制器 `web/src/local/um-data-controller.ts`。云端使用独立的五页入口。
 - 本机生产页不含 API Key 与 API 服务管理；云端接管分享管理前发布它可能失去唯一管理入口，因此 `CONSOLE_LOCAL_SHARE_RETIRED=1` 是显式声明而不是默认值。
 
 ## 相关实现

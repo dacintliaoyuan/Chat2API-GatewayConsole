@@ -606,11 +606,11 @@ class ConsoleReadTests(ConsoleApiTestBase):
         with tempfile.TemporaryDirectory() as td:
             assets = os.path.join(td, "assets")
             os.makedirs(assets)
-            script = os.path.join(assets, "workbench-STUBHASH.js")
+            script = os.path.join(assets, "um-ui-STUBHASH.js")
             with open(script, "wb") as f:
                 f.write(b"console.log('console-stub');")
             with mock.patch.object(usagesrv, "CONSOLE_DIST_DIR", td):
-                status, raw = self.req("GET", "/assets/workbench-STUBHASH.js")
+                status, raw = self.req("GET", "/assets/um-ui-STUBHASH.js")
         self.assertEqual(status, 200)
         self.assertIn(b"console-stub", raw)
 
@@ -1684,8 +1684,8 @@ class ConsoleModelScopeContractTests(ConsoleApiTestBase):
     """模型同步 scope 契约（2026-09-26 后端控制台 API 线）。
 
     维护者报告「应用同步 model · 失败／被拒绝：invalid_params」的确定性触发链是
-    scope 参数形状：网页发数组（workbench.ts:3919-3941），后端要求 JSON 数组
-    字符串（console/adapters.py:155-159 的 _MODEL_SYNC_SCOPE_SCHEMA）。本类锁定
+    scope 参数形状：网页发数组，后端要求 JSON 数组字符串
+    （console/adapters.py:155-159 的 _MODEL_SYNC_SCOPE_SCHEMA）。本类锁定
     两件事：
 
     1. 拒绝说明：已知的参数形状错误在 400 机器码之外补一个受控 detail（不含
