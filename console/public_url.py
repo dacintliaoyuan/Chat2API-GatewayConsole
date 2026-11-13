@@ -13,24 +13,23 @@ isolated with ``python -I`` and cannot import a sibling module) and adds the
 * valid value -> normalized ``https://<host>`` (an explicit ``:443`` is accepted
   and dropped).
 
-The historical Tailscale Funnel URL stays as the fallback ONLY while the key is
-unconfigured; ``resolve`` reports which source won so the console can label the
-address instead of hard-coding a domain in the page.
+The old Tailscale Funnel fallback is retired with the Windows local share chain
+(#33): there is no second public host. ``resolve_configured`` reports the exact
+reason when the key is absent/invalid instead of hard-coding a domain in the page.
 """
 
 
 PUBLIC_ORIGIN_ENV = "CONSOLE_PUBLIC_ORIGIN"
 UNCONFIGURED = "public_origin_unconfigured"
 INVALID = "public_origin_invalid"
-UNAVAILABLE = "public_url_unavailable"
 
 
 class ResolvedPublicUrl(tuple):
     """``(url, source)`` plus the additive ``reason`` for the console.
 
     It stays a tuple so callers can keep unpacking the two historical values;
-    ``source`` is ``"configured"``, ``"tailscale"`` or None, and ``reason`` is
-    empty when a URL exists. ``None`` means unavailable, never "no URL needed".
+    ``source`` is ``"configured"`` or None, and ``reason`` is empty when a URL
+    exists. ``None`` means unavailable, never "no URL needed".
     """
 
     def __new__(cls, url, source, reason):
@@ -52,11 +51,11 @@ def configured_host():
 
 
 def resolve_configured():
-    """Resolve ONLY ``CONSOLE_PUBLIC_ORIGIN``; never read Tailscale.
+    """Resolve ONLY ``CONSOLE_PUBLIC_ORIGIN``; never read a second host.
 
     ``source`` is ``"configured"`` when the key is valid, None when it is
-    absent or invalid, and ``reason`` names the exact condition. Callers that
-    still have a Tailscale Funnel fallback use ``resolve`` instead.
+    absent or invalid, and ``reason`` names the exact condition. There is no
+    Funnel fallback any more (#33).
     """
     from console.public_probe import public_origin
 
@@ -66,27 +65,6 @@ def resolve_configured():
     if reason == INVALID:
         return ResolvedPublicUrl(None, None, INVALID)
     return ResolvedPublicUrl(None, None, UNCONFIGURED)
-
-
-def resolve(ts_url):
-    """Resolve the public share URL: configured origin first, TS second.
-
-    The source is ``"configured"`` when ``CONSOLE_PUBLIC_ORIGIN`` is valid,
-    ``"tailscale"`` when the supplied Funnel URL is a valid https origin, and
-    None when neither is available. An invalid configured origin is an explicit
-    error and never falls back to the Tailscale URL.
-    """
-    from console.public_probe import origin_host, public_origin
-
-    origin, reason = public_origin()
-    if origin is not None:
-        return ResolvedPublicUrl(origin, "configured", "")
-    if reason == INVALID:
-        return ResolvedPublicUrl(None, None, INVALID)
-    host = origin_host(ts_url)
-    if host is not None:
-        return ResolvedPublicUrl("https://" + host, "tailscale", "")
-    return ResolvedPublicUrl(None, None, UNAVAILABLE)
 
 
 def origin_host(value):

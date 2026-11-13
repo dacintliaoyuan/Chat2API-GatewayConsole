@@ -408,9 +408,7 @@ foreach ($scriptName in @(
     'invoke-gateway-service.ps1',
     'invoke-model-sync.ps1', 'manage-model-sync-task.ps1',
     'show-model-sync-notification.ps1', 'lib\gateway-runtime.ps1',
-    'lib\watch-chat2api.ps1', 'lib\register-chat2api-watch.ps1',
-    'lib\watch-share-backend.ps1',
-    'lib\register-share-backend-watch.ps1')) {
+    'lib\watch-chat2api.ps1', 'lib\register-chat2api-watch.ps1')) {
     $tokens = $null
     $parseErrors = $null
     [Management.Automation.Language.Parser]::ParseFile(

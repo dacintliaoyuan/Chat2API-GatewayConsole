@@ -1722,8 +1722,8 @@ SHARE_MANAGEMENT_CONFIG_FILE = os.environ.get("SHARE_MANAGEMENT_CONFIG") or \
 def _load_cloud_share_management_deployment(payload):
     """Explicit cloud (Linux) management transport config (schema 2).
 
-    The Windows schema 1 (named pipe) is NOT accepted here and a Unix path is
-    NEVER stuffed into ``pipe_name``: the transport is explicit. A present but
+    The retired Windows schema 1 (named pipe) is gone with the old local share
+    chain (#33). The transport is explicit (unix_socket); a present but
     corrupt/unusable config still raises BrokerError (never a silent Noop).
     """
     schema = payload.get("schema_version")
@@ -1773,11 +1773,11 @@ def _load_share_management_deployment():
     * absent config file or explicit ``enabled: false`` -> None (NoopBroker;
       status honestly reports 未安装/未授权 and revoking mutations refuse);
     * a PRESENT but corrupt/unusable config (bad JSON, wrong schema,
-      missing/garbage enabled flag, malformed pipe name, unreadable or
+      missing/garbage enabled flag, malformed socket path, unreadable or
       oversized control key) -> BrokerError. The share API must never
       quietly fall back to NoopBroker while a config claims to be enabled;
     * the BrokerClient receives a transport FACTORY (a fresh
-      NamedPipeBrokerTransport per exchange), never a transport instance —
+      UnixSocketBrokerTransport per exchange), never a transport instance —
       the client calls factory().open() for every single exchange.
     """
     path = SHARE_MANAGEMENT_CONFIG_FILE
@@ -1790,36 +1790,9 @@ def _load_share_management_deployment():
         raise BrokerError(f"share management config unreadable: {exc}")
     if not isinstance(payload, dict):
         raise BrokerError("share management config must be an object")
-    if CLOUD_ROLE:
-        return _load_cloud_share_management_deployment(payload)
-    schema = payload.get("schema_version")
-    if isinstance(schema, bool) or schema != 1:
-        raise BrokerError(
-            f"unsupported share management config schema {schema!r}")
-    enabled = payload.get("enabled")
-    if not isinstance(enabled, bool):
-        raise BrokerError("share management config 'enabled' must be an "
-                          "explicit boolean (never inferred)")
-    if enabled is False:
-        return None
-    pipe_prefix = "\\\\.\\pipe\\"
-    pipe_name = payload.get("pipe_name")
-    if (not isinstance(pipe_name, str)
-            or not pipe_name.startswith(pipe_prefix)
-            or len(pipe_name) <= len(pipe_prefix)):
-        raise BrokerError("share management config pipe_name must be a "
-                          "named-pipe path (\\\\.\\pipe\\<name>)")
-    key_file = payload.get("control_key_file")
-    if not isinstance(key_file, str) or not key_file:
-        raise BrokerError("share management config control_key_file missing")
-    from share.broker_client import BrokerClient, NamedPipeBrokerTransport
-    from share.broker_server import read_control_key
-    try:
-        secret = read_control_key(key_file)
-    except (OSError, ValueError) as exc:
-        raise BrokerError(f"share management control key unusable: {exc}")
-    client = BrokerClient(lambda: NamedPipeBrokerTransport(pipe_name), secret)
-    return BrokerClientAdapter(client)
+    # The retired Windows named-pipe schema 1 is gone with the old local
+    # share chain (#33); the cloud role is the only transport.
+    return _load_cloud_share_management_deployment(payload)
 
 
 def get_share_manager():
@@ -2825,7 +2798,7 @@ class Handler(BaseHTTPRequestHandler):
                 from console.share_probe import test_key
                 self._send_json(200, test_key(
                     manager, rest[1], expected,
-                    discover_url=lambda: self._share_funnel_url(refresh=True)))
+                    discover_url=lambda: self._share_public_url()))
                 return
             if method == "POST" and len(rest) == 3 and rest[0] == "keys"                     and rest[2] == "revoke-and-terminate":
                 # R8-A7 revoke-and-terminate: disable + one-shot interrupt of
@@ -3024,51 +2997,16 @@ class Handler(BaseHTTPRequestHandler):
             "created_at": row.get("created_at"),
         }
 
-    # Public funnel URL cache: the node's Tailscale DNS name only changes on
-    # tailnet re-login, so one successful probe is reused; the probe only
-    # happens while the funnel is observed on and the cache is empty.
-    _share_url_cache = {"url": None}
-
     @classmethod
-    def _tailscale_funnel_url(cls, *, refresh=False):
-        """The historical Tailscale Funnel URL (D18-1 fallback only)."""
-        if not refresh and cls._share_url_cache["url"]:
-            return cls._share_url_cache["url"]
-        try:
-            import subprocess
-            proc = subprocess.run(["tailscale", "status", "--json"],
-                                  capture_output=True, timeout=8)
-            if proc.returncode != 0:
-                return None
-            node = json.loads(proc.stdout.decode("utf-8", "replace"))
-            if refresh and node.get("BackendState") != "Running":
-                return None
-            name = str((node.get("Self") or {}).get("DNSName") or "").strip(".")
-            if name:
-                cls._share_url_cache["url"] = "https://%s" % name
-                return cls._share_url_cache["url"]
-        except Exception:
-            pass
-        return None if refresh else cls._share_url_cache["url"]
+    def _share_public_url(cls):
+        """The configured public origin, or None when unset/invalid.
 
-    @classmethod
-    def _share_public_url_detail(cls, *, refresh=False):
-        """``(url, source, reason)``: configured origin first, TS second.
-
-        An invalid ``CONSOLE_PUBLIC_ORIGIN`` is an explicit error and never
-        falls back to the Tailscale URL. With the key absent the historical
-        Funnel discovery is unchanged.
+        The old Tailscale Funnel fallback is retired with the Windows local
+        share chain (#33). An unconfigured/invalid ``CONSOLE_PUBLIC_ORIGIN`` is
+        reported as ``public_url_unavailable`` and never replaced by a guessed
+        host.
         """
-        resolved = console_public_url.resolve_configured()
-        if resolved.source is not None \
-                or resolved.reason == console_public_url.INVALID:
-            return resolved
-        return console_public_url.resolve(
-            cls._tailscale_funnel_url(refresh=refresh))
-
-    @classmethod
-    def _share_funnel_url(cls, *, refresh=False):
-        return cls._share_public_url_detail(refresh=refresh).url
+        return console_public_url.resolve_configured().url
 
     @staticmethod
     def _console_share_capacity(payload):
@@ -3175,122 +3113,6 @@ class Handler(BaseHTTPRequestHandler):
                 mapped["diag"] = list(diag[-5:])
             out["broker"] = mapped
         return out
-
-    @staticmethod
-    def _console_share_public_module():
-        """The public supervision module, or None when it is not deployed.
-
-        Import failure is "module unavailable" (an honest 200 available:false),
-        never an exception that turns into a 500.
-        """
-        try:
-            share_public_supervision = __import__("importlib").import_module("share.public_supervision")
-        except Exception:  # noqa: BLE001
-            return None
-        return share_public_supervision
-
-    def _console_share_public_payload(self):
-        """GET /public: snapshot + bounded event tail + budget + cancel."""
-        supervision = self._console_share_public_module()
-        if supervision is None:
-            return {"available": False,
-                    "reason": "public_supervision_unavailable",
-                    "snapshot": None, "events": None,
-                    "events_truncated": None, "events_unreadable": None,
-                    "budget": None, "cancel": None, "unreadable": True}
-        try:
-            return supervision.read_status()
-        except Exception:  # noqa: BLE001  unreadable is not "no snapshot"
-            return {"available": True, "version": None, "checked_at": None,
-                    "snapshot": None, "events": None,
-                    "events_truncated": None, "events_unreadable": None,
-                    "budget": None, "cancel": None,
-                    "unreadable": True, "reason": "state_unreadable",
-                    "state_file": getattr(supervision, "STATE_FILE_NAME", None)}
-
-    def _console_share_public_events_payload(self):
-        """GET /public-events: bounded, newest-first event page."""
-        query = parse_qs(urlparse(self.path).query)
-        raw_limit = (query.get("limit") or ["50"])[0]
-        try:
-            limit = int(raw_limit)
-        except (TypeError, ValueError):
-            return 400, {"error": "invalid_events_query"}
-        if not 1 <= limit <= 200:
-            return 400, {"error": "invalid_events_query"}
-        before = None
-        raw_before = (query.get("before") or [""])[0]
-        if raw_before:
-            try:
-                before = float(raw_before)
-            except (TypeError, ValueError):
-                return 400, {"error": "invalid_events_query"}
-            if not before > 0 or before in (float("inf"), float("-inf")) \
-                    or before != before:
-                return 400, {"error": "invalid_events_query"}
-        supervision = self._console_share_public_module()
-        if supervision is None:
-            return 200, {"available": False, "events": None,
-                          "next_before": None, "truncated": None,
-                          "reason": "public_supervision_unavailable"}
-        try:
-            status = supervision.read_status(
-                event_limit=supervision.EVENT_MAX_RETURN)
-        except Exception:  # noqa: BLE001  never render "no events" for a read failure
-            return 200, {"available": True, "events": None,
-                          "next_before": None, "truncated": None,
-                          "reason": "state_unreadable"}
-        events = status.get("events") if isinstance(status, dict) else None
-        if not isinstance(events, list):
-            return 200, {"available": True, "events": None,
-                          "next_before": None, "truncated": None,
-                          "reason": "events_unreadable"}
-        rows = []
-        for item in events:
-            if not isinstance(item, dict):
-                continue
-            try:
-                at = datetime.fromisoformat(str(item.get("at_utc"))).timestamp()
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if before is not None and at >= before:
-                continue
-            rows.append((at, item))
-        rows.sort(key=lambda pair: pair[0], reverse=True)
-        page = rows[:limit]
-        next_before = page[-1][0] if len(rows) > limit and page else None
-        return 200, {
-            "available": True,
-            "events": [{"at_utc": item.get("at_utc"),
-                         "status": item.get("status"),
-                         "code": item.get("code"),
-                         "action": item.get("action")}
-                        for _at, item in page],
-            "next_before": next_before,
-            "truncated": bool(status.get("events_truncated")),
-        }
-
-    def _console_share_public_export_payload(self):
-        """GET /public-export: redacted diagnostics attachment."""
-        query = parse_qs(urlparse(self.path).query)
-        fmt = (query.get("format") or ["json"])[0]
-        if fmt != "json":
-            return 400, {"error": "invalid_export_format"}, None
-        supervision = self._console_share_public_module()
-        if supervision is None:
-            return 503, {"error": "share_public_export_unavailable"}, None
-        try:
-            payload = supervision.export_diagnostics()
-        except Exception:  # noqa: BLE001  export unavailable, never a fake file
-            return 503, {"error": "share_public_export_unavailable"}, None
-        generated = payload.get("generated_at") \
-            if isinstance(payload, dict) else None
-        try:
-            stamp = datetime.fromisoformat(str(generated)).strftime(
-                "%Y%m%d-%H%M%S")
-        except (TypeError, ValueError, OverflowError):
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        return 200, payload, "share-public-diagnostics-%s.json" % stamp
 
     def _console_display_session_payload(self):
         """GET /display-session: same-origin launcher path, never credentials.
@@ -3645,106 +3467,67 @@ class Handler(BaseHTTPRequestHandler):
                     payload = {"responsive": False, "error_code": "share_control_unconfirmed"}
                 self._send_json(200, payload)
                 return
-            # S5（契约 §5.1）：公网巡检只读/导出三个入口。它们必须在
-            # ``get_share_manager()`` 之前处理——读面只读巡检模块自己的
-            # 状态文件，不构造分享 store、不探测账号、不触发 Funnel 查询。
-            if method == "GET" and rest == ["public"]:
-                self._send_json(
-                    200, self._console_share_public_payload())
-                return
-            if method == "GET" and rest == ["public-events"]:
-                status, payload = self._console_share_public_events_payload()
-                self._send_json(status, payload)
-                return
-            if method == "GET" and rest == ["public-export"]:
-                status, payload, filename = \
-                    self._console_share_public_export_payload()
-                if status != 200:
-                    self._send_json(status, payload)
-                    return
-                self._send_json_attachment(status, payload, filename)
-                return
             manager = get_share_manager()
             if method == "GET" and rest == ["status"]:
                 payload = self._console_share_status_payload(
                     manager.status())
-                # The console pill derives "已开放" from broker.running AND
-                # funnel_on; the ShareManager store view never carries the
-                # funnel layer, so the facade observes it through the SAME
-                # read-only seam the share.status action uses. The seams are
-                # wired lazily by get_console_manager() on operations access
-                # only — a bare status GET must ensure the wiring itself
-                # (idempotent setattr; unwired -> key absent -> the UI keeps
-                # its honest 未确认 fallback). The CLOUD role passes its own
-                # flag: this lazy path must never install the local
-                # Tailscale/Funnel seams into a cloud process (the cloud
-                # assembly deliberately leaves them unwired).
+                # D18-1: the configured public origin is the real
+                # deployment address. The old Tailscale Funnel fallback was
+                # retired with the Windows local share chain (#33): an
+                # unconfigured origin stays unavailable and is never replaced
+                # by a different public host.
                 try:
                     from console import adapters as console_adapters
                     from console import share_actions as console_share_actions
-                    if console_share_actions._FUNNEL_OBSERVED is None:
+                    if console_share_actions._BROKER_OPS is None:
                         console_adapters.wire_share_production_seams(
                             keys_manager=manager, cloud=CLOUD_ROLE)
-                    funnel = console_share_actions._funnel_observed()
-                    if funnel is not None:
-                        payload["funnel_on"] = bool(funnel)
-                    # D18-1: the configured public origin is the real
-                    # deployment address; the Tailscale Funnel URL stays the
-                    # fallback only when it is observed on. An invalid
-                    # CONSOLE_PUBLIC_ORIGIN is an explicit error and never
-                    # silently falls back to a different public host.
-                    configured = console_public_url.resolve_configured()
-                    if configured.source is not None \
-                            or configured.reason == console_public_url.INVALID:
-                        resolved = configured
-                    elif funnel is True:
-                        resolved = console_public_url.resolve(
-                            self._tailscale_funnel_url())
-                    else:
-                        resolved = console_public_url.ResolvedPublicUrl(
-                            None, None, console_public_url.UNCONFIGURED)
-                    payload["share_url_source"] = resolved.source
-                    payload["share_url_reason"] = resolved.reason
-                    if resolved.url:
-                        payload["share_url"] = resolved.url
+                except Exception:  # noqa: BLE001  status stays honest
+                    pass
+                resolved = console_public_url.resolve_configured()
+                payload["share_url_source"] = resolved.source
+                payload["share_url_reason"] = resolved.reason
+                if resolved.url:
+                    payload["share_url"] = resolved.url
+                try:
                     # Gateway-instance evidence: broker.running is the ALWAYS-ON
-                    # management daemon and must never read as share-open (or
-                    # close-residue) evidence — observe the actual gateway
-                    # instance through the same read-only seam the share.status
-                    # action uses. Account validity rides the dedicated-backend
-                    # observation seam; last_check_at stamps THIS read.
-                    ops = console_share_actions._BROKER_OPS
-                    if ops is not None:
-                        # verify_running is THREE-STATE (True/False/None):
-                        # None = unconfirmed (pipe busy/unreachable) — never
-                        # collapse it to False, that would fabricate a
-                        # confirmed-stopped fact; omit the key instead so the
-                        # UI keeps its honest 未确认 fallback.
-                        running = ops.verify_running()
-                        if running is True or running is False:
-                            payload["gateway_running"] = running
-                    observe = console_share_actions._BACKEND_OBSERVE
-                    if observe is not None:
-                        ob = observe()
-                        if isinstance(ob, dict) and \
-                                ob.get("auth_state") is not None:
-                            payload["account"] = {
-                                "valid": ob.get("auth_state") == "valid",
-                                "running": ob.get("running"),
-                            }
-                        # 归因启用状态（2026-09-26 owner 裁定，同日复核重塑：
-                        # 一个布尔不得冒充三件事）：同一观察缝的 attribution
-                        # 子字典原样透出——加性字段，既有字段的值与语义不变。
-                        # file_ready 只表示本进程此刻能读到长度合格的文件；
-                        # instance_loaded 是对运行中 8100 实例的推断
-                        # （yes/no/unknown，查不到进程即 unknown）；request_attribution
-                        # 本读面不观察，只指向 8110 账本 attribution="verified"
-                        # 的运行期事实。旧的 wired 键已删除（只被本读面与
-                        # console_share_actions 消费，两处已同步更新），
-                        # 不留下一个含义模糊的布尔；前端渲染是另一步。
-                        if isinstance(ob, dict) and \
-                                isinstance(ob.get("attribution"), dict):
-                            payload["attribution"] = dict(ob["attribution"])
+                        # management daemon and must never read as share-open (or
+                        # close-residue) evidence — observe the actual gateway
+                        # instance through the same read-only seam the share.status
+                        # action uses. Account validity rides the dedicated-backend
+                        # observation seam; last_check_at stamps THIS read.
+                        ops = console_share_actions._BROKER_OPS
+                        if ops is not None:
+                            # verify_running is THREE-STATE (True/False/None):
+                            # None = unconfirmed (pipe busy/unreachable) — never
+                            # collapse it to False, that would fabricate a
+                            # confirmed-stopped fact; omit the key instead so the
+                            # UI keeps its honest 未确认 fallback.
+                            running = ops.verify_running()
+                            if running is True or running is False:
+                                payload["gateway_running"] = running
+                        observe = console_share_actions._BACKEND_OBSERVE
+                        if observe is not None:
+                            ob = observe()
+                            if isinstance(ob, dict) and \
+                                    ob.get("auth_state") is not None:
+                                payload["account"] = {
+                                    "valid": ob.get("auth_state") == "valid",
+                                    "running": ob.get("running"),
+                                }
+                            # 归因启用状态（2026-09-26 owner 裁定，同日复核重塑：
+                            # 一个布尔不得冒充三件事）：同一观察缝的 attribution
+                            # 子字典原样透出——加性字段，既有字段的值与语义不变。
+                            # file_ready 只表示本进程此刻能读到长度合格的文件；
+                            # instance_loaded 是对运行中 8100 实例的推断
+                            # （yes/no/unknown，查不到进程即 unknown）；request_attribution
+                            # 本读面不观察，只指向 8110 账本 attribution="verified"
+                            # 的运行期事实。旧的 wired 键已删除（只被本读面与
+                            # console_share_actions 消费，两处已同步更新），
+                            # 不留下一个含义模糊的布尔；前端渲染是另一步。
+                            if isinstance(ob, dict) and \
+                                    isinstance(ob.get("attribution"), dict):
+                                payload["attribution"] = dict(ob["attribution"])
                 except Exception:
                     pass
                 payload["last_check_at"] = int(time.time())
@@ -3808,7 +3591,7 @@ class Handler(BaseHTTPRequestHandler):
                 from console.share_probe import test_key
                 self._send_json(200, test_key(
                     manager, rest[1], expected, private=rest[2] == "test-private",
-                    discover_url=lambda: self._share_funnel_url(refresh=True)))
+                    discover_url=lambda: self._share_public_url()))
                 return
 
             if method == "POST" and rest == ["keys"]:
@@ -3882,7 +3665,7 @@ class Handler(BaseHTTPRequestHandler):
                 from console.share_probe import test_key
                 self._send_json(200, test_key(
                     manager, rest[1], expected,
-                    discover_url=lambda: self._share_funnel_url(refresh=True)))
+                    discover_url=lambda: self._share_public_url()))
                 return
             if method == "POST" and len(rest) == 3 and rest[0] == "keys" \
                     and rest[2] == "revoke-and-terminate":

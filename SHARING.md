@@ -10,4 +10,4 @@
 - `.edge-profile` 与 `token.json` 位于 `/var/lib/um-share-console/share-backend`，由 `um-share` 拥有；合并进程与 18096 控制台以同一 `um-share` 身份读写，不再使用 `dacint`。
 - 撤销 Key：控制台更新投影并把 `terminate_keys` 发给 broker；8100 关闭该 Key 的在途请求，新请求立即被拒。
 - 归因不再经过跨进程 HMAC 标记：鉴权成功后直接用 `key_id` 记账。
-- 旧 Windows 本机分享链及其部署材料已从仓库删除，只保留在 Git 历史；`chat2api/share_gateway.py` 不再存在。
+- 旧 Windows 本机分享链及其部署材料已从仓库删除，只保留在 Git 历史；`chat2api/share_gateway.py` 与 `Recover-ShareControl.*` 恢复入口不再存在。

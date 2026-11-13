@@ -7,14 +7,14 @@
       "model_sync/sync.py": "c00c0a121c5b0840bebadb5b892b1f62f3d460625e89a49382b3c9e41917943f",
       "model_sync/sync_core.py": "eb6bf1601da6f7752765dd08e830c80d7b87126b2a1554fa9059b4013508bcb0",
       "console/model_actions.py": "d0471efb872574604b3cc3684b31cefea9e600634419522d396cefed50e6ed88",
-      "console/adapters.py": "c6f179510357e4b3377d83fe176745ca3de82b5e2451a7ba3d94cb38a39d83fa",
+      "console/adapters.py": "9c42399d15f90b1db4e600910a2b50008040ea0571b0bf98f08692a75bd45ea6",
       "console/operations.py": "90bb9896c112c342efc9cf0430676be22c913c376c7d015b06916db91c586c58",
       "share/metering.py": "46f57c0459211c92f0ed3dc2097481bce750274ee2de8b5bfc686ae1876e5417",
       "console/stats.py": "cc8d6b2ceb3a2a6b6536fd41c67c2c7f66616dbcc1f5a8d5dfa9dacdd61b9e83",
-      "console/log_reader.py": "718c2c095ab19f76323c3cae0871ae16bf59471e53d5f787b325de0a0bf977fb",
-      "usagesrv.py": "c228bc21572695548804efac7ccf955bc6b9342ba5da943a84882b5110561ee9",
-      "console/share_actions.py": "fdd2212e6acb427c71116b2beffa7a9e55c1c14931c198fee98e34217442317e",
-      "console/share_production.py": "aae4b038a039d327f4bcd4812353dcd7582c2f7fdc7b12aa1e02bf6cc8fdf02b",
+      "console/log_reader.py": "162ab866c80355b32cbd8fdaa95bf37603aff16251afc825e1c128f6945df076",
+      "usagesrv.py": "86ed5bcf4a76aac47143cdaeba87a6210e0ff7ee4164e86063c8219a46086645",
+      "console/share_actions.py": "09ed7a75453a6c5a7c438c3d336bc46663894d2eb125dc09595728c25dc0c062",
+      "console/share_production.py": "c50c1a4ac9ba845c81df7cb42a5259ee88ef896c4fdc4d916f7d810f66c458f9",
       "console/gateway_connection.py": "97074be5887cf87966b5f972371441a1908f8a39e21733707d07b16e53c2f0b2"
     }
   },
@@ -395,7 +395,7 @@
         "enabled": true,
         "disabled_reason": null,
         "cancelable": true,
-        "description": "重启一个网关服务（停止后立即重新启动；中断该服务在途工作）",
+        "description": "重启 UM 分享入口（停止后显式启动；中断在途工作）",
         "param_schema": {}
       },
       {
@@ -403,7 +403,7 @@
         "enabled": true,
         "disabled_reason": null,
         "cancelable": true,
-        "description": "启动一个网关服务（经 runtime 权威）",
+        "description": "启动 UM 分享入口（Linux pid 文件与真实进程身份）",
         "param_schema": {}
       },
       {
@@ -411,7 +411,7 @@
         "enabled": true,
         "disabled_reason": null,
         "cancelable": true,
-        "description": "停止一个网关服务（经 runtime 权威）",
+        "description": "停止 UM 分享入口（先持久化停用意图，再发信号）",
         "param_schema": {}
       },
       {
@@ -420,6 +420,14 @@
         "disabled_reason": null,
         "cancelable": true,
         "description": "登录分享专用后端（触发独立 profile 浏览器 UM 登录）",
+        "param_schema": {}
+      },
+      {
+        "action": "share.backend_login_cancel",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": false,
+        "description": "取消本轮登录（只结束本轮并清理浏览器；不停止服务）",
         "param_schema": {}
       },
       {
@@ -465,96 +473,11 @@
         }
       },
       {
-        "action": "share.diagnostics",
-        "enabled": true,
-        "disabled_reason": null,
-        "cancelable": true,
-        "description": "UM 分享九层分层诊断（只读；含看门狗、维护视图与故障留证）",
-        "param_schema": {}
-      },
-      {
-        "action": "share.estop",
-        "enabled": true,
-        "disabled_reason": null,
-        "cancelable": true,
-        "description": "UM 分享紧急停止（立即撤入口，不排空）",
-        "param_schema": {
-          "poll_interval_s": {
-            "type": "int",
-            "min": 1,
-            "max": 10
-          },
-          "ts_confirm_budget_s": {
-            "type": "int",
-            "min": 1,
-            "max": 600
-          },
-          "connectivity_budget_s": {
-            "type": "int",
-            "min": 1,
-            "max": 600
-          },
-          "backend_budget_s": {
-            "type": "int",
-            "min": 1,
-            "max": 600
-          },
-          "drain_budget_s": {
-            "type": "int",
-            "min": 1,
-            "max": 600
-          },
-          "backend_confirm_budget_s": {
-            "type": "int",
-            "min": 1,
-            "max": 600
-          }
-        }
-      },
-      {
-        "action": "share.gateway_restart",
-        "enabled": true,
-        "disabled_reason": null,
-        "cancelable": true,
-        "description": "重启分享入口 8100（单层：经受限 broker 宿主协议；不动 8110 实例）",
-        "param_schema": {
-          "restart_budget_s": {
-            "type": "int",
-            "min": 10,
-            "max": 180
-          }
-        }
-      },
-      {
-        "action": "share.public_check",
-        "enabled": true,
-        "disabled_reason": null,
-        "cancelable": true,
-        "description": "分享公网链路复查（只读 DNS/TLS，不发送推理请求）",
-        "param_schema": {}
-      },
-      {
-        "action": "share.public_retry",
-        "enabled": true,
-        "disabled_reason": null,
-        "cancelable": true,
-        "description": "分享公网链路受限重试（复用滚动 30 分钟预算与编排互斥）",
-        "param_schema": {}
-      },
-      {
-        "action": "share.repair_limits",
+        "action": "share.chain_estop",
         "enabled": true,
         "disabled_reason": null,
         "cancelable": false,
-        "description": "暂停公网并修复隔离规则（成功后保持分享关闭）",
-        "param_schema": {}
-      },
-      {
-        "action": "share.retry_stop",
-        "enabled": true,
-        "disabled_reason": null,
-        "cancelable": true,
-        "description": "UM 分享残留关闭重试（按剩余步骤）",
+        "description": "强制停止整条 API 链（立即取消在途请求并停 8110）",
         "param_schema": {
           "poll_interval_s": {
             "type": "int",
@@ -585,20 +508,15 @@
             "type": "int",
             "min": 1,
             "max": 600
-          },
-          "step_interval_ms": {
-            "type": "int",
-            "min": 1,
-            "max": 60000
           }
         }
       },
       {
-        "action": "share.start",
+        "action": "share.chain_start",
         "enabled": true,
         "disabled_reason": null,
         "cancelable": true,
-        "description": "UM 分享开启链（TS 服务→连接→后端→Funnel）",
+        "description": "启动整条 API 链（8110 运行→有界认证等待→8100 三证启动→公网边缘只读核对）",
         "param_schema": {
           "poll_interval_s": {
             "type": "int",
@@ -638,19 +556,11 @@
         }
       },
       {
-        "action": "share.status",
+        "action": "share.chain_stop",
         "enabled": true,
         "disabled_reason": null,
-        "cancelable": true,
-        "description": "UM 分享分层状态观察（只读）",
-        "param_schema": {}
-      },
-      {
-        "action": "share.stop",
-        "enabled": true,
-        "disabled_reason": null,
-        "cancelable": true,
-        "description": "UM 分享正常关闭链（撤入口→排空→后端→TS）",
+        "cancelable": false,
+        "description": "普通停止整条 API 链（先拒新请求，有界等待在途；排空超时明确显示）",
         "param_schema": {
           "poll_interval_s": {
             "type": "int",
@@ -683,6 +593,36 @@
             "max": 600
           }
         }
+      },
+      {
+        "action": "share.diagnostics",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 分享分层诊断（只读；含看门狗、维护视图与故障留证）",
+        "param_schema": {}
+      },
+      {
+        "action": "share.gateway_restart",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "重启分享入口 8100（单层：经受限 broker 宿主协议；不动 8110 实例）",
+        "param_schema": {
+          "restart_budget_s": {
+            "type": "int",
+            "min": 10,
+            "max": 180
+          }
+        }
+      },
+      {
+        "action": "share.status",
+        "enabled": true,
+        "disabled_reason": null,
+        "cancelable": true,
+        "description": "UM 分享分层状态观察（只读）",
+        "param_schema": {}
       }
     ]
   },
@@ -2596,7 +2536,7 @@
         "enabled": true,
         "disabled_reason": null,
         "cancelable": true,
-        "description": "UM 分享九层分层诊断（只读；含看门狗、维护视图与故障留证）",
+        "description": "UM 分享分层诊断（只读；含看门狗、维护视图与故障留证）",
         "param_schema": {},
         "components": [
           "share_gateway",
@@ -2700,14 +2640,14 @@
           "cancel_requested": false,
           "created_at": "2026-10-02T12:00:01.250000+00:00",
           "started_at": "2026-10-02T12:00:01.750000+00:00",
-          "finished_at": "2026-10-02T12:00:08+00:00",
+          "finished_at": "2026-10-02T12:00:06+00:00",
           "created_epoch": 1790942401.25,
           "started_epoch": 1790942401.75,
-          "finished_epoch": 1790942408.0,
+          "finished_epoch": 1790942406.0,
           "steps": [
             {
               "at": 1790942402.0,
-              "note": "分层只读诊断：九层证据；任一缝失败只让该层 unavailable，整体不抛"
+              "note": "分层只读诊断：七层证据；任一缝失败只让该层 unavailable，整体不抛"
             },
             {
               "at": 1790942402.5,
@@ -2723,22 +2663,14 @@
             },
             {
               "at": 1790942404.5,
-              "note": "核验 TS 服务和连接"
-            },
-            {
-              "at": 1790942405.75,
               "note": "读取上游就绪证据"
             },
             {
-              "at": 1790942406.25,
-              "note": "核验 Funnel 公网映射"
-            },
-            {
-              "at": 1790942407.0,
+              "at": 1790942405.0,
               "note": "核验 WFP 隔离和出站防火墙"
             },
             {
-              "at": 1790942407.5,
+              "at": 1790942405.5,
               "note": "核验分享看门狗"
             }
           ],
@@ -2868,25 +2800,12 @@
                   "timestamp_basis": "source_checked_epoch"
                 }
               },
-              "connectivity": {
-                "state": "ok",
-                "verdict": "confirmed",
-                "source": "ts:status",
-                "checked_at": 1790942405.25,
-                "age_s": 0.25,
-                "ttl_s": 300,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
               "upstream": {
                 "state": "ok",
                 "verdict": "confirmed",
                 "source": "backend:health.upstream_reachability",
                 "checked_at": 1790942400.5,
-                "age_s": 5.5,
+                "age_s": 4.25,
                 "ttl_s": 300,
                 "stale": false,
                 "reason": null,
@@ -2902,38 +2821,12 @@
                   "timestamp_basis": "source_checked_epoch"
                 }
               },
-              "ts_service": {
-                "state": "running",
-                "verdict": "confirmed",
-                "source": "sc:query-ts",
-                "checked_at": 1790942404.75,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
-              "funnel": {
-                "state": "on",
-                "verdict": "confirmed",
-                "source": "ts:serve-status",
-                "checked_at": 1790942406.5,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
               "security_gate": {
                 "state": "ok",
                 "verdict": "confirmed",
                 "source": "broker:host-evidence{limits}",
                 "checked_at": 1790942400.0,
-                "age_s": 7.25,
+                "age_s": 5.25,
                 "ttl_s": 600,
                 "stale": false,
                 "reason": null,
@@ -2949,7 +2842,7 @@
                 "verdict": "confirmed",
                 "source": "broker:host-evidence{watchdog}",
                 "checked_at": 1790942400.0,
-                "age_s": 7.75,
+                "age_s": 5.75,
                 "ttl_s": 60,
                 "stale": false,
                 "reason": null,
@@ -3115,25 +3008,12 @@
                 "timestamp_basis": "source_checked_epoch"
               }
             },
-            "connectivity": {
-              "state": "ok",
-              "verdict": "confirmed",
-              "source": "ts:status",
-              "checked_at": 1790942405.25,
-              "age_s": 0.25,
-              "ttl_s": 300,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
             "upstream": {
               "state": "ok",
               "verdict": "confirmed",
               "source": "backend:health.upstream_reachability",
               "checked_at": 1790942400.5,
-              "age_s": 5.5,
+              "age_s": 4.25,
               "ttl_s": 300,
               "stale": false,
               "reason": null,
@@ -3149,38 +3029,12 @@
                 "timestamp_basis": "source_checked_epoch"
               }
             },
-            "ts_service": {
-              "state": "running",
-              "verdict": "confirmed",
-              "source": "sc:query-ts",
-              "checked_at": 1790942404.75,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
-            "funnel": {
-              "state": "on",
-              "verdict": "confirmed",
-              "source": "ts:serve-status",
-              "checked_at": 1790942406.5,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
             "security_gate": {
               "state": "ok",
               "verdict": "confirmed",
               "source": "broker:host-evidence{limits}",
               "checked_at": 1790942400.0,
-              "age_s": 7.25,
+              "age_s": 5.25,
               "ttl_s": 600,
               "stale": false,
               "reason": null,
@@ -3196,7 +3050,7 @@
               "verdict": "confirmed",
               "source": "broker:host-evidence{watchdog}",
               "checked_at": 1790942400.0,
-              "age_s": 7.75,
+              "age_s": 5.75,
               "ttl_s": 60,
               "stale": false,
               "reason": null,
@@ -3338,7 +3192,7 @@
         "before": null,
         "after": null,
         "last_error": null,
-        "note": "九层全部 confirmed（只读、无副作用）；维护视图无租约、无 last_error；观察缝 forget_stale=False（不删 backend.pid）。"
+        "note": "七层全部 confirmed（只读、无副作用）；维护视图无租约、无 last_error；观察缝 forget_stale=False（不删 backend.pid）。"
       },
       {
         "case": "unknown",
@@ -3350,52 +3204,44 @@
           "resource": "share:orchestration",
           "generation": 0,
           "cancel_requested": false,
-          "created_at": "2026-10-02T12:00:09.250000+00:00",
-          "started_at": "2026-10-02T12:00:09.750000+00:00",
-          "finished_at": "2026-10-02T12:00:15.750000+00:00",
-          "created_epoch": 1790942409.25,
-          "started_epoch": 1790942409.75,
-          "finished_epoch": 1790942415.75,
+          "created_at": "2026-10-02T12:00:07.250000+00:00",
+          "started_at": "2026-10-02T12:00:07.750000+00:00",
+          "finished_at": "2026-10-02T12:00:11.750000+00:00",
+          "created_epoch": 1790942407.25,
+          "started_epoch": 1790942407.75,
+          "finished_epoch": 1790942411.75,
           "steps": [
             {
-              "at": 1790942410.0,
-              "note": "分层只读诊断：九层证据；任一缝失败只让该层 unavailable，整体不抛"
+              "at": 1790942408.0,
+              "note": "分层只读诊断：七层证据；任一缝失败只让该层 unavailable，整体不抛"
             },
             {
-              "at": 1790942410.5,
+              "at": 1790942408.5,
               "note": "核验分享入口：受限任务、进程身份和监听"
             },
             {
-              "at": 1790942411.0,
+              "at": 1790942409.0,
               "note": "核验独立分享后端 8110"
             },
             {
-              "at": 1790942411.75,
+              "at": 1790942409.75,
               "note": "核验分享账号认证"
             },
             {
-              "at": 1790942412.25,
-              "note": "核验 TS 服务和连接"
-            },
-            {
-              "at": 1790942413.5,
+              "at": 1790942410.25,
               "note": "读取上游就绪证据"
             },
             {
-              "at": 1790942414.0,
-              "note": "核验 Funnel 公网映射"
-            },
-            {
-              "at": 1790942414.75,
+              "at": 1790942410.75,
               "note": "核验 WFP 隔离和出站防火墙"
             },
             {
-              "at": 1790942415.25,
+              "at": 1790942411.25,
               "note": "核验分享看门狗"
             }
           ],
           "result": {
-            "checked_at": 1790942410.25,
+            "checked_at": 1790942408.25,
             "layers": {
               "share_gateway": {
                 "state": "unavailable",
@@ -3412,7 +3258,7 @@
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "backend:observe(forget_stale=False)+pid-state",
-                "checked_at": 1790942411.25,
+                "checked_at": 1790942409.25,
                 "age_s": 0.25,
                 "ttl_s": 60,
                 "stale": false,
@@ -3422,13 +3268,13 @@
                     "running": true,
                     "auth_state": "valid",
                     "auth_label": "认证有效",
-                    "observed_at": 1790942408.5,
+                    "observed_at": 1790942406.5,
                     "upstream_reachability": {
                       "state": "ok",
-                      "checked_epoch": 1790942408.5,
+                      "checked_epoch": 1790942406.5,
                       "changed": false,
                       "outage_started": null,
-                      "last_ok": 1790942408.5
+                      "last_ok": 1790942406.5
                     },
                     "attribution": {
                       "file_ready": true,
@@ -3453,7 +3299,7 @@
                 "state": "valid",
                 "verdict": "confirmed",
                 "source": "backend:admin/auth/status",
-                "checked_at": 1790942408.5,
+                "checked_at": 1790942406.5,
                 "age_s": 3.5,
                 "ttl_s": 300,
                 "stale": false,
@@ -3472,72 +3318,33 @@
                   "timestamp_basis": "source_checked_epoch"
                 }
               },
-              "connectivity": {
-                "state": "ok",
-                "verdict": "confirmed",
-                "source": "ts:status",
-                "checked_at": 1790942413.0,
-                "age_s": 0.25,
-                "ttl_s": 300,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
               "upstream": {
                 "state": "ok",
                 "verdict": "confirmed",
                 "source": "backend:health.upstream_reachability",
-                "checked_at": 1790942408.5,
-                "age_s": 5.25,
+                "checked_at": 1790942406.5,
+                "age_s": 4.0,
                 "ttl_s": 300,
                 "stale": false,
                 "reason": null,
                 "evidence": {
                   "upstream": {
                     "state": "ok",
-                    "checked_epoch": 1790942408.5,
+                    "checked_epoch": 1790942406.5,
                     "changed": false,
                     "outage_started": null,
-                    "last_ok": 1790942408.5
+                    "last_ok": 1790942406.5
                   },
                   "health_reachable": true,
                   "timestamp_basis": "source_checked_epoch"
-                }
-              },
-              "ts_service": {
-                "state": "running",
-                "verdict": "confirmed",
-                "source": "sc:query-ts",
-                "checked_at": 1790942412.5,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
-              "funnel": {
-                "state": "on",
-                "verdict": "confirmed",
-                "source": "ts:serve-status",
-                "checked_at": 1790942414.25,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
                 }
               },
               "security_gate": {
                 "state": "ok",
                 "verdict": "confirmed",
                 "source": "broker:host-evidence{limits}",
-                "checked_at": 1790942408.0,
-                "age_s": 7.0,
+                "checked_at": 1790942406.0,
+                "age_s": 5.0,
                 "ttl_s": 600,
                 "stale": false,
                 "reason": null,
@@ -3553,7 +3360,7 @@
                 "verdict": "confirmed",
                 "source": "broker:host-evidence{watchdog}",
                 "checked_at": 1790942400.0,
-                "age_s": 15.5,
+                "age_s": 11.5,
                 "ttl_s": 60,
                 "stale": false,
                 "reason": null,
@@ -3594,7 +3401,7 @@
           "idempotency_key": null
         },
         "result": {
-          "checked_at": 1790942410.25,
+          "checked_at": 1790942408.25,
           "layers": {
             "share_gateway": {
               "state": "unavailable",
@@ -3611,7 +3418,7 @@
               "state": "running",
               "verdict": "confirmed",
               "source": "backend:observe(forget_stale=False)+pid-state",
-              "checked_at": 1790942411.25,
+              "checked_at": 1790942409.25,
               "age_s": 0.25,
               "ttl_s": 60,
               "stale": false,
@@ -3621,13 +3428,13 @@
                   "running": true,
                   "auth_state": "valid",
                   "auth_label": "认证有效",
-                  "observed_at": 1790942408.5,
+                  "observed_at": 1790942406.5,
                   "upstream_reachability": {
                     "state": "ok",
-                    "checked_epoch": 1790942408.5,
+                    "checked_epoch": 1790942406.5,
                     "changed": false,
                     "outage_started": null,
-                    "last_ok": 1790942408.5
+                    "last_ok": 1790942406.5
                   },
                   "attribution": {
                     "file_ready": true,
@@ -3652,7 +3459,7 @@
               "state": "valid",
               "verdict": "confirmed",
               "source": "backend:admin/auth/status",
-              "checked_at": 1790942408.5,
+              "checked_at": 1790942406.5,
               "age_s": 3.5,
               "ttl_s": 300,
               "stale": false,
@@ -3671,72 +3478,33 @@
                 "timestamp_basis": "source_checked_epoch"
               }
             },
-            "connectivity": {
-              "state": "ok",
-              "verdict": "confirmed",
-              "source": "ts:status",
-              "checked_at": 1790942413.0,
-              "age_s": 0.25,
-              "ttl_s": 300,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
             "upstream": {
               "state": "ok",
               "verdict": "confirmed",
               "source": "backend:health.upstream_reachability",
-              "checked_at": 1790942408.5,
-              "age_s": 5.25,
+              "checked_at": 1790942406.5,
+              "age_s": 4.0,
               "ttl_s": 300,
               "stale": false,
               "reason": null,
               "evidence": {
                 "upstream": {
                   "state": "ok",
-                  "checked_epoch": 1790942408.5,
+                  "checked_epoch": 1790942406.5,
                   "changed": false,
                   "outage_started": null,
-                  "last_ok": 1790942408.5
+                  "last_ok": 1790942406.5
                 },
                 "health_reachable": true,
                 "timestamp_basis": "source_checked_epoch"
-              }
-            },
-            "ts_service": {
-              "state": "running",
-              "verdict": "confirmed",
-              "source": "sc:query-ts",
-              "checked_at": 1790942412.5,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
-            "funnel": {
-              "state": "on",
-              "verdict": "confirmed",
-              "source": "ts:serve-status",
-              "checked_at": 1790942414.25,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
               }
             },
             "security_gate": {
               "state": "ok",
               "verdict": "confirmed",
               "source": "broker:host-evidence{limits}",
-              "checked_at": 1790942408.0,
-              "age_s": 7.0,
+              "checked_at": 1790942406.0,
+              "age_s": 5.0,
               "ttl_s": 600,
               "stale": false,
               "reason": null,
@@ -3752,7 +3520,7 @@
               "verdict": "confirmed",
               "source": "broker:host-evidence{watchdog}",
               "checked_at": 1790942400.0,
-              "age_s": 15.5,
+              "age_s": 11.5,
               "ttl_s": 60,
               "stale": false,
               "reason": null,
@@ -3805,7 +3573,7 @@
             "state": "running",
             "verdict": "confirmed",
             "source": "backend:observe(forget_stale=False)+pid-state",
-            "checked_at": 1790942411.25,
+            "checked_at": 1790942409.25,
             "age_s": 0.25,
             "ttl_s": 60,
             "stale": false,
@@ -3815,13 +3583,13 @@
                 "running": true,
                 "auth_state": "valid",
                 "auth_label": "认证有效",
-                "observed_at": 1790942408.5,
+                "observed_at": 1790942406.5,
                 "upstream_reachability": {
                   "state": "ok",
-                  "checked_epoch": 1790942408.5,
+                  "checked_epoch": 1790942406.5,
                   "changed": false,
                   "outage_started": null,
-                  "last_ok": 1790942408.5
+                  "last_ok": 1790942406.5
                 },
                 "attribution": {
                   "file_ready": true,
@@ -3858,58 +3626,50 @@
           "resource": "share:orchestration",
           "generation": 0,
           "cancel_requested": false,
-          "created_at": "2026-10-02T12:00:17+00:00",
-          "started_at": "2026-10-02T12:00:17.500000+00:00",
-          "finished_at": "2026-10-02T12:00:23.750000+00:00",
-          "created_epoch": 1790942417.0,
-          "started_epoch": 1790942417.5,
-          "finished_epoch": 1790942423.75,
+          "created_at": "2026-10-02T12:00:13+00:00",
+          "started_at": "2026-10-02T12:00:13.500000+00:00",
+          "finished_at": "2026-10-02T12:00:17.750000+00:00",
+          "created_epoch": 1790942413.0,
+          "started_epoch": 1790942413.5,
+          "finished_epoch": 1790942417.75,
           "steps": [
             {
-              "at": 1790942417.75,
-              "note": "分层只读诊断：九层证据；任一缝失败只让该层 unavailable，整体不抛"
+              "at": 1790942413.75,
+              "note": "分层只读诊断：七层证据；任一缝失败只让该层 unavailable，整体不抛"
             },
             {
-              "at": 1790942418.25,
+              "at": 1790942414.25,
               "note": "核验分享入口：受限任务、进程身份和监听"
             },
             {
-              "at": 1790942419.0,
+              "at": 1790942415.0,
               "note": "核验独立分享后端 8110"
             },
             {
-              "at": 1790942419.75,
+              "at": 1790942415.75,
               "note": "核验分享账号认证"
             },
             {
-              "at": 1790942420.25,
-              "note": "核验 TS 服务和连接"
-            },
-            {
-              "at": 1790942421.5,
+              "at": 1790942416.25,
               "note": "读取上游就绪证据"
             },
             {
-              "at": 1790942422.0,
-              "note": "核验 Funnel 公网映射"
-            },
-            {
-              "at": 1790942422.75,
+              "at": 1790942416.75,
               "note": "核验 WFP 隔离和出站防火墙"
             },
             {
-              "at": 1790942423.25,
+              "at": 1790942417.25,
               "note": "核验分享看门狗"
             }
           ],
           "result": {
-            "checked_at": 1790942418.0,
+            "checked_at": 1790942414.0,
             "layers": {
               "share_gateway": {
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "broker:host-verify{running}+instance-probe+attribution",
-                "checked_at": 1790942418.5,
+                "checked_at": 1790942414.5,
                 "age_s": 0.25,
                 "ttl_s": 60,
                 "stale": false,
@@ -3938,11 +3698,11 @@
                       "file": {
                         "present": true,
                         "size": 4096,
-                        "mtime": 1790942416.0
+                        "mtime": 1790942412.0
                       }
                     },
                     "detail": "read tail ok",
-                    "checked_at": 1790942416
+                    "checked_at": 1790942412
                   },
                   "timestamp_basis": "local_read"
                 }
@@ -3951,7 +3711,7 @@
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "backend:observe(forget_stale=False)+pid-state",
-                "checked_at": 1790942419.25,
+                "checked_at": 1790942415.25,
                 "age_s": 0.25,
                 "ttl_s": 60,
                 "stale": false,
@@ -3961,13 +3721,13 @@
                     "running": true,
                     "auth_state": "valid",
                     "auth_label": "认证有效",
-                    "observed_at": 1790941416.0,
+                    "observed_at": 1790941412.0,
                     "upstream_reachability": {
                       "state": "ok",
-                      "checked_epoch": 1790941416.0,
+                      "checked_epoch": 1790941412.0,
                       "changed": false,
                       "outage_started": null,
-                      "last_ok": 1790941416.0
+                      "last_ok": 1790941412.0
                     },
                     "attribution": {
                       "file_ready": true,
@@ -3992,7 +3752,7 @@
                 "state": "valid",
                 "verdict": "confirmed",
                 "source": "backend:admin/auth/status",
-                "checked_at": 1790941416.0,
+                "checked_at": 1790941412.0,
                 "age_s": 1004.0,
                 "ttl_s": 300,
                 "stale": true,
@@ -4011,72 +3771,33 @@
                   "timestamp_basis": "source_checked_epoch"
                 }
               },
-              "connectivity": {
-                "state": "ok",
-                "verdict": "confirmed",
-                "source": "ts:status",
-                "checked_at": 1790942421.0,
-                "age_s": 0.25,
-                "ttl_s": 300,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
               "upstream": {
                 "state": "ok",
                 "verdict": "confirmed",
                 "source": "backend:health.upstream_reachability",
-                "checked_at": 1790941416.0,
-                "age_s": 1005.75,
+                "checked_at": 1790941412.0,
+                "age_s": 1004.5,
                 "ttl_s": 300,
                 "stale": true,
                 "reason": null,
                 "evidence": {
                   "upstream": {
                     "state": "ok",
-                    "checked_epoch": 1790941416.0,
+                    "checked_epoch": 1790941412.0,
                     "changed": false,
                     "outage_started": null,
-                    "last_ok": 1790941416.0
+                    "last_ok": 1790941412.0
                   },
                   "health_reachable": true,
                   "timestamp_basis": "source_checked_epoch"
-                }
-              },
-              "ts_service": {
-                "state": "running",
-                "verdict": "confirmed",
-                "source": "sc:query-ts",
-                "checked_at": 1790942420.5,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
-              "funnel": {
-                "state": "on",
-                "verdict": "confirmed",
-                "source": "ts:serve-status",
-                "checked_at": 1790942422.25,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
                 }
               },
               "security_gate": {
                 "state": "ok",
                 "verdict": "confirmed",
                 "source": "broker:host-evidence{limits}",
-                "checked_at": 1790941116.0,
-                "age_s": 1307.0,
+                "checked_at": 1790941112.0,
+                "age_s": 1305.0,
                 "ttl_s": 600,
                 "stale": true,
                 "reason": null,
@@ -4092,7 +3813,7 @@
                 "verdict": "confirmed",
                 "source": "broker:host-evidence{watchdog}",
                 "checked_at": 1790942400.0,
-                "age_s": 23.5,
+                "age_s": 17.5,
                 "ttl_s": 60,
                 "stale": false,
                 "reason": null,
@@ -4133,13 +3854,13 @@
           "idempotency_key": null
         },
         "result": {
-          "checked_at": 1790942418.0,
+          "checked_at": 1790942414.0,
           "layers": {
             "share_gateway": {
               "state": "running",
               "verdict": "confirmed",
               "source": "broker:host-verify{running}+instance-probe+attribution",
-              "checked_at": 1790942418.5,
+              "checked_at": 1790942414.5,
               "age_s": 0.25,
               "ttl_s": 60,
               "stale": false,
@@ -4168,11 +3889,11 @@
                     "file": {
                       "present": true,
                       "size": 4096,
-                      "mtime": 1790942416.0
+                      "mtime": 1790942412.0
                     }
                   },
                   "detail": "read tail ok",
-                  "checked_at": 1790942416
+                  "checked_at": 1790942412
                 },
                 "timestamp_basis": "local_read"
               }
@@ -4181,7 +3902,7 @@
               "state": "running",
               "verdict": "confirmed",
               "source": "backend:observe(forget_stale=False)+pid-state",
-              "checked_at": 1790942419.25,
+              "checked_at": 1790942415.25,
               "age_s": 0.25,
               "ttl_s": 60,
               "stale": false,
@@ -4191,13 +3912,13 @@
                   "running": true,
                   "auth_state": "valid",
                   "auth_label": "认证有效",
-                  "observed_at": 1790941416.0,
+                  "observed_at": 1790941412.0,
                   "upstream_reachability": {
                     "state": "ok",
-                    "checked_epoch": 1790941416.0,
+                    "checked_epoch": 1790941412.0,
                     "changed": false,
                     "outage_started": null,
-                    "last_ok": 1790941416.0
+                    "last_ok": 1790941412.0
                   },
                   "attribution": {
                     "file_ready": true,
@@ -4222,7 +3943,7 @@
               "state": "valid",
               "verdict": "confirmed",
               "source": "backend:admin/auth/status",
-              "checked_at": 1790941416.0,
+              "checked_at": 1790941412.0,
               "age_s": 1004.0,
               "ttl_s": 300,
               "stale": true,
@@ -4241,72 +3962,33 @@
                 "timestamp_basis": "source_checked_epoch"
               }
             },
-            "connectivity": {
-              "state": "ok",
-              "verdict": "confirmed",
-              "source": "ts:status",
-              "checked_at": 1790942421.0,
-              "age_s": 0.25,
-              "ttl_s": 300,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
             "upstream": {
               "state": "ok",
               "verdict": "confirmed",
               "source": "backend:health.upstream_reachability",
-              "checked_at": 1790941416.0,
-              "age_s": 1005.75,
+              "checked_at": 1790941412.0,
+              "age_s": 1004.5,
               "ttl_s": 300,
               "stale": true,
               "reason": null,
               "evidence": {
                 "upstream": {
                   "state": "ok",
-                  "checked_epoch": 1790941416.0,
+                  "checked_epoch": 1790941412.0,
                   "changed": false,
                   "outage_started": null,
-                  "last_ok": 1790941416.0
+                  "last_ok": 1790941412.0
                 },
                 "health_reachable": true,
                 "timestamp_basis": "source_checked_epoch"
-              }
-            },
-            "ts_service": {
-              "state": "running",
-              "verdict": "confirmed",
-              "source": "sc:query-ts",
-              "checked_at": 1790942420.5,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
-            "funnel": {
-              "state": "on",
-              "verdict": "confirmed",
-              "source": "ts:serve-status",
-              "checked_at": 1790942422.25,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
               }
             },
             "security_gate": {
               "state": "ok",
               "verdict": "confirmed",
               "source": "broker:host-evidence{limits}",
-              "checked_at": 1790941116.0,
-              "age_s": 1307.0,
+              "checked_at": 1790941112.0,
+              "age_s": 1305.0,
               "ttl_s": 600,
               "stale": true,
               "reason": null,
@@ -4322,7 +4004,7 @@
               "verdict": "confirmed",
               "source": "broker:host-evidence{watchdog}",
               "checked_at": 1790942400.0,
-              "age_s": 23.5,
+              "age_s": 17.5,
               "ttl_s": 60,
               "stale": false,
               "reason": null,
@@ -4364,7 +4046,7 @@
             "state": "valid",
             "verdict": "confirmed",
             "source": "backend:admin/auth/status",
-            "checked_at": 1790941416.0,
+            "checked_at": 1790941412.0,
             "age_s": 1004.0,
             "ttl_s": 300,
             "stale": true,
@@ -4387,18 +4069,18 @@
             "state": "ok",
             "verdict": "confirmed",
             "source": "backend:health.upstream_reachability",
-            "checked_at": 1790941416.0,
-            "age_s": 1005.75,
+            "checked_at": 1790941412.0,
+            "age_s": 1004.5,
             "ttl_s": 300,
             "stale": true,
             "reason": null,
             "evidence": {
               "upstream": {
                 "state": "ok",
-                "checked_epoch": 1790941416.0,
+                "checked_epoch": 1790941412.0,
                 "changed": false,
                 "outage_started": null,
-                "last_ok": 1790941416.0
+                "last_ok": 1790941412.0
               },
               "health_reachable": true,
               "timestamp_basis": "source_checked_epoch"
@@ -4408,8 +4090,8 @@
             "state": "ok",
             "verdict": "confirmed",
             "source": "broker:host-evidence{limits}",
-            "checked_at": 1790941116.0,
-            "age_s": 1307.0,
+            "checked_at": 1790941112.0,
+            "age_s": 1305.0,
             "ttl_s": 600,
             "stale": true,
             "reason": null,
@@ -4427,566 +4109,6 @@
         "note": "checked_at 取证据自身观测时间（timestamp_basis=source_checked_epoch）；backend_auth/upstream/security_gate age_s > ttl_s → stale=true；其余层新鲜。"
       },
       {
-        "case": "partial_failure",
-        "operation": {
-          "id": "fixture-partial_failure-op",
-          "action": "share.diagnostics",
-          "target": "share",
-          "state": "succeeded",
-          "resource": "share:orchestration",
-          "generation": 0,
-          "cancel_requested": false,
-          "created_at": "2026-10-02T12:00:25+00:00",
-          "started_at": "2026-10-02T12:00:25.500000+00:00",
-          "finished_at": "2026-10-02T12:00:31.500000+00:00",
-          "created_epoch": 1790942425.0,
-          "started_epoch": 1790942425.5,
-          "finished_epoch": 1790942431.5,
-          "steps": [
-            {
-              "at": 1790942425.75,
-              "note": "分层只读诊断：九层证据；任一缝失败只让该层 unavailable，整体不抛"
-            },
-            {
-              "at": 1790942426.25,
-              "note": "核验分享入口：受限任务、进程身份和监听"
-            },
-            {
-              "at": 1790942427.0,
-              "note": "核验独立分享后端 8110"
-            },
-            {
-              "at": 1790942427.75,
-              "note": "核验分享账号认证"
-            },
-            {
-              "at": 1790942428.25,
-              "note": "核验 TS 服务和连接"
-            },
-            {
-              "at": 1790942429.25,
-              "note": "读取上游就绪证据"
-            },
-            {
-              "at": 1790942429.75,
-              "note": "核验 Funnel 公网映射"
-            },
-            {
-              "at": 1790942430.5,
-              "note": "核验 WFP 隔离和出站防火墙"
-            },
-            {
-              "at": 1790942431.0,
-              "note": "核验分享看门狗"
-            }
-          ],
-          "result": {
-            "checked_at": 1790942426.0,
-            "layers": {
-              "share_gateway": {
-                "state": "running",
-                "verdict": "confirmed",
-                "source": "broker:host-verify{running}+instance-probe+attribution",
-                "checked_at": 1790942426.5,
-                "age_s": 0.25,
-                "ttl_s": 60,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "instance_probe": {
-                    "pid": 54300,
-                    "reason": "ok"
-                  },
-                  "attribution": {
-                    "file_ready": true,
-                    "reason": "ok"
-                  },
-                  "faults": {
-                    "check": "faults",
-                    "verdict": {
-                      "last_fault": null,
-                      "counts_by_phase": {
-                        "auth": 0,
-                        "config": 0,
-                        "body": 0,
-                        "limit": 1,
-                        "upstream": 3,
-                        "stream": 0
-                      },
-                      "file": {
-                        "present": true,
-                        "size": 4096,
-                        "mtime": 1790942424.0
-                      }
-                    },
-                    "detail": "read tail ok",
-                    "checked_at": 1790942424
-                  },
-                  "timestamp_basis": "local_read"
-                }
-              },
-              "share_backend": {
-                "state": "running",
-                "verdict": "confirmed",
-                "source": "backend:observe(forget_stale=False)+pid-state",
-                "checked_at": 1790942427.25,
-                "age_s": 0.25,
-                "ttl_s": 60,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "observe": {
-                    "running": true,
-                    "auth_state": "valid",
-                    "auth_label": "认证有效",
-                    "observed_at": 1790942424.25,
-                    "upstream_reachability": {
-                      "state": "ok",
-                      "checked_epoch": 1790942424.25,
-                      "changed": false,
-                      "outage_started": null,
-                      "last_ok": 1790942424.25
-                    },
-                    "attribution": {
-                      "file_ready": true,
-                      "reason": "ok",
-                      "instance_loaded": {
-                        "value": "yes",
-                        "basis": "inference"
-                      }
-                    }
-                  },
-                  "pid_state": {
-                    "state": "running",
-                    "pid": 54300,
-                    "port": 8110,
-                    "identity": "verified",
-                    "identity_reason": "ok"
-                  },
-                  "timestamp_basis": "local_read"
-                }
-              },
-              "backend_auth": {
-                "state": "valid",
-                "verdict": "confirmed",
-                "source": "backend:admin/auth/status",
-                "checked_at": 1790942424.25,
-                "age_s": 3.75,
-                "ttl_s": 300,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "auth_label": "认证有效",
-                  "running": true,
-                  "attribution": {
-                    "file_ready": true,
-                    "reason": "ok",
-                    "instance_loaded": {
-                      "value": "yes",
-                      "basis": "inference"
-                    }
-                  },
-                  "timestamp_basis": "source_checked_epoch"
-                }
-              },
-              "connectivity": {
-                "state": "unavailable",
-                "verdict": "unavailable",
-                "source": "ts:status",
-                "checked_at": null,
-                "age_s": null,
-                "ttl_s": 300,
-                "stale": true,
-                "reason": "connectivity_query_failed",
-                "evidence": {
-                  "error_code": "share_status_unknown"
-                }
-              },
-              "upstream": {
-                "state": "ok",
-                "verdict": "confirmed",
-                "source": "backend:health.upstream_reachability",
-                "checked_at": 1790942424.25,
-                "age_s": 5.25,
-                "ttl_s": 300,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "upstream": {
-                    "state": "ok",
-                    "checked_epoch": 1790942424.25,
-                    "changed": false,
-                    "outage_started": null,
-                    "last_ok": 1790942424.25
-                  },
-                  "health_reachable": true,
-                  "timestamp_basis": "source_checked_epoch"
-                }
-              },
-              "ts_service": {
-                "state": "running",
-                "verdict": "confirmed",
-                "source": "sc:query-ts",
-                "checked_at": 1790942428.5,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
-              "funnel": {
-                "state": "on",
-                "verdict": "confirmed",
-                "source": "ts:serve-status",
-                "checked_at": 1790942430.0,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
-              "security_gate": {
-                "state": "ok",
-                "verdict": "confirmed",
-                "source": "broker:host-evidence{limits}",
-                "checked_at": 1790942424.0,
-                "age_s": 6.75,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "check": "limits",
-                  "verdict": true,
-                  "detail": "ok",
-                  "timestamp_basis": "local_read"
-                }
-              },
-              "watchdog": {
-                "state": "running",
-                "verdict": "confirmed",
-                "source": "broker:host-evidence{watchdog}",
-                "checked_at": 1790942400.0,
-                "age_s": 31.25,
-                "ttl_s": 60,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "task_name": "umshare-watchdog",
-                  "exists": true,
-                  "task_state": "Running",
-                  "execute": "<fixture-pwsh.exe>",
-                  "execute_matches": true,
-                  "script_path": "<fixture-watchdog-umshare.ps1>",
-                  "script_matches": true,
-                  "last_task_result": 2147946720,
-                  "last_task_result_hex": "0x800710E0",
-                  "last_run_at": 1790942370.0,
-                  "queried_at": 1790942400.0,
-                  "heartbeat_at": 1790942399.0,
-                  "heartbeat_source": "watchdog_log_mtime",
-                  "timestamp_basis": "local_read"
-                }
-              }
-            },
-            "maintenance": {
-              "lease": null,
-              "instance": {
-                "instance_id": "fixture-instance-1",
-                "state": "running",
-                "active_count": 0,
-                "last_seen_generation": 12
-              },
-              "last_outcome": null
-            },
-            "desired_stop_in_force": false,
-            "last_error": null,
-            "supervision": null,
-            "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收；证据不可得层：connectivity"
-          },
-          "error": null,
-          "idempotency_key": null
-        },
-        "result": {
-          "checked_at": 1790942426.0,
-          "layers": {
-            "share_gateway": {
-              "state": "running",
-              "verdict": "confirmed",
-              "source": "broker:host-verify{running}+instance-probe+attribution",
-              "checked_at": 1790942426.5,
-              "age_s": 0.25,
-              "ttl_s": 60,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "instance_probe": {
-                  "pid": 54300,
-                  "reason": "ok"
-                },
-                "attribution": {
-                  "file_ready": true,
-                  "reason": "ok"
-                },
-                "faults": {
-                  "check": "faults",
-                  "verdict": {
-                    "last_fault": null,
-                    "counts_by_phase": {
-                      "auth": 0,
-                      "config": 0,
-                      "body": 0,
-                      "limit": 1,
-                      "upstream": 3,
-                      "stream": 0
-                    },
-                    "file": {
-                      "present": true,
-                      "size": 4096,
-                      "mtime": 1790942424.0
-                    }
-                  },
-                  "detail": "read tail ok",
-                  "checked_at": 1790942424
-                },
-                "timestamp_basis": "local_read"
-              }
-            },
-            "share_backend": {
-              "state": "running",
-              "verdict": "confirmed",
-              "source": "backend:observe(forget_stale=False)+pid-state",
-              "checked_at": 1790942427.25,
-              "age_s": 0.25,
-              "ttl_s": 60,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "observe": {
-                  "running": true,
-                  "auth_state": "valid",
-                  "auth_label": "认证有效",
-                  "observed_at": 1790942424.25,
-                  "upstream_reachability": {
-                    "state": "ok",
-                    "checked_epoch": 1790942424.25,
-                    "changed": false,
-                    "outage_started": null,
-                    "last_ok": 1790942424.25
-                  },
-                  "attribution": {
-                    "file_ready": true,
-                    "reason": "ok",
-                    "instance_loaded": {
-                      "value": "yes",
-                      "basis": "inference"
-                    }
-                  }
-                },
-                "pid_state": {
-                  "state": "running",
-                  "pid": 54300,
-                  "port": 8110,
-                  "identity": "verified",
-                  "identity_reason": "ok"
-                },
-                "timestamp_basis": "local_read"
-              }
-            },
-            "backend_auth": {
-              "state": "valid",
-              "verdict": "confirmed",
-              "source": "backend:admin/auth/status",
-              "checked_at": 1790942424.25,
-              "age_s": 3.75,
-              "ttl_s": 300,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "auth_label": "认证有效",
-                "running": true,
-                "attribution": {
-                  "file_ready": true,
-                  "reason": "ok",
-                  "instance_loaded": {
-                    "value": "yes",
-                    "basis": "inference"
-                  }
-                },
-                "timestamp_basis": "source_checked_epoch"
-              }
-            },
-            "connectivity": {
-              "state": "unavailable",
-              "verdict": "unavailable",
-              "source": "ts:status",
-              "checked_at": null,
-              "age_s": null,
-              "ttl_s": 300,
-              "stale": true,
-              "reason": "connectivity_query_failed",
-              "evidence": {
-                "error_code": "share_status_unknown"
-              }
-            },
-            "upstream": {
-              "state": "ok",
-              "verdict": "confirmed",
-              "source": "backend:health.upstream_reachability",
-              "checked_at": 1790942424.25,
-              "age_s": 5.25,
-              "ttl_s": 300,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "upstream": {
-                  "state": "ok",
-                  "checked_epoch": 1790942424.25,
-                  "changed": false,
-                  "outage_started": null,
-                  "last_ok": 1790942424.25
-                },
-                "health_reachable": true,
-                "timestamp_basis": "source_checked_epoch"
-              }
-            },
-            "ts_service": {
-              "state": "running",
-              "verdict": "confirmed",
-              "source": "sc:query-ts",
-              "checked_at": 1790942428.5,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
-            "funnel": {
-              "state": "on",
-              "verdict": "confirmed",
-              "source": "ts:serve-status",
-              "checked_at": 1790942430.0,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
-            "security_gate": {
-              "state": "ok",
-              "verdict": "confirmed",
-              "source": "broker:host-evidence{limits}",
-              "checked_at": 1790942424.0,
-              "age_s": 6.75,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "check": "limits",
-                "verdict": true,
-                "detail": "ok",
-                "timestamp_basis": "local_read"
-              }
-            },
-            "watchdog": {
-              "state": "running",
-              "verdict": "confirmed",
-              "source": "broker:host-evidence{watchdog}",
-              "checked_at": 1790942400.0,
-              "age_s": 31.25,
-              "ttl_s": 60,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "task_name": "umshare-watchdog",
-                "exists": true,
-                "task_state": "Running",
-                "execute": "<fixture-pwsh.exe>",
-                "execute_matches": true,
-                "script_path": "<fixture-watchdog-umshare.ps1>",
-                "script_matches": true,
-                "last_task_result": 2147946720,
-                "last_task_result_hex": "0x800710E0",
-                "last_run_at": 1790942370.0,
-                "queried_at": 1790942400.0,
-                "heartbeat_at": 1790942399.0,
-                "heartbeat_source": "watchdog_log_mtime",
-                "timestamp_basis": "local_read"
-              }
-            }
-          },
-          "maintenance": {
-            "lease": null,
-            "instance": {
-              "instance_id": "fixture-instance-1",
-              "state": "running",
-              "active_count": 0,
-              "last_seen_generation": 12
-            },
-            "last_outcome": null
-          },
-          "desired_stop_in_force": false,
-          "last_error": null,
-          "supervision": null,
-          "note": "只读全域诊断：unavailable 表示该层证据不可得（如实，不冒充）；进程在 ≠ 业务就绪；非计费目录就绪 ≠ 真实推理验收；证据不可得层：connectivity"
-        },
-        "readback": {
-          "connectivity": {
-            "state": "unavailable",
-            "verdict": "unavailable",
-            "source": "ts:status",
-            "checked_at": null,
-            "age_s": null,
-            "ttl_s": 300,
-            "stale": true,
-            "reason": "connectivity_query_failed",
-            "evidence": {
-              "error_code": "share_status_unknown"
-            }
-          },
-          "ts_service": {
-            "state": "running",
-            "verdict": "confirmed",
-            "source": "sc:query-ts",
-            "checked_at": 1790942428.5,
-            "age_s": 0.25,
-            "ttl_s": 600,
-            "stale": false,
-            "reason": null,
-            "evidence": {
-              "timestamp_basis": "local_read"
-            }
-          },
-          "security_gate": {
-            "state": "ok",
-            "verdict": "confirmed",
-            "source": "broker:host-evidence{limits}",
-            "checked_at": 1790942424.0,
-            "age_s": 6.75,
-            "ttl_s": 600,
-            "stale": false,
-            "reason": null,
-            "evidence": {
-              "check": "limits",
-              "verdict": true,
-              "detail": "ok",
-              "timestamp_basis": "local_read"
-            }
-          }
-        },
-        "before": null,
-        "after": null,
-        "last_error": null,
-        "note": "单层 connectivity 缝抛异常 → 只该层 unavailable + reason；整体不抛，其余层照常给出证据。"
-      },
-      {
         "case": "authenticating",
         "operation": {
           "id": "fixture-authenticating-op",
@@ -4996,19 +4118,19 @@
           "resource": "share:orchestration",
           "generation": 0,
           "cancel_requested": false,
-          "created_at": "2026-10-02T12:00:40+00:00",
-          "started_at": "2026-10-02T12:00:40.500000+00:00",
-          "finished_at": "2026-10-02T12:00:41.250000+00:00",
-          "created_epoch": 1790942440.0,
-          "started_epoch": 1790942440.5,
-          "finished_epoch": 1790942441.25,
+          "created_at": "2026-10-02T12:00:24.250000+00:00",
+          "started_at": "2026-10-02T12:00:24.750000+00:00",
+          "finished_at": "2026-10-02T12:00:25.500000+00:00",
+          "created_epoch": 1790942424.25,
+          "started_epoch": 1790942424.75,
+          "finished_epoch": 1790942425.5,
           "steps": [
             {
-              "at": 1790942440.75,
+              "at": 1790942425.0,
               "note": "仅重新认证 8110：不冷启动、不重启进程、不绕过人工认证"
             },
             {
-              "at": 1790942441.0,
+              "at": 1790942425.25,
               "note": "重新认证结果：state=logging_in，triggered=False，polled=0"
             }
           ],
@@ -5048,7 +4170,7 @@
             "state": "logging_in",
             "verdict": "confirmed",
             "source": "backend:admin/auth/status",
-            "checked_at": 1790942432.0,
+            "checked_at": 1790942418.25,
             "age_s": 3.75,
             "ttl_s": 300,
             "stale": false,
@@ -5071,7 +4193,7 @@
             "state": "running",
             "verdict": "confirmed",
             "source": "backend:observe(forget_stale=False)+pid-state",
-            "checked_at": 1790942435.0,
+            "checked_at": 1790942421.25,
             "age_s": 0.25,
             "ttl_s": 60,
             "stale": false,
@@ -5081,13 +4203,13 @@
                 "running": true,
                 "auth_state": "logging_in",
                 "auth_label": "认证中（人工窗口已开启）",
-                "observed_at": 1790942432.0,
+                "observed_at": 1790942418.25,
                 "upstream_reachability": {
                   "state": "ok",
-                  "checked_epoch": 1790942432.0,
+                  "checked_epoch": 1790942418.25,
                   "changed": false,
                   "outage_started": null,
-                  "last_ok": 1790942432.0
+                  "last_ok": 1790942418.25
                 },
                 "attribution": {
                   "file_ready": true,
@@ -5124,15 +4246,15 @@
           "resource": "share:orchestration",
           "generation": 0,
           "cancel_requested": false,
-          "created_at": "2026-10-02T12:00:49.500000+00:00",
-          "started_at": "2026-10-02T12:00:50+00:00",
-          "finished_at": "2026-10-02T12:00:51.250000+00:00",
-          "created_epoch": 1790942449.5,
-          "started_epoch": 1790942450.0,
-          "finished_epoch": 1790942451.25,
+          "created_at": "2026-10-02T12:00:31.750000+00:00",
+          "started_at": "2026-10-02T12:00:32.250000+00:00",
+          "finished_at": "2026-10-02T12:00:33.500000+00:00",
+          "created_epoch": 1790942431.75,
+          "started_epoch": 1790942432.25,
+          "finished_epoch": 1790942433.5,
           "steps": [
             {
-              "at": 1790942450.25,
+              "at": 1790942432.5,
               "note": "8110 单层重启：五项身份核实 → 暂停 8100 接收 → 有界排空 → 重启 → 恢复接收"
             }
           ],
@@ -5149,7 +4271,7 @@
             "state": "running",
             "verdict": "confirmed",
             "source": "broker:host-verify{running}+instance-probe+attribution",
-            "checked_at": 1790942443.75,
+            "checked_at": 1790942428.0,
             "age_s": 0.25,
             "ttl_s": 60,
             "stale": false,
@@ -5178,11 +4300,11 @@
                   "file": {
                     "present": true,
                     "size": 4096,
-                    "mtime": 1790942441.5
+                    "mtime": 1790942425.75
                   }
                 },
                 "detail": "read tail ok",
-                "checked_at": 1790942441
+                "checked_at": 1790942425
               },
               "timestamp_basis": "local_read"
             }
@@ -5191,7 +4313,7 @@
             "state": "running",
             "verdict": "confirmed",
             "source": "backend:observe(forget_stale=False)+pid-state",
-            "checked_at": 1790942444.5,
+            "checked_at": 1790942428.75,
             "age_s": 0.25,
             "ttl_s": 60,
             "stale": false,
@@ -5201,13 +4323,13 @@
                 "running": true,
                 "auth_state": "valid",
                 "auth_label": "认证有效",
-                "observed_at": 1790942441.75,
+                "observed_at": 1790942426.0,
                 "upstream_reachability": {
                   "state": "ok",
-                  "checked_epoch": 1790942441.75,
+                  "checked_epoch": 1790942426.0,
                   "changed": false,
                   "outage_started": null,
-                  "last_ok": 1790942441.75
+                  "last_ok": 1790942426.0
                 },
                 "attribution": {
                   "file_ready": true,
@@ -5275,23 +4397,23 @@
           "resource": "share:orchestration",
           "generation": 0,
           "cancel_requested": false,
-          "created_at": "2026-10-02T12:00:52+00:00",
-          "started_at": "2026-10-02T12:00:52.500000+00:00",
-          "finished_at": "2026-10-02T12:00:54+00:00",
-          "created_epoch": 1790942452.0,
-          "started_epoch": 1790942452.5,
-          "finished_epoch": 1790942454.0,
+          "created_at": "2026-10-02T12:00:34.250000+00:00",
+          "started_at": "2026-10-02T12:00:34.750000+00:00",
+          "finished_at": "2026-10-02T12:00:36.250000+00:00",
+          "created_epoch": 1790942434.25,
+          "started_epoch": 1790942434.75,
+          "finished_epoch": 1790942436.25,
           "steps": [
             {
-              "at": 1790942452.75,
+              "at": 1790942435.0,
               "note": "8110 单层重启：五项身份核实 → 暂停 8100 接收 → 有界排空 → 重启 → 恢复接收"
             },
             {
-              "at": 1790942453.5,
+              "at": 1790942435.75,
               "note": "维护租约已建立（component=share_gateway，lease_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa，round=7，active_count=3）：8100 已暂停接收"
             },
             {
-              "at": 1790942453.75,
+              "at": 1790942436.0,
               "note": "恢复 8100 接收（drain_timeout）：resumed=True，state=running，active_count=0"
             }
           ],
@@ -5335,67 +4457,59 @@
           "resource": "share:orchestration",
           "generation": 0,
           "cancel_requested": true,
-          "created_at": "2026-10-02T12:00:55.250000+00:00",
-          "started_at": "2026-10-02T12:00:55.750000+00:00",
-          "finished_at": "2026-10-02T12:01:07+00:00",
-          "created_epoch": 1790942455.25,
-          "started_epoch": 1790942455.75,
-          "finished_epoch": 1790942467.0,
+          "created_at": "2026-10-02T12:00:37.500000+00:00",
+          "started_at": "2026-10-02T12:00:38+00:00",
+          "finished_at": "2026-10-02T12:00:45.750000+00:00",
+          "created_epoch": 1790942437.5,
+          "started_epoch": 1790942438.0,
+          "finished_epoch": 1790942445.75,
           "steps": [
             {
-              "at": 1790942456.0,
+              "at": 1790942438.25,
               "note": "8100 单层重启：九层只读快照 → 安全门（host-evidence limits） → broker gateway-restart"
             },
             {
-              "at": 1790942456.25,
-              "note": "分层只读诊断：九层证据；任一缝失败只让该层 unavailable，整体不抛"
+              "at": 1790942438.5,
+              "note": "分层只读诊断：七层证据；任一缝失败只让该层 unavailable，整体不抛"
             },
             {
-              "at": 1790942456.75,
+              "at": 1790942439.0,
               "note": "核验分享入口：受限任务、进程身份和监听"
             },
             {
-              "at": 1790942457.5,
+              "at": 1790942439.75,
               "note": "核验独立分享后端 8110"
             },
             {
-              "at": 1790942458.25,
+              "at": 1790942440.5,
               "note": "核验分享账号认证"
             },
             {
-              "at": 1790942458.75,
-              "note": "核验 TS 服务和连接"
-            },
-            {
-              "at": 1790942460.0,
+              "at": 1790942441.0,
               "note": "读取上游就绪证据"
             },
             {
-              "at": 1790942460.5,
-              "note": "核验 Funnel 公网映射"
-            },
-            {
-              "at": 1790942461.25,
+              "at": 1790942441.5,
               "note": "核验 WFP 隔离和出站防火墙"
             },
             {
-              "at": 1790942461.75,
+              "at": 1790942442.0,
               "note": "核验分享看门狗"
             },
             {
-              "at": 1790942462.25,
+              "at": 1790942442.5,
               "note": "安全门已确认，执行受限 8100 单层重启"
             },
             {
-              "at": 1790942462.5,
+              "at": 1790942442.75,
               "note": "取消已请求，但 8100 重启副作用已提交：按实际结果返回（不伪报回退）"
             },
             {
-              "at": 1790942462.75,
+              "at": 1790942443.0,
               "note": "8100 已确认重启，正在读取动作后的九层状态"
             },
             {
-              "at": 1790942466.75,
+              "at": 1790942445.5,
               "note": "cancel was requested but the operation finished"
             }
           ],
@@ -5423,7 +4537,7 @@
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "broker:host-verify{running}+instance-probe+attribution",
-                "checked_at": 1790942457.0,
+                "checked_at": 1790942439.25,
                 "age_s": 0.25,
                 "ttl_s": 60,
                 "stale": false,
@@ -5452,11 +4566,11 @@
                       "file": {
                         "present": true,
                         "size": 4096,
-                        "mtime": 1790942454.25
+                        "mtime": 1790942436.5
                       }
                     },
                     "detail": "read tail ok",
-                    "checked_at": 1790942454
+                    "checked_at": 1790942436
                   },
                   "timestamp_basis": "local_read"
                 }
@@ -5465,7 +4579,7 @@
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "backend:observe(forget_stale=False)+pid-state",
-                "checked_at": 1790942457.75,
+                "checked_at": 1790942440.0,
                 "age_s": 0.25,
                 "ttl_s": 60,
                 "stale": false,
@@ -5475,13 +4589,13 @@
                     "running": true,
                     "auth_state": "valid",
                     "auth_label": "认证有效",
-                    "observed_at": 1790942454.5,
+                    "observed_at": 1790942436.75,
                     "upstream_reachability": {
                       "state": "ok",
-                      "checked_epoch": 1790942454.5,
+                      "checked_epoch": 1790942436.75,
                       "changed": false,
                       "outage_started": null,
-                      "last_ok": 1790942454.5
+                      "last_ok": 1790942436.75
                     },
                     "attribution": {
                       "file_ready": true,
@@ -5506,7 +4620,7 @@
                 "state": "valid",
                 "verdict": "confirmed",
                 "source": "backend:admin/auth/status",
-                "checked_at": 1790942454.5,
+                "checked_at": 1790942436.75,
                 "age_s": 4.0,
                 "ttl_s": 300,
                 "stale": false,
@@ -5525,72 +4639,33 @@
                   "timestamp_basis": "source_checked_epoch"
                 }
               },
-              "connectivity": {
-                "state": "ok",
-                "verdict": "confirmed",
-                "source": "ts:status",
-                "checked_at": 1790942459.5,
-                "age_s": 0.25,
-                "ttl_s": 300,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
               "upstream": {
                 "state": "ok",
                 "verdict": "confirmed",
                 "source": "backend:health.upstream_reachability",
-                "checked_at": 1790942454.5,
-                "age_s": 5.75,
+                "checked_at": 1790942436.75,
+                "age_s": 4.5,
                 "ttl_s": 300,
                 "stale": false,
                 "reason": null,
                 "evidence": {
                   "upstream": {
                     "state": "ok",
-                    "checked_epoch": 1790942454.5,
+                    "checked_epoch": 1790942436.75,
                     "changed": false,
                     "outage_started": null,
-                    "last_ok": 1790942454.5
+                    "last_ok": 1790942436.75
                   },
                   "health_reachable": true,
                   "timestamp_basis": "source_checked_epoch"
-                }
-              },
-              "ts_service": {
-                "state": "running",
-                "verdict": "confirmed",
-                "source": "sc:query-ts",
-                "checked_at": 1790942459.0,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
-              "funnel": {
-                "state": "on",
-                "verdict": "confirmed",
-                "source": "ts:serve-status",
-                "checked_at": 1790942460.75,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
                 }
               },
               "security_gate": {
                 "state": "ok",
                 "verdict": "confirmed",
                 "source": "broker:host-evidence{limits}",
-                "checked_at": 1790942454.0,
-                "age_s": 7.5,
+                "checked_at": 1790942436.0,
+                "age_s": 5.75,
                 "ttl_s": 600,
                 "stale": false,
                 "reason": null,
@@ -5606,9 +4681,9 @@
                 "verdict": "confirmed",
                 "source": "broker:host-evidence{watchdog}",
                 "checked_at": 1790942400.0,
-                "age_s": 62.0,
+                "age_s": 42.25,
                 "ttl_s": 60,
-                "stale": true,
+                "stale": false,
                 "reason": null,
                 "evidence": {
                   "task_name": "umshare-watchdog",
@@ -5633,7 +4708,7 @@
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "broker:host-verify{running}+instance-probe+attribution",
-                "checked_at": 1790942463.25,
+                "checked_at": 1790942443.5,
                 "age_s": 0.25,
                 "ttl_s": 60,
                 "stale": false,
@@ -5662,11 +4737,11 @@
                       "file": {
                         "present": true,
                         "size": 4096,
-                        "mtime": 1790942454.25
+                        "mtime": 1790942436.5
                       }
                     },
                     "detail": "read tail ok",
-                    "checked_at": 1790942454
+                    "checked_at": 1790942436
                   },
                   "timestamp_basis": "local_read"
                 }
@@ -5675,7 +4750,7 @@
                 "state": "running",
                 "verdict": "confirmed",
                 "source": "backend:observe(forget_stale=False)+pid-state",
-                "checked_at": 1790942463.75,
+                "checked_at": 1790942444.0,
                 "age_s": 0.25,
                 "ttl_s": 60,
                 "stale": false,
@@ -5685,13 +4760,13 @@
                     "running": true,
                     "auth_state": "valid",
                     "auth_label": "认证有效",
-                    "observed_at": 1790942454.5,
+                    "observed_at": 1790942436.75,
                     "upstream_reachability": {
                       "state": "ok",
-                      "checked_epoch": 1790942454.5,
+                      "checked_epoch": 1790942436.75,
                       "changed": false,
                       "outage_started": null,
-                      "last_ok": 1790942454.5
+                      "last_ok": 1790942436.75
                     },
                     "attribution": {
                       "file_ready": true,
@@ -5716,8 +4791,8 @@
                 "state": "valid",
                 "verdict": "confirmed",
                 "source": "backend:admin/auth/status",
-                "checked_at": 1790942454.5,
-                "age_s": 9.75,
+                "checked_at": 1790942436.75,
+                "age_s": 7.75,
                 "ttl_s": 300,
                 "stale": false,
                 "reason": null,
@@ -5735,72 +4810,33 @@
                   "timestamp_basis": "source_checked_epoch"
                 }
               },
-              "connectivity": {
-                "state": "ok",
-                "verdict": "confirmed",
-                "source": "ts:status",
-                "checked_at": 1790942465.0,
-                "age_s": 0.25,
-                "ttl_s": 300,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
               "upstream": {
                 "state": "ok",
                 "verdict": "confirmed",
                 "source": "backend:health.upstream_reachability",
-                "checked_at": 1790942454.5,
-                "age_s": 11.0,
+                "checked_at": 1790942436.75,
+                "age_s": 8.0,
                 "ttl_s": 300,
                 "stale": false,
                 "reason": null,
                 "evidence": {
                   "upstream": {
                     "state": "ok",
-                    "checked_epoch": 1790942454.5,
+                    "checked_epoch": 1790942436.75,
                     "changed": false,
                     "outage_started": null,
-                    "last_ok": 1790942454.5
+                    "last_ok": 1790942436.75
                   },
                   "health_reachable": true,
                   "timestamp_basis": "source_checked_epoch"
-                }
-              },
-              "ts_service": {
-                "state": "running",
-                "verdict": "confirmed",
-                "source": "sc:query-ts",
-                "checked_at": 1790942464.5,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
-                }
-              },
-              "funnel": {
-                "state": "on",
-                "verdict": "confirmed",
-                "source": "ts:serve-status",
-                "checked_at": 1790942465.75,
-                "age_s": 0.25,
-                "ttl_s": 600,
-                "stale": false,
-                "reason": null,
-                "evidence": {
-                  "timestamp_basis": "local_read"
                 }
               },
               "security_gate": {
                 "state": "ok",
                 "verdict": "confirmed",
                 "source": "broker:host-evidence{limits}",
-                "checked_at": 1790942454.0,
-                "age_s": 12.25,
+                "checked_at": 1790942436.0,
+                "age_s": 9.0,
                 "ttl_s": 600,
                 "stale": false,
                 "reason": null,
@@ -5816,9 +4852,9 @@
                 "verdict": "confirmed",
                 "source": "broker:host-evidence{watchdog}",
                 "checked_at": 1790942400.0,
-                "age_s": 66.5,
+                "age_s": 45.25,
                 "ttl_s": 60,
-                "stale": true,
+                "stale": false,
                 "reason": null,
                 "evidence": {
                   "task_name": "umshare-watchdog",
@@ -5868,7 +4904,7 @@
               "state": "running",
               "verdict": "confirmed",
               "source": "broker:host-verify{running}+instance-probe+attribution",
-              "checked_at": 1790942457.0,
+              "checked_at": 1790942439.25,
               "age_s": 0.25,
               "ttl_s": 60,
               "stale": false,
@@ -5897,11 +4933,11 @@
                     "file": {
                       "present": true,
                       "size": 4096,
-                      "mtime": 1790942454.25
+                      "mtime": 1790942436.5
                     }
                   },
                   "detail": "read tail ok",
-                  "checked_at": 1790942454
+                  "checked_at": 1790942436
                 },
                 "timestamp_basis": "local_read"
               }
@@ -5910,7 +4946,7 @@
               "state": "running",
               "verdict": "confirmed",
               "source": "backend:observe(forget_stale=False)+pid-state",
-              "checked_at": 1790942457.75,
+              "checked_at": 1790942440.0,
               "age_s": 0.25,
               "ttl_s": 60,
               "stale": false,
@@ -5920,13 +4956,13 @@
                   "running": true,
                   "auth_state": "valid",
                   "auth_label": "认证有效",
-                  "observed_at": 1790942454.5,
+                  "observed_at": 1790942436.75,
                   "upstream_reachability": {
                     "state": "ok",
-                    "checked_epoch": 1790942454.5,
+                    "checked_epoch": 1790942436.75,
                     "changed": false,
                     "outage_started": null,
-                    "last_ok": 1790942454.5
+                    "last_ok": 1790942436.75
                   },
                   "attribution": {
                     "file_ready": true,
@@ -5951,7 +4987,7 @@
               "state": "valid",
               "verdict": "confirmed",
               "source": "backend:admin/auth/status",
-              "checked_at": 1790942454.5,
+              "checked_at": 1790942436.75,
               "age_s": 4.0,
               "ttl_s": 300,
               "stale": false,
@@ -5970,72 +5006,33 @@
                 "timestamp_basis": "source_checked_epoch"
               }
             },
-            "connectivity": {
-              "state": "ok",
-              "verdict": "confirmed",
-              "source": "ts:status",
-              "checked_at": 1790942459.5,
-              "age_s": 0.25,
-              "ttl_s": 300,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
             "upstream": {
               "state": "ok",
               "verdict": "confirmed",
               "source": "backend:health.upstream_reachability",
-              "checked_at": 1790942454.5,
-              "age_s": 5.75,
+              "checked_at": 1790942436.75,
+              "age_s": 4.5,
               "ttl_s": 300,
               "stale": false,
               "reason": null,
               "evidence": {
                 "upstream": {
                   "state": "ok",
-                  "checked_epoch": 1790942454.5,
+                  "checked_epoch": 1790942436.75,
                   "changed": false,
                   "outage_started": null,
-                  "last_ok": 1790942454.5
+                  "last_ok": 1790942436.75
                 },
                 "health_reachable": true,
                 "timestamp_basis": "source_checked_epoch"
-              }
-            },
-            "ts_service": {
-              "state": "running",
-              "verdict": "confirmed",
-              "source": "sc:query-ts",
-              "checked_at": 1790942459.0,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
-            "funnel": {
-              "state": "on",
-              "verdict": "confirmed",
-              "source": "ts:serve-status",
-              "checked_at": 1790942460.75,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
               }
             },
             "security_gate": {
               "state": "ok",
               "verdict": "confirmed",
               "source": "broker:host-evidence{limits}",
-              "checked_at": 1790942454.0,
-              "age_s": 7.5,
+              "checked_at": 1790942436.0,
+              "age_s": 5.75,
               "ttl_s": 600,
               "stale": false,
               "reason": null,
@@ -6051,9 +5048,9 @@
               "verdict": "confirmed",
               "source": "broker:host-evidence{watchdog}",
               "checked_at": 1790942400.0,
-              "age_s": 62.0,
+              "age_s": 42.25,
               "ttl_s": 60,
-              "stale": true,
+              "stale": false,
               "reason": null,
               "evidence": {
                 "task_name": "umshare-watchdog",
@@ -6078,7 +5075,7 @@
               "state": "running",
               "verdict": "confirmed",
               "source": "broker:host-verify{running}+instance-probe+attribution",
-              "checked_at": 1790942463.25,
+              "checked_at": 1790942443.5,
               "age_s": 0.25,
               "ttl_s": 60,
               "stale": false,
@@ -6107,11 +5104,11 @@
                     "file": {
                       "present": true,
                       "size": 4096,
-                      "mtime": 1790942454.25
+                      "mtime": 1790942436.5
                     }
                   },
                   "detail": "read tail ok",
-                  "checked_at": 1790942454
+                  "checked_at": 1790942436
                 },
                 "timestamp_basis": "local_read"
               }
@@ -6120,7 +5117,7 @@
               "state": "running",
               "verdict": "confirmed",
               "source": "backend:observe(forget_stale=False)+pid-state",
-              "checked_at": 1790942463.75,
+              "checked_at": 1790942444.0,
               "age_s": 0.25,
               "ttl_s": 60,
               "stale": false,
@@ -6130,13 +5127,13 @@
                   "running": true,
                   "auth_state": "valid",
                   "auth_label": "认证有效",
-                  "observed_at": 1790942454.5,
+                  "observed_at": 1790942436.75,
                   "upstream_reachability": {
                     "state": "ok",
-                    "checked_epoch": 1790942454.5,
+                    "checked_epoch": 1790942436.75,
                     "changed": false,
                     "outage_started": null,
-                    "last_ok": 1790942454.5
+                    "last_ok": 1790942436.75
                   },
                   "attribution": {
                     "file_ready": true,
@@ -6161,8 +5158,8 @@
               "state": "valid",
               "verdict": "confirmed",
               "source": "backend:admin/auth/status",
-              "checked_at": 1790942454.5,
-              "age_s": 9.75,
+              "checked_at": 1790942436.75,
+              "age_s": 7.75,
               "ttl_s": 300,
               "stale": false,
               "reason": null,
@@ -6180,72 +5177,33 @@
                 "timestamp_basis": "source_checked_epoch"
               }
             },
-            "connectivity": {
-              "state": "ok",
-              "verdict": "confirmed",
-              "source": "ts:status",
-              "checked_at": 1790942465.0,
-              "age_s": 0.25,
-              "ttl_s": 300,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
             "upstream": {
               "state": "ok",
               "verdict": "confirmed",
               "source": "backend:health.upstream_reachability",
-              "checked_at": 1790942454.5,
-              "age_s": 11.0,
+              "checked_at": 1790942436.75,
+              "age_s": 8.0,
               "ttl_s": 300,
               "stale": false,
               "reason": null,
               "evidence": {
                 "upstream": {
                   "state": "ok",
-                  "checked_epoch": 1790942454.5,
+                  "checked_epoch": 1790942436.75,
                   "changed": false,
                   "outage_started": null,
-                  "last_ok": 1790942454.5
+                  "last_ok": 1790942436.75
                 },
                 "health_reachable": true,
                 "timestamp_basis": "source_checked_epoch"
-              }
-            },
-            "ts_service": {
-              "state": "running",
-              "verdict": "confirmed",
-              "source": "sc:query-ts",
-              "checked_at": 1790942464.5,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
-              }
-            },
-            "funnel": {
-              "state": "on",
-              "verdict": "confirmed",
-              "source": "ts:serve-status",
-              "checked_at": 1790942465.75,
-              "age_s": 0.25,
-              "ttl_s": 600,
-              "stale": false,
-              "reason": null,
-              "evidence": {
-                "timestamp_basis": "local_read"
               }
             },
             "security_gate": {
               "state": "ok",
               "verdict": "confirmed",
               "source": "broker:host-evidence{limits}",
-              "checked_at": 1790942454.0,
-              "age_s": 12.25,
+              "checked_at": 1790942436.0,
+              "age_s": 9.0,
               "ttl_s": 600,
               "stale": false,
               "reason": null,
@@ -6261,9 +5219,9 @@
               "verdict": "confirmed",
               "source": "broker:host-evidence{watchdog}",
               "checked_at": 1790942400.0,
-              "age_s": 66.5,
+              "age_s": 45.25,
               "ttl_s": 60,
-              "stale": true,
+              "stale": false,
               "reason": null,
               "evidence": {
                 "task_name": "umshare-watchdog",
@@ -6291,7 +5249,7 @@
             "state": "running",
             "verdict": "confirmed",
             "source": "broker:host-verify{running}+instance-probe+attribution",
-            "checked_at": 1790942463.25,
+            "checked_at": 1790942443.5,
             "age_s": 0.25,
             "ttl_s": 60,
             "stale": false,
@@ -6320,11 +5278,11 @@
                   "file": {
                     "present": true,
                     "size": 4096,
-                    "mtime": 1790942454.25
+                    "mtime": 1790942436.5
                   }
                 },
                 "detail": "read tail ok",
-                "checked_at": 1790942454
+                "checked_at": 1790942436
               },
               "timestamp_basis": "local_read"
             }
@@ -6333,7 +5291,7 @@
             "state": "running",
             "verdict": "confirmed",
             "source": "backend:observe(forget_stale=False)+pid-state",
-            "checked_at": 1790942463.75,
+            "checked_at": 1790942444.0,
             "age_s": 0.25,
             "ttl_s": 60,
             "stale": false,
@@ -6343,13 +5301,13 @@
                 "running": true,
                 "auth_state": "valid",
                 "auth_label": "认证有效",
-                "observed_at": 1790942454.5,
+                "observed_at": 1790942436.75,
                 "upstream_reachability": {
                   "state": "ok",
-                  "checked_epoch": 1790942454.5,
+                  "checked_epoch": 1790942436.75,
                   "changed": false,
                   "outage_started": null,
-                  "last_ok": 1790942454.5
+                  "last_ok": 1790942436.75
                 },
                 "attribution": {
                   "file_ready": true,
@@ -6376,7 +5334,7 @@
             "state": "running",
             "verdict": "confirmed",
             "source": "broker:host-verify{running}+instance-probe+attribution",
-            "checked_at": 1790942457.0,
+            "checked_at": 1790942439.25,
             "age_s": 0.25,
             "ttl_s": 60,
             "stale": false,
@@ -6405,11 +5363,11 @@
                   "file": {
                     "present": true,
                     "size": 4096,
-                    "mtime": 1790942454.25
+                    "mtime": 1790942436.5
                   }
                 },
                 "detail": "read tail ok",
-                "checked_at": 1790942454
+                "checked_at": 1790942436
               },
               "timestamp_basis": "local_read"
             }
@@ -6418,7 +5376,7 @@
             "state": "running",
             "verdict": "confirmed",
             "source": "backend:observe(forget_stale=False)+pid-state",
-            "checked_at": 1790942457.75,
+            "checked_at": 1790942440.0,
             "age_s": 0.25,
             "ttl_s": 60,
             "stale": false,
@@ -6428,13 +5386,13 @@
                 "running": true,
                 "auth_state": "valid",
                 "auth_label": "认证有效",
-                "observed_at": 1790942454.5,
+                "observed_at": 1790942436.75,
                 "upstream_reachability": {
                   "state": "ok",
-                  "checked_epoch": 1790942454.5,
+                  "checked_epoch": 1790942436.75,
                   "changed": false,
                   "outage_started": null,
-                  "last_ok": 1790942454.5
+                  "last_ok": 1790942436.75
                 },
                 "attribution": {
                   "file_ready": true,
@@ -6459,7 +5417,7 @@
             "state": "valid",
             "verdict": "confirmed",
             "source": "backend:admin/auth/status",
-            "checked_at": 1790942454.5,
+            "checked_at": 1790942436.75,
             "age_s": 4.0,
             "ttl_s": 300,
             "stale": false,
@@ -6478,72 +5436,33 @@
               "timestamp_basis": "source_checked_epoch"
             }
           },
-          "connectivity": {
-            "state": "ok",
-            "verdict": "confirmed",
-            "source": "ts:status",
-            "checked_at": 1790942459.5,
-            "age_s": 0.25,
-            "ttl_s": 300,
-            "stale": false,
-            "reason": null,
-            "evidence": {
-              "timestamp_basis": "local_read"
-            }
-          },
           "upstream": {
             "state": "ok",
             "verdict": "confirmed",
             "source": "backend:health.upstream_reachability",
-            "checked_at": 1790942454.5,
-            "age_s": 5.75,
+            "checked_at": 1790942436.75,
+            "age_s": 4.5,
             "ttl_s": 300,
             "stale": false,
             "reason": null,
             "evidence": {
               "upstream": {
                 "state": "ok",
-                "checked_epoch": 1790942454.5,
+                "checked_epoch": 1790942436.75,
                 "changed": false,
                 "outage_started": null,
-                "last_ok": 1790942454.5
+                "last_ok": 1790942436.75
               },
               "health_reachable": true,
               "timestamp_basis": "source_checked_epoch"
-            }
-          },
-          "ts_service": {
-            "state": "running",
-            "verdict": "confirmed",
-            "source": "sc:query-ts",
-            "checked_at": 1790942459.0,
-            "age_s": 0.25,
-            "ttl_s": 600,
-            "stale": false,
-            "reason": null,
-            "evidence": {
-              "timestamp_basis": "local_read"
-            }
-          },
-          "funnel": {
-            "state": "on",
-            "verdict": "confirmed",
-            "source": "ts:serve-status",
-            "checked_at": 1790942460.75,
-            "age_s": 0.25,
-            "ttl_s": 600,
-            "stale": false,
-            "reason": null,
-            "evidence": {
-              "timestamp_basis": "local_read"
             }
           },
           "security_gate": {
             "state": "ok",
             "verdict": "confirmed",
             "source": "broker:host-evidence{limits}",
-            "checked_at": 1790942454.0,
-            "age_s": 7.5,
+            "checked_at": 1790942436.0,
+            "age_s": 5.75,
             "ttl_s": 600,
             "stale": false,
             "reason": null,
@@ -6559,9 +5478,9 @@
             "verdict": "confirmed",
             "source": "broker:host-evidence{watchdog}",
             "checked_at": 1790942400.0,
-            "age_s": 62.0,
+            "age_s": 42.25,
             "ttl_s": 60,
-            "stale": true,
+            "stale": false,
             "reason": null,
             "evidence": {
               "task_name": "umshare-watchdog",
@@ -6586,7 +5505,7 @@
             "state": "running",
             "verdict": "confirmed",
             "source": "broker:host-verify{running}+instance-probe+attribution",
-            "checked_at": 1790942463.25,
+            "checked_at": 1790942443.5,
             "age_s": 0.25,
             "ttl_s": 60,
             "stale": false,
@@ -6615,11 +5534,11 @@
                   "file": {
                     "present": true,
                     "size": 4096,
-                    "mtime": 1790942454.25
+                    "mtime": 1790942436.5
                   }
                 },
                 "detail": "read tail ok",
-                "checked_at": 1790942454
+                "checked_at": 1790942436
               },
               "timestamp_basis": "local_read"
             }
@@ -6628,7 +5547,7 @@
             "state": "running",
             "verdict": "confirmed",
             "source": "backend:observe(forget_stale=False)+pid-state",
-            "checked_at": 1790942463.75,
+            "checked_at": 1790942444.0,
             "age_s": 0.25,
             "ttl_s": 60,
             "stale": false,
@@ -6638,13 +5557,13 @@
                 "running": true,
                 "auth_state": "valid",
                 "auth_label": "认证有效",
-                "observed_at": 1790942454.5,
+                "observed_at": 1790942436.75,
                 "upstream_reachability": {
                   "state": "ok",
-                  "checked_epoch": 1790942454.5,
+                  "checked_epoch": 1790942436.75,
                   "changed": false,
                   "outage_started": null,
-                  "last_ok": 1790942454.5
+                  "last_ok": 1790942436.75
                 },
                 "attribution": {
                   "file_ready": true,
@@ -6669,8 +5588,8 @@
             "state": "valid",
             "verdict": "confirmed",
             "source": "backend:admin/auth/status",
-            "checked_at": 1790942454.5,
-            "age_s": 9.75,
+            "checked_at": 1790942436.75,
+            "age_s": 7.75,
             "ttl_s": 300,
             "stale": false,
             "reason": null,
@@ -6688,72 +5607,33 @@
               "timestamp_basis": "source_checked_epoch"
             }
           },
-          "connectivity": {
-            "state": "ok",
-            "verdict": "confirmed",
-            "source": "ts:status",
-            "checked_at": 1790942465.0,
-            "age_s": 0.25,
-            "ttl_s": 300,
-            "stale": false,
-            "reason": null,
-            "evidence": {
-              "timestamp_basis": "local_read"
-            }
-          },
           "upstream": {
             "state": "ok",
             "verdict": "confirmed",
             "source": "backend:health.upstream_reachability",
-            "checked_at": 1790942454.5,
-            "age_s": 11.0,
+            "checked_at": 1790942436.75,
+            "age_s": 8.0,
             "ttl_s": 300,
             "stale": false,
             "reason": null,
             "evidence": {
               "upstream": {
                 "state": "ok",
-                "checked_epoch": 1790942454.5,
+                "checked_epoch": 1790942436.75,
                 "changed": false,
                 "outage_started": null,
-                "last_ok": 1790942454.5
+                "last_ok": 1790942436.75
               },
               "health_reachable": true,
               "timestamp_basis": "source_checked_epoch"
-            }
-          },
-          "ts_service": {
-            "state": "running",
-            "verdict": "confirmed",
-            "source": "sc:query-ts",
-            "checked_at": 1790942464.5,
-            "age_s": 0.25,
-            "ttl_s": 600,
-            "stale": false,
-            "reason": null,
-            "evidence": {
-              "timestamp_basis": "local_read"
-            }
-          },
-          "funnel": {
-            "state": "on",
-            "verdict": "confirmed",
-            "source": "ts:serve-status",
-            "checked_at": 1790942465.75,
-            "age_s": 0.25,
-            "ttl_s": 600,
-            "stale": false,
-            "reason": null,
-            "evidence": {
-              "timestamp_basis": "local_read"
             }
           },
           "security_gate": {
             "state": "ok",
             "verdict": "confirmed",
             "source": "broker:host-evidence{limits}",
-            "checked_at": 1790942454.0,
-            "age_s": 12.25,
+            "checked_at": 1790942436.0,
+            "age_s": 9.0,
             "ttl_s": 600,
             "stale": false,
             "reason": null,
@@ -6769,9 +5649,9 @@
             "verdict": "confirmed",
             "source": "broker:host-evidence{watchdog}",
             "checked_at": 1790942400.0,
-            "age_s": 66.5,
+            "age_s": 45.25,
             "ttl_s": 60,
-            "stale": true,
+            "stale": false,
             "reason": null,
             "evidence": {
               "task_name": "umshare-watchdog",
@@ -6809,12 +5689,12 @@
           "resource": "share:orchestration",
           "generation": 0,
           "cancel_requested": true,
-          "created_at": "2026-10-02T12:01:08+00:00",
+          "created_at": "2026-10-02T12:00:46.750000+00:00",
           "started_at": null,
-          "finished_at": "2026-10-02T12:01:08.250000+00:00",
-          "created_epoch": 1790942468.0,
+          "finished_at": "2026-10-02T12:00:47+00:00",
+          "created_epoch": 1790942446.75,
           "started_epoch": null,
-          "finished_epoch": 1790942468.25,
+          "finished_epoch": 1790942447.0,
           "steps": [],
           "result": null,
           "error": {
@@ -6836,7 +5716,7 @@
         "supervision": {
           "generatedFrom": "share.backend_supervision.run_once(apply=True) via the real handler; private fixture inputs (temp watch dir, fake boot id, fake broker view, fake ops gate)",
           "decision": {
-            "at_utc": "2026-10-02T12:01:09.500000+00:00",
+            "at_utc": "2026-10-02T12:00:48.250000+00:00",
             "action": "none",
             "code": "budget_exhausted",
             "detail": "本小时启动预算已耗尽（3/3）：只报告并给人工入口——查看监督日志 <watch-dir>\\share-backend-watch.log 或 console「分享」面板后人工决定",
@@ -6853,9 +5733,9 @@
             "boot_id": "FIXTURE-HOST|2026-10-02T09:00:00.0000000Z",
             "consecutive_failures": 2,
             "restart_attempts_utc": [
-              "2026-10-02T11:46:08.750000+00:00",
-              "2026-10-02T11:51:08.750000+00:00",
-              "2026-10-02T11:56:08.750000+00:00"
+              "2026-10-02T11:45:47.500000+00:00",
+              "2026-10-02T11:50:47.500000+00:00",
+              "2026-10-02T11:55:47.500000+00:00"
             ],
             "idle_reason": "budget_exhausted"
           }
@@ -6865,7 +5745,7 @@
     "supervision": {
       "generatedFrom": "share.backend_supervision.run_once(apply=True) via the real handler; private fixture inputs (temp watch dir, fake boot id, fake broker view, fake ops gate)",
       "decision": {
-        "at_utc": "2026-10-02T12:01:09.500000+00:00",
+        "at_utc": "2026-10-02T12:00:48.250000+00:00",
         "action": "none",
         "code": "budget_exhausted",
         "detail": "本小时启动预算已耗尽（3/3）：只报告并给人工入口——查看监督日志 <watch-dir>\\share-backend-watch.log 或 console「分享」面板后人工决定",
@@ -6882,9 +5762,9 @@
         "boot_id": "FIXTURE-HOST|2026-10-02T09:00:00.0000000Z",
         "consecutive_failures": 2,
         "restart_attempts_utc": [
-          "2026-10-02T11:46:08.750000+00:00",
-          "2026-10-02T11:51:08.750000+00:00",
-          "2026-10-02T11:56:08.750000+00:00"
+          "2026-10-02T11:45:47.500000+00:00",
+          "2026-10-02T11:50:47.500000+00:00",
+          "2026-10-02T11:55:47.500000+00:00"
         ],
         "idle_reason": "budget_exhausted"
       }

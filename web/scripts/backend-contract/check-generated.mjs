@@ -251,7 +251,6 @@ assert.deepEqual(scenarioCases, [
   "normal",
   "unknown",
   "stale",
-  "partial_failure",
   "authenticating",
   "maintenance",
   "timeout",
@@ -300,10 +299,7 @@ assert.deepEqual(
     "share_gateway",
     "share_backend",
     "backend_auth",
-    "connectivity",
     "upstream",
-    "ts_service",
-    "funnel",
     "security_gate",
     "watchdog",
   ].sort()
@@ -331,14 +327,6 @@ assert.equal(scenario("stale").result.layers.security_gate.stale, true);
 assert.equal(
   scenario("stale").result.layers.backend_auth.evidence.timestamp_basis,
   "source_checked_epoch"
-);
-assert.equal(
-  scenario("partial_failure").result.layers.connectivity.state,
-  "unavailable"
-);
-assert.equal(
-  scenario("partial_failure").result.layers.connectivity.reason,
-  "connectivity_query_failed"
 );
 assert.equal(scenario("authenticating").result.state, "logging_in");
 assert.equal(scenario("authenticating").result.triggered, false);

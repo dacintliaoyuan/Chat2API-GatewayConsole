@@ -109,19 +109,12 @@ export function actionLabel(action: string): string {
     "account.login": "账号登录",
     "account.um_status": "UM 认证状态",
     "account.um_verify": "核验登录是否有效",
-    "share.start": "开启分享",
-    "share.stop": "关闭分享",
-    "share.estop": "紧急停止分享",
-    "share.retry_stop": "重试关闭分享",
     "share.status": "读取分享状态",
     "share.backend_login": "启动 / 按需登录 8110",
     "share.diagnostics": "分层诊断",
-    "share.repair_limits": "修复隔离规则",
     "share.backend_reauthenticate": "仅重新认证 8110",
     "share.backend_restart": "仅重启运行中的 8110",
     "share.gateway_restart": "仅重启 8100",
-    "share.public_check": "公网链路复查",
-    "share.public_retry": "公网链路受限重试",
   };
   return CN_ACTION[action] ?? action;
 }
@@ -171,7 +164,7 @@ export function shareRecoveryHint(action: string, code: string): string {
       "deadline_exceeded",
     ].includes(code)
   ) {
-    return "先恢复受限后台：在控制台目录运行 Recover-ShareControl.bat，按 Windows 管理员提示恢复后重新读取状态与分层状态；再按需登录 8110、开启分享";
+    return "先恢复受限后台：确认 um-share-broker 服务与 broker 控制通道可用，再重新读取状态与分层状态；再按需登录 8110、开启分享";
   }
   return action === "share.backend_restart" &&
     code === "share_backend_not_running"

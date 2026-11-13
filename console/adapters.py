@@ -87,19 +87,6 @@ CLOUD_RUNTIME_ACTIONS_DISABLED_REASON = (
     "云端角色只装配 UM 分享：运行目标只有 share-gateway；"
     "其他本地服务不在本部署授权集合内")
 
-# Explicit cloud (Linux) role: the deployment terminates HTTPS directly, so it has
-# NO Tailscale service, NO Funnel and NO Windows WFP layer. The four layered
-# chain actions below are therefore registered DISABLED with this reason — an
-# honest "not assembled" card (the console can show WHY) instead of a click that
-# can only fail at the first TS/Funnel seam. The manager refuses every submit
-# with OperationUnavailable (action_disabled) BEFORE an operation row is created,
-# and no handler ever runs.
-CLOUD_SHARE_ORCH_DISABLED_REASON = (
-    "云端直连 HTTPS：Tailscale/Funnel 编排未装配")
-CLOUD_SHARE_ORCH_ACTIONS: frozenset = frozenset({
-    "share.start", "share.stop", "share.estop", "share.retry_stop"})
-
-
 def runtime_target_enabled(action, target, cloud=False):
     """(enabled, reason) for one real service action under the policy.
 
@@ -136,18 +123,15 @@ _SHARE_BUDGET_SCHEMA = {
     "drain_budget_s": {"type": "int", "min": 1, "max": 600},
     "backend_confirm_budget_s": {"type": "int", "min": 1, "max": 600},
 }
-# R13-A / D18-6: share.start publishes the bounded dedicated-backend auth
-# wait budget (logging_in / unknown observations after a fresh start). The upper
-# bound 1800 == the dedicated instance's own human login window (chat2api
-# --login-timeout, console_share_production._BACKEND_LOGIN_TIMEOUT_S), so the
-# wait can outlast the login it is waiting for. share.stop/estop never wait
-# for auth, so the param stays OFF those schemas (no dead knob).
+# R13-A / D18-6: the whole-chain start publishes the bounded
+# dedicated-backend auth wait budget (logging_in / unknown observations after a
+# fresh start). The upper bound 1800 == the dedicated instance's own human
+# login window (chat2api --login-timeout,
+# console_share_production._BACKEND_LOGIN_TIMEOUT_S), so the wait can outlast
+# the login it is waiting for.
 _SHARE_OPEN_BUDGET_SCHEMA = dict(
     _SHARE_BUDGET_SCHEMA,
     backend_auth_budget_s={"type": "int", "min": 1, "max": 1800})
-_SHARE_RETRY_SCHEMA = dict(_SHARE_BUDGET_SCHEMA,
-                           step_interval_ms={"type": "int", "min": 1,
-                                             "max": 60000})
 # Rev9 A9-3/A9-4 (contract §1.3): the two single-layer restart schemas,
 # bounded ints; defaults live in the handlers (缺省即默认).  lease_s upper
 # bound 600 == protocol MAINTENANCE_LEASE_MAX_S; restart_budget_s upper bound
@@ -652,86 +636,24 @@ def _share_resource(target, params):
     return "share:orchestration"
 
 
-def _share_public_resource(target, params):
-    """Human public-supervision clicks serialize on their own resource.
-
-    The ACTUAL mutex is the module's ``share:public-state`` (writes) and
-    ``share:orchestration`` (side effects); this resource only keeps two
-    human clicks from racing each other. The target is fixed to ``share`` —
-    no arbitrary URL, path or service is accepted.
-    """
-    if target != "share":
-        raise OperationError(
-            "invalid_target",
-            "目标必须是 share（公网巡检不接受任意 URL/路径/服务名）")
-    return "share:public"
-
-
-def production_public_cancel_request(reason):
-    """Write the public-supervision cancel file (production seam).
-
-    Distinguishes "module not deployed" (None = unwired, no risk to guard)
-    from "wired but the write failed" (False); never fakes a write.
-    """
-    try:
-        share_public_supervision = __import__("importlib").import_module("share.public_supervision")
-    except Exception:  # noqa: BLE001
-        return None
-    try:
-        return bool(share_public_supervision.request_cancel(reason))
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def production_public_cancel_clear():
-    """Clear the public-supervision cancel file (production seam)."""
-    try:
-        share_public_supervision = __import__("importlib").import_module("share.public_supervision")
-    except Exception:  # noqa: BLE001
-        return None
-    try:
-        return bool(share_public_supervision.clear_cancel())
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _wire_public_cancel_seams():
-    """Bind the two cancel seams ONLY when the module is deployed.
-
-    An import failure keeps them None (unwired) — "module not deployed" must
-    never be reported as "cancel write failed" (contract §5.4).
-    """
-    try:
-        share_public_supervision = __import__("importlib").import_module("share.public_supervision")  # noqa: F401
-    except Exception:  # noqa: BLE001
-        return
-    console_share_actions._PUBLIC_CANCEL_REQUEST = \
-        production_public_cancel_request
-    console_share_actions._PUBLIC_CANCEL_CLEAR = production_public_cancel_clear
-
-
 def wire_share_production_seams(keys_manager=None, cloud=False):
     """Bind the REAL share seams — PRODUCTION ASSEMBLY ONLY.
 
     console_share_production.production_seams() returns the orchestration's
-    seam globals by name (broker restricted protocol, funnel command,
-    connectivity observation); the TS privileged seam stays fail-closed
-    until the broker whitelist extension is deployed (package section 5).
-    Called from usagesrv's production console-manager assembly ONLY —
-    never from build_registry (a pure factory that tests must be able to
-    call without any OS-level side effect).
+    seam globals by name (broker restricted protocol, dedicated backend and
+    maintenance verbs); the retired Windows TS/Funnel seams are gone. Called
+    from usagesrv's production console-manager assembly ONLY — never from
+    build_registry (a pure factory that tests must be able to call without
+    any OS-level side effect).
 
-    ``cloud=True`` is the explicit cloud (Linux) role: the Tailscale/Funnel
-    seams stay UNWIRED and the persistent stop intent is the Linux file the
-    pid-file host ops write.
+    ``cloud=True`` is the explicit cloud (Linux) role: the persistent stop
+    intent is the Linux file the pid-file host ops write.
     """
     try:
         seams = console_share_production.production_seams(
             keys_manager=keys_manager, cloud=cloud)
     except Exception:
-        # Fail-closed: leave the honest unwired seams in place. The two
-        # public-cancel seams are independent of the share assembly and are
-        # still bound below when their module is deployed.
+        # Fail-closed: leave the honest unwired seams in place.
         seams = None
     for key, value in (seams or {}).items():
         if value is not None:
@@ -741,8 +663,6 @@ def wire_share_production_seams(keys_manager=None, cloud=False):
     # orchestration then reports "not managed by this deployment").
     console_share_actions._EDGE_STATUS = \
         production_cloud_edge_status if cloud else None
-    _wire_public_cancel_seams()
-
 
 CLOUDFLARED_UNIT = "cloudflared"
 
@@ -786,63 +706,16 @@ def production_cloud_edge_status(*, runner=None):
     return {"exists": True, "active": active == "active", "detail": active}
 
 
-def _share_action_specs(include_public=True, cloud=False):
-    """The UM share action catalogue (the ONLY cloud-role actions).
+def _share_action_specs(cloud=False):
+    """The UM share action catalogue registered by the cloud role.
 
-    Extracted verbatim from ``build_registry`` so the explicit cloud role can
-    assemble exactly these actions without importing or touching any non-UM
-    subsystem (model_sync / zcode).
-
-    ``include_public=False`` omits the three Tailscale/WFP-specific actions
-    (``share.public_check``, ``share.public_retry``, ``share.repair_limits``):
-    the cloud deployment exposes direct HTTPS, not a Funnel, and has no Windows
-    WFP rules, so those capabilities are honestly NOT assembled there.
-
-    ``cloud=True`` additionally marks the four layered open/close chain actions
-    (``CLOUD_SHARE_ORCH_ACTIONS``) DISABLED: their first layer is the Windows
-    TS service / Funnel orchestration, which does not exist on the cloud. They
-    stay in the catalogue so the console can report WHY they are unavailable;
-    the manager refuses every submit before an operation row exists. The
-    Windows/local catalogue is built with ``cloud=False`` and is unchanged.
+    The retired Windows local chain actions (``share.start`` / ``share.stop`` /
+    ``share.estop`` / ``share.retry_stop``) and their Funnel / TS public
+    checks are gone with the old chain (#33). The cloud catalogue keeps the
+    read-only status/diagnostics, the dedicated-backend actions and the
+    restricted broker gateway-restart.
     """
-    specs = [
-        ActionSpec(
-            "share.start", "UM 分享开启链（TS 服务→连接→后端→Funnel）",
-            handler=console_share_actions.share_open,
-            resource_fn=_share_resource,
-            param_schema=_SHARE_OPEN_BUDGET_SCHEMA,
-            # 节5 批准记录（2026-09-16）：生产适配器已接线。R13-A：
-            # backend_auth_budget_s 为专用后端认证等待预算（logging_in/
-            # unknown 观察），仅本动作消费。
-            enabled=True),
-        ActionSpec(
-            "share.stop", "UM 分享正常关闭链（撤入口→排空→后端→TS）",
-            handler=console_share_actions.share_close,
-            resource_fn=_share_resource,
-            param_schema=_SHARE_BUDGET_SCHEMA,
-            # 节5 批准记录（2026-09-16）。pre_lock 在 worker 获取
-            # share:orchestration 之前写公网巡检取消文件（契约 §5.4）。
-            enabled=True,
-            pre_lock=console_share_actions.public_cancel_pre_lock(
-                "manual_close")),
-        ActionSpec(
-            "share.estop", "UM 分享紧急停止（立即撤入口，不排空）",
-            handler=console_share_actions.share_estop,
-            resource_fn=_share_resource,
-            param_schema=_SHARE_BUDGET_SCHEMA,
-            # 节5 批准记录（2026-09-16）：生产适配器已接线。
-            enabled=True,
-            pre_lock=console_share_actions.public_cancel_pre_lock(
-                "manual_estop")),
-        ActionSpec(
-            "share.retry_stop", "UM 分享残留关闭重试（按剩余步骤）",
-            handler=console_share_actions.share_retry_stop,
-            resource_fn=_share_resource,
-            param_schema=_SHARE_RETRY_SCHEMA,
-            # 节5 批准记录（2026-09-16）。
-            enabled=True,
-            pre_lock=console_share_actions.public_cancel_pre_lock(
-                "manual_retry_stop")),
+    return [
         ActionSpec(
             "share.backend_login", "登录分享专用后端（触发独立 profile 浏览器 UM 登录）",
             handler=console_share_actions.backend_login,
@@ -860,7 +733,7 @@ def _share_action_specs(include_public=True, cloud=False):
             enabled=True, bump_generation_on_success=False),
         ActionSpec(
             "share.diagnostics",
-            "UM 分享九层分层诊断（只读；含看门狗、维护视图与故障留证）",
+            "UM 分享分层诊断（只读；含看门狗、维护视图与故障留证）",
             handler=console_share_actions.diagnostics,
             resource_fn=_share_resource,
             param_schema={},
@@ -896,59 +769,6 @@ def _share_action_specs(include_public=True, cloud=False):
             enabled=True, disabled_reason=None,
             bump_generation_on_success=True, cancelable=True),
     ]
-    if include_public:
-        # S5（契约 §5.2）：公网链路一键复查与受限重试。两者都走
-        # ``share:public`` 资源串行化人工点击；真正的互斥由模块内部的
-        # ``share:public-state``（状态/事件/预算/取消写入）和
-        # ``share:orchestration``（Funnel/TS 副作用）承担。
-        # 不设置 pre_lock：它们不写取消文件。
-        specs.extend([
-            ActionSpec(
-                "share.public_check",
-                "分享公网链路复查（只读 DNS/TLS，不发送推理请求）",
-                handler=console_share_actions.public_check,
-                resource_fn=_share_public_resource,
-                param_schema={},
-                enabled=True, disabled_reason=None,
-                bump_generation_on_success=False, cancelable=True),
-            ActionSpec(
-                "share.public_retry",
-                "分享公网链路受限重试（复用滚动 30 分钟预算与编排互斥）",
-                handler=console_share_actions.public_retry,
-                resource_fn=_share_public_resource,
-                param_schema={},
-                enabled=True, disabled_reason=None,
-                bump_generation_on_success=False, cancelable=True),
-            ActionSpec(
-                "share.repair_limits",
-                "暂停公网并修复隔离规则（成功后保持分享关闭）",
-                handler=console_share_actions.repair_limits,
-                resource_fn=_share_resource,
-                param_schema={},
-                enabled=True, bump_generation_on_success=True, cancelable=False,
-                # pre_lock 在动作锁之前写公网巡检取消文件（契约 §5.4）。
-                pre_lock=console_share_actions.public_cancel_pre_lock(
-                    "repair_limits")),
-        ])
-    if cloud:
-        _mark_cloud_share_specs(specs)
-    return specs
-
-
-def _mark_cloud_share_specs(specs):
-    """Mark the TS/Funnel chain actions honestly UNASSEMBLED (cloud role).
-
-    ``enabled=False`` is the manager's submit-time refusal authority: it raises
-    OperationUnavailable (code ``action_disabled``) with the cloud reason BEFORE
-    an operation row is created, so no handler can run and no fake success is
-    possible. Mutating only the freshly built cloud list never touches the
-    Windows/local catalogue.
-    """
-    for spec in specs:
-        if spec.name in CLOUD_SHARE_ORCH_ACTIONS:
-            spec.enabled = False
-            spec.disabled_reason = CLOUD_SHARE_ORCH_DISABLED_REASON
-    return specs
 
 
 def _cloud_service_resource(action):
@@ -958,8 +778,7 @@ def _cloud_service_resource(action):
             raise OperationUnavailable(action, reason)
         # A2: the service page's start/stop/restart and the share page's
         # share.gateway_restart act on the SAME 8100 resource. ONE resource
-        # key makes the operation manager's existing mutex serialize them,
-        # instead of two page-local button states pretending to do so.
+        # key makes the operation manager's existing mutex serialize them.
         return "share:orchestration"
     return resource
 
@@ -967,14 +786,11 @@ def _cloud_service_resource(action):
 def build_cloud_registry():
     """Explicit cloud role registry: ONLY the UM share stack.
 
-    The non-UM cards (model_sync / zcode) and the
-    Tailscale/WFP-specific public repair are NOT assembled: this factory never
-    imports their modules. The four layered open/close chain actions stay in the
-    catalogue but are DISABLED (``CLOUD_SHARE_ORCH_DISABLED_REASON``): the
-    cloud terminates HTTPS directly and has no Tailscale/Funnel/WFP layer, so a
-    submit is refused with an explicit unassembled error before any row exists.
+    The non-UM cards (model_sync / zcode) and the retired Windows local
+    share chain are NOT assembled: this factory never imports their modules.
     Real service start/stop/restart drive the Linux pid-file adapter for
-    ``share-gateway`` only.
+    ``share-gateway`` only; the whole-chain start/stop/estop actions drive
+    the restricted broker and the dedicated 8110.
     """
     runtime = RuntimeServiceAdapter(cloud=True)
     specs = [
@@ -997,11 +813,10 @@ def build_cloud_registry():
             enabled=True, disabled_reason=None,
             bump_generation_on_success=True),
     ]
-    specs.extend(_share_action_specs(include_public=False, cloud=True))
+    specs.extend(_share_action_specs(cloud=True))
     # D18-10: the CLOUD-ONLY whole-chain lifecycle actions. They drive the
-    # restricted broker + the dedicated 8110 only — the cloud deployment has
-    # no Tailscale/Funnel layer, so the four legacy layered actions above stay
-    # DISABLED while these three are the daily start/stop controls.
+    # restricted broker + the dedicated 8110 only; the retired Windows local
+    # layered actions are not registered at all.
     specs.extend([
         ActionSpec(
             "share.chain_start",
@@ -1051,8 +866,9 @@ def build_registry(cloud=False):
     blanket flip; adding a target is a one-line policy-data change.
 
     ``cloud=True`` assembles ONLY the UM share stack (see
-    ``build_cloud_registry``); the local Windows registry keeps every
-    existing card and imports the non-UM modules lazily.
+    ``build_cloud_registry``); the local Windows registry keeps service,
+    account, catalog and context-probe cards only and imports the non-UM
+    modules lazily.
     """
     if cloud:
         return build_cloud_registry()
@@ -1389,8 +1205,8 @@ def build_registry(cloud=False):
             # system write and the daily 06:00 catalog mirror relies on the
             # task; the section-5 approval text does not cover disabling.
             enabled=False, disabled_reason=MODEL_TASK_DISABLE_DISABLED_REASON),
-        # UM 分享动作目录（含 TS/Funnel 专用公网巡检与 WFP 隔离修复）
-        # 抽到 _share_action_specs()：云端角色只装配其中的非 TS/WFP 子集，
-        # 本地 Windows 装配保持全部动作不变。
-        *_share_action_specs(),
+        # The retired Windows local share chain actions are NOT registered
+        # here (#33): the local registry keeps service / account / catalog /
+        # context probe only. The cloud role builds its own catalogue from
+        # _share_action_specs().
     ]

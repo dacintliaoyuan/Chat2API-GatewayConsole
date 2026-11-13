@@ -9,6 +9,7 @@ writes the registration file, and a successful start self-publishes an
 atomic registration record.
 """
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -81,89 +82,8 @@ class FakeServerKernel:
         return 1
 
 
-class InstancePipeServerTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.config = Path(self.temp.name) / "um-share-projection.json"
-        self.config.write_text(json.dumps(_projection()), encoding="utf-8")
-        self.share = ShareServer(("127.0.0.1", 0), self.config,
-                                 auth_mode="projection")
-        self.addCleanup(self.share.server_close)
-
-    def tearDown(self):
-        self.temp.cleanup()
-
-    def _pipe_name(self):
-        return sip.instance_pipe_name(r"\\.\pipe\um-share-instance-",
-                                      self.share.instance_id)
-
-    def test_dispatch_to_real_instance_handler(self):
-        # 有签名的 instance-status 请求 → 替身 handle_instance_control 校验
-        # （mac + instance 绑定 + 重放消费）→ 结构化 ok 响应写回。
-        frame = bp.encode_frame(bp.build_request(
-            "inst-k", "instance-status", instance_id=self.share.instance_id))
-        kernel = FakeServerKernel(frame)
-        server = sip.InstancePipeServer(self.share, "inst-k",
-                                        self._pipe_name(), kernel=(kernel, None))
-        record = server.serve_once()
-        self.assertTrue(record["ok"], record)
-        response = json.loads(bytes(kernel.written))
-        self.assertTrue(response["ok"], response)
-        self.assertEqual(response["result"]["instance_id"],
-                         self.share.instance_id)
-        self.assertEqual(response["result"]["state"], "running")
-
-    def test_wrong_secret_refused_by_real_handler(self):
-        # 坏密钥 → 真实 handler 返回 forbidden，wire 层原样转发。
-        frame = bp.encode_frame(bp.build_request(
-            "WRONG", "instance-status", instance_id=self.share.instance_id))
-        kernel = FakeServerKernel(frame)
-        server = sip.InstancePipeServer(self.share, "inst-k",
-                                        self._pipe_name(), kernel=(kernel, None))
-        record = server.serve_once()
-        self.assertTrue(record["ok"])
-        response = json.loads(bytes(kernel.written))
-        self.assertFalse(response["ok"])
-        self.assertEqual(response["error_code"], "forbidden")
-
-    def test_wrong_instance_binding_refused(self):
-        # 指向另一实例的请求 → 真实 handler 返回 instance_mismatch。
-        frame = bp.encode_frame(bp.build_request(
-            "inst-k", "instance-status", instance_id="i-other"))
-        kernel = FakeServerKernel(frame)
-        server = sip.InstancePipeServer(self.share, "inst-k",
-                                        self._pipe_name(), kernel=(kernel, None))
-        server.serve_once()
-        response = json.loads(bytes(kernel.written))
-        self.assertEqual(response["error_code"], "instance_mismatch")
-
-    def test_unparsable_frame_is_bad_request(self):
-        kernel = FakeServerKernel(b"not-json\n")
-        server = sip.InstancePipeServer(self.share, "inst-k",
-                                        self._pipe_name(), kernel=(kernel, None))
-        record = server.serve_once()
-        self.assertTrue(record["ok"])
-        response = json.loads(bytes(kernel.written))
-        self.assertEqual(response["error_code"], "bad_request")
-
-    def test_oversized_frame_refused_before_dispatch(self):
-        kernel = FakeServerKernel(b"x" * (bp.MAX_MESSAGE + 1) + b"\n")
-        server = sip.InstancePipeServer(self.share, "inst-k",
-                                        self._pipe_name(), kernel=(kernel, None))
-        record = server.serve_once()
-        self.assertFalse(record["ok"])
-        self.assertEqual(record.get("error_code"), "overlimit")
-        response = json.loads(bytes(kernel.written))
-        self.assertEqual(response["error_code"], "overlimit")
-
-    def test_pipe_name_carries_instance_id(self):
-        # 管道名 = 前缀 + instance_id（寻址）；身份由签名帧与 verifier 承担。
-        name = self._pipe_name()
-        self.assertTrue(name.startswith(r"\\.\pipe\um-share-instance-"))
-        with self.assertRaises(ValueError):
-            sip.instance_pipe_name(r"\\.\pipe\um-share-instance-", "")
-
-
+@unittest.skipUnless(os.name == "posix",
+                     "AF_UNIX instance channel is POSIX-only")
 class StartInstanceChannelTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

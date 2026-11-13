@@ -162,12 +162,9 @@ def setUpModule():
     _ISOLATION_SAVED_SEAMS = {
         name: value for name, value in vars(console_share_actions).items()
         if name.startswith("_") and name.upper() == name}
-    for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                         "_declare_real_kernel"),
-                        (share_broker_server, "_declared_kernel")):
-        patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-        patcher.start()
-        _ISOLATION_PATCHERS.append(patcher)
+    # The retired Windows named-pipe transport is gone with the old local
+    # share chain (#33).
+    _ = (share_broker_client, share_broker_server)
     _ISOLATION_SAVED_STATS_ENVIRONMENT = console_stats._STATS_ENVIRONMENT
     console_stats.configure(_UsagesrvStatsEnvironment())
 

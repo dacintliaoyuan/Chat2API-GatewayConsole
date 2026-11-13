@@ -15,6 +15,6 @@
 - 生产 8100 只运行 `chat2api/chat2api.py`；不再有第二套分享 server。
 - `share_gateway` 是读面键，不是模块名；helper 模块名是 `share_auth`。
 - `chat2api.py` 只在 `--share-config` 分支内延迟 import `share_auth`，顶层不 import。
-- 旧 Windows 本机分享链的部署材料已从仓库删除，只保留在 Git 历史。
+- 旧 Windows 本机分享链的部署材料与 `Recover-ShareControl.*` 恢复入口已从仓库删除，只保留在 Git 历史。
 - 旧链测试已随 `ShareServer`/HMAC 归因/revoke notice 退役删除；broker/instance-pipe 用例只使用 `tests/_share_instance_double.py` 的最小实例端点替身。
 - 改分享链名字时先跑 `python scripts/check_share_names.py`；它失败就说明旧链/新链混了。
