@@ -97,18 +97,18 @@ def _load_nonstream_aggregate():
     return nonstream_aggregate
 
 
-def _load_share_entry():
-    """Load the share gate beside THIS file, only when share mode is used.
+def _load_share_auth():
+    """Load the pure share auth helpers beside THIS file, only in share mode.
 
     The private 8000 chain and the isolated local package never import it at
     module load: the import is reached from the share request path and from
     main() only when ``--share-config`` is present.
     """
     try:
-        from . import share_entry
+        from . import share_auth
     except ImportError:
-        import share_entry as share_entry
-    return share_entry
+        import share_auth as share_auth
+    return share_auth
 
 
 _nonstream_aggregate = _load_nonstream_aggregate()
@@ -2432,7 +2432,7 @@ def _ensure_revoke_applied_loaded():
     with _revoke_applied_lock:
         if _revoke_applied_loaded:
             return
-        state = _share_entry_module().load_revoke_state()
+        state = _share_auth_module().load_revoke_state()
         _revoke_applied_generations.clear()
         _revoke_applied_generations.update(
             state.get("generations") or {})
@@ -2447,7 +2447,7 @@ def _reset_share_revoke_state():
         _revoke_applied_generations.clear()
         _revoke_applied_loaded = False
     try:
-        _share_entry_module().reset_revoke_state_cache()
+        _share_auth_module().reset_revoke_state_cache()
     except (ImportError, AttributeError):
         pass
 
@@ -2491,21 +2491,22 @@ def _share_dispatch_refusal(key_id):
     return None
 
 
-_SHARE_GATEWAY_REQUIRED = (
+_SHARE_AUTH_REQUIRED = (
     "load_revoke_state", "reset_revoke_state_cache",
-    "record_revoke_generation", "_verified_revoke_notice_action",
-    "_verified_revoke_notice_ts", "valid_responses_request",
-    "responses_to_messages_request",
+    "record_revoke_generation", "valid_chat_request",
+    "valid_messages_request", "resolve_share_credential", "ShareGate",
+    "model_catalog_limit", "messages_query", "load_config",
 )
 
 
-def _share_entry_module():
-    """Load share_entry beside THIS file, independent of sys.path.
+def _share_auth_module():
+    """Load share_auth beside THIS file, independent of sys.path.
 
     Same seam as ``_load_share_dispatch``: the service runs this file as a
     script (its directory is on sys.path), while tests load it by path from
     another directory.  Reuse the module when it is already imported so the
-    notice builder/verifier has exactly ONE implementation.
+    gate, request validators and revoke-state store have exactly ONE
+    implementation.
 
     A failed import leaves a partially initialized module in ``sys.modules``.
     That partial module must never be reused: evict it before retrying, and
@@ -2518,24 +2519,24 @@ def _share_entry_module():
     """
     if share_backend_role() is False:
         raise ImportError("share backend module not assembled")
-    module = sys.modules.get("share_entry")
+    module = sys.modules.get("share_auth")
     if module is not None and all(
-            hasattr(module, name) for name in _SHARE_GATEWAY_REQUIRED):
+            hasattr(module, name) for name in _SHARE_AUTH_REQUIRED):
         return module
     if module is not None:
-        sys.modules.pop("share_entry", None)
+        sys.modules.pop("share_auth", None)
     import importlib.util
-    path = os.path.join(HERE, "share_entry.py")
-    spec = importlib.util.spec_from_file_location("share_entry", path)
+    path = os.path.join(HERE, "share_auth.py")
+    spec = importlib.util.spec_from_file_location("share_auth", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules["share_entry"] = module
+    sys.modules["share_auth"] = module
     try:
         spec.loader.exec_module(module)
     except BaseException:
-        if sys.modules.get("share_entry") is module:
-            sys.modules.pop("share_entry", None)
+        if sys.modules.get("share_auth") is module:
+            sys.modules.pop("share_auth", None)
         raise
     return module
 
@@ -6579,7 +6580,7 @@ class Handler(BaseHTTPRequestHandler):
         gate = getattr(self.server, "share_gate", None)
         if gate is None:
             return True
-        share = _load_share_entry()
+        share = _load_share_auth()
         if path.startswith("/v1/models"):
             try:
                 share.model_catalog_limit(raw_path)
@@ -7441,7 +7442,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if getattr(self.server, "share_gate", None) is not None \
                 and upstream_path == "/api/v1/messages" \
-                and not _load_share_entry().valid_messages_request(body):
+                and not _load_share_auth().valid_messages_request(body):
             self._error(400, "unsupported_messages_request",
                         error_type="unsupported_messages_request")
             return
@@ -7859,7 +7860,7 @@ class Handler(BaseHTTPRequestHandler):
         if body is None:
             return
         if getattr(self.server, "share_gate", None) is not None \
-                and not _load_share_entry().valid_chat_request(body):
+                and not _load_share_auth().valid_chat_request(body):
             self._error(400, "unsupported_chat_request",
                         error_type="unsupported_chat_request")
             return
@@ -9739,7 +9740,7 @@ def main():
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.proxy = proxy
-    server.share_gate = (_load_share_entry().ShareGate(args.share_config,
+    server.share_gate = (_load_share_auth().ShareGate(args.share_config,
                                     auth_mode=args.auth_mode)
                          if args.share_config else None)
     server.local_api_key = LOCAL_API_KEY

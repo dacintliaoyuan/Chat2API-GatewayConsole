@@ -2,7 +2,7 @@
 (ai-gateway/share/instance_pipe.py, R41-1).
 
 Fake kernels only - no real pipe. Verifies: the bounded wire layer
-dispatches to the REAL ShareServer.handle_instance_control (signed schema
+dispatches to the test double's handle_instance_control (signed schema
 v2, instance binding, replay), oversized frames are refused before
 dispatch, a failed listener is an EXPLICIT not-ready state that never
 writes the registration file, and a successful start self-publishes an
@@ -18,10 +18,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import share.broker_protocol as bp  # noqa: E402
 import share.instance_pipe as sip  # noqa: E402
-from share_entry import ShareServer  # noqa: E402
+from _share_instance_double import FakeShareServer as ShareServer  # noqa: E402
 
 
 def _projection(generation=1):
@@ -97,7 +98,7 @@ class InstancePipeServerTests(unittest.TestCase):
                                       self.share.instance_id)
 
     def test_dispatch_to_real_instance_handler(self):
-        # 有签名的 instance-status 请求 → 真实 handle_instance_control 校验
+        # 有签名的 instance-status 请求 → 替身 handle_instance_control 校验
         # （mac + instance 绑定 + 重放消费）→ 结构化 ok 响应写回。
         frame = bp.encode_frame(bp.build_request(
             "inst-k", "instance-status", instance_id=self.share.instance_id))

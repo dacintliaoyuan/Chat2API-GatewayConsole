@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 
 import share.broker_protocol as bp  # noqa: E402
-import share_entry as share  # noqa: E402
+import share_auth as share  # noqa: E402
 from share.management import ShareManager  # noqa: E402
 from share.store import (KEY_MAX_CONCURRENCY_MAX,  # noqa: E402
                          NEW_KEY_DEFAULT_MAX_CONCURRENCY,
@@ -404,13 +404,6 @@ class _AdmissionCase(unittest.TestCase):
         self.addCleanup(self.td.cleanup)
         self.config = Path(self.td.name) / "projection.json"
 
-        def _close_server():
-            server = getattr(self, "server", None)
-            if server is not None:
-                server.server_close()
-
-        self.addCleanup(_close_server)
-
     def _entry(self, key_id, max_concurrency):
         return {"key_id": key_id, "name": "friend-" + key_id,
                 "secret_hash": hashlib.sha256(
@@ -425,7 +418,7 @@ class _AdmissionCase(unittest.TestCase):
             encoding="utf-8")
 
     def _server(self):
-        self.server = share.ShareServer(("127.0.0.1", 0), self.config)
+        self.server = share.ShareGate(self.config)
         return self.server
 
 

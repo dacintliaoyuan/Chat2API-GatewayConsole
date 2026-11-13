@@ -75,8 +75,8 @@ case "$WEB_ROLE" in
   *) echo "unsafe web role: $WEB_ROLE (local|cloud)" >&2; exit "$EX_USAGE" ;;
 esac
 [ -f "$SOURCE/usagesrv.py" ] || die "source root lacks usagesrv.py: $SOURCE" "$EX_NOINPUT"
-[ -f "$SOURCE/chat2api/share_entry.py" ] || \
-  die "source root lacks chat2api/share_entry.py" "$EX_NOINPUT"
+[ -f "$SOURCE/chat2api/share_auth.py" ] || \
+  die "source root lacks chat2api/share_auth.py" "$EX_NOINPUT"
 [ -f "$SOURCE/chat2api/chat2api.py" ] || \
   die "source root lacks chat2api/chat2api.py" "$EX_NOINPUT"
 [ -f "$DEPLOY_ROOT/make-manifest.py" ] || \

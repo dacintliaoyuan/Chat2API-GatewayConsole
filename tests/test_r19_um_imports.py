@@ -59,7 +59,7 @@ sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 before = {
-    "share_entry": "share_entry" in sys.modules,
+    "share_auth": "share_auth" in sys.modules,
     "share_dispatch": "share_dispatch" in sys.modules,
 }
 
@@ -73,7 +73,7 @@ def attempt(name):
 module.SHARE_BACKEND_ROLE = False
 role_false_loads = {
     "_load_share_dispatch": attempt("_load_share_dispatch"),
-    "_share_entry_module": attempt("_share_entry_module"),
+    "_share_auth_module": attempt("_share_auth_module"),
 }
 
 print(json.dumps({
@@ -83,7 +83,7 @@ print(json.dumps({
             "shared.nonstream_aggregate"),
     "before": before,
     "after": {
-        "share_entry": "share_entry" in sys.modules,
+        "share_auth": "share_auth" in sys.modules,
         "share_dispatch": "share_dispatch" in sys.modules,
     },
     "role_false_loads": role_false_loads,
@@ -123,8 +123,8 @@ class Chat2apiSharedImportTests(unittest.TestCase):
         offenders = [
             "{}:{}".format(lineno, module)
             for module, names, lineno in _imports_of(tree)
-            if module == "share_entry"
-            or (module in ("", ".") and "share_entry" in names)
+            if module == "share_auth"
+            or (module in ("", ".") and "share_auth" in names)
         ]
         self.assertTrue(
             offenders,
@@ -184,16 +184,16 @@ class Chat2apiSharedImportTests(unittest.TestCase):
         chat2api.SHARE_BACKEND_ROLE = False
         try:
             cached_dispatch = types.ModuleType("share_dispatch")
-            cached_gateway = types.ModuleType("share_entry")
-            for name in chat2api._SHARE_GATEWAY_REQUIRED:
+            cached_gateway = types.ModuleType("share_auth")
+            for name in chat2api._SHARE_AUTH_REQUIRED:
                 setattr(cached_gateway, name, lambda *_args: None)
             with mock.patch.dict(sys.modules, {
                     "share_dispatch": cached_dispatch,
-                    "share_entry": cached_gateway}):
+                    "share_auth": cached_gateway}):
                 with self.assertRaises(ImportError):
                     chat2api._load_share_dispatch()
                 with self.assertRaises(ImportError):
-                    chat2api._share_entry_module()
+                    chat2api._share_auth_module()
         finally:
             chat2api.SHARE_BACKEND_ROLE = original_role
 
@@ -262,14 +262,14 @@ class Chat2apiSharedImportTests(unittest.TestCase):
         self.assertIs(payload["nonstream_is_shared"], True,
                       "chat2api must load the aggregator from shared")
         self.assertEqual(payload["before"],
-                         {"share_entry": False, "share_dispatch": False},
+                         {"share_auth": False, "share_dispatch": False},
                          "the private import must not load the share gate or the dispatch module")
         self.assertEqual(payload["role_false_loads"],
                          {"_load_share_dispatch": "ImportError",
-                          "_share_entry_module": "ImportError"},
+                          "_share_auth_module": "ImportError"},
                          "the private role must refuse both share loaders")
         self.assertEqual(payload["after"],
-                         {"share_entry": False, "share_dispatch": False},
+                         {"share_auth": False, "share_dispatch": False},
                          "a refused loader must not import the share backend")
 
     def test_missing_shared_package_fails_the_import_closed(self):

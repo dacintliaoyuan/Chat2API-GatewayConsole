@@ -61,7 +61,7 @@ import json
 import chat2api
 from usagesrv import load_price_table
 from console import stats as console_stats
-from share_entry import ShareServer
+from share_auth import ShareGate
 from model_sync import sync as model_sync
 from zcode.hot_sync import marker
 import local.app
@@ -181,7 +181,7 @@ class ImportScannerTests(unittest.TestCase):
                 "chat2api",
                 "usagesrv",
                 "console",
-                "share_entry",
+                "share_auth",
                 "model_sync",
                 "zcode.hot_sync",
                 "local.app",
@@ -209,7 +209,7 @@ class ImportScannerTests(unittest.TestCase):
             "chat2api.handler",
             "usagesrv",
             "console.stats",
-            "share_entry",
+            "share_auth",
             "model_sync.sync",
             "zcode.hot_sync",
             "local",
@@ -224,7 +224,7 @@ class ImportScannerTests(unittest.TestCase):
                 "chat2api.handler",
                 "usagesrv",
                 "console.stats",
-                "share_entry",
+                "share_auth",
                 "model_sync.sync",
                 "zcode.hot_sync",
                 "local",

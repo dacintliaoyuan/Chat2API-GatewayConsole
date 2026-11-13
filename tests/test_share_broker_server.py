@@ -8,8 +8,9 @@ already covered by test_share_broker.py); these tests verify the WIRE
 layer (framing, bounded reads/writes, R41-4 cycle ownership and the
 R37 admission contract) and the R41-1/R41-2 assembly closed loop: a REAL
 signed management request through build_server's coordinator, a REAL
-instance-channel signature frame validated by ShareServer.handle_instance_control,
-and an ACK - never an echo fixture standing in for the instance.
+instance-channel signature frame validated by the test double's
+handle_instance_control, and an ACK - never an echo fixture standing in for
+the instance.
 """
 import argparse
 import json
@@ -34,6 +35,7 @@ def _write_secret(path, text):
         os.chmod(path, 0o600)
     return path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import share.broker_protocol as bp  # noqa: E402
 import share.broker_server as srv  # noqa: E402
@@ -41,7 +43,7 @@ from share.broker_host import (BrokerHostCoordinator,  # noqa: E402
                                InstanceRegistry, MaintenanceLeaseStore,
                                ReplayRegistry)
 from share.broker_ops import WindowsInstanceVerifier  # noqa: E402
-from share_entry import ShareServer  # noqa: E402
+from _share_instance_double import FakeShareServer as ShareServer  # noqa: E402
 from share.runtime import ProtectedProjectionWriter  # noqa: E402
 
 

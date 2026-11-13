@@ -5,7 +5,7 @@ Runs the REAL cloud package on loopback only:
 
     fake UM (verification upstream)
     share/broker_ops.py::linux_main (AF_UNIX broker, spawns 8100)
-    chat2api/share_entry.py (8100 role, spawned by the broker)
+    chat2api/chat2api.py (8100 role, spawned by the broker)
     cloud/run_cloud.py --config (18096 role, owns the 8110 backend)
 
 The fixture reuses the process/HTTP helpers from
@@ -38,7 +38,10 @@ for _entry in (str(TESTS), str(AI_GATEWAY)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-import linux_share_chain_legacy as chain  # noqa: E402
+try:
+    from . import process_support as chain  # noqa: E402
+except ImportError:
+    import process_support as chain  # noqa: E402
 
 PRODUCTION_PORTS = frozenset((8000, 8001, 8100, 8110, 18096, 5901))
 MODEL = "fake-um-model"
@@ -160,7 +163,7 @@ def _paths_for(root: Path) -> dict:
     }
 
 
-class CloudChainFixture(chain.ChainFixture):
+class CloudChainFixture:
     """One isolated cloud chain: fake UM + broker/8100 + cloud/8110."""
 
     def __init__(self, package_root, report_path=None):
@@ -185,7 +188,9 @@ class CloudChainFixture(chain.ChainFixture):
         report = report_path or (
             Path(tempfile.mkdtemp(prefix="r19-cloud-report-"))
             / "report.json")
-        super().__init__(report)
+        self.report_path = Path(report)
+        self.root = Path(tempfile.mkdtemp(prefix="r19-cloud-chain-"))
+        self.processes = []
         self.paths = _paths_for(self.root)
         self.env = self._build_env()
         self.work_dir = self.paths["work"]
@@ -264,6 +269,13 @@ class CloudChainFixture(chain.ChainFixture):
             name, argv, env or self.env, self.work_dir, log_path)
         self.processes.append(process)
         return process
+
+    def _write_secret(self, path, data, mode=0o600):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        with contextlib.suppress(OSError):
+            os.chmod(path, mode)
 
     def config_values(self) -> dict:
         paths = self.paths
@@ -415,16 +427,13 @@ class CloudChainFixture(chain.ChainFixture):
                 self.paths[name].unlink()
         gateway = [
             sys.executable,
-            str(self.package / "chat2api" / "share_entry.py"),
+            str(self.package / "chat2api" / "chat2api.py"),
             "--port", str(self.share_port),
-            "--upstream-port", str(self.backend_port),
-            "--config", str(self.paths["projection"]),
+            "--share-config", str(self.paths["projection"]),
             "--auth-mode", "projection",
-            "--attribution-key-file", str(self.paths["attribution"]),
             "--instance-key-file", str(self.paths["instance_key"]),
-            "--registration-file", str(self.paths["registration"]),
             "--instance-pipe-prefix", str(self.paths["instance_prefix"]),
-            "--fault-log", str(self.paths["share_faults"]),
+            "--registration-file", str(self.paths["registration"]),
         ]
         argv = [
             sys.executable,
@@ -435,7 +444,7 @@ class CloudChainFixture(chain.ChainFixture):
             *broker_argv(self.paths)[1:],
             "--expected-uid", str(os.getuid()),
             "--expect-instance-image", sys.executable,
-            "--expect-instance-cmdline-marker", "share_entry.py",
+            "--expect-instance-cmdline-marker", "chat2api.py",
             "--expect-instance-port", str(self.share_port),
             "--deadline", "10",
             "--dispatch-deadline", "30",
@@ -739,7 +748,7 @@ class CloudChainFixture(chain.ChainFixture):
         if self.management_process is not None:
             self.management_process.stop()
         gateway_live = self._live_pid(
-            self.paths["host_pid"], "share_entry.py")
+            self.paths["host_pid"], "chat2api.py")
         if self.broker_client is not None and self.broker is not None \
                 and self.broker.alive() and (
                     gateway_live is not None
@@ -755,7 +764,7 @@ class CloudChainFixture(chain.ChainFixture):
         if self.broker is not None:
             self.broker.stop()
         self._stop_residual(
-            self.paths["host_pid"], "share_entry.py", self.share_port)
+            self.paths["host_pid"], "chat2api.py", self.share_port)
         self._stop_residual(
             self.paths["backend"] / "backend.pid", "chat2api.py",
             self.backend_port)

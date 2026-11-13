@@ -52,7 +52,7 @@ FORBIDDEN_FILES = (
     "console/share_production.py",
     "share/management.py",
     "share/store.py",
-    "chat2api/share_entry.py",
+    "chat2api/share_auth.py",
     "chat2api/share_dispatch.py",
     "share/instance_pipe.py",
     "share/runtime.py",

@@ -22,7 +22,7 @@ _SPEC = importlib.util.spec_from_file_location(
 chat2api = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = chat2api
 _SPEC.loader.exec_module(chat2api)
-from share_entry import ShareGate
+from share_auth import ShareGate
 
 
 def _headers(secret):

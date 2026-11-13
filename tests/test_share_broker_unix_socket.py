@@ -35,6 +35,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import share.broker_protocol as bp  # noqa: E402
 import share.broker_server as srv  # noqa: E402
@@ -42,7 +43,7 @@ import share.instance_pipe as sip  # noqa: E402
 from share.broker_client import (BrokerClient, BrokerTransport,  # noqa: E402
                                 UnixSocketBrokerTransport,
                                 validate_unix_socket_path)
-from share_entry import ShareServer  # noqa: E402
+from _share_instance_double import FakeShareServer as ShareServer  # noqa: E402
 
 IS_LINUX = sys.platform.startswith("linux")
 LINUX_ONLY = unittest.skipUnless(

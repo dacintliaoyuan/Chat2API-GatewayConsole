@@ -20,6 +20,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import share.broker_protocol as bp  # noqa: E402
 import share.broker_client as bc  # noqa: E402
@@ -34,10 +36,11 @@ from share.runtime import ProtectedProjectionWriter  # noqa: E402
 from share.store import MigrationConflict, ShareStore  # noqa: E402
 
 _SHARE_GW = importlib.util.spec_from_file_location(
-    "share_entry_broker_test",
-    Path(__file__).resolve().parents[1] / "chat2api" / "share_entry.py")
+    "share_auth_broker_test",
+    Path(__file__).resolve().parents[1] / "chat2api" / "share_auth.py")
 share_gw = importlib.util.module_from_spec(_SHARE_GW)
 _SHARE_GW.loader.exec_module(share_gw)
+from _share_instance_double import FakeShareServer as ShareServer  # noqa: E402
 
 _REVOKE_STATE_TMP = None
 _REVOKE_STATE_SAVED = None
@@ -299,7 +302,7 @@ class D1ClosedLoopTests(_RuntimeRevokeFixture, unittest.TestCase):
         self.config.write_text(json.dumps(
             {"schema_version": 1, "config_generation": 1, "data": []}),
             encoding="utf-8")
-        self.server = share_gw.ShareServer(("127.0.0.1", 0), self.config)
+        self.server = ShareServer(("127.0.0.1", 0), self.config)
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self._teardown_server)
@@ -560,7 +563,7 @@ class D2LifecycleTests(unittest.TestCase):
             encoding="utf-8")
         self.writer = ProtectedProjectionWriter(
             self.config, acl_checker=lambda p: None)
-        self.server = share_gw.ShareServer(("127.0.0.1", 0), self.config)
+        self.server = ShareServer(("127.0.0.1", 0), self.config)
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self._teardown_server)
@@ -786,7 +789,7 @@ class R29ClosureTests(unittest.TestCase):
             encoding="utf-8")
         self.writer = ProtectedProjectionWriter(
             self.config, acl_checker=lambda p: None)
-        self.server = share_gw.ShareServer(("127.0.0.1", 0), self.config)
+        self.server = ShareServer(("127.0.0.1", 0), self.config)
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self._teardown_server)
@@ -978,7 +981,7 @@ class R31ClosureTests(_RuntimeRevokeFixture, unittest.TestCase):
             encoding="utf-8")
         self.writer = ProtectedProjectionWriter(
             self.config, acl_checker=lambda p: None)
-        self.server = share_gw.ShareServer(("127.0.0.1", 0), self.config)
+        self.server = ShareServer(("127.0.0.1", 0), self.config)
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self._teardown_server)
@@ -2657,7 +2660,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "clients.json"
             config.write_text(json.dumps({"clients": {}}), encoding="utf-8")
-            server = share_gw.ShareServer(("127.0.0.1", 0), config)
+            server = ShareServer(("127.0.0.1", 0), config)
             self.addCleanup(server.server_close)
             secret = "inst-e2e"
             instance_id = server.instance_id

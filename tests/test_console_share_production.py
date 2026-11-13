@@ -136,10 +136,9 @@ def _broker_loader(loader):
         yield
     finally:
         prod.configure_broker_loader(saved)
-# 归因密钥的只读现场：两端真正读密钥的模块（只做 AST/文本核对，
+# 归因密钥的只读现场：真正读密钥的模块（只做 AST/文本核对，
 # 不 import，零副作用）。
 _GATEWAY_DIR = Path(__file__).resolve().parents[1]
-_SHARE_GATEWAY_SOURCE = _GATEWAY_DIR / "chat2api" / "share_entry.py"
 _CHAT2API_SOURCE = _GATEWAY_DIR / "chat2api" / "chat2api.py"
 
 

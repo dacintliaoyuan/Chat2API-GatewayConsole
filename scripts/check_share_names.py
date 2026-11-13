@@ -6,7 +6,7 @@ Checks the invariants the merged 8100 process depends on:
 * ``chat2api/share_gateway.py`` no longer exists;
 * production code never uses ``share_entry`` as the read-surface component key
   (the key is ``share_gateway``);
-* ``chat2api/chat2api.py`` imports ``share_entry`` lazily, never at module top;
+* ``chat2api/chat2api.py`` imports ``share_auth`` lazily, never at module top;
 * production code never references the removed ``chat2api/share_gateway.py`` path.
 """
 
@@ -30,7 +30,7 @@ COMPONENT_KEY_FILES = (
 
 PRODUCTION_FILES = (
     "chat2api/chat2api.py",
-    "chat2api/share_entry.py",
+    "chat2api/share_auth.py",
     "console/share_actions.py",
     "console/share_production.py",
     "console/adapters.py",
@@ -72,15 +72,15 @@ def main() -> int:
         for node in tree.body:
             if isinstance(node, ast.ImportFrom):
                 names = {alias.name for alias in node.names}
-                if node.module == "share_entry" or (
-                        node.module in (None, "") and "share_entry" in names):
+                if node.module == "share_auth" or (
+                        node.module in (None, "") and "share_auth" in names):
                     errors.append(
-                        "chat2api.py imports share_entry at module top; "
+                        "chat2api.py imports share_auth at module top; "
                         "the import must stay inside the share branch")
             elif isinstance(node, ast.Import):
-                if any(alias.name == "share_entry" for alias in node.names):
+                if any(alias.name == "share_auth" for alias in node.names):
                     errors.append(
-                        "chat2api.py imports share_entry at module top; "
+                        "chat2api.py imports share_auth at module top; "
                         "the import must stay inside the share branch")
 
     if errors:

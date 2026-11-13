@@ -26,7 +26,6 @@ import os
 import queue
 import socket
 import sys
-import tempfile
 import threading
 import time
 import tracemalloc
@@ -45,7 +44,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(CHAT2API_PATH.parent))
 import _chat2api_http_harness as harness  # noqa: E402
 import nonstream_aggregate  # noqa: E402
-import share_entry as share_entry  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location(
     "chat2api_nonstream_aggregate", CHAT2API_PATH)
@@ -54,20 +52,12 @@ assert SPEC.loader is not None
 sys.modules[SPEC.name] = chat2api
 SPEC.loader.exec_module(chat2api)
 
-
-def _write_private(path, text):
-    """Fixture secrets must pass the POSIX 0600/current-uid gate."""
-    from share.secret_protection import write_private_secret_path
-    write_private_secret_path(Path(path), str(text).encode("utf-8"))
-
 STUB_TOKEN = "stub-token"
 LOCAL_KEY = "local-secret-n1"
 
 # R13: the trusted aggregate scope is a STARTUP environment value; tests build
-# it with the real parser and sign attribution markers with the real share
-# gateway builder, so a changed wire format or parser fails here instead of
-# silently leaving every request native.
-ATTRIBUTION_SECRET = "s" * 48
+# it with the real parser, so a changed wire format or parser fails here instead
+# of silently leaving every request native.
 ATTRIBUTION_KEY_ID = "synthetic-selected-key"
 UNSELECTED_KEY_ID = "unselected-key"
 # The exact canonical JSON console_share_production._backend_aggregate_scope_json
@@ -77,25 +67,6 @@ UNSELECTED_KEY_ID = "unselected-key"
 PRODUCTION_EMPTY_SCOPE_JSON = '{"key_ids":[],"models":[],"protocols":[]}'
 
 
-def install_attribution_key(test):
-    """Give this suite a private, non-production attribution key file."""
-    tmp = tempfile.TemporaryDirectory(prefix="chat2api-aggregate-attribution-")
-    test.addCleanup(tmp.cleanup)
-    key_file = Path(tmp.name) / "share-attribution.key"
-    _write_private(key_file, ATTRIBUTION_SECRET)
-    patch = mock.patch.object(chat2api, "SHARE_ATTRIBUTION_KEY_FILE",
-                              str(key_file))
-    patch.start()
-    test.addCleanup(patch.stop)
-    chat2api._attribution_key_cache["stat"] = None
-    test.addCleanup(chat2api._attribution_seen.clear)
-
-
-def marker_headers(key_id=ATTRIBUTION_KEY_ID):
-    headers, _ = share_entry.build_attribution(ATTRIBUTION_SECRET, key_id)
-    return headers
-
-
 def aggregate_scope(*, models, protocols, key_ids=(ATTRIBUTION_KEY_ID,)):
     """Build the real parsed scope shape from a JSON startup value."""
     return chat2api.parse_nonstream_aggregate_scope(json.dumps({
@@ -103,12 +74,6 @@ def aggregate_scope(*, models, protocols, key_ids=(ATTRIBUTION_KEY_ID,)):
         "models": list(models),
         "protocols": list(protocols),
     }))
-
-
-def tampered_marker_headers(key_id=ATTRIBUTION_KEY_ID):
-    headers = dict(marker_headers(key_id))
-    headers[share_entry.X_ATTRIBUTION_SIGNATURE] = "0" * 64
-    return headers
 
 
 def raw_http_request(server, path, body, headers=None):

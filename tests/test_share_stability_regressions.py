@@ -1,11 +1,15 @@
 """Regression loops for the observed sharing recovery and public-path failures."""
 import ssl
 import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_console_public_probe import (
     ANSWER, CATALOG, PUBLIC_IP, PUBLIC_URL, SECRET, isolated_http, probe, reply,

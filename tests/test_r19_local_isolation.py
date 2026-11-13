@@ -11,7 +11,7 @@ temp directories and started from an arbitrary CWD with a polluted
   project directory or the Git root;
 * ``runtime_info.modules`` does not load ``cloud``/``usagesrv``/
   ``console.adapters``/``share.management``/``share.store``/
-  ``share.broker_*``/``chat2api.share_entry``/``chat2api.share_dispatch``;
+  ``share.broker_*``/``chat2api.share_auth``/``chat2api.share_dispatch``;
 * every configured path is below the package fixture root and never equal to
   or inside the real state paths (the test does not read or hash real data).
 """
@@ -55,7 +55,7 @@ FORBIDDEN_MODULES = (
     "console.adapters",
     "share.management",
     "share.store",
-    "chat2api.share_entry",
+    "chat2api.share_auth",
     "chat2api.share_dispatch",
 )
 FORBIDDEN_FILES = (
@@ -65,7 +65,7 @@ FORBIDDEN_FILES = (
     "console/share_production.py",
     "share/management.py",
     "share/store.py",
-    "chat2api/share_entry.py",
+    "chat2api/share_auth.py",
     "chat2api/share_dispatch.py",
     "share/instance_pipe.py",
     "share/runtime.py",

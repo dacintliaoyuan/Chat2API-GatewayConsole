@@ -7,8 +7,8 @@ are fakes in temp dirs. No real task, pipe, process identity query or ACL
 audit runs here - those are the D4/L2 experiments (H3/H6 and the ACL
 calibrations). The tests verify ARGUMENT control, exit-code semantics,
 fail-closed decisions and the R41-2 trust-chain instance_call wiring over
-the REAL instance protocol (the fake kernel forwards the signed frame to
-ShareServer.handle_instance_control, never an echo).
+the instance protocol (the fake kernel forwards the signed frame to the
+test double's handle_instance_control, never an echo).
 """
 import json
 import os
@@ -19,9 +19,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import share.broker_protocol as bp  # noqa: E402
-from share_entry import ShareServer  # noqa: E402
+from _share_instance_double import FakeShareServer as ShareServer  # noqa: E402
 
 import share.broker_ops as share_broker_ops  # noqa: E402
 

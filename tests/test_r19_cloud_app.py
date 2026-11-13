@@ -5,7 +5,7 @@ The cloud chain runs the REAL package processes on loopback only:
 
     fake UM (verification upstream)
     share/broker_ops.py::linux_main (AF_UNIX broker, spawns 8100)
-    chat2api/share_entry.py (8100 role, spawned by the broker)
+    chat2api/chat2api.py (8100 role, spawned by the broker)
     cloud/run_cloud.py (18096 role, owns the 8110 chat2api backend)
 
 Every path, secret, token, ledger, projection and SQLite file lives under one
@@ -58,7 +58,7 @@ class CloudPackageTests(unittest.TestCase):
             "cloud/backend/config.py",
             "shared/__init__.py",
             "chat2api/chat2api.py",
-            "chat2api/share_entry.py",
+            "chat2api/share_auth.py",
             "chat2api/share_dispatch.py",
             "share/broker_ops.py",
             "share/broker_server.py",

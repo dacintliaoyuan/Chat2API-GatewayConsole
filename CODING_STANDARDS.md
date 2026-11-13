@@ -5,9 +5,9 @@
 ## 分享链
 
 - 改分享链名字前先跑 `python scripts/check_share_names.py`；它失败说明旧链/新链混了。
-- 生产 8100 只运行 `chat2api/chat2api.py`；`chat2api/share_entry.py` 是旧链测试专用。
-- `share_gateway` 是读面组件键，不要改成 `share_entry`；模块名才是 `share_entry`。
-- `chat2api.py` 只在 `--share-config` 分支内延迟 import `share_entry`，顶层 import 视为违规。
+- 生产 8100 只运行 `chat2api/chat2api.py`；纯 helper 在 `chat2api/share_auth.py`。
+- `share_gateway` 是读面组件键，不要改成 `share_auth`；模块名是 `share_auth`。
+- `chat2api.py` 只在 `--share-config` 分支内延迟 import `share_auth`，顶层 import 视为违规。
 - 旧链/新链的完整映射见 `docs/share-chain-map.md`；改名前先读它。
 
 ## Python

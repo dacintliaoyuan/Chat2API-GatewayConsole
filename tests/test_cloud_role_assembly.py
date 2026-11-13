@@ -51,7 +51,7 @@ import share.broker_protocol as bp  # noqa: E402
 import usagesrv  # noqa: E402  (no role env set -> the local default)
 from share.broker_client import BrokerClient  # noqa: E402
 from share.broker_protocol import BrokerResult  # noqa: E402
-from share_entry import ShareServer  # noqa: E402
+from share_auth import ShareGate  # noqa: E402
 from share.management import BrokerClientAdapter, ShareManager  # noqa: E402
 from console.operations import (  # noqa: E402
     OperationError,
@@ -1134,9 +1134,7 @@ class LinuxBrokerEntryTests(unittest.TestCase):
                                broker=BrokerClientAdapter(_ProjectionBroker()))
         created = manager.create_key("friendA")
         self.assertTrue(created["published"])
-        server = ShareServer(("127.0.0.1", 0), config,
-                              auth_mode="projection")
-        self.addCleanup(server.server_close)
+        server = ShareGate(config, auth_mode="projection")
         key_id = created["key_id"]
         self.assertTrue(server.acquire(
             key_id, generation=created["desired_generation"],

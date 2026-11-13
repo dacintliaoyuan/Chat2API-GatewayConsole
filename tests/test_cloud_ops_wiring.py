@@ -11,11 +11,11 @@ changed.  The budget/automatic-backup features are gone (D18-11); the
 independent security floor and its revoke/ACK fence stay.
 """
 import hashlib
-import importlib.util
 import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -23,15 +23,14 @@ from unittest import mock
 HERE = Path(__file__).resolve().parents[1]          # ai-gateway/
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "um-cloud-deploy"))
+sys.path.insert(0, str(HERE / "chat2api"))
+sys.path.insert(0, str(HERE / "tests"))
 
 import backup_restore  # noqa: E402
 import usagesrv  # noqa: E402
+import share_auth as share  # noqa: E402
+from _share_instance_double import FakeShareServer  # noqa: E402
 from share.store import ShareStore  # noqa: E402
-
-_SPEC = importlib.util.spec_from_file_location(
-    "share_entry", HERE / "chat2api" / "share_entry.py")
-share = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(share)
 
 
 def _entry(key_id="ka", secret="test-secret"):
@@ -255,17 +254,21 @@ class CloudOpsReadFaceTests(unittest.TestCase):
         self.addCleanup(state_patch.stop)
         share.reset_revoke_state_cache()
         self.addCleanup(share.reset_revoke_state_cache)
-        server = share.ShareServer(("127.0.0.1", 0), config)
-        self.addCleanup(server.server_close)
+        server = FakeShareServer(config=config)
         payload = _projection([_entry()])
-        request = {
-            "request_id": "load-1",
-            "fields": {
-                "generation": payload["config_generation"],
-                "fingerprint": hashlib.sha256(json.dumps(
-                    payload, sort_keys=True).encode()).hexdigest(),
-            },
+        from share.broker_protocol import INSTANCE_SIGNED_KEYS, sign
+        fields = {
+            "generation": payload["config_generation"],
+            "fingerprint": hashlib.sha256(json.dumps(
+                payload, sort_keys=True).encode()).hexdigest(),
         }
+        request = sign("inst-secret", {
+            "v": 2, "action": "load",
+            "request_id": "load-1",
+            "ts": int(time.time()) + 1,
+            "instance_id": server.instance_id,
+            "fields": fields,
+        }, INSTANCE_SIGNED_KEYS)
         previous = dict(share._revoke_applied_generations)
         share._revoke_applied_generations.clear()
         share._revoke_applied_generations["ka"] = 7
@@ -275,7 +278,6 @@ class CloudOpsReadFaceTests(unittest.TestCase):
             share._revoke_applied_generations.update(previous)
 
         self.addCleanup(restore)
-        reply, notices = server._apply_projection_load_locked(request)
+        reply = server.handle_instance_control(request, "inst-secret")
         self.assertTrue(reply["ok"], reply)
         self.assertEqual(reply["result"]["security_generation"], 7)
-        self.assertEqual(notices, [])

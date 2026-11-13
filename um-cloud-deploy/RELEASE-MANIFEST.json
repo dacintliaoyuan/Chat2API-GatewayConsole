@@ -6,8 +6,8 @@
       "files": [
         "chat2api/chat2api.py",
         "chat2api/nonstream_aggregate.py",
+        "chat2api/share_auth.py",
         "chat2api/share_dispatch.py",
-        "chat2api/share_entry.py",
         "console/adapters.py",
         "console/display_proxy.py",
         "console/log_reader.py",
@@ -56,7 +56,7 @@
         "share/metering.py",
         "share/secret_protection.py",
         "share/instance_pipe.py",
-        "chat2api/share_entry.py",
+        "chat2api/share_auth.py",
         "chat2api/chat2api.py",
         "chat2api/nonstream_aggregate.py",
         "chat2api/share_dispatch.py"
@@ -91,8 +91,8 @@
       "files": [
         "chat2api/chat2api.py",
         "chat2api/nonstream_aggregate.py",
+        "chat2api/share_auth.py",
         "chat2api/share_dispatch.py",
-        "chat2api/share_entry.py",
         "console/__init__.py",
         "console/adapters.py",
         "console/display_proxy.py",
@@ -141,7 +141,7 @@
       ],
       "roots": [
         "usagesrv.py",
-        "chat2api/share_entry.py",
+        "chat2api/share_auth.py",
         "chat2api/chat2api.py",
         "share/broker_ops.py",
         "share/backend_supervision.py",
@@ -567,14 +567,14 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/make-manifest.py",
-      "sha256": "06193e2fe8370d1d21354abd899bb642d2f7b6831042eca6fe8ad7c2c65ed4c4",
-      "size": 20226
+      "sha256": "6573e809bc04c6beb27ecf5eb6af377c6ff68f8f72b55df218b9213b24b9e05f",
+      "size": 20115
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/package-release.sh",
-      "sha256": "e751ff1ffd4037a071f11140bb4294908df07f8a0aa95ce8946f9d982db74f79",
-      "size": 10470
+      "sha256": "4077b91caf1f4c1efe499f5b825081e2f4d5117f36d0361bd8e9cf85b9c21933",
+      "size": 10468
     },
     {
       "kind": "deployment",
@@ -644,8 +644,8 @@
         "cloud_runtime"
       ],
       "path": "chat2api/chat2api.py",
-      "sha256": "3ef5c91721d4a79ebab9f87c65cb83a285802c4ab1f81987d0a8bc16d0f4ac45",
-      "size": 501816
+      "sha256": "2d1eecb7505ef80a1faac787df995b354a55f5ea237d53364331076d6d9126d7",
+      "size": 501844
     },
     {
       "closures": [
@@ -661,18 +661,18 @@
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "chat2api/share_dispatch.py",
-      "sha256": "3a3857d15dda042c8bc2e7413bb9c123764dbfbb29560119becd19f88893a8e2",
-      "size": 24328
+      "path": "chat2api/share_auth.py",
+      "sha256": "efb1b41e7225b88a815334d1e50b0a60183a62fe28729048212a8cba8a0999da",
+      "size": 63619
     },
     {
       "closures": [
         "static_superset",
         "cloud_runtime"
       ],
-      "path": "chat2api/share_entry.py",
-      "sha256": "0686af3cd6396ed03c0638b663cd7d7641d8e18d9c6e4d132fb7fbca3a9ee11b",
-      "size": 206973
+      "path": "chat2api/share_dispatch.py",
+      "sha256": "3a3857d15dda042c8bc2e7413bb9c123764dbfbb29560119becd19f88893a8e2",
+      "size": 24328
     },
     {
       "closures": [
@@ -714,8 +714,8 @@
         "cloud_runtime"
       ],
       "path": "console/log_reader.py",
-      "sha256": "76efb8d1adad2ccb10e0ebcacdc7cc88c0d884574b0a0ea939b8e726c9cfe3d2",
-      "size": 61743
+      "sha256": "5cab34307bd400c11a721dbddd7594d7dcc8072c2f97c5438f744077e2335845",
+      "size": 61832
     },
     {
       "closures": [
@@ -784,8 +784,8 @@
         "cloud_runtime"
       ],
       "path": "console/share_production.py",
-      "sha256": "15bc0cddc99be7e50f4c3195795f9581b316919e380076f92355d7e034ec1ce4",
-      "size": 197994
+      "sha256": "494bf7ed96ba8d48500e3b42e61f9661cfc663d11a3cc2b26703f5cca398aa7c",
+      "size": 198395
     },
     {
       "closures": [
@@ -909,8 +909,8 @@
         "cloud_runtime"
       ],
       "path": "share/broker_ops.py",
-      "sha256": "ba6f532d6bbad1f68874a2cc248c12c640a3016b0fc8e79e313bba3df7468cf0",
-      "size": 130054
+      "sha256": "86b5405e1fa0814448ab900eec63a08fe64c5bcc82585b4bb3195e7792127fe2",
+      "size": 129895
     },
     {
       "closures": [
@@ -1058,7 +1058,7 @@
       "size": 46032
     }
   ],
-  "generated_at": "2026-11-12T20:42:18.209950+00:00",
+  "generated_at": "2026-11-13T00:17:02.435296+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",

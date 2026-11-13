@@ -6,15 +6,15 @@
 * 服务以脚本方式运行：``cwd=chat2api/``，``sys.path[0]=chat2api/``，
   仓库根 ``ai-gateway/`` 不在 ``sys.path``。此时
   ``from share_secret_protection import ...`` 必然 ModuleNotFoundError，
-  而失败会被 fail-closed 处理器吞掉，控制令牌与归属密钥都被静默拒绝。
-* ``_load_share_secret_protection()`` 先复用 ``sys.modules``，否则按路径
-  加载父目录的 ``share/secret_protection.py``；不修改 ``sys.path``。
-* 正控：已有控制令牌与已有归属密钥都能读到。
-* 负控：缺失或权限不符的密钥仍拒绝（令牌读取失败返回 None，归属密钥
-  缺失、过短或 POSIX 权限过宽返回 None），绝不退化成新建或猜测。
+  而失败会被 fail-closed 处理器吞掉，控制令牌被静默拒绝。
+* ``chat2api._load_share_secret_protection()`` 先复用 ``sys.modules``，否则
+  按路径加载父目录的 ``share/secret_protection.py``；不修改 ``sys.path``。
+* 正控：已有控制令牌能读到。
+* 负控：缺失或权限不符的令牌仍拒绝（令牌读取失败返回 None），绝不退化成
+  新建或猜测。
 
 子进程用 ``python -c`` 从 ``chat2api/`` 启动，并移除 ``PYTHONPATH``；子进程
-先断言普通 import 不可用，再加载两个产品模块。父进程只准备临时密钥文件，
+先断言普通 import 不可用，再加载产品模块。父进程只准备临时令牌文件，
 不启动服务、不写生产账本。所有文件路径都先校验落在显式给出的根目录内。
 """
 
@@ -34,11 +34,9 @@ TEST_DIR = Path(__file__).resolve().parent
 GATEWAY_DIR = TEST_DIR.parent
 CHAT2API_DIR = GATEWAY_DIR / "chat2api"
 CHAT2API_PATH = CHAT2API_DIR / "chat2api.py"
-SHARE_GATEWAY_PATH = CHAT2API_DIR / "share_entry.py"
-SECRET_PATH = GATEWAY_DIR / "share/secret_protection.py"
+SECRET_PATH = GATEWAY_DIR / "share" / "secret_protection.py"
 
 TOKEN = "existing-control-token-value"
-ATTRIBUTION_KEY = "a" * 48
 
 
 def _within(root, path):
@@ -106,11 +104,9 @@ def load(name, path, root):
 
 
 def main():
-    (gateway_dir, temp_root, chat2api_path, share_path, token_path,
-     key_path, missing_key_path, directory_path, loose_token_path,
-     loose_key_path) = sys.argv[1:11]
-    for path in (token_path, key_path, missing_key_path, directory_path,
-                 loose_token_path, loose_key_path):
+    (gateway_dir, temp_root, chat2api_path, token_path,
+     directory_path, loose_token_path) = sys.argv[1:7]
+    for path in (token_path, directory_path, loose_token_path):
         if not within(temp_root, path):
             raise SystemExit("fixture path outside the temp root")
     report = {
@@ -127,16 +123,12 @@ def main():
     else:
         report["plain_import"] = "available"
     chat2api = load("chat2api_secret_loading", chat2api_path, gateway_dir)
-    share = load("share_entry_secret_loading", share_path, gateway_dir)
     report["token"] = chat2api.ensure_control_token(token_path)
-    report["key"] = share.load_attribution_key(key_path)
-    report["missing_key"] = share.load_attribution_key(missing_key_path)
     report["directory_token"] = chat2api.ensure_control_token(directory_path)
     report["loader_file"] = (
         chat2api._load_share_secret_protection().__file__)
     if os.name == "posix":
         report["loose_token"] = chat2api.ensure_control_token(loose_token_path)
-        report["loose_key"] = share.load_attribution_key(loose_key_path)
     print(json.dumps(report))
 
 
@@ -145,36 +137,28 @@ main()
 
 
 class ScriptModeSecretLoadingTests(unittest.TestCase):
-    """以真实脚本方式启动子进程，验证两条密钥读取都走路径加载。"""
+    """以真实脚本方式启动子进程，验证控制令牌读取走路径加载。"""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
         self.token_path = self.dir / "control-token"
-        self.key_path = self.dir / "share-attribution.key"
-        self.missing_key_path = self.dir / "missing.key"
         self.directory_path = self.dir / "token-directory"
         self.loose_token_path = self.dir / "loose-token"
-        self.loose_key_path = self.dir / "loose-attribution.key"
         _write_private(self.dir, self.token_path, TOKEN)
-        _write_private(self.dir, self.key_path, ATTRIBUTION_KEY)
         self.directory_path.mkdir()
         if os.name == "posix":
             _write_private(self.dir, self.loose_token_path, "loose-token")
-            _write_private(self.dir, self.loose_key_path, "b" * 48)
-            for path in (self.loose_token_path, self.loose_key_path):
-                os.chmod(path, 0o644)
+            os.chmod(self.loose_token_path, 0o644)
 
     def _run_child(self):
         env = dict(os.environ)
         env.pop("PYTHONPATH", None)
         proc = subprocess.run(
             [sys.executable, "-c", _CHILD_SCRIPT, str(GATEWAY_DIR),
-             str(self.dir), str(CHAT2API_PATH), str(SHARE_GATEWAY_PATH),
-             str(self.token_path), str(self.key_path),
-             str(self.missing_key_path), str(self.directory_path),
-             str(self.loose_token_path), str(self.loose_key_path)],
+             str(self.dir), str(CHAT2API_PATH), str(self.token_path),
+             str(self.directory_path), str(self.loose_token_path)],
             cwd=str(CHAT2API_DIR), env=env, capture_output=True,
             text=True, encoding="utf-8", timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stderr[-4000:])
@@ -186,21 +170,18 @@ class ScriptModeSecretLoadingTests(unittest.TestCase):
         self.assertFalse(report["parent_on_sys_path"])
         self.assertEqual(report["plain_import"], "unavailable")
 
-    def test_script_mode_reads_existing_control_token_and_attribution_key(self):
+    def test_script_mode_reads_existing_control_token(self):
         report = self._run_child()
         self.assertEqual(report["token"], TOKEN)
-        self.assertEqual(report["key"], ATTRIBUTION_KEY)
-        # 两条读取共用同一个按路径加载的模块（父目录文件）。
+        # 控制令牌读取走按路径加载的模块（父目录文件）。
         self.assertEqual(Path(report["loader_file"]).resolve(),
                          SECRET_PATH.resolve())
 
     def test_script_mode_still_refuses_missing_or_loose_secrets(self):
         report = self._run_child()
-        self.assertIsNone(report["missing_key"])
         self.assertIsNone(report["directory_token"])
         if os.name == "posix":
             self.assertIsNone(report["loose_token"])
-            self.assertIsNone(report["loose_key"])
 
 
 class ModuleReuseTests(unittest.TestCase):
@@ -208,8 +189,6 @@ class ModuleReuseTests(unittest.TestCase):
 
     def test_loader_reuses_an_already_imported_module(self):
         chat2api = _load("chat2api_secret_reuse", CHAT2API_PATH, GATEWAY_DIR)
-        share = _load("share_entry_secret_reuse", SHARE_GATEWAY_PATH,
-                      GATEWAY_DIR)
         fake = SimpleNamespace(
             read_private_secret_path=lambda *args, **kwargs: b"secret",
             write_private_secret_path=lambda *args, **kwargs: None,
@@ -217,7 +196,6 @@ class ModuleReuseTests(unittest.TestCase):
         with mock.patch.dict(sys.modules,
                              {"share.secret_protection": fake}):
             self.assertIs(chat2api._load_share_secret_protection(), fake)
-            self.assertIs(share._load_share_secret_protection(), fake)
 
 
 if __name__ == "__main__":
