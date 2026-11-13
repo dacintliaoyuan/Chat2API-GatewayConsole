@@ -4,7 +4,7 @@
 
 ## 单进程边界
 
-- 云端只有 `um-share-broker.service` 拉起 `chat2api/chat2api.py`（8100）；`um-share-console.service` 只跑 18096 控制台，不再拉 8110。
+- 云端只有 `um-share-broker.service` 拉起 `chat2api/chat2api.py`（8100）；`um-share-console.service` 只跑 18096 控制台。
 - 8100 进程内完成 API Key 鉴权、每 Key 并发准入、模型目录、chat/messages/responses 翻译、UM 会话与账本。
 - 8100 只监听 loopback；Cloudflare Tunnel 只反代分享白名单到 8100。
 - `.edge-profile` 与 `token.json` 位于 `/var/lib/um-share-console/share-backend`，由 `um-share` 拥有；合并进程与 18096 控制台以同一 `um-share` 身份读写，不再使用 `dacint`。

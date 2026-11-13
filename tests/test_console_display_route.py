@@ -329,11 +329,10 @@ class DisplayStateRouteTest(unittest.TestCase):
         finally:
             connection.close()
 
-    def _state(self, auth, *, display=None):
+    def _state(self, *, display=None):
         proxy = _FakeOperatorDisplay()
         with mock.patch.object(usagesrv, "DISPLAY_PROXY", proxy), \
-                mock.patch.object(console_share_actions,
-                                  "backend_auth_read", return_value=auth), \
+\
                 mock.patch.object(
                     usagesrv.Handler, "_console_display_availability",
                     return_value=display or {"available": True,
@@ -344,50 +343,10 @@ class DisplayStateRouteTest(unittest.TestCase):
         self.assertEqual(status, 200)
         return json.loads(body)
 
-    def test_display_state_valid_only_from_the_current_read(self):
-        payload = self._state({
-            "state": "valid", "label": "认证有效", "error": None,
-            "recovery": None, "observed_at": 1790000000,
-            "login_window_deadline_epoch": 1790001800})
-        self.assertEqual(payload["state"], "valid")
-        self.assertEqual(payload["label"], "登录有效")
-        self.assertEqual(payload["observed_at"], 1790000000)
-        self.assertEqual(payload["login_window_deadline_epoch"], 1790001800)
-        self.assertTrue(payload["available"])
-        self.assertTrue(payload["display"]["available"])
-        self.assertEqual(payload["operator"], {
-            "owned_by_me": False, "owner_present": True,
-            "generation": 2, "stale": False})
-
-    def test_display_state_distinguishes_login_phases(self):
-        cases = (
-            ({"state": "logging_in", "error": "umpass_mfa_required"},
-             "waiting_mfa"),
-            ({"state": "logging_in", "error": None}, "logging_in"),
-            ({"state": "needs_login", "error": "duo_prompt_waiting"},
-             "waiting_mfa"),
-            ({"state": "invalid"}, "failed"),
-            ({"state": "failed"}, "failed"),
-            ({"state": "failed", "error": "timeout"}, "timed_out"),
-            ({"state": "failed",
-              "error": "manual_takeover:timeout"}, "timed_out"),
-            ({"state": "needs_login",
-              "error": "manual_takeover:umpass_mfa_required"},
-             "waiting_mfa"),
-            ({"state": "timed_out"}, "timed_out"),
-            ({"state": "cancelled"}, "cancelled"),
-            ({"state": "unknown"}, "unknown"),
-        )
-        for auth, expected in cases:
-            with self.subTest(auth=auth):
-                payload = self._state(auth)
-                self.assertEqual(payload["state"], expected)
-
     def test_display_state_not_started_and_disconnected_are_separate(self):
-        payload = self._state({"state": None})
+        payload = self._state()
         self.assertEqual(payload["state"], "not_started")
         payload = self._state(
-            {"state": None},
             display={"available": False, "reason": "display_disabled"})
         self.assertEqual(payload["state"], "display_disconnected")
         self.assertEqual(payload["display"], {
@@ -395,9 +354,6 @@ class DisplayStateRouteTest(unittest.TestCase):
 
     def test_display_state_is_a_read_without_a_share_manager(self):
         with mock.patch.object(usagesrv, "DISPLAY_PROXY", None), \
-                mock.patch.object(console_share_actions,
-                                  "backend_auth_read",
-                                  return_value={"state": None}), \
                 mock.patch.object(usagesrv, "get_share_manager",
                                   side_effect=AssertionError(
                                       "a read must not assemble the manager")):
@@ -473,29 +429,6 @@ class DisplayStateRouteTest(unittest.TestCase):
             self.assertEqual(status, 400)
         self.assertEqual(proxy.calls, [])
 
-    def test_backend_login_cancel_calls_the_action_and_reports_it(self):
-        calls = []
-        with mock.patch.object(
-                console_share_actions, "backend_login_cancel",
-                side_effect=lambda target, params, ctx=None: (
-                    calls.append((target, params)) or {
-                        "cancelled": True, "state": "cancelled",
-                        "detail": None})):
-            status, _, body = self._request(
-                "/api/console/share-management/backend-login-cancel",
-                {"X-Requested-With": "XMLHttpRequest",
-                 "Content-Type": "application/json"},
-                method="POST", body=json.dumps({}))
-        self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body), {
-            "cancelled": True, "state": "cancelled", "detail": None})
-        self.assertEqual(calls, [("", {})])
-        with mock.patch.object(usagesrv, "DISPLAY_PROXY", None):
-            status, _, _ = self._request(
-                "/api/console/share-management/backend-login-cancel",
-                {"Content-Type": "application/json"},
-                method="POST", body=json.dumps({}))
-        self.assertEqual(status, 403)
 
 
 if __name__ == "__main__":

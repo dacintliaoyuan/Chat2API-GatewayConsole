@@ -382,7 +382,7 @@ def _chat2api_key_state(payload, entry, cmdline_reader, env):
     if declared_port is not None and declared_port != payload["port"]:
         payload["reason"] = (
             "运行实例无法确认：命令行 --port %s 与快照端口 %s 不一致"
-            "（8110 分享实例与私有实例共用同一脚本，不能混为一谈）"
+            "（8100 分享入口与私有实例共用同一脚本，不能混为一谈）"
             % (declared_port, payload["port"]))
         return
     loopback = _is_loopback(host)

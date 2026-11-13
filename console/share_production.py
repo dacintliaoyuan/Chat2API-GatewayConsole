@@ -14,19 +14,16 @@ Each adapter mirrors a REAL product surface, honestly:
   bool|None contract (stopped -> True, running -> False, no record -> None).
 * ``production_seams()`` - the seam dict for console_share_actions (key-by-key
   match with the module's injection seams): the broker gate, the desired-stop
-  reader, the dedicated backend, the key preconditions, the Rev9 maintenance /
-  reauth seams and the supervision read face. The retired Windows TS/Funnel
-  seams are NOT delivered any more (#33).
+  reader, the key preconditions and the Rev9 maintenance / gateway-restart
+  seams. The retired Windows TS/Funnel seams (#33) and the dedicated
+  backend seams (#34) are NOT delivered any more.
 * ``share_attribution_key_path()`` / ``share_attribution_status()`` - the ONE
-  shared attribution key file BOTH ends must point at (C2 verified
-  attribution). The path is a deployment fact, not a second state store: 8100
-  reads the file once at startup, 8110 re-stats it per request; the
-  dedicated-backend child env and ``_paths()["attribution_key"]`` carry the
-  SAME resolved path. The status helper reports THREE DIFFERENT facts under
-  three different names: ``file_ready`` (this process, now), ``instance_loaded``
-  (an INFERENCE from the process start time vs the file mtime, "unknown" when
-  the process cannot be found) and ``request_attribution`` (the runtime fact
-  this read surface does NOT observe: a pointer to the 8110 ledger).
+  shared attribution key file the merged 8100 process reads at startup (C2
+  verified attribution). The path is a deployment fact, not a second state
+  store. The status helper reports TWO DIFFERENT facts under two different
+  names: ``file_ready`` (this process, now) and ``instance_loaded`` (an
+  INFERENCE from the process start time vs the file mtime, "unknown" when
+  the process cannot be found).
 
 Privacy: no credential content passes through this module - the broker
 control secret stays inside the share-management loader, and the file surfaces
@@ -40,22 +37,16 @@ running-instance probe is read-only: the port table and one process start time
 - never any file content, and never a write/signal/restart.
 """
 
-import csv
 import inspect
 import json
 import math
 import os
-import re
 import subprocess
-import sys
 import time
-import urllib.request
-from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
 from console.operations import OperationError
-from share.broker_ops import linux_entry_script
 from share.broker_protocol import RESULT_CODES
 from share.management import BrokerError
 
@@ -73,42 +64,12 @@ _CODE_LAYER_FAILED = "share_layer_failed"
 _CODE_STATUS_UNKNOWN = "share_status_unknown"
 
 
-def _default_bytes_runner(args, timeout):
-    """Controlled argument-array runner, no shell, BYTES stdout (same shape as
-    _ProductionBackendOps._pid_alive :1071-1073 / _port_listening :1120-1122).
-
-    Localized Windows output (netstat, PowerShell) is NOT valid UTF-8 on this
-    machine: a utf-8 text decode raises UnicodeDecodeError in the reader thread
-    and leaves ``stdout`` EMPTY (calibrated 2026-09-26), which would read as
-    "the query succeeded and nobody listens" — a fabricated fact. Bytes plus
-    ``errors="replace"`` keeps an unparsable row unparsable instead."""
-    return subprocess.run(args, shell=False, capture_output=True,
-                          timeout=timeout)
 
 
-def _proc_text(proc):
-    """stdout as text: bytes are decoded with errors="replace" (never a
-    fabricated empty reading); an injected text runner is used as-is."""
-    text = getattr(proc, "stdout", "") or ""
-    if isinstance(text, bytes):
-        return text.decode("utf-8", errors="replace")
-    return text
 
 
-def _merged_text(proc):
-    """Mirror the watchdog query shape: stdout and stderr merged (the
-    watchdog redirects 2>&1, :239), whitespace collapsed and trimmed
-    (:242 ``($svc -join ' ').Trim()``)."""
-    text = (getattr(proc, "stdout", "") or "") + " " \
-        + (getattr(proc, "stderr", "") or "")
-    return " ".join(text.split())
 
 
-def _shorten(text):
-    text = text or ""
-    if len(text) <= DETAIL_MAX_CHARS:
-        return text
-    return text[:DETAIL_MAX_CHARS] + "..."
 
 
 def production_desired_stop_record(*, status_path=DEFAULT_BROKER_STATUS_PATH):
@@ -158,23 +119,6 @@ def production_desired_stop_reader(*, status_path=DEFAULT_BROKER_STATUS_PATH):
     return record["state"] == "stopped"
 
 
-def configure_supervision_paths(*, watch_dir=None, lock_dir=None):
-    """Explicitly wire the share supervision state/lock roots (E19-1-03).
-
-    The production defaults (``share_backend_supervision.DEFAULT_WATCH_DIR``
-    under LOCALAPPDATA and the in-package ``data/console-locks``) are correct
-    for the local Windows deployment but wrong for the cloud root, which owns
-    its own state tree. This forwards to
-    ``share_backend_supervision.configure_paths`` (the ONE implementation) so
-    the read/write faces used here — ``production_supervision_state`` and the
-    ``_production_intent_write`` seam — resolve against the configured dirs.
-
-    ``None`` keeps the production default for that root. The import is
-    deferred for the same reason as the other supervision seams: the console
-    action layer must not import the supervision module at assembly time.
-    """
-    from share.backend_supervision import configure_paths
-    configure_paths(watch_dir=watch_dir, lock_dir=lock_dir)
 
 
 def configure_broker_loader(loader):
@@ -266,7 +210,7 @@ class _ProductionBrokerOps:
             code = "unconfirmed"
         raise OperationError(
             "share_broker_unavailable",
-            "受限后台响应未确认（code=%s）；尚未启动或登录 8110。"
+            "受限后台响应未确认（code=%s）；尚未启动或登录 8100。"
             "请先确认 um-share-broker 服务与 broker 控制通道可用，"
             "再重新读取分层状态；任务及账号状态未知，"
             "不据此判为已停止或失效" % code)
@@ -411,92 +355,33 @@ def production_broker_ops(broker=None):
     return _ProductionBrokerOps(broker)
 
 
-# ---------------------------------------------------------------------------
-# Dedicated share backend (Revision 6 R6-A1 / R8-A7)
-# ---------------------------------------------------------------------------
-# The dedicated backend is a SECOND chat2api-class instance with its own
-# port / token / profile / control secret / log / ledger — the share gateway
-# forwards THERE, never to the production chat2api process (whose 64 reader
-# slots and listening socket must stay untouched). Identity discipline: the
-# managed PID is re-verified against its exact command line (chat2api.py +
-# --port <port>) before ANY stop action, so a console stop can never kill
-# the production instance by pattern.
-DEFAULT_SHARE_BACKEND_PORT = 8110
-DEFAULT_UM_BASE_URL = "https://chat.genai.um.edu.mo"
-
-
-def _backend_dir(config=None):
-    if config is not None:
-        return config.backend_dir
-    override = os.environ.get("CONSOLE_SHARE_BACKEND_DIR")
-    if override:
-        if not os.path.isabs(override):
-            raise ValueError("CONSOLE_SHARE_BACKEND_DIR must be absolute")
-        return override
-    local = os.environ.get("LOCALAPPDATA")
-    if not local:
-        raise ValueError(
-            "CONSOLE_SHARE_BACKEND_DIR unresolvable: no LOCALAPPDATA "
-            "(无回退；显式配置或设置环境变量)")
-    return os.path.join(local, "SelfUseAI", "ai-gateway", "share-backend")
-
-
-def _backend_port(config=None):
-    if config is not None:
-        return config.backend_port
-    raw = os.environ.get("CONSOLE_SHARE_BACKEND_PORT")
-    if not raw:
-        return DEFAULT_SHARE_BACKEND_PORT
-    try:
-        port = int(raw)
-    except ValueError:
-        raise ValueError("CONSOLE_SHARE_BACKEND_PORT must be an integer")
-    if not 1 <= port <= 65535:
-        raise ValueError("CONSOLE_SHARE_BACKEND_PORT out of range")
-    return port
-
-
-def _backend_base_url(config=None):
-    if config is not None:
-        return config.backend_base_url
-    return os.environ.get("CONSOLE_SHARE_BACKEND_BASE_URL") or \
-        DEFAULT_UM_BASE_URL
+def _shorten(text):
+    text = text or ""
+    if len(text) <= DETAIL_MAX_CHARS:
+        return text
+    return text[:DETAIL_MAX_CHARS] + "..."
 
 
 # ---- shared attribution key (C2 verified attribution) ----------------------
-# BOTH ends must point at ONE key file, and this module is the single place
-# the 8110 side resolves that path:
-#   * 8100 (share gateway) reads the file ONCE at startup through the
-#     SHARE_ATTRIBUTION_KEY_FILE env var (chat2api.py :115), which the
-#     deployed run wrapper sets (the retired Windows deploy script Start stage,
-#     $liveEnv);
-#   * 8110 (dedicated backend) re-stats it PER REQUEST through
-#     CHAT2API_SHARE_ATTRIBUTION_KEY_FILE (chat2api.py :1525-1528),
-#     injected by _child_env below.
-# The file lives in the DEPLOYED RunRoot run/ dir: ai-gateway/data carries an
-# explicit DENY ACE for um_share (a key there is unreadable by 8100 and silently
-# disables attribution), and run/live is removed and recreated by every deploy
-# (the retired Windows deploy script :824-826). A missing, unreadable or
-# too-short file is
-# NOT an error: it is the explicit "no attribution" state (a request 8110
-# cannot verify is recorded unattributed), which is why
-# share_attribution_status() reports it loudly instead of letting it hide.
-# Because 8100 reads the file only ONCE at startup, a create/rotate after the
-# gateway started is NOT visible in a running instance until it is restarted:
-# that is a DIFFERENT fact from file readiness and is reported separately
-# (``instance_loaded``, inferred from the gateway process start time vs this
-# file's mtime — see share_entry_instance_probe). Generation/rotation
-# procedure: SHARING.md.
+# The merged 8100 process reads ONE key file at startup through the
+# SHARE_ATTRIBUTION_KEY_FILE env var (chat2api.py). The file lives in the
+# DEPLOYED RunRoot run/ dir: ai-gateway/data carries an explicit DENY ACE
+# for um_share (a key there is unreadable by 8100 and silently disables
+# attribution), and run/live is removed and recreated by every deploy. A
+# missing, unreadable or too-short file is NOT an error: it is the explicit
+# "no attribution" state (a request the gateway cannot verify is recorded
+# unattributed), which is why share_attribution_status() reports it loudly
+# instead of letting it hide. Because 8100 reads the file only ONCE at startup,
+# a create/rotate after the gateway started is NOT visible in a running instance
+# until it is restarted: that is a DIFFERENT fact from file readiness and is
+# reported separately (``instance_loaded``, inferred from the gateway process
+# start time vs this file's mtime — see share_entry_instance_probe).
+# Generation/rotation procedure: SHARING.md.
 DEFAULT_SHARE_RUN_ROOT = r"C:\ProgramData\UMShareRun"  # deploy -RunRoot default
 SHARE_RUN_ROOT_ENV = "CONSOLE_SHARE_RUN_ROOT"
 SHARE_ATTRIBUTION_KEY_NAME = "share-attribution.key"
 SHARE_ATTRIBUTION_KEY_FILE_ENV = "CONSOLE_SHARE_ATTRIBUTION_KEY_FILE"
 SHARE_ATTRIBUTION_KEY_MIN_BYTES = 32   # = share_entry/chat2api constant
-BACKEND_ATTRIBUTION_KEY_ENV = "CHAT2API_SHARE_ATTRIBUTION_KEY_FILE"
-BACKEND_SHARE_SECRET_KEY_ENV = "CHAT2API_SHARE_SECRET_KEY_FILE"
-# standards-config-05: the two identity paths the 8110 child also owns.
-BACKEND_REVOKE_STATE_ENV = "CHAT2API_SHARE_REVOKE_STATE_FILE"
-BACKEND_PRICE_TABLE_ENV = "CHAT2API_PRICE_TABLE_FILE"
 
 
 def _share_run_root():
@@ -548,9 +433,9 @@ def _attribution_file_fact(target):
     ``key_chars`` is the stripped length ONLY — never any content. The secret
     never leaves this function: it is not returned, printed, logged or compared.
     ``file_ready`` is a statement about THIS caller identity at THIS moment; it
-    does NOT mean the running 8100 instance loaded this content, that the
-    um_share identity can read the file, or that 8110 loaded it (each of those
-    is a different fact — see share_attribution_status).
+    does NOT mean the running 8100 instance loaded this content, or that the
+    um_share identity can read the file (each of those is a different fact —
+    see share_attribution_status).
     """
     try:
         info = os.stat(target)
@@ -598,9 +483,30 @@ _CIM_IMAGE_NAME_SCRIPT = (
     "(Get-CimInstance Win32_Process -Filter 'ProcessId=%d') | "
     "ForEach-Object { $_.Name }")
 # The runtime fact that decides "request attribution verified" — NOT observed
-# by this read surface (8110 re-stats the key PER REQUEST and writes it into
-# each ledger row; chat2api.py :1670 returns the reason "verified").
+# by this read surface (the merged 8100 process writes it into each ledger row;
+# chat2api.py returns the reason "verified").
 _LEDGER_ATTRIBUTION_FACT = "backend_ledger_row_attribution_verified"
+
+
+def _default_bytes_runner(args, timeout):
+    """Controlled argument-array runner, no shell, BYTES stdout.
+
+    Localized Windows output (netstat, PowerShell) is NOT valid UTF-8 on this
+    machine: a utf-8 text decode raises UnicodeDecodeError in the reader
+    thread and leaves ``stdout`` EMPTY, which would read as "the query
+    succeeded and nobody listens" — a fabricated fact. Bytes plus
+    ``errors="replace"`` keeps an unparsable row unparsable instead."""
+    return subprocess.run(args, shell=False, capture_output=True,
+                          timeout=timeout)
+
+
+def _proc_text(proc):
+    """stdout as text: bytes are decoded with errors="replace" (never a
+    fabricated empty reading); an injected text runner is used as-is."""
+    text = getattr(proc, "stdout", "") or ""
+    if isinstance(text, bytes):
+        return text.decode("utf-8", errors="replace")
+    return text
 
 
 def _listening_pids(port, runner=None):
@@ -773,9 +679,9 @@ def share_attribution_status(path=None, gateway_probe=None, ledger_path=None):
        content is long enough (the four states of
        :func:`_attribution_file_fact`). This is what the old ``wired``
        boolean proved, and nothing more: it does NOT mean the running 8100
-       instance loaded this content (it reads the file once at startup), that
+       instance loaded this content (it reads the file once at startup), or that
        the um_share identity can read the file (this process runs as the
-       console user), or that 8110 loaded it (8110 re-stats it per request).
+       console user).
     2. INSTANCE LOADED — ``instance_loaded`` sub-dict: whether the RUNNING
        8100 instance is INFERRED to have loaded the CURRENT content, from
        its start time vs the file mtime (``value`` "yes" / "no" /
@@ -786,7 +692,7 @@ def share_attribution_status(path=None, gateway_probe=None, ledger_path=None):
     3. REQUEST ATTRIBUTION — ``request_attribution`` sub-dict: NOT observed
        here at all (``verdict`` = "not_observed_here"); it only names the
        runtime fact that decides it, a row with ``attribution="verified"`` in
-       the 8110 ledger (``ledger_file``).
+       the 8100 ledger (``ledger_file``).
 
     ``key_chars`` is the stripped length ONLY — never any content. The secret
     never leaves this function: it is not returned, printed, logged or compared.
@@ -823,1093 +729,8 @@ def share_attribution_status(path=None, gateway_probe=None, ledger_path=None):
     }
 
 
-# standards-config-10: the same production facts the cloud root refuses, for
-# the public ``BackendConfig`` constructor.
-_BACKEND_FORBIDDEN_PORTS = frozenset({8000, 8001, 8100, 8110, 18096, 5901})
-_BACKEND_LOOPBACK_HOSTS = frozenset(("127.0.0.1", "::1", "localhost"))
 
-_BACKEND_CONFIG_PATH_FIELDS = (
-    "share_run_root", "share_secret_key", "attribution_key", "token",
-    "service_log", "usage_log", "control_token", "reauth_slot", "pid",
-    "backend_dir", "profile", "backend_gateway_dir")
-# Optional identity paths: validated only when the caller supplies them.
-_BACKEND_CONFIG_OPTIONAL_PATH_FIELDS = (
-    "revoke_state_file", "price_table_file")
 
-
-@dataclass(frozen=True)
-class BackendConfig:
-    """Explicit dedicated-backend configuration (E19-1-06).
-
-    The cloud composition root passes this object to
-    ``production_backend_ops(config=...)`` instead of relying on process-wide
-    environment variables. Every field is REQUIRED: a missing value is a caller
-    error, never a silent fallback to the historical env/default path. Paths must
-    be absolute, ``backend_port`` must be a real port and ``backend_base_url``
-    must be an HTTP(S) URL.
-
-    Field wiring:
-    * ``share_run_root`` / ``share_secret_key`` / ``attribution_key`` are the
-      shared deployment facts: ``_paths()`` carries them and ``_child_env()``
-      redirects ``CHAT2API_SHARE_SECRET_KEY_FILE``,
-      ``CHAT2API_SHARE_ATTRIBUTION_KEY_FILE`` and
-      ``CONSOLE_SHARE_RUN_ROOT`` to them;
-    * ``token`` / ``service_log`` / ``usage_log`` / ``control_token`` /
-      ``reauth_slot`` / ``pid`` are the dedicated instance's private state
-      files (``_paths()`` and ``_child_env()``);
-    * ``backend_dir`` is the dedicated state directory;
-    * ``profile`` is the dedicated instance's private browser profile dir
-      (``_paths()``/``_child_cmdline()``), NOT silently re-derived from
-      ``backend_dir``;
-    * ``backend_port`` / ``backend_base_url`` are the child's listener facts;
-    * ``backend_gateway_dir`` is the chat2api source dir the child runs from.
-    """
-
-    share_run_root: str
-    share_secret_key: str
-    attribution_key: str
-    token: str
-    service_log: str
-    usage_log: str
-    control_token: str
-    reauth_slot: str
-    pid: str
-    backend_dir: str
-    profile: str
-    backend_port: int
-    backend_base_url: str
-    backend_gateway_dir: str
-    # standards-config-05: the two identity paths the 8110 child also owns.
-    # ``revoke_state_file`` is the ONE revoke-state file 8100 reads and 8110
-    # writes (``chat2api.py`` reads ``CHAT2API_SHARE_REVOKE_STATE_FILE``);
-    # ``price_table_file`` is the price document the child prices its ledger
-    # with. Both used to be CloudConfig fields with NO consumer: the 8110 child
-    # fell back to the deployment default, so the console and the child read
-    # DIFFERENT files. They are REQUIRED (no silent fallback) and forwarded in
-    # ``_child_env``.
-    # The two identity paths the 8110 child also owns. ``None`` means the
-    # caller built its own path map without them (the existing tests do), so
-    # ``_child_env`` writes no redirect; a caller that supplies them gets the
-    # exact same paths the console reads.
-    revoke_state_file: str | None = None
-    price_table_file: str | None = None
-
-    def __post_init__(self):
-        for name in _BACKEND_CONFIG_PATH_FIELDS:
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value:
-                raise ValueError(
-                    "BackendConfig %s must be a non-empty path" % name)
-            if not os.path.isabs(value):
-                raise ValueError(
-                    "BackendConfig %s must be absolute" % name)
-        for name in _BACKEND_CONFIG_OPTIONAL_PATH_FIELDS:
-            value = getattr(self, name)
-            if value is None:
-                continue
-            if not isinstance(value, str) or not value:
-                raise ValueError(
-                    "BackendConfig %s must be a non-empty path" % name)
-            if not os.path.isabs(value):
-                raise ValueError(
-                    "BackendConfig %s must be absolute" % name)
-        port = self.backend_port
-        if isinstance(port, bool) or not isinstance(port, int):
-            raise ValueError("BackendConfig backend_port must be an integer")
-        if not 1 <= port <= 65535:
-            raise ValueError("BackendConfig backend_port out of range")
-        url = self.backend_base_url
-        if not isinstance(url, str) or not url:
-            raise ValueError(
-                "BackendConfig backend_base_url must be a non-empty URL")
-        if not url.startswith(("http://", "https://")):
-            raise ValueError(
-                "BackendConfig backend_base_url must be http(s)")
-        # standards-config-10: this public constructor is the LAST place a
-        # caller can name the three production facts the cloud root already
-        # refuses. Without them a direct caller could point the dedicated 8110
-        # child at a production port, a non-loopback upstream, or a gateway
-        # directory outside the package.
-        if port in _BACKEND_FORBIDDEN_PORTS:
-            raise ValueError(
-                "BackendConfig backend_port must not be a production port "
-                "(%d is in %s)"
-                % (port, ", ".join(str(p) for p in
-                                   sorted(_BACKEND_FORBIDDEN_PORTS))))
-        from urllib.parse import urlsplit
-        host = (urlsplit(url).hostname or "").lower()
-        if host not in _BACKEND_LOOPBACK_HOSTS:
-            raise ValueError(
-                "BackendConfig backend_base_url must name a loopback host")
-        gateway_dir = self.backend_gateway_dir
-        if os.path.basename(gateway_dir.rstrip("/\\")) != "chat2api":
-            raise ValueError(
-                "BackendConfig backend_gateway_dir must be the in-package "
-                "chat2api source directory")
-        try:
-            resolved = Path(gateway_dir).resolve()
-            package = Path(__file__).resolve().parents[1]
-        except (OSError, ValueError) as exc:
-            raise ValueError(
-                "BackendConfig backend_gateway_dir is not usable: %s" % exc)
-        if resolved != package and package not in resolved.parents:
-            raise ValueError(
-                "BackendConfig backend_gateway_dir must be inside the package")
-
-
-class _ProductionBackendOps:
-    """Start/stop/verify the dedicated share-backend process.
-
-    The child runs the SAME chat2api.py source with isolated state paths
-    (env redirects, R6-A1) — no source copy, no shared state file with the
-    production instance. Every stop re-verifies the exact command line
-    (chat2api.py + --port <port>) before acting, so a bare PID can never
-    match the production instance; stop is graceful first (the backend's
-    own /admin/shutdown with ITS control secret) and falls back to a
-    verified-PID termination only when graceful fails. Returns are plain
-    bools: True only on confirmed facts, False keeps the residual honest.
-
-    Write surface (2026-09-28 review): ``start`` writes the pid file and
-    ``stop``/``verify_closed`` may remove it — those are ACTION paths. The
-    acceptance collectors must not inherit that: ``verify_running`` takes the
-    additive ``forget_stale`` switch (``False`` = never remove) and
-    ``backend_pid_state`` is a pure read-only report with no write on any
-    branch.
-    """
-
-    def __init__(self, gateway_dir=None, port=None, base_url=None,
-                 spawner=None, stopper=None, config=None):
-        self._gateway_dir = gateway_dir   # chat2api source dir
-        self._port = port
-        self._base_url = base_url
-        self._spawner = spawner           # test seam: (cmdline, env) -> proc
-        self._stopper = stopper           # test seam: (pid) -> None|True
-        self._config = config             # explicit BackendConfig or None
-
-    def _paths(self):
-        if self._config is not None:
-            # Explicit cloud configuration: every value comes from the
-            # BackendConfig object — no environment read, no repository
-            # default. The profile is the configured private browser state
-            # (a deployment may place it outside the backend dir).
-            config = self._config
-            d = _backend_dir(config)
-            return {
-                "dir": d,
-                "port": self._port or _backend_port(config),
-                "token": config.token,
-                "profile": config.profile,
-                "log": config.service_log,
-                "ledger": config.usage_log,
-                "control_token": config.control_token,
-                "reauth_slot": config.reauth_slot,
-                "attribution_key": config.attribution_key,
-                "pid": config.pid,
-                "share_run_root": config.share_run_root,
-                "share_secret_key": config.share_secret_key,
-                "revoke_state_file": config.revoke_state_file,
-                "price_table_file": config.price_table_file,
-            }
-        d = _backend_dir()
-        port = self._port or _backend_port()
-        return {
-            "dir": d,
-            "port": port,
-            "token": os.path.join(d, "token.json"),
-            "profile": os.path.join(d, "edge-profile"),
-            "log": os.path.join(d, "share-backend.log"),
-            "ledger": os.path.join(d, "usage-share-backend.jsonl"),
-            "control_token": os.path.join(d, "control-token"),
-            # D15-4: the cross-instance reauthentication slot MUST live in a
-            # persistent WRITABLE path. The release <dir>/data is read-only
-            # under the console unit's ProtectSystem=strict, which made every
-            # session start fail with slot_unavailable. This directory is the
-            # console's own ReadWritePaths state dir (the same one that already
-            # holds token/log/ledger/pid), so both the console and its 8110
-            # child can coordinate the lease there.
-            "reauth_slot": os.path.join(d, "chat2api-reauth.state"),
-            # The ONE key file BOTH ends point at (8100 reads it once at
-            # startup; this instance re-stats it per request). Resolved by the
-            # SAME function the status read surface uses, so the injected path
-            # can never be a second literal.
-            "attribution_key": share_attribution_key_path(),
-            "pid": os.path.join(d, "backend.pid"),
-        }
-
-    def _child_cmdline(self, paths):
-        # --login-timeout 1800 (chat2api.py:9681 default 180): D18-6 fixes
-        # the dedicated instance's human login window at 30 minutes. The
-        # browser is on the private Xvfb display, never public. Production
-        # chat2api (port 8000) is unaffected: this flag only reaches THIS
-        # dedicated child's command line; N3 adds the aggregate switch here.
-        return [sys.executable, "chat2api.py",
-                "--base-url", self._base_url or _backend_base_url(
-                    self._config),
-                "--port", str(paths["port"]), "--profile", paths["profile"],
-                "--login-timeout", str(_BACKEND_LOGIN_TIMEOUT_S),
-                "--nonstream-upstream-aggregate"]
-
-    def _child_env(self, paths):
-        env = dict(os.environ)
-        env["CHAT2API_TOKEN_FILE"] = paths["token"]
-        env["CHAT2API_SERVICE_LOG"] = paths["log"]
-        env["CHAT2API_USAGE_LOG"] = paths["ledger"]
-        env["CHAT2API_CONTROL_TOKEN_FILE"] = paths["control_token"]
-        # standards-config-05: the shared run root is a real child input
-        # (``_share_run_root()`` reads this exact env var). It was carried by
-        # ``_paths()`` but never reached the child, so the 8110 process fell
-        # back to the deployment default while the console used the configured
-        # root. A caller that builds its own path map (the existing tests do)
-        # simply omits the key, and then no redirect is written.
-        if "share_run_root" in paths:
-            env[SHARE_RUN_ROOT_ENV] = paths["share_run_root"]
-        # standards-config-05: the revoke-state and price-table identity paths.
-        # Without them the 8110 child silently fell back to the deployment
-        # default (``/var/lib/um-share/share-revoke.state`` and the
-        # in-package ``data/prices.json``), so the console and the child read
-        # DIFFERENT files even though CloudConfig named one path.
-        if "revoke_state_file" in paths:
-            env[BACKEND_REVOKE_STATE_ENV] = paths["revoke_state_file"]
-        if "price_table_file" in paths:
-            env[BACKEND_PRICE_TABLE_ENV] = paths["price_table_file"]
-        if self._config is not None:
-            # Explicit cloud configuration: the child's shared secrets and
-            # reauthentication slot come from the BackendConfig object. The
-            # slot is ALWAYS redirected here (the explicit config names the
-            # writable path), independent of os.name.
-            env["CHAT2API_REAUTH_SLOT_FILE"] = paths["reauth_slot"]
-            env[BACKEND_SHARE_SECRET_KEY_ENV] = paths["share_secret_key"]
-        # D15-4: on POSIX the release <dir>/data is read-only under the
-        # console unit's ProtectSystem=strict, which made every session start
-        # fail with slot_unavailable. Point the 8110 child at the console's
-        # persistent writable state dir; the child keeps its own rolling
-        # attempt ledger and cross-process mutex unchanged.
-        # On Windows the historical default is already writable AND shared with
-        # the private 8000 chain, so it stays byte-for-byte: a second slot
-        # path here would silently split the cross-instance mutex.
-        elif os.name == "posix":
-            env["CHAT2API_REAUTH_SLOT_FILE"] = paths["reauth_slot"]
-        # Same pattern as the four redirects above, but this value is NOT a
-        # private state file: it is the ONE shared key file 8100 also reads
-        # (chat2api.py :1525-1528 prefers this env var over the repository
-        # default, so the dedicated instance verifies exactly the markers the
-        # share gateway signs).
-        env[BACKEND_ATTRIBUTION_KEY_ENV] = paths["attribution_key"]
-        # The child's startup record names who started it (chat2api.py
-        # launch_source); this instance is only ever started by a console action.
-        env["CHAT2API_LAUNCH_SOURCE"] = "console"
-        # R13: ONLY this dedicated 8110 child gets the aggregate scope. It is
-        # built here rather than copied from the console environment, so an
-        # unrelated parent value cannot widen the selection; the private 8000
-        # chain is not spawned by this class and never receives it.
-        env[BACKEND_AGGREGATE_SCOPE_ENV] = _backend_aggregate_scope_json()
-        return env
-
-    def _spawn(self, cmdline, env, creationflags):
-        """Spawn the detached child; Windows keeps the historical flags.
-
-        The Linux adapter overrides this with its own session so the child
-        survives the console process (there is no DETACHED_PROCESS there).
-        """
-        return subprocess.Popen(
-            cmdline,
-            cwd=self._gateway_dir or ".",
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creationflags, close_fds=True)
-
-    def _force_stop(self, pid):
-        """Force-stop one identity-verified PID; Windows keeps taskkill."""
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                       capture_output=True, timeout=15)
-
-    # Exit records L5/L6 (round 19): the PARENT side of this instance's life.
-    # The child's own log cannot hold these: a taskkill /F never runs the
-    # child's finally, so only the parent can say who stopped which PID and
-    # how. Kept out of _paths() and below _child_env on purpose: both are
-    # line-pinned by tests/test_share_gate_citations.py.
-    _LIFECYCLE_LOG = "backend-lifecycle.log"
-    _LIFECYCLE_MAX_BYTES = 256 * 1024
-    # A9-3 identity evidence (contract §5.1): a NEW file next to the pid
-    # file, written by start() after a successful spawn and read by
-    # restart()/diagnostics. The pid file's own readers stay byte-for-byte
-    # (backend.pid is still THE pid source); this record only adds the
-    # five-item identity facts (profile + creation time) the strict check
-    # needs. The tolerance is the watchdog's own (±2 s, same as
-    # the retired Windows watchdog's own tolerance (±2 s), see Git history).
-    _INSTANCE_FILE = "backend-instance.json"
-    _INSTANCE_CREATION_TOLERANCE_S = 2.0
-
-    def _lifecycle_path(self, paths):
-        return os.path.join(paths["dir"], self._LIFECYCLE_LOG)
-
-    def _instance_path(self, paths):
-        """The dedicated instance's identity record (A9-3, contract §5.1):
-        a NEW file next to backend.pid; the pid file stays the readers'
-        byte-for-byte source.
-
-        The path is NORMALIZED and CONTAINMENT-CHECKED: the record must
-        live directly inside the resolved backend dir (the fixed file name
-        carries no separator, so a traversal can never escape the dir)."""
-        base = os.path.abspath(paths["dir"])
-        path = os.path.abspath(os.path.join(base, self._INSTANCE_FILE))
-        if os.path.dirname(path) != base:
-            raise ValueError("instance record path escapes the backend dir")
-        return path
-
-    def _record(self, paths, message):
-        """Append one parent-side lifecycle line; never fails the action.
-
-        Only PIDs, the port, the route and the result are written - never
-        tokens, keys or request content.
-        """
-        path = self._lifecycle_path(paths)
-        try:
-            if os.path.getsize(path) > self._LIFECYCLE_MAX_BYTES:
-                os.replace(path, path + ".1")
-        except OSError:
-            pass
-        try:
-            with open(path, "a", encoding="utf-8") as f:
-                f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), message))
-        except OSError:
-            pass
-
-    def start(self):
-        paths = self._paths()
-        if self.verify_running() is True:
-            return True  # already running; never owned twice
-        # Attribution visibility (2026-09-26): a missing, unreadable or
-        # too-short key file is NOT a failure — the share keeps serving and
-        # 8110 records unattributed whatever it cannot read — but it must be
-        # visible, otherwise the operator cannot tell "not ready" from "ready
-        # but nothing attributed yet". This warning is about the FILE fact
-        # only: whether the running 8100 instance loaded the current content
-        # is a DIFFERENT fact and is not probed here (the start action must
-        # not depend on it). Never logs the secret itself.
-        file_ready, reason, _chars, _mtime = _attribution_file_fact(
-            paths["attribution_key"])
-        if file_ready is not True:
-            print("[share-backend] 归因密钥文件未就绪（原因=%s，文件=%s）："
-                  "专用后端照常启动，8110 读不到密钥的请求记为未归属；"
-                  "8100 是否已载入本次未探测；"
-                  "生成/轮换见 SHARING.md"
-                  % (reason, paths["attribution_key"]),
-                  flush=True)
-        for d in (paths["dir"], paths["profile"]):
-            try:
-                os.makedirs(d, exist_ok=True)
-            except OSError as exc:
-                raise OperationError(
-                    "share_backend_failed",
-                    "专用后端目录不可创建（%s）：%s" % (d, exc))
-        creationflags = 0
-        if hasattr(subprocess, "DETACHED_PROCESS"):
-            creationflags = (subprocess.DETACHED_PROCESS |
-                             subprocess.CREATE_NEW_PROCESS_GROUP)
-        try:
-            if self._spawner is not None:
-                proc = self._spawner(self._child_cmdline(paths),
-                                     self._child_env(paths))
-            else:
-                proc = self._spawn(self._child_cmdline(paths),
-                                   self._child_env(paths), creationflags)
-        except OSError as exc:
-            raise OperationError(
-                "share_backend_failed",
-                "专用后端进程启动失败：%s" % exc)
-        with open(paths["pid"], "w", encoding="ascii") as f:
-            f.write(str(proc.pid))
-        self._record(paths, "started pid=%d port=%d by=console"
-                     % (proc.pid, paths["port"]))
-        # A9-3 identity evidence (contract §5.1): the NEW instance record
-        # is written atomically next to backend.pid. It never replaces the
-        # pid file (its readers stay byte-for-byte); a failed write only
-        # fails closed (the next restart reads "reduced" and refuses).
-        self._write_instance_record(paths, proc.pid)
-        return True
-
-    def stop(self):
-        paths = self._paths()
-        pid = self._read_pid(paths)
-        if pid is None:
-            return not self._port_listening(paths["port"])
-        if not self._pid_matches(paths, pid):
-            # Registered PID no longer runs the dedicated-backend command
-            # line: refuse to act on it (never kill by bare PID).
-            self._record(paths, "stop skipped pid=%d port=%d reason=pid_not_backend"
-                         % (pid, paths["port"]))
-            self._forget(paths)
-            return not self._port_listening(paths["port"])
-        self._record(paths, "stop requested pid=%d port=%d by=console"
-                     % (pid, paths["port"]))
-        self._graceful_shutdown(paths)
-        deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline:
-            if not self._pid_alive(pid):
-                self._record(paths, "stopped pid=%d port=%d by=graceful"
-                             % (pid, paths["port"]))
-                self._forget(paths)
-                return True
-            time.sleep(0.5)
-        if self._stopper is not None:
-            self._stopper(pid)
-        else:
-            self._force_stop(pid)
-        alive = self._pid_alive(pid)
-        self._record(paths, "force stop pid=%d port=%d by=taskkill result=%s"
-                     % (pid, paths["port"], "alive" if alive else "dead"))
-        if alive:
-            return False
-        self._forget(paths)
-        return True
-
-    def verify_running(self, forget_stale=True):
-        """``True`` only on confirmed evidence, as before.
-
-        ``forget_stale`` is the additive READ-ONLY switch (default ``True`` =
-        the historical behaviour byte-for-byte). With ``forget_stale=False`` a
-        stale pid file — registered PID no longer running the dedicated-backend
-        command line — is LEFT IN PLACE and the verdict is reported as-is: no
-        ``_forget()``, no write of any kind. The read-only acceptance
-        collectors use that form so a "read-only" check can never delete a file.
-        """
-        paths = self._paths()
-        pid = self._read_pid(paths)
-        if pid is None:
-            return False
-        if not self._pid_matches(paths, pid):
-            if forget_stale:
-                self._forget(paths)
-            return False
-        return self._port_listening(paths["port"])
-
-    def backend_pid_state(self, paths=None):
-        """Read-only pid-file REPORT — never writes, never deletes.
-
-        This method has no ``_forget()`` (nor any other write) on ANY branch:
-        a stale pid file is reported stale and left byte-for-byte as found, so
-        the acceptance collectors can describe the backend without changing it.
-
-        The evidence is EXACTLY the evidence ``verify_running`` uses (the CIM
-        identity check plus the port table), so this report can never contradict
-        that verdict. ``state`` is one of:
-
-        * ``"pid_file_absent"`` — no pid file at the resolved path;
-        * ``"pid_file_unreadable"`` — the file exists but its content is not a
-          PID (never folded into "absent");
-        * ``"pid_stale"`` — a PID is registered but it no longer runs the
-          dedicated-backend command line (process gone OR identity mismatch:
-          ``_pid_matches`` cannot tell those apart, and this report does not
-          guess which — it is the case ``verify_running`` answers False for and
-          would have deleted the file);
-        * ``"port_not_listening"`` — the PID matches but nobody LISTENs there;
-        * ``"running"`` — PID matches and the port is listening.
-
-        Additive A9-3 identity fields (contract §5.1): ``identity`` is
-        ``"verified"`` (the instance record is complete AND
-        ``_pid_matches_strict`` passes), ``"reduced"`` (no instance record
-        but the three shared checks pass — a pre-deployment instance) or
-        ``"unknown"`` (everything else, including a contradictory record);
-        ``identity_reason`` names the precise code. The report still has NO
-        write on any branch.
-        """
-        paths = paths or self._paths()
-        pid_path = paths["pid"]
-        present = os.path.isfile(pid_path)
-        pid = self._read_pid(paths)
-        out = {"pid_file": pid_path, "pid_file_present": present, "pid": pid,
-               "pid_matches": None, "port_listening": None, "state": None,
-               "identity": "unknown", "identity_reason": None}
-        if pid is None:
-            out["state"] = ("pid_file_unreadable" if present
-                            else "pid_file_absent")
-            out["identity_reason"] = out["state"]
-            return out
-        matches = self._pid_matches(paths, pid)
-        out["pid_matches"] = matches
-        if not matches:
-            out["state"] = "pid_stale"
-            out["identity_reason"] = "identity_mismatch"
-            return out
-        record = self._instance_record(paths)
-        if record is None:
-            # A pre-deployment instance: the three shared checks pass but
-            # there is no instance record -> "reduced" (no CIM re-read).
-            out["identity"] = "reduced"
-            out["identity_reason"] = "instance_record_absent"
-        else:
-            identity, reason = self._identity_verdict(paths, pid, record)
-            out["identity"] = identity
-            out["identity_reason"] = reason
-        listening = self._port_listening(paths["port"])
-        out["port_listening"] = listening
-        out["state"] = "running" if listening else "port_not_listening"
-        return out
-
-    def verify_closed(self):
-        paths = self._paths()
-        pid = self._read_pid(paths)
-        if pid is None:
-            return not self._port_listening(paths["port"])
-        if self._pid_alive(pid) and self._pid_matches(paths, pid):
-            return False
-        self._forget(paths)
-        return not self._port_listening(paths["port"])
-
-    # -- internals --------------------------------------------------------
-    def _read_pid(self, paths):
-        try:
-            with open(paths["pid"], encoding="ascii") as f:
-                return int(f.read().strip())
-        except (OSError, ValueError):
-            return None
-
-    def _forget(self, paths):
-        try:
-            os.remove(paths["pid"])
-        except OSError:
-            pass
-
-    def _pid_alive(self, pid):
-        # `tasklist /FO CSV` 把**每个字段**都加引号（`"python.exe","54300",…`），
-        # 所以裸 needle `,54300` 永远不命中——原实现因此对活着的 PID 也返回
-        # False（2026-09-28 由执行轮 10 的写面审计旁证发现，影响 stop() 与
-        # verify_closed() 的动作判定）。改为按 CSV 第二列（PID 字段）比对。
-        try:
-            out = subprocess.run(
-                ["tasklist", "/FI", "PID eq %d" % pid, "/FO", "CSV", "/NH"],
-                capture_output=True, timeout=10)
-            text = out.stdout.decode("utf-8", errors="replace")
-            want = str(int(pid))
-            for row in csv.reader(text.splitlines()):
-                if len(row) >= 2 and row[1].strip() == want:
-                    return True
-            return False
-        except (OSError, subprocess.TimeoutExpired, ValueError):
-            return False
-
-    def _pid_process(self, pid):
-        """One CIM query for the process identity (image path + command
-        line + creation epoch). wmic is deprecated/absent on newer Windows
-        (S3-R6A3 R-S3-3: this machine has no wmic), so the evidence comes
-        from PowerShell Get-CimInstance — argument-list invocation, never a
-        shell.
-
-        A9-3 (contract §5.1): the creation time is read in the SAME query,
-        converted to epoch INSIDE PowerShell with the invariant culture (the
-        same .NET-ticks conversion the 8100 probe uses) — the Python side
-        parses one finite number only. An unreadable row or an unavailable
-        creation time reads None — never a guessed identity."""
-        try:
-            out = subprocess.run(
-                ["pwsh", "-NoProfile", "-Command",
-                 "(Get-CimInstance Win32_Process -Filter "
-                 "'ProcessId=%d') | ForEach-Object { "
-                 "$_.ExecutablePath + [char]10 + $_.CommandLine + "
-                 "[char]10 + $(if ($_.CreationDate) { "
-                 "(([double]($_.CreationDate.ToUniversalTime().Ticks "
-                 "- %d) / 10000000.0).ToString("
-                 "[System.Globalization.CultureInfo]::InvariantCulture)) "
-                 "} else { '' }) }" % (pid, _DOTNET_EPOCH_TICKS)],
-                capture_output=True, timeout=15)
-            text = out.stdout.decode("utf-8", errors="replace")
-            lines = [l.strip() for l in text.splitlines()]
-            image = lines[0] if len(lines) >= 1 and lines[0] else None
-            cmdline = lines[1] if len(lines) >= 2 and lines[1] else None
-            creation = None
-            if len(lines) >= 3 and lines[2]:
-                try:
-                    creation = float(lines[2])
-                except ValueError:
-                    creation = None
-            if creation is not None and not math.isfinite(creation):
-                creation = None
-            if creation is not None and creation <= 0:
-                creation = None
-            return (image, cmdline, creation)
-        except (OSError, subprocess.TimeoutExpired):
-            return (None, None, None)
-
-    def _identity_ok(self, paths, image, cmdline):
-        """The THREE shared identity checks (byte-for-byte the historical
-        ``_pid_matches`` semantics): exact image path (the SAME interpreter
-        this adapter would spawn) + the script token as an exact cmdline
-        element + the exact '--port <port>' argument pair. A substring
-        '8000' inside '80000' or a lookalike cmdline can never match."""
-        if not image or not cmdline:
-            return False
-        if os.path.normcase(os.path.abspath(image)) != \
-                os.path.normcase(os.path.abspath(sys.executable)):
-            return False
-        tokens = cmdline.split()
-        script_ok = any(t.endswith("chat2api.py") for t in tokens)
-        port_ok = False
-        for i, t in enumerate(tokens):
-            if t == "--port" and i + 1 < len(tokens) \
-                    and tokens[i + 1] == str(paths["port"]):
-                port_ok = True
-        return script_ok and port_ok
-
-    def _profile_ok(self, paths, cmdline):
-        """The exact '--profile <paths["profile"]>' argument pair (A9-3)."""
-        tokens = cmdline.split()
-        for i, t in enumerate(tokens):
-            if t == "--profile" and i + 1 < len(tokens) \
-                    and tokens[i + 1] == paths["profile"]:
-                return True
-        return False
-
-    def _identity_verdict(self, paths, pid, record):
-        """``(identity, reason)`` from ONE identity read + the record.
-
-        ``verified`` = the record is complete AND the five-item check passes;
-        ``reduced``/``unknown`` are decided by the CALLER (no record ->
-        reduced) so this helper only runs when a record exists. Every
-        unavailable item reads ``unknown``: identity is never assumed from a
-        subset."""
-        image, cmdline, creation = self._pid_process(pid)
-        if not self._identity_ok(paths, image, cmdline):
-            return "unknown", "identity_mismatch"
-        if not self._profile_ok(paths, cmdline):
-            return "unknown", "instance_profile_mismatch"
-        expected = record.get("creation_epoch")
-        if creation is None or isinstance(expected, bool) \
-                or not isinstance(expected, (int, float)):
-            return "unknown", "instance_creation_unavailable"
-        if abs(float(creation) - float(expected)) > \
-                self._INSTANCE_CREATION_TOLERANCE_S:
-            return "unknown", "instance_creation_mismatch"
-        return "verified", "instance_record_confirmed"
-
-    def _pid_matches(self, paths, pid):
-        """Watchdog-grade identity: THREE checks (byte-for-byte the
-        historical semantics, contract §5.1) — image + script token +
-        '--port <port>'. (The five-item check restart()/diagnostics use is
-        ``_pid_matches_strict``.)"""
-        image, cmdline, _creation = self._pid_process(pid)
-        return self._identity_ok(paths, image, cmdline)
-
-    def _pid_matches_strict(self, paths, pid):
-        """A9-3 FIVE-item identity check (contract §5.1): the three shared
-        checks + the exact '--profile <paths["profile"]>' pair + the process
-        creation time matching the instance record (within the watchdog's ±2 s).
-        Any item unreadable/unavailable -> False: identity is NEVER assumed
-        from a subset here (restart() refuses on anything but verified)."""
-        if not self._pid_matches(paths, pid):
-            return False
-        record = self._instance_record(paths)
-        if record is None:
-            return False
-        identity, _reason = self._identity_verdict(paths, pid, record)
-        return identity == "verified"
-
-    def _write_instance_record(self, paths, pid):
-        """Atomically write the instance identity record (contract §5.1).
-
-        The record is an identity AID, never a second state authority: the
-        pid file stays byte-for-byte the readers' pid source, and a failed
-        write only fails closed (a later restart then reads "reduced" and
-        refuses).
-
-        ``creation_epoch`` is THIS parent's own spawn moment and ``image`` is
-        the interpreter this adapter spawned — the same "captured at first
-        sight" shape the watchdog keeps for its own record
-        (the retired Windows watchdog's own record: its own datetime
-        compared with the LIVE CIM creation within ±2 s).
-        ``_pid_matches_strict`` re-reads the LIVE creation time and
-        requires agreement within ±2 s, so a recycled PID never verifies.
-
-        The destination is NORMALIZED and CONTAINMENT-CHECKED before the
-        write: both the record and its tmp sibling must resolve directly
-        inside the backend dir (the fixed file name carries no separator,
-        so a traversal can never escape it)."""
-        now = time.time()
-        record = {"schema_version": 1, "pid": int(pid),
-                  "creation_epoch": now, "image": sys.executable,
-                  "profile": paths["profile"], "port": paths["port"],
-                  "started_at": now, "source": "console"}
-        base = os.path.abspath(paths["dir"])
-        path = os.path.abspath(os.path.join(base, self._INSTANCE_FILE))
-        tmp = os.path.abspath(path + ".tmp")
-        if os.path.dirname(path) != base or os.path.dirname(tmp) != base:
-            raise ValueError("instance record path escapes the backend dir")
-        try:
-            Path(tmp).write_text(json.dumps(record), encoding="utf-8")
-            os.replace(tmp, path)
-        except OSError as exc:
-            self._record(paths, "instance record write failed pid=%d reason=%s"
-                         % (pid, type(exc).__name__))
-
-    def _instance_record(self, paths=None):
-        """Read the dedicated instance's identity record (read-only).
-
-        Returns the validated record dict or None (absent/malformed/unknown
-        schema/port mismatch) — a missing record is NEVER a guessed identity:
-        the caller reports "reduced" (the three shared checks only)."""
-        paths = paths or self._paths()
-        try:
-            record = json.loads(
-                Path(self._instance_path(paths)).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        if not isinstance(record, dict) or record.get("schema_version") != 1:
-            return None
-        pid = record.get("pid")
-        port = record.get("port")
-        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
-            return None
-        if isinstance(port, bool) or not isinstance(port, int) \
-                or port != paths["port"]:
-            return None
-        for key in ("image", "profile"):
-            if not isinstance(record.get(key), str) or not record[key]:
-                return None
-        return record
-
-    def restart(self, *, drain_budget_s=60.0, poll_interval_s=1.0,
-                stop_budget_s=30.0, start_budget_s=90.0,
-                cancel_check=None, step=None):
-        """A9-3 execution body (contract §5.2/§5.4): identity → stop →
-        confirm gone → start → verify_running, with an optional per-stage
-        callback.
-
-        * the FIVE-item identity must be ``verified`` BEFORE anything is
-          stopped (reduced/unknown -> share_backend_identity_unknown:
-          never taskkill a bare PID, never cold-start);
-        * the graceful shutdown is awaited for at most ``drain_budget_s``;
-          the force kill re-verifies the FIVE-item identity BEFORE it runs
-          (a replaced/recycled PID is never killed) and the disappearance
-          is confirmed within ``stop_budget_s``;
-        * ``start()`` is the SAME shared recovery handler the supervision
-          calls, and its readiness is confirmed within ``start_budget_s``;
-        * ``cancel_check`` (optional callable) is consulted ONCE before the
-          destructive stop: a cancelled request stops nothing. Once the stop
-          ran, this operation completes its own compensation (the start) and
-          reports the actual state — no fake rollback.
-
-        Returns the frozen ``backend`` sub-dict {pid_before, pid_after,
-        port, profile, identity}; every failure raises OperationError with
-        the actual stage and state (share_backend_restart_failed)."""
-        paths = self._paths()
-        state = self.backend_pid_state(paths)
-        if state.get("state") != "running" \
-                or state.get("identity") != "verified":
-            raise OperationError(
-                "share_backend_identity_unknown",
-                "专用后端身份未核实（state=%s identity=%s reason=%s）："
-                "绝不 taskkill 裸 PID、不冷启动"
-                % (state.get("state"), state.get("identity"),
-                   state.get("identity_reason")))
-        pid_before = state["pid"]
-        if cancel_check is not None:
-            cancel_check()
-        _step_notify(step, "正在停止专用后端（pid=%s）" % pid_before)
-        self._graceful_shutdown(paths)
-        deadline = time.monotonic() + max(0.0, float(drain_budget_s))
-        while time.monotonic() < deadline:
-            if not self._pid_alive(pid_before):
-                break
-            time.sleep(poll_interval_s)
-        if self._pid_alive(pid_before):
-            # Re-verify the FIVE-item identity BEFORE the force kill: a
-            # replaced/recycled PID is never killed.
-            if self._pid_matches_strict(paths, pid_before) is not True:
-                raise OperationError(
-                    "share_backend_restart_failed",
-                    "阶段=stop：等待超时且身份复核未通过（pid=%d 仍存活）："
-                    "不 taskkill 身份不明的进程" % pid_before)
-            if self._stopper is not None:
-                self._stopper(pid_before)
-            else:
-                self._force_stop(pid_before)
-            deadline = time.monotonic() + max(0.0, float(stop_budget_s))
-            while time.monotonic() < deadline:
-                if not self._pid_alive(pid_before):
-                    break
-                time.sleep(poll_interval_s)
-        if self._pid_alive(pid_before):
-            raise OperationError(
-                "share_backend_restart_failed",
-                "阶段=stop：专用后端 %d 未确认消失（force 停止后仍存活）"
-                % pid_before)
-        self._forget(paths)
-        _step_notify(step, "专用后端已停止（pid=%s）" % pid_before)
-        if self.start() is not True:
-            raise OperationError(
-                "share_backend_restart_failed",
-                "阶段=start：专用后端启动未获门确认")
-        deadline = time.monotonic() + max(0.0, float(start_budget_s))
-        running = False
-        while time.monotonic() < deadline:
-            if self.verify_running() is True:
-                running = True
-                break
-            time.sleep(poll_interval_s)
-        if not running:
-            raise OperationError(
-                "share_backend_restart_failed",
-                "阶段=verify_running：专用后端启动后未确认运行")
-        pid_after = self._read_pid(paths)
-        _step_notify(step, "专用后端已重启（pid=%s）" % pid_after)
-        return {"pid_before": pid_before, "pid_after": pid_after,
-                "port": paths["port"], "profile": paths["profile"],
-                "identity": "verified"}
-
-    def _port_listening(self, port):
-        try:
-            out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
-                                 capture_output=True, timeout=10)
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-        suffix = ":%d " % port
-        for line in out.stdout.decode("utf-8", errors="replace").splitlines():
-            parts = line.split()
-            if len(parts) >= 4 and parts[3] == "LISTENING" and                     parts[1].endswith(suffix.strip()):
-                return True
-        return False
-
-    def _graceful_shutdown(self, paths):
-        try:
-            with open(paths["control_token"], encoding="utf-8") as f:
-                token = f.read().strip()
-        except OSError:
-            return False
-        if not token:
-            return False
-        req = urllib.request.Request(
-            "http://127.0.0.1:%d/admin/shutdown" % paths["port"],
-            method="POST", headers={"X-Admin-Control": token})
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                resp.read()
-            return True
-        except Exception:  # noqa: BLE001
-            return False
-
-
-class _LinuxBackendOps(_ProductionBackendOps):
-    """POSIX (Linux) dedicated-backend gate.
-
-    ``proc_root`` and ``kill_fn`` are injectable OS boundaries for offline
-    tests; production uses the real /proc and os.kill. The pid file stays the
-    pid authority, the instance record stays the identity aid, and every stop
-    re-verifies the exact command line before signalling.
-    """
-
-    def __init__(self, gateway_dir=None, port=None, base_url=None,
-                 spawner=None, stopper=None, config=None, *,
-                 proc_root="/proc",
-                 kill_fn=None, exe_reader=None,
-                 clock=time.monotonic, sleeper=time.sleep):
-        super().__init__(gateway_dir=gateway_dir, port=port,
-                         base_url=base_url, spawner=spawner,
-                         stopper=stopper, config=config)
-        self._proc_root = str(proc_root)
-        self._kill = kill_fn or os.kill
-        self._exe_reader = exe_reader or os.readlink
-        self._clock = clock
-        self._sleep = sleeper
-
-    def _spawn(self, cmdline, env, creationflags):
-        # POSIX has no DETACHED_PROCESS: the child gets its OWN session so
-        # the console process can exit without taking the backend down.
-        return subprocess.Popen(
-            cmdline, cwd=self._gateway_dir or ".", env=env,
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True,
-            close_fds=True)
-
-    def _force_stop(self, pid):
-        # Identity was verified by the CALLER; SIGTERM first, then SIGKILL
-        # only when the process is still alive.
-        try:
-            self._kill(int(pid), 15)   # SIGTERM
-        except OSError:
-            return
-        deadline = self._clock() + 10.0
-        while self._clock() < deadline:
-            if self._pid_alive(pid) is False:
-                return
-            self._sleep(0.05)
-        try:
-            self._kill(int(pid), 9)    # SIGKILL
-        except OSError:
-            return
-
-    def _pid_alive(self, pid):
-        try:
-            self._kill(int(pid), 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except OSError:
-            return False
-
-    def _pid_process(self, pid):
-        """(image, cmdline, creation_epoch) from the REAL /proc/<pid>."""
-        text = _linux_proc_read(self._proc_root, pid, "cmdline")
-        cmdline = None
-        if text:
-            cmdline = " ".join(part for part in text.split("\x00") if part)
-        image = None
-        try:
-            image = self._exe_reader(
-                os.path.join(self._proc_root, str(int(pid)), "exe"))
-        except OSError:
-            image = None
-        return (image, cmdline,
-                _linux_proc_creation_epoch(self._proc_root, pid))
-
-    def _identity_ok(self, paths, image, cmdline):
-        if not image or not cmdline:
-            return False
-        if os.path.realpath(image) != os.path.realpath(sys.executable):
-            return False
-        tokens = cmdline.split()
-        # The entry is the interpreter's script operand, never a script name
-        # that merely appears among the arguments (e.g. after ``python -c``).
-        entry = linux_entry_script(tokens)
-        script_ok = entry is not None and \
-            os.path.basename(entry) == "chat2api.py"
-        port_ok = False
-        for i, t in enumerate(tokens):
-            if t == "--port" and i + 1 < len(tokens) \
-                    and tokens[i + 1] == str(paths["port"]):
-                port_ok = True
-        return script_ok and port_ok
-
-    def _port_listening(self, port):
-        """Kernel LISTEN fact from /proc/net/tcp{,6} for 127.0.0.1:<port>.
-
-        The hex port is the local address' second half and state 0A is LISTEN;
-        an unreadable table is an honest False (no netstat is ever run).
-        """
-        wanted = "%04X" % int(port)
-        for name in ("tcp", "tcp6"):
-            text = _linux_proc_root_read(self._proc_root, "net", name)
-            if text is None:
-                continue
-            for line in text.splitlines()[1:]:
-                parts = line.split()
-                if len(parts) < 4 or parts[3] != "0A":
-                    continue
-                local = parts[1]
-                if ":" not in local:
-                    continue
-                address, _, hex_port = local.rpartition(":")
-                if hex_port.upper() != wanted:
-                    continue
-                if address.upper() in ("0100007F", "00000000"):
-                    return True
-        return False
-
-
-class _MergedBackendOps(_LinuxBackendOps):
-    """Cloud merged 8100 process: the console owns no 8110 child.
-
-    The broker is the only launcher; start/stop are no-ops here. Login and
-    restart target the merged 8100 process with the console's own control
-    token, and the broker owns the restart.
-    """
-
-    def _paths(self):
-        paths = super()._paths()
-        paths["port"] = SHARE_GATEWAY_PORT
-        paths["pid"] = "/run/um-share/share-gateway.pid"
-        if self._config is not None:
-            paths["control_token"] = self._config.control_token_file
-        else:
-            paths["control_token"] = os.environ.get(
-                "USAGE_CONTROL_TOKEN_FILE",
-                "/etc/um-share/admin-control-token")
-        return paths
-
-    def start(self):
-        # The broker is the only launcher. This is an honest readiness check,
-        # never a second Popen: False means the login flow must not claim a
-        # cold start it did not perform.
-        return self.verify_running() is True
-
-    def stop(self):
-        # The broker owns the stop intent. Report success only when the
-        # merged process is actually gone.
-        return self.verify_running() is not True
-
-    def restart(self, **kwargs):
-        return production_gateway_restart()
-
-
-# ---------------------------------------------------------------------------
-# Linux restricted dedicated-backend gate (2026-10-30 cloud role)
-# ---------------------------------------------------------------------------
-# The SAME pid file, identity and lifecycle contract as the Windows gate above;
-# only the OS primitives differ. Nothing here calls tasklist, netstat,
-# PowerShell/CIM or taskkill, and no Windows DACL is fabricated:
-#   * liveness is os.kill(pid, 0) (ProcessLookupError = gone; EPERM = exists
-#     but not ours, which is never signalled);
-#   * identity is the REAL /proc/<pid> command line (the expected script
-#     marker plus the exact --port <port> pair) and the /proc/<pid>/exe
-#     symlink, compared with realpath so a symlinked interpreter still
-#     matches;
-#   * the listener fact is the kernel's own /proc/net/tcp{,6} LISTEN table
-#     for 127.0.0.1:<port>;
-#   * the process creation time comes from /proc/<pid>/stat starttime plus
-#     /proc/stat btime (PID reuse detection stays intact);
-#   * a force stop is SIGTERM then SIGKILL, never taskkill.
-# The instance record/pid-file writers and the graceful /admin/shutdown
-# route are inherited byte for byte.
-
-
-def _linux_proc_read(proc_root, pid, name):
-    try:
-        return Path(proc_root, str(int(pid)), name).read_text(
-            encoding="utf-8", errors="replace")
-    except (OSError, ValueError):
-        return None
-
-
-def _linux_proc_root_read(proc_root, *parts):
-    """Read a file directly under the proc root (stat, net/tcp, net/tcp6)."""
-    try:
-        return Path(proc_root, *parts).read_text(
-            encoding="utf-8", errors="replace")
-    except (OSError, ValueError):
-        return None
-
-
-def _linux_proc_creation_epoch(proc_root, pid):
-    """Creation epoch from /proc/<pid>/stat starttime + /proc/stat btime."""
-    stat_text = _linux_proc_read(proc_root, pid, "stat")
-    btime_text = _linux_proc_root_read(proc_root, "stat")
-    if not stat_text or not btime_text:
-        return None
-    try:
-        tail = stat_text[stat_text.rindex(")") + 2:].split()
-        start_ticks = int(tail[19])
-    except (ValueError, IndexError):
-        return None
-    btime = None
-    for line in btime_text.splitlines():
-        if line.startswith("btime "):
-            try:
-                btime = int(line.split()[1])
-            except (ValueError, IndexError):
-                btime = None
-            break
-    if btime is None:
-        return None
-    try:
-        ticks = int(os.sysconf("SC_CLK_TCK"))
-    except (ValueError, OSError, AttributeError):
-        ticks = 100
-    if ticks <= 0:
-        ticks = 100
-    return float(btime) + float(start_ticks) / float(ticks)
 
 
 # ---------------------------------------------------------------------------
@@ -1923,15 +744,10 @@ def _linux_proc_creation_epoch(proc_root, pid):
 # at module level (GATEWAY_RESTART_BUDGET_DEFAULT_S) is imported INSIDE
 # production_gateway_restart, and every wire action name is reached through
 # the wave-1 BrokerClient methods (share/broker_client.py) instead of raw
-# action strings. `_step_notify` and `_HostEvidence` are referenced by the
-# methods above and resolve at call time.
+# action strings. `_HostEvidence` is referenced by the methods above and
+# resolves at call time.
 
 
-def _step_notify(step, note):
-    """Optional per-stage callback for the 8110 restart (contract §5.4):
-    ``step`` receives ONE bounded stage note; None = no callback."""
-    if step is not None:
-        step(note)
 
 
 class _HostEvidence(dict):
@@ -2053,27 +869,6 @@ def production_maintenance_status(*, broker=None):
     return dict(payload)
 
 
-def production_supervision_state():
-    """Rev19 A19-2 监督段读面：监督自己的持久状态（只读，懒导入）。
-
-    返回 ``{"state": <watch state>, "state_path": <状态文件路径>}`` 或 None
-    （缺席/不可读/形状不对 → None，页面写「未提供 ≠ 监督未运行」）。懒导入：
-    动作层只在请求该段时读监督模块（不在装配期导入）；只读：不写状态、
-    不启停监督、不发请求。陈旧判定（mtime 超 TTL）由动作层做，本函数不判定。
-    """
-    try:
-        share_backend_supervision = __import__("importlib").import_module("share.backend_supervision")
-        state = share_backend_supervision.read_watch_state()
-        # The ACTIVE state path: a composition root that injected its own
-        # watch dir (configure_supervision_paths) must be reported here too,
-        # otherwise the page would name a file the supervisor never writes.
-        state_path = share_backend_supervision.active_state_path()
-    except Exception:  # noqa: BLE001 - 读面自身故障按未提供，绝不冒充监督在跑
-        return None
-    if not isinstance(state, dict) or state.get("unreadable"):
-        # 缺席/不可读/形状不对 → None（页面写「未提供 ≠ 监督未运行」）。
-        return None
-    return {"state": state, "state_path": state_path}
 
 
 def production_gateway_restart(budget_s=None, *, broker=None):
@@ -2140,866 +935,30 @@ def production_broker_evidence(check, *, broker=None):
     return _HostEvidence(evidence)
 
 
-def _reauth_refusal_message(detail):
-    """What the operator can actually do about a reauth refusal (contract
-    §4.3): the ONE mapping BOTH the old login flow and the new
-    ``share.backend_reauthenticate`` use — output byte-identical.
 
-    A corrupted/unreadable coordination state is permanent: retrying the
-    trigger returns the same refusal forever, so the note must name the file to
-    clear instead of advising a retry nobody can satisfy. Everything else (a
-    live session in the other instance, the rolling attempt cap, an
-    unavailable lock) really is transient."""
-    if (detail.endswith(":slot_corrupt")
-            or detail.endswith(":slot_unreadable")
-            or detail.endswith(":slot_unavailable")):
-        return ("该实例的跨实例状态文件已损坏、不可读或不可写，重试不会改变结果："
-                "需由运维清理专用后端的 chat2api-reauth.state 并核对目录权限")
-    return "请稍后重试或点「刷新状态」核对"
 
 
-def _backend_control_token(paths):
-    """``(token, reason)`` for the dedicated instance's control secret.
 
-    ``(None, "unreadable"|"empty")`` when it cannot be used: the caller
-    refuses with share_backend_login_unwired and sends ZERO HTTP. The secret
-    is never echoed into any message, result or error."""
-    try:
-        with open(paths["control_token"], encoding="utf-8") as f:
-            token = f.read().strip()
-    except OSError:
-        return None, "unreadable"
-    if not token:
-        return None, "empty"
-    return token, "ok"
 
 
-def _auth_status_payload(paths, token=None, opener=None):
-    """The parsed ``GET /admin/auth/status`` payload, or None when the
-    endpoint is unreachable/unreadable/off-contract (honest unknown).
 
-    ``token=None`` reads the dedicated control secret itself; a missing or
-    empty secret returns None with ZERO HTTP. The secret is never echoed
-    into any message, result or error."""
-    if token is None:
-        token, _reason = _backend_control_token(paths)
-    if token is None:
-        return None
-    fetch = opener or urllib.request.urlopen
-    req = urllib.request.Request(
-        "http://127.0.0.1:%d/admin/auth/status" % paths["port"],
-        headers={"X-Admin-Control": token})
-    try:
-        with fetch(req, timeout=8) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except Exception:  # noqa: BLE001
-        return None
-    if not isinstance(payload, dict) \
-            or not isinstance(payload.get("state"), str):
-        return None
-    return payload
 
 
-def _backend_health_snapshot(paths, opener=None):
-    """``(reachable, payload)`` from ONE bounded ``GET /health`` (read-only).
 
-    ``reachable`` is True only for an HTTP 200; ``payload`` is the parsed
-    JSON object when the body is a dict, else None. A cold/not-ready process
-    answers (False, None) — never a fabricated reading."""
-    fetch = opener or urllib.request.urlopen
-    req = urllib.request.Request("http://127.0.0.1:%d/health" % paths["port"])
-    try:
-        with fetch(req, timeout=4) as resp:
-            body = resp.read()
-            try:
-                parsed = json.loads(body.decode("utf-8"))
-            except (ValueError, UnicodeError):
-                parsed = None
-            return resp.status == 200, (parsed if isinstance(parsed, dict)
-                                       else None)
-    except Exception:  # noqa: BLE001  not-ready is just not-ready
-        return False, None
 
 
-def _reauth_result(accepted, state, label, triggered, polled, instance,
-                    reason, note, error=None, recovery=None):
-    """The frozen A9-2 result shape (contract §4.2) + A1/A2 authoritative
-    ``error``/``recovery`` fields; ``note`` bounded."""
-    return {"accepted": accepted, "state": state, "label": label,
-            "triggered": triggered, "polled": polled, "instance": instance,
-            "reason": reason, "note": _shorten(note),
-            "error": error, "recovery": recovery}
 
 
-def _login_result(triggered, state, label, started_here, restored, note,
-                   error=None, recovery=None):
-    """The frozen login result shape + A1 authoritative ``error``/``recovery``.
 
-    ``state`` keeps its historical values (valid/logging_in/needs_login/
-    failed/unknown). ``error`` is None or the instance's own stable code; a
-    refusal (``reauth_refused:*``) therefore never reads as a credential
-    failure. ``recovery`` is the bounded next step (action + earliest allowed
-    retry), never a secret.
-    """
-    return {"triggered": triggered, "state": state, "label": label,
-            "started_here": started_here, "restored": restored,
-            "note": _shorten(note), "error": error, "recovery": recovery}
 
 
-def production_backend_reauth(*, ops=None, control=None, urlopen_fn=None,
-                            poll_interval_s=1.5, poll_attempts=6,
-                            cancel_check=None):
-    """A9-2 production body: re-authenticate 8110 ONLY.
 
-    Never cold-starts (the old login flow keeps its cold-start branch; this
-    action does NOT), never restarts the process, never bypasses the human SSO:
 
-    * the instance must be ``running`` with a ``verified`` five-item identity,
-      else share_backend_not_running / share_backend_identity_unknown;
-    * a missing control token refuses with share_backend_login_unwired and
-      ZERO HTTP;
-    * ``valid`` = zero side effects; ``logging_in`` = no second window;
-      a true credential ``failed`` refuses the rejected credential, while
-      ``superseded``/``BrowserDisabled``/``manual_takeover:*`` are reported
-      as non-credential failures (no refusal, no trigger);
-      ``needs_login`` = POST /admin/auth/login (non-202 refuses);
-      ``unknown``/unreadable = no trigger at all (unknown is NOT expired);
-    * the poll window (``poll_attempts`` x ``poll_interval_s``) reports
-      valid/logging_in, preserves a ``reauth_refused:`` reason verbatim and
-      raises share_backend_reauth_refused, raises
-      share_backend_reauth_failed on ``failed``, and raises
-      share_backend_reauth_manual when the window ends still needing a
-      login (never claiming a browser is waiting).
-    ``cancel_check`` is the cooperative cancel point (called at the start,
-    before the trigger and between polls); the old login flow passes none."""
-    opener = urlopen_fn or urllib.request.urlopen
-    ops = ops or production_backend_ops()
-    paths = ops._paths()
-    state = ops.backend_pid_state(paths)
-    if state.get("state") != "running":
-        raise OperationError(
-            "share_backend_not_running",
-            "专用后端未运行（state=%s，原因=%s）：仅认证动作绝不冷启动"
-            % (state.get("state"), state.get("identity_reason")))
-    if state.get("identity") != "verified":
-        raise OperationError(
-            "share_backend_identity_unknown",
-            "专用后端身份未核实（identity=%s，原因=%s）：仅认证动作绝不"
-            "操作身份不明的进程"
-            % (state.get("identity"), state.get("identity_reason")))
-    instance = {"pid": state.get("pid"), "port": paths["port"],
-                "identity": "verified"}
-    if cancel_check is not None:
-        cancel_check()
-    token, reason = _backend_control_token(paths)
-    if token is None:
-        raise OperationError(
-            "share_backend_login_unwired",
-            "专用后端控制令牌缺失或为空（原因=%s，未部署或已清理）："
-            "不触发认证、零 HTTP" % reason)
-    payload = _auth_status_payload(paths, token, opener=opener)
-    if payload is None:
-        # Unreadable != expired: NEVER trigger on an unknown state.
-        error, recovery = _auth_outcome(
-            "unconfirmed", "auth_status_unreadable", None)
-        return _reauth_result(
-            True, "unconfirmed", None, False, 0, instance,
-            "auth_status_unreadable",
-            "专用后端认证状态不可读：未触发认证（未知 ≠ 过期）；"
-            "请稍后重试或点「刷新状态」核对",
-            error=error, recovery=recovery)
-    current = payload["state"]
-    label = payload.get("label")
-    error = payload.get("error")
-    error = error if isinstance(error, str) and error else None
-    instance_recovery = payload.get("recovery")
-    if not isinstance(instance_recovery, dict):
-        instance_recovery = None
-    if current == "valid":
-        return _reauth_result(True, "valid", label, False, 0, instance,
-                              None, "专用后端上游认证已有效（零副作用）",
-                              error=None, recovery=None)
-    if current == "logging_in":
-        _error, recovery = _auth_outcome("logging_in", error,
-                                         instance_recovery)
-        return _reauth_result(True, "logging_in", label, False, 0,
-                              instance, None, "登录已在进行中：不重复开窗",
-                              error=_error, recovery=recovery)
-    if current == "failed":
-        note = _non_credential_failure_note(error)
-        if note is not None:
-            # Not a credential verdict: no trigger, no refusal, no restart.
-            _error, recovery = _auth_outcome(
-                "failed", error, instance_recovery)
-            return _reauth_result(
-                True, "failed", label, False, 0, instance,
-                "instance_state_failed", note,
-                error=_error, recovery=recovery)
-        raise OperationError(
-            "share_backend_reauth_refused",
-            "专用后端上次认证已被拒绝（%s）：绝不重试已被拒绝的凭据"
-            % (error or label or "failed"))
-    if current != "needs_login":
-        # A readable state outside the frozen branches (e.g. "invalid"):
-        # unknown != expired — never trigger on it.
-        reason = "instance_state_%s" % current
-        _error, recovery = _auth_outcome("unconfirmed", reason,
-                                         instance_recovery)
-        return _reauth_result(
-            True, "unconfirmed", label, False, 0, instance, reason,
-            "专用后端报告认证状态 %s：未触发（未知 ≠ 过期），"
-            "请点「刷新状态」核对" % current,
-            error=_error, recovery=recovery)
-    if cancel_check is not None:
-        cancel_check()
-    trigger = urllib.request.Request(
-        "http://127.0.0.1:%d%s" % (paths["port"],
-                                   _BACKEND_LOGIN_TRIGGER_PATH),
-        data=b"", method="POST", headers={"X-Admin-Control": token})
-    try:
-        with opener(trigger, timeout=8) as resp:
-            trigger_status = resp.status
-            resp.read()
-    except urllib.error.HTTPError as exc:
-        trigger_status = exc.code
-        try:
-            exc.read()
-        except (OSError, ValueError):
-            pass
-        finally:
-            try:
-                exc.close()
-            except Exception:  # noqa: BLE001
-                pass
-    except (urllib.error.URLError, OSError, TimeoutError) as exc:
-        raise OperationError(
-            "share_backend_reauth_failed",
-            "登录触发请求失败（%s: %s）：未开始登录流程"
-            % (type(exc).__name__, exc))
-    if trigger_status != 202:
-        raise OperationError(
-            "share_backend_reauth_refused",
-            "登录触发被拒（HTTP %s）：未开始登录流程" % trigger_status)
-    last_state = None
-    last_label = label
-    polled = 0
-    for _ in range(max(1, poll_attempts)):
-        if cancel_check is not None:
-            cancel_check()
-        polled += 1
-        payload = _auth_status_payload(paths, token, opener=opener)
-        if payload is None:
-            continue
-        current = payload["state"]
-        label = payload.get("label")
-        error = payload.get("error")
-        error = error if isinstance(error, str) and error else None
-        instance_recovery = payload.get("recovery")
-        if not isinstance(instance_recovery, dict):
-            instance_recovery = None
-        if current == "valid":
-            return _reauth_result(True, "valid", label, True, polled,
-                                  instance, None, "登录完成（上游认证有效）",
-                                  error=None, recovery=None)
-        if current == "logging_in":
-            _error, recovery = _auth_outcome("logging_in", error,
-                                             instance_recovery)
-            return _reauth_result(
-                True, "logging_in", label, True, polled, instance, None,
-                "登录进行中——请在专用实例浏览器窗口完成 UM 登录，"
-                "然后点「刷新状态」确认",
-                error=_error, recovery=recovery)
-        if error is not None and error.startswith("reauth_refused:"):
-            raise OperationError(
-                "share_backend_reauth_refused",
-                "专用实例拒绝了本次登录会话（%s）——未开启新的提交窗口；%s"
-                % (error, _reauth_refusal_message(error)))
-        if current == "failed":
-            note = _non_credential_failure_note(error)
-            if note is not None:
-                # The trigger was accepted, but the terminal failure never
-                # judged the credential: report it as such, never as a
-                # credential rejection.
-                _error, recovery = _auth_outcome(
-                    "failed", error, instance_recovery)
-                return _reauth_result(
-                    True, "failed", label, True, polled, instance,
-                    "instance_state_failed", note,
-                    error=_error, recovery=recovery)
-            raise OperationError(
-                "share_backend_reauth_failed",
-                "专用后端登录失败（%s）" % (error or label or "failed"))
-        last_state = current
-        last_label = label
-        time.sleep(poll_interval_s)
-    raise OperationError(
-        "share_backend_reauth_manual",
-        "认证窗口结束仍未见有效会话（最后状态=%s）：需人工在本机完成 "
-        "UM SSO 后点「刷新状态」核对" % (last_state or "unknown"))
 
 
-def _production_intent_write(state, *, source):
-    """Share runtime-intent writer (the ``_INTENT_WRITE`` seam value).
 
-    Delegates to ``share_backend_supervision.write_desired_state`` (the ONE
-    writer implementation, §7.4); the import is deferred because the
-    supervision module must never be imported by the console action layer.
-    A missing module or a failed write returns False — the caller then says
-    "意图未写" instead of pretending it was written."""
-    try:
-        from share.backend_supervision import write_desired_state
-        return bool(write_desired_state(state, source=source))
-    except Exception:  # noqa: BLE001 - never a fake True on a failed write
-        return False
 
 
-def production_backend_observe(forget_stale=True):
-    """Read-only dedicated-backend view: /health + /admin/auth/status on
-    the dedicated port with ITS control secret. Never probes port 8000 and
-    never touches the production chat2api process. There is NO login_url:
-    the instance's GET / is health JSON, not a login page — login is
-    triggered through the console's「登录分享专用后端」action
-    (production_backend_login), which drives the control-token-gated
-    POST /admin/auth/login that opens the instance's own browser.
-
-    Plan-Revision 13: the instance recovers on its own, so ``auth_label``
-    is the authoritative field — chat2api puts the reason a window was left
-    to a human (or that the last check was inconclusive) into the label it
-    reports. The dict shape is unchanged.
-
-    The ``attribution`` entry (2026-09-26, split into three facts after the
-    review: ONE boolean must not stand for THREE different things) is a
-    read-only view of the attribution chain with its own names:
-
-    * ``file_ready`` — the ONE shared key file 8100 also reads is readable
-      by THIS process now and long enough;
-    * ``instance_loaded`` — whether the RUNNING 8100 instance is INFERRED to
-      have loaded the CURRENT content (its start time vs the file mtime);
-      "unknown" when the process cannot be found — never "yes";
-    * ``request_attribution`` — NOT observed here; it points at the runtime
-      fact that decides it (a row with ``attribution="verified"`` in the 8110
-      ledger, whose path is carried along).
-
-    All of them are reported even when THIS instance is NOT running (they
-    are facts about the key file and the 8100 process, not about THIS 8110
-    process), so the read surface can tell「文件未就绪」from「文件就绪但
-    8100 实例未载入（推断）」— and it never claims the third one either
-    way.
-
-    ``forget_stale`` is the additive READ-ONLY switch (default ``True`` = the
-    historical behaviour, byte-for-byte): it is forwarded verbatim to
-    ``verify_running``. With ``forget_stale=False`` this observation NEVER
-    deletes a stale ``backend.pid`` — the caller gets the same ``running``
-    verdict with the file left in place. The dict shape is unchanged either
-    way; for the honest reason behind a ``running=False`` read
-    ``production_backend_pid_state()``.
-
-    A9-1 additive evidence (contract §3.2/§3.4) for the layered
-    diagnostics — the existing keys stay byte-for-byte:
-
-    * ``observed_at`` — the epoch when THIS process read
-      ``/admin/auth/status`` (None when the status was never read);
-    * ``auth_evidence`` / ``auth_gate`` — the instance's own bounded
-      evidence/gate sub-objects (None when absent/off-contract);
-    * ``health_reachable`` — whether 8110 answered ``GET /health`` 200
-      (True/False/None = not observed);
-    * ``upstream_reachability`` — the ``/health`` sub-object with
-      ``state`` (ok/unreachable/unknown) and ``checked_epoch``; the
-      diagnostics layer reads ``state``/``checked_epoch`` from here.
-    """
-    ops = production_backend_ops()
-    paths = ops._paths()
-    running = ops.verify_running(forget_stale=forget_stale)
-    out = {"running": running, "auth_state": None, "auth_label": None,
-           "observed_at": None, "auth_evidence": None, "auth_gate": None,
-           "auth_error": None, "auth_recovery": None,
-           "health_reachable": None, "upstream_reachability": None,
-           "attribution": share_attribution_status(
-               paths["attribution_key"], ledger_path=paths["ledger"])}
-    if running is not True:
-        return out
-    payload = _auth_status_payload(paths)
-    if payload is None:
-        # No usable status read (missing/unreadable secret, unreachable or
-        # off-contract endpoint): the historical "unknown" stays, never a
-        # fabricated state and never a fabricated observation time.
-        out["auth_state"] = "unknown"
-    else:
-        out["observed_at"] = time.time()
-        out["auth_state"] = payload["state"]
-        out["auth_label"] = payload.get("label")
-        evidence = payload.get("evidence")
-        out["auth_evidence"] = evidence if isinstance(evidence, dict) else None
-        gate = payload.get("gate")
-        out["auth_gate"] = gate if isinstance(gate, dict) else None
-        error = payload.get("error")
-        out["auth_error"] = error if isinstance(error, str) else None
-        recovery = payload.get("recovery")
-        out["auth_recovery"] = recovery if isinstance(recovery, dict) else None
-    reachable, health = _backend_health_snapshot(paths)
-    out["health_reachable"] = reachable
-    if isinstance(health, dict):
-        reach = health.get("upstream_reachability")
-        out["upstream_reachability"] = reach if isinstance(reach, dict) \
-            else None
-    return out
-
-
-def production_backend_pid_state():
-    """Read-only dedicated-backend pid REPORT: the resolved pid file plus the
-    identity evidence, WITHOUT any cleanup. This function has no write on any
-    branch — a stale pid file is reported stale and left byte-for-byte as found
-    (``_ProductionBackendOps.backend_pid_state``). Use it next to
-    ``production_backend_observe(forget_stale=False)`` when a read-only
-    collector must say WHY the backend is not running instead of only ``False``.
-    """
-    return production_backend_ops().backend_pid_state()
-
-
-def _backend_auth_observation(paths, opener=None):
-    """``(state, label, error, recovery)`` from the dedicated instance's
-    auth/status.
-
-    ``error`` is the instance's own reason string (for example
-    ``manual_takeover:umpass_prefill_missing`` or
-    ``reauth_refused:global_session_active``), or None when it reports no
-    failure. ``recovery`` is the instance's OWN recovery summary
-    (``{state, next_attempt_epoch, pause_reason, ...}``) or None; it names
-    the next allowed attempt instead of making the console guess a wait.
-    A missing/unreadable status endpoint stays "unknown" and is never
-    turned into a fabricated state. The read is the SAME
-    :func:`_auth_status_payload` the A9-2/A9-1 readers use (one parser,
-    byte-for-byte behaviour)."""
-    token, _reason = _backend_control_token(paths)
-    if token is None:
-        return ("unknown", None, None, None)
-    payload = _auth_status_payload(paths, token, opener=opener)
-    if payload is None:
-        return ("unknown", None, None, None)
-    error = payload.get("error")
-    recovery = payload.get("recovery")
-    return (payload["state"], payload.get("label"),
-            error if isinstance(error, str) and error else None,
-            recovery if isinstance(recovery, dict) else None)
-
-
-def _non_credential_failure_note(error):
-    """The honest note for a ``failed`` state that never judged the credential.
-
-    The MFA/manual takeover, closed-window, exhausted-recovery, missing
-    browser/display/edge, browser config and token-save failures are NOT
-    authentication rejections. Returns None for every other failure (a real
-    credential/auth failure).
-    """
-    if not isinstance(error, str):
-        return None
-    if error.startswith("superseded"):
-        return "本次登录流程已被新流程取代；未判凭据失败"
-    if error == "BrowserDisabled":
-        return "专用实例浏览器不可用；未判凭据失败"
-    if error.startswith("manual_takeover:"):
-        return "专用实例已转入人工接管；未判凭据失败"
-    if error in ("umpass_mfa_required", "umpass_prefill_missing"):
-        return "UM 登录需要本人完成 MFA 或人工接管；未判凭据失败"
-    if error == "timeout":
-        return "UM 登录窗口等待超时；未判凭据失败，请按原身份回查"
-    if error in ("window_closed", "attempts_exhausted"):
-        return "登录窗口已关闭或自动恢复尝试已用尽；未判凭据失败，请按原身份回查"
-    if error in ("edge_missing", "browser_missing", "display_missing",
-                  "browser_config_error", "token_save_failed"):
-        return "专用实例的浏览器/显示或凭据保存环境不可用；未判凭据失败，请修复环境后重试"
-    return None
-
-
-def _auth_outcome(state, error, recovery):
-    """``(error, recovery)`` — the authoritative A1 pair for the console.
-
-    A refused NEW session (``reauth_refused:*``) is NOT an authentication
-    failure: the credential was never judged, so ``state`` stays whatever the
-    instance reported (usually ``needs_login``) and the pair names the wait
-    (or the operator cleanup) instead of pretending a credential failed.
-    The same discipline applies to a ``failed`` state whose error is
-    ``superseded``, ``BrowserDisabled`` or ``manual_takeover:*``: none of
-    them is a credential verdict.
-    ``error`` is the instance's own stable code; ``recovery`` is a bounded
-    machine-readable next step carrying the earliest allowed retry. No
-    credential, token, password or page content is ever copied here.
-    """
-    next_at = None
-    if isinstance(recovery, dict):
-        raw = recovery.get("next_attempt_epoch")
-        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-            next_at = float(raw)
-    if isinstance(error, str) and error.startswith("reauth_refused:"):
-        reason = error.split(":", 1)[1]
-        if reason in ("slot_corrupt", "slot_unreadable", "slot_unavailable"):
-            return error, {"action": "operator", "next_allowed_epoch": None,
-                           "detail": "跨实例状态文件损坏/不可读/不可写：需运维清理"
-                                     "专用后端的 chat2api-reauth.state 并核对目录权限"}
-        return error, {"action": "wait", "next_allowed_epoch": next_at,
-                       "detail": "登录会话被跨实例限频拒绝：等待允许时刻，"
-                                 "不要重复触发"}
-    note = _non_credential_failure_note(error)
-    if note is not None:
-        if error.startswith("superseded"):
-            action = "refresh"
-        elif error == "BrowserDisabled":
-            action = "operator"
-        elif error in ("window_closed", "attempts_exhausted", "timeout"):
-            action = "refresh"
-        elif error in ("edge_missing", "browser_missing", "display_missing",
-                        "browser_config_error", "token_save_failed"):
-            action = "operator"
-        else:
-            action = "human"
-        return error, {"action": action, "next_allowed_epoch": None,
-                       "detail": note}
-    if state == "failed":
-        return (error or "login_failed",
-                {"action": "human", "next_allowed_epoch": None,
-                 "detail": "上游认证失败：请核对凭据后重新登录"})
-    if state == "needs_login":
-        return (error, {"action": "human", "next_allowed_epoch": None,
-                        "detail": "尚未开始登录：请本人完成 UM SSO"})
-    if state == "logging_in":
-        return (error, {"action": "wait", "next_allowed_epoch": None,
-                        "detail": "登录窗口已打开：等待本人完成 UM SSO"})
-    if state == "valid":
-        return (error, None)
-    return (error or "auth_status_unreadable",
-            {"action": "refresh", "next_allowed_epoch": None,
-             "detail": "认证状态不可读：请刷新状态核对"})
-
-
-_BACKEND_LOGIN_TRIGGER_PATH = "/admin/auth/login"
-_BACKEND_LOGIN_CANCEL_PATH = "/admin/auth/cancel"
-
-# Dedicated-instance SSO window (chat2api --login-timeout): D18-6 fixes the
-# human login window at 30 minutes (1800s). The browser is on the private Xvfb
-# display and is never exposed publicly; the operator can cancel the round from
-# the private console without stopping the instance.
-_BACKEND_LOGIN_TIMEOUT_S = 1800
-
-
-def _backend_health_ok(paths, opener=None):
-    """Bounded cold-start readiness probe: GET /health (public route in
-    chat2api.py — no control header involved) must answer 200. This is the
-    liveness signal that the dedicated process's HTTP control surface is
-    accepting requests; auth/status on a cold-starting process would only
-    read "unknown", which cannot distinguish not-ready from broken. The SAME
-    :func:`_backend_health_snapshot` read the A9-1 upstream layer uses
-    (one bounded GET, byte-for-byte verdict)."""
-    reachable, _payload = _backend_health_snapshot(paths, opener=opener)
-    return reachable
-
-
-def production_backend_login(urlopen_fn=None, ops=None,
-                             poll_interval_s=1.5, poll_attempts=6,
-                             ready_interval_s=1.0, ready_attempts=15):
-    """Console "登录分享专用后端" flow (maintainer direction 2026-09-17,
-    replacing the misleading login_url pointer: the dedicated instance's
-    GET / is health JSON, NOT a login page — the only login trigger is the
-    control-token-gated POST /admin/auth/login, whose refresh() opens the
-    instance's OWN independent-profile browser for the human UM SSO).
-
-    Discipline:
-    * every request targets the DEDICATED port (paths["port"]) with the
-      dedicated control secret in the X-Admin-Control header — port 8000
-      and the production chat2api process are never touched; the secret is
-      never echoed into any message, result or error;
-    * an already-valid instance is a no-op; a not-running instance is
-      STARTED by this flow and, when the flow then FAILS, restored to its
-      original stopped state (an originally-running instance is left
-      running — we only ever undo our own change); a ``failed`` state whose
-      error never judged the credential (``superseded``/``BrowserDisabled``/
-      ``manual_takeover:*``) is reported as such and NEVER stops the
-      instance;
-    * COLD-START READINESS GATE (maintainer review 2026-09-17): an
-      instance this flow started is polled via /health until its control
-      surface actually answers (a cold-starting process would make the
-      very next auth/trigger request fail and wrongly roll the fresh
-      instance back); only after readiness is the login submitted, and a
-      readiness TIMEOUT restores the just-started instance;
-    * the trigger is fire-and-forget by contract (wait=False): a short
-      bounded poll reports states honestly — "logging_in" (the ONLY
-      state chat2api's refresh() sets when it actually starts the browser
-      flow) means the popped window is waiting for the human; when the
-      window ends WITHOUT an observed auth state (endpoint unreachable or
-      unreadable), the result says "触发已受理、状态未确认" and never
-      claims a browser is waiting; completing the SSO is the human's
-      step, never a fabricated success.
-
-    Returns {"triggered", "state", "label", "started_here", "restored",
-    "note", "error", "recovery"}; ``error``/``recovery`` are the
-    authoritative A1 pair (a refused NEW session is not a credential
-    failure), and failures raise structured OperationErrors.
-    """
-    opener = urlopen_fn or urllib.request.urlopen
-    ops = ops or production_backend_ops()
-    paths = ops._paths()
-    try:
-        with open(paths["control_token"], encoding="utf-8") as f:
-            token = f.read().strip()
-    except OSError:
-        token = ""
-    if not token:
-        raise OperationError(
-            "share_backend_login_failed",
-            "专用后端控制令牌缺失或为空（未部署或已清理）；不触发登录")
-    started_here = False
-    was_running = ops.verify_running() is True
-    if not was_running:
-        if ops.start() is not True:
-            raise OperationError(
-                "share_backend_login_failed",
-                "专用后端启动未获门确认；不触发登录")
-        started_here = True
-
-    def _restore_and_raise(message):
-        restored = None
-        if started_here:
-            ops.stop()
-            restored = ops.verify_running() is not True
-        suffix = ""
-        if started_here:
-            suffix = ("；已按原始状态恢复（专用后端已停止）"
-                      if restored is True else
-                      "；恢复未确认——请人工核对专用后端进程与 %s 端口后清理"
-                      % paths["port"])
-        raise OperationError("share_backend_login_failed", message + suffix)
-
-    if not was_running:
-        # Cold-start readiness gate (Fix A): do NOT submit the login to a
-        # process that has not proven its control surface answers — that
-        # would connect-refuse and wrongly restore the fresh instance.
-        ready = False
-        for _ in range(max(1, ready_attempts)):
-            if _backend_health_ok(paths, opener=opener):
-                ready = True
-                break
-            time.sleep(ready_interval_s)
-        if not ready:
-            _restore_and_raise(
-                "专用后端冷启动未就绪（%.0fs 内 /health 未确认响应）；"
-                "不提交登录" % (ready_attempts * ready_interval_s))
-
-    # Already valid: nothing to trigger (bearer present); no restore —
-    # a running+valid instance is the desired end state either way.
-    state, label, detail, instance_recovery = _backend_auth_observation(
-        paths, opener=opener)
-    if state == "valid":
-        error, recovery = _auth_outcome("valid", detail, instance_recovery)
-        return _login_result(
-            False, "valid", label, started_here, None,
-            "专用后端上游认证已有效（无需触发登录）",
-            error=error, recovery=recovery)
-
-    trigger = urllib.request.Request(
-        "http://127.0.0.1:%d%s" % (paths["port"],
-                                   _BACKEND_LOGIN_TRIGGER_PATH),
-        data=b"", method="POST",
-        headers={"X-Admin-Control": token})
-    try:
-        with opener(trigger, timeout=8) as resp:
-            trigger_status = resp.status
-            resp.read()
-    except urllib.error.HTTPError as exc:
-        trigger_status = exc.code
-        try:
-            exc.read()
-        except (OSError, ValueError):
-            pass
-        finally:
-            try:
-                exc.close()
-            except Exception:  # noqa: BLE001
-                pass
-    except (urllib.error.URLError, OSError, TimeoutError) as exc:
-        _restore_and_raise("登录触发请求失败（%s: %s）"
-                           % (type(exc).__name__, exc))
-    if trigger_status != 202:
-        # The endpoint answers 202 for an accepted fire-and-forget trigger;
-        # anything else means the login did NOT start. Report only the
-        # status code — no response body, and never the control secret.
-        _restore_and_raise("登录触发被拒（HTTP %s）；未开始登录流程"
-                           % trigger_status)
-
-    last_state, last_label, last_detail = None, None, None
-    last_recovery = None
-    observed_any = False
-    for _ in range(max(1, poll_attempts)):
-        (last_state, last_label, last_detail,
-         last_recovery) = _backend_auth_observation(paths, opener=opener)
-        if last_state != "unknown":
-            observed_any = True
-        if last_state == "valid":
-            error, recovery = _auth_outcome(
-                "valid", last_detail, last_recovery)
-            return _login_result(
-                True, "valid", last_label, started_here, None,
-                "登录完成（上游认证有效）", error=error, recovery=recovery)
-        if last_state == "logging_in":
-            # The ONLY state chat2api's refresh(wait=False) sets when it
-            # actually starts the browser flow — here (and only here) the
-            # popped window really is waiting for the human.
-            error, recovery = _auth_outcome(
-                "logging_in", last_detail, last_recovery)
-            return _login_result(
-                True, "logging_in", last_label, started_here, None,
-                "登录进行中——请在弹出的专用实例浏览器窗口完成 "
-                "UM 登录，然后点「刷新状态」确认",
-                error=error, recovery=recovery)
-        if (last_detail or "").startswith("reauth_refused:"):
-            # A refused session never started, so this is NOT a failed login:
-            # leave the instance exactly as it is (never stop a healthy process
-            # because the cross-instance gate said no) and report the refusal
-            # itself. Checked before the state branches because a refusal leaves
-            # the instance in needs_login (refresh() only sets _auth_error), so a
-            # state-first test would report the common refusal as "trigger
-            # accepted, re-trigger if needed".
-            error, recovery = _auth_outcome(
-                last_state or "failed", last_detail, last_recovery)
-            return _login_result(
-                True, last_state or "failed", last_label, started_here, None,
-                "专用实例拒绝了本次登录会话（%s）——未开启新的"
-                "提交窗口，实例保持运行；%s"
-                % (last_detail, _reauth_refusal_message(last_detail)),
-                error=error, recovery=recovery)
-        if last_state == "failed":
-            # A failed state whose error never judged the credential
-            # (superseded / BrowserDisabled / manual_takeover:*) is NOT a
-            # login failure: keep the instance exactly as it is and report
-            # the instance's own reason with the honest recovery step.
-            note = _non_credential_failure_note(last_detail)
-            if note is not None:
-                error, recovery = _auth_outcome(
-                    "failed", last_detail, last_recovery)
-                return _login_result(
-                    True, "failed", last_label, started_here, None,
-                    note, error=error, recovery=recovery)
-            # Plan-Revision 13: the instance also reports WHY it stopped
-            # (for example a window left to a human), so the failure text
-            # carries it instead of a bare "failed" nobody can act on.
-            _restore_and_raise("专用后端登录失败（%s）"
-                               % (last_detail or last_label or "failed"))
-        time.sleep(poll_interval_s)
-    # Window ended without a terminal verdict (Fix B): the honest report
-    # depends on what was ACTUALLY observed. "needs_login" observed means
-    # the instance still says no login session exists; NO readable state
-    # at all means the status endpoint stayed unreachable — neither may be
-    # presented as "browser waiting for the human".
-    if last_state == "needs_login" and observed_any:
-        error, recovery = _auth_outcome(
-            "needs_login", last_detail, last_recovery)
-        return _login_result(
-            True, "needs_login", last_label, started_here, None,
-            "登录触发已受理；专用实例报告「需要登录」——尚未"
-            "观察到登录会话（logging_in）%s。请点「刷新状态」"
-            "核对，必要时再次触发"
-            % (("；实例自报原因：%s" % last_detail)
-               if last_detail else ""),
-            error=error, recovery=recovery)
-    error, recovery = _auth_outcome(
-        "unknown", last_detail, last_recovery)
-    return _login_result(
-        True, last_state or "unknown", last_label, started_here, None,
-        "登录触发已受理（HTTP 202）；当前认证状态未确认"
-        "（状态接口未观察到可读状态）——请稍后点「刷新状态」"
-        "核对",
-        error=error, recovery=recovery)
-
-
-def backend_login_cancel(*, ops=None, urlopen_fn=None):
-    """Cancel THIS login round on the dedicated 8110 instance (D18-6).
-
-    POSTs the control-token-gated ``/admin/auth/cancel``. The instance ends
-    the current login round and closes its browser context; it is NEVER stopped,
-    restarted or reconfigured here, and ordinary requests never reopen the
-    round. A later explicit login may start a new one.
-
-    Returns ``{"cancelled": bool, "state": str, "detail": str|None}`` with
-    ``state`` in ``{"cancelled", "no_login_in_progress"}``. A missing control
-    token or an unreachable/refused endpoint raises ``OperationError`` and never
-    reports a fabricated success.
-    """
-    opener = urlopen_fn or urllib.request.urlopen
-    ops = ops or production_backend_ops()
-    paths = ops._paths()
-    token, reason = _backend_control_token(paths)
-    if token is None:
-        raise OperationError(
-            "share_backend_login_cancel_failed",
-            "专用后端控制令牌缺失或为空（未部署或已清理）；未取消登录")
-    request = urllib.request.Request(
-        "http://127.0.0.1:%d%s" % (paths["port"],
-                                   _BACKEND_LOGIN_CANCEL_PATH),
-        data=b"", method="POST",
-        headers={"X-Admin-Control": token})
-    try:
-        with opener(request, timeout=8) as resp:
-            status = resp.status
-            body = resp.read()
-    except urllib.error.HTTPError as exc:
-        status = exc.code
-        body = b""
-        try:
-            exc.read()
-        except (OSError, ValueError):
-            pass
-        finally:
-            try:
-                exc.close()
-            except Exception:  # noqa: BLE001
-                pass
-    except (urllib.error.URLError, OSError, TimeoutError) as exc:
-        raise OperationError(
-            "share_backend_login_cancel_failed",
-            "登录取消失败（%s: %s）；未停止服务"
-            % (type(exc).__name__, exc))
-    if status != 200:
-        # Report only the status code — no response body, and never the
-        # control secret.
-        raise OperationError(
-            "share_backend_login_cancel_failed",
-            "登录取消被拒（HTTP %s）；服务未停止" % status)
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (ValueError, UnicodeError):
-        raise OperationError(
-            "share_backend_login_cancel_failed",
-            "登录取消响应不可读；请刷新状态核对")
-    if not isinstance(payload, dict) or not isinstance(
-            payload.get("state"), str):
-        raise OperationError(
-            "share_backend_login_cancel_failed",
-            "登录取消响应不符合契约；请刷新状态核对")
-    detail = payload.get("detail")
-    return {
-        "cancelled": bool(payload.get("cancelled")),
-        "state": payload["state"],
-        "detail": detail if isinstance(detail, str) else None,
-    }
-
-
-def production_backend_ops(config=None):
-    """Production dedicated-backend gate (fresh instance per call; the
-    paths/port resolve lazily so assembly never touches the filesystem).
-
-    ``config`` is the explicit ``BackendConfig`` the cloud composition root
-    passes (E19-1-06): the gateway source dir, every state path, the port and
-    the base URL then come from the object, never from the process
-    environment. Without it the historical environment-driven behavior is kept
-    byte for byte.
-
-    Windows keeps ``_ProductionBackendOps``; POSIX uses the pid-file +
-    /proc identity gate (no tasklist/netstat/CIM/taskkill)."""
-    if config is not None:
-        gateway_dir = config.backend_gateway_dir
-    else:
-        gateway_dir = str((Path(__file__).resolve().parents[1] / "chat2api"))
-    if os.name == "posix":
-        return _MergedBackendOps(gateway_dir=gateway_dir, config=config)
-    return _ProductionBackendOps(gateway_dir=gateway_dir, config=config)
 
 
 def production_keys_confirmed(manager=None):
@@ -3107,19 +1066,13 @@ def production_seams(*, broker=None, task_name=None,
     (console/share_actions.py :40-90), so wiring is a direct
     ``setattr(console_share_actions, key, value)`` per entry:
 
-    * _BROKER_OPS / _BACKEND_OPS / _BACKEND_OBSERVE are the restricted
-      broker gate, the dedicated-backend gate and its read-only observation;
+    * _BROKER_OPS is the restricted broker gate;
     * _DESIRED_STOP_READER reads the broker's protected lifecycle record
       (injectable status_path, default the deployment path);
     * _MAINTENANCE_BEGIN / _MAINTENANCE_END / _MAINTENANCE_STATUS /
       _GATEWAY_RESTART are the wave-1 BrokerClient maintenance verbs
       bound to the SAME broker as the gate (no raw action strings here);
-    * _BACKEND_REAUTH is the A9-2 production body (its own lazy ops);
-    * _INTENT_WRITE is the deferred supervision writer (the console action
-      layer never imports the supervision module);
-    * _SUPERVISION_STATE is the Rev19 A19-2 supervision-segment read face
-      (lazy: it imports the supervision module only when the segment is
-      requested, and reads the supervisor's OWN state file).
+    * _KEYS_CONFIRMED / _KEYS_DIAGNOSIS are the key preconditions.
 
     The retired Windows TS/Funnel seams are NOT delivered any more (#33):
     the cloud deployment has no Tailscale/Funnel layer. The broker gate is
@@ -3136,9 +1089,6 @@ def production_seams(*, broker=None, task_name=None,
         "_BROKER_OPS": ops,
         "_DESIRED_STOP_READER": partial(production_desired_stop_reader,
                                         **reader_bind),
-        "_BACKEND_OPS": production_backend_ops(),
-        "_BACKEND_OBSERVE": production_backend_observe,
-        "_BACKEND_LOGIN": production_backend_login,
         "_KEYS_CONFIRMED": (partial(production_keys_confirmed,
                                     manager=keys_manager)
                             if keys_manager is not None
@@ -3155,9 +1105,6 @@ def production_seams(*, broker=None, task_name=None,
                                       broker=broker),
         "_GATEWAY_RESTART": partial(production_gateway_restart,
                                    broker=broker),
-        "_BACKEND_REAUTH": production_backend_reauth,
-        "_INTENT_WRITE": _production_intent_write,
-        "_SUPERVISION_STATE": production_supervision_state,
     }
     if cloud:
         # Explicit cloud (Linux) role: the persistent stop intent is the
@@ -3165,33 +1112,6 @@ def production_seams(*, broker=None, task_name=None,
         seams["_DESIRED_STOP_READER"] = partial(
             production_linux_desired_stop_reader, state_dir=linux_state_dir)
     return seams
-
-
-# R13: the dedicated 8110 child's aggregate transport is gated by an explicit
-# startup scope. The gray release is NOT enabled: every list is empty, so the
-# child's nonstream_aggregate_allowed() is False for every verified key, model and
-# protocol and ALL 8110 non-stream requests keep the native transport. The empty
-# value is sent explicitly (not omitted) so the startup record says the operator
-# decided not to select a scope instead of leaving an ambiguous absence. Only
-# _child_env (the 8110 child) receives this scope; the private 8000 chain is never
-# started here and never inherits it. Do NOT add a key id/model here without the
-# matching N3 acceptance evidence: the temporary N3 key is deleted, the four existing
-# user keys are not verified for this transport, and the key id must always be the
-# share ledger's verified identity, never a client-supplied request field.
-#
-# Kept at the END of the module on purpose: test_share_gate_citations.py pins the
-# line numbers of _paths/_child_env and the surrounding comments, so adding these
-# definitions before them would silently re-point every citation.
-BACKEND_AGGREGATE_SCOPE_ENV = "CHAT2API_NONSTREAM_AGGREGATE_SCOPE"
-
-
-def _backend_aggregate_scope_json():
-    """The explicit, empty startup scope handed to the dedicated 8110 child."""
-    return json.dumps({
-        "key_ids": [],
-        "models": [],
-        "protocols": [],
-    }, separators=(",", ":"))
 
 
 # ------------------------------------------------- Linux stop intent (cloud)

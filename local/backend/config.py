@@ -37,9 +37,9 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 
 # E19-1-04 step 3: the real deployment listeners. A local fixture must never
 # bind one of these - an accidental match would take the production service's
-# port (8000/8001 private chain, 8100 share gateway, 8110 share backend,
-# 18096 cloud console, 5901 whatever the deployment assigns) or steal it.
-FORBIDDEN_PORTS = frozenset({8000, 8001, 8100, 8110, 18096, 5901})
+# port (8000/8001 private chain, 8100 share gateway, 18096 cloud
+# console, 5901 whatever the deployment assigns) or steal it.
+FORBIDDEN_PORTS = frozenset({8000, 8001, 8100, 18096, 5901})
 
 # E19-1-04 step 4: the real state/profile/secret paths of the in-package
 # deployment. A fixture that names one of these would read or write the operator's
@@ -667,7 +667,7 @@ class LocalConfig:
         # child resolve temp files outside the isolation.
         _require_um_home(um_runtime, values["home_dir"])
         # standards-config-06 / spec-local-006: the ledger the summary READS
-        # and the ledger the 8110 child WRITES are one identity, not two
+        # and the ledger the 8100 process WRITES are one identity, not two
         # independent paths. A mismatch made the summary read a file the child
         # never wrote and report a quiet zero.
         try:

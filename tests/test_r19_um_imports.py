@@ -60,21 +60,9 @@ spec.loader.exec_module(module)
 
 before = {
     "share_auth": "share_auth" in sys.modules,
-    "share_dispatch": "share_dispatch" in sys.modules,
 }
 
-def attempt(name):
-    try:
-        getattr(module, name)()
-    except ImportError:
-        return "ImportError"
-    return "loaded"
-
-module.SHARE_BACKEND_ROLE = False
-role_false_loads = {
-    "_load_share_dispatch": attempt("_load_share_dispatch"),
-    "_share_auth_module": attempt("_share_auth_module"),
-}
+module._share_auth_module()
 
 print(json.dumps({
     "package_root": str(module._PACKAGE_ROOT),
@@ -84,9 +72,7 @@ print(json.dumps({
     "before": before,
     "after": {
         "share_auth": "share_auth" in sys.modules,
-        "share_dispatch": "share_dispatch" in sys.modules,
     },
-    "role_false_loads": role_false_loads,
 }))
 """
 
@@ -179,27 +165,7 @@ class Chat2apiSharedImportTests(unittest.TestCase):
                     "shared.responses_protocol", modules,
                     "{} must import shared.responses_protocol".format(name))
 
-    def test_role_false_loaders_raise_before_loading(self):
-        original_role = chat2api.SHARE_BACKEND_ROLE
-        chat2api.SHARE_BACKEND_ROLE = False
-        try:
-            cached_dispatch = types.ModuleType("share_dispatch")
-            cached_gateway = types.ModuleType("share_auth")
-            for name in chat2api._SHARE_AUTH_REQUIRED:
-                setattr(cached_gateway, name, lambda *_args: None)
-            with mock.patch.dict(sys.modules, {
-                    "share_dispatch": cached_dispatch,
-                    "share_auth": cached_gateway}):
-                with self.assertRaises(ImportError):
-                    chat2api._load_share_dispatch()
-                with self.assertRaises(ImportError):
-                    chat2api._share_auth_module()
-        finally:
-            chat2api.SHARE_BACKEND_ROLE = original_role
-
-    def test_private_role_revoke_endpoint_answers_503(self):
-        original_role = chat2api.SHARE_BACKEND_ROLE
-        chat2api.SHARE_BACKEND_ROLE = False
+    def test_revoke_endpoint_without_gate_answers_503(self):
         original_log_message = chat2api.Handler.log_message
         chat2api.Handler.log_message = lambda *_args: None
         server = ThreadingHTTPServer(("127.0.0.1", 0), chat2api.Handler)
@@ -214,8 +180,6 @@ class Chat2apiSharedImportTests(unittest.TestCase):
 
         self.addCleanup(setattr, chat2api.Handler, "log_message",
                         original_log_message)
-        self.addCleanup(setattr, chat2api, "SHARE_BACKEND_ROLE",
-                        original_role)
         self.addCleanup(stop)
         connection = http.client.HTTPConnection(
             "127.0.0.1", server.server_address[1], timeout=5)
@@ -261,16 +225,10 @@ class Chat2apiSharedImportTests(unittest.TestCase):
                          AI_GATEWAY_ROOT.resolve())
         self.assertIs(payload["nonstream_is_shared"], True,
                       "chat2api must load the aggregator from shared")
-        self.assertEqual(payload["before"],
-                         {"share_auth": False, "share_dispatch": False},
-                         "the private import must not load the share gate or the dispatch module")
-        self.assertEqual(payload["role_false_loads"],
-                         {"_load_share_dispatch": "ImportError",
-                          "_share_auth_module": "ImportError"},
-                         "the private role must refuse both share loaders")
-        self.assertEqual(payload["after"],
-                         {"share_auth": False, "share_dispatch": False},
-                         "a refused loader must not import the share backend")
+        self.assertEqual(payload["before"], {"share_auth": False},
+                         "the private import must not load the share gate")
+        self.assertEqual(payload["after"], {"share_auth": True},
+                         "the lazy loader must import the in-process share gate")
 
     def test_missing_shared_package_fails_the_import_closed(self):
         """No second copy: a bundle without ``shared`` must fail, not degrade.
@@ -331,7 +289,7 @@ def _free_loopback_port():
     ``local.tests.test_local_composition._free_port``,
     ``tests.test_r19_cloud_root._free_port``) all exclude the production
     ports. This fourth one only bound port 0 and accepted whatever came back,
-    so a real 8000/8001/8100/8110/18096/5901 could be handed to a real
+    so a real 8000/8001/8100/18096/5901 could be handed to a real
     ``chat2api.main()`` child.
     """
     from local.backend.config import FORBIDDEN_PORTS
@@ -358,14 +316,10 @@ class PortAllocatorConsistencyTests(unittest.TestCase):
     def test_every_allocator_excludes_the_same_production_ports(self):
         sys.path.insert(0, str(AI_GATEWAY_ROOT / "tests"))
         import r19.local_fixture as local_fixture
-        import r19.cloud_fixture as cloud_fixture
         from local.backend.config import FORBIDDEN_PORTS as LOCAL_PORTS
-        from cloud.backend.config import FORBIDDEN_PORTS as CLOUD_PORTS
         sets = {
             "local.backend.config": set(LOCAL_PORTS),
-            "cloud.backend.config": set(CLOUD_PORTS),
             "r19.local_fixture": set(local_fixture.PRODUCTION_PORTS),
-            "r19.cloud_fixture": set(cloud_fixture.PRODUCTION_PORTS),
         }
         reference = sets["local.backend.config"]
         for name, ports in sets.items():

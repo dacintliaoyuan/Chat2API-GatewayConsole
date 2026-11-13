@@ -62,7 +62,7 @@ HOST_VERIFY_CHECKS = frozenset(("running", "closed"))
 HOST_STOP_ACTION = "host-stop"
 HOST_REPAIR_LIMITS_ACTION = "host-repair-limits"
 
-# Temporary maintenance lease (A9-3 8110 restart pauses 8100 acceptance via
+# Temporary maintenance lease (A9-3 8100 restart pauses acceptance via
 # this lease; A9-4 8100 restart carries its own maintenance record). The
 # lease is a MAINTENANCE TRANSIENT, never a confirmed stop: it binds
 # (component, instance_id, round, expires_at) and a stopped instance can
@@ -83,7 +83,6 @@ HOST_EVIDENCE_CHECKS = frozenset(("limits", "faults", "watchdog"))
 # Component enum: protocol constants; the concrete object is pinned by the
 # broker-side deployment configuration (the TS_SERVICE_NAME pattern).
 COMPONENT_SHARE_GATEWAY = "share_gateway"      # 8100
-COMPONENT_SHARE_BACKEND = "share_backend"      # 8110 (no lease this round)
 MAINTENANCE_COMPONENTS = frozenset((COMPONENT_SHARE_GATEWAY,))
 GATEWAY_RESTART_COMPONENTS = frozenset((COMPONENT_SHARE_GATEWAY,))
 

@@ -121,7 +121,7 @@ class FakeBroker:
         self.graceful_stop_calls = 0
         self.emergency_stop_calls = 0
         self.emergency_stop_result = {"state": "stopped", "stopped": True}
-        # S2: model the REAL 8110 runtime's security watermark. The runtime
+        # S2: model the REAL 8100 runtime's security watermark. The runtime
         # advances its own applied revoke watermark ONLY when a Key transitions
         # from enabled to disabled/absent (a REVOKE). A rotate (same Key, new
         # secret_version) leaves it untouched, so the pending rotate intent is
@@ -263,9 +263,6 @@ class ConsoleShareFacadeTests(unittest.TestCase):
                 broker=self.broker, runner=fake_runner, keys_manager=keys_manager,
                 cloud=cloud,
                 status_path=str(Path(self.tmp_store.name) / "absent-status.json"))
-            # The 8110 HTTP/file observer has independent boundaries.
-            seams["_BACKEND_OBSERVE"] = lambda: {
-                "running": False, "auth_state": None}
             for name, value in seams.items():
                 setattr(_share_orchestration, name, value)
             _share_orchestration._BROKER_OPS = (
@@ -513,7 +510,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
             f"/api/console/share-management/keys/{key['id']}/rotate",
             method="POST", xrw="XMLHttpRequest",
             body={"expected_row_version": key["row_version"]})
-        # The real 8110 runtime does NOT advance its applied revoke watermark
+        # The real 8100 runtime does NOT advance its applied revoke watermark
         # for a rotate (the Key stays enabled), so the publication is refused
         # fail-closed instead of pretending a success.
         self.assertEqual(status, 503)
@@ -578,7 +575,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.assertFalse(result["key"]["enabled"])
         self.assertTrue(result["revoked"])
         self.assertEqual(self.broker.terminate_keys_seen, [[key["id"]]])
-        # C1/D18-3: the answer separates 8100/8110 counters and never
+        # C1/D18-3: the answer separates the gateway counters and never
         # pretends an already-consumed upstream cost can be withdrawn.
         self.assertEqual(result["terminated"], 2)
         self.assertEqual(result["released"], 3)

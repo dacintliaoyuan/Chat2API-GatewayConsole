@@ -61,7 +61,7 @@ LOCAL_KEY = "local-secret-n1"
 ATTRIBUTION_KEY_ID = "synthetic-selected-key"
 UNSELECTED_KEY_ID = "unselected-key"
 # The exact canonical JSON console_share_production._backend_aggregate_scope_json
-# hands to the dedicated 8110 child: an EXPLICITLY empty (disabled) scope. Kept
+# hands to the share entry: an EXPLICITLY empty (disabled) scope. Kept
 # as a literal so this suite stays independent of the console module; the console
 # suite pins the builder's output to this same string.
 PRODUCTION_EMPTY_SCOPE_JSON = '{"key_ids":[],"models":[],"protocols":[]}'
@@ -1230,7 +1230,7 @@ class TestNonStreamAggregateScopeUnit(unittest.TestCase):
                 json.dumps(data)), data)
 
     def test_production_empty_scope_is_disabled_and_matches_nothing(self):
-        # The exact JSON console_share_production hands to the dedicated 8110
+        # The exact JSON console_share_production hands to the share entry
         # child. It is a VALID disabled scope (not a parse failure), and no
         # verified real key/model/protocol triple matches it.
         scope = chat2api.parse_nonstream_aggregate_scope(
@@ -1539,7 +1539,7 @@ class TestNonStreamAggregateHttp(unittest.TestCase):
         self._assert_native_chat(response)
 
     def test_direct_request_without_attribution_stays_native(self):
-        # Direct 8110: no marker, hence no verified key id.
+        # Direct private request: no marker, hence no verified key id.
         response = self._post("native-model", aggregate=True,
                              sign_headers=False)
         self._assert_native_chat(response)
@@ -1553,7 +1553,7 @@ class TestNonStreamAggregateHttp(unittest.TestCase):
     def test_client_header_cannot_widen_the_scope(self):
         # The scope is read from the startup environment only; a request
         # header carrying the same name is not configuration and cannot turn
-        # aggregation on for a direct 8110 request.
+        # aggregation on for a direct private request.
         response = self._post(
             "native-model", aggregate=True, install_scope=False,
             sign_headers=False,

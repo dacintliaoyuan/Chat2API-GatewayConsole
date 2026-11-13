@@ -1790,10 +1790,8 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
             # attribution shape, so keep it unwired instead of reading the live
             # process.
             mock.patch.object(orch, "_MAINTENANCE_STATUS", None),
-            mock.patch.object(orch, "_BACKEND_OBSERVE", lambda: {
-                "running": True, "auth_state": "valid",
-                "auth_label": "认证有效",
-                "attribution": dict(self.NOT_READY)}),
+            mock.patch.object(orch, "_share_entry_attribution",
+                              lambda: dict(self.NOT_READY)),
         ]
         for patcher in patchers:
             patcher.start()
@@ -1817,7 +1815,6 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
         self.assertNotIn("wired", payload["attribution"])
         # 加性：既有字段的值与语义不变。
         self.assertIs(payload["in_sync"], True)
-        self.assertEqual(payload["account"], {"valid": True, "running": True})
 
     def test_status_reports_file_ready_and_instance_not_loaded(self):
         ready = dict(self.NOT_READY, file_ready=True, reason="ok",
@@ -1826,9 +1823,8 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
                                            value="no",
                                            reason="process_started_before_"
                                                   "key_mtime"))
-        with mock.patch.object(orch, "_BACKEND_OBSERVE", lambda: {
-                "running": True, "auth_state": "valid",
-                "auth_label": "认证有效", "attribution": ready}):
+        with mock.patch.object(orch, "_share_entry_attribution",
+                              lambda: dict(ready)):
             payload = self._status()
         self.assertEqual(payload["attribution"], ready)
         self.assertIs(payload["attribution"]["file_ready"], True)
@@ -1837,10 +1833,8 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
 
     def test_renamed_state_source_is_not_reported_as_attribution(self):
         """变异核对：状态来源改名后端点不得冒充归因在场。"""
-        with mock.patch.object(orch, "_BACKEND_OBSERVE", lambda: {
-                "running": True, "auth_state": "valid",
-                "auth_label": "认证有效",
-                "attribution_state": {"file_ready": True}}):
+        with mock.patch.object(orch, "_share_entry_attribution",
+                              lambda: {"attribution_state": {"file_ready": True}}):
             payload = self._status()
         self.assertNotIn("attribution", payload)
 

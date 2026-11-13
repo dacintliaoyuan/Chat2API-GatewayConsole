@@ -290,8 +290,9 @@ class BrokerHostCoordinator:
         # poll on the injected clock instead of a single immediate check.
         # The budget stays strictly under the wire deadline
         # (share_broker_protocol.DEFAULT_DEADLINE_SECONDS = 10s) and under the
-        # console's backend layer budget (console_share_actions
-        # _BACKEND_DEFAULT_S = 30s), so a late readiness can never arrive
+        # console's gateway layer budget (console_share_actions
+        # _GATEWAY_RESTART_DEFAULTS = 120s), so a late readiness can never
+        # arrive
         # after the caller already gave up (no ownerless running instance).
         self.start_ready_timeout = start_ready_timeout
         self.start_poll_interval = start_poll_interval

@@ -36,7 +36,7 @@ UM_CONSOLE_LOG="${UM_CONSOLE_LOG:-/var/log/um-share-console}"
 UM_SYSTEMD_DIR="${UM_SYSTEMD_DIR:-/etc/systemd/system}"
 UM_BROKER_USER="${UM_BROKER_USER:-um-share}"
 UM_BROKER_GROUP="${UM_BROKER_GROUP:-um-share}"
-# The broker host, the console, the 8100/8110 children and the loopback display
+# The broker host, the console, the 8100 child and the loopback display
 # share ONE restricted system user.  Privilege separation is by cgroup, unit
 # hardening and the InaccessiblePaths/ReadOnlyPaths fences, not by a second uid;
 # the 0600 control/instance keys are read by this same uid.

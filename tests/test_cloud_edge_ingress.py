@@ -3,7 +3,7 @@
 
 The public edge must route exactly the four shared API paths to the loopback
 8100 gateway and answer every other path with 404.  The private console (18096),
-the 8110 share backend and the display (5901) must never appear as an ingress
+the display (5901) must never appear as an ingress
 service.  ``check-ingress.py`` only reads the file and reports
 ``{ok, problems, rules}``; it never writes or reloads a tunnel.
 
@@ -26,7 +26,7 @@ CONFIG = DEPLOY / "config" / "cloudflared.yml.example"
 HOST = "dacintapi.de5.net"
 API_PATHS = ("/v1/models", "/v1/chat/completions", "/v1/messages",
              "/v1/responses")
-FORBIDDEN_PORTS = ("18096", "8110", "5901")
+FORBIDDEN_PORTS = ("18096", "5901")
 
 
 def _load_checker():

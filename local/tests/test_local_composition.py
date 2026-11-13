@@ -388,7 +388,7 @@ class LocalConfigTests(unittest.TestCase):
         """standards-config-06 / spec-local-006: one ledger, one identity.
 
         ``ledger_file`` is what the summary reads; ``um_runtime.usage_log`` is
-        what the 8110 child writes. The old config accepted them as two
+        what the 8100 process writes. The old config accepted them as two
         independent paths, so the summary could read a ledger the child never
         wrote and report a quiet zero. A mismatch is a configuration error.
         """
@@ -541,10 +541,10 @@ class LocalConfigTests(unittest.TestCase):
             self.assertTrue(path == root or root in path.parents,
                             "um_runtime.%s=%s escapes %s"
                             % (name, value, root))
-        self.assertNotIn(fixture["port"], (8000, 8001, 8100, 8110, 18096,
+        self.assertNotIn(fixture["port"], (8000, 8001, 8100, 18096,
                                          5901))
         self.assertNotIn(fixture["um_runtime"]["port"],
-                         (8000, 8001, 8100, 8110, 18096, 5901))
+                         (8000, 8001, 8100, 18096, 5901))
 
 
 class IsolationGuardRegressionTests(unittest.TestCase):
@@ -1335,7 +1335,7 @@ class LocalAppTests(unittest.TestCase):
                 encoding="utf-8")
             for forbidden in ("import usagesrv", "import console_adapters",
                               "import share_management", "import share_store",
-                              "import share_entry", "import share_dispatch",
+                              "import share_entry",
                               "import console_display_proxy"):
                 self.assertNotIn(forbidden, source, name)
         self.assertNotIn("console_adapters", sys.modules)
@@ -1351,7 +1351,7 @@ class LocalAppTests(unittest.TestCase):
         """
         forbidden = ("cloud", "usagesrv", "console_adapters",
                      "share_management", "share_store", "share_entry",
-                     "share_dispatch", "share_metering", "share_broker_host",
+                     "share_metering", "share_broker_host",
                      "console_display_proxy")
         # R19-5 retained surface: recorded here so a future change that ADDS a
         # module to this set is visible, but NOT asserted absent - retiring them

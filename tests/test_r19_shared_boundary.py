@@ -602,7 +602,7 @@ class KnownDeferredBoundaryTests(unittest.TestCase):
             "{} no longer imports {}: E19-2 moved the credential reader; "
             "update this known-deferral assertion".format(
                 shared.name, self.SECRET_PROTECTION_IMPORT))
-        for relative in ("local/backend/app.py", "cloud/backend/app.py"):
+        for relative in ("local/backend/app.py",):
             path = AI_GATEWAY_ROOT / relative
             with self.subTest(path=relative):
                 self.assertTrue(path.is_file(), "{} must exist".format(path))
@@ -622,8 +622,7 @@ class DualEndConsumptionTests(unittest.TestCase):
     still fails.
     """
 
-    END_DIRS = {"local": AI_GATEWAY_ROOT / "local",
-                "cloud": AI_GATEWAY_ROOT / "cloud"}
+    END_DIRS = {"local": AI_GATEWAY_ROOT / "local"}
 
     @staticmethod
     def _shared_imports(path):

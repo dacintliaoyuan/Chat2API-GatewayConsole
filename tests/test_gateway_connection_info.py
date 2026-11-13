@@ -404,13 +404,13 @@ class Chat2ApiSourceTests(unittest.TestCase):
         self.assertIn("形状异常", payload["reason"])
 
     def test_share_instance_port_mismatch_is_unknown(self):
-        # 反例（调查 §3.1）：8110 share 实例与私有实例共用同一脚本，按 --port 区分
+        # 反例（调查 §3.1）：28110 share 实例与私有实例共用同一脚本，按 --port 区分
         self.write_log(_record_line(downstream_key="not_required"))
         payload = self._info(
-            cmdline="python chat2api.py --port 8110 --profile x")
+            cmdline="python chat2api.py --port 28110 --profile x")
         self.assertEqual(payload["key_state"], "unknown")
         self.assertNotEqual(payload["key_state"], "absent")
-        self.assertIn("8110", payload["reason"])
+        self.assertIn("28110", payload["reason"])
 
     def test_stopped_instance_is_unknown(self):
         payload = self._info(state="Stopped", pids=())

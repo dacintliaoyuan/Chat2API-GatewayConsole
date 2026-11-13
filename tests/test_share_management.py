@@ -38,7 +38,7 @@ class FakeBroker:
         self.graceful_stop_calls = 0
         self.emergency_stop_calls = 0
         self.emergency_stop_result = {"state": "stopped", "stopped": True}
-        # S2: model the REAL 8110 runtime's security watermark. The
+        # S2: model the REAL 8100 runtime's security watermark. The
         # runtime advances its own applied revoke watermark ONLY when a Key
         # transitions from enabled to disabled/absent (a REVOKE). A rotate
         # (same Key, new secret_version) and a lowered limit leave it

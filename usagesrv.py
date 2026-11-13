@@ -1325,11 +1325,11 @@ SHARE_USAGE_LEDGER_NAME = "usage-share-backend.jsonl"
 
 
 def share_usage_ledger_path():
-    """分享专用后端 8110 的用量账本路径。
+    """合并后 8100 分享进程的用量账本路径。
 
-    解析口径与 console_share_production._backend_dir / console_log_reader 一致：
-    CONSOLE_SHARE_BACKEND_DIR（须绝对路径）覆盖，否则 %LOCALAPPDATA% 下的
-    SelfUseAI/ai-gateway/share-backend；解析不出返回 None（不猜路径）。"""
+    解析口径与 console_log_reader 一致：CONSOLE_SHARE_BACKEND_DIR（须绝对
+    路径）覆盖，否则 %LOCALAPPDATA% 下的 SelfUseAI/ai-gateway/share-backend；
+    解析不出返回 None（不猜路径）。"""
     override = os.environ.get(SHARE_BACKEND_DIR_ENV)
     if override:
         if not os.path.isabs(override):
@@ -3262,56 +3262,26 @@ class Handler(BaseHTTPRequestHandler):
         return "unknown", "状态未知", error
 
     def _console_display_state_payload(self):
-        """GET /display-state: read-only auth + operator + display facts.
+        """GET /display-state: read-only operator + display facts.
 
-        The read never triggers a login, never starts/stops the dedicated
-        instance and never extends the login window: the deadline comes from
-        the instance's OWN one-time window and is passed through verbatim.
+        The read never triggers a login, never starts/stops the share entry and
+        never extends a login window.
         """
-        from console import share_actions as console_share_actions
-        failed = None
-        try:
-            auth = console_share_actions.backend_auth_read()
-        except Exception as exc:  # noqa: BLE001 - unreadable is unknown
-            failed = "%s: %s" % (type(exc).__name__, exc)
-            auth = {"state": None, "label": None, "error": None,
-                    "recovery": None, "observed_at": None,
-                    "login_window_deadline_epoch": None}
+        auth = {"state": None, "label": None, "error": None,
+                "recovery": None, "observed_at": None,
+                "login_window_deadline_epoch": None}
         display = self._console_display_availability()
         state, label, detail = self._console_display_state_of(auth, display)
-        if failed is not None:
-            state, label, detail = "unknown", "状态未知", failed
         return {
             "available": True,
             "state": state,
             "label": label,
             "detail": detail,
-            "observed_at": auth.get("observed_at"),
-            "login_window_deadline_epoch":
-                auth.get("login_window_deadline_epoch"),
+            "observed_at": None,
+            "login_window_deadline_epoch": None,
             "operator": self._console_operator_state(),
             "display": display,
         }
-
-    def _console_backend_login_cancel_payload(self):
-        """POST /backend-login-cancel: end THIS login round only (D18-8)."""
-        from console import share_actions as console_share_actions
-        from console.operations import OperationError
-        try:
-            result = console_share_actions.backend_login_cancel("", {})
-        except OperationError as exc:
-            return 503, {"cancelled": False, "state": None,
-                         "detail": str(exc), "error": exc.code}
-        if not isinstance(result, dict):
-            return 503, {"cancelled": False, "state": None,
-                         "detail": "登录取消响应不符合契约"}
-        cancelled = bool(result.get("cancelled"))
-        state = result.get("state")
-        if state not in ("cancelled", "no_login_in_progress"):
-            state = "cancelled" if cancelled else "no_login_in_progress"
-        detail = result.get("detail")
-        return 200, {"cancelled": cancelled, "state": state,
-                     "detail": detail if isinstance(detail, str) else None}
 
     def _console_display_operator_payload(self, body):
         """POST /display-operator: acquire or explicitly take over (D18-9)."""
@@ -3425,10 +3395,6 @@ class Handler(BaseHTTPRequestHandler):
             # never triggers a login and never extends the login window.
             self._send_json(200, self._console_display_state_payload())
             return
-        if method == "POST" and rest == ["backend-login-cancel"]:
-            status, payload = self._console_backend_login_cancel_payload()
-            self._send_json(status, payload)
-            return
         if method == "POST" and rest == ["display-operator"]:
             body, body_code, body_error = self._read_share_json_body()
             if body_code is not None:
@@ -3494,8 +3460,7 @@ class Handler(BaseHTTPRequestHandler):
                         # management daemon and must never read as share-open (or
                         # close-residue) evidence — observe the actual gateway
                         # instance through the same read-only seam the share.status
-                        # action uses. Account validity rides the dedicated-backend
-                        # observation seam; last_check_at stamps THIS read.
+                        # action uses; last_check_at stamps THIS read.
                         ops = console_share_actions._BROKER_OPS
                         if ops is not None:
                             # verify_running is THREE-STATE (True/False/None):
@@ -3506,28 +3471,20 @@ class Handler(BaseHTTPRequestHandler):
                             running = ops.verify_running()
                             if running is True or running is False:
                                 payload["gateway_running"] = running
-                        observe = console_share_actions._BACKEND_OBSERVE
-                        if observe is not None:
-                            ob = observe()
-                            if isinstance(ob, dict) and \
-                                    ob.get("auth_state") is not None:
-                                payload["account"] = {
-                                    "valid": ob.get("auth_state") == "valid",
-                                    "running": ob.get("running"),
-                                }
-                            # 归因启用状态（2026-09-26 owner 裁定，同日复核重塑：
-                            # 一个布尔不得冒充三件事）：同一观察缝的 attribution
-                            # 子字典原样透出——加性字段，既有字段的值与语义不变。
-                            # file_ready 只表示本进程此刻能读到长度合格的文件；
-                            # instance_loaded 是对运行中 8100 实例的推断
-                            # （yes/no/unknown，查不到进程即 unknown）；request_attribution
-                            # 本读面不观察，只指向 8110 账本 attribution="verified"
-                            # 的运行期事实。旧的 wired 键已删除（只被本读面与
-                            # console_share_actions 消费，两处已同步更新），
-                            # 不留下一个含义模糊的布尔；前端渲染是另一步。
-                            if isinstance(ob, dict) and \
-                                    isinstance(ob.get("attribution"), dict):
-                                payload["attribution"] = dict(ob["attribution"])
+                        # 归因启用状态（2026-09-26 owner 裁定，同日复核重塑：
+                        # 一个布尔不得冒充三件事）：同一观察缝的 attribution
+                        # 子字典原样透出——加性字段，既有字段的值与语义不变。
+                        # file_ready 只表示本进程此刻能读到长度合格的文件；
+                        # instance_loaded 是对运行中 8100 实例的推断
+                        # （yes/no/unknown，查不到进程即 unknown）；request_attribution
+                        # 本读面不观察，只指向 8100 账本 attribution="verified"
+                        # 的运行期事实。旧的 wired 键已删除（只被本读面与
+                        # console_share_actions 消费，两处已同步更新），
+                        # 不留下一个含义模糊的布尔；前端渲染是另一步。
+                        attribution = console_share_actions._share_entry_attribution()
+                        if isinstance(attribution, dict) \
+                                and "file_ready" in attribution:
+                            payload["attribution"] = dict(attribution)
                 except Exception:
                     pass
                 payload["last_check_at"] = int(time.time())
@@ -3689,8 +3646,8 @@ class Handler(BaseHTTPRequestHandler):
                     rest[1], expected_row_version=expected,
                     idempotency_key=idem)
                 # C1/D18-3: the revoke answer distinguishes what the
-                # management side released (8110 PENDING/GRANTED) from what it
-                # aborted (8110 COMMITTED) and what 8100 closed upstream.
+                # management side released (PENDING/GRANTED) from what it
+                # aborted (COMMITTED) and what 8100 closed upstream.
                 # A missing count stays None (never a fabricated 0). The note
                 # must not claim the in-flight state was confirmed when the
                 # instance ACK carried no terminated count.

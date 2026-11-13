@@ -42,9 +42,9 @@ from pathlib import Path
 from unittest import mock
 
 # Ports the real services own (production chat2api 8000, share 8100,
-# console 8110, share broker 8096, m365 bridge 8320). A test server bound to
+# share broker 8096, m365 bridge 8320). A test server bound to
 # any of them is a configuration error, not a test failure to tolerate.
-REAL_SERVICE_PORTS = frozenset({8000, 8100, 8110, 8096, 8320})
+REAL_SERVICE_PORTS = frozenset({8000, 8100, 8096, 8320})
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 

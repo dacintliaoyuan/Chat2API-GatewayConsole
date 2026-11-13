@@ -564,8 +564,8 @@ _reader_slots = threading.BoundedSemaphore(STREAM_MAX_CONCURRENT_READERS)
 # ``stream_options``) and the gateway aggregates the deltas locally. The client's
 # response mode and the ledger's ``stream`` field stay the client's own
 # (``False``). Default False keeps the private 8000 chain and every other caller
-# on the native non-stream transport; the share entry (8110) is not wired to it in
-# N1, and enabling it there needs the N2/N3 gates first.
+# on the native non-stream transport; enabling the share entry needs the N2/N3
+# gates first.
 NONSTREAM_UPSTREAM_AGGREGATE = False
 
 # Per-HTTP-request cumulative authentication wait budget (A3). It is created
@@ -573,9 +573,8 @@ NONSTREAM_UPSTREAM_AGGREGATE = False
 # compatibility retry and hidden retry of THAT request. It is independent of the
 # stream-reader slots below: a request waiting for authentication must never
 # consume a streaming slot before it actually opens a stream. The generic
-# in-process default is 30 seconds; main() resolves the role default (180 for
-# both the private 8000 instance and the dedicated 8110 share backend, D18-5)
-# and an explicit CLI/env value (clamped to 1..180).
+# in-process default is 30 seconds; main() resolves the 8000/8100 default (180,
+# D18-5) and an explicit CLI/env value (clamped to 1..180).
 try:
     AUTH_WAIT_BUDGET_S = max(0.01, min(180.0, float(
         os.environ.get("CHAT2API_AUTH_WAIT_BUDGET_S", "30"))))
@@ -1130,7 +1129,7 @@ def _owner_pid_alive(pid) -> bool:
     owner reference. A restart gives the new instance a different PID while the old
     lease keeps its full TTL, so without this probe a dead holder refuses every
     login until the TTL runs out (observed live: an ECS restart left the slot
-    pointing at the previous 8110 for 24 hours and every login answered
+    pointing at the previous 8100 process for 24 hours and every login answered
     ``reauth_refused:global_session_active``).
 
     FAIL-CLOSED: only a DEFINITE "no such process" counts as dead. A probe that
@@ -2188,14 +2187,8 @@ def set_request_facts(protocol, key_id=None, request_id=None,
                       attribution="absent", attribution_ts=None):
     """Install THIS request's attribution facts for record_usage.
 
-    A new request on this thread also ends the PREVIOUS request's pre-send
-    ticket: the ticket is released exactly once here, so a committed ticket can
-    never outlive the request it belonged to (see share_dispatch).
-    ``attribution_ts`` is the VERIFIED marker's own timestamp; 8110 compares it
-    with a persisted revoke generation to refuse only requests admitted before
-    that revoke.
+    ``attribution_ts`` is the VERIFIED marker's own timestamp.
     """
-    _release_share_dispatch_ticket("request_finished")
     _request_facts.protocol = protocol
     _request_facts.key_id = key_id
     _request_facts.request_id = request_id
@@ -2208,242 +2201,26 @@ def _request_fact(name):
     return getattr(_request_facts, name, None)
 
 
-# --------------------------------------- share pre-send dispatch (8110 only)
-# The dedicated share backend (8110) is the ONLY process that receives a
-# VERIFIED attribution marker, and it is the only place where a share request's
-# send can be staggered: before the upstream send, one share Key must not fire a
-# burst of simultaneous requests, while different keys rotate. The 8000 main chain
-# installs no verified fact, so it never assembles a dispatcher and keeps its
-# native JSON and its existing retry/budget/cancel semantics untouched.
-SHARE_DISPATCH_PROTOCOLS = frozenset({"chat", "messages", "responses"})
-
-# Review #9: the SAME source serves TWO roles - the private 8000 main chain and
-# the dedicated 8110 share backend.  Only the backend may assemble the pre-send
-# dispatcher or accept a signed revoke notice: a signed notice that somehow
-# reaches the private chain must be an explicit no-op, never a ticket release.
-# The role is resolved ONCE by main() (dedicated profile / explicit marker) and
-# stays None for an in-process module loaded without main(), so embedded tests
-# and callers keep their existing wiring.  None means "not launched by main()",
-# NOT "backend".
-SHARE_BACKEND_ROLE_ENV = "CHAT2API_SHARE_BACKEND"
-SHARE_BACKEND_KEY_ENV = "CHAT2API_SHARE_ATTRIBUTION_KEY_FILE"
-SHARE_BACKEND_ROLE = None
 
 
-def _parse_share_backend_marker(value):
-    """Parse the explicit role marker; None when the value is not one."""
-    if not isinstance(value, str):
-        return None
-    marker = value.strip().lower()
-    if marker in ("1", "true", "yes", "on", "share-backend",
-                  "share_backend", "backend"):
-        return True
-    if marker in ("0", "false", "no", "off", "private", "main"):
-        return False
-    return None
 
 
-def _resolve_share_backend_role(default):
-    """Resolve the role: explicit marker > backend key env > ``default``."""
-    marker = _parse_share_backend_marker(
-        os.environ.get(SHARE_BACKEND_ROLE_ENV))
-    if marker is not None:
-        return marker
-    if os.environ.get(SHARE_BACKEND_KEY_ENV):
-        return True
-    return default
 
 
-def share_backend_role():
-    """True for the dedicated share backend, False for the private chain.
-
-    ``None`` means this module was loaded without ``main()`` (in-process wiring
-    and tests); it keeps the legacy behavior instead of guessing a role.
-    """
-    if SHARE_BACKEND_ROLE is not None:
-        return SHARE_BACKEND_ROLE
-    return _resolve_share_backend_role(None)
-
-# A request whose cumulative send-wait budget ended before its turn is refused
-# with a retryable 429. The hint is a definite whole number of seconds (the share
-# relay only forwards 1..900) so a client backs off instead of immediately
-# re-entering the same congested rotation.
-SHARE_DISPATCH_RETRY_AFTER_S = 1
-# Review #9: a revoke state file that cannot be read is a retryable service
-# failure, never a client cancellation.  The HTTP error type and the ledger
-# status share this ONE stable name.
-SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS = "share_dispatch_state_unavailable"
-
-_share_dispatcher = None
-_share_dispatcher_lock = threading.Lock()
 
 
-def _load_share_dispatch():
-    """Load the pre-send scheduler beside THIS file, independent of sys.path.
-
-    Same seam as the other beside-THIS-file loaders: the service runs this
-    file as a script (its directory is on sys.path), while test suites load it by
-    path from another directory. Reuse the module when it is already imported so
-    the tests and the wiring share one class object. No I/O or network side effect
-    happens here; the dispatcher itself is still built only on first VERIFIED
-    request.
-
-    E19-1-02: a process resolved as the private (non-share) role refuses BEFORE
-    looking at ``sys.modules`` or the filesystem, so the local package never
-    needs the cloud share backend sources.
-    """
-    if share_backend_role() is False:
-        raise ImportError("share backend module not assembled")
-    import importlib.util
-    module = sys.modules.get("share_dispatch")
-    if module is not None:
-        return module
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "share_dispatch.py")
-    spec = importlib.util.spec_from_file_location("share_dispatch", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["share_dispatch"] = module
-    spec.loader.exec_module(module)
-    return module
 
 
-def share_dispatcher():
-    """The process-wide pre-send dispatcher, built on first VERIFIED request.
-
-    Lazy on purpose: a process that never serves a verified share request (the
-    8000 main chain, or a direct 8110 caller) never assembles one.  Review #9:
-    a process explicitly resolved as the PRIVATE main chain never assembles one
-    even when it receives a verified marker or a signed revoke notice.
-    """
-    if share_backend_role() is False:
-        return None
-    global _share_dispatcher
-    with _share_dispatcher_lock:
-        if _share_dispatcher is None:
-            _share_dispatcher = _load_share_dispatch().ShareDispatcher()
-        return _share_dispatcher
 
 
-def share_dispatch_ticket(protocol):
-    """Register (or re-enter) THIS request's pre-send ticket; None when disabled.
-
-    Enabled ONLY for a request whose attribution this process VERIFIED at its own
-    HTTP boundary (``verify_share_attribution`` -> ``set_request_facts``): the
-    facts must say "verified", the installed protocol must be the handler's own
-    protocol (scope match), and both the verified key id and the request id must be
-    present. A direct 8110 caller, a missing marker, an unverified marker and a
-    mismatched protocol/scope all keep the dispatcher unassembled and this
-    function returns None, leaving the send path unchanged.
-
-    The ticket is stored on this thread's facts so the request-boundary reset in
-    ``set_request_facts`` can release it exactly once.
-    """
-    if protocol not in SHARE_DISPATCH_PROTOCOLS:
-        return None
-    if _request_fact("attribution") != "verified":
-        return None
-    if _request_fact("protocol") != protocol:
-        return None
-    key_id = _request_fact("key_id")
-    request_id = _request_fact("request_id")
-    if not isinstance(key_id, str) or not key_id:
-        return None
-    if not isinstance(request_id, str) or not request_id:
-        return None
-    # A request that 8100 admitted BEFORE the revoke notice may reach this
-    # process AFTER it: the persisted generation refuses a NEW ticket instead of
-    # granting and sending it late.  The check is fail-closed when the state
-    # cannot be read, and a later re-enabled Key's newer attribution is allowed.
-    refusal = _share_dispatch_refusal(key_id)
-    dispatcher = share_dispatcher()
-    if dispatcher is None:
-        # Review #9: the private main chain never assembles a dispatcher, so a
-        # verified marker that reaches it can never create a ticket.
-        return None
-    ticket = dispatcher.register(key_id, request_id,
-                                 closed_reason=refusal)
-    _request_facts.dispatch_ticket = ticket
-    return ticket
 
 
-def _release_share_dispatch_ticket(reason):
-    """Release THIS thread's request ticket exactly once (idempotent)."""
-    ticket = getattr(_request_facts, "dispatch_ticket", None)
-    _request_facts.dispatch_ticket = None
-    if ticket is not None:
-        ticket.release(reason)
 
-
-def _close_share_dispatch():
-    """Process exit: release every ticket exactly once."""
-    dispatcher = _share_dispatcher
-    if dispatcher is not None:
-        dispatcher.close_all("exit")
-
-
-def _raise_share_dispatch_refusal(outcome, reason=None):
-    """Map a non-GRANTED dispatch outcome onto this module's errors.
-
-    The SAME mapping is used after ``wait_turn`` and when ``commit`` refuses a
-    ticket that was released between the grant and the send. A revoke therefore
-    stays a retryable ``_ShareDispatchRevoked`` (429) instead of collapsing into
-    the generic client-disconnect cancellation.  Review #9: an unreadable revoke
-    state is a retryable SERVICE failure (503), not a client cancel; its reason
-    is the closed ticket's own ``revoke_state_unavailable``.
-    """
-    module = _load_share_dispatch()
-    # Review #9: the reason wins over the generic outcome: an unreadable
-    # revoke state is a retryable SERVICE failure, never a client cancel.
-    if reason == "revoke_state_unavailable":
-        raise _ShareDispatchStateUnavailable(
-            "share revoke state is unavailable; refusing the send")
-    if outcome == module.OUTCOME_TIMEOUT:
-        raise _ShareDispatchTimeout(
-            "share send wait budget exhausted before this request's turn")
-    if outcome == module.OUTCOME_REVOKED:
-        raise _ShareDispatchRevoked(
-            "the Key was revoked before this request's send turn")
-    if outcome == module.OUTCOME_DEADLINE:
-        raise _RequestDeadlineExceeded(
-            "request deadline exhausted while waiting for the share send turn")
-    if outcome == module.OUTCOME_STOPPED:
-        raise _RequestCancelled("instance stopping")
-    if outcome == module.OUTCOME_CANCELLED:
-        raise _RequestCancelled("client disconnected")
-    raise _RequestCancelled("share dispatch released")
-
-
-def _await_share_send_turn(ticket, cancel_check, request_deadline, stopping):
-    """Wait at the send boundary; map the outcome onto this module's errors.
-
-    Only a granted turn lets the send proceed. A cumulative-budget timeout is a
-    RETRYABLE refusal: the ticket was released exactly once without a grant, so this
-    raises ``_ShareDispatchTimeout`` and the request never reaches the upstream
-    (the handler maps it to 429 + Retry-After). Cancel and process exit keep this
-    module's existing error mapping, so the handler's retry/budget/cancel semantics
-    are unchanged. A release before the send (revoke, state unavailable or an
-    already closed ticket) refuses the send instead of letting it reach the upstream
-    late.
-    """
-    outcome = ticket.wait_turn(cancel_check=cancel_check,
-                              request_deadline=request_deadline,
-                              stop_check=stopping)
-    if outcome == _load_share_dispatch().OUTCOME_GRANTED:
-        return
-    _raise_share_dispatch_refusal(outcome, getattr(ticket, "reason", None))
-
-
-# ------------------------------------ share revoke notice (R-C5, 8100 -> 8110)
-# 8100 owns the projection, so it is the only process that can observe "this
-# Key became disabled/deleted at generation N". 8110 owns the pre-send tickets.
-# The 8100 handler can stay blocked in upstream.getresponse() after a revoke
-# closed the CLIENT socket, so the 8100->8110 socket never sees EOF and 8110's
-# cancel_check cannot release the ticket by itself.  The 8100 therefore sends ONE
-# loopback-only notice signed with the SAME shared attribution secret.  This
-# process verifies it at its own loopback boundary and releases that Key's
-# PENDING/GRANTED tickets.  The notice carries no plaintext Key and no secret.
+# ------------------------------------ share revoke notice (R-C5, in-process)
+# The merged 8100 process owns the projection, so it is the only process that
+# can observe "this Key became disabled/deleted at generation N".  A revoke
+# closes the Key's in-flight client sockets in-process; no cross-process notice
+# or shared secret is involved any more (#34).
 # Review #14: applied generations are evicted by TIME, never by insertion
 # order.  A notice older than the timestamp window can never pass verification,
 # so only entries whose last update is older than the window are dropped; every
@@ -2500,45 +2277,6 @@ def _reset_share_revoke_state():
         pass
 
 
-def _share_dispatch_refusal(key_id):
-    """Why a NEW ticket for this Key must be refused, or None.
-
-    The applied revoke generation is persisted, so a request that 8100 admitted
-    before the notice but that reaches 8110 after it is refused even when the
-    notice closed no ticket.  A request admitted after a later re-enable carries
-    a strictly newer attribution timestamp and is admitted again; a missing
-    timestamp is fail-closed.
-    """
-    try:
-        # 8100 and 8110 read the same revoke state file; a write/rename on the
-        # 8100 side can briefly race this first load.  Retry a bounded number
-        # of times before treating it as a service failure.
-        for attempt in range(3):
-            try:
-                _ensure_revoke_applied_loaded()
-                break
-            except (OSError, ValueError):
-                if attempt == 2:
-                    raise
-                time.sleep(0.05)
-        with _revoke_applied_lock:
-            entry = _revoke_applied_generations.get(key_id)
-            if entry is None:
-                return None
-            applied_at = (entry.get("applied_at")
-                          if isinstance(entry, dict) else None)
-    except (ImportError, AttributeError, OSError, ValueError) as exc:
-        print(f"[share-dispatch] revoke state load failed: "
-              f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-        return "revoke_state_unavailable"
-    if applied_at is None:
-        return "revoke"
-    ts = _request_fact("attribution_ts")
-    if ts is None or ts <= applied_at:
-        return "revoke"
-    return None
-
-
 _SHARE_AUTH_REQUIRED = (
     "load_revoke_state", "reset_revoke_state_cache",
     "record_revoke_generation", "valid_chat_request",
@@ -2550,23 +2288,16 @@ _SHARE_AUTH_REQUIRED = (
 def _share_auth_module():
     """Load share_auth beside THIS file, independent of sys.path.
 
-    Same seam as ``_load_share_dispatch``: the service runs this file as a
-    script (its directory is on sys.path), while tests load it by path from
-    another directory.  Reuse the module when it is already imported so the
-    gate, request validators and revoke-state store have exactly ONE
-    implementation.
+    The service runs this file as a script (its directory is on sys.path),
+    while tests load it by path from another directory.  Reuse the module when
+    it is already imported so the gate, request validators and revoke-state
+    store have exactly ONE implementation.
 
     A failed import leaves a partially initialized module in ``sys.modules``.
     That partial module must never be reused: evict it before retrying, and
     evict it again if the retry fails, so one transient failure cannot poison
     every later request in this process.
-
-    E19-1-02: a process resolved as the private (non-share) role refuses
-    BEFORE looking at ``sys.modules`` or the filesystem, so the local package
-    never needs the cloud share backend sources.
     """
-    if share_backend_role() is False:
-        raise ImportError("share backend module not assembled")
     module = sys.modules.get("share_auth")
     if module is not None and all(
             hasattr(module, name) for name in _SHARE_AUTH_REQUIRED):
@@ -4693,9 +4424,6 @@ class Proxy:
         # per-cycle event interrupts a blocking browser poll), but the state
         # stays the existing shutdown outcome below, never "cancelled".
         self._login_cancel_event.set()
-        # Process exit releases every pre-send ticket exactly once (8110 only;
-        # a process that never assembled a dispatcher has nothing to close).
-        _close_share_dispatch()
         with self._commit_lock:
             with self._auth_condition:
                 # Supersede any in-flight session: its late result must not
@@ -4725,7 +4453,7 @@ class Proxy:
     def call(self, method: str, path: str, stream: bool = False,
              physical_budget=None, request_deadline=None,
              auth_wait_budget=None, cancel_check=None, reader_lease=None,
-             dispatch_ticket=None, **kwargs):
+             **kwargs):
         """Request with a single 401 -> re-auth retry. For streaming endpoints
         you MUST pass stream=True, otherwise requests buffers the whole SSE
         body until the upstream closes the connection.
@@ -4739,21 +4467,9 @@ class Proxy:
         HTTP request; this call never resets it across its internal re-sends.
         ``cancel_check`` is the request-scoped cancellation probe. Both are
         checked again after an auth wait and before every real upstream call.
-
-        ``dispatch_ticket`` is the pre-send ticket of a VERIFIED share request
-        (see share_dispatch). Only the dedicated 8110 share backend passes
-        one: it waits here for its Key's turn before the first upstream send,
-        and its cumulative wait budget is never reset by an internal retry. A
-        request whose budget ends before its turn is refused with a retryable
-        failure (``_ShareDispatchTimeout``) and never reaches the upstream. The
-        8000 main chain passes None and is byte-for-byte unchanged.
         """
         extra_headers = kwargs.pop("headers", {})
         timeout = kwargs.pop("timeout", 600)
-        if dispatch_ticket is not None:
-            _await_share_send_turn(dispatch_ticket, cancel_check,
-                                   request_deadline,
-                                   self._shutdown_event.is_set)
         legacy_limit = None
         legacy_used = 0
         if physical_budget is not None and not isinstance(
@@ -4856,15 +4572,6 @@ class Proxy:
                     self._raise_auth_required()
                 bearer = self.bearer()
             check_before_upstream()
-            if dispatch_ticket is not None and not dispatch_ticket.commit():
-                # The ticket was released (cancel/revoke/exit) between the
-                # granted wait and this send: never send late, and keep the
-                # release reason (a revoke stays a retryable 429).  A ticket
-                # wrapper only needs to expose ``outcome``; a missing reason
-                # must not crash the handler into a bare connection close.
-                _raise_share_dispatch_refusal(
-                    dispatch_ticket.outcome,
-                    getattr(dispatch_ticket, "reason", None))
             if not consume_budget():
                 raise _PhysicalBudgetExceeded(
                     "upstream physical request budget exhausted")
@@ -4873,19 +4580,9 @@ class Proxy:
                 headers={"Authorization": f"Bearer {bearer}",
                          **extra_headers},
                 timeout=clipped_timeout(),
-                # D18-3: a committed share send must be abortable by a key
-                # revoke. stream=True returns as soon as the response headers
-                # arrive, so the ticket can close the live connection; a
-                # non-stream handler still reads the whole body. The private
-                # 8000 chain (dispatch_ticket is None) keeps stream=stream.
-                stream=(True if dispatch_ticket is not None else stream),
+                stream=stream,
                 **kwargs)
             if r.status_code != 401:
-                if dispatch_ticket is not None:
-                    # Register the abort AFTER the response object exists. A
-                    # revoke that arrived between commit() and this point
-                    # closes it immediately (attach_abort returns True).
-                    dispatch_ticket.attach_abort(r.close)
                 return r
             # A4/A7: an explicit credential rejection never leaks to a
             # handler as a raw upstream response - every entry would
@@ -5098,34 +4795,10 @@ class _RequestDeadlineExceeded(RuntimeError):
     """No new upstream work may start after the per-request wall deadline."""
 
 
-class _ShareDispatchTimeout(RuntimeError):
-    """The cumulative pre-send wait ended before this request's turn.
-
-    The request was released exactly once and never reached the upstream. This is a
-    RETRYABLE refusal, never a cancellation and never a success: the handler maps
-    it to 429 + Retry-After with the ``share_dispatch_timeout`` error type and
-    records its own ledger status.
-    """
 
 
-class _ShareDispatchRevoked(RuntimeError):
-    """The Key was revoked while this request waited for its send turn.
-
-    The 8100 share gateway sent a trusted revoke notice and this request's
-    PENDING/GRANTED ticket was released before the send. This is a RETRYABLE
-    refusal with its own 429 error type, never a cancellation and never a
-    success; the request never reached the upstream.
-    """
 
 
-class _ShareDispatchStateUnavailable(RuntimeError):
-    """The persisted revoke state could not be read for this request.
-
-    This is a RETRYABLE service failure (503 + Retry-After), never a client
-    cancellation: the ticket was closed before the send, and the request never
-    reached the upstream.  The handler records the ledger status
-    ``share_dispatch_state_unavailable`` instead of ``client_disconnected``.
-    """
 
 
 class _RequestCancelled(RuntimeError):
@@ -6365,50 +6038,6 @@ class Handler(BaseHTTPRequestHandler):
             extra_headers,
         )
 
-    def _share_dispatch_timeout_error(self):
-        """Refuse a request whose pre-send wait ended before its turn.
-
-        429 + a definite Retry-After + a distinct type: the request never
-        reached the upstream, so a retry is safe and no success is fabricated.
-        The 8100 share relay forwards this Retry-After on its own stable
-        failure wrapper, so the hint survives the hop.
-        """
-        self._error(
-            429,
-            "Share send wait budget exhausted before this request's turn",
-            error_type="share_dispatch_timeout",
-            extra_headers={
-                "Retry-After": str(SHARE_DISPATCH_RETRY_AFTER_S)})
-
-    def _share_dispatch_revoked_error(self):
-        """Refuse a request whose Key was revoked before its send turn.
-
-        429 + a definite Retry-After + a distinct type: the ticket was released
-        without a grant and the request never reached the upstream, so a retry is
-        safe and no success is fabricated.
-        """
-        self._error(
-            429,
-            "The share Key was revoked before this request's send turn",
-            error_type="share_dispatch_revoked",
-            extra_headers={
-                "Retry-After": str(SHARE_DISPATCH_RETRY_AFTER_S)})
-
-    def _share_dispatch_state_unavailable_error(self):
-        """Refuse a request whose revoke state could not be read.
-
-        503 + a definite Retry-After + a distinct type: this is a retryable
-        SERVICE failure, never a client cancel.  The request never reached the
-        upstream, so no success is fabricated and the ledger status is the same
-        stable name.
-        """
-        self._error(
-            503,
-            "The share revoke state is unavailable; retry later",
-            error_type=SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS,
-            extra_headers={
-                "Retry-After": str(SHARE_DISPATCH_RETRY_AFTER_S)})
-
     @staticmethod
     def _aggregate_failure_error(status, exc):
         """Map one failed SSE aggregate onto a 502 (message, detail, type).
@@ -6604,7 +6233,6 @@ class Handler(BaseHTTPRequestHandler):
                 gate.release(self._share_key_id)
                 self._share_key_id = None
                 self._share_ctx = None
-            _release_share_dispatch_ticket("request_finished")
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -6664,7 +6292,7 @@ class Handler(BaseHTTPRequestHandler):
                        "reason": reason.get("reason"),
                        "detail": reason.get("detail")})
             return False
-        ctx = share._InflightCtx(self.connection, retryable_refusal=False)
+        ctx = share._InflightCtx(self.connection)
         gate.register_inflight(entry["key_id"], ctx)
         self._share_key_id = entry["key_id"]
         self._share_ctx = ctx
@@ -6986,7 +6614,7 @@ class Handler(BaseHTTPRequestHandler):
         # N2b: a stream=false Responses client may use an SSE chat upstream
         # only for the selected (verified key, model, protocol) triple; the
         # native non-stream transport is the default for everything else.
-        # A direct 8110 request has no verified key id and stays native.
+        # A direct private request has no verified key id and stays native.
         upstream_stream = client_stream or nonstream_aggregate_allowed(
             "responses", body.get("model"))
         if upstream_stream and not client_stream:
@@ -6998,38 +6626,18 @@ class Handler(BaseHTTPRequestHandler):
         started_at = time.time()
         input_est = _message_tokens(chat_body.get("messages"))
         upstream_owned = False
-        # Pre-send scheduling (8110 only): None unless this request's
-        # attribution was VERIFIED at this process's HTTP boundary.
-        dispatch_ticket = share_dispatch_ticket("responses")
         try:
             r = proxy.call("POST", "/api/chat/completions",
                            stream=upstream_stream,
                            json=chat_body,
                            auth_wait_budget=auth_wait_budget,
                            request_deadline=request_deadline,
-                           cancel_check=cancel_check,
-                           dispatch_ticket=dispatch_ticket)
+                           cancel_check=cancel_check)
         except ReauthenticationRequired as exc:
             record_usage(body["model"], client_stream, started_at, None,
                           input_est, 0, status="reauthentication_required")
             self._reauthentication_error(
                 getattr(exc, "reason", None) or str(exc) or None)
-            return
-        except _ShareDispatchTimeout:
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="share_dispatch_timeout")
-            self._share_dispatch_timeout_error()
-            return
-        except _ShareDispatchRevoked:
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="share_dispatch_revoked")
-            self._share_dispatch_revoked_error()
-            return
-        except _ShareDispatchStateUnavailable:
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0,
-                          status=SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
-            self._share_dispatch_state_unavailable_error()
             return
         except _RequestCancelled:
             self.close_connection = True
@@ -7246,38 +6854,18 @@ class Handler(BaseHTTPRequestHandler):
         upstream_owned = False
         if request_deadline is None:
             request_deadline = time.monotonic() + MAX_REQUEST_SECONDS
-        # Pre-send scheduling (8110 only): the client protocol is still
-        # Responses, so the facts' own protocol must match it.
-        dispatch_ticket = share_dispatch_ticket("responses")
         try:
             r = proxy.call("POST", "/api/v1/messages", stream=upstream_stream,
                            json=messages_body,
                            headers={"Anthropic-Version": "2023-06-01"},
                            auth_wait_budget=auth_wait_budget,
                            request_deadline=request_deadline,
-                           cancel_check=cancel_check,
-                           dispatch_ticket=dispatch_ticket)
+                           cancel_check=cancel_check)
         except ReauthenticationRequired as exc:
             record_usage(body["model"], client_stream, started_at, None,
                           input_est, 0, status="reauthentication_required")
             self._reauthentication_error(
                 getattr(exc, "reason", None) or str(exc) or None)
-            return
-        except _ShareDispatchTimeout:
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="share_dispatch_timeout")
-            self._share_dispatch_timeout_error()
-            return
-        except _ShareDispatchRevoked:
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="share_dispatch_revoked")
-            self._share_dispatch_revoked_error()
-            return
-        except _ShareDispatchStateUnavailable:
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0,
-                          status=SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
-            self._share_dispatch_state_unavailable_error()
             return
         except _RequestCancelled:
             self.close_connection = True
@@ -7625,10 +7213,6 @@ class Handler(BaseHTTPRequestHandler):
                 repetition_retries_done,
                 int((time.monotonic() - started_compat) * 1000))
 
-        # Pre-send scheduling (8110 only): only the Messages protocol is a
-        # conversation protocol here, so embeddings never enters the rotation.
-        dispatch_ticket = (share_dispatch_ticket("messages")
-                           if record_messages else None)
         while True:
             remaining_s = deadline - time.monotonic()
             if remaining_s <= 0:
@@ -7658,29 +7242,12 @@ class Handler(BaseHTTPRequestHandler):
                     physical_budget=physical_budget,
                     request_deadline=deadline,
                     auth_wait_budget=auth_wait_budget,
-                    cancel_check=cancel_check,
-                    dispatch_ticket=dispatch_ticket)
+                    cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
                 self._reauthentication_error(
                     getattr(exc, "reason", None) or str(exc) or None)
                 log_summary("reauthentication_required")
                 record_messages_usage("reauthentication_required")
-                return
-            except _ShareDispatchTimeout:
-                self._share_dispatch_timeout_error()
-                log_summary("share_dispatch_timeout")
-                record_messages_usage("share_dispatch_timeout")
-                return
-            except _ShareDispatchRevoked:
-                self._share_dispatch_revoked_error()
-                log_summary("share_dispatch_revoked")
-                record_messages_usage("share_dispatch_revoked")
-                return
-            except _ShareDispatchStateUnavailable:
-                self._share_dispatch_state_unavailable_error()
-                log_summary(SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
-                record_messages_usage(
-                    SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
                 return
             except _RequestCancelled:
                 self.close_connection = True
@@ -7925,7 +7492,7 @@ class Handler(BaseHTTPRequestHandler):
         # The client's response mode and the upstream transport mode are
         # separate (N1): R13 aggregates only a fully selected (verified key,
         # model, protocol) triple, while every existing caller keeps the native
-        # transport. A direct 8110 request has no verified key id and stays
+        # transport. A direct private request has no verified key id and stays
         # native. Every downstream decision uses client_stream; only the
         # upstream request/read/reader-slot decision uses upstream_stream.
         client_stream = bool(body.get("stream"))
@@ -8031,11 +7598,6 @@ class Handler(BaseHTTPRequestHandler):
         request_deadline = (time.monotonic() + MAX_REQUEST_SECONDS
                             if request_deadline is None
                             else request_deadline)
-        # Pre-send scheduling (8110 only): None unless this request's
-        # attribution was VERIFIED at this process's HTTP boundary. The ticket
-        # lives for the whole logical request, so every retry below reuses the
-        # same cumulative wait budget instead of resetting it.
-        dispatch_ticket = share_dispatch_ticket("chat")
 
         def chat_call_timeout():
             """Per-attempt socket read timeout capped by the request deadline:
@@ -8097,8 +7659,7 @@ class Handler(BaseHTTPRequestHandler):
                         request_deadline=request_deadline,
                         auth_wait_budget=auth_wait_budget,
                         cancel_check=cancel_check,
-                        reader_lease=reader_lease,
-                        dispatch_ticket=dispatch_ticket)
+                        reader_lease=reader_lease)
                 except ReauthenticationRequired:
                     raise
                 except _RequestCancelled:
@@ -8212,30 +7773,6 @@ class Handler(BaseHTTPRequestHandler):
                             exc_name=type(exc).__name__)
                 self._reauthentication_error(
                     getattr(exc, "reason", None) or str(exc) or None)
-                return
-            except _ShareDispatchTimeout:
-                log_failure("share_dispatch_timeout", 429)
-                record_usage(
-                    req_model, client_stream, started_at, None,
-                    _message_tokens(body.get("messages")), 0,
-                    status="share_dispatch_timeout")
-                self._share_dispatch_timeout_error()
-                return
-            except _ShareDispatchRevoked:
-                log_failure("share_dispatch_revoked", 429)
-                record_usage(
-                    req_model, client_stream, started_at, None,
-                    _message_tokens(body.get("messages")), 0,
-                    status="share_dispatch_revoked")
-                self._share_dispatch_revoked_error()
-                return
-            except _ShareDispatchStateUnavailable:
-                log_failure(SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS, 503)
-                record_usage(
-                    req_model, client_stream, started_at, None,
-                    _message_tokens(body.get("messages")), 0,
-                    status=SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
-                self._share_dispatch_state_unavailable_error()
                 return
             except _RequestCancelled:
                 self.close_connection = True
@@ -9641,9 +9178,9 @@ def main():
     ap.add_argument("--login-timeout", type=int, default=180,
                     help="Seconds to wait for manual sign-in")
     # N3: explicit, default-off transport switch for the non-streaming
-    # Chat/Messages/Responses paths. Only the dedicated 8110 share-backend
-    # passes it; the private 8000 command line and every other caller keep
-    # the native non-stream transport unless this flag is present. R13: the
+    # Chat/Messages/Responses paths. The share entry may pass it; the private
+    # 8000 command line and every other caller keep the native non-stream
+    # transport unless this flag is present. R13: the
     # flag alone never aggregates - the startup scope must also select the
     # verified (key, model, protocol) triple.
     ap.add_argument("--nonstream-upstream-aggregate", action="store_true",
@@ -9699,21 +9236,12 @@ def main():
 
     EFFORT_MODELS.extend(args.effort_model)
 
-    # Review #9: resolve the explicit role ONCE at startup. An explicit
-    # CHAT2API_SHARE_BACKEND marker wins; otherwise the dedicated profile
-    # (or the launcher's backend attribution-key env) is the backend. The
-    # private 8000 main chain resolves to False and can never assemble a
-    # pre-send dispatcher or release tickets from a signed notice.
-    global NONSTREAM_UPSTREAM_AGGREGATE, SHARE_BACKEND_ROLE, \
-        AUTH_WAIT_BUDGET_S
-    SHARE_BACKEND_ROLE = _resolve_share_backend_role(
-        "share-backend" in (args.profile or ""))
-    # A2-1/D18-5: the private direct 8000 instance and the dedicated 8110
-    # share backend both default to 180 seconds; an explicit CLI/env value
-    # overrides the role default and is clamped to 1..180. The generic
-    # in-process default keeps 30.
+    global NONSTREAM_UPSTREAM_AGGREGATE, AUTH_WAIT_BUDGET_S
+    # A2-1/D18-5: the 8000/8100 processes default to 180 seconds; an
+    # explicit CLI/env value is clamped to 1..180. The generic in-process
+    # default keeps 30.
     AUTH_WAIT_BUDGET_S = resolve_auth_wait_budget(
-        args.auth_wait_budget_seconds, SHARE_BACKEND_ROLE)
+        args.auth_wait_budget_seconds, bool(args.share_config))
     # N3: the switch is default-off and only the explicit flag turns it on.
     # It is set before the startup record so the loaded mode is observable.
     NONSTREAM_UPSTREAM_AGGREGATE = bool(args.nonstream_upstream_aggregate)
@@ -9728,7 +9256,7 @@ def main():
     # never leaves a startup line that cannot be tied to one port and PID.
     _logger.info(
         "startup build=%s version=%s source_rev=%s "
-        "role=%s host=%s port=%d pid=%d ppid=%d launched_by=%s "
+        "host=%s port=%d pid=%d ppid=%d launched_by=%s "
         "repetition_retries=%d upstream_fast_retries=%d "
         "upstream_slow_retries=%d slow_threshold_s=%.1f "
         "max_physical_attempts=%d max_request_seconds=%d "
@@ -9736,7 +9264,6 @@ def main():
         "auto_trim_current_turn_images=%s nonstream_upstream_aggregate=%s "
         "nonstream_aggregate_scope=%s auth_wait_budget_s=%g",
         RUNTIME_BUILD_ID, CHAT2API_VERSION, CHAT2API_SOURCE_REV,
-        "share-backend" if SHARE_BACKEND_ROLE else "private",
         args.host, args.port, os.getpid(), os.getppid(), launch_source(),
         REPETITION_GUARD_AUTO_RETRIES, UPSTREAM_AUTO_RETRIES,
         UPSTREAM_SLOW_AUTO_RETRIES, UPSTREAM_SLOW_RETRY_THRESHOLD_S,
@@ -10029,7 +9556,7 @@ def nonstream_aggregate_allowed(protocol, model):
     body: the key id is the VERIFIED attribution fact installed at the HTTP
     boundary (``verify_share_attribution`` -> ``set_request_facts``), the
     protocol must be the one that same boundary installed, and the model is the
-    handler's own client-requested model. A direct 8110 caller carries no
+    handler's own client-requested model. A direct private caller carries no
     marker, so it has no key id and stays native. The switch must be on, the
     startup scope must be valid and non-empty, and all three components must
     match; any missing or mismatched component keeps the native non-stream
@@ -10068,8 +9595,8 @@ def nonstream_aggregate_allowed(protocol, model):
 def _load_share_secret_protection():
     """Load the repo-root secret adapter independent of sys.path.
 
-    Same seam as ``_load_share_dispatch``: the service runs this file as a
-    script from ``chat2api/`` (so the repository root is NOT on sys.path), while
+    The service runs this file as a script from ``chat2api/`` (so the
+    repository root is NOT on sys.path), while
     the adapter lives one directory up. A plain
     ``from share_secret_protection import ...`` therefore raised ImportError
     there, and the fail-closed handlers swallowed it: the control token and the
@@ -10160,14 +9687,13 @@ def _clamp_auth_wait_budget(raw, fallback):
     return max(1.0, min(180.0, value))
 
 
-def resolve_auth_wait_budget(cli_value=None, share_backend=None):
+def resolve_auth_wait_budget(cli_value=None, share_gateway=False):
     """Resolve the per-request authentication-wait budget (A2-1/D18-5).
 
-    The private direct 8000 instance and the dedicated 8110 share backend both
-    default to 180 seconds. An explicit CLI value or the existing
-    ``CHAT2API_AUTH_WAIT_BUDGET_S`` env value overrides the role default
-    for BOTH roles and is clamped to 1..180, so neither an operator value nor
-    a leaked local env can exceed the hard ceiling or disable the budget. The
+    The 8000 and 8100 processes both default to 180 seconds. An explicit CLI
+    value or the existing ``CHAT2API_AUTH_WAIT_BUDGET_S`` env value overrides
+    the default and is clamped to 1..180, so neither an operator value nor a
+    leaked local env can exceed the hard ceiling or disable the budget. The
     generic/in-process default (``None``) stays 30 unless an explicit value
     selects another legal value.
     """
@@ -10177,7 +9703,7 @@ def resolve_auth_wait_budget(cli_value=None, share_backend=None):
     value = _clamp_auth_wait_budget(raw, None)
     if value is not None:
         return value
-    if share_backend is True or share_backend is False:
+    if share_gateway is True:
         return 180.0
     return 30.0
 
@@ -10224,12 +9750,6 @@ def _pre_output_verify(proxy, auth_wait_budget, request_deadline, cancel_check,
     recovery cycle; ``unknown`` never starts a login window.
     """
     if auth_wait_budget is None:
-        return "retry"
-    # A2-1/D18-5: the bounded pre-output check belongs to the private
-    # direct 8000 chain. The dedicated 8110 share backend keeps its existing
-    # strategy and never gains this extra probe/recovery path: its 180-second
-    # budget covers the 401 re-send only, not a non-401 pre-output probe.
-    if share_backend_role() is True:
         return "retry"
     # A credential validated moments ago is already strong evidence: a normal
     # request must not gain a new probe on every read failure. Only a stale or

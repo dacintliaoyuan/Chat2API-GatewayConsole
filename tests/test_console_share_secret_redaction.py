@@ -170,8 +170,6 @@ class SecretRedactionTests(unittest.TestCase):
                 broker=self.broker, runner=fake_runner,
                 keys_manager=keys_manager, cloud=cloud,
                 status_path=str(Path(self.tmp_store.name) / "absent.json"))
-            seams["_BACKEND_OBSERVE"] = lambda: {
-                "running": True, "auth_state": "valid"}
             for name, value in seams.items():
                 setattr(_share_orchestration, name, value)
 

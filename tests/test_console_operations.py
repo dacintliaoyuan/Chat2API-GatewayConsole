@@ -395,10 +395,10 @@ class ShareOrchestrationResourceTests(ConsoleTestBase):
             return {"ok": True}
 
         mgr = self.manager([
-            self._share_spec("share.backend_restart", first, bump=True),
+            self._share_spec("share.diagnostics", first, bump=True),
             self._share_spec("share.gateway_restart", second, bump=True)])
-        op1 = mgr.submit("share.backend_restart", "share", {})
-        deadline = time.time() + 3
+        op1 = mgr.submit("share.diagnostics", "share", {})
+        deadline = time.time() + 10
         while mgr.get_operation(op1["id"])["state"] != "running":
             self.assertLess(time.time(), deadline)
             time.sleep(0.02)
@@ -470,12 +470,11 @@ class ShareOrchestrationResourceTests(ConsoleTestBase):
     def test_share_diagnostics_end_to_end_unwired_is_honest(self):
         # Rev9 A9-8 end-to-end: submit through the REAL registry creates an
         # operation row on share:orchestration; with every seam unwired the
-        # read-only report succeeds with seven honestly-unavailable layers
+        # read-only report succeeds with two honestly-unavailable layers
         # (never a raise, never a fabricated state) and is JSON-persisted.
         from console import adapters as console_adapters
         from console import share_actions as console_share_actions
-        seam_names = ("_BROKER_OPS", "_BACKEND_OBSERVE",
-                      "_BACKEND_OPS", "_MAINTENANCE_STATUS", "_INTENT_WRITE")
+        seam_names = ("_BROKER_OPS", "_MAINTENANCE_STATUS")
         saved = {n: getattr(console_share_actions, n) for n in seam_names}
         try:
             for n in seam_names:
@@ -508,13 +507,13 @@ class SubmitIdempotencyParamTests(ConsoleTestBase):
     """
 
     def _real_host_restart_spec(self, handler):
-        # The REAL production param schema (drain_budget_s 1..600), not a test
-        # approximation: this is the schema the console exposes for the
-        # share.backend_restart host action.
+        # The REAL production param schema (restart_budget_s 10..180), not a
+        # test approximation: this is the schema the console exposes for the
+        # share.gateway_restart host action.
         from console import adapters as console_adapters
         real = {spec.name: spec
                 for spec in console_adapters.build_cloud_registry()}[
-                    "share.backend_restart"]
+                    "share.gateway_restart"]
         return ActionSpec(
             real.name, real.description, handler=handler,
             resource_fn=real.resource_fn, param_schema=real.param_schema,
@@ -528,11 +527,11 @@ class SubmitIdempotencyParamTests(ConsoleTestBase):
             calls.append(dict(params))
             release.wait(3.0)
             return {"ok": True,
-                    "drain_budget_s": params.get("drain_budget_s")}
+                    "restart_budget_s": params.get("restart_budget_s")}
 
         mgr = self.manager([self._real_host_restart_spec(handler)])
-        first = mgr.submit("share.backend_restart", "share",
-                           {"drain_budget_s": 15}, "restart-intent-1")
+        first = mgr.submit("share.gateway_restart", "share",
+                           {"restart_budget_s": 15}, "restart-intent-1")
         deadline = time.time() + 3
         while mgr.get_operation(first["id"])["state"] != "running":
             self.assertLess(time.time(), deadline)
@@ -541,47 +540,47 @@ class SubmitIdempotencyParamTests(ConsoleTestBase):
         # Same action/target/key, different normalized params: reject while the
         # original is still running, never queue a second execution.
         with self.assertRaises(OperationError) as cm:
-            mgr.submit("share.backend_restart", "share",
-                       {"drain_budget_s": 600}, "restart-intent-1")
+            mgr.submit("share.gateway_restart", "share",
+                       {"restart_budget_s": 180}, "restart-intent-1")
         self.assertEqual(cm.exception.code, "idempotency_key_conflict")
         self.assertEqual(len(mgr.list_operations()), 1)
 
         # A lost response / page refresh re-looks up the SAME intent while the
         # original runs: same params dedupe to the original operation.
-        replay = mgr.submit("share.backend_restart", "share",
-                            {"drain_budget_s": 15}, "restart-intent-1")
+        replay = mgr.submit("share.gateway_restart", "share",
+                            {"restart_budget_s": 15}, "restart-intent-1")
         self.assertTrue(replay.get("deduplicated"))
         self.assertEqual(replay["id"], first["id"])
 
         release.set()
         first = wait_terminal(mgr, first["id"])
         self.assertEqual(first["state"], "succeeded")
-        self.assertEqual(first["result"]["drain_budget_s"], 15)
-        self.assertEqual(calls, [{"drain_budget_s": 15}])
+        self.assertEqual(first["result"]["restart_budget_s"], 15)
+        self.assertEqual(calls, [{"restart_budget_s": 15}])
 
         # After the terminal result, the same key + same params still dedupe.
-        again = mgr.submit("share.backend_restart", "share",
-                           {"drain_budget_s": 15}, "restart-intent-1")
+        again = mgr.submit("share.gateway_restart", "share",
+                           {"restart_budget_s": 15}, "restart-intent-1")
         self.assertTrue(again.get("deduplicated"))
         self.assertEqual(again["id"], first["id"])
-        self.assertEqual(again["result"]["drain_budget_s"], 15)
+        self.assertEqual(again["result"]["restart_budget_s"], 15)
 
         # An intentionally NEW operation stays distinguishable: a new key is a
         # new intent even with the same params, and a new key with the new
         # params creates and runs another operation.
-        independent = mgr.submit("share.backend_restart", "share",
-                                {"drain_budget_s": 15}, "restart-intent-3")
+        independent = mgr.submit("share.gateway_restart", "share",
+                                {"restart_budget_s": 15}, "restart-intent-3")
         independent = wait_terminal(mgr, independent["id"])
         self.assertNotEqual(independent["id"], first["id"])
-        self.assertEqual(independent["result"]["drain_budget_s"], 15)
-        second = mgr.submit("share.backend_restart", "share",
-                            {"drain_budget_s": 600}, "restart-intent-2")
+        self.assertEqual(independent["result"]["restart_budget_s"], 15)
+        second = mgr.submit("share.gateway_restart", "share",
+                            {"restart_budget_s": 180}, "restart-intent-2")
         second = wait_terminal(mgr, second["id"])
         self.assertNotEqual(second["id"], first["id"])
-        self.assertEqual(second["result"]["drain_budget_s"], 600)
-        self.assertEqual(calls, [{"drain_budget_s": 15},
-                                {"drain_budget_s": 15},
-                                {"drain_budget_s": 600}])
+        self.assertEqual(second["result"]["restart_budget_s"], 180)
+        self.assertEqual(calls, [{"restart_budget_s": 15},
+                                {"restart_budget_s": 15},
+                                {"restart_budget_s": 180}])
         mgr.shutdown(wait=True)
 
     def test_normalized_params_legacy_rows_and_defaults_stay_compatible(self):

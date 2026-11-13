@@ -47,7 +47,6 @@ def _load(name, path):
 import importlib.util  # noqa: E402
 
 share = _load("share_auth", CHAT2API / "share_auth.py")
-dispatch = _load("share_dispatch", CHAT2API / "share_dispatch.py")
 chat2api = _load("chat2api_revoke_state", CHAT2API / "chat2api.py")
 
 KEY_ID = "eee3e921-f1ee-4b5a-8fc0-e4d2eb30135f"
@@ -131,53 +130,27 @@ class TestRevokeStateInitialization(unittest.TestCase):
         self.assertEqual(state["generations"][KEY_ID]["generation"], 7)
         self.assertTrue(self.marker.exists())
 
-    def test_unavailable_state_is_retryable_503_not_a_client_cancel(self):
-        # Review #9: the closed ticket names revoke_state_unavailable; it must
-        # map to the retryable SERVICE failure, never client_disconnected.
+    def test_unavailable_state_is_an_explicit_error(self):
+        # The persisted revoke state still fails closed, and the retired 8110
+        # dispatch ticket/refusal mapping is gone with #34.
         share.load_revoke_state()
         self.state_file.unlink()
-        chat2api._reset_share_revoke_state()
-        chat2api.set_request_facts(
-            "chat", KEY_ID, "state-unavailable", "verified",
-            attribution_ts=int(time.time()) + 1)
-        self.assertEqual(chat2api._share_dispatch_refusal(KEY_ID),
-                         "revoke_state_unavailable")
-        dispatcher = dispatch.ShareDispatcher(max_wait=10)
-        chat2api._share_dispatcher = dispatcher
-        self.addCleanup(self._reset_dispatcher)
-        ticket = chat2api.share_dispatch_ticket("chat")
-        self.assertIsNotNone(ticket)
-        self.assertEqual(ticket.state, "closed")
-        self.assertEqual(ticket.reason, "revoke_state_unavailable")
-        with self.assertRaises(chat2api._ShareDispatchStateUnavailable):
-            chat2api._raise_share_dispatch_refusal(
-                ticket.outcome, ticket.reason)
-        with self.assertRaises(chat2api._ShareDispatchStateUnavailable):
-            chat2api._await_share_send_turn(ticket, None, None, None)
-        self.assertFalse(issubclass(chat2api._ShareDispatchStateUnavailable,
-                                    chat2api._RequestCancelled))
-        handler = chat2api.Handler.__new__(chat2api.Handler)
-        captured = {}
+        share.reset_revoke_state_cache()
+        with self.assertRaises(share.RevokeStateUnavailable):
+            share.load_revoke_state()
+        for name in ("_share_dispatch_refusal",
+                      "_raise_share_dispatch_refusal",
+                      "_await_share_send_turn", "_share_dispatcher"):
+            with self.subTest(symbol=name):
+                self.assertFalse(hasattr(chat2api, name))
 
-        def capture(code, message, detail=None,
-                    error_type="chat2api_error", extra_headers=None):
-            captured.update(code=code, message=message, detail=detail,
-                             error_type=error_type,
-                             extra_headers=extra_headers)
 
-        handler._error = capture
-        handler._share_dispatch_state_unavailable_error()
-        self.assertEqual(captured["code"], 503)
-        self.assertEqual(captured["error_type"],
-                         chat2api.SHARE_DISPATCH_STATE_UNAVAILABLE_STATUS)
-        self.assertIn("Retry-After", captured["extra_headers"])
+class TestRetiredShareDispatch(unittest.TestCase):
+    """#34: the 8110 pre-send dispatcher module is gone."""
 
-    @staticmethod
-    def _reset_dispatcher():
-        dispatcher = chat2api._share_dispatcher
-        if dispatcher is not None:
-            dispatcher.close_all("test")
-        chat2api._share_dispatcher = None
+    def test_dispatch_module_is_absent(self):
+        self.assertFalse((CHAT2API / "share_dispatch.py").exists())
+        self.assertIsNone(importlib.util.find_spec("share_dispatch"))
 
 
 class TestLegacyReleaseAdoption(unittest.TestCase):

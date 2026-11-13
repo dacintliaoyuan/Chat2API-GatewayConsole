@@ -40,7 +40,6 @@ STATIC_ROOTS = [
     "chat2api/share_auth.py",
     "chat2api/chat2api.py",
     "share/broker_ops.py",
-    "share/backend_supervision.py",
     # Ops CLI included in the release even though no runtime module imports
     # it: key create/rotate/disable/delete is a supported private operation.
     "share/admin.py",
@@ -79,7 +78,6 @@ CLOUD_RUNTIME = [
     "chat2api/share_auth.py",
     "chat2api/chat2api.py",
     "chat2api/nonstream_aggregate.py",
-    "chat2api/share_dispatch.py",
 ]
 
 # importlib.util.spec_from_file_location targets: the module name is a literal
@@ -87,7 +85,6 @@ CLOUD_RUNTIME = [
 DYNAMIC_MODULES = {
     "chat2api/chat2api": [
         "chat2api/nonstream_aggregate",
-        "chat2api/share_dispatch",
         "chat2api/share_auth",
         "share/secret_protection",
     ],
@@ -148,7 +145,7 @@ def _resolve(name: str, modules: dict[str, Path]) -> str | None:
     name = name.split(".")[0]
     if name in modules:
         return name
-    if name in ("nonstream_aggregate", "share_dispatch", "share_auth",
+    if name in ("nonstream_aggregate", "share_auth",
                  "share/secret_protection", "share/instance_pipe"):
         candidate = "chat2api/" + name
         if candidate in modules:

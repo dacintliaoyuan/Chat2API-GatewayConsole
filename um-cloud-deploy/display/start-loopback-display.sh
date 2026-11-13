@@ -4,7 +4,7 @@
 # Xvfb never listens on TCP (-nolisten tcp); x11vnc binds 127.0.0.1 only
 # (-localhost).  The browser reaches it through the console's same-origin
 # /display/ WebSocket proxy; the VNC port is never opened in the cloud security
-# group.  The persistent Chromium profile belongs to the 8110 child, not to this
+# group.  The persistent Chromium profile belongs to the 8100 process, not to this
 # display process.
 #
 # The persistent VNC auth file is root-only.  systemd LoadCredential gives this
