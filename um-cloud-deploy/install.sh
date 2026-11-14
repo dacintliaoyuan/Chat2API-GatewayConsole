@@ -38,7 +38,10 @@ Options:
   --skip-apt            do not install Ubuntu packages
   --apt-locked          install the exact versions in dependencies.lock.json
   --no-start            install files but do not start/enable services
-  --with-display        also enable the loopback Xvfb/x11vnc unit
+  --with-display        explicit install-time opt-in: also enable and start the
+                        loopback Xvfb/x11vnc unit (default: installed but
+                        not enabled; use display/manual-takeover.sh start
+                        for the on-demand path)
   --with-cloudflared    also install/start the Cloudflare Tunnel edge unit
                         (default off; public edge is not managed otherwise)
   --cloudflared-token-file PATH
@@ -546,8 +549,8 @@ ensure_env_line "$UM_ETC/console.env" CONSOLE_PUBLIC_ORIGIN "https://dacintapi.d
 # The cloud share does not add an extra per-key dispatch queue.
 ensure_env_line "$UM_ETC/console.env" CHAT2API_SHARE_DISPATCH_MAX_WAIT_S "0"
 # Private Tailscale Serve entry and same-origin noVNC launcher.  The display
-# stays opt-in (0); the operator enables it after creating the root-only VNC
-# credential and installing the tailnet policy.
+# unit is installed but NOT enabled by default; the operator starts it on demand
+# with display/manual-takeover.sh after creating the root-only VNC credential.
 ensure_env_line "$UM_ETC/console.env" USAGE_TAILNET_CONFIG_FILE "$UM_ETC/console-tailnet-access.json"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_ENABLED "0"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_VNC_HOST "127.0.0.1"

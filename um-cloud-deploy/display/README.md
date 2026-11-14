@@ -38,11 +38,36 @@ sudo bash ./configure-tailscale-serve.sh --apply  # 写入 / → http://127.0.0.
 
 ## 登录窗口
 
+默认路径是 headless 登录：`browser_login` 打开 headless Chromium，不创建可见窗口，也不要求 `DISPLAY`/`WAYLAND_DISPLAY`，因此默认路径不依赖 display。`um-share-display.service` 只作为人工接管的按需出口；`install.sh` 安装该 unit，但不 enable、不开机自启。
+
 `um-share-display.service` 启动 `Xvfb :99 -nolisten tcp` 和 `x11vnc -localhost -rfbport 5901`。浏览器通过控制台同源的 `/display/` 页面和 `/display/websockify` WebSocket 访问它；手机打开 `https://<node>.<tailnet>.ts.net/`，页面使用 `location.host`，不连接手机自己的 `127.0.0.1`。
 
 VNC 认证由云端完成：控制台代理与 x11vnc 完成 RFB 3.8/3.7/3.3 的 VncAuth 握手，浏览器不接收 VNC 密码、不弹密码框。密码只持久化在 root-only 文件；不写入命令行、URL、日志、`console.env` 或浏览器存储。
 
 `display` unit 通过 `LoadCredential` 持有只读密码副本，并在 `/run/um-share/vnc-auth.sock` 启动 `vnc-auth-helper.py`；控制台代理通过 `CONSOLE_DISPLAY_VNC_AUTH_SOCKET` 连接它。`x11vnc` 继续 `-localhost -rfbauth`。
+
+## 按需启动（人工接管）
+
+自动流程返回 `manual_takeover_required:<reason>` 后，操作员显式执行下面的脚本；默认安装不会 enable display，也不会在开机时启动它：
+
+```bash
+# 仅首次：创建 root-only VNC 认证文件（install.sh 不会创建密码）。
+sudo x11vnc -storepasswd /etc/um-share/vnc.passwd
+sudo chown root:root /etc/um-share/vnc.passwd
+sudo chmod 0600 /etc/um-share/vnc.passwd
+
+# 人工接管：只 systemctl start，不 enable；同时打开控制台 /display/ 面并重启控制台。
+sudo /opt/um-share/current/um-cloud-deploy/display/manual-takeover.sh start
+
+# 人工步骤完成后释放内存：停止 display，并关闭 /display/ 面；unit 仍保持安装且未 enable。
+sudo /opt/um-share/current/um-cloud-deploy/display/manual-takeover.sh stop
+
+# 只读确认：unit 是否只在本次人工接管中运行。
+systemctl is-enabled um-share-display.service   # 必须是 disabled
+systemctl is-active um-share-display.service    # 只在接管期间为 active
+```
+
+脚本要求 root，检查 `/etc/um-share/vnc.passwd` 为 root-only（0400/0600），只调用 `systemctl start`/`systemctl stop`，从不调用 `systemctl enable`/`systemctl disable`；`start` 会把 `console.env` 的 `CONSOLE_DISPLAY_ENABLED=1` 写入并重启控制台，`stop` 写回 0；默认安装不 enable display。真实 systemd 启动、`LoadCredential` 与真实 noVNC/VNC 握手仍须在目标机 follow-up 验证。
 
 ## 认证与来源
 
