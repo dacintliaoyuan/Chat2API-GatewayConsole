@@ -30,8 +30,20 @@ chat2api 访问 UM 时所持凭据的状态，规范值为「认证有效」「�
 _Avoid_: 服务状态、token 状态
 
 **重新认证会话 (Reauthentication session)**:
-为恢复 chat2api 上游认证而打开的一次可见 Edge 登录交互；同一时刻所有触发方共享唯一会话。
-_Avoid_: 登录窗口、刷新 token
+为恢复 chat2api 上游认证而进行的一次登录交互（可见或 headless）；同一时刻所有触发方共享唯一会话。
+_Avoid_: 登录窗口、刷新 token、可见窗口
+
+**登录呈现方式 (Login presentation mode)**:
+一次登录交互是否创建可见浏览器窗口的呈现选择；默认 headless-first，正常路径不创建可见窗口，不要求 `DISPLAY` 或 `WAYLAND_DISPLAY`，并复用同一 profile。
+_Avoid_: 默认可见窗口、每次新建专用 profile
+
+**登录浏览器单实例 (Single login-browser instance per profile)**:
+同一 profile 目录在同一时刻最多只有一个登录浏览器；按 profile 目录持有 OS 级文件锁（POSIX `flock` / Windows `msvcrt.locking`），锁文件放在 profile 目录并附带 pid 与进程启动时间用于诊断，进程退出后锁自动释放。打开前只清理同 profile 的旧 Chromium（先 SIGTERM，等待，再 SIGKILL），不碰其他浏览器。
+_Avoid_: 全局单浏览器、同 profile 多开
+
+**人工接管 (Manual takeover)**:
+自动流程遇到只能由本人完成的步骤时立即结束当前轮并释放浏览器，默认返回 `manual_takeover_required:<reason>`；操作员显式选择才按需拉起可见 display 并开新轮，不复用旧轮。`umpass_mfa_required`、`umpass_prefill_missing`、`unrecognized_page` 属于人工接管；`duo_prompt_waiting` 继续等待，不误判为人工接管。
+_Avoid_: 自动重试人工步骤、把 Duo 推送等待当人工接管
 
 **UM 自动认证恢复轮次 (UM automatic authentication recovery cycle)**:
 一个实例围绕同一次 UM 上游认证恢复需求组织的有限一组重新认证会话；同一实例的并发触发归入同一轮次，两个实例分别确认各自认证结果。
