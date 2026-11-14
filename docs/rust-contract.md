@@ -27,7 +27,7 @@
 | 8100 | 分享网关（合并进程） | 8100，仅 loopback | 8100（`um-cloud-deploy/systemd/um-share-broker.service` 的 `--port 8100`） | 8100 | 不变 |
 | 18096 | 云端控制台宿主 | 18096，仅 loopback | 18096（`usagesrv.py:102`） | **8096** | 窗口内 `USAGESRV_PORT=18096` 仍可显式配置 |
 | 5901 | display x11vnc | 5901，仅 loopback | 5901（`console/display_proxy.py:223`） | **8097** | 窗口内 `CONSOLE_DISPLAY_VNC_PORT=5901` 仍可显式配置 |
-| 5173 | vite 开发服务 | 不适用 | 5173（`check_port_bindings.py:35`） | 5173 | 不变 |
+| 5173 | vite 开发服务 | 不适用 | 5173（`check_port_bindings.py` 的 `PORT_ALLOCATIONS`） | 5173 | 不变 |
 | 8099 | 候选预览 | 不适用 | 8099（AGENTS.md） | 8099 | 不变 |
 
 说明：
@@ -100,7 +100,8 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 | 面 | 端点组 | 鉴权 | 请求/响应 | 错误码 | 流式 | 超时/取消 | 幂等 | 主要副作用 |
 |---|---|---|---|---|---|---|---|---|
-| 8100 | `/health`、`/ready`、`/v1/models` | 分享模式需分享 Key；非分享模式按本地 Key 规则 | JSON；目录可带 `limit`/`beta=true` | 401/404/503/502 | 无 | 请求总预算、认证等待预算 | 只读 | 读投影、UM 上游 |
+| 8100 | `/health`、`/ready` | 无 | JSON | 503/502 | 无 | 请求总预算 | 只读 | 读投影、UM 上游 |
+| 8100 | `/v1/models` | 分享模式需分享 Key；非分享模式按本地 Key 规则 | JSON；目录可带 `limit`/`beta=true` | 401/404/503/502 | 无 | 请求总预算、认证等待预算 | 只读 | 读投影、UM 上游 |
 | 8100 | `/v1/version` | 非分享模式按本地 Key 规则；分享模式 404 | JSON | 401/404/502/503 | 无 | 请求总预算 | 只读 | UM 上游 |
 | 8100 | `/v1/chat/completions` | 分享模式 Bearer Key | JSON 进，JSON 或 SSE 出 | 400/401/413/429/502/503 | SSE 透传 | 首字节/静默/总预算 | 重试只在未提交前 | 追加账本、UM 上游 |
 | 8100 | `/v1/messages` | 分享模式 Bearer 或 `X-Api-Key` | Anthropic JSON/SSE 字节透传 | 400/401/413/429/502/503 | SSE 透传 | 同上 | 重试只在未提交前 | 追加账本、UM 上游 |
@@ -111,7 +112,10 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | 8100 | `/admin/auth/*`、`/admin/share/revoke`、`/admin/shutdown` | 控制令牌 | JSON | 403 | 无 | 无 | 登录/撤销有界 | 浏览器、撤销在途、停止服务 |
 | 18096 | `/health`、`/api/summary`、`/api/console/*` 只读 | loopback Host/Origin；写面按路由：facade 需同源标记/控制令牌，operations 只受同源门 | JSON no-store | 400/401/403/404/409/410/413/502/503 | 无 SSE | display/操作/TTL | 读无；写按 Key/操作 | SQLite、账本、日志、broker |
 | 18096 | `/api/console/share-management/*` 写面 | 同源标记或控制令牌 | JSON no-store | 400/403/404/409/410/413/503 | 无 | 写请求前端 20s 预算 | idempotency_key + row_version | SQLite、投影发布、安全日志 |
-| 18096 | `/display/*` | 同源；`/display/` 与 `/display/websockify` 另需 display session、控制令牌或 Tailscale Serve 身份 | HTML/JS/WebSocket | 400/403/404/409/413/415/426/502/503 | RFB WebSocket | grant 60s、session 300s、idle 900s | 单次 grant | x11vnc 网络、operator 状态 |
+| 18096 | `/display`、`/display/` | 同源 + display 授权（display session、控制令牌或 Tailscale Serve 身份） | HTML/JS | 400/403/404/409/413/415/426/502/503 | 无 | grant 60s、session 300s、idle 900s | 单次 grant | operator 状态 |
+| 18096 | `/display/launcher.js`、`/display/launcher-state.js`、`/display/<asset>`、`/display/session`、GET `/display/grant` | 同源 | JS/JSON | 400/403/404/409/413/415/426/502/503 | 无 | session 300s、idle 900s | 无 | noVNC 静态树 |
+| 18096 | POST `/display/grant` | 同源 + 有效单次 grant | JSON | 400/403/404/409/413/415/426/502/503 | 无 | grant 60s | 单次 grant | grant 存储 |
+| 18096 | `/display/websockify` | display session + operator generation | RFB WebSocket | 400/403/409/426/503 | RFB WebSocket | idle 900s、session 14400s | 单次 operator | x11vnc 网络、operator 状态 |
 | broker | AF_UNIX 管理通道 | HMAC-SHA256 + 时间窗 + replay | 一行 JSON，最大 1 MiB | 固定结果码表 | 无 | 10s/90s/30s/130s | request_id 一次性 | 投影、pid、信号、Popen |
 | Key 管理 | SQLite + `/api/share/*` | 管理面鉴权 | JSON | 400/401/404/409/410/503 | 无 | 发布 fail-closed | idempotency_key + row_version | SQLite、投影、安全日志 |
 | 用量账本 | 只读查询 | 随宿主面 | JSON | 400/502/503 | 无 | 有界读取 | 只读 | 无写入 |
@@ -150,7 +154,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 - 每 Key 并发、全局并发和每 Key 20 次/60 秒的滑动限速在进程内完成（`chat2api/share_auth.py:80-82,1300-1395`）。拒绝时 429 `sharing_limit_reached`，`reason` 区分 `per_key_concurrency`、`share_concurrency`、`key_rate_limit`、`state_not_accepting`。
 - 非分享白名单的 `/v1/*` 路径在分享模式下返回 404 `route_not_shared`；分享模式只允许 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`，因此 `/v1/version` 与 `/v1/embeddings` 只在非分享模式可用（`chat2api/chat2api.py:6196-6236`）。
 - 目录只允许规范 `/v1/models`、`beta=true` 和单个 `limit`（1..1000，规范十进制）查询；其他查询 404 `route_not_shared`（`chat2api/share_auth.py:32-72`）。
-- `/api/*` 兼容别名是本机/非分享面，不在 Cloudflare 白名单内，也不经分享 Key 门；分享模式只保证四条 `/v1` 路径的公网语义（`chat2api/chat2api.py:6196-6236`、`um-cloud-deploy/cloudflared/check-ingress.py:26-143`）。
+- `/api/*` 兼容别名是本机/非分享面，不在 Cloudflare 白名单内，也不经分享 Key 门；分享模式只保证四条 `/v1` 路径的公网语义（`chat2api/chat2api.py:6196-6236`、`um-cloud-deploy/cloudflared/check-ingress.py:26-142`）。
 
 ### 5.2 请求与响应
 
@@ -211,8 +215,8 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | GET | `/api/summary` | 无 | 云端汇总；角色 `cloud`，不读私人账本 |
 | POST | `/api/session` | 引导码 | 兑换 HttpOnly 会话 Cookie，TTL 12 小时 |
 | POST | `/api/session/reissue` | `X-Admin-Control` | 重新签发引导码 |
-| GET | `/display` | 同源 | 重定向到 `/display/` |
-| GET | `/display/` | display 授权 | noVNC launcher 页面 |
+| GET | `/display` | 同源 + display 授权 | 重定向到 `/display/` |
+| GET | `/display/` | 同源 + display 授权 | noVNC launcher 页面 |
 | GET | `/display/launcher.js`、`/display/launcher-state.js`、`/display/<asset>` | 同源 | launcher 模块与只读 noVNC 静态树，防穿越 |
 | GET | `/display/session` | 同源 | `{authorized, expires_at}` |
 | GET | `/display/grant` | 同源 | launcher 页面，fragment 兑换 |
@@ -246,7 +250,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | GET | `/api/console/operations`、`/operations/{id}` | 无（只读） | 操作记录 |
 | POST | `/api/console/operations` | 无（同源写边界） | 提交动作；201/200 |
 | POST | `/api/console/operations/{id}/cancel` | 无（同源写边界） | 协作取消 |
-| GET/POST | `/api/share/usage`、`/usage/requests` | 会话或控制令牌 | 旧管理面只读 |
+| GET | `/api/share/usage`、`/usage/requests` | 会话或控制令牌 | 旧管理面只读 |
 | GET | `/api/share/status`、`/keys`、`/keys/{id}`、`/keys/{id}/secret`、`/operations/{id}` | 会话或控制令牌 | 旧管理面只读 |
 | POST | `/api/share/limits/normalize` | 控制令牌或会话+CSRF | 显式归一化 |
 | POST | `/api/share/keys`、`/keys/{id}/test`、`/keys/{id}/rotate`、`/keys/{id}/revoke-and-terminate` | 控制令牌或会话+CSRF | 旧管理面写 |
@@ -295,7 +299,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 - `share-management/status` 的 `gateway_running` 是三态：只有 broker 明确确认 True/False 才出现，未确认时省略，不折成 false（`usagesrv.py:2730-2748`）。
 - `share-management/status` 的 `capacity.in_flight` 来自 broker maintenance 视图；未接线/读不到时为 `null` 并带原因，不写 0（`usagesrv.py:2267-2330`）。
 - `share-management/keys/{id}/secret` 的四种结果：200 明文；200 `secret_unavailable` + `reason=legacy|undecryptable|version_conflict`；410 `key_deleted`；404 未知（`usagesrv.py:2205-2239`）。
-- `revoke-and-terminate` 返回 `revoked=true`，并区分 `terminated`/`released`/`aborted`/`upstream_closed`；缺失计数保持 `null`，不伪造 0（`usagesrv.py:2955-2988`）。
+- `revoke-and-terminate` 返回 `revoked=true`，并区分 `terminated`/`released`/`aborted`/`upstream_closed`；缺失计数保持 `null`，不伪造 0（`usagesrv.py` 的 `revoke-and-terminate` 分支）。
 - 操作提交：`idempotency_key` 1..128；同 action/target/params 复用同一操作，不同则 409 `idempotency_key_conflict`；新建 201，复用 200（`usagesrv.py:3510-3538`、`console/operations.py:433-534`）。
 - 操作取消：已结束 409 `operation_already_finished`；未知 404 `operation_not_found`；排队中取消立即变 `cancelled`，执行中置 `cancel_requested`（`console/operations.py:544-570`）。
 
@@ -319,6 +323,29 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 - 发布投影：原子写临时文件 + `os.replace`；generation 单调；同代内容不同拒绝（`share/runtime.py:24-80`）。
 - 写 broker 操作记录：`data/console-state.sqlite3` 的 `operations`；明文 Key 绝不进 `result_json`（`usagesrv.py:3248`）。
 - 不自动备份、不做预算保护；备份只走显式 CLI。
+
+### 6.6 读面响应形状
+
+以下只冻结顶层形状；字段级语义与缺失值规则以对应构造点为准，Rust 不得自行补零或改写。
+
+| 端点 | 顶层响应字段 |
+|---|---|
+| `GET /health` | `status`、`service`、`port` |
+| `GET /api/summary` | `summary`、`checkedAt`；角色 `cloud` 不读私人账本 |
+| `GET /api/console/share-management/status` | `generation`、`keys`、`capacity`、`gateway_running`；缺失保持 `null`/省略 |
+| `GET /api/console/share-management/keys` | `keys[]`；每项 `id`、`name`、`max_concurrency`、`row_version`、状态字段；不含明文/哈希 |
+| `GET /api/console/share-usage` | `summary`、`filters`、`coverage`、`checkedAt`；费用/价格字段已退役 |
+| `GET /api/console/share-usage/requests` | `rows[]`、`nextCursor`、`truncated`、`filters`、`coverage`、`checkedAt` |
+| `GET /api/console/um/today` | `today`、`coverage`、`timezone`、`checked_epoch` |
+| `GET /api/console/um/trend` | `range`、`days`/点序列、`coverage`、`checked_epoch` |
+| `GET /api/console/um/requests` | `rows[]`、`nextCursor`、`truncated`、`coverage` |
+| `GET /api/console/um/logs`、`request-logs` | `rows[]`、`nextCursor`、`truncated`、`coverage` |
+| `GET /api/console/stats` | `requests`、`input_tokens`、`output_tokens`、`cache`、`coverage`；云端角色 503 |
+| `GET /api/console/logs` | `rows[]`、`coverage`；云端角色 503 |
+| `GET /api/console/operations` | `operations[]`；每项 `id`、`action`、`status`、`result` |
+| `GET /api/console/operations/{id}` | 单个 operation；未知 404 |
+| `GET /api/console/actions` | `actions[]`；动作目录 |
+| `GET /api/console/gateway-connection` | `service`、`connection`、`snapshot`；云端角色 503 |
 
 ## 7. broker 契约
 
@@ -454,14 +481,14 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
-| GET | `/display` | 同源/管理身份 | 重定向到 `/display/` |
-| GET | `/display/` | display 授权 | noVNC launcher 页面 |
-| GET | `/display/launcher.js` | display 授权 | launcher 模块脚本 |
-| GET | `/display/launcher-state.js` | display 授权 | launcher 状态模块 |
-| GET | `/display/<asset>` | display 授权 | 只读 noVNC 静态树，防穿越 |
-| GET | `/display/session` | display 授权 | `{authorized, expires_at}` |
-| GET | `/display/grant` | 管理身份 | launcher 页面，fragment 兑换 |
-| POST | `/display/grant` | 管理身份 | 单次 grant 换 HttpOnly Cookie |
+| GET | `/display` | 同源 + display 授权 | 重定向到 `/display/` |
+| GET | `/display/` | 同源 + display 授权 | noVNC launcher 页面 |
+| GET | `/display/launcher.js` | 同源 | launcher 模块脚本 |
+| GET | `/display/launcher-state.js` | 同源 | launcher 状态模块 |
+| GET | `/display/<asset>` | 同源 | 只读 noVNC 静态树，防穿越 |
+| GET | `/display/session` | 同源 | `{authorized, expires_at}` |
+| GET | `/display/grant` | 同源 | launcher 页面，fragment 兑换 |
+| POST | `/display/grant` | 同源 + 有效单次 grant | 单次 grant 换 HttpOnly Cookie |
 | GET | `/display/websockify` | display session + operator generation | WebSocket RFB 中继 |
 
 ### 10.2 语义
@@ -485,7 +512,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 ### 11.1 入口配置校验
 
 - `python um-cloud-deploy/cloudflared/check-ingress.py --config um-cloud-deploy/config/cloudflared.yml.example --expect-host <配置公网主机>`。
-- 只读解析 YAML：公网 host 只允许 4 条分享路径 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`；service 必须是 8100 loopback；最后一条必须是 `http_status:404`；当前禁止出现 18096/5901，#40 后同样禁止 8096/8097；重复路径、缺路径、错 host 都报 problem（`um-cloud-deploy/cloudflared/check-ingress.py:26-143`）。
+- 只读解析 YAML：公网 host 只允许 4 条分享路径 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`；service 必须是 8100 loopback；最后一条必须是 `http_status:404`；当前禁止出现 18096/5901，#40 后同样禁止 8096/8097；重复路径、缺路径、错 host 都报 problem（`um-cloud-deploy/cloudflared/check-ingress.py:26-142`）。
 - 不写、不 reload、不 restart tunnel；只返回 `{ok, problems, rules}`，退出码 0/1。
 
 ### 11.2 公网 DNS/TLS 检查
@@ -567,9 +594,11 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 ## 15. 未验证与待确认
 
-- 本票未运行全量 parity 门禁；只运行了文档定向核对（见提交说明）。
+- 运行 `bash scripts/check.sh --quick`（工作目录 `.worktrees/integration-rust-contract`，提交 `cb29da4`）：退出码 0。
+- 运行 `bash scripts/check.sh --full`（同上）：退出码 0；`Ran 2310 tests` / `OK (skipped=63)`，`local/tests` `Ran 54 tests` / `OK`。
+- 运行 `python -m unittest tests.test_chat2api_linux_platform tests.test_cloud_display_on_demand tests.test_console_display_proxy`（同上）：退出码 0。
+- 未运行 Rust 编译/测试：本票只产出测量、契约与切片计划，未创建 Cargo 工程。
 - 登录中/登录后 RSS 未验证；没有维护者授权触发重登。
 - Chromium 未运行，没有 idle RSS；登录相关 display 行为以 spec #8 为准。
 - #40 未合入本分支；8096/8097 只是决策记录，未在云端验证。
 - 未执行真实 Cloudflare Tunnel 变更、UM 上游登录、broker 重启或生产备份/恢复。
-- Rust 实现、Cargo 工程、Rust 契约测试均未创建。

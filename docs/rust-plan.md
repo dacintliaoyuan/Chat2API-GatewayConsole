@@ -177,7 +177,6 @@ bash scripts/check.sh --full
 ```bash
 bash scripts/check.sh --full
 bash um-cloud-deploy/run-linux-checks.sh --mode full
-python check_port_bindings.py
 ```
 
 另需在候选环境跑一次真实 8100 进程的 `tests/linux_share_chain.py --scenario core`（由 `run-linux-checks.sh` 调用）。
@@ -345,9 +344,9 @@ bash um-cloud-deploy/run-linux-checks.sh --mode full
 
 ## 8. 与 #40 的边界
 
-- Rust 切片不实现端口重排；不把 8096/8097 写进 Rust 默认值。
+- Rust 切片不实现端口重排；新端口由 #40 的部署模板决定，Rust 只读环境变量。
 - #40 完成后，Rust 服务必须接受 `USAGESRV_PORT` 与 `CONSOLE_DISPLAY_VNC_PORT` 的显式配置；默认值来自部署模板，不来自 Rust 代码。
-- 兼容窗口内，旧值 18096/5901 作为显式配置仍可启动；窗口结束后移除旧别名。Rust 不得同时监听新旧两个端口。
+- 兼容窗口内，旧端口值作为显式配置仍可启动；窗口结束后移除旧别名。Rust 不得同时监听新旧两个端口。
 - 非法值继续 fail closed；Rust 不静默回退默认端口。
 - 本计划不修改 `AGENTS.md` 端口表；#40 自己同步端口表、部署模板、测试与文档。
 - `CODING_STANDARDS.md` 的「生产 8100 只运行 `chat2api/chat2api.py`」由 S4 在切换时修订；#40 不修改这条规则。
@@ -356,6 +355,6 @@ bash um-cloud-deploy/run-linux-checks.sh --mode full
 
 - 本票未运行任何 parity 门禁；上表命令是仓库实际命令，不是本票的通过证据。
 - 未创建 Rust 工程、未写 Rust 代码、未跑 Rust 测试。
-- 未在云端验证 8096/8097；#40 未合入本分支。
+- 未在云端验证 #40 的新端口；#40 未合入本分支。
 - 未触发登录，未测量登录中/登录后 RSS；Chromium 未运行。
 - 未执行真实 Cloudflare Tunnel 变更、broker 重启、生产备份/恢复或 UM 登录验收。
