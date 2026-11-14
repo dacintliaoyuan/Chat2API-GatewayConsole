@@ -387,7 +387,7 @@ class ShareStore:
     def close(self):
         try:
             self._conn.close()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — SQLite 事务失败按错误上报
             pass
 
     # ------------------------------------------------------------------ ddl

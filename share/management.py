@@ -479,7 +479,7 @@ class ShareManager:
         Never raises: an unconfirmed stop is reported, not swallowed."""
         try:
             result = self.broker.emergency_stop()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — 管理面失败按可读错误上报
             return {"attempted": True, "confirmed": False,
                     "error": f"{type(exc).__name__}: {exc}"}
         confirmed = isinstance(result, dict) and result.get("stopped") is True
@@ -692,7 +692,7 @@ class ShareManager:
             try:
                 reply = self.broker.publish(projection,
                                         terminate_keys=terminate_keys)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 管理面失败按可读错误上报
                 error = f"projection publication failed: {type(exc).__name__}: {exc}"
                 store.update_operation(op_id, "failed", {"error": error})
                 self._note_failure("publish", error)
@@ -798,7 +798,7 @@ class ShareManager:
         keep the publication marked blocked while it is not (R4-a)."""
         try:
             result = self.broker.emergency_stop()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — 管理面失败按可读错误上报
             stop = {"attempted": True, "confirmed": False,
                     "error": f"{type(exc).__name__}: {exc}"}
         else:
@@ -1263,7 +1263,7 @@ class ShareManager:
             compensation = self.broker.emergency_stop()
             closed = isinstance(compensation, dict) \
                 and compensation.get("stopped") is True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — 管理面失败按可读错误上报
             compensation = {"error": f"{type(exc).__name__}: {exc}"}
         if closed:
             store.update_operation(op["id"], "applied", {
@@ -1282,7 +1282,7 @@ class ShareManager:
         self._update_operation(op_id, "running", {})
         try:
             result = fn()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — 管理面失败按可读错误上报
             # R31-2: an exception does NOT mean the side effect never
             # happened - a late start that opened the entry and then threw
             # must still pass through the epoch compensation check.

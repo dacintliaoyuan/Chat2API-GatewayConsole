@@ -228,7 +228,7 @@ def _read_ledger_jsonl(path, environment=None):
                     continue
                 try:
                     rec = json.loads(line)
-                except ValueError:
+                except (ValueError, RecursionError):
                     bad_lines += 1
                     continue
                 if isinstance(rec, dict):
@@ -256,7 +256,7 @@ def _read_dsh_snapshot(path, environment=None):
         return None, {"missing": True}
     except OSError as exc:
         return None, {"read_error": environment.display_path(str(exc))}
-    except ValueError as exc:  # json.JSONDecodeError and friends
+    except (ValueError, RecursionError) as exc:
         return None, {"corrupt": "%s: %s" % (type(exc).__name__, exc)}
     if not isinstance(data, dict):
         return None, {"corrupt": "snapshot root is not a JSON object"}
@@ -1122,7 +1122,7 @@ def _refresh_jsonl_cache(path, source, spec):
                 continue
             try:
                 record = json.loads(line.decode("utf-8"))
-            except ValueError:
+            except (ValueError, RecursionError):
                 bad_lines += 1
                 continue
             if not isinstance(record, dict):

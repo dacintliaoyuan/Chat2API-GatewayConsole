@@ -291,7 +291,7 @@ class BoundedPipeServer:
             try:
                 record = self.serve_once()
                 self._last_error = record.get("error")
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:  # noqa: BLE001 — broker 服务边界失败返回固定结果
                 # Bottom catch: never let one poisoned cycle kill serving.
                 self._last_error = f"{type(exc).__name__}: {exc}"
                 self._release_instance()
@@ -394,7 +394,7 @@ class BoundedPipeServer:
                     outcome["value"] = _exchange()
                 except _CancelledConnection:
                     outcome["cancelled"] = True
-                except BaseException as exc:  # noqa: BLE001
+                except BaseException as exc:  # noqa: BLE001 — broker 服务边界失败返回固定结果
                     outcome["error"] = exc
                 finally:
                     done.set()
@@ -430,7 +430,7 @@ class BoundedPipeServer:
                     cancel_synchronous_worker_io(kernel32, worker)
                 try:
                     kernel32.DisconnectNamedPipe(self._handle)
-                except BaseException:  # noqa: BLE001
+                except BaseException:  # noqa: BLE001 — broker 服务边界失败返回固定结果
                     pass
                 self._release_instance()
                 if done.wait(self._WORKER_EXIT_OBSERVE_SECONDS):
@@ -551,7 +551,7 @@ class BoundedPipeServer:
                 try:
                     kernel32, _ = self._kernel()
                     kernel32.DisconnectNamedPipe(self._handle)
-                except BaseException:  # noqa: BLE001
+                except BaseException:  # noqa: BLE001 — broker 服务边界失败返回固定结果
                     pass
                 kernel32, _ = self._kernel()
                 kernel32.CloseHandle(self._handle)
@@ -1277,7 +1277,7 @@ class _ManagementDispatch:
             request_id = body.get("request_id") if isinstance(body, dict) \
                 else None
             return self._frame(request_id, exc.code, str(exc))
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:  # noqa: BLE001 — broker 服务边界失败返回固定结果
             record["dispatch_error"] = f"{type(exc).__name__}: {exc}"
             request_id = body.get("request_id") if isinstance(body, dict) \
                 else None

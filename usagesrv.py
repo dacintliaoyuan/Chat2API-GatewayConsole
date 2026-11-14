@@ -189,7 +189,7 @@ def _console_build_identity_error():
                 % (label, expected))
     try:
         identity = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         return ("%s 不是有效 JSON：无法确认托管页面属于 %s 角色"
                 % (label, expected))
     if not isinstance(identity, dict):
@@ -246,7 +246,7 @@ def _load_json(path):
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
 
 
@@ -263,14 +263,14 @@ def _read_jsonl(path, limit=200000):
                     continue
                 try:
                     rec = json.loads(line)
-                except ValueError:
+                except (ValueError, RecursionError):
                     continue
                 if isinstance(rec, dict):
                     rec["_ms"] = _parse_ts(rec.get("time"))
                     records.append(rec)
     except FileNotFoundError:
         return []
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return records
     records.sort(key=lambda r: r.get("_ms") or 0)
     return records[-limit:]
@@ -1055,7 +1055,7 @@ def _load_share_management_deployment():
     try:
         with open(path, encoding="utf-8") as f:
             payload = json.load(f)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise BrokerError(f"share management config unreadable: {exc}")
     if not isinstance(payload, dict):
         raise BrokerError("share management config must be an object")
@@ -1741,7 +1741,7 @@ class Handler(BaseHTTPRequestHandler):
             return None, 400, "incomplete_body"
         try:
             obj = json.loads(raw) if raw else {}
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             return None, 400, "invalid_json"
         if obj is None:
             obj = {}
@@ -2192,7 +2192,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._share_error(exc)
             return
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
             print(f"[usagesrv] share api error: {type(exc).__name__}: {exc}", flush=True)
             self.close_connection = True
             self._send_json(500, {"error": "share management error"})
@@ -3007,7 +3007,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send_json(status_code_for(exc), {"error": str(exc)})
             return
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
             # Details to the server console only; the response stays
             # generic (same discipline as _share_api).
             print(f"[usagesrv] console share api error: {type(exc).__name__}: {exc}",
@@ -3167,7 +3167,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_um_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] UM read surface failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "um_query_failed"})
@@ -3195,7 +3195,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_usage_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] usage tokens query failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "usage_query_failed"})
@@ -3222,7 +3222,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_usage_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] usage rates query failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "usage_query_failed"})
@@ -3235,7 +3235,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload["recorded_requests"] = \
                     _usage_rates_recorded_requests(payload)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] recorded request count failed: %s"
                       % type(exc).__name__, flush=True)
             self._send_json(200, payload)
@@ -3357,7 +3357,7 @@ class Handler(BaseHTTPRequestHandler):
                 for line in tail_lines:
                     try:
                         row = json.loads(line)
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         continue
                     if not isinstance(row, dict):
                         continue

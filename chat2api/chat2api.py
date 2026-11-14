@@ -753,7 +753,8 @@ class TokenStore:
             if data.get("url") != self.url:
                 return None
             return data
-        except (OSError, ValueError, TypeError, AttributeError):
+        except (OSError, ValueError, TypeError, AttributeError,
+                RecursionError):
             return None
 
     def save(self, token: str, api_key: str = None):
@@ -2097,6 +2098,8 @@ def fetch_api_key(base_url: str, token: str, upstream_config=None) -> str | None
                     print("Got Open WebUI API key.")
                     return key
         except (requests.RequestException, ValueError):
+            # Best-effort API-key probe: no key is the same as an unreadable
+            # probe here; the caller falls back to the session token.
             pass
         finally:
             if r is not None:
@@ -5248,7 +5251,7 @@ def _repair_truncated_json_prefix(text):
     repaired += "".join("}" if c == "{" else "]" for c in reversed(stack))
     try:
         payload = json.loads(repaired)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -5260,7 +5263,7 @@ def _extract_upstream_reject_error(response_text):
     error_code = ""
     try:
         payload = json.loads(response_text)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         payload = _repair_truncated_json_prefix(response_text)
         if payload is None:
             return (_sanitize_upstream_error_value(response_text, 120),
@@ -5698,7 +5701,7 @@ def _reasoning_retry_preflight(upstream, first_data_deadline,
         saw_substantive = True
         try:
             chunk = json.loads(payload)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             return "pass"
         if not isinstance(chunk, dict):
             return "pass"
@@ -7840,6 +7843,8 @@ class Handler(BaseHTTPRequestHandler):
                     content = data["choices"][0]["message"]["content"]
                     out_est = _est_tokens(content)
                 except (KeyError, IndexError, TypeError):
+                    # Missing usage shape only means no estimate; the request
+                    # itself already succeeded.
                     pass
                 record_usage(req_model, False, started_at, usage,
                              _message_tokens(body.get("messages")), out_est)
@@ -8001,6 +8006,8 @@ class Handler(BaseHTTPRequestHandler):
                     content = aggregate_data["choices"][0]["message"]["content"]
                     out_est = _est_tokens(content)
                 except (KeyError, IndexError, TypeError):
+                    # Missing usage shape only means no estimate; the request
+                    # itself already succeeded.
                     pass
                 record_usage(
                     req_model, False, started_at, aggregate_data.get("usage"),
@@ -8385,7 +8392,7 @@ class Handler(BaseHTTPRequestHandler):
             if payload and payload != "[DONE]":
                 try:
                     chunk = json.loads(payload)
-                except ValueError:
+                except (ValueError, RecursionError):
                     chunk = None
             error_reason = None
             if isinstance(chunk, dict):
@@ -8839,7 +8846,7 @@ class Handler(BaseHTTPRequestHandler):
                 if data_text and data_text != "[DONE]":
                     try:
                         event = json.loads(data_text)
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         event = None
 
                 text_piece = None

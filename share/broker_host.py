@@ -443,7 +443,7 @@ class BrokerHostCoordinator:
             return False
         try:
             self.discover_instance()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — broker 主机边界失败返回固定结果
             return False
         return True
 
@@ -529,7 +529,7 @@ class BrokerHostCoordinator:
             return BrokerResult.err("unconfirmed", "no registered instance")
         try:
             resp = self.instance_call("load", load_fields, current)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — broker 主机边界失败返回固定结果
             self.diag.record("load", ok=False, exception_type=type(exc).__name__,
                              detail=str(exc)[:120], instance_id=current,
                              request_id=request_id)
@@ -546,7 +546,7 @@ class BrokerHostCoordinator:
                     "unconfirmed", "no registered instance after refresh")
             try:
                 resp = self.instance_call("load", load_fields, current)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — broker 主机边界失败返回固定结果
                 self.diag.record("load", ok=False,
                                  exception_type=type(exc).__name__,
                                  detail=str(exc)[:120], instance_id=current,
@@ -653,7 +653,7 @@ class BrokerHostCoordinator:
                                      deadline - self._clock())
             if not resp.get("ok"):
                 notification_failed = True
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — broker 主机边界失败返回固定结果
             notification_failed = True
         while self._clock() < deadline:
             remaining = deadline - self._clock()
@@ -665,7 +665,7 @@ class BrokerHostCoordinator:
                 active_left = (resp.get("result") or {}).get("active_count")
                 if active_left == 0:
                     break
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — broker 主机边界失败返回固定结果
                 notification_failed = True
                 break
             time.sleep(min(0.05, max(0.0, deadline - self._clock())))
@@ -679,7 +679,7 @@ class BrokerHostCoordinator:
                 min(self.stop_timeout / 2, stop_deadline - self._clock()))
             if not stop.get("ok"):
                 notification_failed = True
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — broker 主机边界失败返回固定结果
             notification_failed = True
         host_stopped = self._host_op("stop_host",
                                      stop_deadline - self._clock()) is True
@@ -732,7 +732,7 @@ class BrokerHostCoordinator:
                                 (stop.get("result") or {}).get("state")
                                 == "stopped")
             cleared = (stop.get("result") or {}).get("cleared_in_flight")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — broker 主机边界失败返回固定结果
             notification_failed = True
         host_stopped = self._host_op("stop_host",
                                      stop_deadline - self._clock()) is True
@@ -788,7 +788,7 @@ class BrokerHostCoordinator:
         if self.maintenance is not None:
             try:
                 self.maintenance(dict(record))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — broker 主机边界失败返回固定结果
                 # Best-effort persistence: a failing sink is recorded and
                 # never breaks the management path.
                 self.diag.record("maintenance-sink", ok=False,
@@ -824,7 +824,7 @@ class BrokerHostCoordinator:
         any failure is an explicit unconfirmed, never a fabricated state."""
         try:
             resp = self.instance_call("instance-status", {}, instance_id)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — broker 主机边界失败返回固定结果
             return None, f"instance status failed: {type(exc).__name__}"
         if not resp.get("ok"):
             return None, ((resp.get("result") or {}).get("detail")
@@ -861,7 +861,7 @@ class BrokerHostCoordinator:
             return BrokerResult.err("blocked", "instance is stopped")
         try:
             drained = self.instance_call("drain", {}, current)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — broker 主机边界失败返回固定结果
             return BrokerResult.err(
                 "unconfirmed", f"instance drain failed: "
                               f"{type(exc).__name__}")
@@ -930,7 +930,7 @@ class BrokerHostCoordinator:
                                     "instance or round changed")
         try:
             resp = self.instance_call("resume", {}, current)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — broker 主机边界失败返回固定结果
             self._record_maintenance_outcome(
                 "maintenance-end", False, "unconfirmed",
                 f"instance resume failed: {type(exc).__name__}")
@@ -1013,7 +1013,7 @@ class BrokerHostCoordinator:
             return
         try:
             resp = self.instance_call("resume", {}, current)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — broker 主机边界失败返回固定结果
             self._record_maintenance_outcome(
                 "maintenance-end", False, "unconfirmed",
                 f"expiry resume failed: {type(exc).__name__}")
@@ -1090,7 +1090,7 @@ class BrokerHostCoordinator:
                     stopped_confirmed = True
                     break
                 time.sleep(self.gateway_poll_interval)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — broker 主机边界失败返回固定结果
             stopped_confirmed = False
         running_confirmed = False
         if stopped_confirmed:
@@ -1102,7 +1102,7 @@ class BrokerHostCoordinator:
                         running_confirmed = True
                         break
                     time.sleep(self.gateway_poll_interval)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — broker 主机边界失败返回固定结果
                 running_confirmed = False
         restarted = stopped_confirmed and running_confirmed
         elapsed = round(self._clock() - started, 3)

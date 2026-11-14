@@ -978,7 +978,7 @@ def production_keys_confirmed(manager=None):
         return False
     try:
         raw = manager.list_keys()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — 发布/回滚边界失败按可读错误上报
         return None
     # ShareManager.list_keys returns {"keys": [rows]} (the /api/share/keys
     # shape); a bare list is tolerated for test seams. Found live via the
@@ -1038,7 +1038,7 @@ def production_keys_diagnosis(manager=None):
     total_count = 0
     try:
         raw = manager.list_keys()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — 发布/回滚边界失败按可读错误上报
         reasons.append("keys_read_failed")
     else:
         # Same shape tolerance as production_keys_confirmed: the real
