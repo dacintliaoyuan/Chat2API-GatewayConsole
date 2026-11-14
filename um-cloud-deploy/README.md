@@ -99,9 +99,17 @@ bash um-cloud-deploy/package-release.sh \
 /root/um-share-<version>/um-cloud-deploy/install.sh \
   --release-dir /root/um-share-<version> \
   --version <version> \
-  --wheelhouse /root/wheelhouse \
-  --with-display
+  --wheelhouse /root/wheelhouse
 ```
+
+安装只写入 `um-share-display.service`，默认不 enable、不随开机启动；正常登录路径是 headless，不依赖 display。需要人工接管时，操作员显式执行：
+
+```bash
+sudo /opt/um-share/current/um-cloud-deploy/display/manual-takeover.sh start
+sudo /opt/um-share/current/um-cloud-deploy/display/manual-takeover.sh stop
+```
+
+`start` 只对本次启动 `systemctl start`，从不 `enable`，并打开控制台 `/display/` 面；`stop` 停止 display 并关闭该面，unit 仍保持安装且未 enable。认证文件、Tailnet 策略与未验证范围见 [display/README.md](display/README.md)。
 
 安装脚本幂等：已存在的 release 若 manifest 相同则复用；已存在的配置、密钥与数据不覆盖；venv 与浏览器缓存已存在则复用；unit 已存在则重装模板并 `daemon-reload`。
 
