@@ -1124,10 +1124,9 @@ def build_linux_server(args, *, verifier=None, host_ops=None,
                                    DEFAULT_DEADLINE_SECONDS),
         state_dir=Path(args.broker_dir),
         dispatch_deadline_seconds=getattr(args, "dispatch_deadline", None),
-        # The REAL management coordinator (same object the Windows assembly
-        # passes to ManagementPipeServer): the AF_UNIX server therefore serves
-        # publish/load/drain/host-stop/gateway-restart through the same
-        # HMAC/replay/whitelist pipeline instead of the base
+        # The REAL management coordinator: the AF_UNIX server therefore
+        # serves publish/load/drain/host-stop/gateway-restart through the
+        # same HMAC/replay/whitelist pipeline instead of the base
         # NotImplementedError.
         coordinator=coordinator)
     maintenance_cell["server"] = server

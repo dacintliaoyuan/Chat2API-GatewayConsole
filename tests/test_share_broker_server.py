@@ -1,18 +1,20 @@
-"""D4-prerequisite offline tests for the SYSTEM broker management pipe
-server (ai-gateway/share/broker_server.py).
+"""Offline management-channel tests for share/broker_server.py.
 
-Everything runs on injected fake kernels and fixture coordinators/writers
-in temp dirs - no real pipe, no SYSTEM task, no RunRoot access. The server
-holds NO product coordination rules (they live in BrokerHostCoordinator,
-already covered by test_share_broker.py); these tests verify the WIRE
-layer (framing, bounded reads/writes, R41-4 cycle ownership and the
-R37 admission contract) and the R41-1/R41-2 assembly closed loop: a REAL
-signed management request through build_server's coordinator, a REAL
-instance-channel signature frame validated by the test double's
-handle_instance_control, and an ACK - never an echo fixture standing in for
-the instance.
+Everything runs against the REAL POSIX bounded cycle and management dispatch,
+with an in-memory accepted-connection double at the OS socket boundary - no
+named pipe, no SYSTEM task, no RunRoot access. The server holds NO product
+coordination rules (they live in BrokerHostCoordinator, already covered by
+test_share_broker.py); these tests verify the WIRE layer (framing, bounded
+reads/writes, R41-4 cycle ownership and the R37 admission contract) and the
+R41-1/R41-2 assembly closed loop: a REAL signed management request through
+the coordinator, validated by its own HMAC/replay pipeline and answered with an
+ACK - never an echo fixture standing in for the instance.
+
+The REAL AF_UNIX accept/SO_PEERCRED path is covered by
+tests/test_share_broker_unix_socket.py. The retired Windows named-pipe
+transport and its fake kernel fixture were removed with the old local share
+chain (#39).
 """
-import argparse
 import json
 import os
 import sys
@@ -25,15 +27,6 @@ from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-
-def _write_secret(path, text):
-    """Fixture secret files must pass the POSIX 0600/current-uid gate."""
-    path = Path(path)
-    path.write_text(text, encoding="utf-8")
-    if os.name == "posix":
-        os.chmod(path, 0o600)
-    return path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -42,8 +35,122 @@ import share.broker_server as srv  # noqa: E402
 from share.broker_host import (BrokerHostCoordinator,  # noqa: E402
                                InstanceRegistry, MaintenanceLeaseStore,
                                ReplayRegistry)
-from _share_instance_double import FakeShareServer as ShareServer  # noqa: E402
 from share.runtime import ProtectedProjectionWriter  # noqa: E402
+
+
+class _FakeConnection:
+    """In-memory accepted connection at the OS socket boundary.
+
+    It implements the byte-stream surface the POSIX transport uses
+    (``recv``/``send``/``settimeout``/``setblocking``/``shutdown``/
+    ``close``), so the REAL bounded cycle, framing and dispatch run
+    unchanged: the queued request is delivered once and the reply is captured.
+    """
+
+    def __init__(self, request_frame):
+        self._pending = bytes(request_frame)
+        self.sent = bytearray()
+        self.shutdowns = []
+        self.closed = False
+        self.blocking = True
+        self.timeout = None
+        self.credentials = {"pid": os.getpid(), "uid": 0, "gid": 0}
+
+    def recv(self, size):
+        if self._pending:
+            chunk = self._pending[:size]
+            self._pending = self._pending[size:]
+            return chunk
+        return b""
+
+    def send(self, data):
+        if self.closed:
+            raise OSError("fake connection is closed")
+        self.sent.extend(data)
+        return len(data)
+
+    def settimeout(self, value):
+        self.timeout = value
+
+    def setblocking(self, flag):
+        self.blocking = bool(flag)
+
+    def shutdown(self, how):
+        self.shutdowns.append(how)
+
+    def close(self):
+        self.closed = True
+
+
+class _ConnectionServer(srv.UnixSocketBrokerServer):
+    """UnixSocketBrokerServer with an in-memory accepted connection.
+
+    ONLY the OS accept path is replaced: the bounded cycle, framing,
+    management dispatch and protected records are the REAL POSIX server code.
+    """
+
+    def __init__(self, *requests, coordinator=None,
+                 deadline_seconds=srv.DEFAULT_DEADLINE_SECONDS,
+                 state_dir=None, clock=time.monotonic,
+                 dispatch_deadline_seconds=None):
+        self._requests = []
+        for frame in requests:
+            self.queue_request(frame)
+        self.connection = None
+        self.coordinator = coordinator
+        # Bypass the POSIX platform gate of the real transport: this double
+        # never opens a socket. Everything else is the REAL base constructor.
+        srv.BoundedPipeServer.__init__(
+            self, "in-memory-management-endpoint",
+            deadline_seconds=deadline_seconds, state_dir=state_dir,
+            clock=clock,
+            dispatch_deadline_seconds=dispatch_deadline_seconds)
+        self.socket_path = "in-memory-management-endpoint"
+        self._listener = None
+        self._socket_identity = None
+        self._listener_lock = threading.Lock()
+        self.last_peer_credentials = None
+        if coordinator is not None:
+            self._init_management()
+        else:
+            self.lifecycle = None
+            self.maintenance = None
+
+    def queue_request(self, frame):
+        if isinstance(frame, dict):
+            frame = bp.encode_frame(frame)
+        self._requests.append(bytes(frame))
+
+    def _create_instance(self):
+        cycle = srv._UnixConnectionCycle(listener=None)
+        self._handle = cycle
+        return cycle
+
+    def _bounded_connect(self, handle, cancel, deadline):
+        if cancel.is_set() or self._clock() >= deadline:
+            raise srv._CancelledConnection()
+        if not self._requests:
+            raise srv.ProtocolError("bad_request", "no queued request")
+        self.connection = _FakeConnection(self._requests.pop(0))
+        if not handle.attach(self.connection, self.connection.credentials):
+            raise srv._CancelledConnection()
+
+    @property
+    def written(self):
+        return bytes(self.connection.sent) if self.connection else b""
+
+
+def _serve_frame(server, request=None, deadline=None):
+    """Run ONE bounded management cycle and return (record, reply).
+
+    The request frame is queued at the in-memory connection boundary; the
+    reply is decoded from the bytes the real bounded write produced. The reply
+    is None when the cycle was abandoned before writing one.
+    """
+    if request is not None:
+        server.queue_request(request)
+    record = server.serve_once(deadline=deadline)
+    return record, (json.loads(server.written) if server.written else None)
 
 
 def _projection(generation=1, entries=None):
@@ -107,88 +214,6 @@ class _ServerFixture:
             instance_call=fake_instance_call)
 
 
-class FakeK32:
-    """Fake kernel32 half of the server's injectable facade. Handles are
-    per-cycle distinct values and every op is tagged with the handle it
-    operated on, so R41-4 cycle ownership is OBSERVABLE."""
-
-    def __init__(self, request_frame=b""):
-        self.request_frame = request_frame
-        self.gate = None            # when set: ConnectNamedPipe/ReadFile block
-        self.created_args = None
-        self.read_calls = 0
-        self.written = bytearray()
-        self.disconnects = 0
-        self.close_calls = 0
-        self.fail_create = None     # None | 'null' | 'invalid'
-        self.client_pid = 4242
-        self._next_handle = 0x2000
-        self.ops = []               # (handle, op) in call order
-        self.gates = {}
-
-    def CreateNamedPipeW(self, name, open_mode, pipe_mode, instances,
-                         out_size, in_size, timeout, security):
-        self.created_args = (name, open_mode, instances)
-        if self.fail_create == 'null':
-            return None
-        if self.fail_create == 'invalid':
-            return (1 << 64) - 1
-        handle = self._next_handle
-        self._next_handle += 0x100
-        return handle
-
-    def ConnectNamedPipe(self, h, overlapped):
-        self.ops.append((h, "connect"))
-        if self.gate is not None:
-            self.gate.wait(30)
-        return 1
-
-    def ReadFile(self, h, buf, n, read, overlapped):
-        self.ops.append((h, "read"))
-        self.read_calls += 1
-        if self.gate is not None:
-            self.gate.wait(30)
-        data = self.request_frame[:n]
-        buf[:len(data)] = data
-        read.contents.value = len(data)
-        return 1
-
-    def WriteFile(self, h, data, n, written, overlapped):
-        self.ops.append((h, "write"))
-        self.written += bytes(data[:n])
-        written.contents.value = n
-        return 1
-
-    def FlushFileBuffers(self, h):
-        self.ops.append((h, "flush"))
-        return 1
-
-    def DisconnectNamedPipe(self, h):
-        self.ops.append((h, "disconnect"))
-        self.disconnects += 1
-        return 1
-
-    def CloseHandle(self, h):
-        self.ops.append((h, "close"))
-        self.close_calls += 1
-        if self.gate is not None:
-            self.gate.set()          # cancel-close releases the blocked call
-        return 1
-
-    def GetLastError(self):
-        return 0
-
-    def GetNamedPipeClientProcessId(self, h, p):
-        p.contents.value = self.client_pid
-        return 1
-
-
-def _server(td, kernel, coordinator, deadline=5.0, state_dir=None):
-    return srv.ManagementPipeServer(
-        coordinator, r"\\.\pipe\um-share-broker", kernel=(kernel, None),
-        deadline_seconds=deadline, state_dir=state_dir)
-
-
 class LifecycleRecordTests(unittest.TestCase):
     """Watchdog-coordination lifecycle record: the Protected broker record
     flips to 'stopped' ONLY on a VERIFIED drain/emergency-stop closure and
@@ -197,7 +222,7 @@ class LifecycleRecordTests(unittest.TestCase):
     for the watchdog - never derived from a request's intent."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.temp.cleanup)
 
     def _server(self, state_dir=None):
@@ -221,20 +246,20 @@ class LifecycleRecordTests(unittest.TestCase):
             instance_secret="inst-k", instances=fixture.instances,
             replay=bp.ReplayRegistry(), host_ops=fixture.ops,
             instance_call=inst_call, drain_timeout=0.2)
-        server = srv.ManagementPipeServer(
-            coord, r"\\.\pipe\um-share-broker", deadline_seconds=5.0,
-            state_dir=state_dir)
+        server = _ConnectionServer(
+            coordinator=coord, deadline_seconds=5.0, state_dir=state_dir)
         return server, calls
 
     def _status_payload(self, state_dir):
-        # 用一个 status 请求内核跑一轮 serve_once，读回状态文件。
+        # 用一个 status 请求跑一轮 serve_once，读回状态文件。
         fixture = _ServerFixture(self.temp.name)
-        kernel = FakeK32(bp.encode_frame(bp.build_request("mgmt-k",
-                                                          "status")))
-        state_server = srv.ManagementPipeServer(
-            fixture.coordinator, r"\\.\pipe\um-share-broker",
-            kernel=(kernel, None), deadline_seconds=5.0, state_dir=state_dir)
-        state_server.serve_once()
+        state_server = _ConnectionServer(
+            coordinator=fixture.coordinator, deadline_seconds=5.0,
+            state_dir=state_dir)
+        record, reply = _serve_frame(
+            state_server, bp.build_request("mgmt-k", "status"))
+        self.assertTrue(record["ok"], record)
+        self.assertTrue(reply["ok"], reply)
         return json.loads((state_dir / "broker-status.json")
                           .read_text(encoding="utf-8"))
 
@@ -250,13 +275,13 @@ class LifecycleRecordTests(unittest.TestCase):
         state_dir = Path(self.temp.name) / "broker"
         state_dir.mkdir()
         server, _ = self._server(state_dir=state_dir)
-        kernel = FakeK32(bp.encode_frame(
-            bp.build_request("mgmt-k", "drain")))
-        server3 = srv.ManagementPipeServer(
-            server.coordinator, r"\\.\pipe\um-share-broker",
-            kernel=(kernel, None), deadline_seconds=5.0, state_dir=state_dir)
-        record = server3.serve_once()
+        server3 = _ConnectionServer(
+            coordinator=server.coordinator, deadline_seconds=5.0,
+            state_dir=state_dir)
+        record, reply = _serve_frame(
+            server3, bp.build_request("mgmt-k", "drain"))
         self.assertTrue(record["ok"], record)
+        self.assertTrue(reply["ok"], reply)
         self.assertEqual(server3.lifecycle["state"], "stopped")
         self.assertEqual(server3.lifecycle["by"], "drain")
         persisted = json.loads(
@@ -270,13 +295,13 @@ class LifecycleRecordTests(unittest.TestCase):
         state_dir = Path(self.temp.name) / "broker"
         state_dir.mkdir()
         server, _ = self._server(state_dir=state_dir)
-        kernel = FakeK32(bp.encode_frame(
-            bp.build_request("mgmt-k", "emergency-stop")))
-        server3 = srv.ManagementPipeServer(
-            server.coordinator, r"\\.\pipe\um-share-broker",
-            kernel=(kernel, None), deadline_seconds=5.0, state_dir=state_dir)
-        record = server3.serve_once()
+        server3 = _ConnectionServer(
+            coordinator=server.coordinator, deadline_seconds=5.0,
+            state_dir=state_dir)
+        record, reply = _serve_frame(
+            server3, bp.build_request("mgmt-k", "emergency-stop"))
         self.assertTrue(record["ok"], record)
+        self.assertTrue(reply["ok"], reply)
         self.assertEqual(server3.lifecycle["state"], "stopped")
         self.assertEqual(server3.lifecycle["by"], "emergency-stop")
 
@@ -284,12 +309,13 @@ class LifecycleRecordTests(unittest.TestCase):
         state_dir = Path(self.temp.name) / "broker"
         state_dir.mkdir()
         server, _ = self._server(state_dir=state_dir)
-        kernel = FakeK32(bp.encode_frame(bp.build_request("mgmt-k", "start")))
-        server3 = srv.ManagementPipeServer(
-            server.coordinator, r"\\.\pipe\um-share-broker",
-            kernel=(kernel, None), deadline_seconds=5.0, state_dir=state_dir)
-        record = server3.serve_once()
+        server3 = _ConnectionServer(
+            coordinator=server.coordinator, deadline_seconds=5.0,
+            state_dir=state_dir)
+        record, reply = _serve_frame(
+            server3, bp.build_request("mgmt-k", "start"))
         self.assertTrue(record["ok"], record)
+        self.assertTrue(reply["ok"], reply)
         self.assertEqual(server3.lifecycle["state"], "running")
         self.assertEqual(server3.lifecycle["by"], "start")
 
@@ -304,12 +330,13 @@ class LifecycleRecordTests(unittest.TestCase):
                         "by": "emergency-stop"}), encoding="utf-8")
         server, _ = self._server(state_dir=state_dir)
         self.assertEqual(server.lifecycle["state"], "stopped")
-        kernel = FakeK32(bp.encode_frame(bp.build_request("mgmt-k", "start")))
-        server3 = srv.ManagementPipeServer(
-            server.coordinator, r"\\.\pipe\um-share-broker",
-            kernel=(kernel, None), deadline_seconds=5.0, state_dir=state_dir)
-        record = server3.serve_once()
+        server3 = _ConnectionServer(
+            coordinator=server.coordinator, deadline_seconds=5.0,
+            state_dir=state_dir)
+        record, reply = _serve_frame(
+            server3, bp.build_request("mgmt-k", "start"))
         self.assertTrue(record["ok"], record)
+        self.assertTrue(reply["ok"], reply)
         self.assertEqual(server3.lifecycle["state"], "running")
         self.assertEqual(server3.lifecycle["by"], "start")
         persisted = json.loads(
@@ -335,21 +362,21 @@ class LifecycleRecordTests(unittest.TestCase):
         self._unpersistable(state_dir)
         server, _ = self._server(state_dir=state_dir)
         self.assertEqual(server.lifecycle["state"], "stopped")
-        kernel = FakeK32(bp.encode_frame(bp.build_request("mgmt-k", "start")))
-        server3 = srv.ManagementPipeServer(
-            server.coordinator, r"\\.\pipe\um-share-broker",
-            kernel=(kernel, None), deadline_seconds=5.0, state_dir=state_dir)
-        server3.serve_once()
-        reply = json.loads(bytes(kernel.written))
+        server3 = _ConnectionServer(
+            coordinator=server.coordinator, deadline_seconds=5.0,
+            state_dir=state_dir)
+        record, reply = _serve_frame(
+            server3, bp.build_request("mgmt-k", "start"))
+        self.assertTrue(record["ok"], record)
         self.assertFalse(reply["ok"], reply)
         self.assertEqual(reply["error_code"], "unconfirmed")
         self.assertIn("lifecycle", reply["result"]["detail"])
         # 内存不分叉：仍是加载时的 stopped，而不是「内存 running / 磁盘 stopped」。
         self.assertEqual(server3.lifecycle["state"], "stopped")
         self.assertEqual(server3.lifecycle["by"], "emergency-stop")
-        reloaded = srv.ManagementPipeServer(
-            server.coordinator, r"\\.\pipe\um-share-broker",
-            deadline_seconds=5.0, state_dir=state_dir)
+        reloaded = _ConnectionServer(
+            coordinator=server.coordinator, deadline_seconds=5.0,
+            state_dir=state_dir)
         self.assertEqual(reloaded.lifecycle["state"], "stopped")
 
     def test_drain_with_unpersistable_lifecycle_is_unconfirmed(self):
@@ -362,19 +389,19 @@ class LifecycleRecordTests(unittest.TestCase):
             encoding="utf-8")
         self._unpersistable(state_dir)
         server, _ = self._server(state_dir=state_dir)
-        kernel = FakeK32(bp.encode_frame(bp.build_request("mgmt-k", "drain")))
-        server3 = srv.ManagementPipeServer(
-            server.coordinator, r"\\.\pipe\um-share-broker",
-            kernel=(kernel, None), deadline_seconds=5.0, state_dir=state_dir)
-        server3.serve_once()
-        reply = json.loads(bytes(kernel.written))
+        server3 = _ConnectionServer(
+            coordinator=server.coordinator, deadline_seconds=5.0,
+            state_dir=state_dir)
+        record, reply = _serve_frame(
+            server3, bp.build_request("mgmt-k", "drain"))
+        self.assertTrue(record["ok"], record)
         self.assertFalse(reply["ok"], reply)
         self.assertEqual(reply["error_code"], "unconfirmed")
         self.assertEqual(server3.lifecycle["state"], "running")
         self.assertEqual(server3.lifecycle["by"], "start")
-        reloaded = srv.ManagementPipeServer(
-            server.coordinator, r"\\.\pipe\um-share-broker",
-            deadline_seconds=5.0, state_dir=state_dir)
+        reloaded = _ConnectionServer(
+            coordinator=server.coordinator, deadline_seconds=5.0,
+            state_dir=state_dir)
         self.assertEqual(reloaded.lifecycle["state"], "running")
 
     def test_lifecycle_restored_from_protected_file(self):
@@ -572,7 +599,7 @@ class MaintenanceRecordTests(unittest.TestCase):
     惰性到期在有界 resume 成功后才回收；维护暂态绝不写停止终态。"""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.temp.cleanup)
 
     def _server(self, state_dir=None, coordinator=None, instance=None,
@@ -580,17 +607,16 @@ class MaintenanceRecordTests(unittest.TestCase):
         instance = instance or _MaintenanceInstance()
         coord = coordinator or _maintenance_coordinator(
             self.temp.name, instance, clock=clock)
-        return srv.ManagementPipeServer(
-            coord, r"\\.\pipe\um-share-broker", deadline_seconds=5.0,
+        return _ConnectionServer(
+            coordinator=coord, deadline_seconds=5.0,
             state_dir=state_dir), coord, instance
 
     def _serve(self, coord, request, state_dir=None):
-        kernel = FakeK32(bp.encode_frame(request))
-        server = srv.ManagementPipeServer(
-            coord, r"\\.\pipe\um-share-broker", kernel=(kernel, None),
-            deadline_seconds=5.0, state_dir=state_dir)
-        record = server.serve_once()
-        return server, record, kernel
+        server = _ConnectionServer(
+            request, coordinator=coord, deadline_seconds=5.0,
+            state_dir=state_dir)
+        record, reply = _serve_frame(server)
+        return server, record, reply
 
     def test_missing_record_falls_back_to_idle(self):
         state_dir = Path(self.temp.name) / "broker"
@@ -631,14 +657,14 @@ class MaintenanceRecordTests(unittest.TestCase):
         self.assertEqual(persisted, record)
         self.assertFalse((state_dir / "maintenance.json.tmp").exists())
         # broker-status.json 每周期镜像 maintenance（同 lifecycle 模式）。
-        kernel = FakeK32(bp.encode_frame(bp.build_request("mgmt-k",
-                                                          "status")))
-        mirror = srv.ManagementPipeServer(
-            server.coordinator, r"\\.\pipe\um-share-broker",
-            kernel=(kernel, None), deadline_seconds=5.0,
+        mirror = _ConnectionServer(
+            coordinator=server.coordinator, deadline_seconds=5.0,
             state_dir=state_dir)
         mirror.maintenance = dict(record)
-        mirror.serve_once()
+        mirror_record, reply = _serve_frame(
+            mirror, bp.build_request("mgmt-k", "status"))
+        self.assertTrue(mirror_record["ok"], mirror_record)
+        self.assertTrue(reply["ok"], reply)
         payload = json.loads((state_dir / "broker-status.json")
                              .read_text(encoding="utf-8"))
         self.assertEqual(payload["maintenance"]["state"], "leased")
@@ -670,15 +696,14 @@ class MaintenanceRecordTests(unittest.TestCase):
         state_dir = Path(self.temp.name) / "broker"
         state_dir.mkdir()
         coord = _maintenance_coordinator(self.temp.name,
-                                        _MaintenanceInstance())
-        server, record, kernel = self._serve(
+                                         _MaintenanceInstance())
+        server, record, reply = self._serve(
             coord, bp.build_request("mgmt-k", bp.MAINTENANCE_BEGIN_ACTION,
                                     {"component": "share_gateway",
                                      "lease_s": 300}), state_dir)
         self.assertTrue(record["ok"], record)
-        response = json.loads(bytes(kernel.written))
-        self.assertTrue(response["ok"], response)
-        self.assertEqual(response["result"]["state"], "draining")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["state"], "draining")
         self.assertEqual(server.lifecycle["state"], "running")
         self.assertFalse((state_dir / "lifecycle.json").exists())
         persisted = json.loads((state_dir / "maintenance.json")
@@ -698,20 +723,19 @@ class MaintenanceRecordTests(unittest.TestCase):
         coord = _maintenance_coordinator(self.temp.name, instance,
                                          clock=clock)
         # 同一个 server 对象跨两个周期（生产只有一个 broker 进程实例）。
-        kernel = FakeK32(bp.encode_frame(bp.build_request(
+        server = _ConnectionServer(
+            coordinator=coord, deadline_seconds=5.0, state_dir=state_dir)
+        record, reply = _serve_frame(server, bp.build_request(
             "mgmt-k", bp.MAINTENANCE_BEGIN_ACTION,
-            {"component": "share_gateway", "lease_s": 300})))
-        server = srv.ManagementPipeServer(
-            coord, r"\\.\pipe\um-share-broker", kernel=(kernel, None),
-            deadline_seconds=5.0, state_dir=state_dir)
-        record = server.serve_once()
+            {"component": "share_gateway", "lease_s": 300}))
         self.assertTrue(record["ok"], record)
+        self.assertTrue(reply["ok"], reply)
         self.assertEqual(server.maintenance["state"], "leased")
         clock.advance(301)
-        kernel.request_frame = bp.encode_frame(
-            bp.build_request("mgmt-k", "status"))
-        record2 = server.serve_once()
+        record2, reply2 = _serve_frame(
+            server, bp.build_request("mgmt-k", "status"))
         self.assertTrue(record2["ok"], record2)
+        self.assertTrue(reply2["ok"], reply2)
         self.assertEqual(instance.count("resume"), 1)
         self.assertIsNone(coord.leases.current())
         self.assertEqual(server.maintenance["state"], "idle")
@@ -722,7 +746,7 @@ class MaintenanceRecordTests(unittest.TestCase):
         self.assertEqual(persisted["by"], "expiry")
 
 
-class _DispatchProbeServer(srv.ManagementPipeServer):
+class _DispatchProbeServer(_ConnectionServer):
     """Test-only subclass: a dispatch that blocks a bounded time so the
     two-phase join is observable (no product rule lives here)."""
 
@@ -761,35 +785,33 @@ class DispatchDeadlineTests(unittest.TestCase):
         return calls
 
     def _serve(self, dispatch_seconds, dispatch_deadline, cycle_deadline):
-        kernel = FakeK32(bp.encode_frame(
-            bp.build_request("mgmt-k", "status")))
-        server = _DispatchProbeServer(
-            self.fx.coordinator, r"\\.\pipe\um-share-broker",
-            kernel=(kernel, None), deadline_seconds=cycle_deadline,
-            state_dir=None, dispatch_seconds=dispatch_seconds,
+        return _DispatchProbeServer(
+            bp.encode_frame(bp.build_request("mgmt-k", "status")),
+            coordinator=self.fx.coordinator,
+            deadline_seconds=cycle_deadline,
+            dispatch_seconds=dispatch_seconds,
             dispatch_deadline_seconds=dispatch_deadline)
-        return server, kernel
 
     def test_none_keeps_the_old_single_join_byte_for_byte(self):
         calls = self._joins()
-        server, _kernel = self._serve(0.5, None, 0.2)
+        server = self._serve(0.5, None, 0.2)
         record = server.serve_once(deadline=time.monotonic() + 0.2)
         self.assertEqual(len(calls), 1)       # 绝不进入第二次 join
         self.assertFalse(record["ok"])
         self.assertTrue(record.get("abandoned"))
         self.assertEqual(record["error"], "connection deadline exceeded")
         self.assertEqual(server.dispatch_calls, 1)
+        self.assertIsNone(server.written or None)
 
     def test_set_extends_the_dispatch_wait_bounded(self):
         calls = self._joins()
-        server, kernel = self._serve(0.4, 3.0, 0.2)
+        server = self._serve(0.4, 3.0, 0.2)
         record = server.serve_once(deadline=time.monotonic() + 0.2)
         self.assertEqual(len(calls), 2)       # 读预算 + 派发预算
         self.assertTrue(record["ok"], record)
         self.assertEqual(record["phase"], "reply")
         self.assertEqual(server.dispatch_calls, 1)
-        response = json.loads(bytes(kernel.written))
-        self.assertTrue(response["ok"])
+        self.assertTrue(json.loads(server.written)["ok"])
 
 
 if __name__ == "__main__":
