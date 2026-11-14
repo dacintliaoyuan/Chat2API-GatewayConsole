@@ -520,6 +520,29 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
         self.assertEqual(status["recovery"]["pause_reason"],
                          "upstream_credential_rejected")
 
+    def test_cleanup_failure_is_terminal_and_visible(self):
+        proxy = self._proxy()
+        with (
+            mock.patch.object(
+                chat2api, "browser_login",
+                side_effect=chat2api.LoginCleanupFailed(
+                    "browser_cleanup_failed",
+                    "RuntimeError: close exploded",
+                    primary=chat2api.LoginStalled("timeout",
+                                                  "last page x"))),
+            self._grant_patch(),
+            mock.patch.object(chat2api, "release_reauth_slot"),
+        ):
+            self.assertFalse(proxy.refresh(force=True))
+
+        status = proxy.auth_status()
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["error"], "browser_cleanup_failed")
+        self.assertEqual(status["recovery"]["state"], "exhausted")
+        self.assertEqual(status["recovery"]["session_starts"], 1)
+        self.assertEqual(status["recovery"]["pause_reason"],
+                         "browser_cleanup_failed")
+
     def test_closed_window_is_reopened_within_the_budget(self):
         proxy = self._proxy()
         calls = []
