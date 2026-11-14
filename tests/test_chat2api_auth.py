@@ -912,10 +912,14 @@ class TestAuthWatchVisibility(unittest.TestCase):
         self.assertIsNone(recovery["next_attempt_epoch"])
         self.assertIsNone(recovery["pause_reason"])
 
-        # /health 同样带 watch；既有 authentication 仍只有 state/label。
+        # /health 同样带 watch；authentication 在 state/label 之外只加
+        # manual 原因码；未开始登录时不编造 deadline。
         snapshot = proxy.health_snapshot()
         self.assertEqual(sorted(snapshot["authentication"]),
-                         ["label", "state"])
+                         ["error", "label", "state"])
+        self.assertIsNone(snapshot["authentication"]["error"])
+        self.assertIsNone(snapshot["login_window_deadline_epoch"])
+        self.assertIsNone(snapshot["login_window_s"])
         self.assertEqual(snapshot["watch"], watch)
         self.assertEqual(sorted(snapshot["watch"]), self.WATCH_KEYS)
         # /health 的恢复摘要只给粗粒度进度，暂停原因留在控制令牌门后。
@@ -1211,21 +1215,56 @@ class TestCrossInstanceGate(unittest.TestCase):
         self.assertEqual(proxy.auth_status()["login"]["origin"],
                          "https://websso.um.edu.mo/login")
 
-    def test_health_snapshot_carries_only_the_coarse_state(self):
-        # F4b：/health 无需控制令牌，因此只带 state/label，细节留在
+    def test_health_snapshot_shows_the_manual_reason_not_the_page(self):
+        # Ticket #15：/health 无需控制令牌，但必须让操作员看到
+        # manual_takeover_required:<reason>；登录页 URL 等细节仍留在
         # /admin/auth/status。
         proxy = self._local_proxy()
         proxy._note_login_progress({
             "phase": "awaiting_duo",
-            "origin": "https://websso.um.edu.mo/login",
+            "origin": "https://websso.um.edu.mo/login?code=ONE-TIME-SECRET",
             "manual_reason": "mfa_required",
         })
         snapshot = proxy.health_snapshot()
         self.assertEqual(sorted(snapshot["authentication"]),
-                         ["label", "state"])
+                         ["error", "label", "state"])
+        self.assertEqual(snapshot["authentication"]["error"],
+                         "manual_takeover_required:mfa_required")
+        self.assertIn("需人工", snapshot["authentication"]["label"])
+        self.assertNotIn("websso", str(snapshot))
+        self.assertNotIn("ONE-TIME-SECRET", str(snapshot))
         detail = proxy.auth_status()
         self.assertIn("login", detail)
         self.assertIn("evidence", detail)
+
+    def test_health_snapshot_shows_the_login_window_deadline(self):
+        # Ticket #15：窗口截止时间与 /admin/auth/status 同源；未开始登录
+        # 时不编造 deadline。
+        proxy = self._local_proxy()
+        self.assertIsNone(
+            proxy.health_snapshot()["login_window_deadline_epoch"])
+        with proxy._auth_condition:
+            proxy._login_window = {
+                "started_epoch": 1000.0,
+                "window_s": 1800.0,
+                "deadline_epoch": 2800.0,
+            }
+        snapshot = proxy.health_snapshot()
+        self.assertEqual(snapshot["login_window_deadline_epoch"], 2800.0)
+        self.assertEqual(snapshot["login_window_s"], 1800.0)
+        self.assertEqual(snapshot["login_window_deadline_epoch"],
+                         proxy.auth_status()["login_window_deadline_epoch"])
+
+    def test_health_snapshot_hides_non_manual_auth_errors(self):
+        # /health 无控制令牌：只暴露 manual 原因码，其他失败原因留在
+        # /admin/auth/status。
+        proxy = self._local_proxy()
+        with proxy._auth_condition:
+            proxy._auth_state = "failed"
+            proxy._auth_error = "upstream_credential_rejected"
+        snapshot = proxy.health_snapshot()
+        self.assertEqual(snapshot["authentication"]["state"], "failed")
+        self.assertIsNone(snapshot["authentication"]["error"])
 
     def test_same_pid_reacquire_is_idempotent(self):
         chat2api.acquire_reauth_slot(self.slot, pid=111, ttl_s=60, now=1000.0)
@@ -1598,7 +1637,7 @@ class TestRefreshUnderGate(unittest.TestCase):
     def test_corrupt_slot_is_reported_as_a_refusal_not_a_failure(self):
         # R13-2 拒绝面：损坏槽位必须如实报出（reauth_refused:slot_corrupt），
         # 走既有 gate/throttle 通道，让 /admin/auth/status 与分享控制台看得见；
-        # /health 仍只给 state/label（F4b），细节留在控制令牌门后。
+        # /health 只给 manual 原因码，其他拒绝细节留在控制令牌门后。
         Path(chat2api.REAUTH_SLOT_FILE).write_text("{not json",
                                                   encoding="utf-8")
         proxy = chat2api.Proxy({"token": "stale", "api_key": None},
@@ -1614,7 +1653,9 @@ class TestRefreshUnderGate(unittest.TestCase):
         self.assertEqual(status["gate"]["granted"], False)
         self.assertEqual(status["gate"]["reason"], "slot_corrupt")
         self.assertEqual(sorted(proxy.health_snapshot()["authentication"]),
-                         ["label", "state"])
+                         ["error", "label", "state"])
+        self.assertIsNone(
+            proxy.health_snapshot()["authentication"]["error"])
         with self.assertRaises(chat2api.ReauthenticationThrottled) as caught:
             proxy._raise_auth_required()
         self.assertEqual(caught.exception.reason, "slot_corrupt")

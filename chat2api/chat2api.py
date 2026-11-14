@@ -3857,10 +3857,17 @@ class Proxy:
 
     def health_snapshot(self) -> dict:
         status = self.auth_status()
-        # /health needs no control token, so it carries only the coarse state
-        # (state/label): the evidence/login/gate detail - including the last
-        # login page and the lease owner - stays behind /admin/auth/status,
-        # where the control token is required.
+        # /health needs no control token. Ticket #15 makes the operator-visible
+        # manual reason (``manual_takeover_required:<reason>``) and the ONE login
+        # window deadline part of it, because they explain why the automatic
+        # path stopped. The login page/evidence/gate detail - including the last
+        # page URL and the lease owner - still stays behind
+        # /admin/auth/status, where the control token is required. Other auth
+        # errors are NOT copied here.
+        error = status["error"]
+        manual_error = (error if isinstance(error, str)
+                        and error.startswith(MANUAL_TAKEOVER_REQUIRED_PREFIX)
+                        else None)
         cached = self.models_cache.get("data")
         return {
             "status": "ok",
@@ -3869,7 +3876,8 @@ class Proxy:
             "backend": self.base_url,
             "models": len(cached.get("data", [])) if cached else 0,
             "authentication": {"state": status["state"],
-                               "label": status["label"]},
+                               "label": status["label"],
+                               "error": manual_error},
             # §8.4 additive: the auth-watch thread's liveness and last
             # round only — no credential, no round content.
             "watch": status["watch"],
@@ -3882,6 +3890,12 @@ class Proxy:
                 "next_attempt_epoch":
                     status["recovery"]["next_attempt_epoch"],
             },
+            # Ticket #15 additive login window: the SAME deadline the
+            # control-token status reports, so the operator can see how long
+            # this round may still take. Null before the first explicit login.
+            "login_window_deadline_epoch":
+                status["login_window_deadline_epoch"],
+            "login_window_s": status["login_window_s"],
             "upstream": self.config_summary(),
             "upstream_reachability": self.upstream_reachability_snapshot(),
             "docs": "POST /v1/chat/completions",
@@ -3946,7 +3960,13 @@ class Proxy:
                     (parsed.scheme, parsed.netloc, parsed.path, "", ""))
             self._auth_login = progress
             if progress.get("manual_reason"):
-                self._auth_error = "manual_takeover:%s" % progress["manual_reason"]
+                # Ticket #15: the console-visible error code must be the same
+                # ``manual_takeover_required:<reason>`` the terminal round
+                # publishes, so a status/health read before the round's finally
+                # block still names the manual step correctly.
+                self._auth_error = (
+                    "%s%s" % (MANUAL_TAKEOVER_REQUIRED_PREFIX,
+                              progress["manual_reason"]))
 
     def _session_is_current(self, generation):
         with self._auth_condition:

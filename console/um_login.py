@@ -40,10 +40,16 @@ Injected params (bounded, optional; defaults match the console contract):
   values are capped at 3600s so a bad injection cannot wait unbounded.
 
 Error codes: status_unavailable / start_failed / login_unreachable /
-login_verification_unknown / login_timeout_not_settled / stop_failed, plus
-restricted verification errors from console_um_adapter. Cancellation
-propagates as OperationCancelled and is mapped by the task layer. The token is
-never included in messages or results.
+login_verification_unknown / login_timeout_not_settled /
+login_manual_takeover_required / login_failed / stop_failed, plus
+restricted verification errors from console_um_adapter. Ticket #15: a
+terminal manual-takeover round and an exhausted recovery fail
+immediately with the reason instead of waiting for the console budget; a
+bare ``failed`` that chat2api may still retry keeps waiting. An operator
+cancel of THIS round propagates as OperationCancelled (the task layer's
+cancelled state) after restoring the service. Cancellation propagates as
+OperationCancelled and is mapped by the task layer. The token is never
+included in messages or results.
 
 Decision recorded here: a definitive-looking intermediate state (e.g.
 ``failed``) is NOT fast-failed; chat2api may retry internally, so the
@@ -69,6 +75,13 @@ _START_WAIT_DEFAULT_S = 30.0
 _LOGIN_BUDGET_DEFAULT_S = 190.0
 _INTERVAL_DEFAULT_S = 1.0
 _BUDGET_MAX_S = 3600.0
+
+# Ticket #15: the chat2api terminal manual-takeover code. The three reasons
+# are accepted bare as well, so a console talking to an older chat2api instance
+# still names the manual step instead of waiting for the full budget.
+_MANUAL_TAKEOVER_PREFIX = "manual_takeover_required:"
+_MANUAL_REASONS = ("umpass_mfa_required", "umpass_prefill_missing",
+                   "unrecognized_page")
 
 # Restore outcome kinds returned by _restore_service_state:
 # kept     - the service was already running; nothing was started or stopped.
@@ -208,11 +221,14 @@ def _post_force_login(base_url, token):
             "登录请求未完成：chat2api 返回 HTTP %d（期望 202）" % status_code)
 
 
-def _read_auth_state(base_url, token):
-    """One GET /admin/auth/status read; None means 'unknown this round'.
+def _read_auth_status(base_url, token):
+    """One GET /admin/auth/status read; state None means 'unknown'.
 
-    Poll callers treat None as 'keep waiting within the budget'; the final
-    recheck reports the last actually observed fact instead of guessing.
+    Poll callers treat an unreachable/malformed read as 'keep waiting within
+    the budget'; the final recheck reports the last actually observed fact
+    instead of guessing. Ticket #15 keeps only the whitelisted terminal fields
+    (state/error/recovery state and pause reason) so a manual takeover or an
+    operator cancel can end the wait immediately.
     """
     request = urllib.request.Request(
         base_url.rstrip("/") + "/admin/auth/status",
@@ -226,17 +242,81 @@ def _read_auth_state(base_url, token):
             exc.close()
         except Exception:
             pass
-        return None
+        return {"state": None, "error": None, "recovery": None}
     except (urllib.error.URLError, OSError, TimeoutError):
-        return None
+        return {"state": None, "error": None, "recovery": None}
     if status_code != 200:
-        return None
+        return {"state": None, "error": None, "recovery": None}
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        return None
-    if isinstance(payload, dict) and isinstance(payload.get("state"), str):
-        return payload["state"]
+        return {"state": None, "error": None, "recovery": None}
+    if not isinstance(payload, dict) or not isinstance(
+            payload.get("state"), str):
+        return {"state": None, "error": None, "recovery": None}
+    recovery = payload.get("recovery")
+    if not isinstance(recovery, dict):
+        recovery = None
+    return {
+        "state": payload["state"],
+        "error": (payload.get("error")
+                  if isinstance(payload.get("error"), str) else None),
+        "recovery": (None if recovery is None else {
+            "state": (recovery.get("state")
+                      if isinstance(recovery.get("state"), str) else None),
+            "pause_reason": (recovery.get("pause_reason")
+                             if isinstance(recovery.get("pause_reason"), str)
+                             else None),
+        }),
+    }
+
+
+def _login_cancelled(status):
+    """True when chat2api reports THIS login round as cancelled.
+
+    An operator cancel is not a credential verdict: the console task layer
+    already has the ``cancelled`` state for it, so the orchestration raises
+    OperationCancelled (after restoring the service) instead of a failed login.
+    """
+    recovery = status.get("recovery") or {}
+    return (status.get("state") == "cancelled"
+            or status.get("error") == "cancelled"
+            or recovery.get("pause_reason") == "cancelled")
+
+
+def _terminal_login_failure(status):
+    """Map a TERMINAL chat2api login failure to one console error, or None.
+
+    Only a terminal fact ends the console wait early: a manual-takeover round
+    (which chat2api has already ended and whose browser is closed) and a
+    recovery cycle that is exhausted. A bare ``failed`` while the recovery
+    cycle is still running is NOT terminal: chat2api may retry it internally,
+    so the console keeps polling within its own budget. Cancellation is handled
+    separately by ``_login_cancelled`` and keeps the cancelled state.
+    """
+    state = status.get("state")
+    error = status.get("error")
+    recovery = status.get("recovery") or {}
+    recovery_state = recovery.get("state")
+    pause_reason = recovery.get("pause_reason")
+
+    manual = None
+    for reason in (error, pause_reason):
+        if not isinstance(reason, str):
+            continue
+        if reason.startswith(_MANUAL_TAKEOVER_PREFIX):
+            manual = reason
+            break
+        if reason in _MANUAL_REASONS:
+            manual = _MANUAL_TAKEOVER_PREFIX + reason
+            break
+    if manual is not None:
+        return ("login_manual_takeover_required",
+                "登录需要人工接管（%s）；本轮已结束，浏览器已关闭" % manual)
+
+    if recovery_state == "exhausted":
+        reason = pause_reason or error or "failed"
+        return ("login_failed", "登录失败（%s）；自动恢复已结束" % reason)
     return None
 
 
@@ -246,6 +326,10 @@ def _wait_login_valid(base_url, token, ctx, budget_s, interval_s):
     Returns (state, waited_s, at_recheck). state == "valid" means the login
     settled; anything else is the budget-exhaustion outcome where state is
     the single recheck result (None when even the recheck was unreachable).
+    A terminal manual-takeover or exhausted-recovery failure raises the
+    mapped OperationError immediately; an operator cancel raises
+    OperationCancelled. Both restore the service first instead of waiting
+    for the budget.
     Cooperative cancel: the event is checked before every poll and before
     the recheck, so a cancelled run stops polling and restores as usual.
     """
@@ -254,17 +338,29 @@ def _wait_login_valid(base_url, token, ctx, budget_s, interval_s):
     while True:
         if ctx is not None:
             ctx.raise_if_cancelled()
-        state = _read_auth_state(base_url, token)
-        if state == "valid":
-            return state, time.monotonic() - started, False
+        status = _read_auth_status(base_url, token)
+        if status["state"] == "valid":
+            return status["state"], time.monotonic() - started, False
+        if _login_cancelled(status):
+            raise OperationCancelled()
+        failure = _terminal_login_failure(status)
+        if failure is not None:
+            raise OperationError(*failure)
         if time.monotonic() >= deadline:
             break
         time.sleep(interval_s)
     # Budget exhausted: exactly one recheck (phase 5) before reporting.
     if ctx is not None:
         ctx.raise_if_cancelled()
-    state = _read_auth_state(base_url, token)
-    return state, time.monotonic() - started, True
+    status = _read_auth_status(base_url, token)
+    if status["state"] == "valid":
+        return status["state"], time.monotonic() - started, True
+    if _login_cancelled(status):
+        raise OperationCancelled()
+    failure = _terminal_login_failure(status)
+    if failure is not None:
+        raise OperationError(*failure)
+    return status["state"], time.monotonic() - started, True
 
 
 def _restore_service_state(ctx, started_by_us):
