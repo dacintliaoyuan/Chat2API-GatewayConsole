@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The private display surface must be reachable through the real 18096 handler.
+"""The private display surface must be reachable through the real 8096 handler.
 
 These tests bind usagesrv's real ThreadingHTTPServer on an ephemeral loopback
 port and exercise the same do_GET/_console_share_api paths production uses.  The

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Configure the tailnet-only Serve entry for the private console.
 #
-# The console listener remains 127.0.0.1:18096.  Serve terminates HTTPS on the
-# tailnet and proxies only the root path to that loopback address.  Funnel is never
-# enabled, and this script never adds a public 80/443/8100/5901 listener.
+# The console listener defaults to 127.0.0.1:8096 (expand-contract 2026-11-14;
+# the legacy 18096 stays an explicit value for one release cycle via
+# CONSOLE_PORT=18096).  Serve terminates HTTPS on the tailnet and proxies only
+# the root path to that loopback address.  Funnel is never enabled, and this
+# script never adds a public 80/443/8100/8097 listener.
 #
 # Without --apply the script only reports the current state and the exact command
 # it would run.  Replacing a different existing Serve configuration requires
@@ -12,21 +14,22 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python3.14}"
+CONSOLE_PORT="${CONSOLE_PORT:-8096}"
 APPLY=0
 RESET_OTHER=0
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 usage: configure-tailscale-serve.sh [--apply] [--reset-other-serve]
 
   --apply               write the Serve configuration (default: dry run)
-  --reset-other-serve   allow `tailscale serve reset` when the current Serve
-                        configuration is not exactly / -> 127.0.0.1:18096
+  --reset-other-serve   allow \`tailscale serve reset\` when the current Serve
+                        configuration is not exactly / -> 127.0.0.1:$CONSOLE_PORT
 
 The only applied handler is:
-  tailscale serve --bg --https=443 http://127.0.0.1:18096
+  tailscale serve --bg --https=443 http://127.0.0.1:$CONSOLE_PORT
 
-Funnel must already be off (`tailscale funnel reset`); this script refuses to
+Funnel must already be off (\`tailscale funnel reset\`); this script refuses to
 continue while Funnel is enabled.
 EOF
 }
@@ -89,20 +92,21 @@ try:
     document = json.load(sys.stdin)
 except ValueError:
     raise SystemExit(65)
-errors = tailscale_serve_policy.validate_serve_status(document)
+errors = tailscale_serve_policy.validate_serve_status(
+    document, "http://127.0.0.1:" + sys.argv[2])
 for error in errors:
     print(error, file=sys.stderr)
 raise SystemExit(1 if errors else 0)
-' "$HERE"; then
+' "$HERE" "$CONSOLE_PORT"; then
   current_ok=1
 else
   current_ok=0
 fi
 
 echo "== private Tailscale Serve =="
-echo "handler : / -> http://127.0.0.1:18096 (HTTPS 443, tailnet only)"
+echo "handler : / -> http://127.0.0.1:$CONSOLE_PORT (HTTPS 443, tailnet only)"
 if [ "$current_ok" -eq 1 ]; then
-  echo "status  : already exactly the private 18096 handler"
+  echo "status  : already exactly the private $CONSOLE_PORT handler"
 else
   echo "status  : current Serve configuration differs"
 fi
@@ -121,7 +125,7 @@ if [ "$current_ok" -eq 0 ]; then
   tailscale serve reset
 fi
 
-tailscale serve --bg --https=443 http://127.0.0.1:18096
+tailscale serve --bg --https=443 "http://127.0.0.1:$CONSOLE_PORT"
 
 if ! serve_json="$(tailscale serve status --json 2>/dev/null)"; then
   echo "cannot verify Tailscale Serve status" >&2
@@ -136,12 +140,13 @@ try:
     document = json.load(sys.stdin)
 except ValueError:
     raise SystemExit(65)
-errors = tailscale_serve_policy.validate_serve_status(document)
+errors = tailscale_serve_policy.validate_serve_status(
+    document, "http://127.0.0.1:" + sys.argv[2])
 for error in errors:
     print(error, file=sys.stderr)
 raise SystemExit(1 if errors else 0)
-' "$HERE"; then
-  echo "Serve verification failed; expected only / -> http://127.0.0.1:18096" >&2
+' "$HERE" "$CONSOLE_PORT"; then
+  echo "Serve verification failed; expected only / -> http://127.0.0.1:$CONSOLE_PORT" >&2
   exit 69
 fi
 
@@ -159,8 +164,9 @@ if ! ss -H -ltnp | awk '$4 ~ /:(80|443)$/ && /tailscaled/ {print $4}' \
   exit 1
 fi
 
-# The private display and backend never listen off loopback.
-if ! ss -H -ltn | awk '$4 ~ /:(18096|8100|5901)$/ {print $4}' \
+# The private display and backend never listen off loopback.  The legacy
+# 18096/5901 aliases stay in the check for the expand-contract window.
+if ! ss -H -ltn | awk '$4 ~ /:(8096|8100|8097|18096|5901)$/ {print $4}' \
   | while read -r address; do
       case "$address" in
         127.0.0.1:*|\[::1\]:*) ;;
@@ -171,10 +177,10 @@ if ! ss -H -ltn | awk '$4 ~ /:(18096|8100|5901)$/ {print $4}' \
   echo "private loopback check failed" >&2
   exit 1
 fi
-if ! ss -H -ltn | awk '$4 ~ /:18096$/ {found=1} END {exit !found}'; then
-  echo "18096 is not listening on loopback" >&2
+if ! ss -H -ltn | awk -v port="$CONSOLE_PORT" '$4 ~ ":" port "$" {found=1} END {exit !found}'; then
+  echo "$CONSOLE_PORT is not listening on loopback" >&2
   exit 69
 fi
 
-echo "verified: no Funnel, Serve only 18096, private ports loopback-only"
+echo "verified: no Funnel, Serve only $CONSOLE_PORT, private ports loopback-only"
 echo "note: the existing Caddy 443 share ingress is separate and unchanged"

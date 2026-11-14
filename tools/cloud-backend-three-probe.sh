@@ -8,7 +8,7 @@ set -u
 
 SSH_CONF="C:/Users/dacint/.ssh/aliyun-um-ecs.conf"
 HOST="um-share-ecs"
-BASE="http://127.0.0.1:18096"
+BASE="http://127.0.0.1:8096"
 fail=0
 
 run() {

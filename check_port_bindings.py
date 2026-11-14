@@ -3,9 +3,11 @@
 """Audit live listening ports against the allocation table (AGENTS.md).
 
 Read-only audit: runs netstat -ano, parses TCP LISTENING and UDP rows, and
-classifies every socket inside the governed ranges this repository owns.
-Sockets outside the governed ranges are counted as out-of-scope information
-and never count as violations (Windows system ports, third-party apps).
+classifies every socket inside the governed ranges this repository owns plus
+the expand-contract legacy aliases (18096/5901).  Sockets outside the governed
+ranges are counted as out-of-scope information and never count as violations
+(Windows system ports, third-party apps).  A governed legacy alias is reported as
+LEGACY-ALIAS, not UNREGISTERED, for one release cycle.
 
 Exit codes: 0 = conform; 1 = violations found; 2 = query or parse failure
 (fail-closed: an empty or unparseable netstat result is a failure, never
@@ -26,14 +28,26 @@ GOVERNED_RANGES: tuple[tuple[int, int], ...] = (
 GOVERNED_SINGLETONS = frozenset({5173})
 
 # Allocated ports: port -> (service label, allowed binding scope).
-# 2026-11-01: the local console backend moved 8096 -> 8001 (cloud stays
-# 18096); 8001 is registered inside the 8000-8009 segment by maintainer
-# decision, while a listener on the old 8096 is now UNREGISTERED.
+# 2026-11-01: the local console backend moved 8096 -> 8001; 8001 is registered
+# inside the 8000-8009 segment by maintainer decision.
+# 2026-11-14: the cloud console moved 18096 -> 8096 and the display moved
+# 5901 -> 8097, both inside the 8090-8099 segment, so the audit now covers
+# them.  The old ports are explicit compatibility aliases for one release cycle
+# (expand-contract): a listener there is LEGACY-ALIAS, not UNREGISTERED.
 PORT_ALLOCATIONS: dict[int, tuple[str, str]] = {
     8000: ("chat2api", "loopback"),
     8001: ("usagesrv console backend", "loopback"),
+    8096: ("usagesrv cloud console backend", "loopback"),
+    8097: ("display x11vnc", "loopback"),
     8100: ("um-share gateway", "loopback"),
     5173: ("Console dev server (vite)", "loopback"),
+}
+
+# Expand-contract aliases: old port -> the registered port that replaced it.
+# The next release removes these entries (contract).
+LEGACY_PORT_ALIASES: dict[int, int] = {
+    18096: 8096,
+    5901: 8097,
 }
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "[::1]", "::1"})
@@ -86,7 +100,7 @@ def parse_listeners(text: str) -> list[Listener]:
 
 
 def is_governed(port: int) -> bool:
-    if port in GOVERNED_SINGLETONS:
+    if port in GOVERNED_SINGLETONS or port in LEGACY_PORT_ALIASES:
         return True
     return any(low <= port <= high for low, high in GOVERNED_RANGES)
 
@@ -107,9 +121,22 @@ def classify(listeners: list[Listener]) -> tuple[list[str], list[str]]:
             continue
         allocation = PORT_ALLOCATIONS.get(item.port)
         if allocation is None:
-            violations.append(
-                "UNREGISTERED       %s %s:%d  pid=%s  （治理段内未在 AGENTS.md 登记）"
-                % (item.proto, item.host, item.port, item.pid))
+            replacement = LEGACY_PORT_ALIASES.get(item.port)
+            if replacement is None:
+                violations.append(
+                    "UNREGISTERED       %s %s:%d  pid=%s  （治理段内未在 AGENTS.md 登记）"
+                    % (item.proto, item.host, item.port, item.pid))
+                continue
+            label, scope = PORT_ALLOCATIONS[replacement]
+            if scope == "loopback" and item.host not in _LOOPBACK_HOSTS:
+                violations.append(
+                    "BINDING-MISMATCH   %s %s:%d  pid=%s  （%s 要求仅 loopback）"
+                    % (item.proto, item.host, item.port, item.pid, label))
+                continue
+            ok_lines.append(
+                "LEGACY-ALIAS       %s %s:%d  pid=%s  （%s 的兼容别名，替代端口 %d）"
+                % (item.proto, item.host, item.port, item.pid, label,
+                   replacement))
             continue
         label, scope = allocation
         if scope == "loopback" and item.host not in _LOOPBACK_HOSTS:

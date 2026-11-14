@@ -71,7 +71,7 @@ def make_config(**changes):
     values = {
         "enabled": True,
         "vnc_host": "127.0.0.1",
-        "vnc_port": 5901,
+        "vnc_port": 8097,
         "novnc_root": str(DISPLAY_DIR),
         "launcher_file": str(LAUNCHER),
         "max_connections": 2,
@@ -413,9 +413,21 @@ class DisplayConfigTests(unittest.TestCase):
         })
         self.assertTrue(config.enabled)
         self.assertEqual(config.vnc_host, "127.0.0.1")
-        self.assertEqual(config.vnc_port, 5901)
+        self.assertEqual(config.vnc_port, 8097)
         self.assertEqual(config.vnc_auth_socket, "/run/um-share/vnc-auth.sock")
         self.assertEqual(config.vnc_auth_file, "")
+
+    def test_legacy_vnc_port_is_explicitly_accepted(self):
+        # Expand-contract (2026-11-14): 5901 is no longer the default; an
+        # explicit legacy value keeps working for one release cycle.
+        config = display.load_config({
+            "CONSOLE_DISPLAY_ENABLED": "1",
+            "CONSOLE_DISPLAY_VNC_PORT": "5901",
+            "CONSOLE_DISPLAY_NOVNC_ROOT": str(DISPLAY_DIR),
+            "CONSOLE_DISPLAY_LAUNCHER_FILE": str(LAUNCHER),
+        })
+        self.assertTrue(config.enabled)
+        self.assertEqual(config.vnc_port, 5901)
 
     def test_auth_socket_and_file_are_exclusive(self):
         for change in (
@@ -2056,6 +2068,26 @@ class DisplayRelayBackpressureTests(unittest.TestCase):
 
 
 class DisplayDeploymentTests(unittest.TestCase):
+    def test_display_unit_uses_the_new_port_and_legacy_window(self):
+        # Expand-contract (2026-11-14): the display default moved 5901 ->
+        # 8097; the old value stays explicit for one release cycle.
+        service = (ROOT / "um-cloud-deploy" / "systemd"
+                   / "um-share-display.service").read_text(encoding="utf-8")
+        self.assertIn("Environment=UM_VNC_PORT=8097", service)
+        self.assertNotIn("Environment=UM_VNC_PORT=5901", service)
+
+    def test_display_script_follows_the_console_vnc_port(self):
+        # x11vnc and the console proxy must never disagree about the port:
+        # the start script reads the deployed console.env key.
+        script = (DISPLAY_DIR / "start-loopback-display.sh").read_text(
+            encoding="utf-8")
+        self.assertIn(
+            'CONSOLE_ENV_FILE="${UM_CONSOLE_ENV_FILE:-/etc/um-share/console.env}"',
+            script)
+        self.assertIn("CONSOLE_DISPLAY_VNC_PORT", script)
+        self.assertIn(
+            'VNC_PORT="${CONSOLE_VNC_PORT:-${UM_VNC_PORT:-8097}}"', script)
+
     def test_display_unit_uses_root_only_credential(self):
         service = (ROOT / "um-cloud-deploy" / "systemd"
                    / "um-share-display.service").read_text(encoding="utf-8")
@@ -2252,13 +2284,15 @@ class DisplayGrantScriptTests(unittest.TestCase):
             self.grant.read_control_token(path)
 
 
-    def test_serve_script_is_18096_only(self):
+    def test_serve_script_is_8096_only(self):
         script = (DISPLAY_DIR / "configure-tailscale-serve.sh").read_text(
             encoding="utf-8")
+        self.assertIn('CONSOLE_PORT="${CONSOLE_PORT:-8096}"', script)
         self.assertIn(
-            "tailscale serve --bg --https=443 http://127.0.0.1:18096", script)
+            'tailscale serve --bg --https=443 "http://127.0.0.1:$CONSOLE_PORT"',
+            script)
         self.assertIn("tailscale funnel status --json", script)
-        self.assertIn("18096|8100|5901", script)
+        self.assertIn("8096|8100|8097|18096|5901", script)
 
     def test_console_listener_stays_loopback(self):
         source = (ROOT / "usagesrv.py").read_text(encoding="utf-8")
@@ -2280,7 +2314,7 @@ class TailscaleServePolicyTests(unittest.TestCase):
             "Web": {
                 "pc.example.ts.net:443": {
                     "Handlers": {
-                        "/": {"Proxy": "http://127.0.0.1:18096"},
+                        "/": {"Proxy": "http://127.0.0.1:8096"},
                     },
                 },
             },
@@ -2291,14 +2325,25 @@ class TailscaleServePolicyTests(unittest.TestCase):
         self.assertEqual(
             self.policy.validate_serve_status(self.exact_status()), [])
 
+    def test_legacy_proxy_is_accepted_only_when_expected(self):
+        # Expand-contract (2026-11-14): the wrapper may still target the
+        # legacy console port during the window, but only by naming it.
+        legacy = "http://127.0.0.1:18096"
+        document = self.exact_status()
+        document["Web"]["pc.example.ts.net:443"]["Handlers"]["/"]["Proxy"] = legacy
+        self.assertEqual(
+            [], self.policy.validate_serve_status(
+                document, expected_proxy=legacy))
+        self.assertTrue(self.policy.validate_serve_status(document))
+
     def test_extra_or_public_handlers_are_refused(self):
         cases = (
             {"TCP": {"80": {"HTTPS": True}}},
             {"Web": {"pc.example.ts.net:443": {"Handlers": {
-                "/": {"Proxy": "http://127.0.0.1:18097"}}}}},
+                "/": {"Proxy": "http://127.0.0.1:8097"}}}}},
             {"Web": {"pc.example.ts.net:443": {"Handlers": {
-                "/": {"Proxy": "http://127.0.0.1:18096"},
-                "/api": {"Proxy": "http://127.0.0.1:18096"}}}}},
+                "/": {"Proxy": "http://127.0.0.1:8096"},
+                "/api": {"Proxy": "http://127.0.0.1:8096"}}}}},
             {"AllowFunnel": {"pc.example.ts.net:443": True}},
         )
         for change in cases:

@@ -285,7 +285,7 @@ restore_edge() {
 # health_gate probes both ports, so it runs only when both units were active.
 # Return 0 only when every originally-active object is serving again.
 restore_units() {
-  local failed=0
+  local failed=0 console_listen_port
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ]; then
     systemctl start um-share-broker.service || failed=1
     brokerctl start-explicit || failed=1
@@ -295,7 +295,8 @@ restore_units() {
   fi
   [ "$failed" -eq 0 ] || return 1
   if [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
-    wait_port_open 127.0.0.1 18096 "$UM_HEALTH_TIMEOUT_S" || return 1
+    console_listen_port="$(console_port)" || return 1
+    wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
   fi
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ]; then
     wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || return 1
@@ -464,10 +465,12 @@ abort_before_switch() {
 }
 
 start_switch() {
+  local console_listen_port
   systemctl start um-share-broker.service || return 1
   brokerctl start-explicit || return 1
   systemctl start um-share-console.service || return 1
-  wait_port_open 127.0.0.1 18096 "$UM_HEALTH_TIMEOUT_S" || return 1
+  console_listen_port="$(console_port)" || return 1
+  wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
   wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || return 1
   health_gate || return 1
   return 0

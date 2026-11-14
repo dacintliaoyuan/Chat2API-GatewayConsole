@@ -37,9 +37,9 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 
 # E19-1-04 step 3: the real deployment listeners. A local fixture must never
 # bind one of these - an accidental match would take the production service's
-# port (8000/8001 private chain, 8100 share gateway, 18096 cloud
-# console, 5901 whatever the deployment assigns) or steal it.
-FORBIDDEN_PORTS = frozenset({8000, 8001, 8100, 18096, 5901})
+# port (8000/8001 private chain, 8100 share gateway, 8096 cloud console,
+# 8097 display, 18096/5901 their expand-contract aliases) or steal it.
+FORBIDDEN_PORTS = frozenset({8000, 8001, 8096, 8097, 8100, 18096, 5901})
 
 # E19-1-04 step 4: the real state/profile/secret paths of the in-package
 # deployment. A fixture that names one of these would read or write the operator's

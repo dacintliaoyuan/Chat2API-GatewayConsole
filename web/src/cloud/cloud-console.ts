@@ -211,7 +211,7 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
       if (__CONSOLE_CANDIDATE__)
         return {
           ok: false,
-          reason: "候选预览是只读的：写操作请在云端 18096 生产页面执行",
+          reason: "候选预览是只读的：写操作请在云端生产页面执行",
         };
       const verdict = gate.verdict();
       return verdict.state === "confirmed"
@@ -369,7 +369,7 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
 
   function writeBlock(action: string, target: string): string | null {
     if (__CONSOLE_CANDIDATE__)
-      return "候选预览是只读的：写操作请在云端 18096 生产页面执行";
+      return "候选预览是只读的：写操作请在云端生产页面执行";
     if (gate.verdict().state !== "confirmed") return gate.verdict().reason;
     const actions = lastValue(model.actions)?.value;
     if (!actions)

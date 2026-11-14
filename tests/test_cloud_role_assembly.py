@@ -7,8 +7,9 @@ Covers the explicit cloud role contract:
   (the local console keeps its own cards and probes);
 * ``UM_SHARE_ROLE=cloud`` / ``UM_SHARE_DEPLOYMENT=cloud`` assembles ONLY the
   UM share stack and never assembles the retired cards,
-  keeps the loopback Host/Origin/CSRF/session gates and defaults to 18096
-  with STRICT port validation;
+  keeps the loopback Host/Origin/CSRF/session gates and defaults to 8096
+  with STRICT port validation (the legacy 18096 stays an explicit value during
+  the expand-contract window);
 * the cloud registry marks the Tailscale/Funnel chain actions as honestly
   unassembled (disabled + explicit reason; submit refused before any row) while
   the Windows local registry keeps them enabled;
@@ -187,8 +188,12 @@ class DeploymentRoleTests(unittest.TestCase):
         self.assertEqual(
             usagesrv._resolve_deployment_role({"UM_SHARE_DEPLOYMENT": "CLOUD"}),
             "cloud")
-        self.assertEqual(usagesrv._resolve_port("cloud", {}), 18096)
+        self.assertEqual(usagesrv._resolve_port("cloud", {}), 8096)
         self.assertEqual(usagesrv._resolve_port("local", {}), 8001)
+        # Expand-contract (2026-11-14): the old cloud port stays an explicit
+        # value for one release cycle; the DEFAULT above is already 8096.
+        self.assertEqual(
+            usagesrv._resolve_port("cloud", {"USAGESRV_PORT": "18096"}), 18096)
         self.assertEqual(
             usagesrv._resolve_port("cloud", {"USAGESRV_PORT": "18097"}), 18097)
         for bad in ("0", "65536", "", " 18096", "+18096", "0x4650",
@@ -213,20 +218,33 @@ class DeploymentRoleTests(unittest.TestCase):
             usagesrv._resolve_deployment_role(
                 {"UM_SHARE_ROLE": "cloud", "UM_SHARE_DEPLOYMENT": "local"})
 
-    def test_cloud_module_reads_18096_and_loopback_gates(self):
+    def test_cloud_module_reads_8096_and_loopback_gates(self):
         with tempfile.TemporaryDirectory() as directory:
             tmp = SimpleNamespace(name=directory)
             module = _load_cloud_usagesrv(tmp)
             self.assertEqual(module.DEPLOYMENT_ROLE, "cloud")
-            self.assertEqual(module.PORT, 18096)
+            self.assertEqual(module.PORT, 8096)
             self.assertEqual(module.HOST, "127.0.0.1")
-            self.assertTrue(module.host_allowed("127.0.0.1:18096"))
-            self.assertFalse(module.host_allowed("evil.example:18096"))
+            self.assertTrue(module.host_allowed("127.0.0.1:8096"))
+            self.assertFalse(module.host_allowed("evil.example:8096"))
             self.assertTrue(module.origin_allowed(
-                "http://127.0.0.1:18096"))
+                "http://127.0.0.1:8096"))
             self.assertFalse(module.origin_allowed(
                 "http://127.0.0.1:8001"))
             self.assertFalse(module.origin_allowed("https://evil.example"))
+
+    def test_cloud_module_accepts_the_legacy_port_explicitly(self):
+        # Expand-contract (2026-11-14): the old cloud port is not a second
+        # listener. It only works when an operator explicitly configures it.
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = SimpleNamespace(name=directory)
+            module = _load_cloud_usagesrv(tmp, USAGESRV_PORT="18096")
+            self.assertEqual(module.PORT, 18096)
+            self.assertTrue(module.host_allowed("127.0.0.1:18096"))
+            self.assertTrue(module.origin_allowed(
+                "http://127.0.0.1:18096"))
+            self.assertFalse(module.origin_allowed(
+                "http://127.0.0.1:8096"))
 
     def test_host_and_origin_are_derived_from_the_resolved_port(self):
         # 2026-11-01: Host/Origin are not hardcoded to a port; the same
