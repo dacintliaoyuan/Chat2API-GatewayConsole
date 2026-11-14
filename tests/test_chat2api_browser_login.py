@@ -802,6 +802,55 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertTrue(context.closed)
         self.assertEqual(stopped, [True])
 
+    def test_launch_is_headless_and_reuses_the_given_profile(self):
+        site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
+        context = _FakeContext(site)
+        launches = []
+
+        class FakeManager:
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=lambda *args, **kwargs: (
+                            launches.append((args, kwargs)) or context),
+                    ),
+                    stop=lambda: None,
+                )
+
+        with (
+            mock.patch.object(chat2api, "find_edge", return_value="fake-edge"),
+            mock.patch("playwright.sync_api.sync_playwright",
+                       return_value=FakeManager()),
+            redirect_stdout(io.StringIO()),
+        ):
+            token = chat2api.browser_login(
+                BASE_URL, "profile-dir", 1,
+                credential_probe=lambda base_url, bearer: ("valid", None, 200),
+                process_lister=lambda _profile: [],
+                process_signal=lambda _pid, _sig: True,
+            )
+
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(len(launches), 1)
+        args, kwargs = launches[0]
+        # 同一个 profile 目录交给持久化上下文，不再派生专用目录。
+        self.assertEqual(args, ("profile-dir",))
+        # 默认无窗口：真实启动参数必须是 headless。
+        self.assertIs(kwargs.get("headless"), True)
+
+    def test_posix_without_a_display_drives_the_fake_flow(self):
+        site = _build_site()
+        harness = _Harness(site)
+
+        with mock.patch.object(chat2api.sys, "platform", "linux"), \
+             mock.patch.dict(os.environ, {"DISPLAY": "",
+                                         "WAYLAND_DISPLAY": ""}):
+            token = harness.run()
+
+        # POSIX 无 DISPLAY/WAYLAND_DISPLAY 也必须走通 headless 自动流程。
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(harness.click_selectors(), [SSO_BUTTON, SUBMIT_BUTTON])
+
     def setUp(self):
         _patch_click_budget(self, settle_s=30.0)
 
