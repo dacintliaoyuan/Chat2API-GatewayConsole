@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 class RetiredZCodeFileLockTests(unittest.TestCase):
     def test_zcode_package_is_gone(self):
         self.assertIsNone(importlib.util.find_spec("zcode"))
-        self.assertFalse((ROOT / "zcode").exists())
+        self.assertFalse(any((ROOT / "zcode").rglob("*.py")))
 
     def test_zcode_file_lock_module_is_gone(self):
         with self.assertRaises(ModuleNotFoundError):

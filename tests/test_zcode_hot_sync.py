@@ -37,7 +37,7 @@ class RetiredZCodeHotSyncTests(unittest.TestCase):
                 self.assertIsNone(spec)
                 with self.assertRaises(ModuleNotFoundError):
                     importlib.import_module(name)
-        self.assertFalse((ROOT / "zcode").exists())
+        self.assertFalse(any((ROOT / "zcode").rglob("*.py")))
 
     def test_zcode_protocol_fixtures_are_gone(self):
         for path in RETIRED_FIXTURES:

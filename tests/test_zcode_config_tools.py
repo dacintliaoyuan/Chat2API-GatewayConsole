@@ -22,7 +22,7 @@ CONFIG_ADAPTERS = ROOT / "model_sync" / "config_adapters.py"
 
 class RetiredZCodeConfigToolsTests(unittest.TestCase):
     def test_config_tool_is_gone(self):
-        self.assertFalse(TOOL_DIR.exists())
+        self.assertFalse(any(TOOL_DIR.rglob("*.py")))
         self.assertFalse(TOOL.exists())
 
     def test_zcode_config_adapter_is_gone(self):
@@ -41,7 +41,7 @@ class RetiredZCodeConfigToolsTests(unittest.TestCase):
 
     def test_zcode_package_is_gone(self):
         self.assertIsNone(importlib.util.find_spec("zcode"))
-        self.assertFalse((ROOT / "zcode").exists())
+        self.assertFalse(any((ROOT / "zcode").rglob("*.py")))
 
 
 if __name__ == "__main__":

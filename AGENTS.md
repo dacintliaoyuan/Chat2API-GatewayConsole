@@ -9,6 +9,7 @@
 - **生产目录**：`web/dist` 是本机生产页，`web/dist-cloud` 是云端生产页（打包为 `web/dist`）；两者都在 `.gitignore` 里，构建产物不入库。
 - **凭据与运行数据不入库**：`data/`、`profile/`、`tmp/`、`output/`、`chat2api/token.json`、`chat2api/.edge-profile/` 都由根 `.gitignore` 覆盖。
 - **验证**：`web/` 下 `npm run check:cloud-console`、`npm run check:um`；Python 回归 `python -m unittest discover -s tests -p "test_*.py"`。
+- **契约夹具**：改 `usagesrv.py`/`console/adapters.py`/`console/model_actions.py`/`share/metering.py`/`console/stats.py`/`console/log_reader.py` 后运行 `python tests/generate_frontend_contract_fixture.py`；`check-generated` 会因夹具过期失败。
 
 ## 2. 导航
 
@@ -32,10 +33,11 @@
 | 8001 | usagesrv 本机控制台宿主 | 127.0.0.1 |
 | 8100 | 分享链 um-share 网关 | 127.0.0.1 |
 | 18096 | usagesrv 云端控制台宿主 | 127.0.0.1 |
+| 5901 | display x11vnc（按需） | 127.0.0.1 |
 | 5173 | vite 开发服务 | 127.0.0.1 |
 | 8099 | 候选预览（vite preview） | 127.0.0.1 |
 
-`8000-8009` 是会话适配段，`8090-8099` 是控制台/管理段，`8100-8119` 是分享段（唯一允许非 loopback 的段，偏离须登记），`8300-8399` 是协议网关段。新增服务先选段内未占用端口；迁移同步更新本表、服务配置、消费者、测试与文档。`check_port_bindings.py` 对照本表审计治理段内未登记监听。
+`8000-8009` 是会话适配段，`8090-8099` 是控制台/管理段，`8100-8119` 是分享段（唯一允许非 loopback 的段，偏离须登记），`8300-8399` 是协议网关段。`5901` 是 display 的按需监听，落在治理段外，不参与端口审计；迁移或新增时同步本表与 `console/display_proxy.py`。新增服务先选段内未占用端口；迁移同步更新本表、服务配置、消费者、测试与文档。`check_port_bindings.py` 对照本表审计治理段内未登记监听。
 
 ## 4. 分享链边界
 
