@@ -105,7 +105,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | 8100 | `/v1/chat/completions` | 分享模式 Bearer Key | JSON 进，JSON 或 SSE 出 | 400/401/413/429/502/503 | SSE 透传 | 首字节/静默/总预算 | 重试只在未提交前 | 追加账本、UM 上游 |
 | 8100 | `/v1/messages` | 分享模式 Bearer 或 `X-Api-Key` | Anthropic JSON/SSE 字节透传 | 400/401/413/429/502/503 | SSE 透传 | 同上 | 重试只在未提交前 | 追加账本、UM 上游 |
 | 8100 | `/v1/responses` | 分享模式 Bearer | Responses 请求，JSON 或 Responses SSE | 400/401/413/429/502/503 | Responses 事件流 | 同上 | 同上 | 追加账本、UM 上游 |
-| 8100 | `/api/chat/completions`、`/api/v1/messages`、`/api/v1/responses` | 非分享模式本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | JSON/SSE | 400/401/413/502/503 | 同对应 `/v1` 路由 | 同上 | 同上 | 追加账本、UM 上游 |
+| 8100 | `/api/chat/completions`、`/api/v1/chat/completions`、`/api/v1/messages`、`/api/v1/responses` | 非分享模式本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | JSON/SSE | 400/401/413/502/503 | 同对应 `/v1` 路由 | 同上 | 同上 | 追加账本、UM 上游 |
 | 8100 | `/v1/embeddings` | 非分享模式 Bearer；分享模式 404 `route_not_shared` | JSON 透传 | 400/401/413/404/502/503 | 无 | 请求总预算 | 无账本行 | UM 上游 |
 | 8100 | `/api/v1/embeddings` | 非分享模式 Bearer；分享模式不经分享 Key 门，公网不反代 | JSON 透传 | 400/401/413/502/503 | 无 | 请求总预算 | 无账本行 | UM 上游 |
 | 8100 | `/admin/auth/*`、`/admin/share/revoke`、`/admin/shutdown` | 控制令牌 | JSON | 403 | 无 | 无 | 登录/撤销有界 | 浏览器、撤销在途、停止服务 |
@@ -135,7 +135,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | POST | `/v1/embeddings` | 非分享模式：Bearer；分享模式 404 `route_not_shared` | OpenAI 兼容透传，不记账 |
 | GET | `/v1/version` | 非分享模式：本地 Key（非 loopback 绑定时）；分享模式 404 `route_not_shared` | 版本与重试策略 |
 | GET | `/api/models`、`/api/v1/models` | 非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | 本机模型目录别名 |
-| POST | `/api/chat/completions`、`/api/v1/messages`、`/api/v1/responses`、`/api/v1/embeddings` | 非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | 本机兼容别名 |
+| POST | `/api/chat/completions`、`/api/v1/chat/completions`、`/api/v1/messages`、`/api/v1/responses`、`/api/v1/embeddings` | 非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | 本机兼容别名 |
 | GET/POST | 未列入别名的 `/api/*` | 本地控制令牌 | 上游 `api/*` 透传 |
 | GET/POST | `/admin/auth/status`、`/admin/auth/verify`、`/admin/auth/login`、`/admin/auth/cancel` | 本地控制令牌 | 认证观察、主动核验、登录、取消登录 |
 | POST | `/admin/share/revoke` | 本地控制令牌 | 关闭某分享 Key 的在途请求 |
