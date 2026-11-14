@@ -809,6 +809,13 @@ class TokenStore:
 
 BROWSER_PATH_ENV = "CHAT2API_BROWSER_PATH"
 
+# The on-demand manual display publishes this runtime state while it is active
+# (ticket #14).  Its absence is the default: a headless login.  The file lives
+# under the broker's runtime directory, which the display unit shares, and carries
+# only the display name and the auth/socket paths needed by a visible browser.
+LOGIN_DISPLAY_FILE_ENV = "CHAT2API_LOGIN_DISPLAY_FILE"
+LOGIN_DISPLAY_FILE = "/run/um-share/login-display.env"
+
 # Linux has no Edge-first installation convention; any Chromium-family binary
 # Playwright can drive is acceptable. The order is the preference order and
 # ``shutil.which`` resolves each name through PATH.
@@ -2397,19 +2404,87 @@ def _check_login_window(page, closed_check):
             "window_closed", "last page %s" % (page.url() or "unknown"))
 
 
+def _display_process_alive(pid):
+    """Whether the display supervisor that published the state still runs."""
+    if sys.platform.startswith("win"):
+        # The cloud display is a POSIX-only path; never signal a Windows PID.
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The display runs as the same service user; a permission error still
+        # means the PID exists.
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _login_display(environ=None):
+    """Return the active manual display's DISPLAY/XAUTHORITY, or ``None``.
+
+    The default login path is headless (ADR 0002).  Only an explicitly started
+    on-demand display publishes ``login-display.env``; this function accepts that
+    state only while every part it names still exists, so a stale file after a
+    crash cannot turn the default path into a visible window.  The file is written
+    by ``um-cloud-deploy/display/start-loopback-display.sh`` and removed when
+    the display stops.
+    """
+    env = os.environ if environ is None else environ
+    path = (env.get(LOGIN_DISPLAY_FILE_ENV) or LOGIN_DISPLAY_FILE).strip()
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            values = {}
+            for raw in handle:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip()
+    except (OSError, UnicodeError):
+        return None
+    display = values.get("UM_LOGIN_DISPLAY", "")
+    auth = values.get("UM_LOGIN_XAUTHORITY", "")
+    socket_path = values.get("UM_LOGIN_DISPLAY_SOCKET", "")
+    pid = values.get("UM_LOGIN_DISPLAY_PID", "")
+    number = display[1:].split(".")[0]
+    if not display or not auth or not socket_path:
+        return None
+    if not display.startswith(":") or not number.isdigit():
+        return None
+    if not os.path.isfile(auth) or not os.access(auth, os.R_OK):
+        return None
+    if not os.path.exists(socket_path):
+        return None
+    if pid:
+        try:
+            pid_number = int(pid)
+        except ValueError:
+            return None
+        if pid_number <= 0 or not _display_process_alive(pid_number):
+            return None
+    return {"DISPLAY": display, "XAUTHORITY": auth}
+
+
 def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                   on_context=None, cancel_event=None,
                   context_factory=None, credential_probe=None,
                   on_progress=None, cancel_login_event=None,
                   process_lister=None, process_signal=None) -> str:
-    """Open a headless Chromium-family browser and drive the two-step UM SSO.
+    """Open a Chromium-family browser and drive the two-step UM SSO.
 
     The SAME on-disk profile passed by the caller is reused (cookie, autofill
-    and the existing login state survive) and no visible window is created on the
-    normal path. Windows drives Microsoft Edge from its installation paths;
-    Linux drives the first Chromium-family binary found in PATH (or the explicit
-    ``CHAT2API_BROWSER_PATH`` override), so no DISPLAY/WAYLAND_DISPLAY is
-    required. Controlled flow (A13-1/A13-3): the Open
+    and the existing login state survive). The normal path is headless and creates
+    no visible window; it requires neither DISPLAY nor WAYLAND_DISPLAY. When the
+    operator has explicitly started the on-demand manual display, this round opens
+    a visible window on that display instead, so the human can finish the step
+    there. Windows drives Microsoft Edge from its installation paths; Linux drives
+    the first Chromium-family binary found in PATH (or the explicit
+    ``CHAT2API_BROWSER_PATH`` override). Controlled flow (A13-1/A13-3): the Open
     WebUI login page's "使用 UMPASS 继续" entry, then the UMPASS form whose
     account and password the browser already autofilled from this instance's own
     profile. The automatic part
@@ -2456,9 +2531,16 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             "%s: %s" % (exc.reason, exc.detail)) from exc
     if not edge:
         raise LoginUnavailable(*_missing_browser_error(sys.platform))
+    display_env = _login_display()
+    headful = display_env is not None
     print("=" * 60)
-    print(f"Opening headless browser ({edge}): {base_url}")
-    print("Using the existing profile (skipped if already logged in).")
+    if headful:
+        print(f"Opening visible browser on {display_env['DISPLAY']} "
+              f"({edge}): {base_url}")
+        print("Finish the manual step in the login window.")
+    else:
+        print(f"Opening headless browser ({edge}): {base_url}")
+        print("Using the existing profile (skipped if already logged in).")
     print(f"Waiting up to {timeout_s}s for the session token...")
     print("=" * 60)
 
@@ -2510,11 +2592,22 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             ctx = context_factory(edge, profile_dir)
         else:
             playwright = manager.start()
+            launch_options = {
+                "headless": not headful,
+                "executable_path": edge,
+            }
+            if headful:
+                browser_env = {**os.environ, **display_env}
+                # The on-demand display is X11; a stale Wayland hint must not
+                # make Chromium pick a different backend.
+                browser_env.pop("WAYLAND_DISPLAY", None)
+                launch_options.update(
+                    args=["--start-maximized"],
+                    no_viewport=True,
+                    env=browser_env,
+                )
             ctx = playwright.chromium.launch_persistent_context(
-                profile_dir,
-                headless=True,
-                executable_path=edge,
-            )
+                profile_dir, **launch_options)
         session_error = None
         try:
             if on_context:

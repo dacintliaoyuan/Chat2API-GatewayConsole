@@ -34,7 +34,8 @@
 ## 相关实现
 
 - `chat2api/chat2api.py`：`browser_login`、重新认证轮次与 profile 启动
-- `um-cloud-deploy/systemd/um-share-display.service`：按需 display unit
+- `um-cloud-deploy/systemd/um-share-display.service`：按需 display unit，并与 8100 子进程共享私有 `/tmp`
+- `um-cloud-deploy/display/start-loopback-display.sh`：display 就绪后发布 `login-display.env`；`browser_login` 据此在新轮次打开可见浏览器
 - `um-cloud-deploy/install.sh`：display unit 安装但不默认 enable
 - `um-cloud-deploy/display/README.md`：私有 display 入口与人工接管说明
 - `console/display_proxy.py`：控制台 display 读面

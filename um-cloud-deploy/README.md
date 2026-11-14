@@ -109,7 +109,7 @@ sudo /opt/um-share/current/um-cloud-deploy/display/manual-takeover.sh start
 sudo /opt/um-share/current/um-cloud-deploy/display/manual-takeover.sh stop
 ```
 
-`start` 只对本次启动 `systemctl start`，从不 `enable`，并打开控制台 `/display/` 面；`stop` 停止 display 并关闭该面，unit 仍保持安装且未 enable。认证文件、Tailnet 策略与未验证范围见 [display/README.md](display/README.md)。
+`start` 只对本次启动 `systemctl start`，从不 `enable`，等 display 发布运行时状态后打开控制台 `/display/` 面；此后开新登录轮，8100 子进程会在该 display 上打开可见浏览器。`stop` 停止 display、清除运行时状态并关闭该面，新轮次回到 headless；unit 仍保持安装且未 enable。认证文件、Tailnet 策略与未验证范围见 [display/README.md](display/README.md)。
 
 安装脚本幂等：已存在的 release 若 manifest 相同则复用；已存在的配置、密钥与数据不覆盖；venv 与浏览器缓存已存在则复用；unit 已存在则重装模板并 `daemon-reload`。
 

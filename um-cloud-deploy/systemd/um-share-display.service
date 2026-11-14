@@ -3,6 +3,13 @@ Description=UM share loopback Xvfb + x11vnc display (private web/SSH window only
 Documentation=file:///opt/um-share/current/um-cloud-deploy/display/README.md
 After=network-online.target um-share-broker.service
 Wants=network-online.target um-share-broker.service
+# The 8100 child launches the visible browser and must reach Xvfb's
+# /tmp/.X11-unix socket.  Both units keep PrivateTmp=true; joining the
+# broker's namespace puts the socket where the 8100 child can connect to it
+# without opening a TCP X listener or sharing the host /tmp.  PartOf keeps the
+# display on the same lifecycle as the broker whose namespace it joins.
+JoinsNamespaceOf=um-share-broker.service
+PartOf=um-share-broker.service
 ConditionPathExists=/etc/um-share/vnc.passwd
 ConditionPathExists=/opt/um-share/current/um-cloud-deploy/display/start-loopback-display.sh
 

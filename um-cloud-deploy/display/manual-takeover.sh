@@ -17,6 +17,7 @@ UNIT="${UM_DISPLAY_UNIT:-um-share-display.service}"
 CONSOLE_UNIT="${UM_CONSOLE_UNIT:-um-share-console.service}"
 VNC_PASSWD="${UM_VNC_PASSWD_FILE:-/etc/um-share/vnc.passwd}"
 CONSOLE_ENV="${UM_CONSOLE_ENV_FILE:-/etc/um-share/console.env}"
+DISPLAY_STATE="${UM_LOGIN_DISPLAY_FILE:-/run/um-share/login-display.env}"
 
 fail() {
   echo "$1" >&2
@@ -71,6 +72,18 @@ set_console_display() {
   return 0
 }
 
+# The display script publishes DISPLAY/XAUTHORITY only after Xvfb and the VNC
+# auth helper are ready.  Wait for it before telling the operator to open a new
+# login round: without this state the round would stay headless.
+wait_for_display_state() {
+  local _
+  for _ in $(seq 1 100); do
+    [ -f "$DISPLAY_STATE" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 start_display() {
   require_root
   [ -f "$VNC_PASSWD" ] || \
@@ -86,10 +99,24 @@ start_display() {
     400|600|0400|0600) ;;
     *) fail "vnc auth file must be root-only (0400/0600): $VNC_PASSWD" 77 ;;
   esac
+  # An inactive unit cannot own a live display state; drop a stale file so the
+  # wait below observes THIS start rather than a previous run.
+  if ! systemctl is-active --quiet "$UNIT"; then
+    rm -f "$DISPLAY_STATE"
+  fi
   systemctl start "$UNIT" || \
     fail "cannot start $UNIT" 69
   systemctl is-active --quiet "$UNIT" || \
     fail "$UNIT did not become active" 69
+  if ! wait_for_display_state; then
+    # A display left active by an older release has no runtime state.  Restart
+    # it once so the new script publishes the state before the operator opens
+    # a login round.
+    systemctl restart "$UNIT" || \
+      fail "cannot restart $UNIT to publish the login display state" 69
+    wait_for_display_state || \
+      fail "$UNIT did not publish the login display state" 69
+  fi
   if set_console_display 1; then
     systemctl restart "$CONSOLE_UNIT" || \
       fail "display started but $CONSOLE_UNIT restart failed" 69
@@ -97,18 +124,24 @@ start_display() {
       fail "display started but $CONSOLE_UNIT is not active" 69
   fi
   echo "display is active for this boot: $UNIT"
-  echo "open the console /display/ page; run '$0 stop' when the manual step is done."
+  echo "open the console /display/ page and start a new login round;"
+  echo "that round opens its visible browser on this display."
+  echo "run '$0 stop' when the manual step is done."
 }
 
 stop_display() {
   require_root
   systemctl stop "$UNIT" || \
     fail "cannot stop $UNIT" 69
+  # The display cleanup trap removes this too; the explicit removal covers an
+  # old display process that did not publish the new runtime state.
+  rm -f "$DISPLAY_STATE"
   if set_console_display 0; then
     systemctl restart "$CONSOLE_UNIT" || \
       fail "display stopped but $CONSOLE_UNIT restart failed" 69
   fi
-  echo "display is stopped; the unit is still installed and NOT disabled."
+  echo "display is stopped; new login rounds are headless again."
+  echo "the unit is still installed and NOT disabled."
 }
 
 status_display() {
@@ -120,6 +153,11 @@ status_display() {
     echo "console display surface: enabled"
   else
     echo "console display surface: disabled"
+  fi
+  if [ -f "$DISPLAY_STATE" ]; then
+    echo "login display state: published (new rounds open visibly)"
+  else
+    echo "login display state: absent (new rounds stay headless)"
   fi
 }
 

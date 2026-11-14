@@ -69,6 +69,24 @@ ACCOUNT = "uc59xxxx@um.edu.mo"
 PASSWORD = "offline-placeholder"
 
 
+def _write_login_display(marker, auth, socket_path, display=":99",
+                          pid=None):
+    """Write the runtime state the on-demand display publishes.
+
+    The display unit writes this file only while a manual takeover is active;
+    ``browser_login`` reads it to decide between headless and the visible
+    login window.  The test writes the same shape with throwaway paths.
+    """
+    marker.write_text(
+        "UM_LOGIN_DISPLAY=%s\n"
+        "UM_LOGIN_XAUTHORITY=%s\n"
+        "UM_LOGIN_DISPLAY_SOCKET=%s\n"
+        "UM_LOGIN_DISPLAY_PID=%s\n"
+        % (display, auth, socket_path,
+           os.getpid() if pid is None else pid),
+        encoding="utf-8")
+
+
 class _FakeElement:
     def __init__(self, site=None, selector=None, visible=True, value="",
                  on_click=None):
@@ -870,26 +888,143 @@ class SessionLifecycleTests(unittest.TestCase):
                     stop=lambda: None,
                 )
 
-        with (
-            mock.patch.object(chat2api, "find_edge", return_value="fake-edge"),
-            mock.patch("playwright.sync_api.sync_playwright",
-                       return_value=FakeManager()),
-            redirect_stdout(io.StringIO()),
-        ):
-            token = chat2api.browser_login(
-                BASE_URL, "profile-dir", 1,
-                credential_probe=lambda base_url, bearer: ("valid", None, 200),
-                process_lister=lambda _profile: [],
-                process_signal=lambda _pid, _sig: True,
-            )
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-display-") as tmp:
+            with (
+                mock.patch.object(chat2api, "find_edge",
+                                  return_value="fake-edge"),
+                mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
+                                  os.path.join(tmp, "absent.env")),
+                mock.patch.dict(os.environ, {
+                    chat2api.LOGIN_DISPLAY_FILE_ENV:
+                        os.path.join(tmp, "absent.env")}),
+                mock.patch("playwright.sync_api.sync_playwright",
+                           return_value=FakeManager()),
+                redirect_stdout(io.StringIO()),
+            ):
+                token = chat2api.browser_login(
+                    BASE_URL, "profile-dir", 1,
+                    credential_probe=lambda base_url, bearer:
+                    ("valid", None, 200),
+                    process_lister=lambda _profile: [],
+                    process_signal=lambda _pid, _sig: True,
+                )
 
         self.assertEqual(token, "fresh-token")
         self.assertEqual(len(launches), 1)
         args, kwargs = launches[0]
         # 同一个 profile 目录交给持久化上下文，不再派生专用目录。
         self.assertEqual(args, ("profile-dir",))
-        # 默认无窗口：真实启动参数必须是 headless。
+        # 默认无窗口：真实启动参数必须是 headless，且不注入 display 环境。
         self.assertIs(kwargs.get("headless"), True)
+        self.assertNotIn("env", kwargs)
+        self.assertNotIn("args", kwargs)
+
+    def test_launch_is_headful_when_the_manual_display_is_active(self):
+        site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
+        context = _FakeContext(site)
+        launches = []
+
+        class FakeManager:
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=lambda *args, **kwargs: (
+                            launches.append((args, kwargs)) or context),
+                    ),
+                    stop=lambda: None,
+                )
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-display-") as tmp:
+            auth = Path(tmp) / "display.auth"
+            auth.write_text("", encoding="utf-8")
+            display_socket = Path(tmp) / "X99"
+            display_socket.write_text("", encoding="utf-8")
+            marker = Path(tmp) / "login-display.env"
+            _write_login_display(marker, auth, display_socket)
+            with (
+                mock.patch.object(chat2api, "find_edge",
+                                  return_value="fake-edge"),
+                mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
+                                  str(marker)),
+                mock.patch.dict(os.environ, {
+                    chat2api.LOGIN_DISPLAY_FILE_ENV: str(marker),
+                    "WAYLAND_DISPLAY": "wayland-0"}),
+                mock.patch("playwright.sync_api.sync_playwright",
+                           return_value=FakeManager()),
+                redirect_stdout(io.StringIO()),
+            ):
+                token = chat2api.browser_login(
+                    BASE_URL, "profile-dir", 1,
+                    credential_probe=lambda base_url, bearer:
+                    ("valid", None, 200),
+                    process_lister=lambda _profile: [],
+                    process_signal=lambda _pid, _sig: True,
+                )
+
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(len(launches), 1)
+        args, kwargs = launches[0]
+        self.assertEqual(args, ("profile-dir",))
+        # 人工接管已拉起 display：新轮次必须在同一 profile 上开可见窗口。
+        self.assertIs(kwargs.get("headless"), False)
+        self.assertEqual(kwargs.get("args"), ["--start-maximized"])
+        self.assertIs(kwargs.get("no_viewport"), True)
+        env = kwargs.get("env") or {}
+        self.assertEqual(env.get("DISPLAY"), ":99")
+        self.assertEqual(env.get("XAUTHORITY"), str(auth))
+        # display 是 X11；残留的 Wayland 提示不能把浏览器切到别的后端。
+        self.assertNotIn("WAYLAND_DISPLAY", env)
+
+    def test_stale_manual_display_state_stays_headless(self):
+        site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
+        context = _FakeContext(site)
+        launches = []
+
+        class FakeManager:
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=lambda *args, **kwargs: (
+                            launches.append((args, kwargs)) or context),
+                    ),
+                    stop=lambda: None,
+                )
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-display-") as tmp:
+            auth = Path(tmp) / "display.auth"
+            auth.write_text("", encoding="utf-8")
+            marker = Path(tmp) / "login-display.env"
+            # X socket 不在：display 已停止，残留的 runtime state 不能把
+            # 默认路径变成可见窗口。
+            _write_login_display(
+                marker, auth, Path(tmp) / "missing-X99")
+            with (
+                mock.patch.object(chat2api, "find_edge",
+                                  return_value="fake-edge"),
+                mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
+                                  str(marker)),
+                mock.patch.dict(os.environ, {
+                    chat2api.LOGIN_DISPLAY_FILE_ENV: str(marker)}),
+                mock.patch("playwright.sync_api.sync_playwright",
+                           return_value=FakeManager()),
+                redirect_stdout(io.StringIO()),
+            ):
+                token = chat2api.browser_login(
+                    BASE_URL, "profile-dir", 1,
+                    credential_probe=lambda base_url, bearer:
+                    ("valid", None, 200),
+                    process_lister=lambda _profile: [],
+                    process_signal=lambda _pid, _sig: True,
+                )
+
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(len(launches), 1)
+        _args, kwargs = launches[0]
+        self.assertIs(kwargs.get("headless"), True)
+        self.assertNotIn("env", kwargs)
 
     def test_posix_without_a_display_drives_the_fake_flow(self):
         site = _build_site()
