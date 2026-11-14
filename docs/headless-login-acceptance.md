@@ -4,7 +4,7 @@
 - 记录日期：2026-11-14
 - 被测行为代码：`integration/headless-login` @ `aec8b3d`（#9–#15 已合入）
 - 本机测试环境：Windows 10.0.26300 x64，Python 3.14.10，Git Bash
-- 云端基线环境：`um-share-ecs`（`100.71.250.7`），Ubuntu 26.04.1 LTS，kernel 7.0.0-38-generic x86_64，Python 3.14.4，release `/opt/um-share/releases/s2-20261113b`，`chat2api_build=e2d60349+reviewed`
+- 云端基线环境：`um-share-ecs`（SSH 别名），Ubuntu 26.04.1 LTS，kernel 7.0.0-38-generic x86_64，Python 3.14.4，release `/opt/um-share/releases/s2-20261113b`，`chat2api_build=e2d60349+reviewed`
 
 ## 行为验收
 
