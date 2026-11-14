@@ -15,11 +15,14 @@ carries "filled / not filled" as a value the session only ever tests for
 non-emptiness, and the session must never print, return or store it.
 """
 
+import atexit
 import http.client
 import importlib.util
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -282,11 +285,23 @@ class _Harness:
         self.notes = []
         self.created = []
         self.reported = []
+        self.profile_dir = tempfile.mkdtemp(
+            prefix="chat2api-browser-login-")
+        atexit.register(shutil.rmtree, self.profile_dir, ignore_errors=True)
 
     def _context_factory(self, _edge, _profile_dir):
         context = _FakeContext(self.site)
         self.created.append(context)
         return context
+
+    @staticmethod
+    def _no_processes(_profile_dir):
+        return []
+
+    @staticmethod
+    def _never_signal(pid, sig):
+        raise AssertionError("unexpected browser cleanup signal: %s %s"
+                             % (pid, sig))
 
     def _credential_probe(self, base_url, token):
         self.probes.append((base_url, token))
@@ -312,13 +327,15 @@ class _Harness:
         ):
             result = chat2api.browser_login(
                 BASE_URL,
-                "profile-dir",
+                self.profile_dir,
                 timeout_s,
                 on_context=self._on_context,
                 cancel_event=cancel_event,
                 context_factory=self._context_factory,
                 credential_probe=self._credential_probe,
                 on_progress=self._on_progress,
+                process_lister=self._no_processes,
+                process_signal=self._never_signal,
             )
         self.output = output.getvalue()
         return result
@@ -642,6 +659,8 @@ class RealDomLoginPageTests(unittest.TestCase):
         self.served = []
         self.notes = []
         self.probes = []
+        self.profile_dir = tempfile.mkdtemp(prefix="chat2api-dom-profile-")
+        self.addCleanup(shutil.rmtree, self.profile_dir, ignore_errors=True)
         self.entry_html = _fixture("um_openwebui_entry_desensitized.html")
         self.websso_html = _fixture("um_websso_adfs_desensitized.html")
         self.context = type(self).browser.new_context()
@@ -677,10 +696,12 @@ class RealDomLoginPageTests(unittest.TestCase):
             redirect_stdout(io.StringIO()),
         ):
             return chat2api.browser_login(
-                BASE_URL, "profile-dir", timeout_s,
+                BASE_URL, self.profile_dir, timeout_s,
                 context_factory=self._context_factory,
                 credential_probe=self._probe,
-                on_progress=self.notes.append)
+                on_progress=self.notes.append,
+                process_lister=lambda _profile: [],
+                process_signal=lambda _pid, _sig: True)
 
     def _run_stalled(self, timeout_s=3):
         with self.assertRaises(chat2api.LoginStalled) as caught:
@@ -768,10 +789,14 @@ class SessionLifecycleTests(unittest.TestCase):
             mock.patch("playwright.sync_api.sync_playwright", return_value=FakeManager()),
             redirect_stdout(io.StringIO()),
         ):
-            token = chat2api.browser_login(
-                BASE_URL, "profile-dir", 1,
-                credential_probe=lambda base_url, bearer: ("valid", None, 200),
-            )
+            with tempfile.TemporaryDirectory(
+                    prefix="chat2api-real-playwright-") as profile_dir:
+                token = chat2api.browser_login(
+                    BASE_URL, profile_dir, 1,
+                    credential_probe=lambda base_url, bearer: ("valid", None, 200),
+                    process_lister=lambda _profile: [],
+                    process_signal=lambda _pid, _sig: True,
+                )
 
         self.assertEqual(token, "fresh-token")
         self.assertTrue(context.closed)
@@ -801,6 +826,8 @@ class SessionLifecycleTests(unittest.TestCase):
             token = chat2api.browser_login(
                 BASE_URL, "profile-dir", 1,
                 credential_probe=lambda base_url, bearer: ("valid", None, 200),
+                process_lister=lambda _profile: [],
+                process_signal=lambda _pid, _sig: True,
             )
 
         self.assertEqual(token, "fresh-token")
@@ -1007,6 +1034,339 @@ class AdminLoginWindowTests(unittest.TestCase):
         while len(self.login_calls) < 2 and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertEqual(len(self.login_calls), 2)
+
+
+class ProfileSingleInstanceLockTests(unittest.TestCase):
+    """ticket #11：同一 profile 同时只允许一个登录浏览器。"""
+
+    def setUp(self):
+        self.profile = tempfile.mkdtemp(prefix="chat2api-profile-lock-")
+        self.addCleanup(shutil.rmtree, self.profile, ignore_errors=True)
+
+    @staticmethod
+    def _empty_lister(_profile):
+        return []
+
+    @staticmethod
+    def _never_signal(pid, sig):
+        raise AssertionError("unexpected signal %s to pid %s" % (sig, pid))
+
+    def test_second_login_is_rejected_while_the_first_is_running(self):
+        site = _build_site()
+        started = threading.Event()
+        release = threading.Event()
+        contexts = []
+        results = {}
+        errors = []
+
+        def factory(_edge, profile):
+            contexts.append(profile)
+            started.set()
+            release.wait(5)
+            return _FakeContext(site)
+
+        def first():
+            try:
+                results["token"] = chat2api.browser_login(
+                    BASE_URL, self.profile, 2,
+                    context_factory=factory,
+                    credential_probe=lambda _base, _token: ("valid", None, 200),
+                    process_lister=self._empty_lister,
+                    process_signal=self._never_signal,
+                )
+            except BaseException as exc:  # noqa: BLE001 - reported below
+                errors.append(exc)
+
+        thread = threading.Thread(target=first)
+        thread.start()
+        self.assertTrue(started.wait(5), "the first login never opened")
+        with self.assertRaises(chat2api.LoginBusy) as caught:
+            chat2api.browser_login(
+                BASE_URL, self.profile, 2,
+                context_factory=lambda _edge, _profile: self.fail(
+                    "the second request must not open a browser"),
+                process_lister=lambda _profile: self.fail(
+                    "cleanup must not run while another session holds the lock"),
+                process_signal=self._never_signal,
+            )
+        self.assertEqual(caught.exception.reason, "login_already_running")
+
+        release.set()
+        thread.join(5)
+        self.assertFalse(thread.is_alive(), "the first login never finished")
+        self.assertEqual(errors, [])
+        self.assertEqual(results.get("token"), "fresh-token")
+        self.assertEqual(contexts, [self.profile])
+
+    def test_a_different_profile_is_not_blocked(self):
+        other_profile = tempfile.mkdtemp(prefix="chat2api-other-profile-")
+        self.addCleanup(shutil.rmtree, other_profile, ignore_errors=True)
+        lock = chat2api._acquire_profile_login_lock(self.profile)
+        self.assertIsNotNone(lock)
+        self.addCleanup(chat2api._release_profile_login_lock, lock)
+
+        site = _build_site()
+        token = chat2api.browser_login(
+            BASE_URL, other_profile, 2,
+            context_factory=lambda _edge, _profile: _FakeContext(site),
+            credential_probe=lambda _base, _token: ("valid", None, 200),
+            process_lister=self._empty_lister,
+            process_signal=self._never_signal,
+        )
+        self.assertEqual(token, "fresh-token")
+
+    def test_lock_file_lives_in_the_profile_and_records_the_owner(self):
+        lock = chat2api._acquire_profile_login_lock(self.profile)
+        self.assertIsNotNone(lock)
+        self.addCleanup(chat2api._release_profile_login_lock, lock)
+
+        self.assertEqual(os.path.dirname(lock.path), os.path.abspath(self.profile))
+        self.assertEqual(os.path.basename(lock.path),
+                         chat2api.PROFILE_LOGIN_LOCK_NAME)
+        owner = chat2api._read_profile_lock_owner(self.profile)
+        self.assertIsNotNone(owner)
+        self.assertEqual(owner.get("pid"), os.getpid())
+        self.assertIn("process_started_epoch", owner)
+
+    def test_lock_is_released_after_a_failed_session(self):
+        def failing_factory(_edge, _profile):
+            raise RuntimeError("launch failed")
+
+        with self.assertRaises(RuntimeError):
+            chat2api.browser_login(
+                BASE_URL, self.profile, 1,
+                context_factory=failing_factory,
+                process_lister=self._empty_lister,
+                process_signal=self._never_signal,
+            )
+
+        site = _build_site()
+        token = chat2api.browser_login(
+            BASE_URL, self.profile, 2,
+            context_factory=lambda _edge, _profile: _FakeContext(site),
+            credential_probe=lambda _base, _token: ("valid", None, 200),
+            process_lister=self._empty_lister,
+            process_signal=self._never_signal,
+        )
+        self.assertEqual(token, "fresh-token")
+
+    def test_lock_is_released_when_the_holder_process_dies(self):
+        marker = os.path.join(self.profile, "child-locked")
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _CHILD_LOCK_SCRIPT,
+             str(CHAT2API_PATH), self.profile, marker],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self.addCleanup(self._stop_child, proc)
+
+        deadline = time.monotonic() + 20
+        while not os.path.exists(marker):
+            if proc.poll() is not None:
+                stderr = proc.stderr.read().decode("utf-8", "replace")
+                self.fail("the lock child exited early: %s" % stderr)
+            if time.monotonic() >= deadline:
+                self.fail("the lock child never acquired the profile lock")
+            time.sleep(0.02)
+
+        with open(marker, encoding="utf-8") as handle:
+            child_pid = int(handle.read())
+        owner = chat2api._read_profile_lock_owner(self.profile)
+        self.assertIsNotNone(owner)
+        self.assertEqual(owner.get("pid"), child_pid)
+
+        with self.assertRaises(chat2api.LoginBusy):
+            chat2api.browser_login(
+                BASE_URL, self.profile, 1,
+                context_factory=lambda _edge, _profile: self.fail(
+                    "a locked profile must not open a browser"),
+                process_lister=self._empty_lister,
+                process_signal=self._never_signal,
+            )
+
+        proc.terminate()
+        proc.wait(10)
+
+        site = _build_site()
+        token = chat2api.browser_login(
+            BASE_URL, self.profile, 2,
+            context_factory=lambda _edge, _profile: _FakeContext(site),
+            credential_probe=lambda _base, _token: ("valid", None, 200),
+            process_lister=self._empty_lister,
+            process_signal=self._never_signal,
+        )
+        self.assertEqual(token, "fresh-token")
+
+    @staticmethod
+    def _stop_child(proc):
+        if proc.poll() is None:
+            proc.kill()
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                pass
+        if proc.stderr is not None:
+            proc.stderr.close()
+
+
+class ProfileBrowserCleanupTests(unittest.TestCase):
+    """ticket #11：打开前只清理同 profile 的旧 Chromium，先 TERM 后 KILL。"""
+
+    def setUp(self):
+        self.profile = tempfile.mkdtemp(prefix="chat2api-profile-cleanup-")
+        self.other_profile = tempfile.mkdtemp(
+            prefix="chat2api-other-cleanup-")
+        self.addCleanup(shutil.rmtree, self.profile, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, self.other_profile, ignore_errors=True)
+        self.signals = []
+        self.alive = {}
+
+    @staticmethod
+    def _process(pid, name, argv):
+        return chat2api.ProfileBrowserProcess(
+            pid=pid, name=name, argv=tuple(argv))
+
+    def _lister(self, _profile):
+        return list(self.alive.values())
+
+    def _signal(self, pid, sig):
+        self.signals.append((pid, sig))
+        if sig == chat2api.PROFILE_BROWSER_TERM_SIGNAL:
+            self.alive.pop(pid, None)
+        return True
+
+    @staticmethod
+    def _empty_lister(_profile):
+        return []
+
+    def test_only_chromium_with_the_exact_same_profile_is_terminated(self):
+        same_profile = self._process(
+            101, "msedge.exe",
+            ["msedge.exe", "--user-data-dir=" + self.profile])
+        other_profile = self._process(
+            202, "chrome.exe",
+            ["chrome.exe", "--user-data-dir=" + self.other_profile])
+        firefox = self._process(
+            303, "firefox.exe",
+            ["firefox.exe", "--user-data-dir=" + self.profile])
+        prefix_profile = self._process(
+            404, "chromium",
+            ["chromium", "--user-data-dir=" + self.profile + "-copy"])
+        subdirectory = self._process(
+            505, "google-chrome",
+            ["google-chrome", "--user-data-dir=" + self.profile + "/Default"])
+        self.alive = {process.pid: process for process in (
+            same_profile, other_profile, firefox, prefix_profile, subdirectory)}
+
+        terminated = chat2api._cleanup_profile_browsers(
+            self.profile,
+            lister=self._lister,
+            signal_process=self._signal,
+            term_wait_s=0.05,
+            kill_wait_s=0.05,
+        )
+
+        self.assertEqual(terminated, [101])
+        self.assertEqual(self.signals, [
+            (101, chat2api.PROFILE_BROWSER_TERM_SIGNAL)])
+        self.assertEqual(set(self.alive), {202, 303, 404, 505})
+
+    def test_sigterm_that_does_not_finish_escalates_to_sigkill(self):
+        target = self._process(
+            111, "msedge.exe",
+            ["msedge.exe", "--user-data-dir", self.profile])
+        self.alive = {target.pid: target}
+
+        def stubborn_signal(pid, sig):
+            self.signals.append((pid, sig))
+            if sig == chat2api.PROFILE_BROWSER_KILL_SIGNAL:
+                self.alive.pop(pid, None)
+            return True
+
+        terminated = chat2api._cleanup_profile_browsers(
+            self.profile,
+            lister=self._lister,
+            signal_process=stubborn_signal,
+            term_wait_s=0.05,
+            kill_wait_s=0.05,
+        )
+
+        self.assertEqual(terminated, [111])
+        self.assertEqual([sig for _pid, sig in self.signals], [
+            chat2api.PROFILE_BROWSER_TERM_SIGNAL,
+            chat2api.PROFILE_BROWSER_KILL_SIGNAL,
+        ])
+
+    def test_stale_browser_is_cleaned_before_the_context_opens(self):
+        target = self._process(
+            121, "msedge.exe",
+            ["msedge.exe", "--user-data-dir=" + self.profile])
+        self.alive = {target.pid: target}
+        events = []
+
+        def signal(pid, sig):
+            events.append(("signal", pid, sig))
+            if sig == chat2api.PROFILE_BROWSER_KILL_SIGNAL:
+                self.alive.pop(pid, None)
+            return True
+
+        def factory(_edge, profile):
+            events.append(("open", profile))
+            return _FakeContext(_build_site())
+
+        token = chat2api.browser_login(
+            BASE_URL, self.profile, 2,
+            context_factory=factory,
+            credential_probe=lambda _base, _token: ("valid", None, 200),
+            process_lister=self._lister,
+            process_signal=signal,
+        )
+
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(events[0], (
+            "signal", 121, chat2api.PROFILE_BROWSER_TERM_SIGNAL))
+        self.assertEqual(events[-1], ("open", self.profile))
+
+    def test_unreadable_process_table_refuses_the_session_and_releases_the_lock(self):
+        opened = []
+        with self.assertRaises(chat2api.LoginUnavailable) as caught:
+            chat2api.browser_login(
+                BASE_URL, self.profile, 1,
+                context_factory=lambda _edge, profile: opened.append(profile),
+                process_lister=lambda _profile: None,
+                process_signal=lambda _pid, _sig: True,
+            )
+        self.assertEqual(caught.exception.reason,
+                         "profile_cleanup_unavailable")
+        self.assertEqual(opened, [])
+
+        site = _build_site()
+        token = chat2api.browser_login(
+            BASE_URL, self.profile, 2,
+            context_factory=lambda _edge, _profile: _FakeContext(site),
+            credential_probe=lambda _base, _token: ("valid", None, 200),
+            process_lister=self._empty_lister,
+            process_signal=lambda _pid, _sig: True,
+        )
+        self.assertEqual(token, "fresh-token")
+
+
+_CHILD_LOCK_SCRIPT = """\
+import importlib.util
+import os
+import sys
+import time
+
+spec = importlib.util.spec_from_file_location(
+    "chat2api_profile_lock_child", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+lock = module._acquire_profile_login_lock(sys.argv[2])
+if lock is None:
+    raise SystemExit(3)
+with open(sys.argv[3], "w", encoding="utf-8") as marker:
+    marker.write(str(os.getpid()))
+time.sleep(60)
+"""
 
 
 if __name__ == "__main__":
