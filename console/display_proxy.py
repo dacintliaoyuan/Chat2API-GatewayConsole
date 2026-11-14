@@ -1,6 +1,6 @@
 """Same-origin noVNC launcher and WebSocket-to-RFB relay.
 
-The console listener stays on loopback (18096).  Tailscale Serve terminates
+The console listener stays on loopback (8096).  Tailscale Serve terminates
 HTTPS on the tailnet and forwards only the configured owner/device to that
 listener.  This module adds the private display surface:
 
@@ -10,7 +10,7 @@ listener.  This module adds the private display surface:
   cannot be an inline script);
 * ``/display/<asset>`` serves the installed noVNC JavaScript/CSS tree;
 * ``/display/websockify`` upgrades to WebSocket and relays RFB bytes to the
-  loopback x11vnc port (5901 by default).
+  loopback x11vnc port (8097 by default).
 
 The console's origin gate is not an administrator identity.  An SSH ``-L``
 tunnel also reaches the console as loopback, so a display grant is required:
@@ -111,6 +111,13 @@ _VNC_AUTH_FILE_MODES = (0o400, 0o440, 0o600, 0o640)
 _VNC_AUTH_OWNERS = (0,)
 _AUTH_UNSET = object()
 
+# Expand-contract (2026-11-14): x11vnc moved 5901 -> 8097 so the display
+# listener sits inside the governed 8090-8099 segment.  During the one-release
+# window the old port is still accepted when CONSOLE_DISPLAY_VNC_PORT names it
+# explicitly; it is never a second default and there is never a second listener.
+DEFAULT_VNC_PORT = 8097
+LEGACY_VNC_COMPAT_PORTS = frozenset({5901})
+
 STATIC_TYPES = {
     ".js": "text/javascript; charset=utf-8",
     ".mjs": "text/javascript; charset=utf-8",
@@ -160,7 +167,7 @@ class DisplayGrantError(Exception):
 class DisplayConfig:
     enabled: bool = False
     vnc_host: str = "127.0.0.1"
-    vnc_port: int = 5901
+    vnc_port: int = DEFAULT_VNC_PORT
     novnc_root: str = "/usr/share/novnc"
     launcher_file: str = ""
     max_connections: int = 2
@@ -220,8 +227,9 @@ def load_config(environ=None):
         address = ipaddress.ip_address(vnc_host)
         if not address.is_loopback:
             raise ValueError("vnc host must be loopback")
-        vnc_port = _integer(_env(environ, "CONSOLE_DISPLAY_VNC_PORT", "5901"),
-                            1, 65535)
+        vnc_port = _integer(
+            _env(environ, "CONSOLE_DISPLAY_VNC_PORT", str(DEFAULT_VNC_PORT)),
+            1, 65535)
         novnc_root = str(_env(environ, "CONSOLE_DISPLAY_NOVNC_ROOT",
                             "/usr/share/novnc")).strip()
         if not novnc_root or not _absolute_path(novnc_root):

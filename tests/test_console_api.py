@@ -509,7 +509,7 @@ class ConsoleReadTests(ConsoleApiTestBase):
 
     def test_root_cloud_process_refuses_local_identity(self):
         # The reverse mismatch is refused too: a cloud process must not host the
-        # local tree, which would otherwise show the wrong console on 18096.
+        # local tree, which would otherwise show the wrong console on 8096.
         with tempfile.TemporaryDirectory() as td:
             index = os.path.join(td, "index.html")
             with open(index, "wb") as f:

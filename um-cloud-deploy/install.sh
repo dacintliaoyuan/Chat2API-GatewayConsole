@@ -551,7 +551,10 @@ ensure_env_line "$UM_ETC/console.env" CHAT2API_SHARE_DISPATCH_MAX_WAIT_S "0"
 ensure_env_line "$UM_ETC/console.env" USAGE_TAILNET_CONFIG_FILE "$UM_ETC/console-tailnet-access.json"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_ENABLED "0"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_VNC_HOST "127.0.0.1"
-ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_VNC_PORT "5901"
+# Expand-contract (2026-11-14): the display moved 5901 -> 8097.  An existing
+# console.env keeps its explicit value for one release cycle; the display
+# start script reads it so x11vnc and the console proxy stay on the same port.
+ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_VNC_PORT "8097"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_NOVNC_ROOT "/usr/share/novnc"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_LAUNCHER_FILE "/opt/um-share/current/um-cloud-deploy/display/novnc-launcher.html"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_VNC_AUTH_SOCKET "/run/um-share/vnc-auth.sock"
@@ -639,11 +642,12 @@ if [ "$NO_START" -eq 0 ]; then
   if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
     systemctl restart cloudflared.service
   fi
-  wait_port_open 127.0.0.1 18096 "$UM_HEALTH_TIMEOUT_S" || \
-    die "console 18096 did not open" "$EX_UNAVAILABLE"
+  console_listen_port="$(console_port)" || exit "$EX_DATAERR"
+  wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || \
+    die "console $console_listen_port did not open" "$EX_UNAVAILABLE"
   wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || \
     die "share gateway 8100 did not open (check broker start)" "$EX_UNAVAILABLE"
-  health_gate || die "health gate failed (18096/8100 HTTP)" "$EX_UNAVAILABLE"
+  health_gate || die "health gate failed ($console_listen_port/8100 HTTP)" "$EX_UNAVAILABLE"
 else
   log "services were not started (--no-start)"
 fi

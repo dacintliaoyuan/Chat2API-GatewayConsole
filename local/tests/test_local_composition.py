@@ -541,10 +541,10 @@ class LocalConfigTests(unittest.TestCase):
             self.assertTrue(path == root or root in path.parents,
                             "um_runtime.%s=%s escapes %s"
                             % (name, value, root))
-        self.assertNotIn(fixture["port"], (8000, 8001, 8100, 18096,
-                                         5901))
+        self.assertNotIn(fixture["port"], (8000, 8001, 8096, 8097, 8100,
+                                         18096, 5901))
         self.assertNotIn(fixture["um_runtime"]["port"],
-                         (8000, 8001, 8100, 18096, 5901))
+                         (8000, 8001, 8096, 8097, 8100, 18096, 5901))
 
 
 class IsolationGuardRegressionTests(unittest.TestCase):
@@ -568,7 +568,7 @@ class IsolationGuardRegressionTests(unittest.TestCase):
         return str(caught.exception)
 
     def test_a_production_port_is_refused(self):
-        for port in (8000, 8001, 18096, 5901):
+        for port in (8000, 8001, 8096, 8097, 18096, 5901):
             with self.subTest(port=port):
                 message = self._refused(
                     lambda values, p=port: values.update({"port": p}))

@@ -21,10 +21,19 @@ import stat
 import sys
 from urllib.parse import urlsplit
 
-DEFAULT_CONSOLE = "http://127.0.0.1:18096"
+# Expand-contract (2026-11-14): the console moved 18096 -> 8096.  The default
+# follows the new port; the legacy 18096 stays usable as an explicit --console
+# value for one release cycle.  The admin control token only goes to these cloud
+# console origins, never to the local 8001 console.
+DEFAULT_CONSOLE = "http://127.0.0.1:8096"
+# Expand-contract (2026-11-14): 18096 is the legacy cloud console port and
+# stays accepted for one release cycle.  8001 is the LOCAL console and is never
+# a valid destination for the cloud admin token.
+CONSOLE_PORTS = frozenset({8096, 18096})
 DEFAULT_TOKEN_FILE = "/etc/um-share/admin-control-token"
 MAX_TOKEN_BYTES = 1024
 SERVICE_USER = "um-share"
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 def _service_user_uid():
@@ -105,15 +114,23 @@ def request_grant(console, token, timeout):
 
 def request_console_session(console, token, timeout):
     """Use the existing console-session issuer; never send its token off-host."""
-    if console != DEFAULT_CONSOLE:
-        raise ValueError("console bootstrap requires the fixed loopback origin")
-    connection = http.client.HTTPConnection("127.0.0.1", 18096, timeout=timeout)
+    parsed = urlsplit(console)
+    if parsed.scheme != "http" or parsed.hostname not in LOOPBACK_HOSTS \
+            or parsed.path not in ("", "/") or parsed.username is not None \
+            or parsed.password is not None or parsed.query or parsed.fragment:
+        raise ValueError("console bootstrap requires a loopback origin")
+    port = parsed.port or 80
+    origin = f"http://{parsed.hostname}:{port}"
+    if port not in CONSOLE_PORTS:
+        raise ValueError("console bootstrap requires a cloud console port")
+    connection = http.client.HTTPConnection(
+        parsed.hostname, port, timeout=timeout)
     try:
         connection.request(
             "POST", "/api/session/reissue", body=b"",
             headers={"X-Admin-Control": token,
                      "X-Requested-With": "XMLHttpRequest",
-                     "Origin": DEFAULT_CONSOLE, "Content-Length": "0"})
+                     "Origin": origin, "Content-Length": "0"})
         response = connection.getresponse()
         return response.status, response.read(64 * 1024)
     finally:
