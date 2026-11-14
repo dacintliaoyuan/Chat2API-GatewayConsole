@@ -6145,7 +6145,7 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         try:
             body = json.loads(self.rfile.read(length))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             self._error(400, "Request body is not valid JSON",
                         error_type="invalid_json")
             return None
