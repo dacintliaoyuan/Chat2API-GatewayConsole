@@ -1169,6 +1169,12 @@ class AdminLoginWindowTests(unittest.TestCase):
         status, payload = self._request("GET", "/health")
         self.assertEqual(status, 200)
         self.assertEqual(payload["status"], "ok")
+        # Ticket #15：取消后状态/health 都是 cancelled，窗口不延长。
+        self.assertEqual(payload["authentication"]["state"], "cancelled")
+        self.assertIsNone(payload["authentication"]["error"])
+        self.assertEqual(payload["login_window_deadline_epoch"],
+                         first_deadline)
+        self.assertNotIn(self.STUB_TOKEN, json.dumps(payload))
 
         # An ordinary request never reopens the cancelled round.
         self.assertFalse(self.proxy.refresh(wait=False))
@@ -1188,6 +1194,92 @@ class AdminLoginWindowTests(unittest.TestCase):
         while len(self.login_calls) < 2 and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertEqual(len(self.login_calls), 2)
+
+    # ------------------------------------------------------- ticket #15
+
+    def test_manual_takeover_reason_and_window_are_visible(self):
+        # Ticket #15：真正 manual 阶段结束后，状态和 health 都要让操作员
+        # 看到 manual_takeover_required:<reason> 与窗口截止时间；窗口只由
+        # 显式登录开启一次。
+        with mock.patch.object(
+                chat2api, "browser_login",
+                side_effect=chat2api.LoginStalled(
+                    "manual_takeover_required:umpass_mfa_required",
+                    "last page https://websso.um.edu.mo/")):
+            status, payload = self._request("POST", "/admin/auth/login")
+            self.assertEqual(status, 202, payload)
+            deadline = payload["login_window_deadline_epoch"]
+            self.assertIsNotNone(deadline)
+            self._await_recovery_thread()
+
+        status, payload = self._request("GET", "/admin/auth/status")
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(
+            payload["error"],
+            "manual_takeover_required:umpass_mfa_required")
+        self.assertEqual(payload["recovery"]["pause_reason"],
+                         "manual_takeover_required:umpass_mfa_required")
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+
+        status, payload = self._request("GET", "/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["authentication"]["state"], "failed")
+        self.assertEqual(
+            payload["authentication"]["error"],
+            "manual_takeover_required:umpass_mfa_required")
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+        self.assertEqual(payload["login_window_s"], 1800)
+        self.assertNotIn(self.STUB_TOKEN, json.dumps(payload))
+
+    def test_successful_login_reports_valid_and_clears_the_error(self):
+        # Ticket #15：成功后状态为 valid、error/login 为空；窗口截止时间
+        # 保持本轮固定值，控制台响应不含 token。
+        status, payload = self._request("POST", "/admin/auth/login")
+        self.assertEqual(status, 202, payload)
+        deadline = payload["login_window_deadline_epoch"]
+        self.assertIsNotNone(deadline)
+        self.release.set()
+        self._await_recovery_thread()
+
+        status, payload = self._request("GET", "/admin/auth/status")
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["state"], "valid")
+        self.assertIsNone(payload["error"])
+        self.assertIsNone(payload["login"])
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+
+        status, payload = self._request("GET", "/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["authentication"]["state"], "valid")
+        self.assertIsNone(payload["authentication"]["error"])
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+        self.assertNotIn(self.STUB_TOKEN, json.dumps(payload))
+
+    def test_credential_rejection_reports_failed_state(self):
+        # Ticket #15：凭据被拒后状态为 failed 且保留真实原因；
+        # health 只暴露 manual 原因码，其他失败原因留在控制令牌门后。
+        with mock.patch.object(
+                chat2api, "browser_login",
+                side_effect=chat2api.LoginCredentialRejected(
+                    "upstream_credential_rejected")):
+            status, payload = self._request("POST", "/admin/auth/login")
+            self.assertEqual(status, 202, payload)
+            deadline = payload["login_window_deadline_epoch"]
+            self._await_recovery_thread()
+
+        status, payload = self._request("GET", "/admin/auth/status")
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["error"], "upstream_credential_rejected")
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+
+        status, payload = self._request("GET", "/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["authentication"]["state"], "failed")
+        self.assertIsNone(payload["authentication"]["error"])
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+        self.assertNotIn(self.STUB_TOKEN, json.dumps(payload))
 
 
 class ProfileSingleInstanceLockTests(unittest.TestCase):

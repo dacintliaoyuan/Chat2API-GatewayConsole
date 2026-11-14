@@ -18,6 +18,7 @@ from unittest import mock
 
 import usagesrv
 from console import share_actions as console_share_actions
+from console import um_adapter as console_um_adapter
 from console.display_proxy import DisplayConfig, DisplayProxy
 from share.secret_protection import write_private_secret_path
 
@@ -329,10 +330,15 @@ class DisplayStateRouteTest(unittest.TestCase):
         finally:
             connection.close()
 
-    def _state(self, *, display=None):
+    def _state(self, *, display=None, auth=None):
         proxy = _FakeOperatorDisplay()
+        observed = auth if auth is not None else {
+            "state": None, "label": None, "error": None,
+            "observed_at": None, "login_window_deadline_epoch": None}
         with mock.patch.object(usagesrv, "DISPLAY_PROXY", proxy), \
-\
+                mock.patch.object(
+                    usagesrv, "_console_auth_observation",
+                    return_value=observed), \
                 mock.patch.object(
                     usagesrv.Handler, "_console_display_availability",
                     return_value=display or {"available": True,
@@ -352,8 +358,68 @@ class DisplayStateRouteTest(unittest.TestCase):
         self.assertEqual(payload["display"], {
             "available": False, "reason": "display_disabled"})
 
+    def test_display_state_shows_manual_reason_and_window(self):
+        # Ticket #15：控制台状态读面必须显示
+        # manual_takeover_required:<reason> 与实例自己的窗口截止时间；
+        # token 与登录页细节不得出现在响应里。
+        payload = self._state(auth={
+            "state": "failed",
+            "label": "认证失败（需人工：umpass_mfa_required）",
+            "error": "manual_takeover_required:umpass_mfa_required",
+            "observed_at": 1700000000,
+            "login_window_deadline_epoch": 2800.0,
+            "token": "secret-control-token",
+            "page": "https://websso.um.edu.mo/login?code=ONE-TIME",
+        })
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["label"], "需要人工接管")
+        self.assertEqual(
+            payload["detail"],
+            "manual_takeover_required:umpass_mfa_required")
+        self.assertEqual(payload["login_window_deadline_epoch"], 2800.0)
+        self.assertEqual(payload["observed_at"], 1700000000)
+        self.assertNotIn("secret-control-token", json.dumps(payload))
+        self.assertNotIn("ONE-TIME", json.dumps(payload))
+
+    def test_display_state_shows_waiting_mfa_with_window(self):
+        for reason in ("umpass_mfa_required", "umpass_prefill_missing",
+                       "unrecognized_page"):
+            with self.subTest(reason=reason):
+                payload = self._state(auth={
+                    "state": "logging_in",
+                    "label": "登录中（需人工：%s）" % reason,
+                    "error": "manual_takeover_required:" + reason,
+                    "observed_at": 1700000001,
+                    "login_window_deadline_epoch": 2800.0,
+                })
+                self.assertEqual(payload["state"], "waiting_mfa")
+                self.assertEqual(payload["label"], "等待 MFA（本人操作）")
+                self.assertEqual(
+                    payload["detail"],
+                    "manual_takeover_required:" + reason)
+                self.assertEqual(payload["login_window_deadline_epoch"],
+                                 2800.0)
+
+    def test_display_state_maps_valid_cancelled_and_timeout(self):
+        cases = (
+            ({"state": "valid", "error": None}, "valid"),
+            ({"state": "cancelled", "error": "cancelled"}, "cancelled"),
+            ({"state": "timed_out", "error": None}, "timed_out"),
+            ({"state": "failed", "error": "timeout"}, "timed_out"),
+        )
+        for auth, expected in cases:
+            with self.subTest(state=auth["state"]):
+                payload = self._state(auth=auth)
+                self.assertEqual(payload["state"], expected)
+                self.assertEqual(payload["login_window_deadline_epoch"], None)
+
     def test_display_state_is_a_read_without_a_share_manager(self):
         with mock.patch.object(usagesrv, "DISPLAY_PROXY", None), \
+                mock.patch.object(
+                    usagesrv, "_console_auth_observation",
+                    return_value={"state": None, "label": None,
+                                   "error": None, "observed_at": None,
+                                   "login_window_deadline_epoch": None}), \
                 mock.patch.object(usagesrv, "get_share_manager",
                                   side_effect=AssertionError(
                                       "a read must not assemble the manager")):
@@ -429,6 +495,53 @@ class DisplayStateRouteTest(unittest.TestCase):
             self.assertEqual(status, 400)
         self.assertEqual(proxy.calls, [])
 
+
+
+class ConsoleAuthObservationTest(unittest.TestCase):
+    """Ticket #15：display-state 的 auth 读面只读、同源、不含 token。"""
+
+    def test_cloud_uses_the_share_gateway_port_and_control_token(self):
+        with mock.patch.object(usagesrv, "CLOUD_ROLE", True), \
+                mock.patch.object(
+                    usagesrv, "console_services_snapshot",
+                    return_value=({"services": [{"key": "share-gateway",
+                                                "port": 8100}]},
+                                  False, 0.0)), \
+                mock.patch.object(
+                    console_um_adapter, "_read_control_token",
+                    return_value="test-control-token") as read_token, \
+                mock.patch.object(
+                    console_um_adapter, "_read_auth_status",
+                    return_value={
+                        "state": "failed",
+                        "label": "认证失败（需人工）",
+                        "error": "manual_takeover_required:umpass_mfa_required",
+                        "recovery": None,
+                        "login_window_deadline_epoch": 2800.0,
+                        "login_window_s": 1800.0,
+                        "checked_epoch": 1700000000,
+                    }) as read:
+            observed = usagesrv._console_auth_observation()
+        read_token.assert_called_once_with(usagesrv.CONTROL_TOKEN_FILE)
+        read.assert_called_once_with("http://127.0.0.1:8100",
+                                    "test-control-token")
+        self.assertEqual(observed["state"], "failed")
+        self.assertEqual(observed["error"],
+                         "manual_takeover_required:umpass_mfa_required")
+        self.assertEqual(observed["login_window_deadline_epoch"], 2800.0)
+        self.assertEqual(observed["observed_at"], 1700000000)
+        self.assertNotIn("test-control-token",
+                         json.dumps(observed, ensure_ascii=False))
+
+    def test_unreadable_auth_is_an_honest_unknown(self):
+        with mock.patch.object(usagesrv, "CLOUD_ROLE", True), \
+                mock.patch.object(
+                    usagesrv, "console_services_snapshot",
+                    side_effect=RuntimeError("snapshot exploded")):
+            observed = usagesrv._console_auth_observation()
+        self.assertIsNone(observed["state"])
+        self.assertIsNone(observed["error"])
+        self.assertIsNone(observed["login_window_deadline_epoch"])
 
 
 if __name__ == "__main__":
