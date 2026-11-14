@@ -933,11 +933,17 @@ def _console_auth_observation():
     the cloud role resolves the share entry's port from the Linux runtime
     snapshot (never a guessed port). A read failure stays an honest unknown
     (state None), so display-state degrades to not_started/disconnected
-    instead of inventing valid or a fake deadline. No token or login page is
-    copied into the observation.
+    instead of inventing valid or a fake deadline. Ticket #41 keeps the
+    readable classification (``control_denied`` / ``status_unreachable`` /
+    ``status_query_failed`` / ``status_schema`` or a generic
+    ``auth_observation_failed``) in ``read_error`` so /display-state can
+    show why the observation is unknown. No token or login page is copied
+    into the observation.
     """
+    from console import um_adapter as console_um_adapter
+    from console.operations import OperationError
+
     try:
-        from console import um_adapter as console_um_adapter
         snapshot = None
         if CLOUD_ROLE:
             snapshot, _cached, _age = console_services_snapshot()
@@ -945,10 +951,19 @@ def _console_auth_observation():
             cloud=CLOUD_ROLE, snapshot=snapshot)
         token = console_um_adapter._read_control_token(CONTROL_TOKEN_FILE)
         status = console_um_adapter._read_auth_status(base_url, token)
-    except Exception:  # noqa: BLE001  a display read must stay honest
+    except OperationError as exc:
         return {"state": None, "label": None, "error": None,
                 "observed_at": None,
-                "login_window_deadline_epoch": None}
+                "login_window_deadline_epoch": None,
+                "read_error": {"code": exc.code, "message": exc.message}}
+    except Exception as exc:  # noqa: BLE001  a display read must stay honest
+        return {"state": None, "label": None, "error": None,
+                "observed_at": None,
+                "login_window_deadline_epoch": None,
+                "read_error": {
+                    "code": "auth_observation_failed",
+                    "message": "%s: %s" % (type(exc).__name__, exc),
+                }}
     return {
         "state": status["state"],
         "label": status["label"],
@@ -956,6 +971,7 @@ def _console_auth_observation():
         "observed_at": status["checked_epoch"],
         "login_window_deadline_epoch":
             status["login_window_deadline_epoch"],
+        "read_error": None,
     }
 
 
@@ -2535,6 +2551,14 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(reason, str) and reason.startswith(prefix):
                 reason = reason.split(":", 1)[1]
                 break
+        read_error = auth.get("read_error")
+        read_detail = None
+        if isinstance(read_error, dict):
+            code = read_error.get("code") or "unknown"
+            read_detail = "认证状态读取失败（%s）" % code
+            message = read_error.get("message")
+            if isinstance(message, str) and message:
+                read_detail += "：" + message
         if state == "valid":
             return "valid", "登录有效", None
         if state == "cancelled":
@@ -2554,6 +2578,12 @@ class Handler(BaseHTTPRequestHandler):
                 return "waiting_mfa", "等待 MFA（本人操作）", error
             return "logging_in", "正在登录", error
         if state is None:
+            if read_detail:
+                if not display["available"]:
+                    return ("display_disconnected", "显示连接中断",
+                            "%s；显示不可用：%s"
+                            % (read_detail, display["reason"]))
+                return "not_started", "未开始登录", read_detail
             if not display["available"]:
                 return ("display_disconnected", "显示连接中断",
                         display["reason"])
@@ -2579,6 +2609,7 @@ class Handler(BaseHTTPRequestHandler):
             "observed_at": auth.get("observed_at"),
             "login_window_deadline_epoch":
                 auth.get("login_window_deadline_epoch"),
+            "auth_error": auth.get("read_error"),
             "operator": self._console_operator_state(),
             "display": display,
         }

@@ -886,7 +886,7 @@ class TestAuthWatchVisibility(unittest.TestCase):
         self.assertEqual(sorted(status),
                          ["error", "evidence", "gate", "label", "login",
                           "login_window_deadline_epoch", "login_window_s",
-                          "recovery", "state", "watch"])
+                          "primary", "recovery", "state", "watch"])
         self.assertIsNone(status["login_window_deadline_epoch"])
         self.assertIsNone(status["login_window_s"])
         watch = status["watch"]
@@ -916,7 +916,7 @@ class TestAuthWatchVisibility(unittest.TestCase):
         # manual 原因码；未开始登录时不编造 deadline。
         snapshot = proxy.health_snapshot()
         self.assertEqual(sorted(snapshot["authentication"]),
-                         ["error", "label", "state"])
+                         ["error", "label", "primary", "state"])
         self.assertIsNone(snapshot["authentication"]["error"])
         self.assertIsNone(snapshot["login_window_deadline_epoch"])
         self.assertIsNone(snapshot["login_window_s"])
@@ -1223,13 +1223,13 @@ class TestCrossInstanceGate(unittest.TestCase):
         proxy._note_login_progress({
             "phase": "awaiting_duo",
             "origin": "https://websso.um.edu.mo/login?code=ONE-TIME-SECRET",
-            "manual_reason": "mfa_required",
+            "manual_reason": "umpass_mfa_required",
         })
         snapshot = proxy.health_snapshot()
         self.assertEqual(sorted(snapshot["authentication"]),
-                         ["error", "label", "state"])
+                         ["error", "label", "primary", "state"])
         self.assertEqual(snapshot["authentication"]["error"],
-                         "manual_takeover_required:mfa_required")
+                         "manual_takeover_required:umpass_mfa_required")
         self.assertIn("需人工", snapshot["authentication"]["label"])
         self.assertNotIn("websso", str(snapshot))
         self.assertNotIn("ONE-TIME-SECRET", str(snapshot))
@@ -1653,7 +1653,7 @@ class TestRefreshUnderGate(unittest.TestCase):
         self.assertEqual(status["gate"]["granted"], False)
         self.assertEqual(status["gate"]["reason"], "slot_corrupt")
         self.assertEqual(sorted(proxy.health_snapshot()["authentication"]),
-                         ["error", "label", "state"])
+                         ["error", "label", "primary", "state"])
         self.assertIsNone(
             proxy.health_snapshot()["authentication"]["error"])
         with self.assertRaises(chat2api.ReauthenticationThrottled) as caught:

@@ -57,7 +57,6 @@ console keeps polling within its budget and the budget-exhaustion recheck
 reports the actually observed final state honestly.
 """
 
-import json
 import time
 import urllib.error
 import urllib.request
@@ -67,9 +66,8 @@ from console import um_adapter as console_um_adapter
 from console.operations import OperationCancelled, OperationError
 
 # The login POST is a state-changing force entry; 10s is ample for a loopback
-# call. The status poll timeout is contract-fixed at 5s per request.
+# call. The status poll timeout stays the adapter's 5s per request.
 _LOGIN_TIMEOUT_S = 10.0
-_STATUS_TIMEOUT_S = 5.0
 
 _START_WAIT_DEFAULT_S = 30.0
 _LOGIN_BUDGET_DEFAULT_S = 190.0
@@ -82,6 +80,11 @@ _BUDGET_MAX_S = 3600.0
 _MANUAL_TAKEOVER_PREFIX = "manual_takeover_required:"
 _MANUAL_REASONS = ("umpass_mfa_required", "umpass_prefill_missing",
                    "unrecognized_page")
+# Ticket #41: only these stages end the round. A prefixed soft reason
+# (a swallowed click, an unrecognized control, a Duo push still being
+# waited on) keeps the backend token poll running, so the console must keep
+# waiting instead of reporting a finished manual takeover.
+_TERMINAL_MANUAL_REASONS = frozenset(_MANUAL_REASONS)
 
 # Restore outcome kinds returned by _restore_service_state:
 # kept     - the service was already running; nothing was started or stopped.
@@ -224,50 +227,27 @@ def _post_force_login(base_url, token):
 def _read_auth_status(base_url, token):
     """One GET /admin/auth/status read; state None means 'unknown'.
 
-    Poll callers treat an unreachable/malformed read as 'keep waiting within
-    the budget'; the final recheck reports the last actually observed fact
-    instead of guessing. Ticket #15 keeps only the whitelisted terminal fields
-    (state/error/recovery state and pause reason) so a manual takeover or an
-    operator cancel can end the wait immediately.
+    Ticket #41: the read delegates to ``console_um_adapter._read_auth_status``
+    so the console uses the SAME classification (``control_denied`` /
+    ``status_unreachable`` / ``status_query_failed`` / ``status_schema``)
+    instead of collapsing every failure into ``state=None, error=None``. A
+    read failure is carried in ``read_error``; poll callers still keep
+    waiting within their budget for a transient failure, but a configuration
+    or schema error ends the wait honestly. Ticket #15 keeps only the
+    whitelisted terminal fields (state/error/recovery state and pause
+    reason) so a manual takeover or an operator cancel can end the wait
+    immediately.
     """
-    request = urllib.request.Request(
-        base_url.rstrip("/") + "/admin/auth/status",
-        headers={"X-Admin-Control": token})
     try:
-        with urllib.request.urlopen(request, timeout=_STATUS_TIMEOUT_S) as resp:
-            status_code = resp.status
-            raw = resp.read()
-    except urllib.error.HTTPError as exc:
-        try:
-            exc.close()
-        except Exception:
-            pass
-        return {"state": None, "error": None, "recovery": None}
-    except (urllib.error.URLError, OSError, TimeoutError):
-        return {"state": None, "error": None, "recovery": None}
-    if status_code != 200:
-        return {"state": None, "error": None, "recovery": None}
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
-        return {"state": None, "error": None, "recovery": None}
-    if not isinstance(payload, dict) or not isinstance(
-            payload.get("state"), str):
-        return {"state": None, "error": None, "recovery": None}
-    recovery = payload.get("recovery")
-    if not isinstance(recovery, dict):
-        recovery = None
+        status = console_um_adapter._read_auth_status(base_url, token)
+    except OperationError as exc:
+        return {"state": None, "error": None, "recovery": None,
+                "read_error": {"code": exc.code, "message": exc.message}}
     return {
-        "state": payload["state"],
-        "error": (payload.get("error")
-                  if isinstance(payload.get("error"), str) else None),
-        "recovery": (None if recovery is None else {
-            "state": (recovery.get("state")
-                      if isinstance(recovery.get("state"), str) else None),
-            "pause_reason": (recovery.get("pause_reason")
-                             if isinstance(recovery.get("pause_reason"), str)
-                             else None),
-        }),
+        "state": status["state"],
+        "error": status["error"],
+        "recovery": status["recovery"],
+        "read_error": None,
     }
 
 
@@ -305,9 +285,11 @@ def _terminal_login_failure(status):
         if not isinstance(reason, str):
             continue
         if reason.startswith(_MANUAL_TAKEOVER_PREFIX):
-            manual = reason
-            break
-        if reason in _MANUAL_REASONS:
+            if reason[len(_MANUAL_TAKEOVER_PREFIX):] in _TERMINAL_MANUAL_REASONS:
+                manual = reason
+                break
+            continue
+        if reason in _TERMINAL_MANUAL_REASONS:
             manual = _MANUAL_TAKEOVER_PREFIX + reason
             break
     if manual is not None:
@@ -320,16 +302,39 @@ def _terminal_login_failure(status):
     return None
 
 
+def _terminal_status_read_failure(status):
+    """Map a status-read failure that waiting cannot fix to an error.
+
+    A rejected control header (``control_denied``) and a malformed response
+    (``status_schema``) are configuration/data errors: polling again cannot
+    produce a different result. Transient read failures
+    (``status_unreachable`` / ``status_query_failed``) stay within the poll
+    budget and are reported by the final timeout message.
+    """
+    read_error = status.get("read_error")
+    if not isinstance(read_error, dict):
+        return None
+    code = read_error.get("code")
+    if code not in ("control_denied", "status_schema"):
+        return None
+    return OperationError(
+        code,
+        "无法读取认证状态，登录等待已结束：%s"
+        % (read_error.get("message") or code))
+
+
 def _wait_login_valid(base_url, token, ctx, budget_s, interval_s):
     """Poll auth status until valid or the console budget is exhausted.
 
-    Returns (state, waited_s, at_recheck). state == "valid" means the login
-    settled; anything else is the budget-exhaustion outcome where state is
-    the single recheck result (None when even the recheck was unreachable).
-    A terminal manual-takeover or exhausted-recovery failure raises the
-    mapped OperationError immediately; an operator cancel raises
-    OperationCancelled. Both restore the service first instead of waiting
-    for the budget.
+    Returns (state, waited_s, at_recheck, read_error). state == "valid"
+    means the login settled; anything else is the budget-exhaustion outcome
+    where state is the single recheck result (None when even the recheck was
+    unreachable). A terminal manual-takeover or exhausted-recovery failure
+    raises the mapped OperationError immediately; an operator cancel raises
+    OperationCancelled. A configuration/schema status-read failure also ends
+    the wait immediately, while a transient read failure keeps polling and is
+    carried in ``read_error`` for the timeout message. Both restore the
+    service first instead of waiting for the budget.
     Cooperative cancel: the event is checked before every poll and before
     the recheck, so a cancelled run stops polling and restores as usual.
     """
@@ -340,7 +345,11 @@ def _wait_login_valid(base_url, token, ctx, budget_s, interval_s):
             ctx.raise_if_cancelled()
         status = _read_auth_status(base_url, token)
         if status["state"] == "valid":
-            return status["state"], time.monotonic() - started, False
+            return (status["state"], time.monotonic() - started, False,
+                    None)
+        read_failure = _terminal_status_read_failure(status)
+        if read_failure is not None:
+            raise read_failure
         if _login_cancelled(status):
             raise OperationCancelled()
         failure = _terminal_login_failure(status)
@@ -354,13 +363,17 @@ def _wait_login_valid(base_url, token, ctx, budget_s, interval_s):
         ctx.raise_if_cancelled()
     status = _read_auth_status(base_url, token)
     if status["state"] == "valid":
-        return status["state"], time.monotonic() - started, True
+        return (status["state"], time.monotonic() - started, True, None)
+    read_failure = _terminal_status_read_failure(status)
+    if read_failure is not None:
+        raise read_failure
     if _login_cancelled(status):
         raise OperationCancelled()
     failure = _terminal_login_failure(status)
     if failure is not None:
         raise OperationError(*failure)
-    return status["state"], time.monotonic() - started, True
+    return (status["state"], time.monotonic() - started, True,
+            status.get("read_error"))
 
 
 def _restore_service_state(ctx, started_by_us):
@@ -415,8 +428,10 @@ def _success_note(waited, at_recheck, fact, login_skipped):
     return "；".join(parts)
 
 
-def _timeout_message(final_state, waited, fact):
+def _timeout_message(final_state, waited, fact, read_error=None):
     observed = final_state if final_state else "不可达"
+    if isinstance(read_error, dict) and read_error.get("code"):
+        observed += "（读取失败：%s）" % read_error["code"]
     return ("登录在控制台等待上限内未确认完成（等待 %.1fs，复查状态=%s）；"
             "控制台超时不保证后端线程已结束，实际状态可能仍在变化；%s"
             % (waited, observed, fact))
@@ -472,6 +487,7 @@ def relogin_um(target, params, ctx=None):
         if verify_state == "valid":
             login_skipped = True
             state, waited, at_recheck = "valid", 0.0, False
+            read_error = None
             _report(ctx, "当前账号有效，无需重新登录，未发送登录请求")
         elif verify_state in ("needs_login", "rejected"):
             # Phase 3: the single force re-login entry, only after a
@@ -480,7 +496,7 @@ def relogin_um(target, params, ctx=None):
             _post_force_login(base_url, token)
             _report(ctx, "登录请求已被 chat2api 接受（202），开始等待登录完成")
             # Phase 4 + 5: bounded cooperative polling with a final recheck.
-            state, waited, at_recheck = _wait_login_valid(
+            state, waited, at_recheck, read_error = _wait_login_valid(
                 base_url, token, ctx, login_budget_s, interval_s)
         else:
             raise OperationError(
@@ -499,7 +515,7 @@ def relogin_um(target, params, ctx=None):
         # Console budget exhausted; the recheck state is reported as-is.
         raise OperationError(
             "login_timeout_not_settled",
-            _timeout_message(state, waited, fact))
+            _timeout_message(state, waited, fact, read_error))
     if kind == _RESTORE_FAILED:
         # Authentication is valid but restore could not be confirmed:
         # report the residual instead of a fake full success.
