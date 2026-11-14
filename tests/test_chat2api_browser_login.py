@@ -1085,6 +1085,72 @@ class SessionLifecycleTests(unittest.TestCase):
     def test_default_idle_timeout_is_five_minutes(self):
         self.assertEqual(chat2api.LOGIN_IDLE_TIMEOUT_S, 300.0)
 
+    def test_duo_wait_keeps_the_idle_timeout_alive(self):
+        # ticket #41：Duo 推送等待是真实进展，手机批准可能超过空闲
+        # 超时；等待期间必须刷新 idle deadline，不能按 idle_timeout 结束。
+        class _SlowDuoApproval(_FakeSite):
+            def __init__(self):
+                super().__init__(DUO_URL)
+                self.started = time.monotonic()
+
+            def wait_for_timeout(self, ms):
+                time.sleep(ms / 1000.0)
+                if time.monotonic() - self.started >= 0.2:
+                    self.navigate(OPENWEBUI_HOME)
+                    self.set_token("duo-approved-token")
+
+        harness = _Harness(_SlowDuoApproval())
+        with mock.patch.object(chat2api, "LOGIN_IDLE_TIMEOUT_S", 0.05), \
+                mock.patch.object(chat2api, "LOGIN_POLL_INTERVAL_MS", 10):
+            token = harness.run(timeout_s=2)
+
+        self.assertEqual(token, "duo-approved-token")
+        self.assertIn("awaiting_duo", harness.phases())
+        self.assertEqual(harness.manual_reasons(), [])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+    def test_navigation_failure_is_retried_once_before_manual(self):
+        site = _build_site()
+        site.url = ""
+        site.goto_calls = []
+
+        def flaky_goto(url, wait_until=None, timeout=None):
+            site.goto_calls.append(url)
+            if len(site.goto_calls) == 1:
+                raise RuntimeError("navigation failed")
+            site.url = OPENWEBUI_URL
+
+        site.goto = flaky_goto
+        harness = _Harness(site)
+
+        token = harness.run()
+
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(site.goto_calls, [BASE_URL, BASE_URL])
+        self.assertEqual(harness.manual_reasons(), [])
+
+    def test_navigation_failure_is_bounded_and_then_manual(self):
+        site = _build_site()
+        site.url = ""
+        site.goto_calls = []
+
+        def always_failing_goto(url, wait_until=None, timeout=None):
+            site.goto_calls.append(url)
+            raise RuntimeError("navigation failed")
+
+        site.goto = always_failing_goto
+        harness = _Harness(site)
+
+        with self.assertRaises(chat2api.LoginStalled) as ctx:
+            harness.run(timeout_s=1)
+
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:unrecognized_page")
+        self.assertEqual(site.goto_calls, [BASE_URL, BASE_URL])
+        self.assertEqual(harness.manual_reasons(), ["unrecognized_page"])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
     def test_total_budget_still_ends_the_session_before_the_idle_timeout(self):
         site = _FakeSite(OPENWEBUI_URL)
         harness = _Harness(site)
@@ -1161,6 +1227,7 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertEqual(ctx.exception.reason, "browser_cleanup_failed")
         self.assertIsInstance(ctx.exception.__cause__, chat2api.LoginStalled)
         self.assertEqual(ctx.exception.__cause__.reason, "timeout")
+        self.assertIs(ctx.exception.primary, ctx.exception.__cause__)
         self.assertIn("timeout", str(ctx.exception))
         self.assertEqual(harness.reported, [harness.created[0], None])
         self.assertTrue(harness.created[0].closed)
@@ -1478,6 +1545,48 @@ class ProfileSingleInstanceLockTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(results.get("token"), "fresh-token")
         self.assertEqual(contexts, [self.profile])
+
+    def test_missing_lock_primitive_is_not_reported_as_busy(self):
+        # ticket #41：没有 OS 锁原语是配置错误，不是另一个登录
+        # 会话占用；必须报告可读的 unavailable 原因。
+        with (
+            mock.patch.object(chat2api, "find_edge",
+                              return_value="fake-edge"),
+            mock.patch.object(
+                chat2api, "_profile_login_lock_primitive",
+                return_value=(None, None)),
+        ):
+            with self.assertRaises(chat2api.LoginUnavailable) as caught:
+                chat2api.browser_login(
+                    BASE_URL, self.profile, 1,
+                    context_factory=lambda _edge, _profile: self.fail(
+                        "a missing lock primitive must not open a browser"),
+                    process_lister=self._empty_lister,
+                    process_signal=self._never_signal,
+                )
+        self.assertEqual(caught.exception.reason, "login_lock_unavailable")
+        self.assertIn("lock primitive", caught.exception.detail)
+
+    def test_lock_file_error_is_not_reported_as_busy(self):
+        # ticket #41：锁文件不可创建/读取是文件系统错误，不能伪装成
+        # login_already_running。
+        with (
+            mock.patch.object(chat2api, "find_edge",
+                              return_value="fake-edge"),
+            mock.patch.object(
+                chat2api.os, "open",
+                side_effect=OSError("permission denied")),
+        ):
+            with self.assertRaises(chat2api.LoginUnavailable) as caught:
+                chat2api.browser_login(
+                    BASE_URL, self.profile, 1,
+                    context_factory=lambda _edge, _profile: self.fail(
+                        "a lock file error must not open a browser"),
+                    process_lister=self._empty_lister,
+                    process_signal=self._never_signal,
+                )
+        self.assertEqual(caught.exception.reason, "login_lock_file_error")
+        self.assertIn("permission denied", caught.exception.detail)
 
     def test_a_different_profile_is_not_blocked(self):
         other_profile = tempfile.mkdtemp(prefix="chat2api-other-profile-")

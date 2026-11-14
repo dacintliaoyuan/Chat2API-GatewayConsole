@@ -362,6 +362,9 @@ LOGIN_CLICK_TIMEOUT_MS = 15000
 LOGIN_CLICK_OBSERVE_TIMEOUT_S = 8.0
 LOGIN_STAGE_SETTLE_TIMEOUT_S = 20.0
 LOGIN_MAX_CLICKS_PER_STAGE = 2
+# Ticket #41: a failed first navigation is retried once before the unknown
+# page is treated as a manual takeover; the retry is bounded.
+LOGIN_NAVIGATION_ATTEMPTS = 2
 # A session with no observable progress for five minutes is stuck and must
 # release its browser instead of holding it for the caller's total budget (30
 # minutes on the dedicated instance).
@@ -370,6 +373,12 @@ LOGIN_IDLE_TIMEOUT_S = 300.0
 # once. The returned code keeps the reason so the operator can decide between a
 # retry (a new round) and an on-demand visible display.
 MANUAL_TAKEOVER_REQUIRED_PREFIX = "manual_takeover_required:"
+# Ticket #41: only these stages end THIS round at once. A click the page
+# swallowed or a control the session could not recognize leaves the automatic
+# flow stopped but the token poll running, so it is a soft manual signal.
+LOGIN_TERMINAL_MANUAL_REASONS = frozenset((
+    "umpass_mfa_required", "umpass_prefill_missing", "unrecognized_page"))
+LOGIN_SOFT_MANUAL_PREFIX = "manual_takeover:"
 
 # Opt-in "raw upstream catalog, fresh, no local virtual aliases" contract used
 # by the public share entry. Behavior-neutral for all other consumers: they
@@ -1298,7 +1307,8 @@ def _reauth_lock_primitive(platform=None, importer=None):
         return None, None
 
 
-def _acquire_reauth_lock(path: str, primitive=None, wait_s=None):
+def _acquire_reauth_lock(path: str, primitive=None, wait_s=None,
+                          error_sink=None):
     """Cross-process mutex for the slot read-modify-write (A13-3, R13-1).
 
     The lease below is advisory and long-lived, so it cannot make the acquire step
@@ -1327,7 +1337,10 @@ def _acquire_reauth_lock(path: str, primitive=None, wait_s=None):
     ``REAUTH_LOCK_WAIT_S``; the login-browser profile lock passes ``0.0`` so a
     second session is refused immediately. Returns the handle, or None when the lock
     could not be taken within the wait (or no OS primitive exists); the caller
-    must then refuse the session rather than guess.
+    must then refuse the session rather than guess. When ``error_sink`` is given it
+    is filled with ``reason``/``detail`` ONLY for a configuration or filesystem
+    error; plain contention leaves it empty, because the caller must not report a
+    held lock as a broken host.
     """
     if primitive is None:
         primitive = _reauth_lock_primitive()
@@ -1336,6 +1349,12 @@ def _acquire_reauth_lock(path: str, primitive=None, wait_s=None):
         _logger.warning(
             "reauthentication lock primitive unavailable on platform=%s - "
             "refusing sessions rather than skipping the mutex", sys.platform)
+        if error_sink is not None:
+            error_sink.update({
+                "reason": "lock_primitive_unavailable",
+                "detail": "OS file lock primitive is unavailable on platform=%s"
+                          % sys.platform,
+            })
         return None
     wait_s = REAUTH_LOCK_WAIT_S if wait_s is None else max(0.0, float(wait_s))
     lock_path = "%s.lock" % path
@@ -1350,13 +1369,25 @@ def _acquire_reauth_lock(path: str, primitive=None, wait_s=None):
         if kind == "fcntl":
             try:
                 os.fchmod(fd, 0o600)
-            except OSError:
+            except OSError as exc:
                 _logger.warning(
                     "could not restrict reauthentication lock permissions "
                     "path=%s - refusing sessions", lock_path)
                 os.close(fd)
+                if error_sink is not None:
+                    error_sink.update({
+                        "reason": "lock_file_error",
+                        "detail": "could not restrict lock permissions on %s: %s"
+                                  % (lock_path, exc),
+                    })
                 return None
-    except OSError:
+    except OSError as exc:
+        if error_sink is not None:
+            error_sink.update({
+                "reason": "lock_file_error",
+                "detail": "could not open lock file %s: %s"
+                          % (lock_path, exc),
+            })
         return None
     try:
         if kind == "msvcrt":
@@ -1375,11 +1406,17 @@ def _acquire_reauth_lock(path: str, primitive=None, wait_s=None):
                     # correct move (returning None here refused a free lock).
                     pass
             os.lseek(fd, 0, os.SEEK_SET)
-    except OSError:
+    except OSError as exc:
         try:
             os.close(fd)
         except OSError:
             pass
+        if error_sink is not None:
+            error_sink.update({
+                "reason": "lock_file_error",
+                "detail": "could not prepare lock file %s: %s"
+                          % (lock_path, exc),
+            })
         return None
     deadline = time.time() + wait_s
     while True:
@@ -1568,17 +1605,35 @@ def _acquire_profile_login_lock(profile_dir: str):
     No waiting: ticket #11 explicitly allows a second request to be REJECTED
     instead of joined. The lock is taken BEFORE any stale-browser cleanup and
     before the browser opens, and is held for the whole session.
+
+    ``None`` means the profile is genuinely held by another session (or by this
+    process). A missing OS lock primitive or an unreadable/uncreatable lock file
+    is a configuration/filesystem error and raises ``LoginUnavailable`` with a
+    readable reason instead of masquerading as ``login_already_running``
+    (ticket #41).
     """
     key = _profile_login_lock_key(profile_dir)
     with _profile_login_locks_guard:
         if key in _profile_login_locks:
             return None
+        primitive = _profile_login_lock_primitive()
+        if primitive[1] is None:
+            raise LoginUnavailable(
+                "login_lock_unavailable",
+                "OS file lock primitive is unavailable on platform=%s"
+                % sys.platform)
+        failure = {}
         handle = _acquire_reauth_lock(
             os.path.join(os.path.realpath(os.path.abspath(profile_dir)),
                          PROFILE_LOGIN_LOCK_STEM),
-            primitive=_profile_login_lock_primitive(),
-            wait_s=0.0)
+            primitive=primitive,
+            wait_s=0.0,
+            error_sink=failure)
         if handle is None:
+            if failure:
+                raise LoginUnavailable(
+                    "login_lock_file_error", failure.get("detail") or
+                    "could not acquire the profile login lock file")
             return None
         handle.profile_key = key
         _profile_login_locks[key] = handle
@@ -2345,6 +2400,21 @@ class LoginCleanupFailed(RuntimeError):
         self.primary = primary
 
 
+def _login_failure_primary(exc):
+    """A readable primary outcome from a session exception (ticket #41).
+
+    ``LoginCleanupFailed.primary`` keeps the exception that actually ended the
+    round; this projects its reason (or class name when it has none) so status
+    and /health can report both the cleanup failure and the primary outcome.
+    """
+    if exc is None:
+        return None
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, str) and reason:
+        return reason
+    return type(exc).__name__
+
+
 class _LoginCancelSignal:
     """OR of the shutdown event and the explicit login-cancel event."""
 
@@ -2613,11 +2683,21 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             if on_context:
                 on_context(ctx)
             page = _LoginPage(ctx.pages[0] if ctx.pages else ctx.new_page())
-            try:
-                page.bring_to_front()
-                page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
-            except Exception as e:
-                print(f"[warn] Failed to load page (may still be redirecting): {e}")
+            navigation_error = None
+            for attempt in range(LOGIN_NAVIGATION_ATTEMPTS):
+                try:
+                    page.bring_to_front()
+                    page.goto(base_url, wait_until="domcontentloaded",
+                              timeout=30000)
+                    navigation_error = None
+                    break
+                except Exception as e:
+                    navigation_error = e
+                    if attempt + 1 < LOGIN_NAVIGATION_ATTEMPTS:
+                        print(f"[warn] Failed to load page, retrying: {e}")
+            if navigation_error is not None:
+                print("[warn] Failed to load page (may still be "
+                      f"redirecting): {navigation_error}")
 
             deadline = time.time() + timeout_s
             idle_deadline = time.monotonic() + LOGIN_IDLE_TIMEOUT_S
@@ -2688,7 +2768,10 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                 if stage == "duo":
                     # Auto-approved for a trusted device; a prompt that wants
                     # a code is the human's step. Never clicked either way.
+                    # Ticket #41: waiting on the Duo push IS progress - the
+                    # phone approval may take longer than the idle timeout.
                     stage_seen.setdefault(stage, time.time())
+                    mark_progress()
                     note("awaiting_duo", origin=url)
                 elif stage == "unknown":
                     stage_seen.setdefault(stage, time.time())
@@ -3499,6 +3582,9 @@ class Proxy:
         self._auth_condition = threading.Condition()
         self._auth_state = "valid" if self.bearer() else "needs_login"
         self._auth_error = None
+        # Ticket #41: the primary session outcome (timeout/manual/cancel/...)
+        # that a terminal LoginCleanupFailed masked; None when there is none.
+        self._auth_failure_primary = None
         self._auth_thread = None
         self._browser_context = None
         self._shutdown_event = threading.Event()
@@ -3619,12 +3705,16 @@ class Proxy:
             login = dict(self._auth_login) if self._auth_login else None
             gate = dict(self._auth_gate) if self._auth_gate else None
             error = self._auth_error
+            primary = self._auth_failure_primary
             recovery = dict(self._recovery)
             window = dict(self._login_window) if self._login_window else None
         return {
             "state": state,
             "label": self._auth_label(state, evidence, login),
             "error": error,
+            # Ticket #41: the primary outcome a terminal LoginCleanupFailed
+            # masked (timeout/manual/cancel/...), None otherwise.
+            "primary": primary,
             "evidence": evidence,
             "login": login,
             "gate": gate,
@@ -3970,7 +4060,11 @@ class Proxy:
             "models": len(cached.get("data", [])) if cached else 0,
             "authentication": {"state": status["state"],
                                "label": status["label"],
-                               "error": manual_error},
+                               "error": manual_error,
+                               # Ticket #41: the primary session outcome a
+                               # cleanup failure masked, so /health carries
+                               # both reasons.
+                               "primary": status["primary"]},
             # §8.4 additive: the auth-watch thread's liveness and last
             # round only — no credential, no round content.
             "watch": status["watch"],
@@ -4053,13 +4147,16 @@ class Proxy:
                     (parsed.scheme, parsed.netloc, parsed.path, "", ""))
             self._auth_login = progress
             if progress.get("manual_reason"):
-                # Ticket #15: the console-visible error code must be the same
-                # ``manual_takeover_required:<reason>`` the terminal round
-                # publishes, so a status/health read before the round's finally
-                # block still names the manual step correctly.
-                self._auth_error = (
-                    "%s%s" % (MANUAL_TAKEOVER_REQUIRED_PREFIX,
-                              progress["manual_reason"]))
+                # Ticket #15/#41: only a true manual stage publishes the
+                # terminal ``manual_takeover_required:<reason>`` code. A soft
+                # manual signal (a swallowed click, an unrecognized control)
+                # names the human step without ending the round: the token poll
+                # keeps running.
+                reason = progress["manual_reason"]
+                prefix = (MANUAL_TAKEOVER_REQUIRED_PREFIX
+                          if reason in LOGIN_TERMINAL_MANUAL_REASONS
+                          else LOGIN_SOFT_MANUAL_PREFIX)
+                self._auth_error = "%s%s" % (prefix, reason)
 
     def _session_is_current(self, generation):
         with self._auth_condition:
@@ -4177,10 +4274,17 @@ class Proxy:
         self._recovery["state"] = "exhausted"
         self._recovery["next_attempt_epoch"] = None
         self._recovery["pause_reason"] = pause_reason
+        # Ticket #41: a stop/refusal is not a cleanup failure; do not keep
+        # a previous round's masked primary outcome.
+        self._auth_failure_primary = None
         self._auth_condition.notify_all()
 
-    def _fail_recovery_locked(self, reason):
-        """End the cycle with an honest failure reason; lock held (A3/A6)."""
+    def _fail_recovery_locked(self, reason, primary=None):
+        """End the cycle with an honest failure reason; lock held (A3/A6).
+
+        ``primary`` is the readable session outcome a cleanup failure masked
+        (ticket #41); it is None for ordinary failures.
+        """
         now = self._recovery_now()
         self._recovery["state"] = "exhausted"
         self._recovery["next_attempt_epoch"] = None
@@ -4189,6 +4293,7 @@ class Proxy:
         self._recovery["last_failure_reason"] = reason
         self._auth_state = "failed"
         self._auth_error = reason
+        self._auth_failure_primary = primary
         self._auth_condition.notify_all()
 
     def _retry_recovery_locked(self, reason):
@@ -4228,12 +4333,11 @@ class Proxy:
         if thread is not None and thread.is_alive():
             state = self._recovery["state"]
             if state in ("running", "waiting"):
-                if not force or state == "running":
-                    return True
-                # An explicit manual retry while the cycle is only WAITING
-                # for a refused gate may open a new cycle; the old waiting
-                # thread is woken and exits without opening a window.
-                self._recovery_wake.set()
+                # Ticket #41 (spec #8 story 12): a repeated explicit login
+                # joins the CURRENT round, including a round that is only
+                # waiting for a refused gate. It must not open a second
+                # cycle or reset the 6-session budget.
+                return True
             # A thread that already published valid/idle (or a terminal pause)
             # is still finishing its finally block. It is NOT the cycle to
             # join: start a new one so a fresh 401 never reuses the finished
@@ -4252,6 +4356,7 @@ class Proxy:
             "last_failure_reason": None,
             "pause_reason": None,
         })
+        self._auth_failure_primary = None
         _logger.info("reauthentication cycle started round=%s force=%s thread=%s",
                      self._recovery["round"], force,
                      threading.current_thread().name)
@@ -4330,15 +4435,18 @@ class Proxy:
     def _perform_recovery_session(self, generation, login_cancel):
         """Open ONE login session and classify its outcome (A2).
 
-        Returns ``(outcome, reason)`` where outcome is ``valid`` (credentials
-        committed), ``manual`` (the window needs a human), ``rejected`` (the
-        upstream explicitly refused the submitted account/password),
-        ``unavailable`` (the browser cannot be used), ``transient`` (a network /
-        browser / closed-window failure that may be reopened), ``cancelled`` (the
-        operator explicitly cancelled THIS round), ``terminal`` (a failure that
-        cannot produce different evidence, including a browser context that could
-        not be released) or ``superseded`` (shutdown or a newer cycle won the
-        final commit race).
+        Returns ``(outcome, reason, primary)`` where outcome is ``valid``
+        (credentials committed), ``manual`` (the window needs a human),
+        ``rejected`` (the upstream explicitly refused the submitted
+        account/password), ``unavailable`` (the browser cannot be used),
+        ``busy`` (another process owns this profile's login browser: a throttle,
+        not a failure), ``transient`` (a network / browser / closed-window
+        failure that may be reopened), ``cancelled`` (the operator explicitly
+        cancelled THIS round), ``terminal`` (a failure that cannot produce
+        different evidence, including a browser context that could not be released)
+        or ``superseded`` (shutdown or a newer cycle won the final commit
+        race). ``primary`` is the readable primary outcome only when a
+        ``LoginCleanupFailed`` masked it; otherwise it is None.
         """
         try:
             token = browser_login(
@@ -4351,43 +4459,47 @@ class Proxy:
                 on_progress=self._note_login_progress,
             )
         except LoginCancelled as exc:
-            return "cancelled", exc.reason
+            return "cancelled", exc.reason, None
         except LoginBusy as exc:
             # Another process already owns this profile's login browser: it is
             # a throttle, never a credential verdict, and this instance must
-            # never open a second browser (ticket #11).
-            return "transient", exc.reason
+            # never open a second browser (ticket #11). Ticket #41 keeps it
+            # out of the failure budget and preserves the reason.
+            return "busy", exc.reason, None
         except LoginStalled as exc:
-            return "manual", exc.reason
+            return "manual", exc.reason, None
         except LoginCredentialRejected as exc:
-            return "rejected", exc.reason
+            return "rejected", exc.reason, None
         except LoginUnavailable as exc:
-            return "unavailable", exc.reason
+            return "unavailable", exc.reason, None
         except LoginCleanupFailed as exc:
             # The browser context could not be released: a residual browser
             # may still occupy memory, so report the cleanup failure as a
-            # terminal outcome instead of retrying it.
-            return "terminal", exc.reason
+            # terminal outcome instead of retrying it. Ticket #41 keeps the
+            # primary outcome so status/health can report both.
+            return ("terminal", exc.reason,
+                    _login_failure_primary(exc.primary))
         except LoginWindowClosed as exc:
-            return "transient", exc.reason
+            return "transient", exc.reason, None
         except (requests.RequestException, TimeoutError, OSError) as exc:
-            return "transient", type(exc).__name__
+            return "transient", type(exc).__name__, None
         except Exception as exc:
             # A closed target can surface from any page operation; it is the
             # transient window-closed signal, never a credential verdict.
             if "closed" in str(exc).lower():
-                return "transient", "window_closed"
+                return "transient", "window_closed", None
             # An unclassified failure is terminal: retrying an unknown state
             # could repeat the same wrong action.
-            return "terminal", type(exc).__name__
+            return "terminal", type(exc).__name__, None
         try:
             config = self.probe_config() if self.args.use_api_key else None
             api_key = fetch_api_key(self.base_url, token, config) \
                 if self.args.use_api_key else None
         except Exception as exc:
-            return "terminal", type(exc).__name__
-        return self._commit_credentials(generation, token, api_key,
-                                        login_cancel)
+            return "terminal", type(exc).__name__, None
+        outcome, reason = self._commit_credentials(
+            generation, token, api_key, login_cancel)
+        return outcome, reason, None
 
     def _commit_credentials(self, generation, token, api_key, login_cancel):
         """Serial final commit: save + publish, or discard after shutdown (A6).
@@ -4580,7 +4692,7 @@ class Proxy:
                             self._auth_state = "logging_in"
                             self._auth_error = None
                             self._auth_condition.notify_all()
-                outcome, detail = self._perform_recovery_session(
+                outcome, detail, primary = self._perform_recovery_session(
                     generation, login_cancel)
                 # Release the lease as soon as the session ends and BEFORE
                 # publishing its outcome: a waiter that observes the terminal
@@ -4606,6 +4718,7 @@ class Proxy:
                         succeeded = True
                         self._auth_state = "valid"
                         self._auth_error = None
+                        self._auth_failure_primary = None
                         self._auth_login = None
                         self._recovery.update({
                             "state": "idle",
@@ -4641,10 +4754,29 @@ class Proxy:
                         self._auth_login = None
                         self._stop_recovery_locked("cancelled")
                         return
+                    if outcome == "busy":
+                        # Ticket #41: another process owns the profile lock.
+                        # This attempt never opened a session, so it must not
+                        # consume the 6-session budget; keep the busy reason
+                        # visible and recheck like a shared-slot wait.
+                        if self._recovery["round"] != round_id:
+                            return
+                        if self._recovery["session_starts"] > 0:
+                            self._recovery["session_starts"] -= 1
+                        self._recovery["state"] = "waiting"
+                        self._recovery["next_attempt_epoch"] = None
+                        self._recovery["last_failure_epoch"] = (
+                            self._recovery_now())
+                        self._recovery["last_failure_reason"] = detail
+                        self._recovery["pause_reason"] = None
+                        self._auth_state = "needs_login"
+                        self._auth_error = detail
+                        self._auth_condition.notify_all()
+                        continue
                     if outcome != "transient":
                         # manual / rejected / unavailable / terminal:
                         # retrying cannot produce different evidence.
-                        self._fail_recovery_locked(detail)
+                        self._fail_recovery_locked(detail, primary)
                         return
                     if not self._retry_recovery_locked(detail):
                         return
@@ -4915,6 +5047,7 @@ class Proxy:
                 self._login_cancel_event.set()
                 self._auth_state = "cancelled"
                 self._auth_error = "cancelled"
+                self._auth_failure_primary = None
                 self._auth_login = None
                 self._recovery["state"] = "exhausted"
                 self._recovery["next_attempt_epoch"] = None
