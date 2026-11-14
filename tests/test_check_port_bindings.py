@@ -100,25 +100,48 @@ class ClassifyTest(unittest.TestCase):
         # their governed ports but hold no allocation, so a listener is reported
         # as UNREGISTERED instead of being silently accepted.
         self.assertNotIn(8310, audit.PORT_ALLOCATIONS)
-        self.assertNotIn(8097, audit.PORT_ALLOCATIONS)
+        # 2026-11-14: 8097 is now the display port, so it IS allocated.
+        self.assertIn(8097, audit.PORT_ALLOCATIONS)
         self.assertTrue(audit.is_governed(8317))  # old cliproxy port still governed
         self.assertFalse(audit.is_governed(445))
         self.assertFalse(audit.is_governed(49664))
 
-    def test_console_backend_moved_to_8001(self):
-        # 2026-11-01: the local console backend moved 8096 -> 8001.
-        self.assertEqual("usagesrv console backend",
-                         audit.PORT_ALLOCATIONS[8001][0])
-        self.assertTrue(audit.is_governed(8001))
-        # The old port stays governed (8090-8099) but holds no allocation:
-        # a listener there must be reported, never silently accepted.
+    def test_console_ports_are_registered(self):
+        # 2026-11-14: the cloud console moved 18096 -> 8096 and the display
+        # moved 5901 -> 8097, both inside the governed 8090-8099 segment.
+        self.assertEqual("usagesrv cloud console backend",
+                         audit.PORT_ALLOCATIONS[8096][0])
+        self.assertEqual("display x11vnc", audit.PORT_ALLOCATIONS[8097][0])
         self.assertTrue(audit.is_governed(8096))
-        self.assertNotIn(8096, audit.PORT_ALLOCATIONS)
+        self.assertTrue(audit.is_governed(8097))
         listeners = audit.parse_listeners(
-            "  TCP    127.0.0.1:8096    0.0.0.0:0    LISTENING    25044\n")
+            "  TCP    127.0.0.1:8096    0.0.0.0:0    LISTENING    25044\n"
+            "  TCP    127.0.0.1:8097    0.0.0.0:0    LISTENING    25045\n")
+        violations, info = audit.classify(listeners)
+        self.assertEqual([], violations)
+        self.assertTrue(any(line.startswith("OK") for line in info))
+
+    def test_legacy_console_ports_are_aliases_not_unregistered(self):
+        # Expand-contract (2026-11-14): during the one-release window the old
+        # ports are still legitimate listeners and must be reported as
+        # LEGACY-ALIAS, never as UNREGISTERED.
+        self.assertEqual(8096, audit.LEGACY_PORT_ALIASES[18096])
+        self.assertEqual(8097, audit.LEGACY_PORT_ALIASES[5901])
+        listeners = audit.parse_listeners(
+            "  TCP    127.0.0.1:18096    0.0.0.0:0    LISTENING    25044\n"
+            "  TCP    127.0.0.1:5901     0.0.0.0:0    LISTENING    25045\n")
+        violations, info = audit.classify(listeners)
+        self.assertEqual([], violations)
+        aliases = [line for line in info if line.startswith("LEGACY-ALIAS")]
+        self.assertEqual(2, len(aliases), info)
+
+    def test_a_legacy_alias_widened_binding_is_a_violation(self):
+        listeners = audit.parse_listeners(
+            "  TCP    0.0.0.0:18096    0.0.0.0:0    LISTENING    25044\n")
         violations, _ = audit.classify(listeners)
         self.assertEqual(1, len(violations))
-        self.assertIn("UNREGISTERED", violations[0])
+        self.assertIn("BINDING-MISMATCH", violations[0])
+        self.assertIn("18096", violations[0])
 
 
 if __name__ == "__main__":

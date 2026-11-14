@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Validate that Tailscale Serve exposes only the private console 18096.
+"""Validate that Tailscale Serve exposes only the private console 8096.
 
 The cloud machine must not use Funnel and must not add public listeners for
-80/443/8100/5901.  ``tailscale serve status --json`` is the authoritative
+80/443/8100/8097.  ``tailscale serve status --json`` is the authoritative
 view of Serve handlers.  This module is deliberately pure: it parses the JSON
 document and returns human-readable errors; the shell wrapper performs the
 ``tailscale`` commands.
+
+Expand-contract (2026-11-14): 8096 is the new default console port.  During the
+one-release window the wrapper may pass the legacy 18096 explicitly; this module
+validates whichever exact proxy it is told to expect.
 """
 from __future__ import annotations
 
 import json
 import sys
 
-EXPECTED_PROXY = "http://127.0.0.1:18096"
+EXPECTED_PROXY = "http://127.0.0.1:8096"
 EXPECTED_PORT = "443"
 
 
@@ -30,8 +34,8 @@ def _funnel_enabled(document):
     return any(value is not False for value in allow.values())
 
 
-def validate_serve_status(document):
-    """Return a list of policy violations; an empty list means exact 18096 only."""
+def validate_serve_status(document, expected_proxy=EXPECTED_PROXY):
+    """Return violations; an empty list means exactly the expected proxy only."""
     errors = []
     if not isinstance(document, dict):
         return ["serve status is not an object"]
@@ -69,8 +73,8 @@ def validate_serve_status(document):
     handler = handlers["/"]
     if not isinstance(handler, dict) or set(handler) != {"Proxy"}:
         errors.append("root handler must be a single proxy")
-    elif handler.get("Proxy") != EXPECTED_PROXY:
-        errors.append("root proxy must be " + EXPECTED_PROXY)
+    elif handler.get("Proxy") != expected_proxy:
+        errors.append("root proxy must be " + expected_proxy)
 
     if _funnel_enabled(document):
         errors.append("Funnel is enabled")

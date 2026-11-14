@@ -253,7 +253,7 @@ class LocalIsolatedRuntimeTests(unittest.TestCase):
             payload["choices"][0]["message"]["content"],
             "r19 isolated closure")
 
-        # E19-1-L2 / F25: the real 8000/8001/18096 chain may be listening
+        # E19-1-L2 / F25: the real 8000/8001/8096/8097 chain may be listening
         # while this test runs. The isolated package must use only its own
         # temporary ports, and its traffic must land on the fixture's upstream —
         # never on a production listener. Asserted from the fixture's own control

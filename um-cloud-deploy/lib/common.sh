@@ -54,6 +54,11 @@ UM_ATTRIBUTION_KEY="${UM_ATTRIBUTION_KEY:-$UM_ETC/share-attribution.key}"
 UM_DRAIN_BUDGET_S="${UM_DRAIN_BUDGET_S:-900}"
 UM_BROKER_DRAIN_MAX_S="${UM_BROKER_DRAIN_MAX_S:-90}"
 UM_HEALTH_TIMEOUT_S="${UM_HEALTH_TIMEOUT_S:-60}"
+# Expand-contract (2026-11-14): the cloud console defaults to 8096.  The
+# deployed console.env is authoritative (an existing deployment may still carry
+# the legacy 18096 explicitly for one release cycle), so the ops scripts never
+# hardcode a port that could disagree with the running service.
+CONSOLE_PORT_DEFAULT=8096
 
 log() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2
@@ -292,14 +297,41 @@ wait_established_zero() {
   done
 }
 
+console_port() {
+  local file="${UM_ETC:-/etc/um-share}/console.env"
+  local value="" found=0
+  if [ -r "$file" ]; then
+    value="$(sed -n 's/^[[:space:]]*USAGESRV_PORT[[:space:]]*=[[:space:]]*//p' "$file" \
+      | tail -n 1 | tr -d '\r')"
+    if [ -n "$value" ] \
+        || grep -Eq '^[[:space:]]*USAGESRV_PORT[[:space:]]*=' "$file"; then
+      found=1
+    fi
+  fi
+  if [ "$found" -eq 0 ]; then
+    printf '%s\n' "$CONSOLE_PORT_DEFAULT"
+    return 0
+  fi
+  case "$value" in
+    ''|*[!0-9]*)
+      die "$file: USAGESRV_PORT must be 1..65535 (actual=$value)" "$EX_DATAERR"
+      ;;
+  esac
+  if [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+    die "$file: USAGESRV_PORT must be 1..65535 (actual=$value)" "$EX_DATAERR"
+  fi
+  printf '%s\n' "$value"
+}
+
 health_gate() {
-  local console_code gateway_code
+  local console_code gateway_code port
+  port="$(console_port)" || return 1
   console_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
-    http://127.0.0.1:18096/ 2>/dev/null || true)"
+    "http://127.0.0.1:$port/" 2>/dev/null || true)"
   case "$console_code" in
     2??|3??|4??) ;;
     *)
-      log "console HTTP probe failed: $console_code"
+      log "console HTTP probe failed: $console_code (port $port)"
       return 1
       ;;
   esac

@@ -1,6 +1,6 @@
 # 网关控制台前端
 
-同一套源码按构建期角色产出两个控制台（[ADR 0001](../docs/adr/0001-one-frontend-two-consoles-build-time-role.md)）：本机控制台管理本机 UM（8000）与控制台宿主（8001），云端控制台管理云端分享 API（18096）。页面使用 TypeScript、Vite 和共享外壳 `src/shell/`，真实数据由各自后端提供。
+同一套源码按构建期角色产出两个控制台（[ADR 0001](../docs/adr/0001-one-frontend-two-consoles-build-time-role.md)）：本机控制台管理本机 UM（8000）与控制台宿主（8001），云端控制台管理云端分享 API（8096）。页面使用 TypeScript、Vite 和共享外壳 `src/shell/`，真实数据由各自后端提供。
 
 ## 开发
 

@@ -7,13 +7,26 @@
 # group.  The persistent Chromium profile belongs to the 8100 process, not to this
 # display process.
 #
+# Expand-contract (2026-11-14): x11vnc moved 5901 -> 8097.  console.env's
+# CONSOLE_DISPLAY_VNC_PORT is authoritative so the console proxy and x11vnc
+# never disagree; UM_VNC_PORT (the unit's new default) is the fallback, and the
+# legacy 5901 is still accepted as an explicit value for one release cycle.
+# Only that ONE key is read: the display service does not import the whole
+# console environment.
+#
 # The persistent VNC auth file is root-only.  systemd LoadCredential gives this
 # service a private read-only copy at $CREDENTIALS_DIRECTORY/vnc.passwd; the source
 # path is validated but never read by the service user.
 set -euo pipefail
 
 DISPLAY_NUM="${UM_DISPLAY:-:99}"
-VNC_PORT="${UM_VNC_PORT:-5901}"
+CONSOLE_ENV_FILE="${UM_CONSOLE_ENV_FILE:-/etc/um-share/console.env}"
+CONSOLE_VNC_PORT=""
+if [ -r "$CONSOLE_ENV_FILE" ]; then
+  CONSOLE_VNC_PORT="$(sed -n 's/^[[:space:]]*CONSOLE_DISPLAY_VNC_PORT[[:space:]]*=[[:space:]]*//p' \
+    "$CONSOLE_ENV_FILE" | tail -n 1 | tr -d '\r')"
+fi
+VNC_PORT="${CONSOLE_VNC_PORT:-${UM_VNC_PORT:-8097}}"
 VNC_AUTH_SOURCE="${UM_VNC_AUTH_SOURCE:-/etc/um-share/vnc.passwd}"
 VNC_AUTH_SOCKET="${UM_VNC_AUTH_SOCKET:-/run/um-share/vnc-auth.sock}"
 PYTHON="${UM_DEPLOY_PYTHON:-python3.14}"

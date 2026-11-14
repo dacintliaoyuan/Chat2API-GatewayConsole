@@ -232,7 +232,7 @@ _Avoid_: 管理会话、私网可达即可信
 _Avoid_: 主控制台、统一控制台
 
 **云端控制台 (Cloud console)**:
-云机上只管理云端 API 服务的控制台入口；与本地控制台共用前端代码，数据与操作目标各自归属，不经对方转发。入口为 `Open-CloudConsole.bat`（经专用 SSH 配置建 loopback 隧道到 18096），生产页是发布包内的 `web/dist`（cloud 角色，构建自 `web/dist-cloud`）。
+云机上只管理云端 API 服务的控制台入口；与本地控制台共用前端代码，数据与操作目标各自归属，不经对方转发。入口为 `Open-CloudConsole.bat`（经专用 SSH 配置建 loopback 隧道到 8096；一个发布周期内可用 `-CloudConsolePort 18096` 指向旧端口），生产页是发布包内的 `web/dist`（cloud 角色，构建自 `web/dist-cloud`）。
 _Avoid_: 远程管理本地、跨机统一控制台
 
 **控制台角色 (Console role)**:
@@ -272,7 +272,7 @@ _Avoid_: 本人独立注册域名、永久稳定承诺、免费即免备案
 _Avoid_: 分享预算保护（旧称）、预算告警即自动停费、日常更新强断、允许自动加预算
 
 **云端部署角色 (Cloud deployment role)**:
-由 `UM_SHARE_ROLE`/`UM_SHARE_DEPLOYMENT` 显式选择的 `local`（Windows 本机）或 `cloud`（Linux 云机）装配身份；未设置即 `local`，冲突或非法值在导入时拒绝。`cloud` 只装配 UM 分享动作与 `share-gateway` 服务控制；管理端口 `local` 默认 8001、`cloud` 默认 18096（`USAGESRV_PORT` 严格校验）。云端 `schema_version=2` 的 `unix_socket` 管理传输与 Windows `schema_version=1` 的 Named Pipe 配置分别有效，不得把 Unix 路径塞进 `pipe_name`。
+由 `UM_SHARE_ROLE`/`UM_SHARE_DEPLOYMENT` 显式选择的 `local`（Windows 本机）或 `cloud`（Linux 云机）装配身份；未设置即 `local`，冲突或非法值在导入时拒绝。`cloud` 只装配 UM 分享动作与 `share-gateway` 服务控制；管理端口 `local` 默认 8001、`cloud` 默认 8096（`USAGESRV_PORT` 严格校验；一个发布周期内旧 18096 仍是显式兼容值）。云端 `schema_version=2` 的 `unix_socket` 管理传输与 Windows `schema_version=1` 的 Named Pipe 配置分别有效，不得把 Unix 路径塞进 `pipe_name`。
 _Avoid_: 用前端隐藏卡片代替后端隔离、云端照搬整个私人 data 目录
 
 **Linux 平台适配 (Linux platform adaptation)**:

@@ -99,7 +99,12 @@ ROLE_LOCAL = "local"
 ROLE_CLOUD = "cloud"
 PORT_ENV = "USAGESRV_PORT"
 LOCAL_DEFAULT_PORT = 8001
-CLOUD_DEFAULT_PORT = 18096
+# Expand-contract (2026-11-14): the cloud console moved 18096 -> 8096 so the
+# listener sits inside the governed 8090-8099 segment.  During the one-release
+# window the old port is still accepted when USAGESRV_PORT names it explicitly;
+# it is never a second default and there is never a second listener.
+CLOUD_DEFAULT_PORT = 8096
+CLOUD_LEGACY_COMPAT_PORTS = frozenset({18096})
 
 
 class DeploymentRoleError(RuntimeError):
@@ -136,11 +141,13 @@ def _resolve_deployment_role(environ=None):
 def _resolve_port(role, environ=None):
     """Resolve the listen port with STRICT validation.
 
-    Unset -> 8001 for the local role, 18096 for the cloud role (the SSH
-    tunnel's local forwarding port, so it never collides with a local 8001).
-    A set value must be ASCII digits only and within 1..65535; anything
-    else (empty, sign, whitespace, hex, float, out of range) raises
-    DeploymentRoleError — never a silently coerced port.
+    Unset -> 8001 for the local role, 8096 for the cloud role (inside the
+    governed 8090-8099 console segment; the SSH tunnel forwards the same port,
+    so it never collides with a local 8001). A set value must be ASCII digits
+    only and within 1..65535; anything else (empty, sign, whitespace, hex,
+    float, out of range) raises DeploymentRoleError — never a silently coerced
+    port. The legacy 18096 remains an accepted explicit value for the
+    expand-contract window.
     """
     env = os.environ if environ is None else environ
     raw = env.get(PORT_ENV)

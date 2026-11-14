@@ -78,7 +78,7 @@ def free_port():
 
 # E19-1-05 step 2 / G17: the real deployment listeners. A fixture port that
 # happens to match one would collide with (or shadow) a production service.
-PRODUCTION_PORTS = frozenset({8000, 8001, 8100, 18096, 5901})
+PRODUCTION_PORTS = frozenset({8000, 8001, 8096, 8097, 8100, 18096, 5901})
 
 
 def distinct_free_ports(count):

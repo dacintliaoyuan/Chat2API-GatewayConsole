@@ -68,7 +68,7 @@ function New-FakeTunnelCommandLine {
     param(
         [string]$ConfigPath = $script:fake.ConfigPath,
         [string]$HostAlias = 'um-share-ecs',
-        [string]$Forward = '127.0.0.1:18096:127.0.0.1:18096'
+        [string]$Forward = '127.0.0.1:8096:127.0.0.1:8096'
     )
     return '"' + $script:fake.SshExe + '" -F "' + $ConfigPath + '" -N -L ' + $Forward + ' ' + $HostAlias
 }
@@ -84,8 +84,8 @@ function Write-FakeState {
         pid = $ProcessId
         started_utc = '2026-11-04T00:00:00Z'
         bind = '127.0.0.1'
-        port = 18096
-        target = '127.0.0.1:18096'
+        port = 8096
+        target = '127.0.0.1:8096'
         route = $Route
         ssh_exe = $script:fake.SshExe
         ssh_config = $ConfigPath
@@ -237,7 +237,7 @@ function Reset-Fake {
         HealthThrows = $false
         HealthSequence = @()
         Health = @{ Ok = $true; StatusCode = 200;
-            Content = '{"status":"ok","service":"usagesrv","port":18096}'; Detail = '' }
+            Content = '{"status":"ok","service":"usagesrv","port":8096}'; Detail = '' }
         HealthUris = [System.Collections.Generic.List[string]]::new()
         BootstrapCalls = 0
         BootstrapArgumentLine = ''
@@ -279,6 +279,25 @@ function Reset-Fake {
     $script:fake.Shortcut = $shortcut
     $script:fake.Shell = $shell
 }
+
+# Expand-contract (2026-11-14): the entry defaults to 8096, but an operator
+# may still point the tunnel at the legacy 18096 cloud port for one release
+# cycle.  The override must move the forward, the health URL and the state file
+# together, and dot-sourcing again must restore the new default.
+# Dot-sourcing also rebinds the entry's own $StatePath/$LogPath defaults, so the
+# test's isolated paths are saved and restored around this block.
+$savedStatePath = $script:statePath
+$savedLogPath = $script:logPath
+. $entry -Library -CloudConsolePort 18096
+Assert-Equal $script:CloudConsolePort 18096 'legacy override uses the explicit port'
+Assert-Equal $script:CloudConsoleTargetPort 18096 'legacy override targets the same cloud port'
+Assert-Equal $script:CloudConsoleHealthUrl 'http://127.0.0.1:18096/health' 'legacy override health URL follows the port'
+Assert-Match (Get-CloudTunnelArgumentLine -ConfigPath 'C:\fake\config' -HostAlias 'um-share-ecs') '-L 127\.0\.0\.1:18096:127\.0\.0\.1:18096' 'legacy override forwards the explicit port'
+. $entry -Library
+Assert-Equal $script:CloudConsolePort 8096 'default port is restored to 8096'
+Assert-Equal $script:CloudConsoleHealthUrl 'http://127.0.0.1:8096/health' 'default health URL follows 8096'
+$script:statePath = $savedStatePath
+$script:logPath = $savedLogPath
 
 function New-TestAdapter {
     return @{
@@ -584,9 +603,10 @@ $entryText = Get-Content -LiteralPath $entry -Raw -Encoding UTF8
 $batText = Get-Content -LiteralPath $bat -Raw -Encoding UTF8
 $gitignoreText = Get-Content -LiteralPath $gitignore -Raw -Encoding UTF8
 
-Assert-Match $entryText 'CloudConsolePort = 18096' 'entry uses loopback port 18096'
+Assert-Match $entryText 'CloudConsolePort = 8096' 'entry uses loopback port 8096'
+Assert-Match $entryText '\[ValidateRange\(1, 65535\)\]\[int\]\$CloudConsolePort = 8096' 'entry exposes the explicit CloudConsolePort switch'
 Assert-Match $entryText 'CloudConsoleBind = ''127\.0\.0\.1''' 'entry binds 127.0.0.1'
-Assert-Match $entryText 'http://localhost:18096/#overview' 'entry uses a browser host distinct from the default local console'
+Assert-Match $entryText 'http://localhost:8096/#overview' 'entry uses a browser host distinct from the default local console'
 Assert-Match $entryText 'aliyun-um-ecs\.conf' 'default SSH config is the dedicated file'
 Assert-Match $entryText 'um-share-ecs' 'default SSH host alias is the dedicated host'
 Assert-Match $entryText 'aliyun-um-ecs-public\.conf' 'public SSH config is a dedicated file'
@@ -643,7 +663,7 @@ $argumentLine = Get-CloudTunnelArgumentLine -ConfigPath $script:fake.ConfigPath 
 Assert-Match $argumentLine '-F "' 'argument line passes the config explicitly with -F'
 Assert-Match $argumentLine ([regex]::Escape($script:fake.ConfigPath)) 'argument line uses the dedicated config'
 Assert-Match $argumentLine '-N' 'argument line disables the remote command'
-Assert-Match $argumentLine '-L 127\.0\.0\.1:18096:127\.0\.0\.1:18096' 'argument line forwards loopback 18096'
+Assert-Match $argumentLine '-L 127\.0\.0\.1:8096:127\.0\.0\.1:8096' 'argument line forwards loopback 8096'
 Assert-Match $argumentLine '-o BatchMode=yes' 'argument line enforces BatchMode'
 Assert-Match $argumentLine '-o StrictHostKeyChecking=yes' 'argument line enforces strict host checking'
 Assert-Match $argumentLine '-o IdentitiesOnly=yes' 'argument line enforces IdentitiesOnly'
@@ -665,22 +685,22 @@ Assert-True (-not (Test-CloudTunnelCommandLine -CommandLine $publicCanonical -Co
     -HostAlias 'um-share-ecs' -Route 'private')) 'a public tunnel command line is not owned for the private route'
 Assert-True (-not (Test-CloudTunnelCommandLine -CommandLine $canonical -ConfigPath $script:fake.ConfigPath `
     -HostAlias 'um-share-ecs' -Route 'bogus')) 'an unknown route is never owned'
-$bareForward = '"C:\fake\ssh.exe" -F "' + $script:fake.ConfigPath + '" -N -L 18096:127.0.0.1:18096 um-share-ecs'
+$bareForward = '"C:\fake\ssh.exe" -F "' + $script:fake.ConfigPath + '" -N -L 8096:127.0.0.1:8096 um-share-ecs'
 Assert-True (Test-CloudTunnelCommandLine -CommandLine $bareForward -ConfigPath $script:fake.ConfigPath `
     -HostAlias 'um-share-ecs' -Route 'private') 'bare loopback forward is owned'
-$noSpace = '"C:\fake\ssh.exe" -F"' + $script:fake.ConfigPath + '" -N -L127.0.0.1:18096:127.0.0.1:18096 um-share-ecs'
+$noSpace = '"C:\fake\ssh.exe" -F"' + $script:fake.ConfigPath + '" -N -L127.0.0.1:8096:127.0.0.1:8096 um-share-ecs'
 Assert-True (Test-CloudTunnelCommandLine -CommandLine $noSpace -ConfigPath $script:fake.ConfigPath `
     -HostAlias 'um-share-ecs' -Route 'private') 'compact -F/-L forms are owned'
-$wrongHost = '"C:\fake\ssh.exe" -F "' + $script:fake.ConfigPath + '" -N -L 127.0.0.1:18096:127.0.0.1:18096 other-host'
+$wrongHost = '"C:\fake\ssh.exe" -F "' + $script:fake.ConfigPath + '" -N -L 127.0.0.1:8096:127.0.0.1:8096 other-host'
 Assert-True (-not (Test-CloudTunnelCommandLine -CommandLine $wrongHost -ConfigPath $script:fake.ConfigPath `
     -HostAlias 'um-share-ecs' -Route 'private')) 'a different host alias is not owned'
-$wrongForward = '"C:\fake\ssh.exe" -F "' + $script:fake.ConfigPath + '" -N -L 127.0.0.1:18096:127.0.0.1:8001 um-share-ecs'
+$wrongForward = '"C:\fake\ssh.exe" -F "' + $script:fake.ConfigPath + '" -N -L 127.0.0.1:8096:127.0.0.1:8001 um-share-ecs'
 Assert-True (-not (Test-CloudTunnelCommandLine -CommandLine $wrongForward -ConfigPath $script:fake.ConfigPath `
     -HostAlias 'um-share-ecs' -Route 'private')) 'a forward to 8001 is not owned'
-$noN = '"C:\fake\ssh.exe" -F "' + $script:fake.ConfigPath + '" -L 18096:127.0.0.1:18096 um-share-ecs'
+$noN = '"C:\fake\ssh.exe" -F "' + $script:fake.ConfigPath + '" -L 8096:127.0.0.1:8096 um-share-ecs'
 Assert-True (-not (Test-CloudTunnelCommandLine -CommandLine $noN -ConfigPath $script:fake.ConfigPath `
     -HostAlias 'um-share-ecs' -Route 'private')) 'an interactive ssh session is not owned'
-$noF = '"C:\fake\ssh.exe" -N -L 18096:127.0.0.1:18096 um-share-ecs'
+$noF = '"C:\fake\ssh.exe" -N -L 8096:127.0.0.1:8096 um-share-ecs'
 Assert-True (-not (Test-CloudTunnelCommandLine -CommandLine $noF -ConfigPath $script:fake.ConfigPath `
     -HostAlias 'um-share-ecs' -Route 'private')) 'a tunnel without -F is not owned'
 Assert-True (-not (Test-CloudTunnelCommandLine -CommandLine '' -ConfigPath $script:fake.ConfigPath `
@@ -707,24 +727,24 @@ $code = Invoke-Entry
 Assert-Equal $code 0 'cold start exits 0'
 Assert-Equal $script:fake.StartCalls 1 'cold start starts one tunnel'
 Assert-Equal $script:fake.BrowserCalls 1 'cold start opens one browser'
-Assert-Equal $script:fake.LastUrl 'http://localhost:18096/display/grant#console=ConsoleBootstrap_0123456789' 'cold start opens the bootstrap URL on isolated browser host'
+Assert-Equal $script:fake.LastUrl 'http://localhost:8096/display/grant#console=ConsoleBootstrap_0123456789' 'cold start opens the bootstrap URL on isolated browser host'
 Assert-Equal $script:fake.StopCalls 0 'cold start does not stop anything'
 Assert-Equal $script:fake.HealthCalls 1 'cold start performs one health check'
-Assert-Equal $script:fake.HealthUris[0] 'http://127.0.0.1:18096/health' 'health check targets loopback 18096'
+Assert-Equal $script:fake.HealthUris[0] 'http://127.0.0.1:8096/health' 'health check targets loopback 8096'
 Assert-Equal $script:fake.EffectiveCalls 1 'cold start validates the SSH config once'
 Assert-Equal $script:fake.TailscaleCalls 1 'cold start checks Tailscale once'
 Assert-Equal $script:fake.LockCalls 1 'cold start takes the entry lock'
 Assert-Equal $script:fake.UnlockCalls 1 'cold start releases the entry lock'
 Assert-Equal $script:fake.LockNames[0] 'Local\UMCloudConsoleEntry' 'entry lock name is fixed'
-Assert-Match $script:fake.ArgumentLine '-L 127\.0\.0\.1:18096:127\.0\.0\.1:18096' 'started ssh forwards loopback 18096'
+Assert-Match $script:fake.ArgumentLine '-L 127\.0\.0\.1:8096:127\.0\.0\.1:8096' 'started ssh forwards loopback 8096'
 Assert-Match $script:fake.ArgumentLine ([regex]::Escape($script:fake.ConfigPath)) 'started ssh uses the dedicated config'
 Assert-Equal $script:fake.StdoutPath (Join-Path (Split-Path -Parent $script:statePath) 'cloud-console-tunnel.stdout.log') 'stdout log stays next to state'
 Assert-Equal $script:fake.StderrPath (Join-Path (Split-Path -Parent $script:statePath) 'cloud-console-tunnel.stderr.log') 'stderr log stays next to state'
 Assert-StateExists 'cold start writes the state file'
 Assert-StatePid 4100 'state records the started pid'
 Assert-StateField 'bind' '127.0.0.1' 'state records loopback bind'
-Assert-StateField 'port' '18096' 'state records port 18096'
-Assert-StateField 'target' '127.0.0.1:18096' 'state records the forward target'
+Assert-StateField 'port' '8096' 'state records port 8096'
+Assert-StateField 'target' '127.0.0.1:8096' 'state records the forward target'
 Assert-StateField 'ssh_host' 'um-share-ecs' 'state records the host alias'
 Assert-LogContains 'open\.started' 'cold start logs the started event'
 Assert-LogContains 'open\.ready' 'cold start logs the ready event'
@@ -892,7 +912,7 @@ Assert-StateExists 'unhealthy owned tunnel keeps the state file'
 Assert-LogContains 'open\.timeout' 'unhealthy owned tunnel logs the failure'
 
 $script:fake.Health = @{ Ok = $true; StatusCode = 200;
-    Content = '{"status":"ok","service":"usagesrv","port":18096}'; Detail = '' }
+    Content = '{"status":"ok","service":"usagesrv","port":8096}'; Detail = '' }
 $second = Invoke-Entry
 Assert-Equal $second 0 'recovered tunnel exits 0'
 Assert-Equal $script:fake.StartCalls 0 'recovered tunnel is reused, not restarted'
@@ -1152,7 +1172,7 @@ Assert-StateExists 'a health reply from port 8001 keeps the tunnel'
 Reset-Fake
 Add-OwnTunnel -ProcessId 4200
 $script:fake.Health = @{ Ok = $true; StatusCode = 200;
-    Content = '{"status":"ok","service":"other","port":18096}'; Detail = '' }
+    Content = '{"status":"ok","service":"other","port":8096}'; Detail = '' }
 $code = Invoke-Entry
 Assert-Equal $code 4 'a health reply from another service is rejected'
 
@@ -1606,7 +1626,7 @@ Assert-Equal $code 1 'stop with an unreadable state process exits 1'
 Assert-Equal $script:fake.StopCalls 0 'stop with an unreadable state process kills nothing'
 Assert-StateExists 'stop with an unreadable state process keeps the state'
 
-# The state-file PID must not be killed when 18096 is owned by a different
+# The state-file PID must not be killed when 8096 is owned by a different
 # matching process: the listener would survive while stop reported success.
 Reset-Fake
 Add-OwnTunnel -ProcessId 4300
@@ -1751,9 +1771,9 @@ foreach ($mode in @('New', 'Adopt', 'State', 'Locked')) {
     Assert-Equal $script:fake.BootstrapCalls 1 "$mode signs once"
     Assert-Equal $script:fake.EffectiveCalls 1 "$mode validates SSH"
     Assert-Equal $script:fake.BootstrapSshExe $script:fake.SshExe "$mode uses resolved SSH"
-    Assert-Equal $script:fake.LastUrl 'http://localhost:18096/display/grant#console=ConsoleBootstrap_0123456789' "$mode uses separate cloud browser host"
+    Assert-Equal $script:fake.LastUrl 'http://localhost:8096/display/grant#console=ConsoleBootstrap_0123456789' "$mode uses separate cloud browser host"
     Assert-Equal ([Uri]$script:fake.LastUrl).Host 'localhost' "$mode browser differs from local 127.0.0.1 host"
-    Assert-Equal $script:fake.HealthUris[0] 'http://127.0.0.1:18096/health' "$mode health stays on IPv4 loopback"
+    Assert-Equal $script:fake.HealthUris[0] 'http://127.0.0.1:8096/health' "$mode health stays on IPv4 loopback"
     foreach ($flag in @('-T', '-F', 'BatchMode=yes', 'StrictHostKeyChecking=yes', 'IdentitiesOnly=yes', 'UserKnownHostsFile=', 'ClearAllForwardings=yes', '--console-session')) {
         Assert-True ($script:fake.BootstrapArgumentLine.Contains($flag)) "$mode bootstrap includes $flag"
     }
@@ -1804,7 +1824,7 @@ foreach ($suffix in @('', "`n", "`r`n")) {
         $script:fake.BootstrapResponse.Output = '/display/grant#console=' + ('a' * $length) + $suffix
         $code = Invoke-Entry
         Assert-Equal $code 0 "bootstrap length $length permits only helper print newline"
-        Assert-Equal $script:fake.LastUrl ('http://localhost:18096/display/grant#console=' + ('a' * $length)) 'browser URL excludes helper print newline'
+        Assert-Equal $script:fake.LastUrl ('http://localhost:8096/display/grant#console=' + ('a' * $length)) 'browser URL excludes helper print newline'
     }
 }
 

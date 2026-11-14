@@ -289,7 +289,7 @@ def _free_loopback_port():
     ``local.tests.test_local_composition._free_port``,
     ``tests.test_r19_cloud_root._free_port``) all exclude the production
     ports. This fourth one only bound port 0 and accepted whatever came back,
-    so a real 8000/8001/8100/18096/5901 could be handed to a real
+    so a real 8000/8001/8096/8097/8100/18096/5901 could be handed to a real
     ``chat2api.main()`` child.
     """
     from local.backend.config import FORBIDDEN_PORTS
@@ -326,7 +326,10 @@ class PortAllocatorConsistencyTests(unittest.TestCase):
             self.assertEqual(ports, reference,
                              "%s drifted from the production port set" % name)
         self.assertIn(8000, reference)
+        self.assertIn(8096, reference)
+        self.assertIn(8097, reference)
         self.assertIn(18096, reference)
+        self.assertIn(5901, reference)
 
     def test_the_new_allocator_never_returns_a_production_port(self):
         from local.backend.config import FORBIDDEN_PORTS
