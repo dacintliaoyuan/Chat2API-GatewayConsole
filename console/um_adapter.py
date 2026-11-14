@@ -25,6 +25,11 @@ auth state. 200 JSON is ``{"verify": "valid|rejected|needs_login|unknown",
 the login orchestration reuses the same verification request before it
 decides whether a browser login is needed.
 
+Ticket #15: ``um_auth_status`` also passes the ONE login window
+(``login_window_deadline_epoch`` / ``login_window_s``) through, so the
+console can show how long the current explicit round may still take. A
+malformed/missing window stays unknown (None), never 0.
+
 Handler contract matches the task layer: ``handler(target, params, ctx)``.
 Pure stdlib plus the shared console error type; import has no side effects.
 """
@@ -68,7 +73,7 @@ _VERIFY_NOTE = ("受限核验：经 chat2api 受限端点单次探测上游目�
                 "不武断等同过期")
 
 
-def _read_control_token():
+def _read_control_token(path=None):
     """Read the shared admin-control token file; never include its value or
     any file content in error messages. Three distinct facts, never merged
     (absent != unreadable != empty):
@@ -79,10 +84,14 @@ def _read_control_token():
       unknown, which must not masquerade as absence.
     * Readable but blank after strip -> ``control_token_empty``.
 
-    All three reject the query; none is an empty-success path.
+    All three reject the query; none is an empty-success path. ``path`` lets a
+    caller with its own deployment-specific token file (the cloud console uses
+    ``USAGE_CONTROL_TOKEN_FILE``) read the SAME file without a second parser;
+    the module constant stays the default for the local console and tests.
     """
+    token_file = CONTROL_TOKEN_FILE if path is None else path
     try:
-        with open(CONTROL_TOKEN_FILE, encoding="utf-8") as f:
+        with open(token_file, encoding="utf-8") as f:
             value = f.read().strip()
     except FileNotFoundError:
         raise OperationError(
@@ -100,27 +109,37 @@ def _read_control_token():
     return value
 
 
-def resolve_chat2api_base_url():
+def resolve_chat2api_base_url(cloud=False, snapshot=None):
     """Resolve the chat2api base URL from the runtime snapshot.
 
     The runtime snapshot (console_adapters.service_status) is the single
     source of truth for the service port; hardcoding 8000 is forbidden.
+    ``cloud=True`` selects the Linux share entry (``share-gateway``), which is
+    the only UM process the cloud role runs. A caller that already read the
+    snapshot may pass it in ``snapshot`` so one read feeds both facts.
     """
     from console import adapters as console_adapters  # noqa: WPS433  (lazy: keep import side-effect free)
 
-    try:
-        snapshot = console_adapters.service_status()
-    except Exception:
-        raise OperationError(
-            "status_unavailable",
-            "无法从 runtime 快照解析 chat2api 服务地址")
+    if snapshot is None:
+        try:
+            # Keep the local call signature unchanged: existing callers and
+            # tests patch the zero-argument snapshot read.
+            if cloud:
+                snapshot = console_adapters.service_status(cloud=True)
+            else:
+                snapshot = console_adapters.service_status()
+        except Exception:
+            raise OperationError(
+                "status_unavailable",
+                "无法从 runtime 快照解析 chat2api 服务地址")
     services = snapshot.get("services") if isinstance(snapshot, dict) else None
     if not isinstance(services, list):
         raise OperationError(
             "status_unavailable",
             "无法从 runtime 快照解析 chat2api 服务地址")
+    wanted = "share-gateway" if cloud else "chat2api"
     for entry in services:
-        if not isinstance(entry, dict) or entry.get("key") != "chat2api":
+        if not isinstance(entry, dict) or entry.get("key") != wanted:
             continue
         try:
             port = int(entry.get("port"))
@@ -135,6 +154,17 @@ def resolve_chat2api_base_url():
 def _coerce_text(value):
     """Normalize an optional response field to str|None."""
     return value if isinstance(value, str) else None
+
+
+def _coerce_number(value):
+    """Normalize an optional response number to float|None.
+
+    Booleans are not numbers here (``True`` must never become 1.0), and a
+    malformed/missing window field stays unknown instead of being folded to 0.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 _RECOVERY_STATES = ("idle", "waiting", "running", "exhausted", "stopped")
@@ -174,14 +204,32 @@ def um_auth_status(target, params, ctx=None):
 
     Never sends an Origin header (urllib default), never touches the
     upstream, and never creates or rewrites the token file. The result
-    never contains the token itself.
+    never contains the token itself. Ticket #15 also passes the ONE login
+    window deadline through, so the console can show it.
     """
     if ctx is not None:
         ctx.raise_if_cancelled()
 
     base_url = resolve_chat2api_base_url()
     token = _read_control_token()
+    status = _read_auth_status(base_url, token)
+    return {
+        **status,
+        "source": "memory-state",
+        "verified": False,
+        "state_known": status["state"] in _KNOWN_STATES,
+        "note": _STATE_NOTE,
+    }
 
+
+def _read_auth_status(base_url, token):
+    """One GET /admin/auth/status read with an already-read token.
+
+    Shared by the read action, the login orchestration and the console
+    display-state read so all three use the same HTTP boundary and the same
+    whitelist. Ticket #15 passes the login window through; malformed window
+    fields are unknown (None), never 0.
+    """
     request = urllib.request.Request(
         base_url.rstrip("/") + "/admin/auth/status",
         headers={"X-Admin-Control": token})
@@ -224,19 +272,19 @@ def um_auth_status(target, params, ctx=None):
         raise OperationError(
             "status_schema", "auth status 响应形状与预期不符")
 
-    state = payload["state"]
     return {
-        "state": state,
+        "state": payload["state"],
         "label": _coerce_text(payload.get("label")),
         "error": _coerce_text(payload.get("error")),
         # A7 additive recovery summary: explicitly whitelisted fields only.
         # The full recovery dict is never passed through, so a future private
         # field cannot leak through this read face.
         "recovery": _recovery_summary(payload.get("recovery")),
-        "source": "memory-state",
-        "verified": False,
-        "state_known": state in _KNOWN_STATES,
-        "note": _STATE_NOTE,
+        # Ticket #15 additive login window: the ONE deadline fixed by the
+        # explicit login round. A status read never extends it.
+        "login_window_deadline_epoch": _coerce_number(
+            payload.get("login_window_deadline_epoch")),
+        "login_window_s": _coerce_number(payload.get("login_window_s")),
         "checked_epoch": int(time.time()),
     }
 

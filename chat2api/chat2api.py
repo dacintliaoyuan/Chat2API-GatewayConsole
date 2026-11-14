@@ -12,9 +12,10 @@ openwebui-chat2api — expose any Open WebUI instance as a local OpenAI-compatib
 
 How it works:
   1. Open WebUI keeps its session token in `localStorage` on the site's origin.
-  2. On first run this script opens a visible Edge window (Playwright, dedicated
-     profile) where you sign in once (SSO/username/password). The token is saved
-     to `token.json` and reused afterwards — no browser needed for later runs.
+  2. On first run this script opens a headless Edge browser (Playwright, the
+     instance's existing profile) where the automatic SSO flow signs in. The token
+     is saved to `token.json` and reused afterwards — no browser needed for later
+     runs.
   3. A local HTTP server forwards OpenAI-style requests to the instance's native
      `/api/chat/completions` endpoint. Streaming (SSE) and non-streaming are
      both supported, as are Open WebUI API keys (long-lived, preferred over the
@@ -61,7 +62,9 @@ import queue
 import random
 import secrets
 import select
+import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -230,14 +233,14 @@ REAUTH_MAX_ATTEMPTS_PER_WINDOW = 3
 # Recovery cycle (Plan-Revision 2 A3): the FIRST failure is retried at once,
 # every following retry waits 30/60/300/600 seconds measured from the moment
 # the previous attempt actually FAILED (never from its start). The first attempt
-# plus five retries make at most six visible sessions per cycle; the last failure
+# plus five retries make at most six login sessions per cycle; the last failure
 # pauses the automatic recovery and only an explicit manual request opens a new
 # cycle. A refused session (another instance's live lease, or the rolling global
 # cap) does NOT consume a retry: the scheduler waits for the earliest allowed
 # moment instead.
 REAUTH_RECOVERY_BACKOFF_S = (0.0, 30.0, 60.0, 300.0, 600.0)
 REAUTH_MAX_SESSIONS_PER_CYCLE = 1 + len(REAUTH_RECOVERY_BACKOFF_S)
-# Lease coverage on top of --login-timeout (A5): a visible session may spend
+# Lease coverage on top of --login-timeout (A5): a login session may spend
 # its whole human wait PLUS bounded startup, navigation, credential-probe and
 # cleanup budgets, so the shared lease must outlive all of them. These are
 # explicit per-phase bounds, not a fixed "safety" number, and a crashed holder
@@ -292,7 +295,7 @@ CONFIG_REFRESH_TIMEOUT_S = 15.0
 # and websso.um.edu.mo is the UMPASS form whose account and password Edge
 # already autofilled from the instance's own profile. Everything else -
 # including the Duo prompt, which is waited on but never clicked - stops the
-# automatic flow and leaves the visible window to a human.
+# automatic flow and reports the manual reason to the operator.
 OPENWEBUI_SSO_BUTTON_SELECTORS = (
     'button:has-text("使用 UMPASS 继续")',
     'button:has-text("Continue with UMPASS")',
@@ -359,6 +362,14 @@ LOGIN_CLICK_TIMEOUT_MS = 15000
 LOGIN_CLICK_OBSERVE_TIMEOUT_S = 8.0
 LOGIN_STAGE_SETTLE_TIMEOUT_S = 20.0
 LOGIN_MAX_CLICKS_PER_STAGE = 2
+# A session with no observable progress for five minutes is stuck and must
+# release its browser instead of holding it for the caller's total budget (30
+# minutes on the dedicated instance).
+LOGIN_IDLE_TIMEOUT_S = 300.0
+# Ticket #13: a step only the account holder can complete ends THIS round at
+# once. The returned code keeps the reason so the operator can decide between a
+# retry (a new round) and an on-demand visible display.
+MANUAL_TAKEOVER_REQUIRED_PREFIX = "manual_takeover_required:"
 
 # Opt-in "raw upstream catalog, fresh, no local virtual aliases" contract used
 # by the public share entry. Behavior-neutral for all other consumers: they
@@ -798,6 +809,13 @@ class TokenStore:
 
 BROWSER_PATH_ENV = "CHAT2API_BROWSER_PATH"
 
+# The on-demand manual display publishes this runtime state while it is active
+# (ticket #14).  Its absence is the default: a headless login.  The file lives
+# under the broker's runtime directory, which the display unit shares, and carries
+# only the display name and the auth/socket paths needed by a visible browser.
+LOGIN_DISPLAY_FILE_ENV = "CHAT2API_LOGIN_DISPLAY_FILE"
+LOGIN_DISPLAY_FILE = "/run/um-share/login-display.env"
+
 # Linux has no Edge-first installation convention; any Chromium-family binary
 # Playwright can drive is acceptable. The order is the preference order and
 # ``shutil.which`` resolves each name through PATH.
@@ -807,6 +825,52 @@ LINUX_BROWSER_NAMES = (
     "google-chrome",
     "microsoft-edge",
 )
+
+# One login browser per profile directory (ticket #11). The lock lives INSIDE the
+# profile directory, so the OS releases it when the holding process dies.
+PROFILE_LOGIN_LOCK_STEM = "login-browser"
+PROFILE_LOGIN_LOCK_NAME = PROFILE_LOGIN_LOCK_STEM + ".lock"
+
+# Cleanup only ever signals these Chromium-family images. Firefox and every other
+# browser stay untouched even when they point at the same profile path.
+PROFILE_BROWSER_PROCESS_NAMES = frozenset({
+    "chrome", "chrome.exe",
+    "chromium", "chromium.exe",
+    "chromium-browser", "chromium-browser.exe",
+    "google-chrome", "google-chrome.exe",
+    "google-chrome-stable", "google-chrome-stable.exe",
+    "microsoft-edge", "microsoft-edge.exe",
+    "microsoft-edge-stable", "microsoft-edge-stable.exe",
+    "msedge", "msedge.exe",
+    "headless_shell", "headless_shell.exe",
+    "chrome-headless-shell", "chrome-headless-shell.exe",
+})
+PROFILE_BROWSER_TERM_SIGNAL = getattr(signal, "SIGTERM", 15)
+PROFILE_BROWSER_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
+PROFILE_BROWSER_TERM_WAIT_S = 5.0
+PROFILE_BROWSER_KILL_WAIT_S = 2.0
+PROFILE_BROWSER_POLL_S = 0.1
+_WINDOWS_PROCESS_QUERY_TIMEOUT_S = 10.0
+
+
+class ProfileBrowserProcess:
+    """One OS process that keeps a login profile open.
+
+    ``name`` is the executable/image name and ``argv`` the already-split command
+    line. The cleanup decision uses BOTH: a matching profile path alone is never
+    enough (a text editor may mention it), and a Chromium-family image alone is
+    never enough (it belongs to another profile).
+    """
+
+    __slots__ = ("pid", "name", "argv")
+
+    def __init__(self, pid: int, name: str, argv):
+        self.pid = int(pid)
+        self.name = name or ""
+        self.argv = tuple(argv or ())
+
+    def __repr__(self):
+        return "ProfileBrowserProcess(pid=%r, name=%r)" % (self.pid, self.name)
 
 
 class BrowserConfigError(RuntimeError):
@@ -1203,13 +1267,15 @@ class _ReauthLock:
     precedents this protocol copies.
     """
 
-    __slots__ = ("fd", "path", "kind", "primitive")
+    __slots__ = ("fd", "path", "kind", "primitive", "profile_key")
 
-    def __init__(self, fd, path, kind=None, primitive=None):
+    def __init__(self, fd, path, kind=None, primitive=None,
+                 profile_key=None):
         self.fd = fd
         self.path = path
         self.kind = kind
         self.primitive = primitive
+        self.profile_key = profile_key
 
 
 def _reauth_lock_primitive(platform=None, importer=None):
@@ -1232,7 +1298,7 @@ def _reauth_lock_primitive(platform=None, importer=None):
         return None, None
 
 
-def _acquire_reauth_lock(path: str, primitive=None):
+def _acquire_reauth_lock(path: str, primitive=None, wait_s=None):
     """Cross-process mutex for the slot read-modify-write (A13-3, R13-1).
 
     The lease below is advisory and long-lived, so it cannot make the acquire step
@@ -1257,9 +1323,11 @@ def _acquire_reauth_lock(path: str, primitive=None):
     code itself never unlinks the lock file.
 
     ``primitive`` is the ``(kind, module)`` test seam from
-    ``_reauth_lock_primitive``. Returns the handle, or None when the lock could
-    not be taken within REAUTH_LOCK_WAIT_S (or no OS primitive exists); the
-    caller must then refuse the session rather than guess.
+    ``_reauth_lock_primitive``. ``wait_s`` defaults to
+    ``REAUTH_LOCK_WAIT_S``; the login-browser profile lock passes ``0.0`` so a
+    second session is refused immediately. Returns the handle, or None when the lock
+    could not be taken within the wait (or no OS primitive exists); the caller
+    must then refuse the session rather than guess.
     """
     if primitive is None:
         primitive = _reauth_lock_primitive()
@@ -1269,6 +1337,7 @@ def _acquire_reauth_lock(path: str, primitive=None):
             "reauthentication lock primitive unavailable on platform=%s - "
             "refusing sessions rather than skipping the mutex", sys.platform)
         return None
+    wait_s = REAUTH_LOCK_WAIT_S if wait_s is None else max(0.0, float(wait_s))
     lock_path = "%s.lock" % path
     try:
         directory = os.path.dirname(os.path.abspath(lock_path))
@@ -1312,7 +1381,7 @@ def _acquire_reauth_lock(path: str, primitive=None):
         except OSError:
             pass
         return None
-    deadline = time.time() + REAUTH_LOCK_WAIT_S
+    deadline = time.time() + wait_s
     while True:
         try:
             if kind == "msvcrt":
@@ -1362,6 +1431,459 @@ def _release_reauth_lock(handle):
             os.close(fd)
         except OSError:
             pass
+
+
+# ------------------------- login browser single instance (ticket #11)
+#
+# One profile directory can only be driven by ONE login browser. The kernel lock
+# on ``<profile>/login-browser.lock`` is authoritative across processes and is
+# released automatically when its holder dies. The in-process registry closes the
+# same-process race as well: msvcrt byte-range locks are not guaranteed to
+# contend between two handles of the same Windows process, and two Proxy instances
+# in one process must still not open two browsers.
+_profile_login_locks = {}
+_profile_login_locks_guard = threading.Lock()
+
+
+def _profile_login_lock_path(profile_dir: str) -> str:
+    resolved = os.path.realpath(os.path.abspath(profile_dir))
+    return os.path.join(resolved, PROFILE_LOGIN_LOCK_NAME)
+
+
+def _profile_login_lock_key(profile_dir: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(profile_dir)))
+
+
+def _process_start_epoch(pid):
+    """Process creation epoch, used only in the lock file's diagnostics.
+
+    ``None`` means the fact could not be read on this host (e.g. macOS without
+    /proc). Diagnostics must never fail a login: an unreadable start time is
+    simply absent, while the pid itself stays recorded.
+    """
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return None
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            process_query_limited_information = 0x1000
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            handle = kernel32.OpenProcess(
+                process_query_limited_information, False, int(pid))
+            if not handle:
+                return None
+            try:
+                created = wintypes.FILETIME()
+                exited = wintypes.FILETIME()
+                kernel = wintypes.FILETIME()
+                user = wintypes.FILETIME()
+                kernel32.GetProcessTimes.argtypes = [
+                    wintypes.HANDLE,
+                    ctypes.POINTER(wintypes.FILETIME),
+                    ctypes.POINTER(wintypes.FILETIME),
+                    ctypes.POINTER(wintypes.FILETIME),
+                    ctypes.POINTER(wintypes.FILETIME)]
+                if not kernel32.GetProcessTimes(
+                        handle, ctypes.byref(created), ctypes.byref(exited),
+                        ctypes.byref(kernel), ctypes.byref(user)):
+                    return None
+                ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+                return ticks / 10_000_000.0 - 11_644_473_600.0
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:  # noqa: BLE001 - diagnostics only, never a verdict
+            return None
+    try:
+        stat = Path("/proc/%d/stat" % int(pid)).read_text(
+            encoding="utf-8", errors="replace")
+        fields = stat.rsplit(")", 1)[-1].split()
+        start_ticks = int(fields[19])
+        with open("/proc/stat", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("btime "):
+                    boot = float(line.split()[1])
+                    break
+            else:
+                return None
+        hertz = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+        return boot + start_ticks / float(hertz)
+    except (IndexError, OSError, ValueError):
+        return None
+
+
+def _write_profile_lock_owner(handle):
+    """Record pid + process start time next to the lock byte.
+
+    The OS lock covers byte 0 only; the diagnostic payload starts at byte 1, so
+    another process can read it on Windows while the lock is held (a byte-range
+    lock makes the locked byte itself inaccessible, not the rest of the file).
+    """
+    payload = json.dumps({
+        "pid": os.getpid(),
+        "process_started_epoch": _process_start_epoch(os.getpid()),
+        "profile_dir": os.path.dirname(handle.path),
+        "acquired_epoch": time.time(),
+    }, sort_keys=True).encode("utf-8")
+    try:
+        os.lseek(handle.fd, 1, os.SEEK_SET)
+        os.write(handle.fd, payload)
+        os.ftruncate(handle.fd, 1 + len(payload))
+    except OSError:
+        _logger.warning(
+            "could not record login lock owner path=%s", handle.path)
+
+
+def _read_profile_lock_owner(profile_dir: str):
+    """Best-effort diagnostic owner of the profile login lock; None if unreadable."""
+    path = _profile_login_lock_path(profile_dir)
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(1)
+            raw = handle.read(4096)
+    except OSError:
+        return None
+    try:
+        owner = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return owner if isinstance(owner, dict) else None
+
+
+def _profile_login_lock_primitive():
+    """The lock primitive of the RUNNING host, not of a simulated platform.
+
+    Tests drive the POSIX browser path by patching ``sys.platform`` on a Windows
+    host. The profile lock is a kernel object, so it must still use the host's real
+    primitive; otherwise a simulated POSIX login would refuse itself with a
+    misleading ``login_already_running`` because ``fcntl`` cannot be imported.
+    """
+    return _reauth_lock_primitive("win32" if os.name == "nt" else "linux")
+
+
+def _acquire_profile_login_lock(profile_dir: str):
+    """Take the ONE login-browser slot for this profile, or return None.
+
+    No waiting: ticket #11 explicitly allows a second request to be REJECTED
+    instead of joined. The lock is taken BEFORE any stale-browser cleanup and
+    before the browser opens, and is held for the whole session.
+    """
+    key = _profile_login_lock_key(profile_dir)
+    with _profile_login_locks_guard:
+        if key in _profile_login_locks:
+            return None
+        handle = _acquire_reauth_lock(
+            os.path.join(os.path.realpath(os.path.abspath(profile_dir)),
+                         PROFILE_LOGIN_LOCK_STEM),
+            primitive=_profile_login_lock_primitive(),
+            wait_s=0.0)
+        if handle is None:
+            return None
+        handle.profile_key = key
+        _profile_login_locks[key] = handle
+    _write_profile_lock_owner(handle)
+    return handle
+
+
+def _release_profile_login_lock(handle):
+    """Release a handle from ``_acquire_profile_login_lock``; never delete it."""
+    if handle is None:
+        return
+    key = getattr(handle, "profile_key", None)
+    try:
+        _release_reauth_lock(handle)
+    finally:
+        if key is not None:
+            with _profile_login_locks_guard:
+                if _profile_login_locks.get(key) is handle:
+                    _profile_login_locks.pop(key, None)
+
+
+def _profile_login_busy(profile_dir: str):
+    owner = _read_profile_lock_owner(profile_dir) or {}
+    detail = "profile %s" % os.path.abspath(profile_dir)
+    pid = owner.get("pid")
+    if isinstance(pid, int) and not isinstance(pid, bool):
+        detail += "; owner pid=%d" % pid
+        started = owner.get("process_started_epoch")
+        if isinstance(started, (int, float)) and not isinstance(started, bool):
+            detail += " started=%.3f" % float(started)
+    return LoginBusy("login_already_running", detail, owner)
+
+
+def _strip_optional_quotes(value: str) -> str:
+    value = (value or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def _browser_process_name(name: str) -> str:
+    return os.path.basename((name or "").strip()).lower()
+
+
+def _profile_argument_from_argv(argv):
+    """The ``--user-data-dir`` value in an argv, or None.
+
+    Both the ``--user-data-dir=<path>`` form Playwright uses and the
+    ``--user-data-dir <path>`` form are accepted.
+    """
+    for index, raw in enumerate(argv or ()):
+        argument = _strip_optional_quotes(str(raw))
+        if argument == "--user-data-dir" and index + 1 < len(argv):
+            return _strip_optional_quotes(str(argv[index + 1]))
+        if argument.startswith("--user-data-dir="):
+            return _strip_optional_quotes(argument.split("=", 1)[1])
+    return None
+
+
+def _normalized_profile_path(path: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def _profile_browser_process_matches(profile_dir: str, name: str, argv) -> bool:
+    """Whether this process is a Chromium-family browser on THIS exact profile.
+
+    Both halves are mandatory: Firefox or another browser is never touched even
+    with the same profile, and a Chromium process on another profile (including
+    a prefix or a subdirectory of this profile) is never touched either.
+    """
+    if _browser_process_name(name) not in PROFILE_BROWSER_PROCESS_NAMES:
+        return False
+    used_profile = _profile_argument_from_argv(argv)
+    if not used_profile:
+        return False
+    return _normalized_profile_path(used_profile) == \
+        _normalized_profile_path(profile_dir)
+
+
+def _list_posix_profile_browser_processes(profile_dir: str,
+                                          proc_root: str = "/proc"):
+    """Read /proc command lines; None when the process table is unreadable."""
+    try:
+        entries = os.listdir(proc_root)
+    except OSError:
+        return None
+    found = []
+    own_pid = os.getpid()
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == own_pid:
+            continue
+        try:
+            raw = Path(proc_root, entry, "cmdline").read_bytes()
+        except OSError:
+            # The process vanished (or cannot be read): it is not evidence of a
+            # live same-profile browser, so it is skipped instead of failing the
+            # whole cleanup.
+            continue
+        argv = [part.decode("utf-8", "replace")
+                for part in raw.split(b"\0") if part]
+        if not argv:
+            continue
+        name = os.path.basename(argv[0])
+        if _profile_browser_process_matches(profile_dir, name, argv):
+            found.append(ProfileBrowserProcess(pid, name, argv))
+    return found
+
+
+def _default_powershell_runner(script: str, timeout: float):
+    """Run a read-only CIM query through pwsh, then Windows PowerShell.
+
+    ``None`` means neither shell could be executed; the caller treats that as an
+    unreadable process table (fail closed), never as "no browser".
+    """
+    for shell in ("pwsh", "powershell"):
+        try:
+            return subprocess.run(
+                [shell, "-NoProfile", "-Command", script],
+                capture_output=True, timeout=timeout)
+        except FileNotFoundError:
+            continue
+        except (OSError, subprocess.SubprocessError):
+            return None
+    return None
+
+
+def _list_windows_profile_browser_processes(profile_dir: str, runner=None):
+    """Read-only Win32_Process query; None when the table is unreadable."""
+    names = sorted(name for name in PROFILE_BROWSER_PROCESS_NAMES
+                   if name.endswith(".exe"))
+    flt = " OR ".join("Name='%s'" % name for name in names)
+    script = ("Get-CimInstance Win32_Process -Filter \"%s\" | "
+              "Select-Object ProcessId,Name,CommandLine | "
+              "ConvertTo-Json -Compress" % flt)
+    run = runner or _default_powershell_runner
+    try:
+        proc = run(script, _WINDOWS_PROCESS_QUERY_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc is None or proc.returncode != 0:
+        return None
+    output = getattr(proc, "stdout", b"") or b""
+    if isinstance(output, bytes):
+        text = output.decode("utf-8", errors="replace")
+    else:
+        text = str(output)
+    if not text.strip():
+        return []
+    try:
+        rows = json.loads(text)
+    except ValueError:
+        return None
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return None
+    found = []
+    own_pid = os.getpid()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            pid = int(row.get("ProcessId"))
+        except (TypeError, ValueError):
+            continue
+        if pid == own_pid:
+            continue
+        name = row.get("Name") or ""
+        command_line = row.get("CommandLine")
+        if not isinstance(command_line, str) or not command_line.strip():
+            continue
+        try:
+            argv = shlex.split(command_line, posix=False)
+        except ValueError:
+            continue
+        argv = [_strip_optional_quotes(part) for part in argv]
+        if _profile_browser_process_matches(profile_dir, name, argv):
+            found.append(ProfileBrowserProcess(pid, name, argv))
+    return found
+
+
+def _list_profile_browser_processes(profile_dir: str):
+    """Enumerate live Chromium-family processes using this exact profile."""
+    if os.name == "nt":
+        return _list_windows_profile_browser_processes(profile_dir)
+    return _list_posix_profile_browser_processes(profile_dir)
+
+
+def _signal_profile_browser(pid: int, sig: int) -> bool:
+    """Send one signal; False when the process is already gone/unreachable."""
+    try:
+        os.kill(int(pid), sig)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        _logger.warning(
+            "could not signal browser process pid=%s signal=%s: permission "
+            "denied", pid, sig)
+        return False
+    except OSError as exc:
+        _logger.warning(
+            "could not signal browser process pid=%s signal=%s: %s",
+            pid, sig, exc)
+        return False
+
+
+def _unique_process_pids(processes):
+    seen = set()
+    pids = []
+    for process in processes or ():
+        pid = getattr(process, "pid", None)
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            continue
+        if pid in seen:
+            continue
+        seen.add(pid)
+        pids.append(pid)
+    return pids
+
+
+def _cleanup_profile_browsers(profile_dir: str, *, lister=None,
+                               signal_process=None, term_wait_s=None,
+                               kill_wait_s=None):
+    """Terminate stale Chromium-family browsers using THIS exact profile.
+
+    The caller already holds ``_acquire_profile_login_lock``, so no NEW login
+    browser can appear while this runs. Only processes matching BOTH the
+    Chromium-family image set AND the exact ``--user-data-dir`` are signalled;
+    Firefox and other profiles are never touched. SIGTERM comes first, then a
+    bounded wait, then SIGKILL for survivors. An unreadable process table
+    refuses the session instead of launching on top of an unknown browser.
+    """
+    list_processes = lister or _list_profile_browser_processes
+    send_signal = signal_process or _signal_profile_browser
+    term_wait_s = (PROFILE_BROWSER_TERM_WAIT_S if term_wait_s is None
+                   else max(0.0, float(term_wait_s)))
+    kill_wait_s = (PROFILE_BROWSER_KILL_WAIT_S if kill_wait_s is None
+                   else max(0.0, float(kill_wait_s)))
+
+    processes = list_processes(profile_dir)
+    if processes is None:
+        raise LoginUnavailable(
+            "profile_cleanup_unavailable",
+            "could not enumerate browser processes for %s" % profile_dir)
+    targets = [process for process in processes
+               if _profile_browser_process_matches(
+                   profile_dir, getattr(process, "name", ""),
+                   getattr(process, "argv", ()))]
+    pids = _unique_process_pids(targets)
+    if not pids:
+        return []
+
+    for pid in pids:
+        send_signal(pid, PROFILE_BROWSER_TERM_SIGNAL)
+    remaining = set(pids)
+    deadline = time.time() + term_wait_s
+    while remaining:
+        processes = list_processes(profile_dir)
+        if processes is None:
+            _logger.warning(
+                "could not re-enumerate browser processes during cleanup "
+                "profile=%s - refusing rather than escalating on unverified "
+                "pids", profile_dir)
+            raise LoginUnavailable(
+                "profile_cleanup_unavailable",
+                "could not re-enumerate browser processes for %s"
+                % profile_dir)
+        remaining = {pid for pid in remaining
+                     if any(getattr(process, "pid", None) == pid
+                            for process in processes)}
+        if not remaining:
+            return sorted(pids)
+        if time.time() >= deadline:
+            break
+        time.sleep(PROFILE_BROWSER_POLL_S)
+
+    for pid in sorted(remaining):
+        send_signal(pid, PROFILE_BROWSER_KILL_SIGNAL)
+    deadline = time.time() + kill_wait_s
+    while remaining and time.time() < deadline:
+        processes = list_processes(profile_dir)
+        if processes is None:
+            _logger.warning(
+                "could not re-enumerate browser processes after SIGKILL "
+                "profile=%s - refusing rather than claiming the cleanup "
+                "finished", profile_dir)
+            raise LoginUnavailable(
+                "profile_cleanup_unavailable",
+                "could not verify the cleanup of browser processes for %s"
+                % profile_dir)
+        remaining = {pid for pid in remaining
+                     if any(getattr(process, "pid", None) == pid
+                            for process in processes)}
+        if remaining:
+            time.sleep(PROFILE_BROWSER_POLL_S)
+    if remaining:
+        raise LoginUnavailable(
+            "profile_cleanup_failed",
+            "browser processes still use %s: %s" % (
+                profile_dir, ", ".join(str(pid) for pid in sorted(remaining))))
+    return sorted(pids)
 
 
 def acquire_reauth_slot(path: str, pid: int, ttl_s: float, now=None,
@@ -1594,7 +2116,7 @@ class _LoginPage:
         self._page.wait_for_timeout(ms)
 
     def is_closed(self) -> bool:
-        """Whether the visible window is gone (A2 window-reopen signal).
+        """Whether the login page is gone (A2 window-reopen signal).
 
         A stand-in page without the Playwright method reports "not closed", so
         the offline fakes keep their previous behaviour. A closed target can
@@ -1705,7 +2227,13 @@ def _host_matches(host: str, allowed: str) -> bool:
 
 
 class LoginStalled(RuntimeError):
-    """The automatic flow stopped and the visible window awaits a human."""
+    """The automatic flow stopped and the login session awaits a human.
+
+    Ticket #13: a step only the account holder can complete carries the
+    ``manual_takeover_required:<reason>`` code in ``reason`` and the session
+    ends immediately; a Duo push wait that runs out of the total budget keeps
+    the bare ``duo_prompt_waiting`` reason because it is not a manual takeover.
+    """
 
     def __init__(self, reason: str, detail: str = ""):
         super().__init__("login requires a human: %s%s"
@@ -1715,7 +2243,7 @@ class LoginStalled(RuntimeError):
 
 
 class LoginWindowClosed(RuntimeError):
-    """The visible window vanished while the automatic flow still needed it.
+    """The login page vanished while the automatic flow still needed it.
 
     Transient (A2): the closed window may be reopened within the same recovery
     cycle, so this is never reported as a password rejection or a pause.
@@ -1777,6 +2305,46 @@ class LoginCancelled(RuntimeError):
         self.reason = reason
 
 
+class LoginBusy(RuntimeError):
+    """Another login session already owns this browser profile (ticket #11).
+
+    Raised BEFORE a browser is launched. The single-instance lock is an OS file
+    lock, so a crashed holder releases it automatically; the caller may retry
+    after the current session ends. ``owner`` carries the lock file's diagnostic
+    pid/start time when it was readable.
+    """
+
+    def __init__(self, reason: str = "login_already_running", detail: str = "",
+                 owner=None):
+        message = "login busy: %s" % reason
+        if detail:
+            message += " (%s)" % detail
+        super().__init__(message)
+        self.reason = reason
+        self.detail = detail
+        self.owner = owner or {}
+
+
+class LoginCleanupFailed(RuntimeError):
+    """The login session ended but its browser context could not be released.
+
+    A residual context/Chromium keeps occupying memory, so the failure is
+    reported explicitly instead of being swallowed. ``primary`` carries the
+    session outcome that ended the round (timeout, cancel, probe failure) when
+    the close failure masked it, so the operator sees both.
+    """
+
+    def __init__(self, reason: str = "browser_cleanup_failed",
+                 detail: str = "", primary=None):
+        message = "login cleanup failed: %s" % reason
+        if detail:
+            message += " (%s)" % detail
+        super().__init__(message)
+        self.reason = reason
+        self.detail = detail
+        self.primary = primary
+
+
 class _LoginCancelSignal:
     """OR of the shutdown event and the explicit login-cancel event."""
 
@@ -1836,14 +2404,86 @@ def _check_login_window(page, closed_check):
             "window_closed", "last page %s" % (page.url() or "unknown"))
 
 
+def _display_process_alive(pid):
+    """Whether the display supervisor that published the state still runs."""
+    if sys.platform.startswith("win"):
+        # The cloud display is a POSIX-only path; never signal a Windows PID.
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The display runs as the same service user; a permission error still
+        # means the PID exists.
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _login_display(environ=None):
+    """Return the active manual display's DISPLAY/XAUTHORITY, or ``None``.
+
+    The default login path is headless (ADR 0002).  Only an explicitly started
+    on-demand display publishes ``login-display.env``; this function accepts that
+    state only while every part it names still exists, so a stale file after a
+    crash cannot turn the default path into a visible window.  The file is written
+    by ``um-cloud-deploy/display/start-loopback-display.sh`` and removed when
+    the display stops.
+    """
+    env = os.environ if environ is None else environ
+    path = (env.get(LOGIN_DISPLAY_FILE_ENV) or LOGIN_DISPLAY_FILE).strip()
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            values = {}
+            for raw in handle:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip()
+    except (OSError, UnicodeError):
+        return None
+    display = values.get("UM_LOGIN_DISPLAY", "")
+    auth = values.get("UM_LOGIN_XAUTHORITY", "")
+    socket_path = values.get("UM_LOGIN_DISPLAY_SOCKET", "")
+    pid = values.get("UM_LOGIN_DISPLAY_PID", "")
+    number = display[1:].split(".")[0]
+    if not display or not auth or not socket_path:
+        return None
+    if not display.startswith(":") or not number.isdigit():
+        return None
+    if not os.path.isfile(auth) or not os.access(auth, os.R_OK):
+        return None
+    if not os.path.exists(socket_path):
+        return None
+    if pid:
+        try:
+            pid_number = int(pid)
+        except ValueError:
+            return None
+        if pid_number <= 0 or not _display_process_alive(pid_number):
+            return None
+    return {"DISPLAY": display, "XAUTHORITY": auth}
+
+
 def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                   on_context=None, cancel_event=None,
                   context_factory=None, credential_probe=None,
-                  on_progress=None, cancel_login_event=None) -> str:
-    """Open a visible Chromium-family browser and drive the two-step UM SSO.
+                  on_progress=None, cancel_login_event=None,
+                  process_lister=None, process_signal=None) -> str:
+    """Open a Chromium-family browser and drive the two-step UM SSO.
 
-    Windows drives Microsoft Edge from its installation paths; Linux drives the
-    first Chromium-family binary found in PATH (or the explicit
+    The SAME on-disk profile passed by the caller is reused (cookie, autofill
+    and the existing login state survive). The normal path is headless and creates
+    no visible window; it requires neither DISPLAY nor WAYLAND_DISPLAY. When the
+    operator has explicitly started the on-demand manual display, this round opens
+    a visible window on that display instead, so the human can finish the step
+    there. Windows drives Microsoft Edge from its installation paths; Linux drives
+    the first Chromium-family binary found in PATH (or the explicit
     ``CHAT2API_BROWSER_PATH`` override). Controlled flow (A13-1/A13-3): the Open
     WebUI login page's "使用 UMPASS 继续" entry, then the UMPASS form whose
     account and password the browser already autofilled from this instance's own
@@ -1851,16 +2491,37 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     only acts on the verified Open WebUI origin (the instance's own --base-url)
     and on websso.um.edu.mo, and only while the expected control is uniquely
     visible. MFA/captcha, a missing prefill, a changed form, an unknown page
-    or a swallowed click stop the automatic flow and leave the visible window to
-    a human (``on_progress`` reports the reason; the token poll keeps
-    running). ``cancel_event`` cancels the session when the service stops and
+    or a swallowed click stop the automatic flow and report the reason to the
+    operator (``on_progress``; the token poll keeps running).
+    ``cancel_event`` cancels the session when the service stops and
     ``cancel_login_event`` cancels it when the operator explicitly cancels THIS
     round (D18-6): the latter raises ``LoginCancelled`` so the recovery loop
     ends the round instead of treating a closed window as a reopenable failure.
-    ``context_factory(edge, profile_dir)`` and
-    ``credential_probe(base_url, token)`` are the test seams: the real
-    defaults are the Playwright persistent context and
-    ``classify_credential``.
+
+    Ticket #11: the whole session is guarded by the profile's OS single-instance
+    lock (released automatically when this process dies) and, while the lock is
+    held, stale Chromium-family processes using the SAME profile are terminated
+    before the new browser opens. A second call on the same profile raises
+    ``LoginBusy`` before any browser is created; it never joins another
+    process's browser.
+
+    Ticket #12: the caller's ``timeout_s`` remains the total budget, while a
+    session with no observable progress (a page/stage change, a new token, or a
+    click that moved the page) for ``LOGIN_IDLE_TIMEOUT_S`` is closed early.
+    The browser context is closed on success, timeout, cancel and failure; when
+    that close fails, ``LoginCleanupFailed`` reports it explicitly instead of
+    leaving a residual browser unreported.
+
+    Ticket #13: MFA, a missing prefill and an unrecognized page end THIS round
+    at once with ``manual_takeover_required:<reason>`` (the finally closes the
+    browser and releases the profile lock), while a Duo push prompt is still
+    waited on for the account holder's approval.
+
+    ``context_factory(edge, profile_dir)``, ``credential_probe(base_url,
+    token)``, ``process_lister(profile_dir)`` and ``process_signal(pid,
+    signal)`` are the test seams: the real defaults are the Playwright
+    persistent context, ``classify_credential``, the OS process table and
+    ``os.kill``.
     """
     try:
         edge = find_edge()
@@ -1870,15 +2531,16 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             "%s: %s" % (exc.reason, exc.detail)) from exc
     if not edge:
         raise LoginUnavailable(*_missing_browser_error(sys.platform))
-    if not sys.platform.startswith("win") and not _headful_display_available():
-        raise LoginUnavailable(
-            "display_missing",
-            "DISPLAY and WAYLAND_DISPLAY are both unset; a visible "
-            "browser window cannot be opened")
-    # A visible login window needs a display on POSIX; Windows never reads it.
+    display_env = _login_display()
+    headful = display_env is not None
     print("=" * 60)
-    print(f"Opening browser ({edge}): {base_url}")
-    print("Sign in in the window that pops up (skipped if already logged in).")
+    if headful:
+        print(f"Opening visible browser on {display_env['DISPLAY']} "
+              f"({edge}): {base_url}")
+        print("Finish the manual step in the login window.")
+    else:
+        print(f"Opening headless browser ({edge}): {base_url}")
+        print("Using the existing profile (skipped if already logged in).")
     print(f"Waiting up to {timeout_s}s for the session token...")
     print("=" * 60)
 
@@ -1901,26 +2563,55 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
         except Exception:
             pass  # progress reporting must never break the session
 
-    manager = None
-    playwright = None
-    if context_factory is None:
-        from playwright.sync_api import sync_playwright  # lazy import
-        manager = sync_playwright()
+    def stop_for_manual(reason):
+        """End THIS round now: report why, then let the finally close the
+        browser and release the profile lock."""
+        url = page.url() or "unknown"
+        note("manual_takeover", origin=url, manual_reason=reason)
+        raise LoginStalled(
+            MANUAL_TAKEOVER_REQUIRED_PREFIX + reason,
+            "last page %s" % url)
+
+    lock = _acquire_profile_login_lock(profile_dir)
+    if lock is None:
+        raise _profile_login_busy(profile_dir)
+    try:
+        _cleanup_profile_browsers(
+            profile_dir, lister=process_lister,
+            signal_process=process_signal)
+        manager = None
+        playwright = None
+        if context_factory is None:
+            from playwright.sync_api import sync_playwright  # lazy import
+            manager = sync_playwright()
+    except BaseException:
+        _release_profile_login_lock(lock)
+        raise
     try:
         if context_factory is not None:
             ctx = context_factory(edge, profile_dir)
         else:
             playwright = manager.start()
+            launch_options = {
+                "headless": not headful,
+                "executable_path": edge,
+            }
+            if headful:
+                browser_env = {**os.environ, **display_env}
+                # The on-demand display is X11; a stale Wayland hint must not
+                # make Chromium pick a different backend.
+                browser_env.pop("WAYLAND_DISPLAY", None)
+                launch_options.update(
+                    args=["--start-maximized"],
+                    no_viewport=True,
+                    env=browser_env,
+                )
             ctx = playwright.chromium.launch_persistent_context(
-                profile_dir,
-                headless=False,
-                executable_path=edge,
-                args=["--start-maximized"],
-                no_viewport=True,
-            )
-        if on_context:
-            on_context(ctx)
+                profile_dir, **launch_options)
+        session_error = None
         try:
+            if on_context:
+                on_context(ctx)
             page = _LoginPage(ctx.pages[0] if ctx.pages else ctx.new_page())
             try:
                 page.bring_to_front()
@@ -1929,17 +2620,33 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                 print(f"[warn] Failed to load page (may still be redirecting): {e}")
 
             deadline = time.time() + timeout_s
+            idle_deadline = time.monotonic() + LOGIN_IDLE_TIMEOUT_S
+            last_url = page.url()
+            last_token = None
             rejected_tokens = set()
             clicks = {"openwebui": 0, "umpass": 0}
             stage_seen = {}
             manual_reason = None
+
+            def mark_progress():
+                nonlocal idle_deadline
+                idle_deadline = time.monotonic() + LOGIN_IDLE_TIMEOUT_S
+
             while time.time() < deadline:
                 raise_if_cancelled()
                 _check_login_window(page, page.is_closed)
+                if time.monotonic() >= idle_deadline:
+                    raise LoginStalled(
+                        "idle_timeout",
+                        "no progress for %ss; last page %s"
+                        % (LOGIN_IDLE_TIMEOUT_S, page.url() or "unknown"))
                 try:
                     token = page.read_token()
                 except Exception:
                     token = None
+                if token and token != last_token:
+                    last_token = token
+                    mark_progress()
                 if token and token not in rejected_tokens:
                     verdict = probe(base_url, token)[0]
                     if verdict == "valid":
@@ -1965,6 +2672,9 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                         "credential_probe_inconclusive"
 
                 url = page.url()
+                if url != last_url:
+                    last_url = url
+                    mark_progress()
                 host = _page_host(url)
                 if url and _page_origin(url) == expected_origin:
                     stage = "openwebui"
@@ -1982,9 +2692,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                     note("awaiting_duo", origin=url)
                 elif stage == "unknown":
                     stage_seen.setdefault(stage, time.time())
-                    manual_reason = manual_reason or "unrecognized_page"
-                    note("manual_takeover", origin=url,
-                         manual_reason=manual_reason)
+                    stop_for_manual("unrecognized_page")
                 elif manual_reason is not None:
                     # The automatic flow already stopped (an inconclusive
                     # probe, a human-only page, a changed site): never act
@@ -2011,6 +2719,8 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                                 page, target, url, cancel_signal)
                             if outcome == "cancelled":
                                 raise_if_cancelled()
+                            if outcome == "advanced":
+                                mark_progress()
                             note("openwebui_clicked", origin=url)
                 elif stage == "umpass":
                     if clicks[stage] >= LOGIN_MAX_CLICKS_PER_STAGE:
@@ -2018,14 +2728,10 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                         note("manual_takeover", origin=url,
                              manual_reason=manual_reason)
                     elif page.any_visible(UMPASS_MFA_SELECTORS):
-                        manual_reason = manual_reason or "umpass_mfa_required"
-                        note("manual_takeover", origin=url,
-                             manual_reason=manual_reason)
+                        stop_for_manual("umpass_mfa_required")
                     elif not page.field_filled(UMPASS_ACCOUNT_SELECTORS) or \
                             not page.field_filled(UMPASS_PASSWORD_SELECTORS):
-                        manual_reason = manual_reason or "umpass_prefill_missing"
-                        note("manual_takeover", origin=url,
-                             manual_reason=manual_reason)
+                        stop_for_manual("umpass_prefill_missing")
                     else:
                         target = page.one_visible(UMPASS_SUBMIT_SELECTORS)
                         if target is None:
@@ -2042,6 +2748,8 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                                 page, target, url, cancel_signal)
                             if outcome == "cancelled":
                                 raise_if_cancelled()
+                            if outcome == "advanced":
+                                mark_progress()
                             note("umpass_submitted", origin=url)
                             _check_login_window(page, page.is_closed)
                             if _umpass_credential_rejected(page):
@@ -2066,16 +2774,36 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                 manual_reason = "duo_prompt_waiting"
             raise LoginStalled(manual_reason or "timeout",
                                "last page %s" % (page.url() or "unknown"))
+        except Exception as exc:
+            session_error = exc
+            raise
         finally:
             if on_context:
-                on_context(None)
+                try:
+                    on_context(None)
+                except Exception:
+                    _logger.warning(
+                        "login context callback failed while releasing the "
+                        "browser context")
             try:
                 ctx.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                detail = "%s: %s" % (type(exc).__name__, exc)
+                if session_error is not None:
+                    detail += "; primary outcome: %s: %s" % (
+                        type(session_error).__name__, session_error)
+                cleanup_error = LoginCleanupFailed(
+                    "browser_cleanup_failed", detail,
+                    primary=session_error)
+                if session_error is not None:
+                    raise cleanup_error from session_error
+                raise cleanup_error
     finally:
-        if playwright is not None:
-            playwright.stop()
+        try:
+            if playwright is not None:
+                playwright.stop()
+        finally:
+            _release_profile_login_lock(lock)
 
 
 def fetch_api_key(base_url: str, token: str, upstream_config=None) -> str | None:
@@ -3222,10 +3950,17 @@ class Proxy:
 
     def health_snapshot(self) -> dict:
         status = self.auth_status()
-        # /health needs no control token, so it carries only the coarse state
-        # (state/label): the evidence/login/gate detail - including the last
-        # login page and the lease owner - stays behind /admin/auth/status,
-        # where the control token is required.
+        # /health needs no control token. Ticket #15 makes the operator-visible
+        # manual reason (``manual_takeover_required:<reason>``) and the ONE login
+        # window deadline part of it, because they explain why the automatic
+        # path stopped. The login page/evidence/gate detail - including the last
+        # page URL and the lease owner - still stays behind
+        # /admin/auth/status, where the control token is required. Other auth
+        # errors are NOT copied here.
+        error = status["error"]
+        manual_error = (error if isinstance(error, str)
+                        and error.startswith(MANUAL_TAKEOVER_REQUIRED_PREFIX)
+                        else None)
         cached = self.models_cache.get("data")
         return {
             "status": "ok",
@@ -3234,7 +3969,8 @@ class Proxy:
             "backend": self.base_url,
             "models": len(cached.get("data", [])) if cached else 0,
             "authentication": {"state": status["state"],
-                               "label": status["label"]},
+                               "label": status["label"],
+                               "error": manual_error},
             # §8.4 additive: the auth-watch thread's liveness and last
             # round only — no credential, no round content.
             "watch": status["watch"],
@@ -3247,6 +3983,12 @@ class Proxy:
                 "next_attempt_epoch":
                     status["recovery"]["next_attempt_epoch"],
             },
+            # Ticket #15 additive login window: the SAME deadline the
+            # control-token status reports, so the operator can see how long
+            # this round may still take. Null before the first explicit login.
+            "login_window_deadline_epoch":
+                status["login_window_deadline_epoch"],
+            "login_window_s": status["login_window_s"],
             "upstream": self.config_summary(),
             "upstream_reachability": self.upstream_reachability_snapshot(),
             "docs": "POST /v1/chat/completions",
@@ -3311,7 +4053,13 @@ class Proxy:
                     (parsed.scheme, parsed.netloc, parsed.path, "", ""))
             self._auth_login = progress
             if progress.get("manual_reason"):
-                self._auth_error = "manual_takeover:%s" % progress["manual_reason"]
+                # Ticket #15: the console-visible error code must be the same
+                # ``manual_takeover_required:<reason>`` the terminal round
+                # publishes, so a status/health read before the round's finally
+                # block still names the manual step correctly.
+                self._auth_error = (
+                    "%s%s" % (MANUAL_TAKEOVER_REQUIRED_PREFIX,
+                              progress["manual_reason"]))
 
     def _session_is_current(self, generation):
         with self._auth_condition:
@@ -3580,15 +4328,17 @@ class Proxy:
         return True
 
     def _perform_recovery_session(self, generation, login_cancel):
-        """Open ONE visible session and classify its outcome (A2).
+        """Open ONE login session and classify its outcome (A2).
 
         Returns ``(outcome, reason)`` where outcome is ``valid`` (credentials
         committed), ``manual`` (the window needs a human), ``rejected`` (the
         upstream explicitly refused the submitted account/password),
         ``unavailable`` (the browser cannot be used), ``transient`` (a network /
         browser / closed-window failure that may be reopened), ``cancelled`` (the
-        operator explicitly cancelled THIS round) or ``superseded`` (shutdown or
-        a newer cycle won the final commit race).
+        operator explicitly cancelled THIS round), ``terminal`` (a failure that
+        cannot produce different evidence, including a browser context that could
+        not be released) or ``superseded`` (shutdown or a newer cycle won the
+        final commit race).
         """
         try:
             token = browser_login(
@@ -3602,12 +4352,22 @@ class Proxy:
             )
         except LoginCancelled as exc:
             return "cancelled", exc.reason
+        except LoginBusy as exc:
+            # Another process already owns this profile's login browser: it is
+            # a throttle, never a credential verdict, and this instance must
+            # never open a second browser (ticket #11).
+            return "transient", exc.reason
         except LoginStalled as exc:
             return "manual", exc.reason
         except LoginCredentialRejected as exc:
             return "rejected", exc.reason
         except LoginUnavailable as exc:
             return "unavailable", exc.reason
+        except LoginCleanupFailed as exc:
+            # The browser context could not be released: a residual browser
+            # may still occupy memory, so report the cleanup failure as a
+            # terminal outcome instead of retrying it.
+            return "terminal", exc.reason
         except LoginWindowClosed as exc:
             return "transient", exc.reason
         except (requests.RequestException, TimeoutError, OSError) as exc:
@@ -9566,19 +10326,6 @@ def _load_share_secret_protection():
     sys.modules["share_secret_protection"] = module
     spec.loader.exec_module(module)
     return module
-
-
-def _headful_display_available(environ=None):
-    """True when a POSIX session can open a visible browser window.
-
-    ``DISPLAY`` or ``WAYLAND_DISPLAY`` must name a non-empty display; a
-    headless service (both unset or blank) cannot drive the visible login
-    window, so the caller reports ``display_missing`` instead of launching a
-    browser that would fail at startup. Windows never consults this helper.
-    """
-    env = os.environ if environ is None else environ
-    return bool((env.get("DISPLAY") or "").strip() or
-                (env.get("WAYLAND_DISPLAY") or "").strip())
 
 
 def _missing_browser_error(platform=None):

@@ -288,9 +288,19 @@ class TestBrowserLookup(_LockChildHarness):
         # 历史日志仍能识别 "Edge was not found" 这个条件。
         self.assertIn("Edge was not found", str(caught.exception))
 
-    def test_posix_missing_display_is_display_missing(self):
+    def test_posix_without_display_reaches_the_browser_launch(self):
+        launched = []
+
+        class BrowserLaunchReached(Exception):
+            pass
+
+        def context_factory(edge, profile_dir):
+            launched.append((edge, profile_dir))
+            raise BrowserLaunchReached()
+
         for display in ("", "   "):
             with self.subTest(display=display):
+                launched.clear()
                 with mock.patch.object(chat2api.sys, "platform", "linux"), \
                      mock.patch.object(
                          chat2api, "find_edge",
@@ -298,12 +308,12 @@ class TestBrowserLookup(_LockChildHarness):
                      mock.patch.dict(os.environ,
                                      {"DISPLAY": display,
                                       "WAYLAND_DISPLAY": ""}):
-                    with self.assertRaises(
-                            chat2api.LoginUnavailable) as caught:
+                    with self.assertRaises(BrowserLaunchReached):
                         chat2api.browser_login(
-                            "https://example.invalid", "profile", 1)
-                self.assertEqual(caught.exception.reason, "display_missing")
-                self.assertIn("DISPLAY", str(caught.exception))
+                            "https://example.invalid", "profile", 1,
+                            context_factory=context_factory)
+                self.assertEqual(launched, [("/usr/bin/chromium",
+                                           "profile")])
 
     def test_posix_wayland_display_reaches_the_browser_check(self):
         with mock.patch.object(chat2api.sys, "platform", "linux"), \

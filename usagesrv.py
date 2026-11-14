@@ -924,6 +924,41 @@ def _console_health_payload(force):
     return dict(payload), False
 
 
+def _console_auth_observation():
+    """One read-only auth observation for the console display-state face.
+
+    Ticket #15: the cloud status page must show the instance's own manual
+    takeover reason and login window, not a placeholder. The read uses the same
+    chat2api status endpoint and the same control token as the local console;
+    the cloud role resolves the share entry's port from the Linux runtime
+    snapshot (never a guessed port). A read failure stays an honest unknown
+    (state None), so display-state degrades to not_started/disconnected
+    instead of inventing valid or a fake deadline. No token or login page is
+    copied into the observation.
+    """
+    try:
+        from console import um_adapter as console_um_adapter
+        snapshot = None
+        if CLOUD_ROLE:
+            snapshot, _cached, _age = console_services_snapshot()
+        base_url = console_um_adapter.resolve_chat2api_base_url(
+            cloud=CLOUD_ROLE, snapshot=snapshot)
+        token = console_um_adapter._read_control_token(CONTROL_TOKEN_FILE)
+        status = console_um_adapter._read_auth_status(base_url, token)
+    except Exception:  # noqa: BLE001  a display read must stay honest
+        return {"state": None, "label": None, "error": None,
+                "observed_at": None,
+                "login_window_deadline_epoch": None}
+    return {
+        "state": status["state"],
+        "label": status["label"],
+        "error": status["error"],
+        "observed_at": status["checked_epoch"],
+        "login_window_deadline_epoch":
+            status["login_window_deadline_epoch"],
+    }
+
+
 def _console_error_status(exc):
     """Map task-layer rejections to HTTP status codes."""
     code = getattr(exc, "code", "")
@@ -2496,8 +2531,10 @@ class Handler(BaseHTTPRequestHandler):
         state = auth.get("state")
         error = auth.get("error")
         reason = error
-        if isinstance(reason, str) and reason.startswith("manual_takeover:"):
-            reason = reason.split(":", 1)[1]
+        for prefix in ("manual_takeover_required:", "manual_takeover:"):
+            if isinstance(reason, str) and reason.startswith(prefix):
+                reason = reason.split(":", 1)[1]
+                break
         if state == "valid":
             return "valid", "登录有效", None
         if state == "cancelled":
@@ -2507,9 +2544,13 @@ class Handler(BaseHTTPRequestHandler):
         if state in ("invalid", "failed"):
             if reason == "timeout":
                 return "timed_out", "登录窗口已超时", error
+            if isinstance(error, str) and error.startswith(
+                    "manual_takeover_required:"):
+                return "failed", "需要人工接管", error
             return "failed", "登录失败", error
         if state in ("logging_in", "needs_login"):
-            if reason in ("umpass_mfa_required", "duo_prompt_waiting"):
+            if reason in ("umpass_mfa_required", "umpass_prefill_missing",
+                          "unrecognized_page", "duo_prompt_waiting"):
                 return "waiting_mfa", "等待 MFA（本人操作）", error
             return "logging_in", "正在登录", error
         if state is None:
@@ -2523,11 +2564,11 @@ class Handler(BaseHTTPRequestHandler):
         """GET /display-state: read-only operator + display facts.
 
         The read never triggers a login, never starts/stops the share entry and
-        never extends a login window.
+        never extends a login window. Ticket #15 reads the instance's own auth
+        observation so the manual reason and the ONE login window deadline are
+        visible; an unreadable observation stays an honest unknown.
         """
-        auth = {"state": None, "label": None, "error": None,
-                "recovery": None, "observed_at": None,
-                "login_window_deadline_epoch": None}
+        auth = _console_auth_observation()
         display = self._console_display_availability()
         state, label, detail = self._console_display_state_of(auth, display)
         return {
@@ -2535,8 +2576,9 @@ class Handler(BaseHTTPRequestHandler):
             "state": state,
             "label": label,
             "detail": detail,
-            "observed_at": None,
-            "login_window_deadline_epoch": None,
+            "observed_at": auth.get("observed_at"),
+            "login_window_deadline_epoch":
+                auth.get("login_window_deadline_epoch"),
             "operator": self._console_operator_state(),
             "display": display,
         }

@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
@@ -460,6 +461,80 @@ class ConsoleUmLoginTests(unittest.TestCase):
         self.assertEqual(result["final_state"], "valid")
         self.assertEqual([(r[0], r[1]) for r in case.requests], [
             ("GET", "/admin/auth/verify")])
+
+    # ------------------------------------------------------- ticket #15
+
+    @staticmethod
+    def _terminal_status(state, error, pause_reason):
+        return {
+            "state": state,
+            "label": "认证失败（需人工：umpass_mfa_required）",
+            "error": error,
+            "recovery": {
+                "state": "exhausted", "round": 1, "session_starts": 1,
+                "max_sessions": 6, "next_attempt_epoch": None,
+                "pause_reason": pause_reason,
+            },
+            "login_window_deadline_epoch": 2800.0,
+            "login_window_s": 1800.0,
+        }
+
+    def test_20_manual_takeover_maps_to_reason_without_waiting(self):
+        case = self._start_case("Running", status_payload=self._terminal_status(
+            "failed",
+            "manual_takeover_required:umpass_mfa_required",
+            "manual_takeover_required:umpass_mfa_required"),
+            params={"login_budget_s": 5.0})
+        started = time.monotonic()
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertLess(time.monotonic() - started, 1.0)
+        error = caught.exception
+        self.assertEqual(error.code, "login_manual_takeover_required")
+        self.assertIn(
+            "manual_takeover_required:umpass_mfa_required", error.message)
+        self.assertNotIn("isolated-test-control-token", error.message)
+        self.assertEqual(case.wrapper.call_count, 0)  # was running: no restart
+
+    def test_21_cancelled_round_maps_to_cancelled_without_waiting(self):
+        case = self._start_case("Running", status_payload=self._terminal_status(
+            "cancelled", "cancelled", "cancelled"),
+            params={"login_budget_s": 5.0})
+        started = time.monotonic()
+        with self.assertRaises(OperationCancelled):
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(case.wrapper.call_count, 0)  # was running: no restart
+
+    def test_22_terminal_credential_failure_maps_to_failed_state(self):
+        case = self._start_case("Running", status_payload=self._terminal_status(
+            "failed", "upstream_credential_rejected",
+            "upstream_credential_rejected"),
+            params={"login_budget_s": 5.0})
+        started = time.monotonic()
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertLess(time.monotonic() - started, 1.0)
+        error = caught.exception
+        self.assertEqual(error.code, "login_failed")
+        self.assertIn("upstream_credential_rejected", error.message)
+
+    def test_23_retrying_failure_still_waits_for_the_budget(self):
+        # 只把 recovery 已结束的终态当作终态；仍在 retrying 的 failed
+        # 继续等，符合 chat2api 内部可能重试的既有约定。
+        case = self._start_case("Running", status_payload={
+            "state": "failed", "label": "认证失败", "error": "window_closed",
+            "recovery": {
+                "state": "running", "round": 1, "session_starts": 1,
+                "max_sessions": 6, "next_attempt_epoch": None,
+                "pause_reason": None,
+            },
+        }, params={"login_budget_s": 0.2, "poll_interval_s": 0.02})
+        started = time.monotonic()
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertGreaterEqual(time.monotonic() - started, 0.2)
+        self.assertEqual(caught.exception.code, "login_timeout_not_settled")
 
     def test_19_unknown_next_attempt_projects_as_null(self):
         # A8/A7: while another instance's live lease is the only reason for

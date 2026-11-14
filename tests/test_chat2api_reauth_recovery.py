@@ -487,7 +487,7 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
             mock.patch.object(
                 chat2api, "browser_login",
                 side_effect=chat2api.LoginStalled(
-                    "umpass_mfa_required",
+                    "manual_takeover_required:umpass_mfa_required",
                     "last page https://websso.um.edu.mo/")),
             self._grant_patch(),
             mock.patch.object(chat2api, "release_reauth_slot"),
@@ -496,11 +496,52 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
 
         status = proxy.auth_status()
         self.assertEqual(status["state"], "failed")
-        self.assertEqual(status["error"], "umpass_mfa_required")
+        self.assertEqual(status["error"],
+                         "manual_takeover_required:umpass_mfa_required")
         self.assertEqual(status["recovery"]["state"], "exhausted")
         self.assertEqual(status["recovery"]["session_starts"], 1)
         self.assertEqual(status["recovery"]["pause_reason"],
-                         "umpass_mfa_required")
+                         "manual_takeover_required:umpass_mfa_required")
+
+    def test_operator_retry_starts_a_new_round_after_manual_takeover(self):
+        proxy = self._proxy()
+        calls = []
+
+        def fake_login(*args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise chat2api.LoginStalled(
+                    "manual_takeover_required:umpass_mfa_required",
+                    "last page https://websso.um.edu.mo/")
+            return "fresh-token"
+
+        with (
+            mock.patch.object(
+                chat2api, "browser_login", side_effect=fake_login),
+            self._grant_patch(),
+            mock.patch.object(chat2api, "release_reauth_slot"),
+            mock.patch.object(chat2api.TokenStore, "save"),
+        ):
+            self.assertFalse(proxy.refresh(force=True))
+            status = proxy.auth_status()
+            self.assertEqual(status["state"], "failed")
+            self.assertEqual(
+                status["error"],
+                "manual_takeover_required:umpass_mfa_required")
+            self.assertEqual(status["recovery"]["state"], "exhausted")
+            first_round = status["recovery"]["round"]
+            self._finish_session_thread(proxy)
+
+            # ticket #13：操作员显式重试开的是新轮，不复用旧轮；旧轮的
+            # cancel 信号也不会取消新轮。
+            self.assertTrue(proxy.refresh(force=True))
+            status = proxy.auth_status()
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(status["state"], "valid")
+        self.assertEqual(status["recovery"]["round"], first_round + 1)
+        self.assertIsNot(calls[0].get("cancel_login_event"),
+                         calls[1].get("cancel_login_event"))
 
     def test_explicit_credential_rejection_pauses_the_cycle(self):
         proxy = self._proxy()
@@ -519,6 +560,29 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
         self.assertEqual(status["error"], "upstream_credential_rejected")
         self.assertEqual(status["recovery"]["pause_reason"],
                          "upstream_credential_rejected")
+
+    def test_cleanup_failure_is_terminal_and_visible(self):
+        proxy = self._proxy()
+        with (
+            mock.patch.object(
+                chat2api, "browser_login",
+                side_effect=chat2api.LoginCleanupFailed(
+                    "browser_cleanup_failed",
+                    "RuntimeError: close exploded",
+                    primary=chat2api.LoginStalled("timeout",
+                                                  "last page x"))),
+            self._grant_patch(),
+            mock.patch.object(chat2api, "release_reauth_slot"),
+        ):
+            self.assertFalse(proxy.refresh(force=True))
+
+        status = proxy.auth_status()
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["error"], "browser_cleanup_failed")
+        self.assertEqual(status["recovery"]["state"], "exhausted")
+        self.assertEqual(status["recovery"]["session_starts"], 1)
+        self.assertEqual(status["recovery"]["pause_reason"],
+                         "browser_cleanup_failed")
 
     def test_closed_window_is_reopened_within_the_budget(self):
         proxy = self._proxy()
