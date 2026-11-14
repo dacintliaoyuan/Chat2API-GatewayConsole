@@ -12,9 +12,10 @@ openwebui-chat2api — expose any Open WebUI instance as a local OpenAI-compatib
 
 How it works:
   1. Open WebUI keeps its session token in `localStorage` on the site's origin.
-  2. On first run this script opens a visible Edge window (Playwright, dedicated
-     profile) where you sign in once (SSO/username/password). The token is saved
-     to `token.json` and reused afterwards — no browser needed for later runs.
+  2. On first run this script opens a headless Edge browser (Playwright, the
+     instance's existing profile) where the automatic SSO flow signs in. The token
+     is saved to `token.json` and reused afterwards — no browser needed for later
+     runs.
   3. A local HTTP server forwards OpenAI-style requests to the instance's native
      `/api/chat/completions` endpoint. Streaming (SSE) and non-streaming are
      both supported, as are Open WebUI API keys (long-lived, preferred over the
@@ -230,14 +231,14 @@ REAUTH_MAX_ATTEMPTS_PER_WINDOW = 3
 # Recovery cycle (Plan-Revision 2 A3): the FIRST failure is retried at once,
 # every following retry waits 30/60/300/600 seconds measured from the moment
 # the previous attempt actually FAILED (never from its start). The first attempt
-# plus five retries make at most six visible sessions per cycle; the last failure
+# plus five retries make at most six login sessions per cycle; the last failure
 # pauses the automatic recovery and only an explicit manual request opens a new
 # cycle. A refused session (another instance's live lease, or the rolling global
 # cap) does NOT consume a retry: the scheduler waits for the earliest allowed
 # moment instead.
 REAUTH_RECOVERY_BACKOFF_S = (0.0, 30.0, 60.0, 300.0, 600.0)
 REAUTH_MAX_SESSIONS_PER_CYCLE = 1 + len(REAUTH_RECOVERY_BACKOFF_S)
-# Lease coverage on top of --login-timeout (A5): a visible session may spend
+# Lease coverage on top of --login-timeout (A5): a login session may spend
 # its whole human wait PLUS bounded startup, navigation, credential-probe and
 # cleanup budgets, so the shared lease must outlive all of them. These are
 # explicit per-phase bounds, not a fixed "safety" number, and a crashed holder
@@ -292,7 +293,7 @@ CONFIG_REFRESH_TIMEOUT_S = 15.0
 # and websso.um.edu.mo is the UMPASS form whose account and password Edge
 # already autofilled from the instance's own profile. Everything else -
 # including the Duo prompt, which is waited on but never clicked - stops the
-# automatic flow and leaves the visible window to a human.
+# automatic flow and reports the manual reason to the operator.
 OPENWEBUI_SSO_BUTTON_SELECTORS = (
     'button:has-text("使用 UMPASS 继续")',
     'button:has-text("Continue with UMPASS")',
@@ -1594,7 +1595,7 @@ class _LoginPage:
         self._page.wait_for_timeout(ms)
 
     def is_closed(self) -> bool:
-        """Whether the visible window is gone (A2 window-reopen signal).
+        """Whether the login page is gone (A2 window-reopen signal).
 
         A stand-in page without the Playwright method reports "not closed", so
         the offline fakes keep their previous behaviour. A closed target can
@@ -1705,7 +1706,7 @@ def _host_matches(host: str, allowed: str) -> bool:
 
 
 class LoginStalled(RuntimeError):
-    """The automatic flow stopped and the visible window awaits a human."""
+    """The automatic flow stopped and the login session awaits a human."""
 
     def __init__(self, reason: str, detail: str = ""):
         super().__init__("login requires a human: %s%s"
@@ -1715,7 +1716,7 @@ class LoginStalled(RuntimeError):
 
 
 class LoginWindowClosed(RuntimeError):
-    """The visible window vanished while the automatic flow still needed it.
+    """The login page vanished while the automatic flow still needed it.
 
     Transient (A2): the closed window may be reopened within the same recovery
     cycle, so this is never reported as a password rejection or a pause.
@@ -1840,20 +1841,23 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                   on_context=None, cancel_event=None,
                   context_factory=None, credential_probe=None,
                   on_progress=None, cancel_login_event=None) -> str:
-    """Open a visible Chromium-family browser and drive the two-step UM SSO.
+    """Open a headless Chromium-family browser and drive the two-step UM SSO.
 
-    Windows drives Microsoft Edge from its installation paths; Linux drives the
-    first Chromium-family binary found in PATH (or the explicit
-    ``CHAT2API_BROWSER_PATH`` override). Controlled flow (A13-1/A13-3): the Open
+    The SAME on-disk profile passed by the caller is reused (cookie, autofill
+    and the existing login state survive) and no visible window is created on the
+    normal path. Windows drives Microsoft Edge from its installation paths;
+    Linux drives the first Chromium-family binary found in PATH (or the explicit
+    ``CHAT2API_BROWSER_PATH`` override), so no DISPLAY/WAYLAND_DISPLAY is
+    required. Controlled flow (A13-1/A13-3): the Open
     WebUI login page's "使用 UMPASS 继续" entry, then the UMPASS form whose
     account and password the browser already autofilled from this instance's own
     profile. The automatic part
     only acts on the verified Open WebUI origin (the instance's own --base-url)
     and on websso.um.edu.mo, and only while the expected control is uniquely
     visible. MFA/captcha, a missing prefill, a changed form, an unknown page
-    or a swallowed click stop the automatic flow and leave the visible window to
-    a human (``on_progress`` reports the reason; the token poll keeps
-    running). ``cancel_event`` cancels the session when the service stops and
+    or a swallowed click stop the automatic flow and report the reason to the
+    operator (``on_progress``; the token poll keeps running).
+    ``cancel_event`` cancels the session when the service stops and
     ``cancel_login_event`` cancels it when the operator explicitly cancels THIS
     round (D18-6): the latter raises ``LoginCancelled`` so the recovery loop
     ends the round instead of treating a closed window as a reopenable failure.
@@ -1870,15 +1874,9 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             "%s: %s" % (exc.reason, exc.detail)) from exc
     if not edge:
         raise LoginUnavailable(*_missing_browser_error(sys.platform))
-    if not sys.platform.startswith("win") and not _headful_display_available():
-        raise LoginUnavailable(
-            "display_missing",
-            "DISPLAY and WAYLAND_DISPLAY are both unset; a visible "
-            "browser window cannot be opened")
-    # A visible login window needs a display on POSIX; Windows never reads it.
     print("=" * 60)
-    print(f"Opening browser ({edge}): {base_url}")
-    print("Sign in in the window that pops up (skipped if already logged in).")
+    print(f"Opening headless browser ({edge}): {base_url}")
+    print("Using the existing profile (skipped if already logged in).")
     print(f"Waiting up to {timeout_s}s for the session token...")
     print("=" * 60)
 
@@ -1913,10 +1911,8 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             playwright = manager.start()
             ctx = playwright.chromium.launch_persistent_context(
                 profile_dir,
-                headless=False,
+                headless=True,
                 executable_path=edge,
-                args=["--start-maximized"],
-                no_viewport=True,
             )
         if on_context:
             on_context(ctx)
@@ -3580,7 +3576,7 @@ class Proxy:
         return True
 
     def _perform_recovery_session(self, generation, login_cancel):
-        """Open ONE visible session and classify its outcome (A2).
+        """Open ONE login session and classify its outcome (A2).
 
         Returns ``(outcome, reason)`` where outcome is ``valid`` (credentials
         committed), ``manual`` (the window needs a human), ``rejected`` (the
@@ -9566,19 +9562,6 @@ def _load_share_secret_protection():
     sys.modules["share_secret_protection"] = module
     spec.loader.exec_module(module)
     return module
-
-
-def _headful_display_available(environ=None):
-    """True when a POSIX session can open a visible browser window.
-
-    ``DISPLAY`` or ``WAYLAND_DISPLAY`` must name a non-empty display; a
-    headless service (both unset or blank) cannot drive the visible login
-    window, so the caller reports ``display_missing`` instead of launching a
-    browser that would fail at startup. Windows never consults this helper.
-    """
-    env = os.environ if environ is None else environ
-    return bool((env.get("DISPLAY") or "").strip() or
-                (env.get("WAYLAND_DISPLAY") or "").strip())
 
 
 def _missing_browser_error(platform=None):
