@@ -12,7 +12,6 @@ instance-channel signature frame validated by the test double's
 handle_instance_control, and an ACK - never an echo fixture standing in for
 the instance.
 """
-import argparse
 import json
 import os
 import sys
@@ -42,7 +41,6 @@ import share.broker_server as srv  # noqa: E402
 from share.broker_host import (BrokerHostCoordinator,  # noqa: E402
                                InstanceRegistry, MaintenanceLeaseStore,
                                ReplayRegistry)
-from _share_instance_double import FakeShareServer as ShareServer  # noqa: E402
 from share.runtime import ProtectedProjectionWriter  # noqa: E402
 
 

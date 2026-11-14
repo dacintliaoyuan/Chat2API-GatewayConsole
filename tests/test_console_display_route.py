@@ -17,7 +17,6 @@ from pathlib import Path
 from unittest import mock
 
 import usagesrv
-from console import share_actions as console_share_actions
 from console.display_proxy import DisplayConfig, DisplayProxy
 from share.secret_protection import write_private_secret_path
 

@@ -186,12 +186,12 @@ def _call(base_url, method, path, token, body=None):
             try:
                 data = raw.decode("utf-8")
                 json.loads(data)
-            except Exception:
+            except ValueError:
                 pass
         if response.status >= 400:
             try:
                 error = json.loads(data).get("error", data[:200])
-            except Exception:
+            except (ValueError, AttributeError):
                 error = data[:200]
             raise ApiError(response.status, error)
         return json.loads(data)

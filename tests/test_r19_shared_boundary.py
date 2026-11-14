@@ -22,16 +22,13 @@ or filter cannot silently turn the real boundary checks into no-ops.
 """
 
 import ast
-import contextlib
 import json
 import os
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
-from unittest import mock
 
 sys.dont_write_bytecode = True
 

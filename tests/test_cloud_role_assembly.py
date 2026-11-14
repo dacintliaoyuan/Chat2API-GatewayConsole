@@ -33,7 +33,6 @@ import os
 import sys
 import tempfile
 import threading
-import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,15 +48,9 @@ from console import share_production as console_share_production  # noqa: E402
 import share.broker_ops as share_broker_ops  # noqa: E402
 import share.broker_protocol as bp  # noqa: E402
 import usagesrv  # noqa: E402  (no role env set -> the local default)
-from share.broker_client import BrokerClient  # noqa: E402
 from share.broker_protocol import BrokerResult  # noqa: E402
 from share_auth import ShareGate  # noqa: E402
 from share.management import BrokerClientAdapter, ShareManager  # noqa: E402
-from console.operations import (  # noqa: E402
-    OperationError,
-    OperationManager,
-    OperationUnavailable,
-)
 import share.management as share_management  # noqa: E402
 
 

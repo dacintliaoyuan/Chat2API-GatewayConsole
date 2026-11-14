@@ -41,19 +41,21 @@ from .stats_env import build_stats_environment
 
 from app.console_backend_app import (
     BackendHTTPServer, RoleApp, RoleCapabilities, RoleProfile, RouteSpec,
-    PID_FILE_STALE_AFTER_S, PID_IDENTITY_TOLERANCE_S,
+    PID_FILE_STALE_AFTER_S,
     SHUTDOWN_DRAIN_TIMEOUT_S,
-    append_bounded_log as _append_bounded_log,
-    has_proxy_metadata as _has_proxy_metadata,
-    hostname_of as _hostname_of,
-    pid_alive as _pid_alive,
-    process_creation_epoch as _process_creation_epoch,
-    read_control_token as _read_control_token,
     read_pid_file as _read_pid_file,
-    read_pid_identity as _read_pid_identity,
-    remove_pid_file as _remove_pid_file,
     write_pid_file as _write_pid_file,
 )
+
+# Test seams: tests/test_r19_local_app.py drives the pid-file and drain
+# constants through this composition module, and local/tests reads the drain
+# budget here. Listed explicitly so the re-export is not an accidental import.
+__all__ = [
+    "PID_FILE_STALE_AFTER_S",
+    "SHUTDOWN_DRAIN_TIMEOUT_S",
+    "_read_pid_file",
+    "_write_pid_file",
+]
 
 LOOPBACK_HOSTS = frozenset(("127.0.0.1", "::1", "localhost"))
 PROXY_METADATA_HEADERS = ("Forwarded", "X-Forwarded-For",

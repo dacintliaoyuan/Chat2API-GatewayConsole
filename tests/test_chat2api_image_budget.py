@@ -21,7 +21,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock

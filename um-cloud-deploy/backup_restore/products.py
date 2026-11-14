@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from .constants import _RELEASE_ROOT
 from .errors import BackupError, BackupKeyError

@@ -198,7 +198,7 @@ class _ProductionBrokerOps:
         """Confirm the read-only channel before the open chain owns changes."""
         try:
             snapshot = self._broker.snapshot()
-        except Exception:
+        except Exception:  # noqa: BLE001 — 传输细节可能含本机配置或凭据
             # Transport details may contain local configuration or secrets.
             snapshot = None
         if (isinstance(snapshot, dict) and snapshot.get("state") == "ok"

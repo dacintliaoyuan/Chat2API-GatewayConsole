@@ -597,7 +597,7 @@ def _report_probe_progress(ctx, outcome):
             int(row.get("requests") or 0))
         try:
             ctx.report_step(_single_line(note))
-        except Exception:
+        except Exception:  # noqa: BLE001 — 进度上报失败不得中断操作
             pass
     stopped = outcome.get("stopped")
     try:
@@ -605,7 +605,7 @@ def _report_probe_progress(ctx, outcome):
             "上下文探测结束：发送 %d 请求%s" % (
                 int(outcome.get("used") or 0),
                 "（%s 停止）" % stopped if stopped else "")))
-    except Exception:
+    except Exception:  # noqa: BLE001 — 进度上报失败不得中断操作
         pass
 
 
@@ -674,7 +674,7 @@ def _preserve_probe_evidence(records, selection, outcome, exc):
                      "未写入主状态"),
         })
         return "；已计费证据保留到恢复文件 %s" % path.name
-    except Exception as recovery_exc:
+    except Exception as recovery_exc:  # noqa: BLE001 — 恢复文件写入失败只报告，不覆盖主结果
         return "；已计费证据恢复文件写入失败：%s" % type(
             recovery_exc).__name__
 

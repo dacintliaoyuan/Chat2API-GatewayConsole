@@ -13,7 +13,6 @@ whole test suite imports host modules in the same process.
 import ast
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile

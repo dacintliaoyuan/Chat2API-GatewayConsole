@@ -24,11 +24,9 @@ import sys
 import tempfile
 import threading
 import time
-import types
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest import mock
 
 AI_GATEWAY_ROOT = Path(__file__).resolve().parents[1]
 CHAT2API_PATH = AI_GATEWAY_ROOT / "chat2api" / "chat2api.py"

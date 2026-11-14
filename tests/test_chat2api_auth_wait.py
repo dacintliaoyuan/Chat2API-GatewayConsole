@@ -1186,7 +1186,7 @@ class AuthWaitCancelStopTests(AuthWaitTestBase):
         def run_request():
             try:
                 result["response"] = self._chat_request()
-            except Exception as exc:  # the client may see a closed socket
+            except Exception as exc:  # noqa: BLE001 — 客户端可能看到已关闭 socket
                 result["error"] = exc
 
         with (
@@ -1327,7 +1327,7 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
     def _run_stream_worker(self, result):
         try:
             result["response"] = self._stream_chat_request(timeout=5)
-        except Exception as exc:  # the client may see a closed socket
+        except Exception as exc:  # noqa: BLE001 — 客户端可能看到已关闭 socket
             result["error"] = exc
 
     def test_a6_stream_auth_wait_releases_the_reader_slot(self):

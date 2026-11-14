@@ -15,7 +15,6 @@ from .errors import (
     BackupIntegrityError, BackupSecurityError, RestoreTargetExists,
 )
 from .backup import inspect_backup
-from .keyfile import _validate_key
 from .package import (
     _inspect_budget_bytes, _security_state_bytes,
     _validate_security_state, read_security_state,

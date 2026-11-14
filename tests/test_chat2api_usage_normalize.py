@@ -44,11 +44,10 @@ tail can reach the PRODUCTION ledger (the 2026-10-02 pollution incident).
 import importlib.util
 import json
 import sys
-import tempfile
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock

@@ -17,7 +17,6 @@ No network, no real ledger and no price file is touched here.
 
 import importlib.util
 import json
-import os
 import sys
 import tempfile
 import unittest
