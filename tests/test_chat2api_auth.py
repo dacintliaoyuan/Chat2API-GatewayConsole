@@ -1799,13 +1799,15 @@ class TestRefreshUnderGate(unittest.TestCase):
             mock.patch.object(
                 chat2api, "browser_login",
                 side_effect=chat2api.LoginStalled(
-                    "umpass_prefill_missing", "last page https://websso.um.edu.mo/adfs/ls/")),
+                    "manual_takeover_required:umpass_prefill_missing",
+                    "last page https://websso.um.edu.mo/adfs/ls/")),
             mock.patch.object(chat2api.TokenStore, "save"),
         ):
             self.assertFalse(proxy.refresh(force=True))
         status = proxy.auth_status()
         self.assertEqual(status["state"], "failed")
-        self.assertEqual(status["error"], "umpass_prefill_missing")
+        self.assertEqual(status["error"],
+                         "manual_takeover_required:umpass_prefill_missing")
 
 
 class TestOwnerLivenessProbe(unittest.TestCase):

@@ -412,40 +412,71 @@ class TwoStepFlowTests(unittest.TestCase):
         # the prompt out and only then reads the token.
         self.assertEqual(harness.click_selectors(), [SSO_BUTTON, SUBMIT_BUTTON])
 
-    def test_missing_prefill_never_submits_and_the_human_finishes(self):
+    def test_duo_prompt_wait_is_not_manual_takeover(self):
+        site = _FakeSite(DUO_URL)
+        harness = _Harness(site)
+        started = time.monotonic()
+
+        with self.assertRaises(chat2api.LoginStalled) as ctx:
+            harness.run(timeout_s=0.3)
+        elapsed = time.monotonic() - started
+
+        # ticket #13：Duo 推送等待必须继续等手机批准，不能当 manual 立即
+        # 结束；等待期间不上报 manual_reason，结束后才按超时原因如实报告。
+        self.assertEqual(ctx.exception.reason, "duo_prompt_waiting")
+        self.assertGreaterEqual(elapsed, 0.3)
+        self.assertEqual(harness.manual_reasons(), [])
+        self.assertIn("awaiting_duo", harness.phases())
+        self.assertEqual(harness.click_selectors(), [])
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+    def test_missing_prefill_ends_the_round_for_manual_takeover(self):
         site = _build_site(password="")
         harness = _Harness(site)
+        started = time.monotonic()
 
-        def human_fills_the_form(fake):
-            fake.elements[PASSWORD_FIELD] = [
-                _element(PASSWORD_FIELD, fake, value=PASSWORD)]
-            fake.set_token("human-token")
+        with self.assertRaises(chat2api.LoginStalled) as ctx:
+            harness.run(timeout_s=5)
+        elapsed = time.monotonic() - started
 
-        site.script = [harness.human_step("umpass_prefill_missing",
-                                           human_fills_the_form)]
-
-        token = harness.run()
-
-        self.assertEqual(token, "human-token")
+        # ticket #13：自动填充缺失需要本人补全，属于真正 manual 阶段：
+        # 立即结束本轮，不提交表单，也不保留浏览器。
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:umpass_prefill_missing")
+        self.assertLess(elapsed, 1.0)
         self.assertEqual(harness.click_selectors(), [SSO_BUTTON])
-        self.assertIn("umpass_prefill_missing", harness.manual_reasons())
+        self.assertEqual(harness.manual_reasons(), ["umpass_prefill_missing"])
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
 
-    def test_mfa_prompt_is_left_to_a_human(self):
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
+
+    def test_mfa_prompt_ends_the_round_for_manual_takeover(self):
         site = _build_site(mfa=True)
         harness = _Harness(site)
+        started = time.monotonic()
 
-        def human_completes_the_mfa(fake):
-            fake.elements.pop(MFA_MARKER)
-            fake.set_token("mfa-token")
+        with self.assertRaises(chat2api.LoginStalled) as ctx:
+            harness.run(timeout_s=5)
+        elapsed = time.monotonic() - started
 
-        site.script = [harness.human_step("umpass_mfa_required",
-                                          human_completes_the_mfa)]
-
-        token = harness.run()
-
-        self.assertEqual(token, "mfa-token")
+        # ticket #13：MFA 验证码属于真正 manual 阶段：立即结束本轮并返回
+        # 带原因的错误码，绝不等满 30 分钟或 5 分钟空闲预算。
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:umpass_mfa_required")
+        self.assertLess(elapsed, 1.0)
         self.assertEqual(harness.click_selectors(), [SSO_BUTTON])
-        self.assertIn("umpass_mfa_required", harness.manual_reasons())
+        self.assertEqual(harness.manual_reasons(), ["umpass_mfa_required"])
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+        # 浏览器已释放：同一 profile 可以立即开新一轮。
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
 
     def test_swallowed_submit_is_retried_once_then_accepted(self):
         site = _build_site(swallowed=1)
@@ -514,13 +545,24 @@ class ClickSafetyGateTests(unittest.TestCase):
         site = _FakeSite(LOOKALIKE_URL)
         site.elements = {SSO_BUTTON: [_element(SSO_BUTTON, site)]}
         harness = _Harness(site)
+        started = time.monotonic()
 
         with self.assertRaises(chat2api.LoginStalled) as ctx:
-            harness.run(timeout_s=0.3)
+            harness.run(timeout_s=5)
+        elapsed = time.monotonic() - started
 
-        self.assertEqual(ctx.exception.reason, "unrecognized_page")
+        # ticket #13：未知页面属于真正 manual 阶段：立即结束本轮并释放浏览器。
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:unrecognized_page")
+        self.assertLess(elapsed, 1.0)
         self.assertEqual(harness.click_selectors(), [])
         self.assertEqual(harness.notes[0]["origin"], LOOKALIKE_URL)
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
 
     def test_lookalike_sso_host_is_not_the_sso_page(self):
         site = _FakeSite(LOOKALIKE_URL)
@@ -532,9 +574,11 @@ class ClickSafetyGateTests(unittest.TestCase):
         harness = _Harness(site)
 
         with self.assertRaises(chat2api.LoginStalled) as ctx:
-            harness.run(timeout_s=0.3)
+            harness.run(timeout_s=5)
 
-        self.assertEqual(ctx.exception.reason, "unrecognized_page")
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:unrecognized_page")
         self.assertEqual(harness.click_selectors(), [])
 
     def test_missing_button_on_the_login_page_never_clicks(self):
@@ -619,7 +663,9 @@ class FallbackSelectorIdentityTests(unittest.TestCase):
         with self.assertRaises(chat2api.LoginStalled) as ctx:
             harness.run(timeout_s=0.3)
 
-        self.assertEqual(ctx.exception.reason, "umpass_mfa_required")
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:umpass_mfa_required")
         self.assertEqual(harness.click_selectors(), [SSO_BUTTON])
 
 
@@ -747,7 +793,8 @@ class RealDomLoginPageTests(unittest.TestCase):
         self.websso_html = _fixture("um_websso_mfa_desensitized.html")
         exc = self._run_stalled(timeout_s=3)
 
-        self.assertEqual(exc.reason, "umpass_mfa_required")
+        self.assertEqual(
+            exc.reason, "manual_takeover_required:umpass_mfa_required")
         self.assertIn(WEBSO_ORIGIN + "/adfs/ls/", self.served)
         self.assertNotIn(WEBSO_ORIGIN + "/adfs/ls/submitted", self.served)
         self.assertNotIn(WEBSO_ORIGIN + "/adfs/ls/otp-clicked", self.served)
@@ -758,9 +805,10 @@ class RealDomLoginPageTests(unittest.TestCase):
         # 如实报出 unrecognized_page 与它看到的页面。
         self.entry_html = self.entry_html.replace(
             WEBSO_ORIGIN + "/adfs/ls/", OTHER_ORIGIN + "/sso")
-        exc = self._run_stalled(timeout_s=3)
+        exc = self._run_stalled(timeout_s=5)
 
-        self.assertEqual(exc.reason, "unrecognized_page")
+        self.assertEqual(
+            exc.reason, "manual_takeover_required:unrecognized_page")
         # 页面确实被加载（导航发生了），但页面上的控件一次都没被点。
         self.assertIn(OTHER_ORIGIN + "/sso", self.served)
         self.assertNotIn(WEBSO_ORIGIN + "/adfs/ls/submitted", self.served)

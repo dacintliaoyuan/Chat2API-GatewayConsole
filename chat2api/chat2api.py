@@ -366,6 +366,10 @@ LOGIN_MAX_CLICKS_PER_STAGE = 2
 # release its browser instead of holding it for the caller's total budget (30
 # minutes on the dedicated instance).
 LOGIN_IDLE_TIMEOUT_S = 300.0
+# Ticket #13: a step only the account holder can complete ends THIS round at
+# once. The returned code keeps the reason so the operator can decide between a
+# retry (a new round) and an on-demand visible display.
+MANUAL_TAKEOVER_REQUIRED_PREFIX = "manual_takeover_required:"
 
 # Opt-in "raw upstream catalog, fresh, no local virtual aliases" contract used
 # by the public share entry. Behavior-neutral for all other consumers: they
@@ -2216,7 +2220,13 @@ def _host_matches(host: str, allowed: str) -> bool:
 
 
 class LoginStalled(RuntimeError):
-    """The automatic flow stopped and the login session awaits a human."""
+    """The automatic flow stopped and the login session awaits a human.
+
+    Ticket #13: a step only the account holder can complete carries the
+    ``manual_takeover_required:<reason>`` code in ``reason`` and the session
+    ends immediately; a Duo push wait that runs out of the total budget keeps
+    the bare ``duo_prompt_waiting`` reason because it is not a manual takeover.
+    """
 
     def __init__(self, reason: str, detail: str = ""):
         super().__init__("login requires a human: %s%s"
@@ -2427,6 +2437,11 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     that close fails, ``LoginCleanupFailed`` reports it explicitly instead of
     leaving a residual browser unreported.
 
+    Ticket #13: MFA, a missing prefill and an unrecognized page end THIS round
+    at once with ``manual_takeover_required:<reason>`` (the finally closes the
+    browser and releases the profile lock), while a Duo push prompt is still
+    waited on for the account holder's approval.
+
     ``context_factory(edge, profile_dir)``, ``credential_probe(base_url,
     token)``, ``process_lister(profile_dir)`` and ``process_signal(pid,
     signal)`` are the test seams: the real defaults are the Playwright
@@ -2465,6 +2480,15 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                           "manual_reason": manual_reason, "detail": detail})
         except Exception:
             pass  # progress reporting must never break the session
+
+    def stop_for_manual(reason):
+        """End THIS round now: report why, then let the finally close the
+        browser and release the profile lock."""
+        url = page.url() or "unknown"
+        note("manual_takeover", origin=url, manual_reason=reason)
+        raise LoginStalled(
+            MANUAL_TAKEOVER_REQUIRED_PREFIX + reason,
+            "last page %s" % url)
 
     lock = _acquire_profile_login_lock(profile_dir)
     if lock is None:
@@ -2575,9 +2599,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                     note("awaiting_duo", origin=url)
                 elif stage == "unknown":
                     stage_seen.setdefault(stage, time.time())
-                    manual_reason = manual_reason or "unrecognized_page"
-                    note("manual_takeover", origin=url,
-                         manual_reason=manual_reason)
+                    stop_for_manual("unrecognized_page")
                 elif manual_reason is not None:
                     # The automatic flow already stopped (an inconclusive
                     # probe, a human-only page, a changed site): never act
@@ -2613,14 +2635,10 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                         note("manual_takeover", origin=url,
                              manual_reason=manual_reason)
                     elif page.any_visible(UMPASS_MFA_SELECTORS):
-                        manual_reason = manual_reason or "umpass_mfa_required"
-                        note("manual_takeover", origin=url,
-                             manual_reason=manual_reason)
+                        stop_for_manual("umpass_mfa_required")
                     elif not page.field_filled(UMPASS_ACCOUNT_SELECTORS) or \
                             not page.field_filled(UMPASS_PASSWORD_SELECTORS):
-                        manual_reason = manual_reason or "umpass_prefill_missing"
-                        note("manual_takeover", origin=url,
-                             manual_reason=manual_reason)
+                        stop_for_manual("umpass_prefill_missing")
                     else:
                         target = page.one_visible(UMPASS_SUBMIT_SELECTORS)
                         if target is None:
