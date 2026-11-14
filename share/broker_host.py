@@ -24,7 +24,8 @@ import time
 import uuid
 
 from share.broker_protocol import (BrokerResult, ProtocolError,
-                                   ReplayRegistry,
+                                   # Re-exported for tests/test_share_broker_drain.py.
+                                   ReplayRegistry as ReplayRegistry,
                                    DRAIN_WINDOW_SECONDS,
                                    STOP_BUDGET_SECONDS,
                                    GATEWAY_RESTART_ACTION,
@@ -34,7 +35,6 @@ from share.broker_protocol import (BrokerResult, ProtocolError,
                                    RESULT_CODES,
                                    parse_projection_payload,
                                    validate_gateway_restart_fields,
-                                   validate_instance_request,
                                    validate_maintenance_begin_fields,
                                    validate_maintenance_end_fields,
                                    validate_management_request)

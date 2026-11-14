@@ -1461,7 +1461,7 @@ class _VncAuthUpstream(threading.Thread):
                     raise AssertionError("unexpected client init")
                 conn.sendall(self.server_init)
                 self.after_server_init = conn.recv(4096)
-        except Exception as exc:  # pragma: no cover - surfaced by the test
+        except Exception as exc:  # noqa: BLE001 — 由测试断言上报  # pragma: no cover
             self.error = exc
         finally:
             self.server.close()

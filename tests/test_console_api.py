@@ -11,7 +11,6 @@ remaining real write stays disabled with its precise reason) and the
 unauthorized-target submit path.
 """
 
-import contextlib
 import importlib.util
 import json
 import os

@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-from console.public_probe import (MAX_OUTPUT_TOKENS, MAX_RESPONSE_BYTES,
+from console.public_probe import (MAX_RESPONSE_BYTES,
                                  PREFERRED_MODEL_IDS, TIMEOUT_SECONDS,
                                  _http_reason, public_host)
 from share.store import (Disabled, NotFound, SecretUnavailable,

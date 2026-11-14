@@ -15,4 +15,7 @@ exclude = [
 
 [tool.ruff.lint]
 # Syntax errors and undefined names: fast, deterministic, no existing baseline.
-select = ["E9", "F63", "F7", "F82"]
+# F401 and BLE001 are cleared: unused imports are removed; blind catches stay
+# only at boundary layers where every failure is an honest reported outcome, each
+# pinned with a reasoned noqa.
+select = ["E9", "F63", "F7", "F82", "BLE001", "F401"]

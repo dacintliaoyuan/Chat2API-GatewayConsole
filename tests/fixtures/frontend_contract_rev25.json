@@ -4,17 +4,17 @@
     "generatedFrom": "generate_frontend_contract_fixture.py:real handlers/private fixtures",
     "sourceHashEncoding": "utf8-lf",
     "sourceHashes": {
-      "model_sync/sync.py": "c1c8d03c43a6bf89c64a884dcabf9d63ecb893042f6636a65771005c58af1aaa",
+      "model_sync/sync.py": "3fc589dcb8a228a717c675b52d94b84b8d3f17a6c8a9d119f4477403c8cc7ce4",
       "model_sync/sync_core.py": "b6b4e99bf2491b1e89df6632ef5232d67a583f14d4ad361746e91a3c37efcaa7",
-      "console/model_actions.py": "a6b74d0ce1b0f4361784fce872ac235c565fca2d1f392d6015ce0765fec3ecbd",
-      "console/adapters.py": "c2661a3f904f75087b4af1a0b819f1b3db905e0abacdcb3fa893a56835df93bb",
-      "console/operations.py": "90bb9896c112c342efc9cf0430676be22c913c376c7d015b06916db91c586c58",
+      "console/model_actions.py": "3825b6396ff83ff747df70514f96005a40488b9da1e5765ab1543152e24be648",
+      "console/adapters.py": "180e1fb5a3a8603b1e9bd5141fd26e1bf4a0ec5ed3c9605cf811f13ca5888407",
+      "console/operations.py": "e97c8822b4689503fface9748c2be00ab1eee3e8dab00cce0c0126c54da8a7e2",
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
-      "console/stats.py": "cdd0cd7e9ffe3bd13829327caf69d32e56e91cd7b637de42db49ddaef35ecd28",
+      "console/stats.py": "03422ed1f75a49556ef43ef23efd44bc9a3f12bb001f9fcf139e2bb369dfe3dd",
       "console/log_reader.py": "359106dc5ce7f9e4c1bd3aa46bba3fc4a8afb9521327837f5c0917f28445733a",
-      "usagesrv.py": "48fd227e725b9fdde8bffde0074117e147b095122b2a74ed512a47f03bcf9ae2",
+      "usagesrv.py": "743c9848560d0f6484ce3dd94f37f9301fcd20c70d3eeb1c0cd8e848d2719420",
       "console/share_actions.py": "f28299cdd6565fa4957039a3a225841d8d12f578ef4bb18333a544879c7f24c5",
-      "console/share_production.py": "971fb30857b0f214f7e6470c9e77737842bc9119a93bd54e707c3b0c83a46c32",
+      "console/share_production.py": "0b80610c6ca0c1362c083610ed8bcf4f269d790c1916071bfc57a361140d1c2a",
       "console/gateway_connection.py": "049cddb9667cc9ae15bf5474317101d7af62a2e1f333dbc951674acd5c5c351e"
     }
   },
@@ -268,7 +268,7 @@
     "sources": [
       "um"
     ],
-    "checked_epoch": 1794620217
+    "checked_epoch": 1794658009
   },
   "scoped_catalog": {
     "catalogs": {
@@ -296,7 +296,7 @@
     "sources": [
       "um"
     ],
-    "checked_epoch": 1794620217
+    "checked_epoch": 1794658009
   },
   "context_overrides": {
     "overrides": [

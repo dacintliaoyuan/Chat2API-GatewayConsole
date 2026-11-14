@@ -30,7 +30,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from console import share_production as console_share_production  # noqa: E402
 import share.broker_ops as share_broker_ops  # noqa: E402
 
 GATEWAY_PORT = 28100

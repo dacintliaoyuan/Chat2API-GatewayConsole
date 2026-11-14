@@ -23,7 +23,7 @@ from share.management import (BrokerClientAdapter, BrokerError, NoopBroker,
                              ShareManager)  # noqa: E402
 from share.broker_client import BrokerClient  # noqa: E402
 import share.broker_protocol as broker_protocol  # noqa: E402
-from share.store import (Conflict, Disabled, NotFound, ShareStore,  # noqa: E402
+from share.store import (Conflict, Disabled, ShareStore,  # noqa: E402
                          StoreError, VersionMismatch)
 
 

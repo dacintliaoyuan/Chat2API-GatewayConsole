@@ -22,7 +22,7 @@ sys.modules[_SPEC.name] = console_operations
 _SPEC.loader.exec_module(console_operations)
 
 from console.operations import (ActionSpec, ConsoleStateError, LockBusy,
-                                OperationCancelled, OperationError,
+                                OperationError,
                                 OperationManager, OperationUnavailable,
                                 ResourceFileLock)
 

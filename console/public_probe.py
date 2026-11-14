@@ -898,7 +898,7 @@ def main(argv=None):
                 or any(ord(c) < 33 or ord(c) > 126 for c in secret)):
             raise ValueError()
         result = probe_public_model(secret, payload.get('public_url'))
-    except Exception:
+    except Exception:  # noqa: BLE001 — 绝不序列化异常：HTTP 体或凭据可能在其中
         # Never serialize exceptions: HTTP bodies or credentials may be present.
         result = {'connected': False, 'reason': 'probe_failed', 'stage': 'configuration',
                   'http_status': None, 'model': None, 'elapsed_ms': 0}

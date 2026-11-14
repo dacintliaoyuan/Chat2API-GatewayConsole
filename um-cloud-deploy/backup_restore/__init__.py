@@ -48,7 +48,7 @@ from .constants import (
     MIN_PASSPHRASE_CHARS, NONCE_SIZE,
     RECOVERY_KIT_FORMAT, RECOVERY_KIT_MAGIC, SALT_SIZE, SCRYPT_N,
     SCRYPT_P, SCRYPT_R, SECURITY_FORMAT, SECURITY_PREFIX,
-    SHARE_SECRET_KEY_ENV, SHARE_SECRET_NAME, TAG_SIZE, _RELEASE_ROOT,
+    SHARE_SECRET_KEY_ENV, SHARE_SECRET_NAME, TAG_SIZE,
 )
 from .errors import (
     BackupAuthenticationError, BackupBudgetError, BackupConfigError,
@@ -57,48 +57,33 @@ from .errors import (
     BackupSecurityError, BackupUploadError, DeploymentAssemblyError,
     ObjectStoreError, RecoveryKitError, RestoreTargetExists,
 )
-from .keyfile import (
-    _decode_key, _key_fingerprint, _validate_key, load_backup_key,
-    write_backup_key,
-)
+from .keyfile import load_backup_key, write_backup_key
 from .package import (
-    _atomic_write, _build_package, _inspect_budget_bytes,
-    _inspect_sqlite_bytes, _json_bytes, _last_complete_line_offset,
-    _last_record_time, _load_aead, _open, _parse_extra_files,
-    _parse_package, _seal, _security_state_bytes, _snapshot_sqlite_bytes,
-    _utc_iso, _validate_security_state,
-    _verify_share_secret_decrypts_store, _write_extra_files,
+    # backup.py and restore.py reach this helper through the package facade
+    # (sys.modules[__package__]), so it must stay a package attribute.
+    _verify_share_secret_decrypts_store as _verify_share_secret_decrypts_store,
     read_security_state, snapshot_ledger, write_security_state,
 )
-from .products import (
-    _load_share_secret_protection, _load_share_store,
-)
-from .objectstore import (
-    LocalObjectStore, MemoryObjectStore, ObjectStore, _object_key,
-)
+from .objectstore import LocalObjectStore, MemoryObjectStore, ObjectStore
 from .security import (
     SecurityRecordStoreAdapter, latest_security_state,
     publish_security_records,
 )
 from .recovery import (
-    BackupFreshnessGuard, _read_json, open_recovery_kit, seal_recovery_kit,
+    BackupFreshnessGuard, open_recovery_kit, seal_recovery_kit,
 )
 from .backup import (
-    _record_budget_egress, create_backup, freshness_status, inspect_backup,
+    create_backup, freshness_status, inspect_backup,
     remote_backup_status, retry_pending_uploads, run_backup_cycle,
     upload_backup,
 )
-from .restore import (
-    _inspect_sqlite_file, _move_aside, _rollback_target, _sha256_file,
-    _stage_bytes, restore_backup, restore_for_recovery,
-)
+from .restore import restore_backup, restore_for_recovery
 from .assembly import (
     BROKER_REQUIRED_ARGS, CONSOLE_REQUIRED_ENV,
-    _effective_share_secret_key, _env_assignments,
     check_deployment_assembly, deployment_assembly_problems,
     deployment_backup, deployment_paths, deployment_restore,
 )
-from .cli import _cli_store, main
+from .cli import main
 
 
 __all__ = [

@@ -113,7 +113,7 @@ def _snapshot_chat2api_state():
     and is bounded by the caller's budget, never turned into a fake state."""
     try:
         return _chat2api_state(console_adapters.service_status())
-    except Exception:
+    except Exception:  # noqa: BLE001 — 轮询快照失败按尚未观测处理
         return None
 
 
@@ -129,7 +129,7 @@ def _initial_was_running():
         raise OperationError(
             "status_unavailable",
             "无法读取服务快照（%s），无法判定 chat2api 初始状态" % exc.code)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — 状态快照不可用即 fail-closed
         raise OperationError(
             "status_unavailable",
             "无法读取服务快照（%s），无法判定 chat2api 初始状态"
@@ -194,7 +194,7 @@ def _post_force_login(base_url, token):
     except urllib.error.HTTPError as exc:
         try:
             exc.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 — 释放 HTTPError 是尽力而为
             pass
         raise OperationError(
             "login_unreachable",
@@ -224,7 +224,7 @@ def _read_auth_state(base_url, token):
     except urllib.error.HTTPError as exc:
         try:
             exc.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 — 释放 HTTPError 是尽力而为
             pass
         return None
     except (urllib.error.URLError, OSError, TimeoutError):
@@ -390,7 +390,7 @@ def relogin_um(target, params, ctx=None):
             raise OperationError(
                 "login_verification_unknown",
                 "无法确认当前认证，暂不打开登录；受限核验结果为 unknown")
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 — 恢复服务状态后必须重新抛出原异常
         kind, fact = _restore_service_state(ctx, started_by_us)
         _report(ctx, fact)
         _reraise_after_restore(exc, kind, fact)

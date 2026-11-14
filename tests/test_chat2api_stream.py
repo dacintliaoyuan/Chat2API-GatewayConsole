@@ -20,14 +20,13 @@ instead of forging a log line or looking like a claimable id.
 
 import importlib.util
 import json
-import queue
 import re
 import socket
 import sys
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock

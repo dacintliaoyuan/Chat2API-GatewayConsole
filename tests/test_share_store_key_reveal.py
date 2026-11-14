@@ -20,7 +20,6 @@ identity contract B0 verified for the 8001 console host); everything else
 monkeypatches the protection boundary so the tests stay deterministic.
 """
 import hashlib
-import json
 import sqlite3
 import sys
 import tempfile

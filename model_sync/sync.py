@@ -428,7 +428,7 @@ def collect_fresh_um_catalog(timeout: int = 10) -> dict[str, Any]:
     try:
         status, response_headers, payload, raw = _get_um_models_response(
             timeout=timeout)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — 目录请求失败按 unavailable 上报
         report["error"] = "UM目录不可用：%s" % type(exc).__name__
         return _with_last_success(report)
     report["http_status"] = status
@@ -483,7 +483,7 @@ def collect_fresh_um_catalog(timeout: int = 10) -> dict[str, Any]:
         return _with_last_success(report)
     try:
         models = _um_catalog_models(payload)
-    except Exception as exc:
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
         report["status"] = "invalid_shape"
         report["error"] = "UM目录响应结构非法：%s" % type(exc).__name__
         return _with_last_success(report)
@@ -573,7 +573,7 @@ def collect_catalogs(
         try:
             payload = _get_json(UM_MODELS_URL)
             catalogs["um"] = _um_catalog_models(payload)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 单个目录源失败只记 warning
             warnings.append(f"UM目录不可用：{type(exc).__name__}")
 
     # B0: retired sources are never fetched here. A caller cannot reach this
@@ -1283,7 +1283,7 @@ def probe_context_queue(
             }
             try:
                 result = post(url, body, token=token)
-            except Exception as exc:  # transport/timeout: no capacity verdict
+            except Exception as exc:  # noqa: BLE001 — 传输/超时失败不构成容量结论
                 record["last_error"] = type(exc).__name__
                 row["note"] = "transient:%s，不构成容量结论" % type(exc).__name__
                 completed = False

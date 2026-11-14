@@ -21,7 +21,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from unittest import mock
 
 _TMP = tempfile.mkdtemp(prefix="chat2api-verify-tests-")

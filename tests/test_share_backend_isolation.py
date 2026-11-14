@@ -31,7 +31,6 @@ import time
 import unittest
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GATEWAY = os.path.dirname(HERE)

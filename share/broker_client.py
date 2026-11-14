@@ -27,12 +27,10 @@ import os
 import socket
 import stat
 import struct
-import threading
 import time
 
-from share.broker_protocol import (DEFAULT_DEADLINE_SECONDS, MAX_MESSAGE,
-                                   BrokerResult, ProtocolError,
-                                   build_request, decode_frame,
+from share.broker_protocol import (DEFAULT_DEADLINE_SECONDS, BrokerResult,
+                                   ProtocolError, build_request, decode_frame,
                                    DRAIN_DEADLINE_SECONDS,
                                    EMERGENCY_DEADLINE_SECONDS,
                                    encode_frame, read_bounded_line)

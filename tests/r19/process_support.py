@@ -294,7 +294,7 @@ def _http_request(port, method, path, *, body=None, key=None,
     except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
         try:
             conn.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 — 记录异常，不吞掉
             pass
         return HttpResult(method, path, None, {}, b"", _ms(started),
                           f"{type(exc).__name__}: {exc}")

@@ -28,19 +28,13 @@ Tested contract (Revision 8, five-layer):
   dedicated backend through its own three-state seam.
 """
 
-import ast
-import json
 import os
-import shutil
 import sys
-import tempfile
 import threading
 import time
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from urllib.parse import urlparse
 
 sys.path.insert(0, str(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))

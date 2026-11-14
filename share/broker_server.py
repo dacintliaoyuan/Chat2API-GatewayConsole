@@ -54,9 +54,6 @@ from share.broker_client import (UNIX_SOCKET_DIRECTORY_MODE,
                                  declare_synchronous_io_cancellation,
                                  unix_peer_credentials,
                                  validate_unix_socket_path)
-from share.broker_host import (BrokerDiag, BrokerHostCoordinator,
-                               InstanceRegistry, MaintenanceLeaseStore,
-                               ReplayRegistry)
 from share.broker_protocol import (DEFAULT_DEADLINE_SECONDS, MAX_MESSAGE,
                                    HOST_EVIDENCE_ACTION,
                                    HOST_STOP_ACTION, HOST_VERIFY_ACTION,
@@ -66,8 +63,7 @@ from share.broker_protocol import (DEFAULT_DEADLINE_SECONDS, MAX_MESSAGE,
                                    validate_host_evidence_fields,
                                    validate_host_stop_fields,
                                    validate_host_verify_fields,
-                                   validate_management_request,
-                                   validate_ts_service_control_fields)
+                                   validate_management_request)
 
 # Planned DACL for the management pipe (D0 §27.2): SYSTEM full,
 # Administrators full, the operator account read+write, the restricted

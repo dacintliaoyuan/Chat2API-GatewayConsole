@@ -228,7 +228,7 @@ def _read_ledger_jsonl(path, environment=None):
                     continue
                 try:
                     rec = json.loads(line)
-                except Exception:
+                except ValueError:
                     bad_lines += 1
                     continue
                 if isinstance(rec, dict):
@@ -256,7 +256,7 @@ def _read_dsh_snapshot(path, environment=None):
         return None, {"missing": True}
     except OSError as exc:
         return None, {"read_error": environment.display_path(str(exc))}
-    except Exception as exc:  # json.JSONDecodeError and friends
+    except ValueError as exc:  # json.JSONDecodeError and friends
         return None, {"corrupt": "%s: %s" % (type(exc).__name__, exc)}
     if not isinstance(data, dict):
         return None, {"corrupt": "snapshot root is not a JSON object"}
@@ -430,7 +430,7 @@ def _collect_jsonl_records(records, models_filter, lo_iso, hi_iso,
             acc["output"] += out_tok
             acc["cache"] += cache_tok
             acc["reasoning"] += reason_tok
-        except Exception as exc:  # 单条坏记录不拖垮整个源，coverage 如实标注
+        except Exception as exc:  # noqa: BLE001 — 单条坏记录不拖垮整个源，coverage 如实标注
             if token_group is not None and not token_seen:
                 day, raw_model = token_group
                 acc = days.setdefault(day, {}).setdefault(raw_model, _new_entry())
@@ -489,7 +489,7 @@ def _collect_dsh_records(snapshot, models_filter, lo_iso, hi_iso,
             acc["output"] += int(m.get("output") or 0)
             acc["cache"] += int(m.get("cacheRead") or 0)
             acc["reasoning"] += int(m.get("reasoning") or 0)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 单条坏记录不拖垮整个源
             failed += 1
             last_error = "%s: %s" % (type(exc).__name__, exc)
     error = None
@@ -560,7 +560,7 @@ def _load_source(source, handle, models_filter, lo_iso, hi_iso,
         coverage["ledger_files"] = [environment.display_path(p) for p in paths]
     try:
         content, diag = reader()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — reader 是调用方句柄，失败按 reader_error 上报
         coverage["ledger_present"] = paths is None  # callable handle existed
         coverage["errors"] = [{"type": "reader_error",
                                "detail": "%s: %s" % (type(exc).__name__, exc)}]
@@ -1122,7 +1122,7 @@ def _refresh_jsonl_cache(path, source, spec):
                 continue
             try:
                 record = json.loads(line.decode("utf-8"))
-            except Exception:
+            except ValueError:
                 bad_lines += 1
                 continue
             if not isinstance(record, dict):
@@ -1130,7 +1130,7 @@ def _refresh_jsonl_cache(path, source, spec):
                 continue
             try:
                 events.append(_event_from_record(source, spec, record))
-            except Exception:  # 单条坏记录不拖垮整个源
+            except Exception:  # noqa: BLE001 — 单条坏记录不拖垮整个源
                 bad_lines += 1
         dropped = state["dropped_events"]
         if len(events) > _LEDGER_RECORD_LIMIT:
@@ -1191,7 +1191,7 @@ def _snapshot_events(snapshot):
                 duration_ms=None, duration_state="missing", status=None,
                 cache_tokens=_int_or_none(row.get("cacheRead")),
                 reasoning_tokens=_int_or_none(row.get("reasoning"))))
-        except Exception:
+        except Exception:  # noqa: BLE001 — 单条坏记录不拖垮整个源
             bad_rows += 1
     return events, bad_rows, None
 
