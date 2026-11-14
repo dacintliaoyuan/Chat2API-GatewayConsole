@@ -19,7 +19,7 @@ node scripts/console-gate/run.mjs --role local
 
 - `--role local`：在随机端口起离线夹具服务器，服务 `release/candidate/local/` 与 `fixtures/api.json`，跑 `um` 组（4 个视口 × 浅深主题），结果写到仓库根 `output/console-gate/<时间戳>/result.json` 和截图，任何失败以退出码 1 结束。
 - `--role cloud`：改用 `release/candidate/cloud/` 与 `fixtures/cloud-api.json`（`fixtures/cloud-synth.mjs` 生成的合成数据），跑 `cloud` 组。
-- 不带 `--role`：沿用旧默认目录 `release/candidate/`（本机角色）。
+- 不带 `--role`：等同 `--role local`（本机角色候选 `release/candidate/local/`）。
 - `--quick`：只跑迭代用的一个视口（`um` 组用 1366×768）。
 - `--only um|cloud`：只跑其中一组。
 - `--url <origin>`：浏览器检查改为指向一个已在运行的地址（例如候选预览）。对 8001 这类真实服务要配 `--settle 16000`；读取是真实的，但所有非 GET 仍在本地答 403。
@@ -46,7 +46,7 @@ Playwright 是 `web` 的开发依赖；默认取 `web/node_modules/playwright/in
 
 ## 夹具来源
 
-`fixtures/api.json` 由 `fixtures/sanitize.mjs` 从一次本机 UM 控制台只读采集生成，可以入库：端点、JSON 形状与类型和采集一致；Key 名称、掩码、分享地址、本机路径、日志正文、各类 ID 与令牌都换成合成值，并保持跨端点一致；汇总类 Token / 费用 / 积分 / 耗时按同一常数缩放。
+`fixtures/api.json` 由 `fixtures/sanitize.mjs` 从一次本机 UM 控制台只读采集生成，可以入库：端点、JSON 形状与类型和采集一致；Key 名称、掩码、分享地址、本机路径、日志正文、各类 ID 与令牌都换成合成值，并保持跨端点一致；汇总类 Token / 积分 / 耗时按同一常数缩放。
 
 `fixtures/capture.mjs` 只转发 GET，拒绝单个 Key 与明文路径；采集文件必须留在被忽略的 `output/` 下。`fixtures/shift.mjs` 在每次加载时把所有日期与时间戳整体平移到今天（Asia/Shanghai），近 14 天 / 24 小时 / 7 天窗口因此不会过期。
 

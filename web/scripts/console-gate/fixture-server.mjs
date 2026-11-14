@@ -11,7 +11,7 @@ import { createServer } from "node:http";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { paths } from "./core.mjs";
+import { ROLE_BUILDS, paths } from "./core.mjs";
 import { prepareFixtures } from "./fixtures/shift.mjs";
 
 const TYPES = {
@@ -54,7 +54,7 @@ export function makeReader(fixtures) {
 
 export function startFixtureServer({
   port = 0,
-  build = paths.candidateDir,
+  build = ROLE_BUILDS.local,
   fixtures = paths.fixtures,
 } = {}) {
   const BUILD = resolve(build);
@@ -130,7 +130,7 @@ if (
   };
   const s = await startFixtureServer({
     port: Number(arg("--port", 18199)),
-    build: arg("--build", paths.candidateDir),
+    build: arg("--build", ROLE_BUILDS.local),
     fixtures: arg("--fixtures", paths.fixtures),
   });
   console.log(`fixture server on ${s.url}`);

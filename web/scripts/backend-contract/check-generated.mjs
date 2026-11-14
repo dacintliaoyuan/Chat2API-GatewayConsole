@@ -158,18 +158,45 @@ assert.deepEqual(share.filters, {
   model: null,
   result: null,
 });
-// Cost/price fields were retired with #30: the raw share-usage payload carries
-// no amount, and the normalized view leaves every amount null.
+// Cost/price fields were retired with #30: neither the raw share-usage payload
+// nor the normalized view carries an amount or a price field.
 const usageRow = share.keys.find((row) => row.keyId === "fixture-key");
-for (const field of ["costCny", "knownCostCny", "estimatedCostCny"]) {
-  assert.equal(usageRow[field], null);
+for (const field of [
+  "costCny",
+  "knownCostCny",
+  "estimatedCostCny",
+  "knownCostUsd",
+  "estimatedCostUsd",
+  "costUsd",
+  "priceVersions",
+]) {
+  assert.ok(!(field in usageRow), `normalized row still carries ${field}`);
 }
-assert.equal(usageRow.coverage.costCnyPartial, null);
-assert.equal(usageRow.models[0].costCny, null);
-assert.equal(usageRow.days[0].costCny, null);
-assert.equal(share.unattributed.costCny, null);
-assert.equal(share.unattributed.knownCostCny, null);
-assert.equal(share.unattributed.estimatedCostCny, null);
+for (const field of [
+  "costCnyPartial",
+  "knownCostCnyPartial",
+  "estimatedCostCnyPartial",
+  "pricedRequests",
+  "unpricedRequests",
+  "pricingUnavailableRequests",
+  "costComplete",
+]) {
+  assert.ok(
+    !(field in usageRow.coverage),
+    `normalized coverage still carries ${field}`
+  );
+}
+for (const row of [usageRow.models[0], usageRow.days[0]]) {
+  for (const field of ["costCny", "knownCostUsd", "estimatedCostUsd"]) {
+    assert.ok(!(field in row), `normalized detail still carries ${field}`);
+  }
+}
+for (const field of ["costCny", "knownCostCny", "estimatedCostCny"]) {
+  assert.ok(
+    !(field in share.unattributed),
+    `unattributed bucket still carries ${field}`
+  );
+}
 assert.equal(share.unattributed.undated, null);
 assert.equal(share.coverage.unpricedRequests, undefined);
 assert.equal(share.coverage.priceFn, undefined);

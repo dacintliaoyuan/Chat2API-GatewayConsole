@@ -54,8 +54,10 @@ ALLOWLIST = frozenset({
     "tests/test_model_sync_provider_registration.py",
     "tests/test_model_sync_store_merge.py",
     "tests/test_share_dispatch.py",
+    "tests/test_share_metering.py",
     "tests/test_share_public_supervision.py",
     "tests/test_share_revoke_state.py",
+    "tests/test_share_usage_results.py",
     "tests/test_um_stats_read_surface.py",
     "tests/test_usage_service.py",
     "tests/test_zcode_config_tools.py",
@@ -136,6 +138,19 @@ DENY_RULES = (
      "退役来源的账本环境变量"),
     ("dsh-cost-meter", re.compile(r"dsh-cost-meter"),
      "退役的 DSH 费用插件口径"),
+    ("retired cost fields", re.compile(
+        r"knownCostUsd|estimatedCostUsd|costCny|knownCostCny|"
+        r"estimatedCostCny|priceVersions|priceVersion|pricedRequests|"
+        r"unpricedRequests|pricingUnavailableRequests|costComplete|costUsd|"
+        r"cacheUnknownPricedRequests"),
+     "退役的费用/价格字段"),
+    ("retired usage wording", re.compile(r"费用统计"),
+     "退役的费用统计命名"),
+    ("retired share actions", re.compile(
+        r"share\.(?:start|stop|estop|retry_stop)"),
+     "退役的旧 Windows 本机分享动作"),
+    ("cloud dispatch", re.compile(r"云端发送调度"),
+     "退役的云端预发送调度"),
 )
 
 SCAN_DIRS = (
@@ -161,6 +176,7 @@ SCAN_ROOT_FILES = (
     "GLOSSARY.md",
     "README.md",
     "AGENTS.md",
+    "web/index.html",
 )
 ROOT_SUFFIXES = (".ps1", ".bat", ".vbs")
 IGNORED_DIR_NAMES = frozenset({
@@ -216,6 +232,21 @@ def iter_files(root: Path):
             yield path
 
 
+def _read_text(path: Path) -> tuple[str | None, str | None]:
+    """Read a scanned file, returning a readable reason when it cannot be audited.
+
+    A file we cannot read is not evidence of a clean tree: the audit must fail
+    closed and name the file instead of silently skipping its retired references.
+    """
+    try:
+        return path.read_text(encoding="utf-8"), None
+    except OSError as exc:
+        return None, "读取失败（%s）：%s" % (exc.__class__.__name__, exc)
+    except UnicodeDecodeError as exc:
+        return None, "不是 UTF-8 文本（%s，字节偏移 %d）" % (
+            exc.__class__.__name__, exc.start)
+
+
 def find_violations(root: Path = ROOT, allowlist=ALLOWLIST) -> list[str]:
     """Return every retired-surface hit outside the explicit allowlist."""
     allowed = frozenset(allowlist)
@@ -224,10 +255,12 @@ def find_violations(root: Path = ROOT, allowlist=ALLOWLIST) -> list[str]:
         relative = _relative(path, root)
         if relative in allowed:
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        text, unreadable = _read_text(path)
+        if unreadable is not None:
+            violations.append(
+                "%s: [unreadable] 无法审计该文件：%s" % (relative, unreadable))
             continue
+        assert text is not None
         for number, line in enumerate(text.splitlines(), 1):
             # Content hashes are opaque identities, not retired port/name references.
             if "sha256" in line.lower():

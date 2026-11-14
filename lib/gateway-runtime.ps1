@@ -3,7 +3,7 @@
 #
 # Two active services:
 #   chat2api    8000  /health       UM 模型直连
-#   usage       8001  /health       费用统计聚合
+#   usage       8001  /health       用量统计聚合
 #
 # This module owns the descriptors and the start/stop/status implementation.
 # Adapters (menu, BAT, VBS) delegate here and only handle presentation.
@@ -58,7 +58,7 @@ $script:GatewayServiceDescriptors = [ordered]@{
     }
     'usage' = [pscustomobject]@{
         Key          = 'usage'
-        DisplayName  = '费用统计'
+        DisplayName  = '用量统计'
         Port         = 8001
         HealthPath   = '/health'
         StartOrder   = 6

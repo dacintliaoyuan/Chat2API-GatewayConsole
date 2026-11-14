@@ -97,7 +97,7 @@ $ConsoleTestStopHook = {
 FAKE_SNAPSHOT = {
     "ok": True,
     "services": [{
-        "key": "usage", "display_name": "费用统计", "port": 8001,
+        "key": "usage", "display_name": "用量统计", "port": 8001,
         "state": "Running", "healthy": True, "detail": "运行中",
         "process_ids": [1],
     }],

@@ -178,13 +178,17 @@ export class FixtureTransport implements Transport {
 // replaced by one.
 export const FIXTURE_CONNECTION_KEY = "fixture-connection-key-not-real";
 
-export const FIXTURE_CONNECTION_STATES: readonly ConnectionKeyState[] = [
+/** The fixture models only the one honest state the retained chat2api read
+ *  face can produce; the full ConnectionKeyState remains the backend contract. */
+export type FixtureConnectionKeyState = "absent";
+
+export const FIXTURE_CONNECTION_STATES: readonly FixtureConnectionKeyState[] = [
   "absent",
 ];
 
-/** One synthetic read-face payload per honest key state, matching the Python shape. */
+/** One synthetic read-face payload per key state the fixture models, matching the Python shape. */
 export const FIXTURE_CONNECTION_BODIES: Readonly<
-  Record<ConnectionKeyState, JsonObject>
+  Record<FixtureConnectionKeyState, JsonObject>
 > = Object.freeze({
   absent: {
     ok: true,
@@ -216,7 +220,8 @@ export function gatewayConnectionFixtureBody(
   state: ConnectionKeyState,
   overrides: JsonObject = {}
 ): JsonObject {
-  const base = FIXTURE_CONNECTION_BODIES[state];
+  const base =
+    state === "absent" ? FIXTURE_CONNECTION_BODIES[state] : undefined;
   if (!base) throw new ContractError("unknown connection fixture state");
   return { ...clone(base), ...clone(overrides) };
 }

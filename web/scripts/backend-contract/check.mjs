@@ -170,34 +170,25 @@ const share = {
       keyName: "研发",
       deleted: false,
       requests: 4,
-      knownCostUsd: 0,
-      estimatedCostUsd: 0.0001,
       inputTokens: 50,
       outputTokens: 10,
       unknownRequests: 1,
-      unpricedRequests: 1,
       models: [
         {
           model: "test-model",
           requests: 4,
-          knownCostUsd: 0,
-          estimatedCostUsd: 0.0001,
           inputTokens: 50,
           outputTokens: 10,
           unknownRequests: 1,
-          unpricedRequests: 1,
         },
       ],
       days: [
         {
           day: "2026-10-02",
           requests: 4,
-          knownCostUsd: 0,
-          estimatedCostUsd: 0.0001,
           inputTokens: 50,
           outputTokens: 10,
           unknownRequests: 1,
-          unpricedRequests: 1,
         },
       ],
     },
@@ -205,14 +196,8 @@ const share = {
   unattributed: {
     key_id: null,
     requests: 1,
-    costCny: null,
-    knownCostCny: 0,
-    estimatedCostCny: null,
-    costCnyPartial: true,
-    knownCostCnyPartial: false,
-    estimatedCostCnyPartial: true,
   },
-  coverage: { records: 5, priceFn: true },
+  coverage: { records: 5 },
 };
 for (const row of [
   share.keys[0],
@@ -221,12 +206,8 @@ for (const row of [
 ]) {
   row.coverage = {
     records: 4,
-    pricedRequests: 2,
     unknownTimeRequests: 0,
-    pricingUnavailableRequests: 0,
-    costComplete: false,
   };
-  row.priceVersions = ["fixture-price-v1"];
   row.tokenUsage = {
     totalTokens: 40,
     inputTokens: 30,
@@ -243,18 +224,7 @@ for (const row of [
     unknownRequests: 1,
     complete: false,
   };
-  row.costCny = 0.0012;
-  row.knownCostCny = 0.0008;
-  row.estimatedCostCny = 0.0004;
-  row.costCnyPartial = true;
-  row.knownCostCnyPartial = true;
-  row.estimatedCostCnyPartial = false;
 }
-// The per-model row is fully convertible in this fixture; the key/day rows are
-// lower bounds, so the partial flag must stay attached to the exact row.
-share.keys[0].models[0].costCnyPartial = false;
-share.keys[0].models[0].knownCostCnyPartial = false;
-share.keys[0].models[0].estimatedCostCnyPartial = false;
 function scenario(operations = {}) {
   return {
     name: "offline-contract",
@@ -432,91 +402,21 @@ test("logs preserve structured null fields, raw fallback and a genuine zero rate
   assert.equal(view.events[1].rawMessage, "unknown runtime text");
 });
 
-test("key name and stable identity are independent; missing local coverage is not zero", () => {
+test("key name and stable identity are independent", () => {
   const view = normalizeShareUsage(share);
   assert.equal(view.keys[0].keyName, "研发");
-  assert.equal(view.keys[0].knownCostUsd, 0);
   assert.equal(view.keys[0].coverage.unknownRequests, 1);
-  assert.equal(view.keys[0].days[0].coverage.localCoverageAvailable, true);
-  assert.equal(view.keys[0].days[0].coverage.costComplete, false);
   assert.equal(view.keys[0].tokenUsage.totalTokens, 40);
   assert.equal(view.keys[0].tokenUsage.lowerBoundTokens, 20);
   assert.equal(view.keys[0].tokenUsage.estimatedTokens, 0);
   const legacy = structuredClone(share);
   delete legacy.keys[0].days[0].unknownRequests;
-  delete legacy.keys[0].days[0].unpricedRequests;
   legacy.keys[0].keyName = null;
-  assert.equal(
-    normalizeShareUsage(legacy).keys[0].days[0].coverage.localCoverageAvailable,
-    false
-  );
   assert.equal(
     normalizeShareUsage(legacy).keys[0].days[0].coverage.unknownRequests,
     null
   );
   assert.equal(normalizeShareUsage(legacy).keys[0].keyId, "fixture-stable-key");
-});
-
-test("CNY fields normalize per row and a legacy response stays unknown, never zero", () => {
-  const view = normalizeShareUsage(share);
-  assert.equal(view.keys[0].costCny, 0.0012);
-  assert.equal(view.keys[0].knownCostCny, 0.0008);
-  assert.equal(view.keys[0].estimatedCostCny, 0.0004);
-  assert.equal(view.keys[0].coverage.costCnyPartial, true);
-  assert.equal(view.keys[0].coverage.knownCostCnyPartial, true);
-  assert.equal(view.keys[0].coverage.estimatedCostCnyPartial, false);
-  assert.equal(view.keys[0].models[0].costCny, 0.0012);
-  assert.equal(view.keys[0].models[0].coverage.costCnyPartial, false);
-  assert.equal(view.keys[0].models[0].coverage.knownCostCnyPartial, false);
-  assert.equal(view.keys[0].models[0].coverage.estimatedCostCnyPartial, false);
-  assert.equal(view.keys[0].days[0].estimatedCostCny, 0.0004);
-  assert.equal(view.keys[0].days[0].coverage.costCnyPartial, true);
-  assert.equal(view.unattributed.costCny, null);
-  assert.equal(view.unattributed.knownCostCny, 0);
-  assert.equal(view.unattributed.estimatedCostCny, null);
-  assert.equal(view.unattributed.coverage.costCnyPartial, true);
-  assert.equal(view.unattributed.coverage.knownCostCnyPartial, false);
-  assert.equal(view.unattributed.coverage.estimatedCostCnyPartial, true);
-  // A pre-CNY response (fields absent) keeps null: unknown is not zero, and the
-  // normaliser does not reject the legacy shape.
-  const legacy = structuredClone(share);
-  for (const row of [
-    legacy.keys[0],
-    ...legacy.keys[0].models,
-    ...legacy.keys[0].days,
-    legacy.unattributed,
-  ]) {
-    delete row.costCny;
-    delete row.knownCostCny;
-    delete row.estimatedCostCny;
-    delete row.costCnyPartial;
-    delete row.knownCostCnyPartial;
-    delete row.estimatedCostCnyPartial;
-  }
-  const old = normalizeShareUsage(legacy);
-  assert.equal(old.keys[0].costCny, null);
-  assert.equal(old.keys[0].knownCostCny, null);
-  assert.equal(old.keys[0].estimatedCostCny, null);
-  assert.equal(old.keys[0].coverage.costCnyPartial, null);
-  assert.equal(old.keys[0].coverage.knownCostCnyPartial, null);
-  assert.equal(old.keys[0].coverage.estimatedCostCnyPartial, null);
-  assert.equal(old.keys[0].models[0].costCny, null);
-  assert.equal(old.keys[0].days[0].knownCostCny, null);
-  assert.equal(old.keys[0].days[0].coverage.costCnyPartial, null);
-  assert.equal(old.unattributed.costCny, null);
-  assert.equal(old.unattributed.knownCostCny, null);
-  assert.equal(old.unattributed.estimatedCostCny, null);
-  assert.equal(old.unattributed.coverage.costCnyPartial, null);
-  assert.equal(old.unattributed.undated, null);
-  // Malformed CNY values are unknown, never coerced into a number.
-  const broken = structuredClone(share);
-  broken.keys[0].costCny = "0.0012";
-  broken.keys[0].knownCostCny = -1;
-  broken.keys[0].costCnyPartial = "true";
-  const rejected = normalizeShareUsage(broken).keys[0];
-  assert.equal(rejected.costCny, null);
-  assert.equal(rejected.knownCostCny, null);
-  assert.equal(rejected.coverage.costCnyPartial, null);
 });
 
 test("the unattributed bucket carries its own Token split and is never merged into a key", () => {
@@ -527,23 +427,12 @@ test("the unattributed bucket carries its own Token split and is never merged in
   payload.unattributed = {
     key_id: null,
     requests: 1,
-    knownCostUsd: 0.5,
-    estimatedCostUsd: 0.25,
-    costCny: null,
-    knownCostCny: 3.5,
-    estimatedCostCny: null,
-    costCnyPartial: true,
     inputTokens: 50,
     outputTokens: 10,
     unknownRequests: 1,
-    unpricedRequests: 0,
-    priceVersions: ["fixture-price-v1"],
     coverage: {
       records: 1,
-      pricedRequests: 1,
       unknownTimeRequests: 0,
-      pricingUnavailableRequests: 0,
-      costComplete: true,
     },
     tokenUsage: {
       totalTokens: 60,
@@ -561,42 +450,26 @@ test("the unattributed bucket carries its own Token split and is never merged in
       unknownRequests: 0,
       complete: true,
     },
-    models: [{ model: "test-model", requests: 1, knownCostUsd: 0.5 }],
-    days: [{ day: "2026-10-02", requests: 1, knownCostUsd: 0.5 }],
+    models: [{ model: "test-model", requests: 1 }],
+    days: [{ day: "2026-10-02", requests: 1 }],
     undated: {
       day: null,
       requests: 1,
-      knownCostUsd: 0.5,
-      costCny: null,
-      knownCostCny: 3.5,
-      estimatedCostCny: null,
-      costCnyPartial: true,
     },
   };
   const view = normalizeShareUsage(payload);
   assert.equal(view.unattributed.keyId, null);
   assert.equal(view.unattributed.tokenUsage.totalTokens, 60);
   assert.equal(view.unattributed.tokenUsage.inputTokens, 50);
-  assert.equal(view.unattributed.knownCostUsd, 0.5);
-  assert.equal(view.unattributed.costCny, null);
-  assert.equal(view.unattributed.knownCostCny, 3.5);
-  assert.equal(view.unattributed.estimatedCostCny, null);
-  assert.equal(view.unattributed.coverage.costCnyPartial, true);
   assert.equal(view.unattributed.coverage.records, 1);
   assert.equal(view.unattributed.models[0].identity, "test-model");
   assert.equal(view.unattributed.days[0].identity, "2026-10-02");
-  assert.equal(view.unattributed.days[0].knownCostUsd, 0.5);
-  assert.equal(view.unattributed.undated.knownCostUsd, 0.5);
-  assert.equal(view.unattributed.undated.knownCostCny, 3.5);
-  assert.equal(view.unattributed.undated.costCny, null);
-  assert.equal(view.unattributed.undated.coverage.costCnyPartial, true);
   assert.equal(view.keys.length, normalizeShareUsage(share).keys.length);
   // A payload that carries no split keeps nulls and no rows - never a fabricated
   // complete total, and never a row spread over the keys.
   const legacy = normalizeShareUsage(share).unattributed;
   assert.equal(legacy.tokenUsage.totalTokens, null);
   assert.equal(legacy.coverage.records, null);
-  assert.equal(legacy.knownCostUsd, null);
   assert.deepEqual(legacy.models, []);
   assert.deepEqual(legacy.days, []);
   assert.equal(legacy.undated, null);

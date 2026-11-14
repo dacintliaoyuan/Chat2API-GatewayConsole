@@ -63,7 +63,7 @@ const SCALE =
 const SCALED_ENDPOINTS =
   /^\/api\/(summary|console\/(usage-tokens|usage-rates|stats|share-usage))(\?|$)/;
 const AMOUNT_KEY =
-  /^(input|output|cache|reasoning|tokens?|token_total|partial_token_total|estimated_token_total|costCny|costUsd|knownCostUsd|estimatedCostUsd|estimated_cost_cny|credits|duration_ms)$|_tokens$|Tokens$/;
+  /^(input|output|cache|reasoning|tokens?|token_total|partial_token_total|estimated_token_total|credits|duration_ms)$|_tokens$|Tokens$/;
 
 let seed = 0x5eed1234;
 const rand = () => {

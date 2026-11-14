@@ -278,7 +278,7 @@ export async function runUm(c) {
           "true",
       "速度只画折线：折线图按钮应显示选中并关闭"
     );
-    // r4: 折线图 switches Token / 费用 / 请求 between stacked bars and lines over
+    // r4: 折线图 switches Token / 请求 between stacked bars and lines over
     // the same window, models and figures; it no longer opens a date table.
     await page.click('[data-um-metric="tokens"]');
     await page.waitForTimeout(300);
@@ -969,7 +969,7 @@ export async function runUm(c) {
             .querySelector('[data-um-model-more="deepseek-v3.2"]')
             ?.getAttribute("aria-expanded"),
           focus: document.activeElement?.getAttribute("data-um-model-more"),
-          full: /Connection reset by peer[\s\S]*这次不计速度/.test(
+          full: /通过 16万 字符[\s\S]*上游限流（HTTP 429，不构成上限）/.test(
             document.querySelector(".um-model-table .um-req-detail")
               ?.textContent ?? ""
           ),
@@ -1184,7 +1184,7 @@ export async function runUm(c) {
       height: 768,
     });
     await page.evaluate(() => {
-      document.querySelector(".shell-main").scrollTop = 200;
+      document.querySelector(".shell-main").scrollTop = 100;
     });
     await page.waitForTimeout(250);
     const bar = await page.evaluate(() => {

@@ -10,8 +10,8 @@ import type {
   ConnectionProtocolFace,
   ContextEvidence,
   ContextView,
-  CostCoverage,
-  CostDetail,
+  UsageCoverage,
+  UsageDetail,
   GatewayConnection,
   JsonObject,
   KeyUsage,
@@ -424,33 +424,18 @@ export function normalizeLogPage(value: unknown): LogPage {
     requestScope: root.request_scope === "read_window" ? "read_window" : null,
   };
 }
-function costCoverage(row: JsonObject): CostCoverage {
+function usageCoverage(row: JsonObject): UsageCoverage {
   const coverage = object(row.coverage) ?? {};
   return {
     requests: count(row.requests),
     unknownRequests: count(row.unknownRequests),
-    unpricedRequests: count(row.unpricedRequests),
     incompleteRequests: count(row.incompleteRequests),
     records: count(coverage.records),
-    pricedRequests: count(coverage.pricedRequests),
     unknownTimeRequests: count(coverage.unknownTimeRequests),
-    pricingUnavailableRequests: count(coverage.pricingUnavailableRequests),
-    costComplete: boolean(coverage.costComplete),
-    // CNY partial is a row-level fact (share_metering._finish_summary); a legacy
-    // response without it stays null instead of being read as "complete".
-    costCnyPartial: boolean(row.costCnyPartial),
-    knownCostCnyPartial: boolean(row.knownCostCnyPartial),
-    estimatedCostCnyPartial: boolean(row.estimatedCostCnyPartial),
     cacheReportedRequests: count(coverage.cacheReportedRequests),
     cacheUnreportedRequests: count(coverage.cacheUnreportedRequests),
     cacheUnknownRequests: count(coverage.cacheUnknownRequests),
-    cacheUnknownPricedRequests: count(coverage.cacheUnknownPricedRequests),
     excludedUnknownTimeRequests: count(coverage.excludedUnknownTimeRequests),
-    localCoverageAvailable:
-      count(row.unknownRequests) !== null &&
-      count(row.unpricedRequests) !== null &&
-      count(coverage.records) !== null &&
-      boolean(coverage.costComplete) !== null,
   };
 }
 function tokenUsage(value: unknown): TokenUsage {
@@ -478,24 +463,16 @@ function tokenUsage(value: unknown): TokenUsage {
     cacheUnknownRequests: count(row.cacheUnknownRequests),
   };
 }
-function summary(row: JsonObject): Omit<CostDetail, "identity"> {
+function summary(row: JsonObject): Omit<UsageDetail, "identity"> {
   return {
-    knownCostUsd: nonnegative(row.knownCostUsd),
-    estimatedCostUsd: nonnegative(row.estimatedCostUsd),
-    // CNY amounts follow the same strict rule: a missing legacy field is unknown
-    // (null), while a real zero survives.
-    costCny: nonnegative(row.costCny),
-    knownCostCny: nonnegative(row.knownCostCny),
-    estimatedCostCny: nonnegative(row.estimatedCostCny),
     // Legacy per-side sums are retained for compatibility; complete totals are only tokenUsage.totalTokens.
     inputTokens: count(row.inputTokens),
     outputTokens: count(row.outputTokens),
-    coverage: costCoverage(row),
+    coverage: usageCoverage(row),
     tokenUsage: tokenUsage(row.tokenUsage),
-    priceVersions: stringList(row.priceVersions),
   };
 }
-function costDetails(value: unknown, key: "model" | "day"): CostDetail[] {
+function usageDetails(value: unknown, key: "model" | "day"): UsageDetail[] {
   return requiredRows(value, key === "model" ? "key models" : "key days").map(
     (row) => {
       if (!text(row[key]))
@@ -507,7 +484,7 @@ function costDetails(value: unknown, key: "model" | "day"): CostDetail[] {
 /** 未归属桶的模型/日明细是**加性**的：后端没带这两列就是没有行（不是伪造的
  *  空行），带了就按与每 Key 行同一套身份 + 摘要规则归一化。身份不是字符串
  *  的行无法归到任何名字下——按页面既有规则跳过，绝不用猜出来的身份合并。 */
-function bucketDetails(value: unknown, key: "model" | "day"): CostDetail[] {
+function bucketDetails(value: unknown, key: "model" | "day"): UsageDetail[] {
   if (value === undefined) return [];
   const rows = requiredRows(
     value,
@@ -547,13 +524,13 @@ export function normalizeShareUsage(value: unknown): ShareUsage {
       keyName: text(row.keyName),
       deleted: boolean(row.deleted),
       ...summary(row),
-      models: costDetails(row.models, "model"),
-      days: costDetails(row.days, "day"),
+      models: usageDetails(row.models, "model"),
+      days: usageDetails(row.days, "day"),
       undated: object(row.undated) ? summary(row.undated as JsonObject) : null,
     };
   });
   // 未归属桶走与每 Key 行**同一个** `summary()`：Token 细分（完整 / 下界 /
-  // 估算 / 未知）与费用分列因此与 Key 行同形，页面不再自己解析；桶本身仍
+  // 估算 / 未知）因此与 Key 行同形，页面不再自己解析；桶本身仍
   // 单列（`keyId` 恒为 null），绝不摊到任何 Key。
   const unattributedRow = requiredObject(root.unattributed, "unattributed");
   return {
@@ -652,11 +629,6 @@ function shareRequestRow(row: JsonObject, index: number): ShareUsageRequestRow {
     durationMs: count(row.durationMs),
     cacheTokens: count(row.cacheTokens),
     reasoningTokens: count(row.reasoningTokens),
-    priced: boolean(row.priced),
-    priceVersion: text(row.priceVersion),
-    costUsd: nonnegative(row.costUsd),
-    costCny: nonnegative(row.costCny),
-    costCnyPartial: row.costCnyPartial === true,
   };
 }
 

@@ -364,7 +364,7 @@ def share_status(target, params, ctx=None):
 # These handlers do parameter validation, resource locking, operation creation
 # and phase reporting ONLY (the registry/resource_fn do the lock and the row);
 # the real work is the production adapter seam. 8100 is NEVER restarted via
-# share.stop -> share.start (contract §0.6/§6.3): the only channel is the
+# a console-side stop-then-start (contract §0.6/§6.3): the only channel is the
 # restricted broker gateway-restart verb.
 
 
@@ -745,7 +745,7 @@ def gateway_restart(target, params, ctx=None):
     """A9-4 restart 8100 only (contract §6).
 
     The ONLY channel is the restricted broker gateway-restart verb (host three
-    evidence + instance/lease): never share.stop -> share.start. The limits
+    evidence + instance/lease): never a console-side stop-then-start. The limits
     security gate must be True before the call; False/None refuses. The broker
     call is blocking and bounded by the client; after it returns, a requested
     cancel is reported but the ACTUAL result is still returned (the side effect
@@ -781,7 +781,7 @@ def gateway_restart(target, params, ctx=None):
     if _GATEWAY_RESTART is None:
         raise OperationError(
             "share_broker_unwired",
-            "8100 重启缝未接线（broker 门未装配）；不以 share.stop→share.start"
+            "8100 重启缝未接线（broker 门未装配）；不以旧的本机停止→启动动作"
             " 代替")
     _cancel_point(ctx)
     _report(ctx, "安全门已确认，执行受限 8100 单层重启")
@@ -829,7 +829,7 @@ def gateway_restart(target, params, ctx=None):
     }
     note = _bounded(
         "8100 单层重启完成（component=%s）：经 broker 受限宿主协议，未以"
-        " share.stop→share.start 代替；私人 8000、Key/名称/身份及发布配置"
+        " 旧的本机停止→启动动作代替；私人 8000、Key/名称/身份及发布配置"
         "不变；入口重启期间业务可能暂时不可用"
         % gateway["component"])
     return {"restarted": True, "gateway": gateway,

@@ -5,10 +5,11 @@
 //        [--settle <ms>]
 //
 // --role picks that role's candidate (release/candidate/<role>) and synthetic
-// fixtures, and the candidate binding also checks the manifest's role. The local
+// fixtures, and the candidate binding also checks the manifest's role. It defaults
+// to local so the bare `npm run check:console` runs the local UM console. The local
 // candidate opens the UM console and `--role local` runs the `um` group (UM console
-// views on the offline preview, F1–F7 of the r3 handoff). Without it: starts the
-// offline fixture server on release/candidate with the sanitized fixtures, runs the
+// views on the offline preview, F1–F7 of the r3 handoff). Without --url: starts the
+// offline fixture server on the role candidate with the sanitized fixtures, runs the
 // selected checks, writes <out>/result.json and screenshots, stops the server, exits
 // 1 if anything failed. --url points the browser checks at an already-running
 // origin instead (a live 8001 needs --settle 16000; its reads are real but every
@@ -32,17 +33,13 @@ const stamp = new Date()
 const out = resolve(
   opt("--out", resolve(paths.repoRoot, "output/console-gate", stamp))
 );
-const role = opt("--role", null);
+const role = opt("--role", "local");
 if (role !== null && !Object.hasOwn(ROLE_BUILDS, role)) {
   console.error(`--role 只接受 ${Object.keys(ROLE_BUILDS).join(" / ")}`);
   process.exit(2);
 }
-const build = resolve(
-  opt("--build", role ? ROLE_BUILDS[role] : paths.candidateDir)
-);
-const fixturesFile = resolve(
-  opt("--fixtures", role ? ROLE_FIXTURES[role] : paths.fixtures)
-);
+const build = resolve(opt("--build", ROLE_BUILDS[role]));
+const fixturesFile = resolve(opt("--fixtures", ROLE_FIXTURES[role]));
 const only = new Set(
   opt("--only", role === "cloud" ? "cloud" : "um").split(",")
 );

@@ -804,7 +804,7 @@ def build_registry(ledger_paths: dict[str, str] | None = None) -> dict:
              "path": watch_path("chat2api-watch.log"),
              "rotating": True, "rotation_index": 1},
         ]},
-        {"source": "console", "display": "费用统计服务 8001（本控制台宿主）",
+        {"source": "console", "display": "用量统计服务 8001（本控制台宿主）",
          "categories": [],
          "note": "8001 宿主不落盘行日志（start_usage_service.bat 无重定向，"
                  "usagesrv 的输出只到隐藏窗口）；控制台自身的操作记录在"

@@ -17,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_retired_features.py"
@@ -65,6 +66,39 @@ class RetiredFeatureAuditTests(unittest.TestCase):
         self.assertIn("workbench", violations[0])
         self.assertIn("app/production.py", violations[0])
 
+    def test_unreadable_file_fails_closed_with_a_reason(self):
+        audit = _load_audit()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app").mkdir()
+            path = root / "app" / "bad.py"
+            path.write_text("clean\n", encoding="utf-8")
+            original = Path.read_text
+
+            def read_text(self, *args, **kwargs):
+                if self == path:
+                    raise OSError("permission denied")
+                return original(self, *args, **kwargs)
+
+            with mock.patch.object(Path, "read_text", read_text):
+                violations = audit.find_violations(root, allowlist=())
+        self.assertEqual(1, len(violations))
+        self.assertIn("app/bad.py", violations[0])
+        self.assertIn("unreadable", violations[0])
+        self.assertIn("permission denied", violations[0])
+
+    def test_non_utf8_file_fails_closed_with_a_reason(self):
+        audit = _load_audit()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app").mkdir()
+            (root / "app" / "bad.py").write_bytes(b"workbench \xff\n")
+            violations = audit.find_violations(root, allowlist=())
+        self.assertEqual(1, len(violations))
+        self.assertIn("app/bad.py", violations[0])
+        self.assertIn("unreadable", violations[0])
+        self.assertIn("UnicodeDecodeError", violations[0])
+
     def test_retired_term_inside_allowlist_is_allowed(self):
         audit = _load_audit()
         with tempfile.TemporaryDirectory() as directory:
@@ -110,7 +144,10 @@ class RetiredFeatureAuditTests(unittest.TestCase):
                 "model.settings_", "model.task_", "pricing_rules",
                 "magpie_prices", "price env", "public_supervision",
                 "share_dispatch", "backend_supervision",
-                "consumer helpers", "retired services gate"):
+                "consumer helpers", "retired services gate",
+                "dsh-cost-meter", "retired cost fields",
+                "retired usage wording", "retired share actions",
+                "cloud dispatch"):
             self.assertIn(required, names)
 
     def test_check_sh_invokes_the_audit(self):

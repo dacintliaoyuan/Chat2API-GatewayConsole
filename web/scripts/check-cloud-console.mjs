@@ -113,7 +113,7 @@ test("A2: an operation id for another intent is not accepted as this submit", ()
     {
       operation: {
         id: "op-2",
-        action: "share.stop",
+        action: "share.gateway_restart",
         target: "share",
         state: "running",
       },
@@ -2078,7 +2078,6 @@ test("D18-13: the chart offers 7/14/30 days, keeps the total in the tooltip and 
           models: [],
           undated: null,
           coverage: dayUsage(beijingDay(Date.now())).coverage,
-          costCny: 0.005,
           tokenUsage: dayUsage(beijingDay(Date.now())).tokenUsage,
         },
         {
@@ -2088,7 +2087,6 @@ test("D18-13: the chart offers 7/14/30 days, keeps the total in the tooltip and 
           models: [],
           undated: null,
           coverage: { ...dayUsage("x").coverage, requests: 2 },
-          costCny: null,
           tokenUsage: {
             totalTokens: null,
             lowerBoundTokens: null,
@@ -2200,22 +2198,13 @@ function chartUsagePayload() {
   const coverage = {
     requests: 1,
     unknownRequests: 0,
-    unpricedRequests: 0,
     incompleteRequests: 0,
     records: 1,
-    pricedRequests: 1,
     unknownTimeRequests: 0,
-    pricingUnavailableRequests: 0,
-    costComplete: true,
-    costCnyPartial: false,
-    knownCostCnyPartial: false,
-    estimatedCostCnyPartial: false,
     cacheReportedRequests: 0,
     cacheUnreportedRequests: 0,
     cacheUnknownRequests: 0,
-    cacheUnknownPricedRequests: 0,
     excludedUnknownTimeRequests: 0,
-    localCoverageAvailable: true,
   };
   const tokenUsage = {
     totalTokens: 10,
@@ -2238,24 +2227,14 @@ function chartUsagePayload() {
     cacheUnknownRequests: 0,
   };
   const summary = {
-    knownCostUsd: 0.001,
-    estimatedCostUsd: 0,
-    costCny: 0.005,
-    knownCostCny: 0.005,
-    estimatedCostCny: 0,
     inputTokens: 6,
     outputTokens: 4,
     requests: 1,
     unknownRequests: 0,
-    unpricedRequests: 0,
     incompleteRequests: 0,
     unknownTimeRequests: 0,
-    costCnyPartial: false,
-    knownCostCnyPartial: false,
-    estimatedCostCnyPartial: false,
     coverage,
     tokenUsage,
-    priceVersions: [],
   };
   return {
     keys: [
@@ -2293,7 +2272,6 @@ function failedUsage(count = 3) {
         undated: null,
         requests: count,
         coverage,
-        costCny: day.costCny,
         tokenUsage: day.tokenUsage,
       },
     ],
@@ -2898,18 +2876,15 @@ test("D18-14: today's figures are mono, right-aligned to one line, and the trend
 });
 
 const ready = (value) => ({ state: "ready", at: Date.now(), value });
-const dayUsage = (day, cost = 0.005) => ({
+const dayUsage = (day) => ({
   identity: day,
   coverage: {
     requests: 1,
     records: 1,
     unknownRequests: 0,
-    unpricedRequests: 0,
     incompleteRequests: 1,
     unknownTimeRequests: 0,
     cacheUnreportedRequests: 0,
-    costCnyPartial: true,
-    costComplete: false,
   },
   tokenUsage: {
     totalTokens: 10,
@@ -2919,9 +2894,6 @@ const dayUsage = (day, cost = 0.005) => ({
     complete: true,
     unknownRequests: 0,
   },
-  costCny: cost,
-  knownCostCny: cost,
-  estimatedCostCny: 0,
 });
 const emptyBucket = {
   days: [],
@@ -2931,14 +2903,10 @@ const emptyBucket = {
     requests: 0,
     records: 0,
     unknownRequests: 0,
-    unpricedRequests: 0,
     incompleteRequests: 0,
     unknownTimeRequests: 0,
     cacheUnreportedRequests: 0,
-    costCnyPartial: false,
-    costComplete: true,
   },
-  costCny: 0,
   tokenUsage: {
     totalTokens: 0,
     inputTokens: 0,
@@ -2990,7 +2958,6 @@ const overviewModel = (overrides = {}) => {
           models: [],
           undated: null,
           coverage: day.coverage,
-          costCny: day.costCny,
           tokenUsage: day.tokenUsage,
         },
       ],
@@ -3363,11 +3330,6 @@ const requestRow = (overrides = {}) => ({
   durationMs: 1200,
   cacheTokens: 0,
   reasoningTokens: null,
-  priced: true,
-  priceVersion: "v1",
-  costUsd: 0.001,
-  costCny: 0.005,
-  costCnyPartial: false,
   ...overrides,
 });
 const requestsPage = (rows, nextCursor = null) => ({

@@ -198,7 +198,7 @@ def tearDownModule():
 FAKE_SNAPSHOT = {
     "ok": True,
     "services": [{
-        "key": "usage", "display_name": "费用统计", "port": 8001,
+        "key": "usage", "display_name": "用量统计", "port": 8001,
         "state": "Running", "healthy": True, "detail": "运行中",
         "process_ids": [1],
     }],
@@ -646,7 +646,7 @@ class ConsoleReadTests(ConsoleApiTestBase):
         status, raw = self.req("GET", "/api/console/services", headers=auth)
         data = json.loads(raw)
         self.assertEqual(status, 200)
-        self.assertEqual(data["services"][0]["display_name"], "费用统计")
+        self.assertEqual(data["services"][0]["display_name"], "用量统计")
         self.assertIs(data["meta"]["cached"], False)
         status, raw = self.req("GET", "/api/console/services", headers=auth)
         data = json.loads(raw)

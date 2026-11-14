@@ -533,7 +533,7 @@ class TestGatewayRestart(ShareActionsTestBase):
         self.assertEqual(set(result["after"]), set(m._DIAG_LAYER_KEYS))
         self.assertEqual(result["maintenance"]["lease"]["lease_id"],
                          _LEASE_ID)
-        self.assertIn("share.stop→share.start", result["note"])
+        self.assertIn("旧的本机停止→启动动作代替", result["note"])
 
     def test_44_cancel_after_side_effect_returns_actual_result(self):
         broker = _BrokerStub(verify_running=True)

@@ -598,7 +598,13 @@ export function startPreview(
               ok: true,
               summary: "通过 64万 字符 · 上游没有报告 Token",
             }
-          : null,
+          : scenario === "attention" && m === 3
+            ? {
+                at: now - 2 * DAY,
+                ok: false,
+                summary: "通过 16万 字符 · 上游限流（HTTP 429，不构成上限）",
+              }
+            : null,
   }));
   const history: UmTestRecord[] = zero
     ? []

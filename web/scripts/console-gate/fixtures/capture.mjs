@@ -13,7 +13,7 @@
 // commit it.
 import { writeFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { createContext, paths } from "../core.mjs";
+import { createContext, paths, ROLE_BUILDS } from "../core.mjs";
 import { startFixtureServer } from "../fixture-server.mjs";
 
 const argv = process.argv.slice(2);
@@ -41,7 +41,7 @@ mkdirSync(OUT, { recursive: true });
 const empty = resolve(OUT, "empty-fixtures.json");
 writeFileSync(empty, "{}");
 const server = await startFixtureServer({
-  build: opt("--build", paths.candidateDir),
+  build: opt("--build", ROLE_BUILDS.local),
   fixtures: empty,
 });
 const DENY = /\/share-management\/keys\/|secret|plaintext|reveal/i;

@@ -873,7 +873,7 @@ def production_maintenance_status(*, broker=None):
 
 def production_gateway_restart(budget_s=None, *, broker=None):
     """A9-4: ONE bounded 8100 single-layer restart through the restricted
-    broker host path — NEVER share.stop -> share.start (hard boundary #6).
+    broker host path — NEVER stop-then-start through the console (hard boundary #6).
 
     The broker reply is authoritative: ``restarted`` + ``stopped_confirmed``
     + ``running_confirmed`` are ALL required, otherwise the action fails

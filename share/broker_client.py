@@ -585,7 +585,7 @@ class BrokerClient:
 
     def gateway_restart(self, component: str, budget_s: int) -> BrokerResult:
         """8100 single-layer restart through the restricted broker host path
-        (never share.stop -> share.start). The exchange is BLOCKING and bounded:
+        (never stop-then-start through the console). The exchange is BLOCKING and bounded:
         budget_s + 15 seconds, capped at the frozen 180 second protocol bound
         (budget_s itself stays wire-bounded by the broker whitelist)."""
         budget = int(budget_s)

@@ -1,5 +1,5 @@
 import { escapeHtml } from "../html";
-import type { CostDetail, ShareUsage } from "../console/backend/types";
+import type { UsageDetail, ShareUsage } from "../console/backend/types";
 import {
   FAILURE_WORD,
   lastValue,
@@ -56,7 +56,7 @@ export const toneStatus = (tone: Tone, word: string) =>
 
 /** The fields every usage aggregate carries; a key row, the unattributed bucket
  *  and a day/model detail all satisfy this structurally. */
-export type SummaryRow = Pick<CostDetail, "coverage" | "tokenUsage">;
+export type SummaryRow = Pick<UsageDetail, "coverage" | "tokenUsage">;
 export type UsageAggregate = {
   requests: number | null;
   tokens: number | null;
@@ -126,7 +126,7 @@ export const zeroAggregate = (): UsageAggregate => ({
   records: 0,
 });
 export function windowSum(
-  days: readonly CostDetail[],
+  days: readonly UsageDetail[],
   window: ReadonlySet<string>
 ): UsageAggregate {
   return aggregateRows(days.filter((row) => window.has(row.identity)));
@@ -149,7 +149,7 @@ export function dailyTotals(usage: ShareUsage): DailyTotals {
   const buckets = new Map<string, SummaryRow[]>();
   let hasDaily = false;
   let missingKeys = 0;
-  const add = (rows: readonly CostDetail[]) => {
+  const add = (rows: readonly UsageDetail[]) => {
     if (rows.length) hasDaily = true;
     for (const row of rows) {
       const bucket = buckets.get(row.identity) ?? [];

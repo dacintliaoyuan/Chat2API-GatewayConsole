@@ -215,7 +215,7 @@ _Avoid_: 上游请求重试、整链恢复
 
 **单层重启 (Single-layer restart)**:
 只重启 API 入口或 UM 后端中的一侧，并经临时维护租约暂停另一侧接收、有界排空后再恢复；不重启另一侧实例，也不以整链关闭再开启代替。
-_Avoid_: 整链重启、share.stop→share.start
+_Avoid_: 整链重启、旧的本机停止→启动动作
 
 
 
@@ -278,10 +278,6 @@ _Avoid_: 用前端隐藏卡片代替后端隔离、云端照搬整个私人 data
 **Linux 平台适配 (Linux platform adaptation)**:
 分享链在 POSIX 上的等价实现：重认证锁用 `fcntl.flock`（Windows 保留 `msvcrt`），Key 秘密保护用 AES-256-GCM 文件密钥（`CHAT2API_SHARE_SECRET_KEY_FILE`，0600/当前 uid，Windows 保留 DPAPI），broker 与实例通道用 AF_UNIX＋`SO_PEERCRED`（父目录 0700、socket 0600），受限服务管理用 pid 文件＋`/proc` 身份与信号（Windows 保留计划任务/PowerShell）。秘密文件读取统一走 `read_private_secret_path`；POSIX 上保护失败一律 fail-closed，不静默降级成 hash-only。
 _Avoid_: 把 Unix 路径当 Named Pipe、只改前端、用 root 掩盖权限问题
-
-**云端发送调度 (Cloud dispatch)**:
-
-_Avoid_: 云端分享发送调度（旧称）、入口外额外排队、把调度当上游限流、到期即拒绝
 
 **云端运维隔离件 (Cloud operations isolation)**:
 `um-cloud-deploy/` 的预算保护与自动备份已从默认装配移除（D18-11）：`install.sh` 不再传 `--budget-db/--budget-config`、不再安装 `um-share-backup.timer`，`console.env` 不再写 `UM_CLOUD_BUDGET_DB` 等预算读面变量，`update.sh`/`rollback.sh` 不再执行切换前备份检查点。`backup_restore.py` 只保留显式备份/恢复（默认显式备份参数、`--restore-backup`、`--deployment-restore`），由运维单独授权；现有备份文件与 `backup.key` 不删除。真实云机上的 `um-share-backup.timer` 停用是逐对象的运维动作，本目录不代为实现；未获授权前不得声称已停用或已闭环。

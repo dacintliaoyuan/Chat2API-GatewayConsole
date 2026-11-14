@@ -61,7 +61,7 @@ systemd
 ```
 
 1. **8100 只由 broker 拉起**：`um-share-broker.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`，这是唯一允许的 8100 Popen 路径。
-2. **控制台不直接执行 8100 入口**：`NoExecPaths` 阻止直接执行 `chat2api.py`，`ReadOnlyPaths` 阻止写停止意图；云端注册表里 `share.start/stop/estop/retry_stop` 是 `enabled=False`。
+2. **控制台不直接执行 8100 入口**：`NoExecPaths` 阻止直接执行 `chat2api.py`，`ReadOnlyPaths` 阻止写停止意图；旧 Windows 本机分享动作已退役、不再注册。
 3. **云端不安装第二套 watchdog**：8100 合并进程由 broker 唯一拉起；`share.gateway_restart` 走 broker restart。
 4. **systemd 是最终 cgroup 围栏**：两个 unit 都是 `KillMode=control-group`；`systemctl stop` 不会留下孤儿进程。
 5. **停止意图持久化**：`LinuxHostOps.stop_host()` 在发信号前写 `/run/um-share/share-host-desired.json`；只有 `um-share-brokerctl.py start-explicit` 能清停止意图。

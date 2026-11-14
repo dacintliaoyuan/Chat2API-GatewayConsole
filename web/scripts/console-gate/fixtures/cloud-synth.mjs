@@ -18,8 +18,6 @@ const FIXTURES = {
     "status": 200,
     "body": {
       "generatedAt": "2026-10-31T10:17:27+08:00",
-      "exchangeRate": 7.1,
-      "currency": "CNY",
       "role": "cloud",
       "assembly": {
         "role": "cloud",
@@ -28,31 +26,10 @@ const FIXTURES = {
         ]
       },
       "sources": {},
-      "peak": {
-        "enabled": true,
-        "effectiveAt": "2026-08-01",
-        "windows": [
-          {
-            "beijing": "09:00-12:00",
-            "rate": 2
-          },
-          {
-            "beijing": "14:00-18:00",
-            "rate": 2
-          }
-        ],
-        "weekendOffpeak": true,
-        "note": "高峰按价表 peak 子档计价；北京时间周六/周日全天谷价（与分享计价同一价目表）"
-      },
       "services": {},
       "dsh": {
         "url": null,
         "note": "云端角色未装配 DSH 快照读取"
-      },
-      "dshMergedIntoTotal": {
-        "day": null,
-        "costCny": 0,
-        "note": "云端角色不并入任何本地 DSH 账本"
       },
       "_generated_epoch": 1793413047.4,
       "_cached_age_seconds": 152.6
@@ -404,26 +381,12 @@ const FIXTURES = {
           "inputTokens": 265100,
           "outputTokens": 35860,
           "unknownRequests": 1,
-          "unpricedRequests": 0,
-          "costUsd": 0.10573,
-          "knownCostUsd": 0.10573,
-          "estimatedCostUsd": 0,
-          "costCny": 0.7531,
-          "knownCostCny": 0.7531,
-          "estimatedCostCny": null,
-          "costCnyPartial": true,
-          "knownCostCnyPartial": true,
-          "estimatedCostCnyPartial": true,
           "coverage": {
             "records": 56,
-            "pricedRequests": 55,
             "unknownTimeRequests": 0,
-            "pricingUnavailableRequests": 0,
             "cacheReportedRequests": 53,
             "cacheUnreportedRequests": 3,
             "cacheUnknownRequests": 0,
-            "cacheUnknownPricedRequests": 2,
-            "costComplete": false,
             "completeUsageRequests": 55,
             "partialUsageRequests": 0,
             "estimatedUsageRequests": 0,
@@ -449,10 +412,6 @@ const FIXTURES = {
             "cacheUnreportedRequests": 3,
             "cacheUnknownRequests": 0
           },
-          "priceVersions": [
-            "1970-01-01",
-            "2026-10-27T10:00:00+08:00"
-          ],
           "models": [
             {
               "model": "deepseek-v4-flash",
@@ -460,26 +419,12 @@ const FIXTURES = {
               "inputTokens": 245900,
               "outputTokens": 31540,
               "unknownRequests": 1,
-              "unpricedRequests": 0,
-              "costUsd": 0.101059,
-              "knownCostUsd": 0.101059,
-              "estimatedCostUsd": 0,
-              "costCny": 0.7198,
-              "knownCostCny": 0.7198,
-              "estimatedCostCny": null,
-              "costCnyPartial": true,
-              "knownCostCnyPartial": true,
-              "estimatedCostCnyPartial": true,
               "coverage": {
                 "records": 47,
-                "pricedRequests": 46,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 44,
                 "cacheUnreportedRequests": 3,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 2,
-                "costComplete": false,
                 "completeUsageRequests": 46,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -504,11 +449,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 44,
                 "cacheUnreportedRequests": 3,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "1970-01-01",
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             },
             {
               "model": "glm-5.3-flash",
@@ -516,26 +457,12 @@ const FIXTURES = {
               "inputTokens": 19200,
               "outputTokens": 4320,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.004671,
-              "knownCostUsd": 0.004671,
-              "estimatedCostUsd": 0,
-              "costCny": 0.0333,
-              "knownCostCny": 0.0333,
-              "estimatedCostCny": 0,
-              "costCnyPartial": false,
-              "knownCostCnyPartial": false,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 9,
-                "pricedRequests": 9,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 9,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": true,
                 "completeUsageRequests": 9,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -560,11 +487,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 9,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "1970-01-01",
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             }
           ],
           "days": [
@@ -574,26 +497,12 @@ const FIXTURES = {
               "inputTokens": 47000,
               "outputTokens": 6380,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.019523,
-              "knownCostUsd": 0.019523,
-              "estimatedCostUsd": 0,
-              "costCny": 0.1406,
-              "knownCostCny": 0.1406,
-              "estimatedCostCny": 0,
-              "costCnyPartial": false,
-              "knownCostCnyPartial": false,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 11,
-                "pricedRequests": 11,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 11,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": true,
                 "completeUsageRequests": 11,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -618,10 +527,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 11,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "1970-01-01"
-              ]
+              }
             },
             {
               "day": "2026-10-25",
@@ -629,26 +535,12 @@ const FIXTURES = {
               "inputTokens": 20500,
               "outputTokens": 2560,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.005109,
-              "knownCostUsd": 0.005109,
-              "estimatedCostUsd": 0,
-              "costCny": 0.0368,
-              "knownCostCny": 0.0368,
-              "estimatedCostCny": 0,
-              "costCnyPartial": false,
-              "knownCostCnyPartial": false,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 5,
-                "pricedRequests": 5,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 5,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": true,
                 "completeUsageRequests": 5,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -673,10 +565,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 5,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "1970-01-01"
-              ]
+              }
             },
             {
               "day": "2026-10-27",
@@ -684,26 +573,12 @@ const FIXTURES = {
               "inputTokens": 76800,
               "outputTokens": 10560,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.036324,
-              "knownCostUsd": 0.036324,
-              "estimatedCostUsd": 0,
-              "costCny": 0.2579,
-              "knownCostCny": 0.2579,
-              "estimatedCostCny": 0,
-              "costCnyPartial": false,
-              "knownCostCnyPartial": false,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 12,
-                "pricedRequests": 12,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 12,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": true,
                 "completeUsageRequests": 12,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -728,10 +603,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 12,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             },
             {
               "day": "2026-10-29",
@@ -739,26 +611,12 @@ const FIXTURES = {
               "inputTokens": 56000,
               "outputTokens": 7000,
               "unknownRequests": 1,
-              "unpricedRequests": 0,
-              "costUsd": 0.028547,
-              "knownCostUsd": 0.028547,
-              "estimatedCostUsd": 0,
-              "costCny": 0.2027,
-              "knownCostCny": 0.2027,
-              "estimatedCostCny": 0,
-              "costCnyPartial": true,
-              "knownCostCnyPartial": false,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 11,
-                "pricedRequests": 10,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 10,
                 "cacheUnreportedRequests": 1,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": false,
                 "completeUsageRequests": 10,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -783,10 +641,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 10,
                 "cacheUnreportedRequests": 1,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             },
             {
               "day": "2026-10-30",
@@ -794,26 +649,12 @@ const FIXTURES = {
               "inputTokens": 21600,
               "outputTokens": 3960,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.005856,
-              "knownCostUsd": 0.005856,
-              "estimatedCostUsd": 0,
-              "costCny": 0.0416,
-              "knownCostCny": 0.0416,
-              "estimatedCostCny": null,
-              "costCnyPartial": true,
-              "knownCostCnyPartial": true,
-              "estimatedCostCnyPartial": true,
               "coverage": {
                 "records": 8,
-                "pricedRequests": 8,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 6,
                 "cacheUnreportedRequests": 2,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 2,
-                "costComplete": false,
                 "completeUsageRequests": 8,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -838,10 +679,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 6,
                 "cacheUnreportedRequests": 2,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             },
             {
               "day": "2026-10-31",
@@ -849,26 +687,12 @@ const FIXTURES = {
               "inputTokens": 43200,
               "outputTokens": 5400,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.010371,
-              "knownCostUsd": 0.010371,
-              "estimatedCostUsd": 0,
-              "costCny": 0.0736,
-              "knownCostCny": 0.0736,
-              "estimatedCostCny": 0,
-              "costCnyPartial": false,
-              "knownCostCnyPartial": false,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 9,
-                "pricedRequests": 9,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 9,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": true,
                 "completeUsageRequests": 9,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -893,10 +717,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 9,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             }
           ],
           "undated": null,
@@ -909,26 +730,12 @@ const FIXTURES = {
           "inputTokens": 97100,
           "outputTokens": 24180,
           "unknownRequests": 0,
-          "unpricedRequests": 2,
-          "costUsd": 0.021774,
-          "knownCostUsd": 0.021144,
-          "estimatedCostUsd": 0.00063,
-          "costCny": 0.1554,
-          "knownCostCny": 0.151,
-          "estimatedCostCny": 0.0045,
-          "costCnyPartial": true,
-          "knownCostCnyPartial": true,
-          "estimatedCostCnyPartial": true,
           "coverage": {
             "records": 33,
-            "pricedRequests": 31,
             "unknownTimeRequests": 0,
-            "pricingUnavailableRequests": 0,
             "cacheReportedRequests": 32,
             "cacheUnreportedRequests": 1,
             "cacheUnknownRequests": 0,
-            "cacheUnknownPricedRequests": 1,
-            "costComplete": false,
             "completeUsageRequests": 32,
             "partialUsageRequests": 0,
             "estimatedUsageRequests": 1,
@@ -954,10 +761,6 @@ const FIXTURES = {
             "cacheUnreportedRequests": 1,
             "cacheUnknownRequests": 0
           },
-          "priceVersions": [
-            "1970-01-01",
-            "2026-10-27T10:00:00+08:00"
-          ],
           "models": [
             {
               "model": "glm-5.3-flash",
@@ -965,26 +768,12 @@ const FIXTURES = {
               "inputTokens": 92900,
               "outputTokens": 23420,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.021774,
-              "knownCostUsd": 0.021144,
-              "estimatedCostUsd": 0.00063,
-              "costCny": 0.1554,
-              "knownCostCny": 0.151,
-              "estimatedCostCny": 0.0045,
-              "costCnyPartial": true,
-              "knownCostCnyPartial": true,
-              "estimatedCostCnyPartial": true,
               "coverage": {
                 "records": 31,
-                "pricedRequests": 31,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 30,
                 "cacheUnreportedRequests": 1,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 1,
-                "costComplete": false,
                 "completeUsageRequests": 30,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 1,
@@ -1009,11 +798,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 30,
                 "cacheUnreportedRequests": 1,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "1970-01-01",
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             },
             {
               "model": "gemma-4-31b-it",
@@ -1021,26 +806,12 @@ const FIXTURES = {
               "inputTokens": 4200,
               "outputTokens": 760,
               "unknownRequests": 0,
-              "unpricedRequests": 2,
-              "costUsd": 0,
-              "knownCostUsd": 0,
-              "estimatedCostUsd": 0,
-              "costCny": null,
-              "knownCostCny": null,
-              "estimatedCostCny": 0,
-              "costCnyPartial": true,
-              "knownCostCnyPartial": true,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 2,
-                "pricedRequests": 0,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 2,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": false,
                 "completeUsageRequests": 2,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -1065,10 +836,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 2,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             }
           ],
           "days": [
@@ -1078,26 +846,12 @@ const FIXTURES = {
               "inputTokens": 21000,
               "outputTokens": 6300,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.00544,
-              "knownCostUsd": 0.00544,
-              "estimatedCostUsd": 0,
-              "costCny": 0.0392,
-              "knownCostCny": 0.0392,
-              "estimatedCostCny": 0,
-              "costCnyPartial": false,
-              "knownCostCnyPartial": false,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 7,
-                "pricedRequests": 7,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 7,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": true,
                 "completeUsageRequests": 7,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -1122,10 +876,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 7,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "1970-01-01"
-              ]
+              }
             },
             {
               "day": "2026-10-24",
@@ -1133,26 +884,12 @@ const FIXTURES = {
               "inputTokens": 10400,
               "outputTokens": 2800,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.00296,
-              "knownCostUsd": 0.00296,
-              "estimatedCostUsd": 0,
-              "costCny": 0.0213,
-              "knownCostCny": 0.0213,
-              "estimatedCostCny": 0,
-              "costCnyPartial": false,
-              "knownCostCnyPartial": false,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 4,
-                "pricedRequests": 4,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 4,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": true,
                 "completeUsageRequests": 4,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -1177,10 +914,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 4,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "1970-01-01"
-              ]
+              }
             },
             {
               "day": "2026-10-28",
@@ -1188,26 +922,12 @@ const FIXTURES = {
               "inputTokens": 30600,
               "outputTokens": 7320,
               "unknownRequests": 0,
-              "unpricedRequests": 2,
-              "costUsd": 0.005274,
-              "knownCostUsd": 0.005274,
-              "estimatedCostUsd": 0,
-              "costCny": 0.0374,
-              "knownCostCny": 0.0374,
-              "estimatedCostCny": 0,
-              "costCnyPartial": true,
-              "knownCostCnyPartial": true,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 10,
-                "pricedRequests": 8,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 10,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": false,
                 "completeUsageRequests": 10,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -1232,10 +952,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 10,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             },
             {
               "day": "2026-10-30",
@@ -1243,26 +960,12 @@ const FIXTURES = {
               "inputTokens": 17400,
               "outputTokens": 4560,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.004153,
-              "knownCostUsd": 0.004153,
-              "estimatedCostUsd": 0,
-              "costCny": 0.0295,
-              "knownCostCny": 0.0295,
-              "estimatedCostCny": 0,
-              "costCnyPartial": false,
-              "knownCostCnyPartial": false,
-              "estimatedCostCnyPartial": false,
               "coverage": {
                 "records": 6,
-                "pricedRequests": 6,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 6,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 0,
-                "costComplete": true,
                 "completeUsageRequests": 6,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 0,
@@ -1287,10 +990,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 6,
                 "cacheUnreportedRequests": 0,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             },
             {
               "day": "2026-10-31",
@@ -1298,26 +998,12 @@ const FIXTURES = {
               "inputTokens": 17700,
               "outputTokens": 3200,
               "unknownRequests": 0,
-              "unpricedRequests": 0,
-              "costUsd": 0.003948,
-              "knownCostUsd": 0.003318,
-              "estimatedCostUsd": 0.00063,
-              "costCny": 0.028,
-              "knownCostCny": 0.0236,
-              "estimatedCostCny": 0.0045,
-              "costCnyPartial": true,
-              "knownCostCnyPartial": true,
-              "estimatedCostCnyPartial": true,
               "coverage": {
                 "records": 6,
-                "pricedRequests": 6,
                 "unknownTimeRequests": 0,
-                "pricingUnavailableRequests": 0,
                 "cacheReportedRequests": 5,
                 "cacheUnreportedRequests": 1,
                 "cacheUnknownRequests": 0,
-                "cacheUnknownPricedRequests": 1,
-                "costComplete": false,
                 "completeUsageRequests": 5,
                 "partialUsageRequests": 0,
                 "estimatedUsageRequests": 1,
@@ -1342,10 +1028,7 @@ const FIXTURES = {
                 "cacheReportedRequests": 5,
                 "cacheUnreportedRequests": 1,
                 "cacheUnknownRequests": 0
-              },
-              "priceVersions": [
-                "2026-10-27T10:00:00+08:00"
-              ]
+              }
             }
           ],
           "undated": null,
@@ -1359,26 +1042,12 @@ const FIXTURES = {
         "inputTokens": 3300,
         "outputTokens": 240,
         "unknownRequests": 0,
-        "unpricedRequests": 0,
-        "costUsd": 0.00114,
-        "knownCostUsd": 0.00039,
-        "estimatedCostUsd": 0.00075,
-        "costCny": 0.0081,
-        "knownCostCny": 0.0028,
-        "estimatedCostCny": 0.0053,
-        "costCnyPartial": true,
-        "knownCostCnyPartial": true,
-        "estimatedCostCnyPartial": true,
         "coverage": {
           "records": 3,
-          "pricedRequests": 3,
           "unknownTimeRequests": 0,
-          "pricingUnavailableRequests": 0,
           "cacheReportedRequests": 2,
           "cacheUnreportedRequests": 1,
           "cacheUnknownRequests": 0,
-          "cacheUnknownPricedRequests": 1,
-          "costComplete": false,
           "completeUsageRequests": 2,
           "partialUsageRequests": 0,
           "estimatedUsageRequests": 1,
@@ -1404,10 +1073,6 @@ const FIXTURES = {
           "cacheUnreportedRequests": 1,
           "cacheUnknownRequests": 0
         },
-        "priceVersions": [
-          "1970-01-01",
-          "2026-10-27T10:00:00+08:00"
-        ],
         "models": [
           {
             "model": "deepseek-v4-flash",
@@ -1415,26 +1080,12 @@ const FIXTURES = {
             "inputTokens": 1500,
             "outputTokens": 0,
             "unknownRequests": 0,
-            "unpricedRequests": 0,
-            "costUsd": 0.00075,
-            "knownCostUsd": 0,
-            "estimatedCostUsd": 0.00075,
-            "costCny": 0.0053,
-            "knownCostCny": null,
-            "estimatedCostCny": 0.0053,
-            "costCnyPartial": true,
-            "knownCostCnyPartial": true,
-            "estimatedCostCnyPartial": true,
             "coverage": {
               "records": 1,
-              "pricedRequests": 1,
               "unknownTimeRequests": 0,
-              "pricingUnavailableRequests": 0,
               "cacheReportedRequests": 0,
               "cacheUnreportedRequests": 1,
               "cacheUnknownRequests": 0,
-              "cacheUnknownPricedRequests": 1,
-              "costComplete": false,
               "completeUsageRequests": 0,
               "partialUsageRequests": 0,
               "estimatedUsageRequests": 1,
@@ -1459,10 +1110,7 @@ const FIXTURES = {
               "cacheReportedRequests": 0,
               "cacheUnreportedRequests": 1,
               "cacheUnknownRequests": 0
-            },
-            "priceVersions": [
-              "2026-10-27T10:00:00+08:00"
-            ]
+            }
           },
           {
             "model": "glm-5.3-flash",
@@ -1470,26 +1118,12 @@ const FIXTURES = {
             "inputTokens": 1800,
             "outputTokens": 240,
             "unknownRequests": 0,
-            "unpricedRequests": 0,
-            "costUsd": 0.00039,
-            "knownCostUsd": 0.00039,
-            "estimatedCostUsd": 0,
-            "costCny": 0.0028,
-            "knownCostCny": 0.0028,
-            "estimatedCostCny": 0,
-            "costCnyPartial": false,
-            "knownCostCnyPartial": false,
-            "estimatedCostCnyPartial": false,
             "coverage": {
               "records": 2,
-              "pricedRequests": 2,
               "unknownTimeRequests": 0,
-              "pricingUnavailableRequests": 0,
               "cacheReportedRequests": 2,
               "cacheUnreportedRequests": 0,
               "cacheUnknownRequests": 0,
-              "cacheUnknownPricedRequests": 0,
-              "costComplete": true,
               "completeUsageRequests": 2,
               "partialUsageRequests": 0,
               "estimatedUsageRequests": 0,
@@ -1514,10 +1148,7 @@ const FIXTURES = {
               "cacheReportedRequests": 2,
               "cacheUnreportedRequests": 0,
               "cacheUnknownRequests": 0
-            },
-            "priceVersions": [
-              "1970-01-01"
-            ]
+            }
           }
         ],
         "days": [
@@ -1527,26 +1158,12 @@ const FIXTURES = {
             "inputTokens": 1800,
             "outputTokens": 240,
             "unknownRequests": 0,
-            "unpricedRequests": 0,
-            "costUsd": 0.00039,
-            "knownCostUsd": 0.00039,
-            "estimatedCostUsd": 0,
-            "costCny": 0.0028,
-            "knownCostCny": 0.0028,
-            "estimatedCostCny": 0,
-            "costCnyPartial": false,
-            "knownCostCnyPartial": false,
-            "estimatedCostCnyPartial": false,
             "coverage": {
               "records": 2,
-              "pricedRequests": 2,
               "unknownTimeRequests": 0,
-              "pricingUnavailableRequests": 0,
               "cacheReportedRequests": 2,
               "cacheUnreportedRequests": 0,
               "cacheUnknownRequests": 0,
-              "cacheUnknownPricedRequests": 0,
-              "costComplete": true,
               "completeUsageRequests": 2,
               "partialUsageRequests": 0,
               "estimatedUsageRequests": 0,
@@ -1571,10 +1188,7 @@ const FIXTURES = {
               "cacheReportedRequests": 2,
               "cacheUnreportedRequests": 0,
               "cacheUnknownRequests": 0
-            },
-            "priceVersions": [
-              "1970-01-01"
-            ]
+            }
           },
           {
             "day": "2026-10-29",
@@ -1582,26 +1196,12 @@ const FIXTURES = {
             "inputTokens": 1500,
             "outputTokens": 0,
             "unknownRequests": 0,
-            "unpricedRequests": 0,
-            "costUsd": 0.00075,
-            "knownCostUsd": 0,
-            "estimatedCostUsd": 0.00075,
-            "costCny": 0.0053,
-            "knownCostCny": null,
-            "estimatedCostCny": 0.0053,
-            "costCnyPartial": true,
-            "knownCostCnyPartial": true,
-            "estimatedCostCnyPartial": true,
             "coverage": {
               "records": 1,
-              "pricedRequests": 1,
               "unknownTimeRequests": 0,
-              "pricingUnavailableRequests": 0,
               "cacheReportedRequests": 0,
               "cacheUnreportedRequests": 1,
               "cacheUnknownRequests": 0,
-              "cacheUnknownPricedRequests": 1,
-              "costComplete": false,
               "completeUsageRequests": 0,
               "partialUsageRequests": 0,
               "estimatedUsageRequests": 1,
@@ -1626,10 +1226,7 @@ const FIXTURES = {
               "cacheReportedRequests": 0,
               "cacheUnreportedRequests": 1,
               "cacheUnknownRequests": 0
-            },
-            "priceVersions": [
-              "2026-10-27T10:00:00+08:00"
-            ]
+            }
           }
         ],
         "undated": null
@@ -1649,16 +1246,6 @@ const FIXTURES = {
         "incompleteRequests": 3,
         "unknownUsageRequests": 1,
         "unknownTimeRequests": 0,
-        "unpricedRequests": 2,
-        "peakRequests": 46,
-        "unpricedModels": [
-          "gemma-4-31b-it"
-        ],
-        "priceVersions": [
-          "1970-01-01",
-          "2026-10-27T10:00:00+08:00"
-        ],
-        "priceFn": true,
         "attributionReasons": {
           "absent": 2,
           "no_key": 1
@@ -1666,9 +1253,6 @@ const FIXTURES = {
         "cacheReportedRequests": 87,
         "cacheUnreportedRequests": 5,
         "cacheUnknownRequests": 0,
-        "cacheUnknownPricedRequests": 4,
-        "costCnyPartial": true,
-        "rateFn": true,
         "keyNames": 2
       },
       "results": {
@@ -1803,12 +1387,7 @@ const FIXTURES = {
           "inputTokens": 100,
           "outputTokens": 20,
           "cacheTokens": 0,
-          "reasoningTokens": 0,
-          "priced": true,
-          "priceVersion": "2026-10-27T10:00:00+08:00",
-          "costUsd": 0.0001,
-          "costCny": 0.0007,
-          "costCnyPartial": false
+          "reasoningTokens": 0
         },
         {
           "requestId": "req-2",
@@ -1826,12 +1405,7 @@ const FIXTURES = {
           "inputTokens": null,
           "outputTokens": null,
           "cacheTokens": null,
-          "reasoningTokens": null,
-          "priced": false,
-          "priceVersion": null,
-          "costUsd": null,
-          "costCny": null,
-          "costCnyPartial": true
+          "reasoningTokens": null
         }
       ],
       "nextCursor": null,

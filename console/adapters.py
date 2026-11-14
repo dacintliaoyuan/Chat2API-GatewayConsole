@@ -604,8 +604,7 @@ def production_cloud_edge_status(*, runner=None):
 def _share_action_specs(cloud=False):
     """The UM share action catalogue registered by the cloud role.
 
-    The retired Windows local chain actions (``share.start`` / ``share.stop`` /
-    ``share.estop`` / ``share.retry_stop``) and their Funnel / TS public
+    The retired Windows local chain actions and their Funnel / TS public
     checks are gone with the old chain (#33); the dedicated-backend lifecycle,
     login/reauth and whole-chain actions are gone too (#34). The cloud
     catalogue keeps the read-only status/diagnostics and the restricted broker

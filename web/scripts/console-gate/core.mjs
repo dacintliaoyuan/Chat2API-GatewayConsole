@@ -15,7 +15,6 @@ export const paths = {
   here,
   console: resolve(here, "../.."),
   repoRoot: resolve(here, "../../.."),
-  candidateDir: resolve(here, "../../release/candidate"),
   fixtures: resolve(here, "fixtures/api.json"),
 };
 /** Role candidates (ADR 0001, vite --mode candidate-local / candidate-cloud) and
