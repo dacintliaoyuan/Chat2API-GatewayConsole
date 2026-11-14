@@ -55,7 +55,8 @@ class _StubAdminServer:
 
     def __init__(self, status_value="valid", login_code=202, on_status=None,
                  verify_value="needs_login", verify_code=200,
-                 verify_payload=None, on_verify=None, status_payload=None):
+                 verify_payload=None, on_verify=None, status_payload=None,
+                 status_code=200, status_raw=None):
         self.requests = []  # (method, path, headers-dict)
         self.login_code = login_code
         self.on_status = on_status
@@ -65,6 +66,8 @@ class _StubAdminServer:
                                if verify_payload is None else verify_payload)
         self.on_verify = on_verify
         self.status_payload = status_payload
+        self.status_code = status_code
+        self.status_raw = status_raw
         self._status_next = (status_value if callable(status_value)
                              else itertools.repeat(status_value).__next__)
         outer = self
@@ -99,11 +102,22 @@ class _StubAdminServer:
                 elif self.path == "/admin/auth/status":
                     if outer.on_status is not None:
                         outer.on_status()
-                    if outer.status_payload is not None:
-                        self._json(200, outer.status_payload)
+                    if outer.status_code is None:
+                        self.close_connection = True
+                        return
+                    if outer.status_raw is not None:
+                        self.send_response(outer.status_code)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length",
+                                           str(len(outer.status_raw)))
+                        self.end_headers()
+                        self.wfile.write(outer.status_raw)
+                    elif outer.status_payload is not None:
+                        self._json(outer.status_code, outer.status_payload)
                     else:
-                        self._json(200, {"state": outer._status_next(),
-                                         "label": "", "error": None})
+                        self._json(outer.status_code,
+                                   {"state": outer._status_next(),
+                                    "label": "", "error": None})
                 else:
                     self._json(404, {"error": "unknown endpoint"})
 
@@ -159,12 +173,14 @@ class ConsoleUmLoginTests(unittest.TestCase):
                     on_status=None, params=None, with_ctx=True,
                     verify_value="needs_login", verify_code=200,
                     verify_payload=None, on_verify=None,
-                    status_payload=None):
+                    status_payload=None, status_code=200,
+                    status_raw=None):
         stub = _StubAdminServer(
             status_value=status_value, login_code=login_code,
             on_status=on_status, verify_value=verify_value,
             verify_code=verify_code, verify_payload=verify_payload,
-            on_verify=on_verify, status_payload=status_payload)
+            on_verify=on_verify, status_payload=status_payload,
+            status_code=status_code, status_raw=status_raw)
         self.addCleanup(stub.stop)
         token_patcher = mock.patch.object(
             console_um_login.console_um_adapter, "_read_control_token",
@@ -536,6 +552,58 @@ class ConsoleUmLoginTests(unittest.TestCase):
         self.assertGreaterEqual(time.monotonic() - started, 0.2)
         self.assertEqual(caught.exception.code, "login_timeout_not_settled")
 
+    def test_24_soft_manual_progress_does_not_end_the_wait(self):
+        # ticket #41：只有真正 manual 的三类原因结束本轮；
+        # click-swallowed / unrecognized-control 仍在轮询 token。
+        for reason in ("openwebui_click_swallowed",
+                       "openwebui_button_unrecognized",
+                       "umpass_click_swallowed",
+                       "umpass_submit_unrecognized",
+                       "duo_prompt_waiting"):
+            with self.subTest(reason=reason):
+                status = {
+                    "state": "logging_in",
+                    "error": "manual_takeover_required:" + reason,
+                    "recovery": {"state": "running", "pause_reason": None},
+                }
+                self.assertIsNone(
+                    console_um_login._terminal_login_failure(status),
+                    "契约：%s 不是 terminal，控制台必须继续等待" % reason)
+
+    def test_25_only_the_three_manual_reasons_end_the_round(self):
+        for reason in ("umpass_mfa_required", "umpass_prefill_missing",
+                       "unrecognized_page"):
+            with self.subTest(reason=reason):
+                status = {
+                    "state": "failed",
+                    "error": "manual_takeover_required:" + reason,
+                    "recovery": {"state": "exhausted",
+                                 "pause_reason": "manual_takeover_required:"
+                                 + reason},
+                }
+                failure = console_um_login._terminal_login_failure(status)
+                self.assertIsNotNone(failure)
+                self.assertEqual(failure[0], "login_manual_takeover_required")
+                self.assertIn("manual_takeover_required:" + reason,
+                              failure[1])
+
+    def test_26_soft_manual_status_keeps_polling_until_the_budget(self):
+        case = self._start_case("Running", status_payload={
+            "state": "logging_in",
+            "label": "登录中（需人工：openwebui_click_swallowed）",
+            "error": "manual_takeover:openwebui_click_swallowed",
+            "recovery": {
+                "state": "running", "round": 1, "session_starts": 1,
+                "max_sessions": 6, "next_attempt_epoch": None,
+                "pause_reason": None,
+            },
+        }, params={"login_budget_s": 0.2, "poll_interval_s": 0.02})
+        started = time.monotonic()
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertGreaterEqual(time.monotonic() - started, 0.2)
+        self.assertEqual(caught.exception.code, "login_timeout_not_settled")
+
     def test_19_unknown_next_attempt_projects_as_null(self):
         # A8/A7: while another instance's live lease is the only reason for
         # waiting, the next attempt is UNKNOWN (null), not the old lease
@@ -558,6 +626,72 @@ class ConsoleUmLoginTests(unittest.TestCase):
         self.assertEqual(recovery["max_sessions"], 3)
         self.assertIsNone(recovery["next_attempt_epoch"])
         self.assertNotIn("lease_expires_epoch", recovery)
+
+
+class ConsoleAuthStatusReadTests(unittest.TestCase):
+    """Ticket #41：控制台状态读取复用 um_adapter 的同一错误分类。
+
+    ``console/um_login`` 以前把 401/403、URLError、非 200、JSON 损坏
+    统一压成 ``{state: None, error: None}``，登录等待只能看到超时。
+    这里要求读面保留 ``control_denied`` / ``status_unreachable`` /
+    ``status_query_failed`` / ``status_schema``。
+    """
+
+    def _case(self, **kwargs):
+        case = ConsoleUmLoginTests._start_case(self, "Running", **kwargs)
+        return case
+
+    def _read(self, **kwargs):
+        case = self._case(**kwargs)
+        return console_um_login._read_auth_status(
+            "http://127.0.0.1:%d" % case.stub.port, "token")
+
+    def test_http_401_keeps_control_denied(self):
+        status = self._read(status_code=401)
+        self.assertIsNone(status["state"])
+        self.assertEqual(status["read_error"]["code"], "control_denied")
+
+    def test_closed_connection_keeps_status_unreachable(self):
+        status = self._read(status_code=None)
+        self.assertIsNone(status["state"])
+        self.assertEqual(status["read_error"]["code"], "status_unreachable")
+
+    def test_non_200_keeps_status_query_failed(self):
+        status = self._read(status_code=503)
+        self.assertIsNone(status["state"])
+        self.assertEqual(status["read_error"]["code"],
+                         "status_query_failed")
+
+    def test_corrupt_json_keeps_status_schema(self):
+        status = self._read(status_raw=b"{not json")
+        self.assertIsNone(status["state"])
+        self.assertEqual(status["read_error"]["code"], "status_schema")
+
+    def test_missing_state_keeps_status_schema(self):
+        status = self._read(status_payload={"label": "no state"})
+        self.assertIsNone(status["state"])
+        self.assertEqual(status["read_error"]["code"], "status_schema")
+
+    def test_control_denied_ends_the_wait_instead_of_a_timeout(self):
+        case = self._case(status_code=401,
+                          params={"login_budget_s": 5.0,
+                                   "poll_interval_s": 0.02})
+        started = time.monotonic()
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(caught.exception.code, "control_denied")
+
+    def test_transient_read_error_keeps_polling_until_the_budget(self):
+        case = self._case(status_code=503,
+                          params={"login_budget_s": 0.2,
+                                   "poll_interval_s": 0.02})
+        started = time.monotonic()
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertGreaterEqual(time.monotonic() - started, 0.2)
+        self.assertEqual(caught.exception.code, "login_timeout_not_settled")
+        self.assertIn("status_query_failed", caught.exception.message)
 
 
 if __name__ == "__main__":

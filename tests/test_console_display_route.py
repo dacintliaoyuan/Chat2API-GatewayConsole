@@ -20,6 +20,7 @@ import usagesrv
 from console import share_actions as console_share_actions
 from console import um_adapter as console_um_adapter
 from console.display_proxy import DisplayConfig, DisplayProxy
+from console.operations import OperationError
 from share.secret_protection import write_private_secret_path
 
 _TMP = tempfile.mkdtemp(prefix="display-route-")
@@ -431,6 +432,23 @@ class DisplayStateRouteTest(unittest.TestCase):
         self.assertEqual(payload["display"]["reason"],
                          "display_proxy_unavailable")
 
+    def test_display_state_shows_auth_read_error_detail(self):
+        # ticket #41：auth observation 的配置/暂时失败必须显示可读原因，
+        # 不能把 state=None 当成"未开始登录"而丢掉错误分类。
+        payload = self._state(auth={
+            "state": None, "label": None, "error": None,
+            "observed_at": None, "login_window_deadline_epoch": None,
+            "read_error": {
+                "code": "status_unreachable",
+                "message": "查询失败：chat2api 服务不可达，凭据状态未知",
+            },
+        })
+        self.assertEqual(payload["state"], "not_started")
+        self.assertIn("status_unreachable", payload["detail"])
+        self.assertIn("不可达", payload["detail"])
+        self.assertEqual(payload["auth_error"]["code"],
+                         "status_unreachable")
+
     def test_display_operator_acquire_and_conflicts(self):
         proxy = _FakeOperatorDisplay()
         with mock.patch.object(usagesrv, "DISPLAY_PROXY", proxy):
@@ -542,6 +560,33 @@ class ConsoleAuthObservationTest(unittest.TestCase):
         self.assertIsNone(observed["state"])
         self.assertIsNone(observed["error"])
         self.assertIsNone(observed["login_window_deadline_epoch"])
+        self.assertEqual(observed["read_error"]["code"],
+                         "auth_observation_failed")
+        self.assertIn("snapshot exploded",
+                      observed["read_error"]["message"])
+
+    def test_auth_read_operation_error_is_preserved(self):
+        with mock.patch.object(usagesrv, "CLOUD_ROLE", True), \
+                mock.patch.object(
+                    usagesrv, "console_services_snapshot",
+                    return_value=({"services": [{"key": "share-gateway",
+                                                "port": 8100}]},
+                                  False, 0.0)), \
+                mock.patch.object(
+                    console_um_adapter, "_read_control_token",
+                    return_value="test-control-token"), \
+                mock.patch.object(
+                    console_um_adapter, "_read_auth_status",
+                    side_effect=OperationError(
+                        "status_unreachable",
+                        "查询失败：chat2api 服务不可达，凭据状态未知")):
+            observed = usagesrv._console_auth_observation()
+        self.assertIsNone(observed["state"])
+        self.assertEqual(observed["read_error"]["code"],
+                         "status_unreachable")
+        self.assertIn("不可达", observed["read_error"]["message"])
+        self.assertNotIn("test-control-token",
+                         json.dumps(observed, ensure_ascii=False))
 
 
 if __name__ == "__main__":
