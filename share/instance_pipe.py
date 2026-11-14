@@ -35,12 +35,11 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import threading
 import time
 from pathlib import Path
 
-from share.broker_server import BoundedPipeServer, UnixSocketBrokerServer
+from share.broker_server import UnixSocketBrokerServer
 from share.broker_protocol import DEFAULT_DEADLINE_SECONDS, ProtocolError
 
 

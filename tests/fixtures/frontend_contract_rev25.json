@@ -6,15 +6,15 @@
     "sourceHashes": {
       "model_sync/sync.py": "c1c8d03c43a6bf89c64a884dcabf9d63ecb893042f6636a65771005c58af1aaa",
       "model_sync/sync_core.py": "b6b4e99bf2491b1e89df6632ef5232d67a583f14d4ad361746e91a3c37efcaa7",
-      "console/model_actions.py": "f61c5565062dd5906561b2f2aadaa6255c7bfb37a22228d8a036bcfd155fc2e4",
-      "console/adapters.py": "3fdb9f75f5e08ec197f2de0a191b68a3d1831ae6d6ff809cc847c20202bfa2dc",
+      "console/model_actions.py": "a6b74d0ce1b0f4361784fce872ac235c565fca2d1f392d6015ce0765fec3ecbd",
+      "console/adapters.py": "c2661a3f904f75087b4af1a0b819f1b3db905e0abacdcb3fa893a56835df93bb",
       "console/operations.py": "90bb9896c112c342efc9cf0430676be22c913c376c7d015b06916db91c586c58",
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
-      "console/stats.py": "10466d4d7d06729939544bbec34a2f44531f858055a1a160078eee0810a4ea31",
+      "console/stats.py": "cdd0cd7e9ffe3bd13829327caf69d32e56e91cd7b637de42db49ddaef35ecd28",
       "console/log_reader.py": "359106dc5ce7f9e4c1bd3aa46bba3fc4a8afb9521327837f5c0917f28445733a",
-      "usagesrv.py": "8d15b5896adaa5fe357ab7934c9773083aeb87ad421c6782388ca47736e7ed2d",
-      "console/share_actions.py": "823edf14ffe5df69e8e62380b96f3901fde8d8111a16e3bdaabeb41e6b63aa8c",
-      "console/share_production.py": "22e91a5a6cddbf069c03e57c332f5d6889da7887f3b919c923fece0b5555c792",
+      "usagesrv.py": "48fd227e725b9fdde8bffde0074117e147b095122b2a74ed512a47f03bcf9ae2",
+      "console/share_actions.py": "f28299cdd6565fa4957039a3a225841d8d12f578ef4bb18333a544879c7f24c5",
+      "console/share_production.py": "971fb30857b0f214f7e6470c9e77737842bc9119a93bd54e707c3b0c83a46c32",
       "console/gateway_connection.py": "049cddb9667cc9ae15bf5474317101d7af62a2e1f333dbc951674acd5c5c351e"
     }
   },
@@ -268,7 +268,7 @@
     "sources": [
       "um"
     ],
-    "checked_epoch": 1794613500
+    "checked_epoch": 1794620217
   },
   "scoped_catalog": {
     "catalogs": {
@@ -296,7 +296,7 @@
     "sources": [
       "um"
     ],
-    "checked_epoch": 1794613500
+    "checked_epoch": 1794620217
   },
   "context_overrides": {
     "overrides": [
@@ -380,7 +380,7 @@
     },
     "unit_note": "步进与 input_chars_estimate 为字符数（input_unit=chars），输出上限为 token（output_unit=tokens）；observed_floor/observed_ceiling 是历史字符步进证据，不是 token 容量；token_evidence 为某次成功请求的上游输入 Token 报告（下界证据），不是容量；0 是合法值，判断未知须用 is None（缺席即 Token 容量未知）；不做字符→token 换算；scheme_revision 缺字段=引入修订号前的祖传记录，按修订 1 解释；evidence_revision None=引入修订号前的祖传证据；declared_context 为空即声明未知（declared_context_known=False），探测仍可测量实际可用长度；记录缺席表示未知，不表示已实测或零容量",
     "budget_note": "估算按固定步进表 [4000, 16000, 64000, 256000]（输入为字符数，不做字符→token 换算）；无探测端点或凭据不可读的来源（含已暂停）runner 零请求跳过，其记录估算为 0，totals 可核对总额；totals 三分口径 runnable+blocked+idle=records 条数：runnable=本轮会消耗请求（pending/stale 或 retest 下的 verified/failed，且有端点且凭据可读），blocked=本轮有资格但无端点或凭据不可读，idle=本轮不消耗请求（verified/failed 未 retest、未选中，或 pending 但既有证据已覆盖全梯——runner 零请求直接 verified）；全局请求预算口径：run 动作单次 max_requests ≤ 20、单请求输出 max_tokens ≤ 64；未定价来源不做金额估算",
-    "cost_note": "费用未定价/无法核算：本地网关无计价依据，不编造金额",
+    "cost_note": "未定价/无法核算：本地网关无计价依据，不编造金额",
     "recovery": null,
     "note": "队列在每次目录同步后播种；本预览不发请求、不写状态（凭据文件只读读一次）"
   },

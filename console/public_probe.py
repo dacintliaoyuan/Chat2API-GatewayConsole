@@ -1,4 +1,4 @@
-"""Bounded public-path checks through the sharing Funnel.
+"""Bounded public-path checks through the configured public origin.
 
 Two independent entry points share the same public DNS and TLS boundary:
 ``probe_public_model`` performs the credential-bound model round trip, while
@@ -28,8 +28,8 @@ PUBLIC_ORIGIN_INVALID = 'public_origin_invalid'
 def origin_host(value):
     """The host of a STRICT https origin, or None.
 
-    This is the ONE parser for ``CONSOLE_PUBLIC_ORIGIN`` and for a discovered
-    Tailscale Funnel URL. The accepted shape is ``https://<host>`` with an
+    This is the ONE parser for ``CONSOLE_PUBLIC_ORIGIN``. The accepted shape
+    is ``https://<host>`` with an
     optional ``:443``; a path, query, userinfo, fragment, other scheme/port,
     backslash, whitespace or a malformed DNS label is refused (never guessed
     or repaired). It lives here because the probe worker runs isolated

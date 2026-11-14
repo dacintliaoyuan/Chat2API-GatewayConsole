@@ -122,30 +122,6 @@ class _ManagedStopState:
         self._stopped = False
         self._stopped_at = None
 
-    def express_stop(self):
-        with self._lock:
-            self._desired = True
-            self._expressed_at = time.time()
-            self._stopped = False
-            self._stopped_at = None
-
-    def confirm_stopped(self):
-        with self._lock:
-            if self._desired is not True:
-                raise OperationError(
-                    "share_layer_failed",
-                    "stopped 确认被拒绝：未先表达 desired-stop 意图"
-                    "（watchdog 协调契约）")
-            self._stopped = True
-            self._stopped_at = time.time()
-
-    def confirm_open(self):
-        with self._lock:
-            self._desired = False
-            self._stopped = False
-            self._expressed_at = None
-            self._stopped_at = None
-
     def snapshot(self):
         with self._lock:
             return {"desired_stop_in_force": self._desired,
@@ -464,13 +440,6 @@ def _last_error_from_view(view):
     return None
 
 
-def _active_left(view):
-    instance = view.get("instance") if isinstance(view, dict) else None
-    if isinstance(instance, dict):
-        return instance.get("active_count")
-    return None
-
-
 def _diag_layer(layer, state, verdict, source, *, checked_at=None,
                 evidence=None, reason=None, timestamp_basis=None):
     """One frozen layer entry (contract §3.1).
@@ -614,129 +583,6 @@ def diagnostics(target, params, ctx=None):
     return {"checked_at": now, "layers": layers, "maintenance": maintenance,
             "desired_stop_in_force": desired, "last_error": last_error,
             "note": _bounded("；".join(parts))}
-
-
-
-
-def _maintenance_begin_call(component, lease_s):
-    """Call the injected maintenance-begin seam; its OperationError codes
-    (share_broker_unwired / share_broker_extension_missing /
-    share_capability_missing / share_maintenance_refused) propagate verbatim.
-    """
-    if _MAINTENANCE_BEGIN is None:
-        raise OperationError(
-            "share_broker_unwired",
-            "维护租约缝未接线（broker 门未装配）；不重启目标")
-    try:
-        raw = _MAINTENANCE_BEGIN(component, lease_s)
-    except OperationCancelled:
-        raise
-    except OperationError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise OperationError(
-            "share_broker_unwired",
-            "维护租约调用异常（%s）：不重启目标" % type(exc).__name__)
-    if not isinstance(raw, dict) or not isinstance(raw.get("lease_id"), str) \
-            or not raw["lease_id"]:
-        raise OperationError(
-            "share_broker_unwired",
-            "维护租约结果形状不符合契约（缺 lease_id）：不重启目标")
-    return raw
-
-
-def _maintenance_end_call(lease_id):
-    """(ok, fact, view): call the injected maintenance-end seam.
-
-    Never raises: a failed resume is reported as an honest fact (the caller
-    decides whether that is a failure of the action).
-    """
-    if _MAINTENANCE_END is None:
-        return False, "维护结束缝未接线", None
-    try:
-        raw = _MAINTENANCE_END(COMPONENT_SHARE_GATEWAY, lease_id)
-    except OperationCancelled:
-        return False, "维护结束被取消", None
-    except OperationError as exc:
-        return False, "维护结束失败（%s）" % exc.code, None
-    except Exception as exc:  # noqa: BLE001
-        return False, "维护结束异常（%s）" % type(exc).__name__, None
-    if not isinstance(raw, dict):
-        return False, "维护结束结果形状不符合契约", None
-    ok = raw.get("resumed") is True
-    fact = "resumed=%s，state=%s，active_count=%s" % (
-        raw.get("resumed"), raw.get("state"), raw.get("active_count"))
-    return ok, fact, raw
-
-
-def _resumed_word(resumed):
-    if resumed.get("ok") is True:
-        return "true"
-    if resumed.get("ok") is False:
-        return "false"
-    return "unknown"
-
-
-def _lease_expires_at(lease):
-    if isinstance(lease, dict):
-        return lease.get("lease_expires_at")
-    return None
-
-
-def _drain_wait(ctx, lease_id, round_, drain_budget_s, interval_s):
-    """(drained, view, reason): bounded poll of the maintenance view until
-    active_count == 0 or the drain budget. NEVER stops the target (§9.4).
-    """
-    deadline = time.monotonic() + float(drain_budget_s)
-    view = None
-    while True:
-        _cancel_point(ctx)
-        view, reason = _maintenance_status_read()
-        if view is None:
-            return False, None, reason
-        lease = view.get("lease")
-        if not isinstance(lease, dict) or lease.get("lease_id") != lease_id:
-            return False, view, "lease_mismatch"
-        if view.get("lease_expired") is True:
-            return False, view, "lease_expired"
-        instance = view.get("instance")
-        if isinstance(instance, dict) and instance.get("state") == "stopped":
-            return False, view, "instance_stopped"
-        active = instance.get("active_count") \
-            if isinstance(instance, dict) else None
-        if isinstance(active, int) and not isinstance(active, bool) \
-                and active <= 0:
-            return True, view, None
-        if time.monotonic() >= deadline:
-            return False, view, "drain_timeout"
-        _SLEEP(interval_s)
-
-
-def _pre_start_recheck(lease_id, round_):
-    """(ok, reason, view): re-verify intent and round right before the
-    restart (§9.2/§9.3): a stop in force or a lease/round that moved aborts
-    the restart — a late result must never reopen the share.
-    """
-    if _desired_stop_in_force() is True:
-        return False, "desired_stop_in_force", None
-    view, reason = _maintenance_status_read()
-    if view is None:
-        return False, reason, None
-    lease = view.get("lease")
-    if not isinstance(lease, dict):
-        return False, "lease_missing", view
-    if lease.get("lease_id") != lease_id:
-        return False, "lease_replaced", view
-    if round_ is not None and lease.get("round") != round_:
-        return False, "round_changed", view
-    if view.get("lease_expired") is True:
-        return False, "lease_expired", view
-    instance = view.get("instance")
-    if isinstance(instance, dict) and instance.get("state") == "stopped":
-        return False, "instance_stopped", view
-    return True, None, view
-
-
 
 
 

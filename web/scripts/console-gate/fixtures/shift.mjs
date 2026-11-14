@@ -5,7 +5,7 @@
 // calendar day it was generated on as "_anchor" (Asia/Shanghai), and every load
 // moves all dates forward by (today - _anchor) whole days. Times of day and UTC
 // offsets are kept, so hourly buckets, weekday-independent ordering and the
-// relative order of usage rows and price-version boundaries are all preserved.
+// relative order of usage rows is preserved.
 //
 // What is shifted (pure, deterministic):
 //   - every calendar date (YYYY-MM-DD, years 2020-2099) inside any string value or
@@ -13,7 +13,7 @@
 //     and log timestamps ("2026-10-06 08:48:16,691"). A date glued to a preceding
 //     word / "-" / "." is not a date: model ids such as "gpt-5-2025-08-07" and
 //     compact file names such as "dsh-ledger-20260902.json" stay as they are, and
-//     so do sentinel dates before 2020 ("1970-01-01" = the open-ended price segment);
+//     so do sentinel dates before 2020 ("1970-01-01" = the open-ended segment);
 //   - every number under an epoch-like key (`*_at`, `*_epoch`, `ts`, `*_mtime`,
 //     camelCase `*At`) that is an epoch in seconds (1.5e9..2.5e9) or milliseconds
 //     (1.5e12..2.5e12). Out-of-range values (e.g. a year-9999 expiry) are left alone.

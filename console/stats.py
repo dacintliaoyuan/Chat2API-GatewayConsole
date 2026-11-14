@@ -135,13 +135,13 @@ def _environment():
 
 TIMEZONE_NAME = "Asia/Shanghai"  # 口径=usagesrv._beijing_day 固定 UTC+8
 MAX_RANGE_DAYS = 92
-# 每来源解析口径标签，与 usagesrv 各服务的 kind 一致（usagesrv.py:685/643）。
+# 每来源解析口径标签，与 usagesrv 各服务的 kind 一致（usagesrv.read_dsh_ledger）。
 _SOURCE_KINDS = {
     "chat2api": "estimate",
     "dsh": "dsh-ledger",
 }
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-# 与 usagesrv._read_jsonl 的默认 limit 一致（usagesrv.py:500）。
+# 与 usagesrv._read_jsonl 的默认 limit 一致（usagesrv._read_jsonl）。
 _LEDGER_RECORD_LIMIT = 200000
 
 
@@ -208,7 +208,7 @@ def _iter_dates(lo, hi):
 
 def _read_ledger_jsonl(path, environment=None):
     """Read one JSONL ledger file, mirroring usagesrv._read_jsonl
-    (usagesrv.py:500-521) field-for-field: strip lines, skip blanks, parse
+    (usagesrv._read_jsonl) field-for-field: strip lines, skip blanks, parse
     each line as JSON, keep dicts only, attach rec["_ms"] via
     environment.parse_ts, sort ascending by _ms, cap at the same default limit.
 
@@ -232,19 +232,19 @@ def _read_ledger_jsonl(path, environment=None):
                     bad_lines += 1
                     continue
                 if isinstance(rec, dict):
-                    rec["_ms"] = environment.parse_ts(rec.get("time"))  # 口径=usagesrv.py:514
+                    rec["_ms"] = environment.parse_ts(rec.get("time"))  # 口径=usagesrv._parse_ts
                     records.append(rec)
     except FileNotFoundError:
         return records, {"missing": True, "bad_lines": bad_lines}
     except OSError as exc:
         return records, {"read_error": str(exc), "bad_lines": bad_lines}
-    records.sort(key=lambda r: r.get("_ms") or 0)  # 口径=usagesrv.py:520
+    records.sort(key=lambda r: r.get("_ms") or 0)  # 口径=usagesrv._read_jsonl
     return records[-_LEDGER_RECORD_LIMIT:], {"bad_lines": bad_lines}
 
 
 def _read_dsh_snapshot(path, environment=None):
     """Read the DSH day snapshot JSON, mirroring usagesrv._load_json
-    (usagesrv.py:371-376). Single difference: missing vs corrupt is
+    (usagesrv._read_jsonl). Single difference: missing vs corrupt is
     distinguished so coverage can report honestly (absent is not an error).
 
     Returns (snapshot_dict_or_None, diagnostics)."""
@@ -446,7 +446,7 @@ def _collect_jsonl_records(records, models_filter, lo_iso, hi_iso,
 
 def _collect_dsh_records(snapshot, models_filter, lo_iso, hi_iso,
                          environment=None):
-    """口径=usagesrv read_dsh_ledger（usagesrv.py:602-652）同源：只统计冻结的
+    """口径=usagesrv read_dsh_ledger（usagesrv.read_dsh_ledger）同源：只统计冻结的
     DSH_MERGE_DAY；只汇总原始用量（calls/input/output/cacheRead/reasoning）。
     偏差：逐日汇总取自该日 byProviderModel 行加和而非日级字段，因为快照原生
     粒度即 (day, provider:model)，生产快照两者一致；模型筛选作用于
@@ -789,7 +789,7 @@ def bounded_stats(ledgers, date_from, date_to, sources=None, models=None,
 #     生成速度；分母只含耗时为正且输出 Token 齐全的记录，被跳过的记录按原因
 #     计数单列（skipped），rate 为 null 表示该行无法计算，绝不填 0。
 #   - 身份键 = source + model（同名跨来源不混并）；时间按北京时间自然日/小时
-#     分桶（固定 UTC+8，口径=usagesrv._beijing_day，usagesrv.py:551-554）。
+#     分桶（固定 UTC+8，口径=usagesrv._beijing_day，usagesrv._beijing_day）。
 #
 # 来源词表（端点契约 um|chat2api|dsh）：
 #   * chat2api      <- data/usage-chat2api.jsonl（记录自带 service="chat2api"）
@@ -797,7 +797,7 @@ def bounded_stats(ledgers, date_from, date_to, sources=None, models=None,
 #   * um            本轮无独立账本：UM 流量由 chat2api 账本记账，来源键即 chat2api。
 #                   词表保留 um，但本轮不产出该来源的行；不造别名、不合并同名。
 #
-# 时间口径：时间解析复用 usagesrv._parse_ts（usagesrv.py:293-306；带 Z 或带
+# 时间口径：时间解析复用 usagesrv._parse_ts（usagesrv._parse_ts；带 Z 或带
 # 偏移的 ISO 串按各自偏移解析，无偏移串按 UTC，这是 usagesrv 既有口径）；归日
 # 复用 usagesrv._beijing_day（固定 UTC+8）。无法解析的时间戳不丢弃，进 missing
 # 并以 reason="invalid_time" 另列（date=null，因为不存在可归的北京自然日）。
@@ -1043,7 +1043,7 @@ def _event_from_record(source, spec, record):
         request_id = None
     return _Event(
         ms=ms,
-        model=str(record.get("model") or "unknown"),  # 口径=usagesrv.py:566/747
+        model=str(record.get("model") or "unknown"),  # 口径=usagesrv._read_jsonl
         input_tokens=_first_int(record, spec["input"]),
         output_tokens=_first_int(record, spec["output"]),
         duration_ms=duration_ms,
@@ -1147,7 +1147,7 @@ def _refresh_jsonl_cache(path, source, spec):
 def _snapshot_events(snapshot):
     """DSH 冻结日快照 → 规范化事件 + 坏行计数 + 形状损坏说明。
 
-    口径=usagesrv.read_dsh_ledger（usagesrv.py:629-679）：只统计
+    口径=usagesrv.read_dsh_ledger（usagesrv.read_dsh_ledger）：只统计
     DSH_MERGE_DAY 这一天；每 byProviderModel 行一条事件，模型键为
     "provider:model" 复合键（与 console_stats._collect_dsh_records 同口径）。
     快照是日级聚合、没有逐次耗时，故 duration_state=missing（速率端点按

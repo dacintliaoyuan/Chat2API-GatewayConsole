@@ -147,7 +147,8 @@ class RetiredFeatureAuditTests(unittest.TestCase):
                 "consumer helpers", "retired services gate",
                 "dsh-cost-meter", "retired cost fields",
                 "retired usage wording", "retired share actions",
-                "cloud dispatch"):
+                "cloud dispatch", "old share entry", "share_admin bat",
+                "retired source ledger env"):
             self.assertIn(required, names)
 
     def test_check_sh_invokes_the_audit(self):

@@ -23,7 +23,6 @@ from datetime import datetime, timezone
 
 from model_sync import sync as model_sync
 from console.operations import (
-    OperationCancelled,
     OperationContext,
     OperationError,
 )
@@ -221,7 +220,7 @@ def model_catalog(target, params, ctx=None):
 # non-executable instead of runnable.
 # ---------------------------------------------------------------------------
 
-_COST_NOTE = "费用未定价/无法核算：本地网关无计价依据，不编造金额"
+_COST_NOTE = "未定价/无法核算：本地网关无计价依据，不编造金额"
 # B3（2026-11-01）：有界逐模型进度与结果读面。整批预算最多 20 请求，
 # 进度最多 20 条；结果行与恢复证据各有硬上限，页面重连读原任务，
 # 不因一次任务过大让操作结果无界增长。

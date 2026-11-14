@@ -3,12 +3,11 @@
 All state, client files, prices, keys and logs are private fixtures. No live
 gateway, client configuration, credentials or user ledger is accessed.
 
-Rev9 A9-8 adds the ``share_maintenance`` segment: the four new console
-actions are driven through the REAL registry and the REAL OperationManager with
-every privileged/OS/production seam injected as a private fixture (broker, TS
-service, connectivity, funnel, backend gate, maintenance lease, gateway restart,
-backend reauth, intent writer). Nothing here starts a process, opens a pipe, reads a
-real PID/token/ledger, triggers SSO or issues a model request.
+The retired ``share_maintenance`` segment is no longer generated (#34): the
+remaining console actions are driven through the REAL registry and the REAL
+OperationManager with every privileged/OS/production seam injected as a private
+fixture. Nothing here starts a process, opens a pipe, reads a real
+PID/token/ledger, triggers SSO or issues a model request.
 """
 import contextlib
 import hashlib
@@ -16,8 +15,6 @@ import io
 import json
 import os
 import sys
-import tempfile
-import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,10 +27,7 @@ from test_console_api import usagesrv
 from console import adapters as console_adapters
 from console import log_reader as console_log_reader
 from console import model_actions as actions
-from console import share_actions as console_share_actions
-from console import share_production as console_share_production
-from console.operations import (OperationCancelled, OperationError,
-                               OperationManager, ResourceFileLock)
+from console.operations import OperationManager
 from model_sync import sync as sync
 import share.metering as share_metering
 from model_sync.sync_core import CatalogModel

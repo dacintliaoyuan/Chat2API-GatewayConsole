@@ -52,6 +52,7 @@ ALLOWLIST = frozenset({
     "tests/test_model_sync.py",
     "tests/test_model_sync_core.py",
     "tests/test_model_sync_provider_registration.py",
+    "tests/r19/local_fixture.py",
     "tests/test_model_sync_store_merge.py",
     "tests/test_share_dispatch.py",
     "tests/test_share_metering.py",
@@ -87,7 +88,7 @@ DENY_RULES = (
      "退役的 workbench 逃生口"),
     ("speedtest", re.compile(r"speedtest", re.IGNORECASE),
      "退役的测速"),
-    ("qoder action", re.compile(r"\bqoder\.|\bqoderglobal\.", re.IGNORECASE),
+    ("qoder action", re.compile(r"\bqoder\.|\bqoderglobal\.|qoder-global", re.IGNORECASE),
      "退役的 Qoder 动作"),
     ("cliproxy action", re.compile(r"\bcliproxy\.", re.IGNORECASE),
      "退役的 CLIProxy 动作"),
@@ -177,6 +178,7 @@ SCAN_ROOT_FILES = (
     "README.md",
     "AGENTS.md",
     "web/index.html",
+    "SHARING.md",
 )
 ROOT_SUFFIXES = (".ps1", ".bat", ".vbs")
 IGNORED_DIR_NAMES = frozenset({
@@ -262,9 +264,6 @@ def find_violations(root: Path = ROOT, allowlist=ALLOWLIST) -> list[str]:
             continue
         assert text is not None
         for number, line in enumerate(text.splitlines(), 1):
-            # Content hashes are opaque identities, not retired port/name references.
-            if "sha256" in line.lower():
-                continue
             for name, pattern, description in DENY_RULES:
                 if not pattern.search(line):
                     continue

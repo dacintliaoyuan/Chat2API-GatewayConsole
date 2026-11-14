@@ -4,9 +4,9 @@
 Covers the explicit cloud role contract:
 
 * unset role -> the Windows local console is byte-for-byte unchanged
-  (8001, Qoder/CLIProxy/model_sync cards and probes retained);
+  (the local console keeps its own cards and probes);
 * ``UM_SHARE_ROLE=cloud`` / ``UM_SHARE_DEPLOYMENT=cloud`` assembles ONLY the
-  UM share stack, never reads/probes Qoder / CLIProxy / model_sync / zcode,
+  UM share stack and never assembles the retired cards,
   keeps the loopback Host/Origin/CSRF/session gates and defaults to 18096
   with STRICT port validation;
 * the cloud registry marks the Tailscale/Funnel chain actions as honestly

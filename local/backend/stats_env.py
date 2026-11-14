@@ -44,7 +44,7 @@ def _parse_ts(value):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.timestamp() * 1000
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 

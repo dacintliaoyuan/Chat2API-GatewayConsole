@@ -601,7 +601,7 @@ def production_cloud_edge_status(*, runner=None):
     return {"exists": True, "active": active == "active", "detail": active}
 
 
-def _share_action_specs(cloud=False):
+def _share_action_specs():
     """The UM share action catalogue registered by the cloud role.
 
     The retired Windows local chain actions and their Funnel / TS public
@@ -680,7 +680,7 @@ def build_cloud_registry():
             enabled=True, disabled_reason=None,
             bump_generation_on_success=True),
     ]
-    specs.extend(_share_action_specs(cloud=True))
+    specs.extend(_share_action_specs())
     return specs
 
 
