@@ -362,6 +362,10 @@ LOGIN_CLICK_TIMEOUT_MS = 15000
 LOGIN_CLICK_OBSERVE_TIMEOUT_S = 8.0
 LOGIN_STAGE_SETTLE_TIMEOUT_S = 20.0
 LOGIN_MAX_CLICKS_PER_STAGE = 2
+# A session with no observable progress for five minutes is stuck and must
+# release its browser instead of holding it for the caller's total budget (30
+# minutes on the dedicated instance).
+LOGIN_IDLE_TIMEOUT_S = 300.0
 
 # Opt-in "raw upstream catalog, fresh, no local virtual aliases" contract used
 # by the public share entry. Behavior-neutral for all other consumers: they
@@ -2304,6 +2308,26 @@ class LoginBusy(RuntimeError):
         self.owner = owner or {}
 
 
+class LoginCleanupFailed(RuntimeError):
+    """The login session ended but its browser context could not be released.
+
+    A residual context/Chromium keeps occupying memory, so the failure is
+    reported explicitly instead of being swallowed. ``primary`` carries the
+    session outcome that ended the round (timeout, cancel, probe failure) when
+    the close failure masked it, so the operator sees both.
+    """
+
+    def __init__(self, reason: str = "browser_cleanup_failed",
+                 detail: str = "", primary=None):
+        message = "login cleanup failed: %s" % reason
+        if detail:
+            message += " (%s)" % detail
+        super().__init__(message)
+        self.reason = reason
+        self.detail = detail
+        self.primary = primary
+
+
 class _LoginCancelSignal:
     """OR of the shutdown event and the explicit login-cancel event."""
 
@@ -2396,6 +2420,13 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     ``LoginBusy`` before any browser is created; it never joins another
     process's browser.
 
+    Ticket #12: the caller's ``timeout_s`` remains the total budget, while a
+    session with no observable progress (a page/stage change, a new token, or a
+    click that moved the page) for ``LOGIN_IDLE_TIMEOUT_S`` is closed early.
+    The browser context is closed on success, timeout, cancel and failure; when
+    that close fails, ``LoginCleanupFailed`` reports it explicitly instead of
+    leaving a residual browser unreported.
+
     ``context_factory(edge, profile_dir)``, ``credential_probe(base_url,
     token)``, ``process_lister(profile_dir)`` and ``process_signal(pid,
     signal)`` are the test seams: the real defaults are the Playwright
@@ -2460,9 +2491,10 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                 headless=True,
                 executable_path=edge,
             )
-        if on_context:
-            on_context(ctx)
+        session_error = None
         try:
+            if on_context:
+                on_context(ctx)
             page = _LoginPage(ctx.pages[0] if ctx.pages else ctx.new_page())
             try:
                 page.bring_to_front()
@@ -2471,17 +2503,33 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                 print(f"[warn] Failed to load page (may still be redirecting): {e}")
 
             deadline = time.time() + timeout_s
+            idle_deadline = time.monotonic() + LOGIN_IDLE_TIMEOUT_S
+            last_url = page.url()
+            last_token = None
             rejected_tokens = set()
             clicks = {"openwebui": 0, "umpass": 0}
             stage_seen = {}
             manual_reason = None
+
+            def mark_progress():
+                nonlocal idle_deadline
+                idle_deadline = time.monotonic() + LOGIN_IDLE_TIMEOUT_S
+
             while time.time() < deadline:
                 raise_if_cancelled()
                 _check_login_window(page, page.is_closed)
+                if time.monotonic() >= idle_deadline:
+                    raise LoginStalled(
+                        "idle_timeout",
+                        "no progress for %ss; last page %s"
+                        % (LOGIN_IDLE_TIMEOUT_S, page.url() or "unknown"))
                 try:
                     token = page.read_token()
                 except Exception:
                     token = None
+                if token and token != last_token:
+                    last_token = token
+                    mark_progress()
                 if token and token not in rejected_tokens:
                     verdict = probe(base_url, token)[0]
                     if verdict == "valid":
@@ -2507,6 +2555,9 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                         "credential_probe_inconclusive"
 
                 url = page.url()
+                if url != last_url:
+                    last_url = url
+                    mark_progress()
                 host = _page_host(url)
                 if url and _page_origin(url) == expected_origin:
                     stage = "openwebui"
@@ -2553,6 +2604,8 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                                 page, target, url, cancel_signal)
                             if outcome == "cancelled":
                                 raise_if_cancelled()
+                            if outcome == "advanced":
+                                mark_progress()
                             note("openwebui_clicked", origin=url)
                 elif stage == "umpass":
                     if clicks[stage] >= LOGIN_MAX_CLICKS_PER_STAGE:
@@ -2584,6 +2637,8 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                                 page, target, url, cancel_signal)
                             if outcome == "cancelled":
                                 raise_if_cancelled()
+                            if outcome == "advanced":
+                                mark_progress()
                             note("umpass_submitted", origin=url)
                             _check_login_window(page, page.is_closed)
                             if _umpass_credential_rejected(page):
@@ -2608,13 +2663,30 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                 manual_reason = "duo_prompt_waiting"
             raise LoginStalled(manual_reason or "timeout",
                                "last page %s" % (page.url() or "unknown"))
+        except Exception as exc:
+            session_error = exc
+            raise
         finally:
             if on_context:
-                on_context(None)
+                try:
+                    on_context(None)
+                except Exception:
+                    _logger.warning(
+                        "login context callback failed while releasing the "
+                        "browser context")
             try:
                 ctx.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                detail = "%s: %s" % (type(exc).__name__, exc)
+                if session_error is not None:
+                    detail += "; primary outcome: %s: %s" % (
+                        type(session_error).__name__, session_error)
+                cleanup_error = LoginCleanupFailed(
+                    "browser_cleanup_failed", detail,
+                    primary=session_error)
+                if session_error is not None:
+                    raise cleanup_error from session_error
+                raise cleanup_error
     finally:
         try:
             if playwright is not None:
@@ -4132,8 +4204,10 @@ class Proxy:
         upstream explicitly refused the submitted account/password),
         ``unavailable`` (the browser cannot be used), ``transient`` (a network /
         browser / closed-window failure that may be reopened), ``cancelled`` (the
-        operator explicitly cancelled THIS round) or ``superseded`` (shutdown or
-        a newer cycle won the final commit race).
+        operator explicitly cancelled THIS round), ``terminal`` (a failure that
+        cannot produce different evidence, including a browser context that could
+        not be released) or ``superseded`` (shutdown or a newer cycle won the
+        final commit race).
         """
         try:
             token = browser_login(
@@ -4158,6 +4232,11 @@ class Proxy:
             return "rejected", exc.reason
         except LoginUnavailable as exc:
             return "unavailable", exc.reason
+        except LoginCleanupFailed as exc:
+            # The browser context could not be released: a residual browser
+            # may still occupy memory, so report the cleanup failure as a
+            # terminal outcome instead of retrying it.
+            return "terminal", exc.reason
         except LoginWindowClosed as exc:
             return "transient", exc.reason
         except (requests.RequestException, TimeoutError, OSError) as exc:

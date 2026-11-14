@@ -175,15 +175,18 @@ class _FakeSite:
 
 
 class _FakeContext:
-    def __init__(self, page):
+    def __init__(self, page, close_error=None):
         self.pages = [page]
         self.closed = False
+        self.close_error = close_error
 
     def new_page(self):
         raise AssertionError("the session must reuse the existing page")
 
     def close(self):
         self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
 
 
 def _element(selector, site, *, value="", visible=True, on_click=None):
@@ -278,19 +281,21 @@ def _build_site(token="fresh-token", *, sso_button=True, submit=True,
 class _Harness:
     """Drives the real ``browser_login`` against an offline fake site."""
 
-    def __init__(self, site, verdicts=("valid",)):
+    def __init__(self, site, verdicts=("valid",), close_error=None,
+                 profile_dir=None):
         self.site = site
         self.verdicts = list(verdicts)
+        self.close_error = close_error
         self.probes = []
         self.notes = []
         self.created = []
         self.reported = []
-        self.profile_dir = tempfile.mkdtemp(
+        self.profile_dir = profile_dir or tempfile.mkdtemp(
             prefix="chat2api-browser-login-")
         atexit.register(shutil.rmtree, self.profile_dir, ignore_errors=True)
 
     def _context_factory(self, _edge, _profile_dir):
-        context = _FakeContext(self.site)
+        context = _FakeContext(self.site, close_error=self.close_error)
         self.created.append(context)
         return context
 
@@ -878,6 +883,62 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertEqual(harness.click_selectors(), [])
         self.assertEqual([c.closed for c in harness.created], [True])
 
+    def test_idle_timeout_closes_the_context_and_reports_the_reason(self):
+        site = _FakeSite(OPENWEBUI_URL)
+        harness = _Harness(site)
+
+        with mock.patch.object(chat2api, "LOGIN_IDLE_TIMEOUT_S", 0.05):
+            with self.assertRaises(chat2api.LoginStalled) as ctx:
+                harness.run(timeout_s=1)
+
+        self.assertEqual(ctx.exception.reason, "idle_timeout")
+        self.assertIn("no progress", str(ctx.exception))
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
+
+    def test_default_idle_timeout_is_five_minutes(self):
+        self.assertEqual(chat2api.LOGIN_IDLE_TIMEOUT_S, 300.0)
+
+    def test_total_budget_still_ends_the_session_before_the_idle_timeout(self):
+        site = _FakeSite(OPENWEBUI_URL)
+        harness = _Harness(site)
+
+        with mock.patch.object(chat2api, "LOGIN_IDLE_TIMEOUT_S", 300.0):
+            with self.assertRaises(chat2api.LoginStalled) as ctx:
+                harness.run(timeout_s=0.2)
+
+        self.assertEqual(ctx.exception.reason, "timeout")
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+    def test_progress_resets_the_idle_deadline(self):
+        class ProgressingSite(_FakeSite):
+            """A page that keeps changing while the automatic flow waits."""
+
+            def __init__(self):
+                super().__init__(OPENWEBUI_URL)
+                self.progress = 0
+
+            def wait_for_timeout(self, ms):
+                super().wait_for_timeout(ms)
+                time.sleep(0.002)
+                self.progress += 1
+                self.url = OPENWEBUI_URL if self.progress % 2 else DUO_URL
+                if self.progress >= 60:
+                    self.set_token("progress-token")
+
+        harness = _Harness(ProgressingSite())
+
+        with mock.patch.object(chat2api, "LOGIN_IDLE_TIMEOUT_S", 0.05):
+            token = harness.run(timeout_s=5)
+
+        self.assertEqual(token, "progress-token")
+        self.assertEqual(harness.manual_reasons(), [])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
     def test_missing_edge_is_an_explicit_error(self):
         with mock.patch.object(chat2api, "find_edge", return_value=None):
             with self.assertRaises(RuntimeError) as ctx:
@@ -893,6 +954,51 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertEqual(len(harness.created), 1)
         self.assertEqual(harness.reported, [harness.created[0], None])
         self.assertEqual([c.closed for c in harness.created], [True])
+
+    def test_context_close_failure_is_reported_instead_of_success(self):
+        harness = _Harness(_build_site(),
+                           close_error=RuntimeError("close exploded"))
+
+        with self.assertRaises(chat2api.LoginCleanupFailed) as ctx:
+            harness.run()
+
+        self.assertEqual(ctx.exception.reason, "browser_cleanup_failed")
+        self.assertIn("close exploded", str(ctx.exception))
+        self.assertIsNone(ctx.exception.primary)
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertTrue(harness.created[0].closed)
+
+    def test_cleanup_failure_keeps_the_session_failure_visible(self):
+        harness = _Harness(_FakeSite(OPENWEBUI_URL),
+                           close_error=RuntimeError("close exploded"))
+
+        with self.assertRaises(chat2api.LoginCleanupFailed) as ctx:
+            harness.run(timeout_s=0.2)
+
+        self.assertEqual(ctx.exception.reason, "browser_cleanup_failed")
+        self.assertIsInstance(ctx.exception.__cause__, chat2api.LoginStalled)
+        self.assertEqual(ctx.exception.__cause__.reason, "timeout")
+        self.assertIn("timeout", str(ctx.exception))
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertTrue(harness.created[0].closed)
+
+    def test_failure_closes_the_context_and_releases_the_session(self):
+        harness = _Harness(_build_site())
+
+        def failing_probe(_base_url, _token):
+            raise RuntimeError("probe exploded")
+
+        with mock.patch.object(harness, "_credential_probe",
+                               side_effect=failing_probe):
+            with self.assertRaises(RuntimeError) as ctx:
+                harness.run()
+
+        self.assertIn("probe exploded", str(ctx.exception))
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
 
 
 class AdminLoginWindowTests(unittest.TestCase):
