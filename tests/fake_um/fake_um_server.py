@@ -574,6 +574,7 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
                 self._send_json(200, _messages_body(payload, reply,
                                                       self.fake.config.model))
             return
+        self._discard_body()
         self._send_json(404, {"detail": "Not Found"})
 
     def _effective_mode(self, mode):
@@ -615,6 +616,11 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
             if method != "POST":
                 self._send_json(405, {"detail": "Method Not Allowed"})
                 return
+            # The body is ignored, but a declared body must be consumed:
+            # closing with unread received data makes Windows answer the
+            # client's next read with RST (the intermittent
+            # ConnectionAbortedError in TestBarrierControl).
+            self._discard_body()
             # The new token is readable in-process; it is never sent back over
             # the wire so a control call cannot hand out a credential.
             self.fake.rotate_token()
@@ -624,6 +630,7 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
             if method != "POST":
                 self._send_json(405, {"detail": "Method Not Allowed"})
                 return
+            self._discard_body()
             self.fake.reset()
             self._send_json(200, self.fake.state())
             return
@@ -668,11 +675,37 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
             if method != "POST":
                 self._send_json(405, {"detail": "Method Not Allowed"})
                 return
+            # Consume the declared body before responding: closing with unread
+            # received data makes Windows answer the client's next read with RST.
+            self._discard_body()
             self._send_json(200, self.fake.disarm_barrier())
             return
+        self._discard_body()
         self._send_json(404, {"detail": "Not Found"})
 
     # ---------- body handling ----------
+
+    def _discard_body(self):
+        """Consume a declared request body that this route ignores.
+
+        Closing a socket that still holds unread received data makes Windows
+        answer the client's next read with RST (the intermittent
+        ConnectionAbortedError in TestBarrierControl). A route that ignores the
+        body still reads and discards it, bounded by the same body limit.
+        """
+        header = self.headers.get("Content-Length")
+        if header is None:
+            return
+        try:
+            length = int(header)
+        except ValueError:
+            return
+        if length <= 0:
+            return
+        try:
+            self.rfile.read(min(length, MAX_BODY_BYTES))
+        except OSError:
+            raise _ClientGone() from None
 
     def _read_json(self):
         header = self.headers.get("Content-Length")

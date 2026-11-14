@@ -504,8 +504,9 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
                          "manual_takeover_required:umpass_mfa_required")
 
     def test_soft_manual_progress_is_not_a_terminal_error(self):
-        # ticket #41：click-swallowed/unrecognized-control 只是自动流程
-        # 停止动作、仍在轮询 token，不能发布成 terminal 的
+        # ticket #41/#42 item 11：click-swallowed/unrecognized-control
+        # 只是自动流程停止动作、仍在轮询 token；它只保留在
+        # _auth_login.manual_reason，不能写成 _auth_error 或 terminal
         # manual_takeover_required:<reason>，否则控制台会提前结束等待。
         proxy = self._proxy()
         proxy._note_login_progress({
@@ -516,12 +517,11 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
         status = proxy.auth_status()
         self.assertEqual(status["login"]["manual_reason"],
                          "openwebui_click_swallowed")
-        self.assertEqual(status["error"],
-                         "manual_takeover:openwebui_click_swallowed")
+        self.assertIsNone(status["error"])
         self.assertIn("openwebui_click_swallowed", status["label"])
         self.assertIsNone(
             proxy.health_snapshot()["authentication"]["error"],
-            "契约：非 terminal 的人工原因不得出现在 /health 的 manual error 里")
+            "契约：软人工信号不得成为 /health 的 manual error")
         self.assertNotIn(
             "ONE-TIME",
             str(proxy.auth_status()["login"]),
@@ -581,6 +581,10 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
 
             self.assertTrue(proxy.refresh(force=True, wait=False))
             second = proxy.auth_status()
+            # ticket #42 item 21：等待中的循环只在 shutdown 时退出；先显式
+            # 结束本轮，再在 mock 作用域内 join，释放走测试替身。
+            proxy._shutdown_event.set()
+            self._finish_session_thread(proxy)
 
         self.assertEqual(second["recovery"]["round"], first_round,
                          "契约：等待中的重复 POST 必须加入当前轮")
@@ -592,7 +596,6 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
                          "契约：重复 POST 不得续期登录窗口")
         self.assertIn("reauth_refused:global_session_active",
                       second["error"])
-        self._finish_session_thread(proxy)
 
     def test_login_busy_does_not_consume_the_session_budget(self):
         # ticket #41：另一进程持有 profile 登录锁时，LoginBusy 是

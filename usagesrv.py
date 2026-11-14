@@ -47,6 +47,10 @@ from share.store import (Disabled, StoreError, SecretUnavailable,  # noqa: E402
                          SecretUndecryptable, VersionMismatch, read_key_labels)
 from console import public_url as console_public_url  # noqa: E402
 from console import stats as console_stats  # noqa: E402
+from login_contract import (  # noqa: E402
+    LOGIN_TERMINAL_MANUAL_REASONS,
+    MANUAL_TAKEOVER_REQUIRED_PREFIX,
+)
 
 CHAT2API_LOG = os.environ.get("CHAT2API_USAGE_LOG") or \
     os.path.join(HERE, "data", "usage-chat2api.jsonl")
@@ -937,13 +941,18 @@ def _console_auth_observation():
     readable classification (``control_denied`` / ``status_unreachable`` /
     ``status_query_failed`` / ``status_schema`` or a generic
     ``auth_observation_failed``) in ``read_error`` so /display-state can
-    show why the observation is unknown. No token or login page is copied
-    into the observation.
+    show why the observation is unknown. Ticket #42 item 14 puts the imports
+    inside the guarded block, so an import failure is reported as a read error
+    instead of escaping as a 500. Item 15 sanitizes the generic message so an
+    internal path or long token is never copied to the tokenless face. Item 16
+    keeps the primary cleanup outcome alongside the cleanup failure. No token or
+    login page is copied into the observation.
     """
-    from console import um_adapter as console_um_adapter
-    from console.operations import OperationError
-
+    operation_error = None
     try:
+        from console import um_adapter as console_um_adapter
+        from console.operations import OperationError as operation_error
+
         snapshot = None
         if CLOUD_ROLE:
             snapshot, _cached, _age = console_services_snapshot()
@@ -951,23 +960,34 @@ def _console_auth_observation():
             cloud=CLOUD_ROLE, snapshot=snapshot)
         token = console_um_adapter._read_control_token(CONTROL_TOKEN_FILE)
         status = console_um_adapter._read_auth_status(base_url, token)
-    except OperationError as exc:
-        return {"state": None, "label": None, "error": None,
-                "observed_at": None,
-                "login_window_deadline_epoch": None,
-                "read_error": {"code": exc.code, "message": exc.message}}
     except Exception as exc:  # noqa: BLE001  a display read must stay honest
+        if operation_error is not None and isinstance(exc, operation_error):
+            return {"state": None, "label": None, "error": None,
+                    "primary": None,
+                    "observed_at": None,
+                    "login_window_deadline_epoch": None,
+                    "read_error": {"code": exc.code, "message": exc.message}}
+        message = " ".join(str(exc).split())
+        if not message or _CONSOLE_ERROR_DETAIL_UNSAFE.search(message):
+            # A path, drive or long token would leak internal detail through
+            # the tokenless face; the class name alone is still readable.
+            message = type(exc).__name__
+        else:
+            message = "%s: %s" % (type(exc).__name__,
+                                  message[:_CONSOLE_ERROR_DETAIL_MAX])
         return {"state": None, "label": None, "error": None,
+                "primary": None,
                 "observed_at": None,
                 "login_window_deadline_epoch": None,
                 "read_error": {
                     "code": "auth_observation_failed",
-                    "message": "%s: %s" % (type(exc).__name__, exc),
+                    "message": message,
                 }}
     return {
         "state": status["state"],
         "label": status["label"],
         "error": status["error"],
+        "primary": status.get("primary"),
         "observed_at": status["checked_epoch"],
         "login_window_deadline_epoch":
             status["login_window_deadline_epoch"],
@@ -2536,21 +2556,50 @@ class Handler(BaseHTTPRequestHandler):
         return {"available": True, "reason": None}
 
     @staticmethod
+    def _console_manual_reason(*values):
+        """The terminal manual reason carried by any read field, or None.
+
+        Ticket #42 item 3: chat2api publishes the reason both prefixed
+        (``manual_takeover_required:<reason>``) and, on an older instance,
+        bare. The display read face must name the SAME manual step for both
+        shapes instead of showing a generic failure. The reasons come from the
+        shared contract module, so the service, console adapter and display
+        cannot drift apart.
+        """
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            reason = value
+            for prefix in (MANUAL_TAKEOVER_REQUIRED_PREFIX,
+                           "manual_takeover:"):
+                if reason.startswith(prefix):
+                    reason = reason[len(prefix):]
+                    break
+            if reason in LOGIN_TERMINAL_MANUAL_REASONS:
+                return reason
+        return None
+
+    @staticmethod
     def _console_display_state_of(auth, display):
         """Map one read-only auth observation to the display-state contract.
 
         ``valid`` only comes from THIS read's ``state == "valid"``; an old
         login action, a black screen or an rfb connect never implies it.
         ``waiting_mfa`` needs an explicit MFA/manual reason. ``not_started``
-        and ``display_disconnected`` stay separate facts.
+        and ``display_disconnected`` stay separate facts. Ticket #42 item 3
+        accepts a bare terminal manual reason as well as the prefixed code, so
+        an older chat2api instance still shows "需要人工接管". Item 16 shows
+        the primary outcome a cleanup failure masked.
         """
         state = auth.get("state")
         error = auth.get("error")
+        primary = auth.get("primary")
         reason = error
-        for prefix in ("manual_takeover_required:", "manual_takeover:"):
+        for prefix in (MANUAL_TAKEOVER_REQUIRED_PREFIX, "manual_takeover:"):
             if isinstance(reason, str) and reason.startswith(prefix):
                 reason = reason.split(":", 1)[1]
                 break
+        manual_reason = Handler._console_manual_reason(error, primary)
         read_error = auth.get("read_error")
         read_detail = None
         if isinstance(read_error, dict):
@@ -2568,9 +2617,16 @@ class Handler(BaseHTTPRequestHandler):
         if state in ("invalid", "failed"):
             if reason == "timeout":
                 return "timed_out", "登录窗口已超时", error
-            if isinstance(error, str) and error.startswith(
-                    "manual_takeover_required:"):
-                return "failed", "需要人工接管", error
+            if manual_reason is not None:
+                detail = error
+                if (isinstance(primary, str) and primary
+                        and primary != error):
+                    detail = ("%s；原始原因：%s" % (error, primary)
+                              if error else primary)
+                return "failed", "需要人工接管", detail
+            if isinstance(primary, str) and primary and primary != error:
+                return "failed", "登录失败", "%s；原始原因：%s" % (
+                    error, primary)
             return "failed", "登录失败", error
         if state in ("logging_in", "needs_login"):
             if reason in ("umpass_mfa_required", "umpass_prefill_missing",
@@ -2610,6 +2666,10 @@ class Handler(BaseHTTPRequestHandler):
             "login_window_deadline_epoch":
                 auth.get("login_window_deadline_epoch"),
             "auth_error": auth.get("read_error"),
+            # Ticket #42 item 16: the display read face keeps the primary
+            # session outcome a cleanup failure masked, alongside the cleanup
+            # error already shown in ``detail``.
+            "auth_primary": auth.get("primary"),
             "operator": self._console_operator_state(),
             "display": display,
         }

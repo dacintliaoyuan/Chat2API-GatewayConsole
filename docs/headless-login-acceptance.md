@@ -38,9 +38,19 @@ Playwright 的 `chromium_headless_shell-1248`，`setUpClass` 报
 | #12 | 成功、超时、取消、失败都关闭 context 并释放 slot；5 分钟无进展关闭；30 分钟总预算仍生效；关闭失败显式上报 | `tests.test_chat2api_browser_login.SessionLifecycleTests`、`tests.test_chat2api_reauth_recovery` | 通过 |
 | #13 | 三个 manual 原因各自返回 `manual_takeover_required:<reason>`；manual 阶段不保留浏览器；Duo 推送等待继续；重试开新轮 | `tests.test_chat2api_browser_login.TwoStepFlowTests`、`tests.test_chat2api_reauth_recovery.RecoveryScheduleContractTests`、`tests.test_chat2api_auth` | 通过 |
 | #14 | display unit 安装但默认不 enable；按需 `manual-takeover.sh start`；默认路径不依赖 display；真实 systemd 留目标机 follow-up | `tests.test_cloud_display_on_demand` | 通过 |
-| #15 | 重复 `POST /admin/auth/login` 加入当前轮；health/status 显示 manual 原因和登录窗口截止时间；成功、失败、取消状态正确；控制台不显示 token | `tests.test_console_um_login`、`tests.test_console_um_adapter`、`tests.test_console_display_route` | 通过 |
+| #15 | 重复 `POST /admin/auth/login` 加入当前轮；health/status 显示 manual 原因和人工接管窗口截止时间；成功、失败、取消状态正确；控制台不显示 token | `tests.test_console_um_login`、`tests.test_console_um_adapter`、`tests.test_console_display_route` | 通过 |
 
 本次只跑了上表的定向行为验收；`scripts/check.sh --full` 由 workflow 的最终验证阶段执行，不在本记录中冒充已跑。
+
+## #41 medium 修复验证记录
+
+- 工作目录：`D:\git\github\Chat2API-GatewayConsole\.worktrees\integration-headless-fixes`
+- 被测状态：`integration/headless-fixes` @ `67345d6`（修复提交 `61909fa`）
+- 命令与结果（来自 #41 实现报告，本次记录只归档，不冒充本票重跑）：
+  - `python -m unittest tests.test_chat2api_browser_login tests.test_chat2api_reauth_recovery tests.test_console_um_login tests.test_console_um_adapter tests.test_console_display_route`：`Ran 150 tests in 39.768s`，`OK (skipped=1)`，EXIT=0。
+  - `python -m unittest tests.test_chat2api_auth`：`Ran 89 tests in 20.572s`，`OK`，EXIT=0。
+  - `bash scripts/check.sh --full`：Python 套件 `Ran 2310 tests in 704.794s`，`OK (skipped=63)`；local 套件 `Ran 54 tests in 20.947s`，`OK`；其余编译、ruff、share-names、retired-features、check-generated、tsc、契约、日志与 UM 检查全部通过，EXIT=0。
+- 未验证范围：上述记录来自 #41 的 Windows 本机运行，不是 #42 的回归证据；真实云端 systemd、真实 UM 登录/MFA/Duo 与部署后 headless 行为仍未在目标机复验。
 
 ## RSS 基线
 
@@ -110,7 +120,8 @@ curl -s -X POST -H "X-Admin-Control: $TOKEN" http://127.0.0.1:8100/admin/auth/ca
 - 两轮登录都在浏览器退出后结束；第二轮 `POST /admin/auth/cancel` 返回
   `{"cancelled": false, "state": "no_login_in_progress"}`，说明登录已在调用前成功结束。
 - 基线采集后，云端 `authentication.state` 从 `failed` 变为 `valid`。这是本次显式登录的真实结果，记录在此，
-  不当作部署后 headless 行为的验证。
+  不当作部署后 headless 行为的验证。该真实登录发生在旧 release、非本票验收（`s2-20261113b`）；
+  本票只保留记录，不再执行新的真实云端登录（spec #8 把真实云端登录列为目标机 follow-up）。
 - 采集时 `um-share-display.service` 仍是 `enabled`/`active`（旧安装遗留），`um-share-broker.service`
   与 `um-share-console.service` 均为 `enabled`/`active`；`8100`、`18096`、`5901` 都只监听 `127.0.0.1`。
 
