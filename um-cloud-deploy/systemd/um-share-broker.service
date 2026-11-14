@@ -24,9 +24,12 @@ Environment=CHAT2API_USAGE_LOG=/var/lib/um-share-console/share-backend/usage-sha
 Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token
 EnvironmentFile=-/etc/um-share/console.env
 Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token
-# No global DISPLAY/XAUTHORITY: the normal login is headless.  When the
-# on-demand display is active, browser_login injects its published
-# DISPLAY/XAUTHORITY into the browser launch only.
+# The browser launch gets these only when the on-demand display is active;
+# the default headless path never connects to them.  browser_login also
+# injects the display's published values, so a changed display path does not
+# require a broker restart.
+Environment=DISPLAY=:99
+Environment=XAUTHORITY=/run/um-share/display.auth
 # The 8100 gateway persists its revoke state under the state directory, never
 # inside the release: ProtectSystem=strict keeps /opt/um-share/current read-only.
 # install.sh appends

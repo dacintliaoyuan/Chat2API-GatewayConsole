@@ -91,12 +91,13 @@ class InstallDefaultTests(unittest.TestCase):
         self.assertIn('"headless": not headful', body)
         self.assertNotIn("display_missing", body)
 
-    def test_broker_does_not_require_a_global_display(self):
+    def test_broker_declares_the_optional_display_path(self):
         broker = _read(BROKER_UNIT)
-        # 默认 headless 不依赖 display；可见浏览器只在 browser_login 的
-        # 启动参数里拿到按需 display 的运行时状态。
-        self.assertNotIn("Environment=DISPLAY=", broker)
-        self.assertNotIn("Environment=XAUTHORITY=", broker)
+        # 8100 子进程的浏览器启动需要 DISPLAY/XAUTHORITY；默认 headless
+        # 不连接它们，只有 display 运行时状态完整时 browser_login 才用。
+        self.assertIn("Environment=DISPLAY=:99", broker)
+        self.assertIn(
+            "Environment=XAUTHORITY=/run/um-share/display.auth", broker)
 
     def test_display_unit_shares_the_broker_private_tmp(self):
         unit = _read(DISPLAY_UNIT)
