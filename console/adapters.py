@@ -763,8 +763,9 @@ def build_registry(cloud=False):
             resource_fn=_um_account_resource,
             param_schema=_LOGIN_SCHEMA,
             # 节5 批准记录（2026-09-16）+ 用户指令 A3：登录编排恢复启用。
-            # 登录=用户本机交互（Edge 窗口由用户完成）；编排自身的临时启停
-            # 恢复/超时复验/协作取消已隔离验证。
+            # 登录=一次登录交互（可见或 headless）；默认 headless，只有
+            # 操作员显式人工接管才按需拉起可见 Edge 窗口。编排自身的临时
+            # 启停恢复/超时复验/协作取消已隔离验证。
             enabled=True),
         ActionSpec(
             "model.context_probe_preview",

@@ -8,6 +8,7 @@ VNC endpoint is never contacted; the launcher file and noVNC root are temp files
 import json
 import os
 import base64
+import builtins
 import socket
 import tempfile
 import threading
@@ -17,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 import usagesrv
+import login_contract
 from console import share_actions as console_share_actions
 from console import um_adapter as console_um_adapter
 from console.display_proxy import DisplayConfig, DisplayProxy
@@ -448,6 +450,95 @@ class DisplayStateRouteTest(unittest.TestCase):
         self.assertIn("不可达", payload["detail"])
         self.assertEqual(payload["auth_error"]["code"],
                          "status_unreachable")
+
+    def test_display_state_accepts_bare_terminal_manual_reasons(self):
+        # ticket #42 item 3：display-state 与 console/um_login 使用同一份
+        # terminal manual 原因；裸原因（旧实例）也必须显示"需要人工接管"。
+        for reason in login_contract.LOGIN_TERMINAL_MANUAL_REASONS:
+            with self.subTest(reason=reason):
+                payload = self._state(auth={
+                    "state": "failed",
+                    "label": "认证失败（需人工：%s）" % reason,
+                    "error": reason,
+                    "observed_at": 1700000000,
+                    "login_window_deadline_epoch": 2800.0,
+                })
+                self.assertEqual(payload["state"], "failed")
+                self.assertEqual(payload["label"], "需要人工接管")
+                self.assertIn(reason, payload["detail"])
+
+    def test_display_state_keeps_cleanup_failure_and_primary_reason(self):
+        # ticket #42 item 16：清理失败与原始 manual 原因都要显示。
+        payload = self._state(auth={
+            "state": "failed",
+            "label": "认证失败（清理失败）",
+            "error": "browser_cleanup_failed",
+            "primary": "manual_takeover_required:umpass_mfa_required",
+            "observed_at": 1700000000,
+            "login_window_deadline_epoch": 2800.0,
+        })
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["label"], "需要人工接管")
+        self.assertIn("browser_cleanup_failed", payload["detail"])
+        self.assertIn("manual_takeover_required:umpass_mfa_required",
+                      payload["detail"])
+        self.assertEqual(payload["auth_primary"],
+                         "manual_takeover_required:umpass_mfa_required")
+
+    def test_display_state_keeps_a_non_manual_primary_reason(self):
+        payload = self._state(auth={
+            "state": "failed",
+            "label": "认证失败（清理失败）",
+            "error": "browser_cleanup_failed",
+            "primary": "timeout",
+            "observed_at": 1700000000,
+            "login_window_deadline_epoch": 2800.0,
+        })
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["label"], "登录失败")
+        self.assertIn("browser_cleanup_failed", payload["detail"])
+        self.assertIn("timeout", payload["detail"])
+
+    def test_auth_observation_import_failure_is_a_read_error(self):
+        # ticket #42 item 14：import 失败也要返回 read_error，不能 500。
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "console":
+                raise ImportError("console import exploded")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            observed = usagesrv._console_auth_observation()
+        self.assertIsNone(observed["state"])
+        self.assertEqual(observed["read_error"]["code"],
+                         "auth_observation_failed")
+        self.assertIn("ImportError", observed["read_error"]["message"])
+
+    def test_auth_observation_generic_error_does_not_leak_paths(self):
+        # ticket #42 item 15：无令牌 /display-state 不得回传内部路径或长 token。
+        secret = r"C:\Users\secret\page.html?code=TOKEN12345678901234567890"
+        with (
+            mock.patch.object(
+                console_um_adapter, "resolve_chat2api_base_url",
+                return_value="http://127.0.0.1:1"),
+            mock.patch.object(
+                console_um_adapter, "_read_control_token",
+                return_value="token"),
+            mock.patch.object(
+                console_um_adapter, "_read_auth_status",
+                side_effect=RuntimeError(secret)),
+        ):
+            observed = usagesrv._console_auth_observation()
+        self.assertIsNone(observed["state"])
+        self.assertEqual(observed["read_error"]["code"],
+                         "auth_observation_failed")
+        message = observed["read_error"]["message"]
+        self.assertIn("RuntimeError", message)
+        self.assertNotIn("C:\\", message)
+        self.assertNotIn("secret", message)
+        self.assertNotIn("TOKEN123", message)
+        self.assertNotIn("page.html", message)
 
     def test_display_operator_acquire_and_conflicts(self):
         proxy = _FakeOperatorDisplay()

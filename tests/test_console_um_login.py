@@ -29,6 +29,7 @@ from unittest import mock
 sys.path.insert(0, str(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
+import login_contract  # noqa: E402
 from console import adapters as console_adapters  # noqa: E402  (same directory, sys.path prepared)
 from console import um_adapter as console_um_adapter  # noqa: E402
 from console import um_login as console_um_login  # noqa: E402
@@ -692,6 +693,66 @@ class ConsoleAuthStatusReadTests(unittest.TestCase):
         self.assertGreaterEqual(time.monotonic() - started, 0.2)
         self.assertEqual(caught.exception.code, "login_timeout_not_settled")
         self.assertIn("status_query_failed", caught.exception.message)
+
+    def test_status_poll_keeps_the_historical_5s_timeout(self):
+        # ticket #42 item 17：复用 adapter 后控制台每次轮询仍只阻塞 5s，
+        # 不能悄悄变成 adapter 默认的 10s。
+        status = {
+            "state": "logging_in", "label": "登录中", "error": None,
+            "recovery": {"state": "running"},
+            "primary": None,
+            "login_window_deadline_epoch": None,
+            "login_window_s": None,
+            "checked_epoch": 1,
+        }
+        with mock.patch.object(
+                console_um_adapter, "_read_auth_status",
+                return_value=status) as read:
+            console_um_login._read_auth_status("http://127.0.0.1:1", "token")
+        self.assertEqual(read.call_args.kwargs.get("timeout"), 5.0)
+
+    def test_cleanup_failure_keeps_the_primary_manual_reason(self):
+        # ticket #42 item 16：清理失败不能吞掉原始 manual 原因；控制台必须
+        # 同时显示清理失败与原始原因，并仍映射为人工接管。
+        status = {
+            "state": "failed",
+            "label": "认证失败（清理失败）",
+            "error": "browser_cleanup_failed",
+            "primary": "manual_takeover_required:umpass_mfa_required",
+            "recovery": {
+                "state": "exhausted", "pause_reason": "browser_cleanup_failed",
+            },
+        }
+        failure = console_um_login._terminal_login_failure(status)
+        self.assertIsNotNone(failure)
+        self.assertEqual(failure[0], "login_manual_takeover_required")
+        self.assertIn("browser_cleanup_failed", failure[1])
+        self.assertIn("manual_takeover_required:umpass_mfa_required",
+                      failure[1])
+
+    def test_cleanup_failure_keeps_a_non_manual_primary_reason(self):
+        status = {
+            "state": "failed",
+            "label": "认证失败（清理失败）",
+            "error": "browser_cleanup_failed",
+            "primary": "timeout",
+            "recovery": {
+                "state": "exhausted", "pause_reason": "browser_cleanup_failed",
+            },
+        }
+        failure = console_um_login._terminal_login_failure(status)
+        self.assertIsNotNone(failure)
+        self.assertEqual(failure[0], "login_failed")
+        self.assertIn("browser_cleanup_failed", failure[1])
+        self.assertIn("timeout", failure[1])
+
+    def test_terminal_manual_contract_is_shared_with_the_service(self):
+        # ticket #42 item 12：terminal 原因与前缀只有一份定义，console 直接
+        # 依赖 chat2api 的公开契约常量，避免两边各自维护而漂移。
+        self.assertIs(console_um_login._TERMINAL_MANUAL_REASONS,
+                      login_contract.LOGIN_TERMINAL_MANUAL_REASONS)
+        self.assertEqual(console_um_login._MANUAL_TAKEOVER_PREFIX,
+                         login_contract.MANUAL_TAKEOVER_REQUIRED_PREFIX)
 
 
 if __name__ == "__main__":

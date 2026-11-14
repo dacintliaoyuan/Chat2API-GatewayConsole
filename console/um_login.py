@@ -61,30 +61,35 @@ import time
 import urllib.error
 import urllib.request
 
+from login_contract import (
+    LOGIN_TERMINAL_MANUAL_REASONS,
+    MANUAL_TAKEOVER_REQUIRED_PREFIX,
+)
 from console import adapters as console_adapters
 from console import um_adapter as console_um_adapter
 from console.operations import OperationCancelled, OperationError
 
 # The login POST is a state-changing force entry; 10s is ample for a loopback
-# call. The status poll timeout stays the adapter's 5s per request.
+# call. The status poll keeps the historical 5s per request, even though the
+# shared adapter's own default is 10s (ticket #42 item 17).
 _LOGIN_TIMEOUT_S = 10.0
+_STATUS_POLL_TIMEOUT_S = 5.0
 
 _START_WAIT_DEFAULT_S = 30.0
 _LOGIN_BUDGET_DEFAULT_S = 190.0
 _INTERVAL_DEFAULT_S = 1.0
 _BUDGET_MAX_S = 3600.0
 
-# Ticket #15: the chat2api terminal manual-takeover code. The three reasons
-# are accepted bare as well, so a console talking to an older chat2api instance
-# still names the manual step instead of waiting for the full budget.
-_MANUAL_TAKEOVER_PREFIX = "manual_takeover_required:"
-_MANUAL_REASONS = ("umpass_mfa_required", "umpass_prefill_missing",
-                   "unrecognized_page")
+# Ticket #15/#42: the chat2api terminal manual-takeover code and reasons are
+# shared with the service through ONE contract module; the three reasons are also
+# accepted bare, so a console talking to an older chat2api instance still names
+# the manual step instead of waiting for the full budget.
+_MANUAL_TAKEOVER_PREFIX = MANUAL_TAKEOVER_REQUIRED_PREFIX
 # Ticket #41: only these stages end the round. A prefixed soft reason
 # (a swallowed click, an unrecognized control, a Duo push still being
 # waited on) keeps the backend token poll running, so the console must keep
 # waiting instead of reporting a finished manual takeover.
-_TERMINAL_MANUAL_REASONS = frozenset(_MANUAL_REASONS)
+_TERMINAL_MANUAL_REASONS = LOGIN_TERMINAL_MANUAL_REASONS
 
 # Restore outcome kinds returned by _restore_service_state:
 # kept     - the service was already running; nothing was started or stopped.
@@ -236,17 +241,21 @@ def _read_auth_status(base_url, token):
     or schema error ends the wait honestly. Ticket #15 keeps only the
     whitelisted terminal fields (state/error/recovery state and pause
     reason) so a manual takeover or an operator cancel can end the wait
-    immediately.
+    immediately. Ticket #42 keeps ``primary`` (the outcome a cleanup failure
+    masked) and bounds each poll request to the historical 5s.
     """
     try:
-        status = console_um_adapter._read_auth_status(base_url, token)
+        status = console_um_adapter._read_auth_status(
+            base_url, token, timeout=_STATUS_POLL_TIMEOUT_S)
     except OperationError as exc:
         return {"state": None, "error": None, "recovery": None,
+                "primary": None,
                 "read_error": {"code": exc.code, "message": exc.message}}
     return {
         "state": status["state"],
         "error": status["error"],
         "recovery": status["recovery"],
+        "primary": status.get("primary"),
         "read_error": None,
     }
 
@@ -276,12 +285,13 @@ def _terminal_login_failure(status):
     """
     state = status.get("state")
     error = status.get("error")
+    primary = status.get("primary")
     recovery = status.get("recovery") or {}
     recovery_state = recovery.get("state")
     pause_reason = recovery.get("pause_reason")
 
     manual = None
-    for reason in (error, pause_reason):
+    for reason in (error, pause_reason, primary):
         if not isinstance(reason, str):
             continue
         if reason.startswith(_MANUAL_TAKEOVER_PREFIX):
@@ -293,12 +303,17 @@ def _terminal_login_failure(status):
             manual = _MANUAL_TAKEOVER_PREFIX + reason
             break
     if manual is not None:
-        return ("login_manual_takeover_required",
-                "登录需要人工接管（%s）；本轮已结束，浏览器已关闭" % manual)
+        message = "登录需要人工接管（%s）；本轮已结束，浏览器已关闭" % manual
+        if isinstance(error, str) and error != manual:
+            message += "；清理失败：%s" % error
+        return ("login_manual_takeover_required", message)
 
     if recovery_state == "exhausted":
         reason = pause_reason or error or "failed"
-        return ("login_failed", "登录失败（%s）；自动恢复已结束" % reason)
+        message = "登录失败（%s）；自动恢复已结束" % reason
+        if isinstance(primary, str) and primary != reason:
+            message += "；原始原因：%s" % primary
+        return ("login_failed", message)
     return None
 
 

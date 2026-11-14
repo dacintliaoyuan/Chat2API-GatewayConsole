@@ -369,16 +369,15 @@ LOGIN_NAVIGATION_ATTEMPTS = 2
 # release its browser instead of holding it for the caller's total budget (30
 # minutes on the dedicated instance).
 LOGIN_IDLE_TIMEOUT_S = 300.0
-# Ticket #13: a step only the account holder can complete ends THIS round at
-# once. The returned code keeps the reason so the operator can decide between a
+# Ticket #13/#42: the terminal manual-takeover code and its reasons live in
+# ONE shared module so the service, the console adapter and the display read face
+# cannot drift apart. A step only the account holder can complete ends THIS round
+# at once; the returned code keeps the reason so the operator can decide between a
 # retry (a new round) and an on-demand visible display.
-MANUAL_TAKEOVER_REQUIRED_PREFIX = "manual_takeover_required:"
-# Ticket #41: only these stages end THIS round at once. A click the page
-# swallowed or a control the session could not recognize leaves the automatic
-# flow stopped but the token poll running, so it is a soft manual signal.
-LOGIN_TERMINAL_MANUAL_REASONS = frozenset((
-    "umpass_mfa_required", "umpass_prefill_missing", "unrecognized_page"))
-LOGIN_SOFT_MANUAL_PREFIX = "manual_takeover:"
+from login_contract import (  # noqa: E402  (root prepared above)
+    LOGIN_TERMINAL_MANUAL_REASONS,
+    MANUAL_TAKEOVER_REQUIRED_PREFIX,
+)
 
 # Opt-in "raw upstream catalog, fresh, no local virtual aliases" contract used
 # by the public share entry. Behavior-neutral for all other consumers: they
@@ -1338,9 +1337,10 @@ def _acquire_reauth_lock(path: str, primitive=None, wait_s=None,
     second session is refused immediately. Returns the handle, or None when the lock
     could not be taken within the wait (or no OS primitive exists); the caller
     must then refuse the session rather than guess. When ``error_sink`` is given it
-    is filled with ``reason``/``detail`` ONLY for a configuration or filesystem
-    error; plain contention leaves it empty, because the caller must not report a
-    held lock as a broken host.
+    is filled with ``detail`` ONLY for a filesystem error; plain contention
+    leaves it empty, because the caller must not report a held lock as a broken
+    host. Ticket #42 item 13: the sink carries only the readable detail, the one
+    fact its caller reads; a second unused ``reason`` key is gone.
     """
     if primitive is None:
         primitive = _reauth_lock_primitive()
@@ -1351,7 +1351,6 @@ def _acquire_reauth_lock(path: str, primitive=None, wait_s=None,
             "refusing sessions rather than skipping the mutex", sys.platform)
         if error_sink is not None:
             error_sink.update({
-                "reason": "lock_primitive_unavailable",
                 "detail": "OS file lock primitive is unavailable on platform=%s"
                           % sys.platform,
             })
@@ -1376,7 +1375,6 @@ def _acquire_reauth_lock(path: str, primitive=None, wait_s=None,
                 os.close(fd)
                 if error_sink is not None:
                     error_sink.update({
-                        "reason": "lock_file_error",
                         "detail": "could not restrict lock permissions on %s: %s"
                                   % (lock_path, exc),
                     })
@@ -1384,7 +1382,6 @@ def _acquire_reauth_lock(path: str, primitive=None, wait_s=None,
     except OSError as exc:
         if error_sink is not None:
             error_sink.update({
-                "reason": "lock_file_error",
                 "detail": "could not open lock file %s: %s"
                           % (lock_path, exc),
             })
@@ -1413,7 +1410,6 @@ def _acquire_reauth_lock(path: str, primitive=None, wait_s=None,
             pass
         if error_sink is not None:
             error_sink.update({
-                "reason": "lock_file_error",
                 "detail": "could not prepare lock file %s: %s"
                           % (lock_path, exc),
             })
@@ -2052,7 +2048,7 @@ _release_round_local = threading.local()
 
 
 def _release_reauth_slot_for_round(path: str, pid: int, round_id: int,
-                                    success=False):
+                                    success=False, refund_attempt=False):
     """Release the lease bound to ONE recovery round (R4).
 
     The public ``release_reauth_slot`` signature stays compatible with callers
@@ -2060,16 +2056,27 @@ def _release_reauth_slot_for_round(path: str, pid: int, round_id: int,
     to the synchronous release through a thread-local context, so a release paused
     inside the real function still checks the round stored in the lease: a late
     finally of an OLD round refuses to clear the NEXT round's same-pid lease.
+
+    Ticket #42 item 19: a busy session never opened a browser, so its start
+    must be refunded from the shared rolling attempt ledger instead of being
+    counted against the global cap.
     """
     previous = getattr(_release_round_local, "round_id", None)
     _release_round_local.round_id = round_id
     try:
+        if refund_attempt:
+            # Ticket #42 item 19: only a busy session refunds its start; every
+            # other release keeps the historical call shape so existing test
+            # seams (and callers that only know path/pid/success) still work.
+            return release_reauth_slot(path, pid, success=success,
+                                      refund_attempt=True)
         return release_reauth_slot(path, pid, success=success)
     finally:
         _release_round_local.round_id = previous
 
 
-def release_reauth_slot(path: str, pid: int, success=False):
+def release_reauth_slot(path: str, pid, success=False,
+                        refund_attempt=False):
     """Release a lease this pid holds; never release another instance's lease.
 
     ``_release_reauth_slot_for_round`` additionally binds the release to the
@@ -2106,6 +2113,12 @@ def release_reauth_slot(path: str, pid: int, success=False):
             # acquired the same-pid lease: leave the newer ownership intact.
             return
         attempts = _slot_attempts(state, time.time())
+        if refund_attempt and attempts:
+            # Ticket #42 item 19: the session never opened a browser (another
+            # process owns the profile lock), so the start this lease appended
+            # is refunded. Only THIS pid's lease reaches here, so the last
+            # attempt is exactly the one this release owns.
+            attempts = attempts[:-1]
         _write_reauth_slot(path, {
             "owner_pid": None,
             "started_epoch": 0.0,
@@ -2413,6 +2426,20 @@ def _login_failure_primary(exc):
     if isinstance(reason, str) and reason:
         return reason
     return type(exc).__name__
+
+
+def _health_primary(value):
+    """The ONLY primary value /health may carry (ticket #42 item 10).
+
+    /health needs no control token, so it accepts a reason code or an exception
+    class name and nothing else: a path, a page URL or free-form text would leak
+    internal detail through the unauthenticated face and is dropped.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    if all(part.isidentifier() for part in value.split(":")):
+        return value
+    return None
 
 
 class _LoginCancelSignal:
@@ -2882,9 +2909,31 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                     raise cleanup_error from session_error
                 raise cleanup_error
     finally:
+        # Capture the outcome the outer block is already propagating BEFORE
+        # the nested except replaces sys.exc_info() with the stop failure.
+        active = sys.exc_info()[1]
         try:
             if playwright is not None:
-                playwright.stop()
+                try:
+                    playwright.stop()
+                except Exception as exc:
+                    # Ticket #42 item 7: a Playwright stop failure leaves
+                    # the browser process behind, so it is the SAME explicit
+                    # cleanup failure as a context close failure instead of an
+                    # unnamed exception in status/health.
+                    primary = session_error
+                    if primary is None:
+                        primary = getattr(active, "primary", None)
+                    detail = "playwright.stop failed: %s: %s" % (
+                        type(exc).__name__, exc)
+                    if active is not None and active is not session_error:
+                        detail += "; primary outcome: %s: %s" % (
+                            type(active).__name__, active)
+                    cleanup_error = LoginCleanupFailed(
+                        "browser_cleanup_failed", detail, primary=primary)
+                    if primary is not None:
+                        raise cleanup_error from primary
+                    raise cleanup_error
         finally:
             _release_profile_login_lock(lock)
 
@@ -4047,6 +4096,11 @@ class Proxy:
         # page URL and the lease owner - still stays behind
         # /admin/auth/status, where the control token is required. Other auth
         # errors are NOT copied here.
+        #
+        # Ticket #41 keeps the primary session outcome a cleanup failure masked.
+        # Ticket #42 item 10: because this face has no control token, the
+        # primary value is restricted to a reason code / exception class name;
+        # a path, page URL or free-form text is dropped instead of leaked.
         error = status["error"]
         manual_error = (error if isinstance(error, str)
                         and error.startswith(MANUAL_TAKEOVER_REQUIRED_PREFIX)
@@ -4063,8 +4117,10 @@ class Proxy:
                                "error": manual_error,
                                # Ticket #41: the primary session outcome a
                                # cleanup failure masked, so /health carries
-                               # both reasons.
-                               "primary": status["primary"]},
+                               # both reasons. Ticket #42 item 10: only a
+                               # reason code / class name may pass; paths
+                               # and page content are dropped here.
+                               "primary": _health_primary(status["primary"])},
             # §8.4 additive: the auth-watch thread's liveness and last
             # round only — no credential, no round content.
             "watch": status["watch"],
@@ -4148,15 +4204,15 @@ class Proxy:
             self._auth_login = progress
             if progress.get("manual_reason"):
                 # Ticket #15/#41: only a true manual stage publishes the
-                # terminal ``manual_takeover_required:<reason>`` code. A soft
-                # manual signal (a swallowed click, an unrecognized control)
-                # names the human step without ending the round: the token poll
-                # keeps running.
+                # terminal ``manual_takeover_required:<reason>`` code. Ticket
+                # #42 item 11: a soft manual signal (a swallowed click, an
+                # unrecognized control) only names the human step in
+                # ``_auth_login.manual_reason``; it never becomes an auth
+                # error, so the console keeps polling the token.
                 reason = progress["manual_reason"]
-                prefix = (MANUAL_TAKEOVER_REQUIRED_PREFIX
-                          if reason in LOGIN_TERMINAL_MANUAL_REASONS
-                          else LOGIN_SOFT_MANUAL_PREFIX)
-                self._auth_error = "%s%s" % (prefix, reason)
+                if reason in LOGIN_TERMINAL_MANUAL_REASONS:
+                    self._auth_error = (
+                        MANUAL_TAKEOVER_REQUIRED_PREFIX + reason)
 
     def _session_is_current(self, generation):
         with self._auth_condition:
@@ -4226,7 +4282,7 @@ class Proxy:
         return True
 
     def _reauth_slot_ttl_s(self):
-        """Lease TTL covering every bounded phase of one visible session (A5).
+        """Lease TTL covering every bounded phase of one login interaction (visible or headless).
 
         The human wait plus startup, navigation, credential probe and cleanup
         are always covered. The post-login config and API-key fetches exist
@@ -4434,7 +4490,7 @@ class Proxy:
         return True
 
     def _perform_recovery_session(self, generation, login_cancel):
-        """Open ONE login session and classify its outcome (A2).
+        """Open ONE login interaction (visible or headless) and classify it (A2).
 
         Returns ``(outcome, reason, primary)`` where outcome is ``valid``
         (credentials committed), ``manual`` (the window needs a human),
@@ -4550,9 +4606,10 @@ class Proxy:
         evidence and generations: a credential already restored by valid new
         evidence ends the wait without opening a second window. Every wait also
         watches the shutdown event, so stopping the service cancels the scheduler
-        at once and never treats the stop as a reopenable window. A newer manual
-        cycle replaces a WAITING loop through ``wake``/``round_id``; a loop that
-        already owns a visible session is never replaced.
+        at once and never treats the stop as a reopenable window. A repeated
+        explicit login while this loop is running/waiting JOINS the current round;
+        a loop that already owns a login interaction (visible or headless) is never
+        replaced.
         """
         succeeded = False
         with self._auth_condition:
@@ -4568,7 +4625,8 @@ class Proxy:
                         self._stop_recovery_locked("cancelled")
                         return
                     if self._recovery["round"] != round_id:
-                        # A newer manual cycle replaced this waiting loop.
+                        # Defensive: a round replaced by a newer explicit
+                        # login must not publish this loop's outcome.
                         return
                     if self._recovery_stop_if_restored_locked(
                             generation, credential_generation,
@@ -4707,7 +4765,8 @@ class Proxy:
                 if current_round:
                     _release_reauth_slot_for_round(
                         REAUTH_SLOT_FILE, os.getpid(), round_id,
-                        success=(outcome == "valid"))
+                        success=(outcome == "valid"),
+                        refund_attempt=(outcome == "busy"))
                 granted = False
                 with self._auth_condition:
                     if outcome == "valid":
