@@ -768,6 +768,39 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
                     proxy.health_snapshot()["authentication"]["primary"],
                     expected)
 
+    def test_valid_round_clears_a_stale_cleanup_primary(self):
+        proxy = self._proxy()
+        calls = []
+
+        def fake_login(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise chat2api.LoginCleanupFailed(
+                    "browser_cleanup_failed",
+                    "RuntimeError: close exploded",
+                    primary=chat2api.LoginStalled("timeout",
+                                                  "last page x"))
+            return "fresh-token"
+
+        with (
+            mock.patch.object(
+                chat2api, "browser_login", side_effect=fake_login),
+            self._grant_patch(),
+            mock.patch.object(chat2api, "release_reauth_slot"),
+            mock.patch.object(chat2api.TokenStore, "save"),
+        ):
+            self.assertFalse(proxy.refresh(force=True))
+            self.assertEqual(proxy.auth_status()["primary"], "timeout")
+            self._finish_session_thread(proxy)
+
+            # ticket #41：上一轮清理失败的主因不能残留到本轮 valid。
+            self.assertTrue(proxy.refresh(force=True))
+            status = proxy.auth_status()
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(status["state"], "valid")
+        self.assertIsNone(status["primary"])
+
     def test_closed_window_is_reopened_within_the_budget(self):
         proxy = self._proxy()
         calls = []

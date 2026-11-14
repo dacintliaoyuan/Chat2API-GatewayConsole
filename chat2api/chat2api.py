@@ -4215,6 +4215,7 @@ class Proxy:
             return False
         self._auth_state = "valid"
         self._auth_error = None
+        self._auth_failure_primary = None
         self._auth_login = None
         self._recovery["state"] = "idle"
         self._recovery["next_attempt_epoch"] = None
@@ -5098,6 +5099,7 @@ class Proxy:
             if verdict == "valid":
                 self._auth_state = "valid"
                 self._auth_error = None
+                self._auth_failure_primary = None
                 return "valid"
             if verdict == "unknown":
                 # Undecidable: this is NOT evidence of an expired
@@ -5197,6 +5199,7 @@ class Proxy:
             if verdict == "valid":
                 self._auth_state = "valid"
                 self._auth_error = None
+                self._auth_failure_primary = None
                 return self._record_watch_round("valid")
             if verdict == "unknown":
                 # Long-idle evidence is not evidence of expiry: keep the last
