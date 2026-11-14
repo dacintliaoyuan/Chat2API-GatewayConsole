@@ -27,10 +27,9 @@ Design decisions fixed here:
 * The single-thread accept loop bottom-catches per-cycle exceptions
   (S27.5): a poisoned cycle is disconnected and serving CONTINUES.
 
-The Windows scheduled-task / named-pipe production entry (``build_server`` /
-``main``) is retired with the old local share chain (#33). The named-pipe
-classes kept here are the offline wire-test fixture used by
-``tests/test_share_broker_server.py``; the Linux entry never assembles them.
+The Windows named-pipe transport and its Win32 facade (the retired
+scheduled-task entry and named-pipe classes) were deleted with the old local
+share chain (#39); this module now carries only the POSIX AF_UNIX transport.
 """
 from __future__ import annotations
 
@@ -50,8 +49,6 @@ if _PACKAGE_ROOT not in sys.path:
 
 from share.broker_client import (UNIX_SOCKET_DIRECTORY_MODE,
                                  UNIX_SOCKET_FILE_MODE,
-                                 cancel_synchronous_worker_io,
-                                 declare_synchronous_io_cancellation,
                                  unix_peer_credentials,
                                  validate_unix_socket_path)
 from share.broker_host import (BrokerDiag, BrokerHostCoordinator,
@@ -66,105 +63,7 @@ from share.broker_protocol import (DEFAULT_DEADLINE_SECONDS, MAX_MESSAGE,
                                    validate_host_evidence_fields,
                                    validate_host_stop_fields,
                                    validate_host_verify_fields,
-                                   validate_management_request,
-                                   validate_ts_service_control_fields)
-
-# Planned DACL for the management pipe (D0 §27.2): SYSTEM full,
-# Administrators full, the operator account read+write, the restricted
-# um_share identity and Anonymous explicitly denied. SDDL cannot spell
-# domain\\user names, so the account entries are PLACEHOLDER SIDs that must
-# be replaced with the real S-1-5-21-... values during the authorized L2
-# experiment (H5 calibrates both the SID values and the deny/allow
-# evaluation order). The placeholder form intentionally FAILS the SDDL
-# conversion, so an uncalibrated deployment refuses to serve instead of
-# starting with a default ACL.
-PLANNED_SDDL = ("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;%%SID_DACINT%%)"
-                "(D;;GA;;;%%SID_UM_SHARE%%)(D;;GA;;;AN)")
-
-
-def _declared_kernel():
-    """Real Win32 declarations (kernel32 + advapi32 SDDL conversion)."""
-    import ctypes
-    from ctypes import wintypes
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-    kernel32.CreateNamedPipeW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
-                                          wintypes.DWORD, wintypes.DWORD,
-                                          wintypes.DWORD, wintypes.DWORD,
-                                          wintypes.DWORD, wintypes.LPVOID]
-    kernel32.CreateNamedPipeW.restype = wintypes.HANDLE
-    kernel32.ConnectNamedPipe.argtypes = [wintypes.HANDLE, wintypes.LPVOID]
-    kernel32.ConnectNamedPipe.restype = wintypes.BOOL
-    kernel32.DisconnectNamedPipe.argtypes = [wintypes.HANDLE]
-    kernel32.DisconnectNamedPipe.restype = wintypes.BOOL
-    kernel32.ReadFile.argtypes = [wintypes.HANDLE, wintypes.LPVOID,
-                                  wintypes.DWORD,
-                                  ctypes.POINTER(wintypes.DWORD),
-                                  wintypes.LPVOID]
-    kernel32.ReadFile.restype = wintypes.BOOL
-    kernel32.WriteFile.argtypes = [wintypes.HANDLE, wintypes.LPVOID,
-                                   wintypes.DWORD,
-                                   ctypes.POINTER(wintypes.DWORD),
-                                   wintypes.LPVOID]
-    kernel32.WriteFile.restype = wintypes.BOOL
-    kernel32.FlushFileBuffers.argtypes = [wintypes.HANDLE]
-    kernel32.FlushFileBuffers.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    kernel32.GetLastError.restype = wintypes.DWORD
-    declare_synchronous_io_cancellation(kernel32)
-    kernel32.GetNamedPipeClientProcessId.argtypes = [
-        wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-    kernel32.GetNamedPipeClientProcessId.restype = wintypes.BOOL
-    advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD,
-        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.DWORD)]
-    advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = \
-        wintypes.BOOL
-    return kernel32, advapi32
-
-
-def _invalid_handle(handle):
-    """Strict failure forms: NULL (None) and INVALID_HANDLE_VALUE (-1)."""
-    if handle is None:
-        return True
-    try:
-        return int(handle) == -1 or int(handle) == (1 << 64) - 1
-    except (TypeError, ValueError):
-        return False
-
-
-class _SecurityAttrs:
-    """SECURITY_ATTRIBUTES built from an SDDL string (H2/H5: the SDDL
-    semantics are L2-verified). Conversion failure raises loudly - the
-    server refuses to create a pipe without the intended DACL."""
-
-    _SDDL_REVISION_1 = 1
-
-    def __init__(self, sddl, kernel_pair=None):
-        import ctypes
-        from ctypes import wintypes
-        kernel32, advapi32 = kernel_pair or _declared_kernel()
-        descriptor = ctypes.c_void_p(0)
-        length = wintypes.DWORD(0)
-        ok = advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl, self._SDDL_REVISION_1, ctypes.pointer(descriptor),
-            ctypes.pointer(length))
-        if not ok or not descriptor.value:
-            raise OSError(f"SDDL conversion failed: "
-                          f"{kernel32.GetLastError()}")
-        self._descriptor = descriptor      # keep the OS allocation alive
-        self._buffer = ctypes.create_string_buffer(
-            ctypes.string_at(descriptor.value, length.value))
-
-        class _SA(ctypes.Structure):
-            _fields_ = [("nLength", ctypes.c_ulong),
-                        ("lpSecurityDescriptor", ctypes.c_void_p),
-                        ("bInheritHandle", wintypes.BOOL)]
-
-        self.sa = _SA(ctypes.sizeof(_SA),
-                      ctypes.cast(self._buffer, ctypes.c_void_p).value,
-                      False)
+                                   validate_management_request)
 
 
 class _CancelledConnection(Exception):
@@ -196,47 +95,36 @@ def _wire_maintenance_sink(coordinator, sink):
 
 
 class BoundedPipeServer:
-    """Bounded named-pipe server base (R37 contract, one worker per cycle).
+    """Bounded connection-cycle server base (R37 contract, one worker/cycle).
+
+    The POSIX AF_UNIX transport (``UnixSocketBrokerServer``) is the only
+    production subclass and supplies the transport hooks:
+    ``_create_instance``, ``_bounded_connect``, ``_bounded_read``,
+    ``_bounded_write``, ``_release_instance`` and ``_abort_instance``.
 
     One connection cycle = create instance -> bounded connect -> bounded
-    read -> dispatch -> bounded write -> flush -> disconnect -> close. The
-    cancel event and the pipe handle are cycle-owned locals: the worker can
-    never operate the next cycle's connection, and the blocked kernel call
-    is released only by the outer abandonment path (D4)."""
+    read -> dispatch -> bounded write -> close. The cancel event and the
+    instance handle are cycle-owned locals: the worker can never operate the
+    next cycle's connection, and a blocked call is released only by the outer
+    abandonment path (D4)."""
 
-    _PIPE_ACCESS_DUPLEX = 0x00000003
-    _PIPE_TYPE_BYTE = 0x00000000        # byte mode + byte readmode + wait
-    _PIPE_WAIT = 0x00000000
-    _PIPE_UNLIMITED_INSTANCES = 255
-    _FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
-    _ERROR_PIPE_CONNECTED = 535
     # Bounded worker admission (same contract as the client, R37).
     _MAX_UNCONFIRMED_WORKERS = 8
     _WORKER_EXIT_OBSERVE_SECONDS = 2.0
     _reserved_worker_slots = 0
     _unconfirmed_abandoned = 0
     _accounting_lock = threading.Lock()
-    # Status telemetry is rewritten per cycle while consumers poll it; on
-    # Windows a consumer holding the file without FILE_SHARE_DELETE makes
-    # the atomic replace fail with a sharing violation. The bounded retry
-    # covers the transient reader window; an exhausted writer records
-    # last_error and NEVER kills the serving loop (a stale status is not a
-    # cycle failure).
-    _STATUS_REPLACE_RETRIES = 50
-    _STATUS_REPLACE_BACKOFF = 0.01
 
-    def __init__(self, pipe_name, sddl=None, kernel=None,
+    def __init__(self, pipe_name,
                  deadline_seconds=DEFAULT_DEADLINE_SECONDS, state_dir=None,
                  clock=time.monotonic, dispatch_deadline_seconds=None):
         self.pipe_name = pipe_name
-        self.sddl = sddl
-        self._kernel_pair = kernel          # tests inject a fake facade
         self._deadline = float(deadline_seconds)
         # R44-4 (contract §6.4): the DISPATCH budget is a separate,
         # OPTIONAL bound. None keeps dispatch inside the connected read
         # window (or the caller's explicit cycle cap); a value enables a
         # separate dispatch join so a slow (bounded) handler - e.g. a
-        # gateway-restart - is not abandoned at the 10 s pipe deadline.
+        # gateway-restart - is not abandoned at the connection deadline.
         self._dispatch_deadline = (None if dispatch_deadline_seconds is None
                                    else float(dispatch_deadline_seconds))
         self._state_dir = Path(state_dir) if state_dir else None
@@ -246,21 +134,37 @@ class BoundedPipeServer:
         self._last_error = None
         self._stop = threading.Event()
 
-    # ------------------------------------------------------------ kernel
-    def _kernel(self):
-        """The Win32 facade: injectable for offline tests; production
-        resolves kernel32/advapi32 with explicit signatures."""
-        if self._kernel_pair is not None:
-            return self._kernel_pair
-        return _declared_kernel()
+    # -------------------------------------------------- transport hooks
+    def _create_instance(self):
+        """Create ONE connection instance for this cycle."""
+        raise NotImplementedError
+
+    def _bounded_connect(self, handle, cancel, deadline):
+        """Accept/connect the cycle's peer within the bounded window."""
+        raise NotImplementedError
+
+    def _bounded_read(self, handle, cancel, deadline):
+        """Read ONE newline-terminated request frame within the bound."""
+        raise NotImplementedError
+
+    def _bounded_write(self, handle, frame, cancel, deadline):
+        """Write the reply frame within the bound."""
+        raise NotImplementedError
+
+    def _release_instance(self):
+        """Normal completion: flush and close the cycle's connection."""
+        raise NotImplementedError
+
+    def _abort_instance(self):
+        """Release a blocked worker (shutdown/close); idempotent."""
+        raise NotImplementedError
+
+    def _cancel_worker_io(self, worker):
+        """Cancel platform I/O owned by ``worker`` (False = no such API)."""
+        return False
 
     def _client_pid(self, handle):
-        """Client PID evidence for the connection record (no secrets)."""
-        import ctypes
-        kernel32, _ = self._kernel()
-        pid = ctypes.c_ulong(0)
-        if kernel32.GetNamedPipeClientProcessId(handle, ctypes.pointer(pid)):
-            return int(pid.value)
+        """Kernel peer evidence for the connection record (no secrets)."""
         return None
 
     # ------------------------------------------- bounded worker admission
@@ -333,7 +237,7 @@ class BoundedPipeServer:
                 # R41-4: handle ownership is a cycle local - a worker that
                 # wakes after this cycle was released can never operate the
                 # NEXT cycle's connection.
-                handle = self._create_instance(sddl=self.sddl)
+                handle = self._create_instance()
                 record["phase"] = "connect"
                 if cancel.is_set() or self._clock() >= deadline:
                     raise _CancelledConnection()
@@ -429,13 +333,9 @@ class BoundedPipeServer:
                 # release the connection (the blocked call is the OS
                 # release mechanism itself, D4).
                 cancel.set()
-                kernel32, _ = self._kernel()
                 if not dispatch_started.is_set() or record.get("phase") == "reply":
-                    cancel_synchronous_worker_io(kernel32, worker)
-                try:
-                    kernel32.DisconnectNamedPipe(self._handle)
-                except BaseException:  # noqa: BLE001
-                    pass
+                    self._cancel_worker_io(worker)
+                self._abort_instance()
                 self._release_instance()
                 if done.wait(self._WORKER_EXIT_OBSERVE_SECONDS):
                     self._release_worker_slot()
@@ -465,102 +365,6 @@ class BoundedPipeServer:
         finally:
             self._cycles += 1
             self._write_status()
-
-    # ------------------------------------------------------------ pieces
-    def _create_instance(self, sddl=None):
-        """Create the pipe INSTANCE with the first-instance flag ACTUALLY
-        in the openMode; any failure (NULL or INVALID_HANDLE_VALUE) is a
-        loud refusal - never a silent reuse of an existing name (H4)."""
-        import ctypes
-        kernel32, advapi32 = self._kernel()
-        security = None
-        if sddl:
-            # H2/H5: SDDL semantics are L2-verified; a conversion failure
-            # refuses loudly instead of serving with a default ACL.
-            security = _SecurityAttrs(sddl, (kernel32, advapi32))
-        attrs = ctypes.pointer(security.sa) if security else None
-        open_mode = (self._PIPE_ACCESS_DUPLEX
-                     | self._FILE_FLAG_FIRST_PIPE_INSTANCE)
-        handle = kernel32.CreateNamedPipeW(
-            self.pipe_name, open_mode,
-            self._PIPE_TYPE_BYTE | self._PIPE_WAIT,
-            self._PIPE_UNLIMITED_INSTANCES, MAX_MESSAGE + 1,
-            MAX_MESSAGE + 1, 0, attrs)
-        if _invalid_handle(handle):
-            raise OSError(f"CreateNamedPipeW failed: "
-                          f"{kernel32.GetLastError()}")
-        self._handle = handle
-        return handle
-
-    def _bounded_connect(self, handle, cancel, deadline):
-        """ConnectNamedPipe ON the connection worker. A blocked connect is
-        released only by the outer abandonment path (cancel + disconnect +
-        CancelSynchronousIo + CloseHandle - the OS release mechanism); there is NO nested
-        worker and NO nested observation window, so the accounting has
-        exactly one owner."""
-        kernel32, _ = self._kernel()
-        if kernel32.ConnectNamedPipe(handle, None) == 0:
-            # ERROR_PIPE_CONNECTED (535): the client connected before the
-            # blocking call - the connection exists, treat it as success.
-            if kernel32.GetLastError() != self._ERROR_PIPE_CONNECTED:
-                raise OSError("management pipe connect failed")
-
-    def _bounded_read(self, handle, cancel, deadline):
-        """Byte-stream bounded line read ON the connection worker; cancel
-        is checked before EVERY chunk and the accumulated length is checked
-        BEFORE a complete frame is accepted (a newline-terminated oversized
-        frame can never reach dispatch - the 1 MiB contract holds)."""
-        import ctypes
-        kernel32, _ = self._kernel()
-        chunks = bytearray()
-        while True:
-            if cancel.is_set() or self._clock() >= deadline:
-                raise _CancelledConnection()
-            buf = ctypes.create_string_buffer(4096)
-            read = ctypes.c_ulong(0)
-            ok = kernel32.ReadFile(handle, buf, 4096,
-                                   ctypes.pointer(read), None)
-            if not ok:
-                raise OSError("management pipe read failed")
-            if not read.value:
-                raise ProtocolError("bad_request", "client closed")
-            chunks.extend(buf.raw[:read.value])
-            if len(chunks) > MAX_MESSAGE:
-                raise ProtocolError("overlimit", "request exceeds bound")
-            if chunks.endswith(b"\n"):
-                return bytes(chunks)
-
-    def _bounded_write(self, handle, frame, cancel, deadline):
-        """Bounded write ON the connection worker; cancel is checked before
-        every chunk and FlushFileBuffers closes the reply."""
-        import ctypes
-        kernel32, _ = self._kernel()
-        data = frame
-        written_total = 0
-        while written_total < len(data):
-            if cancel.is_set() or self._clock() >= deadline:
-                raise _CancelledConnection()
-            written = ctypes.c_ulong(0)
-            ok = kernel32.WriteFile(handle, data[written_total:],
-                                    len(data) - written_total,
-                                    ctypes.pointer(written), None)
-            if not ok or not written.value:
-                raise OSError("management pipe write failed")
-            written_total += written.value
-        kernel32.FlushFileBuffers(handle)
-
-    def _release_instance(self):
-        try:
-            if self._handle is not None:
-                try:
-                    kernel32, _ = self._kernel()
-                    kernel32.DisconnectNamedPipe(self._handle)
-                except BaseException:  # noqa: BLE001
-                    pass
-                kernel32, _ = self._kernel()
-                kernel32.CloseHandle(self._handle)
-        finally:
-            self._handle = None
 
     def _dispatch(self, body, record):
         """Channel-specific dispatch; returns the encoded reply frame."""
@@ -599,14 +403,11 @@ class BoundedPipeServer:
         path = self._state_dir / "broker-status.json"
         tmp = self._state_dir / "broker-status.json.tmp"
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        for _ in range(self._STATUS_REPLACE_RETRIES):
-            try:
-                os.replace(tmp, path)
-                return
-            except PermissionError:
-                time.sleep(self._STATUS_REPLACE_BACKOFF)
-        self._last_error = "status write failed (concurrent reader held " \
-                           "the status file without delete sharing)"
+        try:
+            os.replace(tmp, path)
+        except OSError as exc:
+            # A stale status is not a cycle failure: record it and keep serving.
+            self._last_error = f"status write failed: {exc}"
 
 
 class _UnixConnectionCycle:
@@ -686,24 +487,6 @@ class _UnixConnectionCycle:
             pass
 
 
-class _UnixSocketFacade:
-    """The tiny slice of the Win32 facade the bounded base uses in its
-    abandonment path. 'DisconnectNamedPipe' releases a blocked worker by
-    shutting the accepted socket down; there is no thread-cancel API, so the
-    base helper detects the missing OpenThread/CancelSynchronousIo and reports
-    False - the shutdown/close IS the release mechanism (POSIX D4 analogue)."""
-
-    @staticmethod
-    def DisconnectNamedPipe(handle):
-        if handle is not None:
-            handle.abort()
-
-    @staticmethod
-    def CloseHandle(handle):
-        if handle is not None:
-            handle.finish()
-
-
 def _ensure_private_socket_directory(path):
     """Create the endpoint directory 0700 (never wider) and refuse an existing
     directory another local user could reach."""
@@ -778,9 +561,8 @@ class _UnixSocketTransport(BoundedPipeServer):
       remaining deadline.
     * peer identity is KERNEL evidence: SO_PEERCRED supplies pid/uid/gid,
       exposed as ``peer_credentials(handle)``/``last_peer_credentials``,
-      with ``_client_pid`` feeding the base connection record exactly like
-      the named-pipe server's client PID. No status file or self-reported
-      PID is ever trusted.
+      with ``_client_pid`` feeding the base connection record. No status
+      file or self-reported PID is ever trusted.
 
     ``stop()`` ends the loop at the cycle boundary; the serving loop's final
     cleanup closes the listener and unlinks only the socket file it created.
@@ -797,22 +579,17 @@ class _UnixSocketTransport(BoundedPipeServer):
         if not hasattr(socket, "AF_UNIX"):
             raise OSError("AF_UNIX sockets are unavailable on this platform")
         path = validate_unix_socket_path(socket_path)
-        super().__init__(path, sddl=None, kernel=None,
-                         deadline_seconds=deadline_seconds,
+        super().__init__(path, deadline_seconds=deadline_seconds,
                          state_dir=state_dir, clock=clock,
                          dispatch_deadline_seconds=dispatch_deadline_seconds)
         self.socket_path = path
-        self._facade = _UnixSocketFacade()
         self._listener = None
         self._socket_identity = None
         self._listener_lock = threading.Lock()
         self.last_peer_credentials = None
 
     # -------------------------------------------------------- transport
-    def _kernel(self):
-        return self._facade, None
-
-    def _create_instance(self, sddl=None):
+    def _create_instance(self):
         with self._listener_lock:
             if self._listener is None:
                 self._bind_listener_locked()
@@ -965,6 +742,13 @@ class _UnixSocketTransport(BoundedPipeServer):
             return None
         return dict(handle.credentials)
 
+    def _abort_instance(self):
+        """Release a blocked worker: shut the accepted socket down and close
+        it (the POSIX D4 release mechanism)."""
+        handle = self._handle
+        if handle is not None:
+            handle.abort()
+
     def _release_instance(self):
         handle = self._handle
         try:
@@ -981,8 +765,8 @@ class _HostOpsControlCoordinator:
     whitelist extension the console share-host seams drive).
 
     The host evidence queries (task state, gateway processes, port
-    listener, WFP limits, fault tail) need SYSTEM privilege: they execute
-    INSIDE the broker through its own WindowsHostOps - the wire carries the
+    listener, WFP limits, fault tail) need host privilege: they execute
+    INSIDE the broker through its own host ops - the wire carries the
     fixed check enum and nothing else. The verdict is passed through
     VERBATIM (True/False/None for limits; a bounded dict or None for
     faults): an ``ok`` reply whose payload field is ``null`` means the
@@ -1102,17 +886,18 @@ class _HostOpsControlCoordinator:
 
 
 class _ManagementDispatch:
-    """Management-channel dispatch shared by BOTH transports.
+    """Management-channel dispatch for the POSIX AF_UNIX server.
 
     {status, publish, start, drain, emergency-stop} plus the restricted
-    ts-service-control extension (via the dispatch decorator wrapping the
-    coordinator) only. HMAC validation, replay consumption and the action
-    whitelist all belong to the product coordinator - this layer never holds a
-    second copy of the control key.
+    host-verify / host-stop / host-evidence / host-repair-limits extension
+    (via the dispatch decorator wrapping the coordinator) only. HMAC
+    validation, replay consumption and the action whitelist all belong to the
+    product coordinator - this layer never holds a second copy of the control
+    key.
 
     ``lifecycle`` is a PROTECTED record of the last VERIFIED management
     transition ({state: running|stopped, at, by}), persisted in the broker
-    dir (SYSTEM/admin write, operator read-only) and restored on start. The
+    dir (owner write, operator read-only) and restored on start. The
     watchdog consumes it to distinguish a DELIBERATE management stop from an
     anomalous disappearance: a confirmed drain/emergency-stop keeps the
     ordinary stop valid across broker restarts; anomaly / limit-loss still
@@ -1128,8 +913,8 @@ class _ManagementDispatch:
     is the only writer (through the injected sink) and the watchdog consumes
     it to hold off bounded recovery while a window is in force.
 
-    The Windows named-pipe server and the POSIX AF_UNIX server both use THIS
-    class: the Linux entry must not fall back to the base transport's
+    The POSIX AF_UNIX server is the only transport using THIS class: the
+    Linux entry must not fall back to the base transport's
     NotImplementedError, and it must not fake an ACK.
     """
 
@@ -1290,29 +1075,14 @@ class _ManagementDispatch:
         return (json.dumps(response) + "\n").encode("utf-8")
 
 
-class ManagementPipeServer(_ManagementDispatch, BoundedPipeServer):
-    """Windows named-pipe management server (same dispatch as AF_UNIX)."""
-
-    def __init__(self, coordinator, pipe_name, sddl=None, kernel=None,
-                 deadline_seconds=DEFAULT_DEADLINE_SECONDS, state_dir=None,
-                 clock=time.monotonic, dispatch_deadline_seconds=None):
-        self.coordinator = coordinator
-        super().__init__(pipe_name, sddl=sddl, kernel=kernel,
-                         deadline_seconds=deadline_seconds,
-                         state_dir=state_dir, clock=clock,
-                         dispatch_deadline_seconds=dispatch_deadline_seconds)
-        self._init_management()
-
-
 class UnixSocketBrokerServer(_ManagementDispatch, _UnixSocketTransport):
-    """POSIX AF_UNIX management server (same dispatch as Windows).
+    """POSIX AF_UNIX management server.
 
     The product Linux entry assembles this class with its REAL coordinator,
     so publish/load/drain/host-stop/gateway-restart reach the same
-    HMAC/replay/whitelist pipeline as the Windows ``ManagementPipeServer``
-    and never the base transport's ``NotImplementedError``. Instance-channel
-    subclasses override ``_dispatch`` exactly as the Windows instance server
-    does.
+    HMAC/replay/whitelist pipeline and never the base transport's
+    ``NotImplementedError``. Instance-channel subclasses override
+    ``_dispatch``.
     """
 
     def __init__(self, socket_path, deadline_seconds=DEFAULT_DEADLINE_SECONDS,
@@ -1336,10 +1106,9 @@ def read_control_key(path):
     """Load a controlled secret file. The value is never logged; a
     missing/oversized key fails closed.
 
-    On POSIX the same 0600/current-uid gate as the AES-GCM key file is
-    enforced (Q11/R-posix secret boundary): a foreign-owned or
-    world-readable control/instance key is refused instead of being used.
-    Windows keeps its existing read path (the ACL boundary is separate).
+    The same 0600/current-uid gate as the AES-GCM key file is enforced
+    (Q11/R-posix secret boundary): a foreign-owned or world-readable
+    control/instance key is refused instead of being used.
     """
     from share.secret_protection import read_private_secret_path
     try:
