@@ -1,0 +1,604 @@
+# Rust 重写契约冻结（#37）
+
+- 状态：冻结（#37 交付；随父 spec #36 评审后生效）；本文件不包含 Rust 实现。
+- 基线：`integration/rust-contract` @ `d131333`（2026-11-14 11:26:56 +0800）。
+- 测量时点：2026-11-14 19:48（UTC+08:00）。
+- 范围：8100 分享网关、18096 控制台、broker、Key 管理、用量账本、display、Cloudflare 检查、部署与备份。
+- 不包含：headless 登录行为（spec #8）、端口 18096/5901 重排（#40）、前端重写、真实云端 systemd/UM 登录验收。
+
+本文件把“保留的最终功能集”写成可测试的 HTTP/API 契约。Rust 只 port 这里列出的行为；任何未列出的端点、字段、错误码都不进入 Rust 轨道。
+
+## 1. 冻结规则
+
+1. **端点以本文件的表为准**。8100 的分享白名单只有 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`（`um-cloud-deploy/cloudflared/check-ingress.py:26`）；18096 的 `share-management` 面只包含下面列出的固定路由，不做任意 URL/action 代理。
+2. **成功、合法空结果、取消、暂时失败、配置错误、数据损坏必须可区分**。未知不折成 0、false 或空列表；读不到就返回错误或 `null` 加原因。
+3. **明文只在一次性响应里**。Key 明文只在 create/rotate 的即时 no-store 响应和单 Key readback 里出现；不进入日志、操作记录、列表、URL 或 Rust 错误消息。
+4. **副作用只走已列出的边界**。Rust 不得新增第二套 SQLite、第二套 broker、第二个 8100 启动者或第二个 display relay。
+5. **端口不混入本轨道**。当前部署与仓库默认值分开记录；#40 的 8096/8097 只作为配置默认值，Rust 不硬编码旧端口。
+
+## 2. 端口与进程拓扑
+
+### 2.1 当前部署与仓库默认值
+
+| 端口 | 服务 | 当前云端部署（2026-11-14 实测） | 仓库默认值 @ `d131333` | #40 之后仓库默认值 | 兼容窗口 |
+|---|---|---|---|---|---|
+| 8000 | 本机 chat2api / UM 主链 | 不适用（云端不装配） | 8000（`chat2api/chat2api.py` 默认） | 8000 | 不变 |
+| 8001 | 本机控制台宿主 | 不适用（云端不装配） | 8001（`usagesrv.py:101`） | 8001 | 不变 |
+| 8100 | 分享网关（合并进程） | 8100，仅 loopback | 8100（`um-cloud-deploy/systemd/um-share-broker.service` 的 `--port 8100`） | 8100 | 不变 |
+| 18096 | 云端控制台宿主 | 18096，仅 loopback | 18096（`usagesrv.py:102`） | **8096** | 窗口内 `USAGESRV_PORT=18096` 仍可显式配置 |
+| 5901 | display x11vnc | 5901，仅 loopback | 5901（`console/display_proxy.py:223`） | **8097** | 窗口内 `CONSOLE_DISPLAY_VNC_PORT=5901` 仍可显式配置 |
+| 5173 | vite 开发服务 | 不适用 | 5173（`check_port_bindings.py` 的 `PORT_ALLOCATIONS`） | 5173 | 不变 |
+| 8099 | 候选预览 | 不适用 | 8099（AGENTS.md） | 8099 | 不变 |
+
+说明：
+
+- #40 当前未合入本分支；`ports/40` 与 `integration/ports` 仍停在基线 `d131333`。上表“#40 之后”列是 #40 已确认的决策，不是本分支已经生效的代码。
+- 兼容窗口为**一个云端发布周期**。窗口内旧端口只作为**显式配置值**被接受；同一时刻只监听配置指定的一个端口，不双端口监听。
+- 非法端口值继续 fail closed；Rust 不得把旧端口写死，也不得在 #40 完成前抢跑端口重排。
+- 8100 分享段允许非 loopback 的例外只在部署登记时成立；当前云端实测仍为 loopback。
+
+### 2.2 进程与 systemd 边界
+
+```text
+systemd
+├── um-share-broker.service   → share/broker_ops.py → chat2api.py :8100
+├── um-share-console.service  → usagesrv.py :18096
+└── um-share-display.service  → Xvfb :99 + x11vnc :5901（可选）
+```
+
+- 8100 只由 broker 拉起：`um-share-broker.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`（`um-cloud-deploy/systemd/um-share-broker.service`）。
+- 18096 只监听 loopback；公网入口只反代 8100 分享白名单，不反代 18096/5901（`um-cloud-deploy/README.md`）。
+- 控制台 unit 对 `/run/um-share` 只读、`NoExecPaths` 禁止直接执行 `chat2api.py`，因此控制台不能成为第二个 8100 启动者（`um-cloud-deploy/systemd/um-share-console.service`）。
+- 部署 unit 的 `KillMode=control-group` 是最终 cgroup 围栏；`systemctl stop` 不留下孤儿进程。
+
+## 3. 云端 idle RSS 基线
+
+### 3.1 测量方法
+
+- 工作目录：`D:/git/github/Chat2API-GatewayConsole/.worktrees/37`（本地 worktree）。
+- SSH 命令（ticket 指定）：
+
+```bash
+ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf -o BatchMode=yes -o ConnectTimeout=15 um-share-ecs \
+  'ps -eo pid,ppid,user,rss,etime,comm,args --sort=-rss | grep -Ei "chat2api|usagesrv|Xvfb|x11vnc|chrom" | grep -v grep'
+```
+
+- 补充只读读取：
+
+```bash
+ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
+  'systemctl is-active um-share-broker.service um-share-console.service um-share-display.service; \
+   cat /proc/<pid>/status | grep -E "^(Name|VmRSS|VmHWM|Threads):"; free -m'
+```
+
+- 云端版本：Ubuntu，内核 `7.0.0-38-generic` x86_64；Python `3.14.4`；发布版本 `s2-20261113b`（manifest `generated_at=2026-11-13T04:01:52Z`）。
+- 测量时间：2026-11-14 19:48（UTC+08:00）；系统 uptime 2 天 19 小时；`um-share-broker.service`、`um-share-console.service`、`um-share-display.service` 均为 `active (running)`。
+- 两次采样相隔约 2 秒；8100/Xvfb/x11vnc/broker 的 RSS 不变，18096 从 111048 KiB 变为 111044 KiB（±4 KiB）。下表取第二次值。
+- `idle` 判据：没有登录窗口、没有在途分享请求；`display-state` 读面为 `state=valid`，`operator.owner_present=false`；`/health` 的 watch 线程存活。读取本身只发只读 GET，不触发登录。
+- RSS 是 `ps` 的 `rss`（KiB）与 `/proc/<pid>/status` 的 `VmRSS` 交叉核对值；RSS 包含共享页，不是 PSS，不能直接当作 Rust 进程的“净内存”。
+
+| 目标 | PID | RSS KiB | RSS MiB | VmHWM MiB | 状态 | 说明 |
+|---|---:|---:|---:|---:|---|---|
+| 8100 chat2api.py | 95112 | 190004 | 185.6 | 210.8 | idle | 合并分享网关 |
+| 18096 usagesrv.py | 103253 | 111044 | 108.4 | 132.5 | idle | 云端控制台宿主 |
+| Xvfb :99 | 1580 | 24944 | 24.4 | 85.1 | idle | display 虚拟屏 |
+| x11vnc | 1608 | 21836 | 21.3 | 24.2 | idle | 仅 loopback VNC |
+| Chromium | — | — | — | — | 未运行 | 无浏览器进程；登录中/登录后未验证 |
+| broker_ops.py（参考） | 92120 | 25460 | 24.9 | — | idle | 非票面五项，模块参考 |
+
+系统内存（`free -m`）：total 1735 MiB，used 948 MiB，free 223 MiB，buff/cache 723 MiB，available 787 MiB；swap 2047 MiB 未使用。
+
+未验证范围：
+
+- **登录中 RSS 未测量**：没有维护者授权触发重登；不打开可见浏览器、不启动登录窗口。
+- **登录后 RSS 未测量**：同上；不能用“当前认证有效”冒充一次登录后的内存读数。
+- **Chromium idle RSS 不存在**：`pgrep` 未发现 `chrom`/`playwright`/`headless_shell` 进程；不能把“未运行”写成 0 MiB。
+- **#40 之后的 8096/8097 未测量**：本分支没有 #40 代码；云端仍监听旧端口。
+- 本基线不是性能目标，也不能证明 Rust 一定更省内存；Rust 切片验收必须用同一命令、同一 idle 判据重新测量。
+
+## 4. 契约覆盖矩阵
+
+| 面 | 端点组 | 鉴权 | 请求/响应 | 错误码 | 流式 | 超时/取消 | 幂等 | 主要副作用 |
+|---|---|---|---|---|---|---|---|---|
+| 8100 | `/health`、`/ready` | 无 | JSON | 503/502 | 无 | 请求总预算 | 只读 | 读投影、UM 上游 |
+| 8100 | `/v1/models` | 分享模式需分享 Key；非分享模式按本地 Key 规则 | JSON；目录可带 `limit`/`beta=true` | 401/404/503/502 | 无 | 请求总预算、认证等待预算 | 只读 | 读投影、UM 上游 |
+| 8100 | `/v1/version` | 非分享模式按本地 Key 规则；分享模式 404 | JSON | 401/404/502/503 | 无 | 请求总预算 | 只读 | UM 上游 |
+| 8100 | `/v1/chat/completions` | 分享模式 Bearer Key | JSON 进，JSON 或 SSE 出 | 400/401/413/429/502/503 | SSE 透传 | 首字节/静默/总预算 | 重试只在未提交前 | 追加账本、UM 上游 |
+| 8100 | `/v1/messages` | 分享模式 Bearer 或 `X-Api-Key` | Anthropic JSON/SSE 字节透传 | 400/401/413/429/502/503 | SSE 透传 | 同上 | 重试只在未提交前 | 追加账本、UM 上游 |
+| 8100 | `/v1/responses` | 分享模式 Bearer | Responses 请求，JSON 或 Responses SSE | 400/401/413/429/502/503 | Responses 事件流 | 同上 | 同上 | 追加账本、UM 上游 |
+| 8100 | `/api/chat/completions`、`/api/v1/chat/completions`、`/api/v1/messages`、`/api/v1/responses` | 非分享模式本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | JSON/SSE | 400/401/413/502/503 | 同对应 `/v1` 路由 | 同上 | 同上 | 追加账本、UM 上游 |
+| 8100 | `/v1/embeddings` | 非分享模式 Bearer；分享模式 404 `route_not_shared` | JSON 透传 | 400/401/413/404/502/503 | 无 | 请求总预算 | 无账本行 | UM 上游 |
+| 8100 | `/api/v1/embeddings` | 非分享模式 Bearer；分享模式不经分享 Key 门，公网不反代 | JSON 透传 | 400/401/413/502/503 | 无 | 请求总预算 | 无账本行 | UM 上游 |
+| 8100 | `/admin/auth/*`、`/admin/share/revoke`、`/admin/shutdown` | 控制令牌 | JSON | 403 | 无 | 无 | 登录/撤销有界 | 浏览器、撤销在途、停止服务 |
+| 18096 | `/health`、`/api/summary`、`/api/console/*` 只读 | loopback Host/Origin；写面按路由：facade 需同源标记/控制令牌，operations 只受同源门 | JSON no-store | 400/401/403/404/409/410/413/502/503 | 无 SSE | display/操作/TTL | 读无；写按 Key/操作 | SQLite、账本、日志、broker |
+| 18096 | `/api/console/share-management/*` 写面 | 同源标记或控制令牌 | JSON no-store | 400/403/404/409/410/413/503 | 无 | 写请求前端 20s 预算 | idempotency_key + row_version | SQLite、投影发布、安全日志 |
+| 18096 | `/display`、`/display/` | 同源 + display 授权（display session、控制令牌或 Tailscale Serve 身份） | HTML/JS | 400/403/404/409/413/415/426/502/503 | 无 | grant 60s、session 300s、idle 900s | 单次 grant | operator 状态 |
+| 18096 | `/display/launcher.js`、`/display/launcher-state.js`、`/display/<asset>`、`/display/session`、GET `/display/grant` | 同源 | JS/JSON | 400/403/404/409/413/415/426/502/503 | 无 | session 300s、idle 900s | 无 | noVNC 静态树 |
+| 18096 | POST `/display/grant` | 同源 + 有效单次 grant | JSON | 400/403/404/409/413/415/426/502/503 | 无 | grant 60s | 单次 grant | grant 存储 |
+| 18096 | `/display/websockify` | display session + operator generation | RFB WebSocket | 400/403/409/426/503 | RFB WebSocket | idle 900s、session 14400s | 单次 operator | x11vnc 网络、operator 状态 |
+| broker | AF_UNIX 管理通道 | HMAC-SHA256 + 时间窗 + replay | 一行 JSON，最大 1 MiB | 固定结果码表 | 无 | 10s/90s/30s/130s | request_id 一次性 | 投影、pid、信号、Popen |
+| Key 管理 | SQLite + `/api/share/*` | 管理面鉴权 | JSON | 400/401/404/409/410/503 | 无 | 发布 fail-closed | idempotency_key + row_version | SQLite、投影、安全日志 |
+| 用量账本 | 只读查询 | 随宿主面 | JSON | 400/502/503 | 无 | 有界读取 | 只读 | 无写入 |
+| Cloudflare | 配置校验 + 公网 DNS/TLS 检查 | 无凭据 | JSON 结果 | 检查器退出码 | 无 | 15s/60s/8s | 只读 | 不发配置变更 |
+| 部署备份 | CLI | 文件权限/密钥 | JSON/归档 | 见 §12 | 无 | 排空 900s | 锁 + 幂等安装 | 文件、systemd、符号链接 |
+
+## 5. 8100 分享网关
+
+### 5.1 端点与鉴权
+
+8100 是合并后的分享网关（`chat2api/chat2api.py`）。分享模式由 `--share-config` 显式开启；`ShareGate` 在进程内鉴权，不再有第二个监听或跨进程 HMAC 标记（`chat2api/share_auth.py:1245`）。
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/`、`/health` | 无 | 健康快照 |
+| GET | `/ready` | 无 | 凭据有效且上游可达才 200，否则 503 |
+| GET | `/v1/models` | 分享模式：分享 Key；非分享模式：按本地 Key 规则 | 目录；支持 `limit`/`beta=true` 的受限查询 |
+| POST | `/v1/chat/completions` | 分享模式：`Authorization: Bearer` | OpenAI Chat；`stream=true` 返回 SSE |
+| POST | `/v1/messages` | 分享模式：Bearer 或 `X-Api-Key` | Anthropic Messages；字节透传，支持 SSE |
+| POST | `/v1/responses` | 分享模式：Bearer | Responses 子集，JSON 或事件流 |
+| POST | `/v1/embeddings` | 非分享模式：Bearer；分享模式 404 `route_not_shared` | OpenAI 兼容透传，不记账 |
+| GET | `/v1/version` | 非分享模式：本地 Key（非 loopback 绑定时）；分享模式 404 `route_not_shared` | 版本与重试策略 |
+| GET | `/api/models`、`/api/v1/models` | 非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | 本机模型目录别名 |
+| POST | `/api/chat/completions`、`/api/v1/chat/completions`、`/api/v1/messages`、`/api/v1/responses`、`/api/v1/embeddings` | 非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | 本机兼容别名 |
+| GET/POST | 未列入别名的 `/api/*` | 本地控制令牌 | 上游 `api/*` 透传 |
+| GET/POST | `/admin/auth/status`、`/admin/auth/verify`、`/admin/auth/login`、`/admin/auth/cancel` | 本地控制令牌 | 认证观察、主动核验、登录、取消登录 |
+| POST | `/admin/share/revoke` | 本地控制令牌 | 关闭某分享 Key 的在途请求 |
+| POST | `/admin/shutdown` | 本地控制令牌 | 异步停止进程 |
+| OPTIONS | 任意路径 | 无 | 204，CORS 允许方法与头 |
+
+鉴权细节：
+
+- 分享凭据只接受 `Authorization: Bearer <key>`；Messages 与模型目录还接受 `X-Api-Key: <key>`（`chat2api/share_auth.py:1192-1243`）。
+- 同名凭据头重复、空值、超过 256 字符、Bearer 前缀错误、两种头值不同，一律 fail closed 为 401 `invalid_api_key`（`chat2api/chat2api.py:6196-6236`）。
+- 分享 Key 的权威来源是投影文件；每次请求重新读取并校验 `enabled`、`secret_hash`、`secret_version`、`config_generation`（`chat2api/share_auth.py:1245-1320`）。
+- 每 Key 并发、全局并发和每 Key 20 次/60 秒的滑动限速在进程内完成（`chat2api/share_auth.py:80-82,1300-1395`）。拒绝时 429 `sharing_limit_reached`，`reason` 区分 `per_key_concurrency`、`share_concurrency`、`key_rate_limit`、`state_not_accepting`。
+- 非分享白名单的 `/v1/*` 路径在分享模式下返回 404 `route_not_shared`；分享模式只允许 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`，因此 `/v1/version` 与 `/v1/embeddings` 只在非分享模式可用（`chat2api/chat2api.py:6196-6236`）。
+- 目录只允许规范 `/v1/models`、`beta=true` 和单个 `limit`（1..1000，规范十进制）查询；其他查询 404 `route_not_shared`（`chat2api/share_auth.py:32-72`）。
+- `/api/*` 兼容别名是本机/非分享面，不在 Cloudflare 白名单内，也不经分享 Key 门；分享模式只保证四条 `/v1` 路径的公网语义（`chat2api/chat2api.py:6196-6236`、`um-cloud-deploy/cloudflared/check-ingress.py:26-142`）。
+
+### 5.2 请求与响应
+
+- `_read_body` 以 `Content-Length` 为界：非法长度 400 `invalid_request`；超过上限 413 `payload_too_large`；非法 JSON 400 `invalid_json`；非对象 400 `invalid_body`（`chat2api/chat2api.py:6127-6157`）。
+- 分享模式默认请求体上限 32 MiB，可由 `CHAT2API_SHARE_MAX_REQUEST_BYTES` 显式调整到 1 GiB（`chat2api/chat2api.py:422-434`）。
+- 分享模式的 Chat 请求只接受白名单字段；`store` 必须为 `false`；`messages` 必须为非空列表（`chat2api/share_auth.py:75-78,1145-1158`）。
+- 分享模式的 Messages 请求只接受 `MESSAGES_FIELDS`；`max_tokens` 必须是正整数，`stream` 必须是 bool；未知字段拒绝，绝不补默认值（`chat2api/share_auth.py:1159-1190`）。
+- 成功响应：Chat 非流式为 JSON；Chat 流式、Messages 流式为上游 SSE 字节透传；Responses 为翻译后的 JSON 或 Responses 事件流。
+- 错误体统一为 `{"error": {"message": ..., "type": ..., "detail": ...}}`，可附加 `code`、`reason`、`upstream_status`（`chat2api/chat2api.py:5962-5973`）。
+- 所有响应不发 CORS 头，除非 Origin 在 `CHAT2API_ALLOWED_ORIGINS` 白名单内；错误响应主动关闭连接（`chat2api/chat2api.py:5945-5960`）。
+
+### 5.3 流式、超时、取消与重试
+
+- 首字节预算 120 秒；上游单次 socket 静默预算 180 秒；请求总预算默认 360 秒，环境变量可调但夹在 10..3600 秒（`chat2api/chat2api.py:377-385,440-444`）。
+- 200 头只在首个“实质数据”事件出现后提交；提交前的元数据/思考事件可短暂暂存，以便早期重复循环或零数据断流仍可隐藏重试（`chat2api/chat2api.py:8043-8080,8417-8431`）。
+- 提交前失败返回 502；提交后失败写 in-band `error` 事件并结束流，绝不把部分完成当成功（`chat2api/chat2api.py:599-613,8060-8077`）。
+- 预提交暂存上限 64 KiB；未成行字节缓冲上限 1 MiB；生产者/消费者队列上限 256；并发流 reader 上限 128（`chat2api/chat2api.py:388-403,558-559`）。
+- 重试：快速失败最多 5 次，慢失败（耗时达到 30 秒）最多 2 次，物理尝试上限 12；可重试状态为 408/429/500/502/503/504；只在客户端尚未收到任何 SSE 事件前重试（`chat2api/chat2api.py:522-548,7015-7030`）。
+- 客户端断开在每个字节检查；断开后关闭上游、释放 reader 槽，账本记 `client_disconnected`（`chat2api/chat2api.py:6160-6175,8080-8100`）。
+- Messages 流要求官方事件序列；`message_stop` 前 EOF 不算成功；`error` 事件立即终止（`tests/test_chat2api_endpoints.py:501-610`）。
+- Responses 流事件为 `response.created`、`response.output_text.delta`、`response.function_call_arguments.delta`、`response.completed`、`response.incomplete`、`response.failed`（`chat2api/chat2api.py:6720-6760,6955-6985`）。
+- 非流式 Chat/Messages 可由 `--nonstream-upstream-aggregate` 选择上游 SSE 聚合，但只对已验证的 (key, model, protocol) 三元组；默认仍走上游非流式（`chat2api/chat2api.py:7490-7535`）。
+- Embeddings 只透传，不写账本行（`chat2api/chat2api.py:7006-7030`）。
+
+### 5.4 错误码
+
+| HTTP | 错误 | 触发 |
+|---|---|---|
+| 400 | `invalid_request` / `invalid_json` / `invalid_body` / `unsupported_chat_request` / `unsupported_messages_request` / `unsupported_responses_request` | 请求形状不合法 |
+| 401 | `invalid_api_key` / `local_auth_error` | 分享 Key 无效；非 loopback 绑定缺少本地 Key |
+| 403 | `origin_denied` / `Local management endpoint denied` / `Local management token missing or invalid` | 浏览器来源、控制令牌、本机管理边界 |
+| 404 | `Unknown path: ...` / `route_not_shared` | 未知路径；分享模式下非白名单路由 |
+| 413 | `payload_too_large` | 请求体超过上限 |
+| 429 | `sharing_limit_reached` | 并发、限速或停止接受 |
+| 502 | `upstream_unavailable` / `upstream_request_rejected` / `upstream_stream_error` / `request_deadline_exceeded` | 上游失败、超时、流错误 |
+| 503 | `reauthentication_required` / `too_many_concurrent_streams` | 需要交互登录；reader 槽满 |
+
+### 5.5 副作用
+
+- 读投影文件；每次鉴权重新读取，不写投影。
+- 追加用量账本 `usage-share-backend.jsonl`；写失败则本进程禁用记账，但绝不阻断代理（`chat2api/chat2api.py:2502-2512`）。
+- 追加服务日志 `share-backend.log`；日志不含凭据、请求体或响应体。
+- 登录/刷新时写 token/API Key 文件与浏览器 profile；只有显式登录或 401 恢复才打开可见浏览器。
+- 撤销状态文件 `share-revoke.state` 与投影快照，原子写（`chat2api/share_auth.py:475-526`）。
+- 注册实例控制 AF_UNIX 通道；只应答 `instance-status`、`load`、`drain`、`emergency`、`resume`，绝不调用管理动作（`chat2api/chat2api.py:9023-9100`）。
+- `/admin/shutdown` 只停止本进程；不停止上游 UM。
+
+## 6. 18096 控制台
+
+### 6.1 端点与角色边界
+
+18096 是云端控制台宿主（`usagesrv.py`）。云端角色只装配 UM 分享；非 UM 读面明确返回 503 `capability_not_assembled`，不探测也不读取（`usagesrv.py:3043-3062`）。
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/`、`/index.html` | loopback Host/Origin | 托管 `web/dist`；构建身份 role/line/sourceHash 不匹配返回 500 |
+| GET | `/health` | 无 | `{status, service, port}` |
+| GET | `/api/summary` | 无 | 云端汇总；角色 `cloud`，不读私人账本 |
+| POST | `/api/session` | 引导码 | 兑换 HttpOnly 会话 Cookie，TTL 12 小时 |
+| POST | `/api/session/reissue` | `X-Admin-Control` | 重新签发引导码 |
+| GET | `/display` | 同源 + display 授权 | 重定向到 `/display/` |
+| GET | `/display/` | 同源 + display 授权 | noVNC launcher 页面 |
+| GET | `/display/launcher.js`、`/display/launcher-state.js`、`/display/<asset>` | 同源 | launcher 模块与只读 noVNC 静态树，防穿越 |
+| GET | `/display/session` | 同源 | `{authorized, expires_at}` |
+| GET | `/display/grant` | 同源 | launcher 页面，fragment 兑换 |
+| POST | `/display/grant` | 同源 + 有效单次 grant | 单次 grant 换 HttpOnly Cookie |
+| GET | `/display/websockify` | display session 或控制令牌或 Tailscale Serve 身份 | WebSocket RFB 中继 |
+| GET | `/api/console/cloud-ops` | 无（只读） | 安全状态只读面 |
+| GET | `/api/console/share-management/display-session` | 无（只读） | launcher 可用性、operator 状态 |
+| GET | `/api/console/share-management/display-state` | 无（只读） | 认证观察 + display 事实 |
+| POST | `/api/console/share-management/display-operator` | 同源标记或控制令牌 | `acquire`/`takeover` |
+| POST | `/api/console/share-management/display-grant` | 管理身份 | 一次性 display grant |
+| GET | `/api/console/share-management/control-status` | 无（只读） | broker 控制通道是否响应 |
+| GET | `/api/console/share-management/status` | 无（只读） | 分享状态、代次、容量、broker |
+| GET | `/api/console/share-management/keys` | 无（只读） | Key 列表；不含明文/哈希 |
+| GET | `/api/console/share-management/keys/{id}/secret` | 无（只读） | 单 Key 明文 readback，no-store |
+| POST | `/api/console/share-management/keys` | 同源标记或控制令牌 | 创建 Key，明文只回一次 |
+| POST | `/api/console/share-management/keys/{id}/test` | 同源标记或控制令牌 | 公网 Key 自检 |
+| POST | `/api/console/share-management/keys/{id}/test-private` | 同源标记或控制令牌 | 本机 Key 自检 |
+| POST | `/api/console/share-management/keys/{id}/rotate` | 同源标记或控制令牌 | 轮换，明文只回一次 |
+| POST | `/api/console/share-management/keys/{id}/revoke-and-terminate` | 同源标记或控制令牌 | 撤销并终止该 Key 在途请求 |
+| PATCH | `/api/console/share-management/keys/{id}` | 同源标记或控制令牌 | 改名、改每 Key 并发 |
+| PATCH | `/api/console/share-management/settings` | 同源标记或控制令牌 | 改全局并发 1..64 |
+| DELETE | `/api/console/share-management/keys/{id}` | 同源标记或控制令牌 | 删除 Key |
+| GET | `/api/console/share-usage`、`/api/console/share-usage/requests` | 无（只读） | 分享用量汇总/逐请求 |
+| GET | `/api/console/um/today`、`trend`、`requests`、`logs`、`request-logs`、`maintenance` | 无（只读） | UM 主链读面 |
+| GET | `/api/console/usage-tokens`、`/api/console/usage-rates` | 无（只读） | 本机 Token/速率读面；云端角色 503 |
+| GET | `/api/console/gateway-connection` | 无（只读） | 连接信息；云端角色 503 |
+| GET | `/api/console/services`、`/api/console/health` | 无（只读） | 服务与健康 |
+| GET | `/api/console/logs`、`/log-sources`、`/log-entries`、`/log-overview` | 无（只读） | 日志读面；云端角色 503 |
+| GET | `/api/console/stats` | 无（只读） | 有界统计；云端角色 503 |
+| GET | `/api/console/actions` | 无（只读） | 动作目录 |
+| GET | `/api/console/operations`、`/operations/{id}` | 无（只读） | 操作记录 |
+| POST | `/api/console/operations` | 无（同源写边界） | 提交动作；201/200 |
+| POST | `/api/console/operations/{id}/cancel` | 无（同源写边界） | 协作取消 |
+| GET | `/api/share/usage`、`/usage/requests` | 会话或控制令牌 | 旧管理面只读 |
+| GET | `/api/share/status`、`/keys`、`/keys/{id}`、`/keys/{id}/secret`、`/operations/{id}` | 会话或控制令牌 | 旧管理面只读 |
+| POST | `/api/share/limits/normalize` | 控制令牌或会话+CSRF | 显式归一化 |
+| POST | `/api/share/keys`、`/keys/{id}/test`、`/keys/{id}/rotate`、`/keys/{id}/revoke-and-terminate` | 控制令牌或会话+CSRF | 旧管理面写 |
+| PATCH | `/api/share/settings`、`/keys/{id}` | 控制令牌或会话+CSRF | 旧管理面写 |
+| DELETE | `/api/share/keys/{id}` | 控制令牌或会话+CSRF | 旧管理面写 |
+| POST | `/api/share/start`、`/stop`、`/emergency-stop` | 控制令牌或会话+CSRF | 202 受理 |
+| ANY | `/gw/usagesrv/...` | 同实际路径 | 开发/兼容前缀，剥离后走同一路由 |
+
+补充：`/api/share/*` 是 18096 上的旧管理面，走会话/控制令牌鉴权；它不在 Cloudflare 公网白名单内，公网入口仍只有 8100 的四条 `/v1` 路径。
+
+补充：`web/src/cloud/cloud-writes.ts:106-111` 仍会调用 `POST /api/console/share-management/backend-login-cancel`，但当前 18096 没有该路由，实际返回 404 `unknown path`。这是 #34 已退役的专用后端登录动作；不纳入 Rust 契约，登录/display 的呈现由 spec #8 决定。
+
+### 6.2 鉴权与请求边界
+
+- 路由层先校验 Host 必须是 loopback 名，Origin 必须是同 scheme、同 loopback、同端口的本机页面；Tailscale Serve 元数据出现时，必须通过 `TailnetPolicy` 的精确 origin、owner 和 peer 设备校验（`usagesrv.py:1120-1175`、`console/tailnet.py:98-130`）。
+- `_console_api` 的读请求免凭据；写请求由各子路由自己加门（`usagesrv.py:3022-3042`）。
+- `share-management` 写必须带 `X-Requested-With: XMLHttpRequest` 或 `X-Admin-Control`（`usagesrv.py:2639-2648`）。
+- `/api/share/*` 读需要会话 Cookie 或控制令牌；写需要控制令牌，或会话 + `X-Requested-With`（`usagesrv.py:1682-1706`）。
+- 敏感头重复（Content-Type、Content-Length、Authorization、Cookie、X-Admin-Control、X-Requested-With、Transfer-Encoding、Content-Encoding）一律 400，并且只发一个响应后关闭连接（`usagesrv.py:1708-1719`）。
+- 请求体：`Transfer-Encoding`/`Content-Encoding` 拒绝；Content-Length 必须唯一、0..65536；有 body 或 Content-Type 时必须 `application/json`；非法 JSON/非对象 400；超限 413（`usagesrv.py:1720-1750`）。
+- 未知字段一律 400，绝不静默忽略（`usagesrv.py:1752-1758`）。
+
+### 6.3 请求/响应与错误码
+
+| HTTP | 错误/结果 | 触发 |
+|---|---|---|
+| 200 | 正常 JSON | 读面、写面成功 |
+| 201 | 新建 Key / 新操作 | 创建成功 |
+| 202 | `{operation_id, status}` | start/stop/emergency-stop 受理 |
+| 400 | `invalid_*`、`unknown field(s)`、`unsupported_body_encoding`、`invalid_content_length`、`content_type_required`、`incomplete_body`、`invalid_json` | 参数、请求体、查询串 |
+| 401 | `share management credentials required` | `/api/share/*` 缺少会话/令牌 |
+| 403 | `local-only service`、`same-origin marker or control token required`、`display_authorization_required` | 来源、写标记、display 授权 |
+| 404 | `unknown path`、`unknown operation`、`key identity not found` | 未知路径/操作/Key |
+| 405 | `method not allowed` | `control-status` 非 GET |
+| 409 | 版本冲突、重复名、`display_operator_exists`、`display_session_required`、操作已结束、幂等键冲突 | 乐观并发、display operator、操作状态 |
+| 410 | `key_deleted` | 已删除 Key 的明文 readback |
+| 413 | `request_too_large` / `display grant` body 超限 | 请求体超限 |
+| 415 | `display grant` Content-Type 非 JSON | display grant |
+| 426 | `unsupported websocket version` | display WebSocket |
+| 500 | `share management error` / `console_error` / `summary unavailable` | 内部错误 |
+| 502 | `share_usage_unavailable` / `log_reader_failed` / `um_query_failed` / `stats_query_failed` / `runtime status unavailable` | 读面读取失败 |
+| 503 | `console subsystem unavailable`、`share_broker_unavailable`、`display_proxy_unavailable`、`capability_not_assembled` | 子系统/ broker / display 未装配 |
+
+补充：
+
+- `share-management/status` 的 `gateway_running` 是三态：只有 broker 明确确认 True/False 才出现，未确认时省略，不折成 false（`usagesrv.py:2730-2748`）。
+- `share-management/status` 的 `capacity.in_flight` 来自 broker maintenance 视图；未接线/读不到时为 `null` 并带原因，不写 0（`usagesrv.py:2267-2330`）。
+- `share-management/keys/{id}/secret` 的四种结果：200 明文；200 `secret_unavailable` + `reason=legacy|undecryptable|version_conflict`；410 `key_deleted`；404 未知（`usagesrv.py:2205-2239`）。
+- `revoke-and-terminate` 返回 `revoked=true`，并区分 `terminated`/`released`/`aborted`/`upstream_closed`；缺失计数保持 `null`，不伪造 0（`usagesrv.py` 的 `revoke-and-terminate` 分支）。
+- 操作提交：`idempotency_key` 1..128；同 action/target/params 复用同一操作，不同则 409 `idempotency_key_conflict`；新建 201，复用 200（`usagesrv.py:3510-3538`、`console/operations.py:433-534`）。
+- 操作取消：已结束 409 `operation_already_finished`；未知 404 `operation_not_found`；排队中取消立即变 `cancelled`，执行中置 `cancel_requested`（`console/operations.py:544-570`）。
+
+### 6.4 超时、取消与幂等
+
+- 18096 没有 SSE；所有响应都是 `Cache-Control: no-store` 的 JSON。
+- display grant TTL 60 秒；display session TTL 300 秒；最多 64 个待用 grant、64 个会话；最多 2 个并发 relay；idle 900 秒；单会话最长 14400 秒；握手 10 秒；关闭宽限 5 秒（`console/display_proxy.py:102-107,218-245`）。
+- 分享写面前端预算 20 秒，display 写面 30 秒（`web/src/cloud/cloud-writes.ts`）；超时是“未确认”，不是成功。
+- 操作取消是协作式：`cancel_requested` 只是请求，执行器在下一个检查点退出；不会强杀子进程。
+- 幂等键按操作类型绑定；同一 Key 的 create/rotate 重放不返回明文。
+- 部署脚本的 `flock` 锁与 900 秒排空预算见 §12。
+
+### 6.5 副作用
+
+- 写 `data/console-state.sqlite3`：操作记录、跨进程资源锁、幂等键；未完成操作在启动时标为 interrupted，不重放（`console/operations.py:268-370`）。
+- 写分享 Key SQLite：`share-store.db`；schema 3，含 `keys`、`ops`、`configgen`、`security`；投影 schema 仍为 2（`share/store.py:54-60,398-441`）。
+- 写安全日志：每次撤销/轮换/降低并发写一行 `security`，同一事务内先写意图；发布未确认时 fail closed（`share/store.py:415-440`、`share/management.py:1153-1200`）。
+- 写 `configgen`：desired generation 与 applied generation 分离；发布成功才推进 applied。
+- 写会话引导码文件；`/api/session` 只写 HttpOnly Cookie，不返回 token。
+- 读账本、日志、broker 状态、pid 文件、display 状态；不写 8100 账本、不启动 8100。
+- 发布投影：原子写临时文件 + `os.replace`；generation 单调；同代内容不同拒绝（`share/runtime.py:24-80`）。
+- 写 broker 操作记录：`data/console-state.sqlite3` 的 `operations`；明文 Key 绝不进 `result_json`（`usagesrv.py:3248`）。
+- 不自动备份、不做预算保护；备份只走显式 CLI。
+
+### 6.6 读面响应形状
+
+以下只冻结顶层形状；字段级语义与缺失值规则以对应构造点为准，Rust 不得自行补零或改写。
+
+| 端点 | 顶层响应字段 |
+|---|---|
+| `GET /health` | `status`、`service`、`port` |
+| `GET /api/summary` | `summary`、`checkedAt`；角色 `cloud` 不读私人账本 |
+| `GET /api/console/share-management/status` | `generation`、`keys`、`capacity`、`gateway_running`；缺失保持 `null`/省略 |
+| `GET /api/console/share-management/keys` | `keys[]`；每项 `id`、`name`、`max_concurrency`、`row_version`、状态字段；不含明文/哈希 |
+| `GET /api/console/share-usage` | `summary`、`filters`、`coverage`、`checkedAt`；费用/价格字段已退役 |
+| `GET /api/console/share-usage/requests` | `rows[]`、`nextCursor`、`truncated`、`filters`、`coverage`、`checkedAt` |
+| `GET /api/console/um/today` | `today`、`coverage`、`timezone`、`checked_epoch` |
+| `GET /api/console/um/trend` | `range`、`days`/点序列、`coverage`、`checked_epoch` |
+| `GET /api/console/um/requests` | `rows[]`、`nextCursor`、`truncated`、`coverage` |
+| `GET /api/console/um/logs`、`request-logs` | `rows[]`、`nextCursor`、`truncated`、`coverage` |
+| `GET /api/console/stats` | `requests`、`input_tokens`、`output_tokens`、`cache`、`coverage`；云端角色 503 |
+| `GET /api/console/logs` | `rows[]`、`coverage`；云端角色 503 |
+| `GET /api/console/operations` | `operations[]`；每项 `id`、`action`、`status`、`result` |
+| `GET /api/console/operations/{id}` | 单个 operation；未知 404 |
+| `GET /api/console/actions` | `actions[]`；动作目录 |
+| `GET /api/console/gateway-connection` | `service`、`connection`、`snapshot`；云端角色 503 |
+
+## 7. broker 契约
+
+### 7.1 传输与帧
+
+- POSIX 生产传输：AF_UNIX `SOCK_STREAM`，管理 socket `/run/um-share/broker.sock`，目录 0700、socket 0600；对端身份用 `SO_PEERCRED` + `/proc/<pid>` 证据（`share/broker_ops.py:270-360`）。
+- 一连接一 cycle；单行 JSON；`\n` 结尾；最大 1 MiB；先检查上限再接受完整帧；空帧 `empty_request`；超时 `deadline_exceeded`（`share/broker_protocol.py:29-40,215-300`）。
+- 管理请求字段：`v`、`action`、`request_id`、`ts`、`fields`、`mac`；实例请求额外 `instance_id`。HMAC-SHA256 对固定字段排序；`ts` 窗口 ±300 秒；`request_id` 一次性消费防重放（`share/broker_protocol.py:206-280`）。
+- 结果码固定集合：`ok`、`not_installed`、`stale_generation`、`fingerprint_mismatch`、`instance_mismatch`、`replay`、`stale_ts`、`overlimit`、`deadline_exceeded`、`unconfirmed`、`blocked`、`bad_request`、`forbidden`、`internal_error`、`empty_request`、`unknown_instance`、`capability_missing`、`access_denied`（`share/broker_protocol.py:160-180`）。
+
+### 7.2 动作白名单
+
+| 通道 | action | 字段 | 说明 |
+|---|---|---|---|
+| 管理 | `status` | 无 | 状态与诊断 |
+| 管理 | `publish` | `generation`、`fingerprint`、`projection`、可选 `terminate_keys` | 原子写投影 + 实例 load/ACK |
+| 管理 | `start` | 可选 `explicit` | 受限启动；`explicit` 清停止意图 |
+| 管理 | `drain` | 无 | 有界排空 + 最终停止 + 关闭验证 |
+| 管理 | `emergency-stop` | 无 | 清在途 + 停止 + 关闭验证 |
+| 管理 | `ts-service-control` | `action: start|stop` | Windows 专用；Linux 不装配，未知动词拒绝 |
+| 管理 | `host-verify` | `check: running|closed` | 三证据 |
+| 管理 | `host-stop` | 无 | 任务门 |
+| 管理 | `host-repair-limits` | 无 | 限额修复 |
+| 管理 | `maintenance-begin` | `component`、`lease_s` | 维护租约，默认 300 秒、上限 600 秒 |
+| 管理 | `maintenance-end` | `component`、`lease_id` | 恢复接受 |
+| 管理 | `maintenance-status` | 无 | 只读视图 |
+| 管理 | `gateway-restart` | `component`、`budget_s` | 默认 120 秒、上限 180 秒 |
+| 管理 | `host-evidence` | `check: limits|faults|watchdog` | 只读证据 |
+| 实例 | `instance-status` | 无 | 身份与在途数 |
+| 实例 | `load` | `generation`、`fingerprint`、可选 `terminate_keys` | 加载投影并 ACK |
+| 实例 | `drain` | 无 | 暂停接受 |
+| 实例 | `emergency` | 无 | 清在途并停止 |
+| 实例 | `resume` | 无 | 有界排空后恢复接受 |
+
+### 7.3 生命周期、超时与副作用
+
+- 默认 wire deadline 10 秒；管理 dispatch deadline 130 秒；排空窗口 60 秒；最终停止预算 20 秒；客户端排空 deadline 90 秒；紧急停止 deadline 30 秒（`share/broker_protocol.py:29-58`）。
+- 启动后轮询三证据，`start_ready_timeout=6.0` 秒、轮询 0.25 秒；超时或证据不可读都回答 `unconfirmed`，绝不伪造 `started`（`share/broker_host.py:257-325,581-630`）。
+- 排空先通知实例 `drain`，再轮询 `active_count` 到 0；无论通知是否失败，都要执行最终 host stop + `verify_closed`；`timed_out` 与 `stopped` 分开报告（`share/broker_host.py:631-705`）。
+- 紧急停止同样以 VERIFIED host closure 为权威；实例通知失败不跳过 host stop（`share/broker_host.py:706-758`）。
+- 停止优先级：VERIFIED closure 清维护租约并 bump closure epoch；停止后不能被维护租约重新打开（`share/broker_host.py:748-770`）。
+- 维护租约绑定 `(component, instance_id, round, expires_at)`；过期时只在实例/轮次仍为当前时才 resume，替换后的实例绝不 resume（`share/broker_host.py:834-1030`）。
+- gateway restart 三证据门通过才执行；先写 `restarting` 维护记录，再 stop、验证 closed、explicit start、验证 running；未确认则 `unconfirmed` 并带实际 flags，不重试强杀（`share/broker_host.py:1052-1135`）。
+- 持久记录：`lifecycle.json`、`maintenance.json`、`broker-status.json`、`share-host-desired.json`、`share-gateway.pid`。原子写 tmp + replace；写失败时生命周期转换回答 `unconfirmed`，不让内存记录声称已持久化（`share/broker_server.py:586-610,1156-1250`；`share/broker_ops.py:321-380,579-700`）。
+- broker 是 8100 的唯一 Popen 者；控制台 unit 被 `NoExecPaths` 围栏挡住，不能成为第二个启动者（`um-cloud-deploy/systemd/um-share-console.service`、`um-cloud-deploy/systemd/um-share-broker.service`）。
+
+## 8. Key 管理
+
+### 8.1 数据模型
+
+`share-store.db` schema 3（投影 schema 2）：
+
+| 表 | 字段 | 约束 |
+|---|---|---|
+| `meta` | `key`、`value` | `schema_version`、`share_max_concurrency` |
+| `keys` | `key_id`、`name`、`secret_hash`、`secret_version`、`masked_key`、`secret_blob`、`secret_algo`、`enabled`、`max_concurrency`、`created_at`、`updated_at`、`deleted_at`、`row_version` | `name` 在未删除行中唯一；`row_version` 每次变更 +1 |
+| `ops` | `id`、`kind`、`idempotency_key`、`status`、`payload`、`created_at` | `idempotency_key` 唯一 |
+| `configgen` | `schema_version`、`config_generation`、`applied_generation` | desired/applied 分离 |
+| `security` | `record_id`、`key_id`、`generation`、`action`、`secret_version`、`status`、`recorded_at`、`applied_at`、`applied_generation`、`instance_id`、`remote_confirmed_at`、`remote_receipt` | 跨机安全日志 |
+
+（`share/store.py:398-441`）
+
+### 8.2 语义
+
+- 新建 Key：默认每 Key 并发 16，允许 1..48；明文只回一次；idempotency replay 不再返回明文（`share/store.py:85-89,1010-1050`）。
+- 全局分享并发：1..64；新部署默认 64；旧部署保持 2；超出旧契约上限（每 Key 64、全局 128）在解析时夹到新上限，超过旧上限拒绝（`share/store.py:75-90`、`share/broker_protocol.py:557-595`）。
+- 更新：`enabled` 只读；只接受 `False`（撤销方向），`True` 明确拒绝；改名与每 Key 并发可原子更新；降低并发是撤销方向，必须发布确认，否则 503（`share/store.py:1191-1275`）。
+- 轮换：`secret_version+1`，写新 hash、mask、ciphertext，记录安全日志，发布确认；idempotency key 绑定目标 Key，重放返回元数据但不返回明文（`share/store.py:1277-1325`）。
+- 删除/撤销：写 `deleted_at`、清 ciphertext、发布确认；已删除 Key 的明文 readback 410；重复删除返回 `already_deleted`（`share/store.py:1326-1348`）。
+- 明文保护：Windows 用 DPAPI user scope；POSIX 用 AES-256-GCM + 文件密钥；缺失/损坏/权限过宽一律 fail closed，不降级为 hash-only（`share/store.py:160-300`）。
+- 删除 Key 清 ciphertext；旧 hash-only 行保持可用，直到人工轮换（`share/store.py:1074-1130`）。
+
+### 8.3 发布链与失败关闭
+
+- 每次变更先写本地 SQLite（单一写者），再通过 broker 发布投影；投影写入是原子替换，generation 单调，同代内容不同拒绝（`share/management.py:1-20`、`share/runtime.py:24-80`）。
+- 撤销方向（disable/rotate/delete/降低并发）必须等实例 ACK 新代次；未确认则 503，且记录可查询的发布失败，绝不返回假 200（`share/management.py:1-20,800-840,1153-1200`）。
+- 安全日志与 Key 变更同一事务写入，先于发布；远端确认失败保持 pending，不声称跨机保护完成（`share/store.py:415-440`、`um-cloud-deploy/backup_restore/security.py:1-80`）。
+- 提高并发是安全方向，best-effort 发布；降低并发是撤销方向，fail closed（`share/store.py:1191-1275`）。
+
+## 9. 用量账本
+
+### 9.1 写入行
+
+8100 每个请求追加一行 JSONL（`chat2api/chat2api.py:2427-2512`）：
+
+```json
+{
+  "time": "ISO-8601 本地时间",
+  "service": "chat2api",
+  "model": "string",
+  "stream": true,
+  "status": "ok | cancelled | upstream_failed | client_disconnected | ...",
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "cached_input_tokens": 0,
+  "cache_report_status": "reported | unreported",
+  "reasoning_tokens": 0,
+  "total_tokens": 0,
+  "estimated": false,
+  "duration_ms": 0,
+  "usage_source": "upstream | partial | estimated | none",
+  "protocol": "chat | messages | responses | null",
+  "key_id": "string | null",
+  "request_id": "string | null",
+  "attribution": "verified | absent | legacy"
+}
+```
+
+- 只有 `status="ok"` 是完整成功；取消、失败、断流、重试都是已知下界，不补零（`share/metering.py:30-40,233-290`）。
+- `usage_source` 四态：`upstream`、`partial`、`estimated`、`none`；未知不当 0。
+- `cache_report_status` 区分上游是否报告 cache；`cached_input_tokens` 的兼容 0 不能当真实 cache 命中。
+- 归因：只有鉴权后的分享请求写 `key_id`/`request_id`/`attribution=verified`；直连 loopback 请求写 `absent`，不猜 Key。
+- 写失败则本进程禁用记账并打印一行错误，不阻断代理。
+
+### 9.2 读面
+
+- `GET /api/share/usage`、`GET /api/console/share-usage`：同一账本、同一口径；可选 `window`、`key`、`model`、`result`；默认完整历史。未知/缺失不当 0。
+- `GET /api/share/usage/requests`、`GET /api/console/share-usage/requests`：逐请求分页；`limit` 1..200，默认 50；cursor 是行号；未知时间/未知用量保持 `null`；`coverage.olderRecordsUnread` 与 `truncated` 区分“窗口到头”与“账本到头”（`share/metering.py:478-600`）。
+- 拒绝读私人账本 `usage-chat2api.jsonl`，只读分享账本 `usage-share-backend.jsonl`（`share/metering.py:32,292-298`）。
+- 只读：不写、不创建、不截断；最多 200000 行；截断在 coverage 中披露（`share/metering.py:1-20,30,344-477`）。
+
+### 9.3 控制台读面
+
+- `/api/console/share-usage` 与 `/api/share/usage` 共用 `_share_usage_response`；`/api/console/share-usage/requests` 与 `/api/share/usage/requests` 共用逐请求页。
+- `/api/console/usage-tokens` 近 N 个北京自然日（默认 14，上限 31）；`/api/console/usage-rates` 近 N 小时（默认 24，上限 168）；缺分量单列，不折零。
+- `/api/console/stats` 日期范围 `YYYY-MM-DD`，半开区间 `[from 00:00, to+1d 00:00)`，跨度上限 92 天；来源/模型筛选；每端点最多 5000 行。
+- `/api/console/um/today|trend|requests|logs|request-logs` 读 UM 自己的账本/日志；`today` 是北京自然日；请求数按逻辑请求，物理重试不重复计；Token 总量包含重试行的真实消耗。
+- `/api/console/um/maintenance` 读原始操作记录，不读分享账本。
+
+## 10. display
+
+### 10.1 路由
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/display` | 同源 + display 授权 | 重定向到 `/display/` |
+| GET | `/display/` | 同源 + display 授权 | noVNC launcher 页面 |
+| GET | `/display/launcher.js` | 同源 | launcher 模块脚本 |
+| GET | `/display/launcher-state.js` | 同源 | launcher 状态模块 |
+| GET | `/display/<asset>` | 同源 | 只读 noVNC 静态树，防穿越 |
+| GET | `/display/session` | 同源 | `{authorized, expires_at}` |
+| GET | `/display/grant` | 同源 | launcher 页面，fragment 兑换 |
+| POST | `/display/grant` | 同源 + 有效单次 grant | 单次 grant 换 HttpOnly Cookie |
+| GET | `/display/websockify` | display session + operator generation | WebSocket RFB 中继 |
+
+### 10.2 语义
+
+- grant 只存 SHA-256 digest，单次使用、绑定精确 origin；错误 origin 不消耗；TTL 60 秒；最多 64 个待用（`console/display_proxy.py:366-470`）。
+- session 可重连、绑定 origin、TTL 300 秒；最多 64 个；Cookie `HttpOnly; SameSite=Strict; Path=/`，HTTPS 时加 `Secure`（`console/display_proxy.py:470-540,1400-1410`）。
+- WebSocket 只接受 RFC 6455 v13；`Sec-WebSocket-Key` 必须是 16 字节 base64；子协议只接受 `binary`；不合法 400/426（`console/display_proxy.py:1044-1071`）。
+- VNC 认证由 console 代理完成：通过 display service 的窄 helper socket 做 RFB challenge-response；密码不进入 console 进程、HTML、JS、URL、浏览器存储或日志；x11vnc 保持 `-localhost` 与 `-rfbauth`（`console/display_proxy.py:1-40`）。
+- operator 单页：acquire 幂等；另一活跃页 409 `display_operator_exists`；stale owner 可 takeover；generation 单调；旧 generation 的 KeyEvent/PointerEvent 丢弃；观看不受影响（`console/display_proxy.py:470-560`）。
+- 连接上限 2、idle 900 秒、单会话 14400 秒、握手 10 秒、关闭宽限 5 秒（`console/display_proxy.py:218-245`）。
+
+### 10.3 副作用
+
+- 启动 `Xvfb :99` 与 `x11vnc`；x11vnc 只监听 loopback。
+- 读 `/run/um-share/vnc-auth.sock` 或 root-only VNC 凭据文件；不把密码写入响应。
+- 写 `/run/um-share/display.auth` 等运行目录；不写 release。
+- 不记录请求头、RFB 帧、凭据或密码。
+
+## 11. Cloudflare 检查
+
+### 11.1 入口配置校验
+
+- `python um-cloud-deploy/cloudflared/check-ingress.py --config um-cloud-deploy/config/cloudflared.yml.example --expect-host <配置公网主机>`。
+- 只读解析 YAML：公网 host 只允许 4 条分享路径 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`；service 必须是 8100 loopback；最后一条必须是 `http_status:404`；当前禁止出现 18096/5901，#40 后同样禁止 8096/8097；重复路径、缺路径、错 host 都报 problem（`um-cloud-deploy/cloudflared/check-ingress.py:26-142`）。
+- 不写、不 reload、不 restart tunnel；只返回 `{ok, problems, rules}`，退出码 0/1。
+
+### 11.2 公网 DNS/TLS 检查
+
+- `console/public_probe.py:609-684`：一次有界 DNS/TLS 往返，不发 HTTP 请求；默认 15 秒，最大 60 秒；每个地址 8 秒；最多 4 个地址。
+- DNS 两个独立 DoH 源：Cloudflare 与 NextDNS（Google 源仍兼容读取旧状态），并行查询、共用整轮预算；每个源 8 秒；响应最大 64 KiB；NXDOMAIN、NOERROR 无 A、SERVFAIL、DoH HTTP/格式错误、超时分别呈现；TTL 缺失显示未知，不硬编码 300 秒（`console/public_probe.py:118-136,451-520`）。
+- 整体状态：`ok`、`degraded`、`incomplete`、`all_failed`、`not_checked`；地址截断不改写成“全部失败”；DNS 分歧与 TLS 可达分别表达。
+- Key 自检 `console/share_probe.py:212-262`：版本绑定 `expected_row_version`；先确认 broker `host_verify("running")`，再 reveal 明文，经公网或本机 loopback 读模型目录并发送一次最多 32 输出 Token 的短请求；结果保留在页面内存，绑定 Key 版本与 API 地址，5 分钟后标陈旧；同一 Key 同时只允许 1 个测试，全局最多 2 个；不自动发推理请求。
+
+### 11.3 副作用
+
+- 只读：不写 Cloudflare 配置、不 reload、不重启 tunnel、不发 DNS 变更。
+- Key 自检会产生一次真实模型用量；这是显式动作，不是页面刷新副作用。
+
+## 12. 部署与备份
+
+### 12.1 安装、更新、回滚
+
+- `um-cloud-deploy/install.sh`：只安装冻结发布包，不构建产品代码；已存在的 release 若 manifest 相同则复用；配置、密钥、数据不覆盖；`--apt-locked` 安装锁定版本。
+- `um-cloud-deploy/update.sh`：先停 cloudflared，再 `um-share-brokerctl.py --drain-budget 900 --poll-interval 5 stop` 排空；未排空返回 75，不切换版本；然后 host-stop、停控制台 unit、原子切换 `current`；健康门失败自动切回 `previous`。
+- 健康门：`wait_port_open` 等待云端控制台与 8100；当前部署等待 18096/8100，#40 后等待 8096/8100；再 `health_gate`；失败返回 68 并回滚，回滚失败 69。
+- `um-cloud-deploy/rollback.sh`：只切符号链接并重启 unit；不删除 release、数据、密钥或备份。
+- 部署锁：`/run/um-share/deploy.lock` 的非阻塞 `flock`；另一个部署操作返回 75。
+- 显式恢复：`rollback.sh --recover-backup <包> --recover-security-state <状态>`；备份与恢复都走显式 CLI。
+
+### 12.2 备份/恢复
+
+- `python um-cloud-deploy/backup_restore.py --check-deployment-assembly <role> <unit> <env>`：只读检查 unit/env 安全围栏。
+- `python um-cloud-deploy/backup_restore.py --store ... --ledger ... --key-file ... --remote-dir ... --state ... --spool ...`：一致 SQLite 快照 + 账本最后完整行 + AES-256-GCM 封装 + 原子写入。
+- `python um-cloud-deploy/backup_restore.py --restore-backup <包> --key-file ... --restore-target <新目录>`：只恢复到新目录，重复恢复拒绝；先校验 magic、key fingerprint、GCM tag、SHA-256、`PRAGMA integrity_check`、embedded config generation，再写目标。
+- `python um-cloud-deploy/backup_restore.py --deployment-restore --restore-backup <包>`：部署路径恢复，先排空，带独立安全状态 floor；安全状态比备份新时拒绝。
+- `python um-cloud-deploy/backup_restore.py --print-freshness --state ...`、`--retry-pending ...`：只读新鲜度、重试 pending 上传。
+- 预算保护与自动备份已从默认装配移除；不新增自动备份、不自动恢复。
+- 包格式：`UMCLDBK1` + `um-share-backup-v1`；AES-256-GCM；密钥文件 32 字节、模式 0600；恢复 kit 用 scrypt；不记录明文。
+- 退出码：0 成功；1 明确失败；64 用法；65 校验；66 输入缺失；67 目标不可用；68 健康门失败但已回滚；69 回滚/补偿失败；70 软件/装配；71 命令/OS 缺失；72 文件/OS；73 无法创建；74 I/O；75 排空超时/锁忙；77 权限（`um-cloud-deploy/README.md`）。
+
+### 12.3 副作用
+
+- 安装/更新/回滚会写 release 目录、systemd unit、符号链接、运行数据目录；不覆盖配置、密钥、数据。
+- 备份读 SQLite、账本、密钥文件、安全状态；写加密包、state、spool；不删除源数据。
+- 恢复写新目标目录；不覆盖已有目标；不改源数据。
+- 所有脚本默认 fail closed；未确认的关闭不写成 stopped。
+
+## 13. Parity 门禁（仓库实际命令）
+
+以下命令是本仓库实际存在的命令；本票只写文档，**未运行全量门禁**，不能把下表当作本票的通过证据。
+
+| 门禁 | 工作目录 | 命令 | 覆盖 |
+|---|---|---|---|
+| 完整检查 | 仓库根 | `bash scripts/check.sh --full` | compile、ruff、名字/退役检查、契约夹具、diff check、tsc、前端 contracts/logs/um、全部 Python 测试 + local 测试 |
+| 快速检查 | 仓库根 | `bash scripts/check.sh` | 不跑全量 Python 测试 |
+| Python 回归 | 仓库根 | `python -m unittest discover -s tests -p "test_*.py"` | 云端分享/控制台契约 |
+| 本机组合回归 | 仓库根 | `python -m unittest discover -s local/tests -p "test_*.py"` | 本机组合根 |
+| 云端控制台前端 | `web/` | `npm run check:cloud-console` | 云端页面/写面 |
+| UM 视图 | `web/` | `npm run check:um` | UM 读面 |
+| 契约夹具新鲜度 | 仓库根 | `python tests/generate_frontend_contract_fixture.py` 后 `node web/scripts/backend-contract/check-generated.mjs` | 改契约代码后必须重生成 |
+| 分享链名字 | 仓库根 | `python scripts/check_share_names.py` | 旧/新名字混用 |
+| 退役功能 | 仓库根 | `python scripts/check_retired_features.py` | 退役功能不复活 |
+| 端口审计 | 仓库根（Windows 生产机） | `python check_port_bindings.py` | 治理段未登记监听 |
+| Linux 分享链 | 仓库根（WSL/Linux） | `bash um-cloud-deploy/run-linux-checks.sh --mode full` | 真实 8100 进程、长请求、云运维演练 |
+| Cloudflare 入口 | 仓库根 | `python um-cloud-deploy/cloudflared/check-ingress.py --config um-cloud-deploy/config/cloudflared.yml.example --expect-host <配置主机>` | 4 条白名单 + 404 |
+| 部署装配 | 仓库根 | `python um-cloud-deploy/backup_restore.py --check-deployment-assembly console <unit> <env>` | unit/env 安全围栏 |
+| 发布包一致性 | 仓库根 | `python um-cloud-deploy/make-manifest.py --check um-cloud-deploy/RELEASE-MANIFEST.json` | manifest 与当前字节 |
+
+切片验收至少跑：该切片对应的定向测试 + `bash scripts/check.sh --full`；改前端再跑 `web/` 的两个检查；改分享链名字再跑 `check_share_names.py`。
+
+## 14. 模块边界与副作用总表
+
+| 模块 | 读 | 写 | 外部边界 | 不做什么 |
+|---|---|---|---|---|
+| 8100 分享网关 | 投影文件、token/API Key、账本 | 账本 JSONL、服务日志、撤销状态、token/profile | UM 上游 HTTP、Edge/Playwright、实例 AF_UNIX | 不写 SQLite、不发布投影、不管理 Key |
+| 18096 控制台 | 账本、日志、pid、broker 状态、安全状态 | console SQLite、share SQLite、会话码、投影（经 broker） | broker AF_UNIX、x11vnc、公网 DNS/TLS（显式检查） | 不启动 8100、不直接执行 chat2api.py、不自动备份 |
+| broker | pid、/proc、投影、注册文件 | 投影、lifecycle、maintenance、broker-status、pid、停止意图 | AF_UNIX 管理/实例通道、信号、Popen | 不接受任意命令/路径/服务名 |
+| Key 管理 | SQLite、安全状态 | SQLite、投影、安全日志 | broker 发布 | 不在日志/列表返回明文 |
+| 用量账本 | JSONL | 无 | 无 | 不读私人账本、不写 |
+| display | noVNC 静态、VNC helper | 运行目录、grant/session 内存 | x11vnc、浏览器 WebSocket | 不把密码写入响应/日志 |
+| Cloudflare | 配置、DNS/TLS | 无 | DoH、公网 TLS | 不改配置、不 reload |
+| 部署备份 | release、配置、数据、密钥 | release/unit/符号链接、备份包、恢复目标 | systemd、broker CLI、对象存储（显式） | 不自动备份、不覆盖已有目标 |
+
+## 15. 未验证与待确认
+
+- 运行 `bash scripts/check.sh --quick`（工作目录 `.worktrees/integration-rust-contract`，提交 `cb29da4`）：退出码 0。
+- 运行 `bash scripts/check.sh --full`（同上）：退出码 0；`Ran 2310 tests` / `OK (skipped=63)`，`local/tests` `Ran 54 tests` / `OK`。
+- 运行 `python -m unittest tests.test_chat2api_linux_platform tests.test_cloud_display_on_demand tests.test_console_display_proxy`（同上）：退出码 0。
+- 未运行 Rust 编译/测试：本票只产出测量、契约与切片计划，未创建 Cargo 工程。
+- 登录中/登录后 RSS 未验证；没有维护者授权触发重登。
+- Chromium 未运行，没有 idle RSS；登录相关 display 行为以 spec #8 为准。
+- #40 未合入本分支；8096/8097 只是决策记录，未在云端验证。
+- 未执行真实 Cloudflare Tunnel 变更、UM 上游登录、broker 重启或生产备份/恢复。
