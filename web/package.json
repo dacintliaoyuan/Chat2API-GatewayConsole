@@ -17,6 +17,7 @@
     "prepare": "husky"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "husky": "^9.1.7",
     "lint-staged": "^17.6.0",
     "playwright": "^1.65.0",
