@@ -16,6 +16,7 @@ the credential-isolation contract.
 """
 
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -24,7 +25,7 @@ import tempfile
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -659,6 +660,24 @@ class TestChat2ApiEndpoints(unittest.TestCase):
             cwd=str(CHAT2API_PATH.parent))
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn(b"requires CHAT2API_LOCAL_API_KEY", proc.stderr)
+
+
+class RequestBodyContractTests(unittest.TestCase):
+    def test_deeply_nested_json_is_answered_as_invalid_json(self):
+        handler = object.__new__(chat2api.Handler)
+        payload = b"[" * 50000 + b"]" * 50000
+        handler.headers = {"Content-Length": str(len(payload))}
+        handler.rfile = io.BytesIO(payload)
+        handler.server = SimpleNamespace(share_gate=None)
+        errors = []
+
+        def record_error(status, message, **kwargs):
+            errors.append((status, message, kwargs))
+
+        handler._error = record_error
+        self.assertIsNone(handler._read_body())
+        self.assertEqual(errors[0][0], 400)
+        self.assertEqual(errors[0][2].get("error_type"), "invalid_json")
 
 
 if __name__ == "__main__":

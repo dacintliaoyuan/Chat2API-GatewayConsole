@@ -137,7 +137,7 @@ class _UsageIsolation(_LedgerBinding):
                     server.close_client_sockets()
                 finally:
                     ThreadingHTTPServer.server_close(server)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — 关闭服务器失败要收集后统一报告
                 failures.append(exc)
         try:
             self._finish_cleanup()

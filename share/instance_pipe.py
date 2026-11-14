@@ -110,7 +110,7 @@ class _InstanceControlDispatch:
             request_id = body.get("request_id") if isinstance(body, dict) \
                 else None
             return self._frame(request_id, exc.code, str(exc))
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:  # noqa: BLE001 — 实例通道失败按未就绪上报
             record["dispatch_error"] = f"{type(exc).__name__}: {exc}"
             request_id = body.get("request_id") if isinstance(body, dict) \
                 else None
@@ -143,7 +143,7 @@ def probe_instance_listener(server):
     (the same bounded cycle contract). Returns (ok, error)."""
     try:
         handle = server._create_instance()
-    except BaseException as exc:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001 — 实例通道失败按未就绪上报
         return False, f"{type(exc).__name__}: {exc}"
     server._release_instance()
     return True, None

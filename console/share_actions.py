@@ -357,7 +357,7 @@ def _probe(fn):
         raise
     except OperationError as exc:
         return None, exc.code
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — 分享动作失败按可读错误上报
         return None, "probe_failed"
 
 
@@ -374,7 +374,7 @@ def _share_entry_probe():
     """
     try:
         from console import share_production as console_share_production
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — 分享动作失败按可读错误上报
         return None
     fn = getattr(console_share_production, "share_entry_instance_probe", None)
     if fn is None:
@@ -386,7 +386,7 @@ def _share_entry_attribution():
     """Read-only attribution status (contract §3.2, production function)."""
     try:
         from console import share_production as console_share_production
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — 分享动作失败按可读错误上报
         return None
     fn = getattr(console_share_production, "share_attribution_status", None)
     if fn is None:
@@ -410,7 +410,7 @@ def _maintenance_status_read():
         raise
     except OperationError as exc:
         return None, exc.code
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — 分享动作失败按可读错误上报
         return None, "maintenance_read_failed"
     if not isinstance(raw, dict):
         return None, "maintenance_unavailable"
@@ -637,7 +637,7 @@ def gateway_restart(target, params, ctx=None):
         raise
     except OperationError:
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — 分享动作失败按可读错误上报
         raise OperationError(
             "share_broker_unwired",
             "8100 重启调用异常（%s）：实际状态以 share.diagnostics 只读复验"

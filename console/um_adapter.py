@@ -129,7 +129,7 @@ def resolve_chat2api_base_url(cloud=False, snapshot=None):
                 snapshot = console_adapters.service_status(cloud=True)
             else:
                 snapshot = console_adapters.service_status()
-        except Exception:
+        except Exception:  # noqa: BLE001 — 状态快照不可用即 fail-closed
             raise OperationError(
                 "status_unavailable",
                 "无法从 runtime 快照解析 chat2api 服务地址")
@@ -254,7 +254,7 @@ def _read_auth_status(base_url, token, timeout=_TIMEOUT_S):
     except urllib.error.HTTPError as exc:
         try:
             exc.close()  # best-effort: release the wrapped response socket
-        except Exception:
+        except Exception:  # noqa: BLE001 — 释放 HTTPError 是尽力而为
             pass
         if exc.code in (401, 403):
             raise OperationError(
@@ -340,7 +340,7 @@ def _verify_account(base_url, token):
     except urllib.error.HTTPError as exc:
         try:
             exc.close()  # best-effort: release the wrapped response socket
-        except Exception:
+        except Exception:  # noqa: BLE001 — 释放 HTTPError 是尽力而为
             pass
         if exc.code in (401, 403):
             raise OperationError(

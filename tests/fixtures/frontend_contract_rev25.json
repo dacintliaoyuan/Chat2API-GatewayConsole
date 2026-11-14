@@ -4,17 +4,17 @@
     "generatedFrom": "generate_frontend_contract_fixture.py:real handlers/private fixtures",
     "sourceHashEncoding": "utf8-lf",
     "sourceHashes": {
-      "model_sync/sync.py": "c1c8d03c43a6bf89c64a884dcabf9d63ecb893042f6636a65771005c58af1aaa",
+      "model_sync/sync.py": "3fc589dcb8a228a717c675b52d94b84b8d3f17a6c8a9d119f4477403c8cc7ce4",
       "model_sync/sync_core.py": "b6b4e99bf2491b1e89df6632ef5232d67a583f14d4ad361746e91a3c37efcaa7",
-      "console/model_actions.py": "a6b74d0ce1b0f4361784fce872ac235c565fca2d1f392d6015ce0765fec3ecbd",
-      "console/adapters.py": "19f8d7c14721706d417e4661bfbc3cffa5b95d31c8f610689c7f9a08d31f1b48",
-      "console/operations.py": "90bb9896c112c342efc9cf0430676be22c913c376c7d015b06916db91c586c58",
+      "console/model_actions.py": "3825b6396ff83ff747df70514f96005a40488b9da1e5765ab1543152e24be648",
+      "console/adapters.py": "7cab2788a0a62acaa3e4183be0701a5590ace1dd2640f80fd08b9797cea603b3",
+      "console/operations.py": "e97c8822b4689503fface9748c2be00ab1eee3e8dab00cce0c0126c54da8a7e2",
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
-      "console/stats.py": "cdd0cd7e9ffe3bd13829327caf69d32e56e91cd7b637de42db49ddaef35ecd28",
+      "console/stats.py": "3fae809c0c051108c37627b7fdc7111f75c035c71526bcef212236b3216dae59",
       "console/log_reader.py": "359106dc5ce7f9e4c1bd3aa46bba3fc4a8afb9521327837f5c0917f28445733a",
-      "usagesrv.py": "15de631892dbb7b0c3eaeceb9f8cfbeb2e1c662e674046373b9de0729a6f8b32",
-      "console/share_actions.py": "f28299cdd6565fa4957039a3a225841d8d12f578ef4bb18333a544879c7f24c5",
-      "console/share_production.py": "971fb30857b0f214f7e6470c9e77737842bc9119a93bd54e707c3b0c83a46c32",
+      "usagesrv.py": "7c880b72879785ca6ec5b9e4dd4d816ca4f241f1492c8438e39ee2cc7ac37d43",
+      "console/share_actions.py": "7f9f15075ba131c2e2d8459a4e2b05ee1b1454c7d3b609374a028bd1718da7f7",
+      "console/share_production.py": "119ff1f503acffef9da41eece6d17c3a33cb0e8191398e9ed061c7fb2d843f6e",
       "console/gateway_connection.py": "049cddb9667cc9ae15bf5474317101d7af62a2e1f333dbc951674acd5c5c351e"
     }
   },
@@ -268,7 +268,7 @@
     "sources": [
       "um"
     ],
-    "checked_epoch": 1794672294
+    "checked_epoch": 1794675102
   },
   "scoped_catalog": {
     "catalogs": {
@@ -296,7 +296,7 @@
     "sources": [
       "um"
     ],
-    "checked_epoch": 1794672294
+    "checked_epoch": 1794675102
   },
   "context_overrides": {
     "overrides": [

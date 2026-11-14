@@ -17,7 +17,6 @@ All file inputs are redirected to temp dirs; no production ledger is touched.
 """
 
 import json
-import os
 import sys
 import tempfile
 import unittest

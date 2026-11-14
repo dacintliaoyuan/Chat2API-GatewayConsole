@@ -552,7 +552,7 @@ def wire_share_production_seams(keys_manager=None, cloud=False):
     try:
         seams = console_share_production.production_seams(
             keys_manager=keys_manager, cloud=cloud)
-    except Exception:
+    except Exception:  # noqa: BLE001 — 失败即保持未接线 seam，fail-closed
         # Fail-closed: leave the honest unwired seams in place.
         seams = None
     for key, value in (seams or {}).items():

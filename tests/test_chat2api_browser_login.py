@@ -714,7 +714,7 @@ class RealDomLoginPageTests(unittest.TestCase):
         cls.manager = sync_playwright().start()
         try:
             cls.browser = cls.manager.chromium.launch(headless=True)
-        except Exception as exc:  # pragma: no cover - 未安装浏览器
+        except Exception as exc:  # noqa: BLE001 — 无浏览器时跳过（环境缺失）  # pragma: no cover
             cls.manager.stop()
             raise unittest.SkipTest("headless Chromium unavailable: %s: %s"
                                     % (type(exc).__name__, exc))

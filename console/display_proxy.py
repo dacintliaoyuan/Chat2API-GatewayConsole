@@ -56,7 +56,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
-from http.cookies import SimpleCookie
+from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -313,7 +313,7 @@ def _cookie_value(cookie_header, name):
         jar.load(cookie_header)
         morsel = jar.get(name)
         return morsel.value if morsel else None
-    except Exception:
+    except CookieError:
         return None
 
 

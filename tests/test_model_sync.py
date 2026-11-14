@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from model_sync import sync as model_sync  # noqa: E402
-from model_sync.sync_core import CatalogModel, empty_state  # noqa: E402
+from model_sync.sync_core import empty_state  # noqa: E402
 
 
 class CatalogTests(unittest.TestCase):

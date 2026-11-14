@@ -74,7 +74,7 @@ def _cryptography_version() -> str:
     try:
         import cryptography
         return cryptography.__version__
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — 测试替身故意模拟后端失败
         return "unavailable"
 
 

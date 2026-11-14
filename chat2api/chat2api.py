@@ -49,7 +49,6 @@ Thinking-level variants:
 """
 
 import argparse
-import base64
 import email.utils
 import hashlib
 import hmac
@@ -773,7 +772,8 @@ class TokenStore:
             if data.get("url") != self.url:
                 return None
             return data
-        except Exception:
+        except (OSError, ValueError, TypeError, AttributeError,
+                RecursionError):
             return None
 
     def save(self, token: str, api_key: str = None):
@@ -1223,7 +1223,6 @@ def _owner_pid_alive(pid) -> bool:
         return True
     try:
         import ctypes
-        from ctypes import wintypes
 
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -2143,7 +2142,7 @@ def _same_element(left, right) -> bool:
         return True
     try:
         return bool(left.evaluate("(el, other) => el === other", right))
-    except Exception:
+    except Exception:  # noqa: BLE001 — Playwright 元素比较：页面可能已脱离，失败即不同一
         return False
 
 
@@ -2162,7 +2161,7 @@ class _LoginPage:
     def url(self) -> str:
         try:
             return self._page.url or ""
-        except Exception:
+        except Exception:  # noqa: BLE001 — 页面可能已关闭：读不到 URL 按空处理
             return ""
 
     def goto(self, url, wait_until="domcontentloaded", timeout=30000):
@@ -2196,7 +2195,7 @@ class _LoginPage:
         except AttributeError:
             # A stand-in without the Playwright method is "not closed".
             return False
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — Playwright 异常文本是关闭信号，不能按类型窄化
             return "closed" in str(exc).lower()
 
     def _visible_matches(self, selectors):
@@ -2213,19 +2212,19 @@ class _LoginPage:
             try:
                 locator = self._page.locator(selector)
                 count = locator.count()
-            except Exception:
+            except Exception:  # noqa: BLE001 — 选择器可能失效：跳过该选择器
                 continue
             for index in range(count):
                 try:
                     element = locator.nth(index)
                     if not element.is_visible():
                         continue
-                except Exception:
+                except Exception:  # noqa: BLE001 — 元素可能在读取中消失：跳过
                     continue
                 handle = None
                 try:
                     handle = element.element_handle()
-                except Exception:
+                except Exception:  # noqa: BLE001 — 拿不到元素句柄时按独立控件计数
                     pass  # no identity: count it as its own control, never skip
                 if handle is not None:
                     if any(_same_element(handle, other) for other in seen):
@@ -2259,7 +2258,7 @@ class _LoginPage:
         selector, index = target
         try:
             value = self._page.locator(selector).nth(index).input_value()
-        except Exception:
+        except Exception:  # noqa: BLE001 — 输入控件可能在读取中消失：按无值处理
             return False
         return bool((value or "").strip())
 
@@ -2460,7 +2459,7 @@ def _click_and_observe(page, target, before_url, cancel_event) -> str:
     reports ``swallowed`` after the same observation window."""
     try:
         page.click(target)
-    except Exception:
+    except Exception:  # noqa: BLE001 — 点击失败不构成已送达证据
         pass  # not actionable: no evidence it was delivered
     deadline = time.time() + LOGIN_CLICK_OBSERVE_TIMEOUT_S
     while time.time() < deadline:
@@ -2472,7 +2471,7 @@ def _click_and_observe(page, target, before_url, cancel_event) -> str:
             return "advanced"  # the control left the DOM: something moved
         try:
             page.wait(LOGIN_CLICK_OBSERVE_POLL_MS)
-        except Exception:
+        except Exception:  # noqa: BLE001 — 窗口消失由调用方按 swallowed 处理
             return "swallowed"  # a vanished window is reported by the caller
     return "swallowed"
 
@@ -2657,7 +2656,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
         try:
             on_progress({"phase": phase, "origin": origin,
                           "manual_reason": manual_reason, "detail": detail})
-        except Exception:
+        except Exception:  # noqa: BLE001 — 进度回调不得中断登录会话
             pass  # progress reporting must never break the session
 
     def stop_for_manual(reason):
@@ -2718,7 +2717,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                               timeout=30000)
                     navigation_error = None
                     break
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — 页面加载失败仍可能重定向：继续等待
                     navigation_error = e
                     if attempt + 1 < LOGIN_NAVIGATION_ATTEMPTS:
                         print(f"[warn] Failed to load page, retrying: {e}")
@@ -2749,7 +2748,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                         % (LOGIN_IDLE_TIMEOUT_S, page.url() or "unknown"))
                 try:
                     token = page.read_token()
-                except Exception:
+                except Exception:  # noqa: BLE001 — 页面读取令牌可能因导航失败
                     token = None
                 if token and token != last_token:
                     last_token = token
@@ -2767,7 +2766,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                         try:
                             page.drop_token()
                             page.reload()
-                        except Exception:
+                        except Exception:  # noqa: BLE001 — 页面正在导航：令牌仍保持 rejected
                             # A page mid-navigation must not fail the whole
                             # session: the token stays rejected either way.
                             pass
@@ -2891,13 +2890,13 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             if on_context:
                 try:
                     on_context(None)
-                except Exception:
+                except Exception:  # noqa: BLE001 — 回调失败只记录，不覆盖登录结果
                     _logger.warning(
                         "login context callback failed while releasing the "
                         "browser context")
             try:
                 ctx.close()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — 关闭上下文是清理步骤，不得覆盖登录结果
                 detail = "%s: %s" % (type(exc).__name__, exc)
                 if session_error is not None:
                     detail += "; primary outcome: %s: %s" % (
@@ -2916,7 +2915,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             if playwright is not None:
                 try:
                     playwright.stop()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — stop 失败同样按浏览器清理失败上报
                     # Ticket #42 item 7: a Playwright stop failure leaves
                     # the browser process behind, so it is the SAME explicit
                     # cleanup failure as a context close failure instead of an
@@ -2958,7 +2957,9 @@ def fetch_api_key(base_url: str, token: str, upstream_config=None) -> str | None
                 if key:
                     print("Got Open WebUI API key.")
                     return key
-        except Exception:
+        except (requests.RequestException, ValueError):
+            # Best-effort API-key probe: no key is the same as an unreadable
+            # probe here; the caller falls back to the session token.
             pass
         finally:
             if r is not None:
@@ -3173,7 +3174,7 @@ def _est_tokens(text) -> int:
     if not isinstance(text, str):
         try:
             text = json.dumps(text, ensure_ascii=False)
-        except Exception:
+        except (TypeError, ValueError):
             text = str(text)
     cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
     return max(1, cjk + (len(text) - cjk) // 4)
@@ -3367,7 +3368,7 @@ def record_usage(model, stream, started_at, usage, in_est, out_est, status="ok",
         with _usage_lock:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except Exception:
+    except Exception:  # noqa: BLE001 — 记账失败必须降级，绝不能中断请求
         _usage_disabled = True
         print("[chat2api] usage log write failed, accounting disabled", file=sys.stderr)
 
@@ -4013,7 +4014,7 @@ class Proxy:
         try:
             config, failure_reason, upstream_status = \
                 self._fetch_config_observed()
-        except Exception as exc:  # the maintenance loop must never die here
+        except Exception as exc:  # noqa: BLE001 — 维护循环不得因一次失败退出
             config, failure_reason, upstream_status = \
                 None, type(exc).__name__, None
         finally:
@@ -4540,7 +4541,7 @@ class Proxy:
             return "transient", exc.reason, None
         except (requests.RequestException, TimeoutError, OSError) as exc:
             return "transient", type(exc).__name__, None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 页面操作都可能抛窗口关闭信号
             # A closed target can surface from any page operation; it is the
             # transient window-closed signal, never a credential verdict.
             if "closed" in str(exc).lower():
@@ -4552,7 +4553,7 @@ class Proxy:
             config = self.probe_config() if self.args.use_api_key else None
             api_key = fetch_api_key(self.base_url, token, config) \
                 if self.args.use_api_key else None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 凭据落盘失败按 terminal 分类
             return "terminal", type(exc).__name__, None
         outcome, reason = self._commit_credentials(
             generation, token, api_key, login_cancel)
@@ -5119,7 +5120,7 @@ class Proxy:
             if context is not None:
                 try:
                     context.close()
-                except Exception:
+                except Exception:  # noqa: BLE001 — 关闭上下文是清理步骤
                     pass
         return {"cancelled": True, "state": "cancelled",
                 "detail": "已取消本轮登录；服务继续运行，普通请求不会自动重开"}
@@ -5340,7 +5341,7 @@ class Proxy:
         if context is not None:
             try:
                 context.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 — 关闭上下文是清理步骤
                 pass
         for target in (thread, recovery_thread):
             if target and target is not threading.current_thread():
@@ -5560,7 +5561,7 @@ class Proxy:
                     # (stub/short-lived responses may not carry close()).
                     try:
                         r.close()
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — 释放响应是尽力而为
                         pass
         data = self.models_cache["data"]
         if data is None:
@@ -5679,7 +5680,7 @@ def _upstream_trace_headers(response) -> dict:
     for name in _UPSTREAM_TRACE_HEADER_NAMES:
         try:
             trace[name] = _sanitize_upstream_trace_value(headers.get(name), token=name == "x-request-id")
-        except Exception:
+        except Exception:  # noqa: BLE001 — 读取上游头是尽力而为，不得中断流
             trace[name] = None
     return trace
 
@@ -6205,7 +6206,7 @@ def _repair_truncated_json_prefix(text):
     repaired += "".join("}" if c == "{" else "]" for c in reversed(stack))
     try:
         payload = json.loads(repaired)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -6217,7 +6218,7 @@ def _extract_upstream_reject_error(response_text):
     error_code = ""
     try:
         payload = json.loads(response_text)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         payload = _repair_truncated_json_prefix(response_text)
         if payload is None:
             return (_sanitize_upstream_error_value(response_text, 120),
@@ -6392,7 +6393,7 @@ def _upstream_reject_diagnostics(body):
             role_shape="".join(r[0] if r else "?" for r in role_seq)[:120],
             payload_shape_hash=hashlib.sha256(
                 shape_src.encode("utf-8")).hexdigest()[:16])
-    except Exception:
+    except Exception:  # noqa: BLE001 — 诊断构造失败只标记 failed
         diag["diagnostics_error"] = "failed"
     return diag
 
@@ -6655,7 +6656,7 @@ def _reasoning_retry_preflight(upstream, first_data_deadline,
         saw_substantive = True
         try:
             chunk = json.loads(payload)
-        except Exception:
+        except (ValueError, TypeError, RecursionError):
             return "pass"
         if not isinstance(chunk, dict):
             return "pass"
@@ -6728,7 +6729,7 @@ def _reasoning_retry_preflight(upstream, first_data_deadline,
             item = upstream.next_item(STREAM_WATCHDOG_POLL_S)
         except queue.Empty:
             continue
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 上游流读取错误按 upstream_retry/read_error 分类
             if (transient_retry_available and
                     isinstance(exc, _UPSTREAM_TRANSIENT_EXCEPTIONS)):
                 return result("upstream_retry", type(exc).__name__)
@@ -6842,7 +6843,7 @@ class _UpstreamStream:
                     decoded = line.decode("utf-8", errors="replace")
                     if self._thread is None or not self._enqueue(decoded):
                         break
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 生产者线程记录错误并结束，不能逃逸
             self._error = exc
         finally:
             if pending and self._thread is not None and self._error is None:
@@ -6856,7 +6857,7 @@ class _UpstreamStream:
             self._finished = True
             try:
                 self.response.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                 pass
             if self._slot is not None:
                 # Close the connection first, then return the slot to the
@@ -6986,12 +6987,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             upstream = _UpstreamStream(response, reader_slot=reader_lease)
             upstream.start()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 启动失败要分类为 upstream_read_error
             if upstream is not None:
                 upstream.cancel()
             try:
                 response.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                 pass
             reader_lease.release()
             return None, "upstream_read_error", exc
@@ -7012,7 +7013,7 @@ class Handler(BaseHTTPRequestHandler):
                     return aggregator.finish(), "ok", None
         except _NonStreamAggregateError as exc:
             return None, exc.reason, exc
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 上游读失败按 upstream_read_error 分类
             # The only socket this loop reads is the upstream one (the client
             # is only probed, never read): a transport error here is an
             # upstream read failure, never a client disconnect.
@@ -7102,7 +7103,7 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         try:
             body = json.loads(self.rfile.read(length))
-        except Exception:
+        except (OSError, ValueError, RecursionError):
             self._error(400, "Request body is not valid JSON",
                         error_type="invalid_json")
             return None
@@ -7495,10 +7496,7 @@ class Handler(BaseHTTPRequestHandler):
                                   responses_to_chat_request,
                                   chat_to_responses_response,
                                   responses_stream_events,
-                                  responses_requires_messages,
-                                  responses_to_messages_request,
-                                  messages_to_responses_response,
-                                  messages_stream_events)
+                                  responses_requires_messages)
         if not valid_responses_request(body):
             self._error(400, "unsupported_responses_request")
             return
@@ -7605,7 +7603,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not aggregate_lease.acquire(blocking=False):
                     try:
                         r.close()
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                         pass
                     record_usage(body["model"], False, started_at, None,
                                   input_est, 0,
@@ -7831,7 +7829,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not aggregate_lease.acquire(blocking=False):
                     try:
                         r.close()
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                         pass
                     record_usage(body["model"], False, started_at, None,
                                   input_est, 0,
@@ -8287,7 +8285,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not aggregate_lease.acquire(blocking=False):
                     try:
                         response.close()
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                         pass
                     self._error(503, "Too many concurrent streaming requests",
                                 error_type="too_many_concurrent_streams")
@@ -8345,7 +8343,7 @@ class Handler(BaseHTTPRequestHandler):
             if status_code in (400, 422):
                 try:
                     response_text = response.text[:2048]
-                except Exception:
+                except Exception:  # noqa: BLE001 — 上游错误体读取失败按空文本处理
                     response_text = ""
             payload = None
             if record_messages and status_code == 200:
@@ -8711,7 +8709,7 @@ class Handler(BaseHTTPRequestHandler):
                 # re-closed by _repair_truncated_json_prefix.
                 try:
                     response_text = r.text[:2048]
-                except Exception:
+                except Exception:  # noqa: BLE001 — 上游错误体读取失败按空文本处理
                     response_text = ""
                 r.close()
                 if status_code == 401:
@@ -8799,7 +8797,9 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     content = data["choices"][0]["message"]["content"]
                     out_est = _est_tokens(content)
-                except Exception:
+                except (KeyError, IndexError, TypeError):
+                    # Missing usage shape only means no estimate; the request
+                    # itself already succeeded.
                     pass
                 record_usage(req_model, False, started_at, usage,
                              _message_tokens(body.get("messages")), out_est)
@@ -8834,7 +8834,7 @@ class Handler(BaseHTTPRequestHandler):
             upstream_trace = _upstream_trace_headers(r)
             try:
                 upstream.start()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — 生产者启动失败要转成 502
                 log_failure("producer_start_failed", 502,
                             exc_name=type(exc).__name__)
                 self._error(502, "Upstream stream failed to start",
@@ -8847,7 +8847,7 @@ class Handler(BaseHTTPRequestHandler):
                 if response is not None:
                     try:
                         response.close()
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                         pass
                 reader_lease.release()
 
@@ -8884,7 +8884,7 @@ class Handler(BaseHTTPRequestHandler):
             except _NonStreamAggregateError as exc:
                 aggregate_status = exc.reason
                 aggregate_exc = exc
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — 上游读失败按 upstream_read_error 分类
                 # The only socket this loop reads is the upstream one (the
                 # client is only probed, never read): a transport error here
                 # is an upstream read failure, never a client disconnect.
@@ -8960,7 +8960,9 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     content = aggregate_data["choices"][0]["message"]["content"]
                     out_est = _est_tokens(content)
-                except Exception:
+                except (KeyError, IndexError, TypeError):
+                    # Missing usage shape only means no estimate; the request
+                    # itself already succeeded.
                     pass
                 record_usage(
                     req_model, False, started_at, aggregate_data.get("usage"),
@@ -9092,7 +9094,7 @@ class Handler(BaseHTTPRequestHandler):
                     rr, reader_slot=retry_lease)
                 try:
                     retry_upstream.start()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — 重试生产者启动失败要转成重试失败
                     log_failure(f"{stage}_retry_producer_start_failed", 502,
                                 exc_name=type(exc).__name__)
                     fail_hidden_retry(type(exc).__name__)
@@ -9108,7 +9110,7 @@ class Handler(BaseHTTPRequestHandler):
                     if retry_response is not None:
                         try:
                             retry_response.close()
-                        except Exception:
+                        except Exception:  # noqa: BLE001 — 关闭重试响应是尽力而为
                             pass
                     retry_lease.release()
 
@@ -9345,7 +9347,7 @@ class Handler(BaseHTTPRequestHandler):
             if payload and payload != "[DONE]":
                 try:
                     chunk = json.loads(payload)
-                except Exception:
+                except (ValueError, RecursionError):
                     chunk = None
             error_reason = None
             if isinstance(chunk, dict):
@@ -9537,7 +9539,7 @@ class Handler(BaseHTTPRequestHandler):
         except _DegenerateRepetitionError:
             exc_name = "DegenerateRepetition"
             status = "degenerate_repetition"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 上游读失败按 upstream_read_error 分类
             exc_name = type(exc).__name__
             status = "upstream_read_error"
         finally:
@@ -9698,7 +9700,7 @@ class Handler(BaseHTTPRequestHandler):
             # an idle upstream connection behind.
             try:
                 r.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                 pass
             self._error(503, "Too many concurrent streaming requests",
                         error_type="too_many_concurrent_streams")
@@ -9799,7 +9801,7 @@ class Handler(BaseHTTPRequestHandler):
                 if data_text and data_text != "[DONE]":
                     try:
                         event = json.loads(data_text)
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         event = None
 
                 text_piece = None
@@ -9911,7 +9913,7 @@ class Handler(BaseHTTPRequestHandler):
                             f"({type(exc).__name__}); the completion is incomplete.")
                         status = "upstream_read_error"
                         return status
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 — 未提交的兼容流失败要转成 502
                         if not committed:
                             self._error(
                                 502, "Upstream compatibility stream was invalid",
@@ -10552,7 +10554,7 @@ def _release_upstream_reader(upstream):
     if slot is not None:
         try:
             slot.release()
-        except Exception:
+        except Exception:  # noqa: BLE001 — 释放读槽是幂等清理
             pass
     upstream.cancel()
 
@@ -10666,7 +10668,7 @@ def _pre_output_verify(proxy, auth_wait_budget, request_deadline, cancel_check,
         verdict, reason, upstream_status = classify_credential(
             proxy.base_url, bearer,
             timeout=max(0.001, min(15.0, remaining)))
-    except Exception as exc:  # a probe failure stays "unknown", never a login
+    except Exception as exc:  # noqa: BLE001 — 探测失败按 unknown 上报，绝不当作登录
         verdict, reason, upstream_status = "unknown", type(exc).__name__, None
     finally:
         auth_wait_budget.end_wait()

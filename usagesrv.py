@@ -33,7 +33,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone, timedelta
-from http.cookies import SimpleCookie
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -193,7 +193,7 @@ def _console_build_identity_error():
                 % (label, expected))
     try:
         identity = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         return ("%s 不是有效 JSON：无法确认托管页面属于 %s 角色"
                 % (label, expected))
     if not isinstance(identity, dict):
@@ -250,7 +250,7 @@ def _load_json(path):
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except (OSError, ValueError, RecursionError):
         return None
 
 
@@ -267,14 +267,14 @@ def _read_jsonl(path, limit=200000):
                     continue
                 try:
                     rec = json.loads(line)
-                except Exception:
+                except (ValueError, RecursionError):
                     continue
                 if isinstance(rec, dict):
                     rec["_ms"] = _parse_ts(rec.get("time"))
                     records.append(rec)
     except FileNotFoundError:
         return []
-    except Exception:
+    except (OSError, ValueError, RecursionError):
         return records
     records.sort(key=lambda r: r.get("_ms") or 0)
     return records[-limit:]
@@ -494,7 +494,7 @@ def summary_cached() -> dict:
             return stamped
     try:
         built = build_summary()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — 摘要构建失败按 error 上报
         print("[usagesrv] summary build failed: %s" % type(exc).__name__, flush=True)
         return {"error": "summary unavailable"}
     with _SUMMARY_LOCK:
@@ -514,7 +514,7 @@ def _summary_refresh_worker() -> None:
             with _SUMMARY_LOCK:
                 _SUMMARY_CACHE["value"] = built
                 _SUMMARY_CACHE["at"] = time.time()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 刷新失败保留旧缓存
             print("[usagesrv] summary refresh failed: %s" % type(exc).__name__, flush=True)
         time.sleep(_SUMMARY_REFRESH_SECONDS)
 
@@ -731,7 +731,7 @@ def session_valid(cookie_header):
         jar.load(cookie_header)
         morsel = jar.get(SESSION_COOKIE)
         return bool(morsel) and secrets.compare_digest(morsel.value, expected)
-    except Exception:
+    except CookieError:
         return False
 
 
@@ -886,7 +886,7 @@ def _probe_service(spec):
         conn.close()
         return {"id": spec["id"], "port": spec["port"],
                 "state": "listening", "http_status": status, "ms": _ms()}
-    except Exception:
+    except Exception:  # noqa: BLE001 — TCP 接受但 HTTP 探测失败按 note 上报
         return {"id": spec["id"], "port": spec["port"],
                 "state": "listening", "http_status": None,
                 "note": "tcp accepted but http probe failed", "ms": _ms()}
@@ -1126,7 +1126,7 @@ def _load_share_management_deployment():
     try:
         with open(path, encoding="utf-8") as f:
             payload = json.load(f)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise BrokerError(f"share management config unreadable: {exc}")
     if not isinstance(payload, dict):
         raise BrokerError("share management config must be an object")
@@ -1812,7 +1812,7 @@ class Handler(BaseHTTPRequestHandler):
             return None, 400, "incomplete_body"
         try:
             obj = json.loads(raw) if raw else {}
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             return None, 400, "invalid_json"
         if obj is None:
             obj = {}
@@ -2263,7 +2263,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._share_error(exc)
             return
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
             print(f"[usagesrv] share api error: {type(exc).__name__}: {exc}", flush=True)
             self.close_connection = True
             self._send_json(500, {"error": "share management error"})
@@ -2876,7 +2876,7 @@ class Handler(BaseHTTPRequestHandler):
                         if isinstance(attribution, dict) \
                                 and "file_ready" in attribution:
                             payload["attribution"] = dict(attribution)
-                except Exception:
+                except Exception:  # noqa: BLE001 — 归因读取失败只跳过该字段
                     pass
                 payload["last_check_at"] = int(time.time())
                 # r14 总览契约：配置上限 / 在途 / 排队 / 上游容量分列。
@@ -3140,7 +3140,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send_json(status_code_for(exc), {"error": str(exc)})
             return
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
             # Details to the server console only; the response stays
             # generic (same discipline as _share_api).
             print(f"[usagesrv] console share api error: {type(exc).__name__}: {exc}",
@@ -3300,7 +3300,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_um_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] UM read surface failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "um_query_failed"})
@@ -3328,7 +3328,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_usage_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] usage tokens query failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "usage_query_failed"})
@@ -3355,7 +3355,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_usage_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] usage rates query failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "usage_query_failed"})
@@ -3368,7 +3368,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload["recorded_requests"] = \
                     _usage_rates_recorded_requests(payload)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] recorded request count failed: %s"
                       % type(exc).__name__, flush=True)
             self._send_json(200, payload)
@@ -3417,7 +3417,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             manager = get_console_manager()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — console 子系统不可用即 503
             print("[usagesrv] console manager unavailable: %s"
                   % type(exc).__name__, flush=True)
             self._send_json(503, {"error": "console subsystem unavailable"})
@@ -3425,7 +3425,7 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and rest == ["services"]:
             try:
                 payload, cached, cache_age = console_services_snapshot()
-            except Exception:
+            except Exception:  # noqa: BLE001 — 运行态快照不可用即 502
                 self._send_json(502, {"error": "runtime status unavailable"})
                 return
             payload = dict(payload)
@@ -3490,7 +3490,7 @@ class Handler(BaseHTTPRequestHandler):
                 for line in tail_lines:
                     try:
                         row = json.loads(line)
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         continue
                     if not isinstance(row, dict):
                         continue
@@ -3530,7 +3530,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_stats_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — 查询失败按 502 上报
                 print("[usagesrv] stats query failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "stats_query_failed"})
@@ -3581,7 +3581,7 @@ class Handler(BaseHTTPRequestHandler):
                     rotation=rotation,
                     ledger_paths={"chat2api": CHAT2API_LOG},
                     request_id=(query.get("request_id") or [None])[0])
-            except Exception:
+            except Exception:  # noqa: BLE001 — 日志读取失败按 502 上报
                 self._send_json(502, {"error": "log_reader_failed"})
                 return
             self._send_json(200, {"ok": True, **result})
@@ -3602,7 +3602,7 @@ class Handler(BaseHTTPRequestHandler):
                     q=_s("q"), level=_s("level"),
                     since=_s("since"), until=_s("until"),
                     ledger_paths={"chat2api": CHAT2API_LOG})
-            except Exception:
+            except Exception:  # noqa: BLE001 — 日志读取失败按 502 上报
                 self._send_json(502, {"error": "log_reader_failed"})
                 return
             self._send_json(200, {"ok": True, **result})
@@ -3651,7 +3651,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 op = manager.submit(action, target=target, params=params,
                                     idempotency_key=idem)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — 提交失败按统一错误码上报
                 code, status = _console_error_status(exc)
                 payload = {"error": code}
                 reason = getattr(exc, "reason", None)
@@ -3672,7 +3672,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 op = manager.cancel(rest[1])
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — 取消失败按统一错误码上报
                 code, status = _console_error_status(exc)
                 self._send_json(status, {"error": code})
                 return
@@ -3741,7 +3741,7 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             try:
                 self._send_json(200, summary_cached())
-            except Exception as e:  # 页面不能白屏；细节只进服务端控制台，不外带
+            except Exception as e:  # noqa: BLE001 — 页面不能白屏：细节只进服务端控制台
                 print(f"[usagesrv] summary error: {type(e).__name__}: {e}", flush=True)
                 self._send_json(500, {"error": "summary unavailable"})
         elif path.startswith("/api/console/"):
@@ -3763,7 +3763,7 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length)) if length else {}
-            except Exception:
+            except Exception:  # noqa: BLE001 — 会话体不是 JSON 按空对象处理
                 body = {}
             sid = session_exchange((body or {}).get("code"))
             if not sid:

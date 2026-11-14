@@ -19,12 +19,9 @@ rules are pinned at the seam itself.
 """
 
 import gc
-import http.client
 import importlib.util
 import json
-import os
 import queue
-import socket
 import sys
 import threading
 import time
@@ -33,16 +30,12 @@ import unittest
 import weakref
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
-
-import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 CHAT2API_PATH = Path(__file__).resolve().parents[1] / "chat2api" / "chat2api.py"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(CHAT2API_PATH.parent))
-import _chat2api_http_harness as harness  # noqa: E402
 import nonstream_aggregate  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location(

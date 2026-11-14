@@ -19,7 +19,6 @@ from unittest import mock
 
 import usagesrv
 import login_contract
-from console import share_actions as console_share_actions
 from console import um_adapter as console_um_adapter
 from console.display_proxy import DisplayConfig, DisplayProxy
 from console.operations import OperationError

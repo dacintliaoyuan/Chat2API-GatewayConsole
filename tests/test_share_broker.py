@@ -7,7 +7,6 @@ unverified); loopback/in-process transports stand in for the offline loop
 and never count as permission evidence.
 """
 import hashlib
-import http.client
 import importlib.util
 import json
 import os
@@ -24,9 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import share.broker_protocol as bp  # noqa: E402
-import share.broker_client as bc  # noqa: E402
-from share.broker_client import (BrokerClient,  # noqa: E402
-                                 LoopbackTcpBrokerTransport)
+from share.broker_client import BrokerClient  # noqa: E402
 from share.broker_host import (BrokerHostCoordinator,  # noqa: E402
                                InstanceRegistry, MaintenanceLeaseStore,
                                ReplayRegistry)

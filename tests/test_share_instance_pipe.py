@@ -12,8 +12,6 @@ import json
 import os
 import sys
 import tempfile
-import threading
-import time
 import unittest
 from pathlib import Path
 
@@ -21,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import share.broker_protocol as bp  # noqa: E402
 import share.instance_pipe as sip  # noqa: E402
 from _share_instance_double import FakeShareServer as ShareServer  # noqa: E402
 

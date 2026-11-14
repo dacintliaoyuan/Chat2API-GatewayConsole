@@ -186,12 +186,14 @@ def _call(base_url, method, path, token, body=None):
             try:
                 data = raw.decode("utf-8")
                 json.loads(data)
-            except Exception:
+            except (ValueError, RecursionError):
+                # The probe body is optional: an unreadable/malformed
+                # body is treated as empty, never as a protocol failure.
                 pass
         if response.status >= 400:
             try:
                 error = json.loads(data).get("error", data[:200])
-            except Exception:
+            except (ValueError, AttributeError, RecursionError):
                 error = data[:200]
             raise ApiError(response.status, error)
         return json.loads(data)
@@ -274,7 +276,7 @@ def main(argv=None) -> int:
     except ApiError as exc:
         print(f"ERROR {exc.status}: {exc}", file=sys.stderr)
         return 1
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — 管理面失败按可读错误上报
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0

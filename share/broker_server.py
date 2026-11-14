@@ -51,9 +51,6 @@ from share.broker_client import (UNIX_SOCKET_DIRECTORY_MODE,
                                  UNIX_SOCKET_FILE_MODE,
                                  unix_peer_credentials,
                                  validate_unix_socket_path)
-from share.broker_host import (BrokerDiag, BrokerHostCoordinator,
-                               InstanceRegistry, MaintenanceLeaseStore,
-                               ReplayRegistry)
 from share.broker_protocol import (DEFAULT_DEADLINE_SECONDS, MAX_MESSAGE,
                                    HOST_EVIDENCE_ACTION,
                                    HOST_STOP_ACTION, HOST_VERIFY_ACTION,

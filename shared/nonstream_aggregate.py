@@ -74,7 +74,6 @@ preserved instead of dropped.
 """
 
 import json
-import time
 from dataclasses import dataclass, field
 
 # The upstream's explicit-error message is bounded like the stream path's own

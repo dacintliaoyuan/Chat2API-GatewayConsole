@@ -655,14 +655,14 @@ class OperationManager:
         except OperationError as exc:
             self._finish_state(op_id, "failed", error={
                 "code": exc.code, "message": _single_line(exc.message)})
-        except Exception as exc:  # adapter bugs must not hang the pool silently
+        except Exception as exc:  # noqa: BLE001 — 适配器 bug 不得静默挂住操作池
             self._finish_state(op_id, "failed", error={
                 "code": "internal_error",
                 "message": _single_line("%s: %s" % (type(exc).__name__, exc))})
         finally:
             try:
                 lock.__exit__(None, None, None)
-            except Exception:
+            except Exception:  # noqa: BLE001 — 释放锁失败不得掩盖操作结果
                 pass
             with self._state_lock:
                 self._cancel_events.pop(op_id, None)

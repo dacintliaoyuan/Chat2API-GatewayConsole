@@ -2,7 +2,6 @@
 """Local stats environment: raw usage only (price loader retired with #30)."""
 
 import json
-import os
 import sys
 import tempfile
 import unittest
