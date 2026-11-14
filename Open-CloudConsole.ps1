@@ -624,7 +624,7 @@ function Invoke-CloudConsoleBootstrapProcess {
 }
 
 function Get-CloudConsoleBootstrapArgumentLine {
-    param([string]$ConfigPath, [string]$HostAlias, [string]$KnownHostsPath)
+    param([string]$ConfigPath, [string]$HostAlias, [string]$KnownHostsPath, [int]$Port)
     # The dedicated config already pins UserKnownHostsFile; pass the same path
     # as one unquoted -o value (Windows OpenSSH rejects the escaped-quote form
     # with "hostname contains invalid characters"). The preflight's effective
@@ -633,18 +633,18 @@ function Get-CloudConsoleBootstrapArgumentLine {
     $knownHosts = $KnownHostsPath.Replace('\', '/').Replace('"', '')
     return ('-T -F {0} -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes ' +
         '-o UserKnownHostsFile={1} -o ClearAllForwardings=yes -o ConnectTimeout=15 ' +
-        '{2} python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant.py --console-session') -f `
-        $quotedConfig, $knownHosts, $HostAlias
+        '{2} python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant.py --console http://127.0.0.1:{3} --console-session') -f `
+        $quotedConfig, $knownHosts, $HostAlias, $Port
 }
 
 function Get-CloudConsoleDisplayGrantArgumentLine {
-    param([string]$ConfigPath, [string]$HostAlias, [string]$KnownHostsPath)
+    param([string]$ConfigPath, [string]$HostAlias, [string]$KnownHostsPath, [int]$Port)
     $quotedConfig = '"' + $ConfigPath.Replace('"', '\"') + '"'
     $knownHosts = $KnownHostsPath.Replace('\', '/').Replace('"', '')
     return ('-T -F {0} -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes ' +
         '-o UserKnownHostsFile={1} -o ClearAllForwardings=yes -o ConnectTimeout=15 ' +
-        '{2} python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant.py') -f `
-        $quotedConfig, $knownHosts, $HostAlias
+        '{2} python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant.py --console http://127.0.0.1:{3}') -f `
+        $quotedConfig, $knownHosts, $HostAlias, $Port
 }
 
 function Open-CloudConsoleDisplayGrantPage {
@@ -652,7 +652,7 @@ function Open-CloudConsoleDisplayGrantPage {
     $failure = New-CloudResult 1 '授权' 'open.loginfailed' '登录窗口授权失败；请检查专用 SSH 连接与云端授权服务后重试。'
     try {
         $knownHosts = Get-CloudEffectiveValue -Effective $SshPreflight.Effective -Key 'userknownhostsfile'
-        $arguments = Get-CloudConsoleDisplayGrantArgumentLine -ConfigPath $ConfigPath -HostAlias $HostAlias -KnownHostsPath $knownHosts
+        $arguments = Get-CloudConsoleDisplayGrantArgumentLine -ConfigPath $ConfigPath -HostAlias $HostAlias -KnownHostsPath $knownHosts -Port $script:CloudConsolePort
         $response = & $Adapter.IssueConsoleBootstrap $SshPreflight.SshExe $arguments
         if ($null -eq $response -or (Get-CloudObjectProperty $response 'ExitCode') -ne 0) { return $failure }
         $relativeUrl = [string](Get-CloudObjectProperty $response 'Output')
@@ -671,7 +671,7 @@ function Open-CloudConsoleAuthenticatedPage {
     $failure = New-CloudResult 1 '授权' 'open.authorizationfailed' '云端控制台授权失败；请检查专用 SSH 连接与云端授权服务后重试。'
     try {
         $knownHosts = Get-CloudEffectiveValue -Effective $SshPreflight.Effective -Key 'userknownhostsfile'
-        $arguments = Get-CloudConsoleBootstrapArgumentLine -ConfigPath $ConfigPath -HostAlias $HostAlias -KnownHostsPath $knownHosts
+        $arguments = Get-CloudConsoleBootstrapArgumentLine -ConfigPath $ConfigPath -HostAlias $HostAlias -KnownHostsPath $knownHosts -Port $script:CloudConsolePort
         $response = & $Adapter.IssueConsoleBootstrap $SshPreflight.SshExe $arguments
         if ($null -eq $response -or (Get-CloudObjectProperty $response 'ExitCode') -ne 0) { return $failure }
         $relativeUrl = [string](Get-CloudObjectProperty $response 'Output')

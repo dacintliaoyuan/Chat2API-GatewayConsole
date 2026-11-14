@@ -12,7 +12,10 @@ Set-StrictMode -Version 3.0
 $root = Split-Path -Parent $PSScriptRoot
 $entry = Join-Path $root 'Open-CloudConsole.ps1'
 $bat = Join-Path $root 'Open-CloudConsole.bat'
-$projectRoot = Split-Path -Parent $root
+$projectRoot = $root
+while ($projectRoot -and -not (Test-Path -LiteralPath (Join-Path $projectRoot '.gitignore'))) {
+    $projectRoot = Split-Path -Parent $projectRoot
+}
 $gitignore = Join-Path $projectRoot '.gitignore'
 
 if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
@@ -293,6 +296,7 @@ Assert-Equal $script:CloudConsolePort 18096 'legacy override uses the explicit p
 Assert-Equal $script:CloudConsoleTargetPort 18096 'legacy override targets the same cloud port'
 Assert-Equal $script:CloudConsoleHealthUrl 'http://127.0.0.1:18096/health' 'legacy override health URL follows the port'
 Assert-Match (Get-CloudTunnelArgumentLine -ConfigPath 'C:\fake\config' -HostAlias 'um-share-ecs') '-L 127\.0\.0\.1:18096:127\.0\.0\.1:18096' 'legacy override forwards the explicit port'
+Assert-Match (Get-CloudConsoleDisplayGrantArgumentLine -ConfigPath 'C:\fake\config' -HostAlias 'um-share-ecs' -KnownHostsPath 'C:\fake\known_hosts' -Port $script:CloudConsolePort) 'issue-display-grant\.py --console http://127\.0\.0\.1:18096' 'legacy override passes the explicit port to the display grant helper'
 . $entry -Library
 Assert-Equal $script:CloudConsolePort 8096 'default port is restored to 8096'
 Assert-Equal $script:CloudConsoleHealthUrl 'http://127.0.0.1:8096/health' 'default health URL follows 8096'
@@ -1779,7 +1783,7 @@ foreach ($mode in @('New', 'Adopt', 'State', 'Locked')) {
     }
     Assert-True ($script:fake.BootstrapArgumentLine.Contains($script:fake.ConfigPath)) "$mode uses dedicated config"
     Assert-True ($script:fake.BootstrapArgumentLine.Contains($script:fake.KnownHostsPath.Replace('\', '/'))) "$mode uses dedicated known hosts"
-    Assert-Match $script:fake.BootstrapArgumentLine 'um-share-ecs python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant\.py --console-session$' "$mode uses fixed remote command"
+    Assert-Match $script:fake.BootstrapArgumentLine 'um-share-ecs python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant\.py --console http://127\.0\.0\.1:8096 --console-session$' "$mode uses fixed remote command"
     Assert-LogNotContains 'ConsoleBootstrap_0123456789|/display/grant' "$mode bootstrap stays out of logs"
     $stateText = if (Test-Path -LiteralPath $script:statePath) { Get-Content -Raw -Encoding UTF8 $script:statePath } else { '' }
     Assert-NotMatch $stateText 'ConsoleBootstrap_0123456789|/display/grant' "$mode bootstrap stays out of state"
