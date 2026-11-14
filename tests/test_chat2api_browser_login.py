@@ -873,6 +873,51 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertTrue(context.closed)
         self.assertEqual(stopped, [True])
 
+    def test_playwright_stop_failure_is_reported_as_cleanup_failure(self):
+        # ticket #42 item 7：playwright.stop() 失败与 ctx.close() 失败一样，
+        # 必须显式映射为 browser_cleanup_failed，并释放 profile 锁。
+        site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
+        context = _FakeContext(site)
+
+        class FakeManager:
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=lambda *args, **kwargs: context),
+                    stop=self._fail,
+                )
+
+            @staticmethod
+            def _fail():
+                raise RuntimeError("stop exploded")
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-profile-") as profile_dir:
+            with (
+                mock.patch.object(chat2api, "find_edge",
+                                  return_value="fake-edge"),
+                mock.patch("playwright.sync_api.sync_playwright",
+                           return_value=FakeManager()),
+                redirect_stdout(io.StringIO()),
+            ):
+                with self.assertRaises(chat2api.LoginCleanupFailed) as caught:
+                    chat2api.browser_login(
+                        BASE_URL, profile_dir, 1,
+                        credential_probe=lambda base_url, bearer:
+                        ("valid", None, 200),
+                        process_lister=lambda _profile: [],
+                        process_signal=lambda _pid, _sig: True,
+                    )
+        self.assertEqual(caught.exception.reason,
+                         "browser_cleanup_failed")
+        self.assertIn("stop exploded", str(caught.exception))
+        self.assertTrue(context.closed)
+        self.assertFalse(os.path.exists(profile_dir))
+        # stop 失败也必须释放 profile 单实例锁，下一轮才不会被误判 busy。
+        lock = chat2api._acquire_profile_login_lock(profile_dir)
+        self.assertIsNotNone(lock)
+        chat2api._release_profile_login_lock(lock)
+
     def test_launch_is_headless_and_reuses_the_given_profile(self):
         site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
         context = _FakeContext(site)
@@ -889,32 +934,35 @@ class SessionLifecycleTests(unittest.TestCase):
                 )
 
         with tempfile.TemporaryDirectory(
-                prefix="chat2api-login-display-") as tmp:
+                prefix="chat2api-login-profile-") as profile_dir:
             with (
                 mock.patch.object(chat2api, "find_edge",
                                   return_value="fake-edge"),
                 mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
-                                  os.path.join(tmp, "absent.env")),
+                                  os.path.join(profile_dir, "absent.env")),
                 mock.patch.dict(os.environ, {
                     chat2api.LOGIN_DISPLAY_FILE_ENV:
-                        os.path.join(tmp, "absent.env")}),
+                        os.path.join(profile_dir, "absent.env")}),
                 mock.patch("playwright.sync_api.sync_playwright",
                            return_value=FakeManager()),
                 redirect_stdout(io.StringIO()),
             ):
                 token = chat2api.browser_login(
-                    BASE_URL, "profile-dir", 1,
+                    BASE_URL, profile_dir, 1,
                     credential_probe=lambda base_url, bearer:
                     ("valid", None, 200),
                     process_lister=lambda _profile: [],
                     process_signal=lambda _pid, _sig: True,
                 )
 
+        # Ticket #42 item 2: the test owns a temporary profile, never a
+        # production directory; the fixture removes it on exit.
+        self.assertFalse(os.path.exists(profile_dir))
         self.assertEqual(token, "fresh-token")
         self.assertEqual(len(launches), 1)
         args, kwargs = launches[0]
         # 同一个 profile 目录交给持久化上下文，不再派生专用目录。
-        self.assertEqual(args, ("profile-dir",))
+        self.assertEqual(args, (profile_dir,))
         # 默认无窗口：真实启动参数必须是 headless，且不注入 display 环境。
         self.assertIs(kwargs.get("headless"), True)
         self.assertNotIn("env", kwargs)
@@ -943,30 +991,33 @@ class SessionLifecycleTests(unittest.TestCase):
             display_socket.write_text("", encoding="utf-8")
             marker = Path(tmp) / "login-display.env"
             _write_login_display(marker, auth, display_socket)
-            with (
-                mock.patch.object(chat2api, "find_edge",
-                                  return_value="fake-edge"),
-                mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
-                                  str(marker)),
-                mock.patch.dict(os.environ, {
-                    chat2api.LOGIN_DISPLAY_FILE_ENV: str(marker),
-                    "WAYLAND_DISPLAY": "wayland-0"}),
-                mock.patch("playwright.sync_api.sync_playwright",
-                           return_value=FakeManager()),
-                redirect_stdout(io.StringIO()),
-            ):
-                token = chat2api.browser_login(
-                    BASE_URL, "profile-dir", 1,
-                    credential_probe=lambda base_url, bearer:
-                    ("valid", None, 200),
-                    process_lister=lambda _profile: [],
-                    process_signal=lambda _pid, _sig: True,
-                )
+            with tempfile.TemporaryDirectory(
+                    prefix="chat2api-login-profile-") as profile_dir:
+                with (
+                    mock.patch.object(chat2api, "find_edge",
+                                      return_value="fake-edge"),
+                    mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
+                                      str(marker)),
+                    mock.patch.dict(os.environ, {
+                        chat2api.LOGIN_DISPLAY_FILE_ENV: str(marker),
+                        "WAYLAND_DISPLAY": "wayland-0"}),
+                    mock.patch("playwright.sync_api.sync_playwright",
+                               return_value=FakeManager()),
+                    redirect_stdout(io.StringIO()),
+                ):
+                    token = chat2api.browser_login(
+                        BASE_URL, profile_dir, 1,
+                        credential_probe=lambda base_url, bearer:
+                        ("valid", None, 200),
+                        process_lister=lambda _profile: [],
+                        process_signal=lambda _pid, _sig: True,
+                    )
 
+        self.assertFalse(os.path.exists(profile_dir))
         self.assertEqual(token, "fresh-token")
         self.assertEqual(len(launches), 1)
         args, kwargs = launches[0]
-        self.assertEqual(args, ("profile-dir",))
+        self.assertEqual(args, (profile_dir,))
         # 人工接管已拉起 display：新轮次必须在同一 profile 上开可见窗口。
         self.assertIs(kwargs.get("headless"), False)
         self.assertEqual(kwargs.get("args"), ["--start-maximized"])
@@ -1001,25 +1052,28 @@ class SessionLifecycleTests(unittest.TestCase):
             # 默认路径变成可见窗口。
             _write_login_display(
                 marker, auth, Path(tmp) / "missing-X99")
-            with (
-                mock.patch.object(chat2api, "find_edge",
-                                  return_value="fake-edge"),
-                mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
-                                  str(marker)),
-                mock.patch.dict(os.environ, {
-                    chat2api.LOGIN_DISPLAY_FILE_ENV: str(marker)}),
-                mock.patch("playwright.sync_api.sync_playwright",
-                           return_value=FakeManager()),
-                redirect_stdout(io.StringIO()),
-            ):
-                token = chat2api.browser_login(
-                    BASE_URL, "profile-dir", 1,
-                    credential_probe=lambda base_url, bearer:
-                    ("valid", None, 200),
-                    process_lister=lambda _profile: [],
-                    process_signal=lambda _pid, _sig: True,
-                )
+            with tempfile.TemporaryDirectory(
+                    prefix="chat2api-login-profile-") as profile_dir:
+                with (
+                    mock.patch.object(chat2api, "find_edge",
+                                      return_value="fake-edge"),
+                    mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
+                                      str(marker)),
+                    mock.patch.dict(os.environ, {
+                        chat2api.LOGIN_DISPLAY_FILE_ENV: str(marker)}),
+                    mock.patch("playwright.sync_api.sync_playwright",
+                               return_value=FakeManager()),
+                    redirect_stdout(io.StringIO()),
+                ):
+                    token = chat2api.browser_login(
+                        BASE_URL, profile_dir, 1,
+                        credential_probe=lambda base_url, bearer:
+                        ("valid", None, 200),
+                        process_lister=lambda _profile: [],
+                        process_signal=lambda _pid, _sig: True,
+                    )
 
+        self.assertFalse(os.path.exists(profile_dir))
         self.assertEqual(token, "fresh-token")
         self.assertEqual(len(launches), 1)
         _args, kwargs = launches[0]
@@ -1189,10 +1243,17 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertEqual([c.closed for c in harness.created], [True])
 
     def test_missing_edge_is_an_explicit_error(self):
-        with mock.patch.object(chat2api, "find_edge", return_value=None):
-            with self.assertRaises(RuntimeError) as ctx:
-                chat2api.browser_login(BASE_URL, "profile-dir", 1)
-        self.assertIn("Edge was not found", str(ctx.exception))
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-profile-") as profile_dir:
+            with mock.patch.object(chat2api, "find_edge",
+                                   return_value=None):
+                with self.assertRaises(RuntimeError) as ctx:
+                    chat2api.browser_login(BASE_URL, profile_dir, 1)
+            self.assertIn("Edge was not found", str(ctx.exception))
+
+        self.assertFalse(
+            os.path.exists(profile_dir),
+            "ticket #42：测试 profile 必须是临时目录并在退出后清理")
 
     def test_context_is_reported_and_released(self):
         site = _build_site()

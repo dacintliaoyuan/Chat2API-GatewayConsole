@@ -1266,6 +1266,32 @@ class TestCrossInstanceGate(unittest.TestCase):
         self.assertEqual(snapshot["authentication"]["state"], "failed")
         self.assertIsNone(snapshot["authentication"]["error"])
 
+    def test_health_primary_carries_only_reason_codes(self):
+        # ticket #42 item 10：/health 无控制令牌，primary 只带原因码/异常
+        # 类名；路径、页面内容或自由文本必须被丢弃。
+        proxy = self._local_proxy()
+        cases = (
+            ("timeout", "timeout"),
+            ("RuntimeError", "RuntimeError"),
+            ("manual_takeover_required:umpass_mfa_required",
+             "manual_takeover_required:umpass_mfa_required"),
+            (r"C:\Users\secret\page.html?code=ONE-TIME", None),
+            ("last page https://websso.um.edu.mo/?code=ONE-TIME", None),
+            ("browser_cleanup_failed: close exploded", None),
+        )
+        for primary, expected in cases:
+            with self.subTest(primary=primary):
+                with proxy._auth_condition:
+                    proxy._auth_state = "failed"
+                    proxy._auth_error = "browser_cleanup_failed"
+                    proxy._auth_failure_primary = primary
+                snapshot = proxy.health_snapshot()
+                self.assertEqual(
+                    snapshot["authentication"]["primary"], expected)
+                self.assertNotIn("secret", str(snapshot))
+                self.assertNotIn("ONE-TIME", str(snapshot))
+                self.assertNotIn("websso", str(snapshot))
+
     def test_same_pid_reacquire_is_idempotent(self):
         chat2api.acquire_reauth_slot(self.slot, pid=111, ttl_s=60, now=1000.0)
         granted, _reason, ledger = chat2api.acquire_reauth_slot(
@@ -1291,6 +1317,28 @@ class TestCrossInstanceGate(unittest.TestCase):
         # 调度等待该时刻而不是空转或提前开窗。
         self.assertEqual(ledger["next_allowed_epoch"],
                          base + chat2api.REAUTH_ATTEMPT_WINDOW_S)
+
+    def test_busy_refund_does_not_consume_the_global_attempt_cap(self):
+        # ticket #42 item 19：busy 会话没有打开浏览器，释放时必须退还
+        # 本次共享 ledger attempt，否则第 4 次 busy 会误报 global_attempt_cap。
+        cap = chat2api.REAUTH_MAX_ATTEMPTS_PER_WINDOW
+        base = time.time()
+        for index in range(cap + 1):
+            pid = 100 + index
+            granted, reason, _ledger = chat2api.acquire_reauth_slot(
+                self.slot, pid=pid, ttl_s=5, now=base + index)
+            self.assertTrue(granted, reason)
+            chat2api.release_reauth_slot(
+                self.slot, pid=pid, refund_attempt=True)
+            state, error = chat2api._read_reauth_slot(self.slot)
+            self.assertIsNone(error)
+            self.assertEqual(
+                state["attempts"], [],
+                "契约：busy 退还必须移除本次 attempt，不能占满共享窗口")
+
+        granted, reason, _ledger = chat2api.acquire_reauth_slot(
+            self.slot, pid=999, ttl_s=5, now=base + cap + 1)
+        self.assertTrue(granted, reason)
 
     def test_window_self_clears_so_the_cap_is_not_permanent(self):
         cap = chat2api.REAUTH_MAX_ATTEMPTS_PER_WINDOW

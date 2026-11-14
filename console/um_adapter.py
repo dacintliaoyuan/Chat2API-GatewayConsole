@@ -35,6 +35,7 @@ Pure stdlib plus the shared console error type; import has no side effects.
 """
 
 import json
+import math
 import os
 import time
 import urllib.error
@@ -160,11 +161,17 @@ def _coerce_number(value):
     """Normalize an optional response number to float|None.
 
     Booleans are not numbers here (``True`` must never become 1.0), and a
-    malformed/missing window field stays unknown instead of being folded to 0.
+    malformed/missing/non-finite window field stays unknown instead of being
+    folded to 0. Ticket #42: JSON accepts bare ``NaN``/``Infinity`` tokens but
+    neither is a known deadline; keeping one would make the console's own
+    ``json.dumps`` emit invalid JSON.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return number
 
 
 _RECOVERY_STATES = ("idle", "waiting", "running", "exhausted", "stopped")
@@ -190,12 +197,17 @@ def _recovery_summary(value):
             return None
         summary[key] = number
     next_attempt = value.get("next_attempt_epoch")
-    if isinstance(next_attempt, bool) or not isinstance(next_attempt, (int, float)):
+    if (isinstance(next_attempt, bool)
+            or not isinstance(next_attempt, (int, float))
+            or not math.isfinite(float(next_attempt))):
         summary["next_attempt_epoch"] = None
     else:
         summary["next_attempt_epoch"] = float(next_attempt)
     pause_reason = value.get("pause_reason")
     summary["pause_reason"] = _coerce_text(pause_reason)
+    # Ticket #42 item 16: a cleanup failure can mask the session outcome. The
+    # console read face keeps that primary reason alongside the cleanup error.
+    summary["primary"] = _coerce_text(value.get("primary"))
     return summary
 
 
@@ -222,19 +234,21 @@ def um_auth_status(target, params, ctx=None):
     }
 
 
-def _read_auth_status(base_url, token):
+def _read_auth_status(base_url, token, timeout=_TIMEOUT_S):
     """One GET /admin/auth/status read with an already-read token.
 
     Shared by the read action, the login orchestration and the console
     display-state read so all three use the same HTTP boundary and the same
     whitelist. Ticket #15 passes the login window through; malformed window
-    fields are unknown (None), never 0.
+    fields are unknown (None), never 0. Ticket #42 lets the login orchestration
+    keep its historical 5s poll timeout while the other callers keep the
+    adapter default, and passes the primary cleanup outcome through.
     """
     request = urllib.request.Request(
         base_url.rstrip("/") + "/admin/auth/status",
         headers={"X-Admin-Control": token})
     try:
-        with urllib.request.urlopen(request, timeout=_TIMEOUT_S) as resp:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
             status_code = resp.status
             raw = resp.read()
     except urllib.error.HTTPError as exc:
@@ -285,6 +299,9 @@ def _read_auth_status(base_url, token):
         "login_window_deadline_epoch": _coerce_number(
             payload.get("login_window_deadline_epoch")),
         "login_window_s": _coerce_number(payload.get("login_window_s")),
+        # Ticket #42 item 16: the console read face keeps the primary session
+        # outcome a terminal cleanup failure masked.
+        "primary": _coerce_text(payload.get("primary")),
         "checked_epoch": int(time.time()),
     }
 
