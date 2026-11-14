@@ -167,6 +167,7 @@ bash scripts/check.sh --full
 
 - 用 S1+S2 的 Rust 8100 替换 Python 8100；broker 以 Rust 入口启动它。
 - 更新 systemd/unit 与 `--host-command`、`--expect-instance-cmdline-marker`、`--expect-instance-image` 等部署事实；不双端口监听。
+- 修订 `CODING_STANDARDS.md` 的分享链规则：生产 8100 入口改为 Rust，旧 Python 入口只保留为回滚路径；同步 `AGENTS.md` 端口表与部署文档。
 - 账本、日志、token/profile 路径保持不变；Rust 不新增第二套数据目录。
 
 **依赖**：S1、S2、S3。
@@ -349,6 +350,7 @@ bash um-cloud-deploy/run-linux-checks.sh --mode full
 - 兼容窗口内，旧值 18096/5901 作为显式配置仍可启动；窗口结束后移除旧别名。Rust 不得同时监听新旧两个端口。
 - 非法值继续 fail closed；Rust 不静默回退默认端口。
 - 本计划不修改 `AGENTS.md` 端口表；#40 自己同步端口表、部署模板、测试与文档。
+- `CODING_STANDARDS.md` 的「生产 8100 只运行 `chat2api/chat2api.py`」由 S4 在切换时修订；#40 不修改这条规则。
 
 ## 9. 未验证范围
 
