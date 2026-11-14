@@ -20,6 +20,17 @@ web_run() {
   (cd web && "$@") || FAIL=1
 }
 
+# A fresh worktree starts without web/node_modules; the gates below need the
+# locked frontend dependencies. Install them once so a missing install fails here
+# with this message instead of MODULE_NOT_FOUND in every web gate.
+if [ ! -d web/node_modules ]; then
+  echo "== web: npm ci (node_modules missing)"
+  if ! (cd web && npm ci); then
+    echo "web dependencies could not be installed; run 'cd web && npm ci' and retry" >&2
+    exit 1
+  fi
+fi
+
 run python -m compileall -q chat2api . -x '(^|/)(node_modules|web/node_modules|\.git)/'
 run python -m ruff check .
 run python scripts/check_share_names.py
