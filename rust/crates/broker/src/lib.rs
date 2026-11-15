@@ -7,6 +7,7 @@
 //! (projection publish, Key lifecycle, host evidence) are implemented by the
 //! S3b slice behind [`management::ManagementHandler`].
 
+pub mod actions;
 pub mod codec;
 pub mod error;
 pub mod hmac;

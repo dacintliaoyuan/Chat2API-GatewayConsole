@@ -322,7 +322,7 @@ fn the_action_tables_match_the_fixture() {
     let fixture_management: Vec<String> = fixture.broker.management_actions.clone();
     let mut management: Vec<&str> = MANAGEMENT_ACTIONS
         .iter()
-        .map(|action| action.name)
+        .map(|action| action.name())
         .collect();
     management.sort_unstable();
     assert_eq!(management, fixture_management);

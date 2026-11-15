@@ -7,6 +7,7 @@
 
 use serde_json::{Map, Value};
 
+use crate::actions::{Action, InstanceAction, ManagementAction};
 use crate::error::{ProtocolError, ResultCode};
 use crate::hmac::verify_value;
 
@@ -21,17 +22,6 @@ pub const MAX_TERMINATE_KEYS: usize = 16;
 pub const MANAGEMENT_SIGNED_KEYS: [&str; 5] = ["v", "action", "request_id", "ts", "fields"];
 pub const INSTANCE_SIGNED_KEYS: [&str; 6] =
     ["v", "action", "request_id", "ts", "instance_id", "fields"];
-
-pub const TS_SERVICE_CONTROL_ACTION: &str = "ts-service-control";
-pub const HOST_VERIFY_ACTION: &str = "host-verify";
-pub const HOST_STOP_ACTION: &str = "host-stop";
-pub const HOST_REPAIR_LIMITS_ACTION: &str = "host-repair-limits";
-pub const MAINTENANCE_BEGIN_ACTION: &str = "maintenance-begin";
-pub const MAINTENANCE_END_ACTION: &str = "maintenance-end";
-pub const MAINTENANCE_STATUS_ACTION: &str = "maintenance-status";
-pub const GATEWAY_RESTART_ACTION: &str = "gateway-restart";
-pub const HOST_EVIDENCE_ACTION: &str = "host-evidence";
-pub const INSTANCE_RESUME_ACTION: &str = "resume";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldKind {
@@ -51,8 +41,14 @@ pub struct FieldSpec {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ActionSpec {
-    pub name: &'static str,
+    pub action: Action,
     pub fields: &'static [FieldSpec],
+}
+
+impl ActionSpec {
+    pub fn name(&self) -> &'static str {
+        self.action.as_str()
+    }
 }
 
 const fn field(name: &'static str, kind: FieldKind) -> FieldSpec {
@@ -75,11 +71,11 @@ const NONE: &[FieldSpec] = &[];
 
 pub const MANAGEMENT_ACTIONS: &[ActionSpec] = &[
     ActionSpec {
-        name: "status",
+        action: Action::Management(ManagementAction::Status),
         fields: NONE,
     },
     ActionSpec {
-        name: "publish",
+        action: Action::Management(ManagementAction::Publish),
         fields: &[
             field("generation", FieldKind::Int),
             field("fingerprint", FieldKind::Str),
@@ -88,71 +84,71 @@ pub const MANAGEMENT_ACTIONS: &[ActionSpec] = &[
         ],
     },
     ActionSpec {
-        name: "start",
+        action: Action::Management(ManagementAction::Start),
         fields: &[optional_field("explicit", FieldKind::Bool)],
     },
     ActionSpec {
-        name: "drain",
+        action: Action::Management(ManagementAction::Drain),
         fields: NONE,
     },
     ActionSpec {
-        name: "emergency-stop",
+        action: Action::Management(ManagementAction::EmergencyStop),
         fields: NONE,
     },
     ActionSpec {
-        name: TS_SERVICE_CONTROL_ACTION,
+        action: Action::Management(ManagementAction::TsServiceControl),
         fields: &[field("action", FieldKind::Str)],
     },
     ActionSpec {
-        name: HOST_VERIFY_ACTION,
+        action: Action::Management(ManagementAction::HostVerify),
         fields: &[field("check", FieldKind::Str)],
     },
     ActionSpec {
-        name: HOST_STOP_ACTION,
+        action: Action::Management(ManagementAction::HostStop),
         fields: NONE,
     },
     ActionSpec {
-        name: HOST_REPAIR_LIMITS_ACTION,
+        action: Action::Management(ManagementAction::HostRepairLimits),
         fields: NONE,
     },
     ActionSpec {
-        name: MAINTENANCE_BEGIN_ACTION,
+        action: Action::Management(ManagementAction::MaintenanceBegin),
         fields: &[
             field("component", FieldKind::Str),
             field("lease_s", FieldKind::Int),
         ],
     },
     ActionSpec {
-        name: MAINTENANCE_END_ACTION,
+        action: Action::Management(ManagementAction::MaintenanceEnd),
         fields: &[
             field("component", FieldKind::Str),
             field("lease_id", FieldKind::Str),
         ],
     },
     ActionSpec {
-        name: MAINTENANCE_STATUS_ACTION,
+        action: Action::Management(ManagementAction::MaintenanceStatus),
         fields: NONE,
     },
     ActionSpec {
-        name: GATEWAY_RESTART_ACTION,
+        action: Action::Management(ManagementAction::GatewayRestart),
         fields: &[
             field("component", FieldKind::Str),
             field("budget_s", FieldKind::Int),
         ],
     },
     ActionSpec {
-        name: HOST_EVIDENCE_ACTION,
+        action: Action::Management(ManagementAction::HostEvidence),
         fields: &[field("check", FieldKind::Str)],
     },
 ];
 
 pub const INSTANCE_ACTIONS: &[ActionSpec] = &[
     ActionSpec {
-        name: "instance-status",
+        action: Action::Instance(InstanceAction::InstanceStatus),
         fields: NONE,
     },
     ActionSpec {
-        name: "load",
+        action: Action::Instance(InstanceAction::Load),
         fields: &[
             field("generation", FieldKind::Int),
             field("fingerprint", FieldKind::Str),
@@ -160,15 +156,15 @@ pub const INSTANCE_ACTIONS: &[ActionSpec] = &[
         ],
     },
     ActionSpec {
-        name: "drain",
+        action: Action::Instance(InstanceAction::Drain),
         fields: NONE,
     },
     ActionSpec {
-        name: "emergency",
+        action: Action::Instance(InstanceAction::Emergency),
         fields: NONE,
     },
     ActionSpec {
-        name: INSTANCE_RESUME_ACTION,
+        action: Action::Instance(InstanceAction::Resume),
         fields: NONE,
     },
 ];
@@ -176,7 +172,7 @@ pub const INSTANCE_ACTIONS: &[ActionSpec] = &[
 /// One authenticated request after schema validation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidatedRequest {
-    pub action: String,
+    pub action: Action,
     pub request_id: String,
     pub instance_id: Option<String>,
     pub ts: i64,
@@ -229,13 +225,13 @@ fn validate_request(
     if map.get("v").and_then(Value::as_i64) != Some(SCHEMA_VERSION) {
         return Err(bad_request("unsupported protocol version"));
     }
-    let action = map
+    let action_name = map
         .get("action")
         .and_then(Value::as_str)
         .ok_or_else(|| bad_request("unknown action"))?;
     let spec = actions
         .iter()
-        .find(|candidate| candidate.name == action)
+        .find(|candidate| candidate.name() == action_name)
         .ok_or_else(|| bad_request("unknown action"))?;
     let ts = map
         .get("ts")
@@ -301,7 +297,7 @@ fn validate_request(
         normalized.insert(field.name.to_string(), value.clone());
     }
     Ok(ValidatedRequest {
-        action: action.to_string(),
+        action: spec.action,
         request_id: request_id.to_string(),
         instance_id,
         ts,
