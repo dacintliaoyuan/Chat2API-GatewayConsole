@@ -315,9 +315,9 @@ fn framing_from_headers(headers: &HashMap<String, String>) -> Framing {
     Framing::Identity { remaining }
 }
 
-fn read_head(
-    stream: &mut TcpStream,
-) -> Result<(u16, HashMap<String, String>, Vec<u8>), UpstreamFailure> {
+type ResponseHead = (u16, HashMap<String, String>, Vec<u8>);
+
+fn read_head(stream: &mut TcpStream) -> Result<ResponseHead, UpstreamFailure> {
     let mut raw = Vec::new();
     let mut byte = [0u8; 1];
     let header_end = loop {

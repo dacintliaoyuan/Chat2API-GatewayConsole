@@ -94,7 +94,7 @@ fn non_stream_json_is_relayed_unchanged() {
 fn sse_is_forwarded_with_python_event_bytes_and_headers() {
     let temp = TempDir::new("um-rust-chat-shape-");
     let stub = ChatStub::start();
-    let events = vec![
+    let events = [
         b"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n"
             .to_vec(),
         b"data: {\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\n"
@@ -164,7 +164,7 @@ fn sse_is_forwarded_with_python_event_bytes_and_headers() {
 fn a_chunked_upstream_sse_body_is_decoded_before_forwarding() {
     let temp = TempDir::new("um-rust-chat-shape-");
     let stub = ChatStub::start();
-    let events = vec![
+    let events = [
         b"data: {\"choices\":[{\"delta\":{\"content\":\"chunked\"},\"finish_reason\":null}]}\n\n"
             .to_vec(),
         b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n".to_vec(),

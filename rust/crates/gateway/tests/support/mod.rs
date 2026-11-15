@@ -1137,13 +1137,10 @@ impl StreamingClient {
             if Instant::now() >= deadline {
                 break;
             }
-            match self.read_some(Duration::from_millis(50))? {
-                Some(bytes) => {
-                    if bytes.is_empty() {
-                        break;
-                    }
+            if let Some(bytes) = self.read_some(Duration::from_millis(50))? {
+                if bytes.is_empty() {
+                    break;
                 }
-                None => {}
             }
         }
         Ok(std::mem::take(&mut self.buffer))

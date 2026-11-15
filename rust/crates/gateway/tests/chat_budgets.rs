@@ -9,7 +9,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 use support::{
     parse_raw_response, sse_payloads, start_chat_gateway, wait_until, ChatAttempt, ChatChunk,

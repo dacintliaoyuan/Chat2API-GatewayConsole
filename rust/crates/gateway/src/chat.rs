@@ -714,10 +714,8 @@ fn process_event(
         return EventAction::Stop(StreamStatus::Ok);
     }
     if substantive {
-        if !state.committed {
-            if !commit(stream, context, state) {
-                return EventAction::Stop(StreamStatus::ClientDisconnected);
-            }
+        if !state.committed && !commit(stream, context, state) {
+            return EventAction::Stop(StreamStatus::ClientDisconnected);
         }
         let _ = write_chunk(stream, &raw);
         return EventAction::Continue;
