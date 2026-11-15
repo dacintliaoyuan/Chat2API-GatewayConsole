@@ -55,7 +55,7 @@ impl FrameIo for MemoryIo {
         })
     }
 
-    fn write_frame(&mut self, frame: &[u8]) -> io::Result<()> {
+    fn write_frame(&mut self, frame: &[u8], _deadline: Instant) -> io::Result<()> {
         self.written.push(frame.to_vec());
         Ok(())
     }
@@ -252,5 +252,41 @@ fn a_deadline_without_a_frame_gets_no_reply() {
     let outcome = serve_management_cycle(&mut io, &dispatcher, SECRET, deadline, 100);
     assert_eq!(outcome.code(), Some(ResultCode::DeadlineExceeded));
     assert!(io.written.is_empty(), "no fabricated reply on a deadline");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn an_out_of_enum_verb_is_refused_before_the_handler() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let dispatcher = ManagementDispatcher::new(Box::new(RecordingHandler {
+        calls: calls.clone(),
+    }));
+    let body = signed_body(
+        "ts-service-control",
+        json!({"action": "restart"}),
+        "r-1",
+        100,
+    );
+    let (io, outcomes) = run(&dispatcher, vec![body], 100);
+    assert_eq!(outcomes[0].code(), Some(ResultCode::BadRequest));
+    assert_eq!(io.written_value(0)["error_code"], json!("bad_request"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn an_arbitrary_path_field_is_refused_before_the_handler() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let dispatcher = ManagementDispatcher::new(Box::new(RecordingHandler {
+        calls: calls.clone(),
+    }));
+    let body = signed_body(
+        "host-verify",
+        json!({"check": "running", "path": "/usr/bin/true"}),
+        "r-1",
+        100,
+    );
+    let (io, outcomes) = run(&dispatcher, vec![body], 100);
+    assert_eq!(outcomes[0].code(), Some(ResultCode::BadRequest));
+    assert_eq!(io.written_value(0)["error_code"], json!("bad_request"));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }

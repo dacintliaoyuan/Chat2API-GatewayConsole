@@ -10,8 +10,10 @@ use std::fs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use tempfile::TempDir;
+use um_broker::server::FrameIo;
 use um_broker::socket_policy::{SocketPolicyError, UNIX_SOCKET_DIRECTORY_MODE};
 use um_broker::transport::unix::{UnixConnection, UnixListener};
 
@@ -151,4 +153,39 @@ fn closing_never_unlinks_a_replacement_socket() {
     assert!(path.exists());
     drop(replacement);
     let _: PathBuf = path;
+}
+
+#[test]
+fn the_unix_connection_is_a_frame_io_adapter() {
+    fn assert_frame_io<T: FrameIo>() {}
+    assert_frame_io::<UnixConnection>();
+}
+
+#[test]
+fn peer_credentials_match_a_real_child_process() {
+    let dir = temp();
+    let path = dir.path().join("broker.sock");
+    let mut listener = UnixListener::bind(&path).expect("bind");
+    let mut child = Command::new("python3")
+        .arg("-c")
+        .arg(
+            "import socket, sys
+             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+             s.connect(sys.argv[1])
+             sys.stdin.read()
+",
+        )
+        .arg(&path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("spawn a real client child");
+    let connection = listener.accept().expect("accept");
+    let credentials = connection.peer_credentials().expect("peer credentials");
+    assert_eq!(credentials.pid, child.id() as i32);
+    assert_eq!(credentials.uid, unsafe { libc::getuid() });
+    assert_eq!(credentials.gid, unsafe { libc::getgid() });
+    drop(connection);
+    let _ = child.kill();
+    let _ = child.wait();
+    listener.close().expect("close");
 }

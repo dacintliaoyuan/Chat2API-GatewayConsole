@@ -159,6 +159,31 @@ pub const GATEWAY_RESTART_BUDGET_MAX_S: i64 = 180;
 pub const MAINTENANCE_LEASE_DEFAULT_S: i64 = 300;
 pub const GATEWAY_RESTART_BUDGET_DEFAULT_S: i64 = 120;
 
+/// Apply the action-specific field vocabulary BEFORE the handler runs. The
+/// generic schema only checks presence/types; this closes the enums the Python
+/// coordinator validates inside its action branches.
+pub fn validate_management_fields(
+    action: ManagementAction,
+    fields: &Map<String, Value>,
+) -> Result<Map<String, Value>, ProtocolError> {
+    match action {
+        ManagementAction::TsServiceControl => validate_ts_service_control_fields(fields),
+        ManagementAction::HostVerify => validate_host_verify_fields(fields),
+        ManagementAction::HostStop => validate_host_stop_fields(fields),
+        ManagementAction::HostRepairLimits => validate_host_repair_limits_fields(fields),
+        ManagementAction::MaintenanceBegin => validate_maintenance_begin_fields(fields),
+        ManagementAction::MaintenanceEnd => validate_maintenance_end_fields(fields),
+        ManagementAction::MaintenanceStatus => validate_maintenance_status_fields(fields),
+        ManagementAction::GatewayRestart => validate_gateway_restart_fields(fields),
+        ManagementAction::HostEvidence => validate_host_evidence_fields(fields),
+        ManagementAction::Status
+        | ManagementAction::Publish
+        | ManagementAction::Start
+        | ManagementAction::Drain
+        | ManagementAction::EmergencyStop => Ok(fields.clone()),
+    }
+}
+
 /// `ts-service-control` carries the fixed verb enum only: the service name is
 /// a broker-side protocol constant and can never cross the wire.
 pub fn validate_ts_service_control_fields(

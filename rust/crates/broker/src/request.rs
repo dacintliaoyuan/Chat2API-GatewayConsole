@@ -7,7 +7,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::actions::{Action, InstanceAction, ManagementAction};
+use crate::actions::{validate_management_fields, Action, InstanceAction, ManagementAction};
 use crate::error::{ProtocolError, ResultCode};
 use crate::hmac::verify_value;
 
@@ -295,6 +295,9 @@ fn validate_request(
         };
         validate_field(field, value)?;
         normalized.insert(field.name.to_string(), value.clone());
+    }
+    if let Action::Management(action) = spec.action {
+        normalized = validate_management_fields(action, &normalized)?;
     }
     Ok(ValidatedRequest {
         action: spec.action,

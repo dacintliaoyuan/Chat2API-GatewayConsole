@@ -25,6 +25,10 @@ pub const MAX_CLIENT_TIMEOUT_SECONDS: f64 = 180.0;
 pub trait ByteSource {
     /// `Ok(None)` is EOF; an `Err` is an I/O failure (never a frame).
     fn read_byte(&mut self) -> io::Result<Option<u8>>;
+
+    /// Apply the remaining exchange time to the blocking read itself, so a
+    /// drip cannot park inside one recv beyond the deadline.
+    fn set_read_deadline(&mut self, _remaining: Duration) {}
 }
 
 impl<R: std::io::Read> ByteSource for std::io::Bytes<R> {
@@ -85,17 +89,22 @@ where
 {
     let mut chunks = Vec::new();
     loop {
-        if now() >= deadline {
+        let current = now();
+        if current >= deadline {
             return Err(ProtocolError::new(
                 ResultCode::DeadlineExceeded,
                 "request deadline exceeded",
             ));
         }
-        let byte = source.read_byte().map_err(|error| {
-            ProtocolError::new(
+        source.set_read_deadline(deadline.saturating_duration_since(current));
+        let byte = source.read_byte().map_err(|error| match error.kind() {
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => {
+                ProtocolError::new(ResultCode::DeadlineExceeded, "request deadline exceeded")
+            }
+            _ => ProtocolError::new(
                 ResultCode::BadRequest,
                 format!("frame read failed: {}", error.kind() as u8),
-            )
+            ),
         })?;
         match byte {
             None => {

@@ -1,7 +1,8 @@
-# Rust workspace（S0 骨架）
+# Rust workspace（S0 骨架 + S3a broker 控制通道）
 
-本目录是 Rust 重写的 workspace 根。S0 只建立工程骨架、HTTP 测试 harness 与
-临时数据目录，不实现任何生产端点，也不切换生产端口。
+本目录是 Rust 重写的 workspace 根。S0 建立工程骨架、HTTP 测试 harness 与
+临时数据目录；S3a 增加 broker 控制通道的协议内核与 POSIX AF_UNIX 适配器。
+本目录不切换任何生产端口。
 
 ## 结构
 
@@ -9,6 +10,7 @@
 rust/
 ├── Cargo.toml                 workspace 根
 └── crates/
+    ├── broker/                S3a broker 控制通道（帧、HMAC、replay、action、AF_UNIX 策略）
     ├── contract/              只读契约夹具的类型与加载器
     └── test-harness/          临时 loopback HTTP server、临时数据目录
 ```
@@ -18,16 +20,28 @@ rust/
 当前 Python 常量生成。Rust 测试只反序列化该夹具，不手写端点、错误码、
 SSE 事件名或超时预算。
 
+`tests/fixtures/rust_broker_wire_rev1.json` 由
+`tests/generate_rust_broker_fixture.py` 从 `share/broker_protocol.py` 生成；
+Rust broker 测试只反序列化该夹具里的 canonical JSON、帧与 HMAC 向量，不用自己的
+序列化器生成期望值。
+
 后续切片（S1–S8）在 `crates/` 下增加实现 crate，并复用本目录的 harness。
-验收记录见 [docs/rust-s0-acceptance.md](../docs/rust-s0-acceptance.md)。
+验收记录见 [docs/rust-s0-acceptance.md](../docs/rust-s0-acceptance.md) 与
+[docs/rust-s3a-acceptance.md](../docs/rust-s3a-acceptance.md)。
 
 ## 命令
 
 ```bash
 python tests/generate_rust_contract_fixture.py
+python tests/generate_rust_broker_fixture.py
 cargo test --manifest-path rust/Cargo.toml
 bash scripts/check-rust-s0.sh
+bash scripts/check-rust-broker.sh
 ```
+
+`cargo check --manifest-path rust/Cargo.toml -p um-broker --target \
+aarch64-linux-android --tests` 只做 `cfg(unix)` 代码的类型检查；AF_UNIX、
+`SO_PEERCRED` 与真实权限位测试需要在 Linux/WSL 上运行。
 
 ## 边界
 
@@ -38,3 +52,5 @@ bash scripts/check-rust-s0.sh
   `output/`、`/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share`。
 - 本目录不监听 `AGENTS.md` 端口表里的生产端口，也不启动 `chat2api.py`、
   broker 或 display relay。
+- `um-broker` 不 spawn 进程、不执行 shell、不接受任意路径/服务名；动作由固定
+  `Action` 枚举承载，字段由固定白名单校验。

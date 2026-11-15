@@ -8,13 +8,16 @@
 
 use std::fs;
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use crate::budget::{read_bounded_line, ByteSource};
+use crate::error::ProtocolError;
 use crate::peer::PeerCredentials;
+use crate::server::FrameIo;
 use crate::socket_policy::{
     plan_bind_endpoint, plan_connect_endpoint, plan_private_directory, validate_unix_socket_path,
     DirectoryFacts, DirectoryPlan, EndpointFacts, EndpointLiveness, EndpointPlan,
@@ -39,18 +42,27 @@ impl UnixListener {
         })?;
         ensure_private_directory(parent)?;
         reclaim_stale_socket(&path)?;
-        let listener = StdUnixListener::bind(&path).map_err(io_error)?;
-        let bound = fs::symlink_metadata(&path).map_err(io_error)?;
-        let mode = bound.mode() & 0o777;
-        if !bound.file_type().is_socket() || mode != UNIX_SOCKET_FILE_MODE {
-            drop(listener);
-            let _ = fs::remove_file(&path);
-            return Err(SocketPolicyError::AccessDenied(format!(
-                "unix socket file must be 0600: {}",
-                path.display()
-            )));
-        }
-        let identity = (bound.dev(), bound.ino());
+        let bound = (|| -> Result<(StdUnixListener, (u64, u64)), SocketPolicyError> {
+            let listener = StdUnixListener::bind(&path).map_err(io_error)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(UNIX_SOCKET_FILE_MODE))
+                .map_err(io_error)?;
+            let bound = fs::symlink_metadata(&path).map_err(io_error)?;
+            let mode = bound.mode() & 0o777;
+            if !bound.file_type().is_socket() || mode != UNIX_SOCKET_FILE_MODE {
+                return Err(SocketPolicyError::AccessDenied(format!(
+                    "unix socket file must be 0600: {}",
+                    path.display()
+                )));
+            }
+            Ok((listener, (bound.dev(), bound.ino())))
+        })();
+        let (listener, identity) = match bound {
+            Ok(bound) => bound,
+            Err(error) => {
+                let _ = fs::remove_file(&path);
+                return Err(error);
+            }
+        };
         Ok(Self {
             listener,
             path,
@@ -184,6 +196,40 @@ impl UnixConnection {
     }
 }
 
+impl ByteSource for UnixConnection {
+    fn read_byte(&mut self) -> io::Result<Option<u8>> {
+        let mut buffer = [0u8; 1];
+        match io::Read::read(self, &mut buffer)? {
+            0 => Ok(None),
+            _ => Ok(Some(buffer[0])),
+        }
+    }
+
+    fn set_read_deadline(&mut self, remaining: Duration) {
+        let remaining = remaining.max(Duration::from_millis(1));
+        let _ = self.stream.set_read_timeout(Some(remaining));
+    }
+}
+
+impl FrameIo for UnixConnection {
+    fn read_frame(&mut self, deadline: Instant) -> Result<Vec<u8>, ProtocolError> {
+        read_bounded_line(self, deadline, Instant::now)
+    }
+
+    fn write_frame(&mut self, frame: &[u8], deadline: Instant) -> io::Result<()> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "reply deadline exceeded",
+            ));
+        }
+        self.stream
+            .set_write_timeout(Some(remaining.max(Duration::from_millis(1))))?;
+        io::Write::write_all(self, frame)
+    }
+}
+
 impl io::Read for UnixConnection {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         io::Read::read(&mut self.stream, buffer)
@@ -304,6 +350,7 @@ fn probe_liveness(path: &Path) -> EndpointLiveness {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn peer_credentials(fd: RawFd) -> Option<PeerCredentials> {
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
     let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
@@ -327,6 +374,11 @@ fn peer_credentials(fd: RawFd) -> Option<PeerCredentials> {
         uid: credentials.uid,
         gid: credentials.gid,
     })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn peer_credentials(_fd: RawFd) -> Option<PeerCredentials> {
+    None
 }
 
 fn io_error(error: io::Error) -> SocketPolicyError {

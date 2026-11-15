@@ -16,7 +16,7 @@ use crate::management::{rejection_frame, ManagementDispatcher};
 /// use an in-memory connection.
 pub trait FrameIo {
     fn read_frame(&mut self, deadline: Instant) -> Result<Vec<u8>, ProtocolError>;
-    fn write_frame(&mut self, frame: &[u8]) -> io::Result<()>;
+    fn write_frame(&mut self, frame: &[u8], deadline: Instant) -> io::Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,7 +61,7 @@ pub fn serve_management_cycle(
                 // The frame has no request_id association: answer explicitly
                 // before the connection is released, never dispatch.
                 let reply = rejection_frame(None, &error);
-                write_reply(io, &reply);
+                write_reply(io, &reply, deadline);
             }
             return CycleOutcome::NoReply {
                 error: error.code(),
@@ -72,7 +72,7 @@ pub fn serve_management_cycle(
         Ok(body) => body,
         Err(error) => {
             let reply = rejection_frame(None, &error);
-            write_reply(io, &reply);
+            write_reply(io, &reply, deadline);
             return CycleOutcome::NoReply {
                 error: error.code(),
             };
@@ -82,7 +82,7 @@ pub fn serve_management_cycle(
     let request_id = reply.request_id().map(str::to_string);
     let result = reply.result().error_code();
     let value = reply.to_value();
-    if !write_reply(io, &value) {
+    if !write_reply(io, &value, deadline) {
         return CycleOutcome::NoReply {
             error: ResultCode::InternalError,
         };
@@ -90,9 +90,9 @@ pub fn serve_management_cycle(
     CycleOutcome::Replied { request_id, result }
 }
 
-fn write_reply(io: &mut dyn FrameIo, value: &serde_json::Value) -> bool {
+fn write_reply(io: &mut dyn FrameIo, value: &serde_json::Value, deadline: Instant) -> bool {
     let Ok(frame) = encode_frame(value) else {
         return false;
     };
-    io.write_frame(&frame).is_ok()
+    io.write_frame(&frame, deadline).is_ok()
 }
