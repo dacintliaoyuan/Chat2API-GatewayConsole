@@ -6,6 +6,7 @@
 //! translation. The image-bearing tool-result branch uses the Anthropic Messages
 //! upstream exactly like Python.
 
+use std::collections::BTreeMap;
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
@@ -1763,18 +1764,833 @@ fn unix_seconds() -> i64 {
 }
 
 // The stream translator is added by acceptance 2.
-struct ResponsesStreamTranslator;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamMode {
+    Chat,
+    Messages,
+}
+
+struct ToolSlot {
+    id: String,
+    call_id: String,
+    name: String,
+    arguments: String,
+    sent: usize,
+    added: bool,
+    output_index: Option<usize>,
+}
+
+enum BlockSlot {
+    Text {
+        id: String,
+        output_index: usize,
+        text: String,
+        done: bool,
+    },
+    Tool {
+        id: String,
+        call_id: String,
+        name: String,
+        arguments: String,
+        output_index: usize,
+        done: bool,
+    },
+}
+
+/// Translates one upstream SSE stream into Responses events.
+pub struct ResponsesStreamTranslator {
+    model: String,
+    response_id: String,
+    created_at: i64,
+    mode: StreamMode,
+    message_id: String,
+    text: String,
+    message_added: bool,
+    message_index: Option<usize>,
+    next_index: usize,
+    tool_calls: BTreeMap<i64, ToolSlot>,
+    blocks: BTreeMap<i64, Option<BlockSlot>>,
+    output_items: BTreeMap<usize, Value>,
+    usage: Value,
+    done_seen: bool,
+    finish_reason: Option<String>,
+    stop_reason: Option<String>,
+    saw_message_stop: bool,
+    event_name: Option<String>,
+    terminal: bool,
+}
 
 impl ResponsesStreamTranslator {
-    fn new(_model: String, _response_id: String, _created_at: i64, _via_messages: bool) -> Self {
-        Self
+    pub fn new(model: String, response_id: String, created_at: i64, via_messages: bool) -> Self {
+        Self {
+            model,
+            response_id,
+            created_at,
+            mode: if via_messages {
+                StreamMode::Messages
+            } else {
+                StreamMode::Chat
+            },
+            message_id: format!("msg_{}", random_hex(12)),
+            text: String::new(),
+            message_added: false,
+            message_index: None,
+            next_index: 0,
+            tool_calls: BTreeMap::new(),
+            blocks: BTreeMap::new(),
+            output_items: BTreeMap::new(),
+            usage: Value::Object(Map::new()),
+            done_seen: false,
+            finish_reason: None,
+            stop_reason: None,
+            saw_message_stop: false,
+            event_name: None,
+            terminal: false,
+        }
     }
 
-    fn feed_line(&mut self, _line: &str) -> Vec<(String, Value)> {
-        Vec::new()
+    /// Feed one SSE line (without its trailing newline).
+    pub fn feed_line(&mut self, line: &str) -> Vec<(String, Value)> {
+        if self.terminal {
+            return Vec::new();
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            return Vec::new();
+        }
+        match self.mode {
+            StreamMode::Chat => self.feed_chat_line(line),
+            StreamMode::Messages => self.feed_messages_line(line),
+        }
     }
 
-    fn finish(&mut self) -> Vec<(String, Value)> {
-        Vec::new()
+    /// Finish the stream at EOF.
+    pub fn finish(&mut self) -> Vec<(String, Value)> {
+        if self.terminal {
+            return Vec::new();
+        }
+        match self.mode {
+            StreamMode::Chat => self.finish_chat(),
+            StreamMode::Messages => self.finish_messages(),
+        }
+    }
+
+    fn failed(&mut self, code: &str, message: &str) -> Vec<(String, Value)> {
+        self.terminal = true;
+        vec![(
+            "response.failed".to_string(),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": self.response_id,
+                    "object": "response",
+                    "created_at": self.created_at,
+                    "status": "failed",
+                    "model": self.model,
+                    "output": [],
+                    "error": {"code": code, "message": message},
+                },
+            }),
+        )]
+    }
+
+    fn feed_chat_line(&mut self, line: &str) -> Vec<(String, Value)> {
+        let Some(value) = line.strip_prefix("data:") else {
+            return Vec::new();
+        };
+        let value = value.trim();
+        if value == "[DONE]" {
+            self.done_seen = true;
+            return self.finish_chat();
+        }
+        let Ok(chunk) = serde_json::from_str::<Value>(value) else {
+            return Vec::new();
+        };
+        let Some(chunk) = chunk.as_object() else {
+            return Vec::new();
+        };
+        if chunk.get("error").is_some_and(truthy) {
+            return self.failed("upstream_error", "upstream stream failed");
+        }
+        if let Some(usage) = chunk.get("usage").and_then(Value::as_object) {
+            self.usage = Value::Object(usage.clone());
+        }
+        let mut events = Vec::new();
+        if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
+            for choice in choices {
+                let Some(choice) = choice.as_object() else {
+                    continue;
+                };
+                if let Some(finish) = choice.get("finish_reason").and_then(Value::as_str) {
+                    self.finish_reason = Some(finish.to_string());
+                }
+                let Some(delta) = choice.get("delta").and_then(Value::as_object) else {
+                    continue;
+                };
+                let piece = responses_text(delta.get("content"));
+                if !piece.is_empty() {
+                    if !self.message_added {
+                        self.message_added = true;
+                        self.message_index = Some(self.next_index);
+                        self.next_index += 1;
+                        events.push((
+                            "response.output_item.added".to_string(),
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": self.message_index,
+                                "item": {
+                                    "type": "message",
+                                    "id": self.message_id,
+                                    "status": "in_progress",
+                                    "role": "assistant",
+                                    "content": [],
+                                },
+                            }),
+                        ));
+                    }
+                    self.text.push_str(&piece);
+                    events.push((
+                        "response.output_text.delta".to_string(),
+                        json!({
+                            "type": "response.output_text.delta",
+                            "item_id": self.message_id,
+                            "output_index": self.message_index,
+                            "content_index": 0,
+                            "delta": piece,
+                        }),
+                    ));
+                }
+                let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) else {
+                    continue;
+                };
+                for call in tool_calls {
+                    let Some(call) = call.as_object() else {
+                        continue;
+                    };
+                    let index = call
+                        .get("index")
+                        .and_then(Value::as_i64)
+                        .filter(|index| *index >= 0)
+                        .unwrap_or(0);
+                    let slot = self.tool_calls.entry(index).or_insert_with(|| ToolSlot {
+                        id: format!("fc_{}", random_hex(12)),
+                        call_id: String::new(),
+                        name: String::new(),
+                        arguments: String::new(),
+                        sent: 0,
+                        added: false,
+                        output_index: None,
+                    });
+                    if let Some(call_id) = call.get("id").and_then(Value::as_str) {
+                        if !call_id.is_empty() {
+                            slot.call_id = call_id.to_string();
+                        }
+                    }
+                    let Some(function) = call.get("function").and_then(Value::as_object) else {
+                        continue;
+                    };
+                    if let Some(name) = function
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .filter(|name| !name.is_empty())
+                    {
+                        slot.name = name.to_string();
+                    }
+                    let Some(arguments) = function.get("arguments").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if arguments.is_empty() {
+                        continue;
+                    }
+                    slot.arguments.push_str(arguments);
+                    if slot.name.is_empty() {
+                        continue;
+                    }
+                    if !slot.added {
+                        slot.added = true;
+                        slot.output_index = Some(self.next_index);
+                        self.next_index += 1;
+                        events.push((
+                            "response.output_item.added".to_string(),
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": slot.output_index,
+                                "item": {
+                                    "type": "function_call",
+                                    "id": slot.id,
+                                    "call_id": if slot.call_id.is_empty() {
+                                        slot.id.clone()
+                                    } else {
+                                        slot.call_id.clone()
+                                    },
+                                    "name": slot.name,
+                                    "arguments": "",
+                                    "status": "in_progress",
+                                },
+                            }),
+                        ));
+                    }
+                    let pending = slot.arguments[slot.sent..].to_string();
+                    slot.sent = slot.arguments.len();
+                    if !pending.is_empty() {
+                        events.push((
+                            "response.function_call_arguments.delta".to_string(),
+                            json!({
+                                "type": "response.function_call_arguments.delta",
+                                "item_id": slot.id,
+                                "output_index": slot.output_index,
+                                "delta": pending,
+                            }),
+                        ));
+                    }
+                }
+            }
+        }
+        events
+    }
+
+    fn finish_chat(&mut self) -> Vec<(String, Value)> {
+        let mut events = Vec::new();
+        if !self.done_seen {
+            events.extend(self.failed(
+                "upstream_eof_without_done",
+                "upstream stream ended without [DONE]",
+            ));
+            return events;
+        }
+        if self.message_added {
+            let Some(index) = self.message_index else {
+                return events;
+            };
+            let item = json!({
+                "type": "message",
+                "id": self.message_id,
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": self.text,
+                              "annotations": []}],
+            });
+            self.output_items.insert(index, item.clone());
+            events.push((
+                "response.output_item.done".to_string(),
+                json!({
+                    "type": "response.output_item.done",
+                    "output_index": index,
+                    "item": item,
+                }),
+            ));
+        }
+        let indices: Vec<i64> = self.tool_calls.keys().copied().collect();
+        for index in indices {
+            let slot = self.tool_calls.get_mut(&index).expect("tool slot");
+            if slot.name.is_empty() {
+                continue;
+            }
+            if !slot.added {
+                slot.added = true;
+                slot.output_index = Some(self.next_index);
+                self.next_index += 1;
+                events.push((
+                    "response.output_item.added".to_string(),
+                    json!({
+                        "type": "response.output_item.added",
+                        "output_index": slot.output_index,
+                        "item": {
+                            "type": "function_call",
+                            "id": slot.id,
+                            "call_id": if slot.call_id.is_empty() {
+                                slot.id.clone()
+                            } else {
+                                slot.call_id.clone()
+                            },
+                            "name": slot.name,
+                            "arguments": "",
+                            "status": "in_progress",
+                        },
+                    }),
+                ));
+            }
+            let item = json!({
+                "type": "function_call",
+                "id": slot.id,
+                "call_id": if slot.call_id.is_empty() {
+                    slot.id.clone()
+                } else {
+                    slot.call_id.clone()
+                },
+                "name": slot.name,
+                "arguments": slot.arguments,
+                "status": "completed",
+            });
+            if let Some(output_index) = slot.output_index {
+                self.output_items.insert(output_index, item.clone());
+                events.push((
+                    "response.output_item.done".to_string(),
+                    json!({
+                        "type": "response.output_item.done",
+                        "output_index": output_index,
+                        "item": item,
+                    }),
+                ));
+            }
+        }
+        let (status, incomplete) = match self.finish_reason.as_deref() {
+            Some("length") => ("incomplete", Some(json!({"reason": "max_output_tokens"}))),
+            Some("content_filter") => ("incomplete", Some(json!({"reason": "content_filter"}))),
+            _ => ("completed", None),
+        };
+        let ordered: Vec<Value> = self.output_items.values().cloned().collect();
+        let name = if incomplete.is_some() {
+            "response.incomplete"
+        } else {
+            "response.completed"
+        };
+        let mut response = json!({
+            "id": self.response_id,
+            "object": "response",
+            "created_at": self.created_at,
+            "status": status,
+            "model": self.model,
+            "output": ordered,
+            "usage": chat_usage(Some(&self.usage)),
+        });
+        if let Some(incomplete) = incomplete {
+            response["incomplete_details"] = incomplete;
+        }
+        self.terminal = true;
+        events.push((
+            name.to_string(),
+            json!({"type": name, "response": response}),
+        ));
+        events
+    }
+
+    fn feed_messages_line(&mut self, line: &str) -> Vec<(String, Value)> {
+        if let Some(name) = line.strip_prefix("event:") {
+            self.event_name = Some(name.trim().to_string());
+            return Vec::new();
+        }
+        let Some(value) = line.strip_prefix("data:") else {
+            return Vec::new();
+        };
+        let value = value.trim();
+        if value == "[DONE]" {
+            return Vec::new();
+        }
+        let Ok(event) = serde_json::from_str::<Value>(value) else {
+            return Vec::new();
+        };
+        let Some(event) = event.as_object() else {
+            return Vec::new();
+        };
+        let kind = event
+            .get("type")
+            .and_then(Value::as_str)
+            .or(self.event_name.as_deref())
+            .map(str::to_string);
+        self.event_name = None;
+        let Some(kind) = kind else {
+            return Vec::new();
+        };
+        match kind.as_str() {
+            "message_start" => {
+                if let Some(message) = event.get("message").and_then(Value::as_object) {
+                    self.merge_messages_usage(message.get("usage"));
+                }
+                Vec::new()
+            }
+            "content_block_start" => {
+                let Some(index) = event.get("index").and_then(Value::as_i64) else {
+                    return Vec::new();
+                };
+                let Some(block) = event.get("content_block").and_then(Value::as_object) else {
+                    return Vec::new();
+                };
+                let mut events = Vec::new();
+                let slot = match block.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        let item = json!({
+                            "type": "message",
+                            "id": format!("msg_{}", random_hex(12)),
+                            "status": "in_progress",
+                            "role": "assistant",
+                            "content": [],
+                        });
+                        let output_index = self.next_index;
+                        self.next_index += 1;
+                        events.push((
+                            "response.output_item.added".to_string(),
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": output_index,
+                                "item": item,
+                            }),
+                        ));
+                        BlockSlot::Text {
+                            id: item["id"].as_str().unwrap_or_default().to_string(),
+                            output_index,
+                            text: String::new(),
+                            done: false,
+                        }
+                    }
+                    Some("tool_use") => {
+                        let Some(name) = block
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .filter(|name| !name.is_empty())
+                        else {
+                            self.blocks.insert(index, None);
+                            return events;
+                        };
+                        let call_id = block
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("call_{}", random_hex(12)));
+                        let id = format!("fc_{}", random_hex(12));
+                        let output_index = self.next_index;
+                        self.next_index += 1;
+                        events.push((
+                            "response.output_item.added".to_string(),
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": output_index,
+                                "item": {
+                                    "type": "function_call",
+                                    "id": id,
+                                    "call_id": call_id,
+                                    "name": name,
+                                    "arguments": "",
+                                    "status": "in_progress",
+                                },
+                            }),
+                        ));
+                        BlockSlot::Tool {
+                            id,
+                            call_id,
+                            name: name.to_string(),
+                            arguments: String::new(),
+                            output_index,
+                            done: false,
+                        }
+                    }
+                    _ => {
+                        self.blocks.insert(index, None);
+                        return events;
+                    }
+                };
+                self.blocks.insert(index, Some(slot));
+                let Some(Some(slot)) = self.blocks.get_mut(&index) else {
+                    return events;
+                };
+                match slot {
+                    BlockSlot::Text {
+                        id,
+                        output_index,
+                        text,
+                        ..
+                    } => {
+                        if let Some(piece) = block
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .filter(|piece| !piece.is_empty())
+                        {
+                            text.push_str(piece);
+                            events.push((
+                                "response.output_text.delta".to_string(),
+                                json!({
+                                    "type": "response.output_text.delta",
+                                    "item_id": id,
+                                    "output_index": output_index,
+                                    "content_index": 0,
+                                    "delta": piece,
+                                }),
+                            ));
+                        }
+                    }
+                    BlockSlot::Tool {
+                        id,
+                        output_index,
+                        arguments,
+                        ..
+                    } => {
+                        if let Some(input) = block.get("input").and_then(Value::as_object) {
+                            if !input.is_empty() {
+                                let piece = python_json_dumps(&Value::Object(input.clone()));
+                                arguments.push_str(&piece);
+                                events.push((
+                                    "response.function_call_arguments.delta".to_string(),
+                                    json!({
+                                        "type": "response.function_call_arguments.delta",
+                                        "item_id": id,
+                                        "output_index": output_index,
+                                        "delta": piece,
+                                    }),
+                                ));
+                            }
+                        }
+                    }
+                }
+                events
+            }
+            "content_block_delta" => {
+                let Some(index) = event.get("index").and_then(Value::as_i64) else {
+                    return Vec::new();
+                };
+                let Some(Some(slot)) = self.blocks.get_mut(&index) else {
+                    return Vec::new();
+                };
+                let Some(delta) = event.get("delta").and_then(Value::as_object) else {
+                    return Vec::new();
+                };
+                match (delta.get("type").and_then(Value::as_str), slot) {
+                    (
+                        Some("text_delta"),
+                        BlockSlot::Text {
+                            id,
+                            output_index,
+                            text,
+                            ..
+                        },
+                    ) => {
+                        let Some(piece) = delta
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .filter(|piece| !piece.is_empty())
+                        else {
+                            return Vec::new();
+                        };
+                        text.push_str(piece);
+                        vec![(
+                            "response.output_text.delta".to_string(),
+                            json!({
+                                "type": "response.output_text.delta",
+                                "item_id": id,
+                                "output_index": output_index,
+                                "content_index": 0,
+                                "delta": piece,
+                            }),
+                        )]
+                    }
+                    (
+                        Some("input_json_delta"),
+                        BlockSlot::Tool {
+                            id,
+                            output_index,
+                            arguments,
+                            ..
+                        },
+                    ) => {
+                        let Some(piece) = delta
+                            .get("partial_json")
+                            .and_then(Value::as_str)
+                            .filter(|piece| !piece.is_empty())
+                        else {
+                            return Vec::new();
+                        };
+                        arguments.push_str(piece);
+                        vec![(
+                            "response.function_call_arguments.delta".to_string(),
+                            json!({
+                                "type": "response.function_call_arguments.delta",
+                                "item_id": id,
+                                "output_index": output_index,
+                                "delta": piece,
+                            }),
+                        )]
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            "content_block_stop" => {
+                let Some(index) = event.get("index").and_then(Value::as_i64) else {
+                    return Vec::new();
+                };
+                self.done_event(index).into_iter().collect()
+            }
+            "message_delta" => {
+                if let Some(stop_reason) = event
+                    .get("delta")
+                    .and_then(|delta| delta.get("stop_reason"))
+                    .and_then(Value::as_str)
+                {
+                    self.stop_reason = Some(stop_reason.to_string());
+                }
+                self.merge_messages_usage(event.get("usage"));
+                Vec::new()
+            }
+            "message_stop" => {
+                self.saw_message_stop = true;
+                self.finish_messages()
+            }
+            "error" => self.failed("upstream_error", "upstream stream failed"),
+            _ => Vec::new(),
+        }
+    }
+
+    fn merge_messages_usage(&mut self, update: Option<&Value>) {
+        let Some(update) = update.and_then(Value::as_object) else {
+            return;
+        };
+        let Some(usage) = self.usage.as_object_mut() else {
+            return;
+        };
+        for (key, value) in update {
+            if let Value::Object(value) = value {
+                let mut current = usage
+                    .get(key)
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                for (nested_key, nested_value) in value {
+                    current.insert(nested_key.clone(), nested_value.clone());
+                }
+                usage.insert(key.clone(), Value::Object(current));
+            } else {
+                usage.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    fn done_event(&mut self, index: i64) -> Option<(String, Value)> {
+        let slot = self.blocks.get_mut(&index)?.as_mut()?;
+        match slot {
+            BlockSlot::Text {
+                id,
+                output_index,
+                text,
+                done,
+            } => {
+                if *done {
+                    return None;
+                }
+                *done = true;
+                let item = json!({
+                    "type": "message",
+                    "id": id,
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text,
+                                  "annotations": []}],
+                });
+                self.output_items.insert(*output_index, item.clone());
+                Some((
+                    "response.output_item.done".to_string(),
+                    json!({
+                        "type": "response.output_item.done",
+                        "output_index": output_index,
+                        "item": item,
+                    }),
+                ))
+            }
+            BlockSlot::Tool {
+                id,
+                call_id,
+                name,
+                arguments,
+                output_index,
+                done,
+            } => {
+                if *done {
+                    return None;
+                }
+                *done = true;
+                let item = json!({
+                    "type": "function_call",
+                    "id": id,
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": if arguments.is_empty() { "{}" } else { arguments },
+                    "status": "completed",
+                });
+                self.output_items.insert(*output_index, item.clone());
+                Some((
+                    "response.output_item.done".to_string(),
+                    json!({
+                        "type": "response.output_item.done",
+                        "output_index": output_index,
+                        "item": item,
+                    }),
+                ))
+            }
+        }
+    }
+
+    fn finish_messages(&mut self) -> Vec<(String, Value)> {
+        if !self.saw_message_stop {
+            return self.failed(
+                "upstream_eof_without_message_stop",
+                "upstream stream ended without message_stop",
+            );
+        }
+        let mut events = Vec::new();
+        let indices: Vec<i64> = self.blocks.keys().copied().collect();
+        for index in indices {
+            if let Some(event) = self.done_event(index) {
+                events.push(event);
+            }
+        }
+        let (status, incomplete) = match self.stop_reason.as_deref() {
+            Some("max_tokens") => ("incomplete", Some(json!({"reason": "max_output_tokens"}))),
+            Some("refusal" | "sensitive") => {
+                ("incomplete", Some(json!({"reason": "content_filter"})))
+            }
+            _ => ("completed", None),
+        };
+        let ordered: Vec<Value> = self.output_items.values().cloned().collect();
+        let name = if incomplete.is_some() {
+            "response.incomplete"
+        } else {
+            "response.completed"
+        };
+        let mut response = json!({
+            "id": self.response_id,
+            "object": "response",
+            "created_at": self.created_at,
+            "status": status,
+            "model": self.model,
+            "output": ordered,
+            "usage": messages_usage(Some(&self.usage)),
+        });
+        if let Some(incomplete) = incomplete {
+            response["incomplete_details"] = incomplete;
+        }
+        self.terminal = true;
+        events.push((
+            name.to_string(),
+            json!({"type": name, "response": response}),
+        ));
+        events
+    }
+}
+
+/// Python `json.dumps(value)` for one SSE tool-input object: default
+/// separators and insertion order, so the emitted piece matches Python.
+fn python_json_dumps(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let items = map
+                .iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{}: {}",
+                        serde_json::to_string(key).unwrap_or_default(),
+                        python_json_dumps(value)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{{items}}}")
+        }
+        Value::Array(items) => {
+            let items = items
+                .iter()
+                .map(python_json_dumps)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{items}]")
+        }
+        value => serde_json::to_string(value).unwrap_or_default(),
     }
 }
