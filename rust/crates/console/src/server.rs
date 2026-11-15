@@ -265,7 +265,7 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream) {
 
 fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response {
     if !host_allowed(request.headers.get("Host").unwrap_or_default())
-        || !origin_allowed(request.headers.get("Origin"), state.config.port)
+        || !origin_allowed(request.headers.get("Origin"), console_port)
     {
         return ConsoleError::local_only().response();
     }
