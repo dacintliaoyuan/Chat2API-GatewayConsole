@@ -71,7 +71,7 @@ git -c core.whitespace=cr-at-eol diff --check
 - `cargo test --offline`（整个 Rust workspace）：全部 `test result: ok`，无 FAILED。
 - `um-console` 定向测试：`candidate_process` 4、`console_readonly` 18、`console_reads` 6、
   `readonly_side_effects` 6、`request_boundary` 5、`runtime_facts` 8、`share_secret` 4、
-  `share_status` 4、`share_usage` 7。
+  `share_status` 4、`share_usage` 7、`api_share` 5。
 - `python -m unittest tests.test_rust_console_reads_fixture`：Ran 2 tests，OK；夹具由
   `tests/generate_rust_console_reads_fixture.py` 从真实 Python 云端 `usagesrv.Handler` 生成。
 - ticket 的 Python parity 门禁：Ran 253 tests，OK。
