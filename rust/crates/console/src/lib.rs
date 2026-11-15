@@ -16,6 +16,7 @@ pub mod metering;
 pub mod operations;
 pub mod runtime;
 pub mod server;
+pub mod share_auth;
 pub mod share_read;
 pub mod summary;
 

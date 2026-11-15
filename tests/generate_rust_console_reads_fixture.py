@@ -19,6 +19,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import time
 import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -303,6 +304,11 @@ def seed_share_store(path):
                     spec["updated_at"], spec.get("deleted_at"),
                     spec["row_version"],
                 ))
+        connection.execute(
+            "INSERT INTO ops(id,kind,idempotency_key,status,payload,created_at)"
+            " VALUES(?,?,?,?,?,?)",
+            ("op-1", "host", None, "succeeded", '{"ok":true}',
+             "2026-11-15T00:00:00+00:00"))
         connection.commit()
     finally:
         connection.close()
@@ -793,6 +799,89 @@ def explicit_capability_section(server):
         }
     return results
 
+
+def ac5_section(module, server, root, seeded):
+    from share.management import ShareManager
+
+    db = root / "share.db"
+    broker = FakeBroker({
+        "name": "broker-client",
+        "state": "ok",
+        "broker": {"version": "2.0.0", "pid": 4242},
+    })
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    import share.store as store_module
+
+    def posix_unprotect(blob, algo=None):
+        if algo != "aesgcm-file-key-v1":
+            raise store_module.StoreError("unknown share secret algorithm")
+        return AESGCM(FIXTURE_KEY).decrypt(
+            bytes(blob[:12]), bytes(blob[12:]), b"aesgcm-file-key-v1"
+        ).decode("utf-8")
+
+    original_unprotect = store_module.unprotect_secret
+    store_module.unprotect_secret = posix_unprotect
+    module._share_manager = ShareManager(store_path=db, broker=broker)
+    module._session["session"] = "fixture-session"
+    module._session["session_expires"] = time.time() + 3600
+    active = seeded["keys"]["active1"]["key_id"]
+    control = [("X-Admin-Control", CONTROL_TOKEN)]
+    cookie = [("Cookie", "usage_session=fixture-session")]
+    targets = {
+        "status": "/api/share/status",
+        "keys": "/api/share/keys",
+        "key": f"/api/share/keys/{active}",
+        "secret": f"/api/share/keys/{active}/secret",
+        "operation": "/api/share/operations/op-1",
+        "usage": "/api/share/usage",
+        "usageRequests": "/api/share/usage/requests",
+    }
+    results = {}
+    for name, target in targets.items():
+        for auth_name, headers in (
+                ("control", control), ("session", cookie)):
+            result = request(server, "GET", target, headers)
+            body = result["body"]
+            if isinstance(body, dict):
+                body.pop("checkedAt", None)
+            results[f"{auth_name}.{name}"] = {
+                "status": result["status"],
+                "body": body,
+                "cacheControl": result["headers"].get("cache-control"),
+            }
+    missing = request(server, "GET", "/api/share/status")
+    wrong = request(
+        server, "GET", "/api/share/status",
+        [("X-Admin-Control", "wrong-token")])
+    duplicate = request(
+        server, "GET", "/api/share/status",
+        [("X-Admin-Control", CONTROL_TOKEN),
+         ("X-Admin-Control", CONTROL_TOKEN)])
+    foreign = request(
+        server, "GET", "/api/share/status",
+        [("Origin", "http://evil.example")])
+    results["noCredentials"] = {
+        "status": missing["status"], "body": missing["body"],
+        "cacheControl": missing["headers"].get("cache-control"),
+    }
+    results["wrongControl"] = {
+        "status": wrong["status"], "body": wrong["body"],
+        "cacheControl": wrong["headers"].get("cache-control"),
+    }
+    results["duplicateHeader"] = {
+        "status": duplicate["status"], "body": duplicate["body"],
+        "cacheControl": duplicate["headers"].get("cache-control"),
+    }
+    results["foreignOrigin"] = {
+        "status": foreign["status"], "body": foreign["body"],
+        "cacheControl": foreign["headers"].get("cache-control"),
+    }
+    module._share_manager = None
+    module._session["session"] = None
+    module._session["session_expires"] = 0.0
+    store_module.unprotect_secret = original_unprotect
+    return results
+
 def main():
     fixture = {"metadata": {
         "fixture": True,
@@ -824,6 +913,7 @@ def main():
         fixture["shareUsage"] = usage_section(server, root, module)
         fixture["ac4"] = ac4_section(module, server, root)
         fixture["capabilityExplicit"] = explicit_capability_section(server)
+        fixture["apiShare"] = ac5_section(module, server, root, seeded)
         return fixture
     finally:
         server.shutdown()

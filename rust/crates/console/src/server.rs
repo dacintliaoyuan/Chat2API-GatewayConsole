@@ -29,6 +29,7 @@ use crate::error::ConsoleError;
 use crate::metering::{self, UsageFilters};
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
+use crate::share_auth::{management_auth, SessionState};
 use crate::share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
 use crate::summary::SummaryCache;
 
@@ -55,6 +56,7 @@ pub struct AppState {
     pub operations: OperationsReader,
     pub share: ShareReadStore,
     pub share_seams: Arc<dyn ShareReadSeams>,
+    pub session: SessionState,
     services_cache: Mutex<Option<(Value, Instant)>>,
 }
 
@@ -93,6 +95,7 @@ impl ConsoleServer {
                 config.share_secret_key_file.clone(),
             ),
             share_seams,
+            session: SessionState::new(),
             config: config.clone(),
             runtime,
             summary: SummaryCache::new(),
@@ -234,6 +237,9 @@ fn dispatch(state: &AppState, request: &Request) -> Response {
         }
         return ConsoleError::unknown_path().response();
     }
+    if path.starts_with("/api/share/") {
+        return handle_share_read(state, request, &target);
+    }
     if !path.starts_with("/api/console/") {
         return ConsoleError::unknown_path().response();
     }
@@ -253,6 +259,62 @@ fn dispatch(state: &AppState, request: &Request) -> Response {
     match method {
         "GET" => handle_console_get(state, &rest, &target),
         "POST" | "PATCH" | "DELETE" => handle_console_write(state, method, &rest, request),
+        _ => ConsoleError::unknown_path().response(),
+    }
+}
+
+fn handle_share_read(state: &AppState, request: &Request, raw_target: &str) -> Response {
+    if let Err(error) = reject_duplicate_sensitive_header(&request.headers) {
+        return error.response();
+    }
+    let authorized = management_auth(
+        &state.session,
+        state.config.control_token_file.as_deref(),
+        request.headers.get("Cookie"),
+        request.headers.get("X-Admin-Control"),
+    );
+    if !authorized {
+        let mut response = ConsoleError::new(
+            401,
+            json!({"error": "share management credentials required"}),
+        )
+        .response();
+        response.close = true;
+        return response;
+    }
+    let path = raw_target.split('?').next().unwrap_or(raw_target);
+    let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    let rest: Vec<&str> = segments.iter().skip(2).copied().collect();
+    if request.method.as_str() != "GET" {
+        // Writes belong to S6; the candidate never fakes a mutation.
+        return ConsoleError::not_implemented("share_write_s6").response();
+    }
+    match rest.as_slice() {
+        ["usage"] => share_usage_response(state, raw_target, false),
+        ["usage", "requests"] => share_usage_response(state, raw_target, true),
+        ["status"] => match state.share.raw_status(state.share_seams.broker_snapshot()) {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
+        ["keys"] => match state.share.share_keys() {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
+        ["keys", key_id] => match state.share.share_key(key_id) {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
+        ["keys", key_id, "secret"] => {
+            let expected = query_value(raw_target, "expected_row_version");
+            match state.share.secret(key_id, expected.as_deref()) {
+                Ok((status, payload)) => send_json(status, &payload),
+                Err(error) => error.response(),
+            }
+        }
+        ["operations", operation_id] => match state.share.operation(operation_id) {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
         _ => ConsoleError::unknown_path().response(),
     }
 }

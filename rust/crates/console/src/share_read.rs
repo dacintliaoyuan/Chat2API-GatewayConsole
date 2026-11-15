@@ -220,6 +220,98 @@ impl ShareReadStore {
         Ok(json!({ "keys": keys }))
     }
 
+    /// `ShareManager.status()` raw shape (the `/api/share/status` face).
+    pub fn raw_status(&self, broker: Option<Value>) -> Result<Value, ConsoleError> {
+        let connection = self.connection()?;
+        let (schema_version, config_generation, applied_generation) = connection
+            .query_row(
+                "SELECT schema_version,config_generation,applied_generation FROM configgen",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .map_err(|_| share_management_error())?;
+        let security_pending: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM security WHERE status='pending'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| share_management_error())?;
+        let stored_share_max = share_max_concurrency(&connection)?;
+        let keys = list_key_rows(&connection)?;
+        let clamped_keys = keys
+            .iter()
+            .filter(|row| row.max_concurrency > KEY_MAX_CONCURRENCY_MAX)
+            .count() as i64;
+        let blocked_publications = blocked_publications(&connection, applied_generation)?;
+        let blocked = blocked_publications
+            .iter()
+            .any(|item| item["blocked"].as_bool() == Some(true));
+        Ok(json!({
+            "schema_version": schema_version,
+            "share_max_concurrency": stored_share_max.min(SHARE_MAX_CONCURRENCY_MAX),
+            "share_max_concurrency_stored": stored_share_max,
+            "limits_normalization_required":
+                stored_share_max > SHARE_MAX_CONCURRENCY_MAX || clamped_keys > 0,
+            "limits_clamped_keys": clamped_keys,
+            "desired_generation": config_generation,
+            "applied_generation": applied_generation,
+            "in_sync": config_generation == applied_generation && security_pending == 0,
+            "security_pending": security_pending,
+            "security_in_sync": security_pending == 0,
+            "pending_revocation": config_generation > applied_generation,
+            "active_keys": keys.len() as i64,
+            "total_keys": keys.len() as i64,
+            "broker": broker.unwrap_or_else(|| json!({})),
+            "last_publication_failure": Value::Null,
+            "blocked_publications": blocked_publications,
+            "blocked": blocked,
+        }))
+    }
+
+    /// `ShareManager.get_operation()` (the `/api/share/operations/{id}` face).
+    pub fn operation(&self, operation_id: &str) -> Result<Value, ConsoleError> {
+        let connection = self.connection()?;
+        let row = connection
+            .query_row(
+                "SELECT id,kind,status,payload,created_at FROM ops WHERE id=?1",
+                [operation_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    ConsoleError::new(404, json!({"error": "operation not found"}))
+                }
+                _ => share_management_error(),
+            })?;
+        let payload = row
+            .3
+            .as_deref()
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .unwrap_or_else(|| json!({}));
+        Ok(json!({
+            "operation_id": row.0,
+            "kind": row.1,
+            "status": row.2,
+            "payload": payload,
+            "created_at": row.4,
+        }))
+    }
+
     /// `ShareManager.list_keys()` in the `/api/share/*` row shape.
     pub fn share_keys(&self) -> Result<Value, ConsoleError> {
         let connection = self.connection()?;

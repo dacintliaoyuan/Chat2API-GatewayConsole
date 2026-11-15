@@ -78,6 +78,17 @@ class RustConsoleReadsFixtureTests(unittest.TestCase):
         for case in fixture["capabilityExplicit"].values():
             self.assertEqual(case["status"], 503)
             self.assertEqual(case["body"]["error"], "capability_not_assembled")
+        share = fixture["apiShare"]
+        self.assertEqual(share["control.status"]["status"], 200)
+        self.assertEqual(share["session.keys"]["status"], 200)
+        self.assertEqual(
+            share["control.secret"]["body"]["secret"],
+            "um-share-alpha-0123456789abcdef")
+        self.assertEqual(share["control.operation"]["body"]["operation_id"], "op-1")
+        self.assertEqual(share["noCredentials"]["status"], 401)
+        self.assertEqual(share["wrongControl"]["status"], 401)
+        self.assertEqual(share["duplicateHeader"]["status"], 400)
+        self.assertEqual(share["foreignOrigin"]["status"], 403)
 
 
 if __name__ == "__main__":
