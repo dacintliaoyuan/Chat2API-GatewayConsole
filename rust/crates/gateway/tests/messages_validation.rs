@@ -39,9 +39,20 @@ fn assert_rejected(body: Value) {
     });
     let response = client_request(gateway.addr, &request(&body)).expect("messages request");
     assert_eq!(response.status, 400, "body: {body}");
+    assert_eq!(response.json()["type"], json!("error"), "body: {body}");
     assert_eq!(
         response.json()["error"]["type"],
+        json!("invalid_request_error"),
+        "body: {body}"
+    );
+    assert_eq!(
+        response.json()["error"]["code"],
         json!("unsupported_messages_request"),
+        "body: {body}"
+    );
+    assert_eq!(
+        response.json()["error"]["param"],
+        Value::Null,
         "body: {body}"
     );
     assert_eq!(

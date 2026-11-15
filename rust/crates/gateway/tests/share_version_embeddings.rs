@@ -27,7 +27,16 @@ fn version_is_route_not_shared_in_share_mode() {
             .as_u64()
             .unwrap()
     );
-    assert_eq!(response.json(), fixture["readOnly"]["versionShare"]["body"]);
+    assert_eq!(
+        response.json(),
+        json!({"error": {
+            "message": fixture["readOnly"]["versionShare"]["body"]["error"]["message"],
+            "type": "not_found_error",
+            "code": "route_not_shared",
+            "param": null,
+            "detail": null,
+        }})
+    );
     assert_eq!(response.header("connection"), Some("close"));
     assert!(
         !stub
@@ -40,18 +49,17 @@ fn version_is_route_not_shared_in_share_mode() {
 
 #[test]
 fn embeddings_is_route_not_shared_in_share_mode() {
-    let fixture = fixture();
     let temp = TempDir::new(unique_temp_prefix());
     let stub = StubUpstream::start();
     let gateway = start_gateway(&stub, &temp, true);
 
-    let expected = fixture["shareGate"]["routeCases"]
-        .as_array()
-        .expect("route cases")
-        .iter()
-        .find(|case| case["name"] == json!("embeddings"))
-        .expect("embeddings fixture")["body"]
-        .clone();
+    let expected = json!({"error": {
+        "message": "route_not_shared",
+        "type": "not_found_error",
+        "code": "route_not_shared",
+        "param": null,
+        "detail": null,
+    }});
     let response = client_request(
         gateway.addr,
         &ClientRequest::post("/v1/embeddings", "{}").bearer(SHARE_SECRET),
@@ -84,7 +92,7 @@ fn the_route_gate_runs_before_authentication() {
         assert_eq!(response.status, 404, "{target}");
         assert_eq!(
             response.json()["error"]["type"],
-            json!("route_not_shared"),
+            json!("not_found_error"),
             "{target}"
         );
     }

@@ -84,7 +84,7 @@ fn a_zero_data_eof_before_the_200_is_502() {
     let response = support::client_request(gateway.addr, &request()).expect("pre-commit EOF");
     assert_eq!(response.status, 502);
     let body = response.json();
-    assert_eq!(body["error"]["type"], json!("upstream_stream_error"));
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
     assert_eq!(
         body["error"]["detail"]["reason"],
         json!("upstream_eof_without_done")
@@ -110,7 +110,7 @@ fn an_explicit_error_event_before_the_200_is_502() {
     let response = support::client_request(gateway.addr, &request()).expect("pre-commit error");
     assert_eq!(response.status, 502);
     let body = response.json();
-    assert_eq!(body["error"]["type"], json!("upstream_stream_error"));
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
     assert_eq!(
         body["error"]["detail"]["reason"],
         json!("upstream_stream_error")
@@ -143,7 +143,7 @@ fn a_post_commit_eof_writes_one_in_band_error_and_no_done() {
         "a failed stream must not forward [DONE]"
     );
     let error = in_band_error(&body);
-    assert_eq!(error["error"]["type"], json!("upstream_stream_error"));
+    assert_eq!(error["error"]["type"], json!("upstream_error"));
     assert_eq!(error["error"]["code"], json!("upstream_eof_without_done"));
     assert_eq!(
         error["error"]["detail"]["reason"],
@@ -171,7 +171,7 @@ fn a_post_commit_explicit_error_keeps_its_sanitized_message() {
     let (status, _, body) = parse_raw_response(&raw);
     assert_eq!(status, 200);
     let error = in_band_error(&body);
-    assert_eq!(error["error"]["type"], json!("upstream_stream_error"));
+    assert_eq!(error["error"]["type"], json!("upstream_error"));
     assert_eq!(error["error"]["code"], json!("upstream_stream_error"));
     assert_eq!(
         error["error"]["detail"]["upstream_message"],

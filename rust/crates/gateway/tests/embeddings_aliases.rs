@@ -40,7 +40,8 @@ fn the_shared_embeddings_route_is_not_shared() {
         response.json()["error"]["message"],
         json!("route_not_shared")
     );
-    assert_eq!(response.json()["error"]["type"], json!("route_not_shared"));
+    assert_eq!(response.json()["error"]["type"], json!("not_found_error"));
+    assert_eq!(response.json()["error"]["code"], json!("route_not_shared"));
     assert_eq!(stub.attempts(), 0);
 }
 

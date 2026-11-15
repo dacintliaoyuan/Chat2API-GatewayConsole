@@ -30,8 +30,9 @@ fn assert_429(response: &ClientResponse, fixture: &Value, name: &str) {
     assert_eq!(response.status, 429, "{name}");
     let body = response.json();
     assert_eq!(body["error"]["message"], json!("sharing_limit_reached"));
-    assert_eq!(body["error"]["type"], json!("share_gateway_error"));
+    assert_eq!(body["error"]["type"], json!("rate_limit_error"));
     assert_eq!(body["error"]["code"], json!("sharing_limit_reached"));
+    assert_eq!(body["error"]["param"], Value::Null);
     assert_eq!(body["error"]["reason"], expected["reason"], "{name}");
     assert_eq!(body["error"]["detail"], expected["detail"], "{name}");
     assert_eq!(response.header("connection"), Some("close"));
@@ -178,7 +179,7 @@ fn a_corrupt_share_config_is_a_503_not_an_invalid_key() {
     let body = response.json();
     assert_eq!(
         body["error"]["type"],
-        json!("share_config_unavailable"),
+        json!("api_error"),
         "configuration corruption must not be folded into invalid_api_key"
     );
     assert_eq!(body["error"]["code"], json!("share_config_unavailable"));

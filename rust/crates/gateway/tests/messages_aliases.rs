@@ -139,7 +139,11 @@ fn the_alias_uses_the_local_key_when_the_local_key_is_required() {
     )
     .expect("alias without a local key");
     assert_eq!(missing.status, 401);
-    assert_eq!(missing.json()["error"]["type"], json!("local_auth_error"));
+    assert_eq!(
+        missing.json()["error"]["type"],
+        json!("authentication_error")
+    );
+    assert_eq!(missing.json()["error"]["code"], json!("local_auth_error"));
     assert_eq!(stub.attempts(), 0);
 
     let accepted = client_request(

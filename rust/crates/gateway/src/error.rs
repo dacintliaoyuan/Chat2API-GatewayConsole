@@ -1,46 +1,79 @@
-//! Unified gateway error body.
+//! Unified gateway error envelope.
 //!
-//! Every error is serialized as `{"error": {"message", "type", "detail"}}` plus
-//! the optional Python extras `code`, `reason` and `upstream_status`. The
-//! messages and codes are ported from `chat2api/chat2api.py`; the console body
-//! boundary keeps the `usagesrv.py` codes for the local control-token routes.
+//! Chat/Responses/models/version and `/api/*` serialize as the OpenAI shape
+//! `{"error": {"message", "type", "code", "param", "detail"}}`; `/v1/messages`
+//! serializes as the Anthropic shape
+//! `{"type": "error", "error": {"type", "message", "code", "param", "detail"}}`.
+//! `type` is the error category, `code` is the stable machine code, `param` is the
+//! offending field or `null`, and `detail` carries structured diagnostics.
+//!
+//! The messages and codes are ported from `chat2api/chat2api.py`; the console body
+//! boundary keeps the `usagesrv.py` codes for the local control-token routes. The
+//! 8001 console `{"error": "machine_code"}` shape is a different surface and is
+//! not produced here.
 
 use serde_json::{json, Map, Value};
 
 use crate::http::Response;
 
+/// The protocol shape used to serialize one local gateway error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ErrorProtocol {
+    /// OpenAI `{"error": {...}}`, used by Chat, Responses, models, version and
+    /// the local `/api/*` aliases.
+    #[default]
+    OpenAi,
+    /// Anthropic `{"type": "error", "error": {...}}`, used by `/v1/messages`.
+    Anthropic,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayError {
     pub status: u16,
     pub message: String,
+    /// The error category (`invalid_request_error`, `authentication_error`,
+    /// `permission_error`, `not_found_error`, `rate_limit_error`, `api_error`,
+    /// `overloaded_error`, `upstream_error`).
     pub error_type: String,
-    pub detail: Option<Value>,
-    pub code: Option<String>,
+    /// The stable machine code.
+    pub code: String,
+    /// The offending request field, when one is known.
+    pub param: Option<Box<String>>,
+    pub detail: Option<Box<Value>>,
     /// Boxed so the error stays under clippy's large-error threshold.
     pub reason: Option<Box<Value>>,
     pub upstream_status: Option<u16>,
 }
 
 impl GatewayError {
-    pub fn new(status: u16, message: impl Into<String>, error_type: impl Into<String>) -> Self {
+    pub fn new(status: u16, message: impl Into<String>, code: impl Into<String>) -> Self {
+        let code = code.into();
+        let error_type = category_for(status, &code).to_string();
         Self {
             status,
             message: message.into(),
-            error_type: error_type.into(),
+            error_type,
+            code,
+            param: None,
             detail: None,
-            code: None,
             reason: None,
             upstream_status: None,
         }
     }
 
     pub fn with_detail(mut self, detail: Value) -> Self {
-        self.detail = Some(detail);
+        self.detail = Some(Box::new(detail));
         self
     }
 
     pub fn with_code(mut self, code: impl Into<String>) -> Self {
-        self.code = Some(code.into());
+        self.code = code.into();
+        self.error_type = category_for(self.status, &self.code).to_string();
+        self
+    }
+
+    pub fn with_param(mut self, param: impl Into<String>) -> Self {
+        self.param = Some(Box::new(param.into()));
         self
     }
 
@@ -54,28 +87,62 @@ impl GatewayError {
         self
     }
 
-    pub fn body(&self) -> Value {
+    fn error_object(&self) -> Map<String, Value> {
         let mut error = Map::new();
         error.insert("message".to_string(), Value::String(self.message.clone()));
         error.insert("type".to_string(), Value::String(self.error_type.clone()));
+        error.insert("code".to_string(), Value::String(self.code.clone()));
+        error.insert(
+            "param".to_string(),
+            self.param
+                .as_ref()
+                .map(|param| Value::String(param.as_ref().clone()))
+                .unwrap_or(Value::Null),
+        );
         error.insert(
             "detail".to_string(),
-            self.detail.clone().unwrap_or(Value::Null),
+            self.detail
+                .as_ref()
+                .map(|detail| detail.as_ref().clone())
+                .unwrap_or(Value::Null),
         );
-        if let Some(code) = &self.code {
-            error.insert("code".to_string(), Value::String(code.clone()));
-        }
         if let Some(reason) = &self.reason {
             error.insert("reason".to_string(), reason.as_ref().clone());
         }
         if let Some(status) = self.upstream_status {
             error.insert("upstream_status".to_string(), json!(status));
         }
-        json!({"error": Value::Object(error)})
+        error
+    }
+
+    /// The OpenAI-shaped body.
+    pub fn body(&self) -> Value {
+        json!({"error": Value::Object(self.error_object())})
+    }
+
+    /// The Anthropic-shaped body; the machine code and diagnostics stay inside
+    /// the `error` object so Anthropic clients still read `error.type` and
+    /// `error.message`.
+    pub fn anthropic_body(&self) -> Value {
+        json!({
+            "type": "error",
+            "error": Value::Object(self.error_object()),
+        })
     }
 
     pub fn response(&self) -> Response {
         Response::json(self.status, &self.body()).closing()
+    }
+
+    pub fn anthropic_response(&self) -> Response {
+        Response::json(self.status, &self.anthropic_body()).closing()
+    }
+
+    pub fn response_for(&self, protocol: ErrorProtocol) -> Response {
+        match protocol {
+            ErrorProtocol::OpenAi => self.response(),
+            ErrorProtocol::Anthropic => self.anthropic_response(),
+        }
     }
 
     // ----- 8003 share gateway errors (chat2api/chat2api.py) -----
@@ -109,7 +176,11 @@ impl GatewayError {
     }
 
     pub fn unsupported_responses_request() -> Self {
-        Self::new(400, "unsupported_responses_request", "chat2api_error")
+        Self::new(
+            400,
+            "unsupported_responses_request",
+            "unsupported_responses_request",
+        )
     }
 
     pub fn route_not_shared() -> Self {
@@ -117,11 +188,11 @@ impl GatewayError {
     }
 
     pub fn unknown_path(path: &str) -> Self {
-        Self::new(404, format!("Unknown path: {path}"), "chat2api_error")
+        Self::new(404, format!("Unknown path: {path}"), "unknown_path")
     }
 
     pub fn invalid_api_key() -> Self {
-        Self::new(401, "invalid_api_key", "share_gateway_error").with_code("invalid_api_key")
+        Self::new(401, "invalid_api_key", "invalid_api_key")
     }
 
     pub fn local_auth_error() -> Self {
@@ -138,14 +209,18 @@ impl GatewayError {
     }
 
     pub fn control_denied_endpoint() -> Self {
-        Self::new(403, "Local management endpoint denied", "chat2api_error")
+        Self::new(
+            403,
+            "Local management endpoint denied",
+            "control_denied_endpoint",
+        )
     }
 
     pub fn control_denied_token() -> Self {
         Self::new(
             403,
             "Local management token missing or invalid",
-            "chat2api_error",
+            "control_denied_token",
         )
     }
 
@@ -157,20 +232,18 @@ impl GatewayError {
             "Share configuration is unavailable",
             "share_config_unavailable",
         )
-        .with_code("share_config_unavailable")
         .with_detail(Value::String(detail.into()))
     }
 
     pub fn sharing_limit_reached(reason: Option<&str>, detail: Option<&str>) -> Self {
-        let mut error = Self::new(429, "sharing_limit_reached", "share_gateway_error")
-            .with_code("sharing_limit_reached");
+        let mut error = Self::new(429, "sharing_limit_reached", "sharing_limit_reached");
         error.reason = Some(Box::new(
             reason
                 .map(|reason| Value::String(reason.to_string()))
                 .unwrap_or(Value::Null),
         ));
         if let Some(detail) = detail {
-            error.detail = Some(Value::String(detail.to_string()));
+            error.detail = Some(Box::new(Value::String(detail.to_string())));
         }
         error
     }
@@ -182,7 +255,7 @@ impl GatewayError {
             "reauthentication_required",
         );
         if let Some(detail) = detail {
-            error.detail = Some(Value::String(detail.to_string()));
+            error.detail = Some(Box::new(Value::String(detail.to_string())));
         }
         error
     }
@@ -199,7 +272,7 @@ impl GatewayError {
         Self::new(
             502,
             "Failed to fetch model list (auth may have expired)",
-            "chat2api_error",
+            "models_unavailable",
         )
     }
 
@@ -226,19 +299,64 @@ impl GatewayError {
             .with_detail(Value::String(feature.to_string()))
     }
 
+    // ----- machine codes introduced by the protocol-aware error contract -----
+
+    /// The upstream rejected the request for permission reasons.
+    pub fn upstream_forbidden() -> Self {
+        Self::new(403, "Upstream denied the request", "upstream_forbidden")
+    }
+
+    /// The upstream quota is exhausted; retrying cannot help.
+    pub fn upstream_quota_exhausted() -> Self {
+        Self::new(
+            402,
+            "Upstream quota is exhausted",
+            "upstream_quota_exhausted",
+        )
+    }
+
+    /// Reauthentication was attempted and the upstream still rejects the
+    /// credential.
+    pub fn reauthentication_failed() -> Self {
+        Self::new(
+            403,
+            "Open WebUI authentication could not be restored",
+            "reauthentication_failed",
+        )
+    }
+
+    /// The API path exists but the method is not implemented.
+    pub fn method_not_allowed() -> Self {
+        Self::new(405, "Method not allowed", "method_not_allowed")
+    }
+
+    /// A compressed request body is refused because the encoding is unsupported.
+    pub fn unsupported_content_encoding() -> Self {
+        Self::new(
+            415,
+            "Unsupported Content-Encoding",
+            "unsupported_content_encoding",
+        )
+    }
+
+    /// The request body did not arrive within its read budget.
+    pub fn request_timeout() -> Self {
+        Self::new(408, "Request body read timed out", "request_timeout")
+    }
+
+    /// The gateway's own upstream wait budget expired.
+    pub fn upstream_timeout() -> Self {
+        Self::new(504, "Upstream request timed out", "upstream_timeout")
+    }
+
     // ----- console (8002) request-boundary codes (usagesrv.py) -----
 
     pub fn console_body(status: u16, code: &str) -> Self {
-        let error_type = match code {
-            "invalid_json" => "invalid_json",
-            "request_too_large" => "request_too_large",
-            _ => "invalid_request",
-        };
-        Self::new(status, code, error_type)
+        Self::new(status, code, code)
     }
 
     pub fn duplicate_header(name: &str) -> Self {
-        Self::new(400, format!("duplicate header: {name}"), "invalid_request")
+        Self::new(400, format!("duplicate header: {name}"), "invalid_request").with_param(name)
     }
 
     pub fn unknown_fields(fields: &[String]) -> Self {
@@ -247,10 +365,36 @@ impl GatewayError {
             .map(|field| format!("'{field}'"))
             .collect::<Vec<_>>()
             .join(", ");
-        Self::new(
+        let mut error = Self::new(
             400,
             format!("unknown field(s): [{list}]"),
             "invalid_request",
-        )
+        );
+        if let Some(field) = fields.first() {
+            error = error.with_param(field);
+        }
+        error
+    }
+}
+
+/// Map one status/code pair onto the protocol-neutral error category.
+fn category_for(status: u16, code: &str) -> &'static str {
+    match code {
+        "reauthentication_required" | "reauthentication_failed" => "authentication_error",
+        "upstream_forbidden" => "permission_error",
+        "upstream_quota_exhausted" => "rate_limit_error",
+        "share_config_unavailable" | "share_revoke_unassembled" | "not_implemented" => "api_error",
+        "request_deadline_exceeded" | "upstream_attempt_budget_exhausted" => "upstream_error",
+        _ if code.starts_with("upstream_") => "upstream_error",
+        _ => match status {
+            400 | 405 | 408 | 413 | 415 | 422 => "invalid_request_error",
+            401 => "authentication_error",
+            402 | 429 => "rate_limit_error",
+            403 => "permission_error",
+            404 => "not_found_error",
+            529 => "overloaded_error",
+            502..=504 => "upstream_error",
+            _ => "api_error",
+        },
     }
 }

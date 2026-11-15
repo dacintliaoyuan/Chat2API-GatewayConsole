@@ -14,6 +14,56 @@ use um_gateway::GatewayServer;
 
 use support::*;
 
+fn expected_error(case: &Value) -> Value {
+    let old = &case["body"]["error"];
+    let code = old["code"]
+        .as_str()
+        .or_else(|| {
+            old["type"].as_str().filter(|value| {
+                matches!(
+                    *value,
+                    "invalid_request"
+                        | "invalid_json"
+                        | "invalid_body"
+                        | "payload_too_large"
+                        | "unsupported_chat_request"
+                        | "unsupported_messages_request"
+                )
+            })
+        })
+        .or_else(|| {
+            old["message"]
+                .as_str()
+                .filter(|value| *value == "unsupported_responses_request")
+        })
+        .expect("old body error code");
+    let category = match code {
+        "invalid_request"
+        | "invalid_json"
+        | "invalid_body"
+        | "payload_too_large"
+        | "unsupported_chat_request"
+        | "unsupported_messages_request"
+        | "unsupported_responses_request" => "invalid_request_error",
+        other => panic!("unexpected body error code: {other}"),
+    };
+    let error = json!({
+        "message": old["message"],
+        "type": category,
+        "code": code,
+        "param": null,
+        "detail": null,
+    });
+    if case["target"]
+        .as_str()
+        .is_some_and(|target| target.starts_with("/v1/messages"))
+    {
+        json!({"type": "error", "error": error})
+    } else {
+        json!({"error": error})
+    }
+}
+
 fn share_request(name: &str, case: &Value) -> ClientRequest {
     let target = case["target"].as_str().expect("target");
     let mut request = ClientRequest::post(target, "");
@@ -82,7 +132,7 @@ fn share_route_body_cases_match_python() {
             case["status"].as_u64().unwrap(),
             "status for {name}"
         );
-        assert_eq!(response.json(), case["body"], "body for {name}");
+        assert_eq!(response.json(), expected_error(case), "body for {name}");
     }
 }
 
@@ -110,7 +160,7 @@ fn the_share_body_limit_is_32_mib_by_default() {
     let response =
         client_request(addr, &share_request("payload-too-large", case)).expect("oversize");
     assert_eq!(response.status, 413);
-    assert_eq!(response.json(), case["body"]);
+    assert_eq!(response.json(), expected_error(case));
 }
 
 #[test]
@@ -177,7 +227,11 @@ fn revoke_uses_the_share_body_boundary_like_python() {
     )
     .expect("revoke with negative length");
     assert_eq!(response.status, 413);
-    assert_eq!(response.json()["error"]["type"], json!("payload_too_large"));
+    assert_eq!(
+        response.json()["error"]["type"],
+        json!("invalid_request_error")
+    );
+    assert_eq!(response.json()["error"]["code"], json!("payload_too_large"));
 }
 
 #[test]
@@ -206,7 +260,9 @@ fn share_route_refuses_a_declared_oversize_body_before_reading_it() {
         response.json(),
         json!({"error": {
             "message": "Request body too large",
-            "type": "payload_too_large",
+            "type": "invalid_request_error",
+            "code": "payload_too_large",
+            "param": null,
             "detail": null,
         }})
     );
@@ -225,7 +281,10 @@ fn a_negative_content_length_is_payload_too_large_like_python() {
     )
     .expect("negative share length");
     assert_eq!(share.status, 413);
-    assert_eq!(share.json()["error"]["type"], json!("payload_too_large"));
+    assert_eq!(
+        share.json()["error"]["type"],
+        json!("invalid_request_error")
+    );
 
     let revoke = client_request(
         gateway.addr,
@@ -258,7 +317,9 @@ fn share_route_duplicate_content_type_is_not_a_share_key_error() {
         response.json(),
         json!({"error": {
             "message": "unsupported_chat_request",
-            "type": "unsupported_chat_request",
+            "type": "invalid_request_error",
+            "code": "unsupported_chat_request",
+            "param": null,
             "detail": null,
         }})
     );

@@ -76,6 +76,14 @@ fn rejected(request: ClientRequest, name: &str) {
         panic!("{name}: {error}");
     });
     assert_eq!(response.status, 401, "{name}");
+    if request.target.starts_with("/v1/messages") {
+        assert_eq!(response.json()["type"], json!("error"), "{name}");
+    }
+    assert_eq!(
+        response.json()["error"]["type"],
+        json!("authentication_error"),
+        "{name}"
+    );
     assert_eq!(
         response.json()["error"]["code"],
         json!("invalid_api_key"),

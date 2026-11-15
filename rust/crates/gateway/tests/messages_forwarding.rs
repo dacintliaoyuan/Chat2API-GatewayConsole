@@ -141,9 +141,11 @@ fn a_400_upstream_response_keeps_the_status_without_passthrough() {
     assert_eq!(response.status, 400);
     assert_eq!(
         response.json(),
-        json!({"error": {
+        json!({"type": "error", "error": {
             "message": "Upstream rejected the request; the server log has structured diagnostics",
-            "type": "upstream_request_rejected",
+            "type": "upstream_error",
+            "code": "upstream_request_rejected",
+            "param": null,
             "detail": null,
         }})
     );
@@ -170,9 +172,11 @@ fn a_401_upstream_response_is_a_503_reauthentication_error() {
     assert_eq!(response.status, 503);
     assert_eq!(
         response.json(),
-        json!({"error": {
+        json!({"type": "error", "error": {
             "message": "Open WebUI authentication requires an interactive sign-in",
-            "type": "reauthentication_required",
+            "type": "authentication_error",
+            "code": "reauthentication_required",
+            "param": null,
             "detail": "upstream_rejected",
         }})
     );
@@ -198,9 +202,11 @@ fn a_500_upstream_response_is_a_502_with_the_bounded_text() {
     assert_eq!(response.status, 502);
     assert_eq!(
         response.json(),
-        json!({"error": {
+        json!({"type": "error", "error": {
             "message": "Upstream request failed",
-            "type": "chat2api_error",
+            "type": "upstream_error",
+            "code": "chat2api_error",
+            "param": null,
             "detail": "HTTP 500: upstream exploded",
         }})
     );
