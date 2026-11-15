@@ -94,6 +94,7 @@ pub fn management_write_auth(
     cookie_header: Option<&str>,
     supplied_token: Option<&str>,
     requested_with: Option<&str>,
+    write: bool,
 ) -> ManagementAuth {
     if control_token_ok(control_token_file, supplied_token) {
         return ManagementAuth::Control;
@@ -101,7 +102,7 @@ pub fn management_write_auth(
     if !session.valid(cookie_header) {
         return ManagementAuth::Missing;
     }
-    if requested_with != Some("XMLHttpRequest") {
+    if write && requested_with != Some("XMLHttpRequest") {
         return ManagementAuth::CsrfRequired;
     }
     ManagementAuth::Session

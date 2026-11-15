@@ -34,7 +34,7 @@ use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActi
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
 use crate::session::{SessionState, SESSION_COOKIE, SESSION_TTL_SECONDS};
-use crate::share_auth::{control_token_ok, management_auth};
+use crate::share_auth::{control_token_ok, management_write_auth, ManagementAuth};
 use crate::share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
 use crate::share_write::{
     console_public_row, ShareWriteError, ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams,
@@ -291,7 +291,7 @@ fn dispatch(state: &AppState, request: &Request) -> Response {
         return ConsoleError::unknown_path().response();
     }
     if path.starts_with("/api/share/") {
-        return handle_share_read(state, request, &target);
+        return handle_share_api(state, request, &target);
     }
     if !path.starts_with("/api/console/") {
         return ConsoleError::unknown_path().response();
@@ -369,59 +369,347 @@ fn session_body(request: &Request) -> Map<String, Value> {
     }
 }
 
-fn handle_share_read(state: &AppState, request: &Request, raw_target: &str) -> Response {
+fn handle_share_api(state: &AppState, request: &Request, raw_target: &str) -> Response {
     if let Err(error) = reject_duplicate_sensitive_header(&request.headers) {
         return error.response();
     }
-    let authorized = management_auth(
+    let method = request.method.as_str();
+    let write = method != "GET";
+    let auth = management_write_auth(
         &state.session,
         state.config.control_token_file.as_deref(),
         request.headers.get("Cookie"),
         request.headers.get("X-Admin-Control"),
+        request.headers.get("X-Requested-With"),
+        write,
     );
-    if !authorized {
-        let mut response = ConsoleError::new(
-            401,
-            json!({"error": "share management credentials required"}),
-        )
-        .response();
-        response.close = true;
-        return response;
+    match auth {
+        ManagementAuth::Control | ManagementAuth::Session => {}
+        ManagementAuth::Missing => {
+            let mut response = ConsoleError::new(
+                401,
+                json!({"error": "share management credentials required"}),
+            )
+            .response();
+            response.close = true;
+            return response;
+        }
+        ManagementAuth::CsrfRequired => {
+            let mut response =
+                ConsoleError::new(403, json!({"error": "session CSRF marker required"})).response();
+            response.close = true;
+            return response;
+        }
     }
     let path = raw_target.split('?').next().unwrap_or(raw_target);
     let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
     let rest: Vec<&str> = segments.iter().skip(2).copied().collect();
-    if request.method.as_str() != "GET" {
-        // Writes belong to S6; the candidate never fakes a mutation.
-        return ConsoleError::not_implemented("share_write_s6").response();
-    }
-    match rest.as_slice() {
-        ["usage"] => share_usage_response(state, raw_target, false),
-        ["usage", "requests"] => share_usage_response(state, raw_target, true),
-        ["status"] => match state.share.raw_status(state.share_seams.broker_snapshot()) {
-            Ok(payload) => send_json(200, &payload),
-            Err(error) => error.response(),
-        },
-        ["keys"] => match state.share.share_keys() {
-            Ok(payload) => send_json(200, &payload),
-            Err(error) => error.response(),
-        },
-        ["keys", key_id] => match state.share.share_key(key_id) {
-            Ok(payload) => send_json(200, &payload),
-            Err(error) => error.response(),
-        },
-        ["keys", key_id, "secret"] => {
-            let expected = query_value(raw_target, "expected_row_version");
-            match state.share.secret(key_id, expected.as_deref()) {
-                Ok((status, payload)) => send_json(status, &payload),
+    if !write {
+        return match rest.as_slice() {
+            ["usage"] => share_usage_response(state, raw_target, false),
+            ["usage", "requests"] => share_usage_response(state, raw_target, true),
+            ["status"] => match state.share.raw_status(state.share_seams.broker_snapshot()) {
+                Ok(payload) => send_json(200, &payload),
                 Err(error) => error.response(),
+            },
+            ["keys"] => match state.share.share_keys() {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => error.response(),
+            },
+            ["keys", key_id] => match state.share.share_key(key_id) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => error.response(),
+            },
+            ["keys", key_id, "secret"] => {
+                let expected = query_value(raw_target, "expected_row_version");
+                match state.share.secret(key_id, expected.as_deref()) {
+                    Ok((status, payload)) => send_json(status, &payload),
+                    Err(error) => error.response(),
+                }
+            }
+            ["operations", operation_id] => match state.share.operation(operation_id) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => error.response(),
+            },
+            _ => ConsoleError::unknown_path().response(),
+        };
+    }
+    let body = match read_console_body(request) {
+        Ok(body) => body,
+        Err(error) => return error.response(),
+    };
+    let writer = &state.share_write;
+    match (method, rest.as_slice()) {
+        ("POST", ["limits", "normalize"]) => {
+            if let Err(error) = reject_unknown_fields(&body, &[]) {
+                return error.response();
+            }
+            match writer.normalize_limits() {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
             }
         }
-        ["operations", operation_id] => match state.share.operation(operation_id) {
-            Ok(payload) => send_json(200, &payload),
-            Err(error) => error.response(),
-        },
+        ("POST", ["keys"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["name", "idempotency_key", "max_concurrency"])
+            {
+                return error.response();
+            }
+            let name = match body.get("name") {
+                Some(Value::String(name)) if (1..=64).contains(&name.chars().count()) => {
+                    name.clone()
+                }
+                _ => return ConsoleError::body_open(400, "invalid name").response(),
+            };
+            let idempotency_key = match optional_idempotency_key(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let max_concurrency = match optional_max_concurrency(
+                &body,
+                SHARE_KEY_MAX_CONCURRENCY_MAX,
+                "max_concurrency must be an integer in 1..48",
+            ) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match writer.create_key_legacy(&name, max_concurrency, idempotency_key.as_deref()) {
+                Ok(payload) => send_json(201, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("POST", ["keys", key_id, "test"]) => {
+            if let Err(error) = reject_unknown_fields(&body, &["expected_row_version"]) {
+                return error.response();
+            }
+            let expected = match required_positive_expected_version(
+                &body,
+                "invalid key_id or expected_row_version",
+            ) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            if key_id.is_empty() || key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id or expected_row_version")
+                    .response();
+            }
+            let payload = writer.test_key(
+                key_id,
+                expected,
+                false,
+                state.config.public_origin.as_deref(),
+            );
+            send_json(200, &payload)
+        }
+        ("POST", ["keys", key_id, "rotate"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["idempotency_key", "expected_row_version"])
+            {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let idempotency_key = match optional_idempotency_key(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let expected = match required_expected_version(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match writer.rotate_key_legacy(key_id, idempotency_key.as_deref(), expected) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("POST", ["keys", key_id, "revoke-and-terminate"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["idempotency_key", "expected_row_version"])
+            {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let idempotency_key = match optional_idempotency_key(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let expected = match required_positive_expected_version(
+                &body,
+                "expected_row_version must be a positive integer",
+            ) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match writer.revoke_and_terminate_key(key_id, expected, idempotency_key.as_deref()) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("PATCH", ["keys", key_id]) => {
+            if body.contains_key("enabled") {
+                return ConsoleError::body_open(400, "enabled_not_writable").response();
+            }
+            if let Err(error) =
+                reject_unknown_fields(&body, &["name", "max_concurrency", "expected_row_version"])
+            {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let name = match body.get("name") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(name)) if (1..=64).contains(&name.chars().count()) => {
+                    Some(name.clone())
+                }
+                _ => return ConsoleError::body_open(400, "invalid name").response(),
+            };
+            let max_concurrency = match optional_max_concurrency(
+                &body,
+                SHARE_KEY_MAX_CONCURRENCY_MAX,
+                "max_concurrency must be an integer in 1..48",
+            ) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let expected = match required_expected_version(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match writer.update_key(key_id, name.as_deref(), max_concurrency, expected) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("PATCH", ["settings"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["share_max_concurrency", "expected_share_max"])
+            {
+                return error.response();
+            }
+            let share_max = match body.get("share_max_concurrency") {
+                Some(Value::Number(number)) => match number.as_i64() {
+                    Some(value) if (1..=64).contains(&value) => value,
+                    _ => {
+                        return ConsoleError::body_open(
+                            400,
+                            "share_max_concurrency must be an integer in 1..64",
+                        )
+                        .response();
+                    }
+                },
+                _ => {
+                    return ConsoleError::body_open(
+                        400,
+                        "share_max_concurrency must be an integer in 1..64",
+                    )
+                    .response();
+                }
+            };
+            let expected = match body.get("expected_share_max") {
+                None | Some(Value::Null) => None,
+                Some(Value::Number(number)) => match number.as_i64() {
+                    Some(value) => Some(value),
+                    None => {
+                        return ConsoleError::body_open(
+                            400,
+                            "expected_share_max must be an integer",
+                        )
+                        .response();
+                    }
+                },
+                _ => {
+                    return ConsoleError::body_open(400, "expected_share_max must be an integer")
+                        .response();
+                }
+            };
+            match writer.set_share_limits(share_max, expected) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("DELETE", ["keys", key_id]) => {
+            if let Err(error) = reject_unknown_fields(&body, &["expected_row_version"]) {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let expected = match required_expected_version(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match writer.delete_key(key_id, expected) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("POST", ["start"]) | ("POST", ["stop"]) | ("POST", ["emergency-stop"]) => {
+            if let Err(error) = reject_unknown_fields(&body, &["idempotency_key"]) {
+                return error.response();
+            }
+            let idempotency_key = match optional_idempotency_key(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let result = match rest.as_slice() {
+                ["start"] => writer.start(false, idempotency_key.as_deref()),
+                ["stop"] => writer.stop(idempotency_key.as_deref()),
+                _ => writer.emergency_stop_legacy(idempotency_key.as_deref()),
+            };
+            match result {
+                Ok(payload) => send_json(202, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
         _ => ConsoleError::unknown_path().response(),
+    }
+}
+
+const SHARE_KEY_MAX_CONCURRENCY_MAX: i64 = 48;
+
+fn optional_idempotency_key(body: &Map<String, Value>) -> Result<Option<String>, Response> {
+    match body.get("idempotency_key") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(key)) if (1..=128).contains(&key.chars().count()) => {
+            Ok(Some(key.clone()))
+        }
+        _ => Err(ConsoleError::body_open(400, "invalid idempotency_key").response()),
+    }
+}
+
+fn optional_max_concurrency(
+    body: &Map<String, Value>,
+    max: i64,
+    message: &str,
+) -> Result<Option<i64>, Response> {
+    match body.get("max_concurrency") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => match number.as_i64() {
+            Some(value) if (1..=max).contains(&value) => Ok(Some(value)),
+            _ => Err(ConsoleError::body_open(400, message).response()),
+        },
+        _ => Err(ConsoleError::body_open(400, message).response()),
+    }
+}
+
+fn required_expected_version(body: &Map<String, Value>) -> Result<i64, Response> {
+    required_positive_expected_version(body, "expected_row_version required")
+}
+
+fn required_positive_expected_version(
+    body: &Map<String, Value>,
+    message: &str,
+) -> Result<i64, Response> {
+    match body.get("expected_row_version") {
+        Some(Value::Number(number)) => match number.as_i64() {
+            Some(value) if value >= 1 => Ok(value),
+            _ => Err(ConsoleError::body_open(400, message).response()),
+        },
+        _ => Err(ConsoleError::body_open(400, message).response()),
     }
 }
 

@@ -9,8 +9,10 @@
 //! blocked publish intent, never a fake success. Plaintext rides only the
 //! immediate create/rotate response and never an operation row.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 use um_store::secret::load_key_file;
@@ -86,6 +88,48 @@ pub trait ShareWriteSeams: Send + Sync {
     ) -> Result<Value, ShareWriteError>;
 
     fn emergency_stop(&self) -> Result<Value, ShareWriteError>;
+
+    /// `ShareManager.start`: a lifecycle action is a broker/host operation, so
+    /// an unwired seam refuses instead of inventing an operation id.
+    fn start(
+        &self,
+        _explicit: bool,
+        _idempotency_key: Option<&str>,
+    ) -> Result<Value, ShareWriteError> {
+        Err(ShareWriteError::broker(
+            "share host lifecycle seam is not wired; refusing to fake an accepted action",
+        ))
+    }
+
+    fn graceful_stop(&self, _idempotency_key: Option<&str>) -> Result<Value, ShareWriteError> {
+        Err(ShareWriteError::broker(
+            "share host lifecycle seam is not wired; refusing to fake an accepted action",
+        ))
+    }
+
+    fn emergency_stop_action(
+        &self,
+        _idempotency_key: Option<&str>,
+    ) -> Result<Value, ShareWriteError> {
+        Err(ShareWriteError::broker(
+            "share host lifecycle seam is not wired; refusing to fake an accepted action",
+        ))
+    }
+
+    /// `BrokerClientAdapter.host_verify("running")`: three-state evidence.
+    fn gateway_running(&self) -> Option<bool> {
+        None
+    }
+
+    /// The explicit version-bound public probe. `None` means the probe seam is
+    /// not wired; the caller reports an honest failure, never a success.
+    fn probe_models(&self, _secret: &str, _public_url: &str) -> Option<Value> {
+        None
+    }
+
+    fn probe_models_private(&self, _secret: &str) -> Option<Value> {
+        None
+    }
 }
 
 pub struct UnwiredWriteSeams;
@@ -123,6 +167,7 @@ pub struct ShareWriteStore {
     last_published: Mutex<Option<(i64, String)>>,
     last_failure: Mutex<Option<Value>>,
     last_counts: Mutex<AckCounts>,
+    active_probes: Mutex<HashSet<String>>,
 }
 
 impl ShareWriteStore {
@@ -146,6 +191,7 @@ impl ShareWriteStore {
             last_published: Mutex::new(None),
             last_failure: Mutex::new(None),
             last_counts: Mutex::new(AckCounts::default()),
+            active_probes: Mutex::new(HashSet::new()),
         }
     }
 
@@ -309,6 +355,23 @@ impl ShareWriteStore {
         &self,
         key_id: &str,
         expected_row_version: i64,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, ShareWriteError> {
+        let mut payload =
+            self.revoke_and_terminate(key_id, expected_row_version, idempotency_key)?;
+        let store = self.open()?;
+        let key = store.get_key(key_id).map_err(ShareWriteError::store)?;
+        payload["key"] = console_public_row(&key);
+        payload["revoked"] = json!(true);
+        Ok(payload)
+    }
+
+    /// The legacy `/api/share/*` answer: the manager result without the
+    /// facade-only `key`/`plaintext` fields.
+    fn revoke_and_terminate(
+        &self,
+        key_id: &str,
+        expected_row_version: i64,
         _idempotency_key: Option<&str>,
     ) -> Result<Value, ShareWriteError> {
         let mut store = self.open()?;
@@ -316,28 +379,280 @@ impl ShareWriteStore {
             .update_key(key_id, None, Some(false), None, Some(expected_row_version))
             .map_err(ShareWriteError::store)?;
         let terminate_keys = [key_id.to_string()];
-        self.require_applied(&mut store, result, Some(&terminate_keys))?;
+        let disabled = self.require_applied(&mut store, result, Some(&terminate_keys))?;
         let counts = self
             .last_counts
             .lock()
             .map(|counts| counts.clone())
             .unwrap_or_default();
-        let terminated = counts.terminated;
-        let confirmed = terminated.is_some();
-        let key = store.get_key(key_id).map_err(ShareWriteError::store)?;
-        Ok(json!({
-            "key": console_public_row(&key),
-            "revoked": true,
-            "terminated": terminated,
-            "released": counts.released,
-            "aborted": counts.aborted,
-            "upstream_closed": counts.upstream_closed,
-            "note": if confirmed {
+        let confirmed = counts.terminated.is_some();
+        let mut payload = disabled.as_object().cloned().unwrap_or_default();
+        payload.insert("terminated".to_string(), json!(counts.terminated));
+        payload.insert("released".to_string(), json!(counts.released));
+        payload.insert("aborted".to_string(), json!(counts.aborted));
+        payload.insert("upstream_closed".to_string(), json!(counts.upstream_closed));
+        payload.insert(
+            "note".to_string(),
+            json!(if confirmed {
                 "已撤销并确认终止在途请求；已提交上游的消耗不可撤回"
             } else {
                 "已撤销；在途确认未完成；已提交上游的消耗不可撤回"
-            },
+            }),
+        );
+        Ok(Value::Object(payload))
+    }
+
+    /// The legacy `/api/share/keys` answer: the manager result without the
+    /// facade-only `key`/`plaintext` fields.
+    pub fn create_key_legacy(
+        &self,
+        name: &str,
+        max_concurrency: Option<i64>,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, ShareWriteError> {
+        let mut payload = self.create_key(name, max_concurrency, idempotency_key)?;
+        strip_facade_fields(&mut payload);
+        Ok(payload)
+    }
+
+    pub fn rotate_key_legacy(
+        &self,
+        key_id: &str,
+        idempotency_key: Option<&str>,
+        expected_row_version: i64,
+    ) -> Result<Value, ShareWriteError> {
+        let mut payload = self.rotate_key(key_id, idempotency_key, expected_row_version)?;
+        strip_facade_fields(&mut payload);
+        Ok(payload)
+    }
+
+    /// `ShareManager.start`: the lifecycle action is a broker/host operation.
+    pub fn start(
+        &self,
+        explicit: bool,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, ShareWriteError> {
+        self.seams.start(explicit, idempotency_key)
+    }
+
+    pub fn stop(&self, idempotency_key: Option<&str>) -> Result<Value, ShareWriteError> {
+        self.seams.graceful_stop(idempotency_key)
+    }
+
+    pub fn emergency_stop_legacy(
+        &self,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, ShareWriteError> {
+        self.seams.emergency_stop_action(idempotency_key)
+    }
+
+    /// `ShareManager.normalize_limits`: the explicit operator normalization
+    /// action, never a silent startup migration. A lowering whose publication
+    /// was not confirmed is reported through `blocked`.
+    pub fn normalize_limits(&self) -> Result<Value, ShareWriteError> {
+        let store = self.open()?;
+        let stored = store
+            .share_max_concurrency()
+            .map_err(ShareWriteError::store)?;
+        let global_before = stored;
+        let mut global_after = stored;
+        let mut blocked = false;
+        let mut changed = false;
+        if stored > SHARE_MAX_CONCURRENCY_MAX {
+            if self
+                .set_share_limits(SHARE_MAX_CONCURRENCY_MAX, Some(stored))
+                .is_err()
+            {
+                blocked = true;
+            }
+            global_after = SHARE_MAX_CONCURRENCY_MAX;
+            changed = true;
+        } else if stored < SHARE_MAX_CONCURRENCY_MAX {
+            self.set_share_limits(SHARE_MAX_CONCURRENCY_MAX, None)?;
+            global_after = SHARE_MAX_CONCURRENCY_MAX;
+            changed = true;
+        }
+        let rows = store.list_keys(false).map_err(ShareWriteError::store)?;
+        let mut keys = Vec::new();
+        for row in rows {
+            let before = row
+                .get("max_concurrency")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            if before <= KEY_MAX_CONCURRENCY_MAX {
+                continue;
+            }
+            let key_id = row
+                .get("key_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let row_version = row
+                .get("row_version")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            if self
+                .update_key(key_id, None, Some(KEY_MAX_CONCURRENCY_MAX), row_version)
+                .is_err()
+            {
+                blocked = true;
+            }
+            keys.push(json!({
+                "id": key_id,
+                "before": before,
+                "after": KEY_MAX_CONCURRENCY_MAX,
+            }));
+            changed = true;
+        }
+        Ok(json!({
+            "changed": changed,
+            "global": {"before": global_before, "after": global_after},
+            "keys": keys,
+            "blocked": blocked,
         }))
+    }
+
+    /// `console/share_probe.py::test_key`: the explicit version-bound probe.
+    /// The plaintext reaches only the injected probe seam and never the
+    /// response, an operation record, a URL or an error.
+    pub fn test_key(
+        &self,
+        key_id: &str,
+        expected_row_version: i64,
+        private: bool,
+        public_origin: Option<&str>,
+    ) -> Value {
+        let mut result = json!({
+            "key_id": key_id,
+            "row_version": expected_row_version,
+            "connected": false,
+            "reason": "unconfirmed",
+            "stage": "configuration",
+            "tested_from": if private { "private" } else { "public" },
+            "public_url": Value::Null,
+            "dns": Value::Null,
+            "checked_at": epoch_seconds(),
+        });
+        let Some(_guard) = self.begin_probe(key_id) else {
+            result["reason"] = json!("test_in_progress");
+            return result;
+        };
+        let mut store = match self.open() {
+            Ok(store) => store,
+            Err(error) => {
+                result["reason"] = json!(if error.kind == ShareWriteErrorKind::NotFound {
+                    "key_changed"
+                } else {
+                    "secret_unavailable"
+                });
+                return result;
+            }
+        };
+        let row = match store.get_key(key_id) {
+            Ok(row) => row,
+            Err(_) => {
+                result["reason"] = json!("key_changed");
+                return result;
+            }
+        };
+        if row.get("row_version").and_then(Value::as_i64) != Some(expected_row_version) {
+            result["reason"] = json!("key_changed");
+            return result;
+        }
+        if !row.get("deleted_at").map(Value::is_null).unwrap_or(true)
+            || row.get("enabled").and_then(Value::as_bool) != Some(true)
+        {
+            result["reason"] = json!("key_disabled");
+            return result;
+        }
+        if !private {
+            // The old Funnel fallback is retired (#33): an unconfigured or
+            // invalid public origin is never replaced by a guessed host.
+            let resolved = crate::share_read::resolve_public_origin(public_origin);
+            result["public_url"] = if resolved.source == Some("configured") {
+                resolved.url.map(Value::String).unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            if result["public_url"].is_null() {
+                result["reason"] = json!("public_url_unavailable");
+                return result;
+            }
+        }
+        if self.seams.gateway_running() != Some(true) {
+            result["reason"] = json!("gateway_unconfirmed");
+            return result;
+        }
+        let secret = match store.reveal_key_secret(key_id, Some(expected_row_version)) {
+            Ok(payload) => payload
+                .get("secret")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            Err(error) => {
+                result["reason"] = json!(match error.kind() {
+                    "NotFound" | "Conflict" | "Disabled" | "VersionMismatch" => {
+                        "key_changed"
+                    }
+                    _ => "secret_unavailable",
+                });
+                return result;
+            }
+        };
+        let outcome = if private {
+            self.seams.probe_models_private(&secret)
+        } else {
+            self.seams
+                .probe_models(&secret, result["public_url"].as_str().unwrap_or_default())
+        };
+        match outcome {
+            Some(outcome) => {
+                if let (Value::Object(target), Value::Object(extra)) = (&mut result, outcome) {
+                    for (key, value) in extra {
+                        target.insert(key, value);
+                    }
+                }
+            }
+            None => {
+                result["connected"] = json!(false);
+                result["reason"] = json!("connection_failed");
+                result["stage"] = json!("models");
+            }
+        }
+        match store.get_key(key_id) {
+            Ok(current) => {
+                if current.get("row_version").and_then(Value::as_i64) != Some(expected_row_version)
+                    || current.get("enabled").and_then(Value::as_bool) != Some(true)
+                    || !current
+                        .get("deleted_at")
+                        .map(Value::is_null)
+                        .unwrap_or(true)
+                {
+                    result["connected"] = json!(false);
+                    result["reason"] = json!("key_changed");
+                }
+            }
+            Err(_) => {
+                result["connected"] = json!(false);
+                result["reason"] = json!("key_changed");
+            }
+        }
+        result["checked_at"] = json!(epoch_seconds());
+        result
+    }
+
+    fn begin_probe(&self, key_id: &str) -> Option<ProbeGuard<'_>> {
+        let mut active = self
+            .active_probes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if active.contains(key_id) || active.len() >= 2 {
+            return None;
+        }
+        active.insert(key_id.to_string());
+        Some(ProbeGuard {
+            store: self,
+            key_id: key_id.to_string(),
+        })
     }
 
     fn publish_response(
@@ -725,6 +1040,34 @@ fn object(pairs: &[(&str, Value)]) -> Map<String, Value> {
         map.insert((*key).to_string(), value.clone());
     }
     map
+}
+
+/// A bounded per-key probe slot: one probe per key, two globally.
+struct ProbeGuard<'a> {
+    store: &'a ShareWriteStore,
+    key_id: String,
+}
+
+impl Drop for ProbeGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.store.active_probes.lock() {
+            active.remove(&self.key_id);
+        }
+    }
+}
+
+fn strip_facade_fields(payload: &mut Value) {
+    if let Value::Object(map) = payload {
+        map.remove("key");
+        map.remove("plaintext");
+    }
+}
+
+fn epoch_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 /// Test seam: `usagesrv.py::_console_share_public_row`.
