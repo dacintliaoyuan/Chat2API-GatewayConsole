@@ -444,34 +444,23 @@ def _record_share_gate(fixture, gateway, share_path, root):
     })
     gate.set_state("running")
 
-    # Global concurrency: two keys with per-key limit 1 and a one-key global
-    # limit is a config fact, not a handler mutation; record it by constructing
-    # a second gate over a projection-shaped config.
-    projection_path = root / "share-projection.json"
-    projection_path.write_text(json.dumps({
-        "schema_version": 2,
-        "config_generation": 3,
-        "share_max_concurrency": 1,
-        "data": [
-            {"key_id": "friend", "name": "friend",
-             "secret_hash": hashlib.sha256(b"secret").hexdigest(),
-             "secret_version": 1, "enabled": True, "max_concurrency": 1},
-            {"key_id": "second", "name": "second",
-             "secret_hash": hashlib.sha256(b"second-secret").hexdigest(),
-             "secret_version": 1, "enabled": True, "max_concurrency": 1},
-        ],
-    }), encoding="utf-8")
-    global_gate = ShareGate(projection_path)
+    # Global concurrency: two keys in flight and a two-request global limit.
+    global_gate = ShareGate(share_path)
     first = global_gate.authenticate(
         _headers([("Authorization", "Bearer secret")]), True)
     second = global_gate.authenticate(
         _headers([("Authorization", "Bearer second-secret")]), True)
     global_gate.acquire(first[0]["key_id"], first[1]["config_generation"],
                         first[0]["secret_version"])
-    reason = {}
     global_gate.acquire(second[0]["key_id"],
                         second[1]["config_generation"],
-                        second[0]["secret_version"], reason_out=reason)
+                        second[0]["secret_version"])
+    third = global_gate.authenticate(
+        _headers([("Authorization", "Bearer third-secret")]), True)
+    reason = {}
+    global_gate.acquire(third[0]["key_id"],
+                        third[1]["config_generation"],
+                        third[0]["secret_version"], reason_out=reason)
     fixture["shareGate"]["gateReasons"].append({
         "name": "share_concurrency",
         "reason": reason.get("reason"),

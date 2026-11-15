@@ -84,6 +84,9 @@ pub fn projection_share_config() -> String {
             {"key_id": "second", "name": "second",
              "secret_hash": sha256_hex(SECOND_SECRET),
              "secret_version": 1, "enabled": true, "max_concurrency": 1},
+            {"key_id": "third", "name": "third",
+             "secret_hash": sha256_hex(THIRD_SECRET),
+             "secret_version": 1, "enabled": true, "max_concurrency": 1},
         ],
     })
     .to_string()
@@ -129,13 +132,25 @@ impl Drop for TempDir {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StubBehaviour {
     pub delay: Duration,
     pub models_status: u16,
     pub models_body: Option<Value>,
     pub version_status: u16,
     pub version_body: Option<Value>,
+}
+
+impl Default for StubBehaviour {
+    fn default() -> Self {
+        Self {
+            delay: Duration::ZERO,
+            models_status: 200,
+            models_body: None,
+            version_status: 200,
+            version_body: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

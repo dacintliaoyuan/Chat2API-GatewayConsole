@@ -582,7 +582,7 @@
     "reason": "state_not_accepting"
    },
    {
-    "detail": "global share concurrency limit reached (max 1 in-flight requests)",
+    "detail": "global share concurrency limit reached (max 2 in-flight requests)",
     "name": "share_concurrency",
     "reason": "share_concurrency"
    },
