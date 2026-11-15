@@ -1,0 +1,807 @@
+{
+ "bodyRejection": {
+  "console": {
+   "content-encoding": {
+    "code": "unsupported_body_encoding",
+    "parsed": null,
+    "status": 400
+   },
+   "content-type-missing": {
+    "code": "content_type_required",
+    "parsed": null,
+    "status": 400
+   },
+   "content-type-wrong": {
+    "code": "content_type_required",
+    "parsed": null,
+    "status": 400
+   },
+   "duplicate-content-length": {
+    "code": "invalid_content_length",
+    "parsed": null,
+    "status": 400
+   },
+   "duplicate-sensitive-header": {
+    "message": "duplicate header: Content-Type",
+    "status": 400
+   },
+   "invalid-content-length": {
+    "code": "invalid_content_length",
+    "parsed": null,
+    "status": 400
+   },
+   "invalid-json": {
+    "code": "invalid_json",
+    "parsed": null,
+    "status": 400
+   },
+   "non-object": {
+    "code": "invalid_json",
+    "parsed": null,
+    "status": 400
+   },
+   "request-too-large": {
+    "code": "request_too_large",
+    "parsed": null,
+    "status": 413
+   },
+   "transfer-encoding": {
+    "code": "unsupported_body_encoding",
+    "parsed": null,
+    "status": 400
+   },
+   "unknown-field": {
+    "body": {
+     "error": "unknown field(s): ['unknown']"
+    },
+    "status": 400
+   }
+  },
+  "share": {
+   "invalid-content-length": {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "Invalid Content-Length header",
+      "type": "invalid_request"
+     }
+    },
+    "status": 400,
+    "target": "/v1/chat/completions"
+   },
+   "invalid-json": {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "Request body is not valid JSON",
+      "type": "invalid_json"
+     }
+    },
+    "status": 400,
+    "target": "/v1/chat/completions"
+   },
+   "non-object": {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "Request body must be a JSON object",
+      "type": "invalid_body"
+     }
+    },
+    "status": 400,
+    "target": "/v1/chat/completions"
+   },
+   "payload-too-large": {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "Request body too large",
+      "type": "payload_too_large"
+     }
+    },
+    "status": 413,
+    "target": "/v1/chat/completions"
+   },
+   "unknown-chat-field": {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "unsupported_chat_request",
+      "type": "unsupported_chat_request"
+     }
+    },
+    "status": 400,
+    "target": "/v1/chat/completions"
+   },
+   "unknown-messages-field": {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "unsupported_messages_request",
+      "type": "unsupported_messages_request"
+     }
+    },
+    "status": 400,
+    "target": "/v1/messages"
+   },
+   "unknown-responses-field": {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "unsupported_responses_request",
+      "type": "chat2api_error"
+     }
+    },
+    "status": 400,
+    "target": "/v1/responses"
+   }
+  }
+ },
+ "closeOnError": {
+  "connection": "close",
+  "status": 403,
+  "willClose": true
+ },
+ "control": {
+  "host-foreign": {
+   "body": {
+    "error": {
+     "detail": null,
+     "message": "Local management endpoint denied",
+     "type": "chat2api_error"
+    }
+   },
+   "status": 403
+  },
+  "missing": {
+   "body": {
+    "error": {
+     "detail": null,
+     "message": "Local management token missing or invalid",
+     "type": "chat2api_error"
+    }
+   },
+   "status": 403
+  },
+  "origin-present": {
+   "body": {
+    "error": {
+     "detail": null,
+     "message": "Local management endpoint denied",
+     "type": "chat2api_error"
+    }
+   },
+   "status": 403
+  },
+  "valid": {
+   "body": {
+    "released": 0
+   },
+   "status": 200
+  },
+  "wrong-token": {
+   "body": {
+    "error": {
+     "detail": null,
+     "message": "Local management token missing or invalid",
+     "type": "chat2api_error"
+    }
+   },
+   "status": 403
+  }
+ },
+ "cors": {
+  "optionsAllowed": {
+   "allowHeaders": "Content-Type, Authorization, X-Api-Key, Anthropic-Version, Anthropic-Beta",
+   "allowMethods": "GET, POST, OPTIONS",
+   "allowOrigin": "https://allowed.example",
+   "status": 204
+  },
+  "optionsDenied": {
+   "allowOrigin": null,
+   "status": 204
+  },
+  "originAllowed": {
+   "allowOrigin": "https://allowed.example",
+   "status": 400
+  },
+  "originDenied": {
+   "allowOrigin": null,
+   "body": {
+    "error": {
+     "detail": null,
+     "message": "Browser origins are not allowed by default; list the origin in CHAT2API_ALLOWED_ORIGINS to permit it",
+     "type": "origin_denied"
+    }
+   },
+   "status": 403
+  }
+ },
+ "metadata": {
+  "fixture": true,
+  "generatedFrom": "chat2api/chat2api.py + chat2api/share_auth.py",
+  "source": "tests/generate_rust_gateway_fixture.py",
+  "upstream": "in-process stub on 127.0.0.1:0"
+ },
+ "readOnly": {
+  "health": {
+   "shape": {
+    "object": {
+     "authentication": {
+      "object": {
+       "error": "null",
+       "label": "string",
+       "primary": "null",
+       "state": "string"
+      }
+     },
+     "backend": "string",
+     "chat2api_build": "string",
+     "chat2api_version": "string",
+     "docs": "string",
+     "login_window_deadline_epoch": "null",
+     "login_window_s": "null",
+     "models": "number",
+     "recovery": {
+      "object": {
+       "max_sessions": "number",
+       "next_attempt_epoch": "null",
+       "session_starts": "number",
+       "state": "string"
+      }
+     },
+     "status": "string",
+     "upstream": {
+      "object": {
+       "config_attempt_epoch": "number",
+       "config_checked_epoch": "number",
+       "config_last_failure": "null",
+       "config_refreshing": "bool",
+       "enable_api_keys": "bool",
+       "name": "string",
+       "oauth_providers": {
+        "array": [
+         "string"
+        ]
+       },
+       "version": "string"
+      }
+     },
+     "upstream_reachability": {
+      "object": {
+       "changed_epoch": "number",
+       "checked_epoch": "number",
+       "last_ok_epoch": "number",
+       "outage_started_epoch": "null",
+       "reason": "string",
+       "state": "string",
+       "upstream_status": "number"
+      }
+     },
+     "watch": {
+      "object": {
+       "last_round_epoch": "null",
+       "last_round_outcome": "null",
+       "next_round_due": "null",
+       "rounds": "number",
+       "thread_alive": "bool"
+      }
+     }
+    }
+   },
+   "status": 200
+  },
+  "models": {
+   "body": {
+    "data": [
+     {
+      "id": "fixture-model-a",
+      "name": "Fixture A"
+     },
+     {
+      "id": "fixture-model-b",
+      "name": "Fixture B"
+     }
+    ],
+    "object": "list"
+   },
+   "status": 200
+  },
+  "modelsRawFresh": {
+   "body": {
+    "data": [
+     {
+      "id": "fixture-model-a",
+      "name": "Fixture A"
+     },
+     {
+      "id": "fixture-model-b",
+      "name": "Fixture B"
+     }
+    ],
+    "object": "list"
+   },
+   "marker": "1",
+   "status": 200
+  },
+  "readyValid": {
+   "shape": {
+    "object": {
+     "authentication": "string",
+     "reason": "null",
+     "status": "string",
+     "upstream": {
+      "object": {
+       "config_attempt_epoch": "number",
+       "config_checked_epoch": "number",
+       "config_last_failure": "null",
+       "config_refreshing": "bool",
+       "enable_api_keys": "bool",
+       "name": "string",
+       "oauth_providers": {
+        "array": [
+         "string"
+        ]
+       },
+       "version": "string"
+      }
+     },
+     "upstream_reachability": {
+      "object": {
+       "changed_epoch": "number",
+       "checked_epoch": "number",
+       "last_ok_epoch": "number",
+       "outage_started_epoch": "null",
+       "reason": "null",
+       "state": "string",
+       "upstream_status": "number"
+      }
+     },
+     "upstream_status": "number"
+    }
+   },
+   "status": 200
+  },
+  "version": {
+   "shape": {
+    "object": {
+     "chat2api": "string",
+     "chat2api_build": "string",
+     "chat2api_source_rev": "string",
+     "openwebui": {
+      "object": {
+       "version": "string"
+      }
+     },
+     "retry_policy": {
+      "object": {
+       "auto_trim_current_turn_images": "bool",
+       "auto_trim_historical_images": "bool",
+       "max_images": "number",
+       "max_physical_attempts": "number",
+       "max_request_seconds": "number",
+       "repetition_retries": "number",
+       "slow_threshold_seconds": "number",
+       "upstream_fast_retries": "number",
+       "upstream_slow_retries": "number"
+      }
+     }
+    }
+   },
+   "status": 200
+  },
+  "versionShare": {
+   "body": {
+    "error": {
+     "detail": null,
+     "message": "route_not_shared",
+     "type": "route_not_shared"
+    }
+   },
+   "status": 404
+  }
+ },
+ "readyRejected": {
+  "body": {
+   "authentication": "rejected",
+   "reason": "upstream_rejected",
+   "status": "not_ready",
+   "upstream_status": 401
+  },
+  "status": 503
+ },
+ "shareGate": {
+  "credentialCases": [
+   {
+    "body": {
+     "data": [
+      {
+       "id": "fixture-model-a",
+       "name": "Fixture A"
+      },
+      {
+       "id": "fixture-model-b",
+       "name": "Fixture B"
+      }
+     ],
+     "object": "list"
+    },
+    "method": "GET",
+    "name": "bearer",
+    "status": 200,
+    "target": "/v1/models"
+   },
+   {
+    "body": {
+     "error": {
+      "code": "invalid_api_key",
+      "detail": null,
+      "message": "invalid_api_key",
+      "type": "share_gateway_error"
+     }
+    },
+    "method": "GET",
+    "name": "duplicate-authorization",
+    "status": 401,
+    "target": "/v1/models"
+   },
+   {
+    "body": {
+     "error": {
+      "code": "invalid_api_key",
+      "detail": null,
+      "message": "invalid_api_key",
+      "type": "share_gateway_error"
+     }
+    },
+    "method": "GET",
+    "name": "empty-authorization",
+    "status": 401,
+    "target": "/v1/models"
+   },
+   {
+    "body": {
+     "error": {
+      "code": "invalid_api_key",
+      "detail": null,
+      "message": "invalid_api_key",
+      "type": "share_gateway_error"
+     }
+    },
+    "method": "GET",
+    "name": "overlong-authorization",
+    "status": 401,
+    "target": "/v1/models"
+   },
+   {
+    "body": {
+     "error": {
+      "code": "invalid_api_key",
+      "detail": null,
+      "message": "invalid_api_key",
+      "type": "share_gateway_error"
+     }
+    },
+    "method": "GET",
+    "name": "wrong-prefix",
+    "status": 401,
+    "target": "/v1/models"
+   },
+   {
+    "body": {
+     "error": {
+      "code": "invalid_api_key",
+      "detail": null,
+      "message": "invalid_api_key",
+      "type": "share_gateway_error"
+     }
+    },
+    "method": "POST",
+    "name": "different-values",
+    "status": 401,
+    "target": "/v1/messages"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "unsupported_messages_request",
+      "type": "unsupported_messages_request"
+     }
+    },
+    "method": "POST",
+    "name": "same-values",
+    "status": 400,
+    "target": "/v1/messages"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "unsupported_messages_request",
+      "type": "unsupported_messages_request"
+     }
+    },
+    "method": "POST",
+    "name": "api-key-only-messages",
+    "status": 400,
+    "target": "/v1/messages"
+   },
+   {
+    "body": {
+     "error": {
+      "code": "invalid_api_key",
+      "detail": null,
+      "message": "invalid_api_key",
+      "type": "share_gateway_error"
+     }
+    },
+    "method": "POST",
+    "name": "api-key-only-chat",
+    "status": 401,
+    "target": "/v1/chat/completions"
+   },
+   {
+    "body": {
+     "error": {
+      "code": "invalid_api_key",
+      "detail": null,
+      "message": "invalid_api_key",
+      "type": "share_gateway_error"
+     }
+    },
+    "method": "POST",
+    "name": "duplicate-api-key",
+    "status": 401,
+    "target": "/v1/messages"
+   },
+   {
+    "body": {
+     "error": {
+      "code": "invalid_api_key",
+      "detail": null,
+      "message": "invalid_api_key",
+      "type": "share_gateway_error"
+     }
+    },
+    "method": "GET",
+    "name": "unknown-key",
+    "status": 401,
+    "target": "/v1/models"
+   }
+  ],
+  "gateReasons": [
+   {
+    "detail": "per-key concurrency limit reached (max 1 in-flight requests for this key)",
+    "name": "per_key_concurrency",
+    "reason": "per_key_concurrency"
+   },
+   {
+    "detail": "the share is draining or stopped and is not accepting new requests",
+    "name": "state_not_accepting",
+    "reason": "state_not_accepting"
+   },
+   {
+    "detail": "global share concurrency limit reached (max 1 in-flight requests)",
+    "name": "share_concurrency",
+    "reason": "share_concurrency"
+   },
+   {
+    "accepted": false,
+    "detail": "per-key rate limit reached (max 20 requests per minute)",
+    "name": "key_rate_limit",
+    "reason": "key_rate_limit"
+   }
+  ],
+  "limitCases": [],
+  "routeCases": [
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "route_not_shared",
+      "type": "route_not_shared"
+     }
+    },
+    "method": "GET",
+    "name": "version",
+    "status": 404,
+    "target": "/v1/version"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "route_not_shared",
+      "type": "route_not_shared"
+     }
+    },
+    "method": "POST",
+    "name": "embeddings",
+    "status": 404,
+    "target": "/v1/embeddings"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "route_not_shared",
+      "type": "route_not_shared"
+     }
+    },
+    "method": "GET",
+    "name": "unknown-v1",
+    "status": 404,
+    "target": "/v1/unknown"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "unsupported_chat_request",
+      "type": "unsupported_chat_request"
+     }
+    },
+    "method": "POST",
+    "name": "chat",
+    "status": 400,
+    "target": "/v1/chat/completions"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "unsupported_messages_request",
+      "type": "unsupported_messages_request"
+     }
+    },
+    "method": "POST",
+    "name": "messages",
+    "status": 400,
+    "target": "/v1/messages"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "unsupported_responses_request",
+      "type": "chat2api_error"
+     }
+    },
+    "method": "POST",
+    "name": "responses",
+    "status": 400,
+    "target": "/v1/responses"
+   },
+   {
+    "body": {
+     "data": [
+      {
+       "id": "fixture-model-a",
+       "name": "Fixture A"
+      },
+      {
+       "id": "fixture-model-b",
+       "name": "Fixture B"
+      }
+     ],
+     "object": "list"
+    },
+    "method": "GET",
+    "name": "models-beta",
+    "status": 200,
+    "target": "/v1/models?beta=true"
+   },
+   {
+    "body": {
+     "data": [
+      {
+       "id": "fixture-model-a",
+       "name": "Fixture A"
+      },
+      {
+       "id": "fixture-model-b",
+       "name": "Fixture B"
+      }
+     ],
+     "object": "list"
+    },
+    "method": "GET",
+    "name": "models-limit",
+    "status": 200,
+    "target": "/v1/models?limit=5"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "route_not_shared",
+      "type": "route_not_shared"
+     }
+    },
+    "method": "GET",
+    "name": "models-limit-zero",
+    "status": 404,
+    "target": "/v1/models?limit=0"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "route_not_shared",
+      "type": "route_not_shared"
+     }
+    },
+    "method": "GET",
+    "name": "models-limit-leading-zero",
+    "status": 404,
+    "target": "/v1/models?limit=05"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "route_not_shared",
+      "type": "route_not_shared"
+     }
+    },
+    "method": "GET",
+    "name": "models-limit-too-large",
+    "status": 404,
+    "target": "/v1/models?limit=1001"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "route_not_shared",
+      "type": "route_not_shared"
+     }
+    },
+    "method": "GET",
+    "name": "models-duplicate-limit",
+    "status": 404,
+    "target": "/v1/models?limit=5&limit=6"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "route_not_shared",
+      "type": "route_not_shared"
+     }
+    },
+    "method": "GET",
+    "name": "models-unknown-query",
+    "status": 404,
+    "target": "/v1/models?beta=false"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "unsupported_messages_request",
+      "type": "unsupported_messages_request"
+     }
+    },
+    "method": "POST",
+    "name": "messages-beta",
+    "status": 400,
+    "target": "/v1/messages?beta=true"
+   },
+   {
+    "body": {
+     "error": {
+      "detail": null,
+      "message": "route_not_shared",
+      "type": "route_not_shared"
+     }
+    },
+    "method": "POST",
+    "name": "messages-unknown-query",
+    "status": 404,
+    "target": "/v1/messages?beta=false"
+   }
+  ]
+ }
+}
