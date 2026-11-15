@@ -85,3 +85,20 @@ pub fn env_map(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, Str
         .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
         .collect()
 }
+
+pub fn replace_tmp(value: &Value, root: &std::path::Path) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, item)| (key.clone(), replace_tmp(item, root)))
+                .collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|item| replace_tmp(item, root)).collect())
+        }
+        Value::String(text) => {
+            Value::String(text.replace("<tmp>", root.to_string_lossy().as_ref()))
+        }
+        other => other.clone(),
+    }
+}

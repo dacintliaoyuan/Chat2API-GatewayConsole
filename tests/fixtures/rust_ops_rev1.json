@@ -2168,7 +2168,7 @@
      "env": "<env>",
      "ok": false,
      "problems": [
-      "unit file unreadable: C:\\Users\\dacint\\AppData\\Local\\Temp\\um-rust-ops-deploy-<tmp>\\missing.service: [Errno 2] No such file or directory: 'C:\\\\Users\\\\dacint\\\\AppData\\\\Local\\\\Temp\\\\um-rust-ops-deploy-<tmp>\\\\missing.service'"
+      "unit file unreadable: <tmp>\\missing.service: [Errno 2] No such file or directory: 'C:\\\\Users\\\\dacint\\\\AppData\\\\Local\\\\Temp\\\\um-rust-ops-deploy-<tmp>\\\\missing.service'"
      ],
      "role": "console",
      "unit": "<unit>"
@@ -2190,25 +2190,82 @@
     "stdout": ""
    }
   },
+  "paths": {
+   "brokenConsoleEnv": {
+    "error": "BackupError",
+    "message": "console environment file unreadable: <tmp>\\broken-paths\\etc\\console.env: [Errno 13] Permission denied: 'C:\\\\Users\\\\dacint\\\\AppData\\\\Local\\\\Temp\\\\um-rust-ops-deploy-<tmp>\\\\broken-paths\\\\etc\\\\console.env'"
+   },
+   "withConsoleEnv": {
+    "budget_db": "<tmp>\\paths\\var/budget.db",
+    "config": "<tmp>\\paths\\etc/share-management.json",
+    "console": "<tmp>\\paths\\console",
+    "console_var": "<tmp>\\paths\\console",
+    "current": "<tmp>\\paths\\current",
+    "etc": "<tmp>\\paths\\etc",
+    "key_file": "<tmp>\\paths\\etc/backup.key",
+    "ledger": "<tmp>\\paths\\console/share-backend/usage-share-backend.jsonl",
+    "remote_dir": "<tmp>\\paths\\var/backup-remote",
+    "security_state": "<tmp>\\paths\\var/security-state.json",
+    "share_secret_key": "<tmp>\\paths\\share-secret.key",
+    "spool": "<tmp>\\paths\\var/backup-spool",
+    "state": "<tmp>\\paths\\var/backup-freshness.json",
+    "store": "<tmp>\\paths\\console/share-store.db",
+    "var": "<tmp>\\paths\\var"
+   },
+   "withOverride": {
+    "budget_db": "<tmp>\\paths\\var/budget.db",
+    "config": "<tmp>\\paths\\etc/share-management.json",
+    "console": "<tmp>\\paths\\console",
+    "console_var": "<tmp>\\paths\\console",
+    "current": "<tmp>\\paths\\current",
+    "etc": "<tmp>\\paths\\etc",
+    "key_file": "<tmp>\\paths\\etc/backup.key",
+    "ledger": "<tmp>\\paths\\console/share-backend/usage-share-backend.jsonl",
+    "remote_dir": "<tmp>\\paths\\var/backup-remote",
+    "security_state": "<tmp>\\paths\\var/security-state.json",
+    "share_secret_key": "/override/share-secret.key",
+    "spool": "<tmp>\\paths\\var/backup-spool",
+    "state": "<tmp>\\paths\\var/backup-freshness.json",
+    "store": "<tmp>\\paths\\console/share-store.db",
+    "var": "<tmp>\\paths\\var"
+   },
+   "withoutConsoleEnv": {
+    "budget_db": "<tmp>\\paths\\var/budget.db",
+    "config": "<tmp>\\paths\\etc/share-management.json",
+    "console": "<tmp>\\paths\\console",
+    "console_var": "<tmp>\\paths\\console",
+    "current": "<tmp>\\paths\\current",
+    "etc": "<tmp>\\paths\\etc",
+    "key_file": "<tmp>\\paths\\etc/backup.key",
+    "ledger": "<tmp>\\paths\\console/share-backend/usage-share-backend.jsonl",
+    "remote_dir": "<tmp>\\paths\\var/backup-remote",
+    "security_state": "<tmp>\\paths\\var/security-state.json",
+    "share_secret_key": "<tmp>\\paths\\current/data/share-secret.key",
+    "spool": "<tmp>\\paths\\var/backup-spool",
+    "state": "<tmp>\\paths\\var/backup-freshness.json",
+    "store": "<tmp>\\paths\\console/share-store.db",
+    "var": "<tmp>\\paths\\var"
+   }
+  },
   "rollbackHelp": {
-   "code": 1,
-   "stdout": "\ufffde\ufffdl\u0006\\\ufffdx\ufffdv\u001c \\\u0000\\\u0000?\u0000\\\u0000C\u0000:\u0000\\\u0000U\u0000s\u0000e\u0000r\u0000s\u0000\\\u0000d\u0000a\u0000c\u0000i\u0000n\u0000t\u0000\\\u0000A\u0000p\u0000p\u0000D\u0000a\u0000t\u0000a\u0000\\\u0000L\u0000o\u0000c\u0000a\u0000l\u0000\\\u0000D\u0000o\u0000c\u0000k\u0000e\u0000r\u0000\\\u0000w\u0000s\u0000l\u0000\\\u0000m\u0000a\u0000i\u0000n\u0000\\\u0000e\u0000x\u0000t\u00004\u0000.\u0000v\u0000h\u0000d\u0000x\u0000\u001d D\ufffd\ufffdR0R \u0000W\u0000S\u0000L\u00002\u0000:\u0000 \u0000\ufffd|\ufffd~~b\nN0R\u0007c\ufffd[\ufffdv\uf344_\u00020 \u0000\n\u0000\n\u0000\u0019\ufffd\ufffd\ufffdN\u0001x\u001a\ufffd \u0000B\u0000a\u0000s\u0000h\u0000/\u0000S\u0000e\u0000r\u0000v\u0000i\u0000c\u0000e\u0000/\u0000C\u0000r\u0000e\u0000a\u0000t\u0000e\u0000I\u0000n\u0000s\u0000t\u0000a\u0000n\u0000c\u0000e\u0000/\u0000M\u0000o\u0000u\u0000n\u0000t\u0000D\u0000i\u0000s\u0000k\u0000/\u0000E\u0000R\u0000R\u0000O\u0000R\u0000_\u0000P\u0000A\u0000T\u0000H\u0000_\u0000N\u0000O\u0000T\u0000_\u0000F\u0000O\u0000U\u0000N\u0000D\u0000\n\u0000\n\u0000\ufffdY\ufffdgdk\u0019\ufffd\ufffd/f\u000fa\u0016Y\u0019\ufffd\ufffd\f\ufffd\ufffd\ufffd\u0003\ufffdQ\ufffd\u001cd\"}\ufffds\tg\ue558\ufffd\u0016b(W \u0000h\u0000t\u0000t\u0000p\u0000s\u0000:\u0000/\u0000/\u0000g\u0000i\u0000t\u0000h\u0000u\u0000b\u0000.\u0000c\u0000o\u0000m\u0000/\u0000m\u0000i\u0000c\u0000r\u0000o\u0000s\u0000o\u0000f\u0000t\u0000/\u0000W\u0000S\u0000L\u0000/\u0000i\u0000s\u0000s\u0000u\u0000e\u0000s\u0000 \u0000\ufffdc\ufffdN\ufffde\ue558\ufffd\u00020\n\u0000\n\u0000"
+   "code": 0,
+   "stdout": "Usage: rollback.sh [--to VERSION] [options]\n\nOptions:\n  --to VERSION         installed release version (default: previous symlink)\n  --drain-budget SEC   total drain budget, 2..900 (default 900)\n  --no-edge            do not stop/start the managed cloudflared unit\n  --recover-backup PATH explicit recovery only: restore this sealed backup;\n                        the release version is NOT switched\n  --recover-security-state PATH\n                        independent latest security state (required with\n                        --recover-backup)\n  -h, --help            show this help\n\nExit codes: 0 success; 64 usage; 66 no target; 68 health check failed and the\ncurrent release was restored; 69 rollback/compensation failed (manual intervention\nrequired; the public entry may still be open); 70 software; 71 command missing;\n72 file error; 73 missing release; 74 I/O; 75 drain timed out; 77 permission.\n"
   },
   "rollbackUnknown": {
-   "code": 1
+   "code": 64
   },
   "rollbackUsage": {
-   "code": 1
+   "code": 64
   },
   "updateHelp": {
-   "code": 1,
-   "stdout": "\ufffde\ufffdl\u0006\\\ufffdx\ufffdv\u001c \\\u0000\\\u0000?\u0000\\\u0000C\u0000:\u0000\\\u0000U\u0000s\u0000e\u0000r\u0000s\u0000\\\u0000d\u0000a\u0000c\u0000i\u0000n\u0000t\u0000\\\u0000A\u0000p\u0000p\u0000D\u0000a\u0000t\u0000a\u0000\\\u0000L\u0000o\u0000c\u0000a\u0000l\u0000\\\u0000D\u0000o\u0000c\u0000k\u0000e\u0000r\u0000\\\u0000w\u0000s\u0000l\u0000\\\u0000m\u0000a\u0000i\u0000n\u0000\\\u0000e\u0000x\u0000t\u00004\u0000.\u0000v\u0000h\u0000d\u0000x\u0000\u001d D\ufffd\ufffdR0R \u0000W\u0000S\u0000L\u00002\u0000:\u0000 \u0000\ufffd|\ufffd~~b\nN0R\u0007c\ufffd[\ufffdv\uf344_\u00020 \u0000\n\u0000\n\u0000\u0019\ufffd\ufffd\ufffdN\u0001x\u001a\ufffd \u0000B\u0000a\u0000s\u0000h\u0000/\u0000S\u0000e\u0000r\u0000v\u0000i\u0000c\u0000e\u0000/\u0000C\u0000r\u0000e\u0000a\u0000t\u0000e\u0000I\u0000n\u0000s\u0000t\u0000a\u0000n\u0000c\u0000e\u0000/\u0000M\u0000o\u0000u\u0000n\u0000t\u0000D\u0000i\u0000s\u0000k\u0000/\u0000E\u0000R\u0000R\u0000O\u0000R\u0000_\u0000P\u0000A\u0000T\u0000H\u0000_\u0000N\u0000O\u0000T\u0000_\u0000F\u0000O\u0000U\u0000N\u0000D\u0000\n\u0000\n\u0000\ufffdY\ufffdgdk\u0019\ufffd\ufffd/f\u000fa\u0016Y\u0019\ufffd\ufffd\f\ufffd\ufffd\ufffd\u0003\ufffdQ\ufffd\u001cd\"}\ufffds\tg\ue558\ufffd\u0016b(W \u0000h\u0000t\u0000t\u0000p\u0000s\u0000:\u0000/\u0000/\u0000g\u0000i\u0000t\u0000h\u0000u\u0000b\u0000.\u0000c\u0000o\u0000m\u0000/\u0000m\u0000i\u0000c\u0000r\u0000o\u0000s\u0000o\u0000f\u0000t\u0000/\u0000W\u0000S\u0000L\u0000/\u0000i\u0000s\u0000s\u0000u\u0000e\u0000s\u0000 \u0000\ufffdc\ufffdN\ufffde\ue558\ufffd\u00020\n\u0000\n\u0000"
+   "code": 0,
+   "stdout": "Usage: update.sh --release <um-share-VERSION.tar.gz> [options]\n       update.sh --version <VERSION> [options]\n\nOptions:\n  --release PATH       new release tar.gz\n  --version VERSION    expected/installed version\n  --sha256 HEX         expected archive SHA-256\n  --drain-budget SEC   total drain budget, 2..900 (default 900)\n  --skip-drain          emergency only: do not wait/drain; refuses by default\n  --no-edge             do not stop/start the managed cloudflared unit\n  --recover-backup PATH explicit recovery only: restore this sealed backup\n  --recover-security-state PATH\n                        independent latest security state (required with\n                        --recover-backup)\n  -h, --help             show this help\n\nExit codes: 0 success; 64 usage; 65 manifest; 66 missing input;\n68 health check failed and the previous release was restored;\n69 rollback/compensation failed (manual intervention required; the public\nentry may still be open); 70 software; 71 OS/command missing; 72 file error;\n73 version conflict; 74 I/O; 75 drain timed out (no version switch);\n77 permission.\n"
   },
   "updateUnknown": {
-   "code": 1
+   "code": 64
   },
   "updateUsage": {
-   "code": 1
+   "code": 64
   }
  },
  "ledger": {

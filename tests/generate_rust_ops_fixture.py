@@ -768,7 +768,42 @@ def deploy_fixture():
 
     tmp = tempfile.TemporaryDirectory(prefix="um-rust-ops-deploy-")
     root = Path(tmp.name)
+    paths_root = root / "paths"
     try:
+        def layout():
+            return backup_restore.deployment_paths(
+                current=str(paths_root / "current"),
+                etc=str(paths_root / "etc"),
+                var=str(paths_root / "var"),
+                console_var=str(paths_root / "console"))
+
+        for field in ("current", "etc", "var", "console"):
+            Path(layout()[field]).mkdir(parents=True, exist_ok=True)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(backup_restore.SHARE_SECRET_KEY_ENV, None)
+            paths_without_console_env = layout()
+            Path(paths_root / "etc" / "console.env").write_text(
+                f"{backup_restore.SHARE_SECRET_KEY_ENV}="
+                f"{paths_root / 'share-secret.key'}" + chr(10),
+                encoding="utf-8")
+            paths_with_console_env = layout()
+            os.environ[backup_restore.SHARE_SECRET_KEY_ENV] = (
+                "/override/share-secret.key")
+            paths_with_override = layout()
+            os.environ.pop(backup_restore.SHARE_SECRET_KEY_ENV, None)
+        broken = root / "broken-paths"
+        (broken / "etc").mkdir(parents=True)
+        (broken / "etc" / "console.env").mkdir()
+        try:
+            backup_restore.deployment_paths(
+                current=str(broken / "current"),
+                etc=str(broken / "etc"),
+                var=str(broken / "var"),
+                console_var=str(broken / "console"))
+        except backup_restore.BackupError as exc:
+            broken_console_env = error_result(exc)
+        else:
+            raise AssertionError("expected an unreadable console.env refusal")
         unit_path = root / "console.service"
         env_path = root / "console.env"
         missing_unit = root / "missing.service"
@@ -820,6 +855,16 @@ def deploy_fixture():
                     "stderr": usage.stderr,
                 },
             },
+            "paths": {
+                "withoutConsoleEnv": normalize_temp_paths(
+                    paths_without_console_env, root),
+                "withConsoleEnv": normalize_temp_paths(
+                    paths_with_console_env, root),
+                "withOverride": normalize_temp_paths(
+                    paths_with_override, root),
+                "brokenConsoleEnv": normalize_temp_paths(
+                    broken_console_env, root),
+            },
             "updateHelp": script_help("update.sh"),
             "rollbackHelp": script_help("rollback.sh"),
             "updateUsage": script_exit("update.sh", ["--drain-budget", "1"]),
@@ -840,22 +885,34 @@ def normalize_temp_paths(value, root):
     import re
 
     text = json.dumps(value, ensure_ascii=False)
-    text = text.replace(str(root), "<tmp>")
+    escaped_root = json.dumps(str(root))[1:-1]
+    text = text.replace(escaped_root, "<tmp>")
     text = re.sub(r"um-rust-ops-deploy-[A-Za-z0-9_]+",
                   "um-rust-ops-deploy-<tmp>", text)
     return json.loads(text)
 
 
+def bash_program():
+    for candidate in (
+        "C:/Program Files/Git/bin/bash.exe",
+        "C:/Program Files/Git/usr/bin/bash.exe",
+        "C:/Program Files (x86)/Git/bin/bash.exe",
+    ):
+        if Path(candidate).is_file():
+            return candidate
+    return "bash"
+
+
 def script_help(name):
     completed = subprocess.run(
-        ["bash", str(ROOT / "um-cloud-deploy" / name), "--help"],
+        [bash_program(), str(ROOT / "um-cloud-deploy" / name), "--help"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     return {"code": completed.returncode, "stdout": completed.stdout}
 
 
 def script_exit(name, args):
     completed = subprocess.run(
-        ["bash", str(ROOT / "um-cloud-deploy" / name), *args],
+        [bash_program(), str(ROOT / "um-cloud-deploy" / name), *args],
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     return {"code": completed.returncode}
 

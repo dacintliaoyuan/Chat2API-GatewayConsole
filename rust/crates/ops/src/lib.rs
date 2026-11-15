@@ -5,10 +5,15 @@
 //! CLI/JSON contracts. It never writes a ledger, changes a tunnel, runs a backup
 //! or switches a deployment.
 
+pub mod deploy;
 pub mod ingress;
 pub mod ledger;
 pub mod public_probe;
 
+pub use deploy::{
+    check_deployment_assembly, deployment_assembly_problems, deployment_paths, run_backup_restore,
+    run_deploy_script, DeploymentError, DeploymentPaths,
+};
 pub use ingress::check_ingress;
 pub use ledger::{
     read_share_requests, read_share_usage, Clock, LedgerError, RequestOptions, SystemClock,

@@ -85,6 +85,39 @@ class RustOpsFixtureTests(unittest.TestCase):
         self.assertEqual(cloud["check"]["dnsTruncated"]["reason"], "addresses_truncated")
         self.assertEqual(cloud["check"]["unchecked"]["overall"], "not_checked")
 
+    def test_deploy_surface_records_every_acceptance_case(self):
+        fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        deploy = fixture["deploy"]
+        self.assertEqual(deploy["assembly"]["consoleOk"], [])
+        self.assertEqual(deploy["assembly"]["brokerOk"], [])
+        self.assertTrue(deploy["assembly"]["consoleMissing"])
+        self.assertTrue(deploy["assembly"]["brokerMissing"])
+        self.assertEqual(
+            deploy["assembly"]["unknownRole"],
+            ["unknown deployment role: 'unknown'"],
+        )
+        fallback = deploy["paths"]["withoutConsoleEnv"]["share_secret_key"]
+        self.assertTrue(fallback.replace(chr(92), "/").endswith(
+            "paths/current/data/share-secret.key"))
+        configured = deploy["paths"]["withConsoleEnv"]["share_secret_key"]
+        self.assertTrue(configured.replace(chr(92), "/").endswith(
+            "paths/share-secret.key"))
+        self.assertEqual(
+            deploy["paths"]["withOverride"]["share_secret_key"],
+            "/override/share-secret.key",
+        )
+        self.assertEqual(deploy["cli"]["ok"]["code"], 0)
+        self.assertEqual(deploy["cli"]["ok"]["body"]["ok"], True)
+        self.assertEqual(deploy["cli"]["missing"]["code"], 1)
+        self.assertEqual(deploy["cli"]["missing"]["body"]["ok"], False)
+        self.assertEqual(deploy["cli"]["usage"]["code"], 2)
+        self.assertEqual(deploy["updateHelp"]["code"], 0)
+        self.assertEqual(deploy["rollbackHelp"]["code"], 0)
+        self.assertEqual(deploy["updateUsage"]["code"], 64)
+        self.assertEqual(deploy["rollbackUsage"]["code"], 64)
+        self.assertEqual(deploy["updateUnknown"]["code"], 64)
+        self.assertEqual(deploy["rollbackUnknown"]["code"], 64)
+
 
 if __name__ == "__main__":
     unittest.main()
