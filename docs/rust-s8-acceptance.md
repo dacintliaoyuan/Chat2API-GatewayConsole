@@ -66,6 +66,10 @@ PATH shim 让 `python3` 指向已安装 `cryptography` 的 Python 3.14.6。core/
 三个场景均通过。该记录不是 WSL/Linux 发行版上的运行结果，未在真实 Linux
 内核上复测 AF_UNIX/SO_PEERCRED。
 
+同一脚本不带 evidence 参数时使用默认 `/mnt/d/...` 证据目录；在 Windows Git Bash
+中 `mkdir -p /mnt/...` 返回 `Permission denied`，因此该形式未通过。通过显式
+`D:/tmp/umlinux` 的同一 `--mode full` 运行才是 §3 的证据。
+
 ## 4. 夹具
 
 `tests/fixtures/rust_ops_rev1.json` 由
