@@ -271,6 +271,63 @@ fn operations_seeded_rows_and_limit_cases_match_python() {
     }
 }
 
+struct PanicRuntime;
+
+impl um_console::runtime::RuntimeFacts for PanicRuntime {
+    fn snapshot(
+        &self,
+    ) -> Result<um_console::runtime::RuntimeSnapshot, um_console::runtime::RuntimeError>
+    {
+        panic!("a cloud capability refusal must not read runtime facts");
+    }
+}
+
+#[test]
+fn non_um_read_faces_are_capability_not_assembled_without_probing() {
+    let fixture = fixture();
+    let temp = temp();
+    let console = start_console_with(
+        &temp,
+        std::sync::Arc::new(PanicRuntime),
+        |_| {},
+    );
+    for (prefix, case) in fixture["capability"].as_object().unwrap() {
+        let response = get(console.addr, &format!("/api/console/{prefix}"));
+        assert_eq!(
+            u64::from(response.status),
+            case["status"].as_u64().unwrap(),
+            "{prefix}"
+        );
+        assert_eq!(response.json(), case["body"], "{prefix}");
+    }
+    assert_eq!(
+        um_console::server::cloud_capability_prefixes().len(),
+        fixture["capability"].as_object().unwrap().len()
+    );
+}
+
+#[test]
+fn capability_gate_precedes_the_request_body() {
+    let fixture = fixture();
+    let temp = temp();
+    let console = start_console_with(
+        &temp,
+        std::sync::Arc::new(PanicRuntime),
+        |_| {},
+    );
+    let response = client_request(
+        console.addr,
+        &ClientRequest::post("/api/console/stats", b"{\"x\":1}")
+            .header("Content-Type", "application/json"),
+    )
+    .expect("capability post");
+    assert_eq!(
+        u64::from(response.status),
+        fixture["capability"]["stats"]["status"].as_u64().unwrap()
+    );
+    assert_eq!(response.json(), fixture["capability"]["stats"]["body"]);
+}
+
 #[test]
 fn gw_usagesrv_alias_matches_native() {
     let fixture = fixture();
