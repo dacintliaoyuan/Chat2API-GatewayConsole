@@ -10,6 +10,7 @@
 pub mod body;
 pub mod chat;
 pub mod config;
+pub mod embeddings;
 pub mod error;
 pub mod gate;
 pub mod http;

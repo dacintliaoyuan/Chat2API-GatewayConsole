@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use crate::body::{read_json_body, reject_unknown_fields, BodyPolicy};
 use crate::chat::{handle_chat, ChatResult, ReaderSlots};
 use crate::config::{AuthMode, ConfigError, GatewayConfig};
+use crate::embeddings::handle_embeddings;
 use crate::error::GatewayError;
 use crate::gate::{
     constant_time_eq, ensure_control_token, Admission, InflightCtx, RefusalReason, ShareGate,
@@ -301,6 +302,23 @@ fn dispatch_inner(
         );
     }
 
+    if request.method == "POST" && (path == "/v1/embeddings" || path == "/api/v1/embeddings") {
+        if let Err(error) = local_key_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        if let Err(error) = origin_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        let result = handle_embeddings(state, request, stream);
+        return (
+            match result {
+                ChatResult::Response(response) => RouteOutcome::Response(response),
+                ChatResult::Written { close } => RouteOutcome::Written { close },
+            },
+            None,
+        );
+    }
+
     let response = match request.method.as_str() {
         "GET" => handle_get(state, request),
         "POST" => handle_post(state, request),
@@ -477,15 +495,6 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
                 return GatewayError::invalid_request("key_id is required").response();
             };
             Response::json(200, &json!({"released": gate.terminate_key(key_id)}))
-        }
-        "/v1/embeddings" | "/api/v1/embeddings" => {
-            if let Err(error) = local_key_allowed(state, request) {
-                return error.response();
-            }
-            if let Err(error) = origin_allowed(state, request) {
-                return error.response();
-            }
-            GatewayError::not_implemented("embeddings_forwarding_s2").response()
         }
         "/admin/auth/status" | "/admin/auth/verify" | "/admin/auth/login"
         | "/admin/auth/cancel" | "/admin/shutdown" => {
