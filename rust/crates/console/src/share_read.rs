@@ -705,3 +705,56 @@ pub fn broker_snapshot_for_tests(snapshot: Option<Value>) -> Value {
 pub fn capacity_for_tests(configured: Option<&Value>, maintenance: Option<&Value>) -> Value {
     share_capacity(configured, maintenance)
 }
+
+/// Read-only whitelisted Key labels for the usage read faces.
+///
+/// `share/store.py::read_key_labels`: only `key_id`, `name`, `enabled` and
+/// `deleted_at` are selected. A missing/damaged store is an error so the
+/// caller keeps every label `null` instead of treating it as an empty store.
+pub fn read_key_labels(
+    path: &std::path::Path,
+    wanted: &std::collections::BTreeSet<String>,
+) -> Result<std::collections::BTreeMap<String, KeyLabel>, ConsoleError> {
+    use std::collections::BTreeMap;
+    if wanted.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|_| share_management_error())?;
+    let mut labels = BTreeMap::new();
+    let wanted: Vec<&String> = wanted.iter().collect();
+    for batch in wanted.chunks(400) {
+        let placeholders = vec!["?"; batch.len()].join(",");
+        let sql = format!(
+            "SELECT key_id,name,enabled,deleted_at FROM keys WHERE key_id IN ({placeholders})"
+        );
+        let mut statement = connection
+            .prepare(&sql)
+            .map_err(|_| share_management_error())?;
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(batch.iter()), |row| {
+                let key_id: String = row.get(0)?;
+                let name: String = row.get(1)?;
+                let enabled: Option<i64> = row.get(2).ok();
+                let deleted_at: Option<String> = row.get(3).ok();
+                Ok((
+                    key_id,
+                    KeyLabel {
+                        name,
+                        deleted: deleted_at.is_some() || enabled == Some(0),
+                    },
+                ))
+            })
+            .map_err(|_| share_management_error())?;
+        for row in rows {
+            let (key_id, label) = row.map_err(|_| share_management_error())?;
+            labels.insert(key_id, label);
+        }
+    }
+    Ok(labels)
+}
+
+pub struct KeyLabel {
+    pub name: String,
+    pub deleted: bool,
+}

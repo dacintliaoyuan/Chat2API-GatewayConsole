@@ -24,6 +24,7 @@ use crate::body::{
 };
 use crate::config::{ConfigError, ConsoleConfig, Role};
 use crate::error::ConsoleError;
+use crate::metering::{self, UsageFilters};
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
 use crate::share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
@@ -274,6 +275,8 @@ fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Resp
                 Err(error) => error.response(),
             }
         }
+        ["share-usage"] => share_usage_response(state, raw_target, false),
+        ["share-usage", "requests"] => share_usage_response(state, raw_target, true),
         ["operations"] => match state.operations.list(raw_target) {
             Ok(payload) => send_json(200, &payload),
             Err(error) => error.response(),
@@ -511,6 +514,130 @@ pub fn operation_view_for_tests(row: &rusqlite::Row<'_>) -> rusqlite::Result<Val
 /// Test seam: read one body through the console boundary.
 pub fn read_body_for_tests(request: &Request) -> Result<Map<String, Value>, ConsoleError> {
     read_console_body(request)
+}
+
+/// The share-usage ledger path, or `None` when the configured backend dir is
+/// absent/relative (never a guessed path).
+fn share_ledger_path(state: &AppState) -> Option<std::path::PathBuf> {
+    let dir = state.config.share_backend_dir.as_ref()?;
+    if !dir.is_absolute() {
+        return None;
+    }
+    Some(dir.join("usage-share-backend.jsonl"))
+}
+
+fn share_usage_response(state: &AppState, raw_target: &str, requests: bool) -> Response {
+    let Some(ledger) = share_ledger_path(state) else {
+        return ConsoleError::new(503, json!({"error": "share_ledger_path_unresolved"})).response();
+    };
+    let query = query_values(raw_target);
+    let allowed: &[&str] = if requests {
+        &["window", "key", "model", "result", "cursor", "limit"]
+    } else {
+        &["window", "key", "model", "result"]
+    };
+    if let Some(name) = query.keys().find(|name| !allowed.contains(&name.as_str())) {
+        let _ = name;
+        return ConsoleError::new(
+            400,
+            json!({
+                "error": "invalid_share_usage_query",
+                "reason": "unknown_query_field",
+            }),
+        )
+        .response();
+    }
+    if let Some(name) = query
+        .iter()
+        .find(|(_, values)| values.len() != 1)
+        .map(|(name, _)| name)
+    {
+        let _ = name;
+        return ConsoleError::new(
+            400,
+            json!({
+                "error": "invalid_share_usage_query",
+                "reason": "duplicate_query_field",
+            }),
+        )
+        .response();
+    }
+    let value = |name: &str| query.get(name).and_then(|values| values.first()).cloned();
+    let filters = UsageFilters {
+        window: value("window"),
+        key_id: value("key"),
+        model: value("model"),
+        result: value("result"),
+    };
+    let limit = if requests {
+        match value("limit") {
+            None => metering::SHARE_REQUEST_PAGE_DEFAULT,
+            Some(raw) => {
+                if !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return ConsoleError::new(
+                        400,
+                        json!({
+                            "error": "invalid_share_usage_query",
+                            "reason": "limit",
+                        }),
+                    )
+                    .response();
+                }
+                let parsed = raw.parse::<i64>().unwrap_or_default();
+                if !(1..=metering::SHARE_REQUEST_PAGE_MAX).contains(&parsed) {
+                    return ConsoleError::new(
+                        400,
+                        json!({
+                            "error": "invalid_share_usage_query",
+                            "reason": "limit",
+                        }),
+                    )
+                    .response();
+                }
+                parsed
+            }
+        }
+    } else {
+        0
+    };
+    let cursor = value("cursor");
+    let result = if requests {
+        metering::read_share_requests(&ledger, &filters, cursor.as_deref(), limit, None)
+    } else {
+        metering::read_share_usage(&ledger, &filters, metering::DEFAULT_LIMIT, None)
+    };
+    match result {
+        Ok(mut payload) => {
+            metering::attach_key_labels(
+                &mut payload,
+                if requests { "rows" } else { "keys" },
+                if requests { "keyId" } else { "key_id" },
+                state.config.share_store_file.as_ref(),
+            );
+            send_json(200, &payload)
+        }
+        Err(_) => ConsoleError::new(400, json!({"error": "invalid_share_usage_query"})).response(),
+    }
+}
+
+/// All query-string values grouped by name, Python `parse_qs` semantics.
+fn query_values(raw_target: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut values = std::collections::BTreeMap::new();
+    let Some(query) = raw_target.split_once('?').map(|(_, query)| query) else {
+        return values;
+    };
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let key = decode_query_part(key);
+        if key.is_empty() {
+            continue;
+        }
+        values
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push(decode_query_part(value));
+    }
+    values
 }
 
 /// One query-string value, Python `parse_qs` default semantics: the first

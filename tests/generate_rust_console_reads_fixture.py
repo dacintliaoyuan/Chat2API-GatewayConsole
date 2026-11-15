@@ -11,6 +11,7 @@ port is bound and no production data path is read or written.
 """
 
 import hashlib
+from datetime import datetime, timedelta, timezone
 import http.client
 import importlib.util
 import json
@@ -505,6 +506,164 @@ def secret_section(server, seeded):
         store_module.unprotect_secret = original
 
 
+
+def usage_section(server, root, module):
+    """Pin the usage reader with a fixed clock, plus the HTTP boundary.
+
+    Windows filtering depends on the read instant, so the expected summary and
+    page bodies are produced by the REAL `share/metering.py` readers with an
+    explicit `now`. The HTTP cases pin only the time-independent status
+    codes, the no-window bodies and the 400 boundary.
+    """
+    from share import metering
+
+    now = 1700000000.0
+    beijing = datetime.fromtimestamp(now, timezone(timedelta(hours=8)))
+
+    def stamp(delta):
+        return (beijing - delta).isoformat(timespec="seconds")
+
+    active1 = KEYS["active1"]["key_id"]
+    active2 = KEYS["active2"]["key_id"]
+    deleted = KEYS["deleted"]["key_id"]
+    records = [
+        {"time": stamp(timedelta(minutes=30)), "service": "chat2api",
+         "model": "gpt-4o", "stream": True, "status": "ok",
+         "input_tokens": 100, "output_tokens": 50,
+         "cached_input_tokens": 10, "cache_report_status": "reported",
+         "duration_ms": 1200, "usage_source": "upstream",
+         "key_id": active1, "request_id": "req-1",
+         "attribution": "verified"},
+        {"time": stamp(timedelta(hours=2)), "service": "chat2api",
+         "model": "gpt-4o", "status": "ok", "input_tokens": 20,
+         "output_tokens": 10, "cache_report_status": "unreported",
+         "duration_ms": 900, "usage_source": "upstream",
+         "key_id": active1, "request_id": "req-2",
+         "attribution": "verified"},
+        {"time": stamp(timedelta(hours=3)), "service": "chat2api",
+         "model": "gpt-4o", "status": "ok", "input_tokens": 30,
+         "output_tokens": 15, "cache_report_status": "reported",
+         "duration_ms": 700, "usage_source": "upstream",
+         "key_id": active1, "request_id": "req-3",
+         "attribution": "verified"},
+        {"time": stamp(timedelta(hours=4)), "service": "chat2api",
+         "model": "gpt-4o", "status": "ok", "input_tokens": 2,
+         "output_tokens": 1, "cached_input_tokens": 0,
+         "cache_report_status": "reported", "duration_ms": 100,
+         "usage_source": "upstream", "key_id": deleted,
+         "request_id": "req-4", "attribution": "verified"},
+        {"time": stamp(timedelta(hours=5)), "service": "chat2api",
+         "model": "gpt-4o", "status": "", "input_tokens": 3,
+         "output_tokens": 2, "cache_report_status": "unreported",
+         "duration_ms": 100, "usage_source": "upstream",
+         "key_id": active2, "request_id": "req-5",
+         "attribution": "verified"},
+        {"time": stamp(timedelta(hours=6)), "service": "chat2api",
+         "model": "gpt-4o", "status": "client_disconnected",
+         "input_tokens": 4, "cache_report_status": "unreported",
+         "usage_source": "partial", "key_id": active1,
+         "request_id": "req-6", "attribution": "verified"},
+        {"time": stamp(timedelta(days=2)), "service": "chat2api",
+         "model": "claude", "status": "cancelled", "input_tokens": 5,
+         "output_tokens": 0, "cached_input_tokens": 3,
+         "cache_report_status": "reported", "duration_ms": 300,
+         "usage_source": "partial", "key_id": active2,
+         "request_id": "req-7", "attribution": "verified"},
+        {"time": stamp(timedelta(days=10)), "service": "chat2api",
+         "model": None, "status": "ok", "usage_source": "none",
+         "attribution": "absent"},
+        {"service": "chat2api", "model": "gpt-4o",
+         "status": "upstream_failed", "input_tokens": 7,
+         "output_tokens": 3, "usage_source": "estimated",
+         "key_id": active2, "request_id": "req-9",
+         "attribution": "verified"},
+        {"time": stamp(timedelta(hours=1)), "service": "chat2api",
+         "model": "gpt-4o", "status": "ok", "input_tokens": 11,
+         "output_tokens": 4, "estimated": False,
+         "duration_ms": 500, "key_id": active2,
+         "request_id": "req-10", "attribution": "verified"},
+    ]
+    ledger = root / "share-backend" / LEDGER_NAME
+    ledger.write_text(
+        chr(10).join(json.dumps(record) for record in records) + chr(10),
+        encoding="utf-8",
+    )
+
+    def direct(filters, cursor=None, limit=50, page=False):
+        if not page:
+            payload = metering.read_share_usage(
+                str(ledger), limit=200000, now=now, **filters)
+            payload = module.Handler._share_usage_attach_key_labels(
+                None, payload, "keys", "key_id")
+        else:
+            payload = metering.read_share_requests(
+                str(ledger), now=now, cursor=cursor, limit=limit,
+                **filters)
+            payload = module.Handler._share_usage_attach_key_labels(
+                None, payload, "rows", "keyId")
+        payload.pop("checkedAt", None)
+        return payload
+
+    summary = {
+        "all": direct({}),
+        "window7d": direct({"window": "7d"}),
+        "window24h": direct({"window": "24h"}),
+        "window1h": direct({"window": "1h"}),
+        "unattributed": direct({"key_id": "unattributed"}),
+        "keyActive": direct({"key_id": active1}),
+        "modelGpt": direct({"model": "gpt-4o"}),
+        "resultCancelled": direct({"result": "cancelled"}),
+        "combined": direct(
+            {"window": "7d", "model": "gpt-4o", "result": "success"}),
+    }
+    requests = {
+        "default": direct({}, page=True),
+        "limit2": direct({}, limit=2, page=True),
+        "filtered": direct(
+            {"window": "7d", "model": "gpt-4o", "result": "success"},
+            page=True),
+        "unknownKey": direct({"key_id": "no-such-key"}, page=True),
+    }
+    cursor = requests["limit2"].get("nextCursor")
+    requests["cursor"] = direct({}, cursor=cursor, limit=2, page=True)
+
+    def call(target):
+        result = request(server, "GET", target)
+        body = result["body"]
+        if isinstance(body, dict):
+            body.pop("checkedAt", None)
+        return {
+            "status": result["status"],
+            "body": body,
+            "cacheControl": result["headers"].get("cache-control"),
+        }
+
+    http = {
+        "all": call("/api/console/share-usage"),
+        "invalidWindow": call("/api/console/share-usage?window=2d"),
+        "invalidResult": call("/api/console/share-usage?result=bogus"),
+        "duplicateWindow": call(
+            "/api/console/share-usage?window=1h&window=7d"),
+        "unknownQuery": call("/api/console/share-usage?bogus=1"),
+        "requestsDefault": call("/api/console/share-usage/requests"),
+        "requestsLimit2": call(
+            "/api/console/share-usage/requests?limit=2"),
+        "requestsInvalidLimitZero": call(
+            "/api/console/share-usage/requests?limit=0"),
+        "requestsInvalidLimitText": call(
+            "/api/console/share-usage/requests?limit=abc"),
+        "requestsInvalidCursor": call(
+            "/api/console/share-usage/requests?cursor=abc"),
+        "requestsUnknownKey": call(
+            "/api/console/share-usage/requests?key=no-such-key"),
+    }
+    return {
+        "summary": summary,
+        "requests": requests,
+        "http": http,
+        "ledger": ledger.read_text(encoding="utf-8"),
+    }
+
 def main():
     fixture = {"metadata": {
         "fixture": True,
@@ -533,6 +692,7 @@ def main():
         module.get_share_manager()
         fixture["shareKeys"] = keys_section(server)
         fixture["shareSecret"] = secret_section(server, seeded)
+        fixture["shareUsage"] = usage_section(server, root, module)
         return fixture
     finally:
         server.shutdown()

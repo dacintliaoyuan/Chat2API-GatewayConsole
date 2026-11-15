@@ -49,6 +49,23 @@ class RustConsoleReadsFixtureTests(unittest.TestCase):
             outcomes["versionConflict"]["body"]["reason"], "version_conflict")
         self.assertEqual(outcomes["deleted"]["status"], 410)
         self.assertEqual(outcomes["unknown"]["status"], 404)
+        usage = fixture["shareUsage"]
+        self.assertTrue(usage["ledger"])
+        self.assertEqual(
+            usage["summary"]["all"]["coverage"]["records"], 10)
+        self.assertEqual(
+            usage["summary"]["all"]["coverage"]["keyNames"], 3)
+        self.assertEqual(
+            usage["summary"]["all"]["results"]["unknown"], 1)
+        self.assertIsNone(
+            usage["summary"]["all"]["unattributed"]
+            ["tokenUsage"]["totalTokens"])
+        self.assertEqual(
+            usage["http"]["invalidWindow"]["status"], 400)
+        self.assertEqual(
+            usage["requests"]["limit2"]["nextCursor"], "9")
+        self.assertEqual(
+            usage["http"]["requestsInvalidCursor"]["status"], 400)
 
 
 if __name__ == "__main__":

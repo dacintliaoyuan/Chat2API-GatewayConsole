@@ -10,6 +10,7 @@ pub mod actions;
 pub mod body;
 pub mod config;
 pub mod error;
+pub mod metering;
 pub mod operations;
 pub mod runtime;
 pub mod server;
