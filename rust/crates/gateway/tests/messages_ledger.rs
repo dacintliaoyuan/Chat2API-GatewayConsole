@@ -293,7 +293,7 @@ fn an_error_event_is_recorded_as_an_upstream_stream_error() {
 fn a_stream_without_usage_keeps_the_local_estimate() {
     let temp = TempDir::new("um-rust-messages-ledger-");
     let stub = ChatStub::start();
-    let events = vec![
+    let events = [
         sse_event(
             "message_start",
             json!({

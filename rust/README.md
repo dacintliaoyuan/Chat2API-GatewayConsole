@@ -1,10 +1,11 @@
-# Rust workspace（S0 骨架 + S1a/S1b 候选网关 + S3a broker 控制通道 + S3b store/发布/启动身份）
+# Rust workspace（S0 骨架 + S1a/S1b/S2a 候选网关 + S3a broker 控制通道 + S3b store/发布/启动身份）
 
 本目录是 Rust 重写的 workspace 根。S0 建立工程骨架、HTTP 测试 harness 与
 临时数据目录；S1a 增加候选网关 crate（8003 只读面、分享 Key 门与请求拒绝），
 S1b 增加 Chat 非流式/SSE 转发、提交门、超时重试、断开取消与分享账本；
-S3a 增加 broker 控制通道的协议内核与 POSIX AF_UNIX 适配器；S3b 增加
-share store（SQLite schema 3、Key 生命周期、安全日志）、投影原子写、
+S2a 增加 Anthropic Messages 的非流式/SSE 字节透传、官方事件终止语义与
+usage 账本行；S3a 增加 broker 控制通道的协议内核与 POSIX AF_UNIX 适配器；
+S3b 增加 share store（SQLite schema 3、Key 生命周期、安全日志）、投影原子写、
 `publish` writer→load→ACK、有界 host 生命周期与 broker 的 8003 启动身份。
 本目录不切换任何生产端口，Python 仍是回滚权威。
 
@@ -17,7 +18,7 @@ rust/
     ├── broker/                S3a 控制通道 + S3b publish/host 生命周期
     ├── contract/              只读契约夹具的类型与加载器 + canonical JSON
     ├── store/                 S3b share store、Key 生命周期与投影 writer
-    ├── gateway/               S1a/S1b 候选网关：只读面、Key 门、Chat 转发、SSE、账本
+    ├── gateway/               S1a/S1b/S2a 候选网关：只读面、Key 门、Chat/Messages 转发、SSE、账本
     └── test-harness/          临时 loopback HTTP server、临时数据目录
 ```
 
@@ -38,6 +39,7 @@ Rust 测试只反序列化夹具，不用自己的序列化器生成期望值。
 验收记录见 [docs/rust-s0-acceptance.md](../docs/rust-s0-acceptance.md)、
 [docs/rust-s1a-acceptance.md](../docs/rust-s1a-acceptance.md)、
 [docs/rust-s1b-acceptance.md](../docs/rust-s1b-acceptance.md)、
+[docs/rust-s2a-acceptance.md](../docs/rust-s2a-acceptance.md)、
 [docs/rust-s3a-acceptance.md](../docs/rust-s3a-acceptance.md) 与
 [docs/rust-s3b-acceptance.md](../docs/rust-s3b-acceptance.md)。
 
@@ -51,6 +53,7 @@ python tests/generate_rust_store_fixture.py
 cargo test --manifest-path rust/Cargo.toml
 bash scripts/check-rust-s0.sh
 bash scripts/check-rust-broker.sh
+bash scripts/check-rust-s2a.sh
 bash scripts/check-rust-s3b.sh
 ```
 
