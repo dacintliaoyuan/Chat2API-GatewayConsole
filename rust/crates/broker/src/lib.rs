@@ -11,6 +11,7 @@ pub mod actions;
 pub mod codec;
 pub mod error;
 pub mod hmac;
+pub mod instance;
 pub mod management;
 pub mod peer;
 pub mod replay;
