@@ -80,6 +80,9 @@ fn share_body(
         BodyRead::TooLarge(_) => Err(GatewayError::payload_too_large()),
         BodyRead::Incomplete => Err(GatewayError::invalid_json()),
         BodyRead::Complete(bytes) => {
+            if bytes.len() as u64 > max_request_bytes {
+                return Err(GatewayError::payload_too_large());
+            }
             if bytes.is_empty() {
                 return Ok(None);
             }
