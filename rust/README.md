@@ -107,8 +107,8 @@ aarch64-linux-android --tests` 只做 `cfg(unix)` 代码的类型检查；AF_UNI
   `Action` 枚举承载，字段由固定白名单校验。
 - `um-gateway` 的 Chat 转发只在临时 loopback 上游上测试；账本路径必须由
   `CHAT2API_USAGE_LOG` 或测试配置显式给出，未配置时不写任何账本。SSE 生产者
-  在取消后由自己的 `finally` 关闭上游并释放 reader 槽；客户端断开不触发第二次
-  状态行或把部分完成写成成功。
+  在取消后由自己的 `finally` 关闭上游；ADR 0004 取消了 reader 槽位上限。客户端
+  断开不触发第二次状态行或把部分完成写成成功。
 - `um-store` 只打开调用方给定的那一个 SQLite 文件（`schema.rs` 是唯一
   `Connection::open` 位置），不创建第二套库、不迁移数据；schema 3 与
   Python 逐列一致，投影 schema 2 与本地 DB marker 分开。

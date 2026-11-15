@@ -1,7 +1,9 @@
 //! S2b acceptance 5/6: embeddings are relayed unchanged and write no ledger
-//! row; the shared `/v1/embeddings` route is `404 route_not_shared`, while the
-//! local `/api/v1/embeddings` alias bypasses the share-Key gate and is not in
-//! the public Cloudflare whitelist.
+//! row; an upstream non-200 answer is mapped like `_compat_proxy` (401 -> 503
+//! reauthentication, 400/422 -> the same status, others -> 502); the shared
+//! `/v1/embeddings` route is `404 route_not_shared`, while the local
+//! `/api/v1/embeddings` alias bypasses the share-Key gate and is not in the
+//! public Cloudflare whitelist.
 //!
 //! Python source: `chat2api/chat2api.py:7460-7464` (route) and `_compat_proxy`
 //! at `chat2api/chat2api.py:7990-8465`; the public whitelist is
@@ -77,7 +79,7 @@ fn embeddings_are_relayed_unchanged_and_write_no_ledger_row() {
 }
 
 #[test]
-fn a_non_200_embedding_response_is_passed_through_without_a_ledger_row() {
+fn a_400_embedding_response_keeps_the_status_without_a_ledger_row() {
     let temp = TempDir::new("um-rust-embeddings-status-");
     let stub = ChatStub::start();
     stub.push(ChatAttempt::HttpStatus {
@@ -96,9 +98,78 @@ fn a_non_200_embedding_response_is_passed_through_without_a_ledger_row() {
     let response = client_request(gateway.addr, &request("/v1/embeddings", &embedding_body()))
         .expect("embeddings request");
     assert_eq!(response.status, 400);
-    assert_eq!(response.body, b"{\"error\":\"bad input\"}");
+    assert_eq!(
+        response.json(),
+        json!({"error": {
+            "message": "Upstream rejected the request; the server log has structured diagnostics",
+            "type": "upstream_request_rejected",
+            "detail": null,
+        }})
+    );
     assert!(
         !ledger.exists(),
         "a failed embeddings call writes no ledger"
     );
+}
+
+#[test]
+fn a_401_embedding_response_is_a_503_reauthentication_error() {
+    let temp = TempDir::new("um-rust-embeddings-status-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::HttpStatus {
+        status: 401,
+        body: "{\"error\":\"upstream_rejected\"}".to_string(),
+        retry_after: None,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, false, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.max_fast_retries = 0;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 1;
+        config.request_total = Duration::from_secs(5);
+    });
+    let response = client_request(gateway.addr, &request("/v1/embeddings", &embedding_body()))
+        .expect("embeddings request");
+    assert_eq!(response.status, 503);
+    assert_eq!(
+        response.json(),
+        json!({"error": {
+            "message": "Open WebUI authentication requires an interactive sign-in",
+            "type": "reauthentication_required",
+            "detail": "upstream_rejected",
+        }})
+    );
+    assert!(!ledger.exists());
+}
+
+#[test]
+fn a_500_embedding_response_is_a_502_with_the_bounded_text() {
+    let temp = TempDir::new("um-rust-embeddings-status-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::HttpStatus {
+        status: 500,
+        body: "upstream exploded".to_string(),
+        retry_after: None,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, false, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.max_fast_retries = 0;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 1;
+        config.request_total = Duration::from_secs(5);
+    });
+    let response = client_request(gateway.addr, &request("/v1/embeddings", &embedding_body()))
+        .expect("embeddings request");
+    assert_eq!(response.status, 502);
+    assert_eq!(
+        response.json(),
+        json!({"error": {
+            "message": "Upstream request failed",
+            "type": "chat2api_error",
+            "detail": "HTTP 500: upstream exploded",
+        }})
+    );
+    assert!(!ledger.exists());
 }

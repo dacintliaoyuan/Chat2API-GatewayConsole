@@ -199,7 +199,11 @@ _Avoid_: 上游消费立即归零
 
 **API 并发 (API concurrency)**:
 API 入口已接受且尚未释放资源的请求数量；流式请求持续期间占用名额，受每把 API Key 及 API 入口整体两个上限约束，与请求频率不同。
-_Avoid_: 分享并发（旧称）、连接数、每分钟请求数
+_Avoid_: 分享并发（旧称）、连接数、每分钟请求数、网关流式读取并发
+
+**网关流式读取并发 (Gateway streaming reader concurrency)**:
+网关在转发一个流式或聚合响应期间占用的上游读取名额；与分享准入的每 Key/全局并发、认证等待并发和 HTTP 监听 backlog 分别计量，不决定客户端 Key 的并发额度。
+_Avoid_: API 并发、分享并发、认证等待、监听队列
 
 **API 排队等待 (API dispatch wait)**:
 API 入口已接受但尚未提交给 UM 的请求，因发送资源或速率约束而处于有界等待的阶段；等待期间占用相应 API 并发名额，并计入原请求总预算。
@@ -314,3 +318,19 @@ _Avoid_: 单项 core 绿即全套通过、跳过 Windows 全量
 **云端 P1 收口约束 (Cloud P1 closure constraints)**:
 Linux 进程归属只认解释器的入口脚本操作数（`linux_entry_script`：跳过解释器选项，`-c`/`-m`/`-` 返回 `None`），脚本名仅作为参数出现时绝不匹配，`/proc/<pid>/cmdline` 为空或不可读时 fail-closed；`--port` 配对与 uid 检查仍保留。云端控制台的分享动作只装配 8100 的 `share.gateway_restart`；本机注册表保留服务、账号与模型目录动作。`chat2api.py` 按父目录文件加载 `share_secret_protection`（不改 `sys.path`）；`--instance-pipe-prefix` 缺省按平台解析，实例模块不可用时返回 `None` 并报未就绪而不是猜测。`um-cloud-deploy/run-linux-checks.sh` 是 Linux-only 入口（Windows Git Bash 下 `/mnt/d` 路径解析失败），`tests/test_cloud_ops.py` 按平台写独立报告文件，`tests/fake_um/fake_um_server.py` 在 bind 前设置 `request_queue_size`。
 _Avoid_: 用 argv 末位或参数中的脚本名判定归属、用前端隐藏代替后端 disabled、把 PENDING 撤销当成已撤销在途发送、在 Windows 上运行 Linux 检查脚本
+
+**错误信封 (Error envelope)**:
+网关返回错误时使用的 JSON 外壳。OpenAI 形包含 `message`、`type`、`code`、`param`，`detail` 是结构化诊断扩展；`/v1/messages` 使用 Anthropic 形。`type` 表示错误类别，`code` 是稳定的机器码，`param` 指出出错字段或为 `null`。
+_Avoid_: 把 HTTP 状态码当机器码、把 detail 当标准字段、所有路径共用一种协议形状
+
+**上游错误保留 (Upstream error preservation)**:
+上游返回 4xx/5xx 时，网关保留原状态码，按客户端协议重建错误体，并在 `detail` 中记录 `upstream_status` 与有界的 `upstream_message`；只有 401 转成网关自己的 503 重新认证状态。连接失败是 502，网关自己等超时是 504。
+_Avoid_: 一律折叠成 502、原样透传上游 body、把 401 当客户端 Key 错误
+
+**可重试错误 (Retryable error)**:
+网关判断值得再次发送同一上游请求的错误。当前包括 408、429、5xx、529、520-524、传输失败和网关超时；402/403 只做一次探测，400/422 仅在文字表示瞬态时做一次探测，404/405/409/413/415 不重试。重试只在客户端收到首个 UM 首段业务输出前发生，且对客户端隐藏。
+_Avoid_: 所有非 200 都重试、重试 401/403/404、提交后重试
+
+**分享准入拒绝 (Share admission rejection)**:
+分享准入闸门在请求到达 UM 之前产生的 401/429；401 表示分享 Key 无效，429 用 `reason` 区分每 Key 并发、全局并发、每 Key 频率和停止接受，并带 `Retry-After` 或 `X-Should-Retry: false`。它不是上游状态，也不触发 UM 重登录。
+_Avoid_: 把分享 429 当上游 429、把分享 401 当 UM 认证失败、分享 Key 鉴权触发重登录

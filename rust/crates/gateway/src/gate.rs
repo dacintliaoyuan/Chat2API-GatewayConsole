@@ -152,35 +152,44 @@ impl ShareGate {
         guard.state = state;
     }
 
-    /// Resolve one enabled share entry, or None (fail-closed).
+    /// Resolve one enabled share entry, or `Ok(None)` for an invalid key.
+    ///
+    /// A configuration read/parse failure is `Err`: it is a configuration or
+    /// data-corruption failure, never an invalid key, so callers can fail closed
+    /// with a readable 503 instead of folding it into 401.
     pub fn authenticate(
         &self,
         headers: &Headers,
         allow_api_key: bool,
-    ) -> Option<(ShareEntry, ShareConfig)> {
-        let credential = resolve_share_credential(headers, allow_api_key)?;
-        let config = load_share_config(&self.config_path, self.auth_mode).ok()?;
+    ) -> Result<Option<(ShareEntry, ShareConfig)>, ConfigError> {
+        let Some(credential) = resolve_share_credential(headers, allow_api_key) else {
+            return Ok(None);
+        };
+        let config = load_share_config(&self.config_path, self.auth_mode)?;
         let digest = sha256_hex(credential.as_bytes());
         let entry = config
             .entries
             .iter()
             .find(|entry| {
                 entry.enabled && constant_time_eq(entry.secret_hash.as_bytes(), digest.as_bytes())
-            })?
-            .clone();
+            })
+            .cloned();
         let mut guard = self.guard.lock().expect("share gate poisoned");
         guard.config = config.clone();
-        Some((entry, config))
+        Ok(entry.map(|entry| (entry, config)))
     }
 
     /// Admit one request; the refusal reason distinguishes the four classes.
+    ///
+    /// `Err` is a configuration read/parse failure and never a concurrency
+    /// refusal; callers answer it with a readable 503.
     pub fn acquire(
         &self,
         key_id: &str,
         generation: Option<u64>,
         secret_version: Option<u32>,
         reason_out: Option<&mut RefusalReason>,
-    ) -> bool {
+    ) -> Result<bool, ConfigError> {
         let mut reason_out = reason_out;
         let mut guard = self.guard.lock().expect("share gate poisoned");
         if guard.state != GateState::Running {
@@ -191,25 +200,22 @@ impl ShareGate {
                         .to_string(),
                 );
             }
-            return false;
+            return Ok(false);
         }
         let (key_limit, share_max, config) = if generation.is_some() || secret_version.is_some() {
-            let fresh = match load_share_config(&self.config_path, self.auth_mode) {
-                Ok(fresh) => fresh,
-                Err(_) => return false,
-            };
+            let fresh = load_share_config(&self.config_path, self.auth_mode)?;
             if let Some(generation) = generation {
                 if fresh.config_generation < generation {
-                    return false;
+                    return Ok(false);
                 }
             }
             let entry = match fresh.entries.iter().find(|entry| entry.key_id == key_id) {
                 Some(entry) if entry.enabled => entry.clone(),
-                _ => return false,
+                _ => return Ok(false),
             };
             if let Some(secret_version) = secret_version {
                 if entry.secret_version != secret_version {
-                    return false;
+                    return Ok(false);
                 }
             }
             (
@@ -247,7 +253,7 @@ impl ShareGate {
                     ),
                 );
             }
-            return false;
+            return Ok(false);
         }
         if guard.active.values().copied().sum::<u32>() >= share_max {
             if let Some(reason) = reason_out.as_mut() {
@@ -258,7 +264,7 @@ impl ShareGate {
                     ),
                 );
             }
-            return false;
+            return Ok(false);
         }
         if recent_len >= RATE_LIMIT_REQUESTS {
             if let Some(reason) = reason_out.as_mut() {
@@ -267,7 +273,7 @@ impl ShareGate {
                     "per-key rate limit reached (max 20 requests per minute)".to_string(),
                 );
             }
-            return false;
+            return Ok(false);
         }
         guard
             .history
@@ -278,7 +284,7 @@ impl ShareGate {
         if let Some(config) = config {
             guard.config = config;
         }
-        true
+        Ok(true)
     }
 
     pub fn release(&self, key_id: &str) {

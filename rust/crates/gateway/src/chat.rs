@@ -9,7 +9,7 @@
 
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -308,23 +308,6 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
         if physical_attempts >= context.state.config.max_physical_attempts {
             return ChatResult::Response(physical_budget_response());
         }
-        let slot = match acquire_reader(&context.state.stream_readers, context.deadline) {
-            Some(slot) => slot,
-            None => {
-                return ChatResult::Response(
-                    GatewayError::new(
-                        503,
-                        "Too many concurrent streaming requests",
-                        "too_many_concurrent_streams",
-                    )
-                    .with_detail(json!(format!(
-                        "concurrent reader limit {} reached; retry later",
-                        context.state.config.max_stream_readers
-                    )))
-                    .response(),
-                )
-            }
-        };
         physical_attempts += 1;
         let attempt_started = Instant::now();
         let response = match crate::upstream::post_chat(
@@ -335,7 +318,6 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
         ) {
             Ok(response) => response,
             Err(failure) => {
-                slot.release();
                 let elapsed = attempt_started.elapsed();
                 let slow = elapsed >= context.state.config.slow_retry_threshold;
                 if retry_available(context, fast_retries, slow_retries, physical_attempts, slow) {
@@ -361,7 +343,6 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
             compat_retry_used = true;
             upstream_body.remove("stream_options");
             drop(response);
-            slot.release();
             continue;
         }
         if response.status != 200 {
@@ -376,7 +357,6 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
                 }
                 let delay = retry_delay(context, fast_retries, slow);
                 drop(response);
-                slot.release();
                 if !sleep_with_deadline(delay, context.deadline) {
                     return ChatResult::Response(deadline_response());
                 }
@@ -384,7 +364,7 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
             }
             return ChatResult::Response(upstream_status_error(response.status, response));
         }
-        let outcome = consume_stream(context, stream, response.body, slot);
+        let outcome = consume_stream(context, stream, response.body);
         if outcome.status == StreamStatus::ClientDisconnected {
             record_stream_usage(context, &outcome);
             return ChatResult::Written { close: true };
@@ -542,10 +522,9 @@ fn consume_stream(
     context: &ChatContext<'_>,
     stream: &mut TcpStream,
     body: UpstreamBody,
-    slot: Arc<ReaderSlot>,
 ) -> StreamOutcome {
     let watcher = ClientWatcher::start(stream);
-    let reader = StreamReader::start(body, Some(slot));
+    let reader = StreamReader::start(body);
     let mut state = SseState::new();
     let first_byte_deadline = Instant::now()
         + context
@@ -610,7 +589,6 @@ fn consume_stream(
         }
     }
     reader.cancel();
-    reader.release_slot();
     drop(reader);
     StreamOutcome {
         committed: state.committed,
@@ -946,78 +924,6 @@ fn random_request_id() -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-
-/// The bounded concurrent streaming reader set.
-pub struct ReaderSlots {
-    capacity: usize,
-    available: Mutex<usize>,
-    condvar: Condvar,
-}
-
-impl ReaderSlots {
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            capacity,
-            available: Mutex::new(capacity),
-            condvar: Condvar::new(),
-        }
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-
-    /// Take one reader slot; `None` when the cap is reached.
-    pub fn try_acquire(self: &Arc<Self>) -> Option<Arc<ReaderSlot>> {
-        let mut available = self.available.lock().expect("reader slots poisoned");
-        if *available == 0 {
-            return None;
-        }
-        *available -= 1;
-        Some(Arc::new(ReaderSlot {
-            slots: Arc::clone(self),
-            released: AtomicBool::new(false),
-        }))
-    }
-
-    /// Take one reader slot before `deadline`.
-    pub fn acquire_until(self: &Arc<Self>, deadline: Instant) -> Option<Arc<ReaderSlot>> {
-        loop {
-            if let Some(slot) = self.try_acquire() {
-                return Some(slot);
-            }
-            if Instant::now() >= deadline {
-                return None;
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    fn release(&self) {
-        let mut available = self.available.lock().expect("reader slots poisoned");
-        *available += 1;
-        self.condvar.notify_one();
-    }
-}
-
-/// One reader slot that releases exactly once.
-pub struct ReaderSlot {
-    slots: Arc<ReaderSlots>,
-    released: AtomicBool,
-}
-
-impl ReaderSlot {
-    /// Release the slot; a second release is a no-op.
-    pub fn release(&self) {
-        if !self.released.swap(true, Ordering::SeqCst) {
-            self.slots.release();
-        }
-    }
-}
-
-fn acquire_reader(slots: &Arc<ReaderSlots>, deadline: Instant) -> Option<Arc<ReaderSlot>> {
-    slots.acquire_until(deadline)
 }
 
 pub(crate) struct ClientWatcher {

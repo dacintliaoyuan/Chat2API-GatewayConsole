@@ -26,9 +26,21 @@ pub trait ProjectionWriter {
     ) -> Result<(), String>;
 }
 
+/// Default wire deadline of one broker exchange, matching
+/// `share/broker_protocol.py`.
+pub const WIRE_DEADLINE_SECONDS: f64 = 10.0;
+
 /// The instance channel the broker talks to.
 pub trait InstanceChannel {
-    fn call(&mut self, action: &str, fields: &Value, instance_id: &str) -> Result<Value, String>;
+    /// `deadline_s` is the remaining time budget of the caller's exchange; the
+    /// implementation must not block past it.
+    fn call(
+        &mut self,
+        action: &str,
+        fields: &Value,
+        instance_id: &str,
+        deadline_s: f64,
+    ) -> Result<Value, String>;
 }
 
 /// Trusted registry of the CURRENT instance with a MONOTONIC version.
@@ -119,7 +131,7 @@ impl<W: ProjectionWriter, I: InstanceChannel> PublishCoordinator<W, I> {
             return BrokerResult::err(ResultCode::Unconfirmed, "no registered instance");
         }
         let mut current = current_id.clone().unwrap_or_default();
-        let response = match self.channel.call("load", &load_fields, &current) {
+        let response = match self.channel.call("load", &load_fields, &current, WIRE_DEADLINE_SECONDS) {
             Ok(response) => response,
             Err(_) => {
                 if !self.refresh_discovery() {
@@ -135,7 +147,7 @@ impl<W: ProjectionWriter, I: InstanceChannel> PublishCoordinator<W, I> {
                         )
                     }
                 };
-                match self.channel.call("load", &load_fields, &current) {
+                match self.channel.call("load", &load_fields, &current, WIRE_DEADLINE_SECONDS) {
                     Ok(response) => response,
                     Err(error) => {
                         return BrokerResult::err(

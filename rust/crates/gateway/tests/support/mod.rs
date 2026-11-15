@@ -400,8 +400,16 @@ pub fn client_request(
     addr: SocketAddr,
     request: &ClientRequest,
 ) -> std::io::Result<ClientResponse> {
+    client_request_with_timeout(addr, request, Duration::from_secs(10))
+}
+
+pub fn client_request_with_timeout(
+    addr: SocketAddr,
+    request: &ClientRequest,
+    timeout: Duration,
+) -> std::io::Result<ClientResponse> {
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let _ = stream.set_read_timeout(Some(timeout));
     let mut raw = format!("{} {} HTTP/1.1\r\n", request.method, request.target);
     let has_host = request
         .headers

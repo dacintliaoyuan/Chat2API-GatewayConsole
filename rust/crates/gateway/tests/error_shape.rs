@@ -83,7 +83,7 @@ fn every_recorded_error_body_uses_the_unified_shape() {
 }
 
 #[test]
-fn the_console_unknown_field_response_is_an_object() {
+fn the_revoke_route_ignores_unknown_fields_like_python() {
     let temp = TempDir::new(unique_temp_prefix());
     let stub = StubUpstream::start();
     let gateway = start_gateway(&stub, &temp, true);
@@ -93,15 +93,9 @@ fn the_console_unknown_field_response_is_an_object() {
             .header("X-Admin-Control", CONTROL_TOKEN)
             .json_body(r#"{"key_id":"friend","unknown":1}"#),
     )
-    .expect("console unknown field");
-    assert_eq!(response.status, 400);
-    let body = response.json();
-    assert_unified(&body);
-    assert_eq!(
-        body["error"]["message"],
-        json!("unknown field(s): ['unknown']")
-    );
-    assert_eq!(body["error"]["type"], json!("invalid_request"));
+    .expect("revoke unknown field");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json(), json!({"released": 0}));
 }
 
 #[test]

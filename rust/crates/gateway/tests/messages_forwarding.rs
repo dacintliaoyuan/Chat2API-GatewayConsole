@@ -1,7 +1,8 @@
 //! S2a acceptance 4: the non-stream Anthropic JSON body is relayed unchanged
 //! through the Python compatibility path (`POST /api/v1/messages`), with the
 //! stored upstream bearer and the client's `Anthropic-Version`/`Anthropic-Beta`
-//! headers. An upstream non-200 answer keeps its status, headers and body.
+//! headers. An upstream non-200 answer is mapped like `_compat_proxy`:
+//! 401 -> 503 reauthentication, 400/422 -> the same status, others -> 502.
 //!
 //! Python source: `chat2api/chat2api.py:7467-7473` (route), `_compat_proxy`
 //! at `chat2api/chat2api.py:7990-8470` and `_passthrough` at
@@ -117,7 +118,7 @@ fn a_missing_stream_field_is_forwarded_unchanged() {
 }
 
 #[test]
-fn a_non_200_upstream_response_is_passed_through_unchanged() {
+fn a_400_upstream_response_keeps_the_status_without_passthrough() {
     let temp = TempDir::new("um-rust-messages-json-");
     let stub = ChatStub::start();
     let upstream_body = json!({
@@ -138,11 +139,69 @@ fn a_non_200_upstream_response_is_passed_through_unchanged() {
     let response = client_request(gateway.addr, &request(&messages_body(Some(false))))
         .expect("messages request");
     assert_eq!(response.status, 400);
-    assert_eq!(response.json(), upstream_body);
     assert_eq!(
-        response.header("content-type"),
-        Some("text/plain"),
-        "the Python passthrough copies the upstream content type"
+        response.json(),
+        json!({"error": {
+            "message": "Upstream rejected the request; the server log has structured diagnostics",
+            "type": "upstream_request_rejected",
+            "detail": null,
+        }})
     );
     assert_eq!(stub.attempts(), 1);
+}
+
+#[test]
+fn a_401_upstream_response_is_a_503_reauthentication_error() {
+    let temp = TempDir::new("um-rust-messages-json-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::HttpStatus {
+        status: 401,
+        body: "{\"error\":\"upstream_rejected\"}".to_string(),
+        retry_after: None,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.max_fast_retries = 0;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 1;
+        config.request_total = Duration::from_secs(5);
+    });
+    let response = client_request(gateway.addr, &request(&messages_body(Some(false))))
+        .expect("messages request");
+    assert_eq!(response.status, 503);
+    assert_eq!(
+        response.json(),
+        json!({"error": {
+            "message": "Open WebUI authentication requires an interactive sign-in",
+            "type": "reauthentication_required",
+            "detail": "upstream_rejected",
+        }})
+    );
+}
+
+#[test]
+fn a_500_upstream_response_is_a_502_with_the_bounded_text() {
+    let temp = TempDir::new("um-rust-messages-json-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::HttpStatus {
+        status: 500,
+        body: "upstream exploded".to_string(),
+        retry_after: None,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.max_fast_retries = 0;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 1;
+        config.request_total = Duration::from_secs(5);
+    });
+    let response = client_request(gateway.addr, &request(&messages_body(Some(false))))
+        .expect("messages request");
+    assert_eq!(response.status, 502);
+    assert_eq!(
+        response.json(),
+        json!({"error": {
+            "message": "Upstream request failed",
+            "type": "chat2api_error",
+            "detail": "HTTP 500: upstream exploded",
+        }})
+    );
 }

@@ -34,7 +34,6 @@ pub const MIN_REQUEST_TOTAL_SECONDS: u64 = 10;
 pub const MAX_REQUEST_TOTAL_SECONDS: u64 = 3600;
 pub const DEFAULT_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(120);
 pub const DEFAULT_SOCKET_SILENCE_TIMEOUT: Duration = Duration::from_secs(180);
-pub const DEFAULT_MAX_STREAM_READERS: usize = 128;
 pub const DEFAULT_MAX_FAST_RETRIES: u32 = 5;
 pub const DEFAULT_MAX_SLOW_RETRIES: u32 = 2;
 pub const DEFAULT_MAX_PHYSICAL_ATTEMPTS: u32 = 12;
@@ -166,6 +165,7 @@ pub struct GatewayConfig {
     pub control_token_file: Option<PathBuf>,
     pub local_api_key: String,
     pub share_max_request_bytes: u64,
+    pub max_request_bytes: u64,
     pub local_max_request_bytes: u64,
     pub upstream_timeout: Duration,
     /// The R13 non-stream aggregate switch (off by default).
@@ -180,8 +180,6 @@ pub struct GatewayConfig {
     pub first_byte_timeout: Duration,
     /// One upstream socket-read silence budget.
     pub socket_silence_timeout: Duration,
-    /// Concurrent streaming reader cap.
-    pub max_stream_readers: usize,
     pub max_fast_retries: u32,
     pub max_slow_retries: u32,
     pub max_physical_attempts: u32,
@@ -204,6 +202,7 @@ impl Default for GatewayConfig {
             control_token_file: None,
             local_api_key: String::new(),
             share_max_request_bytes: DEFAULT_SHARE_MAX_REQUEST_BYTES,
+            max_request_bytes: DEFAULT_SHARE_MAX_REQUEST_BYTES,
             local_max_request_bytes: CONSOLE_MAX_REQUEST_BYTES,
             upstream_timeout: DEFAULT_UPSTREAM_TIMEOUT,
             nonstream_upstream_aggregate: false,
@@ -212,7 +211,6 @@ impl Default for GatewayConfig {
             request_total: Duration::from_secs(DEFAULT_REQUEST_TOTAL_SECONDS),
             first_byte_timeout: DEFAULT_FIRST_BYTE_TIMEOUT,
             socket_silence_timeout: DEFAULT_SOCKET_SILENCE_TIMEOUT,
-            max_stream_readers: DEFAULT_MAX_STREAM_READERS,
             max_fast_retries: DEFAULT_MAX_FAST_RETRIES,
             max_slow_retries: DEFAULT_MAX_SLOW_RETRIES,
             max_physical_attempts: DEFAULT_MAX_PHYSICAL_ATTEMPTS,
@@ -273,6 +271,11 @@ impl GatewayConfig {
                 config.share_max_request_bytes = parsed.clamp(1, MAX_SHARE_REQUEST_BYTES);
             }
         }
+        if let Ok(value) = std::env::var("CHAT2API_MAX_REQUEST_BYTES") {
+            if let Ok(parsed) = value.parse::<u64>() {
+                config.max_request_bytes = parsed.clamp(1, MAX_SHARE_REQUEST_BYTES);
+            }
+        }
         if let Ok(value) = std::env::var("CHAT2API_CONTROL_TOKEN_FILE") {
             if !value.trim().is_empty() {
                 config.control_token_file = Some(PathBuf::from(value));
@@ -320,14 +323,14 @@ impl GatewayConfig {
                 self.bind_port
             )));
         }
-        if self.max_stream_readers == 0 {
-            return Err(ConfigError(
-                "stream reader limit must be at least 1".to_string(),
-            ));
-        }
         if !(1..=MAX_SHARE_REQUEST_BYTES).contains(&self.share_max_request_bytes) {
             return Err(ConfigError(
                 "share request body limit must be 1..1073741824".to_string(),
+            ));
+        }
+        if !(1..=MAX_SHARE_REQUEST_BYTES).contains(&self.max_request_bytes) {
+            return Err(ConfigError(
+                "request body limit must be 1..1073741824".to_string(),
             ));
         }
         if self.local_max_request_bytes == 0

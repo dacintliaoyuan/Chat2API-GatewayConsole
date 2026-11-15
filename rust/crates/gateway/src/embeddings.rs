@@ -130,6 +130,16 @@ pub fn handle_embeddings(
                 continue;
             }
         }
+        let status = response.status;
+        if status != 200 {
+            let text = response
+                .body
+                .read_prefix(2048)
+                .ok()
+                .map(|raw| String::from_utf8_lossy(&raw).to_string())
+                .unwrap_or_default();
+            return ChatResult::Response(compat_upstream_error(status, &text).response());
+        }
         let raw = match response.body.read_all() {
             Ok(raw) => raw,
             Err(failure) => {
@@ -143,13 +153,23 @@ pub fn handle_embeddings(
                 )
             }
         };
-        let mut translated = Response::new(response.status, raw);
+        let mut translated = Response::new(status, raw);
         for name in ["content-type", "content-length", "cache-control"] {
             if let Some(value) = response.headers.get(name) {
                 translated = translated.with_header(name, value);
             }
         }
         return ChatResult::Response(translated);
+    }
+}
+
+/// Python `_compat_proxy`: 401 is a reauthentication failure, 400/422 keeps
+/// the upstream status, everything else is `upstream_unavailable`.
+fn compat_upstream_error(status: u16, text: &str) -> GatewayError {
+    match status {
+        401 => GatewayError::reauthentication_required(Some("upstream_rejected")),
+        400 | 422 => GatewayError::upstream_rejected(status),
+        _ => GatewayError::upstream_request_failed(status, text),
     }
 }
 

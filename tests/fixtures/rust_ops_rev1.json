@@ -1073,7 +1073,7 @@
   },
   "ingress": {
    "catchAllMissing": {
-    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n",
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
@@ -1084,28 +1084,28 @@
       {
        "hostname": "fixture.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/responses",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       }
      ]
     }
    },
    "catchAllWithHost": {
-    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    service: http_status:404\n\n",
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    service: http_status:404\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
@@ -1116,22 +1116,22 @@
       {
        "hostname": "fixture.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/responses",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
@@ -1142,7 +1142,7 @@
     }
    },
    "duplicatePath": {
-    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
@@ -1153,27 +1153,27 @@
       {
        "hostname": "fixture.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/responses",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": null,
@@ -1195,7 +1195,7 @@
     }
    },
    "example": {
-    "config": "# Cloudflare Tunnel ingress for the UM cloud share API.\n#\n# This file is the public edge contract (D18-1): only the four shared API\n# paths are routed to the loopback 8100 gateway.  The private management\n# console, the share backend and the display are NEVER published here; the\n# catch-all answers 404 for every other path.\n#\n# Install with `install.sh --with-cloudflared` (default off).  The tunnel token\n# lives in /etc/um-share/cloudflared.env, not in this file.\ningress:\n  - hostname: dacintapi.de5.net\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n  - hostname: dacintapi.de5.net\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n  - hostname: dacintapi.de5.net\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n  - hostname: dacintapi.de5.net\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n  - service: http_status:404\n",
+    "config": "# Cloudflare Tunnel ingress for the UM cloud share API.\n#\n# This file is the public edge contract (D18-1): only the four shared API\n# paths are routed to the loopback 8100 gateway.  The private management\n# console, the share backend and the display are NEVER published here; the\n# catch-all answers 404 for every other path.\n#\n# Install with `install.sh --with-cloudflared` (default off).  The tunnel token\n# lives in /etc/um-share/cloudflared.env, not in this file.\ningress:\n  - hostname: dacintapi.de5.net\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n  - hostname: dacintapi.de5.net\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n  - hostname: dacintapi.de5.net\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n  - hostname: dacintapi.de5.net\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n  - service: http_status:404\n",
     "expectHost": "dacintapi.de5.net",
     "result": {
      "ok": true,
@@ -1204,22 +1204,65 @@
       {
        "hostname": "dacintapi.de5.net",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "dacintapi.de5.net",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "dacintapi.de5.net",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "dacintapi.de5.net",
        "path": "/v1/responses",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "forbiddenConsolePort": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/console$\n    service: http://127.0.0.1:8002\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 2 publishes private port 8002: http://127.0.0.1:8002",
+      "rule 2 service must be http://127.0.0.1:8003: http://127.0.0.1:8002"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/console",
+       "service": "http://127.0.0.1:8002"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": null,
@@ -1230,24 +1273,24 @@
     }
    },
    "forbiddenPort": {
-    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/console$\n    service: http://127.0.0.1:8096\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/console$\n    service: http://127.0.0.1:8096\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
      "problems": [
       "rule 2 publishes private port 8096: http://127.0.0.1:8096",
-      "rule 2 service must be http://127.0.0.1:8100: http://127.0.0.1:8096"
+      "rule 2 service must be http://127.0.0.1:8003: http://127.0.0.1:8096"
      ],
      "rules": [
       {
        "hostname": "fixture.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
@@ -1257,12 +1300,55 @@
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "forbiddenRetiredGatewayPort": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/console$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 2 publishes private port 8100: http://127.0.0.1:8100",
+      "rule 2 service must be http://127.0.0.1:8003: http://127.0.0.1:8100"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/console",
        "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": null,
@@ -1289,7 +1375,7 @@
     }
    },
    "missingPath": {
-    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
@@ -1300,17 +1386,17 @@
       {
        "hostname": "fixture.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": null,
@@ -1321,7 +1407,7 @@
     }
    },
    "multipleCatchAll": {
-    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n  - service: http_status:404\n\n",
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n  - service: http_status:404\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
@@ -1332,22 +1418,22 @@
       {
        "hostname": "fixture.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/responses",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": null,
@@ -1363,7 +1449,7 @@
     }
    },
    "noService": {
-    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/extra$\n\n  - service: http_status:404\n\n",
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/extra$\n\n  - service: http_status:404\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
@@ -1374,22 +1460,22 @@
       {
        "hostname": "fixture.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/responses",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
@@ -1405,7 +1491,7 @@
     }
    },
    "nonMappingRule": {
-    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - not-a-mapping\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - not-a-mapping\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
@@ -1416,22 +1502,22 @@
       {
        "hostname": "fixture.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/responses",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": null,
@@ -1442,7 +1528,7 @@
     }
    },
    "notSharedPath": {
-    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/embeddings$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/embeddings$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
@@ -1453,27 +1539,27 @@
       {
        "hostname": "fixture.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/responses",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/embeddings",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": null,
@@ -1500,7 +1586,7 @@
     "rules": []
    },
    "wrongHost": {
-    "config": "ingress:\n  - hostname: other.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "config": "ingress:\n  - hostname: other.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
@@ -1511,22 +1597,22 @@
       {
        "hostname": "other.example",
        "path": "/v1/models",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/responses",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": null,
@@ -1537,12 +1623,12 @@
     }
    },
    "wrongService": {
-    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8101\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8101\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
     "expectHost": "fixture.example",
     "result": {
      "ok": false,
      "problems": [
-      "rule 0 service must be http://127.0.0.1:8100: http://127.0.0.1:8101",
+      "rule 0 service must be http://127.0.0.1:8003: http://127.0.0.1:8101",
       "missing shared API path: /v1/models"
      ],
      "rules": [
@@ -1554,17 +1640,17 @@
       {
        "hostname": "fixture.example",
        "path": "/v1/chat/completions",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/messages",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": "fixture.example",
        "path": "/v1/responses",
-       "service": "http://127.0.0.1:8100"
+       "service": "http://127.0.0.1:8003"
       },
       {
        "hostname": null,

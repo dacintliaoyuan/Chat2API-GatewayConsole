@@ -145,35 +145,34 @@ impl Response {
 #[derive(Debug)]
 pub struct ReadError;
 
-/// Read one request from `stream`; `Ok(None)` is a clean EOF between requests.
-pub fn read_request(
-    stream: &mut TcpStream,
-    peer_ip: std::net::IpAddr,
-) -> io::Result<Option<Request>> {
-    read_request_with_body_cap(stream, peer_ip, HARD_BODY_CAP)
-}
-
-/// Read one request, refusing a declared body above `max_body` BEFORE reading
-/// it. The Python console checks `Content-Length` before it reads the body, so a
-/// declared-too-large request must not wait for bytes that may never arrive.
-pub fn read_request_with_body_cap(
-    stream: &mut TcpStream,
-    peer_ip: std::net::IpAddr,
-    max_body: u64,
-) -> io::Result<Option<Request>> {
-    Ok(read_request_with_leftover(stream, peer_ip, max_body)?.map(|(request, _)| request))
-}
-
-/// Read one request and return the bytes that followed the declared body.
+/// A parsed request head, before the body has been read.
 ///
-/// A WebSocket upgrade never has a body, so those bytes are the client's first
-/// frames: dropping them would lose input that arrived in the same segment as the
-/// handshake.
-pub fn read_request_with_leftover(
+/// The body limit depends on the route (share routes use the share limit, the
+/// local `_read_body` routes use `MAX_REQUEST_BYTES`, and routes that never
+/// read a body keep the hard cap), so the caller selects the limit after seeing
+/// the method and target but before any body byte is read.
+#[derive(Debug, Clone)]
+pub struct RequestHead {
+    pub method: String,
+    pub target: String,
+    pub headers: Headers,
+    pub peer_ip: std::net::IpAddr,
+    leftover: Vec<u8>,
+}
+
+impl RequestHead {
+    /// Path without the query string, matching `urllib.parse.urlparse().path`.
+    pub fn path(&self) -> &str {
+        self.target.split('?').next().unwrap_or(&self.target)
+    }
+}
+
+/// Read one request head from `stream`; `Ok(None)` is a clean EOF between
+/// requests. No body byte is consumed beyond what arrived with the head.
+pub fn read_request_head(
     stream: &mut TcpStream,
     peer_ip: std::net::IpAddr,
-    max_body: u64,
-) -> io::Result<Option<(Request, Vec<u8>)>> {
+) -> io::Result<Option<RequestHead>> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     let header_end = loop {
@@ -221,10 +220,35 @@ pub fn read_request_with_leftover(
         }
     }
 
+    Ok(Some(RequestHead {
+        method,
+        target,
+        headers,
+        peer_ip,
+        leftover: raw[header_end..].to_vec(),
+    }))
+}
+
+/// Read the body for an already parsed head, refusing a declared body above
+/// `max_body` BEFORE reading it. The Python handlers check `Content-Length`
+/// before they read the body, so a declared-too-large request must not wait for
+/// bytes that may never arrive.
+pub fn read_request_body(
+    stream: &mut TcpStream,
+    head: RequestHead,
+    max_body: u64,
+) -> io::Result<(Request, Vec<u8>)> {
+    let RequestHead {
+        method,
+        target,
+        headers,
+        peer_ip,
+        mut leftover,
+    } = head;
+    let mut buffer = [0u8; 4096];
     let declared = headers
         .get("Content-Length")
         .map(|value| value.trim().to_string());
-    let mut leftover = raw[header_end..].to_vec();
     let mut trailing = Vec::new();
     let body = match declared {
         None => {
@@ -241,7 +265,7 @@ pub fn read_request_with_leftover(
                 while leftover.len() < length {
                     let read = stream.read(&mut buffer)?;
                     if read == 0 {
-                        return Ok(Some((
+                        return Ok((
                             Request {
                                 method,
                                 target,
@@ -250,7 +274,7 @@ pub fn read_request_with_leftover(
                                 peer_ip,
                             },
                             leftover,
-                        )));
+                        ));
                     }
                     leftover.extend_from_slice(&buffer[..read]);
                 }
@@ -260,7 +284,7 @@ pub fn read_request_with_leftover(
         },
     };
 
-    Ok(Some((
+    Ok((
         Request {
             method,
             target,
@@ -269,7 +293,45 @@ pub fn read_request_with_leftover(
             peer_ip,
         },
         trailing,
-    )))
+    ))
+}
+
+/// Read one request from `stream`; `Ok(None)` is a clean EOF between requests.
+pub fn read_request(
+    stream: &mut TcpStream,
+    peer_ip: std::net::IpAddr,
+) -> io::Result<Option<Request>> {
+    read_request_with_body_cap(stream, peer_ip, HARD_BODY_CAP)
+}
+
+/// Read one request, refusing a declared body above `max_body` BEFORE reading
+/// it. The Python console checks `Content-Length` before it reads the body, so a
+/// declared-too-large request must not wait for bytes that may never arrive.
+pub fn read_request_with_body_cap(
+    stream: &mut TcpStream,
+    peer_ip: std::net::IpAddr,
+    max_body: u64,
+) -> io::Result<Option<Request>> {
+    let Some(head) = read_request_head(stream, peer_ip)? else {
+        return Ok(None);
+    };
+    read_request_body(stream, head, max_body).map(|(request, _)| Some(request))
+}
+
+/// Read one request and return the bytes that followed the declared body.
+///
+/// A WebSocket upgrade never has a body, so those bytes are the client's first
+/// frames: dropping them would lose input that arrived in the same segment as the
+/// handshake.
+pub fn read_request_with_leftover(
+    stream: &mut TcpStream,
+    peer_ip: std::net::IpAddr,
+    max_body: u64,
+) -> io::Result<Option<(Request, Vec<u8>)>> {
+    let Some(head) = read_request_head(stream, peer_ip)? else {
+        return Ok(None);
+    };
+    read_request_body(stream, head, max_body).map(Some)
 }
 
 /// Write one response and report whether the connection must be closed.

@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -18,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::{
-    line_text, ChatResult, ClientWatcher, ReaderSlot, PRELUDE_MAX_BYTES, SSE_CONTENT_TYPE,
+    line_text, ChatResult, ClientWatcher, PRELUDE_MAX_BYTES, SSE_CONTENT_TYPE,
 };
 use crate::error::GatewayError;
 use crate::gate::Admission;
@@ -177,6 +176,24 @@ pub fn handle_messages(
     }
 }
 
+/// Python `_compat_proxy`: 401 is a reauthentication failure, 400/422 keeps
+/// the upstream status, everything else is `upstream_unavailable`.
+fn compat_upstream_error(status: u16, text: &str) -> GatewayError {
+    match status {
+        401 => GatewayError::reauthentication_required(Some("upstream_rejected")),
+        400 | 422 => GatewayError::upstream_rejected(status),
+        _ => GatewayError::upstream_request_failed(status, text),
+    }
+}
+
+fn compat_ledger_status(status: u16) -> String {
+    match status {
+        401 => "reauthentication_required".to_string(),
+        400 | 422 => format!("HTTP{status}"),
+        _ => "upstream_unavailable".to_string(),
+    }
+}
+
 fn record_usage(
     context: &MessagesContext<'_>,
     status: &str,
@@ -291,6 +308,17 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
             }
         }
         let status = response.status;
+        if status != 200 {
+            let text = response
+                .body
+                .read_prefix(2048)
+                .ok()
+                .map(|raw| String::from_utf8_lossy(&raw).to_string())
+                .unwrap_or_default();
+            let ledger_status = compat_ledger_status(status);
+            record_usage(context, &ledger_status, None, 0);
+            return ChatResult::Response(compat_upstream_error(status, &text).response());
+        }
         let raw = match response.body.read_all() {
             Ok(raw) => raw,
             Err(failure) => {
@@ -305,15 +333,11 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                 );
             }
         };
-        if status == 200 {
-            let payload = serde_json::from_slice::<Value>(&raw).ok();
-            let usage = payload.as_ref().and_then(anthropic_message_usage);
-            let output_estimate = payload.as_ref().map(anthropic_output_estimate).unwrap_or(0);
-            let usage_value = usage.as_ref().map(usage_fields_to_json);
-            record_usage(context, "ok", usage_value.as_ref(), output_estimate);
-        } else {
-            record_usage(context, &format!("HTTP{status}"), None, 0);
-        }
+        let payload = serde_json::from_slice::<Value>(&raw).ok();
+        let usage = payload.as_ref().and_then(anthropic_message_usage);
+        let output_estimate = payload.as_ref().map(anthropic_output_estimate).unwrap_or(0);
+        let usage_value = usage.as_ref().map(usage_fields_to_json);
+        record_usage(context, "ok", usage_value.as_ref(), output_estimate);
         return ChatResult::Response(passthrough_response(status, &response, raw));
     }
 }
@@ -338,24 +362,6 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 .response(),
             );
         }
-        let slot = match context.state.stream_readers.acquire_until(context.deadline) {
-            Some(slot) => slot,
-            None => {
-                record_usage(context, "concurrency_limit", None, 0);
-                return ChatResult::Response(
-                    GatewayError::new(
-                        503,
-                        "Too many concurrent streaming requests",
-                        "too_many_concurrent_streams",
-                    )
-                    .with_detail(json!(format!(
-                        "concurrent reader limit {} reached; retry later",
-                        context.state.config.max_stream_readers
-                    )))
-                    .response(),
-                );
-            }
-        };
         physical_attempts += 1;
         let attempt_started = Instant::now();
         let mut response = match post_compat(
@@ -368,7 +374,6 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
         ) {
             Ok(response) => response,
             Err(failure) => {
-                slot.release();
                 let elapsed = attempt_started.elapsed();
                 let slow = elapsed >= context.state.config.slow_retry_threshold;
                 if retry_available(context, fast_retries, slow_retries, physical_attempts, slow) {
@@ -407,7 +412,6 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 let status = response.status;
                 let delay = retry_delay(context, fast_retries, slow);
                 drop(response);
-                slot.release();
                 if !sleep_with_deadline(delay, context.deadline) {
                     record_usage(context, "request_deadline_exceeded", None, 0);
                     return ChatResult::Response(
@@ -423,31 +427,21 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 continue;
             }
             let status = response.status;
-            let raw = match response.body.read_all() {
-                Ok(raw) => raw,
-                Err(failure) => {
-                    slot.release();
-                    record_usage(context, failure.name(), None, 0);
-                    return ChatResult::Response(
-                        GatewayError::new(
-                            502,
-                            "Failed to reach upstream compatibility endpoint",
-                            failure.name(),
-                        )
-                        .response(),
-                    );
-                }
-            };
-            slot.release();
-            record_usage(context, &format!("HTTP{status}"), None, 0);
-            return ChatResult::Response(passthrough_response(status, &response, raw));
+            let text = response
+                .body
+                .read_prefix(2048)
+                .ok()
+                .map(|raw| String::from_utf8_lossy(&raw).to_string())
+                .unwrap_or_default();
+            let ledger_status = compat_ledger_status(status);
+            record_usage(context, &ledger_status, None, 0);
+            return ChatResult::Response(compat_upstream_error(status, &text).response());
         }
         let upstream_headers = response.headers.clone();
         let outcome = consume_stream(
             context,
             stream,
             response.body,
-            slot,
             &upstream_headers,
             attempt_started,
         );
@@ -621,12 +615,11 @@ fn consume_stream(
     context: &MessagesContext<'_>,
     stream: &mut TcpStream,
     body: UpstreamBody,
-    slot: Arc<ReaderSlot>,
     upstream_headers: &HashMap<String, String>,
     attempt_started: Instant,
 ) -> MessagesStreamOutcome {
     let watcher = ClientWatcher::start(stream);
-    let reader = StreamReader::start(body, Some(slot));
+    let reader = StreamReader::start(body);
     let mut state = MessagesSseState::new();
     let first_data_deadline =
         (Instant::now() + context.state.config.first_byte_timeout).min(context.deadline);
@@ -675,7 +668,6 @@ fn consume_stream(
         }
     }
     reader.cancel();
-    reader.release_slot();
     drop(reader);
     MessagesStreamOutcome {
         committed: state.committed,

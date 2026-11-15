@@ -13,15 +13,18 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::body::{read_json_body, reject_unknown_fields, BodyPolicy};
-use crate::chat::{handle_chat, ChatResult, ReaderSlots};
+use crate::body::{read_json_body, BodyPolicy};
+use crate::chat::{handle_chat, ChatResult};
 use crate::config::{AuthMode, ConfigError, GatewayConfig};
 use crate::embeddings::handle_embeddings;
 use crate::error::GatewayError;
 use crate::gate::{
     constant_time_eq, ensure_control_token, Admission, InflightCtx, RefusalReason, ShareGate,
 };
-use crate::http::{read_request, write_response, BodyRead, Headers, Request, Response};
+use crate::http::{
+    read_request_body, read_request_head, write_response, BodyRead, Headers, Request, RequestHead,
+    Response, HARD_BODY_CAP,
+};
 use crate::ledger::Ledger;
 use crate::messages::handle_messages;
 use crate::readonly::ProxyState;
@@ -41,7 +44,6 @@ pub struct AppState {
     pub local_api_key: String,
     pub require_local_api_key: bool,
     pub ledger: Arc<Ledger>,
-    pub stream_readers: Arc<ReaderSlots>,
 }
 
 /// A started candidate server.
@@ -71,7 +73,6 @@ impl GatewayServer {
         let local_api_key = config.local_api_key.clone();
         let require_local_api_key = !local_api_key.is_empty();
         let ledger = Arc::new(Ledger::new(config.usage_log.clone()));
-        let stream_readers = Arc::new(ReaderSlots::new(config.max_stream_readers));
         let state = Arc::new(AppState {
             config: config.clone(),
             proxy,
@@ -80,7 +81,6 @@ impl GatewayServer {
             local_api_key,
             require_local_api_key,
             ledger,
-            stream_readers,
         });
         let listener = TcpListener::bind((config.bind_host.as_str(), config.bind_port))
             .map_err(ServerError::Io)?;
@@ -177,9 +177,19 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
     let _ = stream.set_read_timeout(Some(IDLE_CONNECTION_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IDLE_CONNECTION_TIMEOUT));
     loop {
-        let request = match read_request(&mut stream, peer_ip) {
-            Ok(Some(request)) => request,
+        let head = match read_request_head(&mut stream, peer_ip) {
+            Ok(Some(head)) => head,
             Ok(None) => return,
+            Err(_) => {
+                let response =
+                    GatewayError::invalid_request("Invalid request line or headers").response();
+                let _ = write_response(&mut stream, &response);
+                return;
+            }
+        };
+        let max_body = body_read_cap(&state, &head);
+        let request = match read_request_body(&mut stream, head, max_body) {
+            Ok((request, _trailing)) => request,
             Err(_) => {
                 let response =
                     GatewayError::invalid_request("Invalid request line or headers").response();
@@ -199,6 +209,30 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
         if close || !write_ok {
             return;
         }
+    }
+}
+
+/// The pre-read body cap for one request.
+///
+/// The Python handler only checks `Content-Length` inside `_read_body`, so the
+/// cap applies exactly to the routes that call it: the 8003 share routes and the
+/// local `/api/*` passthrough use the share limit while a share gate is
+/// assembled and `MAX_REQUEST_BYTES` otherwise; `/admin/share/revoke` uses the
+/// same `_read_body`; every other route never reads a body and keeps the hard
+/// transport cap.
+fn body_read_cap(state: &AppState, head: &RequestHead) -> u64 {
+    let path = head.path();
+    let reads_body = head.method == "POST"
+        && (path.starts_with("/v1/")
+            || path.starts_with("/api/")
+            || path == "/admin/share/revoke");
+    if !reads_body {
+        return HARD_BODY_CAP;
+    }
+    if state.gate.is_some() {
+        state.config.share_max_request_bytes
+    } else {
+        state.config.max_request_bytes
     }
 }
 
@@ -376,20 +410,26 @@ fn admit_share(
         return Err(GatewayError::route_not_shared());
     }
     let gate = state.gate.as_ref().expect("share mode gate");
-    let (entry, config) = gate
-        .authenticate(&request.headers, allow_api_key)
-        .ok_or_else(GatewayError::invalid_api_key)?;
+    let (entry, config) = match gate.authenticate(&request.headers, allow_api_key) {
+        Ok(Some(found)) => found,
+        Ok(None) => return Err(GatewayError::invalid_api_key()),
+        Err(error) => return Err(GatewayError::share_config_unavailable(error.to_string())),
+    };
     let mut reason = RefusalReason::default();
-    if !gate.acquire(
+    match gate.acquire(
         &entry.key_id,
         Some(config.config_generation),
         Some(entry.secret_version),
         Some(&mut reason),
     ) {
-        return Err(GatewayError::sharing_limit_reached(
-            reason.reason.as_deref(),
-            reason.detail.as_deref(),
-        ));
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(GatewayError::sharing_limit_reached(
+                reason.reason.as_deref(),
+                reason.detail.as_deref(),
+            ))
+        }
+        Err(error) => return Err(GatewayError::share_config_unavailable(error.to_string())),
     }
     let context = match stream.try_clone() {
         Ok(clone) => InflightCtx::new(clone),
@@ -481,19 +521,19 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
             }
+            // The 8003 revoke route uses `_read_body`, not the 8002 console
+            // boundary: no Content-Type requirement, duplicate sensitive
+            // headers tolerated, share body limit and share error codes.
             let body = match read_json_body(
                 request,
-                BodyPolicy::Console {
-                    max_request_bytes: state.config.local_max_request_bytes,
+                BodyPolicy::Share {
+                    max_request_bytes: state.config.share_max_request_bytes,
                 },
             ) {
                 Ok(body) => body,
                 Err(error) => return error.response(),
             };
             let body = body.unwrap_or_default();
-            if let Err(error) = reject_unknown_fields(&body, &["key_id"]) {
-                return error.response();
-            }
             let key_id = body.get("key_id").and_then(Value::as_str);
             let Some(key_id) = key_id.filter(|value| !value.is_empty()) else {
                 return GatewayError::invalid_request("key_id is required").response();
@@ -710,8 +750,8 @@ pub fn body_policy_for(state: &AppState, share: bool) -> BodyPolicy {
             max_request_bytes: state.config.share_max_request_bytes,
         }
     } else {
-        BodyPolicy::Console {
-            max_request_bytes: state.config.local_max_request_bytes,
+        BodyPolicy::Share {
+            max_request_bytes: state.config.max_request_bytes,
         }
     }
 }

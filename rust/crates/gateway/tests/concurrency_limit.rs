@@ -150,13 +150,42 @@ fn state_not_accepting_is_the_fourth_reason() {
     let share = temp.write("share.json", &legacy_share_config());
     let gate = Arc::new(ShareGate::new(&share, AuthMode::Auto).expect("gate"));
     let mut reason = RefusalReason::default();
-    assert!(gate.acquire("friend", None, None, Some(&mut reason)));
+    assert!(gate
+        .acquire("friend", None, None, Some(&mut reason))
+        .expect("initial acquire"));
     gate.set_state(GateState::Draining);
     let mut refused = RefusalReason::default();
-    assert!(!gate.acquire("friend", None, None, Some(&mut refused)));
+    assert!(!gate
+        .acquire("friend", None, None, Some(&mut refused))
+        .expect("refused acquire"));
     let expected = reason_case(&fixture, "state_not_accepting");
     assert_eq!(refused.reason.as_deref(), expected["reason"].as_str());
     assert_eq!(refused.detail.as_deref(), expected["detail"].as_str());
+}
+
+#[test]
+fn a_corrupt_share_config_is_a_503_not_an_invalid_key() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let stub = StubUpstream::start();
+    let gateway = start_gateway(&stub, &temp, true);
+    std::fs::write(temp.path().join("share.json"), "{not json").expect("corrupt share config");
+    let response = client_request(
+        gateway.addr,
+        &ClientRequest::get("/v1/models").bearer(SHARE_SECRET),
+    )
+    .expect("corrupt share config request");
+    assert_eq!(response.status, 503);
+    let body = response.json();
+    assert_eq!(
+        body["error"]["type"],
+        json!("share_config_unavailable"),
+        "configuration corruption must not be folded into invalid_api_key"
+    );
+    assert_eq!(body["error"]["code"], json!("share_config_unavailable"));
+    assert_eq!(
+        body["error"]["detail"],
+        json!("Invalid sharing configuration")
+    );
 }
 
 #[test]

@@ -18,7 +18,6 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::chat::ReaderSlot;
 use crate::config::{parse_upstream_base_url, GatewayConfig};
 
 /// Largest response head accepted from the upstream.
@@ -417,12 +416,11 @@ pub struct StreamReader {
     finished: Arc<AtomicBool>,
     error: Arc<Mutex<Option<StreamError>>>,
     cancel: Arc<AtomicBool>,
-    slot: Option<Arc<ReaderSlot>>,
 }
 
 impl StreamReader {
-    /// Start the producer. The producer owns `body` and the reader permit.
-    pub fn start(body: UpstreamBody, slot: Option<Arc<ReaderSlot>>) -> Self {
+    /// Start the producer; it owns `body` and closes it when it exits.
+    pub fn start(body: UpstreamBody) -> Self {
         let (sender, receiver) = sync_channel(UPSTREAM_QUEUE_MAX);
         let finished = Arc::new(AtomicBool::new(false));
         let error = Arc::new(Mutex::new(None));
@@ -430,23 +428,14 @@ impl StreamReader {
         let worker_finished = Arc::clone(&finished);
         let worker_error = Arc::clone(&error);
         let worker_cancel = Arc::clone(&cancel);
-        let worker_slot = slot.clone();
         thread::spawn(move || {
-            produce(
-                body,
-                sender,
-                worker_finished,
-                worker_error,
-                worker_cancel,
-                worker_slot,
-            );
+            produce(body, sender, worker_finished, worker_error, worker_cancel);
         });
         Self {
             receiver,
             finished,
             error,
             cancel,
-            slot,
         }
     }
 
@@ -486,15 +475,7 @@ impl StreamReader {
         self.cancel.store(true, Ordering::SeqCst);
     }
 
-    /// Release the reader slot before a retry; the producer's later release is
-    /// idempotent.
-    pub fn release_slot(&self) {
-        if let Some(slot) = &self.slot {
-            slot.release();
-        }
-    }
-
-    /// Wait for the producer to close the upstream and release its permit.
+    /// Wait for the producer to close the upstream socket.
     pub fn wait_finished(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -519,7 +500,6 @@ fn produce(
     finished: Arc<AtomicBool>,
     error: Arc<Mutex<Option<StreamError>>>,
     cancel: Arc<AtomicBool>,
-    slot: Option<Arc<ReaderSlot>>,
 ) {
     let mut pending = Vec::new();
     loop {
@@ -560,9 +540,6 @@ fn produce(
     }
     finished.store(true, Ordering::SeqCst);
     drop(body);
-    if let Some(slot) = slot {
-        slot.release();
-    }
 }
 
 fn remaining(deadline: Instant) -> Duration {

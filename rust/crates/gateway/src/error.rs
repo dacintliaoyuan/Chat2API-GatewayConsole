@@ -149,6 +149,18 @@ impl GatewayError {
         )
     }
 
+    /// A share configuration read/parse failure is neither an invalid Key nor a
+    /// concurrency refusal; it fails closed with a readable reason.
+    pub fn share_config_unavailable(detail: impl Into<String>) -> Self {
+        Self::new(
+            503,
+            "Share configuration is unavailable",
+            "share_config_unavailable",
+        )
+        .with_code("share_config_unavailable")
+        .with_detail(Value::String(detail.into()))
+    }
+
     pub fn sharing_limit_reached(reason: Option<&str>, detail: Option<&str>) -> Self {
         let mut error = Self::new(429, "sharing_limit_reached", "share_gateway_error")
             .with_code("sharing_limit_reached");
@@ -189,6 +201,24 @@ impl GatewayError {
             "Failed to fetch model list (auth may have expired)",
             "chat2api_error",
         )
+    }
+
+    /// Python `_compat_proxy` maps 400/422 to the upstream status without a
+    /// transient-retry signal; the body carries structured diagnostics only in
+    /// the server log.
+    pub fn upstream_rejected(status: u16) -> Self {
+        Self::new(
+            status,
+            "Upstream rejected the request; the server log has structured diagnostics",
+            "upstream_request_rejected",
+        )
+    }
+
+    /// Python `_compat_proxy` maps every other non-200 to a 502 with a bounded
+    /// upstream text detail.
+    pub fn upstream_request_failed(status: u16, text: &str) -> Self {
+        Self::new(502, "Upstream request failed", "chat2api_error")
+            .with_detail(Value::String(format!("HTTP {status}: {text}")))
     }
 
     pub fn not_implemented(feature: &str) -> Self {

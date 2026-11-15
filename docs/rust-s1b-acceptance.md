@@ -15,7 +15,7 @@
 | 上游客户端 | `rust/crates/gateway/src/upstream.rs` | `POST /api/chat/completions`、逐字节读取、chunked 解码、可取消 SSE 生产者 |
 | 分享账本 | `rust/crates/gateway/src/ledger.rs` | Python `record_usage` 字段、usage 归一化、写失败降级 |
 | 路由接入 | `rust/crates/gateway/src/server.rs` | `/v1/chat/completions` 与两条本机别名 |
-| 配置 | `rust/crates/gateway/src/config.rs` | 账本路径、首字节/静默/总预算、重试与 reader 上限 |
+| 配置 | `rust/crates/gateway/src/config.rs` | 账本路径、首字节/静默/总预算、重试与请求体上限 |
 
 ## 验收对照
 
@@ -26,7 +26,7 @@
 | 3 | 提交前失败 502；提交后 in-band `error` 并结束 | `chat_stream_errors::a_zero_data_eof_before_the_200_is_502`；`chat_stream_errors::an_explicit_error_event_before_the_200_is_502`；`chat_stream_errors::a_post_commit_eof_writes_one_in_band_error_and_no_done`；`chat_stream_errors::a_post_commit_explicit_error_keeps_its_sanitized_message`；`chat_stream_errors::a_done_without_finish_reason_is_an_incomplete_stream` |
 | 4 | 首字节 120 秒、静默 180 秒、总预算 360 秒且环境变量夹在 10..3600 | `chat_budgets::the_timeout_defaults_match_the_contract_fixture`；`chat_budgets::a_silent_upstream_hits_the_first_byte_budget`；`chat_budgets::a_post_commit_silence_hits_the_socket_silence_budget`；`chat_budgets::the_total_budget_stops_retrying_before_any_upstream_data`；`chat_budgets::a_committed_stream_stops_at_the_total_budget` |
 | 5 | 快速失败 5 次、慢失败 2 次、物理尝试 12 次；只在未收到 SSE 事件前重试 | `chat_retry::fast_failures_retry_five_times`；`chat_retry::slow_failures_retry_twice`；`chat_retry::physical_attempts_stop_at_twelve`；`chat_retry::a_pre_commit_eof_is_retried_before_any_sse_event`；`chat_retry::a_committed_stream_is_never_retried` |
-| 6 | 客户端断开逐字节检查；关闭上游、释放 reader 槽、账本记 `client_disconnected` | `chat_disconnect::a_post_commit_disconnect_closes_the_upstream_and_frees_the_slot`；`chat_disconnect::a_pre_commit_disconnect_records_client_disconnected_without_a_200` |
+| 6 | 客户端断开逐字节检查；关闭上游、账本记 `client_disconnected`；无 reader 上限（ADR 0004） | `chat_disconnect::a_post_commit_disconnect_closes_the_upstream`；`chat_disconnect::a_pre_commit_disconnect_records_client_disconnected_without_a_200`；`chat_disconnect::a_second_stream_is_admitted_while_the_first_upstream_is_still_open` |
 | 7 | 账本行字段与 Python 一致；写失败不阻断代理 | `chat_ledger::a_non_stream_row_matches_the_python_field_set_and_values`；`chat_ledger::an_unreported_usage_row_keeps_the_estimate_and_coverage`；`chat_ledger::a_stream_row_uses_the_upstream_usage_and_the_stream_status`；`chat_ledger::a_ledger_write_failure_never_blocks_the_proxy` |
 | 8 | 两条 `/api` 别名是本机兼容面，不进公网白名单 | `chat_aliases::the_aliases_bypass_the_share_key_gate_and_record_no_attribution`；`chat_aliases::the_share_v1_route_still_requires_its_key`；`chat_aliases::the_aliases_are_not_in_the_public_share_whitelist` |
 
@@ -35,7 +35,7 @@
 - 上游请求固定为 `POST /api/chat/completions`，使用存储的 bearer；`stream=true`
   时补 `stream_options.include_usage=true`，客户端 `stream=false` 时仍走上游非流式。
 - SSE 转发保留上游事件字节；生产者在每个字节检查取消，在自己的 `finally`
-  关闭上游并释放 reader 槽。
+  关闭上游。ADR 0004 取消 reader 槽位上限，因此没有可提前释放的并发名额。
 - 提交门：只把可见 `content`、`tool_calls`/`function_call` 或 `finish_reason`
   当实质事件；role/metadata、reasoning 与注释先暂存，暂存上限 64 KiB。
 - 预提交失败返回 502 `upstream_stream_error`；提交后失败只写一个

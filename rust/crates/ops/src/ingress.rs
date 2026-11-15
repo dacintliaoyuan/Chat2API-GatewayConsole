@@ -16,9 +16,11 @@ pub const API_PATHS: [&str; 4] = [
     "/v1/messages",
     "/v1/responses",
 ];
-pub const API_SERVICE: &str = "http://127.0.0.1:8100";
+/// The frozen target contract publishes only the 8003 gateway.
+pub const API_SERVICE: &str = "http://127.0.0.1:8003";
 pub const CATCH_ALL: &str = "http_status:404";
-pub const FORBIDDEN_PORTS: [&str; 4] = ["8096", "8097", "18096", "5901"];
+/// The private console/display and every retired alias stay unpublished.
+pub const FORBIDDEN_PORTS: [&str; 6] = ["8002", "8097", "8100", "8096", "18096", "5901"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IngressError {

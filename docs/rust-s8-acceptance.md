@@ -24,7 +24,7 @@
   只读打开调用方给定的那一个账本，不写、不创建、不截断。
 - Cloudflare ingress 校验完整移植 `check-ingress.py`：4 条白名单路径、8003 目标
   service（当前 Python 仍为 8100）、最后一条 `http_status:404`、禁止
-  8096/8097/18096/5901、重复/缺失路径与 host 校验；只返回
+  8002/8097/8100/8096/18096/5901、重复/缺失路径与 host 校验；只返回
   `{ok, problems, rules}`，不写、不 reload、不 restart。
 - 公网 DNS/TLS 状态机移植 `console/public_probe.py` 的纯逻辑：origin 严格解析、
   两个 DoH 源聚合、`is_global` IPv4 过滤、TTL/negative TTL、`unchecked`、

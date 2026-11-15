@@ -1397,21 +1397,6 @@ fn forward_aggregate(
     request_body: Map<String, Value>,
     via_messages: bool,
 ) -> ChatResult {
-    let Some(slot) = context.state.stream_readers.try_acquire() else {
-        record_usage(context, "concurrency_limit", None, 0);
-        return ChatResult::Response(
-            GatewayError::new(
-                503,
-                "Too many concurrent streaming requests",
-                "too_many_concurrent_streams",
-            )
-            .with_detail(json!(format!(
-                "concurrent reader limit {} reached; retry later",
-                context.state.config.max_stream_readers
-            )))
-            .response(),
-        );
-    };
     let mut fast_retries = 0u32;
     let mut slow_retries = 0u32;
     let mut physical_attempts = 0u32;
@@ -1427,12 +1412,10 @@ fn forward_aggregate(
     };
     loop {
         if Instant::now() >= context.deadline {
-            slot.release();
             record_usage(context, "request_deadline_exceeded", None, 0);
             return ChatResult::Response(deadline_response());
         }
         if physical_attempts >= context.state.config.max_physical_attempts {
-            slot.release();
             record_usage(context, "upstream_attempt_budget_exhausted", None, 0);
             return ChatResult::Response(physical_budget_response());
         }
@@ -1462,7 +1445,6 @@ fn forward_aggregate(
                         continue;
                     }
                 }
-                slot.release();
                 record_usage(context, failure.name(), None, 0);
                 return ChatResult::Response(
                     GatewayError::new(
@@ -1487,20 +1469,18 @@ fn forward_aggregate(
                 let delay = retry_delay(context, fast_retries, slow);
                 drop(response);
                 if !sleep_with_deadline(delay, context.deadline) {
-                    slot.release();
                     record_usage(context, "request_deadline_exceeded", None, 0);
                     return ChatResult::Response(deadline_response());
                 }
                 continue;
             }
             let status = response.status;
-            slot.release();
             record_usage(context, &upstream_status_name(status), None, 0);
             return ChatResult::Response(upstream_status_error(status));
         }
         let mut aggregator = ChatCompletionAggregator::new(Some(context.model));
         let watcher = ClientWatcher::start(stream);
-        let reader = StreamReader::start(response.body, Some(slot));
+        let reader = StreamReader::start(response.body);
         let mut data = None;
         let mut status = "ok".to_string();
         let mut exception = None;
@@ -1542,7 +1522,6 @@ fn forward_aggregate(
             }
         }
         reader.cancel();
-        reader.release_slot();
         drop(reader);
         if let Some(data) = data {
             let translated = if via_messages {
@@ -1690,24 +1669,6 @@ fn forward_stream_with(
             record_usage(context, "upstream_attempt_budget_exhausted", None, 0);
             return ChatResult::Response(physical_budget_response());
         }
-        let slot = match context.state.stream_readers.acquire_until(context.deadline) {
-            Some(slot) => slot,
-            None => {
-                record_usage(context, "concurrency_limit", None, 0);
-                return ChatResult::Response(
-                    GatewayError::new(
-                        503,
-                        "Too many concurrent streaming requests",
-                        "too_many_concurrent_streams",
-                    )
-                    .with_detail(json!(format!(
-                        "concurrent reader limit {} reached; retry later",
-                        context.state.config.max_stream_readers
-                    )))
-                    .response(),
-                );
-            }
-        };
         physical_attempts += 1;
         let attempt_started = Instant::now();
         let response = match post_compat(
@@ -1720,7 +1681,6 @@ fn forward_stream_with(
         ) {
             Ok(response) => response,
             Err(failure) => {
-                slot.release();
                 let elapsed = attempt_started.elapsed();
                 let slow = elapsed >= context.state.config.slow_retry_threshold;
                 if retry_available(context, fast_retries, slow_retries, physical_attempts, slow) {
@@ -1759,7 +1719,6 @@ fn forward_stream_with(
                 let _status = response.status;
                 let delay = retry_delay(context, fast_retries, slow);
                 drop(response);
-                slot.release();
                 if !sleep_with_deadline(delay, context.deadline) {
                     record_usage(context, "request_deadline_exceeded", None, 0);
                     return ChatResult::Response(deadline_response());
@@ -1767,7 +1726,6 @@ fn forward_stream_with(
                 continue;
             }
             let status = response.status;
-            slot.release();
             record_usage(context, &upstream_status_name(status), None, 0);
             return ChatResult::Response(upstream_status_error(status));
         }
@@ -1780,7 +1738,6 @@ fn forward_stream_with(
             headers.push(("Access-Control-Allow-Origin".to_string(), origin.clone()));
         }
         if write_response_head(stream, 200, &headers).is_err() {
-            slot.release();
             return ChatResult::Written { close: true };
         }
         let created_at = unix_seconds();
@@ -1797,7 +1754,6 @@ fn forward_stream_with(
             },
         });
         if write_sse_event(stream, "response.created", &created).is_err() {
-            slot.release();
             record_usage(context, "client_disconnected", None, 0);
             return ChatResult::Written { close: true };
         }
@@ -1808,7 +1764,7 @@ fn forward_stream_with(
             via_messages,
         );
         let watcher = ClientWatcher::start(stream);
-        let reader = StreamReader::start(response.body, Some(slot));
+        let reader = StreamReader::start(response.body);
         let mut output_chars = 0u64;
         let mut status = "ok".to_string();
         let mut usage = Value::Object(Map::new());
@@ -1881,7 +1837,6 @@ fn forward_stream_with(
             }
         }
         reader.cancel();
-        reader.release_slot();
         drop(reader);
         if client_disconnected {
             record_stream_usage(context, &status, &usage, output_chars);

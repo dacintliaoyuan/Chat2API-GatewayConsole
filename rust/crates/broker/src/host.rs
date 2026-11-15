@@ -48,10 +48,12 @@ impl Clock for SystemClock {
 /// The OS-facing host actions. A missing/unreadable verdict is `None`, never a
 /// fabricated `true`.
 pub trait HostOps {
-    fn start_host(&mut self, explicit: bool) -> Option<bool>;
-    fn stop_host(&mut self) -> Option<bool>;
-    fn verify_running(&mut self) -> Option<bool>;
-    fn verify_closed(&mut self) -> Option<bool>;
+    /// Every host verb receives the caller's remaining budget and must not
+    /// block past it.
+    fn start_host(&mut self, explicit: bool, deadline_s: f64) -> Option<bool>;
+    fn stop_host(&mut self, deadline_s: f64) -> Option<bool>;
+    fn verify_running(&mut self, deadline_s: f64) -> Option<bool>;
+    fn verify_closed(&mut self, deadline_s: f64) -> Option<bool>;
     fn verify_limits_evidence(&mut self) -> Option<(Option<Value>, String)>;
     fn verify_limits(&mut self) -> Option<Option<bool>>;
     fn read_watchdog(&mut self) -> Option<Value>;
@@ -195,7 +197,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
     /// Restricted start with ONE bounded readiness confirmation.
     pub fn start(&mut self, explicit: bool) -> BrokerResult {
         let deadline = self.now() + self.start_ready_timeout;
-        if self.host.start_host(explicit) != Some(true) {
+        if self.host.start_host(explicit, deadline - self.now()) != Some(true) {
             return BrokerResult::err(
                 ResultCode::Unconfirmed,
                 "start did not confirm the host task",
@@ -208,14 +210,14 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
             );
         }
         let epoch = self.closure_epoch;
-        let mut running = self.host.verify_running();
+        let mut running = self.host.verify_running(deadline - self.now());
         while running != Some(true) && self.now() < deadline {
             let remaining = deadline - self.now();
             self.sleep(self.start_poll_interval.min(remaining));
             if self.now() >= deadline {
                 break;
             }
-            running = self.host.verify_running();
+            running = self.host.verify_running(deadline - self.now());
         }
         if running != Some(true) {
             return BrokerResult::err(
@@ -245,7 +247,10 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         let instance_id = self.instances.current();
         let deadline = self.now() + self.drain_timeout;
         if let Some(instance_id) = instance_id.as_deref() {
-            match self.channel.call("drain", &json!({}), instance_id) {
+            match self
+                .channel
+                .call("drain", &json!({}), instance_id, deadline - self.now())
+            {
                 Ok(response) if response.get("ok") == Some(&Value::Bool(true)) => {}
                 _ => notification_failed = true,
             }
@@ -262,7 +267,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
             };
             match self
                 .channel
-                .call("instance-status", &json!({}), instance_id)
+                .call("instance-status", &json!({}), instance_id, remaining)
             {
                 Ok(response) => {
                     active_left = response
@@ -284,16 +289,19 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         let stop_deadline = self.now() + self.stop_timeout;
         if let Some(instance_id) = instance_id.as_deref() {
             let budget = (self.stop_timeout / 2.0).min(stop_deadline - self.now());
-            match self.channel.call("emergency", &json!({}), instance_id) {
+            match self
+                .channel
+                .call("emergency", &json!({}), instance_id, budget)
+            {
                 Ok(response) if response.get("ok") == Some(&Value::Bool(true)) => {}
                 _ => notification_failed = true,
             }
-            let _ = budget;
         } else {
             notification_failed = true;
         }
-        let host_stopped = self.host.stop_host() == Some(true);
-        let closed = host_stopped && self.host.verify_closed() == Some(true);
+        let host_stopped = self.host.stop_host(stop_deadline - self.now()) == Some(true);
+        let closed = host_stopped
+            && self.host.verify_closed(stop_deadline - self.now()) == Some(true);
         if closed {
             self.closure_epoch += 1;
             self.leases.clear();
@@ -316,7 +324,11 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         let instance_id = self.instances.current();
         let stop_deadline = self.now() + self.stop_timeout;
         if let Some(instance_id) = instance_id.as_deref() {
-            match self.channel.call("emergency", &json!({}), instance_id) {
+            let budget = (self.stop_timeout / 2.0).min(stop_deadline - self.now());
+            match self
+                .channel
+                .call("emergency", &json!({}), instance_id, budget)
+            {
                 Ok(response) => {
                     if response.get("ok") != Some(&Value::Bool(true)) {
                         notification_failed = true;
@@ -336,8 +348,9 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         } else {
             notification_failed = true;
         }
-        let host_stopped = self.host.stop_host() == Some(true);
-        let closed = host_stopped && self.host.verify_closed() == Some(true);
+        let host_stopped = self.host.stop_host(stop_deadline - self.now()) == Some(true);
+        let closed = host_stopped
+            && self.host.verify_closed(stop_deadline - self.now()) == Some(true);
         let confirmed = closed;
         if confirmed {
             self.closure_epoch += 1;
@@ -353,7 +366,6 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         if let Some(cleared) = cleared {
             result["cleared_in_flight"] = json!(cleared);
         }
-        let _ = stop_deadline;
         BrokerResult::ok(result)
     }
 

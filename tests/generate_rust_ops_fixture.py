@@ -251,6 +251,12 @@ def load_ingress_checker():
 
 def cloud_fixture():
     checker = load_ingress_checker()
+    # The Rust port targets the frozen contract §11.1 (8003 gateway, no private
+    # or retired ports). The current Python deployment still publishes 8100, so
+    # only this fixture applies the target constants to the loaded checker.
+    checker.API_SERVICE = "http://127.0.0.1:8003"
+    checker.FORBIDDEN_PORTS = (
+        "8002", "8097", "8100", "8096", "18096", "5901")
     fixture = {
         "ingress": {},
         "publicHost": {},
@@ -266,13 +272,16 @@ def cloud_fixture():
     def config(rules):
         return "ingress:\n" + "\n".join(rules) + "\n"
 
-    def api_rule(path, host="fixture.example", service="http://127.0.0.1:8100"):
+    def api_rule(path, host="fixture.example", service="http://127.0.0.1:8003"):
         return (f"  - hostname: {host}\n"
                 f"    path: ^{path}$\n"
                 f"    service: {service}\n")
 
     example = (ROOT / "um-cloud-deploy" / "config" /
                "cloudflared.yml.example").read_text(encoding="utf-8")
+    # The checked-in example still targets the current Python 8100 deployment;
+    # the Rust target must see the same rules on 8003.
+    example = example.replace("127.0.0.1:8100", "127.0.0.1:8003")
     ingress_cases = {
         "example": (example, "dacintapi.de5.net"),
         "missingPath": (config([
@@ -329,6 +338,24 @@ def cloud_fixture():
             api_rule("/v1/chat/completions"),
             "  - hostname: fixture.example\n    path: ^/console$\n"
             "    service: http://127.0.0.1:8096\n",
+            api_rule("/v1/messages"),
+            api_rule("/v1/responses"),
+            "  - service: http_status:404\n",
+        ]), "fixture.example"),
+        "forbiddenConsolePort": (config([
+            api_rule("/v1/models"),
+            api_rule("/v1/chat/completions"),
+            "  - hostname: fixture.example\n    path: ^/console$\n"
+            "    service: http://127.0.0.1:8002\n",
+            api_rule("/v1/messages"),
+            api_rule("/v1/responses"),
+            "  - service: http_status:404\n",
+        ]), "fixture.example"),
+        "forbiddenRetiredGatewayPort": (config([
+            api_rule("/v1/models"),
+            api_rule("/v1/chat/completions"),
+            "  - hostname: fixture.example\n    path: ^/console$\n"
+            "    service: http://127.0.0.1:8100\n",
             api_rule("/v1/messages"),
             api_rule("/v1/responses"),
             "  - service: http_status:404\n",

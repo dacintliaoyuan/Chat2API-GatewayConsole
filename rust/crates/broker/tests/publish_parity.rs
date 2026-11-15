@@ -56,7 +56,13 @@ struct FakeChannel {
 }
 
 impl InstanceChannel for FakeChannel {
-    fn call(&mut self, action: &str, fields: &Value, instance_id: &str) -> Result<Value, String> {
+    fn call(
+        &mut self,
+        action: &str,
+        fields: &Value,
+        instance_id: &str,
+        _deadline_s: f64,
+    ) -> Result<Value, String> {
         self.calls.borrow_mut().push(json!({
             "instance_call": {
                 "action": action,
