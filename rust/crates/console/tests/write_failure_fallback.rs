@@ -13,9 +13,7 @@ use std::sync::Arc;
 use serde_json::json;
 use um_test_harness::TempDataDir;
 
-use support::write::{
-    open_store, start_legacy_console, start_unwired_legacy_console, FakeBroker,
-};
+use support::write::{open_store, start_legacy_console, start_unwired_legacy_console, FakeBroker};
 use support::*;
 
 const CONTROL_TOKEN: &str = "fixture-control-token";
@@ -86,7 +84,9 @@ fn a_python_created_store_stays_python_readable_after_legacy_writes() {
     assert_eq!(store.projection_schema_version(), 2);
     let rows = store.list_keys(false).expect("list keys");
     assert!(rows.iter().any(|row| row["name"] == json!("alpha")));
-    assert!(rows.iter().any(|row| row["name"] == json!("renamed-by-rust")));
+    assert!(rows
+        .iter()
+        .any(|row| row["name"] == json!("renamed-by-rust")));
     let tables: Vec<String> = store
         .connection()
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -95,10 +95,7 @@ fn a_python_created_store_stays_python_readable_after_legacy_writes() {
         .expect("query")
         .filter_map(|row| row.ok())
         .collect();
-    assert_eq!(
-        tables,
-        vec!["configgen", "keys", "meta", "ops", "security"]
-    );
+    assert_eq!(tables, vec!["configgen", "keys", "meta", "ops", "security"]);
     drop(store);
 }
 

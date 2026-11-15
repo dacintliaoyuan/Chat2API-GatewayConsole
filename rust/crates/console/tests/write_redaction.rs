@@ -162,21 +162,13 @@ fn plaintext_and_management_secrets_stay_out_of_reads_errors_and_logs() {
             "/api/session".to_string(),
             json!({"code": "wrong-bootstrap-code"}),
         ),
-        (
-            "POST",
-            "/api/session/reissue".to_string(),
-            json!({}),
-        ),
+        ("POST", "/api/session/reissue".to_string(), json!({})),
         (
             "POST",
             "/api/share/keys".to_string(),
             json!({"name": "x", "bogus": 1}),
         ),
-        (
-            "GET",
-            "/api/share/not-a-route".to_string(),
-            json!({}),
-        ),
+        ("GET", "/api/share/not-a-route".to_string(), json!({})),
     ];
     for (method, target, body) in error_cases {
         let headers: &[(&str, &str)] = if target == "/api/session" {
