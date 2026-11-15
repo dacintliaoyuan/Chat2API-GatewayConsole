@@ -32,12 +32,31 @@ DESTINATION = ROOT / "tests" / "fixtures" / "rust_contract_rev1.json"
 
 sys.path[:0] = [str(ROOT)]
 
-import chat2api.chat2api as gateway  # noqa: E402
-import chat2api.share_auth as share_auth  # noqa: E402
-import console.display_proxy as display_proxy  # noqa: E402
-import share.broker_protocol as broker_protocol  # noqa: E402
-import share.metering as share_metering  # noqa: E402
-import share.store as share_store  # noqa: E402
+
+def _load_module(name: str, relative: str):
+    """Load a Python source file under a private module name.
+
+    Loading by package name is not safe here: other test modules put
+    ``chat2api/`` on ``sys.path`` and register the bare ``chat2api`` name for
+    ``chat2api/chat2api.py``. A private name keeps this generator independent
+    of test execution order and does not import a second copy of the behavior.
+    """
+    path = ROOT / relative
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit("cannot load %s" % path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+gateway = _load_module("rust_contract_chat2api", "chat2api/chat2api.py")
+share_auth = _load_module("rust_contract_share_auth", "chat2api/share_auth.py")
+display_proxy = _load_module("rust_contract_display_proxy", "console/display_proxy.py")
+broker_protocol = _load_module("rust_contract_broker_protocol", "share/broker_protocol.py")
+share_metering = _load_module("rust_contract_share_metering", "share/metering.py")
+share_store = _load_module("rust_contract_share_store", "share/store.py")
 
 _PORT_SERVICES = {
     8000: "chat2api",

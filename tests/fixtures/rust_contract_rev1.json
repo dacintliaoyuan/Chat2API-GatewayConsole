@@ -1674,7 +1674,7 @@
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
       "share/store.py": "7bb5b3f1e302de5579043d482a3172548c716b8a619366a0373727d88e714b33",
       "shared/responses_protocol.py": "eafa7d6735fe7d99eed81160084e887644022ec159ab27cac62f03463e8092fe",
-      "tests/generate_rust_contract_fixture.py": "85f5ee95111c39e6a851764c14180d2b5b28b6fd16a408bc9678dbad8c8b81ad",
+      "tests/generate_rust_contract_fixture.py": "e2feca7569c67da1b4d836ee24585483944a4a48d7e41c003b319d909bb49003",
       "um-cloud-deploy/cloudflared/check-ingress.py": "8bc85e85c00ce1675cac5cea08f07095386dc145fea98a9edb018977f539011f"
     },
     "surfaces": [
