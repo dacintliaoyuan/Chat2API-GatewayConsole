@@ -462,7 +462,7 @@ impl ContractFixture {
                 return Err(ContractError::Invalid(format!(
                     "error group has neither codes nor a description: {} {}",
                     group.surface,
-                    group.status.map_or(0, |status| status)
+                    group.status.unwrap_or(0)
                 )));
             }
             let unique: BTreeSet<&str> = group.codes.iter().map(String::as_str).collect();
