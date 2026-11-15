@@ -292,3 +292,96 @@ fn a_verified_closure_clears_the_lease_and_bumps_the_epoch() {
     assert!(coordinator.leases_mut().current().is_none());
     let _ = directory;
 }
+
+fn coordinator_with(
+    config: Value,
+) -> (
+    HostCoordinator<FakeHost, FakeChannel>,
+    Rc<RefCell<Vec<Value>>>,
+) {
+    let clock = Box::new(FakeClock {
+        value: RefCell::new(100.0),
+    });
+    let host_calls = Rc::new(RefCell::new(Vec::new()));
+    let host = FakeHost::new(&config, Rc::clone(&host_calls));
+    let channel_calls = Rc::new(RefCell::new(Vec::new()));
+    let mut registry = InstanceRegistry::default();
+    registry.register("i-1").unwrap();
+    let coordinator = HostCoordinator::new(
+        host,
+        FakeChannel {
+            calls: Rc::clone(&channel_calls),
+            queue: Rc::new(RefCell::new(Vec::new())),
+        },
+        registry,
+        clock,
+    );
+    (coordinator, host_calls)
+}
+
+#[test]
+fn host_verify_and_stop_require_verified_evidence() {
+    let (mut running, _) = coordinator_with(json!({"running": true, "closed": true}));
+    assert_eq!(
+        running.host_verify("running").to_value()["result"]["host_running"],
+        json!(true)
+    );
+    assert_eq!(
+        running.host_verify("closed").to_value()["result"]["host_closed"],
+        json!(true)
+    );
+
+    let (mut stopped, _) = coordinator_with(json!({"stop_result": true, "closed": true}));
+    assert!(stopped.host_stop().ok_flag());
+    let (mut unverified, _) = coordinator_with(json!({"stop_result": true, "closed": false}));
+    assert_eq!(
+        unverified.host_stop().to_value()["error_code"],
+        json!("unconfirmed")
+    );
+    let (mut refused, _) = coordinator_with(json!({"stop_result": false}));
+    assert_eq!(
+        refused.host_stop().to_value()["error_code"],
+        json!("unconfirmed")
+    );
+}
+
+#[test]
+fn limits_repair_and_host_evidence_never_fabricate() {
+    let (mut missing, _) = coordinator_with(json!({}));
+    assert_eq!(
+        missing.host_repair_limits().to_value()["error_code"],
+        json!("capability_missing")
+    );
+    let (mut repaired, _) = coordinator_with(json!({"repair": {"repaired": true}}));
+    assert_eq!(
+        repaired.host_repair_limits().to_value()["result"],
+        json!({"repaired": true, "code": "ok"})
+    );
+    let (mut refused, _) =
+        coordinator_with(json!({"repair": {"repaired": false, "code": "unconfirmed"}}));
+    assert_eq!(
+        refused.host_repair_limits().to_value()["error_code"],
+        json!("unconfirmed")
+    );
+
+    let (mut watchdog, _) =
+        coordinator_with(json!({"watchdog": {"query_error": "wfp_unavailable"}}));
+    let evidence = watchdog.host_evidence("watchdog").to_value();
+    assert_eq!(
+        evidence["result"]["verdict"],
+        json!({"query_error": "wfp_unavailable"})
+    );
+    assert_eq!(evidence["result"]["detail"], json!("wfp_unavailable"));
+
+    let (mut limits, _) = coordinator_with(
+        json!({"limits_evidence": {"verdict": null, "detail": "limits_unavailable"}}),
+    );
+    let evidence = limits.host_evidence("limits").to_value();
+    assert_eq!(evidence["result"]["verdict"], Value::Null);
+    assert_eq!(evidence["result"]["detail"], json!("limits_unavailable"));
+
+    let (mut faults, _) = coordinator_with(json!({}));
+    let evidence = faults.host_evidence("faults").to_value();
+    assert_eq!(evidence["result"]["verdict"], Value::Null);
+    assert_eq!(evidence["result"]["detail"], json!("fault_log_absent"));
+}
