@@ -268,7 +268,11 @@ impl ShareReadStore {
             "pending_revocation": config_generation > applied_generation,
             "active_keys": keys.len() as i64,
             "total_keys": keys.len() as i64,
-            "broker": broker.unwrap_or_else(|| json!({})),
+            "broker": broker.unwrap_or_else(|| json!({
+                "name": "noop",
+                "state": "offline",
+                "note": "未安装/未授权高权限 broker；变更已保存但未在线发布",
+            })),
             "last_publication_failure": Value::Null,
             "blocked_publications": blocked_publications,
             "blocked": blocked,

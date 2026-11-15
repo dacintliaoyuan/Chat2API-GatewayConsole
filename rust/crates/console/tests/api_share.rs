@@ -15,6 +15,20 @@ use support::*;
 const CONTROL_TOKEN: &str = "fixture-control-token";
 
 fn start_api_share_console(temp: &um_test_harness::TempDataDir, fixture: &Value) -> Console {
+    let mut seams = StaticShareSeams::new();
+    seams.broker_snapshot = Some(json!({
+        "name": "broker-client",
+        "state": "ok",
+        "broker": {"version": "2.0.0", "pid": 4242},
+    }));
+    start_api_share_console_with(temp, fixture, std::sync::Arc::new(seams))
+}
+
+fn start_api_share_console_with(
+    temp: &um_test_harness::TempDataDir,
+    fixture: &Value,
+    seams: std::sync::Arc<dyn um_console::ShareReadSeams>,
+) -> Console {
     let control = temp.path().join("control-token");
     std::fs::write(&control, CONTROL_TOKEN).expect("control token");
     let backend = temp.path().join("share-backend");
@@ -35,12 +49,6 @@ fn start_api_share_console(temp: &um_test_harness::TempDataDir, fixture: &Value)
         bytes.push((high * 16 + low) as u8);
     }
     std::fs::write(&key, bytes).expect("write key");
-    let mut seams = StaticShareSeams::new();
-    seams.broker_snapshot = Some(json!({
-        "name": "broker-client",
-        "state": "ok",
-        "broker": {"version": "2.0.0", "pid": 4242},
-    }));
     start_console_with_seams(
         temp,
         |config| {
@@ -49,7 +57,7 @@ fn start_api_share_console(temp: &um_test_harness::TempDataDir, fixture: &Value)
             config.control_token_file = Some(control.clone());
             config.share_secret_key_file = Some(key.clone());
         },
-        std::sync::Arc::new(seams),
+        seams,
     )
 }
 
@@ -164,6 +172,26 @@ fn the_public_ingress_never_reverse_proxies_the_share_management_face() {
     ] {
         assert!(ingress.contains(path), "{path} must stay public");
     }
+}
+
+#[test]
+fn raw_status_without_a_broker_is_an_honest_offline_snapshot() {
+    let fixture = reads_fixture();
+    let temp = temp();
+    seed_share_store(&temp, &fixture["shareStatus"]["storeSeed"]);
+    let console = start_api_share_console_with(
+        &temp,
+        &fixture,
+        std::sync::Arc::new(StaticShareSeams::new()),
+    );
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/share/status").header("X-Admin-Control", CONTROL_TOKEN),
+    )
+    .expect("request");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json()["broker"]["state"], json!("offline"));
+    assert_eq!(response.json()["broker"]["name"], json!("noop"));
 }
 
 #[test]
