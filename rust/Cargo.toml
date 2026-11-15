@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/contract", "crates/test-harness"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+publish = false
