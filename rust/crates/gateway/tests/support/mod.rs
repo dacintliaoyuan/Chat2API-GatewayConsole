@@ -1219,3 +1219,23 @@ pub fn sse_payloads(body: &[u8]) -> Vec<Value> {
         })
         .collect()
 }
+
+pub fn read_jsonl(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+pub fn wait_jsonl(path: &std::path::Path, count: usize, timeout: Duration) -> Vec<Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let rows = read_jsonl(path);
+        if rows.len() >= count || Instant::now() >= deadline {
+            return rows;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
