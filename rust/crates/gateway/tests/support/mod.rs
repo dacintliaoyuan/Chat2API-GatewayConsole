@@ -565,6 +565,10 @@ impl GatewayServerHandle {
     pub fn addr(&self) -> SocketAddr {
         self.inner.addr()
     }
+
+    pub fn state(&self) -> std::sync::Arc<um_gateway::AppState> {
+        self.inner.state()
+    }
 }
 
 impl Drop for GatewayServerHandle {
