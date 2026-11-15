@@ -79,6 +79,10 @@ fn the_timeout_defaults_match_the_contract_fixture() {
         Duration::from_secs(3600)
     );
     assert_eq!(
+        um_gateway::config::parse_request_total_seconds(Some("-1")),
+        Duration::from_secs(10)
+    );
+    assert_eq!(
         um_gateway::config::parse_request_total_seconds(Some("nope")),
         Duration::from_secs(360)
     );

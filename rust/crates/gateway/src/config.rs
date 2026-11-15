@@ -258,9 +258,12 @@ impl GatewayConfig {
 /// values are clamped to 10..3600 seconds, exactly like Python.
 pub fn parse_request_total_seconds(value: Option<&str>) -> Duration {
     let seconds = value
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .unwrap_or(DEFAULT_REQUEST_TOTAL_SECONDS);
-    Duration::from_secs(seconds.clamp(MIN_REQUEST_TOTAL_SECONDS, MAX_REQUEST_TOTAL_SECONDS))
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(DEFAULT_REQUEST_TOTAL_SECONDS as i64);
+    Duration::from_secs(seconds.clamp(
+        MIN_REQUEST_TOTAL_SECONDS as i64,
+        MAX_REQUEST_TOTAL_SECONDS as i64,
+    ) as u64)
 }
 
 /// Parse and validate the upstream base URL. Only plain HTTP is supported by the
