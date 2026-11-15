@@ -559,7 +559,7 @@ impl DisplayRelay {
         if !self.config.enabled {
             return Some(display_json(503, self.unavailable_reason()));
         }
-        let origin = self.request_origin(
+        let Some(origin) = self.request_origin(
             request,
             console_port,
             false,
@@ -567,7 +567,9 @@ impl DisplayRelay {
             grants,
             session,
             control_token_file,
-        )?;
+        ) else {
+            return Some(display_json(403, "display access denied"));
+        };
         Some(self.serve_grant_exchange(request, origin, grants))
     }
 
