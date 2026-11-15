@@ -25,6 +25,7 @@ SSE 事件名或超时预算。
 ```bash
 python tests/generate_rust_contract_fixture.py
 cargo test --manifest-path rust/Cargo.toml
+bash scripts/check-rust-s0.sh
 ```
 
 ## 边界
