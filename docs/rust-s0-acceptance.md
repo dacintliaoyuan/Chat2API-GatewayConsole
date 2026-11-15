@@ -45,10 +45,10 @@
 | `python -m unittest tests.test_retired_features tests.test_check_gate` | `Ran 11 tests`；`OK` |
 | `bash scripts/check-rust-s0.sh` | 退出码 0 |
 | `bash scripts/check.sh --quick` | 退出码 0 |
-| `bash scripts/check.sh --full` | Python 全量 `Ran 2354 tests`，`FAILED (failures=1, errors=1, skipped=63)`；两条失败单独重跑均 `OK`，见下方说明 |
+| `bash scripts/check.sh --full` | 首次实施时 Python 全量 `Ran 2354 tests`，`FAILED (failures=1, errors=1, skipped=63)`；两条失败单独重跑均 `OK`，见下方说明 |
 | `git -c core.whitespace=cr-at-eol diff --check` | 退出码 0 |
 
-全量门禁的两条失败：
+首次全量门禁的两条失败：
 
 - `test_share_management.ShareApiBoundaryTests.test_duplicate_control_header_rejected`
   （`ConnectionAbortedError`）。
@@ -57,6 +57,15 @@
 
 两条失败单独重跑均 `OK`；本票未修改这两个模块，按既有 Windows 连接/
 时序抖动记录，不写成 S0 通过证据。`local/tests` `Ran 54 tests` / `OK`。
+
+复跑（合入 `main` 的 `01b69ed` 之后，2026-11-15）：
+
+- 工作目录 `.worktrees/rust-43`；`cargo 1.100.0`、`rustc 1.100.0`。
+- `bash scripts/check.sh --full` 退出码 0；`tests` `Ran 2353 tests` /
+  `OK (skipped=63)`，`local/tests` `Ran 54 tests` / `OK`。
+- 首次记录的两条抖动未再出现；`01b69ed` 已收口控制台重复头与提前释放窗口抖动。
+- 复跑前 `python tests/generate_rust_contract_fixture.py` 重新生成夹具，`git status`
+  干净，夹具未漂移。
 
 ## 无生产端口切换
 
