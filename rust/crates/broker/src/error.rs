@@ -184,6 +184,17 @@ impl BrokerResult {
         }
     }
 
+    pub fn err_with_result(code: ResultCode, result: Value) -> Self {
+        if code == ResultCode::Ok {
+            panic!("BrokerResult::err_with_result requires a non-ok result code");
+        }
+        Self {
+            ok: false,
+            error_code: code,
+            result,
+        }
+    }
+
     pub fn ok_flag(&self) -> bool {
         self.ok
     }

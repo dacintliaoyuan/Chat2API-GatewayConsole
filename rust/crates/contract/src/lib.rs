@@ -5,6 +5,11 @@
 //! Rust code only *reads* the fixture; expected endpoints, error codes, SSE event
 //! names and budgets are never written here by hand.
 
+pub mod canonical;
+pub mod projection;
+
+pub use projection::{fingerprint, parse_projection_payload, ProjectionError};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
