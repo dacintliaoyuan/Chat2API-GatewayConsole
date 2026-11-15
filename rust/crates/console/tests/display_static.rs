@@ -362,3 +362,63 @@ fn disabled_or_broken_display_is_an_honest_503() {
     assert_eq!(response.status, 503);
     assert_eq!(response.json(), json!({"error": "display_novnc_missing"}));
 }
+
+fn start_production_display_console(
+    temp: &TempDataDir,
+    configure: impl FnOnce(&mut um_console::ConsoleConfig),
+) -> Console {
+    let mut config = base_config(temp);
+    configure(&mut config);
+    Console::from_server(
+        um_console::ConsoleServer::start(config).expect("start production console"),
+    )
+}
+
+#[test]
+fn production_entry_reports_the_assembled_display_availability() {
+    let temp = temp();
+    let assets = display_assets(&temp);
+    let console = start_production_display_console(&temp, |config| {
+        config.display = display_config(&assets, 9);
+    });
+
+    let session = get(
+        &console,
+        "/api/console/share-management/display-session",
+        &[],
+    );
+    assert_eq!(session.status, 200);
+    assert_eq!(session.json()["available"], json!(true));
+    assert_eq!(session.json()["url"], json!("/display/"));
+    assert_eq!(session.json()["reason"], json!(""));
+
+    let state = get(&console, "/api/console/share-management/display-state", &[]);
+    assert_eq!(state.status, 200);
+    assert_eq!(state.json()["display"]["available"], json!(true));
+    assert_eq!(state.json()["display"]["reason"], json!(null));
+    assert_eq!(state.json()["state"], json!("not_started"));
+}
+
+#[test]
+fn production_entry_reports_display_disabled_without_config() {
+    let temp = temp();
+    let console = start_production_display_console(&temp, |config| {
+        config.display = DisplayConfig::default();
+    });
+
+    let session = get(
+        &console,
+        "/api/console/share-management/display-session",
+        &[],
+    );
+    assert_eq!(session.status, 200);
+    assert_eq!(session.json()["available"], json!(false));
+    assert_eq!(session.json()["url"], json!(null));
+    assert_eq!(session.json()["reason"], json!("display_disabled"));
+
+    let state = get(&console, "/api/console/share-management/display-state", &[]);
+    assert_eq!(state.status, 200);
+    assert_eq!(state.json()["display"]["available"], json!(false));
+    assert_eq!(state.json()["display"]["reason"], json!("display_disabled"));
+    assert_eq!(state.json()["state"], json!("display_disconnected"));
+}

@@ -9,6 +9,18 @@ use um_test_harness::TempDataDir;
 mod support;
 
 use support::write::{create_over_http, http_request, start_write_console, Advance, FakeBroker};
+use support::{client_request, ClientRequest, ClientResponse, Console};
+
+fn create_legacy_over_http(console: &Console, name: &str) -> ClientResponse {
+    client_request(
+        console.addr,
+        &ClientRequest::post("/api/share/keys", b"".to_vec())
+            .json_body(json!({"name": name}).to_string().into_bytes())
+            .header("Cookie", "usage_session=fixture-session")
+            .header("X-Requested-With", "XMLHttpRequest"),
+    )
+    .expect("request")
+}
 
 #[test]
 fn revoke_failure_stays_blocked_and_never_answers_a_fake_success() {
@@ -108,4 +120,45 @@ fn deleted_and_legacy_readback_keep_the_four_distinct_outcomes() {
     let (status, payload) = read.secret(&legacy_id, Some("1")).expect("readback");
     assert_eq!(status, 200);
     assert_eq!(payload["reason"], "legacy");
+}
+
+#[test]
+fn status_reports_the_last_publication_failure_and_keeps_it_after_success() {
+    let temp = TempDataDir::new("um-console-share-write-").expect("temp dir");
+    let broker = Arc::new(FakeBroker::new(Advance::RevokeOnly));
+    let (console, _store_path, _key_file) = start_write_console(&temp, broker.clone());
+    console.state().session.issue("fixture-session".to_string());
+
+    *broker.fail.lock().unwrap() = Some("broker down".to_string());
+    let failed = create_legacy_over_http(&console, "failed-publication");
+    assert_eq!(failed.status, 201);
+    assert_eq!(failed.json()["published"], json!(false));
+
+    let status = http_request(
+        &console,
+        "GET",
+        "/api/console/share-management/status",
+        None,
+        false,
+    );
+    assert_eq!(status.status, 200);
+    let failure = status.json()["last_publication_failure"].clone();
+    assert_eq!(failure["kind"], json!("publish"));
+    assert!(failure["error"].as_str().unwrap().contains("broker down"));
+    assert!(failure["at"].is_string());
+
+    // Python keeps `_last_failure` after a later successful publication.
+    *broker.fail.lock().unwrap() = None;
+    let succeeded = create_legacy_over_http(&console, "succeeded-publication");
+    assert_eq!(succeeded.status, 201);
+    assert_eq!(succeeded.json()["published"], json!(true));
+
+    let after = http_request(
+        &console,
+        "GET",
+        "/api/console/share-management/status",
+        None,
+        false,
+    );
+    assert_eq!(after.json()["last_publication_failure"], failure);
 }

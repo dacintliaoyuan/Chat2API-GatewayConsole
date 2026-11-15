@@ -60,6 +60,25 @@ pub struct UnwiredSeams;
 
 impl ShareReadSeams for UnwiredSeams {}
 
+/// Production read seam for the S7 display relay: the assembled
+/// `DisplayConfig` fixes the availability fact, while the broker and
+/// attribution seams stay unconfirmed.
+pub struct DisplaySeams {
+    availability: Value,
+}
+
+impl DisplaySeams {
+    pub fn new(availability: Value) -> Self {
+        Self { availability }
+    }
+}
+
+impl ShareReadSeams for DisplaySeams {
+    fn display_availability(&self) -> Option<Value> {
+        Some(self.availability.clone())
+    }
+}
+
 pub struct ShareReadStore {
     path: PathBuf,
     public_origin: Option<String>,
@@ -126,6 +145,7 @@ impl ShareReadStore {
             .filter(|row| row.max_concurrency > KEY_MAX_CONCURRENCY_MAX)
             .count() as i64;
         let blocked_publications = blocked_publications(&connection, applied_generation)?;
+        let last_publication_failure = last_publication_failure(&connection)?;
         let mut payload = Map::new();
         payload.insert("schema_version".to_string(), json!(schema_version));
         payload.insert(
@@ -159,7 +179,10 @@ impl ShareReadStore {
             "broker".to_string(),
             map_broker_snapshot(seams.broker_snapshot()),
         );
-        payload.insert("last_publication_failure".to_string(), Value::Null);
+        payload.insert(
+            "last_publication_failure".to_string(),
+            last_publication_failure,
+        );
         payload.insert(
             "blocked_publications".to_string(),
             Value::Array(blocked_publications),
@@ -250,6 +273,7 @@ impl ShareReadStore {
             .filter(|row| row.max_concurrency > KEY_MAX_CONCURRENCY_MAX)
             .count() as i64;
         let blocked_publications = blocked_publications(&connection, applied_generation)?;
+        let last_publication_failure = last_publication_failure(&connection)?;
         let blocked = blocked_publications
             .iter()
             .any(|item| item["blocked"].as_bool() == Some(true));
@@ -273,7 +297,7 @@ impl ShareReadStore {
                 "state": "offline",
                 "note": "未安装/未授权高权限 broker；变更已保存但未在线发布",
             })),
-            "last_publication_failure": Value::Null,
+            "last_publication_failure": last_publication_failure,
             "blocked_publications": blocked_publications,
             "blocked": blocked,
         }))
@@ -467,6 +491,43 @@ fn share_max_concurrency(connection: &Connection) -> Result<i64, ConsoleError> {
     }
 }
 
+/// `ShareManager._last_failure` for the durable publish journal: the latest
+/// failed `publish` operation keeps its recorded error even after a later
+/// publication succeeds, matching Python's in-process retention.
+fn last_publication_failure(connection: &Connection) -> Result<Value, ConsoleError> {
+    let mut statement = connection
+        .prepare(concat!(
+            "SELECT payload,created_at FROM ops WHERE kind='publish'",
+            " AND status='failed' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        ))
+        .map_err(|_| share_management_error())?;
+    let row = statement.query_row([], |row| {
+        Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?))
+    });
+    match row {
+        Ok((payload, created_at)) => {
+            let payload = payload
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                .unwrap_or_else(|| json!({}));
+            let error = payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if error.is_empty() {
+                return Ok(Value::Null);
+            }
+            Ok(json!({
+                "kind": "publish",
+                "error": error,
+                "at": created_at,
+            }))
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Value::Null),
+        Err(_) => Err(share_management_error()),
+    }
+}
+
 fn blocked_publications(
     connection: &Connection,
     applied_generation: i64,
@@ -602,6 +663,26 @@ fn store_public_row(row: &KeyRow) -> Value {
 
 fn store_public_row_from_row(row: &Row<'_>) -> rusqlite::Result<Value> {
     Ok(store_public_row(&row_to_key(row)))
+}
+
+/// `usagesrv.py` control-status: the broker control channel answers only
+/// when its snapshot is `state=ok` with a broker object. An unassembled seam
+/// is `share_broker_unwired`; any other snapshot is
+/// `share_broker_unavailable`, never a fabricated responsive `true`.
+pub fn control_status(snapshot: Option<Value>) -> Value {
+    let Some(snapshot) = snapshot else {
+        return json!({"responsive": false, "error_code": "share_broker_unwired"});
+    };
+    let responsive = snapshot.get("state").and_then(Value::as_str) == Some("ok")
+        && snapshot
+            .get("broker")
+            .map(Value::is_object)
+            .unwrap_or(false);
+    if responsive {
+        json!({"responsive": true})
+    } else {
+        json!({"responsive": false, "error_code": "share_broker_unavailable"})
+    }
 }
 
 /// `Handler._console_share_status_payload` broker mapping.

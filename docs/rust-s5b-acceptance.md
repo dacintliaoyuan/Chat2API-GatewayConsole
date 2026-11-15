@@ -10,6 +10,7 @@
 | 验收条目 | 实现 | 定向测试 |
 |---|---|---|
 | AC1 `share-management/status` 的 `gateway_running` 三态 | `share_read.rs::status`、`ShareReadSeams` | `share_status.rs` |
+| AC1b `share-management/control-status` 的 `{responsive,error_code}` 与 405 | `share_read.rs::control_status`、`server.rs` 路由 | `control_status.rs` |
 | AC2 `keys/{id}/secret` 四种结果 | `share_read.rs::secret` | `share_secret.rs` |
 | AC3 `share-usage` 汇总/逐请求/筛选/游标/coverage | `metering.rs`、`share_read.rs::read_key_labels` | `share_usage.rs` |
 | AC4 `um/*`、`usage-tokens/rates`、`logs`、`log-*`、`gateway-connection`、`cloud-ops`、`display-session/state` | `cloud_ops.rs`、`display.rs`、云端 `capability_not_assembled` 门 | `console_reads.rs` |
@@ -40,7 +41,15 @@
 - `cloud_ops.rs` 只读安全状态文件：缺失配置 `configured=false`，不可读状态
   `available=false` + `security_unavailable`，绝不伪造“无撤销”成功。
 - `display.rs` 在候选未装配 display relay 时返回 `display_disabled` 的诚实不可用；
+  生产入口按 S7 的 `DisplayConfig::availability` 装配后，启用时 `display-session` 返回
+  `available=true`/`url=/display/`，未启用时才返回 `display_disabled`；
   `display-state` 按 Python 的 `_console_display_state_of` 映射认证观察。
+- `control-status` 只读 broker 快照：`state=ok` 且带 `broker` 对象时 200
+  `{responsive:true}`；未接线为 `share_broker_unwired`，其余未确认为
+  `share_broker_unavailable`；非 GET 返回 405 `method not allowed`。
+- `share-management/status` 的 `last_publication_failure` 来自最新失败的 `publish`
+  operation（`{kind,error,at}`）；后续发布成功不会清空它，与 Python `_last_failure`
+  的保留语义一致。
 - `/api/share/*` 读面先做敏感头重复检查，再要求会话 Cookie 或控制令牌；写方法在 S5b
   返回 `501 not_implemented`，不伪造写成功。公网入口仍只有 8003 的四条 `/v1` 路径。
 - 候选继续只绑定 `127.0.0.1:0`；`USAGESRV_PORT` 只作为报告端口，8002/8003 与治理段
@@ -101,10 +110,21 @@ git -c core.whitespace=cr-at-eol diff --check
 - S5b 不装配 broker 客户端、display relay、日志读取器或 UM 统计读取器；这些在云端角色
   返回 `503 capability_not_assembled`，与 Python 云端角色一致。`gateway_running` 与
   attribution 来自可注入读缝，生产接线留给后续切片。
-- `display-session`/`display-state` 在候选未装配 display 时返回 `display_disabled`；
-  display grant/session/WebSocket 由 S7 承担。
+- `display-session`/`display-state` 的可用性由 S7 的 `DisplayConfig` 经读缝提供；本切片的
+  `display.rs` 只负责映射，display grant/session/WebSocket 由 S7 承担。
 - `/api/share/*` 写面未实现（`501 not_implemented`），由 S6 承担；本切片不写
   `share-store.db`、账本或日志。
 - 未在真实 Linux `/proc`、真实云端 `share-store.db` 或真实 8002 进程上验证；夹具使用
   临时目录与固定读时刻。
 - 未切换云端 8002、未重启 broker、未执行真实部署或 UM 登录。
+
+## 6. 审查修复（2026-11-16）
+
+- Finding 6：新增 `GET /api/console/share-management/control-status`，按
+  `usagesrv.py:2802-2819` 从 broker 快照返回 `{responsive}` 或
+  `{responsive:false,error_code}`；非 GET 返回 405。
+- Finding 8：`share-management/status` 与 `/api/share/status` 的
+  `last_publication_failure` 从最新失败 `publish` operation 读取
+  `{kind,error,at}`；发布成功不清空，保留语义与 Python `_last_failure` 一致。
+- 定向测试：`cargo test -p um-console --test control_status --test share_status
+  --test share_write_fail_closed --offline` 通过。

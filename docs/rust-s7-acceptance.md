@@ -27,6 +27,10 @@
   auth file 互斥且必须绝对路径；资产缺失分别报 `display_novnc_missing`、
   `display_launcher_missing`、`display_vnc_auth_missing`，其余非法值统一
   `display_config_invalid`。
+- 生产入口 `ConsoleServer::start`/`start_with_runtime` 把 `DisplayConfig::availability`
+  经 `ShareReadSeams` 装入：启用且资产有效时 `display-session` 返回
+  `available=true`/`url=/display/`，`display-state` 的 `display` 为可用；未启用或配置
+  损坏时才返回 `display_disabled` 或对应配置错误码。
 - 静态面：`/display` 308 到 `/display/`；`/display/` 只读 launcher；`launcher.js` 与
   `launcher-state.js` 只从 launcher 文件所在目录取，绝不被 noVNC 树里的同名文件遮蔽；
   `/display/<asset>` 只允许 `STATIC_TYPES` 扩展名、拒绝 `\ % NUL :`、空段、`.`/`..`，
@@ -116,3 +120,13 @@ bash scripts/check-rust-s7.sh
 - POSIX helper socket 与密码文件权限/uid 测试用 `#[cfg(unix)]` 编写；Windows 门禁不执行，
   需在 Linux/WSL 复跑 `cargo test -p um-console --test display_rfb`。
 - 生产 8002/8097 切换与回滚不在本票；Rust 候选仍只绑临时 loopback 端口。
+
+## 6. 审查修复（2026-11-16）
+
+- Finding 7：生产入口此前恒用 `UnwiredSeams`，`display-session`/`display-state` 永远
+  `display_disabled`。现在 `ConsoleServer::start`/`start_with_runtime` 用
+  `DisplaySeams` 装配 `DisplayConfig::availability`；启用显示返回 `available=true`，
+  未启用才返回 `display_disabled`。
+- 定向测试：`display_static.rs` 的
+  `production_entry_reports_the_assembled_display_availability` 与
+  `production_entry_reports_display_disabled_without_config`；未连接真实 x11vnc。

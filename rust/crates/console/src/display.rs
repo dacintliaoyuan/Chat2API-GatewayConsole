@@ -1,9 +1,10 @@
 //! S5b: the display-session / display-state read faces.
 //!
-//! The candidate assembles no display relay (S7 owns it), so the launcher read
-//! answers `display_proxy_unavailable` honestly instead of fabricating an
-//! available page. The display state maps the instance's own auth observation
-//! exactly like `usagesrv.py::_console_display_state_of`.
+//! The production entry wires the S7 display relay's `DisplayConfig::availability`
+//! through `ShareReadSeams`; an enabled relay is reported as available, and only
+//! a disabled/unassembled relay is `display_disabled` (or its config error).
+//! The display state maps the instance's own auth observation exactly like
+//! `usagesrv.py::_console_display_state_of`.
 
 use serde_json::{json, Map, Value};
 
@@ -50,9 +51,7 @@ fn display_availability(seam: Option<Value>) -> Value {
         None => json!({"available": false, "reason": "display_disabled"}),
         Some(availability) => {
             if availability["available"].as_bool() == Some(true) {
-                // No relay is assembled here, so a configured display still
-                // cannot issue a grant. This is an honest unavailable fact.
-                json!({"available": false, "reason": "display_grant_unavailable"})
+                json!({"available": true, "reason": Value::Null})
             } else {
                 let reason = availability["reason"]
                     .as_str()
@@ -66,14 +65,19 @@ fn display_availability(seam: Option<Value>) -> Value {
 
 pub fn display_session(seam: Option<Value>) -> Value {
     let display = display_availability(seam);
+    let available = display["available"].as_bool() == Some(true);
     json!({
-        "available": display["available"] == json!(true),
-        "url": if display["available"] == json!(true) {
+        "available": available,
+        "url": if available {
             json!("/display/")
         } else {
             Value::Null
         },
-        "reason": display["reason"].clone(),
+        "reason": if available {
+            json!("")
+        } else {
+            display["reason"].clone()
+        },
         "expires_at": Value::Null,
         "mode": "novnc",
         "operator": default_operator(),

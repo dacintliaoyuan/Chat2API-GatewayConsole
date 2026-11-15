@@ -36,7 +36,7 @@ use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
 use crate::session::{SessionState, SESSION_COOKIE, SESSION_TTL_SECONDS};
 use crate::share_auth::{control_token_ok, management_write_auth, ManagementAuth};
-use crate::share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
+use crate::share_read::{control_status, DisplaySeams, ShareReadSeams, ShareReadStore};
 use crate::share_write::{
     console_public_row, ShareWriteError, ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams,
 };
@@ -91,7 +91,8 @@ impl ConsoleServer {
         config: ConsoleConfig,
         runtime: Arc<dyn RuntimeFacts>,
     ) -> Result<ServerHandle, ServerError> {
-        Self::start_with_seams(config, runtime, Arc::new(UnwiredSeams))
+        let display = DisplaySeams::new(config.display.availability());
+        Self::start_with_seams(config, runtime, Arc::new(display))
     }
 
     pub fn start_with_seams(
@@ -770,6 +771,9 @@ fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Resp
             Ok(payload) => send_json(200, &payload),
             Err(error) => error.response(),
         },
+        ["share-management", "control-status"] => {
+            send_json(200, &control_status(state.share_seams.broker_snapshot()))
+        }
         ["share-management", "keys", key_id, "secret"] => {
             let expected = query_value(raw_target, "expected_row_version");
             match state.share.secret(key_id, expected.as_deref()) {
@@ -830,6 +834,12 @@ fn handle_share_management_write(
     }
     if method == "POST" && rest == ["display-operator"] {
         return handle_display_operator(state, request);
+    }
+    if rest == ["control-status"] {
+        let mut response =
+            ConsoleError::new(405, json!({"error": "method not allowed"})).response();
+        response.close = true;
+        return response;
     }
     let body = match read_console_body(request) {
         Ok(body) => body,

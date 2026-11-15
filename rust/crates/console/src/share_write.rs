@@ -970,7 +970,11 @@ impl ShareWriteStore {
 
     fn note_failure(&self, error: &str) {
         if let Ok(mut failure) = self.last_failure.lock() {
-            *failure = Some(json!({"kind": "publish", "message": error}));
+            *failure = Some(json!({
+                "kind": "publish",
+                "error": error,
+                "at": um_store::ids::utc_now(),
+            }));
         }
     }
 
