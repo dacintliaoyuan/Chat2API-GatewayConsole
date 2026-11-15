@@ -22,10 +22,15 @@ use crate::body::{
     read_console_body, reject_duplicate_sensitive_header, reject_unknown_fields,
     CONSOLE_MAX_REQUEST_BYTES,
 };
+use crate::cloud_ops::cloud_ops_status;
 use crate::config::{ConfigError, ConsoleConfig, Role};
+use crate::display::{display_session, display_state};
 use crate::error::ConsoleError;
+use crate::metering::{self, UsageFilters};
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
+use crate::share_auth::{management_auth, SessionState};
+use crate::share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
 use crate::summary::SummaryCache;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -49,6 +54,9 @@ pub struct AppState {
     pub runtime: Arc<dyn RuntimeFacts>,
     pub summary: SummaryCache,
     pub operations: OperationsReader,
+    pub share: ShareReadStore,
+    pub share_seams: Arc<dyn ShareReadSeams>,
+    pub session: SessionState,
     services_cache: Mutex<Option<(Value, Instant)>>,
 }
 
@@ -70,9 +78,24 @@ impl ConsoleServer {
         config: ConsoleConfig,
         runtime: Arc<dyn RuntimeFacts>,
     ) -> Result<ServerHandle, ServerError> {
+        Self::start_with_seams(config, runtime, Arc::new(UnwiredSeams))
+    }
+
+    pub fn start_with_seams(
+        config: ConsoleConfig,
+        runtime: Arc<dyn RuntimeFacts>,
+        share_seams: Arc<dyn ShareReadSeams>,
+    ) -> Result<ServerHandle, ServerError> {
         config.validate_candidate().map_err(ServerError::Config)?;
         let state = Arc::new(AppState {
             operations: OperationsReader::new(config.console_state_file.clone()),
+            share: ShareReadStore::with_options(
+                config.share_store_file.clone().unwrap_or_default(),
+                config.public_origin.clone(),
+                config.share_secret_key_file.clone(),
+            ),
+            share_seams,
+            session: SessionState::new(),
             config: config.clone(),
             runtime,
             summary: SummaryCache::new(),
@@ -214,6 +237,9 @@ fn dispatch(state: &AppState, request: &Request) -> Response {
         }
         return ConsoleError::unknown_path().response();
     }
+    if path.starts_with("/api/share/") {
+        return handle_share_read(state, request, &target);
+    }
     if !path.starts_with("/api/console/") {
         return ConsoleError::unknown_path().response();
     }
@@ -237,11 +263,99 @@ fn dispatch(state: &AppState, request: &Request) -> Response {
     }
 }
 
+fn handle_share_read(state: &AppState, request: &Request, raw_target: &str) -> Response {
+    if let Err(error) = reject_duplicate_sensitive_header(&request.headers) {
+        return error.response();
+    }
+    let authorized = management_auth(
+        &state.session,
+        state.config.control_token_file.as_deref(),
+        request.headers.get("Cookie"),
+        request.headers.get("X-Admin-Control"),
+    );
+    if !authorized {
+        let mut response = ConsoleError::new(
+            401,
+            json!({"error": "share management credentials required"}),
+        )
+        .response();
+        response.close = true;
+        return response;
+    }
+    let path = raw_target.split('?').next().unwrap_or(raw_target);
+    let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    let rest: Vec<&str> = segments.iter().skip(2).copied().collect();
+    if request.method.as_str() != "GET" {
+        // Writes belong to S6; the candidate never fakes a mutation.
+        return ConsoleError::not_implemented("share_write_s6").response();
+    }
+    match rest.as_slice() {
+        ["usage"] => share_usage_response(state, raw_target, false),
+        ["usage", "requests"] => share_usage_response(state, raw_target, true),
+        ["status"] => match state.share.raw_status(state.share_seams.broker_snapshot()) {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
+        ["keys"] => match state.share.share_keys() {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
+        ["keys", key_id] => match state.share.share_key(key_id) {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
+        ["keys", key_id, "secret"] => {
+            let expected = query_value(raw_target, "expected_row_version");
+            match state.share.secret(key_id, expected.as_deref()) {
+                Ok((status, payload)) => send_json(status, &payload),
+                Err(error) => error.response(),
+            }
+        }
+        ["operations", operation_id] => match state.share.operation(operation_id) {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
+        _ => ConsoleError::unknown_path().response(),
+    }
+}
+
 fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Response {
     match rest {
         ["services"] => services_response(state),
         ["health"] => health_response(state),
         ["actions"] => send_json(200, &action_catalogue()),
+        ["share-management", "status"] => match state.share.status(&*state.share_seams) {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
+        ["share-management", "keys"] => match state.share.keys() {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
+        ["share-management", "keys", key_id, "secret"] => {
+            let expected = query_value(raw_target, "expected_row_version");
+            match state.share.secret(key_id, expected.as_deref()) {
+                Ok((status, payload)) => send_json(status, &payload),
+                Err(error) => error.response(),
+            }
+        }
+        ["share-usage"] => share_usage_response(state, raw_target, false),
+        ["share-usage", "requests"] => share_usage_response(state, raw_target, true),
+        ["cloud-ops"] => send_json(
+            200,
+            &cloud_ops_status(state.config.security_state_file.as_deref()),
+        ),
+        ["share-management", "display-session"] => send_json(
+            200,
+            &display_session(state.share_seams.display_availability()),
+        ),
+        ["share-management", "display-state"] => send_json(
+            200,
+            &display_state(
+                state.share_seams.auth_observation(),
+                state.share_seams.display_availability(),
+            ),
+        ),
         ["operations"] => match state.operations.list(raw_target) {
             Ok(payload) => send_json(200, &payload),
             Err(error) => error.response(),
@@ -479,4 +593,168 @@ pub fn operation_view_for_tests(row: &rusqlite::Row<'_>) -> rusqlite::Result<Val
 /// Test seam: read one body through the console boundary.
 pub fn read_body_for_tests(request: &Request) -> Result<Map<String, Value>, ConsoleError> {
     read_console_body(request)
+}
+
+/// The share-usage ledger path, or `None` when the configured backend dir is
+/// absent/relative (never a guessed path).
+fn share_ledger_path(state: &AppState) -> Option<std::path::PathBuf> {
+    let dir = state.config.share_backend_dir.as_ref()?;
+    if !dir.is_absolute() {
+        return None;
+    }
+    Some(dir.join("usage-share-backend.jsonl"))
+}
+
+fn share_usage_response(state: &AppState, raw_target: &str, requests: bool) -> Response {
+    let Some(ledger) = share_ledger_path(state) else {
+        return ConsoleError::new(503, json!({"error": "share_ledger_path_unresolved"})).response();
+    };
+    let query = query_values(raw_target);
+    let allowed: &[&str] = if requests {
+        &["window", "key", "model", "result", "cursor", "limit"]
+    } else {
+        &["window", "key", "model", "result"]
+    };
+    if let Some(name) = query.keys().find(|name| !allowed.contains(&name.as_str())) {
+        let _ = name;
+        return ConsoleError::new(
+            400,
+            json!({
+                "error": "invalid_share_usage_query",
+                "reason": "unknown_query_field",
+            }),
+        )
+        .response();
+    }
+    if let Some(name) = query
+        .iter()
+        .find(|(_, values)| values.len() != 1)
+        .map(|(name, _)| name)
+    {
+        let _ = name;
+        return ConsoleError::new(
+            400,
+            json!({
+                "error": "invalid_share_usage_query",
+                "reason": "duplicate_query_field",
+            }),
+        )
+        .response();
+    }
+    let value = |name: &str| query.get(name).and_then(|values| values.first()).cloned();
+    let filters = UsageFilters {
+        window: value("window"),
+        key_id: value("key"),
+        model: value("model"),
+        result: value("result"),
+    };
+    let limit = if requests {
+        match value("limit") {
+            None => metering::SHARE_REQUEST_PAGE_DEFAULT,
+            Some(raw) => {
+                if !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return ConsoleError::new(
+                        400,
+                        json!({
+                            "error": "invalid_share_usage_query",
+                            "reason": "limit",
+                        }),
+                    )
+                    .response();
+                }
+                let parsed = raw.parse::<i64>().unwrap_or_default();
+                if !(1..=metering::SHARE_REQUEST_PAGE_MAX).contains(&parsed) {
+                    return ConsoleError::new(
+                        400,
+                        json!({
+                            "error": "invalid_share_usage_query",
+                            "reason": "limit",
+                        }),
+                    )
+                    .response();
+                }
+                parsed
+            }
+        }
+    } else {
+        0
+    };
+    let cursor = value("cursor");
+    let result = if requests {
+        metering::read_share_requests(&ledger, &filters, cursor.as_deref(), limit, None)
+    } else {
+        metering::read_share_usage(&ledger, &filters, metering::DEFAULT_LIMIT, None)
+    };
+    match result {
+        Ok(mut payload) => {
+            metering::attach_key_labels(
+                &mut payload,
+                if requests { "rows" } else { "keys" },
+                if requests { "keyId" } else { "key_id" },
+                state.config.share_store_file.as_ref(),
+            );
+            send_json(200, &payload)
+        }
+        Err(_) => ConsoleError::new(400, json!({"error": "invalid_share_usage_query"})).response(),
+    }
+}
+
+/// All query-string values grouped by name, Python `parse_qs` semantics.
+fn query_values(raw_target: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut values = std::collections::BTreeMap::new();
+    let Some(query) = raw_target.split_once('?').map(|(_, query)| query) else {
+        return values;
+    };
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let key = decode_query_part(key);
+        if key.is_empty() {
+            continue;
+        }
+        values
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push(decode_query_part(value));
+    }
+    values
+}
+
+/// One query-string value, Python `parse_qs` default semantics: the first
+/// value wins, a blank value is absent, and `+`/`%XX` are decoded.
+fn query_value(raw_target: &str, name: &str) -> Option<String> {
+    let query = raw_target.split_once('?')?.1;
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if decode_query_part(key) != name {
+            continue;
+        }
+        let value = decode_query_part(value);
+        return if value.is_empty() { None } else { Some(value) };
+    }
+    None
+}
+
+fn decode_query_part(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => output.push(b' '),
+            b'%' if index + 2 < bytes.len() => {
+                let high = (bytes[index + 1] as char).to_digit(16);
+                let low = (bytes[index + 2] as char).to_digit(16);
+                match (high, low) {
+                    (Some(high), Some(low)) => {
+                        output.push((high * 16 + low) as u8);
+                        index += 2;
+                    }
+                    _ => output.push(b'%'),
+                }
+            }
+            byte => output.push(byte),
+        }
+        index += 1;
+    }
+    String::from_utf8_lossy(&output).to_string()
 }

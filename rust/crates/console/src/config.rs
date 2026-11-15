@@ -26,6 +26,12 @@ pub const GATEWAY_ENTRY_KIND_ENV: &str = "UM_SHARE_GATEWAY_ENTRY_KIND";
 pub const PROC_ROOT_ENV: &str = "UM_SHARE_PROC_ROOT";
 pub const EXPECTED_UID_ENV: &str = "UM_SHARE_EXPECTED_UID";
 pub const CONSOLE_STATE_FILE_ENV: &str = "CONSOLE_STATE_FILE";
+pub const SHARE_STORE_FILE_ENV: &str = "SHARE_STORE_FILE";
+pub const SHARE_SECRET_KEY_FILE_ENV: &str = "CHAT2API_SHARE_SECRET_KEY_FILE";
+pub const PUBLIC_ORIGIN_ENV: &str = "CONSOLE_PUBLIC_ORIGIN";
+pub const SECURITY_STATE_FILE_ENV: &str = "UM_CLOUD_SECURITY_STATE";
+pub const CONTROL_TOKEN_FILE_ENV: &str = "USAGE_CONTROL_TOKEN_FILE";
+pub const SHARE_BACKEND_DIR_ENV: &str = "CONSOLE_SHARE_BACKEND_DIR";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -83,6 +89,12 @@ pub struct ConsoleConfig {
     pub gateway_entry_kind: EntryKind,
     pub proc_root: PathBuf,
     pub expected_uid: Option<u32>,
+    pub share_store_file: Option<PathBuf>,
+    pub share_secret_key_file: Option<PathBuf>,
+    pub public_origin: Option<String>,
+    pub security_state_file: Option<PathBuf>,
+    pub control_token_file: Option<PathBuf>,
+    pub share_backend_dir: Option<PathBuf>,
 }
 
 impl Default for ConsoleConfig {
@@ -101,6 +113,12 @@ impl Default for ConsoleConfig {
             gateway_entry_kind: EntryKind::Python,
             proc_root: PathBuf::from(DEFAULT_PROC_ROOT),
             expected_uid: None,
+            share_store_file: None,
+            share_secret_key_file: None,
+            public_origin: None,
+            security_state_file: None,
+            control_token_file: None,
+            share_backend_dir: None,
         }
     }
 }
@@ -229,6 +247,34 @@ impl ConsoleConfig {
         if let Ok(value) = std::env::var(CONSOLE_STATE_FILE_ENV) {
             if !value.trim().is_empty() {
                 config.console_state_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var(SHARE_STORE_FILE_ENV) {
+            if !value.trim().is_empty() {
+                config.share_store_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var(SHARE_SECRET_KEY_FILE_ENV) {
+            if !value.trim().is_empty() {
+                config.share_secret_key_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var(PUBLIC_ORIGIN_ENV) {
+            config.public_origin = Some(value);
+        }
+        if let Ok(value) = std::env::var(SECURITY_STATE_FILE_ENV) {
+            if !value.trim().is_empty() {
+                config.security_state_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var(CONTROL_TOKEN_FILE_ENV) {
+            if !value.trim().is_empty() {
+                config.control_token_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var(SHARE_BACKEND_DIR_ENV) {
+            if !value.trim().is_empty() {
+                config.share_backend_dir = Some(PathBuf::from(value));
             }
         }
         Ok(config)

@@ -151,3 +151,142 @@ fn operations_reader_does_not_create_a_lock_directory() {
     assert!(!temp.path().join("locks").exists());
     assert!(!temp.path().join("console.sqlite3").exists());
 }
+
+fn snapshot(root: &Path) -> BTreeSet<(String, Vec<u8>)> {
+    std::fs::read_dir(root)
+        .expect("read temp dir")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .map(|entry| {
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                std::fs::read(entry.path()).expect("read file"),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn share_read_faces_do_not_write_the_store_ledger_or_logs() {
+    let fixture = reads_fixture();
+    let temp = temp();
+    seed_share_store(&temp, &fixture["shareStatus"]["storeSeed"]);
+    let backend = temp.path().join("share-backend");
+    std::fs::create_dir_all(&backend).expect("backend dir");
+    std::fs::write(
+        backend.join("usage-share-backend.jsonl"),
+        fixture["shareUsage"]["ledger"].as_str().expect("ledger"),
+    )
+    .expect("ledger");
+    let control = temp.path().join("control-token");
+    std::fs::write(&control, b"fixture-control-token").expect("control token");
+    let security = temp.path().join("security.json");
+    std::fs::write(
+        &security,
+        b"{\"format\":\"um-share-security-state-v1\",\"generation_floor\":1,\"records\":[]}",
+    )
+    .expect("security state");
+    let key = temp.path().join("share-secret.key");
+    let hex = fixture["metadata"]["fixtureKeyHex"]
+        .as_str()
+        .expect("fixture key");
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    for pair in hex.as_bytes().chunks(2) {
+        let high = (pair[0] as char).to_digit(16).expect("hex");
+        let low = (pair[1] as char).to_digit(16).expect("hex");
+        bytes.push((high * 16 + low) as u8);
+    }
+    std::fs::write(&key, bytes).expect("share secret key");
+    let before = snapshot(temp.path());
+    let mut seams = StaticShareSeams::new();
+    seams.broker_snapshot = Some(serde_json::json!({
+        "name": "broker-client",
+        "state": "ok",
+        "broker": {"version": "2.0.0", "pid": 4242},
+    }));
+    let console = start_console_with_seams(
+        &temp,
+        |config| {
+            config.share_store_file = Some(temp.path().join("share.db"));
+            config.share_backend_dir = Some(backend.clone());
+            config.control_token_file = Some(control.clone());
+            config.security_state_file = Some(security.clone());
+            config.share_secret_key_file = Some(key.clone());
+        },
+        std::sync::Arc::new(seams),
+    );
+    console.state().session.issue("fixture-session".to_string());
+    let targets = [
+        "/api/console/share-management/status",
+        "/api/console/share-management/keys",
+        "/api/console/share-management/keys/key-active-1/secret",
+        "/api/console/share-usage",
+        "/api/console/share-usage/requests",
+        "/api/console/cloud-ops",
+        "/api/console/share-management/display-session",
+        "/api/console/share-management/display-state",
+    ];
+    for target in targets {
+        assert_eq!(get(console.addr, target), 200, "{target}");
+    }
+    for target in [
+        "/api/share/status",
+        "/api/share/keys",
+        "/api/share/keys/key-active-1",
+        "/api/share/keys/key-active-1/secret",
+        "/api/share/operations/op-1",
+        "/api/share/usage",
+        "/api/share/usage/requests",
+    ] {
+        let response = client_request(
+            console.addr,
+            &ClientRequest::get(target).header("X-Admin-Control", "fixture-control-token"),
+        )
+        .expect("request");
+        assert_eq!(response.status, 200, "{target}");
+    }
+    drop(console);
+    assert_eq!(snapshot(temp.path()), before);
+    for sidecar in ["share.db-journal", "share.db-wal", "share.db-shm"] {
+        assert!(
+            !temp.path().join(sidecar).exists(),
+            "read face created a {sidecar} sidecar"
+        );
+    }
+}
+
+#[test]
+fn share_read_faces_never_expose_absolute_data_paths() {
+    let fixture = reads_fixture();
+    let temp = temp();
+    seed_share_store(&temp, &fixture["shareStatus"]["storeSeed"]);
+    let backend = temp.path().join("share-backend");
+    std::fs::create_dir_all(&backend).expect("backend dir");
+    std::fs::write(
+        backend.join("usage-share-backend.jsonl"),
+        fixture["shareUsage"]["ledger"].as_str().expect("ledger"),
+    )
+    .expect("ledger");
+    let console = start_console_with_seams(
+        &temp,
+        |config| {
+            config.share_store_file = Some(temp.path().join("share.db"));
+            config.share_backend_dir = Some(backend.clone());
+        },
+        std::sync::Arc::new(StaticShareSeams::new()),
+    );
+    let absolute = temp.path().to_string_lossy().to_string();
+    for target in [
+        "/api/console/share-management/status",
+        "/api/console/share-management/keys",
+        "/api/console/share-usage",
+        "/api/console/share-usage/requests",
+        "/api/console/cloud-ops",
+        "/api/console/share-management/display-session",
+        "/api/console/share-management/display-state",
+    ] {
+        let response = client_request(console.addr, &ClientRequest::get(target)).expect("request");
+        let body = String::from_utf8_lossy(&response.body);
+        assert!(!body.contains(&absolute), "{target} leaked a data path");
+    }
+}
