@@ -375,7 +375,7 @@ impl DisplayRelay {
             {
                 return Some(display_json(403, "display access denied"));
             }
-            return Some(self.serve_static(DISPLAY_PREFIX));
+            return Some(self.serve_static("/display/"));
         }
         if path == SESSION_PATH {
             if self
