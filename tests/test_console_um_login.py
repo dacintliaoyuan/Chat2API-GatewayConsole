@@ -759,12 +759,13 @@ class ConsoleAuthStatusReadTests(unittest.TestCase):
         self.assertIsNotNone(failure)
         self.assertEqual(failure[0], "login_manual_takeover_required")
         self.assertIn("umpass_mfa_required", failure[1])
+        self.assertNotIn("清理失败", failure[1])
 
     def test_terminal_manual_contract_is_shared_with_the_service(self):
         # ticket #42 item 12：terminal 原因与前缀只有一份定义，console 直接
         # 依赖 chat2api 的公开契约常量，避免两边各自维护而漂移。
-        self.assertIs(console_um_login._TERMINAL_MANUAL_REASONS,
-                      login_contract.LOGIN_TERMINAL_MANUAL_REASONS)
+        self.assertIs(console_um_login.terminal_manual_reason,
+                      login_contract.terminal_manual_reason)
         self.assertEqual(console_um_login._MANUAL_TAKEOVER_PREFIX,
                          login_contract.MANUAL_TAKEOVER_REQUIRED_PREFIX)
 

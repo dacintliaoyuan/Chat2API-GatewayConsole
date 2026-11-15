@@ -62,7 +62,6 @@ import urllib.error
 import urllib.request
 
 from login_contract import (
-    LOGIN_TERMINAL_MANUAL_REASONS,
     MANUAL_TAKEOVER_REQUIRED_PREFIX,
     terminal_manual_reason,
 )
@@ -86,11 +85,6 @@ _BUDGET_MAX_S = 3600.0
 # accepted bare, so a console talking to an older chat2api instance still names
 # the manual step instead of waiting for the full budget.
 _MANUAL_TAKEOVER_PREFIX = MANUAL_TAKEOVER_REQUIRED_PREFIX
-# Ticket #41: only these stages end the round. A prefixed soft reason
-# (a swallowed click, an unrecognized control, a Duo push still being
-# waited on) keeps the backend token poll running, so the console must keep
-# waiting instead of reporting a finished manual takeover.
-_TERMINAL_MANUAL_REASONS = LOGIN_TERMINAL_MANUAL_REASONS
 
 # Restore outcome kinds returned by _restore_service_state:
 # kept     - the service was already running; nothing was started or stopped.
@@ -296,7 +290,8 @@ def _terminal_login_failure(status):
               else _MANUAL_TAKEOVER_PREFIX + manual_reason)
     if manual is not None:
         message = "登录需要人工接管（%s）；本轮已结束，浏览器已关闭" % manual
-        if isinstance(error, str) and error != manual:
+        if (isinstance(error, str)
+                and terminal_manual_reason(error) is None):
             message += "；清理失败：%s" % error
         return ("login_manual_takeover_required", message)
 

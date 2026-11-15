@@ -511,7 +511,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 ### 11.1 入口配置校验
 
 - `python um-cloud-deploy/cloudflared/check-ingress.py --config um-cloud-deploy/config/cloudflared.yml.example --expect-host <配置公网主机>`。
-- 只读解析 YAML：公网 host 只允许 4 条分享路径 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`；service 必须是 8100 loopback；最后一条必须是 `http_status:404`；当前禁止出现 18096/5901，#40 后同样禁止 8096/8097；重复路径、缺路径、错 host 都报 problem（`um-cloud-deploy/cloudflared/check-ingress.py:26-142`）。
+- 只读解析 YAML：公网 host 只允许 4 条分享路径 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`；service 必须是 8100 loopback；最后一条必须是 `http_status:404`；禁止出现 8096/8097 与旧 18096/5901（旧值只作为兼容窗口内的显式配置，公网反代始终禁止）；重复路径、缺路径、错 host 都报 problem（`um-cloud-deploy/cloudflared/check-ingress.py:26-142`）。
 - 不写、不 reload、不 restart tunnel；只返回 `{ok, problems, rules}`，退出码 0/1。
 
 ### 11.2 公网 DNS/TLS 检查
@@ -532,7 +532,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 - `um-cloud-deploy/install.sh`：只安装冻结发布包，不构建产品代码；已存在的 release 若 manifest 相同则复用；配置、密钥、数据不覆盖；`--apt-locked` 安装锁定版本。
 - `um-cloud-deploy/update.sh`：先停 cloudflared，再 `um-share-brokerctl.py --drain-budget 900 --poll-interval 5 stop` 排空；未排空返回 75，不切换版本；然后 host-stop、停控制台 unit、原子切换 `current`；健康门失败自动切回 `previous`。
-- 健康门：`wait_port_open` 等待云端控制台与 8100；当前部署等待 18096/8100，#40 后等待 8096/8100；再 `health_gate`；失败返回 68 并回滚，回滚失败 69。
+- 健康门：`wait_port_open` 等待云端控制台与 8100；#40 已合入，部署默认等待 8096/8100（兼容窗口内旧部署可显式配置 18096/8100）；再 `health_gate`；失败返回 68 并回滚，回滚失败 69。
 - `um-cloud-deploy/rollback.sh`：只切符号链接并重启 unit；不删除 release、数据、密钥或备份。
 - 部署锁：`/run/um-share/deploy.lock` 的非阻塞 `flock`；另一个部署操作返回 75。
 - 显式恢复：`rollback.sh --recover-backup <包> --recover-security-state <状态>`；备份与恢复都走显式 CLI。

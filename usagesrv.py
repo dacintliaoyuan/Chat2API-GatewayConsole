@@ -48,7 +48,7 @@ from share.store import (Disabled, StoreError, SecretUnavailable,  # noqa: E402
 from console import public_url as console_public_url  # noqa: E402
 from console import stats as console_stats  # noqa: E402
 from login_contract import (  # noqa: E402
-    MANUAL_TAKEOVER_REQUIRED_PREFIX,
+    MANUAL_TAKEOVER_PREFIXES,
     terminal_manual_reason,
 )
 
@@ -2563,19 +2563,6 @@ class Handler(BaseHTTPRequestHandler):
         return {"available": True, "reason": None}
 
     @staticmethod
-    def _console_manual_reason(*values):
-        """The terminal manual reason carried by any read field, or None.
-
-        Ticket #42 item 3: chat2api publishes the reason both prefixed
-        (``manual_takeover_required:<reason>``) and, on an older instance,
-        bare. The display read face must name the SAME manual step for both
-        shapes instead of showing a generic failure. The reasons come from the
-        shared contract module, so the service, console adapter and display
-        cannot drift apart.
-        """
-        return terminal_manual_reason(*values)
-
-    @staticmethod
     def _console_display_state_of(auth, display):
         """Map one read-only auth observation to the display-state contract.
 
@@ -2590,15 +2577,11 @@ class Handler(BaseHTTPRequestHandler):
         state = auth.get("state")
         error = auth.get("error")
         primary = auth.get("primary")
-        reason = error
-        for prefix in (MANUAL_TAKEOVER_REQUIRED_PREFIX, "manual_takeover:"):
-            if isinstance(reason, str) and reason.startswith(prefix):
-                reason = reason.split(":", 1)[1]
-                break
-        manual_reason = Handler._console_manual_reason(error, primary)
+        manual_reason = terminal_manual_reason(error, primary)
+        reason = (manual_reason if manual_reason is not None else error)
         prefixed_manual = (isinstance(error, str)
-                           and error.startswith(
-                               MANUAL_TAKEOVER_REQUIRED_PREFIX))
+                           and any(error.startswith(prefix)
+                                   for prefix in MANUAL_TAKEOVER_PREFIXES))
         read_error = auth.get("read_error")
         read_detail = None
         if isinstance(read_error, dict):

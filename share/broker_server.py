@@ -391,7 +391,7 @@ class BoundedSocketServer:
         payload = {"pid": os.getpid(),
                    "server": cls.__name__,
                    "state": "stopped" if self._stop.is_set() else "serving",
-                   "pipe_name": self.socket_path,
+                   "socket_path": self.socket_path,
                    "cycles": self._cycles,
                    "last_error": self._last_error,
                    "unconfirmed_workers": cls._unconfirmed_abandoned,

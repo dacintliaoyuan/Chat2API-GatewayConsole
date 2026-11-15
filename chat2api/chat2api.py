@@ -2541,6 +2541,9 @@ def _login_display(environ=None):
                     continue
                 key, value = line.split("=", 1)
                 values[key.strip()] = value.strip()
+    except FileNotFoundError:
+        # No marker file is the normal headless path, not an error.
+        return None
     except OSError as exc:
         _logger.warning(
             "manual display state unreadable (%s); using headless login",

@@ -324,7 +324,7 @@ def um_verify_account(target, params, ctx=None):
     if ctx is not None:
         ctx.raise_if_cancelled()
 
-    token = _read_control_token()
+    token = read_control_token()
     base_url = resolve_chat2api_base_url()
     return _verify_account(base_url, token)
 
