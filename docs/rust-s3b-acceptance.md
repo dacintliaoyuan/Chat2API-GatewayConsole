@@ -42,8 +42,9 @@
 |---|---|
 | `python -m unittest tests.test_share_store tests.test_share_store_key_reveal tests.test_share_management tests.test_share_management_wiring tests.test_share_security_generation tests.test_share_revoke_state tests.test_share_secret_protection tests.test_share_limits_contract` | `Ran 259 tests`；`OK (skipped=14)` |
 | `bash um-cloud-deploy/run-linux-checks.sh --mode core D:/tmp/umlinux` | 退出码 0；`scenario core: PASS` |
-| `bash scripts/check.sh --full` | 见下方 |
-| `bash scripts/check-rust-s3b.sh` | 见下方 |
+| `bash scripts/check.sh --full` | 退出码 0；`tests` `Ran 2367 tests in 736.795s` / `OK (skipped=63)`，`local/tests` `Ran 54 tests in 20.128s` / `OK`；新增 S3b 测试另经 discover 运行：`test_rust_s3b_boundaries` 4 条、`test_broker_start_identity` 6 条均 `OK` |
+| `bash scripts/check-rust-s3b.sh` | 退出码 0；fmt、clippy、`cargo test`、Android `cfg(unix)` 类型检查、夹具新鲜度与 diff check 全通过 |
+| `cargo test --manifest-path rust/Cargo.toml` | 39 个 test result 行全部 `ok`；S3b 的 store/broker 定向测试均在其中 |
 
 ## 未验证范围
 
