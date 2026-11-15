@@ -523,14 +523,10 @@ impl ProxyState {
     pub fn models(&self, raw_fresh: bool) -> Result<(Value, bool), GatewayError> {
         let observed = self.upstream.get_json("/api/models", Some(&self.bearer));
         let fetched = match observed {
-            Ok((status, payload)) if status == 200 => payload.and_then(|payload| {
-                if payload.is_object() && payload.get("data").and_then(Value::as_array).is_some() {
-                    Some(payload)
-                } else {
-                    None
-                }
+            Ok((200, payload)) => payload.filter(|payload| {
+                payload.is_object() && payload.get("data").and_then(Value::as_array).is_some()
             }),
-            Ok((status, _)) if status == 401 || status == 403 => {
+            Ok((401 | 403, _)) => {
                 return Err(GatewayError::reauthentication_required(Some(
                     "upstream_rejected",
                 )));

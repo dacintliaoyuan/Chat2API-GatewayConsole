@@ -16,7 +16,8 @@ pub struct GatewayError {
     pub error_type: String,
     pub detail: Option<Value>,
     pub code: Option<String>,
-    pub reason: Option<Value>,
+    /// Boxed so the error stays under clippy's large-error threshold.
+    pub reason: Option<Box<Value>>,
     pub upstream_status: Option<u16>,
 }
 
@@ -44,7 +45,7 @@ impl GatewayError {
     }
 
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
-        self.reason = Some(Value::String(reason.into()));
+        self.reason = Some(Box::new(Value::String(reason.into())));
         self
     }
 
@@ -65,7 +66,7 @@ impl GatewayError {
             error.insert("code".to_string(), Value::String(code.clone()));
         }
         if let Some(reason) = &self.reason {
-            error.insert("reason".to_string(), reason.clone());
+            error.insert("reason".to_string(), reason.as_ref().clone());
         }
         if let Some(status) = self.upstream_status {
             error.insert("upstream_status".to_string(), json!(status));
@@ -151,11 +152,11 @@ impl GatewayError {
     pub fn sharing_limit_reached(reason: Option<&str>, detail: Option<&str>) -> Self {
         let mut error = Self::new(429, "sharing_limit_reached", "share_gateway_error")
             .with_code("sharing_limit_reached");
-        error.reason = Some(
+        error.reason = Some(Box::new(
             reason
                 .map(|reason| Value::String(reason.to_string()))
                 .unwrap_or(Value::Null),
-        );
+        ));
         if let Some(detail) = detail {
             error.detail = Some(Value::String(detail.to_string()));
         }

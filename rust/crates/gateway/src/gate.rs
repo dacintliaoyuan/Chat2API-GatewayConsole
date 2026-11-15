@@ -178,7 +178,7 @@ impl ShareGate {
         let mut reason_out = reason_out;
         let mut guard = self.guard.lock().expect("share gate poisoned");
         if guard.state != GateState::Running {
-            if let Some(reason) = reason_out.as_deref_mut() {
+            if let Some(reason) = reason_out.as_mut() {
                 reason.set(
                     "state_not_accepting",
                     "the share is draining or stopped and is not accepting new requests"
@@ -233,7 +233,7 @@ impl ShareGate {
         guard.history.retain(|_, entries| !entries.is_empty());
         let recent_len = guard.history.get(key_id).map(VecDeque::len).unwrap_or(0);
         if guard.active.get(key_id).copied().unwrap_or(0) >= key_limit {
-            if let Some(reason) = reason_out.as_deref_mut() {
+            if let Some(reason) = reason_out.as_mut() {
                 reason.set(
                     "per_key_concurrency",
                     format!(
@@ -244,7 +244,7 @@ impl ShareGate {
             return false;
         }
         if guard.active.values().copied().sum::<u32>() >= share_max {
-            if let Some(reason) = reason_out.as_deref_mut() {
+            if let Some(reason) = reason_out.as_mut() {
                 reason.set(
                     "share_concurrency",
                     format!(
@@ -255,7 +255,7 @@ impl ShareGate {
             return false;
         }
         if recent_len >= RATE_LIMIT_REQUESTS {
-            if let Some(reason) = reason_out.as_deref_mut() {
+            if let Some(reason) = reason_out.as_mut() {
                 reason.set(
                     "key_rate_limit",
                     "per-key rate limit reached (max 20 requests per minute)".to_string(),

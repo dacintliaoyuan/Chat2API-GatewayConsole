@@ -577,39 +577,43 @@ pub fn is_local_control_request(peer_ip: IpAddr, host: &str, origin: Option<&str
     )
 }
 
+/// A bounded query that does not match the SDK shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidQuery;
+
 /// Accept only Harness's bounded catalog query.
-pub fn model_catalog_limit(raw_target: &str) -> Result<Option<u32>, ()> {
+pub fn model_catalog_limit(raw_target: &str) -> Result<Option<u32>, InvalidQuery> {
     if raw_target == "/v1/models" {
         return Ok(None);
     }
     let Some(query) = raw_target.strip_prefix("/v1/models?") else {
-        return Err(());
+        return Err(InvalidQuery);
     };
     if query.is_empty() {
-        return Err(());
+        return Err(InvalidQuery);
     }
     let mut limit = None;
     let mut seen = std::collections::BTreeSet::new();
     for part in query.split('&') {
-        let (name, value) = part.split_once('=').ok_or(())?;
+        let (name, value) = part.split_once('=').ok_or(InvalidQuery)?;
         if name.is_empty() || !seen.insert(name) {
-            return Err(());
+            return Err(InvalidQuery);
         }
         if name == "beta" && value == "true" {
             continue;
         }
         if name != "limit" {
-            return Err(());
+            return Err(InvalidQuery);
         }
         if !value.is_ascii() || !value.chars().all(|character| character.is_ascii_digit()) {
-            return Err(());
+            return Err(InvalidQuery);
         }
         if !(1..=4).contains(&value.len()) {
-            return Err(());
+            return Err(InvalidQuery);
         }
-        let parsed = value.parse::<u32>().map_err(|_| ())?;
+        let parsed = value.parse::<u32>().map_err(|_| InvalidQuery)?;
         if !(1..=1000).contains(&parsed) || parsed.to_string() != value {
-            return Err(());
+            return Err(InvalidQuery);
         }
         limit = Some(parsed);
     }
@@ -617,11 +621,11 @@ pub fn model_catalog_limit(raw_target: &str) -> Result<Option<u32>, ()> {
 }
 
 /// Accept the SDK's beta query on Messages, never an arbitrary one.
-pub fn messages_query(raw_target: &str) -> Result<(), ()> {
+pub fn messages_query(raw_target: &str) -> Result<(), InvalidQuery> {
     if raw_target == "/v1/messages" || raw_target == "/v1/messages?beta=true" {
         Ok(())
     } else {
-        Err(())
+        Err(InvalidQuery)
     }
 }
 
