@@ -15,6 +15,7 @@ pub mod hmac;
 pub mod instance;
 pub mod management;
 pub mod peer;
+pub mod publish;
 pub mod replay;
 pub mod request;
 pub mod server;

@@ -1167,6 +1167,750 @@
       }
     ]
   },
+  "publish": [
+    {
+      "after_load": null,
+      "after_load_instance": "i-1",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        },
+        {
+          "instance_call": {
+            "action": "load",
+            "fields": {
+              "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+              "generation": 4,
+              "terminate_keys": [
+                "k1",
+                "k2"
+              ]
+            },
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "case": "success",
+      "discover": false,
+      "discovery_calls": 0,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        },
+        "terminate_keys": [
+          "k1",
+          "k2"
+        ]
+      },
+      "instances": [
+        "i-1"
+      ],
+      "responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4,
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+          "generation": 4,
+          "instance_id": "i-1"
+        }
+      }
+    },
+    {
+      "after_load": null,
+      "after_load_instance": "i-1",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        },
+        {
+          "instance_call": {
+            "action": "load",
+            "fields": {
+              "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+              "generation": 4
+            },
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "case": "no-terminate",
+      "discover": false,
+      "discovery_calls": 0,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [
+        "i-1"
+      ],
+      "responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4,
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+          "generation": 4,
+          "instance_id": "i-1"
+        }
+      }
+    },
+    {
+      "after_load": null,
+      "after_load_instance": "i-1",
+      "calls": [],
+      "case": "fingerprint-mismatch",
+      "discover": false,
+      "discovery_calls": 0,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [
+        "i-1"
+      ],
+      "responses": [],
+      "result": {
+        "error_code": "fingerprint_mismatch",
+        "ok": false,
+        "result": {
+          "detail": "projection fingerprint mismatch"
+        }
+      }
+    },
+    {
+      "after_load": null,
+      "after_load_instance": "i-1",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        }
+      ],
+      "case": "writer-refused",
+      "discover": false,
+      "discovery_calls": 0,
+      "fail_write": true,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [
+        "i-1"
+      ],
+      "responses": [],
+      "result": {
+        "error_code": "internal_error",
+        "ok": false,
+        "result": {
+          "detail": "writer refused"
+        }
+      }
+    },
+    {
+      "after_load": null,
+      "after_load_instance": "i-1",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        }
+      ],
+      "case": "no-instance",
+      "discover": false,
+      "discovery_calls": 1,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [],
+      "responses": [],
+      "result": {
+        "error_code": "unconfirmed",
+        "ok": false,
+        "result": {
+          "detail": "no registered instance"
+        }
+      }
+    },
+    {
+      "after_load": null,
+      "after_load_instance": "i-1",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        },
+        {
+          "instance_call": {
+            "action": "load",
+            "fields": {
+              "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+              "generation": 4
+            },
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "case": "discovered",
+      "discover": true,
+      "discovery_calls": 1,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [],
+      "responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4,
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+          "generation": 4,
+          "instance_id": "i-1"
+        }
+      }
+    },
+    {
+      "after_load": null,
+      "after_load_instance": "i-1",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        },
+        {
+          "instance_call": {
+            "action": "load",
+            "fields": {
+              "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+              "generation": 4
+            },
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "case": "load-failed",
+      "discover": false,
+      "discovery_calls": 0,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [
+        "i-1"
+      ],
+      "responses": [
+        {
+          "error_code": "not_installed",
+          "ok": false,
+          "result": {}
+        }
+      ],
+      "result": {
+        "error_code": "not_installed",
+        "ok": false,
+        "result": {}
+      }
+    },
+    {
+      "after_load": "once",
+      "after_load_instance": "i-1",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        },
+        {
+          "instance_call": {
+            "action": "load",
+            "fields": {
+              "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+              "generation": 4
+            },
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "load",
+            "fields": {
+              "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+              "generation": 4
+            },
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "case": "load-failed-then-retry",
+      "discover": true,
+      "discovery_calls": 1,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [
+        "i-1"
+      ],
+      "responses": [
+        {
+          "raise": "instance load failed"
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4,
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+          "generation": 4,
+          "instance_id": "i-1"
+        }
+      }
+    },
+    {
+      "after_load": "always",
+      "after_load_instance": "i-2",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        },
+        {
+          "instance_call": {
+            "action": "load",
+            "fields": {
+              "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+              "generation": 4
+            },
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "case": "replaced-instance",
+      "discover": false,
+      "discovery_calls": 0,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [
+        "i-1"
+      ],
+      "responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4,
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "result": {
+        "error_code": "instance_mismatch",
+        "ok": false,
+        "result": {
+          "detail": "instance was replaced while the load was in flight"
+        }
+      }
+    },
+    {
+      "after_load": null,
+      "after_load_instance": "i-1",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        },
+        {
+          "instance_call": {
+            "action": "load",
+            "fields": {
+              "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+              "generation": 4
+            },
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "case": "ack-other-instance",
+      "discover": false,
+      "discovery_calls": 0,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [
+        "i-1"
+      ],
+      "responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4,
+            "instance_id": "i-2"
+          }
+        }
+      ],
+      "result": {
+        "error_code": "instance_mismatch",
+        "ok": false,
+        "result": {
+          "detail": "ACK from a non-current instance"
+        }
+      }
+    },
+    {
+      "after_load": null,
+      "after_load_instance": "i-1",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        },
+        {
+          "instance_call": {
+            "action": "load",
+            "fields": {
+              "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+              "generation": 4
+            },
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "case": "ack-wrong-generation",
+      "discover": false,
+      "discovery_calls": 0,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [
+        "i-1"
+      ],
+      "responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 3,
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "result": {
+        "error_code": "fingerprint_mismatch",
+        "ok": false,
+        "result": {
+          "detail": "ACK content differs from publication"
+        }
+      }
+    },
+    {
+      "after_load": null,
+      "after_load_instance": "i-1",
+      "calls": [
+        {
+          "write": {
+            "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+            "generation": 4
+          }
+        },
+        {
+          "instance_call": {
+            "action": "load",
+            "fields": {
+              "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+              "generation": 4
+            },
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "case": "instance-refusal",
+      "discover": false,
+      "discovery_calls": 0,
+      "fail_write": false,
+      "input": {
+        "fingerprint": "af224085a290f225a1d5a5ea2396bab96d5a577d5d7d0162739513529e2c2c52",
+        "generation": 4,
+        "projection": {
+          "config_generation": 4,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      "instances": [
+        "i-1"
+      ],
+      "responses": [
+        {
+          "error_code": "bad_request",
+          "ok": false,
+          "result": {
+            "detail": "unknown action"
+          }
+        }
+      ],
+      "result": {
+        "error_code": "bad_request",
+        "ok": false,
+        "result": {
+          "detail": "unknown action"
+        }
+      }
+    }
+  ],
   "schema": {
     "columns": {
       "configgen": [

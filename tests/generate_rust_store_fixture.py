@@ -444,6 +444,188 @@ def _secret_vectors():
     return vectors
 
 
+def _publish_section(root):
+    """Publish writer -> load -> ACK cases from the REAL coordinator."""
+    import hashlib as _hashlib
+
+    from share.broker_host import BrokerHostCoordinator, InstanceRegistry
+    from share.broker_protocol import ReplayRegistry
+    from share.management import BrokerError
+
+    projection = {
+        "schema_version": 2,
+        "config_generation": 4,
+        "share_max_concurrency": 64,
+        "data": [{"key_id": "k1", "name": "n1",
+                  "secret_hash": "a" * 64, "secret_version": 1,
+                  "enabled": True, "max_concurrency": 16}],
+    }
+
+    class FakeWriter:
+        def __init__(self, calls, fail=False):
+            self.calls = calls
+            self.fail = fail
+
+        def fingerprint(self, value):
+            return _hashlib.sha256(
+                json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
+
+        def write(self, value, generation, fingerprint):
+            self.calls.append({"write": {"generation": generation,
+                                        "fingerprint": fingerprint}})
+            if self.fail:
+                raise BrokerError("writer refused")
+            return fingerprint
+
+    def run(name, *, instances=(), discover=None, responses=None,
+            fail_write=False, after_load=None, after_load_mode=None,
+            after_load_instance="i-1", fields=None):
+        calls = []
+        registry = InstanceRegistry()
+        for instance_id in instances:
+            registry.register(instance_id)
+        queue = list(responses or [])
+        if after_load_mode is None and after_load is not None:
+            after_load_mode = "always"
+
+        def instance_call(action, call_fields, instance_id):
+            calls.append({"instance_call": {
+                "action": action, "instance_id": instance_id,
+                "fields": call_fields}})
+            if after_load is not None:
+                after_load(registry)
+            if not queue:
+                return {"ok": False, "error_code": "not_installed",
+                        "result": {}}
+            response = queue.pop(0)
+            if "raise" in response:
+                raise RuntimeError(response["raise"])
+            return response
+
+        discovery_calls = []
+
+        def discover_instance():
+            discovery_calls.append(True)
+            if discover is not None:
+                discover(registry)
+
+        coordinator = BrokerHostCoordinator(
+            writer=FakeWriter(calls, fail_write), mgmt_secret="m",
+            instance_secret="i", instances=registry,
+            replay=ReplayRegistry(), host_ops=None,
+            instance_call=instance_call,
+            discover_instance=discover_instance)
+        payload = fields or {
+            "generation": projection["config_generation"],
+            "fingerprint": FakeWriter([]).fingerprint(projection),
+            "projection": projection,
+        }
+        result = coordinator._publish(payload)
+        return {"case": name, "input": payload,
+                "instances": list(instances),
+                "responses": list(responses or []),
+                "after_load": after_load_mode,
+                "after_load_instance": after_load_instance,
+                "discover": discover is not None,
+                "fail_write": fail_write,
+                "result": result.to_dict(),
+                "calls": calls,
+                "discovery_calls": len(discovery_calls)}
+
+    def success():
+        return run("success", instances=("i-1",), responses=[
+            {"ok": True, "error_code": "ok",
+             "result": {"instance_id": "i-1", "generation": 4,
+                        "fingerprint": FakeWriter([]).fingerprint(projection)}}],
+            fields={"generation": 4,
+                    "fingerprint": FakeWriter([]).fingerprint(projection),
+                    "projection": projection,
+                    "terminate_keys": ["k1", "k2"]})
+
+    def no_terminate():
+        return run("no-terminate", instances=("i-1",), responses=[
+            {"ok": True, "error_code": "ok",
+             "result": {"instance_id": "i-1", "generation": 4,
+                        "fingerprint": FakeWriter([]).fingerprint(projection)}}])
+
+    def fingerprint_mismatch():
+        return run("fingerprint-mismatch", instances=("i-1",),
+                    fields={"generation": 4,
+                            "fingerprint": "0" * 64,
+                            "projection": projection})
+
+    def writer_refused():
+        return run("writer-refused", instances=("i-1",), fail_write=True)
+
+    def no_instance():
+        return run("no-instance")
+
+    def discovered():
+        return run("discovered", discover=lambda registry:
+                     registry.register("i-1"), responses=[
+                         {"ok": True, "error_code": "ok",
+                          "result": {"instance_id": "i-1", "generation": 4,
+                                     "fingerprint": FakeWriter([]).fingerprint(
+                                         projection)}}])
+
+    def load_failed():
+        return run("load-failed", instances=("i-1",), responses=[
+            {"ok": False, "error_code": "not_installed", "result": {}}])
+
+    def load_failed_then_retry():
+        replaced = []
+
+        def replace_once(registry):
+            if not replaced:
+                replaced.append(True)
+                registry.register("i-1")
+
+        return run("load-failed-then-retry", instances=("i-1",),
+                    discover=lambda registry: registry.register("i-1"),
+                    after_load=replace_once, after_load_mode="once",
+                    responses=[
+                        {"raise": "instance load failed"},
+                        {"ok": True, "error_code": "ok",
+                         "result": {"instance_id": "i-1", "generation": 4,
+                                    "fingerprint": FakeWriter([]).fingerprint(
+                                        projection)}}])
+
+    def replaced_instance():
+        def replace(registry):
+            registry.register("i-2")
+
+        return run("replaced-instance", instances=("i-1",),
+                    after_load=replace, after_load_instance="i-2",
+                    responses=[
+                        {"ok": True, "error_code": "ok",
+                         "result": {"instance_id": "i-1", "generation": 4,
+                                    "fingerprint": FakeWriter([]).fingerprint(
+                                        projection)}}])
+
+    def ack_other_instance():
+        return run("ack-other-instance", instances=("i-1",), responses=[
+            {"ok": True, "error_code": "ok",
+             "result": {"instance_id": "i-2", "generation": 4,
+                        "fingerprint": FakeWriter([]).fingerprint(projection)}}])
+
+    def ack_wrong_generation():
+        return run("ack-wrong-generation", instances=("i-1",), responses=[
+            {"ok": True, "error_code": "ok",
+             "result": {"instance_id": "i-1", "generation": 3,
+                        "fingerprint": FakeWriter([]).fingerprint(projection)}}])
+
+    def instance_refusal():
+        return run("instance-refusal", instances=("i-1",), responses=[
+            {"ok": False, "error_code": "bad_request",
+             "result": {"detail": "unknown action"}}])
+
+    return [success(), no_terminate(), fingerprint_mismatch(), writer_refused(),
+            no_instance(), discovered(), load_failed(),
+            load_failed_then_retry(), replaced_instance(),
+            ack_other_instance(), ack_wrong_generation(),
+            instance_refusal()]
+
+
 def generate():
     root = tempfile.mkdtemp(prefix="rust-store-fixture-")
     try:
@@ -451,6 +633,7 @@ def generate():
         migration = _migration_v1_section(root)
         lifecycle = _lifecycle_section(root)
         projection = _projection_section(root)
+        publish = _publish_section(root)
         vectors = _secret_vectors()
     finally:
         import shutil
@@ -460,6 +643,7 @@ def generate():
         "migration": migration,
         "lifecycle": lifecycle,
         "projection": projection,
+        "publish": publish,
         "secret_vectors": vectors,
     }
 
