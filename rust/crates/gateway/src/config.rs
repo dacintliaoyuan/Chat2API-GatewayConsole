@@ -70,6 +70,79 @@ pub struct ShareEntry {
     pub max_concurrency: u32,
 }
 
+/// The trusted `(key, model, protocol)` scope of the non-stream aggregate
+/// transport. An empty scope is the explicit disabled state; a partially empty
+/// object is ambiguous and never parses.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AggregateScope {
+    pub key_ids: BTreeSet<String>,
+    pub models: BTreeSet<String>,
+    pub protocols: BTreeSet<String>,
+}
+
+const NONSTREAM_AGGREGATE_PROTOCOLS: [&str; 3] = ["chat", "messages", "responses"];
+const NONSTREAM_AGGREGATE_SCOPE_MAX_ENTRIES: usize = 100;
+const NONSTREAM_AGGREGATE_SCOPE_MAX_CHARS: usize = 256;
+const NONSTREAM_AGGREGATE_SCOPE_MAX_RAW: usize = 65536;
+
+/// Python `parse_nonstream_aggregate_scope`: `None` on ANY failure.
+pub fn parse_nonstream_aggregate_scope(raw: Option<&str>) -> Option<AggregateScope> {
+    let raw = raw.filter(|raw| !raw.trim().is_empty())?;
+    if raw.len() > NONSTREAM_AGGREGATE_SCOPE_MAX_RAW {
+        return None;
+    }
+    let data: Value = serde_json::from_str(raw).ok()?;
+    let data = data.as_object()?;
+    let fields: BTreeSet<&str> = ["key_ids", "models", "protocols"].into_iter().collect();
+    if data.keys().map(String::as_str).collect::<BTreeSet<_>>() != fields {
+        return None;
+    }
+    let mut parsed = AggregateScope::default();
+    for name in ["key_ids", "models", "protocols"] {
+        let values = data.get(name)?.as_array()?;
+        if values.len() > NONSTREAM_AGGREGATE_SCOPE_MAX_ENTRIES {
+            return None;
+        }
+        let mut normalized = BTreeSet::new();
+        for value in values {
+            let value = value.as_str()?;
+            if value.is_empty()
+                || value.len() > NONSTREAM_AGGREGATE_SCOPE_MAX_CHARS
+                || value.trim() != value
+            {
+                return None;
+            }
+            if !normalized.insert(value.to_string()) {
+                return None;
+            }
+        }
+        match name {
+            "key_ids" => parsed.key_ids = normalized,
+            "models" => parsed.models = normalized,
+            _ => parsed.protocols = normalized,
+        }
+    }
+    if parsed
+        .protocols
+        .iter()
+        .any(|protocol| !NONSTREAM_AGGREGATE_PROTOCOLS.contains(&protocol.as_str()))
+    {
+        return None;
+    }
+    let empty = ["key_ids", "models", "protocols"]
+        .iter()
+        .filter(|name| match **name {
+            "key_ids" => parsed.key_ids.is_empty(),
+            "models" => parsed.models.is_empty(),
+            _ => parsed.protocols.is_empty(),
+        })
+        .count();
+    if empty != 0 && empty != 3 {
+        return None;
+    }
+    Some(parsed)
+}
+
 /// The normalized share configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShareConfig {
@@ -95,6 +168,10 @@ pub struct GatewayConfig {
     pub share_max_request_bytes: u64,
     pub local_max_request_bytes: u64,
     pub upstream_timeout: Duration,
+    /// The R13 non-stream aggregate switch (off by default).
+    pub nonstream_upstream_aggregate: bool,
+    /// The trusted startup scope; `None` keeps every request native.
+    pub nonstream_aggregate_scope: Option<AggregateScope>,
     /// Share ledger path; `None` keeps the candidate from writing any ledger.
     pub usage_log: Option<PathBuf>,
     /// Total wall-clock budget of one Chat request.
@@ -129,6 +206,8 @@ impl Default for GatewayConfig {
             share_max_request_bytes: DEFAULT_SHARE_MAX_REQUEST_BYTES,
             local_max_request_bytes: CONSOLE_MAX_REQUEST_BYTES,
             upstream_timeout: DEFAULT_UPSTREAM_TIMEOUT,
+            nonstream_upstream_aggregate: false,
+            nonstream_aggregate_scope: None,
             usage_log: None,
             request_total: Duration::from_secs(DEFAULT_REQUEST_TOTAL_SECONDS),
             first_byte_timeout: DEFAULT_FIRST_BYTE_TIMEOUT,
@@ -206,6 +285,15 @@ impl GatewayConfig {
         }
         config.request_total = parse_request_total_seconds(
             std::env::var("CHAT2API_MAX_REQUEST_SECONDS")
+                .ok()
+                .as_deref(),
+        );
+        config.nonstream_upstream_aggregate =
+            std::env::var("CHAT2API_NONSTREAM_UPSTREAM_AGGREGATE")
+                .ok()
+                .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes"));
+        config.nonstream_aggregate_scope = parse_nonstream_aggregate_scope(
+            std::env::var("CHAT2API_NONSTREAM_AGGREGATE_SCOPE")
                 .ok()
                 .as_deref(),
         );

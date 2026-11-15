@@ -4,19 +4,21 @@
 //! The candidate binds only an ephemeral loopback port and never switches 8003.
 //! It ports the frozen behavior from `docs/rust-contract.md` §5 and the Python
 //! `chat2api/chat2api.py` + `chat2api/share_auth.py` implementations. Chat
-//! forwarding is S1b; Messages forwarding is S2a; Responses and embeddings
-//! remain later slices and answer `501 not_implemented` only after the route,
-//! credential and body gates.
+//! forwarding is S1b; Messages forwarding is S2a; Responses and embeddings are
+//! S2b.
 
 pub mod body;
 pub mod chat;
 pub mod config;
+pub mod embeddings;
 pub mod error;
 pub mod gate;
 pub mod http;
 pub mod ledger;
 pub mod messages;
+pub mod nonstream;
 pub mod readonly;
+pub mod responses;
 pub mod server;
 pub mod upstream;
 

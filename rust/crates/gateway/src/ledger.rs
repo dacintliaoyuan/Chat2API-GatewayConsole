@@ -70,10 +70,12 @@ pub fn normalize_usage(usage: Option<&Value>) -> NormalizedUsage {
         total_tokens: reported_tokens(usage.get("total_tokens")),
         cached_tokens: usage
             .get("prompt_tokens_details")
+            .or_else(|| usage.get("input_tokens_details"))
             .and_then(Value::as_object)
             .and_then(|details| reported_tokens(details.get("cached_tokens"))),
         reasoning_tokens: usage
             .get("completion_tokens_details")
+            .or_else(|| usage.get("output_tokens_details"))
             .and_then(Value::as_object)
             .and_then(|details| reported_tokens(details.get("reasoning_tokens"))),
     }

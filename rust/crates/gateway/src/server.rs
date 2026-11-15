@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use crate::body::{read_json_body, reject_unknown_fields, BodyPolicy};
 use crate::chat::{handle_chat, ChatResult, ReaderSlots};
 use crate::config::{AuthMode, ConfigError, GatewayConfig};
+use crate::embeddings::handle_embeddings;
 use crate::error::GatewayError;
 use crate::gate::{
     constant_time_eq, ensure_control_token, Admission, InflightCtx, RefusalReason, ShareGate,
@@ -24,6 +25,7 @@ use crate::http::{read_request, write_response, BodyRead, Headers, Request, Resp
 use crate::ledger::Ledger;
 use crate::messages::handle_messages;
 use crate::readonly::ProxyState;
+use crate::responses::handle_responses;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -283,12 +285,69 @@ fn dispatch_inner(
         );
     }
 
+    if request.method == "POST" && (path == "/v1/responses" || path == "/api/v1/responses") {
+        if let Err(error) = local_key_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        if let Err(error) = origin_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        let result = handle_responses(state, request, stream, admission.take());
+        return (
+            match result {
+                ChatResult::Response(response) => RouteOutcome::Response(response),
+                ChatResult::Written { close } => RouteOutcome::Written { close },
+            },
+            None,
+        );
+    }
+
+    if request.method == "POST" && (path == "/v1/embeddings" || path == "/api/v1/embeddings") {
+        if let Err(error) = local_key_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        if let Err(error) = origin_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        let result = handle_embeddings(state, request, stream);
+        return (
+            match result {
+                ChatResult::Response(response) => RouteOutcome::Response(response),
+                ChatResult::Written { close } => RouteOutcome::Written { close },
+            },
+            None,
+        );
+    }
+
     let response = match request.method.as_str() {
         "GET" => handle_get(state, request),
         "POST" => handle_post(state, request),
         _ => GatewayError::unknown_path(path).response(),
     };
     (RouteOutcome::Response(response), admission)
+}
+
+/// The R13 gate: only a verified `(key, model, protocol)` triple selected in the
+/// trusted startup scope may use the aggregated upstream SSE transport.
+pub fn nonstream_aggregate_allowed(
+    state: &AppState,
+    protocol: &str,
+    model: &str,
+    key_id: Option<&str>,
+) -> bool {
+    if !state.config.nonstream_upstream_aggregate {
+        return false;
+    }
+    let Some(scope) = &state.config.nonstream_aggregate_scope else {
+        return false;
+    };
+    let Some(key_id) = key_id.filter(|key_id| !key_id.is_empty()) else {
+        return false;
+    };
+    !model.is_empty()
+        && scope.key_ids.contains(key_id)
+        && scope.models.contains(model)
+        && scope.protocols.contains(protocol)
 }
 
 fn is_chat_path(path: &str) -> bool {
@@ -436,58 +495,6 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
                 return GatewayError::invalid_request("key_id is required").response();
             };
             Response::json(200, &json!({"released": gate.terminate_key(key_id)}))
-        }
-        "/v1/responses" | "/api/v1/responses" => {
-            if let Err(error) = local_key_allowed(state, request) {
-                return error.response();
-            }
-            if let Err(error) = origin_allowed(state, request) {
-                return error.response();
-            }
-            let body = match read_json_body(
-                request,
-                BodyPolicy::Share {
-                    max_request_bytes: state.config.share_max_request_bytes,
-                },
-            ) {
-                Ok(body) => body,
-                Err(error) => return error.response(),
-            };
-            let Some(body) = body else {
-                return GatewayError::unsupported_responses_request().response();
-            };
-            let allowed = [
-                "model",
-                "input",
-                "instructions",
-                "stream",
-                "max_output_tokens",
-                "temperature",
-                "top_p",
-                "tools",
-                "tool_choice",
-                "parallel_tool_calls",
-                "store",
-                "prompt_cache_key",
-                "prompt_cache_retention",
-                "prompt_cache_options",
-                "service_tier",
-                "reasoning",
-                "include",
-            ];
-            if reject_unknown_fields(&body, &allowed).is_err() {
-                return GatewayError::unsupported_responses_request().response();
-            }
-            GatewayError::not_implemented("responses_forwarding_s2").response()
-        }
-        "/v1/embeddings" | "/api/v1/embeddings" => {
-            if let Err(error) = local_key_allowed(state, request) {
-                return error.response();
-            }
-            if let Err(error) = origin_allowed(state, request) {
-                return error.response();
-            }
-            GatewayError::not_implemented("embeddings_forwarding_s2").response()
         }
         "/admin/auth/status" | "/admin/auth/verify" | "/admin/auth/login"
         | "/admin/auth/cancel" | "/admin/shutdown" => {
