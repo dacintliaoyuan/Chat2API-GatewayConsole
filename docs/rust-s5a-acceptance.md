@@ -37,6 +37,9 @@
 - `body.rs` 保留 Python 的 400/413 码：重复敏感头、非法/重复
   Content-Length、Transfer/Content-Encoding、Content-Type、非法 JSON、
   非对象、`null` 视作空对象、未知字段排序列表。
+- `um_gateway::http::read_request_with_body_cap` 在读取请求体之前用
+  `Content-Length` 上限拒绝，避免声明超限但未发送 body 时等待；8003 继续用
+  1 GiB 的既有上限。
 - `config.rs` 严格解析角色与端口；候选只装配 cloud 角色，拒绝 local、
   非 loopback host、8002/8003/其他治理段端口，绑定端口必须为 0。
 - `operations.rs` 用 `SQLITE_OPEN_READ_ONLY` 打开调用方给定的那一个
@@ -67,7 +70,7 @@ git -c core.whitespace=cr-at-eol diff --check
 - `cargo test -p um-console --offline`：
   - `console_readonly`：18 passed；
   - `readonly_side_effects`：4 passed；
-  - `request_boundary`：4 passed；
+  - `request_boundary`：5 passed（含“声明超限在读取前拒绝”）；
   - `runtime_facts`：8 passed；
   - doc-tests 0。
 - `cargo test --offline`（整个 Rust workspace）：所有 `test result: ok`，无 FAILED。
