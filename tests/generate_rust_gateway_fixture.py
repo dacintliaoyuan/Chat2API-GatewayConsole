@@ -189,7 +189,7 @@ def share_config_document(keys):
     }}
 
 
-def main():
+def generate():
     tmp = tempfile.TemporaryDirectory(prefix="um-rust-gateway-fixture-")
     root = Path(tmp.name)
     share_path = root / "share.json"
@@ -275,10 +275,7 @@ def main():
         _record_body_rejection(fixture, gateway)
         _record_cors(fixture, gateway)
         _record_control(fixture, gateway)
-        output = ROOT / "tests" / "fixtures" / "rust_gateway_rev1.json"
-        output.write_text(json.dumps(fixture, indent=1, sort_keys=True) + "\n",
-                          encoding="utf-8")
-        print(f"wrote {output}")
+        return fixture
     finally:
         chat2api.ALLOWED_ORIGINS = original_origins
         chat2api.CONTROL_TOKEN_FILE = original_control
@@ -657,6 +654,14 @@ def _record_control(fixture, gateway):
         "connection": close_result["headers"].get("connection"),
         "willClose": close_result["will_close"],
     }
+
+
+def main():
+    fixture = generate()
+    output = ROOT / "tests" / "fixtures" / "rust_gateway_rev1.json"
+    output.write_text(json.dumps(fixture, indent=1, sort_keys=True) + "\n",
+                      encoding="utf-8")
+    print(f"wrote {output}")
 
 
 if __name__ == "__main__":
