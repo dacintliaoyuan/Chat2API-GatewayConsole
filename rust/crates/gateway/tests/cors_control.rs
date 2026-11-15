@@ -171,28 +171,41 @@ fn control_token_gate_cases_match_python() {
 }
 
 #[test]
-fn a_missing_control_token_file_denies_every_control_route() {
+fn a_missing_control_token_file_is_created_on_first_use() {
     let temp = TempDir::new(unique_temp_prefix());
     let stub = StubUpstream::start();
+    let token_path = temp.path().join("control.token");
+    assert!(!token_path.exists());
     let config = um_gateway::config::GatewayConfig {
         upstream_base_url: stub.url(),
         upstream_token: STUB_TOKEN.to_string(),
         share_config: Some(temp.write("share.json", &legacy_share_config())),
-        control_token_file: None,
+        control_token_file: Some(token_path.clone()),
         ..um_gateway::config::GatewayConfig::default()
     };
-    let server = um_gateway::GatewayServer::start(config).expect("gateway without token");
+    let server = um_gateway::GatewayServer::start(config).expect("gateway creates token");
     let addr = server.addr();
-    let response = client_request(
+    let created = std::fs::read_to_string(&token_path).expect("created control token");
+    assert!(!created.trim().is_empty());
+    let accepted = client_request(
+        addr,
+        &ClientRequest::post("/admin/share/revoke", "")
+            .header("X-Admin-Control", created.trim())
+            .json_body(r#"{"key_id":"friend"}"#),
+    )
+    .expect("control with created token");
+    assert_eq!(accepted.status, 200);
+
+    let refused = client_request(
         addr,
         &ClientRequest::post("/admin/share/revoke", "")
             .header("X-Admin-Control", CONTROL_TOKEN)
             .json_body(r#"{"key_id":"friend"}"#),
     )
-    .expect("control without token");
-    assert_eq!(response.status, 403);
+    .expect("control with wrong token");
+    assert_eq!(refused.status, 403);
     assert_eq!(
-        response.json()["error"]["message"],
+        refused.json()["error"]["message"],
         json!("Local management token missing or invalid")
     );
 }

@@ -8,9 +8,10 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::io::Write;
 use std::net::{Shutdown, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -391,13 +392,47 @@ pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     difference == 0
 }
 
-/// Read the control token, fail-closed when it is missing or unreadable.
-pub fn read_control_token(path: &Path) -> Option<String> {
-    let raw = fs::read_to_string(path).ok()?;
-    let value = raw.trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
+/// Load the control token, creating it on first use like Python.
+///
+/// An existing readable token wins. A missing or empty file is initialized with
+/// a fresh token; a failed initialization fails closed (the caller denies).
+pub fn ensure_control_token(path: &Path) -> Option<String> {
+    if let Ok(raw) = fs::read_to_string(path) {
+        let value = raw.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
     }
+    let token = generate_control_token();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok()?;
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).ok()?;
+    file.write_all(token.as_bytes()).ok()?;
+    file.flush().ok()?;
+    Some(token)
+}
+
+fn generate_control_token() -> String {
+    use sha2::{Digest, Sha256};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = Sha256::new();
+    hasher.update(std::process::id().to_le_bytes());
+    hasher.update(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+            .to_le_bytes(),
+    );
+    hasher.update(SEQUENCE.fetch_add(1, Ordering::SeqCst).to_le_bytes());
+    hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
 }

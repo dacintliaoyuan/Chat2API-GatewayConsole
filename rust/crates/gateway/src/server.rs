@@ -19,7 +19,7 @@ use crate::body::{
 use crate::config::{AuthMode, ConfigError, GatewayConfig};
 use crate::error::GatewayError;
 use crate::gate::{
-    constant_time_eq, read_control_token, InflightCtx, RefusalReason, ShareGate,
+    constant_time_eq, ensure_control_token, InflightCtx, RefusalReason, ShareGate,
 };
 use crate::http::{
     read_request, write_response, BodyRead, Headers, Request, Response,
@@ -62,7 +62,7 @@ impl GatewayServer {
         let control_token = config
             .control_token_file
             .as_ref()
-            .and_then(|path| read_control_token(path));
+            .and_then(|path| ensure_control_token(path));
         let proxy = ProxyState::new(&config).map_err(ServerError::Config)?;
         proxy.probe_config();
         let local_api_key = config.local_api_key.clone();
