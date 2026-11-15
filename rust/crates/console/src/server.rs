@@ -454,7 +454,7 @@ fn handle_share_api(state: &AppState, request: &Request, raw_target: &str) -> Re
             ["usage"] => share_usage_response(state, raw_target, false),
             ["usage", "requests"] => share_usage_response(state, raw_target, true),
             ["status"] => match state.share.raw_status(state.share_seams.broker_snapshot()) {
-                Ok(payload) => send_json(200, &payload),
+                Ok(payload) => send_json(200, &with_last_publication_failure(state, payload)),
                 Err(error) => error.response(),
             },
             ["keys"] => match state.share.share_keys() {
@@ -764,7 +764,7 @@ fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Resp
         ["health"] => health_response(state),
         ["actions"] => send_json(200, &action_catalogue()),
         ["share-management", "status"] => match state.share.status(&*state.share_seams) {
-            Ok(payload) => send_json(200, &payload),
+            Ok(payload) => send_json(200, &with_last_publication_failure(state, payload)),
             Err(error) => error.response(),
         },
         ["share-management", "keys"] => match state.share.keys() {
@@ -1483,6 +1483,19 @@ fn service_row(snapshot: &RuntimeSnapshot, gateway_port: u16) -> Value {
 
 fn send_json(status: u16, payload: &Value) -> Response {
     Response::json(status, payload).with_header("Cache-Control", "no-store")
+}
+
+/// Python's `ShareManager.status()` keeps `_last_failure` in-process; the read
+/// store derives it from the durable publish journal. Prefer this process's value
+/// when it performed the failed publication, so a later success retains it exactly
+/// like Python and a failed journal update cannot hide the failure.
+fn with_last_publication_failure(state: &AppState, mut payload: Value) -> Value {
+    if let Some(failure) = state.share_write.last_failure() {
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("last_publication_failure".to_string(), failure);
+        }
+    }
+    payload
 }
 
 fn epoch_seconds() -> i64 {

@@ -47,9 +47,9 @@
 - `control-status` 只读 broker 快照：`state=ok` 且带 `broker` 对象时 200
   `{responsive:true}`；未接线为 `share_broker_unwired`，其余未确认为
   `share_broker_unavailable`；非 GET 返回 405 `method not allowed`。
-- `share-management/status` 的 `last_publication_failure` 来自最新失败的 `publish`
-  operation（`{kind,error,at}`）；后续发布成功不会清空它，与 Python `_last_failure`
-  的保留语义一致。
+- `share-management/status` 的 `last_publication_failure` 优先使用本进程管理器的
+  in-process 记录；重启后从最新失败 `publish` operation 读取 `{kind,error,at}`。
+  后续发布成功不会清空它，与 Python `_last_failure` 的保留语义一致。
 - `/api/share/*` 读面先做敏感头重复检查，再要求会话 Cookie 或控制令牌；写方法在 S5b
   返回 `501 not_implemented`，不伪造写成功。公网入口仍只有 8003 的四条 `/v1` 路径。
 - 候选继续只绑定 `127.0.0.1:0`；`USAGESRV_PORT` 只作为报告端口，8002/8003 与治理段
@@ -124,7 +124,8 @@ git -c core.whitespace=cr-at-eol diff --check
   `usagesrv.py:2802-2819` 从 broker 快照返回 `{responsive}` 或
   `{responsive:false,error_code}`；非 GET 返回 405。
 - Finding 8：`share-management/status` 与 `/api/share/status` 的
-  `last_publication_failure` 从最新失败 `publish` operation 读取
-  `{kind,error,at}`；发布成功不清空，保留语义与 Python `_last_failure` 一致。
+  `last_publication_failure` 优先使用本进程 `ShareWriteStore` 的失败记录，重启后从最新
+  失败 `publish` operation 读取 `{kind,error,at}`；发布成功不清空，保留语义与 Python
+  `_last_failure` 一致。
 - 定向测试：`cargo test -p um-console --test control_status --test share_status
   --test share_write_fail_closed --offline` 通过。
