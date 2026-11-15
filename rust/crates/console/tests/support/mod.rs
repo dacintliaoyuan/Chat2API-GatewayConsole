@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod write;
+
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
