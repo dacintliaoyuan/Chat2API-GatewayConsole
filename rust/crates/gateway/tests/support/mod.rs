@@ -745,6 +745,11 @@ pub enum ChatAttempt {
         body: String,
         retry_after: Option<String>,
     },
+    DelayedHttpStatus {
+        delay: Duration,
+        status: u16,
+        body: String,
+    },
     Silent {
         hold: Duration,
     },
@@ -923,6 +928,22 @@ fn serve_chat(
                 "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\n\
                  Content-Length: {}\r\nConnection: close\r\n\r\n",
                 if status == 200 { "OK" } else { "Error" },
+                raw.len()
+            );
+            stream.write_all(head.as_bytes())?;
+            stream.write_all(&raw)?;
+            stream.flush()?;
+        }
+        ChatAttempt::DelayedHttpStatus {
+            delay,
+            status,
+            body,
+        } => {
+            thread::sleep(delay);
+            let raw = body.into_bytes();
+            let head = format!(
+                "HTTP/1.1 {status} Error\r\nContent-Type: text/plain\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
                 raw.len()
             );
             stream.write_all(head.as_bytes())?;
