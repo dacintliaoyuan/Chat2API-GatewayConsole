@@ -17,5 +17,6 @@ pub mod management;
 pub mod peer;
 pub mod replay;
 pub mod request;
+pub mod server;
 pub mod socket_policy;
 pub mod transport;
