@@ -55,12 +55,14 @@ Playwright 的 `chromium_headless_shell-1248`，`setUpClass` 报
 ## #42 low findings 验证记录
 
 - 工作目录：`.worktrees/integration-final`
-- 被测状态：`integration/feature-retirement-cleanup` @ `30586d2`（#42 实现 `74a4c8e`）
+- 被测状态：`integration/feature-retirement-cleanup` @ `8063e97`（#42 实现 `74a4c8e`；评审修复 `b2dbb00`/`a1c4f9c`/`4e01712`/`8063e97`）
 - 命令与结果：
-  - `python -m unittest tests.test_chat2api_browser_login tests.test_chat2api_reauth_recovery tests.test_console_um_login tests.test_console_um_adapter tests.test_console_display_route tests.test_domain_docs_headless_login tests.test_console_stats tests.test_share_management tests.test_chat2api_auth_wait tests.test_chat2api_linux_platform tests.test_r19_local_isolation`：`Ran 380 tests`，`OK (skipped=7)`。
+  - `python -m unittest` 定向 576 项（11 个 headless/console 模块 + broker、端口、文档）: `Ran 576 tests`，`OK (skipped=37)`。
+  - `python -m unittest tests.test_console_um_login tests.test_console_display_route tests.test_console_um_adapter tests.test_share_broker_server tests.test_share_broker_unix_socket tests.test_cloud_role_assembly`：`Ran 183 tests`，`OK (skipped=28)`。
   - `python -m unittest tests.test_fake_um_server` 连续 3 次：`Ran 50 tests` / `OK`，三次 EXIT=0；barrier teardown 的 `ConnectionAbortedError` 未复现。
+  - `python -m unittest discover -s tests -p "test_*.py"` 连续 3 次：三次均 `Ran 2346 tests` / `OK (skipped=63)`，EXIT=0；`test_fake_um_server` 的 close 缺失与 `test_console_api` 的 `checkedAt` 跨秒失败已修复后未复现。
   - `bash scripts/check.sh --quick`：EXIT=0；前端 80 + 4 + 12 + 69 项通过，关键 Python 回归 135 项 `OK (skipped=5)`。
-  - `bash scripts/check.sh --full`：`Ran 2329 tests / OK (skipped=63)`，`local/tests Ran 54 / OK`，EXIT=0。
+  - `bash scripts/check.sh --full`：`Ran 2346 tests / OK (skipped=63)`，`local/tests Ran 54 / OK`，EXIT=0。
 - 未验证范围：真实云端 systemd、真实 UM 登录/MFA/Duo、部署后 headless 行为仍未在目标机复验；上述记录不是目标机证据。
 
 ## RSS 基线

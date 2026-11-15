@@ -5,7 +5,7 @@
 ## 1. 项目特有事实
 
 - **仓库根就是应用根**：`usagesrv.py`、`check_port_bindings.py`、`chat2api/`、`console/`、`share/`、`model_sync/`、`app/`、`web/`、`tests/`、`um-cloud-deploy/` 都在根级，没有上一级目录。根级模块按域收进包：控制台路由在 `console/`，分享链在 `share/`，模型目录在 `model_sync/`，后端装配在 `app/`。
-- **两个角色**：`UM_SHARE_ROLE=local`（本机 8001，Windows）与 `cloud`（云端 8096，Linux）；前端按构建期角色装入 `web/src/local/local-console.ts` 或 `web/src/cloud/cloud-console.ts`（ADR 0001）。
+- **两个角色**：`UM_SHARE_ROLE=local`（本机 8001，Windows）与 `cloud`（云端 8096，Linux；Rust 目标 8002）；前端按构建期角色装入 `web/src/local/local-console.ts` 或 `web/src/cloud/cloud-console.ts`（ADR 0001）。
 - **生产目录**：`web/dist` 是本机生产页，`web/dist-cloud` 是云端生产页（打包为 `web/dist`）；两者都在 `.gitignore` 里，构建产物不入库。
 - **凭据与运行数据不入库**：`data/`、`profile/`、`tmp/`、`output/`、`chat2api/token.json`、`chat2api/.edge-profile/` 都由根 `.gitignore` 覆盖。
 - **验证**：`web/` 下 `npm run check:cloud-console`、`npm run check:um`；Python 回归 `python -m unittest discover -s tests -p "test_*.py"`。`scripts/check.sh` 在缺 `web/node_modules` 时先 `npm ci`；`web/package.json` 的 `esbuild` 是前端契约门禁的 devDependency。两者只服务门禁环境，不改变产品行为。
@@ -39,6 +39,22 @@
 | 8099 | 候选预览（vite preview） | 127.0.0.1 |
 
 `8000-8009` 是会话适配段，`8090-8099` 是控制台/管理段，`8100-8119` 是分享段（唯一允许非 loopback 的段，偏离须登记），`8300-8399` 是协议网关段。云端控制台与 display 已从治理段外迁入 `8090-8099`（2026-11-14）；旧端口 `18096`/`5901` 在**一个发布周期**内仍作为显式配置值兼容（`USAGESRV_PORT=18096`、`CONSOLE_DISPLAY_VNC_PORT=5901`），审计记为 `LEGACY-ALIAS`，同一时刻只监听配置指定的一个端口，下一个发布周期移除旧别名。迁移或新增时同步本表与 `console/display_proxy.py`。新增服务先选段内未占用端口；迁移同步更新本表、服务配置、消费者、测试与文档。`check_port_bindings.py` 对照本表审计治理段内未登记监听。
+
+### 目标端口契约（Rust 切换后生效）
+
+| 端口 | 角色 | 服务 |
+|---|---|---|
+| 8000 | 本机网关 | `chat2api`（UM 主链） |
+| 8001 | 本机控制台 | `usagesrv` local |
+| 8002 | 云端控制台 | `usagesrv` cloud（截图页面 + `/api/console/*`） |
+| 8003 | 云端网关 | `chat2api.py` 合并进程（当前 8100） |
+| 8004–8009 | 预留 | — |
+
+- `8000–8009` 的段名从「会话适配段」改为「网关/控制台配对段」：8000/8001 本机对，8002/8003 云端对。
+- 目标 unit/CLI：`um-share-broker.service` → `um-share-gateway.service`，`um-share-brokerctl.py` → `um-share-gatewayctl.py`；broker 仍是内部拉起者，不新增第二个进程。
+- `8097` display 与 `8099` 候选预览不变；`5173` 前端开发不变。
+- 旧 `8100`/`8096`/`18096`/`5901` **不保留兼容别名**；下一次 Rust 部署一次性切换，`install.sh` 强制写入 `USAGESRV_PORT=8002` 与 `CONSOLE_DISPLAY_VNC_PORT=8097`。这取代 #40 原先的一个发布周期兼容窗口。
+- 本表是目标契约；当前 Python 代码仍监听 8100/8096，Rust 重写时一起改。
 
 ## 4. 分享链边界
 

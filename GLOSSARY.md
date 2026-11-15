@@ -244,8 +244,16 @@ _Avoid_: 管理会话、私网可达即可信
 _Avoid_: 主控制台、统一控制台
 
 **云端控制台 (Cloud console)**:
-云机上只管理云端 API 服务的控制台入口；与本地控制台共用前端代码，数据与操作目标各自归属，不经对方转发。入口为 `Open-CloudConsole.bat`（经专用 SSH 配置建 loopback 隧道到 8096；一个发布周期内可用 `-CloudConsolePort 18096` 指向旧端口），生产页是发布包内的 `web/dist`（cloud 角色，构建自 `web/dist-cloud`）。
+云机上只管理云端 API 服务的控制台入口；与本地控制台共用前端代码，数据与操作目标各自归属，不经对方转发。目标端口是 8002（Rust 切换后生效；当前 Python 部署仍为 8096），入口为 `Open-CloudConsole.bat`（经专用 SSH 配置建 loopback 隧道），生产页是发布包内的 `web/dist`（cloud 角色，构建自 `web/dist-cloud`）。
 _Avoid_: 远程管理本地、跨机统一控制台
+
+**云端网关 (Cloud gateway)**:
+云机上唯一的分享 API 合并进程（`chat2api.py`），负责分享 Key 鉴权、每 Key 并发、撤销在途请求、用量账本与 SSE 转发；目标端口是 8003（Rust 切换后生效；当前 Python 部署仍为 8100），由 `um-share-gateway.service` 拉起。
+_Avoid_: 合并网关（旧称）、云端反代（它不是独立反代层）、broker（broker 是拉起者，不是网关本身）
+
+**网关/控制台配对段 (Gateway/console pair segment)**:
+`8000–8009`：`8000/8001` 是本机网关/控制台对，`8002/8003` 是云端控制台/网关对，`8004–8009` 预留。
+_Avoid_: 会话适配段（旧段名）
 
 **控制台角色 (Console role)**:
 一份控制台前端构建所呈现的身份（本地或云端），在构建时选定；只有与后端的云端部署角色一致时才允许写操作，访问地址不作为判断依据。
