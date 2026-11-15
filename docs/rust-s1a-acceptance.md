@@ -69,11 +69,16 @@ JSON 形状，以及 Key 门、路由白名单、429 四类 reason、请求体�
 | 命令 | 实际结果 |
 |---|---|
 | `python tests/generate_rust_gateway_fixture.py` | 写出 `tests/fixtures/rust_gateway_rev1.json` |
-| `cargo test --manifest-path rust/Cargo.toml` | S0 10 个 + S1a 41 个测试通过 |
+| `python -m unittest tests.test_rust_gateway_fixture` | `Ran 2 tests`；`OK`（生成器与已提交夹具一致） |
+| `cargo test --manifest-path rust/Cargo.toml` | S0 10 个 + S1a 41 个测试通过；0 failed |
 | `python -m unittest tests.test_chat2api_request_rejection tests.test_chat2api_http_isolation tests.test_share_gate_merged tests.test_share_gate_citations` | `Ran 38 tests`；`OK (skipped=4)` |
-| `bash scripts/check.sh --full` | 见下方复跑结果 |
+| `bash scripts/check.sh --full` | 退出码 0；`tests` `Ran 2355 tests` / `OK (skipped=63)`，`local/tests` `Ran 54 tests` / `OK` |
+| `git -c core.whitespace=cr-at-eol diff --check` | 退出码 0 |
 
-（全量门禁结果在提交后补记。）
+全量门禁在实施过程中出现过一次 Windows 连接/时序抖动：`tests` 的
+`test_rotate_is_fail_closed_until_runtime_catches_up`（`TimeoutError`）与
+`test_explicit_5xx_is_an_error_not_sse`（`ConnectionAbortedError`）各报一次
+error；两条单独重跑均 `OK`。最终复跑退出码 0，不把首次抖动写成通过证据。
 
 ## 无生产端口切换
 
