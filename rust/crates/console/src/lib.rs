@@ -12,6 +12,7 @@ pub mod cloud_ops;
 pub mod config;
 pub mod display;
 pub mod display_grant;
+pub mod display_relay;
 pub mod error;
 pub mod lock;
 pub mod metering;

@@ -8,6 +8,8 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
 
+use crate::display_relay::DisplayConfig;
+
 pub const CLOUD_DEFAULT_PORT: u16 = 8002;
 pub const DEFAULT_GATEWAY_PORT: u16 = 8003;
 pub const DEFAULT_GATEWAY_PID_FILE: &str = "/run/um-share/share-gateway.pid";
@@ -99,6 +101,7 @@ pub struct ConsoleConfig {
     pub control_token_file: Option<PathBuf>,
     pub share_backend_dir: Option<PathBuf>,
     pub usage_session_code_file: Option<PathBuf>,
+    pub display: DisplayConfig,
 }
 
 impl Default for ConsoleConfig {
@@ -125,6 +128,7 @@ impl Default for ConsoleConfig {
             control_token_file: None,
             share_backend_dir: None,
             usage_session_code_file: None,
+            display: DisplayConfig::default(),
         }
     }
 }
@@ -293,6 +297,7 @@ impl ConsoleConfig {
                 config.usage_session_code_file = Some(PathBuf::from(value));
             }
         }
+        config.display = DisplayConfig::from_env();
         Ok(config)
     }
 
