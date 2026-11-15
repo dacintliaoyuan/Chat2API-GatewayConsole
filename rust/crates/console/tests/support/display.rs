@@ -9,6 +9,8 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -73,29 +75,57 @@ pub fn display_config(assets: &DisplayAssets, vnc_port: u16) -> DisplayConfig {
 }
 
 /// One fake x11vnc/RFB listener on an ephemeral loopback port.
+///
+/// The listener accepts connections until `join`/drop sets the stop flag, so a
+/// test that refuses every handshake never blocks on accept and a test with two
+/// viewers gets one fake upstream connection each.
 pub struct FakeDisplay {
     port: u16,
+    stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl FakeDisplay {
     pub fn start<F>(script: F) -> Self
     where
-        F: FnOnce(TcpStream) + Send + 'static,
+        F: Fn(TcpStream) + Send + Sync + 'static,
     {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake display");
+        listener
+            .set_nonblocking(true)
+            .expect("fake display nonblocking");
         let port = listener.local_addr().expect("fake display addr").port();
         assert!(
             !GOVERNED_PORTS.contains(&port),
             "fake display bound a governed port"
         );
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let script = Arc::new(script);
         let handle = thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
-                script(stream);
+            let mut handlers = Vec::new();
+            while !worker_stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let script = Arc::clone(&script);
+                        handlers.push(thread::spawn(move || {
+                            let _ = stream.set_nonblocking(false);
+                            script(stream);
+                        }));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+            for handler in handlers {
+                let _ = handler.join();
             }
         });
         Self {
             port,
+            stop,
             handle: Some(handle),
         }
     }
@@ -105,23 +135,37 @@ impl FakeDisplay {
     }
 
     pub fn join(mut self) {
+        self.stop.store(true, Ordering::SeqCst);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
     }
 }
 
-pub fn recv_exact(stream: &mut TcpStream, size: usize) -> Vec<u8> {
+impl Drop for FakeDisplay {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+pub fn recv_exact(stream: &mut TcpStream, size: usize) -> std::io::Result<Vec<u8>> {
     let mut data = Vec::with_capacity(size);
     let mut buffer = [0u8; 4096];
     while data.len() < size {
-        let read = stream.read(&mut buffer).expect("read exact");
+        let remaining = size - data.len();
+        let read = stream.read(&mut buffer[..remaining])?;
         if read == 0 {
-            panic!("peer closed while reading {size} bytes");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("peer closed while reading {size} bytes"),
+            ));
         }
         data.extend_from_slice(&buffer[..read]);
     }
-    data
+    Ok(data)
 }
 
 /// One masked client WebSocket frame.
@@ -160,26 +204,29 @@ impl WsClient {
         let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
         stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-        let mut lines = vec![format!("GET {target} HTTP/1.1"), format!("Host: {addr}")];
-        let mut has_origin = false;
+        let mut values: Vec<(String, String)> = vec![
+            ("Host".to_string(), addr.to_string()),
+            ("Upgrade".to_string(), "websocket".to_string()),
+            ("Connection".to_string(), "Upgrade".to_string()),
+            ("Sec-WebSocket-Version".to_string(), "13".to_string()),
+            (
+                "Sec-WebSocket-Key".to_string(),
+                "MDEyMzQ1Njc4OWFiY2RlZg==".to_string(),
+            ),
+            ("Sec-WebSocket-Protocol".to_string(), "binary".to_string()),
+        ];
         for (name, value) in headers {
-            if name.eq_ignore_ascii_case("host") {
-                lines[1] = format!("Host: {value}");
+            match values
+                .iter_mut()
+                .find(|(existing, _)| existing.eq_ignore_ascii_case(name))
+            {
+                Some((_, existing)) => *existing = value.to_string(),
+                None => values.push((name.to_string(), value.to_string())),
             }
-            if name.eq_ignore_ascii_case("origin") {
-                has_origin = true;
-            }
-            lines.push(format!("{name}: {value}"));
         }
-        let _ = has_origin;
-        if !headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("upgrade"))
-        {
-            lines.push("Upgrade: websocket".to_string());
-            lines.push("Connection: Upgrade".to_string());
-            lines.push("Sec-WebSocket-Version: 13".to_string());
-            lines.push("Sec-WebSocket-Key: MDEyMzQ1Njc4OWFiY2RlZg==".to_string());
+        let mut lines = vec![format!("GET {target} HTTP/1.1")];
+        for (name, value) in values {
+            lines.push(format!("{name}: {value}"));
         }
         lines.push(String::new());
         lines.push(String::new());
@@ -215,19 +262,19 @@ impl WsClient {
     }
 
     pub fn read_frame(&mut self) -> std::io::Result<(u8, Vec<u8>)> {
-        let first = recv_exact(&mut self.stream, 1)[0];
-        let second = recv_exact(&mut self.stream, 1)[0];
+        let first = recv_exact(&mut self.stream, 1)?[0];
+        let second = recv_exact(&mut self.stream, 1)?[0];
         assert_eq!(second & 0x80, 0, "server frame must not be masked");
         let mut length = u64::from(second & 0x7F);
         if length == 126 {
             length = u64::from(u16::from_be_bytes(
-                recv_exact(&mut self.stream, 2).try_into().expect("length"),
+                recv_exact(&mut self.stream, 2)?.try_into().expect("length"),
             ));
         } else if length == 127 {
             length =
-                u64::from_be_bytes(recv_exact(&mut self.stream, 8).try_into().expect("length"));
+                u64::from_be_bytes(recv_exact(&mut self.stream, 8)?.try_into().expect("length"));
         }
-        let payload = recv_exact(&mut self.stream, length as usize);
+        let payload = recv_exact(&mut self.stream, length as usize)?;
         Ok((first & 0x0F, payload))
     }
 }
