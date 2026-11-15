@@ -629,6 +629,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "um-console"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "libc",
+ "rusqlite",
+ "serde_json",
+ "um-gateway",
+ "um-test-harness",
+]
+
+[[package]]
 name = "um-contract"
 version = "0.1.0"
 dependencies = [
