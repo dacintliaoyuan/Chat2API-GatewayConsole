@@ -959,6 +959,25 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
       void refresh();
       return;
     }
+    const copyApiUrl = target.closest<HTMLElement>(
+      "[data-cloud-copy-api-url]"
+    );
+    if (copyApiUrl) {
+      const value = copyApiUrl.dataset.cloudCopyApiUrl ?? "";
+      if (value) {
+        void navigator.clipboard?.writeText(value);
+        addFeedback({
+          action: "share.copy_api_url",
+          target: "share",
+          tone: "ok",
+          text: "已复制 API 地址",
+          opId: null,
+          intentKey: null,
+        });
+        render();
+      }
+      return;
+    }
     const primary = target.closest<HTMLButtonElement>("[data-cloud-primary]");
     if (primary && !primary.disabled) {
       const action = primaryAction(model).action;

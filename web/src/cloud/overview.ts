@@ -34,10 +34,12 @@ export type {
 } from "./cloud-format";
 export {
   apiEntry,
+  apiUrlHtml,
   authHeadline,
   authHistoryLine,
   checkLine,
   lastStatusCheck,
+  publicApiUrl,
   serviceState,
   statusDetailHtml,
   statusRow,
@@ -48,6 +50,7 @@ export {
 export type {
   AuthHeadline,
   CurrentLogin,
+  PublicApiUrl,
   ServiceState,
   StatusCheck,
   StatusRow,

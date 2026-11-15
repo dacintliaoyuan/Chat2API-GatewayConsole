@@ -471,6 +471,65 @@ export function statusDetailHtml(model: CloudModel): string {
   </div>`;
 }
 
+export type PublicApiUrl = { url: string | null; reason: string };
+
+const API_URL_REASON_WORD: Readonly<Record<string, string>> = {
+  public_origin_unconfigured: "未配置公网地址",
+  public_origin_invalid: "公网地址配置无效",
+};
+
+/** The public API base URL to give another client. The backend's `share_url`
+ *  is an origin (no /v1); the OpenAI-compatible base URL appends `/v1`.
+ *  An unconfigured, stale or malformed origin is reported honestly, never
+ *  guessed from history. */
+export function publicApiUrl(
+  status: ReadState<ShareStatusPayload>
+): PublicApiUrl {
+  const read = lastValue(status);
+  if (!read) return { url: null, reason: "服务状态未读取" };
+  if (read.stale) return { url: null, reason: "状态读数已过时" };
+  const value = read.value;
+  const origin =
+    typeof value.share_url === "string" ? value.share_url.trim() : "";
+  if (!origin) {
+    const raw =
+      typeof value.share_url_reason === "string" && value.share_url_reason
+        ? value.share_url_reason
+        : value.share_url_source === "configured"
+          ? "backend_missing_share_url"
+          : "public_origin_unconfigured";
+    return { url: null, reason: API_URL_REASON_WORD[raw] ?? raw };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return { url: null, reason: "公网地址格式无法确认" };
+  }
+  if (parsed.protocol !== "https:") {
+    return { url: null, reason: "公网地址不是 https" };
+  }
+  return { url: `${origin.replace(/\/+$/, "")}/v1`, reason: "" };
+}
+
+/** Read-only API address line: the URL to hand to another client, or the
+ *  honest reason it is unavailable. It never exposes a Key. */
+export function apiUrlHtml(model: CloudModel): string {
+  const api = publicApiUrl(model.status);
+  if (!api.url) {
+    return `<section class="cloud-api-url" data-tone="warn" aria-label="公网 API">
+    <span class="cloud-api-url-label">公网 API</span>
+    <span class="cloud-api-url-reason">${escapeHtml(api.reason)}</span>
+  </section>`;
+  }
+  return `<section class="cloud-api-url" aria-label="API 地址">
+    <span class="cloud-api-url-label">API 地址</span>
+    <code>${escapeHtml(api.url)}</code>
+    <button type="button" class="btn btn-outline btn-sm" data-cloud-copy-api-url="${escapeHtml(api.url)}">复制</button>
+    <span class="cloud-api-url-note">给其他客户端的 OpenAI 兼容 Base URL；Key 在下方 Key 列表</span>
+  </section>`;
+}
+
 /** Ticket #5: the status line at the top of the single page. */
 export function statusRowHtml(model: CloudModel): string {
   const row = statusRow(model);

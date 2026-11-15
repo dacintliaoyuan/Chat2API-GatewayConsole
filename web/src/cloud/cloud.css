@@ -149,6 +149,34 @@
   border-radius: var(--md-r-l);
   background: var(--md-surface-lowest);
 }
+.cloud-api-url {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--md-hairline);
+  border-radius: var(--md-r-l);
+  background: var(--md-surface-lowest);
+}
+.cloud-api-url-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--md-on-surface-variant);
+}
+.cloud-api-url code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.cloud-api-url-note,
+.cloud-api-url-reason {
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.cloud-api-url[data-tone="warn"] .cloud-api-url-reason {
+  color: var(--md-error, #b3261e);
+}
 .cloud-status-dot {
   flex: none;
   width: 10px;

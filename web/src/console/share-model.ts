@@ -35,6 +35,8 @@ export type ShareStatusPayload = {
   }>;
   blocked?: boolean;
   share_url?: string | null;
+  share_url_source?: string | null;
+  share_url_reason?: string | null;
   funnel_on?: boolean;
   /** Gateway INSTANCE evidence (broker verify_running seam) — distinct from
    *  broker.running, which is the always-on management daemon and is never
