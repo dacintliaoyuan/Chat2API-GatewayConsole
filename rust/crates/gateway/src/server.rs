@@ -22,6 +22,7 @@ use crate::gate::{
 };
 use crate::http::{read_request, write_response, BodyRead, Headers, Request, Response};
 use crate::ledger::Ledger;
+use crate::messages::handle_messages;
 use crate::readonly::ProxyState;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -265,6 +266,23 @@ fn dispatch_inner(
         );
     }
 
+    if request.method == "POST" && (path == "/v1/messages" || path == "/api/v1/messages") {
+        if let Err(error) = local_key_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        if let Err(error) = origin_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        let result = handle_messages(state, request, stream, admission.take());
+        return (
+            match result {
+                ChatResult::Response(response) => RouteOutcome::Response(response),
+                ChatResult::Written { close } => RouteOutcome::Written { close },
+            },
+            None,
+        );
+    }
+
     let response = match request.method.as_str() {
         "GET" => handle_get(state, request),
         "POST" => handle_post(state, request),
@@ -418,30 +436,6 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
                 return GatewayError::invalid_request("key_id is required").response();
             };
             Response::json(200, &json!({"released": gate.terminate_key(key_id)}))
-        }
-        "/v1/messages" | "/api/v1/messages" => {
-            if let Err(error) = local_key_allowed(state, request) {
-                return error.response();
-            }
-            if let Err(error) = origin_allowed(state, request) {
-                return error.response();
-            }
-            let body = match read_json_body(
-                request,
-                BodyPolicy::Share {
-                    max_request_bytes: state.config.share_max_request_bytes,
-                },
-            ) {
-                Ok(body) => body,
-                Err(error) => return error.response(),
-            };
-            let Some(body) = body else {
-                return GatewayError::unsupported_messages_request().response();
-            };
-            if !valid_messages_request(&body) {
-                return GatewayError::unsupported_messages_request().response();
-            }
-            GatewayError::not_implemented("messages_forwarding_s1b").response()
         }
         "/v1/responses" | "/api/v1/responses" => {
             if let Err(error) = local_key_allowed(state, request) {
@@ -696,50 +690,6 @@ pub fn valid_chat_request(body: &serde_json::Map<String, Value>) -> bool {
         return false;
     }
     !body.contains_key("store") || body.get("store") == Some(&Value::Bool(false))
-}
-
-/// Shape-only admission for one shared Messages body.
-pub fn valid_messages_request(body: &serde_json::Map<String, Value>) -> bool {
-    let allowed = [
-        "max_tokens",
-        "messages",
-        "metadata",
-        "model",
-        "stop_sequences",
-        "stream",
-        "system",
-        "temperature",
-        "thinking",
-        "tool_choice",
-        "tools",
-        "top_k",
-        "top_p",
-    ];
-    if body.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return false;
-    }
-    if !body
-        .get("model")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty())
-    {
-        return false;
-    }
-    if !body
-        .get("messages")
-        .and_then(Value::as_array)
-        .is_some_and(|value| !value.is_empty())
-    {
-        return false;
-    }
-    if !body
-        .get("max_tokens")
-        .and_then(Value::as_u64)
-        .is_some_and(|value| value >= 1)
-    {
-        return false;
-    }
-    body.get("stream").map_or(true, Value::is_boolean)
 }
 
 /// Test seam: the body policy used for a route group.

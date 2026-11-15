@@ -876,7 +876,7 @@ fn physical_budget_response() -> Response {
     .response()
 }
 
-fn line_text(line: &[u8]) -> String {
+pub(crate) fn line_text(line: &[u8]) -> String {
     let text = String::from_utf8_lossy(line);
     text.trim_end_matches('\n')
         .trim_end_matches('\r')
@@ -1020,13 +1020,13 @@ fn acquire_reader(slots: &Arc<ReaderSlots>, deadline: Instant) -> Option<Arc<Rea
     slots.acquire_until(deadline)
 }
 
-struct ClientWatcher {
+pub(crate) struct ClientWatcher {
     flag: Arc<AtomicBool>,
     done: Arc<AtomicBool>,
 }
 
 impl ClientWatcher {
-    fn start(stream: &TcpStream) -> Option<Self> {
+    pub(crate) fn start(stream: &TcpStream) -> Option<Self> {
         let clone = stream.try_clone().ok()?;
         let _ = clone.set_read_timeout(Some(Duration::from_millis(100)));
         let flag = Arc::new(AtomicBool::new(false));
@@ -1055,7 +1055,7 @@ impl ClientWatcher {
         Some(Self { flag, done })
     }
 
-    fn disconnected(&self) -> bool {
+    pub(crate) fn disconnected(&self) -> bool {
         self.flag.load(Ordering::SeqCst)
     }
 }

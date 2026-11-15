@@ -99,7 +99,8 @@ fn merge_usage_fields(base: NormalizedUsage, update: NormalizedUsage) -> Normali
     }
 }
 
-fn usage_fields_to_json(fields: &NormalizedUsage) -> Value {
+/// Build the ledger's OpenAI-shaped usage block from normalized fields.
+pub fn usage_fields_to_json(fields: &NormalizedUsage) -> Value {
     let mut value = serde_json::Map::new();
     if let Some(prompt) = fields.prompt_tokens {
         value.insert("prompt_tokens".to_string(), json!(prompt));
@@ -123,6 +124,97 @@ fn usage_fields_to_json(fields: &NormalizedUsage) -> Value {
         );
     }
     Value::Object(value)
+}
+
+/// Merge two cumulative Anthropic usage snapshots: the larger value per field
+/// wins, matching `_AnthropicStreamUsage.observe` (`chat2api/chat2api.py:3477-3539`).
+pub fn merge_usage_max(base: NormalizedUsage, update: NormalizedUsage) -> NormalizedUsage {
+    NormalizedUsage {
+        prompt_tokens: max_option(base.prompt_tokens, update.prompt_tokens),
+        completion_tokens: max_option(base.completion_tokens, update.completion_tokens),
+        total_tokens: max_option(base.total_tokens, update.total_tokens),
+        cached_tokens: max_option(base.cached_tokens, update.cached_tokens),
+        reasoning_tokens: max_option(base.reasoning_tokens, update.reasoning_tokens),
+    }
+}
+
+fn max_option(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (left, right) => left.or(right),
+    }
+}
+
+/// Translate one Anthropic `usage` block into the ledger's normalized fields.
+///
+/// Anthropic counts input tokens WITHOUT cache reads and cache writes, while the
+/// ledger's `prompt_tokens` includes the cached subset. Cache reads become
+/// `prompt_tokens_details.cached_tokens`; cache writes stay part of the
+/// non-cached input because they were fresh input processing, not a cache hit.
+/// Only reported fields appear; nothing is invented (`chat2api/chat2api.py:3420-3447`).
+pub fn anthropic_usage_fields(
+    usage: Option<&Value>,
+    input_side: bool,
+    output_side: bool,
+) -> NormalizedUsage {
+    let Some(Value::Object(usage)) = usage else {
+        return NormalizedUsage::default();
+    };
+    let mut fields = NormalizedUsage::default();
+    if input_side {
+        let input_tokens = reported_tokens(usage.get("input_tokens"));
+        let cache_read = reported_tokens(usage.get("cache_read_input_tokens"));
+        let cache_write = reported_tokens(usage.get("cache_creation_input_tokens"));
+        if input_tokens.is_some() || cache_read.is_some() || cache_write.is_some() {
+            fields.prompt_tokens = Some(
+                input_tokens.unwrap_or(0) + cache_read.unwrap_or(0) + cache_write.unwrap_or(0),
+            );
+        }
+        if cache_read.is_some() {
+            fields.cached_tokens = cache_read;
+        }
+    }
+    if output_side {
+        fields.completion_tokens = reported_tokens(usage.get("output_tokens"));
+    }
+    fields
+}
+
+/// Complete usage of a non-stream Anthropic message; `None` when absent.
+///
+/// A 200 body that is not an Anthropic message (or carries no usage block)
+/// yields `None`, so the row keeps the local estimate with explicit coverage
+/// instead of a fabricated zero (`chat2api/chat2api.py:3449-3458`).
+pub fn anthropic_message_usage(payload: &Value) -> Option<NormalizedUsage> {
+    if payload.get("type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    let fields = anthropic_usage_fields(payload.get("usage"), true, true);
+    if fields.is_empty() {
+        None
+    } else {
+        Some(fields)
+    }
+}
+
+/// Local output-token estimate from a non-stream Anthropic message body.
+///
+/// Only text blocks are counted; an unreadable body yields 0, which keeps the
+/// row's coverage explicit (`chat2api/chat2api.py:3461-3475`).
+pub fn anthropic_output_estimate(payload: &Value) -> u64 {
+    let Some(content) = payload.get("content").and_then(Value::as_array) else {
+        return 0;
+    };
+    let text = content
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    if text.is_empty() {
+        0
+    } else {
+        estimate_tokens(&text)
+    }
 }
 
 /// Rough token estimate used by Python `_est_tokens`: CJK chars count as one
