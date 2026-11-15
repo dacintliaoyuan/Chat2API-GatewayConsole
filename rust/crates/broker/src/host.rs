@@ -196,7 +196,10 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
     pub fn start(&mut self, explicit: bool) -> BrokerResult {
         let deadline = self.now() + self.start_ready_timeout;
         if self.host.start_host(explicit) != Some(true) {
-            return BrokerResult::err(ResultCode::Unconfirmed, "start did not confirm the host task");
+            return BrokerResult::err(
+                ResultCode::Unconfirmed,
+                "start did not confirm the host task",
+            );
         }
         if self.now() >= deadline {
             return BrokerResult::err(
@@ -215,7 +218,10 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
             running = self.host.verify_running();
         }
         if running != Some(true) {
-            return BrokerResult::err(ResultCode::Unconfirmed, "start did not verify a running host");
+            return BrokerResult::err(
+                ResultCode::Unconfirmed,
+                "start did not verify a running host",
+            );
         }
         if self.now() >= deadline {
             return BrokerResult::err(
@@ -239,10 +245,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         let instance_id = self.instances.current();
         let deadline = self.now() + self.drain_timeout;
         if let Some(instance_id) = instance_id.as_deref() {
-            match self
-                .channel
-                .call("drain", &json!({}), instance_id)
-            {
+            match self.channel.call("drain", &json!({}), instance_id) {
                 Ok(response) if response.get("ok") == Some(&Value::Bool(true)) => {}
                 _ => notification_failed = true,
             }
@@ -313,10 +316,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         let instance_id = self.instances.current();
         let stop_deadline = self.now() + self.stop_timeout;
         if let Some(instance_id) = instance_id.as_deref() {
-            match self
-                .channel
-                .call("emergency", &json!({}), instance_id)
-            {
+            match self.channel.call("emergency", &json!({}), instance_id) {
                 Ok(response) => {
                     if response.get("ok") != Some(&Value::Bool(true)) {
                         notification_failed = true;
@@ -358,11 +358,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
     }
 
     /// Pause acceptance with ONE lease bound to the CURRENT instance/round.
-    pub fn maintenance_begin(
-        &mut self,
-        component: &str,
-        lease_s: i64,
-    ) -> BrokerResult {
+    pub fn maintenance_begin(&mut self, component: &str, lease_s: i64) -> BrokerResult {
         if self.leases.current().is_some() {
             return BrokerResult::err(ResultCode::Blocked, "maintenance lease already in force");
         }
@@ -370,10 +366,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         let Some(current) = current else {
             return BrokerResult::err(ResultCode::Unconfirmed, "no registered instance");
         };
-        let status = match self
-            .channel
-            .call("instance-status", &json!({}), &current)
-        {
+        let status = match self.channel.call("instance-status", &json!({}), &current) {
             Ok(response) if response.get("ok") == Some(&Value::Bool(true)) => {
                 response.get("result").cloned().unwrap_or_else(|| json!({}))
             }
@@ -400,10 +393,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         let active = status.get("active_count").and_then(Value::as_i64);
         match self.channel.call("drain", &json!({}), &current) {
             Ok(response) if response.get("ok") == Some(&Value::Bool(true)) => {
-                let drain_result = response
-                    .get("result")
-                    .cloned()
-                    .unwrap_or_else(|| json!({}));
+                let drain_result = response.get("result").cloned().unwrap_or_else(|| json!({}));
                 if drain_result.get("state").and_then(Value::as_str) != Some("draining") {
                     return BrokerResult::err(
                         ResultCode::Unconfirmed,
@@ -466,11 +456,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
     }
 
     /// Resume acceptance for the CURRENT lease.
-    pub fn maintenance_end(
-        &mut self,
-        component: &str,
-        lease_id: &str,
-    ) -> BrokerResult {
+    pub fn maintenance_end(&mut self, component: &str, lease_id: &str) -> BrokerResult {
         let Some(lease) = self.leases.current().cloned() else {
             return BrokerResult::err(ResultCode::Unconfirmed, "no maintenance lease in force");
         };
@@ -482,10 +468,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         }
         let (current, version) = self.instances.snapshot();
         if current.as_deref() != Some(lease.instance_id.as_str()) || version != lease.round {
-            return BrokerResult::err(
-                ResultCode::InstanceMismatch,
-                "instance or round changed",
-            );
+            return BrokerResult::err(ResultCode::InstanceMismatch, "instance or round changed");
         }
         let current = current.unwrap();
         match self.channel.call("resume", &json!({}), &current) {
@@ -655,7 +638,11 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
                     .as_ref()
                     .and_then(|verdict| verdict.get("query_error"))
                     .and_then(Value::as_str)
-                    .unwrap_or(if verdict.is_some() { "ok" } else { "watchdog_capability_missing" })
+                    .unwrap_or(if verdict.is_some() {
+                        "ok"
+                    } else {
+                        "watchdog_capability_missing"
+                    })
                     .to_string();
                 (verdict, detail)
             }
@@ -707,16 +694,10 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
     /// `host-stop`: stop then verify closure, never only the stop's return.
     pub fn host_stop(&mut self) -> BrokerResult {
         if self.host.stop_host() != Some(true) {
-            return BrokerResult::err(
-                ResultCode::Unconfirmed,
-                "host stop did not confirm success",
-            );
+            return BrokerResult::err(ResultCode::Unconfirmed, "host stop did not confirm success");
         }
         if self.host.verify_closed() != Some(true) {
-            return BrokerResult::err(
-                ResultCode::Unconfirmed,
-                "host stop did not verify closure",
-            );
+            return BrokerResult::err(ResultCode::Unconfirmed, "host stop did not verify closure");
         }
         BrokerResult::ok(json!({"host_stopped": true}))
     }
@@ -724,10 +705,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
     /// `host-repair-limits`: a missing helper is `capability_missing`.
     pub fn host_repair_limits(&mut self) -> BrokerResult {
         let Some(result) = self.host.repair_limits() else {
-            return BrokerResult::err(
-                ResultCode::CapabilityMissing,
-                "repair helper unavailable",
-            );
+            return BrokerResult::err(ResultCode::CapabilityMissing, "repair helper unavailable");
         };
         if result.get("repaired") != Some(&Value::Bool(true)) {
             let code = result
@@ -799,11 +777,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
                 self.record_maintenance_outcome("maintenance-end", false, &code);
             }
             Err(_) => {
-                self.record_maintenance_outcome(
-                    "maintenance-end",
-                    false,
-                    "unconfirmed",
-                );
+                self.record_maintenance_outcome("maintenance-end", false, "unconfirmed");
             }
         }
     }
@@ -814,7 +788,14 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         }
         let state = record.get("state").and_then(Value::as_str);
         if state == Some("leased") {
-            if let (Some(component), Some(lease_id), Some(instance_id), Some(round), Some(created_at), Some(expires_at)) = (
+            if let (
+                Some(component),
+                Some(lease_id),
+                Some(instance_id),
+                Some(round),
+                Some(created_at),
+                Some(expires_at),
+            ) = (
                 record.get("component").and_then(Value::as_str),
                 record.get("lease_id").and_then(Value::as_str),
                 record.get("instance_id").and_then(Value::as_str),

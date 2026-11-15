@@ -46,8 +46,18 @@ impl FakeHost {
         Self {
             config: config.clone(),
             calls,
-            running: RefCell::new(config.get("running").and_then(Value::as_bool).unwrap_or(true)),
-            closed: RefCell::new(config.get("closed").and_then(Value::as_bool).unwrap_or(true)),
+            running: RefCell::new(
+                config
+                    .get("running")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+            ),
+            closed: RefCell::new(
+                config
+                    .get("closed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+            ),
             sequence: RefCell::new(
                 config
                     .get("running_sequence")
@@ -148,12 +158,7 @@ struct FakeChannel {
 }
 
 impl InstanceChannel for FakeChannel {
-    fn call(
-        &mut self,
-        action: &str,
-        fields: &Value,
-        instance_id: &str,
-    ) -> Result<Value, String> {
+    fn call(&mut self, action: &str, fields: &Value, instance_id: &str) -> Result<Value, String> {
         self.calls.borrow_mut().push(json!({
             "instance_call": {
                 "action": action,
@@ -207,7 +212,10 @@ fn the_bounded_lifecycle_matches_python() {
         .with_leases(leases);
         let result = match action {
             "start" => coordinator.start(
-                config.get("explicit").and_then(Value::as_bool).unwrap_or(false),
+                config
+                    .get("explicit")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             ),
             "drain" => coordinator.drain(),
             "emergency" => coordinator.emergency_stop(),
@@ -223,7 +231,10 @@ fn the_bounded_lifecycle_matches_python() {
             "maintenance-status" => coordinator.maintenance_status(),
             "gateway-restart" => coordinator.gateway_restart(
                 "share_gateway",
-                config.get("budget_s").and_then(Value::as_i64).unwrap_or(120),
+                config
+                    .get("budget_s")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(120),
             ),
             other => panic!("unexpected action {other}"),
         };

@@ -496,7 +496,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "um-contract",
- "um-store",
 ]
 
 [[package]]
@@ -505,6 +504,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
