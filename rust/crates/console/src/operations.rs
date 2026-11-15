@@ -135,7 +135,7 @@ fn table_names(connection: &Connection) -> Result<Vec<String>, ConsoleError> {
     Ok(tables)
 }
 
-fn operation_view(row: &Row<'_>) -> rusqlite::Result<Value> {
+pub(crate) fn operation_view(row: &Row<'_>) -> rusqlite::Result<Value> {
     let load = |column: &str| -> Option<Value> {
         let raw: String = row.get::<_, Option<String>>(column).ok()??;
         serde_json::from_str(&raw).ok()

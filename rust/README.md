@@ -1,4 +1,4 @@
-# Rust workspace（S0 骨架 + S1a/S1b/S2a 候选网关 + S3a broker 控制通道 + S3b store/发布/启动身份 + S5a 候选 8002 只读核心 + S5b 分享/用量/日志/display 读面 + S8 只读 ops parity）
+# Rust workspace（S0 骨架 + S1a/S1b/S2a 候选网关 + S3a broker 控制通道 + S3b store/发布/启动身份 + S5a 候选 8002 只读核心 + S5b 分享/用量/日志/display 读面 + S6a 8002 写面 + S8 只读 ops parity）
 
 本目录是 Rust 重写的 workspace 根。S0 建立工程骨架、HTTP 测试 harness 与
 临时数据目录；S1a 增加候选网关 crate（8003 只读面、分享 Key 门与请求拒绝），
@@ -10,7 +10,9 @@ S3b 增加 share store（SQLite schema 3、Key 生命周期、安全日志）、
 S5a 增加候选 8002 控制台 crate（六个只读核心端点、云端 summary、
 `capability_not_assembled` 门与只读 SQLite 读面）；S5b 增加分享状态/Key 明文读回、
 `share-usage` 汇总与逐请求页、cloud-ops、display-session/state 与旧 `/api/share/*`
-只读面（会话/控制令牌）；S8 增加 `um-ops`
+只读面（会话/控制令牌）；S6a 增加 operations 写面、分享 Key 写面与 `settings`（同一
+`console-state.sqlite3` schema 1 与 `share-store.db` schema 3，撤销方向 fail closed）；
+S8 增加 `um-ops`
 只读 parity crate（账本读面、Cloudflare ingress、公网 DNS/TLS 状态机与
 部署装配检查）。备份/恢复、公网探测、更新/回滚仍由 Python/bash 工具执行，
 `um-ops` 只转发它们的 CLI/JSON、归档与退出码。
@@ -23,7 +25,7 @@ rust/
 ├── Cargo.toml                 workspace 根
 └── crates/
     ├── broker/                S3a 控制通道 + S3b publish/host 生命周期
-    ├── console/               S5a/S5b 候选 8002：只读核心、分享/用量/日志/display 读面
+    ├── console/               S5a/S5b/S6a 候选 8002：只读核心、读面、operations/Key 写面
     ├── contract/              只读契约夹具的类型与加载器 + canonical JSON
     ├── store/                 S3b share store、Key 生命周期与投影 writer
     ├── gateway/               S1a/S1b/S2a 候选网关：只读面、Key 门、Chat/Messages 转发、SSE、账本
@@ -55,7 +57,8 @@ Rust 测试只反序列化夹具，不用自己的序列化器生成期望值。
 [docs/rust-s3a-acceptance.md](../docs/rust-s3a-acceptance.md)、
 [docs/rust-s3b-acceptance.md](../docs/rust-s3b-acceptance.md) 与
 [docs/rust-s5a-acceptance.md](../docs/rust-s5a-acceptance.md)、
-[docs/rust-s5b-acceptance.md](../docs/rust-s5b-acceptance.md) 与
+[docs/rust-s5b-acceptance.md](../docs/rust-s5b-acceptance.md)、
+[docs/rust-s6a-acceptance.md](../docs/rust-s6a-acceptance.md) 与
 [docs/rust-s8-acceptance.md](../docs/rust-s8-acceptance.md)。
 
 ## 命令
@@ -75,6 +78,7 @@ bash scripts/check-rust-s2a.sh
 bash scripts/check-rust-s3b.sh
 bash scripts/check-rust-s5a.sh
 bash scripts/check-rust-s5b.sh
+bash scripts/check-rust-s6a.sh
 bash scripts/check-rust-s8.sh
 ```
 
@@ -108,6 +112,9 @@ aarch64-linux-android --tests` 只做 `cfg(unix)` 代码的类型检查；AF_UNI
   日志，也不启动 broker、8003 或 display relay。S5b 的 `share-store.db` 只以
   `SQLITE_OPEN_READ_ONLY` 打开，缺失时不创建；`/api/share/*` 读面要求会话或
   控制令牌，写面留给 S6。
+- `um-console` 的写面只打开调用方给定的 `console-state.sqlite3` schema 1 与
+  `share-store.db` schema 3；动作执行与 broker 发布都是注入缝，未接线时诚实失败，
+  不启动 8003、不创建第二套库、不迁移数据。撤销方向未确认发布即 503。
 - `um-ops` 只读账本、Cloudflare 配置、注入的公网 DNS/TLS 事实与部署
   unit/env 文本；不写账本、不改 tunnel、不创建备份。`backup`/`restore`、
   `cloudflare probe`、`deploy assembly`、`deploy update`/`rollback` 只转发

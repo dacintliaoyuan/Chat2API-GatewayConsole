@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod write;
+
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
@@ -86,6 +88,13 @@ impl Console {
 impl Drop for Console {
     fn drop(&mut self) {
         self.server.shutdown();
+    }
+}
+
+impl Console {
+    pub fn from_server(server: um_console::ServerHandle) -> Self {
+        let addr = server.addr();
+        Console { server, addr }
     }
 }
 

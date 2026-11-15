@@ -27,10 +27,14 @@ use crate::config::{ConfigError, ConsoleConfig, Role};
 use crate::display::{display_session, display_state};
 use crate::error::ConsoleError;
 use crate::metering::{self, UsageFilters};
+use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActionExecutor};
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
-use crate::share_auth::{management_auth, SessionState};
+use crate::share_auth::{control_token_ok, management_auth, SessionState};
 use crate::share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
+use crate::share_write::{
+    console_public_row, ShareWriteError, ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams,
+};
 use crate::summary::SummaryCache;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -54,8 +58,10 @@ pub struct AppState {
     pub runtime: Arc<dyn RuntimeFacts>,
     pub summary: SummaryCache,
     pub operations: OperationsReader,
+    pub operation_manager: OperationManagerSlot,
     pub share: ShareReadStore,
     pub share_seams: Arc<dyn ShareReadSeams>,
+    pub share_write: ShareWriteStore,
     pub session: SessionState,
     services_cache: Mutex<Option<(Value, Instant)>>,
 }
@@ -86,15 +92,42 @@ impl ConsoleServer {
         runtime: Arc<dyn RuntimeFacts>,
         share_seams: Arc<dyn ShareReadSeams>,
     ) -> Result<ServerHandle, ServerError> {
+        Self::start_with_wiring(
+            config,
+            runtime,
+            share_seams,
+            Arc::new(UnwiredActionExecutor),
+            Arc::new(UnwiredWriteSeams),
+        )
+    }
+
+    pub fn start_with_wiring(
+        config: ConsoleConfig,
+        runtime: Arc<dyn RuntimeFacts>,
+        share_seams: Arc<dyn ShareReadSeams>,
+        executor: Arc<dyn crate::operation_manager::ActionExecutor>,
+        write_seams: Arc<dyn ShareWriteSeams>,
+    ) -> Result<ServerHandle, ServerError> {
         config.validate_candidate().map_err(ServerError::Config)?;
+        let operation_manager = OperationManagerSlot::new(
+            config.console_state_file.clone(),
+            config.console_lock_dir.clone(),
+            executor,
+        );
         let state = Arc::new(AppState {
             operations: OperationsReader::new(config.console_state_file.clone()),
+            operation_manager,
             share: ShareReadStore::with_options(
                 config.share_store_file.clone().unwrap_or_default(),
                 config.public_origin.clone(),
                 config.share_secret_key_file.clone(),
             ),
             share_seams,
+            share_write: ShareWriteStore::from_config(
+                config.share_store_file.clone(),
+                config.share_secret_key_file.clone(),
+                write_seams,
+            ),
             session: SessionState::new(),
             config: config.clone(),
             runtime,
@@ -169,6 +202,7 @@ impl Drop for ServerHandle {
 #[derive(Debug)]
 pub enum ServerError {
     Config(ConfigError),
+    Console(String),
     Io(std::io::Error),
 }
 
@@ -176,6 +210,7 @@ impl std::fmt::Display for ServerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Config(error) => write!(formatter, "{error}"),
+            Self::Console(error) => write!(formatter, "{error}"),
             Self::Io(error) => write!(formatter, "{error}"),
         }
     }
@@ -258,6 +293,9 @@ fn dispatch(state: &AppState, request: &Request) -> Response {
     }
     match method {
         "GET" => handle_console_get(state, &rest, &target),
+        "POST" | "PATCH" | "DELETE" if rest.first() == Some(&"share-management") => {
+            handle_share_management_write(state, method, &rest[1..], request)
+        }
         "POST" | "PATCH" | "DELETE" => handle_console_write(state, method, &rest, request),
         _ => ConsoleError::unknown_path().response(),
     }
@@ -368,6 +406,299 @@ fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Resp
     }
 }
 
+fn handle_share_management_write(
+    state: &AppState,
+    method: &str,
+    rest: &[&str],
+    request: &Request,
+) -> Response {
+    let token_ok = control_token_ok(
+        state.config.control_token_file.as_deref(),
+        request.headers.get("X-Admin-Control"),
+    );
+    if !token_ok && request.headers.get("X-Requested-With") != Some("XMLHttpRequest") {
+        let mut response = ConsoleError::new(
+            403,
+            json!({"error": "same-origin marker or control token required"}),
+        )
+        .response();
+        response.close = true;
+        return response;
+    }
+    let body = match read_console_body(request) {
+        Ok(body) => body,
+        Err(error) => return error.response(),
+    };
+    let writer = &state.share_write;
+    match (method, rest) {
+        ("POST", ["keys"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["name", "idempotency_key", "max_concurrency"])
+            {
+                return error.response();
+            }
+            let name = match body.get("name") {
+                Some(Value::String(name)) if (1..=64).contains(&name.chars().count()) => {
+                    name.clone()
+                }
+                _ => return ConsoleError::body_open(400, "invalid name").response(),
+            };
+            let idempotency_key = match body.get("idempotency_key") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(key)) if (1..=128).contains(&key.chars().count()) => {
+                    Some(key.as_str())
+                }
+                _ => {
+                    return ConsoleError::body_open(400, "invalid idempotency_key").response();
+                }
+            };
+            let max_concurrency = match body.get("max_concurrency") {
+                None | Some(Value::Null) => None,
+                Some(Value::Number(number)) => match number.as_i64() {
+                    Some(value) if (1..=48).contains(&value) => Some(value),
+                    _ => {
+                        return ConsoleError::body_open(
+                            400,
+                            "max_concurrency must be an integer in 1..48",
+                        )
+                        .response();
+                    }
+                },
+                _ => {
+                    return ConsoleError::body_open(
+                        400,
+                        "max_concurrency must be an integer in 1..48",
+                    )
+                    .response();
+                }
+            };
+            match writer.create_key(&name, max_concurrency, idempotency_key) {
+                Ok(payload) => send_json(
+                    201,
+                    &json!({
+                        "key": payload["key"].clone(),
+                        "plaintext": payload["plaintext"],
+                    }),
+                ),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("PATCH", ["settings"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["share_max_concurrency", "expected_share_max"])
+            {
+                return error.response();
+            }
+            let share_max = match body.get("share_max_concurrency") {
+                Some(Value::Number(number)) => match number.as_i64() {
+                    Some(value) if (1..=64).contains(&value) => value,
+                    _ => {
+                        return ConsoleError::body_open(
+                            400,
+                            "share_max_concurrency must be an integer in 1..64",
+                        )
+                        .response();
+                    }
+                },
+                _ => {
+                    return ConsoleError::body_open(
+                        400,
+                        "share_max_concurrency must be an integer in 1..64",
+                    )
+                    .response();
+                }
+            };
+            let expected = match body.get("expected_share_max") {
+                None | Some(Value::Null) => None,
+                Some(Value::Number(number)) => match number.as_i64() {
+                    Some(value) => Some(value),
+                    None => {
+                        return ConsoleError::body_open(
+                            400,
+                            "expected_share_max must be an integer",
+                        )
+                        .response();
+                    }
+                },
+                _ => {
+                    return ConsoleError::body_open(400, "expected_share_max must be an integer")
+                        .response();
+                }
+            };
+            match writer.set_share_limits(share_max, expected) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("PATCH", ["keys", key_id]) => {
+            if body.contains_key("enabled") {
+                return ConsoleError::body_open(400, "enabled_not_writable").response();
+            }
+            if let Err(error) =
+                reject_unknown_fields(&body, &["name", "max_concurrency", "expected_row_version"])
+            {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let name = match body.get("name") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(name)) if (1..=64).contains(&name.chars().count()) => {
+                    Some(name.as_str())
+                }
+                _ => return ConsoleError::body_open(400, "invalid name").response(),
+            };
+            let max_concurrency = match body.get("max_concurrency") {
+                None | Some(Value::Null) => None,
+                Some(Value::Number(number)) => match number.as_i64() {
+                    Some(value) if (1..=48).contains(&value) => Some(value),
+                    _ => {
+                        return ConsoleError::body_open(
+                            400,
+                            "max_concurrency must be an integer in 1..48",
+                        )
+                        .response();
+                    }
+                },
+                _ => {
+                    return ConsoleError::body_open(
+                        400,
+                        "max_concurrency must be an integer in 1..48",
+                    )
+                    .response();
+                }
+            };
+            let expected = match body.get("expected_row_version") {
+                Some(Value::Number(number)) => number.as_i64().filter(|value| *value >= 1),
+                _ => None,
+            };
+            let Some(expected) = expected else {
+                return ConsoleError::body_open(400, "expected_row_version required").response();
+            };
+            match writer.update_key(key_id, name, max_concurrency, expected) {
+                Ok(payload) => send_json(200, &json!({"key": console_public_row(&payload)})),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("DELETE", ["keys", key_id]) => {
+            if let Err(error) = reject_unknown_fields(&body, &["expected_row_version"]) {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let expected = match body.get("expected_row_version") {
+                Some(Value::Number(number)) => number.as_i64().filter(|value| *value >= 1),
+                _ => None,
+            };
+            let Some(expected) = expected else {
+                return ConsoleError::body_open(400, "expected_row_version required").response();
+            };
+            match writer.delete_key(key_id, expected) {
+                Ok(payload) => send_json(
+                    200,
+                    &json!({
+                        "ok": true,
+                        "deleted": key_id,
+                        "deleted_at": payload.get("deleted_at").cloned().unwrap_or(Value::Null),
+                    }),
+                ),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("POST", ["keys", key_id, "rotate"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["idempotency_key", "expected_row_version"])
+            {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let idempotency_key = match body.get("idempotency_key") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(key)) if (1..=128).contains(&key.chars().count()) => {
+                    Some(key.as_str())
+                }
+                _ => {
+                    return ConsoleError::body_open(400, "invalid idempotency_key").response();
+                }
+            };
+            let expected = match body.get("expected_row_version") {
+                Some(Value::Number(number)) => number.as_i64().filter(|value| *value >= 1),
+                _ => None,
+            };
+            let Some(expected) = expected else {
+                return ConsoleError::body_open(400, "expected_row_version required").response();
+            };
+            match writer.rotate_key(key_id, idempotency_key, expected) {
+                Ok(payload) => send_json(
+                    200,
+                    &json!({
+                        "key": payload["key"].clone(),
+                        "plaintext": payload["plaintext"],
+                    }),
+                ),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("POST", ["keys", key_id, "revoke-and-terminate"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["idempotency_key", "expected_row_version"])
+            {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let idempotency_key = match body.get("idempotency_key") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(key)) if (1..=128).contains(&key.chars().count()) => {
+                    Some(key.as_str())
+                }
+                _ => {
+                    return ConsoleError::body_open(400, "invalid idempotency_key").response();
+                }
+            };
+            let expected = match body.get("expected_row_version") {
+                Some(Value::Number(number)) => number.as_i64().filter(|value| *value >= 1),
+                _ => None,
+            };
+            let Some(expected) = expected else {
+                return ConsoleError::body_open(
+                    400,
+                    "expected_row_version must be a positive integer",
+                )
+                .response();
+            };
+            match writer.revoke_and_terminate_key(key_id, expected, idempotency_key) {
+                Ok(payload) => send_json(
+                    200,
+                    &json!({
+                        "key": console_public_row(&payload["key"]),
+                        "revoked": true,
+                        "terminated": payload["terminated"],
+                        "released": payload["released"],
+                        "aborted": payload["aborted"],
+                        "upstream_closed": payload["upstream_closed"],
+                        "note": payload["note"],
+                    }),
+                ),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        _ => ConsoleError::unknown_path().response(),
+    }
+}
+
+fn share_write_error(error: &ShareWriteError) -> Response {
+    let mut response =
+        ConsoleError::new(error.status(), json!({"error": error.message})).response();
+    response.close = true;
+    response
+}
+
 fn handle_console_write(
     state: &AppState,
     method: &str,
@@ -384,12 +715,120 @@ fn handle_console_write(
         {
             return error.response();
         }
-        // S6 owns operation submission; S5a only owns the read face and
-        // its request boundary.
-        return ConsoleError::not_implemented("operations_submit_s6").response();
+        let manager = match state.operation_manager.get() {
+            Ok(manager) => manager,
+            Err(error) => return error.response(),
+        };
+        let action = match body.get("action").and_then(Value::as_str) {
+            Some(action) if (1..=64).contains(&action.chars().count()) => action.to_string(),
+            _ => return ConsoleError::body_open(400, "invalid action").response(),
+        };
+        let target = match body.get("target") {
+            None | Some(Value::Null) => String::new(),
+            Some(Value::String(target)) if target.chars().count() <= 64 => target.clone(),
+            _ => return ConsoleError::body_open(400, "invalid target").response(),
+        };
+        let idempotency_key = match body.get("idempotency_key") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(key)) if (1..=128).contains(&key.chars().count()) => {
+                Some(key.as_str())
+            }
+            _ => {
+                return ConsoleError::body_open(400, "invalid idempotency_key").response();
+            }
+        };
+        let params = match body.get("params") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(params)) => Some(params),
+            _ => return ConsoleError::body_open(400, "invalid_params").response(),
+        };
+        match manager.submit(&action, &target, params, idempotency_key) {
+            Ok((deduplicated, operation)) => send_json(
+                if deduplicated { 200 } else { 201 },
+                &json!({"operation": operation}),
+            ),
+            Err(error) => operation_error_response(&error),
+        }
+    } else if method == "POST" && rest.len() == 3 && rest[0] == "operations" && rest[2] == "cancel"
+    {
+        let manager = match state.operation_manager.get() {
+            Ok(manager) => manager,
+            Err(error) => return error.response(),
+        };
+        if rest[1].is_empty() || rest[1].chars().count() > 64 {
+            return ConsoleError::body_open(400, "invalid operation id").response();
+        }
+        match manager.cancel(rest[1]) {
+            Ok(operation) => send_json(200, &json!({"requested": true, "operation": operation})),
+            Err(error) => operation_error_response(&error),
+        }
+    } else {
+        ConsoleError::unknown_path().response()
     }
-    let _ = state;
-    ConsoleError::unknown_path().response()
+}
+
+/// `usagesrv.py::_console_error_status` + `_console_error_detail`.
+fn operation_error_response(error: &OperationError) -> Response {
+    let status = match error.code.as_str() {
+        "invalid_action" => 404,
+        "action_disabled" => 403,
+        "invalid_params" | "invalid_target" | "invalid_idempotency_key" | "invalid_resource" => 400,
+        "idempotency_key_conflict" => 409,
+        "operation_not_found" => 404,
+        "operation_already_finished" => 409,
+        _ => 500,
+    };
+    let code = if status == 500 {
+        "console_error".to_string()
+    } else {
+        error.code.clone()
+    };
+    let mut payload = json!({"error": code});
+    if let Some(reason) = &error.reason {
+        payload["reason"] = json!(reason);
+    }
+    if matches!(
+        error.code.as_str(),
+        "invalid_params" | "invalid_target" | "invalid_idempotency_key" | "invalid_resource"
+    ) {
+        if let Some(detail) = safe_detail(&error.message) {
+            payload["detail"] = json!(detail);
+        }
+    }
+    ConsoleError::new(status, payload).response()
+}
+
+/// The Python `_console_error_detail` shape check: single line, no path
+/// separators/drive letters/long token that could be a secret or internal id.
+fn safe_detail(message: &str) -> Option<String> {
+    let text = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    if text.contains('/') || text.contains('\\') {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let mut run = 0usize;
+    for index in 0..bytes.len() {
+        let byte = bytes[index];
+        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.' || byte == b'-' {
+            run += 1;
+            if run >= 24 {
+                return None;
+            }
+        } else {
+            run = 0;
+        }
+        if index + 1 < bytes.len()
+            && byte.is_ascii_alphabetic()
+            && bytes[index + 1] == b':'
+            && (index == 0 || !bytes[index - 1].is_ascii_alphanumeric())
+        {
+            return None;
+        }
+    }
+    Some(text.chars().take(200).collect())
 }
 
 fn services_response(state: &AppState) -> Response {

@@ -307,7 +307,7 @@ impl ShareStore {
         revoking: bool,
         action_kind: &str,
         key_id: Option<&str>,
-    ) -> Result<(), StoreError> {
+    ) -> Result<String, StoreError> {
         let generation = self.generation()?;
         let target = generation
             .get("config_generation")
@@ -325,7 +325,19 @@ impl ShareStore {
             "INSERT INTO ops(id,kind,idempotency_key,status,payload,created_at) VALUES(?,'publish',NULL,'pending',?,?)",
             params![operation_id, payload.to_string(), created_at],
         )?;
-        Ok(())
+        Ok(operation_id)
+    }
+
+    /// Record a publish intent for the CURRENT generation (the Python
+    /// `_publish` fallback when no mutation intent is pending, e.g. a direct
+    /// or replayed call).
+    pub fn record_publish_intent_for_current(
+        &mut self,
+        revoking: bool,
+        action_kind: &str,
+        key_id: Option<&str>,
+    ) -> Result<String, StoreError> {
+        self.record_publish_intent(revoking, action_kind, key_id)
     }
 
     fn record_operation(
