@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::fs;
+use std::process::Command;
 
 use serde_json::{json, Value};
 use um_ops::ingress::check_ingress;
@@ -306,4 +307,40 @@ fn the_public_check_matches_python_with_injected_dns_and_tls() {
             assert_eq!(*transport.calls.borrow(), 0);
         }
     }
+}
+
+#[test]
+fn the_public_probe_is_forwarded_to_the_python_worker() {
+    let temp = temp();
+    let script = temp.path().join("fake_public_probe.py");
+    fs::write(
+        &script,
+        "import json, sys\n\
+print(json.dumps({'forwarded': sys.argv[1:]}, sort_keys=True))\n\
+sys.exit(2)\n",
+    )
+    .expect("fake probe");
+    let output = Command::new(env!("CARGO_BIN_EXE_um-ops"))
+        .args([
+            "--python",
+            "python",
+            "--public-probe",
+            script.to_str().expect("script"),
+            "cloudflare",
+            "probe",
+            "--public-url",
+            "https://fixture.tail-test.ts.net",
+            "--deadline-s",
+            "15",
+        ])
+        .output()
+        .expect("probe");
+    assert_eq!(output.status.code(), Some(2));
+    let body: Value = serde_json::from_slice(&output.stdout).expect("probe json");
+    let forwarded = body["forwarded"].as_array().expect("forwarded");
+    assert_eq!(forwarded[0], "--check-connection");
+    assert!(forwarded
+        .iter()
+        .any(|value| value == "https://fixture.tail-test.ts.net"));
+    assert!(forwarded.iter().any(|value| value == "--deadline-s"));
 }
