@@ -181,6 +181,42 @@ class DeploymentRoleTests(unittest.TestCase):
                          "qoderglobal.status", "m365.settings_save"):
             self.assertNotIn(retired, names)
 
+    def test_local_assembly_ignores_a_stale_share_management_config(self):
+        # The retired local share chain (#33) left a schema 1 config behind.
+        # The local console has no share actions, so it must not read that
+        # cloud share deployment config and must still assemble.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "share-management.json"
+            config.write_text(json.dumps({
+                "schema_version": 1,
+                "enabled": True,
+                "control_key_file": str(root / "retired-key"),
+            }), encoding="utf-8")
+            saved_manager = usagesrv._console_manager
+            saved_share_manager = usagesrv._share_manager
+            try:
+                usagesrv._console_manager = None
+                usagesrv._share_manager = None
+                with mock.patch.object(
+                        usagesrv, "SHARE_MANAGEMENT_CONFIG_FILE",
+                        str(config)), mock.patch.object(
+                            usagesrv, "CONSOLE_STATE_FILE",
+                            str(root / "console.sqlite3")), \
+                        mock.patch.object(
+                            usagesrv, "CONSOLE_LOCK_DIR",
+                            str(root / "console-locks")):
+                    manager = usagesrv.get_console_manager()
+                    self.assertIsNotNone(manager)
+                    names = {spec.name
+                             for spec in console_adapters.build_registry()}
+                    self.assertIn("account.um_status", names)
+                    self.assertNotIn("share.start", names)
+                    manager.close()
+            finally:
+                usagesrv._console_manager = saved_manager
+                usagesrv._share_manager = saved_share_manager
+
     def test_explicit_cloud_role_and_strict_port(self):
         self.assertEqual(
             usagesrv._resolve_deployment_role({"UM_SHARE_ROLE": "cloud"}),

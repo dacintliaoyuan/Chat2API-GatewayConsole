@@ -791,16 +791,22 @@ def get_console_manager():
         if _console_manager is None:
             console_adapters = importlib.import_module("console.adapters")
             console_operations = importlib.import_module("console.operations")
-            console_share_production = importlib.import_module(
-                "console.share_production")
-            # E19-1-06/04B: the share broker construction loader is wired
-            # explicitly BEFORE the seams are assembled; console_share_production
-            # never imports this host module. The cloud root passes a broker
-            # object directly instead (production_seams(broker=...)).
-            console_share_production.configure_broker_loader(
-                _load_share_management_deployment)
-            console_adapters.wire_share_production_seams(
-                keys_manager=get_share_manager(), cloud=CLOUD_ROLE)
+            # Local role (B0): the retired local share chain (#33) has no share
+            # actions, so the local console must not read the cloud share
+            # management config. A stale data/share-management.json (schema 1)
+            # is a retired-local artifact and must not break local assembly.
+            if CLOUD_ROLE:
+                console_share_production = importlib.import_module(
+                    "console.share_production")
+                # E19-1-06/04B: the share broker construction loader is
+                # wired explicitly BEFORE the seams are assembled;
+                # console_share_production never imports this host module. The
+                # cloud root passes a broker object directly instead
+                # (production_seams(broker=...)).
+                console_share_production.configure_broker_loader(
+                    _load_share_management_deployment)
+                console_adapters.wire_share_production_seams(
+                    keys_manager=get_share_manager(), cloud=CLOUD_ROLE)
             _console_manager = console_operations.OperationManager(
                 db_path=CONSOLE_STATE_FILE,
                 registry=console_adapters.build_registry(cloud=CLOUD_ROLE),
