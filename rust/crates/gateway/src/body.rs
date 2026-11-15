@@ -74,6 +74,7 @@ fn share_body(
         BodyRead::InvalidLength => Err(GatewayError::invalid_request(
             "Invalid Content-Length header",
         )),
+        BodyRead::NegativeLength => Err(GatewayError::payload_too_large()),
         BodyRead::TooLarge(length) if *length > max_request_bytes => {
             Err(GatewayError::payload_too_large())
         }
@@ -117,7 +118,7 @@ fn console_body(
         None => 0,
     };
     if length < 0 {
-        return Err(GatewayError::console_body(400, "invalid_content_length"));
+        return Err(GatewayError::console_body(413, "request_too_large"));
     }
     if length as u64 > max_request_bytes {
         return Err(GatewayError::console_body(413, "request_too_large"));
@@ -154,6 +155,9 @@ fn console_body(
         }
         BodyRead::InvalidLength => {
             Err(GatewayError::console_body(400, "invalid_content_length"))
+        }
+        BodyRead::NegativeLength => {
+            Err(GatewayError::console_body(413, "request_too_large"))
         }
         BodyRead::TooLarge(_) => {
             Err(GatewayError::console_body(413, "request_too_large"))

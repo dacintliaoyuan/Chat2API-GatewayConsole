@@ -226,6 +226,35 @@ fn console_body_cases_match_python() {
 }
 
 #[test]
+fn a_negative_content_length_is_payload_too_large_like_python() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let stub = StubUpstream::start();
+    let gateway = start_gateway(&stub, &temp, true);
+    let share = client_request(
+        gateway.addr,
+        &ClientRequest::post("/v1/chat/completions", "")
+            .bearer(SHARE_SECRET)
+            .header("Content-Length", "-1"),
+    )
+    .expect("negative share length");
+    assert_eq!(share.status, 413);
+    assert_eq!(share.json()["error"]["type"], json!("payload_too_large"));
+
+    let console = client_request(
+        gateway.addr,
+        &ClientRequest::post("/admin/share/revoke", "")
+            .header("X-Admin-Control", CONTROL_TOKEN)
+            .header("Content-Length", "-1"),
+    )
+    .expect("negative console length");
+    assert_eq!(console.status, 413);
+    assert_eq!(
+        console.json()["error"]["message"],
+        json!("request_too_large")
+    );
+}
+
+#[test]
 fn share_route_duplicate_content_type_is_not_a_share_key_error() {
     let temp = TempDir::new(unique_temp_prefix());
     let stub = StubUpstream::start();

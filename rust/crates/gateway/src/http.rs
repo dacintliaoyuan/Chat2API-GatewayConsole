@@ -72,6 +72,7 @@ impl Headers {
 pub enum BodyRead {
     Complete(Vec<u8>),
     InvalidLength,
+    NegativeLength,
     TooLarge(u64),
     Incomplete,
 }
@@ -201,7 +202,7 @@ pub fn read_request(stream: &mut TcpStream, peer_ip: std::net::IpAddr) -> io::Re
         None => BodyRead::Complete(Vec::new()),
         Some(value) => match value.parse::<i64>() {
             Err(_) => BodyRead::InvalidLength,
-            Ok(length) if length < 0 => BodyRead::InvalidLength,
+            Ok(length) if length < 0 => BodyRead::NegativeLength,
             Ok(length) if length as u64 > HARD_BODY_CAP => BodyRead::TooLarge(length as u64),
             Ok(length) => {
                 let length = length as usize;
