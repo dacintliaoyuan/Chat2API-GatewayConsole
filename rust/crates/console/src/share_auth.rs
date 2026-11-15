@@ -114,6 +114,13 @@ fn read_private_secret(path: &Path, max_bytes: u64) -> Result<Vec<u8>, std::io::
                 "control token must have mode 0600",
             ));
         }
+        // SAFETY: `geteuid` has no preconditions.
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "control token is not owned by the current uid",
+            ));
+        }
     }
     let raw = std::fs::read(path)?;
     if raw.len() as u64 > max_bytes {
