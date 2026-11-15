@@ -308,3 +308,35 @@ fn an_image_tool_result_uses_the_anthropic_messages_upstream() {
     );
     assert_eq!(seen[0].anthropic_version.as_deref(), Some("2023-06-01"));
 }
+
+#[test]
+fn an_empty_answer_keeps_a_zero_output_estimate() {
+    let temp = TempDir::new("um-rust-responses-empty-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Json {
+        status: 200,
+        body: json!({
+            "id": "chatcmpl-1",
+            "choices": [{"index": 0, "message": {"role": "assistant",
+                          "content": ""}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "total_tokens": 10},
+        }),
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.request_total = Duration::from_secs(5);
+    });
+    let response = client_request(
+        gateway.addr,
+        &request(&json!({"model": "responses-model", "input": "hi"})),
+    )
+    .expect("responses request");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json()["output"], json!([]));
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert_eq!(rows[0]["status"], json!("ok"));
+    assert_eq!(rows[0]["input_tokens"], json!(10));
+    assert_eq!(rows[0]["output_tokens"], json!(0));
+    assert_eq!(rows[0]["usage_source"], json!("partial"));
+}

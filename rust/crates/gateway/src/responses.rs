@@ -1225,7 +1225,7 @@ fn record_translated_usage(
     status: &str,
 ) {
     let output_chars = output_text_chars(translated);
-    let output_estimate = if status == "ok" {
+    let output_estimate = if status == "ok" && output_chars > 0 {
         (output_chars / 4).max(1)
     } else {
         output_chars / 4
@@ -1381,7 +1381,12 @@ fn forward_json(
                 GatewayError::new(502, "unexpected_upstream_response", "chat2api_error").response(),
             );
         };
-        record_translated_usage(context, &translated, Some(&translated["usage"]), "ok");
+        let ledger_usage = if via_messages {
+            translated.get("usage")
+        } else {
+            payload.get("usage")
+        };
+        record_translated_usage(context, &translated, ledger_usage, "ok");
         return ChatResult::Response(Response::json(200, &translated));
     }
 }
