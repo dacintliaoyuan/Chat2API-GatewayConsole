@@ -1371,13 +1371,11 @@
     },
     {
       "codes": [
-        "reauthentication_required",
-        "too_many_concurrent_streams"
+        "reauthentication_required"
       ],
-      "description": "需要交互登录；reader 槽满",
+      "description": "需要交互登录；`too_many_concurrent_streams` 已由 ADR 0004 标记 retired",
       "messages": [
-        "reauthentication_required",
-        "too_many_concurrent_streams"
+        "reauthentication_required"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 503,
@@ -1669,7 +1667,7 @@
       "chat2api/chat2api.py": "5475955c7ae07a8244260065fa73c0982b977353b2dffafcd9488bafff28fad4",
       "chat2api/share_auth.py": "2eea208b3934ddccf7d6e0126fedcbfed96ce2e086cfb1a1f910485f21465766",
       "console/display_proxy.py": "5aada84d79e18c9d6899fd31bfce05098ebc23a990d00cfd81a11f50e326b01c",
-      "docs/rust-contract.md": "a3d03a1c15679e609acd65acbabcc61a30932ac5681b65d558e3d913f7dd716a",
+      "docs/rust-contract.md": "ce4c80bfe59bc00ba53236f591221603f1a8c41ef5f2d517ea843711bd7ec395",
       "share/broker_protocol.py": "dbf7507c125b03bd915a190b052d7e5dac47a4dda80f7ef1fe6a15bbdf7554c2",
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
       "share/store.py": "7bb5b3f1e302de5579043d482a3172548c716b8a619366a0373727d88e714b33",
