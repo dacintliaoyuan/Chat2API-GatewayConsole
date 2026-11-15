@@ -56,26 +56,22 @@ pub fn verify_peer_evidence(
     evidence: &PeerEvidence,
     expectation: &PeerExpectation,
 ) -> Result<PeerEvidence, ProtocolError> {
-    let refuse = |message: &str| {
-        Err(ProtocolError::new(ResultCode::AccessDenied, message))
-    };
+    let refuse = |message: &str| Err(ProtocolError::new(ResultCode::AccessDenied, message));
     if evidence.cmdline.is_empty() {
         return refuse("process command line unreadable (refused)");
     }
     if let Some(marker) = expectation.expected_cmdline_marker.as_deref() {
-        let matches = evidence
-            .cmdline
-            .iter()
-            .any(|part| basename(part) == marker);
+        let matches = evidence.cmdline.iter().any(|part| basename(part) == marker);
         if !matches {
             return refuse("instance entry marker mismatch (refused)");
         }
     }
     if let Some(port) = expectation.expected_port {
         let port = port.to_string();
-        let paired = evidence.cmdline.windows(2).any(|pair| {
-            pair[0] == "--port" && pair[1] == port
-        });
+        let paired = evidence
+            .cmdline
+            .windows(2)
+            .any(|pair| pair[0] == "--port" && pair[1] == port);
         if !paired {
             return refuse("instance port mismatch (refused)");
         }

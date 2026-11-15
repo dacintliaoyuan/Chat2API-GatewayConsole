@@ -121,9 +121,7 @@ pub enum DirectoryPlan {
     Ready,
 }
 
-pub fn plan_private_directory(
-    facts: &DirectoryFacts,
-) -> Result<DirectoryPlan, SocketPolicyError> {
+pub fn plan_private_directory(facts: &DirectoryFacts) -> Result<DirectoryPlan, SocketPolicyError> {
     if !facts.exists {
         return Ok(DirectoryPlan::Create);
     }
@@ -174,9 +172,7 @@ pub enum EndpointPlan {
 }
 
 /// The client-side endpoint policy: refuse a wider endpoint BEFORE connecting.
-pub fn plan_connect_endpoint(
-    facts: &EndpointFacts,
-) -> Result<EndpointPlan, SocketPolicyError> {
+pub fn plan_connect_endpoint(facts: &EndpointFacts) -> Result<EndpointPlan, SocketPolicyError> {
     if !facts.exists || !facts.is_socket {
         return Err(SocketPolicyError::NotASocket(format!(
             "unix socket endpoint is not a socket: {}",

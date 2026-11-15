@@ -97,7 +97,11 @@ fn an_existing_private_directory_is_ready() {
 fn a_wider_directory_is_an_access_refusal() {
     for mode in [0o755, 0o701, 0o770, 0o777, 0o750] {
         let error = plan_private_directory(&dir(true, true, mode)).unwrap_err();
-        assert_eq!(error.result_code().as_str(), "access_denied", "mode {mode:o}");
+        assert_eq!(
+            error.result_code().as_str(),
+            "access_denied",
+            "mode {mode:o}"
+        );
         assert!(error.to_string().contains("0700"), "{error}");
     }
 }
@@ -121,7 +125,11 @@ fn a_private_socket_is_accepted_for_connect() {
 fn a_wider_socket_file_is_an_access_refusal() {
     for mode in [0o644, 0o666, 0o610, 0o700] {
         let error = plan_connect_endpoint(&endpoint(true, true, mode)).unwrap_err();
-        assert_eq!(error.result_code().as_str(), "access_denied", "mode {mode:o}");
+        assert_eq!(
+            error.result_code().as_str(),
+            "access_denied",
+            "mode {mode:o}"
+        );
         assert!(error.to_string().contains("0600"), "{error}");
     }
 }
@@ -129,11 +137,17 @@ fn a_wider_socket_file_is_an_access_refusal() {
 #[test]
 fn a_missing_or_non_socket_endpoint_is_not_installed() {
     assert_eq!(
-        plan_connect_endpoint(&endpoint(false, false, 0)).unwrap_err().result_code().as_str(),
+        plan_connect_endpoint(&endpoint(false, false, 0))
+            .unwrap_err()
+            .result_code()
+            .as_str(),
         "not_installed"
     );
     assert_eq!(
-        plan_connect_endpoint(&endpoint(true, false, 0o600)).unwrap_err().result_code().as_str(),
+        plan_connect_endpoint(&endpoint(true, false, 0o600))
+            .unwrap_err()
+            .result_code()
+            .as_str(),
         "not_installed"
     );
 }

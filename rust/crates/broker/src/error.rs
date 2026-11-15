@@ -99,7 +99,9 @@ impl ResultCode {
     }
 
     pub fn parse(code: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|candidate| candidate.as_str() == code)
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == code)
     }
 }
 

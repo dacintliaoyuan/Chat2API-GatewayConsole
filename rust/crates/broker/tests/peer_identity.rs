@@ -116,7 +116,10 @@ fn the_process_image_must_match() {
     denied(verify_peer_evidence(&wrong_image, &expectation()), "image");
     let mut unreadable_image = evidence(4242);
     unreadable_image.image = None;
-    denied(verify_peer_evidence(&unreadable_image, &expectation()), "image");
+    denied(
+        verify_peer_evidence(&unreadable_image, &expectation()),
+        "image",
+    );
 }
 
 #[test]

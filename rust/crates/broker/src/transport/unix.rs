@@ -35,9 +35,7 @@ impl UnixListener {
     pub fn bind(path: &Path) -> Result<Self, SocketPolicyError> {
         let path = validate_unix_socket_path(path)?;
         let parent = path.parent().ok_or_else(|| {
-            SocketPolicyError::InvalidPath(
-                "unix socket path has no parent directory".to_string(),
-            )
+            SocketPolicyError::InvalidPath("unix socket path has no parent directory".to_string())
         })?;
         ensure_private_directory(parent)?;
         reclaim_stale_socket(&path)?;
@@ -89,8 +87,7 @@ impl UnixListener {
         let result = self.listener.set_nonblocking(true);
         let _ = result;
         if let Ok(metadata) = fs::symlink_metadata(&self.path) {
-            if metadata.file_type().is_socket()
-                && (metadata.dev(), metadata.ino()) == self.identity
+            if metadata.file_type().is_socket() && (metadata.dev(), metadata.ino()) == self.identity
             {
                 fs::remove_file(&self.path)?;
             }
@@ -118,9 +115,7 @@ impl UnixConnection {
     pub fn connect(path: &Path) -> Result<Self, SocketPolicyError> {
         let path = validate_unix_socket_path(path)?;
         let parent = path.parent().ok_or_else(|| {
-            SocketPolicyError::InvalidPath(
-                "unix socket path has no parent directory".to_string(),
-            )
+            SocketPolicyError::InvalidPath("unix socket path has no parent directory".to_string())
         })?;
         check_private_directory(parent)?;
         let metadata = fs::symlink_metadata(&path).map_err(|error| {
@@ -302,12 +297,8 @@ fn probe_liveness(path: &Path) -> EndpointLiveness {
             EndpointLiveness::Live
         }
         Err(error) => match error.kind() {
-            io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound => {
-                EndpointLiveness::Stale
-            }
-            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => {
-                EndpointLiveness::Busy
-            }
+            io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound => EndpointLiveness::Stale,
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => EndpointLiveness::Busy,
             _ => EndpointLiveness::Busy,
         },
     }
