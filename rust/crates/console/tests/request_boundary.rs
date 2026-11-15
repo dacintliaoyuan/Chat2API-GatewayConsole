@@ -29,6 +29,20 @@ fn assert_closing_case(response: &ClientResponse, case: &Value, name: &str) {
 }
 
 #[test]
+fn a_client_may_connect_before_it_sends_the_request() {
+    let temp = temp();
+    let console = start_console(&temp);
+    let response = client_request_after(
+        console.addr,
+        &ClientRequest::get("/health"),
+        std::time::Duration::from_millis(200),
+    )
+    .expect("request after the connection settles");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json()["status"], "ok");
+}
+
+#[test]
 fn duplicate_sensitive_headers_match_python() {
     let fixture = fixture();
     let temp = temp();

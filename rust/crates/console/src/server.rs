@@ -225,6 +225,10 @@ impl std::fmt::Display for ServerError {
 impl std::error::Error for ServerError {}
 
 fn handle_connection(state: Arc<AppState>, mut stream: TcpStream) {
+    // The accept loop polls in non-blocking mode; Windows copies that mode into
+    // accepted sockets, so restore blocking reads and let the read timeout cover
+    // a client that connects before it sends its request.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(IDLE_CONNECTION_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IDLE_CONNECTION_TIMEOUT));
     loop {

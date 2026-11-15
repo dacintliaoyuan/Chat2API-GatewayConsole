@@ -70,13 +70,21 @@ git -c core.whitespace=cr-at-eol diff --check
 - `bash scripts/check-rust-s6b.sh`：首次退出码 0。
 - `git -c core.whitespace=cr-at-eol diff --check`：退出码 0。
 
-既有失败（与本票无关，单独重跑通过）：
+Windows 连接中断的根因与修复（后续门禁波次）：
 
-- 最终再跑 `bash scripts/check-rust-s6b.sh` 时，`um-gateway --test chat_disconnect`
-  的 `a_pre_commit_disconnect_records_client_disconnected_without_a_200` 在 Windows 上
-  因 `ConnectionAborted (10053)` 失败一次。该测试属于 S1b 的 `crates/gateway`，
-  本票未改该 crate；单独重跑 `cargo test -p um-gateway --test chat_disconnect
-  --offline` 三次均为 2 passed、0 failed。
+- 首次门禁中 `um-gateway --test chat_disconnect` 的 `ConnectionAborted (10053)` 与
+  再次门禁中 `um-console --test share_usage` 的 `ConnectionReset (10054)` 是同一
+  根因：监听 socket 以非阻塞模式轮询 `accept`，Windows 会把该模式复制给 accept
+  出的连接；请求字节尚未到达时 `read` 立即返回 `WouldBlock`，服务端按 400 关闭，
+  关闭时未读数据触发 RST。
+- 修复：`crates/console/src/server.rs`、`crates/gateway/src/server.rs` 与两个
+  测试 harness 的 accept 处理器先对已接受连接调用 `set_nonblocking(false)`，恢复
+  阻塞读并让读超时生效。
+- 回归测试 `cargo test -p um-console --test request_boundary --offline
+  a_client_may_connect_before_it_sends_the_request`：修复前在 Windows 上失败
+  （`ConnectionAborted 10053`），修复后通过。
+- 修复后重跑 `bash scripts/check-rust-s6b.sh`：退出码 0；Rust workspace 445 个
+  测试全部 ok（含新增回归测试），Python parity 141 tests `OK`，web 71 pass。
 
 定向测试（S6b）：
 

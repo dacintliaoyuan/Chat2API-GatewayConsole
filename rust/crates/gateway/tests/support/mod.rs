@@ -243,6 +243,9 @@ fn serve_stub(
     behaviour: &Mutex<StubBehaviour>,
     seen: &Mutex<Vec<SeenRequest>>,
 ) -> std::io::Result<()> {
+    // Accepted sockets inherit the non-blocking listener on Windows; the stub
+    // reads with a timeout, so restore blocking mode first.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let request = match read_client_request(&mut stream)? {
         Some(request) => request,
@@ -880,6 +883,9 @@ fn serve_chat(
     closed: &AtomicBool,
     shutdown: &AtomicBool,
 ) -> std::io::Result<()> {
+    // Accepted sockets inherit the non-blocking listener on Windows; the stub
+    // reads with a timeout, so restore blocking mode first.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let Some(request) = read_client_request(&mut stream)? else {
         return Ok(());

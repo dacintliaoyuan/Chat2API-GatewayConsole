@@ -186,7 +186,21 @@ pub fn client_request(
     addr: SocketAddr,
     request: &ClientRequest,
 ) -> std::io::Result<ClientResponse> {
+    client_request_after(addr, request, Duration::ZERO)
+}
+
+/// Connect, wait `delay`, then send. A server must accept a connection before
+/// the request bytes arrive; Windows inherits the listener's non-blocking mode
+/// into accepted sockets unless the server clears it.
+pub fn client_request_after(
+    addr: SocketAddr,
+    request: &ClientRequest,
+    delay: Duration,
+) -> std::io::Result<ClientResponse> {
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
+    if !delay.is_zero() {
+        std::thread::sleep(delay);
+    }
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
     let mut raw = format!("{} {} HTTP/1.1\r\n", request.method, request.target);

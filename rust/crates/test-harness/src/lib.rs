@@ -357,6 +357,9 @@ fn serve<F>(mut stream: TcpStream, handler: &F) -> std::io::Result<()>
 where
     F: Fn(HttpRequest) -> HttpResponse,
 {
+    // Accepted sockets inherit the non-blocking listener on Windows; the harness
+    // reads with a timeout, so restore blocking mode first.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
