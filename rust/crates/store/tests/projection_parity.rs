@@ -8,9 +8,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use um_store::projection::{parse_projection_payload, ProjectionError};
-use um_store::secret::{
-    mask_secret, protect_with_nonce, secret_hash, unprotect_with_key,
-};
+use um_store::secret::{mask_secret, protect_with_nonce, secret_hash, unprotect_with_key};
 use um_store::{AllowPath, DenyAll, ProtectedProjectionWriter};
 
 fn fixture() -> Value {
@@ -97,12 +95,9 @@ fn the_protected_writer_replaces_atomically_and_refuses_regressions() {
     let mut writer = ProtectedProjectionWriter::new(path.clone(), AllowPath(path.clone())).unwrap();
     let generation = projection["config_generation"].as_i64().unwrap();
     let fingerprint = um_store::fingerprint(&projection);
-    let written = writer
-        .write(&projection, generation, &fingerprint)
-        .unwrap();
+    let written = writer.write(&projection, generation, &fingerprint).unwrap();
     assert_eq!(written, fingerprint);
-    let reread: Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let reread: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(reread, projection);
 
     let mut older = projection.clone();
@@ -128,8 +123,7 @@ fn the_protected_writer_replaces_atomically_and_refuses_regressions() {
         "bad_request",
         "same-generation different content must be refused"
     );
-    let unchanged: Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let unchanged: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(unchanged, projection);
 }
 
@@ -143,22 +137,18 @@ fn the_protected_writer_refuses_a_corrupt_baseline_and_a_denied_acl() {
     let directory = tempfile::tempdir().unwrap();
     let corrupt = directory.path().join("corrupt.json");
     std::fs::write(&corrupt, "{\"schema_version\": 2").unwrap();
-    let error = match ProtectedProjectionWriter::new(
-        corrupt.clone(),
-        AllowPath(corrupt.clone()),
-    ) {
+    let error = match ProtectedProjectionWriter::new(corrupt.clone(), AllowPath(corrupt.clone())) {
         Ok(_) => panic!("a corrupt baseline must refuse publication"),
         Err(error) => error,
     };
     assert_eq!(error.code, "bad_request");
-    assert_eq!(std::fs::read_to_string(&corrupt).unwrap(), "{\"schema_version\": 2");
+    assert_eq!(
+        std::fs::read_to_string(&corrupt).unwrap(),
+        "{\"schema_version\": 2"
+    );
 
     let denied_path = directory.path().join("denied.json");
-    let mut denied = ProtectedProjectionWriter::new(
-        denied_path.clone(),
-        DenyAll,
-    )
-    .unwrap();
+    let mut denied = ProtectedProjectionWriter::new(denied_path.clone(), DenyAll).unwrap();
     let error = denied
         .write(&projection, generation, &fingerprint)
         .unwrap_err();
@@ -182,8 +172,5 @@ fn the_writer_refuses_a_projection_the_parser_rejects() {
         .write(&invalid, generation, &fingerprint)
         .unwrap_err();
     assert_eq!(error.code, "bad_request");
-    assert!(!directory
-        .path()
-        .join("share-projection.json")
-        .exists());
+    assert!(!directory.path().join("share-projection.json").exists());
 }

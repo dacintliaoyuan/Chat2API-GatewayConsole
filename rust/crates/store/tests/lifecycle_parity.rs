@@ -100,12 +100,7 @@ fn the_key_lifecycle_matches_the_python_store() {
     let mut steps: Vec<Value> = Vec::new();
 
     let created = store
-        .create_key(
-            "alpha",
-            Some(ALPHA_SECRET),
-            Some("create-alpha"),
-            Some(16),
-        )
+        .create_key("alpha", Some(ALPHA_SECRET), Some("create-alpha"), Some(16))
         .unwrap();
     let alpha_id = created["key_id"].as_str().unwrap().to_string();
     steps.push(json!({"step": "create-alpha", "result": created}));
@@ -233,10 +228,15 @@ fn the_key_lifecycle_matches_the_python_store() {
     }));
 
     let expected = fixture["lifecycle"].as_array().unwrap().clone();
-    assert_eq!(steps.len(), expected.len(), "step count differs from Python");
+    assert_eq!(
+        steps.len(),
+        expected.len(),
+        "step count differs from Python"
+    );
     for (actual, expected) in steps.iter().zip(expected.iter()) {
         assert_eq!(
-            actual, expected,
+            actual,
+            expected,
             "step '{}' differs from Python",
             expected["step"].as_str().unwrap_or("?")
         );

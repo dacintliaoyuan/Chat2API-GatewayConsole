@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 
 use crate::error::{BrokerResult, ResultCode};
-use um_store::projection::parse_projection_payload;
+use um_contract::projection::parse_projection_payload;
 
 /// The protected projection writer the broker owns.
 pub trait ProjectionWriter {
@@ -28,12 +28,7 @@ pub trait ProjectionWriter {
 
 /// The instance channel the broker talks to.
 pub trait InstanceChannel {
-    fn call(
-        &mut self,
-        action: &str,
-        fields: &Value,
-        instance_id: &str,
-    ) -> Result<Value, String>;
+    fn call(&mut self, action: &str, fields: &Value, instance_id: &str) -> Result<Value, String>;
 }
 
 /// Trusted registry of the CURRENT instance with a MONOTONIC version.
@@ -71,11 +66,7 @@ pub struct PublishCoordinator<W: ProjectionWriter, I: InstanceChannel> {
 }
 
 impl<W: ProjectionWriter, I: InstanceChannel> PublishCoordinator<W, I> {
-    pub fn new(
-        writer: W,
-        channel: I,
-        instances: Arc<Mutex<InstanceRegistry>>,
-    ) -> Self {
+    pub fn new(writer: W, channel: I, instances: Arc<Mutex<InstanceRegistry>>) -> Self {
         Self {
             writer,
             channel,
@@ -166,10 +157,7 @@ impl<W: ProjectionWriter, I: InstanceChannel> PublishCoordinator<W, I> {
                 .and_then(Value::as_str)
                 .and_then(ResultCode::parse)
                 .unwrap_or(ResultCode::Unconfirmed);
-            let detail = result
-                .get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let detail = result.get("detail").and_then(Value::as_str).unwrap_or("");
             return BrokerResult::err(code, detail);
         }
         let (current_now, version_now) = self.instances.lock().unwrap().snapshot();

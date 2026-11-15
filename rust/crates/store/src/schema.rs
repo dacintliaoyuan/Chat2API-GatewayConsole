@@ -133,7 +133,10 @@ fn initialize_inside(connection: &Connection) -> Result<(), StoreError> {
             other => Err(other),
         })
         .map_err(|error| StoreError::Other(format!("cannot open share store: {error}")))?;
-    match version.as_deref().and_then(|value| value.parse::<i64>().ok()) {
+    match version
+        .as_deref()
+        .and_then(|value| value.parse::<i64>().ok())
+    {
         None => {
             connection
                 .execute(
@@ -202,10 +205,7 @@ fn upgrade_v1_to_v2(connection: &Connection) -> Result<(), StoreError> {
         )
         .map_err(|error| StoreError::Other(format!("cannot open share store: {error}")))?;
     connection
-        .execute(
-            "UPDATE configgen SET schema_version=?",
-            [SCHEMA_VERSION],
-        )
+        .execute("UPDATE configgen SET schema_version=?", [SCHEMA_VERSION])
         .map_err(|error| StoreError::Other(format!("cannot open share store: {error}")))?;
     Ok(())
 }
@@ -229,10 +229,7 @@ fn upgrade_v2_to_v3(connection: &Connection) -> Result<(), StoreError> {
         )
         .map_err(|error| StoreError::Other(format!("cannot open share store: {error}")))?;
     connection
-        .execute(
-            "UPDATE configgen SET schema_version=?",
-            [SCHEMA_VERSION],
-        )
+        .execute("UPDATE configgen SET schema_version=?", [SCHEMA_VERSION])
         .map_err(|error| StoreError::Other(format!("cannot open share store: {error}")))?;
     Ok(())
 }

@@ -22,8 +22,8 @@ use crate::schema::{
     SHARE_MAX_CONCURRENCY_MAX, SHARE_MAX_CONCURRENCY_MIN,
 };
 use crate::secret::{
-    load_key_file, mask_secret, protect_with_key, secret_eq, secret_hash,
-    unprotect_with_key, SECRET_ALGO_AESGCM_FILE_KEY, SECRET_ALGO_DPAPI_USER,
+    load_key_file, mask_secret, protect_with_key, secret_eq, secret_hash, unprotect_with_key,
+    SECRET_ALGO_AESGCM_FILE_KEY, SECRET_ALGO_DPAPI_USER,
 };
 
 pub const SECURITY_ACTIONS: [&str; 4] = ["revoke", "rotate", "delete", "limit_lower"];
@@ -87,18 +87,17 @@ impl ShareStore {
 
     // ---------------------------------------------------------- generation
     pub fn generation(&mut self) -> Result<Value, StoreError> {
-        let (schema_version, config_generation, applied_generation) =
-            self.connection.query_row(
-                "SELECT schema_version,config_generation,applied_generation FROM configgen",
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                },
-            )?;
+        let (schema_version, config_generation, applied_generation) = self.connection.query_row(
+            "SELECT schema_version,config_generation,applied_generation FROM configgen",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )?;
         let pending_security = self.security_pending()?;
         Ok(json!({
             "schema_version": schema_version,
@@ -151,10 +150,8 @@ impl ShareStore {
             let mut security_applied = Vec::new();
             if let Some(security_generation) = security_generation {
                 if security_generation > 0 {
-                    security_applied = store.mark_security_applied(
-                        generation.min(security_generation),
-                        instance_id,
-                    )?;
+                    security_applied = store
+                        .mark_security_applied(generation.min(security_generation), instance_id)?;
                 }
             }
             let mut result = store.generation()?;
@@ -174,8 +171,7 @@ impl ShareStore {
             let mut statement = self.connection.prepare(
                 "SELECT record_id FROM security WHERE generation<=? AND status IN ('pending','applied') ORDER BY generation, recorded_at",
             )?;
-            let rows =
-                statement.query_map(params![generation], |row| row.get::<_, String>(0))?;
+            let rows = statement.query_map(params![generation], |row| row.get::<_, String>(0))?;
             rows.collect::<Result<_, _>>()?
         };
         if record_ids.is_empty() {
@@ -231,20 +227,21 @@ impl ShareStore {
     }
 
     pub fn security_records(&self) -> Result<Vec<Value>, StoreError> {
-        let mut statement = self.connection.prepare(
-            "SELECT * FROM security ORDER BY generation, recorded_at, record_id",
-        )?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT * FROM security ORDER BY generation, recorded_at, record_id")?;
         let rows = statement.query_map([], |row| Ok(public_security_row(row)))?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     pub fn security_floor(&self) -> Result<i64, StoreError> {
-        Ok(self.connection.query_row(
-            "SELECT MAX(generation) FROM security",
-            [],
-            |row| row.get::<_, Option<i64>>(0),
-        )?
-        .unwrap_or(0))
+        Ok(self
+            .connection
+            .query_row("SELECT MAX(generation) FROM security", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })?
+            .unwrap_or(0))
     }
 
     pub fn security_state(&mut self) -> Result<Value, StoreError> {
@@ -256,7 +253,9 @@ impl ShareStore {
             .unwrap_or(0);
         let pending_remote = records
             .iter()
-            .filter(|record| record.get("status").and_then(Value::as_str) != Some("remote_confirmed"))
+            .filter(|record| {
+                record.get("status").and_then(Value::as_str) != Some("remote_confirmed")
+            })
             .count();
         Ok(json!({
             "format": "um-share-security-state-v1",
@@ -372,7 +371,10 @@ impl ShareStore {
         Ok((operation_id, true))
     }
 
-    fn find_any_operation(&self, idempotency_key: &str) -> Result<Option<OperationRow>, StoreError> {
+    fn find_any_operation(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<OperationRow>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT id,kind,idempotency_key,status,payload,created_at FROM ops WHERE idempotency_key=? LIMIT 1",
         )?;
@@ -401,7 +403,10 @@ impl ShareStore {
         Ok(())
     }
 
-    fn protect_for_new_row(&self, secret: &str) -> Result<(Option<Vec<u8>>, Option<String>), StoreError> {
+    fn protect_for_new_row(
+        &self,
+        secret: &str,
+    ) -> Result<(Option<Vec<u8>>, Option<String>), StoreError> {
         let key = match self.secret_key.as_deref() {
             Some(key) => key,
             None => return Ok((None, None)),
@@ -571,7 +576,9 @@ impl ShareStore {
         let mut statement = self.connection.prepare(&sql)?;
         let changed = statement.execute(rusqlite::params_from_iter(bound.iter()))?;
         if changed == 0 {
-            return Err(StoreError::VersionMismatch("row_version conflict".to_string()));
+            return Err(StoreError::VersionMismatch(
+                "row_version conflict".to_string(),
+            ));
         }
         Ok(())
     }
@@ -605,9 +612,9 @@ impl ShareStore {
             );
             if let Err(error) = result {
                 return Err(match error {
-                    StoreError::Other(_) => StoreError::Conflict(
-                        "display name already in use".to_string(),
-                    ),
+                    StoreError::Other(_) => {
+                        StoreError::Conflict("display name already in use".to_string())
+                    }
                     other => other,
                 });
             }
@@ -698,9 +705,9 @@ impl ShareStore {
             let result = store.update_checked(key_id, expected, &columns.join(", "), &values);
             if let Err(error) = result {
                 return Err(match error {
-                    StoreError::Other(_) => StoreError::Conflict(
-                        "display name already in use".to_string(),
-                    ),
+                    StoreError::Other(_) => {
+                        StoreError::Conflict("display name already in use".to_string())
+                    }
                     other => other,
                 });
             }
@@ -921,9 +928,7 @@ impl ShareStore {
         match value {
             None => Ok(crate::schema::LEGACY_SHARE_MAX_CONCURRENCY),
             Some(value) => value.parse::<i64>().map_err(|_| {
-                StoreError::Other(format!(
-                    "invalid stored share_max_concurrency {value:?}"
-                ))
+                StoreError::Other(format!("invalid stored share_max_concurrency {value:?}"))
             }),
         }
     }
@@ -1002,10 +1007,13 @@ impl ShareStore {
     }
 
     // -------------------------------------------------------------- ops/IDP
-    pub fn operations(&self, kind: Option<&str>, status: Option<&str>) -> Result<Vec<OperationRow>, StoreError> {
-        let mut sql = String::from(
-            "SELECT id,kind,idempotency_key,status,payload,created_at FROM ops",
-        );
+    pub fn operations(
+        &self,
+        kind: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Vec<OperationRow>, StoreError> {
+        let mut sql =
+            String::from("SELECT id,kind,idempotency_key,status,payload,created_at FROM ops");
         let mut clauses = Vec::new();
         let mut bound: Vec<Bind> = Vec::new();
         if let Some(kind) = kind {
@@ -1022,11 +1030,11 @@ impl ShareStore {
         }
         sql.push_str(" ORDER BY created_at");
         let mut statement = self.connection.prepare(&sql)?;
-        let rows = statement.query_map(
-            rusqlite::params_from_iter(bound.iter()),
-            |row| operation_row(row),
-        )?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        let rows = statement.query_map(rusqlite::params_from_iter(bound.iter()), |row| {
+            operation_row(row)
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     pub fn find_pending_publish_intent(
@@ -1065,9 +1073,7 @@ impl ShareStore {
             })
             .and_then(|text| {
                 serde_json::from_str::<Value>(text.as_deref().unwrap_or("{}"))
-                    .map_err(|error| {
-                        rusqlite::Error::InvalidParameterName(error.to_string())
-                    })
+                    .map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))
             })
             .map(|value| value.as_object().cloned().unwrap_or_default())
             .or_else(|error| match error {
@@ -1081,11 +1087,7 @@ impl ShareStore {
         }
         let updated = self.connection.execute(
             "UPDATE ops SET status=?, payload=? WHERE id=?",
-            params![
-                status,
-                Value::Object(payload).to_string(),
-                operation_id
-            ],
+            params![status, Value::Object(payload).to_string(), operation_id],
         )?;
         Ok(updated > 0)
     }
@@ -1112,9 +1114,7 @@ impl ShareStore {
                     .collect::<Result<Vec<_>, _>>()?;
                 entries
             };
-            let share_max = self
-                .share_max_concurrency()?
-                .min(SHARE_MAX_CONCURRENCY_MAX);
+            let share_max = self.share_max_concurrency()?.min(SHARE_MAX_CONCURRENCY_MAX);
             let generation = self.generation()?;
             Ok(json!({
                 "schema_version": PROJECTION_SCHEMA_VERSION,
@@ -1270,8 +1270,7 @@ pub fn random_token_urlsafe(bytes: usize) -> String {
     if getrandom::getrandom(&mut raw).is_err() {
         panic!("share store cannot read OS entropy");
     }
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut output = String::new();
     let mut index = 0;
     while index < raw.len() {

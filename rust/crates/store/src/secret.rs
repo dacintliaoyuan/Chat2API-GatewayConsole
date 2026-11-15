@@ -58,10 +58,18 @@ fn read_key_bytes(target: &Path) -> Result<Vec<u8>, StoreError> {
             .read(true)
             .custom_flags(libc_o_nofollow())
             .open(target)
-            .map_err(|_| secret_error(format!("share secret key file unavailable: {}", target.display())))?;
-        let metadata = file
-            .metadata()
-            .map_err(|_| secret_error(format!("share secret key file unavailable: {}", target.display())))?;
+            .map_err(|_| {
+                secret_error(format!(
+                    "share secret key file unavailable: {}",
+                    target.display()
+                ))
+            })?;
+        let metadata = file.metadata().map_err(|_| {
+            secret_error(format!(
+                "share secret key file unavailable: {}",
+                target.display()
+            ))
+        })?;
         if !metadata.is_file() {
             return Err(secret_error(format!(
                 "share secret key file is not a regular file: {}",
@@ -82,11 +90,19 @@ fn read_key_bytes(target: &Path) -> Result<Vec<u8>, StoreError> {
             )));
         }
     }
-    let mut file = std::fs::File::open(target)
-        .map_err(|_| secret_error(format!("share secret key file unavailable: {}", target.display())))?;
+    let mut file = std::fs::File::open(target).map_err(|_| {
+        secret_error(format!(
+            "share secret key file unavailable: {}",
+            target.display()
+        ))
+    })?;
     let mut raw = Vec::new();
-    std::io::Read::read_to_end(&mut file, &mut raw)
-        .map_err(|_| secret_error(format!("share secret key file unreadable: {}", target.display())))?;
+    std::io::Read::read_to_end(&mut file, &mut raw).map_err(|_| {
+        secret_error(format!(
+            "share secret key file unreadable: {}",
+            target.display()
+        ))
+    })?;
     if raw.len() > MAX_KEY_FILE_BYTES {
         return Err(secret_error(format!(
             "share secret key file is unexpectedly large: {}",
@@ -265,7 +281,14 @@ pub fn secret_eq(secret: &str, digest: &str) -> bool {
 
 /// Display mask: `um-share-****` + the last four characters.
 pub fn mask_secret(secret: &str) -> String {
-    let tail: String = secret.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = secret
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     if secret.chars().count() >= 4 {
         format!("um-share-****{tail}")
     } else {

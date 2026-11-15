@@ -27,7 +27,7 @@ struct FakeWriter {
 
 impl ProjectionWriter for FakeWriter {
     fn fingerprint(&self, projection: &Value) -> String {
-        um_store::fingerprint(projection)
+        um_contract::fingerprint(projection)
     }
 
     fn write(
@@ -191,7 +191,7 @@ fn terminate_keys_is_forwarded_only_when_present() {
             "secret_version": 1, "enabled": true, "max_concurrency": 16,
         }],
     });
-    let fingerprint = um_store::fingerprint(&projection);
+    let fingerprint = um_contract::fingerprint(&projection);
     let registry = Arc::new(Mutex::new(InstanceRegistry::default()));
     registry.lock().unwrap().register("i-1").unwrap();
     let channel_calls = Rc::new(RefCell::new(Vec::new()));
