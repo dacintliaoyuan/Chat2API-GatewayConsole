@@ -120,7 +120,9 @@ impl FakeDisplay {
                 }
             }
             for handler in handlers {
-                let _ = handler.join();
+                if handler.join().is_err() {
+                    panic!("fake display handler panicked");
+                }
             }
         });
         Self {
@@ -137,7 +139,9 @@ impl FakeDisplay {
     pub fn join(mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            if handle.join().is_err() {
+                panic!("fake display script panicked");
+            }
         }
     }
 }
@@ -259,6 +263,26 @@ impl WsClient {
             .write_all(&client_frame(opcode, payload))
             .expect("write client frame");
         self.stream.flush().expect("flush client frame");
+    }
+
+    /// Read the Content-Length body of the last plain response.
+    pub fn read_frame_body(&mut self) -> Vec<u8> {
+        let mut length = 0usize;
+        for (name, value) in self.head.lines().filter_map(|line| line.split_once(':')) {
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                length = value.trim().parse().unwrap_or(0);
+            }
+        }
+        let mut body = vec![0u8; length];
+        let mut read = 0;
+        while read < length {
+            match std::io::Read::read(&mut self.stream, &mut body[read..]) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => read += count,
+            }
+        }
+        body.truncate(read);
+        body
     }
 
     pub fn read_frame(&mut self) -> std::io::Result<(u8, Vec<u8>)> {
