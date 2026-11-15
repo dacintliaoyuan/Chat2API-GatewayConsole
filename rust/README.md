@@ -52,7 +52,8 @@ Rust 测试只反序列化夹具，不用自己的序列化器生成期望值。
 [docs/rust-s2a-acceptance.md](../docs/rust-s2a-acceptance.md)、
 [docs/rust-s3a-acceptance.md](../docs/rust-s3a-acceptance.md)、
 [docs/rust-s3b-acceptance.md](../docs/rust-s3b-acceptance.md) 与
-[docs/rust-s5a-acceptance.md](../docs/rust-s5a-acceptance.md)。
+[docs/rust-s5a-acceptance.md](../docs/rust-s5a-acceptance.md) 与
+[docs/rust-s8-acceptance.md](../docs/rust-s8-acceptance.md)。
 
 ## 命令
 
