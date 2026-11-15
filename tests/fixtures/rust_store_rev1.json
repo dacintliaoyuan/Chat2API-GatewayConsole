@@ -1,4 +1,1330 @@
 {
+  "host": [
+    {
+      "case": "start-success",
+      "clock": 100.0,
+      "config": {
+        "action": "start",
+        "running": true
+      },
+      "host_calls": [
+        {
+          "start_host": false
+        },
+        {
+          "verify_running": true
+        }
+      ],
+      "instance_calls": [],
+      "instance_responses": [],
+      "instances": [
+        "i-1"
+      ],
+      "maintenance": {
+        "by": "startup",
+        "component": null,
+        "created_at": 0,
+        "expires_at": null,
+        "instance_id": null,
+        "last_outcome": null,
+        "lease_id": null,
+        "round": null,
+        "schema_version": 1,
+        "state": "idle"
+      },
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "started": true
+        }
+      }
+    },
+    {
+      "case": "start-timeout",
+      "clock": 106.0,
+      "config": {
+        "action": "start",
+        "running_sequence": [
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false
+        ]
+      },
+      "host_calls": [
+        {
+          "start_host": false
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        },
+        {
+          "verify_running": true
+        }
+      ],
+      "instance_calls": [],
+      "instance_responses": [],
+      "instances": [
+        "i-1"
+      ],
+      "maintenance": {
+        "by": "startup",
+        "component": null,
+        "created_at": 0,
+        "expires_at": null,
+        "instance_id": null,
+        "last_outcome": null,
+        "lease_id": null,
+        "round": null,
+        "schema_version": 1,
+        "state": "idle"
+      },
+      "result": {
+        "error_code": "unconfirmed",
+        "ok": false,
+        "result": {
+          "detail": "start did not verify a running host"
+        }
+      }
+    },
+    {
+      "case": "drain-success",
+      "clock": 100.0,
+      "config": {
+        "action": "drain"
+      },
+      "host_calls": [
+        {
+          "stop_host": true
+        },
+        {
+          "verify_closed": true
+        }
+      ],
+      "instance_calls": [
+        {
+          "instance_call": {
+            "action": "drain",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "emergency",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "instance_responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "state": "draining"
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 0
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "cleared_in_flight": 1,
+            "state": "stopped"
+          }
+        }
+      ],
+      "instances": [
+        "i-1"
+      ],
+      "maintenance": {
+        "by": "startup",
+        "component": null,
+        "created_at": 0,
+        "expires_at": null,
+        "instance_id": null,
+        "last_outcome": null,
+        "lease_id": null,
+        "round": null,
+        "schema_version": 1,
+        "state": "idle"
+      },
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "drained": true,
+          "in_flight": 0,
+          "notification_failed": false,
+          "stopped": true,
+          "timed_out": false
+        }
+      }
+    },
+    {
+      "case": "drain-timeout",
+      "clock": 102.0,
+      "config": {
+        "action": "drain",
+        "running_sequence": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "host_calls": [
+        {
+          "stop_host": true
+        },
+        {
+          "verify_closed": true
+        }
+      ],
+      "instance_calls": [
+        {
+          "instance_call": {
+            "action": "drain",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "emergency",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "instance_responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "state": "draining"
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 2
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "cleared_in_flight": 1,
+            "state": "stopped"
+          }
+        }
+      ],
+      "instances": [
+        "i-1"
+      ],
+      "maintenance": {
+        "by": "startup",
+        "component": null,
+        "created_at": 0,
+        "expires_at": null,
+        "instance_id": null,
+        "last_outcome": null,
+        "lease_id": null,
+        "round": null,
+        "schema_version": 1,
+        "state": "idle"
+      },
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "drained": false,
+          "in_flight": null,
+          "notification_failed": true,
+          "stopped": true,
+          "timed_out": true
+        }
+      }
+    },
+    {
+      "case": "emergency",
+      "clock": 100.0,
+      "config": {
+        "action": "emergency"
+      },
+      "host_calls": [
+        {
+          "stop_host": true
+        },
+        {
+          "verify_closed": true
+        }
+      ],
+      "instance_calls": [
+        {
+          "instance_call": {
+            "action": "emergency",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "instance_responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "cleared_in_flight": 1,
+            "state": "stopped"
+          }
+        }
+      ],
+      "instances": [
+        "i-1"
+      ],
+      "maintenance": {
+        "by": "startup",
+        "component": null,
+        "created_at": 0,
+        "expires_at": null,
+        "instance_id": null,
+        "last_outcome": null,
+        "lease_id": null,
+        "round": null,
+        "schema_version": 1,
+        "state": "idle"
+      },
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "cleared_in_flight": 1,
+          "host_closed": true,
+          "instance_stopped": true,
+          "notification_failed": false,
+          "stopped": true
+        }
+      }
+    },
+    {
+      "case": "maintenance-begin",
+      "clock": 100.0,
+      "config": {
+        "action": "maintenance-begin"
+      },
+      "host_calls": [],
+      "instance_calls": [
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "drain",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "instance_responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 1,
+            "state": "running"
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "state": "draining"
+          }
+        }
+      ],
+      "instances": [
+        "i-1"
+      ],
+      "maintenance": {
+        "by": "maintenance-begin",
+        "component": "share_gateway",
+        "created_at": 100,
+        "expires_at": 400,
+        "instance_id": "i-1",
+        "last_outcome": null,
+        "lease_id": "00000000000000000000000000000001",
+        "round": 1,
+        "schema_version": 1,
+        "state": "leased"
+      },
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "accepted": true,
+          "active_count": 1,
+          "component": "share_gateway",
+          "instance_id": "i-1",
+          "lease_expires_at": 400,
+          "lease_id": "00000000000000000000000000000001",
+          "round": 1,
+          "state": "draining"
+        }
+      }
+    },
+    {
+      "case": "maintenance-end",
+      "clock": 100.0,
+      "config": {
+        "action": "maintenance-end"
+      },
+      "host_calls": [],
+      "instance_calls": [
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "drain",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        },
+        {
+          "instance_call": {
+            "action": "resume",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "instance_responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 1,
+            "state": "running"
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "state": "draining"
+          }
+        },
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 1,
+            "state": "running"
+          }
+        }
+      ],
+      "instances": [
+        "i-1"
+      ],
+      "maintenance": {
+        "by": "maintenance-end",
+        "component": null,
+        "created_at": 100,
+        "expires_at": null,
+        "instance_id": null,
+        "last_outcome": null,
+        "lease_id": null,
+        "round": null,
+        "schema_version": 1,
+        "state": "idle"
+      },
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "active_count": 1,
+          "component": "share_gateway",
+          "instance_id": "i-1",
+          "lease_id": "00000000000000000000000000000001",
+          "resumed": true,
+          "round": 1,
+          "state": "running"
+        }
+      }
+    },
+    {
+      "case": "maintenance-status",
+      "clock": 100.0,
+      "config": {
+        "action": "maintenance-status"
+      },
+      "host_calls": [],
+      "instance_calls": [
+        {
+          "instance_call": {
+            "action": "instance-status",
+            "fields": {},
+            "instance_id": "i-1"
+          }
+        }
+      ],
+      "instance_responses": [
+        {
+          "error_code": "ok",
+          "ok": true,
+          "result": {
+            "active_count": 1,
+            "instance_id": "i-1",
+            "last_seen_generation": 4,
+            "state": "running"
+          }
+        }
+      ],
+      "instances": [
+        "i-1"
+      ],
+      "maintenance": {
+        "by": "startup",
+        "component": null,
+        "created_at": 0,
+        "expires_at": null,
+        "instance_id": null,
+        "last_outcome": null,
+        "lease_id": null,
+        "round": null,
+        "schema_version": 1,
+        "state": "idle"
+      },
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "checked_at": 100,
+          "instance": {
+            "active_count": 1,
+            "instance_id": "i-1",
+            "last_seen_generation": 4,
+            "state": "running"
+          },
+          "last_outcome": null,
+          "lease": null,
+          "lease_expired": false
+        }
+      }
+    },
+    {
+      "case": "gateway-restart",
+      "clock": 100.0,
+      "config": {
+        "action": "gateway-restart",
+        "running_sequence": [
+          true,
+          true
+        ]
+      },
+      "host_calls": [
+        {
+          "verify_running": true
+        },
+        {
+          "stop_host": true
+        },
+        {
+          "verify_closed": true
+        },
+        {
+          "start_host": true
+        },
+        {
+          "verify_running": true
+        }
+      ],
+      "instance_calls": [],
+      "instance_responses": [],
+      "instances": [
+        "i-1"
+      ],
+      "maintenance": {
+        "by": "gateway-restart",
+        "component": null,
+        "created_at": 100,
+        "expires_at": null,
+        "instance_id": null,
+        "last_outcome": null,
+        "lease_id": null,
+        "round": null,
+        "schema_version": 1,
+        "state": "idle"
+      },
+      "result": {
+        "error_code": "ok",
+        "ok": true,
+        "result": {
+          "component": "share_gateway",
+          "elapsed_s": 0.0,
+          "maintenance_state": "idle",
+          "restarted": true,
+          "running_confirmed": true,
+          "stopped_confirmed": true
+        }
+      }
+    },
+    {
+      "case": "gateway-restart-blocked",
+      "clock": 100.0,
+      "config": {
+        "action": "gateway-restart",
+        "running_sequence": [
+          false
+        ]
+      },
+      "host_calls": [
+        {
+          "verify_running": true
+        }
+      ],
+      "instance_calls": [],
+      "instance_responses": [],
+      "instances": [
+        "i-1"
+      ],
+      "maintenance": {
+        "by": "startup",
+        "component": null,
+        "created_at": 0,
+        "expires_at": null,
+        "instance_id": null,
+        "last_outcome": null,
+        "lease_id": null,
+        "round": null,
+        "schema_version": 1,
+        "state": "idle"
+      },
+      "result": {
+        "error_code": "blocked",
+        "ok": false,
+        "result": {
+          "detail": "gateway identity unconfirmed or stopped"
+        }
+      }
+    }
+  ],
   "lifecycle": [
     {
       "result": {

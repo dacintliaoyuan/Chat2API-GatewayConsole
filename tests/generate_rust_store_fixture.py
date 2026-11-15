@@ -626,6 +626,179 @@ def _publish_section(root):
             instance_refusal()]
 
 
+def _host_section(root):
+    """Bounded lifecycle/host cases from the REAL Python coordinator."""
+    from share import broker_host as bh
+
+    class FakeClock:
+        def __init__(self):
+            self.value = 100.0
+
+        def now(self):
+            return self.value
+
+        def sleep(self, seconds):
+            self.value += float(seconds)
+
+    class FakeHost:
+        def __init__(self, config):
+            self.config = config
+            self.calls = []
+            self.running = config.get("running", True)
+            self.closed = config.get("closed", True)
+
+        def start_host(self, explicit=False):
+            self.calls.append({"start_host": explicit})
+            self.running = self.config.get("start_result", True)
+            return self.running
+
+        def stop_host(self):
+            self.calls.append({"stop_host": True})
+            self.closed = self.config.get("closed", True)
+            self.running = False
+            return self.config.get("stop_result", True)
+
+        def verify_running(self):
+            self.calls.append({"verify_running": True})
+            if self.config.get("running_sequence"):
+                return self.config["running_sequence"].pop(0)
+            return self.running
+
+        def verify_closed(self):
+            self.calls.append({"verify_closed": True})
+            return self.closed
+
+        def verify_limits_evidence(self):
+            self.calls.append({"verify_limits_evidence": True})
+            return self.config.get("limits_evidence")
+
+        def verify_limits(self):
+            self.calls.append({"verify_limits": True})
+            return self.config.get("limits")
+
+        def read_watchdog(self):
+            self.calls.append({"read_watchdog": True})
+            return self.config.get("watchdog")
+
+        def read_faults(self):
+            self.calls.append({"read_faults": True})
+            return self.config.get("faults")
+
+        def repair_limits(self):
+            self.calls.append({"repair_limits": True})
+            return self.config.get("repair")
+
+    def run(name, config, *, instances=("i-1",), responses=None):
+        original_config = json.loads(json.dumps(config))
+        clock = FakeClock()
+        host = FakeHost(config)
+        registry = bh.InstanceRegistry()
+        for instance_id in instances:
+            registry.register(instance_id)
+        queue = list(responses or [])
+        calls = []
+
+        def instance_call(action, fields, instance_id):
+            calls.append({"instance_call": {
+                "action": action, "instance_id": instance_id,
+                "fields": fields}})
+            return queue.pop(0)
+
+        leases = bh.MaintenanceLeaseStore(clock=clock.now)
+        saved_sleep = bh.time.sleep
+        saved_uuid = bh.uuid.uuid4
+        uuid_index = [0]
+
+        def fake_uuid():
+            uuid_index[0] += 1
+            return __import__('uuid').UUID(int=uuid_index[0])
+
+        bh.uuid.uuid4 = fake_uuid
+        bh.time.sleep = clock.sleep
+        coordinator = bh.BrokerHostCoordinator(
+            writer=None, mgmt_secret="m", instance_secret="i",
+            instances=registry, replay=None, host_ops=host,
+            instance_call=instance_call, clock=clock.now,
+            sleep=clock.sleep, leases=leases)
+        coordinator.gateway_poll_interval = 0.25
+        action = config["action"]
+        if action == "start":
+            result = coordinator._start(config.get("explicit", False))
+        elif action == "drain":
+            result = coordinator._drain()
+        elif action == "emergency":
+            result = coordinator._emergency_stop()
+        elif action == "maintenance-begin":
+            result = coordinator._maintenance_begin(
+                {"component": "share_gateway",
+                 "lease_s": config.get("lease_s", 300)})
+        elif action == "maintenance-end":
+            begin = coordinator._maintenance_begin(
+                {"component": "share_gateway", "lease_s": 300})
+            lease_id = begin.result["lease_id"]
+            result = coordinator._maintenance_end(
+                {"component": "share_gateway", "lease_id": lease_id})
+        elif action == "maintenance-status":
+            result = coordinator._maintenance_status()
+        elif action == "gateway-restart":
+            result = coordinator._gateway_restart(
+                {"component": "share_gateway",
+                 "budget_s": config.get("budget_s", 120)})
+        else:
+            raise AssertionError(action)
+        bh.time.sleep = saved_sleep
+        bh.uuid.uuid4 = saved_uuid
+        return {"case": name, "config": original_config,
+                "instances": list(instances),
+                "instance_responses": list(responses or []),
+                "result": result.to_dict(),
+                "host_calls": host.calls,
+                "instance_calls": calls,
+                "clock": round(clock.value, 6),
+                "maintenance": coordinator.maintenance_record}
+
+    active = [{"ok": True, "error_code": "ok",
+               "result": {"active_count": 2}}] * 39
+    cases = [
+        run("start-success", {"action": "start", "running": True}),
+        run("start-timeout", {"action": "start",
+                              "running_sequence": [False] * 40}),
+        run("drain-success", {"action": "drain"}, responses=[
+            {"ok": True, "error_code": "ok", "result": {"state": "draining"}},
+            {"ok": True, "error_code": "ok", "result": {"active_count": 0}},
+            {"ok": True, "error_code": "ok",
+             "result": {"state": "stopped", "cleared_in_flight": 1}}]),
+        run("drain-timeout", {"action": "drain",
+                               "running_sequence": [True] * 40}, responses=[
+            {"ok": True, "error_code": "ok", "result": {"state": "draining"}}]
+            + active + [
+            {"ok": True, "error_code": "ok",
+             "result": {"state": "stopped", "cleared_in_flight": 1}}]),
+        run("emergency", {"action": "emergency"}, responses=[
+            {"ok": True, "error_code": "ok",
+             "result": {"state": "stopped", "cleared_in_flight": 1}}]),
+        run("maintenance-begin", {"action": "maintenance-begin"}, responses=[
+            {"ok": True, "error_code": "ok",
+             "result": {"state": "running", "active_count": 1}},
+            {"ok": True, "error_code": "ok", "result": {"state": "draining"}}]),
+        run("maintenance-end", {"action": "maintenance-end"}, responses=[
+            {"ok": True, "error_code": "ok",
+             "result": {"state": "running", "active_count": 1}},
+            {"ok": True, "error_code": "ok", "result": {"state": "draining"}},
+            {"ok": True, "error_code": "ok",
+             "result": {"state": "running", "active_count": 1}}]),
+        run("maintenance-status", {"action": "maintenance-status"}, responses=[
+            {"ok": True, "error_code": "ok",
+             "result": {"instance_id": "i-1", "state": "running",
+                        "active_count": 1, "last_seen_generation": 4}}]),
+        run("gateway-restart", {"action": "gateway-restart",
+                                "running_sequence": [True, True]}),
+        run("gateway-restart-blocked", {"action": "gateway-restart",
+                                         "running_sequence": [False]}),
+    ]
+    return cases
+
+
 def generate():
     root = tempfile.mkdtemp(prefix="rust-store-fixture-")
     try:
@@ -634,6 +807,7 @@ def generate():
         lifecycle = _lifecycle_section(root)
         projection = _projection_section(root)
         publish = _publish_section(root)
+        host = _host_section(root)
         vectors = _secret_vectors()
     finally:
         import shutil
@@ -644,6 +818,7 @@ def generate():
         "lifecycle": lifecycle,
         "projection": projection,
         "publish": publish,
+        "host": host,
         "secret_vectors": vectors,
     }
 

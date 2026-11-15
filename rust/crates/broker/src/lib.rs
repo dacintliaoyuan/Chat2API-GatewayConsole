@@ -12,6 +12,7 @@ pub mod budget;
 pub mod codec;
 pub mod error;
 pub mod hmac;
+pub mod host;
 pub mod instance;
 pub mod management;
 pub mod peer;
