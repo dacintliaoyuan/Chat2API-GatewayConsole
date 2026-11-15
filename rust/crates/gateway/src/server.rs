@@ -349,6 +349,18 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
     let path = request.path();
     match path {
         "/admin/share/revoke" => {
+            let Some(gate) = &state.gate else {
+                return GatewayError::new(
+                    503,
+                    "Share revoke endpoint is not assembled in this role",
+                    "share_revoke_unassembled",
+                )
+                .with_detail(json!({
+                    "released": 0,
+                    "reason": "share_backend_unassembled",
+                }))
+                .response();
+            };
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
             }
@@ -369,12 +381,7 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
             let Some(key_id) = key_id.filter(|value| !value.is_empty()) else {
                 return GatewayError::invalid_request("key_id is required").response();
             };
-            let released = state
-                .gate
-                .as_ref()
-                .map(|gate| gate.terminate_key(key_id))
-                .unwrap_or(0);
-            Response::json(200, &json!({"released": released}))
+            Response::json(200, &json!({"released": gate.terminate_key(key_id)}))
         }
         "/v1/chat/completions" | "/api/chat/completions"
         | "/api/v1/chat/completions" => {
