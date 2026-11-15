@@ -301,6 +301,56 @@ impl DisplayGrants {
     pub fn takeover_operator_at(&self, token: Option<&str>, origin: &str, now: u64) -> Value {
         self.acquire_operator_at(token, origin, "takeover", now)
     }
+
+    /// Whether this connection still owns the current generation.
+    ///
+    /// `display_proxy.py::DisplayGrants.operator_matches`: deliberately
+    /// independent of session expiry, so an established WebSocket keeps its
+    /// operator through a long login window after the short display session
+    /// used at handshake time expires.
+    pub fn operator_matches(&self, token: Option<&str>, generation: u64) -> bool {
+        let Some(token) = token else {
+            return false;
+        };
+        if token.is_empty() || token.len() > MAX_GRANT_TOKEN_BYTES {
+            return false;
+        }
+        let digest = digest(token);
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match inner.operator.as_ref() {
+            Some(operator) => {
+                operator.generation == generation && operator.session_digest == digest
+            }
+            None => false,
+        }
+    }
+
+    /// Release only this page's own generation, never a newer owner.
+    pub fn release_operator(&self, token: Option<&str>, generation: u64) -> bool {
+        let Some(token) = token else {
+            return false;
+        };
+        if token.is_empty() || token.len() > MAX_GRANT_TOKEN_BYTES {
+            return false;
+        }
+        let digest = digest(token);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match inner.operator.as_ref() {
+            Some(operator)
+                if operator.generation == generation && operator.session_digest == digest =>
+            {
+                inner.operator = None;
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 fn session_locked(
@@ -514,5 +564,50 @@ mod tests {
                 "stale": true,
             })
         );
+    }
+
+    #[test]
+    fn only_the_current_generation_matches_and_releases_its_own_owner() {
+        let grants = DisplayGrants::new();
+        let (token, _) = grants.issue_at("a", "http://origin", 10).unwrap();
+        let first = grants
+            .redeem_at(&token, "http://origin", 10)
+            .expect("first");
+        let (token, _) = grants.issue_at("b", "http://origin", 10).unwrap();
+        let second = grants
+            .redeem_at(&token, "http://origin", 10)
+            .expect("second");
+        let generation =
+            grants.acquire_operator_at(Some(&first.token), "http://origin", "acquire", 10)
+                ["generation"]
+                .as_u64()
+                .expect("generation");
+        assert!(grants.operator_matches(Some(&first.token), generation));
+        assert!(!grants.operator_matches(Some(&second.token), generation));
+        assert!(!grants.operator_matches(None, generation));
+        let taken = grants.takeover_operator_at(Some(&second.token), "http://origin", 10);
+        assert!(!grants.operator_matches(Some(&first.token), generation));
+        assert!(grants.operator_matches(
+            Some(&second.token),
+            taken["generation"].as_u64().expect("generation"),
+        ));
+        // A late close from the old page cannot release the new owner.
+        assert!(!grants.release_operator(Some(&first.token), generation));
+        assert_eq!(
+            grants.operator_state_at(Some(&second.token), "http://origin", 10)["owner_present"],
+            json!(true)
+        );
+        assert!(grants.release_operator(
+            Some(&second.token),
+            taken["generation"].as_u64().expect("generation"),
+        ));
+        assert_eq!(
+            grants.operator_state_at(Some(&second.token), "http://origin", 10)["owner_present"],
+            json!(false)
+        );
+        assert!(!grants.operator_matches(
+            Some(&second.token),
+            taken["generation"].as_u64().expect("generation"),
+        ));
     }
 }

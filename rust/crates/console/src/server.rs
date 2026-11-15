@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::{json, Map, Value};
 
 use um_gateway::http::{
-    read_request_with_body_cap, write_response, BodyRead, Headers, Request, Response,
+    read_request_with_leftover, write_response, BodyRead, Headers, Request, Response,
 };
 
 use crate::actions::action_catalogue;
@@ -28,6 +28,7 @@ use crate::cloud_ops::cloud_ops_status;
 use crate::config::{ConfigError, ConsoleConfig, Role};
 use crate::display::{display_session, display_state};
 use crate::display_grant::{DisplayGrants, DISPLAY_SESSION_COOKIE};
+use crate::display_relay::{DisplayRelay, WEBSOCKET_PATH};
 use crate::error::ConsoleError;
 use crate::metering::{self, UsageFilters};
 use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActionExecutor};
@@ -68,6 +69,7 @@ pub struct AppState {
     pub share_write: ShareWriteStore,
     pub session: SessionState,
     pub display_grants: DisplayGrants,
+    pub display: DisplayRelay,
     services_cache: Mutex<Option<(Value, Instant)>>,
 }
 
@@ -135,6 +137,7 @@ impl ConsoleServer {
             ),
             session: SessionState::with_code_file(config.usage_session_code_file.clone()),
             display_grants: DisplayGrants::new(),
+            display: DisplayRelay::new(config.display.clone()),
             config: config.clone(),
             runtime,
             summary: SummaryCache::new(),
@@ -232,7 +235,7 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(IDLE_CONNECTION_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IDLE_CONNECTION_TIMEOUT));
     loop {
-        let request = match read_request_with_body_cap(
+        let (request, leftover) = match read_request_with_leftover(
             &mut stream,
             IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             CONSOLE_MAX_REQUEST_BYTES,
@@ -245,7 +248,23 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream) {
                 return;
             }
         };
-        let response = dispatch(&state, &request);
+        let console_port = stream
+            .local_addr()
+            .map(|addr| addr.port())
+            .unwrap_or(state.config.port);
+        if request.method == "GET" && request.path() == WEBSOCKET_PATH {
+            state.display.handle_websocket(
+                &request,
+                leftover,
+                &mut stream,
+                console_port,
+                &state.display_grants,
+                &state.session,
+                state.config.control_token_file.as_deref(),
+            );
+            return;
+        }
+        let response = dispatch(&state, &request, console_port);
         let close = response.close;
         if write_response(&mut stream, &response).is_err() || close {
             return;
@@ -253,15 +272,36 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream) {
     }
 }
 
-fn dispatch(state: &AppState, request: &Request) -> Response {
+fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response {
     if !host_allowed(request.headers.get("Host").unwrap_or_default())
-        || !origin_allowed(request.headers.get("Origin"), state.config.port)
+        || !origin_allowed(request.headers.get("Origin"), console_port)
     {
         return ConsoleError::local_only().response();
     }
     let target = rewrite_alias(request.raw_target());
     let path = target.split('?').next().unwrap_or(&target);
     let method = request.method.as_str();
+
+    if path == "/display" || path.starts_with("/display/") {
+        let response = match method {
+            "GET" => state.display.handle_get(
+                request,
+                console_port,
+                &state.display_grants,
+                &state.session,
+                state.config.control_token_file.as_deref(),
+            ),
+            "POST" => state.display.handle_post(
+                request,
+                console_port,
+                &state.display_grants,
+                &state.session,
+                state.config.control_token_file.as_deref(),
+            ),
+            _ => None,
+        };
+        return response.unwrap_or_else(|| ConsoleError::unknown_path().response());
+    }
 
     if path == "/health" {
         if method == "GET" {

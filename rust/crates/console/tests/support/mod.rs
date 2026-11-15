@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod display;
 pub mod write;
 
 use std::io::{Read, Write};

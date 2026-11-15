@@ -161,6 +161,19 @@ pub fn read_request_with_body_cap(
     peer_ip: std::net::IpAddr,
     max_body: u64,
 ) -> io::Result<Option<Request>> {
+    Ok(read_request_with_leftover(stream, peer_ip, max_body)?.map(|(request, _)| request))
+}
+
+/// Read one request and return the bytes that followed the declared body.
+///
+/// A WebSocket upgrade never has a body, so those bytes are the client's first
+/// frames: dropping them would lose input that arrived in the same segment as the
+/// handshake.
+pub fn read_request_with_leftover(
+    stream: &mut TcpStream,
+    peer_ip: std::net::IpAddr,
+    max_body: u64,
+) -> io::Result<Option<(Request, Vec<u8>)>> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     let header_end = loop {
@@ -212,8 +225,12 @@ pub fn read_request_with_body_cap(
         .get("Content-Length")
         .map(|value| value.trim().to_string());
     let mut leftover = raw[header_end..].to_vec();
+    let mut trailing = Vec::new();
     let body = match declared {
-        None => BodyRead::Complete(Vec::new()),
+        None => {
+            trailing = std::mem::take(&mut leftover);
+            BodyRead::Complete(Vec::new())
+        }
         Some(value) => match value.parse::<i64>() {
             Err(_) => BodyRead::InvalidLength,
             Ok(length) if length < 0 => BodyRead::NegativeLength,
@@ -224,29 +241,35 @@ pub fn read_request_with_body_cap(
                 while leftover.len() < length {
                     let read = stream.read(&mut buffer)?;
                     if read == 0 {
-                        return Ok(Some(Request {
-                            method,
-                            target,
-                            headers,
-                            body: BodyRead::Incomplete,
-                            peer_ip,
-                        }));
+                        return Ok(Some((
+                            Request {
+                                method,
+                                target,
+                                headers,
+                                body: BodyRead::Incomplete,
+                                peer_ip,
+                            },
+                            leftover,
+                        )));
                     }
                     leftover.extend_from_slice(&buffer[..read]);
                 }
-                leftover.truncate(length);
+                trailing = leftover.split_off(length);
                 BodyRead::Complete(leftover)
             }
         },
     };
 
-    Ok(Some(Request {
-        method,
-        target,
-        headers,
-        body,
-        peer_ip,
-    }))
+    Ok(Some((
+        Request {
+            method,
+            target,
+            headers,
+            body,
+            peer_ip,
+        },
+        trailing,
+    )))
 }
 
 /// Write one response and report whether the connection must be closed.
@@ -306,6 +329,7 @@ pub fn reason_phrase(status: u16) -> &'static str {
         201 => "Created",
         202 => "Accepted",
         204 => "No Content",
+        308 => "Permanent Redirect",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
