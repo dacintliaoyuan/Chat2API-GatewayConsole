@@ -981,7 +981,7 @@ fn serve_chat(
         }
         ChatAttempt::Sse { chunks, hold } => {
             stream.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\
                   Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
             )?;
             stream.flush()?;
@@ -999,7 +999,7 @@ fn serve_chat(
         }
         ChatAttempt::SseChunked { chunks, hold } => {
             stream.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\
                   Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
             )?;
             stream.flush()?;
