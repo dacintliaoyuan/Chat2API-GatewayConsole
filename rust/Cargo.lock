@@ -97,6 +97,9 @@ dependencies = [
 [[package]]
 name = "um-test-harness"
 version = "0.1.0"
+dependencies = [
+ "um-contract",
+]
 
 [[package]]
 name = "unicode-ident"

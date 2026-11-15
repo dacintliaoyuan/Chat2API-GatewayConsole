@@ -19,6 +19,7 @@ rust/
 SSE 事件名或超时预算。
 
 后续切片（S1–S8）在 `crates/` 下增加实现 crate，并复用本目录的 harness。
+验收记录见 [docs/rust-s0-acceptance.md](../docs/rust-s0-acceptance.md)。
 
 ## 命令
 
