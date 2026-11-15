@@ -309,6 +309,29 @@ fn dispatch_inner(
     (RouteOutcome::Response(response), admission)
 }
 
+/// The R13 gate: only a verified `(key, model, protocol)` triple selected in the
+/// trusted startup scope may use the aggregated upstream SSE transport.
+pub fn nonstream_aggregate_allowed(
+    state: &AppState,
+    protocol: &str,
+    model: &str,
+    key_id: Option<&str>,
+) -> bool {
+    if !state.config.nonstream_upstream_aggregate {
+        return false;
+    }
+    let Some(scope) = &state.config.nonstream_aggregate_scope else {
+        return false;
+    };
+    let Some(key_id) = key_id.filter(|key_id| !key_id.is_empty()) else {
+        return false;
+    };
+    !model.is_empty()
+        && scope.key_ids.contains(key_id)
+        && scope.models.contains(model)
+        && scope.protocols.contains(protocol)
+}
+
 fn is_chat_path(path: &str) -> bool {
     matches!(
         path,

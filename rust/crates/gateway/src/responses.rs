@@ -21,6 +21,7 @@ use crate::error::GatewayError;
 use crate::gate::Admission;
 use crate::http::{write_chunk, write_response_head, Request, Response};
 use crate::ledger::{message_tokens, UsageRecord};
+use crate::nonstream::{AggregateFailure, ChatCompletionAggregator};
 use crate::server::AppState;
 use crate::upstream::{post_compat, NextItem, StreamReader};
 
@@ -1109,6 +1110,20 @@ pub fn handle_responses(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let upstream_stream = client_stream
+        || crate::server::nonstream_aggregate_allowed(
+            state,
+            "responses",
+            &model,
+            key_id.as_deref(),
+        );
+    let mut chat_body = chat_body;
+    if upstream_stream && !client_stream {
+        chat_body.insert("stream".to_string(), Value::Bool(true));
+        chat_body
+            .entry("stream_options".to_string())
+            .or_insert_with(|| json!({"include_usage": true}));
+    }
     let started_at = Instant::now();
     let deadline = started_at + state.config.request_total;
     let origin = request
@@ -1130,6 +1145,8 @@ pub fn handle_responses(
     };
     if client_stream {
         forward_stream(&context, stream, chat_body)
+    } else if upstream_stream {
+        forward_aggregate(&context, stream, chat_body, false)
     } else {
         forward_json(&context, chat_body, false)
     }
@@ -1151,6 +1168,12 @@ fn handle_via_messages(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let upstream_stream = client_stream
+        || crate::server::nonstream_aggregate_allowed(state, "responses", &model, key_id);
+    let mut messages_body = messages_body;
+    if upstream_stream && !client_stream {
+        messages_body.insert("stream".to_string(), Value::Bool(true));
+    }
     let started_at = Instant::now();
     let deadline = started_at + state.config.request_total;
     let context = ResponsesContext {
@@ -1167,6 +1190,8 @@ fn handle_via_messages(
     };
     if client_stream {
         forward_messages_stream(&context, stream, messages_body)
+    } else if upstream_stream {
+        forward_aggregate(&context, stream, messages_body, true)
     } else {
         forward_json(&context, messages_body, true)
     }
@@ -1358,6 +1383,250 @@ fn forward_json(
         };
         record_translated_usage(context, &translated, Some(&translated["usage"]), "ok");
         return ChatResult::Response(Response::json(200, &translated));
+    }
+}
+
+fn forward_aggregate(
+    context: &ResponsesContext<'_>,
+    stream: &mut TcpStream,
+    request_body: Map<String, Value>,
+    via_messages: bool,
+) -> ChatResult {
+    let Some(slot) = context.state.stream_readers.try_acquire() else {
+        record_usage(context, "concurrency_limit", None, 0);
+        return ChatResult::Response(
+            GatewayError::new(
+                503,
+                "Too many concurrent streaming requests",
+                "too_many_concurrent_streams",
+            )
+            .with_detail(json!(format!(
+                "concurrent reader limit {} reached; retry later",
+                context.state.config.max_stream_readers
+            )))
+            .response(),
+        );
+    };
+    let mut fast_retries = 0u32;
+    let mut slow_retries = 0u32;
+    let mut physical_attempts = 0u32;
+    let upstream_path = if via_messages {
+        "/api/v1/messages"
+    } else {
+        "/api/chat/completions"
+    };
+    let extra_headers = if via_messages {
+        vec![("Anthropic-Version".to_string(), "2023-06-01".to_string())]
+    } else {
+        Vec::new()
+    };
+    loop {
+        if Instant::now() >= context.deadline {
+            slot.release();
+            record_usage(context, "request_deadline_exceeded", None, 0);
+            return ChatResult::Response(deadline_response());
+        }
+        if physical_attempts >= context.state.config.max_physical_attempts {
+            slot.release();
+            record_usage(context, "upstream_attempt_budget_exhausted", None, 0);
+            return ChatResult::Response(physical_budget_response());
+        }
+        physical_attempts += 1;
+        let attempt_started = Instant::now();
+        let response = match post_compat(
+            &context.state.config,
+            upstream_path,
+            &serde_json::to_vec(&Value::Object(request_body.clone())).unwrap_or_default(),
+            true,
+            context.deadline,
+            &extra_headers,
+        ) {
+            Ok(response) => response,
+            Err(failure) => {
+                let elapsed = attempt_started.elapsed();
+                let slow = elapsed >= context.state.config.slow_retry_threshold;
+                if retry_available(context, fast_retries, slow_retries, physical_attempts, slow) {
+                    fast_retries += 1;
+                    if slow {
+                        slow_retries += 1;
+                    }
+                    if sleep_with_deadline(
+                        retry_delay(context, fast_retries, slow),
+                        context.deadline,
+                    ) {
+                        continue;
+                    }
+                }
+                slot.release();
+                record_usage(context, failure.name(), None, 0);
+                return ChatResult::Response(
+                    GatewayError::new(
+                        502,
+                        "Failed to reach upstream compatibility endpoint",
+                        failure.name(),
+                    )
+                    .response(),
+                );
+            }
+        };
+        if response.status != 200 {
+            let elapsed = attempt_started.elapsed();
+            let slow = elapsed >= context.state.config.slow_retry_threshold;
+            if retryable_status(response.status)
+                && retry_available(context, fast_retries, slow_retries, physical_attempts, slow)
+            {
+                fast_retries += 1;
+                if slow {
+                    slow_retries += 1;
+                }
+                let delay = retry_delay(context, fast_retries, slow);
+                drop(response);
+                if !sleep_with_deadline(delay, context.deadline) {
+                    slot.release();
+                    record_usage(context, "request_deadline_exceeded", None, 0);
+                    return ChatResult::Response(deadline_response());
+                }
+                continue;
+            }
+            let status = response.status;
+            slot.release();
+            record_usage(context, &upstream_status_name(status), None, 0);
+            return ChatResult::Response(upstream_status_error(status));
+        }
+        let mut aggregator = ChatCompletionAggregator::new(Some(context.model));
+        let watcher = ClientWatcher::start(stream);
+        let reader = StreamReader::start(response.body, Some(slot));
+        let mut data = None;
+        let mut status = "ok".to_string();
+        let mut exception = None;
+        loop {
+            if watcher.as_ref().is_some_and(ClientWatcher::disconnected) {
+                status = "client_disconnected".to_string();
+                break;
+            }
+            match reader.next_item(Duration::from_millis(50)) {
+                NextItem::Timeout => continue,
+                NextItem::End => {
+                    match aggregator.finish() {
+                        Ok(value) => {
+                            data = Some(value);
+                        }
+                        Err(failure) => {
+                            status = aggregate_status(&failure).to_string();
+                            if let AggregateFailure::ExplicitError(message) = failure {
+                                exception = Some(message);
+                            }
+                        }
+                    }
+                    break;
+                }
+                NextItem::Error(error) => {
+                    status = "upstream_read_error".to_string();
+                    exception = Some(error.name.to_string());
+                    break;
+                }
+                NextItem::Line(line) => {
+                    if let Err(failure) = aggregator.feed_line(&line_text(&line)) {
+                        status = aggregate_status(&failure).to_string();
+                        if let AggregateFailure::ExplicitError(message) = failure {
+                            exception = Some(message);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        reader.cancel();
+        reader.release_slot();
+        drop(reader);
+        if let Some(data) = data {
+            let translated = if via_messages {
+                messages_to_responses_response(
+                    &data,
+                    context.model,
+                    unix_seconds(),
+                    &format!("resp_{}", random_hex(12)),
+                )
+            } else {
+                chat_to_responses_response(
+                    &data,
+                    context.model,
+                    unix_seconds(),
+                    &format!("resp_{}", random_hex(12)),
+                )
+            };
+            let Ok(translated) = translated else {
+                record_usage(
+                    context,
+                    "unexpected_upstream_response",
+                    aggregator.usage(),
+                    aggregator.output_estimate(),
+                );
+                return ChatResult::Response(
+                    GatewayError::new(502, "unexpected_upstream_response", "chat2api_error")
+                        .response(),
+                );
+            };
+            record_translated_usage(context, &translated, Some(&translated["usage"]), "ok");
+            return ChatResult::Response(Response::json(200, &translated));
+        }
+        if status == "client_disconnected" {
+            record_usage(
+                context,
+                "client_disconnected",
+                aggregator.usage(),
+                aggregator.output_estimate(),
+            );
+            return ChatResult::Written { close: true };
+        }
+        record_usage(
+            context,
+            &format!("aggregate_{status}"),
+            aggregator.usage(),
+            aggregator.output_estimate(),
+        );
+        return ChatResult::Response(aggregate_failure_response(&status, exception.as_deref()));
+    }
+}
+
+fn aggregate_status(failure: &AggregateFailure) -> &'static str {
+    match failure {
+        AggregateFailure::BadFrame => "upstream_bad_frame",
+        AggregateFailure::ExplicitError(_) => "upstream_explicit_error",
+        AggregateFailure::MissingTerminal => "upstream_missing_terminal",
+    }
+}
+
+fn aggregate_failure_response(status: &str, exception: Option<&str>) -> Response {
+    match status {
+        "upstream_explicit_error" => {
+            GatewayError::new(502, "Upstream request failed", "upstream_explicit_error")
+                .with_detail(json!({
+                    "reason": "upstream_explicit_error",
+                    "upstream_message": exception,
+                }))
+                .response()
+        }
+        "upstream_bad_frame" => GatewayError::new(
+            502,
+            "Upstream returned an invalid SSE frame",
+            "upstream_stream_error",
+        )
+        .with_detail(json!({"reason": "upstream_bad_frame"}))
+        .response(),
+        "upstream_missing_terminal" => GatewayError::new(
+            502,
+            "Upstream stream ended without a complete terminal",
+            "upstream_stream_error",
+        )
+        .with_detail(json!({"reason": "upstream_missing_terminal"}))
+        .response(),
+        _ => GatewayError::new(502, "Upstream stream failed", "upstream_stream_error")
+            .with_detail(json!({
+                "reason": "upstream_read_error",
+                "exception": exception,
+            }))
+            .response(),
     }
 }
 

@@ -15,6 +15,7 @@ pub mod gate;
 pub mod http;
 pub mod ledger;
 pub mod messages;
+pub mod nonstream;
 pub mod readonly;
 pub mod responses;
 pub mod server;
