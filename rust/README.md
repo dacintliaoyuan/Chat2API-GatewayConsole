@@ -10,6 +10,7 @@ rust/
 ├── Cargo.toml                 workspace 根
 └── crates/
     ├── contract/              只读契约夹具的类型与加载器
+    ├── gateway/               S1a 候选网关：只读面、Key 门、请求拒绝
     └── test-harness/          临时 loopback HTTP server、临时数据目录
 ```
 
@@ -19,12 +20,14 @@ rust/
 SSE 事件名或超时预算。
 
 后续切片（S1–S8）在 `crates/` 下增加实现 crate，并复用本目录的 harness。
-验收记录见 [docs/rust-s0-acceptance.md](../docs/rust-s0-acceptance.md)。
+验收记录见 [docs/rust-s0-acceptance.md](../docs/rust-s0-acceptance.md) 与
+[docs/rust-s1a-acceptance.md](../docs/rust-s1a-acceptance.md)。
 
 ## 命令
 
 ```bash
 python tests/generate_rust_contract_fixture.py
+python tests/generate_rust_gateway_fixture.py
 cargo test --manifest-path rust/Cargo.toml
 bash scripts/check-rust-s0.sh
 ```
