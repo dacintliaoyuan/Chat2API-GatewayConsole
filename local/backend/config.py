@@ -14,8 +14,7 @@ runtime fact the local application needs. Validation is fail-closed:
 * the UM runtime source directory must be the in-package ``chat2api`` directory;
 * the UM runtime ``home_dir`` is required and must equal ``LocalConfig.home_dir``
   or live under it: the child's ``HOME``/``USERPROFILE``/``TMPDIR`` come from
-  that field, so a value outside the isolated root would place ``~/.dsh``/
-  ``~/.zcode``/temp back in the operator's real profile;
+  that field, so a value outside the isolated root would place temp files back in the operator's real profile;
 * the runtime-control mode is either the explicit ``fixture`` child-process owner
   or the configured ``powershell`` wrapper (which then requires a script).
 
@@ -38,9 +37,9 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 
 # E19-1-04 step 3: the real deployment listeners. A local fixture must never
 # bind one of these - an accidental match would take the production service's
-# port (8000/8001 private chain, 8100 share gateway, 8110 share backend,
-# 18096 cloud console, 5901 whatever the deployment assigns) or steal it.
-FORBIDDEN_PORTS = frozenset({8000, 8001, 8100, 8110, 18096, 5901})
+# port (8000/8001 private chain, 8100 share gateway, 8096 cloud console,
+# 8097 display, 18096/5901 their expand-contract aliases) or steal it.
+FORBIDDEN_PORTS = frozenset({8000, 8001, 8096, 8097, 8100, 18096, 5901})
 
 # E19-1-04 step 4: the real state/profile/secret paths of the in-package
 # deployment. A fixture that names one of these would read or write the operator's
@@ -84,15 +83,13 @@ PATH_FIELDS = (
     "lock_dir",
     "pid_file",
     "ledger_file",
-    "price_file",
     "session_code_file",
     "control_token_file",
     "console_state_file",
     "model_sync_dir",
 )
-# Optional explicit paths: when present they must still be absolute, but a
-# deployment that has no manual price override file simply omits the field.
-OPTIONAL_PATH_FIELDS = ("price_override_file",)
+# Optional explicit paths: when present they must still be absolute.
+OPTIONAL_PATH_FIELDS = ()
 UM_PATH_FIELDS = (
     "source_dir",
     "python",
@@ -370,7 +367,7 @@ def _require_um_home(um_runtime, home_dir):
     ``um_runtime.home_dir`` is required (a missing one is refused by
     ``from_mapping``), must be absolute, and must equal ``home_dir`` or live
     under it. The child gets ``HOME``/``USERPROFILE``/``TMPDIR`` from it, so a
-    value outside the isolated root would place ``~/.dsh``/``~/.zcode``/temp
+    value outside the isolated root would place temp files
     back in the operator's real profile.
     """
     try:
@@ -583,8 +580,6 @@ class LocalConfig:
     lock_dir: str
     pid_file: str
     ledger_file: str
-    price_file: str
-    price_override_file: str | None
     session_code_file: str
     control_token_file: str
     console_state_file: str
@@ -631,10 +626,6 @@ class LocalConfig:
         values = {}
         for field in PATH_FIELDS:
             values[field] = _require_text(raw, field, absolute=True)
-        price_override_file = raw.get("price_override_file")
-        if price_override_file is not None:
-            price_override_file = _require_text(
-                raw, "price_override_file", absolute=True)
         um_runtime = UmRuntimeConfig.from_mapping(
             _require_mapping(raw, "um_runtime"))
         runtime_control = RuntimeControlConfig.from_mapping(
@@ -657,18 +648,16 @@ class LocalConfig:
         _reject_production_port(upstream_port, "um_runtime.base_url")
         for field, value in values.items():
             _reject_real_state(value, field)
-        if price_override_file is not None:
-            _reject_real_state(price_override_file, "price_override_file")
         for field in UM_STATE_PATH_FIELDS:
             _reject_real_state(
                 getattr(um_runtime, field), "um_runtime.%s" % field)
         _reject_real_home(values["home_dir"], values)
         # E19-1-04 step 8: the UM child HOME must be the SAME isolated root the
         # application uses (equal or below it). Anything else would let the
-        # child resolve ``~/.dsh``/``~/.zcode``/temp outside the isolation.
+        # child resolve temp files outside the isolation.
         _require_um_home(um_runtime, values["home_dir"])
         # standards-config-06 / spec-local-006: the ledger the summary READS
-        # and the ledger the 8110 child WRITES are one identity, not two
+        # and the ledger the 8100 process WRITES are one identity, not two
         # independent paths. A mismatch made the summary read a file the child
         # never wrote and report a quiet zero.
         try:
@@ -687,7 +676,6 @@ class LocalConfig:
             schema_version=schema_version,
             host=host,
             port=port,
-            price_override_file=price_override_file,
             um_runtime=um_runtime,
             runtime_control=runtime_control,
             **values,
@@ -711,7 +699,7 @@ class LocalConfig:
         """``config_dir`` must be the ``--config`` document's parent.
 
         A config that names one directory but is read from another would write
-        its session code / price document somewhere the operator did not name, so
+        its session code somewhere the operator did not name, so
         the mismatch is refused at ``--check-config`` time (exit 2).
         """
         try:
@@ -730,8 +718,6 @@ class LocalConfig:
     def config_paths(self):
         """Every configured state path (never the interpreter/source dir)."""
         paths = {field: getattr(self, field) for field in PATH_FIELDS}
-        if self.price_override_file is not None:
-            paths["price_override_file"] = self.price_override_file
         for field in UM_STATE_PATH_FIELDS:
             paths["um_runtime.%s" % field] = getattr(self.um_runtime, field)
         return paths

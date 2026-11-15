@@ -1,59 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-usagesrv — AI 网关费用统计聚合服务（127.0.0.1:8001）。
+usagesrv — AI 网关原始用量聚合服务（127.0.0.1:8001）。
 
 B0（2026-11-01）：默认装配只保留 UM 主链（chat2api 8000）与其必要的
-记账/日志/健康配套。退役来源（Qoder 国内/国际、CLIProxy、M365）不再被
-探测、启动或读入默认汇总；历史账本文件保留可追溯，但不进入 UM 首页。
+记账/日志/健康配套。退役来源不再被探测、启动或读入默认汇总；历史账本
+文件保留可追溯，但不进入 UM 首页。
 
 读取两条本地记账来源，按统一口径聚合后通过 /api/summary 提供给
 控制台前端（根路径直接托管 web/dist/index.html 构建产物；dist 未
 就绪时根路径返回诚实 500，绝不回退旧静态页——2026-09-23 维护者裁定）：
 
-  1. data/usage-chat2api.jsonl    UM 主链 chat2api（按价目表估算）
+  1. data/usage-chat2api.jsonl    UM 主链 chat2api（原始用量与请求记录）
   2. data/dsh-ledger-20260902.json（DSH_MERGE_DAY 账本日快照）
-                                 DSH 2026-09-02 一天的真实记账冻结快照
-                                 （USD 计价，页面按 exchangeRate 换 CNY）
+                                 DSH 2026-09-02 一天的冻结快照
 
-价格引擎移植自 dsh-cost-meter v1.7.7 的计费语义（模型匹配/峰谷判定/选档），
-但价目表已与该插件解耦（2026-09-11 用户决定）：两级读取链——
-  ① data/prices.json（自持价目表，用户查官网后手工维护；文件内 _说明 键
-     记录维护方法，checkedAt 供页面过期提醒，超 PRICE_STALE_DAYS 天黄条）
-  ② data/price.override.json（补缺，可手工编辑，最高优先级）
-不再读取插件账本或插件包内任何文件；插件升级与本服务计价无关。
-路径可用环境变量 USAGE_PRICE_FILE / DSH_LEDGER_SNAPSHOT_FILE 覆盖。
-
-E19-1-04B（2026-11-07）：纯计价规则在 shared/pricing_rules.py（随两端
-包携带）；本模块保留价目表读取、60 秒缓存与同名兼容包装，统计读面通过
-console_stats.StatsEnvironment 显式注入本模块的路径、计价与加载器。
-
-价目表按生效时刻版本化（2026-09-25 C1）：prices.json 可带一个可选的顶层
-"versions" 数组，每段自带生效时刻与当时的模型价、汇率、峰谷规则：
-  {"versions": [
-     {"versionId": "2026-08-01", "effectiveAt": "2026-08-01T00:00:00Z",
-      "checkedAt": "2026-09-11", "exchangeRate": 7.2,
-      "peak": {"enabled": true, "effectiveAt": "...", "windows": [...]},
-      "models": {...}, "providers": {...}},
-     {"versionId": "2026-10-01", "effectiveAt": "2026-10-01T00:00:00Z", ...}]}
-判定规则：记录时刻 → 生效时刻不大于该时刻的最近一段；每段的价格**自持**，
-不继承顶层当前表（否则改当前表会重算历史）。记录时刻缺失/不可解析，或早于
-首段生效时刻时，该记录的价格是「未知」——绝不默默按最新表计价。段内可缺省的
-字段用同一兜底：缺 exchangeRate 用 7.2，缺 peak 视为该段无峰谷（按基础档），
-缺 models/providers 即该段无价。旧形状（无 "versions" 键）映射为一段恒生效的
-默认段，任何时刻（含时刻缺失）都取它——与版本化前逐字段一致，历史金额不变。
-
-全站展示 CNY（汇率取当时生效版本的 exchangeRate）；峰谷口径与 cost-meter
-一致：高峰按该版本 peak 子档计价（官方 DeepSeek 为谷价 2 倍；缺子档按基础价
-不加倍），北京时间周六/周日全天谷价，逐条按请求时刻判定，时刻无效按基础价。
-模型名匹配（精确→归一化→包含→前缀→家族相似）同源移植。历史金额不重算：
-每条记录只按它当时生效版本的价目与汇率折算，改价只影响改价之后的请求。
+费用/价格口径已随 #30 退役：本服务只汇总原始用量（请求数、Token、
+缓存报告），不读价目表、不折算金额，也不再暴露价格环境变量。
+路径可用环境变量 CHAT2API_USAGE_LOG / DSH_LEDGER_SNAPSHOT_FILE 覆盖。
 
 DSH（DeepSeek Harness, 3080）流量经 chat2api 网关时已由 data/usage-chat2api.jsonl
 逐条记账；DSH_MERGE_DAY 快照仅为用户 2026-09-04 决定保留的一个历史日
-（2026-09-02），并入顶部累计参考费用；其他日期不进入任何 DSH 口径。
+（2026-09-02），并入顶部累计；其他日期不进入任何 DSH 口径。
 """
 
+import importlib
 import json
 import os
 import re
@@ -62,7 +33,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone, timedelta
-from http.cookies import SimpleCookie
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -70,37 +41,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from share_management import (BrokerClientAdapter, BrokerError, ShareManager,
+from share.management import (BrokerClientAdapter, BrokerError, ShareManager,
                               status_code_for)  # noqa: E402
-from share_store import (Disabled, StoreError, SecretUnavailable,  # noqa: E402
+from share.store import (Disabled, StoreError, SecretUnavailable,  # noqa: E402
                          SecretUndecryptable, VersionMismatch, read_key_labels)
-import console_public_url  # noqa: E402
-import console_stats  # noqa: E402
-from shared import pricing_rules as _pricing_rules  # noqa: E402
+from console import public_url as console_public_url  # noqa: E402
+from console import stats as console_stats  # noqa: E402
+from login_contract import (  # noqa: E402
+    LOGIN_MANUAL_REASONS,
+    MANUAL_TAKEOVER_PREFIXES,
+    terminal_manual_reason,
+)
 
 CHAT2API_LOG = os.environ.get("CHAT2API_USAGE_LOG") or \
     os.path.join(HERE, "data", "usage-chat2api.jsonl")
-# Retired source ledgers (B0, 2026-11-01). The files stay on disk for
-# historical traceability but the default assembly never reads them: they are
-# exposed only through console_stats.retired_ledgers() for an explicit
-# historical query. No token file is read for them either.
-QODER_LOG = os.environ.get("QODER_USAGE_LOG") or \
-    os.path.join(HERE, "qoder", "data", "usage.jsonl")
-M365_LOG = os.environ.get("M365_USAGE_LOG") or \
-    os.path.join(HERE, "m365", "data", "usage.jsonl")
-OVERRIDE_FILE = os.path.join(HERE, "data", "price.override.json")
-# 自持价目表与 DSH 历史日快照：输入路径可用环境变量覆盖（参照 QODER_USAGE_LOG
-# 先例），测试与迁移时重定向；默认路径读取失败按缺价/空账本降级，不崩溃。
-PRICE_FILE = os.environ.get("USAGE_PRICE_FILE") or \
-    os.path.join(HERE, "data", "prices.json")
-# UM reference prices followed from Magpie (B1, 2026-11-01). This is a
-# read-only snapshot; it never feeds resolve_price or share metering.
-MAGPIE_PRICE_SNAPSHOT_FILE = os.environ.get("MAGPIE_PRICE_SNAPSHOT") or \
-    os.path.join(HERE, "data", "magpie-prices.snapshot.json")
-MAGPIE_PRICE_STATUS_FILE = os.environ.get("MAGPIE_PRICE_STATUS") or (
-    MAGPIE_PRICE_SNAPSHOT_FILE[:-len(".snapshot.json")] + ".status.json"
-    if MAGPIE_PRICE_SNAPSHOT_FILE.endswith(".snapshot.json")
-    else os.path.splitext(MAGPIE_PRICE_SNAPSHOT_FILE)[0] + ".status.json")
 DSH_SNAPSHOT_FILE = os.environ.get("DSH_LEDGER_SNAPSHOT_FILE") or \
     os.path.join(HERE, "data", "dsh-ledger-20260902.json")
 # 根路径 / 托管的唯一页面：控制台前端构建产物。dist 未构建/缺失时根路径
@@ -150,7 +104,11 @@ ROLE_LOCAL = "local"
 ROLE_CLOUD = "cloud"
 PORT_ENV = "USAGESRV_PORT"
 LOCAL_DEFAULT_PORT = 8001
-CLOUD_DEFAULT_PORT = 18096
+# Expand-contract (2026-11-14): the cloud console moved 18096 -> 8096 so the
+# listener sits inside the governed 8090-8099 segment.  During the one-release
+# window the old port is still accepted when USAGESRV_PORT names it explicitly;
+# it is never a second default and there is never a second listener.
+CLOUD_DEFAULT_PORT = 8096
 
 
 class DeploymentRoleError(RuntimeError):
@@ -187,11 +145,13 @@ def _resolve_deployment_role(environ=None):
 def _resolve_port(role, environ=None):
     """Resolve the listen port with STRICT validation.
 
-    Unset -> 8001 for the local role, 18096 for the cloud role (the SSH
-    tunnel's local forwarding port, so it never collides with a local 8001).
-    A set value must be ASCII digits only and within 1..65535; anything
-    else (empty, sign, whitespace, hex, float, out of range) raises
-    DeploymentRoleError — never a silently coerced port.
+    Unset -> 8001 for the local role, 8096 for the cloud role (inside the
+    governed 8090-8099 console segment; the SSH tunnel forwards the same port,
+    so it never collides with a local 8001). A set value must be ASCII digits
+    only and within 1..65535; anything else (empty, sign, whitespace, hex,
+    float, out of range) raises DeploymentRoleError — never a silently coerced
+    port. The legacy 18096 remains an accepted explicit value for the
+    expand-contract window.
     """
     env = os.environ if environ is None else environ
     raw = env.get(PORT_ENV)
@@ -240,7 +200,7 @@ def _console_build_identity_error():
                 % (label, expected))
     try:
         identity = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         return ("%s 不是有效 JSON：无法确认托管页面属于 %s 角色"
                 % (label, expected))
     if not isinstance(identity, dict):
@@ -270,419 +230,35 @@ def _console_build_identity_error():
 # DSH 全部口径只统计这一天，其余日期不纳入。换日在此修改并重启 8001）。
 DSH_MERGE_DAY = "2026-09-02"
 
-# dsh-cost-meter pricing.js 的两个历史分界（峰谷时代前按 legacyBase 计、
-# 北京时间周末全天谷价），保持与其账本口径一致。纯规则常量在
-# shared.pricing_rules；这里保留模块级别名，既有读取端不受影响。
-LEGACY_BASE_BOUNDARY = _pricing_rules.LEGACY_BASE_BOUNDARY
-WEEKEND_OFFPEAK_AT = _pricing_rules.WEEKEND_OFFPEAK_AT
+def _parse_ts(value):
+    """ISO 时间 → epoch ms；失败返回 None。"""
+    if not value:
+        return None
+    try:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp() * 1000
+    except (TypeError, ValueError, OverflowError):
+        return None
 
-# 价目表过期提醒：prices.json 的 checkedAt 距今超过该天数时页面黄条提示
-# 查官网核对价格（用户手工维护价目表的时效提醒，替代原插件版本漂移黄条）。
-PRICE_STALE_DAYS = 30
 
-# 汇率兜底：价目表（或某个版本段）没写 exchangeRate / 写了非正数时一律用
-# 该值——与版本化前 load_price_table 内的硬编码兜底逐字段一致。
-DEFAULT_EXCHANGE_RATE = _pricing_rules.DEFAULT_EXCHANGE_RATE
 
-# 账本记录里可能出现的用量字段（C1 2026-09-25）：整条记录一个都没有时，
+# 账本记录里可能出现的用量字段：整条记录一个都没有时，
 # 该请求的用量是「未知」而不是真实 0。
 USAGE_TOKEN_FIELDS = ("input_tokens", "output_tokens", "cached_input_tokens",
                       "cache_tokens", "reasoning_tokens", "total_tokens")
 
-_price_lock = threading.Lock()
-_price_cache = {"at": 0.0, "data": None}
-
-# ------------------------------------------------------------------ 价格引擎
-
-def canon_model_id(model_id):
-    """归一化：小写、去括号附注、只留字母数字（'GLM-5.2 (go)' → 'glm52'）。"""
-    return _pricing_rules.canon_model_id(model_id)
-
-
-def _strip_id_decor(model_id):
-    """去日期快照（-20260101 / -2026-01-01）与版本后缀（-v2 / -v1.5）。"""
-    return _pricing_rules.strip_id_decor(model_id)
-
-
-def _tokens_of(model_id):
-    return _pricing_rules.tokens_of(model_id)
-
-
-# match_model_id 的记忆化（2026-09-26 /api/console/stats 性能修复）：
-# 该函数只依赖 (model_id, candidates) 两个入参——不读价目表、不读时钟——
-# 是纯函数；但每次调用都要对全部候选做 canon/strip/token 三轮正则归一化。
-# 账本按记录逐条计价时同一模型被重复匹配上万次（实测 3 天窗口 22671 条
-# 记录只有 4 个不同模型名 → 单次请求 22.6 万次以上正则归一化，占
-# /api/console/stats 总耗时的 97%）。按 (model_id, 候选序列) 记忆化后，
-# 候选集合变化自然 miss；缓存有界，超出容量整表清空（宁可少命中，不无界增长）。
-# E19-1-04B：统计计价改走 shared.pricing_rules，其 resolve_price 使用未缓存
-# 匹配（纯规则不持全局状态）；本缓存保留为 usagesrv.match_model_id 的宿主
-# 兼容入口，直接调用该函数的读取端仍享受记忆化。
-_MATCH_CACHE_MAX = 4096
-_match_cache = {}
-_match_cache_lock = threading.Lock()
-
-
-def match_model_id(model_id, candidates):
-    """dsh-cost-meter matchModelId 的 Python 移植：
-    精确 → 归一化等价 → 宽泛包含（最长候选）→ 去后缀精确 → 前缀 → 家族相似。
-    数字分叉守卫（glm-5 vs glm-5.3）与之同口径。
-
-    带记忆化（见 _match_cache 注释）：只对 list/tuple 候选启用，键为
-    (model_id, 候选序列)——命中与未命中返回同一个值，调用方不依赖返回对象
-    的身份，只读其内容。其他候选类型（字符串、集合、生成器……）的 ``in``
-    与迭代语义不同，一律走未缓存路径，保证与记忆化前逐字段一致。"""
-    if not model_id or not candidates:
-        return None
-    if not isinstance(candidates, (list, tuple)):
-        return _match_model_id_uncached(model_id, candidates)
-    try:
-        key = (model_id, tuple(candidates))
-        hash(key)
-    except TypeError:
-        # 候选不可哈希（非字符串）时退化为未缓存路径，不因缓存失败而拒绝。
-        return _match_model_id_uncached(model_id, candidates)
-    with _match_cache_lock:
-        if key in _match_cache:
-            return _match_cache[key]
-    hit = _match_model_id_uncached(model_id, candidates)
-    with _match_cache_lock:
-        if len(_match_cache) >= _MATCH_CACHE_MAX:
-            _match_cache.clear()
-        _match_cache[key] = hit
-    return hit
-
-
-def _match_model_id_uncached(model_id, candidates):
-    """match_model_id 的未缓存实现（纯函数；带记忆化的入口见上）。"""
-    return _pricing_rules.match_model_id_uncached(model_id, candidates)
-
-
-def complete_tier(raw):
-    """补齐一档价格：cacheMiss←input，cacheHit←cachedInput/cacheRead，output←0。"""
-    return _pricing_rules.complete_tier(raw)
-
-
-def normalize_price(raw):
-    """对应插件 normalizePrice：complete_tier 补齐基础三桶后保留峰谷子档
-    （offPeak/peak/legacyBase），供 tier_for 按时刻选档；其余展示字段不移植。
-    此前解析链直接用 complete_tier 会剥掉子档，导致 DeepSeek 峰谷与
-    legacyBase 档位失真（2026-09-05 随 D1 对齐一并修复）。"""
-    return _pricing_rules.normalize_price(raw)
-
-
-def _parse_ts(value):
-    """ISO 时间 → epoch ms；失败返回 None。"""
-    return _pricing_rules.parse_ts(value)
-
-
-def _beijing_weekday(day_index):
-    """北京时间日序 → 星期（0=周日…6=周六；1970-01-01 为周四）。"""
-    return _pricing_rules.beijing_weekday(day_index)
-
-
-def weekend_zone_at(at_ms):
-    """北京时间周六/周日全谷价区间；非周末、生效前或时刻无效返回 None
-    （插件对非有限时刻同样返回 null）。"""
-    return _pricing_rules.weekend_zone_at(at_ms)
-
-
-def is_peak_hour(at_ms, effective_at_ms, windows):
-    return _pricing_rules.is_peak_hour(at_ms, effective_at_ms, windows)
-
-
-def tier_for(entry, at_ms, peak_cfg):
-    """选档：生效后峰时段 → peak（缺子档按基础价，与插件 tierFor 一致）；
-    生效后谷时段 → offPeak；生效前、禁用或时刻无效 → 基础价；峰谷时代前 → legacyBase。"""
-    return _pricing_rules.tier_for(entry, at_ms, peak_cfg)
-
-
-def cost_of(tokens, entry, at_ms, peak_cfg):
-    """一次调用的 USD 成本。tokens 各桶相互独立（缓存部分须先从 input 里扣除）。"""
-    return _pricing_rules.cost_of(tokens, entry, at_ms, peak_cfg)
-
-
-# ------------------------------------------------------------- 价格源与查找
 
 def _load_json(path):
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except (OSError, ValueError, RecursionError):
         return None
-
-
-def _tiers_of(models_table, providers_table):
-    """价表扁平成 [(models_dict, billingMode, source)]，按精确度打分择优。"""
-    return _pricing_rules.tiers_of(models_table, providers_table)
-
-
-def _rate_of(raw_rate):
-    """汇率：非数值/非正数一律退回 DEFAULT_EXCHANGE_RATE（既有兜底口径）。"""
-    return _pricing_rules.rate_of(raw_rate)
-
-
-def _peak_of(raw_peak):
-    """峰谷规则：缺 enabled/windows 即无峰谷（按基础档），effectiveAt 解析失败为 None。"""
-    return _pricing_rules.peak_of(raw_peak)
-
-
-def _checked_age_days(checked_at, now):
-    """checkedAt（人工核对日期）距今天数；缺失/不可解析返回 None（不猜）。"""
-    return _pricing_rules.checked_age_days(checked_at, now)
-
-
-def _version_id(raw, effective_at_ms):
-    """版本标识：显式 versionId 优先，缺省用生效时刻字符串（便于按版本归组）。"""
-    return _pricing_rules.version_id(raw, effective_at_ms)
-
-
-def _price_version(raw, effective_at_ms, now):
-    """一个显式版本段 → 内部查找结构（价格自持，不继承顶层当前表）。"""
-    return _pricing_rules.price_version(raw, effective_at_ms, now)
-
-
-def _current_version(versions, versioned, now_ms):
-    """当前生效段：显式版本段按现时刻选；无可用段返回 None。"""
-    return _pricing_rules.current_version(versions, versioned, now_ms)
-
-
-def load_price_table():
-    """自持价目链聚合为统一查找结构；mtime 60 秒内直接用缓存。
-
-    主源 data/prices.json（用户手工维护，checkedAt 供过期提醒），
-    补缺层 data/price.override.json 最高优先级（resolve_price 内处理）。
-
-    版本段（C1 2026-09-25）：文件带可选顶层 "versions" 时按段解析，价格只
-    取记录时刻生效的那一段；无 "versions" 键的旧形状映射为一段恒生效的默认段，
-    顶层 exchangeRate/peak/tiers 与版本化前逐字段一致。table["versions"] /
-    ["versioned"] / ["versionMeta"] 是新增的加性字段，既有读取端不受影响。
-    """
-    now = time.time()
-    with _price_lock:
-        if _price_cache["data"] is not None and now - _price_cache["at"] < 60:
-            return _price_cache["data"]
-
-    prices = _load_json(PRICE_FILE) or {}
-    top_rate = _rate_of(prices.get("exchangeRate"))
-    top_peak = _peak_of(prices.get("peak"))
-    top_tiers = _tiers_of(prices.get("models"), prices.get("providers"))
-    checked_at = prices.get("checkedAt")
-    checked_age_days = _checked_age_days(checked_at, now)
-
-    raw_versions = prices.get("versions")
-    versioned = isinstance(raw_versions, list)
-    versions, invalid_versions = [], 0
-    if versioned:
-        for raw in raw_versions:
-            if not isinstance(raw, dict):
-                invalid_versions += 1
-                continue
-            effective_at_ms = _parse_ts(raw.get("effectiveAt") or "")
-            if effective_at_ms is None:
-                # 没有可用生效时刻的段不能被任何记录时刻命中：忽略并计数，
-                # 绝不把它当成「一直生效」（否则等于用现价算历史）。
-                invalid_versions += 1
-                continue
-            versions.append(_price_version(raw, effective_at_ms, now))
-        versions.sort(key=lambda v: v["effectiveAtMs"])
-    else:
-        # 旧形状：单一默认段，恒生效（任何时刻，含时刻缺失）——兼容红线。
-        versions = [{
-            "versionId": None,
-            "effectiveAt": None,
-            "effectiveAtMs": None,
-            "exchangeRate": top_rate,
-            "peak": top_peak,
-            "tiers": top_tiers,
-            "checkedAt": checked_at if isinstance(checked_at, str) else None,
-            "checkedAgeDays": checked_age_days,
-        }]
-
-    # 顶层「现行」视图：版本化时取当前生效段（现时刻早于首段时取最早一段），
-    # 无可用段时退回顶层值仅供展示与既有单值口径读取；价格解析一律走版本段。
-    current = _current_version(versions, versioned, now * 1000)
-    if current is None:
-        rate, peak_cfg, tiers = top_rate, top_peak, top_tiers
-    else:
-        rate, peak_cfg, tiers = (current["exchangeRate"], current["peak"],
-                                current["tiers"])
-
-    override = _load_json(OVERRIDE_FILE) or {}
-    override_models = {k: v for k, v in override.items() if not k.startswith("_")}
-
-    data = {
-        "exchangeRate": rate,
-        "peak": peak_cfg,
-        "tiers": tiers,
-        "override": override_models,
-        "versions": versions,
-        "versioned": versioned,
-        "versionMeta": {
-            "versioned": versioned,
-            "count": len(versions),
-            "invalidCount": invalid_versions,
-            "current": None if current is None else {
-                "versionId": current["versionId"],
-                "effectiveAt": current["effectiveAt"],
-                "exchangeRate": current["exchangeRate"],
-                "checkedAt": current["checkedAt"],
-                "checkedStale": (current["checkedAgeDays"] > PRICE_STALE_DAYS)
-                                if current["checkedAgeDays"] is not None else None,
-            },
-        },
-        "meta": {
-            "pricesFound": bool(tiers),
-            "checkedAt": checked_at if isinstance(checked_at, str) else None,
-            "checkedAgeDays": checked_age_days,
-            "checkedStale": (checked_age_days > PRICE_STALE_DAYS)
-                            if checked_age_days is not None else None,
-            "overrideFound": os.path.exists(OVERRIDE_FILE),
-        },
-    }
-    _price_cache["at"] = now
-    _price_cache["data"] = data
-    return data
-
-
-def version_at(table, at_ms):
-    """记录时刻 → 当时生效的版本段；无法证明时返回 None（不猜最新版本）。
-
-    旧形状（无显式版本段）只有一段恒生效的默认段：任何时刻（含时刻缺失/
-    不可解析）都取它——与版本化前逐字段一致。显式版本段下，时刻缺失、不可
-    解析或早于首段生效时刻时返回 None，调用方据此按「未知」处理（不返回 0
-    冒充，也不默默按最新价计）。纯规则在 shared.pricing_rules。
-    """
-    return _pricing_rules.version_at(table, at_ms)
-
-
-def version_rate(table, at_ms):
-    """记录时刻 → 当时生效版本的汇率；版本未知返回 None（不猜现价）。"""
-    return _pricing_rules.version_rate(table, at_ms)
-
-
-def current_version(table=None):
-    """当前生效版本段（展示与既有单值口径）；无可用段时返回 None。"""
-    table = table if table is not None else load_price_table()
-    return _current_version(table.get("versions") or [], table.get("versioned"),
-                            time.time() * 1000)
-
-
-def resolve_price(model_id, at_ms=None):
-    """返回 (entry, billingMode, matched_model, source)；未定价/版本未知返回 (None, ...)。
-
-    at_ms = 记录时刻：按当时生效的版本段取价（含该段的峰谷与 override 优先级）。
-    旧形状价表只有一段恒生效的默认段，时刻（含缺失/不可解析）不影响结果——
-    与版本化前逐字段一致。补缺层 price.override.json 没有生效时刻，仍是最高
-    优先级的手工修补层（要按时刻分段请写进版本段）。纯规则在 shared.pricing_rules。
-    逐条计价走本模块的记忆化 ``match_model_id``（2026-09-26 性能修复），
-    不在 shared 里持全局缓存。
-    """
-    return _pricing_rules.resolve_price(
-        model_id, at_ms, load_price_table(), matcher=match_model_id)
-
-
-def estimate_record(model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok):
-    """单条记录估算：返回 (cost_usd, priced, matched_model, peak_used)。
-
-    既有 4 元组契约（console_stats 依赖）：按记录时刻所属版本计价，版本标识
-    不进返回值；需要版本标识用 estimate_record_with_version。
-    """
-    return _pricing_rules.estimate_record(
-        model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok,
-        load_price_table(), matcher=match_model_id)
-
-
-def estimate_record_with_version(model_id, at_ms, input_tok, output_tok,
-                                 cache_tok, reasoning_tok):
-    """单条记录估算（版本化契约）：返回 (cost_usd, priced, matched, peak, version_id)。
-
-    既有五元组契约（console_stats 等依赖）：version_id 为记录时刻生效版本段的
-    标识，旧形状价表/版本未知时为 None。priced=False 表示价格或版本未知
-    （cost 为 0 是「未知」的占位，不是真实 0）。分享计量的人民币折算入口
-    见 ``estimate_record_with_version_and_rate``（同一金额，额外带汇率）。
-    """
-    return _pricing_rules.estimate_record_detail(
-        model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok,
-        load_price_table(), matcher=match_model_id)[:5]
-
-
-def _estimate_record_detail(model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok):
-    """内部估算：返回
-    (cost_usd, priced, matched, peak, version_id, exchange_rate, cache_unknown)。
-
-    exchange_rate 为该记录所属版本的汇率，None 表示版本未知（不折算、不猜
-    现价）。版本化价表下记录时刻缺失/不可解析/早于首段时返回
-    (0.0, False, None, False, None, None, False)。
-    ``cache_tok is None`` 表示缓存量未报告（Q11）：此时不把未知缓存折成 0，
-    而是按全部输入都是 cache-miss 计算上界，并由 cache_unknown=True 告诉
-    调用方金额不是精确值。旧记录调用方始终传数值，历史金额不变。
-    纯规则在 shared.pricing_rules。
-    """
-    return _pricing_rules.estimate_record_detail(
-        model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok,
-        load_price_table(), matcher=match_model_id)
-
-
-def estimate_record_with_version_and_rate(model_id, at_ms, input_tok, output_tok,
-                                         cache_tok, reasoning_tok):
-    """单条记录估算（含汇率契约）：返回
-    (cost_usd, priced, matched, peak, version_id, exchange_rate)。
-
-    分享计量（share_metering.price_fn）的人民币折算入口：USD 金额、版本标识与
-    ``estimate_record_with_version`` 同源（同一个 shared ``estimate_record_detail``），
-    额外返回该记录所属版本的汇率。``exchange_rate`` 为 None 表示版本未知
-    （不折算、不猜现价）；旧形状价表只有恒生效的默认段，因此任何时刻
-    （含时刻缺失）都返回默认段汇率。既有五元组契约
-    ``estimate_record_with_version`` 保持不变，其消费者不受影响。
-    """
-    return _pricing_rules.estimate_record_detail(
-        model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok,
-        load_price_table(), matcher=match_model_id)[:6]
-
-
-MICROS_PER_YUAN = 1_000_000
-
-
-def budget_cost_micros(model, at_ms, input_tok, output_tok, cache_tok,
-                        reasoning_tok):
-    """S2 预算人民币微元：返回 ``(cost_micros, facts)``。
-
-    ``cost_micros`` 为 None 表示模型未定价或价目版本未知——不返回 0 冒充
-    免费。facts 带实际价目版本/汇率/命中模型，供预算事件审计。
-    """
-    (cost_usd, priced, matched, peak, version_id, rate) = \
-        estimate_record_with_version_and_rate(
-            model, at_ms, input_tok, output_tok, cache_tok, reasoning_tok)
-    facts = {
-        "priced": bool(priced),
-        "matched_model": matched,
-        "peak": bool(peak),
-        "price_version": version_id,
-        "exchange_rate": rate,
-    }
-    if not priced or rate is None:
-        return None, facts
-    return int(round(float(cost_usd) * float(rate) * MICROS_PER_YUAN)), facts
-
-
-def _bucket_price_estimate(rec, model, in_tok, out_tok, cache_tok, reason_tok):
-    """_bucket 计价回调（chat2api）：按记录时刻所属版本估算。
-
-    返回 (cost_usd, priced, matched, peak, version_id, rate, cache_unknown)；
-    rate 为该记录所属版本的汇率，None = 版本未知（不折算、不猜现价）；
-    cache_unknown=True 表示缓存量未报告，金额是 cache-miss 上界。
-    """
-    return _estimate_record_detail(model, rec.get("_ms"), in_tok, out_tok,
-                                  cache_tok, reason_tok)
-
-
-def _bucket_price_m365(rec, model, in_tok, out_tok, cache_tok, reason_tok):
-    """_bucket 计价回调（M365）：status 非 200/None 的失败请求计请求数、费用 0
-    （priced=None，既有口径不变，与版本无关）；其余按记录时刻所属版本估算。"""
-    if rec.get("status") not in (None, 200):
-        return 0.0, None, None, False, None, None, False
-    return _bucket_price_estimate(rec, model, in_tok, out_tok, cache_tok, reason_tok)
 
 
 # ------------------------------------------------------------------- 读取账本
@@ -698,26 +274,32 @@ def _read_jsonl(path, limit=200000):
                     continue
                 try:
                     rec = json.loads(line)
-                except Exception:
+                except (ValueError, RecursionError):
                     continue
                 if isinstance(rec, dict):
                     rec["_ms"] = _parse_ts(rec.get("time"))
                     records.append(rec)
     except FileNotFoundError:
         return []
-    except Exception:
+    except (OSError, ValueError, RecursionError):
         return records
     records.sort(key=lambda r: r.get("_ms") or 0)
     return records[-limit:]
 
 
 def _beijing_day(ms):
-    return _pricing_rules.beijing_day(ms)
+    if ms is None:
+        return None
+    return datetime.fromtimestamp(ms / 1000, tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
 
 
 def _day_start_ms(day):
     """北京时间某日 00:00 → epoch ms；缺失/不可解析返回 None（不猜）。"""
-    return _pricing_rules.day_start_ms(day)
+    try:
+        dt = datetime.strptime(str(day), "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return None
+    return dt.replace(tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000
 
 
 def _usage_known(rec):
@@ -760,63 +342,19 @@ def _cache_report_status(rec):
     return "unknown"
 
 
-class _Money:
-    """USD 小计 + 按版本汇率分组（同一版本的小计只乘一次汇率）。
+def _bucket(records, kind):
+    """按 (服务, 模型, 日) 聚合原始用量。
 
-    旧形状价表只有一段恒生效的默认段，分组恒为单组，换算与版本化前逐位一致：
-    服务级沿用既有的「先 round(usd, 6) 再乘汇率」（_bucket 的 costUsd 就是
-    该四舍五入值，_round_service 消费的正是它），模型/日级用未取整小计。
-    版本化价表下各版本小计各自按自己的汇率换算后相加——历史金额不重算。
-    partial=True 表示有记录的金额未纳入本合计（无价格/用量未知/版本未知）；
-    此时 cny() 在没有任何可折算记录时返回 None（未知，不折 0）。
-    """
-
-    __slots__ = ("usd", "by_rate", "partial", "round_usd")
-
-    def __init__(self, round_usd=False):
-        self.usd = 0.0
-        self.by_rate = {}
-        self.partial = False
-        self.round_usd = round_usd
-
-    def add(self, usd, rate):
-        self.usd += usd
-        if rate is not None:
-            self.by_rate[rate] = self.by_rate.get(rate, 0.0) + usd
-
-    def cny(self):
-        if not self.by_rate:
-            return None if self.partial else 0.0
-        if self.round_usd:
-            return sum(round(usd, 6) * rate for rate, usd in self.by_rate.items())
-        return sum(usd * rate for rate, usd in self.by_rate.items())
-
-
-def _bucket(records, kind, cost_fn):
-    """按 (服务, 模型, 日) 聚合。
-
-    cost_fn(rec, model, i, o, c, r) → (cost_usd, priced, matched, peak,
-    version_id, rate[, cache_unknown])；rate 为该记录所属版本的汇率，None =
-    版本未知（不折算、不猜现价）。未知一律显式分列、不折零：用量未知的请求不进
-    token 合计（unknownUsageRequests），无价格的进 unpricedRequests，版本
-    未知的进 unknownVersionRequests；cache 未报告的请求不进 cache token 合计，
-    单独计数（cacheUnreportedRequests），其金额是 cache-miss 上界并让
-    costCnyPartial=true（Q11）。costCnyPartial=true 表示 costCny 只含
-    可折算的记录（下界，不是总额），只有整节点的金额全部无法折算时
-    costCny=null（未知，绝不折 0）。既有字段的取值不变：旧形状下服务级
-    costCny 与版本化前逐位一致，只有全无价格的模型行从 0 变成 null。
+    只汇总账本里的事实：请求数、Token（输入/输出/缓存/思考）与缓存报告
+    状态；用量未知的请求不进 token 合计（unknownUsageRequests），缓存未报告
+    的请求不进 cache token 合计，单独计数（cacheUnreportedRequests），绝不
+    折成 0。费用/价格口径已随 #30 退役，这里不派生任何金额。
     """
     models, days = {}, {}
-    total = {"requests": 0, "cost_usd": 0.0, "input": 0, "output": 0,
-             "cache": 0, "reasoning": 0, "priced": 0, "peak_requests": 0,
-             "unknown_usage": 0, "unpriced": 0, "unknown_version": 0,
+    total = {"requests": 0, "input": 0, "output": 0, "cache": 0,
+             "reasoning": 0, "unknown_usage": 0,
              "cache_reported": 0, "cache_unreported": 0,
-             "cache_unknown": 0, "cache_unknown_priced": 0}
-    money = _Money(round_usd=True)  # 服务级：沿用既有先 round(usd, 6) 再乘汇率
-    model_money = {}
-    day_money = {}
-    unpriced_models = set()
-    versioned = bool(load_price_table().get("versioned"))
+             "cache_unknown": 0}
     for rec in records:
         ms = rec.get("_ms")
         model = str(rec.get("model") or "unknown")
@@ -826,14 +364,6 @@ def _bucket(records, kind, cost_fn):
         reason_tok = int(rec.get("reasoning_tokens") or 0)
         cache_status = _cache_report_status(rec)
         usage_known = _usage_known(rec)
-        priced_cache_tok = None if cache_status == "unreported" else cache_tok
-        result = cost_fn(rec, model, in_tok, out_tok, priced_cache_tok, reason_tok)
-        if isinstance(result, (tuple, list)) and len(result) >= 7:
-            cost_usd, priced, matched, peak, version_id, rate = result[:6]
-            cache_unknown = bool(result[6])
-        else:
-            cost_usd, priced, matched, peak, version_id, rate = result
-            cache_unknown = False
 
         total["requests"] += 1
         if cache_status == "reported":
@@ -842,8 +372,6 @@ def _bucket(records, kind, cost_fn):
             total["cache_unreported"] += 1
         else:
             total["cache_unknown"] += 1
-        if cache_unknown:
-            total["cache_unknown_priced"] += 1
         if usage_known:
             total["input"] += in_tok
             total["output"] += out_tok
@@ -852,41 +380,20 @@ def _bucket(records, kind, cost_fn):
             total["reasoning"] += reason_tok
         else:
             total["unknown_usage"] += 1
-        total["cost_usd"] += cost_usd
-        if priced:
-            total["priced"] += 1
-        else:
-            unpriced_models.add(model)
-            if priced is False:
-                total["unpriced"] += 1
-                if versioned and version_id is None:
-                    total["unknown_version"] += 1
-        if not usage_known or priced is False or cache_unknown:
-            money.partial = True
-        money.add(cost_usd, rate)
-        if peak:
-            total["peak_requests"] += 1
 
-        key = matched or model
-        m = models.setdefault(key, {"model": key, "requests": 0, "cost_usd": 0.0,
-                                   "input": 0, "output": 0, "cache": 0, "reasoning": 0,
-                                   "priced": 0, "peak_requests": 0,
-                                   "unknown_usage": 0, "unpriced": 0,
-                                   "unknown_version": 0,
-                                   "cache_reported": 0, "cache_unreported": 0,
-                                   "cache_unknown": 0,
-                                   "cache_unknown_priced": 0})
-        m_money = model_money.setdefault(key, _Money())
+        m = models.setdefault(model, {"model": model, "requests": 0,
+                                     "input": 0, "output": 0, "cache": 0,
+                                     "reasoning": 0, "unknown_usage": 0,
+                                     "cache_reported": 0,
+                                     "cache_unreported": 0,
+                                     "cache_unknown": 0})
         m["requests"] += 1
-        m["cost_usd"] += cost_usd
         if cache_status == "reported":
             m["cache_reported"] += 1
         elif cache_status == "unreported":
             m["cache_unreported"] += 1
         else:
             m["cache_unknown"] += 1
-        if cache_unknown:
-            m["cache_unknown_priced"] += 1
         if usage_known:
             m["input"] += in_tok
             m["output"] += out_tok
@@ -895,165 +402,45 @@ def _bucket(records, kind, cost_fn):
             m["reasoning"] += reason_tok
         else:
             m["unknown_usage"] += 1
-        if priced:
-            m["priced"] += 1
-        elif priced is False:
-            m["unpriced"] += 1
-            if versioned and version_id is None:
-                m["unknown_version"] += 1
-        if not usage_known or priced is False or cache_unknown:
-            m_money.partial = True
-        m_money.add(cost_usd, rate)
-        if peak:
-            m["peak_requests"] += 1
 
         day = _beijing_day(ms)
         if day:
-            d = days.setdefault(day, {"day": day, "requests": 0, "cost_usd": 0.0})
-            d_money = day_money.setdefault(day, _Money())
+            d = days.setdefault(day, {"day": day, "requests": 0, "input": 0,
+                                     "output": 0, "cache": 0,
+                                     "reasoning": 0})
             d["requests"] += 1
-            d["cost_usd"] += cost_usd
-            if not usage_known or priced is False or cache_unknown:
-                d_money.partial = True
-            d_money.add(cost_usd, rate)
-    for key, m in models.items():
-        m["_money"] = model_money[key]
-    for day, d in days.items():
-        d["_money"] = day_money[day]
+            d["input"] += in_tok
+            d["output"] += out_tok
+            d["cache"] += cache_tok
+            d["reasoning"] += reason_tok
     return {
         "kind": kind,
         "requests": total["requests"],
-        "costUsd": round(total["cost_usd"], 6),
         "tokens": {"input": total["input"], "output": total["output"],
                    "cache": total["cache"], "reasoning": total["reasoning"]},
         "cacheReportedRequests": total["cache_reported"],
         "cacheUnreportedRequests": total["cache_unreported"],
         "cacheUnknownRequests": total["cache_unknown"],
-        "cacheUnknownPricedRequests": total["cache_unknown_priced"],
-        "pricedRequests": total["priced"],
-        "peakRequests": total["peak_requests"],
         "unknownUsageRequests": total["unknown_usage"],
-        "unpricedRequests": total["unpriced"],
-        "unknownVersionRequests": total["unknown_version"],
-        "models": sorted(models.values(), key=lambda m: -m["cost_usd"]),
+        "models": sorted(models.values(),
+                         key=lambda m: (-m["requests"], m["model"])),
         "days": [days[k] for k in sorted(days)],
-        "unpricedModels": sorted(unpriced_models),
-        "_money": money,
     }
-
-
-def _um_reference_unavailable(failure, state="unsynced", records=None):
-    """Honest UM reference-cost shape when no local ledger can be read.
-
-    ``records=None`` means the caller did not read the ledger at all (cloud
-    role); the counts stay unknown instead of becoming zero.
-    """
-    count = records if isinstance(records, int) and records >= 0 else None
-    return {
-        "label": "参考",
-        "cny": None,
-        "cnyPartial": True,
-        "costUsd": None,
-        "price": {
-            "state": state,
-            "source": None,
-            "snapshotAt": None,
-            "version": None,
-            "failure": failure,
-        },
-        "fx": {"rate": None, "version": None},
-        "snapshotSha256": None,
-        "coverage": {
-            "records": count, "pricedRequests": None,
-            "unpricedRequests": count, "estimatedRequests": None,
-            "incompleteRequests": count,
-            "unknownEffectiveRequests": None, "fxMissingRequests": None,
-            "preEffectiveRequests": None,
-            "costUsd": None, "cny": None, "cnyPartial": True,
-        },
-        "models": [],
-    }
-
-
-def _um_reference_summary(records):
-    """Price UM's own ledger with the local Magpie snapshot.
-
-    This is a separate read-only reference path: it never calls resolve_price,
-    never writes the shared price table and never changes share metering. A
-    missing module, bad snapshot or bad status stays explicit; it never becomes
-    zero. The caller already read ``CHAT2API_LOG`` once and passes those records
-    here, so no second ledger read is issued.
-    """
-    try:
-        import console_magpie_prices
-    except Exception as exc:  # noqa: BLE001 - the service must still start
-        return _um_reference_unavailable(
-            "价格同步模块不可用（%s）" % type(exc).__name__,
-            records=len(records))
-    try:
-        return console_magpie_prices.compute_reference(
-            records, MAGPIE_PRICE_SNAPSHOT_FILE, MAGPIE_PRICE_STATUS_FILE)
-    except Exception as exc:  # noqa: BLE001 - report, never fold to zero
-        return _um_reference_unavailable(
-            "参考费用计算失败（%s）" % type(exc).__name__,
-            records=len(records))
-
-
-def _round_service(svc, exchange_rate):
-    """USD 小计 → CNY：按记录所属版本汇率逐段换算后合计（C1 2026-09-25）。
-
-    节点带 _money（_bucket / read_dsh_ledger 写入）时按版本分组换算：同一
-    版本的小计只乘一次汇率，历史金额不重算。旧形状价表恒为单组，与既有换算
-    逐位一致（服务级沿用既有先 round(usd, 6) 再乘汇率的口径，模型/日级用
-    未取整小计）。partial 的节点 costCnyPartial=true，costCny 只含可折算
-    部分；只有整节点金额全部无法折算时 costCny=null（未知，绝不折 0、绝不按
-    现价）。没有 _money 的节点沿用单一汇率换算（与版本化前同一公式）。
-    """
-    def money(node):
-        raw = node.pop("_money", None)
-        # 各节点只用其中一种键名：service 级 costUsd、models/days cost_usd。
-        usd = node.pop("cost_usd", None)
-        camel = node.pop("costUsd", None)
-        if usd is None:
-            usd = camel
-        if raw is None:
-            node["costCny"] = round((usd or 0.0) * exchange_rate, 4)
-            return
-        raw_cny = raw.cny()
-        node["costCny"] = None if raw_cny is None else round(raw_cny, 4)
-        if raw.partial:
-            node["costCnyPartial"] = True
-
-    money(svc)
-    for m in svc.get("models", []):
-        money(m)
-    for d in svc.get("days", []):
-        money(d)
-    return svc
 
 
 def read_dsh_ledger():
     """读 DSH 账本日快照（data/dsh-ledger-20260902.json）的 days 按日汇总。
 
     快照由 2026-09-11 解耦迁移时从账本存档冻结生成（现行插件账本已丢失该日，
-    存档仍保有；生成方法见快照文件内 _说明）。与原插件记账口径一致：
-    cost 以 config.pricingCurrency（USD）计价，按日、按 provider:model 汇总，
-    cacheRead 计入缓存 token。只统计 DSH_MERGE_DAY 一天。文件缺失或损坏时
-    返回空服务对象，页面显示"暂无记账数据"。
-
-    折算（C1 2026-09-25）：金额是真实记账的 USD，按**该日生效版本段**的汇率
-    折 CNY（逐日各自换算后相加），历史金额不重算；版本化价表下该日无版本可归属
-    时该日 costCny=null（未知，不折 0、不按现价）。"""
+    存档仍保有；生成方法见快照文件内 _说明）。只统计 DSH_MERGE_DAY 一天，
+    只汇总原始用量（calls/input/output/cacheRead/reasoning）；文件缺失或损坏时
+    返回空服务对象，页面显示"暂无记账数据"。费用/价格口径已随 #30 退役。
+    """
     snapshot = _load_json(DSH_SNAPSHOT_FILE) or {}
     days = snapshot.get("days") or {}
-    pricing_currency = (snapshot.get("config") or {}).get("pricingCurrency") or "USD"
     models, day_totals = {}, {}
-    total = {"requests": 0, "cost": 0.0, "input": 0, "output": 0,
+    total = {"requests": 0, "input": 0, "output": 0,
              "cache": 0, "reasoning": 0}
-    money = _Money()
-    model_money = {}
-    day_money = {}
-    day_rate = None
     for day, e in days.items():
         if not isinstance(e, dict):
             continue
@@ -1061,54 +448,35 @@ def read_dsh_ledger():
         if day != DSH_MERGE_DAY:
             continue
         calls = int(e.get("calls") or 0)
-        cost = float(e.get("cost") or 0)
-        rate = day_rate = version_rate(load_price_table(), _day_start_ms(day))
         total["requests"] += calls
-        total["cost"] += cost
         total["input"] += int(e.get("input") or 0)
         total["output"] += int(e.get("output") or 0)
         total["cache"] += int(e.get("cacheRead") or 0)
         total["reasoning"] += int(e.get("reasoning") or 0)
-        d_money = day_money.setdefault(day, _Money())
-        if rate is None:
-            d_money.partial = True
-        d_money.add(cost, rate)
-        day_totals[day] = {"day": day, "requests": calls, "cost_usd": cost}
+        day_totals[day] = {"day": day, "requests": calls,
+                           "input": int(e.get("input") or 0),
+                           "output": int(e.get("output") or 0),
+                           "cache": int(e.get("cacheRead") or 0),
+                           "reasoning": int(e.get("reasoning") or 0)}
         for pm, m in (e.get("byProviderModel") or {}).items():
             if not isinstance(m, dict):
                 continue
-            mm = models.setdefault(pm, {"model": pm, "requests": 0, "cost_usd": 0.0,
-                                       "input": 0, "output": 0, "cache": 0, "reasoning": 0})
-            m_money = model_money.setdefault(pm, _Money())
-            if rate is None:
-                m_money.partial = True
-            m_money.add(float(m.get("cost") or 0), rate)
+            mm = models.setdefault(pm, {"model": pm, "requests": 0,
+                                       "input": 0, "output": 0,
+                                       "cache": 0, "reasoning": 0})
             mm["requests"] += int(m.get("calls") or 0)
-            mm["cost_usd"] += float(m.get("cost") or 0)
             mm["input"] += int(m.get("input") or 0)
             mm["output"] += int(m.get("output") or 0)
             mm["cache"] += int(m.get("cacheRead") or 0)
             mm["reasoning"] += int(m.get("reasoning") or 0)
-    if day_rate is None and total["requests"]:
-        # 有纳入日但没有可归属的版本：金额未折算（未知），不按现价、不折 0。
-        money.partial = True
-    if day_rate is not None:
-        money.add(total["cost"], day_rate)
-    for key, m in models.items():
-        m["_money"] = model_money[key]
-    for day, d in day_totals.items():
-        d["_money"] = day_money[day]
     return {
         "kind": "dsh-ledger",
-        "pricingCurrency": pricing_currency,
         "requests": total["requests"],
-        "costUsd": total["cost"],
         "tokens": {"input": total["input"], "output": total["output"],
                    "cache": total["cache"], "reasoning": total["reasoning"]},
-        "models": sorted(models.values(), key=lambda m: -m["cost_usd"]),
+        "models": sorted(models.values(),
+                         key=lambda m: (-m["requests"], m["model"])),
         "days": [day_totals[k] for k in sorted(day_totals)],
-        "unpricedModels": [],
-        "_money": money,
     }
 
 
@@ -1133,7 +501,7 @@ def summary_cached() -> dict:
             return stamped
     try:
         built = build_summary()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — 摘要构建失败按 error 上报
         print("[usagesrv] summary build failed: %s" % type(exc).__name__, flush=True)
         return {"error": "summary unavailable"}
     with _SUMMARY_LOCK:
@@ -1153,7 +521,7 @@ def _summary_refresh_worker() -> None:
             with _SUMMARY_LOCK:
                 _SUMMARY_CACHE["value"] = built
                 _SUMMARY_CACHE["at"] = time.time()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — 刷新失败保留旧缓存
             print("[usagesrv] summary refresh failed: %s" % type(exc).__name__, flush=True)
         time.sleep(_SUMMARY_REFRESH_SECONDS)
 
@@ -1169,81 +537,32 @@ def _summary_cache_reset_for_tests() -> None:
         _SUMMARY_CACHE["at"] = 0.0
 
 
-def _cloud_peak_and_versions(table):
-    """The price-shape fields shared with the local summary (no ledger read)."""
-    peak_cfg = table["peak"]
-    peak_windows_beijing = []
-    for w in peak_cfg["windows"]:
-        peak_windows_beijing.append(
-            {"beijing": f"{(w['start'] + 8) % 24:02d}:00-{(w['end'] + 8) % 24:02d}:00",
-             "rate": 2.0})
-    return peak_cfg, peak_windows_beijing
-
-
 def _build_cloud_summary():
     """Cloud role summary: ONLY the UM share capability is assembled.
 
-    It NEVER reads the private Qoder / chat2api / M365 / DSH ledgers and NEVER
-    probes any local source port: those resources do not exist on this deployment. The
+    It NEVER reads the private chat2api / DSH ledgers and NEVER probes any
+    local source port: those resources do not exist on this deployment. The
     share usage has its OWN read surface (GET /api/console/share-usage), so this
-    payload honestly reports an EMPTY services object plus the explicit
-    assembly facts instead of fabricating zero rows for absent chains. Only the
-    price table (data/prices.json, the same file the share metering prices
-    against) is read for its metadata/versions/peak shape.
+    payload honestly reports an EMPTY services object plus the explicit assembly
+    facts instead of fabricating zero rows for absent chains. Price fields were
+    retired with #30.
     """
-    table = load_price_table()
-    rate = table["exchangeRate"]
-    peak_cfg, peak_windows_beijing = _cloud_peak_and_versions(table)
     return {
         "generatedAt": datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
-        "exchangeRate": rate,
-        "currency": "CNY",
         "role": ROLE_CLOUD,
         "assembly": {
             "role": ROLE_CLOUD,
             "services": ["share"],
-            "excluded": ["qoder", "chat2api", "m365", "dsh"],
-            "note": "云端角色只装配 UM 分享：不读取本地私人账本、不探测 Qoder/"
-                    "CLIProxy/model_sync；分享用量见 GET /api/console/share-usage",
-        },
-        "sources": {"priceMeta": table["meta"]},
-        # The cloud role never reads the local UM ledger, so it cannot show a
-        # local CNY reference cost. The shape is explicit, not zero.
-        "umReference": _um_reference_unavailable(
-            "云端角色不读取本地 UM 账本", "unsynced", records=None),
-        "peak": {
-            "enabled": peak_cfg["enabled"],
-            "effectiveAt": time.strftime("%Y-%m-%d", time.gmtime(peak_cfg["effectiveAtMs"] / 1000)) if peak_cfg["effectiveAtMs"] else None,
-            "windows": peak_windows_beijing,
-            "weekendOffpeak": True,
-            "note": "高峰按价表 peak 子档计价；北京时间周六/周日全天谷价（与分享计价同一价目表）",
-        },
-        "priceVersions": {
-            "versioned": table["versioned"],
-            "invalidCount": table["versionMeta"]["invalidCount"],
-            "current": table["versionMeta"]["current"],
-            "versions": [
-                {"versionId": v["versionId"],
-                 "effectiveAt": v["effectiveAt"],
-                 "exchangeRate": v["exchangeRate"],
-                 "checkedAt": v["checkedAt"],
-                 "checkedStale": (v["checkedAgeDays"] > PRICE_STALE_DAYS)
-                                 if v["checkedAgeDays"] is not None else None}
-                for v in table["versions"]
-            ],
-            "note": "逐条按记录时刻取当时生效版本段的价目与汇率",
+            "note": "云端角色只装配 UM 分享：不读取本地私人账本；"
+                    "分享用量见 GET /api/console/share-usage",
         },
         # 空 services 是诚实的「本部署未聚合私人账本」：前端显示缺少服务
-        # 聚合的错误，而不是把「没读取」折成 0 请求 / 0 费用。
+        # 聚合的错误，而不是把「没读取」折成 0 请求。
         "services": {},
-        "qoderQuota": {
-            "cn": None, "global": None,
-            "note": "云端角色未装配 Qoder 探测（不访问 8095/8097）",
-        },
         "dsh": {"url": None,
                 "note": "云端角色未装配 DSH 快照读取"},
         "dshMergedIntoTotal": {
-            "day": None, "costCny": 0.0,
+            "day": None,
             "note": "云端角色不并入任何本地 DSH 账本",
         },
     }
@@ -1252,87 +571,28 @@ def _build_cloud_summary():
 def build_summary():
     if CLOUD_ROLE:
         return _build_cloud_summary()
-    rate = load_price_table()["exchangeRate"]
 
-    # UM 主链 chat2api：按价目表估算（逐条按记录时刻所属版本计价与折算）。
-    # 退役来源账本（qoder / m365）保留在磁盘上供历史追溯，默认汇总绝不读取。
-    c2a_records = _read_jsonl(CHAT2API_LOG)
-    c2a = _bucket(c2a_records, "estimate", _bucket_price_estimate)
-    _round_service(c2a, rate)
+    # UM 主链 chat2api：只汇总原始用量（请求数与 Token）。
+    c2a = _bucket(_read_jsonl(CHAT2API_LOG), "estimate")
 
-    # DSH：cost-meter 账本按日汇总的真实记账（USD→CNY，非估算）。
+    # DSH：冻结日快照的原始用量。
     dsh = read_dsh_ledger()
-    _round_service(dsh, rate)
-
-    # DSH 并入顶部累计：只并入 DSH_MERGE_DAY 这一天，不做每日自动并入。
-    dsh_merge_cny, dsh_merge_day = 0.0, None
-    for d in dsh["days"]:
-        if d["day"] == DSH_MERGE_DAY:
-            dsh_merge_cny, dsh_merge_day = d["costCny"], d["day"]
-            break
-
-    table = load_price_table()
-    peak_cfg = table["peak"]
-    peak_windows_beijing = []
-    for w in peak_cfg["windows"]:
-        peak_windows_beijing.append(
-            {"beijing": f"{(w['start'] + 8) % 24:02d}:00-{(w['end'] + 8) % 24:02d}:00",
-             "rate": 2.0})
 
     return {
         "generatedAt": datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
-        "exchangeRate": rate,
-        "currency": "CNY",
         "sources": {
             "chat2apiLog": _display_path(CHAT2API_LOG),
             "dshLedger": _display_path(DSH_SNAPSHOT_FILE),
-            "priceMeta": table["meta"],
-            "magpiePriceSnapshot": _display_path(MAGPIE_PRICE_SNAPSHOT_FILE),
         },
-        "peak": {
-            "enabled": peak_cfg["enabled"],
-            "effectiveAt": time.strftime("%Y-%m-%d", time.gmtime(peak_cfg["effectiveAtMs"] / 1000)) if peak_cfg["effectiveAtMs"] else None,
-            "windows": peak_windows_beijing,
-            "weekendOffpeak": True,
-            "note": "高峰按价表 peak 子档计价（官方 DeepSeek 为谷价 2 倍；缺子档按基础价不加倍）；北京时间周六/周日全天谷价（与 dsh-cost-meter 口径一致）",
-        },
-        # 价目表版本段（C1 2026-09-25）：versioned=false 表示旧形状（无 versions
-        # 键，单一恒生效默认段）；versions 列出每段生效时刻与该段核对时间，供页面
-        # 区分「当前生效版本」「本段核对时间」「本段是否过期」；invalidCount 是
-        # 无可用生效时刻被忽略的段数（既不生效也不参与计价）。
-        "priceVersions": {
-            "versioned": table["versioned"],
-            "invalidCount": table["versionMeta"]["invalidCount"],
-            "current": table["versionMeta"]["current"],
-            "versions": [
-                {"versionId": v["versionId"],
-                 "effectiveAt": v["effectiveAt"],
-                 "exchangeRate": v["exchangeRate"],
-                 "checkedAt": v["checkedAt"],
-                 "checkedStale": (v["checkedAgeDays"] > PRICE_STALE_DAYS)
-                                 if v["checkedAgeDays"] is not None else None}
-                for v in table["versions"]
-            ],
-            "note": "逐条按记录时刻取当时生效版本段的价目与汇率；缺时刻/早于首段按未知（不计 0）；改价只影响之后的请求",
-        },
-        # B0：UM 主链 + 冻结的 DSH 快照。退役来源（qoder / m365）的历史
-        # 账本仍在磁盘保留，但绝不进入默认汇总；也不在这里探测 8095/8097。
+        # B0：UM 主链 + 冻结的 DSH 快照；默认汇总绝不读取未登记来源。
         "services": {"chat2api": c2a, "dsh": dsh},
-        # UM reference cost uses UM's own ledger and the local Magpie snapshot,
-        # not data/prices.json. It is additive and never feeds share pricing.
-        "umReference": _um_reference_summary(c2a_records),
         "dsh": {"url": "http://127.0.0.1:3080",
-                "note": "费用为 2026-09-02 账本日快照的真实记账（USD→CNY）；快照生成方法见 data/dsh-ledger-20260902.json 内 _说明"},
-        "dshMergedIntoTotal": {
-            "day": dsh_merge_day,
-            "costCny": dsh_merge_cny,
-            "note": "仅此日 DSH 账本费用并入顶部累计参考费用",
-        },
+                "note": "用量为 2026-09-02 账本日快照的原始用量；快照生成方法见 data/dsh-ledger-20260902.json 内 _说明"},
     }
 
 
 # ------------------------------------------------------ 分享用量（只读挂载）
-# share_metering.py 由另一名实现者并行编写：这里只做受保护的延迟导入——
+# share/metering.py 由另一名实现者并行编写：这里只做受保护的延迟导入——
 # 模块不存在时 usagesrv 行为与现在完全一致（绝不因它起不来），路由如实报
 # 不可用；绝不把「读不到」折成 0 请求 / 0 费用。挂载点是两个只读口：
 # GET /api/share/usage（share 管理面，鉴权走既有 _share_auth：本机会话或管理
@@ -1345,11 +605,11 @@ SHARE_USAGE_LEDGER_NAME = "usage-share-backend.jsonl"
 
 
 def share_usage_ledger_path():
-    """分享专用后端 8110 的用量账本路径。
+    """合并后 8100 分享进程的用量账本路径。
 
-    解析口径与 console_share_production._backend_dir / console_log_reader 一致：
-    CONSOLE_SHARE_BACKEND_DIR（须绝对路径）覆盖，否则 %LOCALAPPDATA% 下的
-    SelfUseAI/ai-gateway/share-backend；解析不出返回 None（不猜路径）。"""
+    解析口径与 console_log_reader 一致：CONSOLE_SHARE_BACKEND_DIR（须绝对
+    路径）覆盖，否则 %LOCALAPPDATA% 下的 SelfUseAI/ai-gateway/share-backend；
+    解析不出返回 None（不猜路径）。"""
     override = os.environ.get(SHARE_BACKEND_DIR_ENV)
     if override:
         if not os.path.isabs(override):
@@ -1368,7 +628,7 @@ def share_usage_reader():
     返回 (reader, error)：模块不存在/导入失败/接口缺失 → (None, 错误码)，
     导入失败只打印类型名，不抛出——服务照常运行。"""
     try:
-        import share_metering
+        share_metering = __import__("importlib").import_module("share.metering")
     except Exception as exc:  # noqa: BLE001 — 缺模块不是错误：路由如实报不可用
         print(f"[usagesrv] share_metering unavailable: {type(exc).__name__}", flush=True)
         return None, "share_metering_unavailable"
@@ -1385,7 +645,7 @@ def share_usage_requests_reader():
     (None, 错误码)，路由如实报不可用，绝不折成空页。
     """
     try:
-        import share_metering
+        share_metering = __import__("importlib").import_module("share.metering")
     except Exception as exc:  # noqa: BLE001 — 缺模块不是错误：路由如实报不可用
         print(f"[usagesrv] share_metering unavailable: {type(exc).__name__}",
               flush=True)
@@ -1421,7 +681,7 @@ def _generate_session_code_locked(now):
     _session["code"] = secrets.token_urlsafe(24)
     _session["code_expires"] = now + SESSION_CODE_TTL_SECONDS
     try:
-        from share_secret_protection import write_private_secret_path
+        from share.secret_protection import write_private_secret_path
         write_private_secret_path(
             SESSION_CODE_FILE, _session["code"].encode("utf-8"))
     except (OSError, ValueError, ImportError):
@@ -1478,7 +738,7 @@ def session_valid(cookie_header):
         jar.load(cookie_header)
         morsel = jar.get(SESSION_COOKIE)
         return bool(morsel) and secrets.compare_digest(morsel.value, expected)
-    except Exception:
+    except CookieError:
         return False
 
 
@@ -1489,7 +749,7 @@ def control_token_ok(supplied):
     不把管理令牌读进进程。Windows 保持既有读取路径（ACL 边界另管）。
     """
     try:
-        from share_secret_protection import read_private_secret_path
+        from share.secret_protection import read_private_secret_path
         expected = read_private_secret_path(
             CONTROL_TOKEN_FILE, max_bytes=1024,
             label="control token").decode("utf-8").strip()
@@ -1519,19 +779,20 @@ _console_status_cache = {"at": 0.0, "value": None}
 def get_console_manager():
     """Lazily build the console operation manager (never at import time).
 
-    Cloud role: ONLY the UM share registry is assembled (no Qoder/CLIProxy/
-    model_sync/zcode card or handler), and the share seams are wired for the
-    Linux deployment (TS/Funnel stay unwired).
+    Cloud role: ONLY the UM share registry is assembled (no retired
+    non-UM card or handler), and the share seams are wired for the Linux
+    deployment.
 
-    Local role (B0, 2026-11-01): the UM registry only — retired Qoder /
-    QoderGlobal / CLIProxy action modules are not imported.
+    Local role (B0, 2026-11-01): the UM registry only — no non-UM action
+    module is imported.
     """
     global _console_manager
     with _console_manager_lock:
         if _console_manager is None:
-            import console_adapters
-            import console_operations
-            import console_share_production
+            console_adapters = importlib.import_module("console.adapters")
+            console_operations = importlib.import_module("console.operations")
+            console_share_production = importlib.import_module(
+                "console.share_production")
             # E19-1-06/04B: the share broker construction loader is wired
             # explicitly BEFORE the seams are assembled; console_share_production
             # never imports this host module. The cloud root passes a broker
@@ -1558,7 +819,7 @@ def console_services_snapshot():
         cached = _console_status_cache["value"]
         if cached is not None and now - _console_status_cache["at"] < CONSOLE_STATUS_TTL:
             return cached, True, round(now - _console_status_cache["at"], 1)
-    import console_adapters
+    console_adapters = importlib.import_module("console.adapters")
     payload = console_adapters.service_status(cloud=CLOUD_ROLE)
     with _console_status_lock:
         _console_status_cache["at"] = now
@@ -1584,31 +845,6 @@ _CONSOLE_HEALTH_PROBES = (
     # "可用运行时端口证据").
     {"id": "chat2api", "port": 8000, "path": None},
 )
-
-
-def _quota_snapshot_payload(force):
-    """Retired Qoder-CN quota read is NOT assembled (B0, 2026-11-01).
-
-    The Qoder CN source (8095) is retired: this read must never probe it, never
-    read its old token file and never reuse a previous success cache. The
-    endpoint answers an explicit ``not_assembled`` state with null readings —
-    never a fabricated 0 (未知 ≠ 0). ``force`` is accepted for wire
-    compatibility and changes nothing.
-    """
-    return {
-        "state": "not_assembled",
-        "remaining": None,
-        "used": None,
-        "total": None,
-        "expires_at": None,
-        "buckets": None,
-        "exceeded": None,
-        "checked_at": int(time.time()),
-        "error": "退役来源未装配：Qoder 国内额度探测已下线（不访问 8095/8097）",
-        "source": None,
-        "gate": {"verdict": "not_assembled", "desired_state": "unknown",
-                 "process": "unknown"},
-    }
 
 
 def _probe_service(spec):
@@ -1657,7 +893,7 @@ def _probe_service(spec):
         conn.close()
         return {"id": spec["id"], "port": spec["port"],
                 "state": "listening", "http_status": status, "ms": _ms()}
-    except Exception:
+    except Exception:  # noqa: BLE001 — TCP 接受但 HTTP 探测失败按 note 上报
         return {"id": spec["id"], "port": spec["port"],
                 "state": "listening", "http_status": None,
                 "note": "tcp accepted but http probe failed", "ms": _ms()}
@@ -1666,8 +902,8 @@ def _probe_service(spec):
 def _console_health_payload(force):
     if CLOUD_ROLE:
         # 云端角色：只报 UM 分享入口的 pid/身份事实；绝不 TCP 探测
-        # Qoder/CLIProxy/model_sync 等非 UM 端口。
-        import console_adapters
+        # 非 UM 端口。
+        from console import adapters as console_adapters
         snapshot = console_adapters.cloud_service_status()
         services = list(snapshot.get("services") or [])
         services.append({"id": "usagesrv", "port": PORT,
@@ -1697,6 +933,74 @@ def _console_health_payload(force):
         _console_health_cache["at"] = now
         _console_health_cache["payload"] = payload
     return dict(payload), False
+
+
+def _console_auth_observation():
+    """One read-only auth observation for the console display-state face.
+
+    Ticket #15: the cloud status page must show the instance's own manual
+    takeover reason and login window, not a placeholder. The read uses the same
+    chat2api status endpoint and the same control token as the local console;
+    the cloud role resolves the share entry's port from the Linux runtime
+    snapshot (never a guessed port). A read failure stays an honest unknown
+    (state None), so display-state degrades to not_started/disconnected
+    instead of inventing valid or a fake deadline. Ticket #41 keeps the
+    readable classification (``control_denied`` / ``status_unreachable`` /
+    ``status_query_failed`` / ``status_schema`` or a generic
+    ``auth_observation_failed``) in ``read_error`` so /display-state can
+    show why the observation is unknown. Ticket #42 item 14 puts the imports
+    inside the guarded block, so an import failure is reported as a read error
+    instead of escaping as a 500. Item 15 sanitizes the generic message so an
+    internal path or long token is never copied to the tokenless face. Item 16
+    keeps the primary cleanup outcome alongside the cleanup failure. No token or
+    login page is copied into the observation.
+    """
+    operation_error_type = None
+    try:
+        from console import um_adapter as console_um_adapter
+        from console.operations import OperationError as operation_error_type
+
+        snapshot = None
+        if CLOUD_ROLE:
+            snapshot, _cached, _age = console_services_snapshot()
+        base_url = console_um_adapter.resolve_chat2api_base_url(
+            cloud=CLOUD_ROLE, snapshot=snapshot)
+        token = console_um_adapter.read_control_token(CONTROL_TOKEN_FILE)
+        status = console_um_adapter.read_auth_status(base_url, token)
+    except Exception as exc:  # noqa: BLE001  a display read must stay honest
+        if (operation_error_type is not None
+                and isinstance(exc, operation_error_type)):
+            return {"state": None, "label": None, "error": None,
+                    "primary": None,
+                    "observed_at": None,
+                    "login_window_deadline_epoch": None,
+                    "read_error": {"code": exc.code, "message": exc.message}}
+        message = " ".join(str(exc).split())
+        if not message or _CONSOLE_ERROR_DETAIL_UNSAFE.search(message):
+            # A path, drive or long token would leak internal detail through
+            # the tokenless face; the class name alone is still readable.
+            message = type(exc).__name__
+        else:
+            message = "%s: %s" % (type(exc).__name__,
+                                  message[:_CONSOLE_ERROR_DETAIL_MAX])
+        return {"state": None, "label": None, "error": None,
+                "primary": None,
+                "observed_at": None,
+                "login_window_deadline_epoch": None,
+                "read_error": {
+                    "code": "auth_observation_failed",
+                    "message": message,
+                }}
+    return {
+        "state": status["state"],
+        "label": status["label"],
+        "error": status["error"],
+        "primary": status.get("primary"),
+        "observed_at": status["checked_epoch"],
+        "login_window_deadline_epoch":
+            status["login_window_deadline_epoch"],
+        "read_error": None,
+    }
 
 
 def _console_error_status(exc):
@@ -1766,8 +1070,8 @@ SHARE_MANAGEMENT_CONFIG_FILE = os.environ.get("SHARE_MANAGEMENT_CONFIG") or \
 def _load_cloud_share_management_deployment(payload):
     """Explicit cloud (Linux) management transport config (schema 2).
 
-    The Windows schema 1 (named pipe) is NOT accepted here and a Unix path is
-    NEVER stuffed into ``pipe_name``: the transport is explicit. A present but
+    The retired Windows schema 1 (named pipe) is gone with the old local share
+    chain (#33). The transport is explicit (unix_socket); a present but
     corrupt/unusable config still raises BrokerError (never a silent Noop).
     """
     schema = payload.get("schema_version")
@@ -1786,7 +1090,7 @@ def _load_cloud_share_management_deployment(payload):
         raise BrokerError(
             "cloud share management config transport must be 'unix_socket' "
             "(got %r)" % (transport,))
-    from share_broker_client import (BrokerClient,
+    from share.broker_client import (BrokerClient,
                                     UnixSocketBrokerTransport,
                                     validate_unix_socket_path)
     socket_path = payload.get("socket_path")
@@ -1799,7 +1103,7 @@ def _load_cloud_share_management_deployment(payload):
     key_file = payload.get("control_key_file")
     if not isinstance(key_file, str) or not key_file:
         raise BrokerError("share management config control_key_file missing")
-    from share_broker_server import read_control_key
+    from share.broker_server import read_control_key
     try:
         secret = read_control_key(key_file)
     except (OSError, ValueError) as exc:
@@ -1817,11 +1121,11 @@ def _load_share_management_deployment():
     * absent config file or explicit ``enabled: false`` -> None (NoopBroker;
       status honestly reports 未安装/未授权 and revoking mutations refuse);
     * a PRESENT but corrupt/unusable config (bad JSON, wrong schema,
-      missing/garbage enabled flag, malformed pipe name, unreadable or
+      missing/garbage enabled flag, malformed socket path, unreadable or
       oversized control key) -> BrokerError. The share API must never
       quietly fall back to NoopBroker while a config claims to be enabled;
     * the BrokerClient receives a transport FACTORY (a fresh
-      NamedPipeBrokerTransport per exchange), never a transport instance —
+      UnixSocketBrokerTransport per exchange), never a transport instance —
       the client calls factory().open() for every single exchange.
     """
     path = SHARE_MANAGEMENT_CONFIG_FILE
@@ -1830,40 +1134,13 @@ def _load_share_management_deployment():
     try:
         with open(path, encoding="utf-8") as f:
             payload = json.load(f)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise BrokerError(f"share management config unreadable: {exc}")
     if not isinstance(payload, dict):
         raise BrokerError("share management config must be an object")
-    if CLOUD_ROLE:
-        return _load_cloud_share_management_deployment(payload)
-    schema = payload.get("schema_version")
-    if isinstance(schema, bool) or schema != 1:
-        raise BrokerError(
-            f"unsupported share management config schema {schema!r}")
-    enabled = payload.get("enabled")
-    if not isinstance(enabled, bool):
-        raise BrokerError("share management config 'enabled' must be an "
-                          "explicit boolean (never inferred)")
-    if enabled is False:
-        return None
-    pipe_prefix = "\\\\.\\pipe\\"
-    pipe_name = payload.get("pipe_name")
-    if (not isinstance(pipe_name, str)
-            or not pipe_name.startswith(pipe_prefix)
-            or len(pipe_name) <= len(pipe_prefix)):
-        raise BrokerError("share management config pipe_name must be a "
-                          "named-pipe path (\\\\.\\pipe\\<name>)")
-    key_file = payload.get("control_key_file")
-    if not isinstance(key_file, str) or not key_file:
-        raise BrokerError("share management config control_key_file missing")
-    from share_broker_client import BrokerClient, NamedPipeBrokerTransport
-    from share_broker_server import read_control_key
-    try:
-        secret = read_control_key(key_file)
-    except (OSError, ValueError) as exc:
-        raise BrokerError(f"share management control key unusable: {exc}")
-    client = BrokerClient(lambda: NamedPipeBrokerTransport(pipe_name), secret)
-    return BrokerClientAdapter(client)
+    # The retired Windows named-pipe schema 1 is gone with the old local
+    # share chain (#33); the cloud role is the only transport.
+    return _load_cloud_share_management_deployment(payload)
 
 
 def get_share_manager():
@@ -1883,24 +1160,17 @@ def _display_path(path):
 
 
 # console_stats 的进程级显式注入环境（E19-1-04B）：路径取本模块启动时
-# 解析出的常量，计价走 shared.pricing_rules，价目表加载走本模块的 60 秒
-# 缓存链。main() 在启动时 configure 一次，让 um_today/um_trend 等不显式
+# 解析出的常量。main() 在启动时 configure 一次，让 um_today/um_trend 等不显式
 # 传 environment 的函数也走同一注入；console_stats._FILE_CACHE 是 reader
-# 端内缓存，不属于这个环境，也不上提 shared。
+# 端内缓存，不属于这个环境。
 STATS_ENV = console_stats.StatsEnvironment(
     chat2api_log=CHAT2API_LOG,
     dsh_snapshot=DSH_SNAPSHOT_FILE,
-    qoder_log=QODER_LOG,
-    m365_log=M365_LOG,
     dsh_merge_day=DSH_MERGE_DAY,
-    magpie_price_snapshot=MAGPIE_PRICE_SNAPSHOT_FILE,
-    magpie_price_status=MAGPIE_PRICE_STATUS_FILE,
     parse_ts=_parse_ts,
     beijing_day=_beijing_day,
     day_start_ms=_day_start_ms,
     display_path=_display_path,
-    estimate_record=estimate_record,
-    price_table_loader=load_price_table,
 )
 
 
@@ -1951,7 +1221,7 @@ def origin_allowed(origin):
 
 # Remote console access is opt-in and device-scoped. The HTTP listener stays
 # on loopback; only the configured HTTPS Serve proxy may authenticate a peer.
-from console_tailnet import TailnetPolicy, has_proxy_metadata, load_policy
+from console.tailnet import TailnetPolicy, has_proxy_metadata, load_policy
 
 TAILNET_POLICY = TailnetPolicy()
 
@@ -1965,7 +1235,7 @@ TAILNET_POLICY = TailnetPolicy()
 # load so a missing optional display package cannot stop the console; /display/
 # then answers an honest 503.
 try:
-    from console_display_proxy import (
+    from console.display_proxy import (
         DisplayGrantError,
         DisplayGrants,
         DisplayProxy,
@@ -2011,13 +1281,12 @@ def _log_int_or_none(value):
 # 取值；形状里没有的字段一律 null（未采集/未知，绝不折 0）。键=读取表里的形状名。
 _LOG_FEED_SHAPES = {
     # chat2api 账本：字段名同 usagesrv._bucket（time/input_tokens/
-    # output_tokens/duration_ms/credits）。
+    # output_tokens/duration_ms）。
     "usage_ledger": {
         "time": ("time",), "model": ("model",), "status": ("status",),
         "input": ("input_tokens",), "output": ("output_tokens",),
         "cached_input": ("cached_input_tokens",),
         "reasoning": ("reasoning_tokens",), "duration": ("duration_ms",),
-        "credits": ("credits",),
     },
 }
 
@@ -2025,10 +1294,8 @@ _LOG_FEED_SHAPES = {
 def _console_log_readers():
     """调用日志账本读取表（F4b）：请求的 source id → (账本路径, 字段形状)。
 
-    B0（2026-11-01）：默认装配只读 UM 主链（chat2api）账本。退役来源
-    （qoder / qoder-global）的历史账本仍在磁盘保留，但不在本表内：请求它们
-    时按 sources_unavailable 如实声明，绝不静默读取、也不发任何请求。未登记
-    的 id 同样进 sources_unavailable，绝不静默跳过。
+    B0（2026-11-01）：默认装配只读 UM 主链（chat2api）账本。未登记的 id
+    进 sources_unavailable，如实声明未覆盖，绝不静默跳过、也不发任何请求。
     """
     return {
         "chat2api": (CHAT2API_LOG, "usage_ledger"),
@@ -2042,8 +1309,7 @@ def _console_log_row(source, record, shape="usage_ledger"):
     「未采集/未知」，而不是折成 0——0 会被前端读成真实测得值（例如缺输出
     Token 但耗时有效的请求会显示 0 Token/s）。真实 0 是已知值：写了 0 就是 0。
     字段名按 shape（各链账本的写入形状，见 _LOG_FEED_SHAPES）取值；形状里
-    没有的字段（如国际日志的 input_tokens/credits）同样一律 null。
-    credits 保持既有 null 语义（非 int/float 一律 null，本函数不改）。
+    没有的字段同样一律 null。
     """
     fields = _LOG_FEED_SHAPES.get(shape) or _LOG_FEED_SHAPES["usage_ledger"]
 
@@ -2053,7 +1319,6 @@ def _console_log_row(source, record, shape="usage_ledger"):
                 return record[name]
         return None
 
-    credits = raw("credits")
     cache_status = record.get("cache_report_status")
     return {
         "source": source,
@@ -2068,7 +1333,6 @@ def _console_log_row(source, record, shape="usage_ledger"):
                                 else None),
         "reasoning_tokens": _log_int_or_none(raw("reasoning")),
         "duration_ms": _log_int_or_none(raw("duration")),
-        "credits": credits if isinstance(credits, (int, float)) else None,
     }
 
 
@@ -2099,7 +1363,7 @@ def _usage_rates_recorded_requests(payload):
     但窗口内无记录为真实的 0（零记录 ≠ 无记录）；malformed_lines（部分坏行、
     其余仍可读）照常计数。
     """
-    import console_stats
+    from console import stats as console_stats
     coverage = payload.get("coverage") or {}
     hours = coverage.get("hours")
     checked_epoch = payload.get("checked_epoch")
@@ -2222,7 +1486,7 @@ def um_maintenance(manager=None, limit=50):
 
     Only the UM actions are selected: account.um_status / account.um_verify /
     account.login, plus service.start/stop/restart whose target is chat2api.
-    A non-UM operation (model.speedtest, share.*, another service target) is
+    A non-UM operation (share.*, another service target) is
     not mixed into this table. The read is bounded to the newest
     UM_MAINTENANCE_MAX_READ original rows; older rows are not claimed to be
     absent. A manager/database failure is ``unavailable``, never an empty list.
@@ -2556,7 +1820,7 @@ class Handler(BaseHTTPRequestHandler):
             return None, 400, "incomplete_body"
         try:
             obj = json.loads(raw) if raw else {}
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             return None, 400, "invalid_json"
         if obj is None:
             obj = {}
@@ -2608,13 +1872,8 @@ class Handler(BaseHTTPRequestHandler):
 
         可选筛选 ``window``/``key``/``model``/``result`` 由同一 reader 应用，
         默认不筛（完整历史），``filters`` 原样回显。share_metering 缺席、
-        账本路径解析不出、读取失败一律如实返回错误码，绝不以 0 请求 /
-        0 费用冒充。price_fn 是版本化计价器（固定签名
-        (model_id, at_ms, input_tok, output_tok, cache_tok, reasoning_tok) →
-        (cost_usd, priced, matched, peak, version_id, exchange_rate)），分享
-        参考费用与个人费用走同一条版本链；汇率让人民币金额按每条记录自己的
-        版本折算，而不是先聚合 USD 再乘现行汇率。顶层载荷形状不新增
-        currency/exchangeRate（人民币字段落在各分组节点与 coverage）。"""
+        账本路径解析不出、读取失败一律如实返回错误码，绝不以 0 请求冒充。
+        只读原始用量；费用/价格派生已随 #30 退役。"""
         reader, error = share_usage_reader()
         if reader is None:
             return 503, {"error": error}
@@ -2629,8 +1888,7 @@ class Handler(BaseHTTPRequestHandler):
         if "key" in filters:
             filters["key_id"] = filters.pop("key")
         try:
-            payload = reader(ledger, estimate_record_with_version_and_rate,
-                             limit=SHARE_USAGE_LIMIT, **filters)
+            payload = reader(ledger, limit=SHARE_USAGE_LIMIT, **filters)
         except ValueError:
             # The reader rejects an invalid window/key/model/result value; this
             # is caller input, not a ledger failure.
@@ -2646,9 +1904,10 @@ class Handler(BaseHTTPRequestHandler):
         """逐请求分页读面：与汇总同一账本、同一筛选、同一计价链。
 
         返回 ``{rows, nextCursor, truncated, filters, coverage, checkedAt}``；
-        ``rows`` 逐条保留未归属/未知/未报告/未定价，缺失值保持 null。
+        ``rows`` 逐条保留未归属/未知/未报告，缺失值保持 null。
         分页按账本追加顺序（新→旧）用 cursor 行号前进；读取窗口本身被
         截断时 coverage.truncated/olderRecordsUnread 如实说明更旧记录未读。
+        费用/价格派生已随 #30 退役。
         """
         reader, error = share_usage_requests_reader()
         if reader is None:
@@ -2670,8 +1929,7 @@ class Handler(BaseHTTPRequestHandler):
         if "key" in filters:
             filters["key_id"] = filters.pop("key")
         try:
-            payload = reader(ledger, estimate_record_with_version_and_rate,
-                             **filters)
+            payload = reader(ledger, **filters)
         except ValueError:
             return 400, {"error": "invalid_share_usage_query"}
         except Exception as exc:  # noqa: BLE001 — 读不到是错误，不是空页
@@ -2874,10 +2132,10 @@ class Handler(BaseHTTPRequestHandler):
                         or not isinstance(expected, int) or expected < 1:
                     _bad("invalid key_id or expected_row_version")
                     return
-                from console_share_probe import test_key
+                from console.share_probe import test_key
                 self._send_json(200, test_key(
                     manager, rest[1], expected,
-                    discover_url=lambda: self._share_funnel_url(refresh=True)))
+                    discover_url=lambda: self._share_public_url()))
                 return
             if method == "POST" and len(rest) == 3 and rest[0] == "keys"                     and rest[2] == "revoke-and-terminate":
                 # R8-A7 revoke-and-terminate: disable + one-shot interrupt of
@@ -3013,7 +2271,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._share_error(exc)
             return
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
             print(f"[usagesrv] share api error: {type(exc).__name__}: {exc}", flush=True)
             self.close_connection = True
             self._send_json(500, {"error": "share management error"})
@@ -3076,51 +2334,16 @@ class Handler(BaseHTTPRequestHandler):
             "created_at": row.get("created_at"),
         }
 
-    # Public funnel URL cache: the node's Tailscale DNS name only changes on
-    # tailnet re-login, so one successful probe is reused; the probe only
-    # happens while the funnel is observed on and the cache is empty.
-    _share_url_cache = {"url": None}
-
     @classmethod
-    def _tailscale_funnel_url(cls, *, refresh=False):
-        """The historical Tailscale Funnel URL (D18-1 fallback only)."""
-        if not refresh and cls._share_url_cache["url"]:
-            return cls._share_url_cache["url"]
-        try:
-            import subprocess
-            proc = subprocess.run(["tailscale", "status", "--json"],
-                                  capture_output=True, timeout=8)
-            if proc.returncode != 0:
-                return None
-            node = json.loads(proc.stdout.decode("utf-8", "replace"))
-            if refresh and node.get("BackendState") != "Running":
-                return None
-            name = str((node.get("Self") or {}).get("DNSName") or "").strip(".")
-            if name:
-                cls._share_url_cache["url"] = "https://%s" % name
-                return cls._share_url_cache["url"]
-        except Exception:
-            pass
-        return None if refresh else cls._share_url_cache["url"]
+    def _share_public_url(cls):
+        """The configured public origin, or None when unset/invalid.
 
-    @classmethod
-    def _share_public_url_detail(cls, *, refresh=False):
-        """``(url, source, reason)``: configured origin first, TS second.
-
-        An invalid ``CONSOLE_PUBLIC_ORIGIN`` is an explicit error and never
-        falls back to the Tailscale URL. With the key absent the historical
-        Funnel discovery is unchanged.
+        The old Tailscale Funnel fallback is retired with the Windows local
+        share chain (#33). An unconfigured/invalid ``CONSOLE_PUBLIC_ORIGIN`` is
+        reported as ``public_url_unavailable`` and never replaced by a guessed
+        host.
         """
-        resolved = console_public_url.resolve_configured()
-        if resolved.source is not None \
-                or resolved.reason == console_public_url.INVALID:
-            return resolved
-        return console_public_url.resolve(
-            cls._tailscale_funnel_url(refresh=refresh))
-
-    @classmethod
-    def _share_funnel_url(cls, *, refresh=False):
-        return cls._share_public_url_detail(refresh=refresh).url
+        return console_public_url.resolve_configured().url
 
     @staticmethod
     def _console_share_capacity(payload):
@@ -3144,7 +2367,7 @@ class Handler(BaseHTTPRequestHandler):
         checked_at = None
         reason = "maintenance_unwired"
         try:
-            import console_share_actions
+            from console import share_actions as console_share_actions
             seam = getattr(console_share_actions, "_MAINTENANCE_STATUS", None)
             if seam is not None:
                 view = seam()
@@ -3228,122 +2451,6 @@ class Handler(BaseHTTPRequestHandler):
             out["broker"] = mapped
         return out
 
-    @staticmethod
-    def _console_share_public_module():
-        """The public supervision module, or None when it is not deployed.
-
-        Import failure is "module unavailable" (an honest 200 available:false),
-        never an exception that turns into a 500.
-        """
-        try:
-            import share_public_supervision
-        except Exception:  # noqa: BLE001
-            return None
-        return share_public_supervision
-
-    def _console_share_public_payload(self):
-        """GET /public: snapshot + bounded event tail + budget + cancel."""
-        supervision = self._console_share_public_module()
-        if supervision is None:
-            return {"available": False,
-                    "reason": "public_supervision_unavailable",
-                    "snapshot": None, "events": None,
-                    "events_truncated": None, "events_unreadable": None,
-                    "budget": None, "cancel": None, "unreadable": True}
-        try:
-            return supervision.read_status()
-        except Exception:  # noqa: BLE001  unreadable is not "no snapshot"
-            return {"available": True, "version": None, "checked_at": None,
-                    "snapshot": None, "events": None,
-                    "events_truncated": None, "events_unreadable": None,
-                    "budget": None, "cancel": None,
-                    "unreadable": True, "reason": "state_unreadable",
-                    "state_file": getattr(supervision, "STATE_FILE_NAME", None)}
-
-    def _console_share_public_events_payload(self):
-        """GET /public-events: bounded, newest-first event page."""
-        query = parse_qs(urlparse(self.path).query)
-        raw_limit = (query.get("limit") or ["50"])[0]
-        try:
-            limit = int(raw_limit)
-        except (TypeError, ValueError):
-            return 400, {"error": "invalid_events_query"}
-        if not 1 <= limit <= 200:
-            return 400, {"error": "invalid_events_query"}
-        before = None
-        raw_before = (query.get("before") or [""])[0]
-        if raw_before:
-            try:
-                before = float(raw_before)
-            except (TypeError, ValueError):
-                return 400, {"error": "invalid_events_query"}
-            if not before > 0 or before in (float("inf"), float("-inf")) \
-                    or before != before:
-                return 400, {"error": "invalid_events_query"}
-        supervision = self._console_share_public_module()
-        if supervision is None:
-            return 200, {"available": False, "events": None,
-                          "next_before": None, "truncated": None,
-                          "reason": "public_supervision_unavailable"}
-        try:
-            status = supervision.read_status(
-                event_limit=supervision.EVENT_MAX_RETURN)
-        except Exception:  # noqa: BLE001  never render "no events" for a read failure
-            return 200, {"available": True, "events": None,
-                          "next_before": None, "truncated": None,
-                          "reason": "state_unreadable"}
-        events = status.get("events") if isinstance(status, dict) else None
-        if not isinstance(events, list):
-            return 200, {"available": True, "events": None,
-                          "next_before": None, "truncated": None,
-                          "reason": "events_unreadable"}
-        rows = []
-        for item in events:
-            if not isinstance(item, dict):
-                continue
-            try:
-                at = datetime.fromisoformat(str(item.get("at_utc"))).timestamp()
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if before is not None and at >= before:
-                continue
-            rows.append((at, item))
-        rows.sort(key=lambda pair: pair[0], reverse=True)
-        page = rows[:limit]
-        next_before = page[-1][0] if len(rows) > limit and page else None
-        return 200, {
-            "available": True,
-            "events": [{"at_utc": item.get("at_utc"),
-                         "status": item.get("status"),
-                         "code": item.get("code"),
-                         "action": item.get("action")}
-                        for _at, item in page],
-            "next_before": next_before,
-            "truncated": bool(status.get("events_truncated")),
-        }
-
-    def _console_share_public_export_payload(self):
-        """GET /public-export: redacted diagnostics attachment."""
-        query = parse_qs(urlparse(self.path).query)
-        fmt = (query.get("format") or ["json"])[0]
-        if fmt != "json":
-            return 400, {"error": "invalid_export_format"}, None
-        supervision = self._console_share_public_module()
-        if supervision is None:
-            return 503, {"error": "share_public_export_unavailable"}, None
-        try:
-            payload = supervision.export_diagnostics()
-        except Exception:  # noqa: BLE001  export unavailable, never a fake file
-            return 503, {"error": "share_public_export_unavailable"}, None
-        generated = payload.get("generated_at") \
-            if isinstance(payload, dict) else None
-        try:
-            stamp = datetime.fromisoformat(str(generated)).strftime(
-                "%Y%m%d-%H%M%S")
-        except (TypeError, ValueError, OverflowError):
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        return 200, payload, "share-public-diagnostics-%s.json" % stamp
-
     def _console_display_session_payload(self):
         """GET /display-session: same-origin launcher path, never credentials.
 
@@ -3375,9 +2482,20 @@ class Handler(BaseHTTPRequestHandler):
                 "expires_at": None, "mode": "novnc",
                 "operator": self._console_operator_default(),
             }
+        status, grant = self._console_display_grant_payload()
+        if status != 200 or not isinstance(grant, dict) \
+                or not isinstance(grant.get("url"), str):
+            return {
+                "available": False, "url": None,
+                "reason": (grant.get("error")
+                           if isinstance(grant, dict) else None)
+                          or "display_grant_unavailable",
+                "expires_at": None, "mode": "novnc",
+                "operator": self._console_operator_default(),
+            }
         return {
-            "available": True, "url": "/display/", "reason": "",
-            "expires_at": int(time.time() + config.max_session_seconds),
+            "available": True, "url": grant["url"], "reason": "",
+            "expires_at": grant.get("expires_at"),
             "mode": "novnc",
             "operator": self._console_operator_state(),
         }
@@ -3452,13 +2570,27 @@ class Handler(BaseHTTPRequestHandler):
         ``valid`` only comes from THIS read's ``state == "valid"``; an old
         login action, a black screen or an rfb connect never implies it.
         ``waiting_mfa`` needs an explicit MFA/manual reason. ``not_started``
-        and ``display_disconnected`` stay separate facts.
+        and ``display_disconnected`` stay separate facts. Ticket #42 item 3
+        accepts a bare terminal manual reason as well as the prefixed code, so
+        an older chat2api instance still shows "需要人工接管". Item 16 shows
+        the primary outcome a cleanup failure masked.
         """
         state = auth.get("state")
         error = auth.get("error")
-        reason = error
-        if isinstance(reason, str) and reason.startswith("manual_takeover:"):
-            reason = reason.split(":", 1)[1]
+        primary = auth.get("primary")
+        manual_reason = terminal_manual_reason(error, primary)
+        reason = (manual_reason if manual_reason is not None else error)
+        prefixed_manual = (isinstance(error, str)
+                           and any(error.startswith(prefix)
+                                   for prefix in MANUAL_TAKEOVER_PREFIXES))
+        read_error = auth.get("read_error")
+        read_detail = None
+        if isinstance(read_error, dict):
+            code = read_error.get("code") or "unknown"
+            read_detail = "认证状态读取失败（%s）" % code
+            message = read_error.get("message")
+            if isinstance(message, str) and message:
+                read_detail += "：" + message
         if state == "valid":
             return "valid", "登录有效", None
         if state == "cancelled":
@@ -3468,12 +2600,34 @@ class Handler(BaseHTTPRequestHandler):
         if state in ("invalid", "failed"):
             if reason == "timeout":
                 return "timed_out", "登录窗口已超时", error
+            if manual_reason is not None:
+                detail = error
+                if (isinstance(primary, str) and primary
+                        and primary != error):
+                    detail = ("%s；原始原因：%s" % (error, primary)
+                              if error else primary)
+                return "failed", "需要人工接管", detail
+            if isinstance(primary, str) and primary and primary != error:
+                return "failed", "登录失败", "%s；原始原因：%s" % (
+                    error, primary)
             return "failed", "登录失败", error
         if state in ("logging_in", "needs_login"):
-            if reason in ("umpass_mfa_required", "duo_prompt_waiting"):
+            # A bare terminal reason is an older instance that did not prefix
+            # the code; it has already ended the round, so show the manual
+            # takeover. A prefixed reason while logging_in is still the MFA
+            # wait (ticket #15), not a finished round.
+            if manual_reason is not None and not prefixed_manual:
+                return "failed", "需要人工接管", error
+            if reason in LOGIN_MANUAL_REASONS:
                 return "waiting_mfa", "等待 MFA（本人操作）", error
             return "logging_in", "正在登录", error
         if state is None:
+            if read_detail:
+                if not display["available"]:
+                    return ("display_disconnected", "显示连接中断",
+                            "%s；显示不可用：%s"
+                            % (read_detail, display["reason"]))
+                return "not_started", "未开始登录", read_detail
             if not display["available"]:
                 return ("display_disconnected", "显示连接中断",
                         display["reason"])
@@ -3481,25 +2635,16 @@ class Handler(BaseHTTPRequestHandler):
         return "unknown", "状态未知", error
 
     def _console_display_state_payload(self):
-        """GET /display-state: read-only auth + operator + display facts.
+        """GET /display-state: read-only operator + display facts.
 
-        The read never triggers a login, never starts/stops the dedicated
-        instance and never extends the login window: the deadline comes from
-        the instance's OWN one-time window and is passed through verbatim.
+        The read never triggers a login, never starts/stops the share entry and
+        never extends a login window. Ticket #15 reads the instance's own auth
+        observation so the manual reason and the ONE login window deadline are
+        visible; an unreadable observation stays an honest unknown.
         """
-        import console_share_actions
-        failed = None
-        try:
-            auth = console_share_actions.backend_auth_read()
-        except Exception as exc:  # noqa: BLE001 - unreadable is unknown
-            failed = "%s: %s" % (type(exc).__name__, exc)
-            auth = {"state": None, "label": None, "error": None,
-                    "recovery": None, "observed_at": None,
-                    "login_window_deadline_epoch": None}
+        auth = _console_auth_observation()
         display = self._console_display_availability()
         state, label, detail = self._console_display_state_of(auth, display)
-        if failed is not None:
-            state, label, detail = "unknown", "状态未知", failed
         return {
             "available": True,
             "state": state,
@@ -3508,29 +2653,14 @@ class Handler(BaseHTTPRequestHandler):
             "observed_at": auth.get("observed_at"),
             "login_window_deadline_epoch":
                 auth.get("login_window_deadline_epoch"),
+            "auth_error": auth.get("read_error"),
+            # Ticket #42 item 16: the display read face keeps the primary
+            # session outcome a cleanup failure masked, alongside the cleanup
+            # error already shown in ``detail``.
+            "auth_primary": auth.get("primary"),
             "operator": self._console_operator_state(),
             "display": display,
         }
-
-    def _console_backend_login_cancel_payload(self):
-        """POST /backend-login-cancel: end THIS login round only (D18-8)."""
-        import console_share_actions
-        from console_operations import OperationError
-        try:
-            result = console_share_actions.backend_login_cancel("", {})
-        except OperationError as exc:
-            return 503, {"cancelled": False, "state": None,
-                         "detail": str(exc), "error": exc.code}
-        if not isinstance(result, dict):
-            return 503, {"cancelled": False, "state": None,
-                         "detail": "登录取消响应不符合契约"}
-        cancelled = bool(result.get("cancelled"))
-        state = result.get("state")
-        if state not in ("cancelled", "no_login_in_progress"):
-            state = "cancelled" if cancelled else "no_login_in_progress"
-        detail = result.get("detail")
-        return 200, {"cancelled": cancelled, "state": state,
-                     "detail": detail if isinstance(detail, str) else None}
 
     def _console_display_operator_payload(self, body):
         """POST /display-operator: acquire or explicitly take over (D18-9)."""
@@ -3644,10 +2774,6 @@ class Handler(BaseHTTPRequestHandler):
             # never triggers a login and never extends the login window.
             self._send_json(200, self._console_display_state_payload())
             return
-        if method == "POST" and rest == ["backend-login-cancel"]:
-            status, payload = self._console_backend_login_cancel_payload()
-            self._send_json(status, payload)
-            return
         if method == "POST" and rest == ["display-operator"]:
             body, body_code, body_error = self._read_share_json_body()
             if body_code is not None:
@@ -3673,8 +2799,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 # Fixed loopback health read: no store construction/recovery,
                 # account probe, Funnel query or operation side effects.
-                from console_share_production import production_broker_ops
-                from console_operations import OperationError
+                from console.share_production import production_broker_ops
+                from console.operations import OperationError
                 try:
                     production_broker_ops().ensure_control_ready()
                     payload = {"responsive": True}
@@ -3686,107 +2812,59 @@ class Handler(BaseHTTPRequestHandler):
                     payload = {"responsive": False, "error_code": "share_control_unconfirmed"}
                 self._send_json(200, payload)
                 return
-            # S5（契约 §5.1）：公网巡检只读/导出三个入口。它们必须在
-            # ``get_share_manager()`` 之前处理——读面只读巡检模块自己的
-            # 状态文件，不构造分享 store、不探测账号、不触发 Funnel 查询。
-            if method == "GET" and rest == ["public"]:
-                self._send_json(
-                    200, self._console_share_public_payload())
-                return
-            if method == "GET" and rest == ["public-events"]:
-                status, payload = self._console_share_public_events_payload()
-                self._send_json(status, payload)
-                return
-            if method == "GET" and rest == ["public-export"]:
-                status, payload, filename = \
-                    self._console_share_public_export_payload()
-                if status != 200:
-                    self._send_json(status, payload)
-                    return
-                self._send_json_attachment(status, payload, filename)
-                return
             manager = get_share_manager()
             if method == "GET" and rest == ["status"]:
                 payload = self._console_share_status_payload(
                     manager.status())
-                # The console pill derives "已开放" from broker.running AND
-                # funnel_on; the ShareManager store view never carries the
-                # funnel layer, so the facade observes it through the SAME
-                # read-only seam the share.status action uses. The seams are
-                # wired lazily by get_console_manager() on operations access
-                # only — a bare status GET must ensure the wiring itself
-                # (idempotent setattr; unwired -> key absent -> the UI keeps
-                # its honest 未确认 fallback). The CLOUD role passes its own
-                # flag: this lazy path must never install the local
-                # Tailscale/Funnel seams into a cloud process (the cloud
-                # assembly deliberately leaves them unwired).
+                # D18-1: the configured public origin is the real
+                # deployment address. The old Tailscale Funnel fallback was
+                # retired with the Windows local share chain (#33): an
+                # unconfigured origin stays unavailable and is never replaced
+                # by a different public host.
                 try:
-                    import console_adapters
-                    import console_share_actions
-                    if console_share_actions._FUNNEL_OBSERVED is None:
+                    from console import adapters as console_adapters
+                    from console import share_actions as console_share_actions
+                    if console_share_actions._BROKER_OPS is None:
                         console_adapters.wire_share_production_seams(
                             keys_manager=manager, cloud=CLOUD_ROLE)
-                    funnel = console_share_actions._funnel_observed()
-                    if funnel is not None:
-                        payload["funnel_on"] = bool(funnel)
-                    # D18-1: the configured public origin is the real
-                    # deployment address; the Tailscale Funnel URL stays the
-                    # fallback only when it is observed on. An invalid
-                    # CONSOLE_PUBLIC_ORIGIN is an explicit error and never
-                    # silently falls back to a different public host.
-                    configured = console_public_url.resolve_configured()
-                    if configured.source is not None \
-                            or configured.reason == console_public_url.INVALID:
-                        resolved = configured
-                    elif funnel is True:
-                        resolved = console_public_url.resolve(
-                            self._tailscale_funnel_url())
-                    else:
-                        resolved = console_public_url.ResolvedPublicUrl(
-                            None, None, console_public_url.UNCONFIGURED)
-                    payload["share_url_source"] = resolved.source
-                    payload["share_url_reason"] = resolved.reason
-                    if resolved.url:
-                        payload["share_url"] = resolved.url
+                except Exception:  # noqa: BLE001  status stays honest
+                    pass
+                resolved = console_public_url.resolve_configured()
+                payload["share_url_source"] = resolved.source
+                payload["share_url_reason"] = resolved.reason
+                if resolved.url:
+                    payload["share_url"] = resolved.url
+                try:
                     # Gateway-instance evidence: broker.running is the ALWAYS-ON
-                    # management daemon and must never read as share-open (or
-                    # close-residue) evidence — observe the actual gateway
-                    # instance through the same read-only seam the share.status
-                    # action uses. Account validity rides the dedicated-backend
-                    # observation seam; last_check_at stamps THIS read.
-                    ops = console_share_actions._BROKER_OPS
-                    if ops is not None:
-                        # verify_running is THREE-STATE (True/False/None):
-                        # None = unconfirmed (pipe busy/unreachable) — never
-                        # collapse it to False, that would fabricate a
-                        # confirmed-stopped fact; omit the key instead so the
-                        # UI keeps its honest 未确认 fallback.
-                        running = ops.verify_running()
-                        if running is True or running is False:
-                            payload["gateway_running"] = running
-                    observe = console_share_actions._BACKEND_OBSERVE
-                    if observe is not None:
-                        ob = observe()
-                        if isinstance(ob, dict) and \
-                                ob.get("auth_state") is not None:
-                            payload["account"] = {
-                                "valid": ob.get("auth_state") == "valid",
-                                "running": ob.get("running"),
-                            }
+                        # management daemon and must never read as share-open (or
+                        # close-residue) evidence — observe the actual gateway
+                        # instance through the same read-only seam the share.status
+                        # action uses; last_check_at stamps THIS read.
+                        ops = console_share_actions._BROKER_OPS
+                        if ops is not None:
+                            # verify_running is THREE-STATE (True/False/None):
+                            # None = unconfirmed (pipe busy/unreachable) — never
+                            # collapse it to False, that would fabricate a
+                            # confirmed-stopped fact; omit the key instead so the
+                            # UI keeps its honest 未确认 fallback.
+                            running = ops.verify_running()
+                            if running is True or running is False:
+                                payload["gateway_running"] = running
                         # 归因启用状态（2026-09-26 owner 裁定，同日复核重塑：
                         # 一个布尔不得冒充三件事）：同一观察缝的 attribution
                         # 子字典原样透出——加性字段，既有字段的值与语义不变。
                         # file_ready 只表示本进程此刻能读到长度合格的文件；
                         # instance_loaded 是对运行中 8100 实例的推断
                         # （yes/no/unknown，查不到进程即 unknown）；request_attribution
-                        # 本读面不观察，只指向 8110 账本 attribution="verified"
+                        # 本读面不观察，只指向 8100 账本 attribution="verified"
                         # 的运行期事实。旧的 wired 键已删除（只被本读面与
                         # console_share_actions 消费，两处已同步更新），
                         # 不留下一个含义模糊的布尔；前端渲染是另一步。
-                        if isinstance(ob, dict) and \
-                                isinstance(ob.get("attribution"), dict):
-                            payload["attribution"] = dict(ob["attribution"])
-                except Exception:
+                        attribution = console_share_actions._share_entry_attribution()
+                        if isinstance(attribution, dict) \
+                                and "file_ready" in attribution:
+                            payload["attribution"] = dict(attribution)
+                except Exception:  # noqa: BLE001 — 归因读取失败只跳过该字段
                     pass
                 payload["last_check_at"] = int(time.time())
                 # r14 总览契约：配置上限 / 在途 / 排队 / 上游容量分列。
@@ -3846,10 +2924,10 @@ class Handler(BaseHTTPRequestHandler):
                         or not isinstance(expected, int) or expected < 1:
                     _bad("invalid key_id or expected_row_version")
                     return
-                from console_share_probe import test_key
+                from console.share_probe import test_key
                 self._send_json(200, test_key(
                     manager, rest[1], expected, private=rest[2] == "test-private",
-                    discover_url=lambda: self._share_funnel_url(refresh=True)))
+                    discover_url=lambda: self._share_public_url()))
                 return
 
             if method == "POST" and rest == ["keys"]:
@@ -3920,10 +2998,10 @@ class Handler(BaseHTTPRequestHandler):
                         or not isinstance(expected, int) or expected < 1:
                     _bad("invalid key_id or expected_row_version")
                     return
-                from console_share_probe import test_key
+                from console.share_probe import test_key
                 self._send_json(200, test_key(
                     manager, rest[1], expected,
-                    discover_url=lambda: self._share_funnel_url(refresh=True)))
+                    discover_url=lambda: self._share_public_url()))
                 return
             if method == "POST" and len(rest) == 3 and rest[0] == "keys" \
                     and rest[2] == "revoke-and-terminate":
@@ -3947,8 +3025,8 @@ class Handler(BaseHTTPRequestHandler):
                     rest[1], expected_row_version=expected,
                     idempotency_key=idem)
                 # C1/D18-3: the revoke answer distinguishes what the
-                # management side released (8110 PENDING/GRANTED) from what it
-                # aborted (8110 COMMITTED) and what 8100 closed upstream.
+                # management side released (PENDING/GRANTED) from what it
+                # aborted (COMMITTED) and what 8100 closed upstream.
                 # A missing count stays None (never a fabricated 0). The note
                 # must not claim the in-flight state was confirmed when the
                 # instance ACK carried no terminated count.
@@ -4050,7 +3128,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send_json(status_code_for(exc), {"error": str(exc)})
             return
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
             # Details to the server console only; the response stays
             # generic (same discipline as _share_api).
             print(f"[usagesrv] console share api error: {type(exc).__name__}: {exc}",
@@ -4079,13 +3157,13 @@ class Handler(BaseHTTPRequestHandler):
         ok, how = True, "local"
         rest = [s for s in parsed.path.split("/") if s][2:]  # api/console/...
         if CLOUD_ROLE:
-            # 云端角色只装配 UM 分享：非 UM 的读面（Qoder / CLIProxy /
-            # model_sync / zcode 账本与探测）明确返回未装配，绝不探测或
-            # 读取这些路径；管理面仍是 loopback + Host/Origin 门。
+            # 云端角色只装配 UM 分享：非 UM 的读面明确返回未装配，
+            # 绝不探测或读取这些路径；
+            # 管理面仍是 loopback + Host/Origin 门。
             blocked = rest[0] if rest[:1] and rest[0] in (
                 "usage-tokens", "usage-rates", "gateway-connection",
-                "quota-snapshot", "logs", "log-sources", "log-entries",
-                "log-overview", "model-pending", "stats", "um") else None
+                "logs", "log-sources", "log-entries",
+                "log-overview", "stats", "um") else None
             if blocked is not None:
                 self._send_json(503, {
                     "error": "capability_not_assembled",
@@ -4127,7 +3205,7 @@ class Handler(BaseHTTPRequestHandler):
                 # _discard_unread_body：关闭仍有未读数据的连接会让真实
                 # 客户端看到连接重置，而不是下面这个码）。写方法按未知路径
                 # 拒绝，与 /api/share/usage 及控制台面其余只读路由
-                # （usage-tokens / usage-rates / prices…）同一既有行为，
+                # （usage-tokens / usage-rates…）同一既有行为，
                 # 不新增一套 405 语义。
                 self.close_connection = True
                 self._discard_unread_body()
@@ -4143,7 +3221,7 @@ class Handler(BaseHTTPRequestHandler):
             # B5 UM read surface: today/trend/requests/logs/request-logs
             # read UM's own chat2api ledger/logs; maintenance reads the
             # ORIGINAL console operation records. None of these touch the
-            # share ledger, share pricing or the cloud share role.
+            # share ledger or the cloud share role.
             if method != "GET" or len(rest) != 2:
                 self.close_connection = True
                 self._discard_unread_body()
@@ -4163,14 +3241,14 @@ class Handler(BaseHTTPRequestHandler):
             sub = rest[1]
             try:
                 if sub == "today":
-                    import console_stats
+                    from console import stats as console_stats
                     payload = console_stats.um_today()
                 elif sub == "trend":
-                    import console_stats
+                    from console import stats as console_stats
                     payload = console_stats.um_trend(
                         range=_q("range") or "7d")
                 elif sub == "requests":
-                    import console_stats
+                    from console import stats as console_stats
                     payload = console_stats.um_requests(
                         window=_q("window") or "today",
                         model=_q("model"),
@@ -4179,7 +3257,7 @@ class Handler(BaseHTTPRequestHandler):
                         cursor=_q("cursor", 512),
                         limit=_qint("limit", 50))
                 elif sub == "logs":
-                    import console_log_reader
+                    from console import log_reader as console_log_reader
                     levels = [v.strip() for v in
                               (_q("levels") or "").split(",")
                               if v.strip()]
@@ -4196,7 +3274,7 @@ class Handler(BaseHTTPRequestHandler):
                             "detail": payload.get("error")})
                         return
                 elif sub == "request-logs":
-                    import console_log_reader
+                    from console import log_reader as console_log_reader
                     payload = console_log_reader.read_um_request_logs(
                         _q("request_id") or "",
                         limit=_qint("limit", 100),
@@ -4210,7 +3288,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_um_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] UM read surface failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "um_query_failed"})
@@ -4230,7 +3308,7 @@ class Handler(BaseHTTPRequestHandler):
                                       "detail": "days 必须是整数"})
                 return
             try:
-                import console_stats
+                from console import stats as console_stats
                 payload = console_stats.usage_tokens(
                     console_stats.default_sources(
                         environment=_stats_environment()), days=days)
@@ -4238,7 +3316,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_usage_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] usage tokens query failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "usage_query_failed"})
@@ -4257,7 +3335,7 @@ class Handler(BaseHTTPRequestHandler):
                                       "detail": "hours 必须是整数"})
                 return
             try:
-                import console_stats
+                from console import stats as console_stats
                 payload = console_stats.usage_rates(
                     console_stats.default_sources(
                         environment=_stats_environment()), hours=hours)
@@ -4265,7 +3343,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_usage_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] usage rates query failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "usage_query_failed"})
@@ -4278,7 +3356,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload["recorded_requests"] = \
                     _usage_rates_recorded_requests(payload)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — 读面/控制面失败按可读错误上报，不用布尔压平
                 print("[usagesrv] recorded request count failed: %s"
                       % type(exc).__name__, flush=True)
             self._send_json(200, payload)
@@ -4289,7 +3367,7 @@ class Handler(BaseHTTPRequestHandler):
             # get_console_manager() 装配之前（console 子系统故障不掩盖本读面），
             # 且绝不走操作框架——明文调用 Key 不能进
             # data/console-state.sqlite3 的 operations.result_json
-            # （console_operations.py:266/:645-649）。只读：写方法与子路径
+            # （console/operations.py:266/:645-649）。只读：写方法与子路径
             # 按未知路径拒绝（与 /api/console/share-usage 同一既有行为，
             # 不新增 405 语义）；未读请求体先排空再应答。
             if method != "GET" or rest != ["gateway-connection"]:
@@ -4297,17 +3375,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._discard_unread_body()
                 self._send_json(404, {"error": "unknown path"})
                 return
-            import console_gateway_connection  # noqa: WPS433 惰性装配
+            from console import gateway_connection as console_gateway_connection  # noqa: WPS433 惰性装配
             query = parse_qs(parsed.query)
             service = (query.get("service") or [""])[0].strip()
-            # B0（2026-11-01）：退役来源必须在快照/装配之前按模块契约映射为
-            # HTTP 410 + source_retired（RetiredServiceError），不能先落到
-            # 400 invalid_service。这里直接复用异常携带的载荷，绝不读取旧配置、
-            # 旧 Key 文件或探测旧端口。
-            if service in console_gateway_connection.RETIRED_SERVICES:
-                retired = console_gateway_connection.RetiredServiceError(service)
-                self._send_json(retired.http_status, retired.payload())
-                return
             if service not in console_gateway_connection.SERVICES:
                 self._send_json(400, {
                     "error": "invalid_service",
@@ -4323,11 +3393,6 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = console_gateway_connection.connection_info(
                     service, snapshot=snapshot)
-            except console_gateway_connection.RetiredServiceError as exc:
-                # 防御：RETIRED_SERVICES 在两次检查之间变化时仍映射 410，
-                # 不把契约异常降级成 503/500。
-                self._send_json(exc.http_status, exc.payload())
-                return
             except Exception as exc:  # noqa: BLE001 — 读面自身故障按 unknown 上报，不 500
                 print("[usagesrv] gateway connection read failed: %s"
                       % type(exc).__name__, flush=True)
@@ -4340,7 +3405,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             manager = get_console_manager()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — console 子系统不可用即 503
             print("[usagesrv] console manager unavailable: %s"
                   % type(exc).__name__, flush=True)
             self._send_json(503, {"error": "console subsystem unavailable"})
@@ -4348,7 +3413,7 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and rest == ["services"]:
             try:
                 payload, cached, cache_age = console_services_snapshot()
-            except Exception:
+            except Exception:  # noqa: BLE001 — 运行态快照不可用即 502
                 self._send_json(502, {"error": "runtime status unavailable"})
                 return
             payload = dict(payload)
@@ -4358,45 +3423,6 @@ class Handler(BaseHTTPRequestHandler):
                 meta["cache_age_seconds"] = cache_age
             payload["meta"] = meta
             self._send_json(200, payload)
-            return
-        if method == "GET" and rest == ["prices"]:
-            # R9-R29 费用页价目表：prices.json 原样透出（剥离 _说明 内部
-            # 注释键），stale 判定与页面提醒共用 PRICE_STALE_DAYS 阈值；
-            # 只读，读写口径与计价器完全一致（同一文件、同一过期判定）。
-            try:
-                with open(PRICE_FILE, encoding="utf-8") as f:
-                    table = json.load(f)
-            except OSError:
-                self._send_json(502, {"error": "price_table_unavailable"})
-                return
-            except ValueError:
-                self._send_json(502, {"error": "price_table_corrupt"})
-                return
-            if not isinstance(table, dict):
-                self._send_json(502, {"error": "price_table_corrupt"})
-                return
-            table.pop("_说明", None)
-            checked_stale = False
-            checked_at = str(table.get("checkedAt") or "")
-            try:
-                import datetime as _dt
-                age = (_dt.datetime.now() - _dt.datetime.strptime(
-                    checked_at, "%Y-%m-%d")).days
-                checked_stale = age > PRICE_STALE_DAYS
-            except ValueError:
-                checked_stale = True
-            self._send_json(200, {"ok": True, **table,
-                                  "checkedStale": checked_stale})
-            return
-        if method == "GET" and rest == ["quota-snapshot"]:
-            # B0 (2026-11-01): the Qoder-CN source is retired, so this
-            # read face answers an explicit ``not_assembled`` state without
-            # probing 8095, reading its old token or reusing an old snapshot.
-            # Null readings are never folded into 0; ?refresh=1 changes
-            # nothing. The historical ledger value stays on the cost page.
-            query = parse_qs(parsed.query)
-            force = (query.get("refresh") or [""])[0] in ("1", "true")
-            self._send_json(200, _quota_snapshot_payload(force))
             return
         if method == "GET" and rest == ["health"]:
             # R11-6/B2: server-side loopback probes of the five services —
@@ -4412,12 +3438,12 @@ class Handler(BaseHTTPRequestHandler):
             # R9-R30 调用日志：UM 主链账本 JSONL 的尾部，只读尾块 seek
             # 读取（账本文件可达数 MB，绝不整文件读入）；覆盖范围诚实声明
             # 在响应里，缺席账本=该链无日志而非错误。B0（2026-11-01）：
-            # 默认只读 chat2api；退役来源 id 不在读取表内时不再静默跳过
+            # 默认只读 chat2api；未登记来源 id 不在读取表内时不再静默跳过
             # ——该 id 进 sources_unavailable，前端据此区分「没有记录」与
             # 「该来源不在账本覆盖内」。数值字段（input/output/
             # cached_input/reasoning_tokens、duration_ms）缺失或不可解析
             # 一律 null（未知，F2 修复点），绝不折零——0 会被前端读成
-            # 真实测得值；credits 保持既有 null 语义。
+            # 真实测得值。
             query = parse_qs(parsed.query)
             try:
                 limit = max(1, min(200, int((query.get("limit") or ["80"])[0] or 80)))
@@ -4452,7 +3478,7 @@ class Handler(BaseHTTPRequestHandler):
                 for line in tail_lines:
                     try:
                         row = json.loads(line)
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         continue
                     if not isinstance(row, dict):
                         continue
@@ -4481,7 +3507,7 @@ class Handler(BaseHTTPRequestHandler):
             sources = _csv_list("sources")
             models = _csv_list("models")
             try:
-                import console_stats
+                from console import stats as console_stats
                 payload = console_stats.bounded_stats(
                     console_stats.default_ledgers(
                         environment=_stats_environment()),
@@ -4492,7 +3518,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid_stats_query",
                                       "detail": str(exc)})
                 return
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — 查询失败按 502 上报
                 print("[usagesrv] stats query failed: %s"
                       % type(exc).__name__, flush=True)
                 self._send_json(502, {"error": "stats_query_failed"})
@@ -4503,7 +3529,7 @@ class Handler(BaseHTTPRequestHandler):
             # R9-R38 各网关运行日志详情页：来源注册表（服务端唯一权威，
             # 客户端只传 id，绝不传路径）。账本路径按既有环境变量先例注入；
             # 绝对路径不出本机——响应只带文件名，浏览器拿不到目录结构。
-            import console_log_reader
+            from console import log_reader as console_log_reader
             sources = console_log_reader.build_registry(
                 {"chat2api": CHAT2API_LOG}).get("sources") or []
             slim = []
@@ -4524,7 +3550,7 @@ class Handler(BaseHTTPRequestHandler):
             # 内收口（预算、脱敏、三态分码）；此处只做查询串截断与装配。
             # cursor 是服务端铸的 opaque 串（~150 字符），不属搜索词预算，
             # 只截宽裕上限防滥用；形状仍由 reader 验证。
-            import console_log_reader
+            from console import log_reader as console_log_reader
             query = parse_qs(parsed.query)
             def _s(key, cap=120):
                 return (query.get(key) or [""])[0][:cap] or None
@@ -4543,7 +3569,7 @@ class Handler(BaseHTTPRequestHandler):
                     rotation=rotation,
                     ledger_paths={"chat2api": CHAT2API_LOG},
                     request_id=(query.get("request_id") or [None])[0])
-            except Exception:
+            except Exception:  # noqa: BLE001 — 日志读取失败按 502 上报
                 self._send_json(502, {"error": "log_reader_failed"})
                 return
             self._send_json(200, {"ok": True, **result})
@@ -4554,7 +3580,7 @@ class Handler(BaseHTTPRequestHandler):
             # 携带 src/cat，由 reader 解码归位）。汇总的覆盖/截断/未读/
             # 失败由 console_log_reader.read_overview 的 coverage 收口；
             # 逐来源详情契约仍是上面的 log-entries，不改语义。
-            import console_log_reader
+            from console import log_reader as console_log_reader
             query = parse_qs(parsed.query)
             def _s(key, cap=120):
                 return (query.get(key) or [""])[0][:cap] or None
@@ -4564,25 +3590,10 @@ class Handler(BaseHTTPRequestHandler):
                     q=_s("q"), level=_s("level"),
                     since=_s("since"), until=_s("until"),
                     ledger_paths={"chat2api": CHAT2API_LOG})
-            except Exception:
+            except Exception:  # noqa: BLE001 — 日志读取失败按 502 上报
                 self._send_json(502, {"error": "log_reader_failed"})
                 return
             self._send_json(200, {"ok": True, **result})
-            return
-        if method == "GET" and rest == ["model-pending"]:
-            # R9-R34 模型页概览直读：与 model.sync_pending 动作同形状
-            # （load_state + 最近应用结果），只读、无 SyncLock、无探测、
-            # 不记操作账本行（与 prices/logs 的高频只读直读同款）。写入类
-            # 动作（preview/apply/pin/catalog/task）仍走 POST 操作行。
-            import console_model_actions
-            try:
-                payload = console_model_actions.model_sync_pending("", {}, None)
-            except Exception as exc:
-                print("[usagesrv] model-pending error: %s"
-                      % type(exc).__name__, flush=True)
-                self._send_json(502, {"error": "model_state_unavailable"})
-                return
-            self._send_json(200, payload)
             return
         if method == "GET" and rest == ["operations"]:
             limit = 50
@@ -4626,13 +3637,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid idempotency_key"})
                 return
             try:
-                # B0: a retired-source action is refused explicitly before the
-                # manager looks it up, so no handler runs and no row is created.
-                import console_adapters
-                console_adapters.refuse_retired_action(action)
                 op = manager.submit(action, target=target, params=params,
                                     idempotency_key=idem)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — 提交失败按统一错误码上报
                 code, status = _console_error_status(exc)
                 payload = {"error": code}
                 reason = getattr(exc, "reason", None)
@@ -4653,7 +3660,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 op = manager.cancel(rest[1])
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — 取消失败按统一错误码上报
                 code, status = _console_error_status(exc)
                 self._send_json(status, {"error": code})
                 return
@@ -4722,7 +3729,7 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             try:
                 self._send_json(200, summary_cached())
-            except Exception as e:  # 页面不能白屏；细节只进服务端控制台，不外带
+            except Exception as e:  # noqa: BLE001 — 页面不能白屏：细节只进服务端控制台
                 print(f"[usagesrv] summary error: {type(e).__name__}: {e}", flush=True)
                 self._send_json(500, {"error": "summary unavailable"})
         elif path.startswith("/api/console/"):
@@ -4744,7 +3751,7 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length)) if length else {}
-            except Exception:
+            except Exception:  # noqa: BLE001 — 会话体不是 JSON 按空对象处理
                 body = {}
             sid = session_exchange((body or {}).get("code"))
             if not sid:
@@ -4843,12 +3850,11 @@ def main():
         print(f"  私网管理   : 已拒绝；{TAILNET_POLICY.error}")
     if CLOUD_ROLE:
         # 云端角色只装配 UM 分享：不打印、不读取本地私人账本路径。
-        print("  云端角色   : 只装配 UM 分享（Qoder/CLIProxy/model_sync 未装配）")
+        print("  云端角色   : 只装配 UM 分享（非 UM 模块未装配）")
         print("  管理面     : 仅 loopback；Host/Origin/CSRF 门保留")
     else:
         print(f"  chat2api   : {CHAT2API_LOG}")
         print(f"  DSH 快照   : {DSH_SNAPSHOT_FILE}")
-        print(f"  价格主源   : {PRICE_FILE}")
         print("  退役账本   : 仅保留历史追溯（默认不读取/不探测）")
     print("  Ctrl+C 退出")
     print("-" * 60)

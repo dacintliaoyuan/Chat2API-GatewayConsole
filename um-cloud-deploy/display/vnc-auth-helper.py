@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from console_display_proxy import load_vnc_password, vnc_auth_response
+from console.display_proxy import load_vnc_password, vnc_auth_response
 
 MAX_CONNECTIONS = 4
 CONNECTION_TIMEOUT = 5.0
@@ -102,12 +102,12 @@ def main(argv):
         return 2
     try:
         password = load_vnc_password(password_path)
-    except Exception:
+    except Exception:  # noqa: BLE001 — 凭据不可用即退出 1
         print("vnc-auth-helper: credential unavailable", file=sys.stderr)
         return 1
     try:
         serve(password, socket_path)
-    except Exception:
+    except Exception:  # noqa: BLE001 — socket 不可用即退出 1
         print("vnc-auth-helper: socket unavailable", file=sys.stderr)
         return 1
     return 0

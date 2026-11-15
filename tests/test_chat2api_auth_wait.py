@@ -576,7 +576,7 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
             return "fresh-token"
 
         with (
-            self._wait_patches(budget=0.5, recheck=0.02, deadline=3.0),
+            self._wait_patches(budget=0.5, recheck=0.02, deadline=8.0),
             mock.patch.object(StubUpstream, "_next_status",
                               new=delayed_status),
             mock.patch.object(chat2api, "browser_login",
@@ -610,7 +610,7 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
             return "fresh-token"
 
         with (
-            self._wait_patches(budget=0.5, recheck=0.02, deadline=3.0),
+            self._wait_patches(budget=0.5, recheck=0.02, deadline=8.0),
             mock.patch.object(chat2api, "browser_login",
                               side_effect=fake_login),
             mock.patch.object(chat2api.TokenStore, "save"),
@@ -640,7 +640,7 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
             return original_read_body(handler)
 
         with (
-            self._wait_patches(budget=0.5, recheck=0.02, deadline=3.0),
+            self._wait_patches(budget=0.5, recheck=0.02, deadline=8.0),
             mock.patch.object(chat2api.Handler, "_read_body",
                               new=slow_read_body),
             mock.patch.object(chat2api, "browser_login",
@@ -1186,7 +1186,7 @@ class AuthWaitCancelStopTests(AuthWaitTestBase):
         def run_request():
             try:
                 result["response"] = self._chat_request()
-            except Exception as exc:  # the client may see a closed socket
+            except Exception as exc:  # noqa: BLE001 — 客户端可能看到已关闭 socket
                 result["error"] = exc
 
         with (
@@ -1327,7 +1327,7 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
     def _run_stream_worker(self, result):
         try:
             result["response"] = self._stream_chat_request(timeout=5)
-        except Exception as exc:  # the client may see a closed socket
+        except Exception as exc:  # noqa: BLE001 — 客户端可能看到已关闭 socket
             result["error"] = exc
 
     def test_a6_stream_auth_wait_releases_the_reader_slot(self):

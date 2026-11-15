@@ -6,7 +6,7 @@
 
 ## 背景
 
-UM 的 API 服务迁往云机后，维护者要同时管理本机自用服务与云端 API 服务。本机控制台宿主是 `usagesrv.py`（`UM_SHARE_ROLE=local`，`127.0.0.1:8001`）；云端控制台宿主是同一个 `usagesrv.py`（`UM_SHARE_ROLE=cloud`，`127.0.0.1:18096`）。控制台接口只信任本机回环地址上打开的同源页面；经 SSH 转发访问云端时，浏览器地址同样是 localhost。
+UM 的 API 服务迁往云机后，维护者要同时管理本机自用服务与云端 API 服务。本机控制台宿主是 `usagesrv.py`（`UM_SHARE_ROLE=local`，`127.0.0.1:8001`）；云端控制台宿主是同一个 `usagesrv.py`（`UM_SHARE_ROLE=cloud`，`127.0.0.1:8096`；一个发布周期内旧 `18096` 仍是显式兼容值）。控制台接口只信任本机回环地址上打开的同源页面；经 SSH 转发访问云端时，浏览器地址同样是 localhost。
 
 ## 决策
 
@@ -28,8 +28,16 @@ UM 的 API 服务迁往云机后，维护者要同时管理本机自用服务与
 - 发布方必须为每台机器构建对应角色的产物：本机生产页写 `web/dist`，云端生产页写 `web/dist-cloud` 并打包为发布包内的 `web/dist`。
 - 候选线按角色分开：`candidate-local` 写 `web/release/candidate/local/`，`candidate-cloud` 写 `web/release/candidate/cloud/`；旧默认 `candidate` 写 `web/release/candidate/` 并保留角色子目录，只用于 8099 只读预览与日志门禁。
 - 两端共享 `web/src/shell/`、`web/src/console/backend/` 与 `web/src/console/role-gate.ts`，角色专用的页面与样式互不引用。
-- 本机生产默认入口装入 UM 三页与数据控制器 `web/src/local/um-data-controller.ts`；`?console=workbench` 保留旧工作台作为兼容入口。云端使用独立的五页入口。
+- 本机生产默认入口装入 UM 三页与数据控制器 `web/src/local/um-data-controller.ts`。云端使用独立的五页入口。
 - 本机生产页不含 API Key 与 API 服务管理；云端接管分享管理前发布它可能失去唯一管理入口，因此 `CONSOLE_LOCAL_SHARE_RETIRED=1` 是显式声明而不是默认值。
+
+## 端口配对（目标契约，Rust 切换时生效）
+
+- `8000` 本机网关（`chat2api`）、`8001` 本机控制台（`usagesrv` local）；`8002` 云端控制台（`usagesrv` cloud）、`8003` 云端网关（`chat2api.py` 合并进程）；`8004–8009` 预留。`8000–8009` 因此从“会话适配段”改为“网关/控制台配对段”。
+- `8097` display x11vnc 与 `8099` 候选预览保持不变；`5173` 前端开发服务保持不变。
+- `um-share-broker.service` 在目标契约中更名为 `um-share-gateway.service`；`um-share-brokerctl.py` 更名为 `um-share-gatewayctl.py`。broker 仍是内部拉起者，不新增第二个进程。
+- 旧 `8100`、`8096`、`18096`、`5901` **不保留兼容别名**；下一次 Rust 部署一次性切换，`install.sh` 强制写入 `USAGESRV_PORT=8002` 与 `CONSOLE_DISPLAY_VNC_PORT=8097`。这取代 #40 原先“一个发布周期兼容”的决定。
+- 本 ADR 只冻结目标契约；当前 Python 代码仍监听 8100/8096，Rust 重写时一起改。
 
 ## 相关实现
 

@@ -13,6 +13,8 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: post the explanation with `gh issue comment <number> --body "..."`, then `gh issue close <number>`. On an already-closed issue, `gh issue close --comment` drops the comment and still exits 0.
+- **Ticket bodies are single-source**: 票面自相矛盾时直接改正文，不追加“修订”段；验收条件与正文必须一致，否则 preflight 会按原文判失败。
+- **Campus DNS hijack**: `api.github.com` 被劫持到 `198.18.0.8` 时，`gh` 会返回 GraphQL/REST EOF；用 `curl --resolve api.github.com:443:140.82.112.6` 配合 `gh auth token` 读写，token 不打印。
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 

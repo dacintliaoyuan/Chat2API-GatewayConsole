@@ -12,7 +12,6 @@ import {
   normalizeContextEvidence,
   normalizeLogPage,
   normalizeOperation,
-  normalizeSettingsApply,
   normalizeShareUsage,
 } from "../../src/console/backend/index.ts";
 
@@ -34,25 +33,20 @@ assert.equal(
 );
 assert.equal(fixture.metadata.sourceHashEncoding, "utf8-lf");
 // Mirrors the generator's `names` (contract §10.2): the newly published action
-// shapes come from console_share_actions.py / console_share_production.py (Rev9).
-// The share_maintenance supervision segment is not source-hashed by contract, so
-// its generator (share_backend_supervision.py) is deliberately not listed here.
-// The cliproxy_status segment is frozen retired data: its handler module was
-// deleted with the UM-only consolidation, so it has no source hash either and the
-// assertions below keep validating the published shape without a live handler.
+// shapes come from console/share_actions.py / console/share_production.py (Rev9).
 const sourceNames = [
-  "model_sync.py",
-  "model_sync_core.py",
-  "console_model_actions.py",
-  "console_adapters.py",
-  "console_operations.py",
-  "share_metering.py",
-  "console_stats.py",
-  "console_log_reader.py",
+  "model_sync/sync.py",
+  "model_sync/sync_core.py",
+  "console/model_actions.py",
+  "console/adapters.py",
+  "console/operations.py",
+  "share/metering.py",
+  "console/stats.py",
+  "console/log_reader.py",
   "usagesrv.py",
-  "console_share_actions.py",
-  "console_share_production.py",
-  "console_gateway_connection.py",
+  "console/share_actions.py",
+  "console/share_production.py",
+  "console/gateway_connection.py",
 ];
 assert.deepEqual(
   Object.keys(fixture.metadata.sourceHashes).sort(),
@@ -80,12 +74,9 @@ assert.deepEqual(
   "scoped refresh excludes unselected sources"
 );
 assert.ok(
-  fixture.sync_combined_preview.preview.changes.some(
-    (row) => row.key === "um|fixture-model" && row.draft.alias === "Demo 组合"
-  ),
-  "combined changes live inside preview.changes"
+  fixture.scoped_catalog.catalogs.um,
+  "scoped refresh keeps the selected source"
 );
-assert.match(fixture.sync_combined_preview.preview_token, /^[a-f0-9]{64}$/);
 const contexts = normalizeContexts(fixture.context_overrides);
 const evidence = normalizeContextEvidence(fixture.context_probe_preview);
 const details = joinModelDetails(catalog, contexts, evidence);
@@ -104,40 +95,6 @@ assert.ok(
     (row) => row.status === "unconfigured" && row.rows === null
   )
 );
-const applied = normalizeSettingsApply(fixture.settings_apply);
-const readback = normalizeContexts(fixture.client_readback);
-const appliedModel = readback.find((row) => row.key === "um|fixture-model");
-// Rev11 单文件发布：ZCode 侧的实时权威文件（provider_config.json）只携带
-// contextWindow；逐模型显示名/默认档位不在该 store schema 里（只在旧版
-// config.json 迁移路径）。读回以「可发布的 context」为准，显示名/档位如实为
-// 空，绝不把无法落盘的设置伪装成客户端已生效。
-assert.equal(appliedModel.clientContextTokens, 4096);
-assert.equal(appliedModel.clientAlias, null);
-assert.equal(appliedModel.clientDefaultEffort, null);
-assert.ok(
-  appliedModel.clientReadbacks.some(
-    (row) => row.consumer === "ZCode" && row.matchesApplied.context === true
-  )
-);
-assert.equal(
-  evidence.find((row) => row.key === "um|fixture-model").history[0]
-    .verifiedTokenFloor,
-  null
-);
-const deferred = normalizeSettingsApply(fixture.settings_deferred_apply);
-assert.equal(deferred.applied.length, 0);
-assert.deepEqual(deferred.deferred, ["um|fixture-model"]);
-assert.equal(fixture.settings_conflict_error.code, "version_conflict");
-assert.ok(
-  normalizeContexts(fixture.client_readback_unavailable).every(
-    (row) => row.clientReadbackState === "unavailable"
-  )
-);
-assert.equal(
-  applied.applied.some((key) => applied.deferred.includes(key)),
-  false
-);
-
 const fixtureTransport = new FixtureTransport({
   name: "generated-python-contract",
   actions: capabilities,
@@ -149,10 +106,6 @@ const fixtureTransport = new FixtureTransport({
     "model.catalog": [{ result: fixture.catalog }],
     "model.context_overrides": [{ result: fixture.context_overrides }],
     "model.context_probe_preview": [{ result: fixture.context_probe_preview }],
-    "model.settings_preview": [{ result: fixture.settings_preview }],
-    "model.settings_apply": [{ result: fixture.settings_apply }],
-    // This fixture reuses the isolated context readback; it never claims that
-    // a client has read a setting merely because the apply operation succeeded.
   },
 });
 let time = 0;
@@ -165,12 +118,6 @@ const client = new BackendClient(fixtureTransport, {
 assert.deepEqual(await client.readCatalog(), catalog);
 assert.deepEqual(await client.readContexts(), contexts);
 assert.deepEqual(await client.readContextEvidence(), evidence);
-const preview = await client.previewSettings(
-  fixture.settings_preview.selection
-);
-const operation = await client.applySettings(preview, preview.selection);
-assert.equal(operation.state, "succeeded");
-assert.deepEqual(normalizeSettingsApply(operation.operation.result), applied);
 assert.deepEqual((await client.readShareUsage()).value, share);
 assert.deepEqual(
   await client.readLogs({ source: "fixture", category: "runtime" }),
@@ -179,238 +126,9 @@ assert.deepEqual(
 assert.ok(fixtureTransport.calls.every((call) => !call.path.includes("://")));
 assert.equal(
   fixtureTransport.calls.filter((call) => call.method === "POST").length,
-  5
+  3
 );
 
-// Rev9 A9-8: the share_maintenance segment is consumed through the SAME
-// frontend data module (catalog normalization, operation normalization and the
-// offline FixtureTransport). This script never imports Python or a live service.
-const maintenance = fixture.share_maintenance;
-assert.ok(
-  maintenance && typeof maintenance === "object",
-  "share_maintenance segment is missing"
-);
-assert.deepEqual(Object.keys(maintenance.components).sort(), [
-  "share_backend",
-  "share_gateway",
-]);
-const maintenanceActions = normalizeCapabilities({
-  actions: maintenance.actions,
-});
-assert.deepEqual(maintenanceActions.map((row) => row.action).sort(), [
-  "share.backend_reauthenticate",
-  "share.backend_restart",
-  "share.diagnostics",
-  "share.gateway_restart",
-]);
-for (const row of maintenanceActions) {
-  assert.equal(row.enabled, true, `${row.action}: enabled`);
-  assert.equal(row.cancelable, true, `${row.action}: cancelable`);
-  assert.equal(row.disabledReason, null, `${row.action}: disabled_reason`);
-  assert.ok(
-    row.description && row.description.length > 0,
-    `${row.action}: description`
-  );
-}
-const published = new Map(maintenance.actions.map((row) => [row.action, row]));
-for (const row of maintenanceActions) {
-  const schema = published.get(row.action).param_schema;
-  assert.ok(
-    schema && typeof schema === "object",
-    `${row.action}: param_schema`
-  );
-  for (const [key, rule] of Object.entries(schema)) {
-    assert.deepEqual(
-      Object.keys(rule)
-        .sort()
-        .every((name) => ["max", "max_len", "min", "type"].includes(name)),
-      true,
-      `${row.action}.${key}: whitelist`
-    );
-    assert.equal(typeof rule.type, "string", `${row.action}.${key}: type`);
-    if (rule.min !== undefined || rule.max !== undefined)
-      assert.ok(
-        Number.isSafeInteger(rule.min) &&
-          Number.isSafeInteger(rule.max) &&
-          rule.min <= rule.max,
-        `${row.action}.${key}: bounds`
-      );
-  }
-}
-assert.equal(
-  published.get("share.backend_restart").param_schema.lease_s.min,
-  60
-);
-assert.equal(
-  published.get("share.backend_restart").param_schema.lease_s.max,
-  600
-);
-assert.equal(
-  published.get("share.gateway_restart").param_schema.restart_budget_s.max,
-  180
-);
-const scenarioCases = maintenance.scenarios.map((row) => row.case);
-assert.deepEqual(scenarioCases, [
-  "normal",
-  "unknown",
-  "stale",
-  "partial_failure",
-  "authenticating",
-  "maintenance",
-  "timeout",
-  "cancelled",
-  "budget_exhausted",
-]);
-for (const scenario of maintenance.scenarios) {
-  assert.ok(
-    Object.hasOwn(scenario, "operation"),
-    `${scenario.case}: operation key`
-  );
-  if (!scenario.operation) continue;
-  const operation = normalizeOperation({ operation: scenario.operation });
-  assert.ok(
-    operation.id && operation.action === scenario.operation.action,
-    `${scenario.case}: identity`
-  );
-  assert.ok(
-    ["succeeded", "failed", "cancelled"].includes(operation.state),
-    `${scenario.case}: state`
-  );
-  assert.ok(scenario.operation.steps.length >= 1, `${scenario.case}: steps`);
-  assert.equal(
-    operation.createdAt,
-    scenario.operation.created_at,
-    `${scenario.case}: created_at`
-  );
-  assert.equal(
-    operation.finishedAt,
-    scenario.operation.finished_at,
-    `${scenario.case}: finished_at`
-  );
-  assert.ok(
-    scenario.operation.created_epoch < scenario.operation.finished_epoch,
-    `${scenario.case}: epochs`
-  );
-}
-const scenario = (name) =>
-  maintenance.scenarios.find((row) => row.case === name);
-const normal = scenario("normal");
-const normalOperation = normalizeOperation({ operation: normal.operation });
-assert.equal(normalOperation.state, "succeeded");
-assert.deepEqual(
-  Object.keys(normalOperation.result.layers ?? {}).sort(),
-  [
-    "share_gateway",
-    "share_backend",
-    "backend_auth",
-    "connectivity",
-    "upstream",
-    "ts_service",
-    "funnel",
-    "security_gate",
-    "watchdog",
-  ].sort()
-);
-assert.deepEqual(Object.keys(normal.readback).sort(), [
-  "share_backend",
-  "share_gateway",
-]);
-assert.equal(normal.result.layers.security_gate.state, "ok");
-assert.equal(
-  scenario("unknown").result.layers.share_gateway.state,
-  "unavailable"
-);
-assert.equal(
-  scenario("unknown").result.layers.share_gateway.verdict,
-  "unavailable"
-);
-assert.equal(
-  scenario("unknown").result.layers.share_gateway.reason,
-  "share_broker_unwired"
-);
-assert.equal(scenario("stale").result.layers.backend_auth.stale, true);
-assert.equal(scenario("stale").result.layers.upstream.stale, true);
-assert.equal(scenario("stale").result.layers.security_gate.stale, true);
-assert.equal(
-  scenario("stale").result.layers.backend_auth.evidence.timestamp_basis,
-  "source_checked_epoch"
-);
-assert.equal(
-  scenario("partial_failure").result.layers.connectivity.state,
-  "unavailable"
-);
-assert.equal(
-  scenario("partial_failure").result.layers.connectivity.reason,
-  "connectivity_query_failed"
-);
-assert.equal(scenario("authenticating").result.state, "logging_in");
-assert.equal(scenario("authenticating").result.triggered, false);
-assert.equal(
-  scenario("authenticating").readback.backend_auth.state,
-  "logging_in"
-);
-assert.equal(scenario("maintenance").operation.state, "failed");
-assert.equal(
-  scenario("maintenance").operation.error.code,
-  "share_maintenance_refused"
-);
-assert.ok(
-  scenario("maintenance").maintenance.lease.lease_id,
-  "maintenance lease id"
-);
-assert.equal(scenario("maintenance").last_error.ok, false);
-assert.equal(
-  scenario("timeout").operation.error.code,
-  "share_backend_drain_timeout"
-);
-assert.equal(scenario("timeout").drain.state, "timed_out");
-assert.equal(scenario("timeout").drain.active_left, 3);
-assert.equal(scenario("timeout").drain.resumed, true);
-assert.equal(scenario("cancelled").operation.cancel_requested, true);
-assert.equal(scenario("cancelled").operation.state, "succeeded");
-assert.ok(
-  scenario("cancelled").operation.steps.some((step) =>
-    step.note.includes("按实际结果返回")
-  ),
-  "actual-result note"
-);
-assert.equal(scenario("cancelled").cancellation.actual_result_returned, true);
-assert.equal(
-  normalizeOperation({ operation: scenario("cancelled").cancelled_operation })
-    .state,
-  "cancelled"
-);
-assert.equal(maintenance.supervision.decision.code, "budget_exhausted");
-assert.equal(maintenance.supervision.decision.action, "none");
-assert.equal(maintenance.supervision.decision.attempts_this_hour, 3);
-assert.equal(maintenance.supervision.state.idle_reason, "budget_exhausted");
-assert.equal(maintenance.supervision.state.version, 1);
-assert.ok(
-  maintenance.supervision.generatedFrom.includes(
-    "share_backend_supervision.run_once"
-  )
-);
-assert.ok(
-  Array.isArray(maintenance.supervision.state.restart_attempts_utc) &&
-    maintenance.supervision.state.restart_attempts_utc.length === 3
-);
-// Privacy: no credential, absolute path or ledger identity in the segment, and
-// the private/share ledger surfaces keep their existing shapes.
-const maintenanceText = JSON.stringify(maintenance);
-for (const token of [
-  "Bearer ",
-  "sk-",
-  "Authorization",
-  "X-Admin-Control",
-  "C:\\",
-  "usage-share",
-  "usage.jsonl",
-])
-  assert.equal(
-    maintenanceText.includes(token),
-    false,
-    `share_maintenance must not contain ${token}`
-  );
 assert.deepEqual(Object.keys(fixture.share_usage).sort(), [
   "checkedAt",
   "coverage",
@@ -440,319 +158,51 @@ assert.deepEqual(share.filters, {
   model: null,
   result: null,
 });
-// CNY amounts are additive per row; they never introduce a top-level currency or
-// exchangeRate field. A null amount means unknown (the row is a lower bound when
-// its costCnyPartial flag is true), while a real zero survives.
-const cnyKey = share.keys.find((row) => row.keyId === "fixture-key");
-assert.equal(cnyKey.costCny, 0.0012);
-assert.equal(cnyKey.knownCostCny, 0.0008);
-assert.equal(cnyKey.estimatedCostCny, 0.0004);
-assert.equal(cnyKey.coverage.costCnyPartial, true);
-assert.equal(cnyKey.coverage.knownCostCnyPartial, true);
-assert.equal(cnyKey.coverage.estimatedCostCnyPartial, false);
-assert.equal(cnyKey.models[0].costCny, 0.0012);
-assert.equal(cnyKey.models[0].coverage.costCnyPartial, false);
-assert.equal(cnyKey.models[0].coverage.knownCostCnyPartial, false);
-assert.equal(cnyKey.models[0].coverage.estimatedCostCnyPartial, false);
-assert.equal(cnyKey.models[1].costCny, null);
-assert.equal(cnyKey.models[1].knownCostCny, null);
-assert.equal(cnyKey.models[1].estimatedCostCny, 0);
-assert.equal(cnyKey.models[1].coverage.costCnyPartial, true);
-assert.equal(cnyKey.models[1].coverage.knownCostCnyPartial, true);
-assert.equal(cnyKey.models[1].coverage.estimatedCostCnyPartial, false);
-assert.equal(cnyKey.days[0].costCny, 0.0012);
-assert.equal(cnyKey.days[0].coverage.costCnyPartial, true);
-const cnyDeleted = share.keys.find(
-  (row) => row.keyId === "deleted-fixture-key"
-);
-assert.equal(cnyDeleted.costCny, null);
-assert.equal(cnyDeleted.knownCostCny, 0);
-// Unknown usage has no estimated side: its estimated subtotal is a real zero,
-// not null (only the group total is a lower bound).
-assert.equal(cnyDeleted.estimatedCostCny, 0);
-assert.equal(cnyDeleted.coverage.costCnyPartial, true);
-// Unknown usage has no known/estimated attribution: both subtotals stay complete
-// real zeros; only the group total is a lower bound.
-assert.equal(cnyDeleted.coverage.knownCostCnyPartial, false);
-assert.equal(cnyDeleted.coverage.estimatedCostCnyPartial, false);
-assert.equal(cnyDeleted.undated.costCny, null);
-assert.equal(cnyDeleted.undated.knownCostCny, 0);
-assert.equal(cnyDeleted.undated.estimatedCostCny, 0);
-assert.equal(cnyDeleted.undated.coverage.costCnyPartial, true);
-assert.equal(cnyDeleted.undated.coverage.knownCostCnyPartial, false);
-assert.equal(cnyDeleted.undated.coverage.estimatedCostCnyPartial, false);
-assert.equal(share.unattributed.costCny, null);
-assert.equal(share.unattributed.knownCostCny, 0);
-assert.equal(share.unattributed.estimatedCostCny, 0);
-assert.equal(share.unattributed.coverage.costCnyPartial, true);
-assert.equal(share.unattributed.coverage.knownCostCnyPartial, false);
-assert.equal(share.unattributed.coverage.estimatedCostCnyPartial, false);
-assert.equal(share.unattributed.undated, null);
-// The offline FixtureTransport serves the four new actions with zero live calls.
-const maintenanceTransport = new FixtureTransport({
-  name: "generated-python-share-maintenance",
-  actions: maintenanceActions,
-  reads: {},
-  operations: {},
-});
-const maintenanceClient = new BackendClient(maintenanceTransport, {
-  now: () => 0,
-  sleep: async () => {},
-});
-const maintenanceCapabilities = await maintenanceClient.refreshCapabilities();
-assert.equal(maintenanceCapabilities.length, 4);
-assert.ok(
-  maintenanceCapabilities.every((row) => row.enabled && row.cancelable)
-);
-assert.ok(
-  maintenanceTransport.calls.every((call) => !call.path.includes("://"))
-);
-
-// Rev10 A10-5 / B0 retirement: the cliproxy_status segment is frozen
-// sanitized data (the handler module was deleted with the UM-only consolidation;
-// the local console still renders the read-only shape). The checks below keep
-// validating that frozen shape through the SAME frontend data module (capability +
-// operation normalization and the offline FixtureTransport); this script never
-// imports Python or a live service.
-const cliproxy = fixture.cliproxy_status;
-assert.ok(
-  cliproxy && typeof cliproxy === "object",
-  "cliproxy_status segment is missing"
-);
-const cliproxyActions = normalizeCapabilities({ actions: cliproxy.actions });
-assert.deepEqual(
-  cliproxyActions.map((row) => row.action),
-  ["cliproxy.status"]
-);
-const cliproxyRow = cliproxyActions[0];
-assert.equal(cliproxyRow.enabled, true, "cliproxy.status: enabled");
-assert.equal(cliproxyRow.cancelable, true, "cliproxy.status: cancelable");
-assert.equal(
-  cliproxyRow.disabledReason,
-  null,
-  "cliproxy.status: disabled_reason"
-);
-assert.ok(
-  cliproxyRow.description.includes("只读"),
-  "cliproxy.status: read-only description"
-);
-const cliproxyPublished = cliproxy.actions[0];
-assert.deepEqual(
-  cliproxyPublished.param_schema,
-  {},
-  "cliproxy.status: empty param_schema"
-);
-assert.deepEqual(
-  cliproxyPublished.components,
-  ["cliproxy"],
-  "cliproxy.status: components"
-);
-assert.deepEqual(
-  cliproxyPublished.side_effects,
-  ["management_readonly_get", "runtime_snapshot_read"],
-  "cliproxy.status: side_effects"
-);
-assert.equal(cliproxyPublished.target, "CLIProxy", "cliproxy.status: target");
-const cliproxyCases = cliproxy.scenarios.map((row) => row.case);
-assert.deepEqual(
-  cliproxyCases,
-  [
-    "normal",
-    "observed_ok",
-    "denied",
-    "unknown_shape",
-    "credential_absent",
-    "degraded",
-    "no_accounts",
-    "stale",
-    "all_failed",
-    "truncated",
-    "partial_failure",
-    "other_provider",
-  ],
-  "cliproxy_status scenario order"
-);
-const cliproxyScenario = (name) =>
-  cliproxy.scenarios.find((row) => row.case === name);
-for (const scenario of cliproxy.scenarios) {
+// Cost/price fields were retired with #30: neither the raw share-usage payload
+// nor the normalized view carries an amount or a price field.
+const usageRow = share.keys.find((row) => row.keyId === "fixture-key");
+for (const field of [
+  "costCny",
+  "knownCostCny",
+  "estimatedCostCny",
+  "knownCostUsd",
+  "estimatedCostUsd",
+  "costUsd",
+  "priceVersions",
+]) {
+  assert.ok(!(field in usageRow), `normalized row still carries ${field}`);
+}
+for (const field of [
+  "costCnyPartial",
+  "knownCostCnyPartial",
+  "estimatedCostCnyPartial",
+  "pricedRequests",
+  "unpricedRequests",
+  "pricingUnavailableRequests",
+  "costComplete",
+]) {
   assert.ok(
-    Object.hasOwn(scenario, "operation"),
-    `${scenario.case}: operation key`
-  );
-  const operation = normalizeOperation({ operation: scenario.operation });
-  assert.equal(operation.action, "cliproxy.status", `${scenario.case}: action`);
-  assert.equal(operation.target, "CLIProxy", `${scenario.case}: target`);
-  assert.ok(
-    ["succeeded", "failed"].includes(operation.state),
-    `${scenario.case}: state`
-  );
-  // The frozen read-only handler reports no steps (it has no progress seam);
-  // the array must still be present and well-formed.
-  assert.ok(Array.isArray(scenario.operation.steps), `${scenario.case}: steps`);
-  assert.ok(
-    ["GET", null].includes(scenario.management_requests.method),
-    `${scenario.case}: method`
-  );
-  assert.ok(
-    [0, 1].includes(scenario.management_requests.count),
-    `${scenario.case}: request count`
+    !(field in usageRow.coverage),
+    `normalized coverage still carries ${field}`
   );
 }
-const cliproxyNormal = cliproxyScenario("normal");
-assert.equal(cliproxyNormal.operation.state, "succeeded");
-assert.equal(cliproxyNormal.result.accounts.length, 3);
-assert.deepEqual(
-  cliproxyNormal.result.accounts.map((row) => row.observed_upstream_auth.state),
-  ["observed_ok", "unknown", "observed_failed"]
-);
-assert.equal(cliproxyNormal.result.summary.verdict, "unknown");
-assert.equal(cliproxyNormal.result.summary.reason, "no_refresh_observed");
-assert.equal(cliproxyNormal.result.quota.state, "unknown");
-assert.equal(cliproxyNormal.result.quota.source, "none");
-assert.equal(cliproxyNormal.management_requests.count, 1);
-assert.equal(
-  cliproxyScenario("observed_ok").result.summary.verdict,
-  "observed_ok"
-);
-assert.equal(cliproxyScenario("observed_ok").result.summary.reason, null);
-assert.equal(
-  cliproxyScenario("observed_ok").result.accounts[0].observed_upstream_auth
-    .scope,
-  "last_runtime_refresh"
-);
-assert.equal(cliproxyScenario("denied").result.query.state, "denied");
-assert.equal(
-  cliproxyScenario("denied").result.query.reason,
-  "management_read_denied"
-);
-assert.equal(cliproxyScenario("denied").result.query.http_status, 401);
-assert.equal(cliproxyScenario("denied").result.accounts.length, 0);
-assert.equal(cliproxyScenario("denied").result.summary.verdict, "unknown");
-assert.ok(
-  cliproxyScenario("denied").result.note.includes("与 Gemini 登录状态无关")
-);
-assert.equal(cliproxyScenario("unknown_shape").result.query.state, "unknown");
-assert.equal(
-  cliproxyScenario("unknown_shape").result.query.reason,
-  "management_shape_unsupported"
-);
-assert.equal(cliproxyScenario("unknown_shape").result.accounts.length, 0);
-assert.equal(cliproxyScenario("credential_absent").operation.state, "failed");
-assert.equal(
-  cliproxyScenario("credential_absent").operation.error.code,
-  "cliproxy_key_absent"
-);
-assert.equal(
-  cliproxyScenario("credential_absent").management_requests.count,
-  0
-);
-assert.equal(cliproxyScenario("degraded").result.query.state, "degraded");
-assert.equal(
-  cliproxyScenario("degraded").result.query.reason,
-  "runtime_list_unavailable"
-);
-assert.equal(cliproxyScenario("degraded").result.accounts.length, 2);
-assert.ok(
-  cliproxyScenario("degraded").result.accounts.every(
-    (row) => row.observed_upstream_auth.state === "unknown"
-  )
-);
-assert.equal(cliproxyScenario("no_accounts").result.query.state, "available");
-assert.equal(cliproxyScenario("no_accounts").result.accounts.length, 0);
-assert.equal(cliproxyScenario("no_accounts").result.summary.verdict, "unknown");
-assert.equal(
-  cliproxyScenario("no_accounts").result.summary.reason,
-  "no_accounts"
-);
-assert.equal(
-  cliproxyScenario("stale").result.accounts[0].observed_upstream_auth.state,
-  "observed_ok"
-);
-assert.equal(
-  cliproxyScenario("stale").result.accounts[0].observed_upstream_auth.stale,
-  true
-);
-assert.equal(
-  cliproxyScenario("stale").result.accounts[0].observed_upstream_auth.ttl_s,
-  3600
-);
-assert.equal(
-  cliproxyScenario("all_failed").result.summary.verdict,
-  "observed_failed"
-);
-assert.equal(
-  cliproxyScenario("all_failed").result.summary.observed_auth_failed,
-  2
-);
-assert.equal(
-  cliproxyScenario("all_failed").result.summary.observed_auth_unknown,
-  0
-);
-const cliproxyTruncated = cliproxyScenario("truncated").result.summary;
-assert.equal(cliproxyTruncated.accounts_total, 257);
-assert.equal(cliproxyTruncated.accounts_reported, 256);
-assert.equal(cliproxyTruncated.accounts_truncated, true);
-assert.equal(cliproxyTruncated.verdict, "unknown");
-assert.equal(cliproxyTruncated.reason, "accounts_truncated");
-// Privacy: the frozen endpoint string is the ONLY slash-bearing value; no
-// sentinel credential, e-mail, path, header or token may appear anywhere.
-const cliproxyText = JSON.stringify(cliproxy);
-for (const token of [
-  "fixture-management-key-sentinel",
-  "fixture-account@example.invalid",
-  "fixture-access-token-sentinel",
-  "fixture-auth-dir",
-  "Bearer ",
-  "Authorization",
-  "access_token",
-  "sk-",
-  "C:",
-])
-  assert.equal(
-    cliproxyText.includes(token),
-    false,
-    `cliproxy_status must not contain ${token}`
+for (const row of [usageRow.models[0], usageRow.days[0]]) {
+  for (const field of ["costCny", "knownCostUsd", "estimatedCostUsd"]) {
+    assert.ok(!(field in row), `normalized detail still carries ${field}`);
+  }
+}
+for (const field of ["costCny", "knownCostCny", "estimatedCostCny"]) {
+  assert.ok(
+    !(field in share.unattributed),
+    `unattributed bucket still carries ${field}`
   );
-assert.equal(
-  cliproxyText.includes("@"),
-  false,
-  "cliproxy_status must not contain @"
-);
-assert.equal(
-  cliproxyText.includes("\\\\"),
-  false,
-  "cliproxy_status must not contain a backslash"
-);
-// The frozen endpoint string and the frozen denied-note (401/403) are the only
-// allowed slash-bearing values; anything else with a slash is a leak.
-const cliproxyAllowed = [
-  "GET /v0/management/auth-files",
-  "管理读取被拒（401/403）：与 Gemini 登录状态无关；账号事实未知。",
-];
-let cliproxyScrubbed = cliproxyText;
-for (const allowed of cliproxyAllowed)
-  cliproxyScrubbed = cliproxyScrubbed.split(allowed).join("");
-assert.equal(
-  cliproxyScrubbed.includes("/"),
-  false,
-  "cliproxy_status: slash outside the frozen endpoint/note"
-);
-// The offline FixtureTransport serves the new action with zero live calls.
-const cliproxyTransport = new FixtureTransport({
-  name: "generated-python-cliproxy-status",
-  actions: cliproxyActions,
-  reads: {},
-  operations: {},
-});
-const cliproxyClient = new BackendClient(cliproxyTransport, {
-  now: () => 0,
-  sleep: async () => {},
-});
-const cliproxyCapabilities = await cliproxyClient.refreshCapabilities();
-assert.equal(cliproxyCapabilities.length, 1);
-assert.ok(cliproxyCapabilities.every((row) => row.enabled && row.cancelable));
-assert.ok(cliproxyTransport.calls.every((call) => !call.path.includes("://")));
-
+}
+assert.equal(share.unattributed.undated, null);
+assert.equal(share.coverage.unpricedRequests, undefined);
+assert.equal(share.coverage.priceFn, undefined);
+assert.equal(share.coverage.priceVersions, undefined);
+assert.equal(share.coverage.costCnyPartial, undefined);
+assert.equal(share.coverage.rateFn, undefined);
 console.log(
   JSON.stringify(
     {
@@ -765,7 +215,6 @@ console.log(
       logEvents: logs.events.length,
       simulatedOperations: 5,
       liveRequests: 0,
-      cliproxyScenarios: cliproxy.scenarios.length,
       result: "PASS",
     },
     null,

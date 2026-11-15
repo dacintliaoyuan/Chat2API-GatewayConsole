@@ -20,8 +20,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from share_management import ShareManager  # noqa: E402
-import console_share_actions as _share_orchestration  # noqa: E402
+from share.management import ShareManager  # noqa: E402
+from console import share_actions as _share_orchestration  # noqa: E402
 
 _ISOLATION_TEMP = None
 _ISOLATION_PATCHERS = []
@@ -49,8 +49,8 @@ def _guard_usage_module(module):
 
 def setUpModule():
     global _ISOLATION_TEMP
-    import share_broker_client
-    import share_broker_server
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(
         prefix="secret-redaction-")
     root = Path(_ISOLATION_TEMP.name)
@@ -61,12 +61,9 @@ def setUpModule():
         "CONSOLE_LOCK_DIR": str(root / "console-locks")})
     patcher.start()
     _ISOLATION_PATCHERS.append(patcher)
-    for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                         "_declare_real_kernel"),
-                        (share_broker_server, "_declared_kernel")):
-        patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-        patcher.start()
-        _ISOLATION_PATCHERS.append(patcher)
+    # The retired Windows named-pipe transport is gone with the old local
+    # share chain (#33).
+    _ = (share_broker_client, share_broker_server)
 
 
 def tearDownModule():
@@ -156,15 +153,14 @@ class SecretRedactionTests(unittest.TestCase):
             self.usagesrv._share_manager = None
 
     def _install_observation_fixtures(self):
-        import console_adapters
-        import console_share_production
+        from console import adapters as console_adapters
+        from console import share_production as console_share_production
         import subprocess
         saved = {name: value for name, value in vars(_share_orchestration).items()
                  if name.startswith("_") and name.upper() == name}
         self.addCleanup(lambda: [
             _share_orchestration.__dict__.__setitem__(name, value)
             for name, value in saved.items()])
-        _share_orchestration._FUNNEL_OBSERVED = None
 
         def fake_runner(argv, timeout=None, **kwargs):
             return subprocess.CompletedProcess(argv, 0, "{}", "")
@@ -174,8 +170,6 @@ class SecretRedactionTests(unittest.TestCase):
                 broker=self.broker, runner=fake_runner,
                 keys_manager=keys_manager, cloud=cloud,
                 status_path=str(Path(self.tmp_store.name) / "absent.json"))
-            seams["_BACKEND_OBSERVE"] = lambda: {
-                "running": True, "auth_state": "valid"}
             for name, value in seams.items():
                 setattr(_share_orchestration, name, value)
 
@@ -260,7 +254,7 @@ class SecretRedactionTests(unittest.TestCase):
         self.assertNotIn(plaintext, stdout.getvalue())
         self.assertNotIn(plaintext, stderr.getvalue())
 
-        from share_store import ShareStore
+        from share.store import ShareStore
         store = ShareStore(os.environ["SHARE_STORE_FILE"])
         try:
             operations = store.operations()

@@ -3,7 +3,7 @@ Description=UM share broker host (single authority for the 8100 child)
 Documentation=file:///opt/um-share/current/um-cloud-deploy/README.md
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/opt/um-share/current/share_broker_ops.py
+ConditionPathExists=/opt/um-share/current/share/broker_ops.py
 ConditionPathExists=/etc/um-share/broker-control.key
 
 [Service]
@@ -13,25 +13,36 @@ Group=um-share
 WorkingDirectory=/opt/um-share/current
 EnvironmentFile=/etc/um-share/broker.env
 EnvironmentFile=-/etc/um-share/console.env
+# The merged 8100 child keeps the console's token/profile under the writable
+# console state, never inside the read-only release.  The environment file also
+# carries these on an installed host; the explicit values keep the broker child
+# correct even when the optional console.env predates the merged process.
+Environment=CHAT2API_TOKEN_FILE=/var/lib/um-share-console/share-backend/token.json
+Environment=CHAT2API_PROFILE_DIR=/var/lib/um-share-console/share-backend/edge-profile
+Environment=CHAT2API_SERVICE_LOG=/var/lib/um-share-console/share-backend/share-backend.log
+Environment=CHAT2API_USAGE_LOG=/var/lib/um-share-console/share-backend/usage-share-backend.jsonl
 Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token
 EnvironmentFile=-/etc/um-share/console.env
 Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token
+# The browser launch gets these only when the on-demand display is active;
+# the default headless path never connects to them.  browser_login also
+# injects the display's published values, so a changed display path does not
+# require a broker restart.
+Environment=DISPLAY=:99
+Environment=XAUTHORITY=/run/um-share/display.auth
 # The 8100 gateway persists its revoke state under the state directory, never
 # inside the release: ProtectSystem=strict keeps /opt/um-share/current read-only.
 # install.sh appends
 # CHAT2API_SHARE_REVOKE_STATE_FILE=/var/lib/um-share/share-revoke.state
 # to broker.env, and the 8100 child inherits this EnvironmentFile.
-# The 8100 child stamps the price-table version on every ledger row; the table
-# is deployment configuration under /etc, not a file inside the release.
-Environment=CHAT2API_PRICE_TABLE_FILE=/etc/um-share/prices.json
 # The gateway child runs as a script (sys.path[0]=chat2api); the shared
 # projection parser lives one level up at the release root.
 Environment=PYTHONPATH=/opt/um-share/current
 UMask=0077
-# Fail the START, never silently run without metering: the installed unit must
-# still name the price table, and broker.env must set UM_SHARE_UID.
+# Fail the START, never silently run without metering: broker.env must set
+# UM_SHARE_UID.
 ExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly broker /etc/systemd/system/um-share-broker.service /etc/um-share/broker.env
-ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share_broker_ops.py \
+ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share/broker_ops.py \
   --socket-path /run/um-share/broker.sock \
   --key-file /etc/um-share/broker-control.key \
   --instance-key-file /etc/um-share/instance.key \
@@ -47,6 +58,8 @@ ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share_broker_ops.p
   --expect-instance-port 8100 \
   --host-command /opt/um-share/venv/bin/python /opt/um-share/current/chat2api/chat2api.py \
     --port 8100 \
+    --base-url https://chat.genai.um.edu.mo \
+    --login-timeout 1800 \
     --share-config /var/lib/um-share/run/share-projection.json \
     --auth-mode projection \
     --instance-key-file /etc/um-share/instance.key \

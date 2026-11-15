@@ -2,10 +2,10 @@
 """D18-1: the Cloudflare Tunnel ingress is read-only and API-only.
 
 The public edge must route exactly the four shared API paths to the loopback
-8100 gateway and answer every other path with 404.  The private console (18096),
-the 8110 share backend and the display (5901) must never appear as an ingress
-service.  ``check-ingress.py`` only reads the file and reports
-``{ok, problems, rules}``; it never writes or reloads a tunnel.
+8100 gateway and answer every other path with 404.  The private console (8096),
+the display (8097) and their expand-contract legacy aliases (18096/5901) must
+never appear as an ingress service.  ``check-ingress.py`` only reads the file and
+reports ``{ok, problems, rules}``; it never writes or reloads a tunnel.
 
 Run from ``ai-gateway``:
 
@@ -26,7 +26,7 @@ CONFIG = DEPLOY / "config" / "cloudflared.yml.example"
 HOST = "dacintapi.de5.net"
 API_PATHS = ("/v1/models", "/v1/chat/completions", "/v1/messages",
              "/v1/responses")
-FORBIDDEN_PORTS = ("18096", "8110", "5901")
+FORBIDDEN_PORTS = ("8096", "8097", "18096", "5901")
 
 
 def _load_checker():
@@ -94,12 +94,12 @@ class CloudflaredIngressExampleTests(unittest.TestCase):
             path = _write(root, "cloudflared.yml", _config([
                 _api_rule("/v1/models"),
                 "  - hostname: %s\n    path: ^/console$\n"
-                "    service: http://127.0.0.1:18096\n" % HOST,
+                "    service: http://127.0.0.1:8096\n" % HOST,
                 "  - service: http_status:404\n",
             ]))
             result = checker.check_ingress(path, expect_host=HOST)
         self.assertFalse(result["ok"])
-        self.assertTrue(any("18096" in item for item in result["problems"]),
+        self.assertTrue(any("8096" in item for item in result["problems"]),
                         result["problems"])
 
     def test_a_display_service_is_refused(self):
@@ -108,13 +108,32 @@ class CloudflaredIngressExampleTests(unittest.TestCase):
             root = Path(tmp)
             path = _write(root, "cloudflared.yml", _config([
                 "  - hostname: %s\n    path: ^/display/$\n"
-                "    service: http://127.0.0.1:5901\n" % HOST,
+                "    service: http://127.0.0.1:8097\n" % HOST,
                 "  - service: http_status:404\n",
             ]))
             result = checker.check_ingress(path, expect_host=HOST)
         self.assertFalse(result["ok"])
-        self.assertTrue(any("5901" in item for item in result["problems"]),
+        self.assertTrue(any("8097" in item for item in result["problems"]),
                         result["problems"])
+
+    def test_legacy_private_services_are_still_refused(self):
+        # Expand-contract (2026-11-14): the old ports are private listeners
+        # too and must never be routed by the public edge.
+        checker = _load_checker()
+        for port in ("18096", "5901"):
+            with self.subTest(port=port):
+                with tempfile.TemporaryDirectory(prefix="ingress-legacy-") as tmp:
+                    root = Path(tmp)
+                    path = _write(root, "cloudflared.yml", _config([
+                        "  - hostname: %s\n    path: ^/console$\n"
+                        "    service: http://127.0.0.1:%s\n" % (HOST, port),
+                        "  - service: http_status:404\n",
+                    ]))
+                    result = checker.check_ingress(path, expect_host=HOST)
+                self.assertFalse(result["ok"])
+                self.assertTrue(
+                    any(port in item for item in result["problems"]),
+                    result["problems"])
 
     def test_the_catch_all_must_be_the_last_rule(self):
         checker = _load_checker()

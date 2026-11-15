@@ -48,7 +48,6 @@ GLOBAL_OPTIONS = frozenset({
     "--key-file",
     "--timeout",
     "--port",
-    "--backend-port",
     "--drain-budget",
     "--broker-drain-max",
     "--poll-interval",
@@ -458,6 +457,7 @@ log() {{ printf 'LOG:%s\\n' "$*" >&2; }}
 die() {{ printf 'DIE:%s\\n' "$2" >&2; exit "$1"; }}
 systemctl() {{ printf 'systemctl %s\\n' "$*" >> "$TRACE"; }}
 brokerctl() {{ printf 'brokerctl %s\\n' "$*" >> "$TRACE"; }}
+console_port() {{ printf '8096\\n'; }}
 wait_port_open() {{ printf 'wait_port_open %s\\n' "$*" >> "$TRACE"; }}
 health_gate() {{ printf 'health_gate\\n' >> "$TRACE"; }}
 run_recovery() {{ printf 'recovery %s\\n' "$1" >> "$TRACE"; {recovery_tail} }}
@@ -777,7 +777,7 @@ curl() {
   printf '%s\n' "$n" > "$PROBE_COUNT"
   printf 'curl %s\n' "$url" >> "$TRACE"
   case "$url" in
-    *:18096/*) if [ "$n" -le "${FAIL_CONSOLE_PROBES:-0}" ]; then printf '000'; return 0; fi ;;
+    *:8096/*) if [ "$n" -le "${FAIL_CONSOLE_PROBES:-0}" ]; then printf '000'; return 0; fi ;;
     *:8100/*) if [ "$n" -le "${FAIL_GATEWAY_PROBES:-0}" ]; then printf '000'; return 0; fi ;;
   esac
   printf '200'
@@ -1163,7 +1163,7 @@ readlink() {
     def test_an_unconfirmed_stop_in_the_health_fallback_keeps_the_edge_closed(self):
         # R10-a: the forward switch starts both units; a failed health gate must
         # confirm they are stopped before restoring the links and reopening
-        # cloudflared.  An unconfirmed console stop, an open 8110, or an unconfirmed
+        # cloudflared.  An unconfirmed console stop, an open share entry, or an unconfirmed
         # broker stop leaves the links on the new release, the edge closed and
         # the actual residue readable.
         for name in SHELL_SCRIPTS:
@@ -1171,7 +1171,6 @@ readlink() {
                     ("console-stop", {
                         "FAIL_UNIT_STOP_AFTER_START":
                             "um-share-console.service"}),
-                    ("console-port", {"FAIL_CLOSE_AFTER_START": "8110"}),
                     ("broker-stop", {
                         "FAIL_BROKER_STOP": "1",
                         "FAIL_UNIT_STOP_AFTER_START":
@@ -1392,6 +1391,67 @@ readlink() {
                     [], [line for line in result.trace
                          if line.startswith("ln -sfn ")],
                     "a link moved before the refusal")
+
+
+class ConsolePortResolutionTests(unittest.TestCase):
+    """Expand-contract (2026-11-14): ops probes follow the deployed console port.
+
+    The console moved 18096 -> 8096.  install/update/rollback must read the
+    deployed console.env instead of hardcoding one side, so a deployment that
+    still carries the legacy 18096 explicitly keeps working for one release
+    cycle.  A missing line means the new 8096 default; an invalid value fails
+    closed instead of silently probing a different port.
+    """
+
+    def _console_port(self, text):
+        with tempfile.TemporaryDirectory(prefix="console-port-") as tmp:
+            etc = Path(tmp)
+            if text is not None:
+                (etc / "console.env").write_text(text, encoding="utf-8")
+            etc_arg = str(etc)
+            if os.name == "nt":
+                converted = subprocess.run(
+                    ["cygpath", "-u", etc_arg],
+                    capture_output=True, text=True)
+                self.assertEqual(0, converted.returncode, converted.stderr)
+                etc_arg = converted.stdout.strip()
+            script = (
+                "set -euo pipefail\n"
+                '. "$DEPLOY_LIB/common.sh"\n'
+                "console_port\n")
+            env = dict(os.environ, DEPLOY_LIB=str(DEPLOY / "lib"),
+                        UM_ETC=etc_arg)
+            return subprocess.run([BASH, "-c", script], capture_output=True,
+                                  text=True, env=env)
+
+    def test_missing_console_env_uses_the_new_default(self):
+        proc = self._console_port(None)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual("8096", proc.stdout.strip())
+
+    def test_the_deployed_new_port_is_used(self):
+        proc = self._console_port("USAGESRV_PORT=8096\n")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual("8096", proc.stdout.strip())
+
+    def test_the_legacy_port_stays_an_explicit_value(self):
+        proc = self._console_port("USAGESRV_PORT=18096\n")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual("18096", proc.stdout.strip())
+
+    def test_an_invalid_port_fails_closed(self):
+        for value in ("", "abc", "0", "65536", "8096 "):
+            with self.subTest(value=value):
+                proc = self._console_port("USAGESRV_PORT=%s\n" % value)
+                self.assertNotEqual(0, proc.returncode, proc.stdout)
+                self.assertIn("USAGESRV_PORT must be 1..65535", proc.stderr)
+
+    def test_whitespace_around_the_assignment_is_accepted(self):
+        # systemd EnvironmentFile allows whitespace around '='; the ops helper
+        # must read the same value the service will.
+        proc = self._console_port("USAGESRV_PORT = 8096\n")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual("8096", proc.stdout.strip())
 
 
 if __name__ == "__main__":

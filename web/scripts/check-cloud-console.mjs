@@ -54,7 +54,7 @@ const cloud = load(
   "cloud-submit-entry.ts"
 );
 const overview = load(
-  `export { umState, authHeadline, overviewHtml, cnyBound, when, clock } from "./src/cloud/overview.ts";`,
+  `export { umState, authHeadline, overviewHtml, when, clock } from "./src/cloud/overview.ts";`,
   "cloud-overview-entry.ts"
 );
 const intent = load(
@@ -113,7 +113,7 @@ test("A2: an operation id for another intent is not accepted as this submit", ()
     {
       operation: {
         id: "op-2",
-        action: "share.stop",
+        action: "share.gateway_restart",
         target: "share",
         state: "running",
       },
@@ -443,12 +443,12 @@ test("R17/R9: only a queued or running login operation is current login progress
   const um = overview.umState(status, ops);
   assert.equal(um.currentLogin?.state, "running");
   assert.equal(um.currentLogin?.at, loginAt * 1000);
-  assert.equal(um.currentLogin?.action, "share.backend_login");
+  assert.equal(um.currentLogin?.action, "account.login");
   assert.equal(um.auth.word, "无效", "当前登录进度不改写当前认证");
   const headline = overview.authHeadline(um);
   assert.equal(headline.title, "UM 登录进行中");
   assert.match(headline.detail, /当前认证：无效/);
-  assert.match(headline.detail, /当前登录进度：执行中 · 启动 UM 登录流程/);
+  assert.match(headline.detail, /当前登录进度：执行中 · 登录 UM/);
   const html = overview.overviewHtml(
     overviewModel({ status, operations: ops })
   );
@@ -456,19 +456,19 @@ test("R17/R9: only a queued or running login operation is current login progress
   assert.doesNotMatch(html, /当前登录进度：执行中/);
   assert.doesNotMatch(html, /登录动作/);
 
-  // queued is also in-flight progress, and re-auth uses its own action word.
+  // queued is also in-flight progress for the retained login action.
   const queued = overview.umState(status, {
     state: "ready",
     at: readAt * 1000,
-    value: [runningLoginOp("queued", loginAt, "share.backend_reauthenticate")],
+    value: [runningLoginOp("queued", loginAt, "account.login")],
   });
   assert.equal(queued.currentLogin?.state, "queued");
   assert.equal(queued.currentLogin?.at, loginAt * 1000);
-  assert.equal(queued.currentLogin?.action, "share.backend_reauthenticate");
+  assert.equal(queued.currentLogin?.action, "account.login");
   assert.equal(overview.authHeadline(queued).title, "UM 登录进行中");
   assert.match(
     overview.authHeadline(queued).detail,
-    /当前登录进度：排队中 · 重新认证 UM/
+    /当前登录进度：排队中 · 登录 UM/
   );
 });
 
@@ -675,7 +675,7 @@ test("R2: stale status and operations reads are not current on the services page
       value: [
         {
           id: "op-1",
-          action: "share.backend_login",
+          action: "account.login",
           target: "share",
           state: "succeeded",
           created_at: Math.floor((at - 60_000) / 1000),
@@ -724,7 +724,7 @@ const statusOp = (authState, at) => ({
 });
 const loginOp = (authState, at) => ({
   id: `op-login-${authState}`,
-  action: "share.backend_login",
+  action: "account.login",
   target: "share",
   state: "succeeded",
   created_at: at,
@@ -734,7 +734,7 @@ const loginOp = (authState, at) => ({
   steps: [],
   idempotency_key: null,
 });
-const runningLoginOp = (state, at, action = "share.backend_login") => ({
+const runningLoginOp = (state, at, action = "account.login") => ({
   id: `op-login-${state}-${action}`,
   action,
   target: "share",
@@ -904,7 +904,7 @@ test("status detail: stale status and operations readings are marked stale, not 
       value: [
         {
           id: "op-old",
-          action: "share.backend_restart",
+          action: "share.gateway_restart",
           target: "share",
           state: "succeeded",
           created_at: Math.floor((at - 120_000) / 1000),
@@ -1983,11 +1983,10 @@ test("D18-10: the three chain buttons and the advanced fold's server actions are
     })
   );
   for (const action of [
-    "share.chain_start|share",
-    "share.chain_stop|share",
-    "share.chain_estop|share",
-    "share.backend_login|share",
-    "share.backend_restart|share",
+    "service.start|share-gateway",
+    "service.stop|share-gateway",
+    "service.stop|share-gateway",
+    "account.login|share",
     "service.start|share-gateway",
     "service.stop|share-gateway",
     "service.restart|share-gateway",
@@ -2004,13 +2003,13 @@ test("D18-10: the three chain buttons and the advanced fold's server actions are
   const foldAt = html.indexOf("data-cloud-advanced");
   assert.ok(foldAt > 0, "单页没有高级维护折叠");
   const advanced = html.slice(foldAt);
-  assert.match(advanced, /data-cloud-op="share\.status\|share"/);
+  assert.match(advanced, /data-cloud-op="share\.diagnostics\|share"/);
   assert.match(
     advanced,
-    /data-cloud-op="share\.backend_reauthenticate\|share"/
+    /data-cloud-op="share\.gateway_restart\|share"/
   );
-  assert.match(advanced, /分层检查（只读）/);
-  assert.match(advanced, /重新认证 UM/);
+  assert.match(advanced, /分层诊断（只读）/);
+  assert.match(advanced, /重启分享入口 8100/);
 });
 
 test("D18-7/D18-8/D18-9: the deleted services page no longer renders the display card", () => {
@@ -2079,7 +2078,6 @@ test("D18-13: the chart offers 7/14/30 days, keeps the total in the tooltip and 
           models: [],
           undated: null,
           coverage: dayUsage(beijingDay(Date.now())).coverage,
-          costCny: 0.005,
           tokenUsage: dayUsage(beijingDay(Date.now())).tokenUsage,
         },
         {
@@ -2089,7 +2087,6 @@ test("D18-13: the chart offers 7/14/30 days, keeps the total in the tooltip and 
           models: [],
           undated: null,
           coverage: { ...dayUsage("x").coverage, requests: 2 },
-          costCny: null,
           tokenUsage: {
             totalTokens: null,
             lowerBoundTokens: null,
@@ -2128,9 +2125,8 @@ test("D18-14: today's figures are 请求 / Token / 失败 in one block", () => {
       new RegExp(`data-cloud-usage-value="${id}"[^>]*>${value}<`),
       `今日${id} 不是 ${value}`
     );
-  // The cost stays stated, but outside the three-number row; the global cap
-  // now lives in the Key list header.
-  assert.match(block, /今日模型参考费用/);
+  // The global cap now lives in the Key list header; no price is rendered.
+  assert.doesNotMatch(block, /参考费用|参考价|云账单|¥/);
   assert.match(html, /并发 未上报 \/ 8/);
   assert.doesNotMatch(block, /配置并发上限/);
 });
@@ -2202,22 +2198,13 @@ function chartUsagePayload() {
   const coverage = {
     requests: 1,
     unknownRequests: 0,
-    unpricedRequests: 0,
     incompleteRequests: 0,
     records: 1,
-    pricedRequests: 1,
     unknownTimeRequests: 0,
-    pricingUnavailableRequests: 0,
-    costComplete: true,
-    costCnyPartial: false,
-    knownCostCnyPartial: false,
-    estimatedCostCnyPartial: false,
     cacheReportedRequests: 0,
     cacheUnreportedRequests: 0,
     cacheUnknownRequests: 0,
-    cacheUnknownPricedRequests: 0,
     excludedUnknownTimeRequests: 0,
-    localCoverageAvailable: true,
   };
   const tokenUsage = {
     totalTokens: 10,
@@ -2240,24 +2227,14 @@ function chartUsagePayload() {
     cacheUnknownRequests: 0,
   };
   const summary = {
-    knownCostUsd: 0.001,
-    estimatedCostUsd: 0,
-    costCny: 0.005,
-    knownCostCny: 0.005,
-    estimatedCostCny: 0,
     inputTokens: 6,
     outputTokens: 4,
     requests: 1,
     unknownRequests: 0,
-    unpricedRequests: 0,
     incompleteRequests: 0,
     unknownTimeRequests: 0,
-    costCnyPartial: false,
-    knownCostCnyPartial: false,
-    estimatedCostCnyPartial: false,
     coverage,
     tokenUsage,
-    priceVersions: [],
   };
   return {
     keys: [
@@ -2295,7 +2272,6 @@ function failedUsage(count = 3) {
         undated: null,
         requests: count,
         coverage,
-        costCny: day.costCny,
         tokenUsage: day.tokenUsage,
       },
     ],
@@ -2900,18 +2876,15 @@ test("D18-14: today's figures are mono, right-aligned to one line, and the trend
 });
 
 const ready = (value) => ({ state: "ready", at: Date.now(), value });
-const dayUsage = (day, cost = 0.005) => ({
+const dayUsage = (day) => ({
   identity: day,
   coverage: {
     requests: 1,
     records: 1,
     unknownRequests: 0,
-    unpricedRequests: 0,
     incompleteRequests: 1,
     unknownTimeRequests: 0,
     cacheUnreportedRequests: 0,
-    costCnyPartial: true,
-    costComplete: false,
   },
   tokenUsage: {
     totalTokens: 10,
@@ -2921,9 +2894,6 @@ const dayUsage = (day, cost = 0.005) => ({
     complete: true,
     unknownRequests: 0,
   },
-  costCny: cost,
-  knownCostCny: cost,
-  estimatedCostCny: 0,
 });
 const emptyBucket = {
   days: [],
@@ -2933,14 +2903,10 @@ const emptyBucket = {
     requests: 0,
     records: 0,
     unknownRequests: 0,
-    unpricedRequests: 0,
     incompleteRequests: 0,
     unknownTimeRequests: 0,
     cacheUnreportedRequests: 0,
-    costCnyPartial: false,
-    costComplete: true,
   },
-  costCny: 0,
   tokenUsage: {
     totalTokens: 0,
     inputTokens: 0,
@@ -2992,7 +2958,6 @@ const overviewModel = (overrides = {}) => {
           models: [],
           undated: null,
           coverage: day.coverage,
-          costCny: day.costCny,
           tokenUsage: day.tokenUsage,
         },
       ],
@@ -3098,9 +3063,7 @@ test("single page: the old ops and services content is gone and only the two rea
     "安全状态",
     "本页提交",
     "操作记录",
-    "价目表版本",
     "API 入口",
-    "UM 后端",
     "上游认证",
     "登录动作",
     "最近核验",
@@ -3111,14 +3074,14 @@ test("single page: the old ops and services content is gone and only the two rea
     assert.doesNotMatch(html, new RegExp(text), text);
   assert.match(html, /高级维护/);
   const fold = html.slice(html.indexOf("data-cloud-advanced"));
-  assert.match(fold, /分层检查（只读）/);
-  assert.match(fold, /重新认证 UM/);
+  assert.match(fold, /分层诊断（只读）/);
+  assert.match(fold, /重启分享入口 8100/);
   const ops = [...fold.matchAll(/data-cloud-op="([^"]+)"/g)].map(
     (match) => match[1]
   );
   assert.deepEqual(ops, [
-    "share.status|share",
-    "share.backend_reauthenticate|share",
+    "share.diagnostics|share",
+    "share.gateway_restart|share",
   ]);
   assert.doesNotMatch(fold, /data-cloud-maintenance-actions/);
   assert.doesNotMatch(fold, /维护动作/);
@@ -3336,7 +3299,7 @@ test("U: the single page keeps today's figures, cap, trend and the Key list", ()
     })
   );
   assert.match(html, /今日请求/);
-  assert.match(html, /今日模型参考费用/);
+  assert.match(html, /今日 Token/);
   assert.match(html, /并发 未上报 \/ 8/);
   assert.match(html, /cloud-trend-grid/);
   assert.match(html, /API Key/);
@@ -3345,8 +3308,8 @@ test("U: the single page keeps today's figures, cap, trend and the Key list", ()
   assert.doesNotMatch(html, /cloud-status-grid/);
   const fold = html.indexOf("data-cloud-advanced");
   assert.ok(fold > 0, "单页没有高级维护折叠");
-  assert.match(html.slice(fold), /分层检查（只读）/);
-  assert.match(html.slice(fold), /重新认证 UM/);
+  assert.match(html.slice(fold), /分层诊断（只读）/);
+  assert.match(html.slice(fold), /重启分享入口 8100/);
 });
 
 const requestRow = (overrides = {}) => ({
@@ -3367,11 +3330,6 @@ const requestRow = (overrides = {}) => ({
   durationMs: 1200,
   cacheTokens: 0,
   reasoningTokens: null,
-  priced: true,
-  priceVersion: "v1",
-  costUsd: 0.001,
-  costCny: 0.005,
-  costCnyPartial: false,
   ...overrides,
 });
 const requestsPage = (rows, nextCursor = null) => ({
@@ -3761,7 +3719,7 @@ test("status row: the login-window actions follow the display state", () => {
     const row = html.slice(start, html.indexOf("</section>", start));
     return {
       open: /data-cloud-login-window-open/.test(row),
-      relogin: /data-cloud-op="share\.backend_login\|share"/.test(row),
+      relogin: /data-cloud-op="account\.login\|share"/.test(row),
       cancel: /data-cloud-login-cancel/.test(row),
       openWord: /打开登录窗口/.test(row),
       reloginWord: /重新登录/.test(row),
@@ -3895,11 +3853,11 @@ test("primary action: one button follows gateway_running and unknown is disabled
   );
 });
 
-test("primary action: an in-flight chain start shows 启动中…（等待认证） with its own step note", () => {
+test("primary action: an in-flight service start shows 启动中…（等待认证） with its own step note", () => {
   const chainStart = (state, steps) => ({
     id: "op-start",
-    action: "share.chain_start",
-    target: "share",
+    action: "service.start",
+    target: "share-gateway",
     state,
     created_at: Math.floor(Date.now() / 1000),
     steps,
@@ -3923,15 +3881,15 @@ test("primary action: an in-flight chain start shows 启动中…（等待认证
         chainStart("running", [
           {
             at: 1,
-            note: "整链启动：Key 前置 → 8110 → 认证等待 → 8100 → 公网边缘（只读）",
+            note: "服务启动：认证等待 → 8100 → 公网边缘（只读）",
           },
-          { at: 2, note: "专用后端 8110 启动已受理，等待运行确认" },
+          { at: 2, note: "服务启动已受理，等待运行确认" },
         ]),
       ]),
     })
   );
   assert.match(starting, /启动中…（等待认证）/);
-  assert.match(starting, /专用后端 8110 启动已受理，等待运行确认/);
+  assert.match(starting, /服务启动已受理，等待运行确认/);
   assert.match(starting, /disabled/);
   assert.doesNotMatch(starting, /data-cloud-primary="stop"/);
   assert.doesNotMatch(starting, /认证有效|已登录/);
@@ -3957,7 +3915,7 @@ test("primary action: an in-flight chain start shows 启动中…（等待认证
         last: {
           value: [
             chainStart("running", [
-              { at: 2, note: "专用后端 8110 启动已受理，等待运行确认" },
+              { at: 2, note: "服务启动已受理，等待运行确认" },
             ]),
           ],
           at: Date.now() - 60_000,
@@ -3994,7 +3952,7 @@ test("primary action: clicking 启动 turns the same button into 启动中…（
     locale: "zh-CN",
   });
   const state = { running: false, operations: [], posts: [] };
-  const stepNote = "专用后端 8110 启动已受理，等待运行确认";
+  const stepNote = "服务启动已受理，等待运行确认";
   await context.route("**/*", (route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -4031,7 +3989,7 @@ test("primary action: clicking 启动 turns the same button into 启动中…（
         body: JSON.stringify({
           operation: {
             id: "op-start",
-            action: "share.chain_start",
+            action: "service.start",
             target: "share",
             state: "succeeded",
             created_at: Math.floor(Date.now() / 1000),
@@ -4053,9 +4011,9 @@ test("primary action: clicking 启动 turns the same button into 启动中…（
         contentType: "application/json",
         body: JSON.stringify({
           actions: [
-            { action: "share.chain_start", enabled: true },
-            { action: "share.chain_stop", enabled: true },
-            { action: "share.chain_estop", enabled: true },
+            { action: "service.start", enabled: true },
+            { action: "service.stop", enabled: true },
+            { action: "service.stop", enabled: true },
           ],
         }),
       });
@@ -4154,14 +4112,14 @@ test("primary action: clicking 启动 turns the same button into 启动中…（
     );
     assert.deepEqual(
       state.posts.map((body) => `${body.action}|${body.target}`),
-      ["share.chain_start|share"]
+      ["service.start|share-gateway"]
     );
     // Completion: the service read says running, so the same button is 停止.
     state.running = true;
     state.operations = [
       {
         id: "op-start",
-        action: "share.chain_start",
+        action: "service.start",
         target: "share",
         state: "succeeded",
         created_at: Math.floor(Date.now() / 1000),
@@ -4189,7 +4147,7 @@ test("primary action: clicking 启动 turns the same button into 启动中…（
   }
 });
 
-test("primary action: 停止 opens the stop confirm and offers 强制停止 only after a drain timeout", async () => {
+test("primary action: 停止 opens the stop confirm and posts the retained stop action", async () => {
   const { chromium } = await loadPlaywright();
   const browser = await chromium.launch({ channel: "chrome" });
   const context = await browser.newContext({
@@ -4234,7 +4192,7 @@ test("primary action: 停止 opens the stop confirm and offers 强制停止 only
         body: JSON.stringify({
           operation: {
             id: "op-stop",
-            action: "share.chain_stop",
+            action: "service.stop",
             target: "share",
             state: "succeeded",
             created_at: Math.floor(Date.now() / 1000),
@@ -4256,9 +4214,9 @@ test("primary action: 停止 opens the stop confirm and offers 强制停止 only
         contentType: "application/json",
         body: JSON.stringify({
           actions: [
-            { action: "share.chain_start", enabled: true },
-            { action: "share.chain_stop", enabled: true },
-            { action: "share.chain_estop", enabled: true },
+            { action: "service.start", enabled: true },
+            { action: "service.stop", enabled: true },
+            { action: "service.stop", enabled: true },
           ],
         }),
       });
@@ -4343,7 +4301,7 @@ test("primary action: 停止 opens the stop confirm and offers 强制停止 only
     await dialog.waitFor({ state: "visible", timeout: 10000 });
     assert.equal(
       (await dialog.locator(".shell-confirm-body").innerText()).trim(),
-      "停止会先拒绝新请求，等待在途请求结束。若有请求未结束，会提示可以强制停止。确定停止？"
+      "停止会先拒绝新请求，等待在途请求结束；停止意图由云端持久化。确定停止？"
     );
     assert.equal(
       await page.locator("[data-cloud-confirm-force]").isVisible(),
@@ -4353,40 +4311,6 @@ test("primary action: 停止 opens the stop confirm and offers 强制停止 only
     await dialog.locator('button[value="cancel"]').click();
     await dialog.waitFor({ state: "hidden", timeout: 10000 });
     assert.deepEqual(state.posts, [], "取消停止不应提交");
-    // A drain timeout is the only evidence that offers 强制停止.
-    state.operations = [
-      {
-        id: "op-stop",
-        action: "share.chain_stop",
-        target: "share",
-        state: "succeeded",
-        created_at: Math.floor(Date.now() / 1000),
-        finished_at: Math.floor(Date.now() / 1000),
-        result: { state: "drain_timeout" },
-        steps: [],
-      },
-    ];
-    await page.locator("[data-cloud-refresh]").first().click();
-    await page.waitForFunction(
-      () =>
-        (
-          document.querySelector("[data-cloud-primary]")?.textContent ?? ""
-        ).trim() === "停止",
-      null,
-      { timeout: 10000 }
-    );
-    await page.locator('[data-cloud-primary="stop"]').click();
-    await dialog.waitFor({ state: "visible", timeout: 10000 });
-    const force = page.locator("[data-cloud-confirm-force]");
-    assert.equal(await force.isVisible(), true, "排空超时后确认框没有强制停止");
-    assert.equal((await force.innerText()).trim(), "强制停止");
-    await force.click();
-    await dialog.waitFor({ state: "hidden", timeout: 10000 });
-    await page.waitForTimeout(400);
-    assert.deepEqual(
-      state.posts.map((body) => `${body.action}|${body.target}`),
-      ["share.chain_estop|share"]
-    );
   } finally {
     await browser.close();
   }
@@ -4493,7 +4417,7 @@ test("status row: clicking the word expands four evidence items and the two read
             },
             {
               id: "op-login",
-              action: "share.backend_login",
+              action: "account.login",
               target: "share",
               state: "succeeded",
               created_at: Math.floor(Date.now() / 1000) - 120,
@@ -4512,8 +4436,8 @@ test("status row: clicking the word expands four evidence items and the two read
         body: JSON.stringify({
           actions: [
             { action: "share.status", enabled: true },
-            { action: "share.backend_login", enabled: true },
-            { action: "share.backend_reauthenticate", enabled: true },
+            { action: "account.login", enabled: true },
+            { action: "account.login", enabled: true },
           ],
         }),
       });
@@ -4575,7 +4499,7 @@ test("status row: clicking the word expands four evidence items and the two read
       "最近核验",
       "登录动作",
       "分层检查（只读）",
-      "重新认证 UM",
+      "重启分享入口 8100",
     ])
       assert.match(text, new RegExp(evidence), evidence);
     await page
@@ -4602,14 +4526,9 @@ test("status row: clicking the word expands four evidence items and the two read
   }
 });
 
-test("U: a partial cost below ¥0.01 never renders ≥<¥0.01 and stays separate from the cloud bill", () => {
+test("U: the cloud usage block renders raw usage only, never a price", () => {
   const html = overview.overviewHtml(overviewModel());
-  assert.match(html, /≥¥0\.005/);
-  assert.doesNotMatch(html, /≥<¥0\.01/);
-  assert.match(html, /不是云账单/);
-  assert.equal(overview.cnyBound(0.005, true), "≥¥0.005");
-  assert.equal(overview.cnyBound(0.5, true), "≥¥0.50");
-  assert.equal(overview.cnyBound(0, true), "¥0.00");
+  assert.doesNotMatch(html, /参考费用|参考价|云账单|¥/);
 });
 
 function browserBundle() {
@@ -4682,7 +4601,7 @@ test("A2: submit answers keep or close the intent and a refresh never re-POSTs",
             operations: [
               {
                 id: "fx-intent-op",
-                action: "share.status",
+                action: "share.diagnostics",
                 target: "share",
                 state: "succeeded",
                 created_at: 1793413000,
@@ -4724,7 +4643,7 @@ test("A2: submit answers keep or close the intent and a refresh never re-POSTs",
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          actions: [{ action: "share.status", enabled: true }],
+          actions: [{ action: "share.diagnostics", enabled: true }],
         }),
       });
     }
@@ -4813,7 +4732,7 @@ test("A2: submit answers keep or close the intent and a refresh never re-POSTs",
     await page.waitForFunction(
       () => {
         const button = document.querySelector(
-          '[data-cloud-op="share.status|share"]'
+          '[data-cloud-op="share.diagnostics|share"]'
         );
         return button instanceof HTMLButtonElement && !button.disabled;
       },
@@ -4838,7 +4757,7 @@ test("A2: submit answers keep or close the intent and a refresh never re-POSTs",
     ) {
       await evidence.first().locator("summary").click();
     }
-    await page.locator('[data-cloud-op="share.status|share"]').first().click();
+    await page.locator('[data-cloud-op="share.diagnostics|share"]').first().click();
     await page.waitForTimeout(200);
     await page.locator('.shell-confirm button[value="confirm"]').click();
   };

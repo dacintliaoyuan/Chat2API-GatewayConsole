@@ -24,11 +24,9 @@ import sys
 import tempfile
 import threading
 import time
-import types
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest import mock
 
 AI_GATEWAY_ROOT = Path(__file__).resolve().parents[1]
 CHAT2API_PATH = AI_GATEWAY_ROOT / "chat2api" / "chat2api.py"
@@ -59,22 +57,10 @@ sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 before = {
-    "share_entry": "share_entry" in sys.modules,
-    "share_dispatch": "share_dispatch" in sys.modules,
+    "share_auth": "share_auth" in sys.modules,
 }
 
-def attempt(name):
-    try:
-        getattr(module, name)()
-    except ImportError:
-        return "ImportError"
-    return "loaded"
-
-module.SHARE_BACKEND_ROLE = False
-role_false_loads = {
-    "_load_share_dispatch": attempt("_load_share_dispatch"),
-    "_share_entry_module": attempt("_share_entry_module"),
-}
+module._share_auth_module()
 
 print(json.dumps({
     "package_root": str(module._PACKAGE_ROOT),
@@ -83,10 +69,8 @@ print(json.dumps({
             "shared.nonstream_aggregate"),
     "before": before,
     "after": {
-        "share_entry": "share_entry" in sys.modules,
-        "share_dispatch": "share_dispatch" in sys.modules,
+        "share_auth": "share_auth" in sys.modules,
     },
-    "role_false_loads": role_false_loads,
 }))
 """
 
@@ -123,8 +107,8 @@ class Chat2apiSharedImportTests(unittest.TestCase):
         offenders = [
             "{}:{}".format(lineno, module)
             for module, names, lineno in _imports_of(tree)
-            if module == "share_entry"
-            or (module in ("", ".") and "share_entry" in names)
+            if module == "share_auth"
+            or (module in ("", ".") and "share_auth" in names)
         ]
         self.assertTrue(
             offenders,
@@ -179,27 +163,7 @@ class Chat2apiSharedImportTests(unittest.TestCase):
                     "shared.responses_protocol", modules,
                     "{} must import shared.responses_protocol".format(name))
 
-    def test_role_false_loaders_raise_before_loading(self):
-        original_role = chat2api.SHARE_BACKEND_ROLE
-        chat2api.SHARE_BACKEND_ROLE = False
-        try:
-            cached_dispatch = types.ModuleType("share_dispatch")
-            cached_gateway = types.ModuleType("share_entry")
-            for name in chat2api._SHARE_GATEWAY_REQUIRED:
-                setattr(cached_gateway, name, lambda *_args: None)
-            with mock.patch.dict(sys.modules, {
-                    "share_dispatch": cached_dispatch,
-                    "share_entry": cached_gateway}):
-                with self.assertRaises(ImportError):
-                    chat2api._load_share_dispatch()
-                with self.assertRaises(ImportError):
-                    chat2api._share_entry_module()
-        finally:
-            chat2api.SHARE_BACKEND_ROLE = original_role
-
-    def test_private_role_revoke_endpoint_answers_503(self):
-        original_role = chat2api.SHARE_BACKEND_ROLE
-        chat2api.SHARE_BACKEND_ROLE = False
+    def test_revoke_endpoint_without_gate_answers_503(self):
         original_log_message = chat2api.Handler.log_message
         chat2api.Handler.log_message = lambda *_args: None
         server = ThreadingHTTPServer(("127.0.0.1", 0), chat2api.Handler)
@@ -214,8 +178,6 @@ class Chat2apiSharedImportTests(unittest.TestCase):
 
         self.addCleanup(setattr, chat2api.Handler, "log_message",
                         original_log_message)
-        self.addCleanup(setattr, chat2api, "SHARE_BACKEND_ROLE",
-                        original_role)
         self.addCleanup(stop)
         connection = http.client.HTTPConnection(
             "127.0.0.1", server.server_address[1], timeout=5)
@@ -261,16 +223,10 @@ class Chat2apiSharedImportTests(unittest.TestCase):
                          AI_GATEWAY_ROOT.resolve())
         self.assertIs(payload["nonstream_is_shared"], True,
                       "chat2api must load the aggregator from shared")
-        self.assertEqual(payload["before"],
-                         {"share_entry": False, "share_dispatch": False},
-                         "the private import must not load the share gate or the dispatch module")
-        self.assertEqual(payload["role_false_loads"],
-                         {"_load_share_dispatch": "ImportError",
-                          "_share_entry_module": "ImportError"},
-                         "the private role must refuse both share loaders")
-        self.assertEqual(payload["after"],
-                         {"share_entry": False, "share_dispatch": False},
-                         "a refused loader must not import the share backend")
+        self.assertEqual(payload["before"], {"share_auth": False},
+                         "the private import must not load the share gate")
+        self.assertEqual(payload["after"], {"share_auth": True},
+                         "the lazy loader must import the in-process share gate")
 
     def test_missing_shared_package_fails_the_import_closed(self):
         """No second copy: a bundle without ``shared`` must fail, not degrade.
@@ -331,7 +287,7 @@ def _free_loopback_port():
     ``local.tests.test_local_composition._free_port``,
     ``tests.test_r19_cloud_root._free_port``) all exclude the production
     ports. This fourth one only bound port 0 and accepted whatever came back,
-    so a real 8000/8001/8100/8110/18096/5901 could be handed to a real
+    so a real 8000/8001/8096/8097/8100/18096/5901 could be handed to a real
     ``chat2api.main()`` child.
     """
     from local.backend.config import FORBIDDEN_PORTS
@@ -358,21 +314,20 @@ class PortAllocatorConsistencyTests(unittest.TestCase):
     def test_every_allocator_excludes_the_same_production_ports(self):
         sys.path.insert(0, str(AI_GATEWAY_ROOT / "tests"))
         import r19.local_fixture as local_fixture
-        import r19.cloud_fixture as cloud_fixture
         from local.backend.config import FORBIDDEN_PORTS as LOCAL_PORTS
-        from cloud.backend.config import FORBIDDEN_PORTS as CLOUD_PORTS
         sets = {
             "local.backend.config": set(LOCAL_PORTS),
-            "cloud.backend.config": set(CLOUD_PORTS),
             "r19.local_fixture": set(local_fixture.PRODUCTION_PORTS),
-            "r19.cloud_fixture": set(cloud_fixture.PRODUCTION_PORTS),
         }
         reference = sets["local.backend.config"]
         for name, ports in sets.items():
             self.assertEqual(ports, reference,
                              "%s drifted from the production port set" % name)
         self.assertIn(8000, reference)
+        self.assertIn(8096, reference)
+        self.assertIn(8097, reference)
         self.assertIn(18096, reference)
+        self.assertIn(5901, reference)
 
     def test_the_new_allocator_never_returns_a_production_port(self):
         from local.backend.config import FORBIDDEN_PORTS
@@ -389,8 +344,8 @@ class Chat2apiUpstreamTokenEnvTests(unittest.TestCase):
     explicit ``--token`` > ``CHAT2API_UPSTREAM_TOKEN`` > the ``TokenStore``
     file. ``--no-browser`` accepts either source. Every case runs the REAL
     ``main()`` in a child interpreter against a fake upstream, with HOME, the
-    token store, service log, usage ledger, control token, reauth slot, price
-    table and attribution key all redirected into a temp directory; PYTHONPATH
+    token store, service log, usage ledger, control token, reauth slot and
+    attribution key all redirected into a temp directory; PYTHONPATH
     is dropped so the repo cannot be reached through an inherited path.
     """
 
@@ -443,7 +398,6 @@ class Chat2apiUpstreamTokenEnvTests(unittest.TestCase):
             "CHAT2API_USAGE_LOG": str(self.dir / "usage.jsonl"),
             "CHAT2API_CONTROL_TOKEN_FILE": str(self.dir / "control-token"),
             "CHAT2API_REAUTH_SLOT_FILE": str(self.dir / "reauth.state"),
-            "CHAT2API_PRICE_TABLE_FILE": str(self.dir / "prices.json"),
             "CHAT2API_SHARE_ATTRIBUTION_KEY_FILE": str(self.dir / "attr.key"),
         })
         if upstream_token is not None:
@@ -456,7 +410,7 @@ class Chat2apiUpstreamTokenEnvTests(unittest.TestCase):
 
         A missing override would send the real ``main()`` at a production file (the
         service log, the token store, the ledger, the control token, the reauth
-        slot, the price table or the attribution key) - exactly the accident this
+        slot or the attribution key) - exactly the accident this
         suite exists to prevent. Every one of those variables is set by the dict
         above, so a future edit that drops one fails here instead of touching
         real state.
@@ -464,7 +418,7 @@ class Chat2apiUpstreamTokenEnvTests(unittest.TestCase):
         required = (
             "CHAT2API_TOKEN_FILE", "CHAT2API_SERVICE_LOG",
             "CHAT2API_USAGE_LOG", "CHAT2API_CONTROL_TOKEN_FILE",
-            "CHAT2API_REAUTH_SLOT_FILE", "CHAT2API_PRICE_TABLE_FILE",
+            "CHAT2API_REAUTH_SLOT_FILE",
             "CHAT2API_SHARE_ATTRIBUTION_KEY_FILE",
         )
         missing = [name for name in required if not env.get(name)]

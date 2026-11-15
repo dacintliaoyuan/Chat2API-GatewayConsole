@@ -33,8 +33,8 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "um-cloud-deploy"))
 
 import backup_restore  # noqa: E402
-import share_metering  # noqa: E402
-from share_store import ShareStore  # noqa: E402
+import share.metering as share_metering  # noqa: E402
+from share.store import ShareStore  # noqa: E402
 
 SCENARIOS = []
 UNCOVERED = [
@@ -74,7 +74,7 @@ def _cryptography_version() -> str:
     try:
         import cryptography
         return cryptography.__version__
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — 测试替身故意模拟后端失败
         return "unavailable"
 
 

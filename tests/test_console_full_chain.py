@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
-_OPS_PATH = _ROOT / "console_operations.py"
+_OPS_PATH = _ROOT / "console/operations.py"
 _SPEC = importlib.util.spec_from_file_location("console_operations_full",
                                                _OPS_PATH)
 console_operations = importlib.util.module_from_spec(_SPEC)
@@ -26,7 +26,7 @@ assert _SPEC.loader is not None
 sys.modules[_SPEC.name] = console_operations
 _SPEC.loader.exec_module(console_operations)
 
-from console_operations import ActionSpec, OperationManager  # noqa: E402
+from console.operations import ActionSpec, OperationManager  # noqa: E402
 
 _WRAPPER = _ROOT / "invoke-console-runtime-json.ps1"
 _POWERSHELL = os.environ.get("CONSOLE_POWERSHELL") or "pwsh"

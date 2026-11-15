@@ -6,12 +6,12 @@ temp directories and started from an arbitrary CWD with a polluted
 ``PYTHONPATH``.  The test asserts:
 
 * the package carries no cloud/share/broker/display source (only
-  ``share_secret_protection.py`` is allowed for the local control token);
+  ``share/secret_protection.py`` is allowed for the local control token);
 * ``runtime_info.sys_path`` does not contain the original checkout, the
   project directory or the Git root;
 * ``runtime_info.modules`` does not load ``cloud``/``usagesrv``/
-  ``console_adapters``/``share_management``/``share_store``/
-  ``share_broker_*``/``share_entry``/``share_dispatch``;
+  ``console.adapters``/``share.management``/``share.store``/
+  ``share.broker_*``/``chat2api.share_auth``;
 * every configured path is below the package fixture root and never equal to
   or inside the real state paths (the test does not read or hash real data).
 """
@@ -52,26 +52,23 @@ from r19.package_local import (  # noqa: E402
 FORBIDDEN_MODULES = (
     "cloud",
     "usagesrv",
-    "console_adapters",
-    "share_management",
-    "share_store",
-    "share_entry",
-    "share_dispatch",
+    "console.adapters",
+    "share.management",
+    "share.store",
+    "chat2api.share_auth",
 )
 FORBIDDEN_FILES = (
     "usagesrv.py",
-    "console_adapters.py",
-    "console_share_actions.py",
-    "console_share_production.py",
-    "share_management.py",
-    "share_store.py",
-    "share_entry.py",
-    "share_dispatch.py",
-    "share_instance_pipe.py",
-    "share_runtime.py",
-    "share_metering.py",
-    "share_public_supervision.py",
-    "share_backend_supervision.py",
+    "console/adapters.py",
+    "console/share_actions.py",
+    "console/share_production.py",
+    "share/management.py",
+    "share/store.py",
+    "chat2api/share_auth.py",
+    "share/instance_pipe.py",
+    "share/runtime.py",
+    "share/metering.py",
+    "share/public_supervision.py",
 )
 TERMINAL_STATES = ("succeeded", "failed", "cancelled", "interrupted")
 
@@ -101,7 +98,7 @@ class LocalPackageIsolationTests(unittest.TestCase):
             self.assertFalse((package / "data").exists())
             self.assertFalse((package / "profile").exists())
             self.assertTrue(
-                (package / "share_secret_protection.py").is_file(),
+                (package / "share/secret_protection.py").is_file(),
                 "the local control-token gate must travel with the package")
             self.assertTrue((package / "local" / "run_local.py").is_file())
             self.assertTrue((package / "chat2api" / "chat2api.py").is_file())
@@ -154,7 +151,8 @@ class LocalIsolatedRuntimeTests(unittest.TestCase):
         self.arbitrary_cwd = Path(tempfile.mkdtemp(prefix="r19-iso-cwd-"))
         self.polluted = self.copied / "fixture" / "polluted"
         self.polluted.mkdir(parents=True, exist_ok=True)
-        (self.polluted / "console_stats.py").write_text(
+        (self.polluted / "console").mkdir(parents=True, exist_ok=True)
+        (self.polluted / "console/stats.py").write_text(
             "raise RuntimeError('polluted console_stats imported')\n",
             encoding="utf-8")
 
@@ -255,7 +253,7 @@ class LocalIsolatedRuntimeTests(unittest.TestCase):
             payload["choices"][0]["message"]["content"],
             "r19 isolated closure")
 
-        # E19-1-L2 / F25: the real 8000/8001/18096 chain may be listening
+        # E19-1-L2 / F25: the real 8000/8001/8096/8097 chain may be listening
         # while this test runs. The isolated package must use only its own
         # temporary ports, and its traffic must land on the fixture's upstream —
         # never on a production listener. Asserted from the fixture's own control

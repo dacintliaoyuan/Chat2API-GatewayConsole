@@ -1,7 +1,5 @@
 import type { Reading, UmBucket, UmTrend } from "./contract";
 import {
-  cny,
-  cnyShort,
   dayKey,
   dayTitle,
   drawable,
@@ -14,7 +12,7 @@ import {
   tokens,
 } from "./format";
 
-/** The overview trend: stacked daily bars by model for Token / 费用 / 请求, or
+/** The overview trend: stacked daily bars by model for Token / 请求, or
  *  one line per model when the reader switches to 折线图, and always lines for
  *  速度 (a speed is never summed), with a compact ranking over the very same
  *  window. Drawn at the host's real pixel width so text is never scaled.
@@ -27,38 +25,33 @@ import {
  *  the request records. Missing / unreported / unknown never becomes 0, and no
  *  curve bridges a gap or joins two models. */
 
-export type Metric = "tokens" | "cost" | "requests" | "speed";
-/** How Token / 费用 / 请求 are drawn; 速度 is always a line. */
+export type Metric = "tokens" | "requests" | "speed";
+/** How Token / 请求 are drawn; 速度 is always a line. */
 export type Shape = "bar" | "line";
 export const METRICS: readonly { id: Metric; label: string }[] = [
   { id: "tokens", label: "Token" },
-  { id: "cost", label: "费用" },
   { id: "requests", label: "请求" },
   { id: "speed", label: "速度" },
 ];
 const FIELD: Readonly<Record<Metric, keyof UmBucket>> = {
   tokens: "tokens",
-  cost: "costCny",
   requests: "requests",
   speed: "speed",
 };
 const AXIS: Readonly<Record<Metric, (n: number) => string>> = {
   tokens,
-  cost: cnyShort,
   requests: full,
   speed: (n) => full(n),
 };
 /** Tooltip / value shapes; the ranking reads whole counts (`RANK_VALUE`). */
 export const VALUE: Readonly<Record<Metric, (n: number) => string>> = {
   tokens,
-  cost: cny,
   requests: (n) => `${full(n)} 次`,
   speed,
 };
 /** The ranking prefers complete thousands for counts; money and speed keep units. */
 const RANK_VALUE: Readonly<Record<Metric, (n: number) => string>> = {
   tokens: full,
-  cost: cny,
   requests: (n) => `${full(n)} 次`,
   speed,
 };
@@ -324,7 +317,7 @@ export class TrendView {
   private cursorAt: number | null = null;
   constructor(readonly colors: SeriesColors) {}
 
-  /** Lines: 速度 always, Token / 费用 / 请求 when the reader asked for 折线图. */
+  /** Lines: 速度 always, Token / 请求 when the reader asked for 折线图. */
   get lines(): boolean {
     return this.metric === "speed" || this.shape === "line";
   }
@@ -699,7 +692,6 @@ export class TrendView {
           this.metric === "requests"
             ? null
             : readingHtml(m.total.requests, (n) => `${full(n)} 个请求`),
-          this.metric === "cost" ? null : readingHtml(m.total.costCny, cny),
           this.metric === "speed"
             ? readingHtml(m.total.tokens, (n) => `${full(n)} Token`)
             : speedReading(m.total.speed),

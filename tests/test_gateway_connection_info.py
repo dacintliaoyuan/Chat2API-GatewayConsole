@@ -36,7 +36,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import console_gateway_connection as conn  # noqa: E402
+from console import gateway_connection as conn  # noqa: E402
 
 
 def _restore_process_env(saved):
@@ -105,34 +105,29 @@ def _assert_shape(case, payload):
     case.assertIsInstance(payload["checked_epoch"], int)
 
 
-class RetiredServiceTests(unittest.TestCase):
-    """B0（2026-11-01）：退役来源只回答明确的 not_assembled / 410。
+class RetiredServiceRemovalTests(unittest.TestCase):
+    """B0（2026-11-01）退役来源的专用拒绝契约已删除。
 
-    Qoder 国内 / 国际 / CLIProxy 与已归档的 M365 都已退役：读面必须抛
-    ``RetiredServiceError``（HTTP 410、state=not_assembled），绝不读取旧
-    Key 文件、旧 config.yaml，也不探测旧端口。
+    Qoder 国内 / 国际 / CLIProxy 与已归档的 M365 都不在服务表内：读面与
+    未知 service 同码拒绝（ValueError → HTTP 400 invalid_service），绝不
+    读取旧 Key 文件、旧 config.yaml，也不探测旧端口。
     """
 
-    def test_retired_services_answer_not_assembled_410(self):
+    def test_retired_services_are_unknown_and_refused(self):
         for service in ("Qoder", "QoderGlobal", "CLIProxy", "M365"):
             with self.subTest(service=service):
-                with self.assertRaises(conn.RetiredServiceError) as caught:
+                with self.assertRaises(ValueError) as caught:
                     conn.connection_info(service, snapshot=_snapshot())
-                error = caught.exception
-                self.assertEqual(error.code, "source_retired")
-                self.assertEqual(error.http_status, 410)
-                payload = error.payload()
-                self.assertEqual(payload["state"], "not_assembled")
-                self.assertEqual(payload["http_status"], 410)
-                self.assertEqual(payload["service"], service)
-                self.assertFalse(payload["ok"])
-                self.assertIsNone(payload.get("key_plaintext"))
+                self.assertNotIsInstance(caught.exception, AttributeError)
+                self.assertNotIn("source_retired",
+                                 getattr(caught.exception, "code", ""))
 
-    def test_retired_services_are_not_in_the_active_table(self):
+    def test_retired_service_contract_is_gone(self):
+        self.assertFalse(hasattr(conn, "RETIRED_SERVICES"))
+        self.assertFalse(hasattr(conn, "RetiredServiceError"))
         for service in ("Qoder", "QoderGlobal", "CLIProxy", "M365"):
             with self.subTest(service=service):
                 self.assertNotIn(service, conn.SERVICES)
-                self.assertIn(service, conn.RETIRED_SERVICES)
         self.assertEqual(set(conn.SERVICES), {"chat2api"})
 
     def test_no_cliproxy_config_is_read(self):
@@ -409,13 +404,13 @@ class Chat2ApiSourceTests(unittest.TestCase):
         self.assertIn("形状异常", payload["reason"])
 
     def test_share_instance_port_mismatch_is_unknown(self):
-        # 反例（调查 §3.1）：8110 share 实例与私有实例共用同一脚本，按 --port 区分
+        # 反例（调查 §3.1）：28110 share 实例与私有实例共用同一脚本，按 --port 区分
         self.write_log(_record_line(downstream_key="not_required"))
         payload = self._info(
-            cmdline="python chat2api.py --port 8110 --profile x")
+            cmdline="python chat2api.py --port 28110 --profile x")
         self.assertEqual(payload["key_state"], "unknown")
         self.assertNotEqual(payload["key_state"], "absent")
-        self.assertIn("8110", payload["reason"])
+        self.assertIn("28110", payload["reason"])
 
     def test_stopped_instance_is_unknown(self):
         payload = self._info(state="Stopped", pids=())
@@ -445,7 +440,7 @@ class ScopeAndHygieneTests(unittest.TestCase):
     """退役来源拒绝、未知 service 拒绝、旧 Key 不外泄。"""
 
     def test_m365_is_rejected(self):
-        with self.assertRaises(conn.RetiredServiceError):
+        with self.assertRaises(ValueError):
             conn.connection_info("M365", snapshot=_snapshot())
 
     def test_unknown_service_is_rejected(self):
@@ -459,7 +454,7 @@ class ScopeAndHygieneTests(unittest.TestCase):
             captured = io.StringIO()
             with contextlib.redirect_stdout(captured), \
                     contextlib.redirect_stderr(captured):
-                with self.assertRaises(conn.RetiredServiceError):
+                with self.assertRaises(ValueError):
                     conn.connection_info(
                         "Qoder",
                         snapshot=_snapshot(_entry("Qoder", 8095,
@@ -506,7 +501,7 @@ class GatewayConnectionRouteTests(unittest.TestCase):
         _restore_process_env(cls._saved_env)
         cls.addClassCleanup(_restore_process_env, cls._saved_env)
         cls.status_patcher = mock.patch(
-            "console_adapters.service_status", return_value=_FAKE_SNAPSHOT)
+            "console.adapters.service_status", return_value=_FAKE_SNAPSHOT)
         cls.status_patcher.start()
         cls.addClassCleanup(cls.status_patcher.stop)
         cls.server = cls.usagesrv.ThreadingHTTPServer(
@@ -573,10 +568,10 @@ class GatewayConnectionRouteTests(unittest.TestCase):
         self.assertEqual(json.loads(raw.decode("utf-8"))["error"],
                          "invalid_service")
 
-    def test_route_maps_retired_sources_to_410(self):
-        # B0: retired sources must be refused by the module contract
-        # (RetiredServiceError → HTTP 410 + source_retired), never fall
-        # through to 400 invalid_service and never read the runtime snapshot.
+    def test_route_rejects_retired_sources_as_unknown(self):
+        # B0: retired sources are not in the service table, so the route
+        # answers the SAME 400 invalid_service as any unknown service and
+        # never reads the runtime snapshot.
         for service in ("Qoder", "QoderGlobal", "CLIProxy", "M365"):
             with self.subTest(service=service):
                 with mock.patch.object(
@@ -589,15 +584,9 @@ class GatewayConnectionRouteTests(unittest.TestCase):
                                 "manager must not assemble")):
                     status, _, raw = self._get(
                         "/api/console/gateway-connection?service=" + service)
-                self.assertEqual(status, 410)
+                self.assertEqual(status, 400)
                 payload = json.loads(raw.decode("utf-8"))
-                self.assertEqual(payload["error"], "source_retired")
-                self.assertEqual(payload["state"], "not_assembled")
-                self.assertEqual(payload["http_status"], 410)
-                self.assertEqual(payload["service"], service)
-                self.assertFalse(payload["ok"])
-                self.assertIsNone(payload.get("key_plaintext"))
-                self.assertIn("reason", payload)
+                self.assertEqual(payload["error"], "invalid_service")
 
     def test_route_write_methods_and_subpaths_are_unknown(self):
         client = HTTPConnection("127.0.0.1", self.port, timeout=10)
@@ -613,7 +602,7 @@ class GatewayConnectionRouteTests(unittest.TestCase):
         self.assertEqual(status, 404)
 
     def test_route_snapshot_failure_is_unknown_not_absent(self):
-        with mock.patch("console_adapters.service_status",
+        with mock.patch("console.adapters.service_status",
                         side_effect=RuntimeError("synthetic snapshot failure")):
             status, _, raw = self._get(
                 "/api/console/gateway-connection?service=chat2api")

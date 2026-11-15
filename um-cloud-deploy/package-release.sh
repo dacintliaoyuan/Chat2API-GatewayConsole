@@ -75,8 +75,8 @@ case "$WEB_ROLE" in
   *) echo "unsafe web role: $WEB_ROLE (local|cloud)" >&2; exit "$EX_USAGE" ;;
 esac
 [ -f "$SOURCE/usagesrv.py" ] || die "source root lacks usagesrv.py: $SOURCE" "$EX_NOINPUT"
-[ -f "$SOURCE/chat2api/share_entry.py" ] || \
-  die "source root lacks chat2api/share_entry.py" "$EX_NOINPUT"
+[ -f "$SOURCE/chat2api/share_auth.py" ] || \
+  die "source root lacks chat2api/share_auth.py" "$EX_NOINPUT"
 [ -f "$SOURCE/chat2api/chat2api.py" ] || \
   die "source root lacks chat2api/chat2api.py" "$EX_NOINPUT"
 [ -f "$DEPLOY_ROOT/make-manifest.py" ] || \
@@ -178,10 +178,11 @@ fi
 
 # A Windows checkout checks out shell scripts with CRLF, and the packaged bytes
 # then carry a trailing \r on every line.  On the cloud host that breaks the
-# shebang (`env: 'bash\r': No such file or directory`) and, worse, `sed`/`grep`
-# patterns that end in `$`.  Normalize the PAYLOAD to LF BEFORE the manifest is
-# generated so the recorded hashes describe exactly the bytes the cloud extracts.
-# Only text shells are rewritten: every other file keeps its bytes untouched.
+# shebang (`env: 'bash\r': No such file or directory`), `sed`/`grep` patterns
+# that end in `$`, and Python scripts the units execute directly by shebang.
+# Normalize the PAYLOAD to LF BEFORE the manifest is generated so the recorded
+# hashes describe exactly the bytes the cloud extracts.  Only text scripts are
+# rewritten: every other file keeps its bytes untouched.
 "$PYTHON" - "$PAYLOAD" <<'PY' || die "line-ending normalization failed" "$EX_IOERR"
 import sys
 from pathlib import Path
@@ -191,7 +192,7 @@ rewritten = []
 for path in sorted(payload.rglob("*")):
     if not path.is_file() or path.is_symlink():
         continue
-    if path.suffix not in (".sh", ".bash") and path.name not in (
+    if path.suffix not in (".sh", ".bash", ".py") and path.name not in (
             "configure-tailscale-serve.sh", "fluxbox-init"):
         continue
     data = path.read_bytes()
@@ -199,7 +200,7 @@ for path in sorted(payload.rglob("*")):
         continue
     path.write_bytes(data.replace(b"\r\n", b"\n"))
     rewritten.append(str(path.relative_to(payload)))
-print("normalized %d shell file(s) to LF" % len(rewritten))
+print("normalized %d script file(s) to LF" % len(rewritten))
 PY
 
 # Final manifest: hashes the PAYLOAD, not the source.  The deployment files
@@ -220,9 +221,6 @@ verify_release_manifest "$PAYLOAD" "$PAYLOAD/RELEASE-MANIFEST.json" || \
 # Linux extraction keeps systemd ExecStart/ExecStop working.
 find "$PAYLOAD/um-cloud-deploy" -type f \
   \( -name '*.sh' -o -path '*/bin/*.py' \) -exec chmod 0755 {} +
-# The operator runs `console_magpie_prices.py --sync` directly (README); keep the
-# root-level synchronizer executable in the extracted release.
-chmod 0755 "$PAYLOAD/console_magpie_prices.py"
 
 if command -v pwsh >/dev/null 2>&1 && [ -f "$PAYLOAD/um-cloud-deploy/verify-release.ps1" ]; then
   pwsh -NoProfile -NonInteractive -File \

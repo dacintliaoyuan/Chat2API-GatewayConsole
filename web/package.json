@@ -5,12 +5,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "postinstall": "node scripts/patch-rolling-number.mjs",
-    "predev": "node scripts/patch-rolling-number.mjs",
     "dev": "vite --host 127.0.0.1",
-    "prebuild": "node scripts/patch-rolling-number.mjs",
     "build": "tsc && vite build",
-    "check:contracts": "node --experimental-strip-types --test scripts/backend-contract/check.mjs scripts/backend-contract/check-generated.mjs scripts/backend-contract/check-model-demo.mjs scripts/backend-contract/check-log-fixture.mjs scripts/backend-contract/check-share-readiness.mjs scripts/backend-contract/check-share-read-deadlines.mjs scripts/backend-contract/check-share-public.mjs scripts/backend-contract/check-cloud-usage-ledger.mjs",
+    "check:contracts": "node --experimental-strip-types --test scripts/backend-contract/check.mjs scripts/backend-contract/check-generated.mjs scripts/backend-contract/check-share-readiness.mjs scripts/backend-contract/check-share-public.mjs scripts/backend-contract/check-cloud-usage-ledger.mjs",
     "check:logs": "node --experimental-strip-types --test scripts/check-log-presentation.mjs",
     "check:cloud-console": "node --test scripts/check-cloud-console.mjs",
     "check:um": "node --test scripts/check-um-views.mjs",
@@ -19,10 +16,8 @@
     "preview": "vite preview --host 127.0.0.1",
     "prepare": "husky"
   },
-  "dependencies": {
-    "@kitlangton/rolling-number": "0.4.1"
-  },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "husky": "^9.1.7",
     "lint-staged": "^17.6.0",
     "playwright": "^1.65.0",

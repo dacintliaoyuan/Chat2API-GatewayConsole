@@ -1,4 +1,4 @@
-﻿# Offline regression tests for the console runtime JSON bridge.
+# Offline regression tests for the console runtime JSON bridge.
 # Verifies the PowerShell lock protocol against the Python implementation via
 # a REAL cross-process hold, plus snapshot/start/stop shapes with injected
 # test-only scriptblock seams. No real gateway service is started or stopped.
@@ -67,7 +67,7 @@ function Assert-Throws {
 # ---------------------------------------------------------------------------
 
 Assert-Equal (ConvertTo-ConsoleLockFileName -Resource 'service:chat2api') 'service_chat2api' 'colon becomes underscore in lock file name'
-Assert-Equal (ConvertTo-ConsoleLockFileName -Resource 'service:M365') 'service_M365' 'case is preserved in lock file name'
+Assert-Equal (ConvertTo-ConsoleLockFileName -Resource 'service:chat2api') 'service_chat2api' 'case is preserved in lock file name'
 Assert-Equal ((ConvertTo-ConsoleLockFileName -Resource ('a' * 80)).Length) 64 'lock file name capped at 64 chars'
 
 # ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ $allSnapshot = Get-ConsoleRuntimeSnapshot -Inspector {
     [pscustomobject]@{ Key = $Key; State = 'Stopped'; Healthy = $false
                        ProcessIds = @(); Detail = '已停止' }
 }
-Assert-Equal $allSnapshot.services.Count 3 'status-all covers three services (B0 retires Qoder/CLIProxy)'
+Assert-Equal $allSnapshot.services.Count 3 'status-all covers the assembled services'
 
 # ---------------------------------------------------------------------------
 # Start/Stop through the bridge with test-only seams (no real services)
@@ -214,16 +214,13 @@ try {
     Assert-Equal ($script:bridgeScopeTerminated -join ',') '' 'the refused restart terminates nothing'
 
     # Two coexisting instances through the console chain: the private stop
-    # terminates only the private instance, leaves the 8110 share backend
-    # running, and the operation record names the terminated PID.
+    # terminates only the private instance and the operation record names the
+    # terminated PID.
     $script:bridgeScopeListeners = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990108 })
     $script:bridgeScopeTable = @(
         [pscustomobject]@{ ProcessId = 990108; Name = 'python.exe'
                            CommandLine = 'python  chat2api.py --base-url https://chat.example.invalid'
                            CreationDate = [datetime]'2026-09-29T20:11:25' },
-        [pscustomobject]@{ ProcessId = 990109; Name = 'python.exe'
-                           CommandLine = 'C:\Python314\python.exe chat2api.py --base-url https://chat.example.invalid --port 8110 --profile C:\share-backend\edge-profile --login-timeout 600'
-                           CreationDate = [datetime]'2026-09-29T20:14:05' }
     )
     $script:bridgeScopeTerminated.Clear()
     $scopedStop = Invoke-ConsoleRuntimeStop -Key 'chat2api' `
@@ -231,7 +228,6 @@ try {
     Assert-Equal $scopedStop.ok $true 'bridge reports a scoped stop as ok'
     Assert-Equal ($script:bridgeScopeTerminated -join ',') '990108' 'the console stop chain terminates only the private instance'
     Assert-Equal ($scopedStop.result.terminated_process_ids -join ',') '990108' 'the operation record names the terminated private PID'
-    Assert-Equal ($script:bridgeScopeTerminated -contains 990109) $false 'the 8110 share backend survives the console stop chain'
 } finally {
     Remove-Item function:\Get-NetTCPConnection -ErrorAction SilentlyContinue
     Remove-Item function:\Get-CimInstance -ErrorAction SilentlyContinue
@@ -276,7 +272,7 @@ $pyFile = Join-Path $tempRoot 'holder.py'
 $pyCode = @'
 import sys, time
 sys.path.insert(0, r"__GATEWAY__")
-from console_operations import ResourceFileLock
+from console.operations import ResourceFileLock
 lock = ResourceFileLock(sys.argv[1], "service:testkey", "test-holder", timeout_s=2.0)
 lock.acquire()
 print("READY", flush=True)

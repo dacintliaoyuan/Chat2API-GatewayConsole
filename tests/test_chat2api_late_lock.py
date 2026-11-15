@@ -6,7 +6,7 @@ output has reached the downstream client (content or a tool call was already
 streamed): the terminal cut must be visible at WARNING level with
 structure-only fields, and the in-band SSE error must carry a stable
 ``[chat2api:degenerate_repetition]`` marker plus ``error.code`` and a
-structure-only ``detail`` — because the installed ZCode provider path
+structure-only ``detail`` — because the installed local client path
 (``@ai-sdk/openai-compatible``) may drop ``error.code`` and only forward
 ``error.message`` upstream (public SDK issue evidence).
 
@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock

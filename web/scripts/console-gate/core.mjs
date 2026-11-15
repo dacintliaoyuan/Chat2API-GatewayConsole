@@ -1,7 +1,6 @@
 // Shared harness for the console gate: Playwright loading, the read-only request
-// guard, the key mask, page opening and lane navigation. gate.mjs, honesty.mjs,
-// states.mjs and hoverscan.mjs all build on createContext(), so every browser
-// context of every check carries the same guard.
+// guard, the key mask and page opening. The UM and cloud checks both build on
+// createContext(), so every browser context of every check carries the same guard.
 //
 // Guard (registered on the context BEFORE the first navigation): every non-GET/HEAD
 // is answered locally with 403 and never forwarded; every request to a host other
@@ -16,7 +15,6 @@ export const paths = {
   here,
   console: resolve(here, "../.."),
   repoRoot: resolve(here, "../../.."),
-  candidateDir: resolve(here, "../../release/candidate"),
   fixtures: resolve(here, "fixtures/api.json"),
 };
 /** Role candidates (ADR 0001, vite --mode candidate-local / candidate-cloud) and
@@ -39,45 +37,7 @@ export async function loadPlaywright() {
   return import(pathToFileURL(mod).href);
 }
 
-export const VIEWPORTS_FULL = [
-  { tag: "1600x900", width: 1600, height: 900, dsf: 1 },
-  { tag: "1920x1080", width: 1920, height: 1080, dsf: 1 },
-  { tag: "2560x1440", width: 2560, height: 1440, dsf: 1 },
-  { tag: "1536x864-dsf125", width: 1536, height: 864, dsf: 1.25 },
-];
 export const THEMES = ["light", "dark"];
-/** Every surface. Since Rev17 the 网关 workspace (nav lane 1) has two: lane 1 here
- *  means a gateway's detail (chat2api, 账号 tab) and lane 5 the pinned 全部模型
- *  view (the former model lane's alias). 操作记录 (lane 2) sits behind the log
- *  lane's section tabs. */
-export const LANES = [
-  { lane: 0, key: "overview" },
-  { lane: 1, key: "gateway" },
-  { lane: 5, key: "models" },
-  { lane: 3, key: "cost" },
-  { lane: 4, key: "logs" },
-  { lane: 2, key: "ops" },
-  { lane: 6, key: "share" },
-];
-
-/** Reach one LANES surface with real clicks (see LANES for lanes 1 / 2 / 5). */
-export async function navigateTo(page, lane) {
-  if (lane === 2) {
-    await page.click('.wb-nav button[data-wb-lane="4"]');
-    await page.waitForTimeout(700);
-    await page.click('.wb-section-tabs button[data-wb-lane="2"]');
-  } else if (lane === 1 || lane === 5) {
-    await page.click('.wb-nav button[data-wb-lane="1"]');
-    await page.waitForTimeout(400);
-    await page.click(`[data-wb-gw-sel="${lane === 1 ? "0" : "models"}"]`);
-    if (lane === 1) {
-      const tab = page.locator('[data-wb-gw-tab="account"]');
-      if (await tab.count()) await tab.click();
-    }
-  } else {
-    await page.click(`.wb-nav button[data-wb-lane="${lane}"]`);
-  }
-}
 
 export const MASK_INIT = `(() => {
   const RE = /[A-Za-z0-9][A-Za-z0-9_\\-+\\/=.:]{23,}/g;
@@ -89,19 +49,11 @@ export const MASK_INIT = `(() => {
 
 /**
  * One gate run's shared state and helpers.
- * @param {{ base: string, out: string, quick?: boolean, settle?: number, laneWait?: number, entry?: string }} o
- *   settle / laneWait: ms to wait after opening a page / switching a lane. The
- *   fixture server answers instantly; a live 8001 needs ~16000 / ~6000.
- *   entry: query appended to the console address on every newPage.
+ * @param {{ base: string, out: string, quick?: boolean, settle?: number }} o
+ *   settle: ms to wait after opening a page. The fixture server answers
+ *   instantly; a live 8001 needs ~16000.
  */
-export async function createContext({
-  base,
-  out,
-  quick = false,
-  settle = 5500,
-  laneWait = 2200,
-  entry = "",
-}) {
+export async function createContext({ base, out, quick = false, settle = 5500 }) {
   const { chromium } = await loadPlaywright();
   const BASE = base.endsWith("/") ? base : `${base}/`;
   const HOST = new URL(BASE).host;
@@ -117,11 +69,7 @@ export async function createContext({
     OUT: out,
     QUICK: quick,
     SETTLE: settle,
-    LANE_WAIT: laneWait,
-    ENTRY: entry,
-    VIEWPORTS: quick ? [VIEWPORTS_FULL[0]] : VIEWPORTS_FULL,
     THEMES,
-    LANES,
     failures,
     rows,
     nonGet,
@@ -145,7 +93,7 @@ export async function createContext({
       nonGetAnswer = null,
       settle: wait = settle,
       waitForContent = true,
-      ready = ".workbench .wb-content",
+      ready = ".app-shell",
     } = {}) {
       const bctx = await browser.newContext({
         viewport: { width, height },
@@ -203,22 +151,11 @@ export async function createContext({
       const page = await bctx.newPage();
       const errors = [];
       page.on("pageerror", (e) => errors.push(String(e.message).slice(0, 160)));
-      // `entry`: a query the console reads on load. The local candidate shows the
-      // UM console by default; its workbench checks open `?console=workbench`.
-      await page.goto(`${BASE}${entry}`, { waitUntil: "domcontentloaded" });
+      await page.goto(BASE, { waitUntil: "domcontentloaded" });
       if (waitForContent) await page.waitForSelector(ready, { timeout: 20000 });
       await page.waitForTimeout(wait);
       await page.evaluate(() => document.fonts.ready);
       return { ctx: bctx, page, errors };
-    },
-    async gotoLane(page, lane) {
-      await navigateTo(page, lane);
-      await page.waitForTimeout(laneWait);
-      await page.evaluate(() => {
-        const m = document.querySelector(".wb-main");
-        if (m) m.scrollTop = 0;
-      });
-      await page.waitForTimeout(150);
     },
     async close() {
       await browser.close();

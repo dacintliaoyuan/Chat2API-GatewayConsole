@@ -225,35 +225,20 @@ export interface LogPage {
   requestScope: "read_window" | null;
 }
 
-export interface CostCoverage {
+export interface UsageCoverage {
   requests: number | null;
   unknownRequests: number | null;
-  unpricedRequests: number | null;
   incompleteRequests: number | null;
   records: number | null;
-  pricedRequests: number | null;
   unknownTimeRequests: number | null;
-  pricingUnavailableRequests: number | null;
-  costComplete: boolean | null;
-  /** True when `costCny` only covers the convertible records (a lower bound);
-   *  null when the response did not say (legacy shape). Never defaulted to false. */
-  costCnyPartial: boolean | null;
-  /** Per-subtotal partial flags: an unknown-usage record makes only the total a
-   *  lower bound, so known/estimated can stay complete real zeros. Null means the
-   *  response did not say. */
-  knownCostCnyPartial: boolean | null;
-  estimatedCostCnyPartial: boolean | null;
   /** Q11 cache reporting evidence, separate from token coverage. A reported
    *  zero is evidence; unreported/unknown are counted, never read as zero. */
   cacheReportedRequests: number | null;
   cacheUnreportedRequests: number | null;
   cacheUnknownRequests: number | null;
-  cacheUnknownPricedRequests: number | null;
   /** Records whose time could not be parsed; a bounded window excludes them
    *  instead of guessing a time. */
   excludedUnknownTimeRequests: number | null;
-  /** False for legacy details that do not identify local unknown coverage. */
-  localCoverageAvailable: boolean;
 }
 
 export interface TokenUsage {
@@ -278,38 +263,25 @@ export interface TokenUsage {
   cacheUnknownRequests: number | null;
 }
 
-export interface CostDetail {
+export interface UsageDetail {
   identity: string;
-  knownCostUsd: number | null;
-  estimatedCostUsd: number | null;
-  /** CNY amounts from the same price chain; null means unknown, never 0. */
-  costCny: number | null;
-  knownCostCny: number | null;
-  estimatedCostCny: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
-  coverage: CostCoverage;
+  coverage: UsageCoverage;
   tokenUsage: TokenUsage;
-  priceVersions: string[];
 }
 
 export interface KeyUsage {
   keyId: string;
   keyName: string | null;
   deleted: boolean | null;
-  knownCostUsd: number | null;
-  estimatedCostUsd: number | null;
-  costCny: number | null;
-  knownCostCny: number | null;
-  estimatedCostCny: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
-  coverage: CostCoverage;
+  coverage: UsageCoverage;
   tokenUsage: TokenUsage;
-  priceVersions: string[];
-  models: CostDetail[];
-  days: CostDetail[];
-  undated: Omit<CostDetail, "identity"> | null;
+  models: UsageDetail[];
+  days: UsageDetail[];
+  undated: Omit<UsageDetail, "identity"> | null;
 }
 
 /** 未归属桶（Rev19）：账本里没有可归因 `key_id` 的记录，形状与每 Key 行
@@ -318,20 +290,14 @@ export interface KeyUsage {
  *  缺席的字段如实为 null / 空，不折成完整口径。 */
 export interface ShareUsageBucket {
   keyId: null;
-  knownCostUsd: number | null;
-  estimatedCostUsd: number | null;
-  costCny: number | null;
-  knownCostCny: number | null;
-  estimatedCostCny: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
-  coverage: CostCoverage;
+  coverage: UsageCoverage;
   tokenUsage: TokenUsage;
-  priceVersions: string[];
-  models: CostDetail[];
-  days: CostDetail[];
+  models: UsageDetail[];
+  days: UsageDetail[];
   /** Records whose date is unknowable; same shape as a key's undated row. */
-  undated: Omit<CostDetail, "identity"> | null;
+  undated: Omit<UsageDetail, "identity"> | null;
 }
 
 /** D18-2: the real outcome split of the filtered records. `unknown` counts
@@ -374,9 +340,8 @@ export type ShareUsageSource = "upstream" | "partial" | "estimated" | "none";
 export type ShareCacheReportStatus = "reported" | "unreported" | "unknown";
 
 /** One ledger row on the per-request page (`GET .../share-usage/requests`).
- *  Unknown stays null: a missing time keeps `time`/`day` null, unknown usage
- *  keeps token/cost null, an unreported cache count is null (never a measured
- *  zero), and an unpriced model has null amounts with `priced` false. */
+ *  Unknown stays null: a missing time keeps `time`/`day` null and unknown
+ *  usage keeps token counts null. */
 export interface ShareUsageRequestRow {
   requestId: string | null;
   time: string | null;
@@ -397,12 +362,6 @@ export interface ShareUsageRequestRow {
   durationMs: number | null;
   cacheTokens: number | null;
   reasoningTokens: number | null;
-  /** null when no pricing chain was supplied (not evaluated, not free). */
-  priced: boolean | null;
-  priceVersion: string | null;
-  costUsd: number | null;
-  costCny: number | null;
-  costCnyPartial: boolean;
 }
 
 export interface ShareUsageRequestsPage {
@@ -657,10 +616,10 @@ export type ConnectionKeySourceState =
   "present" | "absent" | "unreadable" | "unknown";
 
 /** Rev15 R32-KEY-ACTIVE: how the shown key value is consumed by the running
- *  instance. `per_request` = the gateway rereads the file on every request
- *  (Qoder 国内); `startup_env` = the value was read into the process
- *  environment at launch and later file edits may not take effect (Qoder 国际);
- *  `config_consumed` = the gateway takes the key from cliproxy/config.yaml.
+ *  instance. `per_request` = the gateway rereads the file on every request;
+ *  `startup_env` = the value was read into the process environment at launch
+ *  and later file edits may not take effect; `config_consumed` = the gateway
+ *  takes the key from its own config document.
  *  `unknown` is honest and never coerced into one of the known mechanisms. */
 export type ConnectionKeyInUse =
   "per_request" | "startup_env" | "config_consumed" | "unknown";
@@ -746,36 +705,8 @@ export interface UmTodayPayload {
   };
 }
 
-export interface UmPricePayload {
-  state: "synced" | "unsynced" | "failed";
-  source: string | null;
-  /** Epoch milliseconds. */
-  snapshotAt: number | null;
-  version: string | null;
-  failure: string | null;
-}
-
-export interface UmFxPayload {
-  rate: number | null;
-  version: string | null;
-}
-
-export interface UmCostPayload {
-  label: string | null;
-  cny: UmReading;
-  cnyPartial: boolean | null;
-  costUsd: number | null;
-  price: UmPricePayload;
-  fx: UmFxPayload;
-  unpricedRequests: number | null;
-  estimatedRequests: number | null;
-  coverage: JsonObject;
-  models: JsonObject[];
-}
-
 export interface UmTodayResponse {
   today: UmTodayPayload;
-  cost: UmCostPayload;
   coverage: JsonObject;
   timezone: string | null;
   /** Epoch milliseconds; the backend reports seconds. */
@@ -787,7 +718,6 @@ export type UmReadWindow = "today" | "24h" | "7d" | "30d";
 
 export interface UmBucketPayload {
   tokens: UmReading;
-  costCny: UmReading;
   requests: UmReading;
   speed: UmReading;
 }
@@ -834,7 +764,6 @@ export interface UmRequestRowPayload {
   output: UmReading;
   cacheRead: UmReading;
   reasoning: UmReading;
-  costCny: UmReading;
   durationMs: UmReading;
   firstTokenMs: UmReading;
   speed: UmReading;
@@ -956,20 +885,7 @@ export interface UmOperationsPayload {
   operations: UmOperationPayload[];
 }
 
-export interface UmSummaryReferencePayload {
-  label: string | null;
-  cny: number | null;
-  cnyPartial: boolean | null;
-  costUsd: number | null;
-  price: UmPricePayload;
-  fx: UmFxPayload;
-  snapshotSha256: string | null;
-  coverage: JsonObject;
-  models: JsonObject[];
-}
-
 export interface UmSummaryPayload {
   /** `cloud` when the backend is the cloud role; the local role omits it. */
   role: string | null;
-  umReference: UmSummaryReferencePayload | null;
 }

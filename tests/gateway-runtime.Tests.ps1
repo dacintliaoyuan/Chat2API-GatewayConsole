@@ -1,4 +1,4 @@
-﻿# Offline regression tests for the gateway runtime module.
+# Offline regression tests for the gateway runtime module.
 # Uses injected hooks to verify start/stop/status calls without touching
 # real processes or the task scheduler. Health-only cases use isolated
 # ephemeral loopback sockets, never a configured service port.
@@ -167,29 +167,8 @@ if ($HealthOnly) {
 # ---------------------------------------------------------------------------
 
 $descriptors = Get-GatewayServiceDescriptors
-$expectedKeys = @('M365', 'chat2api', 'usage')
-Assert-Equal (@($descriptors.Keys) -join ',') ($expectedKeys -join ',') 'three service descriptors in stable order (B0 retires Qoder/CLIProxy)'
-Assert-Equal ($descriptors.Keys -notcontains 'DSH') $true 'retired DSH is absent from service descriptors'
-Assert-Equal ($descriptors.Keys -notcontains 'Qoder') $true 'retired Qoder CN is absent from service descriptors'
-Assert-Equal ($descriptors.Keys -notcontains 'QoderGlobal') $true 'retired Qoder Global is absent from service descriptors'
-Assert-Equal ($descriptors.Keys -notcontains 'CLIProxy') $true 'retired CLIProxy is absent from service descriptors'
-
-# Archived lifecycle calls refuse before HTTP, desired-state, launch or stop.
-Assert-Equal $descriptors['M365'].Archived $true 'M365 retains archival metadata'
-$originalDesiredWriter = ${function:Write-GatewayDesiredState}
-try {
-    function Write-GatewayDesiredState { throw 'archived service attempted a state write' }
-    $forbiddenEffect = { throw 'archived service attempted an external effect' }
-    $archivedStart = Start-GatewayService -Key M365 -HttpChecker $forbiddenEffect -Launcher $forbiddenEffect -Sleeper $forbiddenEffect
-    $archivedStop = Stop-GatewayService -Key M365 -HttpChecker $forbiddenEffect -Stopper $forbiddenEffect -Sleeper $forbiddenEffect
-    $archivedRestart = Restart-GatewayService -Key M365 -HttpChecker $forbiddenEffect -Launcher $forbiddenEffect -Stopper $forbiddenEffect -Sleeper $forbiddenEffect
-    foreach ($archivedResult in @($archivedStart, $archivedStop, $archivedRestart)) {
-        Assert-Equal $archivedResult.Status 'Archived' 'archived lifecycle is refused without effects'
-        Assert-Equal $archivedResult.Action 'None' 'archived lifecycle performs no action'
-    }
-} finally {
-    Set-Item -LiteralPath 'function:Write-GatewayDesiredState' -Value $originalDesiredWriter
-}
+$expectedKeys = @('chat2api', 'usage')
+Assert-Equal (@($descriptors.Keys) -join ',') ($expectedKeys -join ',') 'two service descriptors in stable order'
 
 # Unique keys and ports
 $ports = @($descriptors.Values | ForEach-Object { $_.Port })
@@ -203,24 +182,15 @@ Assert-Equal ($healthEndpoints | Select-Object -Unique).Count $healthEndpoints.C
 # ---------------------------------------------------------------------------
 
 $startOrder = Get-GatewayStartOrder
-Assert-Equal ($startOrder -join ',') 'chat2api,usage' 'startup order keeps active sources ahead of consumers and excludes archived M365'
-Assert-Equal ($startOrder -notcontains 'DSH') $true 'retired DSH is absent from startup order'
-Assert-Equal ($startOrder -notcontains 'Qoder') $true 'retired Qoder CN is absent from startup order'
+Assert-Equal ($startOrder -join ',') 'chat2api,usage' 'startup order keeps active sources ahead of consumers'
 
 $stopOrder = Get-GatewayStopOrder
 Assert-Equal ($stopOrder -join ',') 'usage,chat2api' 'stop order keeps the established consumer/source relative order'
-Assert-Equal ($stopOrder -notcontains 'DSH') $true 'retired DSH is absent from stop order'
-Assert-Equal ($stopOrder -notcontains 'CLIProxy') $true 'retired CLIProxy is absent from stop order'
 
 # ---------------------------------------------------------------------------
 # Port and health URL mapping
 # ---------------------------------------------------------------------------
 
-Assert-Equal $descriptors['M365'].Port 4141 'M365 port is 4141'
-Assert-Null $descriptors['M365'].HealthPath 'retired M365 has no health endpoint'
-Assert-Equal $descriptors['M365'].StopStrategy 'Archived' 'retired M365 has no managed lifecycle'
-Assert-Equal $descriptors['M365'].StartAction 'Archived' 'retired M365 has no start action'
-Assert-Null $descriptors['M365'].StartPath 'retired M365 has no executable path'
 Assert-Equal $descriptors['chat2api'].Port 8000 'chat2api port is 8000'
 Assert-Equal $descriptors['chat2api'].HealthPath '/health' 'chat2api health path is /health'
 Assert-Equal $descriptors['chat2api'].AuthStatusUrl 'http://127.0.0.1:8000/admin/auth/status' 'chat2api auth status URL is local'
@@ -233,14 +203,8 @@ Assert-Equal $descriptors['usage'].Port 8001 'usage port is 8001'
 Assert-Equal $descriptors['usage'].HealthPath '/health' 'usage health path is /health'
 
 # Open URLs
-Assert-Null $descriptors['M365'].OpenUrl 'retired M365 has no launchable UI'
 Assert-Equal $descriptors['usage'].OpenUrl 'http://127.0.0.1:8001/' 'usage opens 8001'
 Assert-Null $descriptors['chat2api'].OpenUrl 'chat2api has no open URL'
-
-# B0: the retired Qoder / QoderGlobal / CLIProxy descriptors are gone.
-foreach ($retiredKey in @('Qoder', 'QoderGlobal', 'CLIProxy')) {
-    Assert-Equal ($descriptors.Contains($retiredKey)) $false "$retiredKey descriptor is removed"
-}
 
 # ---------------------------------------------------------------------------
 # Start: idempotent when already healthy
@@ -289,7 +253,7 @@ Assert-Equal $launcherCalls.Count 1 'launcher called once'
 
 # ---------------------------------------------------------------------------
 # Stop: calls stopper hook. Generic stop scenarios run against usage, the
-# stable consumer service that shares the retired DSH's Port stop strategy.
+# stable consumer service used by the generic stop scenarios.
 # ---------------------------------------------------------------------------
 
 $stopperCalls = New-Object System.Collections.ArrayList
@@ -382,7 +346,7 @@ $results = Start-AllGatewayServices `
     -Launcher { param($key, $path, $desc) [void]$startAllCalls.Add($key) } `
     -Sleeper { param($seconds) }
 
-Assert-Equal $results.Count 2 'start-all launches two active services, excluding archived M365'
+Assert-Equal $results.Count 2 'start-all launches the two active services'
 Assert-Equal ($startAllCalls -join ',') 'chat2api,usage' 'start-all follows the fixed startup order'
 
 # ---------------------------------------------------------------------------
@@ -400,7 +364,7 @@ $results = Stop-AllGatewayServices `
     -Stopper { param($key, $desc) [void]$stopAllCalls.Add($key) } `
     -Sleeper { param($seconds) }
 
-Assert-Equal $results.Count 2 'stop-all covers two active descriptors, excluding archived M365'
+Assert-Equal $results.Count 2 'stop-all covers the two active descriptors'
 Assert-Equal ($stopAllCalls -join ',') 'usage,chat2api' 'stop-all follows the reverse startup order'
 
 # ---------------------------------------------------------------------------
@@ -423,10 +387,6 @@ Assert-Equal $proxyEnv.Count 8 'proxy environment has 8 entries (4 cleared + 4 c
 # ---------------------------------------------------------------------------
 
 $healthCheckCalls = New-Object System.Collections.ArrayList
-$archivedHealthy = Test-GatewayServiceHealth -Key 'M365' -HttpChecker {
-    throw 'retired M365 must not perform HTTP checks'
-}
-Assert-Equal $archivedHealthy $false 'retired M365 does not probe its old port'
 Test-GatewayServiceHealth -Key 'chat2api' -HttpChecker {
     param($url, $timeout)
     [void]$healthCheckCalls.Add($url)
@@ -435,7 +395,7 @@ Test-GatewayServiceHealth -Key 'chat2api' -HttpChecker {
 Assert-Equal $healthCheckCalls[0] 'http://127.0.0.1:8000/health' 'active gateway health URL is correct'
 
 $runtimeSource = Get-Content -LiteralPath $runtimeLibrary -Raw
-Assert-Equal ($runtimeSource -notmatch 'M365Managed|python manage\.py') $true 'retired managed launch and stop implementation is removed'
+Assert-Equal ($runtimeSource -notmatch 'python manage\.py') $true 'retired managed launch and stop implementation is removed'
 # HTTP error reachability is exercised above with real 403/500 responses;
 # requiring the old Exception.Response spelling would reintroduce the bug.
 Assert-Equal ($runtimeSource -match '\$ProgressPreference\s*=\s*''SilentlyContinue''') $true 'health checks suppress the PowerShell progress banner'
@@ -444,9 +404,7 @@ foreach ($scriptName in @(
     'invoke-gateway-service.ps1',
     'invoke-model-sync.ps1', 'manage-model-sync-task.ps1',
     'show-model-sync-notification.ps1', 'lib\gateway-runtime.ps1',
-    'lib\watch-chat2api.ps1', 'lib\register-chat2api-watch.ps1',
-    'lib\watch-share-backend.ps1',
-    'lib\register-share-backend-watch.ps1')) {
+    'lib\watch-chat2api.ps1', 'lib\register-chat2api-watch.ps1')) {
     $tokens = $null
     $parseErrors = $null
     [Management.Automation.Language.Parser]::ParseFile(
@@ -459,9 +417,7 @@ Assert-Equal ($taskSource -match "New-ScheduledTaskTrigger -Daily -At '06:00'") 
 Assert-Equal ($taskSource -match '-StartWhenAvailable:\$false') $true 'model sync never catches up a missed run'
 Assert-Equal ($taskSource -match '-WakeToRun:\$false') $true 'model sync never wakes the computer'
 $syncSource = Get-Content -LiteralPath (Join-Path $root 'invoke-model-sync.ps1') -Raw -Encoding utf8
-Assert-Equal ($syncSource -notmatch '\$sourceKeys\s*=\s*@\([^\)]*''QoderGlobal''') $true 'scheduled model sync does not start retired Qoder Global'
 Assert-Equal ($syncSource -match "\`$sourceKeys\s*=\s*@\('chat2api'\)") $true 'scheduled model sync carries only the UM chat2api source'
-Assert-Equal ($syncSource -notmatch '\$sourceKeys\s*=\s*@\([^\)]*''M365''') $true 'scheduled model sync does not start paused M365'
 Assert-Equal ($syncSource -notmatch '\$PSCommandPath\s+-Mode\s+Probe') $true 'model sync apply never auto-invokes probe mode (2026-09-22 contract)'
 Assert-Equal ($syncSource -notmatch '\$SkipProbe') $true 'probe skip switch retired with the auto-probe chain'
 
@@ -517,9 +473,8 @@ Assert-Equal (Test-Chat2ApiControlUri 'http://127.0.0.1:8000/health') $false 'co
 # Round 18 (2026-09-29): private stop scope isolation (D-6/D-7).
 #
 # StopCommandLinePattern ((^|\s)chat2api\.py(\s|$)) alone also matched the
-# dedicated share backend (chat2api.py --port 8110 --profile <share>\edge-profile,
-# started by console_share_production.py:1226-1234), so Stop-GatewayService's
-# GracefulHttp residual branch force-stopped a share instance.
+# a second chat2api.py instance, so Stop-GatewayService's GracefulHttp residual
+# branch could force-stop the wrong instance.
 #
 # The substitutes below land on the LAST boundary — the CIM process query and the
 # Stop-Process / Invoke-WebRequest / Start-Process calls — so the real selection
@@ -629,15 +584,12 @@ function New-StopScopeProcess {
 }
 
 # Command-line fixtures mirror the shapes read from the live machine in round 18
-# (8000 PID 58336 = private, 8110 PID 22612 = share backend); paths are
-# synthetic here so the fixture never depends on this checkout's location.
+# (8000 PID 58336 = private); paths are synthetic here so the fixture never
+# depends on this checkout's location.
 $script:stopScopePrivateCmdLine = 'python  chat2api.py --base-url https://chat.example.invalid'
-$script:stopScopeShareCmdLine = 'C:\Python314\python.exe chat2api.py --base-url https://chat.example.invalid --port 8110 --profile C:\share-backend\edge-profile --login-timeout 600'
-$script:stopScopeShareGatewayCmdLine = 'python share_entry.py --port 8100 --config C:\share\share-gateway.json'
 $script:stopScopeOtherCheckoutCmdLine = 'python D:\other-checkout\ai-gateway\chat2api\chat2api.py --base-url https://chat.example.invalid'
 $script:stopScopePrivateQualifiedCmdLine = 'python ' + (Join-Path (Get-GatewayRoot) 'chat2api\chat2api.py') + ' --base-url https://chat.example.invalid'
 $script:stopScopePrivateStart = [datetime]'2026-09-29T20:11:25'
-$script:stopScopeShareStart = [datetime]'2026-09-29T20:14:05'
 
 function Invoke-StopScopeScenario {
     # Runs one private stop against the real runtime with the boundary
@@ -730,21 +682,17 @@ if (-not $boundaryArmed) {
 # --- Case 1 (load-bearing): two instances coexist + one stop request ---
 $twoInstances = Invoke-StopScopeScenario -Processes @(
     (New-StopScopeProcess -ProcessId 990101 -CommandLine $script:stopScopePrivateCmdLine -CreationDate $script:stopScopePrivateStart),
-    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeShareCmdLine -CreationDate $script:stopScopeShareStart)
+    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeOtherCheckoutCmdLine -CreationDate $script:stopScopeShareStart)
 )
-Assert-Equal ($twoInstances.Terminated -join ',') '990101' 'minimal case: private stop selects only the private 8000 instance, never the 8110 share backend'
+Assert-Equal ($twoInstances.Terminated -join ',') '990101' 'minimal case: private stop selects only the private 8000 instance'
 Assert-Equal $twoInstances.Result.Status 'Stopped' 'minimal case: stop reports Stopped after terminating the private instance'
 
-# --- Case 2 (three instances): + another checkout's same-named script + 8100 ---
+# --- Case 2 (two instances): + another checkout's same-named script ---
 $fullScope = Invoke-StopScopeScenario -Processes @(
     (New-StopScopeProcess -ProcessId 990101 -CommandLine $script:stopScopePrivateCmdLine -CreationDate $script:stopScopePrivateStart),
-    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeShareCmdLine -CreationDate $script:stopScopeShareStart),
-    (New-StopScopeProcess -ProcessId 990103 -CommandLine $script:stopScopeShareGatewayCmdLine -CreationDate $script:stopScopeShareStart),
-    (New-StopScopeProcess -ProcessId 990104 -CommandLine $script:stopScopeOtherCheckoutCmdLine -CreationDate $script:stopScopeShareStart)
+    (New-StopScopeProcess -ProcessId 990104 -CommandLine $script:stopScopeOtherCheckoutCmdLine -CreationDate $script:stopScopePrivateStart)
 )
-Assert-Equal ($fullScope.Terminated -join ',') '990101' 'private stop selects exactly the verified private instance when 8110, 8100 and another checkout coexist'
-Assert-Equal ($fullScope.Terminated -contains 990102) $false 'share backend (chat2api.py --port 8110) is never selected'
-Assert-Equal ($fullScope.Terminated -contains 990103) $false 'share gateway (share_entry.py, 8100) is never selected'
+Assert-Equal ($fullScope.Terminated -join ',') '990101' 'private stop selects exactly the verified private instance when another checkout coexists'
 Assert-Equal ($fullScope.Terminated -contains 990104) $false 'another checkout''s same-named script is never selected'
 Assert-Equal $fullScope.Result.Status 'Stopped' 'private stop still reports Stopped when only the private instance is terminated'
 Assert-Equal ($twoInstances.Requests -join ',') 'http://127.0.0.1:8000/admin/shutdown' 'private stop sends the graceful request to its own 8000 shutdown endpoint'
@@ -752,7 +700,7 @@ Assert-Equal ($twoInstances.Requests -join ',') 'http://127.0.0.1:8000/admin/shu
 # --- Case 3: graceful shutdown request fails (pre-listen / refused POST) ---
 $gracefulFailed = Invoke-StopScopeScenario -Processes @(
     (New-StopScopeProcess -ProcessId 990101 -CommandLine $script:stopScopePrivateCmdLine -CreationDate $script:stopScopePrivateStart),
-    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeShareCmdLine -CreationDate $script:stopScopeShareStart)
+    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeOtherCheckoutCmdLine -CreationDate $script:stopScopeShareStart)
 ) -GracefulFails
 Assert-Equal ($gracefulFailed.Terminated -join ',') '990101' 'failed graceful shutdown still terminates only the verified private instance'
 Assert-Equal $gracefulFailed.Result.Status 'Stopped' 'failed graceful shutdown still reports Stopped after the scoped cleanup'
@@ -776,7 +724,7 @@ Assert-Equal $coldStart.Result.Status 'Stopped' 'cold-start stop reports Stopped
 # --- Case 6: stale PID (the selected process is gone at kill time) ---
 $stalePid = Invoke-StopScopeScenario -Processes @(
     (New-StopScopeProcess -ProcessId 990101 -CommandLine $script:stopScopePrivateCmdLine -CreationDate $script:stopScopePrivateStart),
-    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeShareCmdLine -CreationDate $script:stopScopeShareStart)
+    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeOtherCheckoutCmdLine -CreationDate $script:stopScopeShareStart)
 ) -RequeryProcesses @()
 Assert-Equal ($stalePid.Terminated -join ',') '' 'a vanished PID is never re-used blindly: nothing is terminated'
 Assert-Equal $stalePid.Result.Status 'StopRefused' 'a vanished PID surfaces as StopRefused, never as a claimed Stopped'
@@ -784,7 +732,7 @@ Assert-Equal $stalePid.Result.Status 'StopRefused' 'a vanished PID surfaces as S
 # --- Case 7: reused PID (the same PID now belongs to another process) ---
 $reusedPid = Invoke-StopScopeScenario -Processes @(
     (New-StopScopeProcess -ProcessId 990101 -CommandLine $script:stopScopePrivateCmdLine -CreationDate $script:stopScopePrivateStart),
-    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeShareCmdLine -CreationDate $script:stopScopeShareStart)
+    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeOtherCheckoutCmdLine -CreationDate $script:stopScopeShareStart)
 ) -RequeryProcesses @(
     (New-StopScopeProcess -ProcessId 990101 -CommandLine 'python some-other-tool.py --serve' -CreationDate $script:stopScopeShareStart)
 )
@@ -831,7 +779,7 @@ $script:stopScopeTerminated.Clear()
 $script:stopScopeLaunches.Clear()
 $script:stopScopeTable = @(
     (New-StopScopeProcess -ProcessId 990101 -CommandLine $script:stopScopePrivateCmdLine -CreationDate $script:stopScopePrivateStart),
-    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeShareCmdLine -CreationDate $script:stopScopeShareStart)
+    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeOtherCheckoutCmdLine -CreationDate $script:stopScopeShareStart)
 )
 $script:stopScopeRequery = $null
 $script:stopScopeQueryFails = $false
@@ -859,7 +807,7 @@ $script:stopScopeQueryFails = $false
 # --- Case 14: start's residual cleanup uses the same scoped stop ---
 $startCleanup = Invoke-StartScopeScenario -Processes @(
     (New-StopScopeProcess -ProcessId 990101 -CommandLine $script:stopScopePrivateCmdLine -CreationDate $script:stopScopePrivateStart),
-    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeShareCmdLine -CreationDate $script:stopScopeShareStart)
+    (New-StopScopeProcess -ProcessId 990102 -CommandLine $script:stopScopeOtherCheckoutCmdLine -CreationDate $script:stopScopeShareStart)
 )
 Assert-Equal ($startCleanup.Terminated -join ',') '990101' 'start residual cleanup terminates only the verified private instance'
 Assert-Equal ($startCleanup.Terminated -contains 990102) $false 'start residual cleanup never terminates the share backend'
@@ -1111,7 +1059,7 @@ try {
     $syncStopped = @(Get-GatewayManuallyStoppedKeys -Keys @('chat2api', 'usage'))
     Assert-Equal ($syncStopped -join ',') 'chat2api' 'only an explicit stopped intent is dropped from the scheduled sync sources'
     Assert-Equal (@(Get-GatewayManuallyStoppedKeys -Keys @('usage')) -join ',') '' 'a running intent is never dropped'
-    Assert-Equal (@(Get-GatewayManuallyStoppedKeys -Keys @('M365')) -join ',') '' 'an absent marker is unknown, not an explicit stop'
+    Assert-Equal (@(Get-GatewayManuallyStoppedKeys -Keys @('usage-absent')) -join ',') '' 'an absent marker is unknown, not an explicit stop'
 } finally {
     $env:SELFUSEAI_GATEWAY_WATCH_DIR = $savedSyncWatchDir
     Remove-Item -LiteralPath $syncMarkerRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -1618,9 +1566,9 @@ try {
     $emptyArgs = ($emptyOut | Select-Object -Last 1) | ConvertFrom-Json
     Assert-Equal (($emptyArgs | Where-Object { $_ -like '--sources=*' }).Count) 1 'an empty --sources= survives the PS 5.1 native boundary as one argument'
     Assert-Equal (($emptyArgs | Where-Object { $_ -eq '--apply' }).Count) 1 'the trailing switch survives the boundary as well'
-    $subsetOut = & pwsh.exe -NoProfile -Command ("& python -X utf8 '" + $probe + "' --sources=um,qoder_cn --apply") 2>&1
+    $subsetOut = & pwsh.exe -NoProfile -Command ("& python -X utf8 '" + $probe + "' --sources=um --apply") 2>&1
     $subsetArgs = ($subsetOut | Select-Object -Last 1) | ConvertFrom-Json
-    Assert-Equal (($subsetArgs | Where-Object { $_ -eq '--sources=um,qoder_cn' }).Count) 1 'a non-empty subset is passed through unchanged'
+    Assert-Equal (($subsetArgs | Where-Object { $_ -eq '--sources=um' }).Count) 1 'a non-empty subset is passed through unchanged'
 } finally {
     Remove-Item -LiteralPath $boundaryDir -Recurse -Force -ErrorAction SilentlyContinue
 }

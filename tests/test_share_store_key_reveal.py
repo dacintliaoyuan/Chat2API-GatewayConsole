@@ -20,7 +20,6 @@ identity contract B0 verified for the 8001 console host); everything else
 monkeypatches the protection boundary so the tests stay deterministic.
 """
 import hashlib
-import json
 import sqlite3
 import sys
 import tempfile
@@ -30,8 +29,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import share_store  # noqa: E402
-from share_store import (Disabled, NotFound, SecretUnavailable,  # noqa: E402
+import share.store as share_store  # noqa: E402
+from share.store import (Disabled, NotFound, SecretUnavailable,  # noqa: E402
                          SecretUndecryptable, ShareStore, StoreError,
                          VersionMismatch)
 
@@ -189,7 +188,7 @@ class KeyRevealStoreTests(unittest.TestCase):
         """R11-B1 split-constant contract: the projection marker stays 2
         (share-side whitelist {1,2}) and the payload must be accepted by the
         SAME parser the publish chain uses."""
-        import share_broker_protocol
+        import share.broker_protocol as share_broker_protocol
         store = self._store()
         try:
             store.create_key("proj-check")

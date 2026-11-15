@@ -30,8 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import console_share_production  # noqa: E402
-import share_broker_ops  # noqa: E402
+import share.broker_ops as share_broker_ops  # noqa: E402
 
 GATEWAY_PORT = 28100
 BACKEND_PORT = 28110
@@ -273,27 +272,6 @@ class LinuxHostOpsIdentityTests(_RealChildCase):
                          [])
 
 
-class LinuxBackendIdentityTests(unittest.TestCase):
-    """``_LinuxBackendOps`` has the same entry rule (never an argument)."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
-
-    def _ops(self):
-        return console_share_production._LinuxBackendOps(
-            gateway_dir=str(self.root), port=8110)
-
-    def test_entry_script_is_accepted(self):
-        self.assertTrue(self._ops()._identity_ok(
-            {"port": 8110}, sys.executable,
-            "python chat2api.py --port 8110 --profile profile"))
-
-    def test_script_name_as_an_argument_is_rejected(self):
-        self.assertFalse(self._ops()._identity_ok(
-            {"port": 8110}, sys.executable,
-            "python -c print(1) chat2api.py --port 8110"))
 
 
 if __name__ == "__main__":

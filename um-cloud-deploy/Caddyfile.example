@@ -9,7 +9,7 @@
 #   POST /v1/messages
 #   POST /v1/responses
 #
-# 8110 (share backend) and 18096 (private management console) are NEVER
+# 8096 (private management console) is NEVER
 # reverse-proxied here.  8100 itself is also not opened in the cloud security
 # group; Caddy is the only public listener.
 #

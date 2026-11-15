@@ -33,12 +33,9 @@ export const ROLE_LABEL: Readonly<Record<ConsoleRole, string>> = {
 };
 
 /** Action families only the local registry assembles (console_adapters.build_registry:
- *  Qoder / CLIProxy / model sync); the cloud registry never imports them. */
+ *  model sync); the cloud registry never imports them. */
 const LOCAL_ONLY_ACTION_PREFIXES = [
   "model.",
-  "qoder.",
-  "qoderglobal.",
-  "cliproxy.",
 ];
 const SCOPE = "/gw/usagesrv/";
 const SUMMARY_PATH = "/api/summary";

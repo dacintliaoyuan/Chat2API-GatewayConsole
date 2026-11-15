@@ -221,7 +221,7 @@ export async function runCloud(c) {
     "最近核验",
     "登录动作",
     "分层检查（只读）",
-    "重新认证 UM",
+    "重启分享入口 8100",
   ])
     must(
       `cloud-status-detail:${evidence}`,
@@ -325,7 +325,7 @@ export async function runCloud(c) {
           operations: [
             {
               id: "fx-cloud-op-login-1",
-              action: "share.backend_login",
+              action: "account.login",
               target: "share",
               state: "succeeded",
               created_at: 1793413300,

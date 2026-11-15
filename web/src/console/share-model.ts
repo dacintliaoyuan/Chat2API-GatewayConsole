@@ -1,6 +1,6 @@
 /** API service facade shapes (GET /api/console/share-management/*), shared by the
- *  consoles that read them. Moved out of workbench.ts on 2026-10-31 so the cloud
- *  console reuses the same contract instead of restating it (ADR 0001). */
+ *  consoles that read them. The cloud console reuses the same contract instead
+ *  of restating it (ADR 0001). */
 
 export type ShareStatusPayload = {
   schema_version?: number;
@@ -41,7 +41,7 @@ export type ShareStatusPayload = {
    *  open/residue evidence. */
   gateway_running?: boolean;
   /** The backend sends only {running, valid}, and leaves the key out while the
-   *  UM backend (8110) is down; the check time is `last_check_at` (backend
+   *  UM backend is down; the check time is `last_check_at` (backend
    *  cross-check, 2026-10-31). `failure` is not sent either - it stays typed
    *  only for the local share page, which retires with the local share split. */
   account?: {

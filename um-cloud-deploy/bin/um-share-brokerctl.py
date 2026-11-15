@@ -4,7 +4,7 @@
 
 This helper is the ONLY operator/systemd entry that talks to the broker host's
 AF_UNIX management channel.  It never starts the 8100 gateway with a bare
-``Popen``: the broker host (``share_broker_ops.py``) owns that child.  A start is
+``Popen``: the broker host (``share/broker_ops.py``) owns that child.  A start is
 sent as the restricted broker ``start`` verb; an explicit operator start first
 writes the persistent ``share-host-desired.json`` intent as ``running`` (the same
 schema ``LinuxHostOps`` reads) and then sends the broker verb.
@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import stat
 import sys
 import time
 from pathlib import Path
@@ -123,8 +122,8 @@ def _wait_connections_zero(port: int, budget_s: int, interval_s: float,
 
 
 def _client(args):
-    from share_broker_client import BrokerClient, UnixSocketBrokerTransport
-    from share_broker_server import read_control_key
+    from share.broker_client import BrokerClient, UnixSocketBrokerTransport
+    from share.broker_server import read_control_key
     try:
         secret = read_control_key(args.key_file)
     except (OSError, ValueError) as exc:
@@ -192,12 +191,10 @@ def _drain(args, force: bool) -> int:
         deadline = time.monotonic() + edge_budget
         gateway_ok = _wait_connections_zero(args.port, 0,
                                             args.poll_interval, deadline)
-        backend_ok = _wait_connections_zero(args.backend_port, 0,
-                                           args.poll_interval, deadline)
-        if not (gateway_ok and backend_ok):
+        if not gateway_ok:
             print(json.dumps({
                 "ok": False, "error": "drain_timeout",
-                "port": args.port, "backend_port": args.backend_port,
+                "port": args.port,
                 "budget_s": args.drain_budget,
                 "edge_budget_s": edge_budget,
                 "note": "established connections did not reach zero; "
@@ -261,8 +258,6 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="one broker exchange timeout (1..180 s)")
     parser.add_argument("--port", type=int, default=8100,
                         help="share gateway TCP port used for the drain wait")
-    parser.add_argument("--backend-port", type=int, default=8110,
-                        help="share backend TCP port used for the drain wait")
     parser.add_argument("--drain-budget", type=int,
                         default=DEFAULT_DRAIN_BUDGET_S,
                         help="total drain budget in seconds (default 900)")
@@ -290,9 +285,6 @@ def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
     if not 1 <= int(args.port) <= 65535:
         print("port must be within 1..65535", file=sys.stderr)
-        return EX_USAGE
-    if not 1 <= int(args.backend_port) <= 65535:
-        print("backend-port must be within 1..65535", file=sys.stderr)
         return EX_USAGE
     if not 1 <= int(args.timeout) <= 180:
         print("timeout must be within 1..180 seconds", file=sys.stderr)

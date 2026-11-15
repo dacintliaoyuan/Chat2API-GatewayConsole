@@ -115,23 +115,6 @@ export function publicDnsTtlText(
   return ttlText ?? negativeText ?? "TTL 未提供";
 }
 
-export function latestShareOperationWasStop(
-  operations: ReadonlyArray<{
-    action: string;
-    state: string;
-    created_at: number;
-  }>
-): boolean {
-  const latest = operations
-    .filter((op) =>
-      ["share.start", "share.stop", "share.estop", "share.retry_stop"].includes(
-        op.action
-      )
-    )
-    .sort((a, b) => b.created_at - a.created_at)[0];
-  return latest?.state === "succeeded" && latest.action !== "share.start";
-}
-
 export function localShareReadiness(
   payload: ShareReadinessInput
 ): ShareReading {

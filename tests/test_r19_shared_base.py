@@ -13,7 +13,6 @@ whole test suite imports host modules in the same process.
 import ast
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -72,22 +71,6 @@ REQUIRED_README_TERMS = (
     "broker",
     "OperationManager",
 )
-
-# The cross-end public names E19-1-01 adds to ``pricing_rules`` and the private
-# spellings they alias. The README must spell out the mapping so a consumer
-# renaming in E19-1-02/E19-1-04 can find the replacement without reading source.
-CROSS_END_PUBLIC_NAMES = {
-    "beijing_weekday": "_beijing_weekday",
-    "checked_age_days": "_checked_age_days",
-    "current_version": "_current_version",
-    "peak_of": "_peak_of",
-    "price_version": "_price_version",
-    "rate_of": "_rate_of",
-    "strip_id_decor": "_strip_id_decor",
-    "tiers_of": "_tiers_of",
-    "tokens_of": "_tokens_of",
-    "version_id": "_version_id",
-}
 
 CLEAN_INTERPRETER_PROBE = """
 import json
@@ -247,28 +230,6 @@ class SharedBaseTests(unittest.TestCase):
             "shared/README.md must state the boundary; missing: {}".format(
                 ", ".join(missing)),
         )
-
-    def test_shared_readme_lists_every_cross_end_public_name(self):
-        """The README's mapping table pairs each public rule with its alias.
-
-        The names are checked as a *pair on one table row* rather than as two
-        independent substring searches: ``beijing_weekday`` is a substring of
-        ``_beijing_weekday``, so a "both names appear somewhere" check would pass
-        with the alias alone and never notice a missing public name.
-        """
-        text = README_PATH.read_text(encoding="utf-8-sig")
-        unpaired = []
-        for public, private in CROSS_END_PUBLIC_NAMES.items():
-            row = re.compile(
-                r"^\|\s*`?" + re.escape(public) + r"`?\s*\|\s*`?"
-                + re.escape(private) + r"`?\s*\|", re.MULTILINE)
-            if not row.search(text):
-                unpaired.append("{} -> {}".format(public, private))
-        self.assertEqual(
-            unpaired, [],
-            "shared/README.md must pair each public cross-end name with the "
-            "private spelling it aliases, on one table row; missing rows: "
-            .format(", ".join(unpaired)))
 
     def test_shared_readme_explains_the_threading_runtime_exception(self):
         """Why ``threading`` is not in the runtime forbidden list, in writing."""

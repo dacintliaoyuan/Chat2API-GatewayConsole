@@ -9,10 +9,9 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import console_model_actions  # noqa: E402
-import model_sync  # noqa: E402
-from console_operations import OperationError  # noqa: E402
-from model_sync_core import DEFAULT_BINDINGS  # noqa: E402
+from console import model_actions as console_model_actions  # noqa: E402
+from model_sync import sync as model_sync  # noqa: E402
+from console.operations import OperationError  # noqa: E402
 
 
 class _Ctx:
@@ -37,10 +36,9 @@ class CatalogCapabilityTests(unittest.TestCase):
                         model_sync.collect_catalogs([source])
         get.assert_not_called()
 
-    def test_retired_bindings_are_not_active(self):
-        self.assertFalse(any(
-            b.source in ("m365", "qoder_cn", "qoder_global", "cliproxy")
-            for b in DEFAULT_BINDINGS if b in model_sync.ACTIVE_BINDINGS))
+    def test_retired_bindings_are_not_assembled(self):
+        self.assertFalse(hasattr(model_sync, "ACTIVE_BINDINGS"))
+        self.assertFalse(hasattr(model_sync, "DEFAULT_BINDINGS"))
 
 
 class _CatalogHandler(http.server.BaseHTTPRequestHandler):
@@ -298,14 +296,10 @@ class FreshUmCatalogTests(unittest.TestCase):
                  model_sync, "_post_json",
                  side_effect=AssertionError("inference sent")), \
              mock.patch.object(
-                 model_sync, "run_sync",
-                 side_effect=AssertionError("old sync applied")), \
-             mock.patch.object(
                  model_sync, "apply_config_transaction",
-                 side_effect=AssertionError("config transaction written")), \
-             mock.patch.object(
-                 model_sync, "collect_consumers",
-                 side_effect=AssertionError("client config read")):
+                 side_effect=AssertionError("config transaction written")):
+            self.assertFalse(hasattr(model_sync, "run_sync"))
+            self.assertFalse(hasattr(model_sync, "collect_consumers"))
             result = console_model_actions.model_catalog(
                 "", {"sources": ["um"], "fresh": True}, _Ctx())
         self.assertTrue(result["success"])

@@ -1357,35 +1357,6 @@
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-.cloud-budget-detail {
-  margin-top: 10px;
-}
-.cloud-budget-detail summary {
-  min-height: 36px;
-  padding: 6px 4px;
-  color: var(--md-on-surface-variant);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.cloud-alerts {
-  display: grid;
-  gap: 4px;
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--md-r-s);
-  background: var(--md-warning-container);
-  color: var(--md-on-warning-container);
-  list-style: none;
-  font-size: 12px;
-  line-height: 1.55;
-}
-.cloud-price {
-  margin: 0 0 4px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
 /* ---------- Feedback ---------- */
 .cloud-feedback {
   display: grid;

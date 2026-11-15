@@ -1,7 +1,7 @@
 # Fluxbox resources for the single private login window.
 #
 # The display is a tool, not a desktop: one workspace, no toolbar and no
-# workspace switcher.  The browser window is maximized by the 8110 child.
+# workspace switcher.  The browser window is maximized by the 8100 process.
 # start-loopback-display.sh passes this file with an absolute ``-rc`` path because
 # the service user has no writable home for ``~/.fluxbox``.
 session.screen0.workspaces: 1

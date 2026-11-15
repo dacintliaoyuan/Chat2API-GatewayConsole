@@ -15,25 +15,49 @@ run() {
   "$@" || FAIL=1
 }
 
+web_run() {
+  echo "== web: $*"
+  (cd web && "$@") || FAIL=1
+}
+
+# A fresh worktree starts without web/node_modules; the gates below need the
+# locked frontend dependencies. Install them once so a missing install fails here
+# with this message instead of MODULE_NOT_FOUND in every web gate.
+if [ ! -d web/node_modules ]; then
+  echo "== web: npm ci (node_modules missing)"
+  if ! (cd web && npm ci); then
+    echo "web dependencies could not be installed; run 'cd web && npm ci' and retry" >&2
+    exit 1
+  fi
+fi
+
 run python -m compileall -q chat2api . -x '(^|/)(node_modules|web/node_modules|\.git)/'
+run python -m ruff check .
 run python scripts/check_share_names.py
+run python scripts/check_retired_features.py
 run node web/scripts/backend-contract/check-generated.mjs
 run git -c core.whitespace=cr-at-eol diff --cached --check
 run git -c core.whitespace=cr-at-eol diff --check
+web_run npx tsc --noEmit
+web_run npm run check:contracts
+web_run npm run check:logs
+web_run npm run check:um
 
 case "${1:-}" in
   --quick)
     run python -m unittest \
       tests.test_share_gate_merged \
       tests.test_share_gate_citations \
-      tests.test_share_chain_window \
+      tests.test_check_gate \
       tests.test_r19_um_imports \
       tests.test_console_share_production \
       tests.test_cloud_deploy_assembly \
       tests.test_manifest_stability
+    web_run npm run check:cloud-console
     ;;
   --full)
     run python -m unittest discover -s tests -p "test_*.py"
+    run python -m unittest discover -s local/tests -p "test_*.py"
     ;;
 esac
 

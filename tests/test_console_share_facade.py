@@ -21,8 +21,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from share_management import ShareManager  # noqa: E402
-import console_share_actions as _share_orchestration  # noqa: E402
+from share.management import ShareManager  # noqa: E402
+from console import share_actions as _share_orchestration  # noqa: E402
 
 
 
@@ -67,9 +67,9 @@ def _guard_usage_module(module):
 
 def setUpModule():
     global _ISOLATION_TEMP, _ISOLATION_SAVED_SEAMS
-    import share_broker_client
-    import share_broker_server
-    import console_share_actions
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
+    from console import share_actions as console_share_actions
     _ISOLATION_ATTEMPTS.clear()
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(prefix="offline-management-")
     root = Path(_ISOLATION_TEMP.name)
@@ -88,16 +88,13 @@ def setUpModule():
     _ISOLATION_SAVED_SEAMS = {
         name: value for name, value in vars(console_share_actions).items()
         if name.startswith("_") and name.upper() == name}
-    for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                         "_declare_real_kernel"),
-                        (share_broker_server, "_declared_kernel")):
-        patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-        patcher.start()
-        _ISOLATION_PATCHERS.append(patcher)
+    # The retired Windows named-pipe transport is gone with the old local
+    # share chain (#33).
+    _ = (share_broker_client, share_broker_server)
 
 
 def tearDownModule():
-    import console_share_actions
+    from console import share_actions as console_share_actions
     try:
         for module, old_console, _old_share in _ISOLATION_MODULES:
             current = module._console_manager
@@ -124,7 +121,7 @@ class FakeBroker:
         self.graceful_stop_calls = 0
         self.emergency_stop_calls = 0
         self.emergency_stop_result = {"state": "stopped", "stopped": True}
-        # S2: model the REAL 8110 runtime's security watermark. The runtime
+        # S2: model the REAL 8100 runtime's security watermark. The runtime
         # advances its own applied revoke watermark ONLY when a Key transitions
         # from enabled to disabled/absent (a REVOKE). A rotate (same Key, new
         # secret_version) leaves it untouched, so the pending rotate intent is
@@ -180,7 +177,8 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         cls._saved_env = {}
         for key in ("USAGE_SESSION_CODE_FILE", "USAGE_CONTROL_TOKEN_FILE",
                     "SHARE_STORE_FILE", "SHARE_MANAGEMENT_CONFIG",
-                    "CONSOLE_STATE_FILE", "CONSOLE_LOCK_DIR"):
+                    "CONSOLE_STATE_FILE", "CONSOLE_LOCK_DIR",
+                    "CONSOLE_PUBLIC_ORIGIN"):
             cls._saved_env[key] = os.environ.get(key)
         cls.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True,
                                               prefix="console-share-facade-",
@@ -190,6 +188,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         os.environ["USAGE_CONTROL_TOKEN_FILE"] = os.path.join(
             cls.tmp.name, "usage-control-token")
         os.environ["SHARE_STORE_FILE"] = os.path.join(cls.tmp.name, "share.db")
+        os.environ["CONSOLE_PUBLIC_ORIGIN"] = "https://fixture.tailnet.ts.net"
         # The console status GET ensures the production seam wiring itself
         # (usagesrv's production console-manager assembly), so loading the
         # module mutates console_share_actions' seam globals. Snapshot them
@@ -229,11 +228,6 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.broker = FakeBroker()
         self.usagesrv.get_share_manager = lambda: ShareManager(
             store_path=db, broker=self.broker)
-        self._real_funnel_url = self.usagesrv.Handler._share_funnel_url
-        url = mock.patch.object(self.usagesrv.Handler, '_share_funnel_url',
-                                return_value='https://fixture.tailnet.ts.net')
-        url.start()
-        self.addCleanup(url.stop)
         self._install_observation_fixtures()
         self.server = self.usagesrv.ThreadingHTTPServer(
             ("127.0.0.1", 0), self.usagesrv.Handler)
@@ -253,14 +247,13 @@ class ConsoleShareFacadeTests(unittest.TestCase):
             self.usagesrv._share_manager = None
 
     def _install_observation_fixtures(self):
-        import console_adapters
-        import console_share_production
+        from console import adapters as console_adapters
+        from console import share_production as console_share_production
         import subprocess
         saved = {name: value for name, value in vars(_share_orchestration).items()
                  if name.startswith("_") and name.upper() == name}
         self.addCleanup(lambda: [_share_orchestration.__dict__.__setitem__(name, value)
                                  for name, value in saved.items()])
-        _share_orchestration._FUNNEL_OBSERVED = None
 
         def fake_runner(argv, timeout=None, **kwargs):
             return subprocess.CompletedProcess(argv, 0, "{}", "")
@@ -270,11 +263,11 @@ class ConsoleShareFacadeTests(unittest.TestCase):
                 broker=self.broker, runner=fake_runner, keys_manager=keys_manager,
                 cloud=cloud,
                 status_path=str(Path(self.tmp_store.name) / "absent-status.json"))
-            # The 8110 HTTP/file observer has independent boundaries.
-            seams["_BACKEND_OBSERVE"] = lambda: {
-                "running": False, "auth_state": None}
             for name, value in seams.items():
                 setattr(_share_orchestration, name, value)
+            _share_orchestration._BROKER_OPS = (
+                console_share_production.production_broker_ops(
+                    broker=self.broker))
 
         patcher = mock.patch.object(console_adapters, "wire_share_production_seams",
                                     wire_fixture)
@@ -312,8 +305,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.assertIn("in_sync", data)
         self.assertNotIn("secret", body.decode())
         self.assertNotIn("um-share-", body.decode())
-        self.assertIs(data["gateway_running"], False)
-        self.assertIs(data["funnel_on"], False)
+        self.assertNotIn("funnel_on", data)
 
     def test_status_broker_snapshot_mapping(self):
         f = self.usagesrv.Handler._console_share_status_payload
@@ -518,7 +510,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
             f"/api/console/share-management/keys/{key['id']}/rotate",
             method="POST", xrw="XMLHttpRequest",
             body={"expected_row_version": key["row_version"]})
-        # The real 8110 runtime does NOT advance its applied revoke watermark
+        # The real 8100 runtime does NOT advance its applied revoke watermark
         # for a rotate (the Key stays enabled), so the publication is refused
         # fail-closed instead of pretending a success.
         self.assertEqual(status, 503)
@@ -540,7 +532,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         blocker = status_payload["blocked_publications"][0]
         self.assertEqual(blocker["target_generation"],
                          status_payload["desired_generation"])
-        from share_store import ShareStore
+        from share.store import ShareStore
         store = ShareStore(os.environ["SHARE_STORE_FILE"])
         try:
             publish_ops = store.operations(kind="publish")
@@ -583,7 +575,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.assertFalse(result["key"]["enabled"])
         self.assertTrue(result["revoked"])
         self.assertEqual(self.broker.terminate_keys_seen, [[key["id"]]])
-        # C1/D18-3: the answer separates 8100/8110 counters and never
+        # C1/D18-3: the answer separates the gateway counters and never
         # pretends an already-consumed upstream cost can be withdrawn.
         self.assertEqual(result["terminated"], 2)
         self.assertEqual(result["released"], 3)
@@ -616,7 +608,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.assertNotIn("已撤销并确认终止在途", result["note"])
 
     def test_limits_normalize_route_and_cli_reach_the_manager(self):
-        # D18-4/C1: the documented `share_admin.py limits --normalize`
+        # D18-4/C1: the documented `share/admin.py limits --normalize`
         # action must reach ShareManager.normalize_limits(), not fall through
         # to the unknown-path 404.
         status, body = self.request(
@@ -629,7 +621,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.assertIn("before", result["global"])
         self.assertIn("after", result["global"])
 
-        admin = Path(__file__).resolve().parents[1] / "share_admin.py"
+        admin = Path(__file__).resolve().parents[1] / "share/admin.py"
         env = dict(os.environ, SHARE_MGMT_ALLOW_PORT=str(self.port))
         proc = subprocess.run(
             [sys.executable, "-B", "-X", "utf8", str(admin),
@@ -666,7 +658,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
 
     # ------------------------------------------------ B1 narrow readback
     def test_key_probe_route_is_explicit_public_and_version_bound(self):
-        import console_share_probe
+        from console import share_probe as console_share_probe
         created = json.loads(self.request(
             '/api/console/share-management/keys', method='POST',
             xrw='XMLHttpRequest', body={'name': 'probe-fixture'})[1])
@@ -698,7 +690,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
             self.assertEqual(self.request(path, method='POST', xrw='XMLHttpRequest', body=body)[0], 400)
 
     def test_key_probe_never_sends_credential_to_unverified_gateway(self):
-        import console_share_probe
+        from console import share_probe as console_share_probe
         created = json.loads(self.request(
             '/api/console/share-management/keys', method='POST',
             xrw='XMLHttpRequest', body={'name': 'unverified'})[1])
@@ -711,28 +703,6 @@ class ConsoleShareFacadeTests(unittest.TestCase):
             self.assertFalse(result['connected'])
             self.assertEqual(result['reason'], 'gateway_unconfirmed')
             probe.assert_not_called()
-
-    def test_public_test_never_reuses_a_cached_domain_after_discovery_failure(self):
-        import subprocess
-        handler = self.usagesrv.Handler
-        # Call the real classmethod behind the per-test observation fixture.
-        original = self._real_funnel_url
-        handler._share_url_cache['url'] = 'https://old.tailnet.ts.net'
-        try:
-            with mock.patch.object(subprocess, 'run', side_effect=OSError('fixture failure')):
-                self.assertIsNone(original(refresh=True))
-            offline = subprocess.CompletedProcess([], 0, json.dumps({
-                'BackendState': 'Stopped', 'Self': {'Online': False,
-                    'DNSName': 'new.tailnet.ts.net.'}}).encode())
-            with mock.patch.object(subprocess, 'run', return_value=offline):
-                self.assertIsNone(original(refresh=True))
-            online = subprocess.CompletedProcess([], 0, json.dumps({
-                'BackendState': 'Running', 'Self': {'Online': False,
-                    'DNSName': 'new.tailnet.ts.net.'}}).encode())
-            with mock.patch.object(subprocess, 'run', return_value=online):
-                self.assertEqual(original(refresh=True), 'https://new.tailnet.ts.net')
-        finally:
-            handler._share_url_cache['url'] = None
 
     def test_reveal_returns_created_plaintext_credential_free(self):
         status, body = self.request(
@@ -788,7 +758,7 @@ class ConsoleShareFacadeTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["error"], "key_deleted")
         # A legacy hash-only row (no ciphertext blob) answers an honest
         # inline unavailable state — an expected condition until rotation.
-        from share_store import ShareStore
+        from share.store import ShareStore
         legacy = ShareStore(self.usagesrv.os.environ["SHARE_STORE_FILE"])
         try:
             legacy.migrate_apply({"legacy-friend": "a" * 64})

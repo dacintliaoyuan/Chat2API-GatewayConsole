@@ -28,7 +28,7 @@ API_PATHS = ("/v1/models", "/v1/chat/completions", "/v1/messages",
              "/v1/responses")
 API_SERVICE = "http://127.0.0.1:8100"
 CATCH_ALL = "http_status:404"
-FORBIDDEN_PORTS = ("18096", "8110", "5901")
+FORBIDDEN_PORTS = ("8096", "8097", "18096", "5901")
 
 
 def _normalise_path(path):

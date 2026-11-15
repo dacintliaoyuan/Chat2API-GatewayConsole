@@ -44,15 +44,6 @@ assert SPEC.loader is not None
 sys.modules[SPEC.name] = chat2api
 SPEC.loader.exec_module(chat2api)
 
-SHARE_GATEWAY_PATH = Path(os.path.join(
-    os.path.dirname(_TEST_DIR), "chat2api", "share_entry.py"))
-SHARE_SPEC = importlib.util.spec_from_file_location(
-    "share_entry_linux_platform", SHARE_GATEWAY_PATH)
-share_entry = importlib.util.module_from_spec(SHARE_SPEC)
-assert SHARE_SPEC.loader is not None
-sys.modules[SHARE_SPEC.name] = share_entry
-SHARE_SPEC.loader.exec_module(share_entry)
-
 
 class _FakeMsvcrt:
     LK_NBLCK = 0x01
@@ -297,9 +288,19 @@ class TestBrowserLookup(_LockChildHarness):
         # 历史日志仍能识别 "Edge was not found" 这个条件。
         self.assertIn("Edge was not found", str(caught.exception))
 
-    def test_posix_missing_display_is_display_missing(self):
+    def test_posix_without_display_reaches_the_browser_launch(self):
+        launched = []
+
+        class BrowserLaunchReached(Exception):
+            pass
+
+        def context_factory(edge, profile_dir):
+            launched.append((edge, profile_dir))
+            raise BrowserLaunchReached()
+
         for display in ("", "   "):
             with self.subTest(display=display):
+                launched.clear()
                 with mock.patch.object(chat2api.sys, "platform", "linux"), \
                      mock.patch.object(
                          chat2api, "find_edge",
@@ -307,12 +308,12 @@ class TestBrowserLookup(_LockChildHarness):
                      mock.patch.dict(os.environ,
                                      {"DISPLAY": display,
                                       "WAYLAND_DISPLAY": ""}):
-                    with self.assertRaises(
-                            chat2api.LoginUnavailable) as caught:
+                    with self.assertRaises(BrowserLaunchReached):
                         chat2api.browser_login(
-                            "https://example.invalid", "profile", 1)
-                self.assertEqual(caught.exception.reason, "display_missing")
-                self.assertIn("DISPLAY", str(caught.exception))
+                            "https://example.invalid", "profile", 1,
+                            context_factory=context_factory)
+                self.assertEqual(launched, [("/usr/bin/chromium",
+                                           "profile")])
 
     def test_posix_wayland_display_reaches_the_browser_check(self):
         with mock.patch.object(chat2api.sys, "platform", "linux"), \
@@ -412,86 +413,6 @@ class TestBrowserLookup(_LockChildHarness):
         self.assertTrue(self.wait_for_path(str(out_path)),
                         self._child_report([proc]))
         self.assertEqual(proc.wait(timeout=30), 0, self._child_report([proc]))
-
-
-class TestInstancePipePrefixDefault(unittest.TestCase):
-    """--instance-pipe-prefix：显式值优先，缺省按平台取默认值。"""
-
-    def test_explicit_value_wins_and_default_is_not_read(self):
-        with mock.patch.object(
-                share_entry, "_default_instance_pipe_prefix",
-                side_effect=AssertionError("default must not be read")):
-            self.assertEqual(
-                share_entry._resolve_instance_pipe_prefix(
-                    r"\\.\pipe\um-share-instance-exp-"),
-                r"\\.\pipe\um-share-instance-exp-")
-
-    def test_omitted_value_resolves_the_platform_default(self):
-        for expected in ("/run/um-share/instance-",
-                         r"\\.\pipe\um-share-instance-"):
-            with self.subTest(expected=expected):
-                with mock.patch.object(
-                        share_entry, "_default_instance_pipe_prefix",
-                        return_value=expected) as default:
-                    self.assertEqual(
-                        share_entry._resolve_instance_pipe_prefix(None),
-                        expected)
-                    default.assert_called_once_with()
-
-    def test_public_default_seam_reaches_the_resolver(self):
-        with mock.patch.object(
-                share_entry, "default_instance_pipe_prefix",
-                return_value="/run/um-share/instance-") as default:
-            self.assertEqual(
-                share_entry._resolve_instance_pipe_prefix(None),
-                "/run/um-share/instance-")
-            default.assert_called_once_with()
-
-    def test_unavailable_instance_module_yields_none_not_a_guess(self):
-        with mock.patch.object(
-                share_entry, "_default_instance_pipe_prefix",
-                side_effect=ImportError("share_instance_pipe unavailable")):
-            self.assertIsNone(
-                share_entry._resolve_instance_pipe_prefix(None))
-
-    def test_parse_args_resolves_an_omitted_prefix(self):
-        parser = mock.Mock()
-        parser.parse_args.return_value = mock.Mock(instance_pipe_prefix=None)
-        with mock.patch.object(
-                share_entry, "_default_instance_pipe_prefix",
-                return_value="/run/um-share/instance-"):
-            args = share_entry._parse_args(parser, [])
-        self.assertEqual(args.instance_pipe_prefix,
-                         "/run/um-share/instance-")
-
-    def test_parse_args_keeps_an_explicit_prefix(self):
-        parser = mock.Mock()
-        parser.parse_args.return_value = mock.Mock(
-            instance_pipe_prefix=r"\\.\pipe\custom-")
-        with mock.patch.object(
-                share_entry, "_default_instance_pipe_prefix",
-                side_effect=AssertionError("default must not be read")):
-            args = share_entry._parse_args(parser, [])
-        self.assertEqual(args.instance_pipe_prefix, r"\\.\pipe\custom-")
-
-    def test_real_default_matches_the_instance_channel_module(self):
-        import share_instance_pipe
-        self.assertEqual(
-            share_entry._default_instance_pipe_prefix(),
-            share_instance_pipe.default_instance_pipe_prefix())
-
-    def test_real_omitted_prefix_is_the_platform_default(self):
-        import share_instance_pipe
-        self.assertEqual(
-            share_entry._resolve_instance_pipe_prefix(None),
-            share_instance_pipe.default_instance_pipe_prefix())
-
-    def test_posix_default_is_the_unix_socket_prefix(self):
-        import share_instance_pipe
-        with mock.patch.object(share_instance_pipe.os, "name", "posix"):
-            self.assertEqual(
-                share_instance_pipe.default_instance_pipe_prefix(),
-                "/run/um-share/instance-")
 
 
 @unittest.skipUnless(sys.platform == "linux",

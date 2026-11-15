@@ -68,9 +68,9 @@ def _guard_usage_module(module):
 
 def setUpModule():
     global _ISOLATION_TEMP, _ISOLATION_SAVED_SEAMS
-    import share_broker_client
-    import share_broker_server
-    import console_share_actions
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
+    from console import share_actions as console_share_actions
     _ISOLATION_ATTEMPTS.clear()
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(prefix="offline-management-")
     root = Path(_ISOLATION_TEMP.name)
@@ -89,16 +89,13 @@ def setUpModule():
     _ISOLATION_SAVED_SEAMS = {
         name: value for name, value in vars(console_share_actions).items()
         if name.startswith("_") and name.upper() == name}
-    for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                         "_declare_real_kernel"),
-                        (share_broker_server, "_declared_kernel")):
-        patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-        patcher.start()
-        _ISOLATION_PATCHERS.append(patcher)
+    # The retired Windows named-pipe transport is gone with the old local
+    # share chain (#33).
+    _ = (share_broker_client, share_broker_server)
 
 
 def tearDownModule():
-    import console_share_actions
+    from console import share_actions as console_share_actions
     try:
         for module, old_console, _old_share in _ISOLATION_MODULES:
             current = module._console_manager

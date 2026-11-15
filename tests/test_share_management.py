@@ -19,11 +19,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from share_management import (BrokerClientAdapter, BrokerError, NoopBroker,
+from share.management import (BrokerClientAdapter, BrokerError, NoopBroker,
                              ShareManager)  # noqa: E402
-from share_broker_client import BrokerClient  # noqa: E402
-import share_broker_protocol as broker_protocol  # noqa: E402
-from share_store import (Conflict, Disabled, NotFound, ShareStore,  # noqa: E402
+from share.broker_client import BrokerClient  # noqa: E402
+import share.broker_protocol as broker_protocol  # noqa: E402
+from share.store import (Conflict, Disabled, ShareStore,  # noqa: E402
                          StoreError, VersionMismatch)
 
 
@@ -38,7 +38,7 @@ class FakeBroker:
         self.graceful_stop_calls = 0
         self.emergency_stop_calls = 0
         self.emergency_stop_result = {"state": "stopped", "stopped": True}
-        # S2: model the REAL 8110 runtime's security watermark. The
+        # S2: model the REAL 8100 runtime's security watermark. The
         # runtime advances its own applied revoke watermark ONLY when a Key
         # transitions from enabled to disabled/absent (a REVOKE). A rotate
         # (same Key, new secret_version) and a lowered limit leave it
@@ -416,7 +416,7 @@ class ShareLimitsTests(unittest.TestCase):
         status = self.mgr.status()
         # R11-B1: the status DB marker follows SCHEMA_VERSION (3); the
         # share-side projection stays at PROJECTION_SCHEMA_VERSION (2).
-        from share_store import SCHEMA_VERSION
+        from share.store import SCHEMA_VERSION
         self.assertEqual(status["schema_version"], SCHEMA_VERSION)
         self.assertEqual(status["share_max_concurrency"], 64)
         self.assertEqual(status["share_max_concurrency_stored"], 64)
@@ -1263,7 +1263,7 @@ class ShareApiBoundaryTests(unittest.TestCase):
         self.assertNotIn("secret", result)
 
     def test_cli_exposes_revoke_secret_test_and_settings(self):
-        import share_admin
+        import share.admin as share_admin
         calls = []
 
         def fake_call(base, method, path, token, body=None):
@@ -1595,7 +1595,7 @@ class ShareApiBoundaryTests(unittest.TestCase):
         status_body = json.loads(self.request(
             "/api/share/status", token="test-control-token")[1])
         self.assertEqual(status_body["share_max_concurrency"], 24)
-        from share_store import SCHEMA_VERSION
+        from share.store import SCHEMA_VERSION
         self.assertEqual(status_body["schema_version"], SCHEMA_VERSION)
 
     def test_patch_settings_expected_conflict_returns_409(self):
@@ -1685,10 +1685,10 @@ class ShareApiBoundaryTests(unittest.TestCase):
         self.assertEqual(self.broker.emergency_stop_calls, 1)
 
     def test_cli_is_a_management_service_client(self):
-        # R4: share_admin.py must call the HTTP management service, never open
+        # R4: share/admin.py must call the HTTP management service, never open
         # SQLite directly. Run it against the live test server; the isolated
         # port is injected via the test-only SHARE_MGMT_ALLOW_PORT env.
-        admin = Path(__file__).resolve().parents[1] / "share_admin.py"
+        admin = Path(__file__).resolve().parents[1] / "share/admin.py"
         base = f"http://127.0.0.1:{self.port}"
         env = dict(os.environ, SHARE_MGMT_ALLOW_PORT=str(self.port))
         result = subprocess.run(
@@ -1721,7 +1721,7 @@ class ManagementEndpointGuardTests(unittest.TestCase):
     be called for rejected endpoints."""
 
     def test_rejected_endpoints_never_reach_the_connection_function(self):
-        import share_admin
+        import share.admin as share_admin
         calls = []
 
         class Guard:
@@ -1745,14 +1745,14 @@ class ManagementEndpointGuardTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_valid_loopback_endpoint_is_accepted(self):
-        import share_admin
+        import share.admin as share_admin
         self.assertEqual(
             share_admin._validate_management_endpoint("http://127.0.0.1:8001"),
             ("127.0.0.1", 8001))
 
     def test_test_only_port_override_is_isolated(self):
         # 注入端口仅用于测试且与生产配置隔离：未设 env 时固定 8001。
-        import share_admin
+        import share.admin as share_admin
         old = os.environ.get("SHARE_MGMT_ALLOW_PORT")
         os.environ["SHARE_MGMT_ALLOW_PORT"] = "18443"
         try:
@@ -1860,9 +1860,9 @@ class RevokeAndTerminateTests(unittest.TestCase):
     def test_reply_shapes_both_tolerated(self):
         # 双形状容差：dict（adapter）与 BrokerResult（raw client）都读得到
         # terminated；缺失字段是 None 不是 0。
-        from share_management import _reply_count, _reply_terminated
+        from share.management import _reply_count, _reply_terminated
         self.assertEqual(_reply_terminated({"terminated": 3}), 3)
-        from share_broker_protocol import BrokerResult
+        from share.broker_protocol import BrokerResult
         self.assertEqual(_reply_terminated(
             BrokerResult.ok({"terminated": 2})), 2)
         self.assertIsNone(_reply_terminated({"applied_generation": 3}))
@@ -1898,11 +1898,11 @@ class RevokeAndTerminateTests(unittest.TestCase):
         # store 内 Key 已墓碑化（拒新与清密文已生效），终止待重试——如实语义。
         class _DeadBroker(FakeBroker):
             def publish(self, projection, terminate_keys=None):
-                from share_management import BrokerError
+                from share.management import BrokerError
                 raise BrokerError("unconfirmed: instance load failed")
 
         self.mgr.broker = _DeadBroker()
-        from share_management import BrokerError
+        from share.management import BrokerError
         with self.assertRaises(BrokerError):
             self.mgr.revoke_and_terminate_key(
                 self.key_id, expected_row_version=self.row_version)

@@ -27,9 +27,9 @@ from unittest import mock
 sys.path.insert(0, str(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-import console_adapters  # noqa: E402  (same directory, sys.path prepared)
-import console_um_adapter  # noqa: E402
-from console_operations import OperationError  # noqa: E402
+from console import adapters as console_adapters  # noqa: E402  (same directory, sys.path prepared)
+from console import um_adapter as console_um_adapter  # noqa: E402
+from console.operations import OperationError  # noqa: E402
 
 _TMP = tempfile.mkdtemp(prefix="console-um-adapter-tests-")
 _CONTROL_TOKEN = "test-um-control-token-42"
@@ -130,6 +130,83 @@ class UmAuthStatusPassthroughTests(UmAuthStatusTestBase):
                 self.assertIsInstance(result["checked_epoch"], int)
                 self.assertNotIn(_CONTROL_TOKEN,
                                  json.dumps(result, ensure_ascii=False))
+
+    def test_manual_reason_and_login_window_pass_through(self):
+        # Ticket #15：控制台状态读面必须让操作员看到
+        # manual_takeover_required:<reason> 与本轮窗口截止时间；token 不出现。
+        self.server.respond = (200, json.dumps({
+            "state": "failed",
+            "label": "认证失败（需人工：umpass_mfa_required）",
+            "error": "manual_takeover_required:umpass_mfa_required",
+            "login_window_deadline_epoch": 2800,
+            "login_window_s": 1800,
+        }).encode("utf-8"))
+        result = console_um_adapter.um_auth_status("chat2api", {}, None)
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(
+            result["error"],
+            "manual_takeover_required:umpass_mfa_required")
+        self.assertEqual(result["login_window_deadline_epoch"], 2800.0)
+        self.assertEqual(result["login_window_s"], 1800.0)
+        self.assertNotIn(_CONTROL_TOKEN,
+                         json.dumps(result, ensure_ascii=False))
+
+    def test_malformed_login_window_fields_are_unknown_not_guessed(self):
+        # Ticket #15：窗口字段缺失或形状不对就是未知（None），不折成 0。
+        for deadline, window in ((None, None), (True, "1800"),
+                                 ("2800", True)):
+            with self.subTest(deadline=deadline, window=window):
+                self.server.respond = (200, json.dumps({
+                    "state": "valid",
+                    "label": "有效",
+                    "error": None,
+                    "login_window_deadline_epoch": deadline,
+                    "login_window_s": window,
+                }).encode("utf-8"))
+                result = console_um_adapter.um_auth_status(
+                    "chat2api", {}, None)
+                self.assertIsNone(result["login_window_deadline_epoch"])
+                self.assertIsNone(result["login_window_s"])
+
+    def test_non_finite_window_fields_are_unknown_and_serialize_as_json(self):
+        # ticket #42 item 1：json.loads 接受裸 NaN/Infinity，但它们不是已知
+        # 窗口值；读面必须拒绝，并保证自身状态 JSON 合法。
+        for deadline, window in ((float("nan"), float("inf")),
+                                  (float("inf"), float("nan")),
+                                  (float("-inf"), float("inf"))):
+            with self.subTest(deadline=deadline, window=window):
+                self.server.respond = (200, json.dumps({
+                    "state": "valid",
+                    "label": "有效",
+                    "error": None,
+                    "login_window_deadline_epoch": deadline,
+                    "login_window_s": window,
+                    "recovery": {
+                        "state": "waiting", "round": 1,
+                        "session_starts": 1, "max_sessions": 6,
+                        "next_attempt_epoch": float("nan"),
+                        "pause_reason": None,
+                    },
+                }).encode("utf-8"))
+                result = console_um_adapter.um_auth_status(
+                    "chat2api", {}, None)
+                self.assertIsNone(result["login_window_deadline_epoch"])
+                self.assertIsNone(result["login_window_s"])
+                self.assertIsNone(result["recovery"]["next_attempt_epoch"])
+                json.dumps(result, allow_nan=False)
+
+    def test_primary_cleanup_outcome_passes_through(self):
+        # ticket #42 item 16：清理失败不能吞掉原始会话结果，读面必须保留。
+        self.server.respond = (200, json.dumps({
+            "state": "failed",
+            "label": "认证失败（清理失败）",
+            "error": "browser_cleanup_failed",
+            "primary": "manual_takeover_required:umpass_mfa_required",
+        }).encode("utf-8"))
+        result = console_um_adapter.um_auth_status("chat2api", {}, None)
+        self.assertEqual(result["error"], "browser_cleanup_failed")
+        self.assertEqual(result["primary"],
+                         "manual_takeover_required:umpass_mfa_required")
 
     def test_stub_receives_control_header_and_no_origin(self):
         console_um_adapter.um_auth_status("chat2api", {}, None)

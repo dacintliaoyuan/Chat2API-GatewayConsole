@@ -12,7 +12,7 @@ The local application is exercised as a REAL subprocess through
 * a full start creates only the fixture directories, serves the control-token
   gated local routes, runs the ``model.catalog`` operation and exits cleanly.
 
-Every path lives under the fixture temp root; no real ledger, price document,
+Every path lives under the fixture temp root; no real ledger,
 profile or credential is read.
 """
 from __future__ import annotations
@@ -57,11 +57,10 @@ from r19.local_fixture import (  # noqa: E402
 TERMINAL_STATES = ("succeeded", "failed", "cancelled", "interrupted")
 FORBIDDEN_MODULES = (
     "usagesrv",
-    "console_adapters",
+    "console.adapters",
     "share_management",
     "share_store",
-    "share_entry",
-    "share_dispatch",
+    "share_auth",
     "console_display_proxy",
     "cloud",
 )
@@ -113,18 +112,11 @@ class LocalConfigTests(unittest.TestCase):
             LocalConfig.from_mapping(values)
         self.assertEqual(caught.exception.field, "um_runtime.source_dir")
 
-    def test_price_override_file_is_optional_but_absolute(self):
-        values = self.fixture.config_mapping()
-        self.assertIsNone(LocalConfig.from_mapping(values).price_override_file)
-        values["price_override_file"] = "relative/price.override.json"
-        with self.assertRaises(LocalConfigError) as caught:
-            LocalConfig.from_mapping(values)
-        self.assertEqual(caught.exception.field, "price_override_file")
-
     def test_print_runtime_info_is_isolated_and_does_not_load_cloud(self):
         polluted = self.fixture.root / "polluted"
         polluted.mkdir(parents=True, exist_ok=True)
-        (polluted / "console_stats.py").write_text(
+        (polluted / "console").mkdir(parents=True, exist_ok=True)
+        (polluted / "console/stats.py").write_text(
             "raise RuntimeError('polluted console_stats imported')\n",
             encoding="utf-8")
         arbitrary_cwd = Path(tempfile.mkdtemp(prefix="r19-arbitrary-cwd-"))
@@ -227,7 +219,8 @@ class LocalEndToEndTests(unittest.TestCase):
         self.arbitrary_cwd = Path(tempfile.mkdtemp(prefix="r19-e2e-cwd-"))
         self.polluted = self.fixture.root / "polluted"
         self.polluted.mkdir(parents=True, exist_ok=True)
-        (self.polluted / "console_stats.py").write_text(
+        (self.polluted / "console").mkdir(parents=True, exist_ok=True)
+        (self.polluted / "console/stats.py").write_text(
             "raise RuntimeError('polluted console_stats imported')\n",
             encoding="utf-8")
         self.fixture.start_app(cwd=self.arbitrary_cwd,
@@ -321,13 +314,13 @@ class LocalEndToEndTests(unittest.TestCase):
         self.assertEqual(payload["role"], "local")
 
         # E19-1-04 step 8 / G5: the frontend's readSummary(signal?) passes
-        # NO date range and normalizeUmSummary reads only role/
-        # assembly.role/umReference — so the bare call must succeed.
+        # NO date range and normalizeUmSummary reads only role/assembly.role,
+        # so the bare call must succeed; price facts were retired with #30.
         status, payload = self.fixture.request(
             "GET", "/api/summary", token=self.fixture.control_token)
         self.assertEqual(status, 200, payload)
         self.assertEqual(payload["role"], "local")
-        self.assertIsInstance(payload.get("umReference"), dict, payload)
+        self.assertNotIn("umReference", payload)
 
         # E19-1-04 step 7: the session code file is really consumed.
         status, payload = self.fixture.request(

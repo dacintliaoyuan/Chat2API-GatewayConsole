@@ -19,10 +19,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
 
-import share_broker_protocol as bp  # noqa: E402
-import share_entry as share  # noqa: E402
-from share_management import ShareManager  # noqa: E402
-from share_store import (KEY_MAX_CONCURRENCY_MAX,  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
+import share_auth as share  # noqa: E402
+from share.management import ShareManager  # noqa: E402
+from share.store import (KEY_MAX_CONCURRENCY_MAX,  # noqa: E402
                          NEW_KEY_DEFAULT_MAX_CONCURRENCY,
                          SHARE_MAX_CONCURRENCY_MAX, ShareStore, StoreError)
 
@@ -383,7 +383,7 @@ class DisabledKeyContractTests(_TempStore, unittest.TestCase):
 
 class AdminCliContractTests(unittest.TestCase):
     def test_create_defaults_to_16_and_patch_has_no_enabled(self):
-        import share_admin
+        import share.admin as share_admin
         args = share_admin._parse_args(["create", "--name", "friend"])
         self.assertEqual(args.max_concurrency, 16)
         with self.assertRaises(SystemExit):
@@ -391,7 +391,7 @@ class AdminCliContractTests(unittest.TestCase):
                 ["patch", "k", "--expected-version", "1", "--enable"])
 
     def test_limits_normalize_flag(self):
-        import share_admin
+        import share.admin as share_admin
         self.assertFalse(
             share_admin._parse_args(["limits"]).normalize)
         self.assertTrue(
@@ -403,13 +403,6 @@ class _AdmissionCase(unittest.TestCase):
         self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.td.cleanup)
         self.config = Path(self.td.name) / "projection.json"
-
-        def _close_server():
-            server = getattr(self, "server", None)
-            if server is not None:
-                server.server_close()
-
-        self.addCleanup(_close_server)
 
     def _entry(self, key_id, max_concurrency):
         return {"key_id": key_id, "name": "friend-" + key_id,
@@ -425,7 +418,7 @@ class _AdmissionCase(unittest.TestCase):
             encoding="utf-8")
 
     def _server(self):
-        self.server = share.ShareServer(("127.0.0.1", 0), self.config)
+        self.server = share.ShareGate(self.config)
         return self.server
 
 

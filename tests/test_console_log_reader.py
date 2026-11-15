@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
-_READER_PATH = Path(__file__).resolve().parents[1] / "console_log_reader.py"
+_READER_PATH = Path(__file__).resolve().parents[1] / "console/log_reader.py"
 _SPEC = importlib.util.spec_from_file_location("console_log_reader_test",
                                                _READER_PATH)
 console_log_reader = importlib.util.module_from_spec(_SPEC)
@@ -230,7 +230,7 @@ class ReadEntriesTests(unittest.TestCase):
         self.assertEqual(resp["rows"], [])
 
     def test_share_backend_registry_binds_dedicated_paths(self):
-        """The 8110 dedicated instance's logs resolve from its deployment dir,
+        """The merged 8100 process's logs resolve from its deployment dir,
         never from the 8000 main-chain files. Every read stays inside the env
         patch: the reader re-resolves the registry per call, and an unpatched
         read would silently hit the REAL deployment directory."""
@@ -272,8 +272,7 @@ class ReadEntriesTests(unittest.TestCase):
             by_id = {c["category"]: c for c in share["categories"]}
             self.assertIsNone(by_id["service"]["path"])
             self.assertIsNone(by_id["ledger"]["path"])
-            self.assertIsNone(by_id["lifecycle"]["path"])
-            self.assertIsNone(by_id["watch"]["path"])
+            self.assertNotIn("lifecycle", by_id)
             self.assertIsNotNone(by_id["gateway"]["path"])
             self.assertIsNotNone(by_id["faults"]["path"])
             self.assertIsNotNone(by_id["broker"]["path"])
@@ -785,9 +784,8 @@ class RegistryInventoryTests(unittest.TestCase):
     每个断言都对着本会话实际读到的生产者：
     - chat2api 隐藏启动器 start_chat2api.bat 写 chat2api.console.log /
       .prev，监督 lib/watch-chat2api.ps1 写 watch/chat2api-watch.log；
-    - 分享链：8110 父侧 backend-lifecycle.log、监督
-      share-backend-watch.log、8100 share_guard raw.txt 与
-      share-faults.jsonl、broker lifecycle.json。
+    - 分享链：8100 raw.txt 与 share-faults.jsonl、broker
+      lifecycle.json（8100 父侧日志已随 #34 退役）。
     - B0（2026-11-01）：Qoder 国内/国际与 CLIProxy 已退役，registry
       不再登记它们的来源（/api/console/log-sources 与 log-entries 不再出现）。
     """
@@ -826,7 +824,7 @@ class RegistryInventoryTests(unittest.TestCase):
             self.assertTrue(cats["watch"]["rotating"])
             self.assertEqual(cats["watch"]["rotation_index"], 1)
 
-    def test_share_registry_covers_gateway_broker_supervision_and_exit(self):
+    def test_share_registry_covers_gateway_broker_and_exit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_root = root / "UMShareRun"
@@ -834,15 +832,7 @@ class RegistryInventoryTests(unittest.TestCase):
                 registry = console_log_reader.build_registry({})
             cats = {c["category"]: c
                     for c in _source(registry, "share")["categories"]}
-            self.assertEqual(
-                cats["lifecycle"]["path"],
-                str(root / "LocalAppData" / "SelfUseAI" / "ai-gateway"
-                    / "share-backend" / "backend-lifecycle.log"))
-            self.assertEqual(
-                cats["watch"]["path"],
-                str(root / "LocalAppData" / "SelfUseAI" / "ai-gateway"
-                    / "watch" / "share-backend-watch.log"))
-            self.assertEqual(cats["watch"]["rotation_index"], 1)
+            self.assertNotIn("lifecycle", cats)
             self.assertEqual(cats["gateway"]["path"],
                              str(run_root / "run" / "live" / "raw.txt"))
             self.assertEqual(cats["faults"]["path"],
@@ -902,9 +892,8 @@ class RegistryInventoryTests(unittest.TestCase):
             share = {c["category"]: c
                      for c in _source(registry, "share")["categories"]}
             self.assertIsNone(chat["watch"]["path"])
-            self.assertIsNone(share["watch"]["path"])
-            resp = read_entries("chat2api", "watch")
-        self.assertEqual(resp["status"], "unconfigured")
+            # The retired share-backend watch script is gone (#33).
+            self.assertNotIn("watch", share)
 
 
 class TimeNormalizationTests(unittest.TestCase):

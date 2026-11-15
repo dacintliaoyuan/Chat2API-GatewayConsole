@@ -1,14 +1,19 @@
 ﻿# Desktop entry for the UM cloud console.
 #
-# Opens a loopback SSH tunnel (127.0.0.1:18096 -> cloud 127.0.0.1:18096),
+# Opens a loopback SSH tunnel (127.0.0.1:8096 -> cloud 127.0.0.1:8096),
 # waits for the cloud console health endpoint, then authorizes Edge with a
 # short-lived single-use bootstrap. The tunnel prefers the private Tailscale SSH
 # config and falls back to the public SSH config only when the private route cannot
 # be preflighted or started. Both routes keep the same strict host verification
 # and a dedicated key/known_hosts file. The browser exchanges the bootstrap for
 # the existing HttpOnly console session before redirecting to
-# http://localhost:18096/#overview. The distinct browser host preserves the
+# http://localhost:8096/#overview. The distinct browser host preserves the
 # default local console's 127.0.0.1 session cookie.
+#
+# Expand-contract (2026-11-14): the cloud console moved 18096 -> 8096.  The
+# default is 8096; -CloudConsolePort 18096 keeps the legacy port usable for one
+# release cycle (set the cloud's USAGESRV_PORT to the same value).  Only the
+# configured port is ever forwarded and probed.
 #
 # Security boundaries:
 #   * Each dedicated SSH config is passed explicitly with -F; the default
@@ -17,7 +22,7 @@
 #     dedicated known_hosts file are enforced on the command line and checked
 #     through `ssh -G` for both routes. Only the private route additionally
 #     requires a Tailscale 100.64.0.0/10 HostName.
-#   * Only a listener on 127.0.0.1:18096 owned by an ssh.exe process whose
+#   * Only a listener on 127.0.0.1:8096 owned by an ssh.exe process whose
 #     command line matches the selected route's config/host/forward is reused or
 #     stopped. Foreign and unconfirmed owners are reported, never killed.
 #   * No long-lived token or key material is read. The short-lived bootstrap
@@ -31,7 +36,7 @@
 #   0 success / healthy / stopped / shortcut installed
 #   1 runtime failure (ssh exited, health timeout, browser or state failure)
 #   2 preflight failure (ssh, config, key, known_hosts, Tailscale)
-#   3 port 18096 is foreign or its owner cannot be confirmed
+#   3 the configured console port is foreign or its owner cannot be confirmed
 #   4 our tunnel process is alive but the health check failed
 #
 # -Library is a test-only switch: it loads the functions without running the
@@ -43,6 +48,9 @@ param(
     [switch]$Check,
     [switch]$InstallShortcut,
     [switch]$Library,
+    # Expand-contract (2026-11-14): default 8096; the legacy 18096 stays an
+    # explicit value for one release cycle and must match the cloud console.
+    [ValidateRange(1, 65535)][int]$CloudConsolePort = 8096,
     [string]$SshConfig = (Join-Path $HOME '.ssh\aliyun-um-ecs.conf'),
     [ValidatePattern('^[A-Za-z0-9._-]+$')][string]$SshHostAlias = 'um-share-ecs',
     [string]$PublicSshConfig = (Join-Path $HOME '.ssh\aliyun-um-ecs-public.conf'),
@@ -64,9 +72,9 @@ $ErrorActionPreference = 'Stop'
 $script:CloudConsoleRoot = $PSScriptRoot
 $script:CloudConsoleBatPath = Join-Path $PSScriptRoot 'Open-CloudConsole.bat'
 $script:CloudConsoleBind = '127.0.0.1'
-$script:CloudConsolePort = 18096
-$script:CloudConsoleTargetPort = 18096
-$script:CloudConsoleHealthUrl = 'http://127.0.0.1:18096/health'
+$script:CloudConsolePort = $CloudConsolePort
+$script:CloudConsoleTargetPort = $CloudConsolePort
+$script:CloudConsoleHealthUrl = 'http://127.0.0.1:{0}/health' -f $CloudConsolePort
 $script:CloudConsoleConfigPath = (Join-Path $HOME '.ssh\aliyun-um-ecs.conf')
 $script:CloudConsoleHostAlias = 'um-share-ecs'
 $script:CloudConsolePublicConfigPath = (Join-Path $HOME '.ssh\aliyun-um-ecs-public.conf')
@@ -616,19 +624,46 @@ function Invoke-CloudConsoleBootstrapProcess {
 }
 
 function Get-CloudConsoleBootstrapArgumentLine {
-    param([string]$ConfigPath, [string]$HostAlias, [string]$KnownHostsPath)
-    # Use Windows process-argument quoting, including trailing backslashes.
-    $quoted = @()
-    $knownHostsOption = 'UserKnownHostsFile="' + $KnownHostsPath.Replace('\', '/').Replace('"', '\"') + '"'
-    foreach ($value in @($ConfigPath, $knownHostsOption)) {
-        $escaped = [regex]::Replace($value, '(\\*)"', '$1$1\"')
-        $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
-        $quoted += '"' + $escaped + '"'
-    }
+    param([string]$ConfigPath, [string]$HostAlias, [string]$KnownHostsPath, [int]$Port)
+    # The dedicated config already pins UserKnownHostsFile; pass the same path
+    # as one unquoted -o value (Windows OpenSSH rejects the escaped-quote form
+    # with "hostname contains invalid characters"). The preflight's effective
+    # config remains the source of truth for the path.
+    $quotedConfig = '"' + $ConfigPath.Replace('"', '\"') + '"'
+    $knownHosts = $KnownHostsPath.Replace('\', '/').Replace('"', '')
     return ('-T -F {0} -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes ' +
-        '-o {1} -o ClearAllForwardings=yes -o ConnectTimeout=15 ' +
-        '{2} python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant.py --console-session') -f `
-        $quoted[0], $quoted[1], $HostAlias
+        '-o UserKnownHostsFile={1} -o ClearAllForwardings=yes -o ConnectTimeout=15 ' +
+        '{2} python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant.py --console http://127.0.0.1:{3} --console-session') -f `
+        $quotedConfig, $knownHosts, $HostAlias, $Port
+}
+
+function Get-CloudConsoleDisplayGrantArgumentLine {
+    param([string]$ConfigPath, [string]$HostAlias, [string]$KnownHostsPath, [int]$Port)
+    $quotedConfig = '"' + $ConfigPath.Replace('"', '\"') + '"'
+    $knownHosts = $KnownHostsPath.Replace('\', '/').Replace('"', '')
+    return ('-T -F {0} -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes ' +
+        '-o UserKnownHostsFile={1} -o ClearAllForwardings=yes -o ConnectTimeout=15 ' +
+        '{2} python3 /opt/um-share/current/um-cloud-deploy/display/issue-display-grant.py --console http://127.0.0.1:{3}') -f `
+        $quotedConfig, $knownHosts, $HostAlias, $Port
+}
+
+function Open-CloudConsoleDisplayGrantPage {
+    param($Adapter, $SshPreflight, [string]$ConfigPath, [string]$HostAlias)
+    $failure = New-CloudResult 1 '授权' 'open.loginfailed' '登录窗口授权失败；请检查专用 SSH 连接与云端授权服务后重试。'
+    try {
+        $knownHosts = Get-CloudEffectiveValue -Effective $SshPreflight.Effective -Key 'userknownhostsfile'
+        $arguments = Get-CloudConsoleDisplayGrantArgumentLine -ConfigPath $ConfigPath -HostAlias $HostAlias -KnownHostsPath $knownHosts -Port $script:CloudConsolePort
+        $response = & $Adapter.IssueConsoleBootstrap $SshPreflight.SshExe $arguments
+        if ($null -eq $response -or (Get-CloudObjectProperty $response 'ExitCode') -ne 0) { return $failure }
+        $relativeUrl = [string](Get-CloudObjectProperty $response 'Output')
+        if ($relativeUrl -cnotmatch '\A/display/grant#grant=[A-Za-z0-9_-]{16,256}(?:\r?\n)?\z') { return $failure }
+        $url = 'http://localhost:' + $script:CloudConsolePort + $relativeUrl.TrimEnd("`r", "`n")
+        $browser = Open-CloudConsolePage -Adapter $Adapter -Url $url
+        if (-not $browser.Ok) { return $failure }
+        return New-CloudResult 0 '入口' 'open.loginready' '已打开 UM 私有登录窗口。'
+    } catch {
+        return $failure
+    }
 }
 
 function Open-CloudConsoleAuthenticatedPage {
@@ -636,17 +671,26 @@ function Open-CloudConsoleAuthenticatedPage {
     $failure = New-CloudResult 1 '授权' 'open.authorizationfailed' '云端控制台授权失败；请检查专用 SSH 连接与云端授权服务后重试。'
     try {
         $knownHosts = Get-CloudEffectiveValue -Effective $SshPreflight.Effective -Key 'userknownhostsfile'
-        $arguments = Get-CloudConsoleBootstrapArgumentLine -ConfigPath $ConfigPath -HostAlias $HostAlias -KnownHostsPath $knownHosts
+        $arguments = Get-CloudConsoleBootstrapArgumentLine -ConfigPath $ConfigPath -HostAlias $HostAlias -KnownHostsPath $knownHosts -Port $script:CloudConsolePort
         $response = & $Adapter.IssueConsoleBootstrap $SshPreflight.SshExe $arguments
         if ($null -eq $response -or (Get-CloudObjectProperty $response 'ExitCode') -ne 0) { return $failure }
         $relativeUrl = [string](Get-CloudObjectProperty $response 'Output')
         # Permit the helper's single print newline, never multiple lines or a
         # second destination. Avoid Trim() accepting arbitrary surrounding input.
         if ($relativeUrl -cnotmatch '\A/display/grant#console=[A-Za-z0-9_-]{16,256}(?:\r?\n)?\z') { return $failure }
-        $url = 'http://localhost:18096' + $relativeUrl.TrimEnd("`r", "`n")
+        $url = 'http://localhost:' + $script:CloudConsolePort + $relativeUrl.TrimEnd("`r", "`n")
         $browser = Open-CloudConsolePage -Adapter $Adapter -Url $url
         if (-not $browser.Ok) {
             return New-CloudResult 1 '错误' 'open.browserfailed' '隧道已就绪，但打开 Edge 失败；请重新运行云端控制台入口。'
+        }
+        if ($env:UM_CLOUD_CONSOLE_OPEN_LOGIN -eq '1') {
+            $login = Open-CloudConsoleDisplayGrantPage -Adapter $Adapter -SshPreflight $SshPreflight `
+                -ConfigPath $ConfigPath -HostAlias $HostAlias
+            if ($login.ExitCode -ne 0) {
+                return New-CloudResult 1 '授权' 'open.loginfailed' `
+                    ('控制台已打开，但登录窗口未打开：' + $login.Message)
+            }
+            return New-CloudResult 0 '入口' 'open.ready' 'SSH 隧道已就绪，已打开 UM 云端控制台和私有登录窗口。'
         }
         return New-CloudResult 0 '入口' 'open.ready' 'SSH 隧道已就绪，已打开 UM 云端控制台授权页面。'
     } catch {
@@ -840,7 +884,7 @@ function Get-CloudConsoleOwnedTunnel {
         return @{ State = 'Owned'; Route = $owned[0].Route; Pid = [int]$owned[0].Pid; Detail = '' }
     }
     if ($owned.Count -gt 1) {
-        return @{ State = 'Unconfirmed'; Route = $null; Pid = 0; Detail = '多个路由的隧道同时监听 18096' }
+        return @{ State = 'Unconfirmed'; Route = $null; Pid = 0; Detail = "多个路由的隧道同时监听 $($script:CloudConsolePort)" }
     }
     if ($unconfirmed.Count -gt 0) {
         return @{ State = 'Unconfirmed'; Route = $null; Pid = 0; Detail = ($unconfirmed -join '; ') }
@@ -960,7 +1004,7 @@ function Get-CloudTunnelFailureHint {
         return '主机密钥校验失败：请核对专用 known_hosts'
     }
     if ($tail -match '(?i)remote port forwarding failed|cannot listen|address already in use') {
-        return '本地 18096 端口无法绑定，可能被其他程序占用'
+        return "本地 $($script:CloudConsolePort) 端口无法绑定，可能被其他程序占用"
     }
     if ($tail -match '(?i)could not resolve|connection timed out|no route to host|network is unreachable') {
         if ($Route -eq 'public') {
@@ -981,12 +1025,12 @@ function Wait-CloudConsoleHealthy {
         if ($ownership.State -eq 'Foreign') {
             return @{ Ok = $false; ExitCode = 3; ProcessExited = $false; Event = 'open.foreign'; Pid = 0;
                 CommandLine = ''; SshExe = ''; Label = '端口'
-                Message = "18096 已被其他程序占用（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。" }
+                Message = "$($script:CloudConsolePort) 已被其他程序占用（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。" }
         }
         if ($ownership.State -eq 'Unconfirmed') {
             return @{ Ok = $false; ExitCode = 3; ProcessExited = $false; Event = 'open.unconfirmed'; Pid = 0;
                 CommandLine = ''; SshExe = ''; Label = '端口'
-                Message = "18096 有监听但无法确认归属（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。" }
+                Message = "$($script:CloudConsolePort) 有监听但无法确认归属（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。" }
         }
         if ($ownership.State -eq 'None') {
             $process = $null
@@ -1207,17 +1251,17 @@ function Invoke-CloudConsoleRouteOpen {
             $context.Matches -and $context.Route -ne $routeName -and $ownership.State -eq 'None') {
         return New-CloudRouteResult -Route $routeName -Ok $false -CanFallback $false -Stage 'state' `
             -ExitCode 4 -Label '健康' -Event 'open.unhealthy' `
-            -Message "状态文件记录的$($context.Route)隧道进程在（pid $($context.Pid)），但 18096 无监听；未启动新隧道。"
+            -Message "状态文件记录的$($context.Route)隧道进程在（pid $($context.Pid)），但 $($script:CloudConsolePort) 无监听；未启动新隧道。"
     }
     if ($ownership.State -eq 'Foreign') {
         return New-CloudRouteResult -Route $routeName -Ok $false -CanFallback $false -Stage 'ownership' `
             -ExitCode 3 -Label '端口' -Event 'open.foreign' `
-            -Message "18096 被其他程序占用（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。"
+            -Message "$($script:CloudConsolePort) 被其他程序占用（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。"
     }
     if ($ownership.State -eq 'Unconfirmed') {
         return New-CloudRouteResult -Route $routeName -Ok $false -CanFallback $false -Stage 'ownership' `
             -ExitCode 3 -Label '端口' -Event 'open.unconfirmed' `
-            -Message "18096 监听归属无法确认（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。"
+            -Message "$($script:CloudConsolePort) 监听归属无法确认（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。"
     }
     if ($ownership.State -eq 'Owned') {
         $process = $null
@@ -1417,7 +1461,7 @@ function Get-CloudConsoleCheckDiagnostics {
     } else {
         $lines.Add('hosts 覆盖：未发现该域名的 hosts 条目；本入口不需要 hosts 覆盖。')
     }
-    $lines.Add('结论：本入口不需要旧 fix 的固定 IP/hosts 覆盖；公网 SSH 使用专用配置的主机名，浏览器仍访问 localhost:18096。')
+    $lines.Add("结论：本入口不需要旧 fix 的固定 IP/hosts 覆盖；公网 SSH 使用专用配置的主机名，浏览器仍访问 localhost:$($script:CloudConsolePort)。")
     return @{ Selected = $selected; Preflights = $preflights; Dns = $dns; Hosts = $hosts; Lines = @($lines) }
 }
 
@@ -1434,15 +1478,15 @@ function Invoke-CloudConsoleCheck {
     switch ($ownership.State) {
         'None' {
             if ($null -ne $context -and $null -ne $context.State -and $context.Alive -eq $true -and $context.Matches) {
-                return New-CloudResult 4 '检查' 'check.unhealthy' "状态文件记录的隧道进程在（pid $($context.Pid)），但 18096 无监听。"
+                return New-CloudResult 4 '检查' 'check.unhealthy' "状态文件记录的隧道进程在（pid $($context.Pid)），但 $($script:CloudConsolePort) 无监听。"
             }
-            return New-CloudResult 1 '检查' 'check.absent' '18096 无监听，未发现自建隧道。'
+            return New-CloudResult 1 '检查' 'check.absent' "$($script:CloudConsolePort) 无监听，未发现自建隧道。"
         }
         'Foreign' {
-            return New-CloudResult 3 '检查' 'check.foreign' "18096 被其他程序占用（$($ownership.Detail)）；未结束该进程。"
+            return New-CloudResult 3 '检查' 'check.foreign' "$($script:CloudConsolePort) 被其他程序占用（$($ownership.Detail)）；未结束该进程。"
         }
         'Unconfirmed' {
-            return New-CloudResult 3 '检查' 'check.unconfirmed' "18096 监听归属无法确认（$($ownership.Detail)）；未结束该进程。"
+            return New-CloudResult 3 '检查' 'check.unconfirmed' "$($script:CloudConsolePort) 监听归属无法确认（$($ownership.Detail)）；未结束该进程。"
         }
         'Owned' {
             $health = Invoke-CloudConsoleHealthCheck -Adapter $Adapter -Uri $script:CloudConsoleHealthUrl `
@@ -1486,7 +1530,7 @@ function Invoke-CloudConsoleStop {
             $targetPid = [int]$ownership.Pid
             $targetRoute = $ownership.Route
         } elseif ($ownership.State -eq 'Foreign' -or $ownership.State -eq 'Unconfirmed') {
-            return New-CloudResult 3 '停止' 'stop.foreign' "18096 被其他程序占用（$($ownership.Detail)）；未结束该进程。"
+            return New-CloudResult 3 '停止' 'stop.foreign' "$($script:CloudConsolePort) 被其他程序占用（$($ownership.Detail)）；未结束该进程。"
         }
     }
     if ($targetPid -le 0) {
@@ -1496,16 +1540,16 @@ function Invoke-CloudConsoleStop {
         return New-CloudResult 1 '停止' 'stop.failed' "无法确认待停止隧道（pid $targetPid）的路由；未结束该进程。"
     }
     # Re-read the listener after selecting the target PID: the state file may
-    # point at one of our ssh processes while 18096 is actually owned by another
+    # point at one of our ssh processes while the console port is actually owned by another
     # matching process.  Killing the recorded PID would then report success while
     # the tunnel stays up.
     $ownership = Get-CloudTunnelOwnership -Adapter $Adapter -ConfigPath $targetRoute.ConfigPath `
         -HostAlias $targetRoute.HostAlias -Route $targetRoute.Name
     if ($ownership.State -eq 'Foreign' -or $ownership.State -eq 'Unconfirmed') {
-        return New-CloudResult 3 '停止' 'stop.foreign' "18096 被其他程序占用（$($ownership.Detail)）；未结束该进程。"
+        return New-CloudResult 3 '停止' 'stop.foreign' "$($script:CloudConsolePort) 被其他程序占用（$($ownership.Detail)）；未结束该进程。"
     }
     if ($ownership.State -eq 'Owned' -and [int]$ownership.Pid -ne $targetPid) {
-        return New-CloudResult 3 '停止' 'stop.foreign' "18096 监听属于另一个匹配进程（pid $($ownership.Pid)），不是待停止的 pid $targetPid；未结束该进程。"
+        return New-CloudResult 3 '停止' 'stop.foreign' "$($script:CloudConsolePort) 监听属于另一个匹配进程（pid $($ownership.Pid)），不是待停止的 pid $targetPid；未结束该进程。"
     }
     $stopped = $false
     try { $stopped = [bool](& $Adapter.StopProcess $targetPid) }
@@ -1633,9 +1677,9 @@ function Invoke-CloudConsoleEntry {
                         $result = New-CloudResult 4 '健康' 'open.unhealthy' "自建$($ownership.Route.Name)隧道进程在（pid $($ownership.Pid)），但健康检查失败：$($health.Detail)"
                     }
                 } elseif ($ownership.State -eq 'Foreign') {
-                    $result = New-CloudResult 3 '端口' 'open.foreign' "18096 被其他程序占用（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。"
+                    $result = New-CloudResult 3 '端口' 'open.foreign' "$($script:CloudConsolePort) 被其他程序占用（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。"
                 } elseif ($ownership.State -eq 'Unconfirmed') {
-                    $result = New-CloudResult 3 '端口' 'open.unconfirmed' "18096 监听归属无法确认（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。"
+                    $result = New-CloudResult 3 '端口' 'open.unconfirmed' "$($script:CloudConsolePort) 监听归属无法确认（$($ownership.Detail)）；拒绝冒用，也不会结束该进程。"
                 } else {
                     $result = New-CloudResult 1 '错误' 'open.locked' '另一个入口正在启动隧道，请稍候再试。'
                 }

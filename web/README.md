@@ -1,6 +1,6 @@
 # 网关控制台前端
 
-同一套源码按构建期角色产出两个控制台（[ADR 0001](../docs/adr/0001-one-frontend-two-consoles-build-time-role.md)）：本机控制台管理本机 UM（8000）与控制台宿主（8001），云端控制台管理云端分享 API（18096）。页面使用 TypeScript、Vite 和共享外壳 `src/shell/`，真实数据由各自后端提供。
+同一套源码按构建期角色产出两个控制台（[ADR 0001](../docs/adr/0001-one-frontend-two-consoles-build-time-role.md)）：本机控制台管理本机 UM（8000）与控制台宿主（8001），云端控制台管理云端分享 API（8096）。页面使用 TypeScript、Vite 和共享外壳 `src/shell/`，真实数据由各自后端提供。
 
 ## 开发
 
@@ -9,7 +9,7 @@ npm ci
 npm run dev   # 127.0.0.1:5173
 ```
 
-入口是 `index.html → src/console-entry.ts`，按构建期角色只装入 `src/local/local-console.ts` 或 `src/cloud/cloud-console.ts` 之一。开发服务按本机角色、非候选构建运行；`?console=workbench` 打开旧工作台。开发服务只监听本机。
+入口是 `index.html → src/console-entry.ts`，按构建期角色只装入 `src/local/local-console.ts` 或 `src/cloud/cloud-console.ts` 之一。开发服务按本机角色、非候选构建运行。开发服务只监听本机。
 
 ## 构建
 

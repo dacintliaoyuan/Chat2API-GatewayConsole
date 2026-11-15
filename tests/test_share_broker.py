@@ -7,7 +7,6 @@ unverified); loopback/in-process transports stand in for the offline loop
 and never count as permission evidence.
 """
 import hashlib
-import http.client
 import importlib.util
 import json
 import os
@@ -20,24 +19,25 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chat2api"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import share_broker_protocol as bp  # noqa: E402
-import share_broker_client as bc  # noqa: E402
-from share_broker_client import (BrokerClient,  # noqa: E402
-                                 LoopbackTcpBrokerTransport)
-from share_broker_host import (BrokerHostCoordinator,  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
+from share.broker_client import BrokerClient  # noqa: E402
+from share.broker_host import (BrokerHostCoordinator,  # noqa: E402
                                InstanceRegistry, MaintenanceLeaseStore,
                                ReplayRegistry)
-from share_management import (BrokerClientAdapter, BrokerError,  # noqa: E402
+from share.management import (BrokerClientAdapter, BrokerError,  # noqa: E402
                               NoopBroker, ShareManager)
-from share_runtime import ProtectedProjectionWriter  # noqa: E402
-from share_store import MigrationConflict, ShareStore  # noqa: E402
+from share.runtime import ProtectedProjectionWriter  # noqa: E402
+from share.store import MigrationConflict, ShareStore  # noqa: E402
 
 _SHARE_GW = importlib.util.spec_from_file_location(
-    "share_entry_broker_test",
-    Path(__file__).resolve().parents[1] / "chat2api" / "share_entry.py")
+    "share_auth_broker_test",
+    Path(__file__).resolve().parents[1] / "chat2api" / "share_auth.py")
 share_gw = importlib.util.module_from_spec(_SHARE_GW)
 _SHARE_GW.loader.exec_module(share_gw)
+from _share_instance_double import FakeShareServer as ShareServer  # noqa: E402
 
 _REVOKE_STATE_TMP = None
 _REVOKE_STATE_SAVED = None
@@ -250,7 +250,7 @@ class BrokerClientAdapterHostVerbTests(unittest.TestCase):
         self.assertEqual(client.calls, [("host-stop", {})] * 2)
 
     def test_noop_broker_host_verbs_raise(self):
-        from share_management import NoopBroker
+        from share.management import NoopBroker
         broker = NoopBroker()
         with self.assertRaises(BrokerError):
             broker.host_verify("running")
@@ -299,7 +299,7 @@ class D1ClosedLoopTests(_RuntimeRevokeFixture, unittest.TestCase):
         self.config.write_text(json.dumps(
             {"schema_version": 1, "config_generation": 1, "data": []}),
             encoding="utf-8")
-        self.server = share_gw.ShareServer(("127.0.0.1", 0), self.config)
+        self.server = ShareServer(("127.0.0.1", 0), self.config)
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self._teardown_server)
@@ -560,7 +560,7 @@ class D2LifecycleTests(unittest.TestCase):
             encoding="utf-8")
         self.writer = ProtectedProjectionWriter(
             self.config, acl_checker=lambda p: None)
-        self.server = share_gw.ShareServer(("127.0.0.1", 0), self.config)
+        self.server = ShareServer(("127.0.0.1", 0), self.config)
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self._teardown_server)
@@ -786,7 +786,7 @@ class R29ClosureTests(unittest.TestCase):
             encoding="utf-8")
         self.writer = ProtectedProjectionWriter(
             self.config, acl_checker=lambda p: None)
-        self.server = share_gw.ShareServer(("127.0.0.1", 0), self.config)
+        self.server = ShareServer(("127.0.0.1", 0), self.config)
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self._teardown_server)
@@ -978,7 +978,7 @@ class R31ClosureTests(_RuntimeRevokeFixture, unittest.TestCase):
             encoding="utf-8")
         self.writer = ProtectedProjectionWriter(
             self.config, acl_checker=lambda p: None)
-        self.server = share_gw.ShareServer(("127.0.0.1", 0), self.config)
+        self.server = ShareServer(("127.0.0.1", 0), self.config)
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self._teardown_server)
@@ -1171,7 +1171,7 @@ class R31ClosureTests(_RuntimeRevokeFixture, unittest.TestCase):
                 entered.set()          # 通知：delete 的 load 已到旧实例
                 release.wait(15)       # 扣住返回——等测试换代登记
                 # 旧实例产生成功 ACK 并保存（真实 share 端确认）。
-                from share_broker_protocol import build_request as _build
+                from share.broker_protocol import build_request as _build
                 req = _build(share_secret, action, fields,
                              instance_id=instance_id)
                 resp = self.server.handle_instance_control(req, share_secret)
@@ -1239,701 +1239,6 @@ class R31ClosureTests(_RuntimeRevokeFixture, unittest.TestCase):
         self.assertEqual(self.config.read_text(encoding="utf-8"), on_disk)
 
 
-
-
-class R33PipeTransportTests(unittest.TestCase):
-    """§33 R33-1：NamedPipe 经注入 fake kernel 的完整验收——正常路径
-    （open→write→read→解码成功）、立即完成不误判超时、读/写阻塞分别到
-    期、调用前已过期零写入、失败/取消的关闭次数与放弃状态可观察。"""
-
-    def _transport(self, kernel):
-        t = bc.NamedPipeBrokerTransport(
-            pipe_name=r"\\.\pipe\test-broker", kernel=kernel)
-        t._handle = 0x1000
-        return t
-
-    def test_normal_path_write_read_succeeds(self):
-        # 正常路径：write→read→解码成功；立即完成不得 TimeoutError，
-        # 不触发取消关闭（R33-1 核心验收）。
-        class Kernel:
-            def __init__(self):
-                self.close_calls = 0
-            def CreateFileW(self, *a): return 0x1000
-            def WriteFile(self, h, data, n, written, o):
-                written.contents.value = n
-                return 1
-            def ReadFile(self, h, buf, n, read, overlapped):
-                payload = b'{"v":2,"request_id":"r1","ok":true,' \
-                          b'"error_code":"ok","result":{}}\n'
-                buf[:len(payload)] = payload
-                read.contents.value = len(payload)
-                return 1
-            def CloseHandle(self, h):
-                self.close_calls += 1
-                return 1
-            def GetLastError(self): return 0
-
-        kernel = Kernel()
-        t = self._transport(kernel)
-        deadline = time.monotonic() + 5
-        t.send_all(b'{"x":1}\n', deadline)          # 写不阻塞
-        frame = t.recv_line(deadline)               # 读立即完成
-        self.assertTrue(frame.endswith(b"\n"))
-        self.assertFalse(t._abandoned)              # 正常路径不放弃
-        self.assertEqual(kernel.close_calls, 0)     # 不触发取消关闭
-
-    def test_open_retries_transient_codes_then_succeeds(self):
-        # W2 run20 根因定向：管理 server 每个连接周期释放唯一实例后再重建，
-        # 立即重连会命中 ~1.5ms 零实例窗口（离线实测错误码 2/231）。
-        # open 对 2/231 有界重试并最终成功；重试发生在建连之前（R44-1）。
-        cls = bc.NamedPipeBrokerTransport
-        saved = (cls._OPEN_RETRY_BASE_DELAY, cls._OPEN_RETRY_MAX_DELAY)
-        cls._OPEN_RETRY_BASE_DELAY = 0.0
-        cls._OPEN_RETRY_MAX_DELAY = 0.0
-        try:
-            class TransientKernel:
-                def __init__(self):
-                    self.create_calls = 0
-                    self.codes = [231, 3, 2]
-                    self.last = 0
-                def CreateFileW(self, *a):
-                    self.create_calls += 1
-                    if self.codes:
-                        self.last = self.codes.pop(0)
-                        return 0xFFFFFFFFFFFFFFFF
-                    return 0x1000
-                def GetLastError(self):
-                    return self.last
-
-            kernel = TransientKernel()
-            t = bc.NamedPipeBrokerTransport(
-                pipe_name=r"\\.\pipe\test-broker", kernel=kernel)
-            self.assertIs(t.open(), t)
-            self.assertEqual(t._handle, 0x1000)
-            self.assertEqual(kernel.create_calls, 4)   # 败、败、败、成
-        finally:
-            cls._OPEN_RETRY_BASE_DELAY, cls._OPEN_RETRY_MAX_DELAY = saved
-
-    def test_open_never_retries_non_transient_codes(self):
-        # ACCESS_DENIED 等 DACL 语义失败必须立即拒绝，不得重试成假成功。
-        class DeniedKernel:
-            def __init__(self):
-                self.create_calls = 0
-            def CreateFileW(self, *a):
-                self.create_calls += 1
-                return 0xFFFFFFFFFFFFFFFF
-            def GetLastError(self): return 5
-
-        kernel = DeniedKernel()
-        t = bc.NamedPipeBrokerTransport(
-            pipe_name=r"\\.\pipe\test-broker", kernel=kernel)
-        with self.assertRaises(OSError):
-            t.open()
-        self.assertEqual(kernel.create_calls, 1)
-
-    def test_write_retries_transient_not_connected_then_succeeds(self):
-        # R48-1 定向：单实例 server 在周期切换时释放旧实例，客户端
-        # CreateFileW 已成功但 write 命中 233（连接排队未完成/实例已释放）。
-        # write 遇 233 有界重连并整帧重发；重连后成功。R44-1 保持：
-        # 一次交换最终通过一次成功连接完成。
-        class Kernel:
-            def __init__(self):
-                self.writes = 0
-                self.closes = 0
-                self.creates = 1
-            def CreateFileW(self, *a):
-                self.creates += 1
-                return 0x1000
-            def WriteFile(self, h, data, n, written, o):
-                self.writes += 1
-                if self.writes == 1:
-                    written.contents.value = 0
-                    return 0
-                written.contents.value = n
-                return 1
-            def ReadFile(self, h, buf, n, read, o):
-                payload = (b'{"v":2,"request_id":"r1","ok":true,'
-                           b'"error_code":"ok","result":{}}\n')
-                buf[:len(payload)] = payload
-                read.contents.value = len(payload)
-                return 1
-            def CloseHandle(self, h):
-                self.closes += 1
-                return 1
-            def GetLastError(self):
-                return 233
-
-        kernel = Kernel()
-        t = self._transport(kernel)
-        t._allow_reconnect = True       # owned：由 BrokerClient.call 置位
-        deadline = time.monotonic() + 5
-        t.send_all(b'{"x":1}\n', deadline)
-        frame = t.recv_line(deadline)
-        self.assertTrue(frame.endswith(b"\n"))
-        self.assertEqual(kernel.writes, 2)      # 败、重连后成
-        self.assertGreaterEqual(kernel.closes, 1)
-        self.assertGreaterEqual(kernel.creates, 2)
-        self.assertFalse(t._abandoned)          # 正常路径不放弃
-
-    def test_write_retry_budget_is_bounded(self):
-        # R48-1：持续 233 时预算耗尽后仍按原语义 OSError（不伪装成功、
-        # 不换错误消息、不无限重连）。
-        cls = bc.NamedPipeBrokerTransport
-
-        class AlwaysNotConnectedKernel:
-            def __init__(self):
-                self.creates = 0
-                self.writes = 0
-            def CreateFileW(self, *a):
-                self.creates += 1
-                return 0x1000
-            def WriteFile(self, h, data, n, written, o):
-                self.writes += 1
-                written.contents.value = 0
-                return 0
-            def CloseHandle(self, h):
-                return 1
-            def GetLastError(self):
-                return 233
-
-        kernel = AlwaysNotConnectedKernel()
-        t = self._transport(kernel)
-        t._allow_reconnect = True       # owned：由 BrokerClient.call 置位
-        with self.assertRaises(OSError):
-            t.send_all(b'{"x":1}\n', time.monotonic() + 5)
-        # 首次 open(helper 已建) + 每次重连新建连接,预算耗尽后拒绝。
-        # 字面量断言,不随常量调整自动跟随。WriteFile 次数=首次+重试各一次。
-        self.assertEqual(kernel.creates, 2)
-        self.assertEqual(kernel.writes, 3)
-
-    def test_write_retry_skipped_for_non_owned_transport(self):
-        # R48-1 code-review A：caller-owned（身份已验证）transport 不得重连
-        # ——重连会关掉已验证句柄并新建未验证连接，绕过 R41-2。默认
-        # (_allow_reconnect=False) 遇 233 保持原拒绝语义：无重连、不新建连接。
-        class Kernel:
-            def __init__(self):
-                self.creates = 0
-                self.writes = 0
-            def CreateFileW(self, *a):
-                self.creates += 1
-                return 0x1000
-            def WriteFile(self, h, data, n, written, o):
-                self.writes += 1
-                written.contents.value = 0
-                return 0
-            def CloseHandle(self, h):
-                return 1
-            def GetLastError(self):
-                return 233
-
-        kernel = Kernel()
-        t = self._transport(kernel)      # 默认为非 owned：不重连
-        with self.assertRaises(OSError):
-            t.send_all(b'{"x":1}\n', time.monotonic() + 5)
-        self.assertEqual(kernel.writes, 1)     # 仅一次，不重连
-        self.assertEqual(kernel.creates, 0)    # helper 预置句柄，无重开
-
-    def test_write_retry_resends_whole_frame_after_partial(self):
-        # R48-1 code-review B：部分写入后瞬态失败（长帧分块）重连必须整帧
-        # 重发，不能只发残余段导致协议截断。
-        received = []
-
-        class Kernel:
-            def __init__(self):
-                self.writes = 0
-                self.creates = 0
-            def CreateFileW(self, *a):
-                self.creates += 1
-                return 0x1000
-            def WriteFile(self, h, data, n, written, o):
-                self.writes += 1
-                received.append(bytes(data[:n]))
-                if self.writes == 1:
-                    written.contents.value = 2    # 首块部分成功
-                    return 1
-                if self.writes == 2:
-                    written.contents.value = 0    # 残余块命中 233
-                    return 0
-                written.contents.value = n        # 重连后整帧重写
-                return 1
-            def CloseHandle(self, h):
-                return 1
-            def GetLastError(self):
-                return 233
-
-        kernel = Kernel()
-        t = self._transport(kernel)
-        t._allow_reconnect = True                # owned 场景
-        payload = b'{"very":"long",' + b'x' * 60 + b'}\n'
-        t.send_all(payload, time.monotonic() + 5)
-        self.assertEqual(kernel.writes, 3)
-        self.assertEqual(len(received[0]), len(payload))   # 首块请求整帧
-        self.assertEqual(len(received[1]), len(payload) - 2)  # 残余块
-        self.assertEqual(received[2], payload)   # 重连后从数据头整帧重发
-
-    def test_write_retry_handles_109_and_232_codes(self):
-        # R48-1：109/232 与 233 同为瞬态断连错误，owned 连接均重连后成功。
-        def make_kernel(code):
-            class Kernel:
-                def __init__(self):
-                    self.writes = 0
-                    self.creates = 0
-                def CreateFileW(self, *a):
-                    self.creates += 1
-                    return 0x1000
-                def WriteFile(self, h, data, n, written, o):
-                    self.writes += 1
-                    if self.writes == 1:
-                        written.contents.value = 0
-                        return 0
-                    written.contents.value = n
-                    return 1
-                def CloseHandle(self, h):
-                    return 1
-                def GetLastError(self):
-                    return code
-            return Kernel
-
-        for code in (109, 232):
-            kernel = make_kernel(code)()
-            t = self._transport(kernel)
-            t._allow_reconnect = True
-            t.send_all(b'{"x":1}\n', time.monotonic() + 5)
-            self.assertEqual(kernel.writes, 2)
-            self.assertGreaterEqual(kernel.creates, 1)
-
-    def test_write_never_retries_non_transient_code(self):
-        # R48-1：写路径 ACCESS_DENIED 等失败立即拒绝（与 open 语义一致），
-        # 不把 DACL 拒绝重试成假成功。
-        class Kernel:
-            def __init__(self):
-                self.writes = 0
-                self.creates = 0
-            def CreateFileW(self, *a):
-                self.creates += 1
-                return 0x1000
-            def WriteFile(self, h, data, n, written, o):
-                self.writes += 1
-                written.contents.value = 0
-                return 0
-            def CloseHandle(self, h):
-                return 1
-            def GetLastError(self):
-                return 5
-
-        kernel = Kernel()
-        t = self._transport(kernel)
-        t._allow_reconnect = True
-        with self.assertRaises(OSError):
-            t.send_all(b'{"x":1}\n', time.monotonic() + 5)
-        self.assertEqual(kernel.writes, 1)
-        self.assertEqual(kernel.creates, 0)
-
-    def test_open_retry_budget_is_bounded(self):
-        # 持续 231：预算耗尽后按原语义报 OSError（不换消息、不伪装成功）。
-        cls = bc.NamedPipeBrokerTransport
-        saved = (cls._OPEN_RETRY_SECONDS, cls._OPEN_RETRY_BASE_DELAY)
-        cls._OPEN_RETRY_SECONDS = 0.03
-        cls._OPEN_RETRY_BASE_DELAY = 0.0
-        try:
-            class AlwaysBusyKernel:
-                def CreateFileW(self, *a): return 0xFFFFFFFFFFFFFFFF
-                def GetLastError(self): return 231
-
-            t = bc.NamedPipeBrokerTransport(
-                pipe_name=r"\\.\pipe\test-broker", kernel=AlwaysBusyKernel())
-            with self.assertRaises(OSError):
-                t.open()
-        finally:
-            cls._OPEN_RETRY_SECONDS, cls._OPEN_RETRY_BASE_DELAY = saved
-
-    def test_open_fake_kernel_without_getlasterror_fails_fast(self):
-        # 无 GetLastError 的 fake kernel：错误码按 0 处理 → 立即拒绝，
-        # 不得进入重试循环（兼容既有离线 fake 注入面）。
-        class MuteInvalidKernel:
-            def CreateFileW(self, *a): return 0xFFFFFFFFFFFFFFFF
-
-        t = bc.NamedPipeBrokerTransport(
-            pipe_name=r"\\.\pipe\test-broker", kernel=MuteInvalidKernel())
-        with self.assertRaises(OSError):
-            t.open()
-
-    def test_read_blocked_expires_and_abandons(self):
-        # 读阻塞到期：句柄释放、transport 标记放弃、TimeoutError。
-        class BlockingKernel:
-            def __init__(self):
-                self.close_calls = 0
-                self.release = threading.Event()
-            def ReadFile(self, h, buf, n, read, overlapped):
-                self.release.wait(10)        # 模拟阻塞
-                return 1
-            def WriteFile(self, *a): return 1
-            def CloseHandle(self, h):
-                self.close_calls += 1
-                self.release.set()           # CloseHandle 释放阻塞（D4 验证）
-                return 1
-            def GetLastError(self): return 0
-
-        kernel = BlockingKernel()
-        t = self._transport(kernel)
-        deadline = time.monotonic() + 0.3
-        with self.assertRaises(TimeoutError):
-            t.recv_line(deadline)
-        self.assertTrue(t._abandoned)
-        self.assertEqual(kernel.close_calls, 1)
-        self.assertIsNone(t._handle)
-
-    def test_write_blocked_expires_and_abandons(self):
-        # 写阻塞到期：TimeoutError + 放弃标记 + 取消关闭。
-        class BlockingWriteKernel:
-            def __init__(self):
-                self.close_calls = 0
-            def ReadFile(self, *a): return 1
-            def WriteFile(self, h, data, n, written, overlapped):
-                time.sleep(10)               # 模拟阻塞
-                return 1
-            def CloseHandle(self, h):
-                self.close_calls += 1
-                return 1
-            def GetLastError(self): return 0
-
-        kernel = BlockingWriteKernel()
-        t = self._transport(kernel)
-        deadline = time.monotonic() + 0.3
-        with self.assertRaises(TimeoutError):
-            t.send_all(b'{"x":1}\n', deadline)
-        self.assertTrue(t._abandoned)
-        self.assertEqual(kernel.close_calls, 1)
-
-    def test_already_expired_performs_zero_io(self):
-        # 调用前已过期：零 I/O（worker 不启动），立即 TimeoutError。
-        class NoIoKernel:
-            def __init__(self):
-                self.read_calls = 0
-                self.write_calls = 0
-            def ReadFile(self, *a):
-                self.read_calls += 1
-                return 1
-            def WriteFile(self, *a):
-                self.write_calls += 1
-                return 1
-            def CloseHandle(self, h): return 1
-            def GetLastError(self): return 0
-            def CreateFileW(self, *a): return 0x1000
-
-        kernel = NoIoKernel()
-        t = self._transport(kernel)
-        expired = time.monotonic() - 1
-        saved_reserved = bc.NamedPipeBrokerTransport._reserved_worker_slots
-        with self.assertRaises(TimeoutError):
-            t.send_all(b'{"x":1}\n', expired)
-        with self.assertRaises(TimeoutError):
-            t.recv_line(expired)
-        self.assertEqual(kernel.read_calls, 0)
-        self.assertEqual(kernel.write_calls, 0)   # 零副作用
-        # R37：预过期在预留之前拒绝，不消耗额度。
-        self.assertEqual(bc.NamedPipeBrokerTransport._reserved_worker_slots,
-                         saved_reserved)
-
-    def test_client_full_exchange_succeeds_over_fake_kernel(self):
-        # 完整 BrokerClient→NamedPipe（注入 fake kernel）open→write→read
-        # →解码成功：正常路径不再必失败（R33-1 核心验收）。
-        from share_broker_client import BrokerClient
-
-        class EchoKernel:
-            def __init__(self):
-                self.frames = []
-                self.close_calls = 0
-            def WriteFile(self, h, data, n, written, overlapped):
-                self.frames.append(bytes(data[:n]))
-                written.contents.value = n
-                return 1
-            def ReadFile(self, h, buf, n, read, overlapped):
-                req = json.loads(self.frames[-1].decode("utf-8"))
-                resp = {"v": 2, "request_id": req["request_id"], "ok": True,
-                        "error_code": "ok", "result": {"echo": req["action"]}}
-                payload = (json.dumps(resp) + "\n").encode("utf-8")
-                buf[:len(payload)] = payload
-                read.contents.value = len(payload)
-                return 1
-            def CloseHandle(self, h):
-                self.close_calls += 1
-                return 1
-            def GetLastError(self): return 0
-            def CreateFileW(self, *a): return 0x1000
-
-        kernel = EchoKernel()
-        t = self._transport(kernel)
-        client = BrokerClient(lambda: t, "echo-secret")
-        res = client.status()
-        self.assertTrue(res.ok, res)
-        self.assertEqual(res.result["echo"], "status")
-        self.assertEqual(len(kernel.frames), 1)   # 一次 exchange 一帧
-
-    def test_cancelled_write_late_success_never_issues_second_chunk(self):
-        # R35-1：首块阻塞→超时放弃→释放首块→迟到成功（部分写入）→
-        # 断言不再发第二块 WriteFile；worker 在有界窗口内确认退出。
-        class ChunkedBlockingWriteKernel:
-            def __init__(self):
-                self.write_calls = 0
-                self.release = threading.Event()
-            def WriteFile(self, h, data, n, written, overlapped):
-                self.write_calls += 1
-                if self.write_calls == 1:
-                    self.release.wait(30)      # 首块阻塞
-                written.contents.value = 1     # 迟到成功：仅 1 字节
-                return 1
-            def ReadFile(self, *a): return 1
-            def CloseHandle(self, h):
-                self.release.set()             # 取消关闭释放阻塞调用
-                return 1
-            def GetLastError(self): return 0
-
-        kernel = ChunkedBlockingWriteKernel()
-        t = self._transport(kernel)
-        with self.assertRaises(TimeoutError):
-            t.send_all(b'{"x":1234567}\n', time.monotonic() + 0.3)
-        self.assertTrue(t._abandoned)
-        self.assertEqual(kernel.write_calls, 1)          # 未发第二块
-        self.assertEqual(t.abandoned_workers_reaped, 1)  # worker 终态已确认
-        self.assertEqual(t.abandoned_workers_unreaped, 0)
-
-    def test_cancelled_read_late_success_never_issues_second_chunk(self):
-        # R35-1：读首块阻塞→超时放弃→释放首块→迟到成功（1 字节、无换行）
-        # →断言不再发第二块 ReadFile；worker 终态已确认。
-        class ChunkedBlockingReadKernel:
-            def __init__(self):
-                self.read_calls = 0
-                self.release = threading.Event()
-            def ReadFile(self, h, buf, n, read, overlapped):
-                self.read_calls += 1
-                if self.read_calls == 1:
-                    self.release.wait(30)      # 首块阻塞
-                buf[0:1] = b"x"                # 迟到成功：1 字节、无换行
-                read.contents.value = 1
-                return 1
-            def CloseHandle(self, h):
-                self.release.set()
-                return 1
-            def GetLastError(self): return 0
-
-        kernel = ChunkedBlockingReadKernel()
-        t = self._transport(kernel)
-        with self.assertRaises(TimeoutError):
-            t.recv_line(time.monotonic() + 0.3)
-        self.assertTrue(t._abandoned)
-        self.assertEqual(kernel.read_calls, 1)           # 未发第二块
-        self.assertEqual(t.abandoned_workers_reaped, 1)
-        self.assertEqual(t.abandoned_workers_unreaped, 0)
-
-    def test_normal_multi_chunk_write_and_read_complete(self):
-        # R35-1：正常多块写/读完整完成——每块前的取消检查不影响正常路径。
-        class ChunkedKernel:
-            def __init__(self):
-                self.write_calls = 0
-                self.read_calls = 0
-                self.close_calls = 0
-            def WriteFile(self, h, data, n, written, overlapped):
-                self.write_calls += 1
-                written.contents.value = min(3, n)
-                return 1
-            def ReadFile(self, h, buf, n, read, overlapped):
-                self.read_calls += 1
-                payload = b"abc" if self.read_calls < 2 else b"def\n"
-                buf[:len(payload)] = payload
-                read.contents.value = len(payload)
-                return 1
-            def CloseHandle(self, h):
-                self.close_calls += 1
-                return 1
-            def GetLastError(self): return 0
-
-        kernel = ChunkedKernel()
-        t = self._transport(kernel)
-        deadline = time.monotonic() + 5
-        self.assertEqual(t.send_all(b"0123456789", deadline), 10)
-        self.assertEqual(kernel.write_calls, 4)          # 3+3+3+1
-        self.assertEqual(t.recv_line(deadline), b"abcdef\n")
-        self.assertEqual(kernel.read_calls, 2)
-        self.assertFalse(t._abandoned)
-        self.assertEqual(kernel.close_calls, 0)
-
-    def test_unblocked_fake_worker_is_not_claimed_reaped(self):
-        # R35-1：不解除阻塞的 fake（CloseHandle 不释放阻塞）不得声称已
-        # 回收——unreaped 计数 +1、reaped 为 0，进程级计数相应增加。
-        class StuckKernel:
-            def __init__(self):
-                self.read_calls = 0
-                self.close_calls = 0
-                self.never = threading.Event()   # 从不 set：worker 无法退出
-            def ReadFile(self, h, buf, n, read, overlapped):
-                self.read_calls += 1
-                self.never.wait(30)              # 守护线程滞留有上限
-                return 1
-            def CloseHandle(self, h):
-                self.close_calls += 1            # 不释放阻塞（D4 反例 fake）
-                return 1
-            def GetLastError(self): return 0
-
-        cls = bc.NamedPipeBrokerTransport
-        saved_count = cls._unreaped_abandoned
-        saved_reserved = cls._reserved_worker_slots
-        kernel = StuckKernel()
-        t = self._transport(kernel)
-        with self.assertRaises(TimeoutError):
-            t.recv_line(time.monotonic() + 0.3)
-        self.assertTrue(t._abandoned)
-        self.assertEqual(kernel.close_calls, 1)
-        self.assertEqual(t.abandoned_workers_reaped, 0)
-        self.assertEqual(t.abandoned_workers_unreaped, 1)
-        self.assertEqual(cls._unreaped_abandoned, saved_count + 1)
-        # R37：退出未确认 → 预留额度转为永久占位（reserved 回到进入前
-        # 值，占位由 unreaped 计数持续承担，此后不回收）。
-        self.assertEqual(cls._reserved_worker_slots, saved_reserved)
-
-    def test_admission_refused_at_unreaped_cap(self):
-        # R35-1：无法确认退出的 worker 计入有界上限；达到上限后新
-        # exchange 在启动 worker 前被拒绝（零 I/O、零关闭）。
-        cls = bc.NamedPipeBrokerTransport
-        saved_cap = cls._MAX_UNREAPED_ABANDONED_WORKERS
-        saved_count = cls._unreaped_abandoned
-        cls._MAX_UNREAPED_ABANDONED_WORKERS = 0
-        cls._unreaped_abandoned = 0
-        try:
-            class CountingKernel:
-                def __init__(self):
-                    self.read_calls = 0
-                    self.write_calls = 0
-                    self.close_calls = 0
-                def ReadFile(self, *a):
-                    self.read_calls += 1
-                    return 1
-                def WriteFile(self, *a):
-                    self.write_calls += 1
-                    return 1
-                def CloseHandle(self, h):
-                    self.close_calls += 1
-                    return 1
-                def GetLastError(self): return 0
-
-            kernel = CountingKernel()
-            t = self._transport(kernel)
-            with self.assertRaises(OSError) as ctx:
-                t.recv_line(time.monotonic() + 5)
-            self.assertIn("admission refused", str(ctx.exception))
-            with self.assertRaises(OSError):
-                t.send_all(b'{"x":1}\n', time.monotonic() + 5)
-            self.assertEqual(kernel.read_calls, 0)   # worker 未启动
-            self.assertEqual(kernel.write_calls, 0)
-            self.assertEqual(kernel.close_calls, 0)
-            self.assertFalse(t._abandoned)
-            # R37：拒绝发生在占用之前——额度未被消耗。
-            self.assertEqual(cls._reserved_worker_slots, 0)
-        finally:
-            cls._MAX_UNREAPED_ABANDONED_WORKERS = saved_cap
-            cls._unreaped_abandoned = saved_count
-
-    def test_concurrent_exchanges_cannot_exceed_worker_cap(self):
-        # R37 定向：额度在 worker 启动前原子占用——cap=2 时屏障并发启动
-        # 3 个调用（fake 首块保持阻塞），恰有 2 个进入 I/O，第 3 个被拒且
-        # 零 I/O；确认退出释放额度后，新 exchange 可再次取得额度。
-        cls = bc.NamedPipeBrokerTransport
-        saved = (cls._MAX_UNREAPED_ABANDONED_WORKERS,
-                 cls._unreaped_abandoned, cls._reserved_worker_slots)
-        cls._MAX_UNREAPED_ABANDONED_WORKERS = 2
-        cls._unreaped_abandoned = 0
-        cls._reserved_worker_slots = 0
-        try:
-            class GatedKernel:
-                def __init__(self):
-                    self.read_calls = 0
-                    self.gate = threading.Event()
-                def ReadFile(self, h, buf, n, read, overlapped):
-                    self.read_calls += 1
-                    self.gate.wait(30)         # 首块阻塞
-                    payload = (b'{"v":2,"request_id":"r","ok":true,'
-                               b'"error_code":"ok","result":{}}\n')
-                    buf[:len(payload)] = payload
-                    read.contents.value = len(payload)
-                    return 1
-                def CloseHandle(self, h): return 1
-                def GetLastError(self): return 0
-
-            kernels = [GatedKernel() for _ in range(3)]
-            transports = [self._transport(k) for k in kernels]
-            barrier = threading.Barrier(3)
-            outcomes = [None, None, None]
-
-            def reader(idx):
-                t = transports[idx]
-                barrier.wait(5)
-                try:
-                    outcomes[idx] = {"frame": t.recv_line(
-                        time.monotonic() + 10)}
-                except BaseException as exc:  # noqa: BLE001
-                    outcomes[idx] = {"err": exc}
-
-            threads = [threading.Thread(target=reader, args=(i,))
-                       for i in range(3)]
-            for t in threads:
-                t.start()
-            try:
-                # 等待收敛：恰有 cap 个 worker 进入 I/O，超额者已被拒。
-                deadline_wait = time.monotonic() + 5
-                while True:
-                    refused = [o for o in outcomes if o and "err" in o]
-                    started = sum(k.read_calls for k in kernels)
-                    if started == 2 and len(refused) == 1:
-                        break
-                    if time.monotonic() > deadline_wait:
-                        self.fail("concurrency not converged: "
-                                  f"started={started} "
-                                  f"refused={len(refused)}")
-                    time.sleep(0.01)
-                refused_idx = outcomes.index(refused[0])
-                self.assertIn("admission refused", str(refused[0]["err"]))
-                # 超额者在其启动 worker 前被拒：零 I/O、不放弃。
-                self.assertEqual(kernels[refused_idx].read_calls, 0)
-                self.assertFalse(transports[refused_idx]._abandoned)
-            finally:
-                for k in kernels:
-                    k.gate.set()
-            for t in threads:
-                t.join(15)
-            # 两个 worker 均确认退出 → 额度全部释放。
-            self.assertEqual(cls._reserved_worker_slots, 0)
-            # 释放后额度可再次取得：立即完成的 exchange 正常通过。
-            kernel_c = GatedKernel()
-            kernel_c.gate.set()
-            t4 = self._transport(kernel_c)
-            frame = t4.recv_line(time.monotonic() + 5)
-            self.assertTrue(frame.endswith(b"\n"))
-            self.assertEqual(cls._reserved_worker_slots, 0)
-        finally:
-            (cls._MAX_UNREAPED_ABANDONED_WORKERS,
-             cls._unreaped_abandoned,
-             cls._reserved_worker_slots) = saved
-
-    def test_worker_start_failure_releases_slot(self):
-        # R37：worker.start 失败不得泄漏已预留额度（预留后立即释放）。
-        from unittest import mock
-        cls = bc.NamedPipeBrokerTransport
-        saved_reserved = cls._reserved_worker_slots
-
-        class NoIoKernel:
-            def ReadFile(self, *a): return 1
-            def WriteFile(self, *a): return 1
-            def CloseHandle(self, h): return 1
-            def GetLastError(self): return 0
-
-        kernel = NoIoKernel()
-        t = self._transport(kernel)
-        with mock.patch.object(threading.Thread, "start",
-                               side_effect=RuntimeError("start failed")):
-            with self.assertRaises(RuntimeError):
-                t.recv_line(time.monotonic() + 5)
-        self.assertEqual(cls._reserved_worker_slots, saved_reserved)
-        self.assertFalse(t._abandoned)
 
 
 class TsServiceControlProtocolTests(unittest.TestCase):
@@ -2267,7 +1572,6 @@ class MaintenanceProtocolTests(unittest.TestCase):
         self.assertEqual(bp.HOST_EVIDENCE_CHECKS,
                          frozenset(("limits", "faults", "watchdog")))
         self.assertEqual(bp.COMPONENT_SHARE_GATEWAY, "share_gateway")
-        self.assertEqual(bp.COMPONENT_SHARE_BACKEND, "share_backend")
         self.assertEqual(bp.MAINTENANCE_COMPONENTS,
                          frozenset(("share_gateway",)))
         self.assertEqual(bp.GATEWAY_RESTART_COMPONENTS,
@@ -2657,7 +1961,7 @@ class MaintenanceCoordinatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "clients.json"
             config.write_text(json.dumps({"clients": {}}), encoding="utf-8")
-            server = share_gw.ShareServer(("127.0.0.1", 0), config)
+            server = ShareServer(("127.0.0.1", 0), config)
             self.addCleanup(server.server_close)
             secret = "inst-e2e"
             instance_id = server.instance_id
@@ -3262,7 +2566,7 @@ class CloseBudgetAlignmentTests(unittest.TestCase):
 
     def test_the_coordinator_defaults_are_the_shared_protocol_budgets(self):
         # 直接构造协调端时，默认值也来自同一份协议常量（不是各写一份数字）
-        import share_broker_host
+        import share.broker_host as share_broker_host
         coordinator = share_broker_host.BrokerHostCoordinator(
             writer=SimpleNamespace(write=lambda *a, **k: None),
             mgmt_secret="mgmt-k", instance_secret="inst-k",

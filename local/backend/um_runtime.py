@@ -28,7 +28,6 @@ import json
 import os
 import socket
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -42,7 +41,7 @@ class UmRuntimeError(RuntimeError):
 def _read_control_token(path):
     """Read the child control token; any failure returns None (deny)."""
     try:
-        from share_secret_protection import read_private_secret_path
+        from share.secret_protection import read_private_secret_path
         raw = read_private_secret_path(path, max_bytes=1024,
                                        label="control token")
         value = raw.decode("utf-8").strip()
@@ -79,10 +78,8 @@ def _port_is_listening(host, port):
 class UmRuntime:
     """Start/stop/status the in-package chat2api child process."""
 
-    def __init__(self, config, *, price_file=None, popen=None,
-                 clock=time.monotonic):
+    def __init__(self, config, *, popen=None, clock=time.monotonic):
         self.config = config
-        self.price_file = price_file
         self._popen = popen or subprocess.Popen
         self._clock = clock
         self._process = None
@@ -110,7 +107,7 @@ class UmRuntime:
 
         ``UmRuntimeConfig.home_dir`` is required and validated to equal or live
         under ``LocalConfig.home_dir``; deriving the child HOME from the profile
-        path instead would place ``~/.dsh``/``~/.zcode``/temp wherever the
+        path instead would place client config dirs/temp wherever the
         operator happened to put the profile.
         """
         return os.path.abspath(self.config.home_dir)
@@ -140,8 +137,6 @@ class UmRuntime:
             "CHAT2API_USAGE_LOG": self.config.usage_log,
             "CHAT2API_CONTROL_TOKEN_FILE": self.config.control_token_file,
             "CHAT2API_REAUTH_SLOT_FILE": self.config.reauth_slot_file,
-            "CHAT2API_PRICE_TABLE_FILE": self.price_file or os.path.join(
-                home, "prices.json"),
             # The private role never verifies a share marker; pointing the
             # attribution key at the isolated home keeps even a crafted marker
             # from reading the production key file.
@@ -150,7 +145,7 @@ class UmRuntime:
             "SHARE_ATTRIBUTION_KEY_FILE": os.path.join(
                 home, "share-attribution.key"),
             # Explicitly NOT the share backend: the local runtime must not load
-            # share_entry/share_dispatch (E19-1-02).
+            # share_entry (E19-1-02).
             "CHAT2API_SHARE_BACKEND": "0",
             "CHAT2API_MAX_REQUEST_SECONDS": str(self.config.request_max_s),
             "CHAT2API_AUTH_WAIT_BUDGET_S": str(

@@ -178,41 +178,18 @@ export class FixtureTransport implements Transport {
 // replaced by one.
 export const FIXTURE_CONNECTION_KEY = "fixture-connection-key-not-real";
 
-export const FIXTURE_CONNECTION_STATES: readonly ConnectionKeyState[] = [
-  "present",
+/** The fixture models only the one honest state the retained chat2api read
+ *  face can produce; the full ConnectionKeyState remains the backend contract. */
+export type FixtureConnectionKeyState = "absent";
+
+export const FIXTURE_CONNECTION_STATES: readonly FixtureConnectionKeyState[] = [
   "absent",
-  "needs_key_unconfigured",
-  "unreadable",
-  "unknown",
 ];
 
-/** One synthetic read-face payload per honest key state, matching the Python shape. */
+/** One synthetic read-face payload per key state the fixture models, matching the Python shape. */
 export const FIXTURE_CONNECTION_BODIES: Readonly<
-  Record<ConnectionKeyState, JsonObject>
+  Record<FixtureConnectionKeyState, JsonObject>
 > = Object.freeze({
-  present: {
-    ok: true,
-    service: "Qoder",
-    display_name: "Qoder（国内）",
-    port: 8095,
-    health_path: "/health",
-    health_path_source: "descriptor",
-    base_url: "http://127.0.0.1:8095/v1",
-    protocol: "openai-compatible",
-    protocol_path: "/v1",
-    runtime_state: "Running",
-    runtime_healthy: true,
-    auth: "bearer",
-    key_state: "present",
-    key_plaintext: FIXTURE_CONNECTION_KEY,
-    key_source: "<fixture>/data/qoder-cn-api-token",
-    key_source_state: "present",
-    key_in_use: "per_request",
-    reason:
-      "合成夹具：权威文件可读且非空；网关每请求重读该文件（qoder-cn/server.mjs:66 ensureApiToken），该文件值即实例当前使用的凭据",
-    evidence: ["合成夹具：Key 读取路径 <fixture>/data/qoder-cn-api-token"],
-    checked_epoch: 1790920800,
-  },
   absent: {
     ok: true,
     service: "chat2api",
@@ -237,108 +214,17 @@ export const FIXTURE_CONNECTION_BODIES: Readonly<
     evidence: ["合成夹具：回环绑定", "合成夹具：启动路径未设置该变量"],
     checked_epoch: 1790920800,
   },
-  needs_key_unconfigured: {
-    ok: true,
-    service: "QoderGlobal",
-    display_name: "Qoder（国际）",
-    port: 8097,
-    health_path: "/health",
-    health_path_source: "descriptor",
-    base_url: "http://127.0.0.1:8097/v1",
-    protocol: "openai-compatible",
-    protocol_path: "/v1",
-    runtime_state: "Stopped",
-    runtime_healthy: false,
-    auth: "bearer",
-    key_state: "needs_key_unconfigured",
-    key_plaintext: null,
-    key_source: "<fixture>/data/qoder-global-api-token",
-    key_source_state: "absent",
-    key_in_use: "startup_env",
-    reason:
-      "合成夹具：实例启动脚本把该文件读入 QODER2API_SK，启动后文件变更可能不生效（这是配置文件值）；该网关的 /v1 需要调用 Key，但权威文件缺席或为空：配置缺失，不能表示可免鉴权",
-    evidence: ["合成夹具：Key 读取路径 <fixture>/data/qoder-global-api-token"],
-    checked_epoch: 1790920800,
-  },
-  unreadable: {
-    ok: true,
-    service: "CLIProxy",
-    display_name: "Gemini 网关",
-    port: 8320,
-    health_path: "/healthz",
-    health_path_source: "descriptor",
-    base_url: "http://127.0.0.1:8320/v1",
-    protocol: "openai-compatible",
-    protocol_path: "/v1",
-    alternate_protocols: [
-      {
-        protocol: "gemini-native",
-        path: "/v1beta",
-        note: "合成夹具：同一网关的另一协议面，既有消费方未使用、鉴权口径未验证",
-      },
-    ],
-    runtime_state: "Stopped",
-    runtime_healthy: false,
-    auth: "bearer",
-    key_state: "unreadable",
-    key_plaintext: null,
-    key_source: "<fixture>/cliproxy/gateway-api-key.txt",
-    key_source_state: "unreadable",
-    key_in_use: "config_consumed",
-    reason:
-      "合成夹具：权威文件存在但读取失败（合成错误）：不返回猜测值，也不表示可免鉴权",
-    evidence: ["合成夹具：Key 读取路径 <fixture>/cliproxy/gateway-api-key.txt"],
-    checked_epoch: 1790920800,
-  },
-  unknown: {
-    ok: true,
-    service: "Qoder",
-    display_name: null,
-    port: null,
-    health_path: "/health",
-    health_path_source: "descriptor",
-    base_url: null,
-    protocol: "openai-compatible",
-    protocol_path: "/v1",
-    runtime_state: null,
-    runtime_healthy: null,
-    auth: "unknown",
-    key_state: "unknown",
-    key_plaintext: null,
-    key_source: null,
-    key_source_state: "unknown",
-    key_in_use: "unknown",
-    reason:
-      "合成夹具：runtime 快照不可用或缺少该服务条目；端口与 Base URL 不从显示名或描述符猜算",
-    evidence: ["合成夹具：runtime 快照不可用"],
-    checked_epoch: 1790920800,
-  },
 });
 
-/** A cloned synthetic payload; `overrides` lets a case build a deliberately
- *  malformed or foreign-identity body without mutating the shared fixture. */
 export function gatewayConnectionFixtureBody(
   state: ConnectionKeyState,
   overrides: JsonObject = {}
 ): JsonObject {
-  const base = FIXTURE_CONNECTION_BODIES[state];
+  const base =
+    state === "absent" ? FIXTURE_CONNECTION_BODIES[state] : undefined;
   if (!base) throw new ContractError("unknown connection fixture state");
   return { ...clone(base), ...clone(overrides) };
 }
-
-/** The other honest shape of `unknown`: the key file is readable and non-empty,
- *  but the CLIProxy config consistency check could not be read
- *  (console_gateway_connection.py:486-494). The read face keeps `bearer` and
- *  `config_consumed` there; coercing it to `unknown`/`loopback_no_key` would
- *  read as "no key required". */
-export const FIXTURE_CONNECTION_CONFIG_UNCONFIRMED: JsonObject =
-  gatewayConnectionFixtureBody("unreadable", {
-    key_state: "unknown",
-    key_source_state: "present",
-    key_plaintext: null,
-    reason:
-      "合成夹具：权威文件可读且非空，但无法读取 cliproxy/config.yaml：无法核对本文件值是否在 api-keys 列表内，按未知上报，不返回猜测值，也不表示可免鉴权",
-  });
 
 export function gatewayConnectionFixtureResponse(
   service: string,
@@ -354,29 +240,16 @@ function connectionPath(service: string): string {
   return `/gateway-connection?${new URLSearchParams({ service })}`;
 }
 
-/** FixtureTransport reads: one synthetic path per service, covering the four
- *  live-looking states. The `unknown` body reuses a service ID, so install it
- *  explicitly with `gatewayConnectionFixtureResponse(service, "unknown")`. */
+/** FixtureTransport read: the one synthetic chat2api path with the honest
+ *  absent shape (no real file, key or gateway is touched). */
 export function gatewayConnectionFixtureReads(): Record<
   string,
   TransportResponse
 > {
   return {
-    [connectionPath("Qoder")]: gatewayConnectionFixtureResponse(
-      "Qoder",
-      "present"
-    ),
     [connectionPath("chat2api")]: gatewayConnectionFixtureResponse(
       "chat2api",
       "absent"
-    ),
-    [connectionPath("QoderGlobal")]: gatewayConnectionFixtureResponse(
-      "QoderGlobal",
-      "needs_key_unconfigured"
-    ),
-    [connectionPath("CLIProxy")]: gatewayConnectionFixtureResponse(
-      "CLIProxy",
-      "unreadable"
     ),
   };
 }

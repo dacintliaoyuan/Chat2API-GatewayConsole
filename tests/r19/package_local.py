@@ -6,11 +6,11 @@ unrelated ``tempfile.mkdtemp()`` directory.  The allowlist is explicit:
 
 * ``local/**`` and ``shared/**`` (excluding ``__pycache__``/``*.pyc``);
 * ``chat2api/chat2api.py`` and the local host modules it imports;
-* ``share_secret_protection.py`` — the ONLY allowed ``share_*`` module (the
+* ``share/secret_protection.py`` — the ONLY allowed ``share_*`` module (the
   local control-token gate needs it);
 * ``tests/fake_um/fake_um_server.py`` and its package marker.
 
-No cloud/share/broker/display source, no ``usagesrv.py``/``console_adapters.py``,
+No cloud/share/broker/display source, no ``usagesrv.py``/``console/adapters.py``,
 no ``web/``, ``data/``, ``profile/`` or root deployment script is copied.
 """
 from __future__ import annotations
@@ -28,43 +28,34 @@ COPY_TREES = (
 )
 
 COPY_FILES = (
+    "login_contract.py",
     "chat2api/chat2api.py",
-    "console_backend_app.py",
-    "share_secret_protection.py",
-    "console_stats.py",
-    "console_operations.py",
-    "console_model_actions.py",
-    "model_sync.py",
-    "model_sync_core.py",
-    "model_config_adapters.py",
-    "model_reconcile.py",
-    "zcode_file_lock.py",
-    "zcode_hot_sync.py",
-    "zcode_hot_sync_protocol.py",
+    "app/console_backend_app.py",
+    "share/secret_protection.py",
+    "console/stats.py",
+    "console/operations.py",
+    "console/model_actions.py",
+    "model_sync/sync.py",
+    "model_sync/sync_core.py",
     "tests/fake_um/__init__.py",
     "tests/fake_um/fake_um_server.py",
 )
 
 FORBIDDEN_FILES = (
     "usagesrv.py",
-    "console_adapters.py",
-    "console_share_actions.py",
-    "console_share_production.py",
-    "share_management.py",
-    "share_store.py",
-    "share_entry.py",
-    "share_dispatch.py",
-    "share_instance_pipe.py",
-    "share_runtime.py",
-    "share_metering.py",
-    "share_public_supervision.py",
-    "share_backend_supervision.py",
-    "console_display_proxy.py",
-    "console_log_reader.py",
-    "console_magpie_prices.py",
-    "console_speedtest.py",
-    "console_gateway_connection.py",
-    "console_tailnet.py",
+    "console/adapters.py",
+    "console/share_actions.py",
+    "console/share_production.py",
+    "share/management.py",
+    "share/store.py",
+    "chat2api/share_auth.py",
+    "share/instance_pipe.py",
+    "share/runtime.py",
+    "share/metering.py",
+    "console/display_proxy.py",
+    "console/log_reader.py",
+    "console/gateway_connection.py",
+    "console/tailnet.py",
     "data",
     "profile",
     "web",
@@ -75,9 +66,8 @@ FORBIDDEN_FILES = (
 )
 
 FORBIDDEN_GLOBS = (
-    "share_broker_*.py",
-    "share_broker_*.py",
-    "console_um_*.py",
+    "share/broker_*.py",
+    "console/um_*.py",
     "*.ps1",
     "*.bat",
     "*.vbs",
@@ -156,8 +146,8 @@ def verify_package(package_root):
         problems.append("local/run_local.py")
     if not (root / "chat2api" / "chat2api.py").is_file():
         problems.append("chat2api/chat2api.py")
-    if not (root / "share_secret_protection.py").is_file():
-        problems.append("share_secret_protection.py")
+    if not (root / "share/secret_protection.py").is_file():
+        problems.append("share/secret_protection.py")
     return problems
 
 

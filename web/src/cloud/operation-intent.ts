@@ -64,7 +64,7 @@ export function submitBody(intent: PendingIntent): {
   };
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 function safeStorage(): Storage | null {
@@ -367,76 +367,13 @@ export function opGroup(state: string): OpGroup {
   return "unconfirmed";
 }
 
-/** D18-10: one whole-chain lifecycle result. `waiting_login` is a HUMAN state,
- *  not a success (the dedicated 8110 stays up and the operator retries after
- *  finishing UM SSO/MFA). A timed-out drain is a forced stop, never a normal
- *  close. The backend's own note stays verbatim. */
-export function chainOutcome(op: OperationRow): Outcome {
-  const result = isRecord(op.result) ? op.result : null;
-  const state = typeof result?.state === "string" ? result.state : null;
-  const note = typeof result?.note === "string" ? result.note : "";
-  const layers = isRecord(result?.layers) ? result.layers : null;
-  const layerText = layers
-    ? ["gateway", "share_backend"]
-        .map((key) =>
-          typeof layers[key] === "string" ? `${key}=${layers[key]}` : ""
-        )
-        .filter(Boolean)
-        .join(" · ")
-    : "";
-  const detail = clip(
-    [note, layerText].filter(Boolean).join("；") || "后端未返回简短结果"
-  );
-  if (op.action === "share.chain_start") {
-    if (state === "running")
-      return { tone: "ok", word: "整链已启动", text: detail };
-    if (state === "waiting_login") {
-      return {
-        tone: "warn",
-        word: "等待本人登录/MFA",
-        text: clip(
-          [note, "不是成功：完成 UM 登录/MFA 后重新启动整链"]
-            .filter(Boolean)
-            .join("；")
-        ),
-      };
-    }
-    return { tone: "err", word: "整链启动失败", text: detail };
-  }
-  if (op.action === "share.chain_stop") {
-    if (state === "stopped")
-      return { tone: "ok", word: "整链已停止", text: detail };
-    if (state === "drain_timeout")
-      return {
-        tone: "warn",
-        word: "排空超时 · 已强制停止",
-        text: clip(
-          [note, "在途请求未确认结束；可用强制停止立即取消在途"]
-            .filter(Boolean)
-            .join("；")
-        ),
-      };
-    return { tone: "err", word: "整链停止未全部确认", text: detail };
-  }
-  if (state === "stopped")
-    return { tone: "ok", word: "整链已强制停止", text: detail };
-  return { tone: "err", word: "整链强制停止未全部确认", text: detail };
-}
-
 /** The operation's real outcome. A login trigger is never "已完成" while the
  *  auth read face has not confirmed `valid`. */
 export function operationOutcome(op: OperationRow): Outcome {
   const state = opStateWord(op.state);
   if (op.state === "failed") {
-    if (
-      (op.action === "share.backend_login" ||
-        op.action === "share.backend_reauthenticate") &&
-      isRecord(op.result)
-    ) {
+    if (op.action === "account.login" && isRecord(op.result)) {
       return loginOutcome(op.result);
-    }
-    if (op.action.startsWith("share.chain_") && isRecord(op.result)) {
-      return chainOutcome(op);
     }
     const text = errorText(op);
     const hint = CONTENTION_HINT[op.error?.code ?? ""];
@@ -459,14 +396,8 @@ export function operationOutcome(op: OperationRow): Outcome {
   }
   if (op.state !== "succeeded")
     return { tone: state.tone, word: state.word, text: "等待后端结果" };
-  if (
-    op.action === "share.backend_login" ||
-    op.action === "share.backend_reauthenticate"
-  ) {
+  if (op.action === "account.login") {
     return loginOutcome(op.result);
-  }
-  if (op.action.startsWith("share.chain_") && isRecord(op.result)) {
-    return chainOutcome(op);
   }
   if (op.action === "share.status" && isRecord(op.result)) {
     const auth = isRecord(op.result.backend_auth)
@@ -561,10 +492,7 @@ export function lastAuthObservation(
       source = "status";
       error = typeof auth.error === "string" && auth.error ? auth.error : null;
       recovery = isRecord(auth.recovery) ? auth.recovery : null;
-    } else if (
-      op.action === "share.backend_login" ||
-      op.action === "share.backend_reauthenticate"
-    ) {
+    } else if (op.action === "account.login") {
       if (!isRecord(op.result)) continue;
       state = typeof op.result.state === "string" ? op.result.state : null;
       label =
@@ -572,7 +500,7 @@ export function lastAuthObservation(
           ? op.result.label
           : null;
       at = epochMs(op.finished_at ?? op.created_at);
-      source = op.action === "share.backend_login" ? "login" : "reauth";
+      source = "login";
     } else {
       continue;
     }
@@ -596,17 +524,13 @@ export function lastAuthObservation(
   return best?.observation ?? null;
 }
 
-/** The newest login or re-auth operation, for the services card's own line. */
+/** The newest login operation, for the services card's own line. */
 export function lastLoginOperation(
   operations: readonly OperationRow[]
 ): OperationRow | null {
   return (
     operations
-      .filter(
-        (op) =>
-          op.action === "share.backend_login" ||
-          op.action === "share.backend_reauthenticate"
-      )
+      .filter((op) => op.action === "account.login")
       .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0] ?? null
   );
 }
@@ -683,3 +607,184 @@ const LAYER_WORD: Readonly<Record<string, string>> = {
   unavailable: "不可用",
   unconfirmed: "未确认",
 };
+
+/** A2: only an explicit 4xx refusal proves the operation never ran. A 408, a
+ *  429, a 5xx, a 2xx without an operation id or an unparseable answer may
+ *  still have been accepted, so the intent keeps its idempotency identity and is
+ *  re-queried instead of re-submitted. */
+const REFUSAL_STATUSES: ReadonlySet<number> = new Set([
+  400, 401, 403, 404, 409, 410, 422,
+]);
+
+export type SubmitAnswer =
+  | { kind: "accepted"; operation: OperationRow }
+  | { kind: "refused"; reason: string }
+  | { kind: "unconfirmed"; reason: string };
+
+export function submitAnswer(
+  status: number,
+  data: unknown,
+  action: string,
+  target: string
+): SubmitAnswer {
+  const record = isRecord(data) ? data : null;
+  const operation =
+    record &&
+    isRecord(record.operation) &&
+    typeof record.operation.id === "string" &&
+    record.operation.id
+      ? (record.operation as unknown as OperationRow)
+      : null;
+  if (operation) {
+    // A backend operation id is accepted only when it names THIS intent; a
+    // foreign operation's id is an unconfirmed identity, never our result.
+    if (
+      (operation.action && operation.action !== action) ||
+      (operation.target ?? "") !== target
+    ) {
+      return { kind: "unconfirmed", reason: "operation_identity_mismatch" };
+    }
+    return { kind: "accepted", operation };
+  }
+  const reason =
+    (record &&
+      ((typeof record.reason === "string" && record.reason) ||
+        (typeof record.detail === "string" && record.detail) ||
+        (typeof record.error === "string" && record.error))) ||
+    `HTTP ${status}`;
+  if (REFUSAL_STATUSES.has(status)) return { kind: "refused", reason };
+  return { kind: "unconfirmed", reason };
+}
+
+/** D18-4: the create dialog carries only a name and a concurrency cap. An
+ *  empty cap is refused like any other non-integer: the dialog's own default 16
+ *  is what the user sees prefilled, so an empty field is a real input, not the
+ *  documented default. A value outside 1–48 or a non-integer is refused instead
+ *  of being silently replaced. */
+export type CreateSubmission =
+  | {
+      kind: "invalid";
+      field: "name" | "max_concurrency";
+      reason: string;
+    }
+  | { kind: "ready"; body: { name: string; max_concurrency: number } };
+
+export function submitCreate(
+  nameRaw: string,
+  capRaw: string
+): CreateSubmission {
+  const name = nameRaw.trim();
+  if (!name || name.length > 64)
+    return {
+      kind: "invalid",
+      field: "name",
+      reason: "名称需要 1–64 个字符",
+    };
+  const raw = capRaw.trim();
+  const cap = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(cap) || cap < 1 || cap > 48)
+    return {
+      kind: "invalid",
+      field: "max_concurrency",
+      reason: "并发上限必须是 1–48 的整数（默认 16）",
+    };
+  return { kind: "ready", body: { name, max_concurrency: cap } };
+}
+
+/** D18-5: the inline concurrency edit saves on change. A value outside 1–48
+ *  or a non-integer is refused; the row's current value is not a write. */
+export type ConcurrencySubmission =
+  | { kind: "invalid"; reason: string }
+  | { kind: "ready"; value: number; unchanged: boolean };
+
+export function submitConcurrency(
+  raw: string,
+  current: number | undefined
+): ConcurrencySubmission {
+  const text = raw.trim();
+  const value = Number(text);
+  if (
+    !/^\d+$/.test(text) ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > 48
+  )
+    return { kind: "invalid", reason: "并发上限必须是 1–48 的整数" };
+  return { kind: "ready", value, unchanged: value === current };
+}
+
+/** D18-6: revoke is the tombstone route; the only body is the optimistic
+ *  row version. The backend writes `deleted_at` and clears the ciphertext. */
+export type RevokeSubmission =
+  | { kind: "invalid"; reason: string }
+  | {
+      kind: "ready";
+      path: string;
+      body: { expected_row_version: number };
+    };
+
+export function revokeKey(
+  id: string,
+  rowVersion: number | undefined
+): RevokeSubmission {
+  if (!id) return { kind: "invalid", reason: "缺少 Key 标识" };
+  if (
+    typeof rowVersion !== "number" ||
+    !Number.isInteger(rowVersion) ||
+    rowVersion < 1
+  )
+    return { kind: "invalid", reason: "缺少行版本，请刷新列表后重试" };
+  return {
+    kind: "ready",
+    path: `/api/console/share-management/keys/${encodeURIComponent(id)}/revoke-and-terminate`,
+    body: { expected_row_version: rowVersion },
+  };
+}
+
+/** D18-4: the gateway's own concurrency refusals, in operator words. The
+ *  backend code stays verbatim next to this word; it is never "unknown". */
+const REASON_WORD: Readonly<Record<string, string>> = {
+  share_concurrency: "并发已满（分享网关全局并发）",
+  per_key_concurrency: "并发已满（该 Key 的并发上限）",
+};
+export const reasonWord = (reason: string): string => REASON_WORD[reason] ?? reason;
+
+export const TEST_REASON: Readonly<Record<string, string>> = {
+  unconfirmed: "后端未确认连接结果",
+  test_in_progress: "同一 Key 已有测试在进行",
+  key_disabled: "Key 已停用",
+  public_url_unavailable: "后端没有可用的公网 API 地址",
+  gateway_unconfirmed: "API 入口运行身份未确认",
+  key_changed: "测试期间 Key 已变化，请刷新后重试",
+  secret_unavailable: "Key 明文不可读取，无法测试",
+};
+
+/** R4: the create dialog's note is capability-neutral. The backend may or may
+ *  not keep a ciphertext it can re-read, so it never promises a fixed one-time
+ *  view. The created plaintext is shown in this dialog at once (not masked), and
+ *  the single page has no detail view — a later look is 点开该行. */
+export const CREATE_PLAIN_NOTE =
+  "只创建长期 Key；不设有效期或 Token 配额。明文在本次弹层直接显示；后端保存可回查密文时可再点开该行查看，否则关闭后只能轮换。";
+/** R4: the plain dialog's static warning. Whether a later readback exists is
+ *  the backend's capability, never a fixed claim. */
+export const PLAIN_DIALOG_NOTE =
+  "明文只保存在本页内存；能否再次查看取决于后端能力，请先复制保存。";
+
+/** R4: one capability-consistent note after a create/rotate. `viewable` is the
+ *  answer's key row `plaintext_viewable`; null means it was not reported. The
+ *  note never says a second view is always impossible: the backend allows it for
+ *  a viewable row, otherwise the Key has to be rotated. */
+export function plainNotice(
+  kind: "created" | "rotated",
+  viewable: boolean | null
+): string {
+  const head =
+    kind === "created"
+      ? "这是新建 Key 的明文；"
+      : "旧 Key 已失效；这是新 Key 的明文；";
+  if (viewable === true)
+    return `${head}后端保存了可回查的密文，关闭后可再点开该行查看。`;
+  if (viewable === false)
+    return `${head}后端未保存可回查的密文，关闭后无法再次查看；需要时只能轮换。`;
+  return `${head}后端未上报明文回查能力，关闭后不保证可再次查看；需要时只能轮换。`;
+}

@@ -487,7 +487,7 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
             mock.patch.object(
                 chat2api, "browser_login",
                 side_effect=chat2api.LoginStalled(
-                    "umpass_mfa_required",
+                    "manual_takeover_required:umpass_mfa_required",
                     "last page https://websso.um.edu.mo/")),
             self._grant_patch(),
             mock.patch.object(chat2api, "release_reauth_slot"),
@@ -496,11 +496,201 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
 
         status = proxy.auth_status()
         self.assertEqual(status["state"], "failed")
-        self.assertEqual(status["error"], "umpass_mfa_required")
+        self.assertEqual(status["error"],
+                         "manual_takeover_required:umpass_mfa_required")
         self.assertEqual(status["recovery"]["state"], "exhausted")
         self.assertEqual(status["recovery"]["session_starts"], 1)
         self.assertEqual(status["recovery"]["pause_reason"],
-                         "umpass_mfa_required")
+                         "manual_takeover_required:umpass_mfa_required")
+
+    def test_soft_manual_progress_is_not_a_terminal_error(self):
+        # ticket #41/#42 item 11：click-swallowed/unrecognized-control
+        # 只是自动流程停止动作、仍在轮询 token；它只保留在
+        # _auth_login.manual_reason，不能写成 _auth_error 或 terminal
+        # manual_takeover_required:<reason>，否则控制台会提前结束等待。
+        proxy = self._proxy()
+        proxy._note_login_progress({
+            "phase": "manual_takeover",
+            "manual_reason": "openwebui_click_swallowed",
+            "origin": "https://chat.genai.um.edu.mo/auth?code=ONE-TIME",
+        })
+        status = proxy.auth_status()
+        self.assertEqual(status["login"]["manual_reason"],
+                         "openwebui_click_swallowed")
+        self.assertIsNone(status["error"])
+        self.assertIn("openwebui_click_swallowed", status["label"])
+        self.assertIsNone(
+            proxy.health_snapshot()["authentication"]["error"],
+            "契约：软人工信号不得成为 /health 的 manual error")
+        self.assertNotIn(
+            "ONE-TIME",
+            str(proxy.auth_status()["login"]),
+            "契约：登录页 query string 不得进入状态读面")
+
+        for reason in ("umpass_mfa_required", "umpass_prefill_missing",
+                       "unrecognized_page"):
+            with self.subTest(reason=reason):
+                proxy._note_login_progress({
+                    "phase": "manual_takeover",
+                    "manual_reason": reason,
+                    "origin": "https://websso.um.edu.mo/",
+                })
+                status = proxy.auth_status()
+                self.assertEqual(
+                    status["error"], "manual_takeover_required:" + reason)
+                self.assertEqual(
+                    proxy.health_snapshot()["authentication"]["error"],
+                    "manual_takeover_required:" + reason)
+
+    def test_repeated_manual_login_joins_a_waiting_round(self):
+        # ticket #41（spec #8 用户故事 12）：等待共享租约时重复
+        # POST /admin/auth/login 加入当前轮，不重置 round 与 6 次会话预算。
+        proxy = self._proxy(login_timeout=1800)
+        clock = [1000.0]
+        proxy._recovery_now = lambda: clock[0]
+        sleeps = []
+
+        def fake_sleep(seconds, wake=None):
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        ledger = {"owner_pid": 222, "expires_epoch": 1600.0,
+                  "attempts_in_window": 1,
+                  "next_allowed_epoch": 1600.0}
+        with (
+            mock.patch.object(
+                chat2api, "acquire_reauth_slot",
+                return_value=(False, "global_session_active", ledger)),
+            mock.patch.object(proxy, "_recovery_sleep",
+                              side_effect=fake_sleep),
+            mock.patch.object(
+                chat2api, "browser_login",
+                side_effect=AssertionError(
+                    "a refused round must not open a browser")),
+            mock.patch.object(chat2api, "release_reauth_slot"),
+            mock.patch.object(
+                chat2api, "_release_reauth_slot_for_round"),
+        ):
+            self.assertTrue(proxy.refresh(force=True, wait=False))
+            first = proxy.auth_status()
+            self.assertEqual(first["recovery"]["state"], "waiting")
+            first_round = first["recovery"]["round"]
+            first_starts = first["recovery"]["session_starts"]
+            first_window = first["login_window_deadline_epoch"]
+            self.assertEqual(first_starts, 0)
+
+            self.assertTrue(proxy.refresh(force=True, wait=False))
+            second = proxy.auth_status()
+            # ticket #42 item 21：等待中的循环只在 shutdown 时退出；先显式
+            # 结束本轮，再在 mock 作用域内 join，释放走测试替身。
+            proxy._shutdown_event.set()
+            self._finish_session_thread(proxy)
+
+        self.assertEqual(second["recovery"]["round"], first_round,
+                         "契约：等待中的重复 POST 必须加入当前轮")
+        self.assertEqual(second["recovery"]["session_starts"],
+                         first_starts,
+                         "契约：重复 POST 不得重置 6 次会话预算")
+        self.assertEqual(second["login_window_deadline_epoch"],
+                         first_window,
+                         "契约：重复 POST 不得续期登录窗口")
+        self.assertIn("reauth_refused:global_session_active",
+                      second["error"])
+
+    def test_login_busy_does_not_consume_the_session_budget(self):
+        # ticket #41：另一进程持有 profile 登录锁时，LoginBusy 是
+        # throttle，不是失败；它不得消耗 6 次会话预算，busy 原因必须保留。
+        proxy = self._proxy()
+        calls = []
+        observed = []
+        waits = []
+        clock = [1000.0]
+
+        def fake_now():
+            return clock[0]
+
+        def fake_sleep(seconds, wake=None):
+            waits.append(seconds)
+            clock[0] += seconds
+            status = proxy.auth_status()
+            if (status["recovery"]["state"] == "waiting"
+                    and status["error"] == "login_already_running"
+                    and not observed):
+                observed.append((status["error"],
+                                 status["recovery"]["state"],
+                                 status["recovery"]["session_starts"]))
+
+        def fake_login(*args, **kwargs):
+            calls.append(1)
+            if len(calls) <= 7:
+                raise chat2api.LoginBusy(
+                    "login_already_running", "profile in use")
+            return "fresh-token"
+
+        with (
+            mock.patch.object(
+                chat2api, "browser_login", side_effect=fake_login),
+            self._grant_patch(),
+            mock.patch.object(chat2api, "release_reauth_slot"),
+            mock.patch.object(
+                chat2api, "_release_reauth_slot_for_round"),
+            mock.patch.object(proxy, "_recovery_now", side_effect=fake_now),
+            mock.patch.object(proxy, "_recovery_sleep",
+                              side_effect=fake_sleep),
+            mock.patch.object(chat2api.TokenStore, "save"),
+        ):
+            self.assertTrue(proxy.refresh(force=True))
+
+        status = proxy.auth_status()
+        self.assertEqual(
+            len(calls), 8,
+            "契约：7 次 busy 后仍应保留预算并尝试第 8 次真实会话")
+        self.assertEqual(status["state"], "valid")
+        self.assertEqual(status["recovery"]["session_starts"], 1)
+        self.assertEqual(
+            observed,
+            [("login_already_running", "waiting", 0)],
+            "契约：busy 等待期间必须保留原因，且不占会话预算")
+
+    def test_operator_retry_starts_a_new_round_after_manual_takeover(self):
+        proxy = self._proxy()
+        calls = []
+
+        def fake_login(*args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise chat2api.LoginStalled(
+                    "manual_takeover_required:umpass_mfa_required",
+                    "last page https://websso.um.edu.mo/")
+            return "fresh-token"
+
+        with (
+            mock.patch.object(
+                chat2api, "browser_login", side_effect=fake_login),
+            self._grant_patch(),
+            mock.patch.object(chat2api, "release_reauth_slot"),
+            mock.patch.object(chat2api.TokenStore, "save"),
+        ):
+            self.assertFalse(proxy.refresh(force=True))
+            status = proxy.auth_status()
+            self.assertEqual(status["state"], "failed")
+            self.assertEqual(
+                status["error"],
+                "manual_takeover_required:umpass_mfa_required")
+            self.assertEqual(status["recovery"]["state"], "exhausted")
+            first_round = status["recovery"]["round"]
+            self._finish_session_thread(proxy)
+
+            # ticket #13：操作员显式重试开的是新轮，不复用旧轮；旧轮的
+            # cancel 信号也不会取消新轮。
+            self.assertTrue(proxy.refresh(force=True))
+            status = proxy.auth_status()
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(status["state"], "valid")
+        self.assertEqual(status["recovery"]["round"], first_round + 1)
+        self.assertIsNot(calls[0].get("cancel_login_event"),
+                         calls[1].get("cancel_login_event"))
 
     def test_explicit_credential_rejection_pauses_the_cycle(self):
         proxy = self._proxy()
@@ -519,6 +709,100 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
         self.assertEqual(status["error"], "upstream_credential_rejected")
         self.assertEqual(status["recovery"]["pause_reason"],
                          "upstream_credential_rejected")
+
+    def test_cleanup_failure_is_terminal_and_visible(self):
+        proxy = self._proxy()
+        with (
+            mock.patch.object(
+                chat2api, "browser_login",
+                side_effect=chat2api.LoginCleanupFailed(
+                    "browser_cleanup_failed",
+                    "RuntimeError: close exploded",
+                    primary=chat2api.LoginStalled("timeout",
+                                                  "last page x"))),
+            self._grant_patch(),
+            mock.patch.object(chat2api, "release_reauth_slot"),
+        ):
+            self.assertFalse(proxy.refresh(force=True))
+
+        status = proxy.auth_status()
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["error"], "browser_cleanup_failed")
+        self.assertEqual(status["primary"], "timeout")
+        self.assertEqual(status["recovery"]["state"], "exhausted")
+        self.assertEqual(status["recovery"]["session_starts"], 1)
+        self.assertEqual(status["recovery"]["pause_reason"],
+                         "browser_cleanup_failed")
+        health = proxy.health_snapshot()
+        self.assertEqual(health["authentication"]["error"], None)
+        self.assertEqual(health["authentication"]["primary"], "timeout")
+
+    def test_cleanup_failure_keeps_each_primary_outcome(self):
+        # ticket #41：清理失败不能吞掉原始 timeout / manual / cancel；
+        # status 与 health 必须同时带 primary 结果。
+        cases = (
+            (chat2api.LoginStalled("timeout", "last page x"), "timeout"),
+            (chat2api.LoginStalled(
+                "manual_takeover_required:umpass_mfa_required",
+                "last page x"),
+             "manual_takeover_required:umpass_mfa_required"),
+            (chat2api.LoginCancelled("cancelled"), "cancelled"),
+            (None, None),
+        )
+        for primary, expected in cases:
+            with self.subTest(expected=expected):
+                proxy = self._proxy()
+                with (
+                    mock.patch.object(
+                        chat2api, "browser_login",
+                        side_effect=chat2api.LoginCleanupFailed(
+                            "browser_cleanup_failed",
+                            "RuntimeError: close exploded",
+                            primary=primary)),
+                    self._grant_patch(),
+                    mock.patch.object(chat2api, "release_reauth_slot"),
+                ):
+                    self.assertFalse(proxy.refresh(force=True))
+
+                status = proxy.auth_status()
+                self.assertEqual(status["error"], "browser_cleanup_failed")
+                self.assertEqual(status["primary"], expected)
+                self.assertEqual(
+                    proxy.health_snapshot()["authentication"]["primary"],
+                    expected)
+
+    def test_valid_round_clears_a_stale_cleanup_primary(self):
+        proxy = self._proxy()
+        calls = []
+
+        def fake_login(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise chat2api.LoginCleanupFailed(
+                    "browser_cleanup_failed",
+                    "RuntimeError: close exploded",
+                    primary=chat2api.LoginStalled("timeout",
+                                                  "last page x"))
+            return "fresh-token"
+
+        with (
+            mock.patch.object(
+                chat2api, "browser_login", side_effect=fake_login),
+            self._grant_patch(),
+            mock.patch.object(chat2api, "release_reauth_slot"),
+            mock.patch.object(chat2api.TokenStore, "save"),
+        ):
+            self.assertFalse(proxy.refresh(force=True))
+            self.assertEqual(proxy.auth_status()["primary"], "timeout")
+            self._finish_session_thread(proxy)
+
+            # ticket #41：上一轮清理失败的主因不能残留到本轮 valid。
+            self.assertTrue(proxy.refresh(force=True))
+            status = proxy.auth_status()
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(status["state"], "valid")
+        self.assertIsNone(status["primary"])
 
     def test_closed_window_is_reopened_within_the_budget(self):
         proxy = self._proxy()

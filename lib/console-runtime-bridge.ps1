@@ -1,7 +1,7 @@
 ﻿# console-runtime-bridge.ps1 - PowerShell side of the console runtime JSON
 # bridge. Gateway-runtime remains the single service authority; this file only
 # adds the cross-process resource lock (same protocol as
-# console_operations.ResourceFileLock in Python) and JSON-shaped snapshots.
+# console.operations.ResourceFileLock in Python) and JSON-shaped snapshots.
 #
 # Functions only; the CLI entry (invoke-console-runtime-json.ps1) dot-sources
 # this file and dispatches. Scriptblock parameters (Inspector/Starter/Stopper)

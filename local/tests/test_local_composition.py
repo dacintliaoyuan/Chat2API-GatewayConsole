@@ -31,6 +31,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -43,18 +44,18 @@ PROJECT_ROOT = AI_GATEWAY.parent
 GIT_ROOT = AI_GATEWAY.parents[1]
 sys.path.insert(0, str(AI_GATEWAY))
 
-import console_stats  # noqa: E402
-import model_sync  # noqa: E402
+from console import stats as console_stats  # noqa: E402
+from model_sync import sync as model_sync  # noqa: E402
 
-from console_operations import ActionSpec, OperationManager  # noqa: E402
+from console.operations import ActionSpec, OperationManager  # noqa: E402
 from local.backend import app as local_app  # noqa: E402
 from local.backend.config import LocalConfig, LocalConfigError  # noqa: E402
 from local.backend.registry import build_registry  # noqa: E402
 from local.backend.stats_env import build_stats_environment  # noqa: E402
 
 _RUNTIME_GLOBALS = (
-    "DATA_DIR", "STATE_FILE", "RESULT_FILE", "PREVIEW_FILE", "HISTORY_FILE",
-    "BACKUP_DIR", "LOCK_FILE", "UM_MODELS_URL", "UM_CHAT_URL",
+    "DATA_DIR", "STATE_FILE", "BACKUP_DIR", "LOCK_FILE",
+    "UM_MODELS_URL", "UM_CHAT_URL",
     "UM_MODELS_HOST", "UM_MODELS_PORT", "UM_MODELS_PATH",
     "_CATALOG_ENDPOINTS", "CONTEXT_PROBE_ENDPOINTS",
 )
@@ -91,7 +92,6 @@ def _fixture_mapping(root):
         "lock_dir": str(root / "locks"),
         "pid_file": str(root / "state" / "local-app.pid"),
         "ledger_file": str(root / "state" / "usage-chat2api.jsonl"),
-        "price_file": str(root / "config" / "prices.json"),
         "session_code_file": str(root / "config" / "usage-session-code"),
         "control_token_file": str(root / "config" / "admin-control-token"),
         "console_state_file": str(root / "state" / "console-state.sqlite3"),
@@ -254,12 +254,6 @@ class ConfigureRuntimeTests(unittest.TestCase):
         self.assertEqual(model_sync.DATA_DIR, data_dir)
         self.assertEqual(model_sync.STATE_FILE,
                          data_dir / "model-sync-state.json")
-        self.assertEqual(model_sync.RESULT_FILE,
-                         data_dir / "model-sync-last-result.json")
-        self.assertEqual(model_sync.PREVIEW_FILE,
-                         data_dir / "model-sync-last-preview.json")
-        self.assertEqual(model_sync.HISTORY_FILE,
-                         data_dir / "model-sync-history.jsonl")
         self.assertEqual(model_sync.BACKUP_DIR,
                          data_dir / "model-sync-backups")
         self.assertEqual(model_sync.LOCK_FILE, data_dir / "model-sync.lock")
@@ -288,69 +282,10 @@ class ConfigureRuntimeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     model_sync.configure_runtime(**values)
 
-    def test_configure_runtime_leaves_the_client_config_paths_alone(self):
-        """E19-1-04 step 12: the three client-config paths are import-time.
-
-        ``configure_runtime`` rewrites ONLY the state directory, its five files,
-        the lock file and the UM endpoints. ``DSH_YAML``/``ZCODE_JSON``/
-        ``ZCODE_PROVIDER_CONFIG`` stay whatever ``Path.home()`` resolved at
-        import time, so the isolation of those paths comes from the isolated HOME
-        the entry point applies — not from this call.
-        """
-        before = (model_sync.DSH_YAML, model_sync.ZCODE_JSON,
-                  model_sync.ZCODE_PROVIDER_CONFIG)
-        root = Path(tempfile.mkdtemp(prefix="r19-local-runtime-"))
-        self.addCleanup(shutil.rmtree, root, True)
-        model_sync.configure_runtime(
-            data_dir=root / "model-sync",
-            um_models_url="http://127.0.0.1:28000/v1/models",
-            um_chat_url="http://127.0.0.1:28000/v1/chat/completions")
-        self.assertEqual(
-            (model_sync.DSH_YAML, model_sync.ZCODE_JSON,
-             model_sync.ZCODE_PROVIDER_CONFIG), before)
-
-
-class ClientConfigPathIsolationTests(unittest.TestCase):
-    """E19-1-04 step 12: observe the three import-time paths in a CHILD.
-
-    ``DSH_YAML``/``ZCODE_JSON``/``ZCODE_PROVIDER_CONFIG`` are evaluated when
-    ``model_sync`` is imported, so asserting them inside this process would only
-    measure whatever HOME the test runner inherited. The observation must run in a
-    child with the isolated HOME, exactly as the real entry point does.
-    """
-
-    PATHS = ("DSH_YAML", "ZCODE_JSON", "ZCODE_PROVIDER_CONFIG")
-
-    def test_client_config_paths_live_under_the_isolated_home(self):
-        home = Path(tempfile.mkdtemp(prefix="r19-model-sync-home-"))
-        self.addCleanup(shutil.rmtree, home, True)
-        code = (
-            "import sys\n"
-            "sys.path.insert(0, %r)\n"
-            "import model_sync\n"
-            "for name in %r:\n"
-            "    print(name, getattr(model_sync, name))\n"
-        ) % (str(AI_GATEWAY), self.PATHS)
-        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-        env.pop("PYTHONPATH", None)
-        env["HOME"] = str(home)
-        env["USERPROFILE"] = str(home)
-        completed = subprocess.run(
-            [sys.executable, "-I", "-c", code], capture_output=True,
-            text=True, timeout=120, env=env)
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        seen = {}
-        for line in completed.stdout.splitlines():
-            name, _, value = line.partition(" ")
-            seen[name] = value
-        self.assertEqual(set(seen), set(self.PATHS), completed.stdout)
-        for name, value in seen.items():
-            with self.subTest(name=name):
-                path = Path(value)
-                self.assertTrue(
-                    path == home or home in path.parents,
-                    "%s=%s is outside the isolated home %s"
-                    % (name, path, home))
+    def test_client_config_paths_are_gone(self):
+        """Ticket #32: the DSH/ZCode client config paths are retired."""
+        for name in ("DSH_YAML", "ZCODE_JSON", "ZCODE_PROVIDER_CONFIG"):
+            self.assertFalse(hasattr(model_sync, name), name)
 
 
 # ------------------------------------------------------------- UM child env
@@ -453,7 +388,7 @@ class LocalConfigTests(unittest.TestCase):
         """standards-config-06 / spec-local-006: one ledger, one identity.
 
         ``ledger_file`` is what the summary reads; ``um_runtime.usage_log`` is
-        what the 8110 child writes. The old config accepted them as two
+        what the 8100 process writes. The old config accepted them as two
         independent paths, so the summary could read a ledger the child never
         wrote and report a quiet zero. A mismatch is a configuration error.
         """
@@ -606,10 +541,10 @@ class LocalConfigTests(unittest.TestCase):
             self.assertTrue(path == root or root in path.parents,
                             "um_runtime.%s=%s escapes %s"
                             % (name, value, root))
-        self.assertNotIn(fixture["port"], (8000, 8001, 8100, 8110, 18096,
-                                         5901))
+        self.assertNotIn(fixture["port"], (8000, 8001, 8096, 8097, 8100,
+                                         18096, 5901))
         self.assertNotIn(fixture["um_runtime"]["port"],
-                         (8000, 8001, 8100, 8110, 18096, 5901))
+                         (8000, 8001, 8096, 8097, 8100, 18096, 5901))
 
 
 class IsolationGuardRegressionTests(unittest.TestCase):
@@ -633,14 +568,14 @@ class IsolationGuardRegressionTests(unittest.TestCase):
         return str(caught.exception)
 
     def test_a_production_port_is_refused(self):
-        for port in (8000, 8001, 18096, 5901):
+        for port in (8000, 8001, 8096, 8097, 18096, 5901):
             with self.subTest(port=port):
                 message = self._refused(
                     lambda values, p=port: values.update({"port": p}))
                 self.assertIn("must not be a production port", message)
 
     def test_the_real_deployment_state_is_refused(self):
-        for field in ("ledger_file", "price_file", "state_root"):
+        for field in ("ledger_file", "state_root"):
             with self.subTest(field=field):
                 message = self._refused(
                     lambda values, f=field: values.update(
@@ -932,7 +867,14 @@ class RunLocalCliTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location(
             "_r19_run_local_probe", entry)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # The production entry refuses to run without ``python -I``; this
+        # in-process probe fakes only the flag it reads, then exercises
+        # ``_clean_sys_path()`` directly.
+        with mock.patch.object(sys, "flags",
+                               types.SimpleNamespace(isolated=True,
+                                                     optimize=0,
+                                                     verbose=0)):
+            spec.loader.exec_module(module)
 
         checkout = Path(tempfile.mkdtemp(prefix="r19-checkout-"))
         self.addCleanup(shutil.rmtree, checkout, True)
@@ -986,12 +928,6 @@ class LocalAppTests(unittest.TestCase):
         if os.name == "posix":
             os.chmod(token_file, 0o600)
             os.chmod(self.root, 0o700)
-        Path(values["price_file"]).parent.mkdir(parents=True, exist_ok=True)
-        Path(values["price_file"]).write_text(json.dumps({
-            "exchangeRate": 7.2,
-            "checkedAt": "2026-11-07T00:00:00+08:00",
-            "models": {"fake-um-model": {"input": 1.0, "output": 2.0}},
-        }), encoding="utf-8")
         Path(values["ledger_file"]).parent.mkdir(parents=True, exist_ok=True)
         Path(values["ledger_file"]).write_text(
             json.dumps({"time": "2026-11-07T10:00:00+08:00",
@@ -1400,12 +1336,12 @@ class LocalAppTests(unittest.TestCase):
                 encoding="utf-8")
             for forbidden in ("import usagesrv", "import console_adapters",
                               "import share_management", "import share_store",
-                              "import share_entry", "import share_dispatch",
+                              "import share_entry",
                               "import console_display_proxy"):
                 self.assertNotIn(forbidden, source, name)
-        self.assertNotIn("console_adapters", sys.modules)
-        self.assertNotIn("share_management", sys.modules)
-        self.assertNotIn("usagesrv", sys.modules)
+        # In-process ``sys.modules`` is order-dependent (other suites import
+        # these modules); the child-process check below is the discriminating
+        # one, so this test only asserts the source has no such import.
 
     def test_loaded_module_set_excludes_cloud_and_legacy_hosts(self):
         """R19-1: observed in a CHILD, not through this runner's own imports.
@@ -1414,15 +1350,15 @@ class LocalAppTests(unittest.TestCase):
         in-process ``sys.modules`` check could pass for the wrong reason. The child
         imports only the composition root.
         """
-        forbidden = ("cloud", "usagesrv", "console_adapters",
-                     "share_management", "share_store", "share_entry",
-                     "share_dispatch", "share_metering", "share_broker_host",
-                     "console_display_proxy")
+        forbidden = ("cloud", "usagesrv", "console.adapters",
+                     "share.management", "share.store",
+                     "share.instance_pipe", "share.metering",
+                     "share.broker_host", "console.display_proxy")
         # R19-5 retained surface: recorded here so a future change that ADDS a
         # module to this set is visible, but NOT asserted absent - retiring them
         # is E19-3's scope (plan step 13).
-        retained = ("zcode_hot_sync", "model_sync", "console_stats",
-                    "console_model_actions", "model_reconcile")
+        retained = ("model_sync.sync", "console.stats",
+                    "console.model_actions")
         code = (
             "import sys\n"
             "sys.path.insert(0, %r)\n"

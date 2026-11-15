@@ -10,8 +10,8 @@ import type {
   ConnectionProtocolFace,
   ContextEvidence,
   ContextView,
-  CostCoverage,
-  CostDetail,
+  UsageCoverage,
+  UsageDetail,
   GatewayConnection,
   JsonObject,
   KeyUsage,
@@ -55,8 +55,6 @@ import type {
   UmBucketPayload,
   UmCatalogModelPayload,
   UmCatalogPayload,
-  UmCostPayload,
-  UmFxPayload,
   UmLogLevel,
   UmLogLinePayload,
   UmLogPagePayload,
@@ -64,7 +62,6 @@ import type {
   UmMaintenanceRowPayload,
   UmOperationPayload,
   UmOperationsPayload,
-  UmPricePayload,
   UmReading,
   UmReadingKind,
   UmRequestLogsPayload,
@@ -75,7 +72,6 @@ import type {
   UmServiceEntry,
   UmServicesPayload,
   UmSummaryPayload,
-  UmSummaryReferencePayload,
   UmTodayPayload,
   UmTodayResponse,
   UmTrendModelPayload,
@@ -428,33 +424,18 @@ export function normalizeLogPage(value: unknown): LogPage {
     requestScope: root.request_scope === "read_window" ? "read_window" : null,
   };
 }
-function costCoverage(row: JsonObject): CostCoverage {
+function usageCoverage(row: JsonObject): UsageCoverage {
   const coverage = object(row.coverage) ?? {};
   return {
     requests: count(row.requests),
     unknownRequests: count(row.unknownRequests),
-    unpricedRequests: count(row.unpricedRequests),
     incompleteRequests: count(row.incompleteRequests),
     records: count(coverage.records),
-    pricedRequests: count(coverage.pricedRequests),
     unknownTimeRequests: count(coverage.unknownTimeRequests),
-    pricingUnavailableRequests: count(coverage.pricingUnavailableRequests),
-    costComplete: boolean(coverage.costComplete),
-    // CNY partial is a row-level fact (share_metering._finish_summary); a legacy
-    // response without it stays null instead of being read as "complete".
-    costCnyPartial: boolean(row.costCnyPartial),
-    knownCostCnyPartial: boolean(row.knownCostCnyPartial),
-    estimatedCostCnyPartial: boolean(row.estimatedCostCnyPartial),
     cacheReportedRequests: count(coverage.cacheReportedRequests),
     cacheUnreportedRequests: count(coverage.cacheUnreportedRequests),
     cacheUnknownRequests: count(coverage.cacheUnknownRequests),
-    cacheUnknownPricedRequests: count(coverage.cacheUnknownPricedRequests),
     excludedUnknownTimeRequests: count(coverage.excludedUnknownTimeRequests),
-    localCoverageAvailable:
-      count(row.unknownRequests) !== null &&
-      count(row.unpricedRequests) !== null &&
-      count(coverage.records) !== null &&
-      boolean(coverage.costComplete) !== null,
   };
 }
 function tokenUsage(value: unknown): TokenUsage {
@@ -482,24 +463,16 @@ function tokenUsage(value: unknown): TokenUsage {
     cacheUnknownRequests: count(row.cacheUnknownRequests),
   };
 }
-function summary(row: JsonObject): Omit<CostDetail, "identity"> {
+function summary(row: JsonObject): Omit<UsageDetail, "identity"> {
   return {
-    knownCostUsd: nonnegative(row.knownCostUsd),
-    estimatedCostUsd: nonnegative(row.estimatedCostUsd),
-    // CNY amounts follow the same strict rule: a missing legacy field is unknown
-    // (null), while a real zero survives.
-    costCny: nonnegative(row.costCny),
-    knownCostCny: nonnegative(row.knownCostCny),
-    estimatedCostCny: nonnegative(row.estimatedCostCny),
     // Legacy per-side sums are retained for compatibility; complete totals are only tokenUsage.totalTokens.
     inputTokens: count(row.inputTokens),
     outputTokens: count(row.outputTokens),
-    coverage: costCoverage(row),
+    coverage: usageCoverage(row),
     tokenUsage: tokenUsage(row.tokenUsage),
-    priceVersions: stringList(row.priceVersions),
   };
 }
-function costDetails(value: unknown, key: "model" | "day"): CostDetail[] {
+function usageDetails(value: unknown, key: "model" | "day"): UsageDetail[] {
   return requiredRows(value, key === "model" ? "key models" : "key days").map(
     (row) => {
       if (!text(row[key]))
@@ -511,7 +484,7 @@ function costDetails(value: unknown, key: "model" | "day"): CostDetail[] {
 /** 未归属桶的模型/日明细是**加性**的：后端没带这两列就是没有行（不是伪造的
  *  空行），带了就按与每 Key 行同一套身份 + 摘要规则归一化。身份不是字符串
  *  的行无法归到任何名字下——按页面既有规则跳过，绝不用猜出来的身份合并。 */
-function bucketDetails(value: unknown, key: "model" | "day"): CostDetail[] {
+function bucketDetails(value: unknown, key: "model" | "day"): UsageDetail[] {
   if (value === undefined) return [];
   const rows = requiredRows(
     value,
@@ -551,13 +524,13 @@ export function normalizeShareUsage(value: unknown): ShareUsage {
       keyName: text(row.keyName),
       deleted: boolean(row.deleted),
       ...summary(row),
-      models: costDetails(row.models, "model"),
-      days: costDetails(row.days, "day"),
+      models: usageDetails(row.models, "model"),
+      days: usageDetails(row.days, "day"),
       undated: object(row.undated) ? summary(row.undated as JsonObject) : null,
     };
   });
   // 未归属桶走与每 Key 行**同一个** `summary()`：Token 细分（完整 / 下界 /
-  // 估算 / 未知）与费用分列因此与 Key 行同形，页面不再自己解析；桶本身仍
+  // 估算 / 未知）因此与 Key 行同形，页面不再自己解析；桶本身仍
   // 单列（`keyId` 恒为 null），绝不摊到任何 Key。
   const unattributedRow = requiredObject(root.unattributed, "unattributed");
   return {
@@ -656,11 +629,6 @@ function shareRequestRow(row: JsonObject, index: number): ShareUsageRequestRow {
     durationMs: count(row.durationMs),
     cacheTokens: count(row.cacheTokens),
     reasoningTokens: count(row.reasoningTokens),
-    priced: boolean(row.priced),
-    priceVersion: text(row.priceVersion),
-    costUsd: nonnegative(row.costUsd),
-    costCny: nonnegative(row.costCny),
-    costCnyPartial: row.costCnyPartial === true,
   };
 }
 
@@ -1401,44 +1369,8 @@ function umBucket(value: unknown, name: string): UmBucketPayload {
   if (!row) throw new ContractError(`${name} must be an object`);
   return {
     tokens: normalizeUmReading(row.tokens, `${name}.tokens`),
-    costCny: normalizeUmReading(row.costCny, `${name}.costCny`),
     requests: normalizeUmReading(row.requests, `${name}.requests`),
     speed: normalizeUmReading(row.speed, `${name}.speed`),
-  };
-}
-function umPrice(value: unknown): UmPricePayload {
-  const row = object(value) ?? {};
-  const state = row.state;
-  return {
-    state:
-      state === "synced" || state === "unsynced" || state === "failed"
-        ? state
-        : "failed",
-    source: text(row.source),
-    snapshotAt: count(row.snapshotAt),
-    version: text(row.version),
-    failure: text(row.failure),
-  };
-}
-function umFx(value: unknown): UmFxPayload {
-  const row = object(value) ?? {};
-  return { rate: nonnegative(row.rate), version: text(row.version) };
-}
-export function normalizeUmCostPayload(value: unknown): UmCostPayload {
-  const row = object(value) ?? {};
-  return {
-    label: text(row.label),
-    cny: normalizeUmReading(row.cny, "参考费用"),
-    cnyPartial: boolean(row.cnyPartial),
-    costUsd: nonnegative(row.costUsd),
-    price: umPrice(row.price),
-    fx: umFx(row.fx),
-    unpricedRequests: count(row.unpricedRequests),
-    estimatedRequests: count(row.estimatedRequests),
-    coverage: object(row.coverage) ?? {},
-    models: Array.isArray(row.models)
-      ? (row.models.filter((item) => object(item)) as JsonObject[])
-      : [],
   };
 }
 export function normalizeUmTodayResponse(value: unknown): UmTodayResponse {
@@ -1478,7 +1410,6 @@ export function normalizeUmTodayResponse(value: unknown): UmTodayResponse {
         samples: count(speed.samples),
       },
     },
-    cost: normalizeUmCostPayload(root.cost),
     coverage: object(root.coverage) ?? {},
     timezone: text(root.timezone),
     checkedAt: epochMs(root.checked_epoch),
@@ -1581,7 +1512,6 @@ function umRequestRow(value: unknown): UmRequestRowPayload {
     output: normalizeUmReading(row.output, "输出 Token"),
     cacheRead: normalizeUmReading(row.cacheRead, "缓存读取"),
     reasoning: normalizeUmReading(row.reasoning, "思考 Token"),
-    costCny: normalizeUmReading(row.costCny, "参考费用"),
     durationMs: normalizeUmReading(row.durationMs, "耗时"),
     firstTokenMs: normalizeUmReading(row.firstTokenMs, "首字耗时"),
     speed: normalizeUmReading(row.speed, "速度"),
@@ -1839,31 +1769,10 @@ export function normalizeUmOperations(value: unknown): UmOperationsPayload {
   });
   return { operations };
 }
-export function normalizeUmSummaryReference(
-  value: unknown
-): UmSummaryReferencePayload {
-  const row = object(value) ?? {};
-  return {
-    label: text(row.label),
-    cny: nonnegative(row.cny),
-    cnyPartial: boolean(row.cnyPartial),
-    costUsd: nonnegative(row.costUsd),
-    price: umPrice(row.price),
-    fx: umFx(row.fx),
-    snapshotSha256: text(row.snapshotSha256),
-    coverage: object(row.coverage) ?? {},
-    models: Array.isArray(row.models)
-      ? (row.models.filter((item) => object(item)) as JsonObject[])
-      : [],
-  };
-}
 export function normalizeUmSummary(value: unknown): UmSummaryPayload {
   const root = requiredObject(value, "UM summary response");
   const assembly = object(root.assembly) ?? {};
   return {
     role: text(root.role) ?? text(assembly.role),
-    umReference: object(root.umReference)
-      ? normalizeUmSummaryReference(root.umReference)
-      : null,
   };
 }

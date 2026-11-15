@@ -22,7 +22,6 @@ WITH_DISPLAY=0
 WITH_CLOUDFLARED=0
 CLOUDFLARED_TOKEN_FILE=""
 WHEELHOUSE=""
-PRICE_TABLE=""
 RECOVER_BACKUP=""
 RECOVER_SECURITY_STATE=""
 
@@ -39,14 +38,16 @@ Options:
   --skip-apt            do not install Ubuntu packages
   --apt-locked          install the exact versions in dependencies.lock.json
   --no-start            install files but do not start/enable services
-  --with-display        also enable the loopback Xvfb/x11vnc unit
+  --with-display        explicit install-time opt-in: also enable and start the
+                        loopback Xvfb/x11vnc unit (default: installed but
+                        not enabled; use display/manual-takeover.sh start
+                        for the on-demand path)
   --with-cloudflared    also install/start the Cloudflare Tunnel edge unit
                         (default off; public edge is not managed otherwise)
   --cloudflared-token-file PATH
                         tunnel token for --with-cloudflared (required unless
                         /etc/um-share/cloudflared.env exists)
   --wheelhouse PATH     local wheelhouse for pip --no-index
-  --price-table PATH    metering price table (required unless /etc/um-share/prices.json exists)
   --recover-backup PATH explicit recovery only: sealed backup to restore
   --recover-security-state PATH
                         independent latest security state (required with
@@ -80,7 +81,6 @@ while [ "$#" -gt 0 ]; do
     --with-display) WITH_DISPLAY=1; shift ;;
     --with-cloudflared) WITH_CLOUDFLARED=1; shift ;;
     --cloudflared-token-file) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; CLOUDFLARED_TOKEN_FILE="$2"; shift 2 ;;
-    --price-table) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; PRICE_TABLE="$2"; shift 2 ;;
     --recover-backup) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_BACKUP="$2"; shift 2 ;;
     --recover-security-state) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_SECURITY_STATE="$2"; shift 2 ;;
     -h|--help) usage; exit "$EX_OK" ;;
@@ -99,9 +99,6 @@ done
 
 if [ -n "$CLOUDFLARED_TOKEN_FILE" ] && [ ! -f "$CLOUDFLARED_TOKEN_FILE" ]; then
   die "cloudflared token file not found: $CLOUDFLARED_TOKEN_FILE" "$EX_NOINPUT"
-fi
-if [ -n "$PRICE_TABLE" ] && [ ! -f "$PRICE_TABLE" ]; then
-  die "price table not found: $PRICE_TABLE" "$EX_NOINPUT"
 fi
 if [ -n "$RECOVER_BACKUP" ] || [ -n "$RECOVER_SECURITY_STATE" ]; then
   [ -n "$RECOVER_BACKUP" ] && [ -n "$RECOVER_SECURITY_STATE" ] || \
@@ -487,37 +484,11 @@ run_recovery() {
     chown root:"$UM_BROKER_GROUP" "$UM_ETC/share-management.json"
     chmod 0640 "$UM_ETC/share-management.json"
   fi
-  if [ -f "$UM_ETC/prices.json" ]; then
-    chown root:"$UM_BROKER_GROUP" "$UM_ETC/prices.json"
-    chmod 0640 "$UM_ETC/prices.json"
-  fi
 }
 
 write_if_absent "$UM_BROKER_KEY" 0600 "$UM_BROKER_USER" "$UM_BROKER_GROUP" random_secret
 write_if_absent "$UM_INSTANCE_KEY" 0600 "$UM_BROKER_USER" "$UM_BROKER_GROUP" random_secret
 write_if_absent "$UM_ETC/admin-control-token" 0600 "$UM_BROKER_USER" "$UM_BROKER_GROUP" random_secret
-
-# The share metering price table is deployment configuration, not release
-# code.  Without it the ledger stamps no price version, so a missing table is a
-# deployment refusal.
-if [ ! -e "$UM_ETC/prices.json" ]; then
-  [ -n "$PRICE_TABLE" ] || \
-    die "price table is required: pass --price-table or pre-create $UM_ETC/prices.json" "$EX_NOINPUT"
-  install -m 0640 -o root -g "$UM_BROKER_GROUP" \
-    "$PRICE_TABLE" "$UM_ETC/prices.json"
-else
-  log "keeping existing $UM_ETC/prices.json"
-fi
-python3.14 - "$UM_ETC/prices.json" <<'PY'
-import json
-import sys
-try:
-    payload = json.load(open(sys.argv[1], encoding="utf-8"))
-except (OSError, ValueError) as exc:
-    raise SystemExit(f"price table is not valid JSON: {exc}")
-if not isinstance(payload, dict):
-    raise SystemExit("price table must be a JSON object")
-PY
 
 if [ ! -e "$UM_ETC/share-management.json" ]; then
   install -m 0640 -o root -g "$UM_BROKER_GROUP" \
@@ -562,26 +533,31 @@ ensure_env_line "$UM_ETC/broker.env" CHAT2API_SHARE_REVOKE_STATE_FILE \
 ensure_env_line "$UM_ETC/console.env" CHAT2API_SHARE_REVOKE_STATE_FILE \
   "$UM_VAR/share-revoke.state"
 # Existing operator env files are never overwritten, but a missing read-face
-# line is appended: an upgraded install must not silently lose the security,
-# price or Magpie wiring (the console unit's ExecStartPre fails closed on any
-# omission).  Budget and automatic-backup keys are deliberately absent.
+# line is appended: an upgraded install must not silently lose the security
+# wiring (the console unit's ExecStartPre fails closed on any omission).
+# Budget and automatic-backup keys are deliberately absent.
 ensure_env_line "$UM_ETC/console.env" UM_CLOUD_SECURITY_STATE "$UM_VAR/security-state.json"
-ensure_env_line "$UM_ETC/console.env" USAGE_PRICE_FILE "$UM_ETC/prices.json"
-ensure_env_line "$UM_ETC/console.env" CHAT2API_PRICE_TABLE_FILE "$UM_ETC/prices.json"
-ensure_env_line "$UM_ETC/console.env" MAGPIE_PRICE_SNAPSHOT "$UM_VAR/magpie-prices.snapshot.json"
-ensure_env_line "$UM_ETC/console.env" MAGPIE_PRICE_STATUS "$UM_VAR/magpie-prices.status.json"
+# The merged 8100 child owns the UM login token and browser profile; keep them
+# under the writable console state instead of the read-only release.
+ensure_env_line "$UM_ETC/console.env" CHAT2API_TOKEN_FILE \
+  "$UM_CONSOLE_VAR/share-backend/token.json"
+ensure_env_line "$UM_ETC/console.env" CHAT2API_PROFILE_DIR \
+  "$UM_CONSOLE_VAR/share-backend/edge-profile"
 # Public API origin shown by the console and used by the public probe.  The
 # domain is deployment configuration; a missing line keeps the legacy TS rule.
 ensure_env_line "$UM_ETC/console.env" CONSOLE_PUBLIC_ORIGIN "https://dacintapi.de5.net"
 # The cloud share does not add an extra per-key dispatch queue.
 ensure_env_line "$UM_ETC/console.env" CHAT2API_SHARE_DISPATCH_MAX_WAIT_S "0"
 # Private Tailscale Serve entry and same-origin noVNC launcher.  The display
-# stays opt-in (0); the operator enables it after creating the root-only VNC
-# credential and installing the tailnet policy.
+# unit is installed but NOT enabled by default; the operator starts it on demand
+# with display/manual-takeover.sh after creating the root-only VNC credential.
 ensure_env_line "$UM_ETC/console.env" USAGE_TAILNET_CONFIG_FILE "$UM_ETC/console-tailnet-access.json"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_ENABLED "0"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_VNC_HOST "127.0.0.1"
-ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_VNC_PORT "5901"
+# Expand-contract (2026-11-14): the display moved 5901 -> 8097.  An existing
+# console.env keeps its explicit value for one release cycle; the display
+# start script reads it so x11vnc and the console proxy stay on the same port.
+ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_VNC_PORT "8097"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_NOVNC_ROOT "/usr/share/novnc"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_LAUNCHER_FILE "/opt/um-share/current/um-cloud-deploy/display/novnc-launcher.html"
 ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_VNC_AUTH_SOCKET "/run/um-share/vnc-auth.sock"
@@ -669,13 +645,12 @@ if [ "$NO_START" -eq 0 ]; then
   if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
     systemctl restart cloudflared.service
   fi
-  wait_port_open 127.0.0.1 18096 "$UM_HEALTH_TIMEOUT_S" || \
-    die "console 18096 did not open" "$EX_UNAVAILABLE"
+  console_listen_port="$(console_port)" || exit "$EX_DATAERR"
+  wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || \
+    die "console $console_listen_port did not open" "$EX_UNAVAILABLE"
   wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || \
     die "share gateway 8100 did not open (check broker start)" "$EX_UNAVAILABLE"
-  wait_port_open 127.0.0.1 8110 "$UM_HEALTH_TIMEOUT_S" || \
-    log "WARNING: 8110 is not listening yet; start it with share.backend_restart"
-  health_gate || die "health gate failed (18096/8100 HTTP)" "$EX_UNAVAILABLE"
+  health_gate || die "health gate failed ($console_listen_port/8100 HTTP)" "$EX_UNAVAILABLE"
 else
   log "services were not started (--no-start)"
 fi

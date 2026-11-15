@@ -193,7 +193,7 @@ class Chat2ApiExitRecordTests(unittest.TestCase):
 
         lines = self._lines(service_log)
         startup = self._index(
-            lines, "role=private host=127.0.0.1 port=%d pid=%d ppid=%d launched_by=testsuite"
+            lines, "host=127.0.0.1 port=%d pid=%d ppid=%d launched_by=testsuite"
             % (port, pid, os.getpid()))
         self.assertIn("startup build=", lines[startup])
         listening = self._index(lines, "listening host=127.0.0.1 port=%d pid=%d" % (port, pid))
@@ -216,12 +216,12 @@ class Chat2ApiExitRecordTests(unittest.TestCase):
         text = "\n".join(lines)
         self.assertNotIn("exit begin port=%d pid=%d" % (port, pid), text)
 
-    def test_share_backend_role_and_invalid_launch_source(self):
+    def test_invalid_launch_source(self):
         proc, port, service_log = self._start(
             "share", profile_name="share-backend-profile", launch_source="Not A Token")
         lines = self._lines(service_log)
         line = lines[self._index(lines, "port=%d pid=%d" % (port, proc.pid))]
-        self.assertIn("role=share-backend", line)
+        self.assertNotIn("role=", line)
         self.assertIn("launched_by=invalid", line)
         self.assertNotIn("Not A Token", "\n".join(lines))
 

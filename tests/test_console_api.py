@@ -11,7 +11,6 @@ remaining real write stays disabled with its precise reason) and the
 unauthorized-target submit path.
 """
 
-import contextlib
 import importlib.util
 import json
 import os
@@ -49,7 +48,7 @@ os.environ["USAGE_CONTROL_TOKEN_FILE"] = os.path.join(_TMP, "admin-control-token
 os.environ["SHARE_STORE_FILE"] = os.path.join(_TMP, "share-store.db")
 os.environ["SHARE_MANAGEMENT_CONFIG"] = os.path.join(_TMP, "no-share-deployment.json")
 _CONTROL_TOKEN = "test-control-token-console-api"
-from share_secret_protection import write_private_secret_path
+from share.secret_protection import write_private_secret_path
 write_private_secret_path(
     os.environ["USAGE_CONTROL_TOKEN_FILE"], _CONTROL_TOKEN.encode("utf-8"))
 
@@ -61,10 +60,10 @@ assert _SPEC.loader is not None
 sys.modules[_SPEC.name] = usagesrv
 _SPEC.loader.exec_module(usagesrv)
 
-import console_adapters  # noqa: E402  (same directory, sys.path prepared)
-import console_share_actions as orch  # noqa: E402  (share observe seam)
-import share_metering  # noqa: E402  (share-usage payload clock seam)
-import share_store  # noqa: E402  (B8-6 key-name projection fixture store)
+from console import adapters as console_adapters  # noqa: E402  (same directory, sys.path prepared)
+from console import share_actions as orch  # noqa: E402  (share observe seam)
+import share.metering as share_metering  # noqa: E402  (share-usage payload clock seam)
+import share.store as share_store  # noqa: E402  (B8-6 key-name projection fixture store)
 
 
 # Guard before any test can construct a default management client. The
@@ -78,41 +77,22 @@ _ISOLATION_PATCHERS = []
 _ISOLATION_MODULES = []
 _ISOLATION_TEMP = None
 
-_STATS_PRICE_TABLE = {"exchangeRate": 7.2, "meta": {"checkedAt": None}}
-
-
 class _ConsoleApiStatsEnvironment:
     """StatsEnvironment fixture for this module's statistics routes.
 
-    Paths point into this module's fixture directory and the price loader is a
-    minimal fixture table, so the console_stats reads behind the HTTP routes never
-    touch a production ledger or price file. The price rate is irrelevant to the
-    route-contract cases.
+    Paths point into this module's fixture directory, so the console_stats reads
+    behind the HTTP routes never touch a production ledger.
     """
 
     chat2api_log = property(
         lambda self: os.path.join(_TMP, "usage-chat2api.jsonl"))
     dsh_snapshot = property(
         lambda self: os.path.join(_TMP, "dsh-snapshot.json"))
-    qoder_log = property(lambda self: os.path.join(_TMP, "qoder-usage.jsonl"))
-    m365_log = property(lambda self: os.path.join(_TMP, "m365-usage.jsonl"))
     dsh_merge_day = property(lambda self: usagesrv.DSH_MERGE_DAY)
-    magpie_price_snapshot = property(
-        lambda self: os.path.join(_TMP, "magpie-prices.snapshot.json"))
-    magpie_price_status = property(
-        lambda self: os.path.join(_TMP, "magpie-prices.status.json"))
     parse_ts = staticmethod(lambda value: usagesrv._parse_ts(value))
     beijing_day = staticmethod(lambda ms: usagesrv._beijing_day(ms))
     day_start_ms = staticmethod(lambda day: usagesrv._day_start_ms(day))
     display_path = staticmethod(lambda path: usagesrv._display_path(path))
-    estimate_record = staticmethod(
-        lambda *args: usagesrv.estimate_record(*args))
-    price_table_loader = staticmethod(lambda: _STATS_PRICE_TABLE)
-
-
-def _refuse_real_kernel(*args, **kwargs):
-    _ISOLATION_ATTEMPTS.append("real_named_pipe_kernel")
-    raise AssertionError("offline test attempted a real named-pipe kernel")
 
 
 def _guard_usage_module(module, root=None, patchers=None, modules=None):
@@ -163,9 +143,9 @@ def _guard_usage_module(module, root=None, patchers=None, modules=None):
 
 def setUpModule():
     global _ISOLATION_TEMP, _ISOLATION_SAVED_SEAMS
-    import share_broker_client
-    import share_broker_server
-    import console_share_actions
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
+    from console import share_actions as console_share_actions
     _ISOLATION_ATTEMPTS.clear()
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(prefix="offline-management-")
     root = Path(_ISOLATION_TEMP.name)
@@ -182,16 +162,13 @@ def setUpModule():
     _ISOLATION_SAVED_SEAMS = {
         name: value for name, value in vars(console_share_actions).items()
         if name.startswith("_") and name.upper() == name}
-    for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                         "_declare_real_kernel"),
-                        (share_broker_server, "_declared_kernel")):
-        patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-        patcher.start()
-        _ISOLATION_PATCHERS.append(patcher)
+    # The retired Windows named-pipe transport is gone with the old local
+    # share chain (#33); the POSIX socket transport needs no kernel facade.
+    _ = (share_broker_client, share_broker_server)
 
 
 def tearDownModule():
-    import console_share_actions
+    from console import share_actions as console_share_actions
     try:
         for module, old_console, _old_share in _ISOLATION_MODULES:
             current = module._console_manager
@@ -220,7 +197,7 @@ def tearDownModule():
 FAKE_SNAPSHOT = {
     "ok": True,
     "services": [{
-        "key": "usage", "display_name": "费用统计", "port": 8001,
+        "key": "usage", "display_name": "用量统计", "port": 8001,
         "state": "Running", "healthy": True, "detail": "运行中",
         "process_ids": [1],
     }],
@@ -293,14 +270,11 @@ class ConsoleApiTestBase(unittest.TestCase):
                 "CONSOLE_LOCK_DIR": str(root / "console-locks")})
             cls._isolation_env.start()
             cls.addClassCleanup(cls._isolation_env.stop)
-        import share_broker_client
-        import share_broker_server
-        for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                             "_declare_real_kernel"),
-                            (share_broker_server, "_declared_kernel")):
-            patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-            patcher.start()
-            cls._isolation_patchers.append(patcher)
+        import share.broker_client as share_broker_client
+        import share.broker_server as share_broker_server
+        # The retired Windows named-pipe transport is gone with the old
+        # local share chain (#33).
+        _ = (share_broker_client, share_broker_server)
         cls._isolation_seams = {
             name: value for name, value in vars(orch).items()
             if name.startswith("_") and name.upper() == name}
@@ -319,7 +293,7 @@ class ConsoleApiTestBase(unittest.TestCase):
                 if current is not None and current is not old_console:
                     current.close(wait=True)
         finally:
-            import console_stats
+            from console import stats as console_stats
             console_stats._STATS_ENVIRONMENT = cls._isolation_stats_before
             for patcher in reversed(cls._isolation_patchers):
                 patcher.stop()
@@ -334,7 +308,7 @@ class ConsoleApiTestBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.status_patcher = mock.patch(
-            "console_adapters.service_status", return_value=FAKE_SNAPSHOT)
+            "console.adapters.service_status", return_value=FAKE_SNAPSHOT)
         cls.status_patcher.start()
         cls.addClassCleanup(cls.status_patcher.stop)
         cls._start_class_isolation()
@@ -370,7 +344,7 @@ class ConsoleApiTestBase(unittest.TestCase):
         cls.addClassCleanup(cls.server.shutdown)
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
-        import console_stats
+        from console import stats as console_stats
         # standards-tests-04: the class installed a PROCESS-WIDE environment and
         # never restored it, so every later module of the same ``discover`` run
         # inherited an environment whose paths pointed into this class's temp
@@ -534,7 +508,7 @@ class ConsoleReadTests(ConsoleApiTestBase):
 
     def test_root_cloud_process_refuses_local_identity(self):
         # The reverse mismatch is refused too: a cloud process must not host the
-        # local tree, which would otherwise show the wrong console on 18096.
+        # local tree, which would otherwise show the wrong console on 8096.
         with tempfile.TemporaryDirectory() as td:
             index = os.path.join(td, "index.html")
             with open(index, "wb") as f:
@@ -606,11 +580,11 @@ class ConsoleReadTests(ConsoleApiTestBase):
         with tempfile.TemporaryDirectory() as td:
             assets = os.path.join(td, "assets")
             os.makedirs(assets)
-            script = os.path.join(assets, "workbench-STUBHASH.js")
+            script = os.path.join(assets, "um-ui-STUBHASH.js")
             with open(script, "wb") as f:
                 f.write(b"console.log('console-stub');")
             with mock.patch.object(usagesrv, "CONSOLE_DIST_DIR", td):
-                status, raw = self.req("GET", "/assets/workbench-STUBHASH.js")
+                status, raw = self.req("GET", "/assets/um-ui-STUBHASH.js")
         self.assertEqual(status, 200)
         self.assertIn(b"console-stub", raw)
 
@@ -671,7 +645,7 @@ class ConsoleReadTests(ConsoleApiTestBase):
         status, raw = self.req("GET", "/api/console/services", headers=auth)
         data = json.loads(raw)
         self.assertEqual(status, 200)
-        self.assertEqual(data["services"][0]["display_name"], "费用统计")
+        self.assertEqual(data["services"][0]["display_name"], "用量统计")
         self.assertIs(data["meta"]["cached"], False)
         status, raw = self.req("GET", "/api/console/services", headers=auth)
         data = json.loads(raw)
@@ -688,8 +662,9 @@ class ConsoleReadTests(ConsoleApiTestBase):
         status, raw = self.req("GET", "/api/console/operations")
         self.assertEqual(status, 200)
         status, raw = self.req("GET", "/api/console/model-pending")
-        self.assertEqual(status, 200)
-        self.assertIn("pending", json.loads(raw))
+        # Ticket #32: the sync-pending read face is retired with the model
+        # sync actions; the unknown GET route answers 404.
+        self.assertEqual(status, 404)
         status, raw = self.req("POST", "/api/console/operations",
                                body={"action": "no.such", "target": "x"})
         self.assertEqual(status, 404)
@@ -723,7 +698,7 @@ class LogOverviewRouteTests(ConsoleApiTestBase):
     """
 
     def test_overview_aggregates_all_targets_and_states_coverage(self):
-        import console_log_reader
+        from console import log_reader as console_log_reader
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "chat2api").mkdir()
@@ -760,9 +735,9 @@ class LogOverviewRouteTests(ConsoleApiTestBase):
             targets = {(t["source"], t["category"]): t
                        for t in payload["targets"]}
             # 缺失目标如实上报，行数不计为 0。
-            self.assertEqual(targets[("share", "watch")]["status"],
+            self.assertEqual(targets[("share", "faults")]["status"],
                              "missing")
-            self.assertIsNone(targets[("share", "watch")]["rows"])
+            self.assertIsNone(targets[("share", "faults")]["rows"])
             self.assertGreaterEqual(
                 payload["coverage"]["targets_missing"], 1)
 
@@ -778,33 +753,13 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
     share_metering 缺席时如实返回错误码，绝不折成 0 请求 / 0 费用。
     """
 
-    PRICED_MODEL = "zfpricedfixture"
-    UNPRICED_MODEL = "qquunpricedfixture"
+    MODEL_A = "fixture-model-a"
+    MODEL_B = "fixture-model-b"
     LEDGER_NAME = "usage-share-backend.jsonl"
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="console-share-usage-")
         self.addCleanup(self._tmp.cleanup)
-        # 价目链按生产同款注入点重定向（照 tests/test_console_stats.py 先例），
-        # 夹具价表只有 PRICED_MODEL 一条：无价模型因此必然无价，不读生产价表。
-        self._orig_price_file = usagesrv.PRICE_FILE
-        self._orig_override_file = usagesrv.OVERRIDE_FILE
-        self._orig_price_cache = dict(usagesrv._price_cache)
-        prices = {
-            "_说明": "console share-usage route fixture",
-            "checkedAt": "2026-09-25",
-            "exchangeRate": 7.2,
-            "models": {},
-            "providers": {"fixture": {"models": {
-                self.PRICED_MODEL: {"input": 1.0, "output": 2.0}}}},
-        }
-        self.prices_path = os.path.join(self._tmp.name, "prices.json")
-        with open(self.prices_path, "w", encoding="utf-8") as handle:
-            json.dump(prices, handle, ensure_ascii=False)
-        usagesrv.PRICE_FILE = self.prices_path
-        usagesrv.OVERRIDE_FILE = os.path.join(self._tmp.name, "no-override.json")
-        usagesrv._price_cache["data"] = None
-        self.addCleanup(self._restore_price_chain)
         self.ledger_dir = os.path.join(self._tmp.name, "share-backend")
         os.makedirs(self.ledger_dir)
         # Rev8 B8-6：费用读面把每个 Key 的白名单名称/删除状态从管理库投影
@@ -839,12 +794,6 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         else:
             os.environ["SHARE_STORE_FILE"] = self._orig_share_store
 
-    def _restore_price_chain(self):
-        usagesrv.PRICE_FILE = self._orig_price_file
-        usagesrv.OVERRIDE_FILE = self._orig_override_file
-        usagesrv._price_cache.clear()
-        usagesrv._price_cache.update(self._orig_price_cache)
-
     def _ledger_records(self):
         """夹具账本：已归因（上游用量 / 本地估算）、无价、未归因各一条。"""
         base = {
@@ -854,21 +803,21 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         }
         return [
             {**base, "time": "2026-09-25T10:00:00+08:00",
-             "model": self.PRICED_MODEL, "input_tokens": 1000000,
+             "model": self.MODEL_A, "input_tokens": 1000000,
              "output_tokens": 0, "total_tokens": 1000000, "estimated": False,
              "usage_source": "upstream", "key_id": self.key_a, "request_id": "r1"},
             {**base, "time": "2026-09-25T11:00:00+08:00",
-             "model": self.PRICED_MODEL, "input_tokens": 1000000,
+             "model": self.MODEL_A, "input_tokens": 1000000,
              "output_tokens": 0, "total_tokens": 1000000, "estimated": True,
              "usage_source": "estimated", "key_id": self.key_a, "request_id": "r2"},
             {**base, "time": "2026-09-25T12:00:00+08:00",
-             "model": self.UNPRICED_MODEL, "input_tokens": 10,
+             "model": self.MODEL_B, "input_tokens": 10,
              "output_tokens": 5, "total_tokens": 15, "estimated": False,
              "usage_source": "upstream", "key_id": self.key_b, "request_id": "r3"},
             {**base, "time": "2026-09-25T13:00:00+08:00",
              # 7,000 input tokens × 1.0 USD/1M = 0.007 USD → × 7.2 = 0.0504 CNY；
              # 与两条 1.0 USD 记录合计 2.007 USD → 14.4504 CNY（逐条换算后相加）。
-             "model": self.PRICED_MODEL, "input_tokens": 7000, "output_tokens": 0,
+             "model": self.MODEL_A, "input_tokens": 7000, "output_tokens": 0,
              "total_tokens": 7000, "estimated": False, "usage_source": "upstream",
              "request_id": "r4"},
         ]
@@ -920,43 +869,19 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertEqual(coverage["ledger"], self.LEDGER_NAME)
         self.assertIs(coverage["ledgerPresent"], True)
         self.assertIs(coverage["ledgerReadable"], True)
-        self.assertIs(coverage["priceFn"], True)
         self.assertEqual(coverage["attributed"], 3)
         self.assertEqual(coverage["unattributed"], 1)
-        self.assertEqual(coverage["unpricedRequests"], 1)
-        self.assertEqual(coverage["unpricedModels"], [self.UNPRICED_MODEL])
-        self.assertIs(coverage["priceFn"], True)
         # 人民币口径：计价器是六元组（带每条记录所属版本的汇率）。
-        self.assertIs(coverage["rateFn"], True)
         # 有记录无法折算（key_b 的无价行）→ 整页金额是下界，不是确定总额。
-        self.assertIs(coverage["costCnyPartial"], True)
         key_a = self._key(console_payload, self.key_a)
         self.assertEqual(key_a["requests"], 2)
-        self.assertEqual(key_a["knownCostUsd"], 1.0)
-        self.assertEqual(key_a["estimatedCostUsd"], 1.0)
         # 旧形状价表只有恒生效的默认段（7.2）：已知/估算各自逐条换算。
-        self.assertEqual(key_a["knownCostCny"], 7.2)
-        self.assertEqual(key_a["estimatedCostCny"], 7.2)
-        self.assertEqual(key_a["costCny"], 14.4)
-        self.assertIs(key_a["costCnyPartial"], False)
         # B8-6：白名单名称投影——活动 Key 名字可读、deleted=False。
         self.assertEqual(key_a["keyName"], "甲钥匙")
         self.assertIs(key_a["deleted"], False)
         key_b = self._key(console_payload, self.key_b)
-        self.assertEqual(key_b["unpricedRequests"], 1)
         # 无价记录不折 0：人民币总额未知且显式标 partial；唯一记录是
         # upstream，估算侧没有记录，因此 estimatedCostCny 是真实 0.0。
-        self.assertIsNone(key_b["costCny"])
-        self.assertIsNone(key_b["knownCostCny"])
-        self.assertEqual(key_b["estimatedCostCny"], 0.0)
-        self.assertIs(key_b["costCnyPartial"], True)
-        # 整页人民币总额（载荷没有顶层金额字段，按各 Key + 未归属求和）：
-        # 14.4 + 0.0504 = 14.4504；key_b 的未知不计入。
-        buckets = console_payload["keys"] + [console_payload["unattributed"]]
-        page_cny = sum(row["costCny"] for row in buckets
-                       if row["costCny"] is not None)
-        self.assertEqual(page_cny, 14.4504)
-        self.assertEqual(console_payload["unattributed"]["costCny"], 0.0504)
         # 删除过的 Key：名字仍可读，deleted=True；密钥明文/密文/哈希不在响应里。
         self.assertEqual(key_b["keyName"], "乙钥匙")
         self.assertIs(key_b["deleted"], True)
@@ -968,8 +893,6 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertEqual(coverage["keyNames"], 2)
 
     def test_usage_read_never_assembles_management_or_opens_broker(self):
-        from share_broker_client import NamedPipeBrokerTransport
-
         # 每次拒绝都记进 _ISOLATION_ATTEMPTS：若路由把异常吞掉，入口仍会
         # 因累计 attempts 失败（与 58-63 行的设计一致），证据不再只剩
         # assert_not_called 的连接错误。
@@ -981,17 +904,10 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
             _ISOLATION_ATTEMPTS.append("production_deployment_loader")
             raise AssertionError("deployment read")
 
-        def _refuse_pipe(*args, **kwargs):
-            _ISOLATION_ATTEMPTS.append("real_named_pipe_kernel")
-            raise AssertionError("real pipe opened")
-
         before = Path(self.share_db).read_bytes()
         with mock.patch.object(usagesrv, "get_share_manager",
-                               side_effect=_refuse_assembly) as manager, \
-             mock.patch.object(usagesrv, "_load_share_management_deployment",
-                               side_effect=_refuse_deployment) as deployment, \
-             mock.patch.object(NamedPipeBrokerTransport, "open",
-                               side_effect=_refuse_pipe) as pipe:
+                               side_effect=_refuse_assembly) as manager,              mock.patch.object(usagesrv, "_load_share_management_deployment",
+                               side_effect=_refuse_deployment) as deployment:
             status, raw = self.req("GET", "/api/console/share-usage")
         self.assertEqual(status, 200)
         payload = json.loads(raw)
@@ -1000,7 +916,6 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertIs(self._key(payload, self.key_b)["deleted"], True)
         manager.assert_not_called()
         deployment.assert_not_called()
-        pipe.assert_not_called()
         self.assertEqual(Path(self.share_db).read_bytes(), before)
 
     def test_unknown_names_and_unreadable_store_stay_unknown(self):
@@ -1008,8 +923,8 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         real_reader = usagesrv.share_usage_reader()[0]
         self.assertIsNotNone(real_reader)
 
-        def reader(ledger, price_fn=None, *, limit=200000):
-            payload = real_reader(ledger, price_fn, limit=limit)
+        def reader(ledger, *, limit=200000):
+            payload = real_reader(ledger, limit=limit)
             payload["keys"].append({"key_id": "k-unknown", "requests": 1})
             return payload
 
@@ -1045,7 +960,7 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
     def test_write_methods_and_subpaths_never_reach_the_reader(self):
         calls = []
 
-        def reader(ledger, price_fn=None, *, limit=200000):
+        def reader(ledger, *, limit=200000):
             calls.append(ledger)
             return {"requests": 0, "keys": [], "unattributed": {},
                     "checkedAt": "2026-09-25T12:00:00+00:00", "coverage": {}}
@@ -1075,7 +990,7 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
 
     def test_missing_share_metering_reports_an_error_not_zero(self):
         # 模块缺席不是「零用量」：503 错误码原样透出，绝不返回 0 请求载荷。
-        with mock.patch.dict(sys.modules, {"share_metering": None}):
+        with mock.patch.dict(sys.modules, {"share.metering": None}):
             status, raw = self.req("GET", "/api/console/share-usage")
         self.assertEqual(status, 503)
         self.assertEqual(json.loads(raw), {"error": "share_metering_unavailable"})
@@ -1112,15 +1027,23 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertEqual(by_id["r3"]["keyName"], "乙钥匙")
         self.assertIs(by_id["r3"]["deleted"], True)
         # 前端统一走 /gw/usagesrv 别名；管理面同一份载荷。
+        # checkedAt 是本次读取的墙钟；并发负载下两次读取可能跨秒，不能作为
+        # “同一份载荷”的比较字段。
+        def without_checked_at(payload):
+            return {key: value for key, value in payload.items()
+                    if key != "checkedAt"}
+
         status, alias_raw = self.req(
             "GET", "/gw/usagesrv/api/console/share-usage/requests?limit=2")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(alias_raw), page)
+        self.assertEqual(without_checked_at(json.loads(alias_raw)),
+                         without_checked_at(page))
         status, management_raw = self.req(
             "GET", "/api/share/usage/requests?limit=2",
             headers={"X-Admin-Control": _CONTROL_TOKEN})
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(management_raw), page)
+        self.assertEqual(without_checked_at(json.loads(management_raw)),
+                         without_checked_at(page))
         # 第二页只含更旧记录；到底后 nextCursor 为 null。
         status, second_raw = self.req(
             "GET", "/api/console/share-usage/requests?limit=2&cursor=3")
@@ -1138,7 +1061,7 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertEqual([row["requestId"] for row in json.loads(raw)["rows"]],
                          ["r2", "r1"])
         status, raw = self.req(
-            "GET", f"/api/console/share-usage/requests?model={self.UNPRICED_MODEL}")
+            "GET", f"/api/console/share-usage/requests?model={self.MODEL_B}")
         self.assertEqual(status, 200)
         self.assertEqual([row["requestId"] for row in json.loads(raw)["rows"]],
                          ["r3"])
@@ -1165,7 +1088,7 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
                 self.assertEqual(json.loads(raw)["error"], "unknown path")
 
     def test_request_page_missing_metering_reports_an_error_not_empty(self):
-        with mock.patch.dict(sys.modules, {"share_metering": None}):
+        with mock.patch.dict(sys.modules, {"share.metering": None}):
             status, raw = self.req(
                 "GET", "/api/console/share-usage/requests")
         self.assertEqual(status, 503)
@@ -1262,7 +1185,7 @@ class EnvironmentRestorationTests(unittest.TestCase):
         code = "\n".join([
             "import json, os, sys, unittest",
             "sys.path[:0] = [%r, %r]",
-            "import console_stats",
+            "from console import stats as console_stats",
             "before = console_stats._STATS_ENVIRONMENT",
             "import test_console_api as module",
             "suite = unittest.TestSuite([",
@@ -1294,51 +1217,39 @@ class RegistryHonestyTests(ConsoleApiTestBase):
     def test_production_registry_enablement_is_explicit(self):
         infos = usagesrv.get_console_manager().action_info()
         # B0 (2026-11-01): retired M365 / Qoder CN / Qoder Global /
-        # CLIProxy management actions are absent. Active actions retain their
-        # exact enablement and disabled reasons below.
-        self.assertEqual(len(infos), 36)
+        # CLIProxy management actions are absent. Ticket #32 retires the
+        # model sync/settings/task actions and #33 retires the local share
+        # chain: model.catalog, the context probe and the context overrides
+        # are the only model actions left.
+        self.assertEqual(len(infos), 12)
         by_name = {i["action"]: i for i in infos}
         enabled = {n for n, i in by_name.items() if i["enabled"]}
         # The deployment authorization package (2026-09-16, section 5) plus
-        # user instruction A3 flipped the approved actions live: the four-
-        # layer share orchestration, the model speedtest, the service start/stop
+        # user instruction A3 flipped the approved actions live: the service
+        # start/stop
         # target (chat2api only after B0 — usage stays excluded as the
-        # console's own web host), the UM login orchestration, the managed
-        # model-sync writes (sync_apply/task_install — the pin writes were
-        # removed with the pin mechanism, Rev8 2026-10-02), since the
+        # console's own web host), the UM login orchestration, since the
         # maintainer's 2026-09-22 budget approval the billed long-input
         # context probe RUN within its registered caps (≤20 requests,
         # ≤64 tokens), and since Plan-Revision 7 step 6 the state-only
-        # context override set/clear (client application stays behind
-        # sync_apply). Scheduled-task DISABLE stays disabled with its
-        # precise reason.
+        # context override set/clear.
         self.assertEqual(
             enabled,
-            {"account.um_status",
-             "model.sync_preview", "model.sync_pending",
-             "model.sync_history", "model.task_status",
-             "share.status",
-             "share.start", "share.stop", "share.estop", "share.retry_stop",
-             "share.backend_login",
-             "model.speedtest",
-             "service.start", "service.stop", "service.restart",
-             "account.login",
-             "model.sync_apply",
-             "model.task_install",
-             "model.catalog", "model.context_probe_preview",
-             "model.context_probe_run",
-             "model.context_overrides", "model.context_override_set",
-             "model.context_override_clear",
-             "account.um_verify",
-             "model.settings_save", "model.settings_preview", "model.settings_apply",
-             # Rev9 A9-8 (2026-10-03): the four maintenance actions.
-             "share.diagnostics", "share.repair_limits", "share.backend_reauthenticate",
-             "share.backend_restart", "share.gateway_restart",
-             # S5（契约 §5.2）：公网巡检一键复查与受限重试。
-             "share.public_check", "share.public_retry"})
-        self.assertEqual(len(enabled), 35)
-        self.assertEqual(len(infos) - len(enabled), 1)
+            {"account.um_status", "account.um_verify", "account.login",
+             "model.catalog", "model.context_override_clear",
+             "model.context_override_set", "model.context_overrides",
+             "model.context_probe_preview", "model.context_probe_run",
+             "service.restart", "service.start",
+             "service.stop"})
+        self.assertEqual(len(enabled), 12)
+        self.assertEqual(len(infos) - len(enabled), 0)
         for retired in (
+                "model.sync_preview", "model.sync_pending",
+                "model.sync_history", "model.sync_apply",
+                "model.settings_save", "model.settings_preview",
+                "model.settings_apply",
+                "model.task_status", "model.task_install",
+                "model.task_disable",
                 "qoder.credential_bridge", "qoder.source_diagnostics",
                 "qoder.quota_read", "qoder.status", "qoder.models",
                 "qoder.poc", "qoderglobal.status", "qoderglobal.models",
@@ -1365,12 +1276,20 @@ class RegistryHonestyTests(ConsoleApiTestBase):
         for retired in ("qoderglobal.status", "qoderglobal.models",
                         "qoderglobal.quota", "qoderglobal.login"):
             self.assertNotIn(retired, by_name)
-        # task_disable stays disabled with its precise real-write reason.
-        disabled_spec = by_name["model.task_disable"]
-        self.assertFalse(disabled_spec["enabled"])
-        self.assertIn("真实系统写入", disabled_spec["disabled_reason"])
-        self.assertIn("06:00", disabled_spec["disabled_reason"])
-        self.assertIn("节 5", disabled_spec["disabled_reason"])
+        # Ticket #32: the model sync/settings/task actions are gone; the
+        # catalog, context probe and context overrides stay registered.
+        for retired in ("model.sync_preview", "model.sync_pending",
+                        "model.sync_history", "model.sync_apply",
+                        "model.settings_save", "model.settings_preview",
+                        "model.settings_apply", "model.task_status",
+                        "model.task_install", "model.task_disable"):
+            self.assertNotIn(retired, by_name)
+        for kept in ("model.catalog", "model.context_probe_preview",
+                     "model.context_probe_run", "model.context_overrides",
+                     "model.context_override_set",
+                     "model.context_override_clear"):
+            self.assertIn(kept, by_name)
+            self.assertTrue(by_name[kept]["enabled"], kept)
 
     def test_um_verify_enabled_after_endpoint_live(self):
         # B-2 (2026-09-20): the RUNNING production chat2api instance ships
@@ -1414,7 +1333,7 @@ class RegistryHonestyTests(ConsoleApiTestBase):
         self.assertEqual(data["error"], "invalid_stats_query")
 
     def test_stats_valid_query_with_fixture_ledgers(self):
-        import console_stats
+        from console import stats as console_stats
         fixture = console_stats.bounded_stats(
             {}, "2099-01-01", "2099-01-02")
         # No ledgers: coverage absent, empty days — honest empty, not zeros.
@@ -1486,18 +1405,18 @@ class ConsoleWriteBoundaryTests(ConsoleApiTestBase):
         # allow-sets and is refused at submit time.
         self.assertIn("宿主", data["reason"])
 
-    def test_retired_source_action_is_refused_with_410(self):
-        # B0: a retired-source action is refused explicitly (source_retired)
-        # before the operation manager looks it up, so no handler runs and no
-        # operation row is created.
+    def test_retired_source_action_is_unknown_and_creates_no_row(self):
+        # B0: retired-source actions are not registered and have no dedicated
+        # gate any more, so the operation manager answers invalid_action and
+        # no handler runs and no operation row is created.
         for action in ("qoder.status", "qoderglobal.status",
                        "cliproxy.status", "m365.settings_save"):
             with self.subTest(action=action):
                 status, raw = self.req("POST", "/api/console/operations",
                                        body={"action": action,
                                              "target": ""})
-                self.assertEqual(status, 410)
-                self.assertEqual(json.loads(raw)["error"], "source_retired")
+                self.assertEqual(status, 404)
+                self.assertEqual(json.loads(raw)["error"], "invalid_action")
         status, raw = self.req("GET", "/api/console/operations")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw)["operations"], [])
@@ -1537,29 +1456,21 @@ class _OkHandler(BaseHTTPRequestHandler):
 
 
 class QuotaSnapshotEndpointTests(ConsoleApiTestBase):
-    """B0 (2026-11-01): the retired source quota read face is NOT assembled.
+    """B0 (2026-11-01): the retired source quota read face is removed.
 
-    The retired model source is gone from the registry: the endpoint answers an
-    explicit ``not_assembled`` state with null readings, never probes a retired
-    port and never reads an old token file or a stale success cache.
-    ``?refresh=1`` changes nothing (no dead knob).
+    The retired model source is gone, and its payload builder plus route are
+    gone with it: the path answers the same unknown-path 404 as any other
+    unregistered path, never probes a retired port and never reads an old token
+    file or a stale success cache. ``?refresh=1`` changes nothing.
     """
 
-    def test_quota_snapshot_is_not_assembled(self):
+    def test_quota_snapshot_endpoint_is_gone(self):
         for query in ("", "?refresh=1"):
             with self.subTest(query=query):
                 status, raw = self.req(
                     "GET", "/api/console/quota-snapshot" + query)
-                self.assertEqual(status, 200)
-                payload = json.loads(raw)
-                self.assertEqual(payload["state"], "not_assembled")
-                self.assertIsNone(payload["remaining"])
-                self.assertIsNone(payload["used"])
-                self.assertIsNone(payload["total"])
-                self.assertIn("error", payload)
-                self.assertNotEqual(payload["error"], "")
-                self.assertEqual(payload["gate"]["verdict"],
-                                 "not_assembled")
+                self.assertEqual(status, 404)
+                self.assertEqual(json.loads(raw)["error"], "unknown path")
 
 
 class ConsoleHealthEndpointTests(ConsoleApiTestBase):
@@ -1681,53 +1592,29 @@ class ConsoleHealthEndpointTests(ConsoleApiTestBase):
 
 
 class ConsoleModelScopeContractTests(ConsoleApiTestBase):
-    """模型同步 scope 契约（2026-09-26 后端控制台 API 线）。
+    """Ticket #32: the model sync/settings/task actions are retired.
 
-    维护者报告「应用同步 model · 失败／被拒绝：invalid_params」的确定性触发链是
-    scope 参数形状：网页发数组（workbench.ts:3919-3941），后端要求 JSON 数组
-    字符串（console_adapters.py:155-159 的 _MODEL_SYNC_SCOPE_SCHEMA）。本类锁定
-    两件事：
-
-    1. 拒绝说明：已知的参数形状错误在 400 机器码之外补一个受控 detail（不含
-       路径/密钥/长 token），且拒绝不入操作账本（提交前抛出，无操作行）。
-    2. 预览/应用同范围：两个动作对同一 scope 参数的判定与归一化逐字段一致，
-       合法 scope 传到 model_sync.run_sync 的 scope 完全相同。
-
-    model_sync 的全部路径常量与 run_sync 都被替换/替身化：不取上游目录、不写
-    任何客户端配置、不动真实 data/ 与锁文件。
+    The old scope/selection contract belonged to model.sync_preview/apply; both
+    action ids now follow the existing unknown-action contract (404
+    invalid_action) and create no operation row. The kept model actions stay
+    registered with their exact schemas.
     """
 
-    PREVIEW = "model.sync_preview"
-    APPLY = "model.sync_apply"
+    RETIRED = (
+        "model.sync_preview", "model.sync_pending",
+        "model.sync_history", "model.sync_apply",
+        "model.settings_save", "model.settings_preview",
+        "model.settings_apply",
+        "model.task_status", "model.task_install",
+        "model.task_disable",
+    )
+    KEPT = (
+        "model.catalog", "model.context_probe_preview",
+        "model.context_probe_run", "model.context_overrides",
+        "model.context_override_set", "model.context_override_clear",
+    )
 
-    @classmethod
-    def setUpClass(cls):
-        # 本类必须提交真实操作（拒绝与成功路径都要走真 HTTP 提交），故把控制台
-        # 状态库与锁目录也指到本类私有临时目录：同一模块内其他用例断言
-        # 「操作列表为空」不会被本类产生的操作行污染。
-        super().setUpClass()
-
-    @contextlib.contextmanager
-    def _isolated_sync(self):
-        import model_sync
-        with tempfile.TemporaryDirectory() as directory:
-            data = Path(directory) / "data"
-            data.mkdir(parents=True, exist_ok=True)
-            paths = {
-                "DATA_DIR": data,
-                "STATE_FILE": data / "model-sync-state.json",
-                "RESULT_FILE": data / "model-sync-last-result.json",
-                "PREVIEW_FILE": data / "model-sync-last-preview.json",
-                "HISTORY_FILE": data / "model-sync-history.jsonl",
-                "BACKUP_DIR": data / "model-sync-backups",
-                "LOCK_FILE": data / "model-sync.lock",
-            }
-            with contextlib.ExitStack() as stack:
-                for name, value in paths.items():
-                    stack.enter_context(mock.patch.object(model_sync, name, value))
-                yield paths
-
-    def _submit(self, action, params):
+    def _submit(self, action, params=None):
         body = {"action": action, "target": "model"}
         if params is not None:
             body["params"] = params
@@ -1735,170 +1622,49 @@ class ConsoleModelScopeContractTests(ConsoleApiTestBase):
                               headers={"X-Admin-Control": _CONTROL_TOKEN})
         return status, json.loads(raw)
 
-    def _wait(self, op_id, timeout=20.0):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            status, raw = self.req(
-                "GET", "/api/console/operations/%s" % op_id,
-                headers={"X-Admin-Control": _CONTROL_TOKEN})
-            self.assertEqual(status, 200)
-            op = json.loads(raw)["operation"]
-            if op["state"] in ("succeeded", "failed", "cancelled",
-                               "interrupted"):
-                return op
-            time.sleep(0.05)
-        self.fail("operation %s did not finish in %.0fs" % (op_id, timeout))
-
     def _operation_count(self):
         status, raw = self.req("GET", "/api/console/operations?limit=200",
                               headers={"X-Admin-Control": _CONTROL_TOKEN})
         self.assertEqual(status, 200)
         return len(json.loads(raw)["operations"])
 
-    def test_scope_array_shapes_are_refused_with_controlled_detail(self):
-        """网页的提交形状（数组）在提交即 400，带机器码 + 受控说明，不入账本。"""
-        cases = (
-            ("sources", {"sources": ["um"]}, "sources"),
-            ("consumers", {"consumers": ["ZCode"]}, "consumers"),
-            ("models", {"models": ["um"]}, "models"),
-        )
-        for action in (self.PREVIEW, self.APPLY):
-            for name, params, token in cases:
-                with self.subTest(action=action, case=name):
-                    before = self._operation_count()
-                    status, data = self._submit(action, params)
-                    self.assertEqual(status, 400)
-                    self.assertEqual(data["error"], "invalid_params")
-                    self.assertEqual(before, self._operation_count(),
-                                     "拒绝不得入操作账本")
-                    detail = data.get("detail")
-                    self.assertIsInstance(detail, str)
-                    self.assertIn(token, detail)
-                    # 受控：说明不含路径分隔符、盘符或长 token（密钥形态）。
-                    self.assertNotIn("\\", detail)
-                    self.assertNotIn("/", detail)
-                    self.assertLessEqual(len(detail), 200)
+    def test_retired_model_sync_actions_are_unknown_and_create_no_row(self):
+        """退役动作按既有未知动作契约诚实拒绝（404 invalid_action）。"""
+        for action in self.RETIRED:
+            with self.subTest(action=action):
+                before = self._operation_count()
+                status, data = self._submit(action, {"scope_mode": "all"})
+                self.assertEqual(status, 404, action)
+                self.assertEqual(data["error"], "invalid_action", action)
+                self.assertEqual(before, self._operation_count(),
+                                 "拒绝不得入操作账本")
 
-    def test_scope_refusals_are_identical_for_preview_and_apply(self):
-        """同一非法 scope 参数必须在预览与应用两处同样被拒（码与说明逐字段相同）。
-
-        Rev8（2026-10-02）：缺 scope_mode 也属于「同一非法 scope 参数」——两个
-        动作都必须拒绝，且码与说明逐字段相同（缺失模式不再默认全量）。
-        """
-        cases = (
-            {"sources": ["um"]},
-            {"consumers": ["ZCode"]},
-            {"models": ["um"]},
-            {"sources": 5},
-            {"consumers": {"ZCode": True}},
-        )
-        for params in cases:
-            with self.subTest(params=params):
-                _, preview = self._submit(self.PREVIEW, params)
-                _, apply = self._submit(self.APPLY, params)
-                self.assertEqual(preview, apply)
-        # Rev8：缺失 scope_mode（连 params 都不带）同样两处同码同文拒绝；
-        # 操作行元数据（action 名）天然不同，只比较错误字段。
-        outcomes = []
-        for action in (self.PREVIEW, self.APPLY):
-            with self._isolated_sync():
-                status, data = self._submit(action, None)
-                self.assertEqual(status, 201)
-                op = self._wait(data["operation"]["id"])
-                self.assertEqual(op["state"], "failed")
-                self.assertEqual(op["error"]["code"], "invalid_params")
-                self.assertIn("scope_mode", op["error"]["message"])
-                outcomes.append((op["error"]["code"], op["error"]["message"]))
-        self.assertEqual(outcomes[0], outcomes[1])
-
-    def test_handler_level_scope_refusals_match_across_preview_and_apply(self):
-        """通过 schema、由 handler 内 _console_scope 拒绝的同一非法参数在两处一致。
-
-        这类值形状合法（str/object），内层规则由 model_sync._normalize_scope
-        判定（带 scope_mode=selected 走到内层；末例是非法模式本身），故提交行
-        已建立、拒绝落在操作行（state=failed + error.code）。两个动作的判定与
-        说明必须逐字段相同。
-        """
-        cases = (
-            {"scope_mode": "selected", "sources": "[]"},
-            {"scope_mode": "selected", "sources": '["um","um"]'},
-            {"scope_mode": "selected", "sources": "not json"},
-            {"scope_mode": "selected", "consumers": '["M365"]'},
-            {"scope_mode": "selected", "models": {"um": "m"}},
-            {"scope_mode": "selected", "models": {"bogus": ["m"]}},
-            {"scope_mode": "selected", "sources": '["qoder_cn"]',
-             "models": {"um": ["m"]}},
-            {"scope_mode": "everything"},
-        )
-        for params in cases:
-            with self.subTest(params=params):
-                outcomes = []
-                for action in (self.PREVIEW, self.APPLY):
-                    with self._isolated_sync():
-                        status, data = self._submit(action, params)
-                        self.assertEqual(status, 201)
-                        op = self._wait(data["operation"]["id"])
-                        self.assertEqual(op["state"], "failed")
-                        self.assertEqual(op["error"]["code"], "invalid_params")
-                        outcomes.append((op["error"]["code"],
-                                         op["error"]["message"]))
-                self.assertEqual(outcomes[0], outcomes[1])
-                self.assertNotIn("\n", outcomes[0][1])
-                self.assertNotEqual(outcomes[0][1], "")
-
-    def test_valid_scope_normalizes_identically_and_reaches_run_sync(self):
-        """合法 scope 在两处归一化到同一字典，并原样传给 run_sync。"""
-        import model_sync
-        params = {"scope_mode": "selected", "sources": '["um"]',
-                  "consumers": '["ZCode"]', "models": {"um": ["model-a"]}}
-        expected = {"sources": ["um"], "consumers": ["ZCode"],
-                    "models": {"um": ["model-a"]}}
-        seen = {}
-        for action in (self.PREVIEW, self.APPLY):
-            with self._isolated_sync():
-                calls = []
-
-                def _record(*args, **kwargs):
-                    calls.append(kwargs)
-                    return {"status": "preview", "applied": [],
-                            "pending": [], "appliedDetails": [],
-                            "pendingDetails": [], "warnings": []}
-
-                with mock.patch.object(model_sync, "run_sync",
-                                       side_effect=_record):
-                    status, data = self._submit(action, params)
-                    self.assertEqual(status, 201)
-                    op = self._wait(data["operation"]["id"])
-                self.assertEqual(op["state"], "succeeded")
-                self.assertEqual(len(calls), 1)
-                seen[action] = calls[0]["scope"]
-                self.assertEqual(calls[0]["scope"], expected)
-                self.assertNotIn("detail", data)
-        self.assertEqual(seen[self.PREVIEW], seen[self.APPLY])
-
-    def test_preview_and_apply_accept_the_same_scope_keys(self):
-        """参数集本身：scope_mode + scope 三键在两处一致；probe 已随组合动作移除。
-
-        §11.3 组合窗口（2026-10-10）：两处都接受 selection（草稿版本），
-        应用另需带回组合预览的 preview_token；范围四键仍逐项一致。
-        """
-        import console_adapters
+    def test_retired_model_actions_are_not_registered(self):
         specs = {spec.name: spec for spec in console_adapters.build_registry()}
-        preview = specs[self.PREVIEW].param_schema
-        apply_ = specs[self.APPLY].param_schema
-        for key in ("scope_mode", "sources", "consumers", "models"):
-            self.assertEqual(preview[key], apply_[key])
-        self.assertEqual(set(preview),
-                         {"scope_mode", "sources", "consumers", "models",
-                          "selection"})
-        self.assertEqual(set(apply_), set(preview) | {"preview_token"})
-        self.assertEqual(preview["selection"], apply_["selection"])
-        self.assertNotIn("preview_token", preview)
-        # Rev8 契约 2：组合动作「应用并探测」移除——probe 不再属于任何同步动作。
-        self.assertNotIn("probe", set(apply_))
-        self.assertEqual(specs[self.PREVIEW].resource_fn, specs[self.APPLY].resource_fn)
-        self.assertEqual(specs[self.PREVIEW].resource_fn("model", {}),
-                         specs[self.APPLY].resource_fn("model", {}))
+        for action in self.RETIRED:
+            self.assertNotIn(action, specs)
+
+    def test_kept_model_actions_are_registered_with_their_schemas(self):
+        specs = {spec.name: spec for spec in console_adapters.build_registry()}
+        for kept in self.KEPT:
+            self.assertIn(kept, specs)
+        self.assertEqual(set(specs["model.catalog"].param_schema),
+                         {"sources", "fresh"})
+        probe_schema = specs["model.context_probe_preview"].param_schema
+        self.assertEqual(set(probe_schema), {"sources", "models", "retest"})
+        run_schema = specs["model.context_probe_run"].param_schema
+        self.assertTrue(set(probe_schema) <= set(run_schema))
+        self.assertEqual(set(run_schema),
+                         {"sources", "models", "retest",
+                          "max_requests", "max_tokens"})
+        self.assertEqual(specs["model.context_probe_preview"].resource_fn,
+                         specs["model.context_probe_run"].resource_fn)
+        self.assertEqual(
+            set(specs["model.context_override_set"].param_schema),
+            {"source", "model_id", "context", "expected_set_at"})
+        self.assertEqual(
+            set(specs["model.context_override_clear"].param_schema),
+            {"source", "model_id", "expected_set_at"})
 
     def test_disabled_action_keeps_machine_code_and_reason(self):
         """既有 403 语义不变：机器码 + reason 仍在（detail 不覆盖 reason）。"""
@@ -1922,10 +1688,10 @@ class ConsoleModelScopeContractTests(ConsoleApiTestBase):
 
     def test_unknown_parameter_is_still_refused(self):
         """不放宽校验：未知参数仍 400，且说明只点名参数、不回显路径。"""
-        status, data = self._submit(self.PREVIEW, {"probe": False})
+        status, data = self._submit("model.catalog", {"bogus": True})
         self.assertEqual(status, 400)
         self.assertEqual(data["error"], "invalid_params")
-        self.assertIn("probe", data["detail"])
+        self.assertIn("bogus", data["detail"])
         self.assertNotIn("\\", data["detail"])
 
 
@@ -1963,18 +1729,14 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
         patchers = [
             mock.patch.object(usagesrv, "get_share_manager",
                               lambda: self.manager),
-            # 观察缝：_FUNNEL_OBSERVED 非 None -> 跳过生产装配（零真实调用）。
-            mock.patch.object(orch, "_FUNNEL_OBSERVED", lambda: False),
             mock.patch.object(orch, "_BROKER_OPS", None),
             # The status read's capacity block is a SEPARATE read seam. A prior
             # module can leave it wired to a real broker; this class tests the
             # attribution shape, so keep it unwired instead of reading the live
             # process.
             mock.patch.object(orch, "_MAINTENANCE_STATUS", None),
-            mock.patch.object(orch, "_BACKEND_OBSERVE", lambda: {
-                "running": True, "auth_state": "valid",
-                "auth_label": "认证有效",
-                "attribution": dict(self.NOT_READY)}),
+            mock.patch.object(orch, "_share_entry_attribution",
+                              lambda: dict(self.NOT_READY)),
         ]
         for patcher in patchers:
             patcher.start()
@@ -1998,7 +1760,6 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
         self.assertNotIn("wired", payload["attribution"])
         # 加性：既有字段的值与语义不变。
         self.assertIs(payload["in_sync"], True)
-        self.assertEqual(payload["account"], {"valid": True, "running": True})
 
     def test_status_reports_file_ready_and_instance_not_loaded(self):
         ready = dict(self.NOT_READY, file_ready=True, reason="ok",
@@ -2007,9 +1768,8 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
                                            value="no",
                                            reason="process_started_before_"
                                                   "key_mtime"))
-        with mock.patch.object(orch, "_BACKEND_OBSERVE", lambda: {
-                "running": True, "auth_state": "valid",
-                "auth_label": "认证有效", "attribution": ready}):
+        with mock.patch.object(orch, "_share_entry_attribution",
+                              lambda: dict(ready)):
             payload = self._status()
         self.assertEqual(payload["attribution"], ready)
         self.assertIs(payload["attribution"]["file_ready"], True)
@@ -2018,10 +1778,8 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
 
     def test_renamed_state_source_is_not_reported_as_attribution(self):
         """变异核对：状态来源改名后端点不得冒充归因在场。"""
-        with mock.patch.object(orch, "_BACKEND_OBSERVE", lambda: {
-                "running": True, "auth_state": "valid",
-                "auth_label": "认证有效",
-                "attribution_state": {"file_ready": True}}):
+        with mock.patch.object(orch, "_share_entry_attribution",
+                              lambda: {"attribution_state": {"file_ready": True}}):
             payload = self._status()
         self.assertNotIn("attribution", payload)
 
@@ -2029,11 +1787,7 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
         # D18-1: the explicit deployment origin is the address the console
         # labels and copies; the Tailscale Funnel read must not even run.
         with mock.patch.dict(os.environ, {
-                "CONSOLE_PUBLIC_ORIGIN": "https://dacintapi.de5.net"}), \
-                mock.patch.object(
-                    usagesrv.Handler, "_tailscale_funnel_url",
-                    side_effect=AssertionError(
-                        "the Tailscale URL must not be read")):
+                "CONSOLE_PUBLIC_ORIGIN": "https://dacintapi.de5.net"}):
             payload = self._status()
         self.assertEqual(payload["share_url"], "https://dacintapi.de5.net")
         self.assertEqual(payload["share_url_source"], "configured")
@@ -2041,11 +1795,7 @@ class ConsoleShareStatusAttributionTests(ConsoleApiTestBase):
 
     def test_status_invalid_public_origin_never_falls_back(self):
         with mock.patch.dict(os.environ, {
-                "CONSOLE_PUBLIC_ORIGIN": "https://dacintapi.de5.net/v1"}), \
-                mock.patch.object(
-                    usagesrv.Handler, "_tailscale_funnel_url",
-                    side_effect=AssertionError(
-                        "the Tailscale URL must not be read")):
+                "CONSOLE_PUBLIC_ORIGIN": "https://dacintapi.de5.net/v1"}):
             payload = self._status()
         self.assertNotIn("share_url", payload)
         self.assertIsNone(payload["share_url_source"])

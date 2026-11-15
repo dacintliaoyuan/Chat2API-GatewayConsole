@@ -1,5 +1,5 @@
 /**
- * Shared operation-feedback state for the gateway console workbench (R9-R37).
+ * Shared operation-feedback state for the gateway consoles (R9-R37).
  *
  * Layers (handoff A37-1 + the maintainer's four-layer design):
  *  - button level: the triggering button flips into an explicit action state;
@@ -43,11 +43,7 @@ export interface FeedbackEntry {
 export type FeedbackListener = (entries: FeedbackEntry[]) => void;
 
 const CN_ACTION: Record<string, string> = {
-  "model.sync_preview": "同步预览",
-  "model.sync_apply": "应用同步",
   "model.catalog": "刷新目录",
-  "model.task_status": "同步任务状态",
-  "model.sync_pending": "同步概览",
   "service.start": "启动服务",
   "service.stop": "停止服务",
   "service.restart": "重启服务",
@@ -86,59 +82,21 @@ export function stateDot(state: FeedbackState): string {
 /** Chinese name for a registry action; falls back to the raw action id. */
 export function actionLabel(action: string): string {
   const CN_ACTION: Record<string, string> = {
-    "model.sync_preview": "同步预览",
-    "model.sync_apply": "应用同步",
     "model.catalog": "刷新目录",
-    "model.task_status": "同步任务状态",
     "service.start": "启动服务",
     "service.stop": "停止服务",
     "service.restart": "重启服务",
-    "model.sync_history": "同步历史",
-    "model.sync_pending": "同步概览",
-    "model.speedtest": "模型测速",
     "model.context_probe_preview": "探测队列预览",
     "model.context_probe_run": "执行上下文探测",
     "model.context_overrides": "读取上下文设置",
     "model.context_override_set": "设置上下文覆盖",
     "model.context_override_clear": "恢复默认上下文",
-    "model.settings_save": "保存设置草稿",
-    "model.settings_preview": "预览模型设置",
-    "model.settings_apply": "应用模型设置",
-    "model.task_install": "安装同步任务",
-    "model.task_disable": "禁用同步任务",
     "account.login": "账号登录",
     "account.um_status": "UM 认证状态",
     "account.um_verify": "核验登录是否有效",
-    "cliproxy.status": "Gemini 登录查询",
-    "qoder.status": "Qoder 登录状态",
-    "qoder.models": "Qoder 模型目录",
-    "qoder.quota_read": "Qoder 积分额度",
-    "qoder.poc": "Qoder 连通性验证",
-    "qoder.credential_bridge": "Qoder 凭据桥接",
-    "qoder.source_diagnostics": "Qoder 凭据来源诊断",
-    "qoderglobal.login": "国际版登录",
-    "qoderglobal.status": "国际版登录状态",
-    "qoderglobal.models": "国际版模型目录",
-    "qoderglobal.quota": "国际版额度",
-    "m365.supply_status": "M365 凭据供给状态",
-    "m365.candidate_status": "M365 候选状态",
-    "m365.candidate_verify": "M365 候选验证",
-    "m365.mapping_publish": "M365 映射发布",
-    "m365.settings_save": "M365 设置保存",
-    "m365.speedtest_key_setup": "创建测速密钥",
-    "share.start": "开启分享",
-    "share.stop": "关闭分享",
-    "share.estop": "紧急停止分享",
-    "share.retry_stop": "重试关闭分享",
     "share.status": "读取分享状态",
-    "share.backend_login": "启动 / 按需登录 8110",
     "share.diagnostics": "分层诊断",
-    "share.repair_limits": "修复隔离规则",
-    "share.backend_reauthenticate": "仅重新认证 8110",
-    "share.backend_restart": "仅重启运行中的 8110",
     "share.gateway_restart": "仅重启 8100",
-    "share.public_check": "公网链路复查",
-    "share.public_retry": "公网链路受限重试",
   };
   return CN_ACTION[action] ?? action;
 }
@@ -177,7 +135,7 @@ export function summarizeResult(result: Record<string, unknown>): string {
 }
 
 /** Recovery follows the failed layer; a broker failure must not send the user
- *  through another 8110 login before the restricted control channel is usable. */
+ *  through another login before the restricted control channel is usable. */
 export function shareRecoveryHint(action: string, code: string): string {
   if (!action.startsWith("share.")) return "";
   if (
@@ -188,12 +146,9 @@ export function shareRecoveryHint(action: string, code: string): string {
       "deadline_exceeded",
     ].includes(code)
   ) {
-    return "先恢复受限后台：在控制台目录运行 Recover-ShareControl.bat，按 Windows 管理员提示恢复后重新读取状态与分层状态；再按需登录 8110、开启分享";
+    return "先恢复受限后台：确认 um-share-broker 服务与 broker 控制通道可用，再重新读取状态与分层状态；再按需登录、开启分享";
   }
-  return action === "share.backend_restart" &&
-    code === "share_backend_not_running"
-    ? "请点“启动 / 按需登录 8110”，检查认证并在需要时启动登录"
-    : "";
+  return "";
 }
 
 /** True while the entry should occupy a visible notice slot. */

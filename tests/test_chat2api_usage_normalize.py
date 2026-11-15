@@ -44,11 +44,10 @@ tail can reach the PRODUCTION ledger (the 2026-10-02 pollution incident).
 import importlib.util
 import json
 import sys
-import tempfile
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -70,7 +69,7 @@ def _load(name, relative):
 
 
 chat2api = _load("chat2api_usage_normalize", "chat2api/chat2api.py")
-metering = _load("share_metering_usage_normalize", "share_metering.py")
+metering = _load("share_metering_usage_normalize", "share/metering.py")
 
 STUB_TOKEN = "stub-token"
 
@@ -231,12 +230,9 @@ class UsageNormalizeTestBase(unittest.TestCase):
             mock.patch.object(chat2api, "UPSTREAM_AUTO_RETRIES", 0),
             mock.patch.object(chat2api, "REPETITION_GUARD_AUTO_RETRY", False),
             mock.patch.object(chat2api, "REPETITION_GUARD_AUTO_RETRIES", 0),
-            mock.patch.object(chat2api, "PRICE_TABLE_FILE",
-                              str(self._tmp / "prices.json")),
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        chat2api._price_version_cache["stat"] = None
         chat2api._reader_slots = threading.BoundedSemaphore(
             chat2api.STREAM_MAX_CONCURRENT_READERS)
         StubUpstreamHandler.posts = 0
@@ -520,15 +516,8 @@ class TestChatSseSegmentedUsage(UsageNormalizeTestBase):
         self.assertFalse(rec["estimated"])
 
 
-class TestShareFeeReadEnd(UsageNormalizeTestBase):
-    """The per-key fee read end over rows the new writer produces."""
-
-    @staticmethod
-    def price_fn(model, at_ms, in_tok, out_tok, cache_tok, reason_tok):
-        # Billed on the reported sides minus the cached subset; every model
-        # is priced so the test isolates the bucketing, not the price table.
-        cost = in_tok * 0.001 + out_tok * 0.002
-        return cost, True, model, False, "v-test"
+class TestShareUsageReadEnd(UsageNormalizeTestBase):
+    """The raw per-key read end over rows the new writer produces."""
 
     def write_share_rows(self, rows):
         ledger = self._tmp / "usage-share-backend.jsonl"
@@ -557,7 +546,6 @@ class TestShareFeeReadEnd(UsageNormalizeTestBase):
             "key_id": "k1",
             "request_id": "r1",
             "attribution": "verified",
-            "price_version": "v-test",
         }
 
     @classmethod
@@ -580,34 +568,24 @@ class TestShareFeeReadEnd(UsageNormalizeTestBase):
                           output_tokens=20, total_tokens=520),
         ]
         ledger = self.write_share_rows(rows)
-        result = metering.read_share_usage(str(ledger), self.price_fn)
+        result = metering.read_share_usage(str(ledger))
         keys = {entry["key_id"]: entry for entry in result["keys"]}
-        # k1: the upstream row costs 100*0.001+10*0.002 = 0.12, the real-zero
-        # row contributes 0.0 to the SAME known bucket (a trusted zero is
-        # known usage, not unknown); the partial row's 50*0.001+10*0.002 =
-        # 0.07 goes to the estimated bucket; the "none" row is UNKNOWN
-        # (counted, never priced as 0).
         self.assertEqual(keys["k1"]["requests"], 4)
-        self.assertAlmostEqual(keys["k1"]["knownCostUsd"], 0.12)
-        self.assertAlmostEqual(keys["k1"]["estimatedCostUsd"], 0.07)
         self.assertEqual(keys["k1"]["unknownRequests"], 1)
-        self.assertEqual(keys["k2"]["knownCostUsd"], 0.54)
+        self.assertEqual(keys["k1"]["tokenUsage"]["completeRequests"], 2)
+        self.assertEqual(keys["k1"]["tokenUsage"]["unknownRequests"], 1)
+        self.assertEqual(keys["k2"]["requests"], 1)
+        self.assertEqual(keys["k2"]["tokenUsage"]["completeRequests"], 1)
 
-    def test_cached_subset_reaches_the_price_function(self):
-        # R20-1 读端：写端现在保留的缓存数必须原样到达计价函数（价目引擎
-        # 自己把它当输入子集减掉），否则缓存命中会被按普通输入单价计费。
-        seen = {}
-
-        def price_fn(model, at_ms, in_tok, out_tok, cache_tok, reason_tok):
-            seen.update({"in": in_tok, "out": out_tok, "cache": cache_tok,
-                         "reason": reason_tok})
-            return 0.0, True, model, False, "v-test"
-
-        rows = [self.row_with(cached_input_tokens=60, reasoning_tokens=4)]
+    def test_cached_subset_reaches_the_raw_read_end(self):
+        # 写端保留的缓存数必须原样到达读端；价目引擎已随 #30 退役。
+        rows = [self.row_with(cached_input_tokens=60, reasoning_tokens=4,
+                              cache_report_status="reported")]
         ledger = self.write_share_rows(rows)
-        metering.read_share_usage(str(ledger), price_fn)
-        self.assertEqual(seen, {"in": 100, "out": 10, "cache": 60,
-                                "reason": 4})
+        result = metering.read_share_usage(str(ledger))
+        key = result["keys"][0]
+        self.assertEqual(key["tokenUsage"]["cachedInputTokens"], 60)
+        self.assertEqual(key["tokenUsage"]["cacheReportedRequests"], 1)
 
     def test_historical_rows_without_usage_source_still_bucket(self):
         # Historical rows carry no usage_source key at all; the reader keeps
@@ -618,10 +596,11 @@ class TestShareFeeReadEnd(UsageNormalizeTestBase):
         legacy_estimated = dict(legacy, key_id="k2", estimated=True)
         rows = [legacy, legacy_estimated]
         ledger = self.write_share_rows(rows)
-        result = metering.read_share_usage(str(ledger), self.price_fn)
+        result = metering.read_share_usage(str(ledger))
         keys = {entry["key_id"]: entry for entry in result["keys"]}
-        self.assertAlmostEqual(keys["k1"]["knownCostUsd"], 0.12)
-        self.assertAlmostEqual(keys["k2"]["estimatedCostUsd"], 0.12)
+        self.assertEqual(keys["k1"]["requests"], 1)
+        self.assertEqual(keys["k2"]["requests"], 1)
+        self.assertEqual(keys["k2"]["tokenUsage"]["estimatedRequests"], 1)
 
 
 if __name__ == "__main__":

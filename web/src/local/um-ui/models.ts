@@ -1,6 +1,5 @@
 import type {
   ModelTestState,
-  TestKind,
   UmModelRow,
   UmModels,
   UmTestRecord,
@@ -25,8 +24,8 @@ import {
 } from "./format";
 
 /** 模型与设置: the access card, every UM model in one table with one shared
- *  selection bar (测速 / 上下文探测 run on click, no preview, no second
- *  confirm), the current test, then folded history and settings. */
+ *  selection bar (上下文探测 runs on click, no preview, no second confirm),
+ *  the current test, then folded history and settings. */
 
 export type ModelsUi = {
   selected: ReadonlySet<string>;
@@ -38,11 +37,6 @@ export type ModelsUi = {
   awaiting: boolean;
 };
 
-const KIND: Readonly<Record<TestKind, string>> = {
-  speedtest: "测速",
-  context: "上下文探测",
-};
-const kindWord = (kind: TestKind) => wordOf(KIND, kind, "测试");
 export const TEST_STATE: Readonly<
   Record<ModelTestState, { word: string; tone: string }>
 > = {
@@ -72,20 +66,14 @@ export function catalogIds(m: UmModels): string[] {
   return [...new Set(loaded(m.catalog)?.data.models.map((x) => x.id) ?? [])];
 }
 
-/** Why a test of `kind` cannot start now, or null. The selection bar draws
- *  its buttons from this and the console checks it again on click, so a
+/** Why a context probe cannot start now, or null. The selection bar draws
+ *  its button from this and the console checks it again on click, so a
  *  stale or child-dispatched click can never send what the page shows closed. */
-export function testBlockReason(
-  m: UmModels,
-  ui: ModelsUi,
-  kind: TestKind
-): string | null {
+export function testBlockReason(m: UmModels, ui: ModelsUi): string | null {
   const count = catalogIds(m).filter((id) => ui.selected.has(id)).length;
   const running = m.run !== null && m.run.state !== "finished";
   return (
-    blockReason(
-      kind === "speedtest" ? m.actions.speedtest : m.actions.context
-    ) ??
+    blockReason(m.actions.context) ??
     (running
       ? "已有测试在进行，等它结束或停止后再发起"
       : ui.awaiting
@@ -178,31 +166,20 @@ function figuresHtml(text: string): string {
   }
   return html + esc(text.slice(last));
 }
-/** 最近测试, compact: the conclusion on the first line (at most two), 测速's
- *  耗时 and the time under it. The controller's full wording, long errors and
- *  the evidence stay one click away in the row's 详情, never cut off unseen. */
+/** 最近测试, compact: the conclusion on the first line and the time under
+ *  it. The controller's full wording, long errors and the evidence stay one
+ *  click away in the row's 详情, never cut off unseen. */
 function lastTestCell(
   row: UmModelRow,
   detailId: string,
   open: boolean
 ): string {
-  const tests: [string, NonNullable<UmModelRow["lastSpeed"]>, boolean][] = [];
-  if (row.lastSpeed) tests.push(["测速", row.lastSpeed, true]);
-  if (row.lastContext) tests.push(["上下文", row.lastContext, false]);
-  if (!tests.length) return `<span class="um-absent">未测</span>`;
-  const items = tests
-    .map(([kind, test, keepRest]) => {
-      const [head = "", ...rest] = clauses(test.summary);
-      const more =
-        keepRest && rest.length
-          ? `<span class="um-last-rest">${figuresHtml(rest.join(" · "))}</span>`
-          : "";
-      return `<div class="um-last" data-tone="${test.ok ? "ok" : "err"}" title="${esc(`${kind}：${test.summary}`)}"><span class="dot" aria-hidden="true"></span><div class="um-last-body">
-      <p class="um-last-head"><b>${kind}</b>${test.ok ? "" : `<span class="sr-only">未通过：</span>`}${figuresHtml(head)}</p>
-      <p class="um-last-meta">${more}<span class="um-last-time um-nb">${esc(when(test.at))}</span></p></div></div>`;
-    })
-    .join("");
-  return `<div class="um-last-cell">${items}<button type="button" class="um-link um-last-more" data-um-model-more="${esc(row.id)}" aria-expanded="${open}" aria-controls="${detailId}">${open ? "收起详情" : "详情"}</button></div>`;
+  if (!row.lastContext) return `<span class="um-absent">未测</span>`;
+  const test = row.lastContext;
+  const [head = ""] = clauses(test.summary);
+  return `<div class="um-last-cell"><div class="um-last" data-tone="${test.ok ? "ok" : "err"}" title="${esc(`上下文：${test.summary}`)}"><span class="dot" aria-hidden="true"></span><div class="um-last-body">
+      <p class="um-last-head"><b>上下文</b>${test.ok ? "" : `<span class="sr-only">未通过：</span>`}${figuresHtml(head)}</p>
+      <p class="um-last-meta"><span class="um-last-time um-nb">${esc(when(test.at))}</span></p></div></div><button type="button" class="um-link um-last-more" data-um-model-more="${esc(row.id)}" aria-expanded="${open}" aria-controls="${detailId}">${open ? "收起详情" : "详情"}</button></div>`;
 }
 function modelDetailHtml(row: UmModelRow, source: string): string {
   const c = row.context;
@@ -240,12 +217,6 @@ function modelDetailHtml(row: UmModelRow, source: string): string {
         : thinkSource(row.thinking.source),
     ],
     [
-      "最近测速",
-      row.lastSpeed
-        ? `${esc(row.lastSpeed.summary)}（${esc(when(row.lastSpeed.at))}）`
-        : "未测",
-    ],
-    [
       "最近上下文探测",
       row.lastContext
         ? `${esc(row.lastContext.summary)}（${esc(when(row.lastContext.at))}）`
@@ -269,7 +240,7 @@ function catalogHtml(m: UmModels, ui: ModelsUi): string {
     m.refresh.state === "failed"
       ? `<p class="um-banner" data-tone="warn" role="status"><span class="dot" aria-hidden="true"></span>刷新失败（${esc(when(m.refresh.at))}）：${esc(m.refresh.reason)}。下表仍是 ${shown ? esc(when(shown.data.fetchedAt)) : "上次"} 取到的目录，已过期。</p>`
       : m.refresh.state === "succeeded"
-        ? `<p class="um-banner" data-tone="ok" role="status"><span class="dot" aria-hidden="true"></span>已从 UM 取到最新目录（${esc(when(m.refresh.at))}）；刷新只读目录，不测速、不探测、不改客户端配置。</p>`
+        ? `<p class="um-banner" data-tone="ok" role="status"><span class="dot" aria-hidden="true"></span>已从 UM 取到最新目录（${esc(when(m.refresh.at))}）；刷新只读目录，不探测、不改客户端配置。</p>`
         : shown?.stale
           ? `<p class="um-banner" data-tone="warn" role="status">${freshnessHtml(shown.at, shown.stale)}</p>`
           : "";
@@ -310,16 +281,13 @@ function catalogHtml(m: UmModels, ui: ModelsUi): string {
 function selectionBar(m: UmModels, ui: ModelsUi): string {
   const ids = catalogIds(m);
   const count = ids.filter((id) => ui.selected.has(id)).length;
-  const button = (kind: TestKind) => {
-    const block = testBlockReason(m, ui, kind);
-    return `<button type="button" class="btn btn-sm ${kind === "speedtest" ? "btn-primary" : "btn-tonal"}" data-um-test="${kind}"${block ? ` disabled title="${esc(block)}"` : ""}>${kindWord(kind)}</button>`;
-  };
-  const note =
-    testBlockReason(m, ui, "speedtest") ?? testBlockReason(m, ui, "context");
+  const block = testBlockReason(m, ui);
+  const button = `<button type="button" class="btn btn-sm btn-tonal" data-um-test="context"${block ? ` disabled title="${esc(block)}"` : ""}>上下文探测</button>`;
+  const note = block;
   return `<div class="um-selbar" role="toolbar" aria-label="批量测试">
     <button type="button" class="btn btn-sm btn-outline" data-um-pick-all${!ids.length || count === ids.length ? " disabled" : ""}>全选</button>
     <span class="um-selbar-count" aria-live="polite">已选 <b>${count}</b> 个</span>
-    ${button("speedtest")}${button("context")}
+    ${button}
     <button type="button" class="btn btn-sm btn-outline" data-um-pick-none${count ? "" : " disabled"}>清空选择</button>
     <span class="um-selbar-note">${note ? esc(note) : "点击后直接执行，不再二次确认；多个模型按顺序依次测试。上下文探测整批共用一份请求预算。"}</span>
   </div>`;
@@ -356,7 +324,7 @@ function runHtml(m: UmModels, ui: ModelsUi): string {
   if (!run) return "";
   const done = run.items.filter((i) => TERMINAL.has(i.state)).length;
   const finished = run.state === "finished";
-  const stopLabel = run.kind === "context" ? "停止后续探测" : "停止后续测速";
+  const stopLabel = "停止后续探测";
   const stopBlock = stopBlockReason(m, run.id);
   const stop = finished
     ? ""
@@ -372,10 +340,10 @@ function runHtml(m: UmModels, ui: ModelsUi): string {
     .join(" · ");
   const heading =
     run.state === "submitting"
-      ? `正在提交${kindWord(run.kind)}`
+      ? "正在提交上下文探测"
       : finished
-        ? `最近一次${kindWord(run.kind)} · 已结束`
-        : `当前测试 · ${kindWord(run.kind)}`;
+        ? "最近一次上下文探测 · 已结束"
+        : "当前测试 · 上下文探测";
   const items = run.items
     .map((item, i) => {
       const st = testState(item.state);
@@ -414,23 +382,11 @@ function historyHtml(m: UmModels, ui: ModelsUi, models: string[]): string {
     const wired = h.records.state !== "unwired";
     const filters = `<div class="um-filters">
       <label class="um-select"><span class="sr-only">模型</span><select data-um-hmodel${wired ? "" : " disabled"}><option value="">全部模型</option>${models.map((x) => `<option value="${esc(x)}"${x === h.filter.model ? " selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
-      <div class="um-seg" role="group" aria-label="类型">${(
-        [
-          [null, "全部"],
-          ["speedtest", "测速"],
-          ["context", "上下文探测"],
-        ] as const
-      )
-        .map(
-          ([k, label]) =>
-            `<button type="button" data-um-hkind="${k ?? ""}" aria-pressed="${h.filter.kind === k}"${wired ? "" : " disabled"}>${label}</button>`
-        )
-        .join("")}</div>
       ${shown ? `<span class="card-meta">${freshnessHtml(shown.at, shown.stale, shown.refreshing)}</span>` : ""}
     </div>`;
     const rows = shown
       ? shown.data.length
-        ? `<div class="um-table-scroll"><table class="data-table" role="table"><thead><tr role="row"><th scope="col" role="columnheader">时间</th><th scope="col" role="columnheader">模型</th><th scope="col" role="columnheader">类型</th><th scope="col" role="columnheader">结果</th><th scope="col" role="columnheader">摘要</th></tr></thead><tbody>${shown.data.map(historyRow).join("")}</tbody></table></div>`
+        ? `<div class="um-table-scroll"><table class="data-table" role="table"><thead><tr role="row"><th scope="col" role="columnheader">时间</th><th scope="col" role="columnheader">模型</th><th scope="col" role="columnheader">结果</th><th scope="col" role="columnheader">摘要</th></tr></thead><tbody>${shown.data.map(historyRow).join("")}</tbody></table></div>`
         : `<p class="um-empty">没有符合筛选的测试记录。</p>`
       : placeholderHtml(h.records, "历史测试记录");
     body = `<div class="um-fold-body">${filters}${rows}</div>`;
@@ -439,7 +395,7 @@ function historyHtml(m: UmModels, ui: ModelsUi, models: string[]): string {
 }
 function historyRow(r: UmTestRecord): string {
   const st = testState(r.result);
-  return `<tr${r.archived ? ` class="is-archived"` : ""} role="row"><td class="tnum um-hist-time" role="cell">${esc(when(r.at))}</td><td class="um-req-model" role="cell" data-label="模型" title="${esc(r.model)}">${esc(r.model)}</td><td role="cell" data-label="类型">${kindWord(r.kind)}</td><td role="cell" data-label="结果"><span class="status" data-tone="${st.tone}"><span class="dot" aria-hidden="true"></span>${st.word}</span>${r.archived ? ` <span class="pill">已归档</span>` : ""}</td><td class="um-hist-summary" role="cell" data-label="摘要">${esc(r.summary)}</td></tr>`;
+  return `<tr${r.archived ? ` class="is-archived"` : ""} role="row"><td class="tnum um-hist-time" role="cell">${esc(when(r.at))}</td><td class="um-req-model" role="cell" data-label="模型" title="${esc(r.model)}">${esc(r.model)}</td><td role="cell" data-label="结果"><span class="status" data-tone="${st.tone}"><span class="dot" aria-hidden="true"></span>${st.word}</span>${r.archived ? ` <span class="pill">已归档</span>` : ""}</td><td class="um-hist-summary" role="cell" data-label="摘要">${esc(r.summary)}</td></tr>`;
 }
 
 function settingsHtml(m: UmModels, open: boolean): string {

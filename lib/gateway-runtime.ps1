@@ -1,13 +1,9 @@
-﻿# Gateway runtime module: single source of truth for service identity,
+# Gateway runtime module: single source of truth for service identity,
 # health checks, start/stop strategies and startup order.
 #
-# Two active services and one retired identity tombstone:
-#   M365        4141  retired (historical ledger identity only)
+# Two active services:
 #   chat2api    8000  /health       UM 模型直连
-#   usage       8001  /health       费用统计聚合
-#
-# B0（2026-11-01）：Qoder 国内 / Qoder 国际 / CLIProxy 三个网关已退役，
-# 描述符、启动顺序项与 Bearer 辅助函数全部删除；退役来源不再出现在 runtime。
+#   usage       8001  /health       用量统计聚合
 #
 # This module owns the descriptors and the start/stop/status implementation.
 # Adapters (menu, BAT, VBS) delegate here and only handle presentation.
@@ -17,18 +13,6 @@
 # ---------------------------------------------------------------------------
 
 $script:GatewayServiceDescriptors = [ordered]@{
-    'M365' = [pscustomobject]@{
-        Key          = 'M365'
-        Archived     = $true
-        DisplayName  = 'M365'
-        Port         = 4141
-        HealthPath   = $null
-        StartOrder   = 1
-        OpenUrl      = $null
-        StartAction  = 'Archived'
-        StopAction   = 'Archived'
-        StopStrategy = 'Archived'
-    }
     'chat2api' = [pscustomobject]@{
         Key          = 'chat2api'
         DisplayName  = 'chat2api'
@@ -45,9 +29,9 @@ $script:GatewayServiceDescriptors = [ordered]@{
         StopProcessName = 'python.exe'
         StopCommandLinePattern = '(^|\s)chat2api\.py(\s|$)'
         # Round 18 (2026-09-29) stop-scope identity. The entrypoint token above
-        # also matched the dedicated share backend (chat2api.py --port 8110
+        # also matched another chat2api.py instance
         # --profile <share>\edge-profile, started by
-        # console_share_production.py:1226-1234), so a private stop force-stopped
+        # console/share_production.py:1226-1234), so a private stop force-stopped
         # a share instance. The private launcher (start_chat2api.bat) passes only
         # --base-url, so these two facts positively identify the private
         # instance; --port, when declared, must agree with Port. See
@@ -74,7 +58,7 @@ $script:GatewayServiceDescriptors = [ordered]@{
     }
     'usage' = [pscustomobject]@{
         Key          = 'usage'
-        DisplayName  = '费用统计'
+        DisplayName  = '用量统计'
         Port         = 8001
         HealthPath   = '/health'
         StartOrder   = 6
@@ -443,7 +427,7 @@ function Stop-GatewayScopedProcesses {
 
     Round 18 (2026-09-29): the GracefulHttp/CommandLine branches used to
     force-stop every python.exe whose command line carried the entrypoint token,
-    which selected the dedicated share backend (chat2api.py --port 8110) too. Now
+    which selected another chat2api.py instance too. Now
     the scope is classified first, each selected PID is re-verified against its
     startup identity right before the kill, and an unconfirmable scope terminates
     NOTHING and reports StopRefused instead of a broad force-stop or a fake
@@ -1102,7 +1086,7 @@ function Start-GatewayService {
     if (Test-GatewayServiceArchived -Key $Key) {
         return [pscustomobject]@{
             Key = $Key; Status = 'Archived'; Action = 'None'
-            Detail = 'M365 已退役；仅保留历史统计身份，不提供启停'
+            Detail = '服务已归档；仅保留历史身份，不提供启停'
         }
     }
 
@@ -1237,7 +1221,7 @@ function Stop-GatewayService {
     if (Test-GatewayServiceArchived -Key $Key) {
         return [pscustomobject]@{
             Key = $Key; Status = 'Archived'; Action = 'None'
-            Detail = 'M365 已退役；仅保留历史统计身份，不提供启停'
+            Detail = '服务已归档；仅保留历史身份，不提供启停'
         }
     }
 
@@ -1293,7 +1277,7 @@ function Stop-GatewayService {
                 # the private instance's own control token opens its
                 # /admin/shutdown (the share backend reads
                 # CHAT2API_CONTROL_TOKEN_FILE from its own data dir,
-                # console_share_production.py:1236-1246). The FORCE-KILL below
+                # console/share_production.py:1236-1246). The FORCE-KILL below
                 # is the part that used to select the share backend, so it runs
                 # through the verified stop scope.
                 $gracefulRequested = $false
@@ -1383,7 +1367,7 @@ function Restart-GatewayService {
     if (Test-GatewayServiceArchived -Key $Key) {
         return [pscustomobject]@{
             Key = $Key; Status = 'Archived'; Action = 'None'
-            Detail = 'M365 已退役；仅保留历史统计身份，不提供启停'
+            Detail = '服务已归档；仅保留历史身份，不提供启停'
         }
     }
 

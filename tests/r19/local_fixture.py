@@ -8,11 +8,11 @@ composition root needs:
   (never the repository ``data/``, ``profile/`` or ``chat2api/token.json``);
 * explicit free loopback ports for the app, the local UM runtime and the fake
   UM upstream;
-* the fixture ledger, price table, control token and session code;
+* the fixture ledger, control token and session code;
 * the fake UM child process (``tests/fake_um/fake_um_server.py``);
 * subprocess helpers for ``local/run_local.py``.
 
-Nothing here reads a real credential, ledger, profile or price document.  The
+Nothing here reads a real credential, ledger or profile.  The
 ``package_root`` is explicit so the same fixture can run the in-tree package or
 an isolated copy built by ``r19.package_local``.
 """
@@ -51,9 +51,6 @@ REAL_STATE_PATHS = (
     AI_GATEWAY / "chat2api" / "chat2api.log",
     AI_GATEWAY / "data" / "chat2api-reauth.state",
     AI_GATEWAY / "data" / "usage-chat2api.jsonl",
-    AI_GATEWAY / "data" / "prices.json",
-    AI_GATEWAY / "data" / "magpie-prices.snapshot.json",
-    AI_GATEWAY / "data" / "magpie-prices.status.json",
     AI_GATEWAY / "data" / "dsh-ledger-20260902.json",
     AI_GATEWAY / "data" / "console-state.sqlite3",
     AI_GATEWAY / "data" / "console-locks",
@@ -81,7 +78,7 @@ def free_port():
 
 # E19-1-05 step 2 / G17: the real deployment listeners. A fixture port that
 # happens to match one would collide with (or shadow) a production service.
-PRODUCTION_PORTS = frozenset({8000, 8001, 8100, 8110, 18096, 5901})
+PRODUCTION_PORTS = frozenset({8000, 8001, 8096, 8097, 8100, 18096, 5901})
 
 
 def distinct_free_ports(count):
@@ -229,7 +226,6 @@ class LocalFixture:
             "lock_dir": root / "locks",
             "pid_file": root / "state" / "local-app.pid",
             "ledger_file": root / "fixture" / "usage-chat2api.jsonl",
-            "price_file": root / "fixture" / "prices.json",
             "session_code_file": root / "fixture" / "usage-session-code",
             "control_token_file": root / "fixture" / "admin-control-token",
             "console_state_file": root / "state" / "console-state.sqlite3",
@@ -244,11 +240,6 @@ class LocalFixture:
             self.control_token + "\n", encoding="utf-8")
         self.paths["session_code_file"].write_text(
             SESSION_CODE + "\n", encoding="utf-8")
-        self.paths["price_file"].write_text(json.dumps({
-            "exchangeRate": 7.2,
-            "checkedAt": "2026-11-07T00:00:00+08:00",
-            "models": {self.model: {"input": 1.0, "output": 2.0}},
-        }, ensure_ascii=False), encoding="utf-8")
         self.paths["ledger_file"].write_text(json.dumps({
             "time": "2026-11-07T10:00:00+08:00",
             "model": self.model,
@@ -280,7 +271,6 @@ class LocalFixture:
             "lock_dir": str(self.paths["lock_dir"]),
             "pid_file": str(self.paths["pid_file"]),
             "ledger_file": str(self.paths["ledger_file"]),
-            "price_file": str(self.paths["price_file"]),
             "session_code_file": str(self.paths["session_code_file"]),
             "control_token_file": str(self.paths["control_token_file"]),
             "console_state_file": str(self.paths["console_state_file"]),

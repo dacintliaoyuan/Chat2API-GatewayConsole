@@ -4,11 +4,12 @@
 Covers the explicit cloud role contract:
 
 * unset role -> the Windows local console is byte-for-byte unchanged
-  (8001, Qoder/CLIProxy/model_sync cards and probes retained);
+  (the local console keeps its own cards and probes);
 * ``UM_SHARE_ROLE=cloud`` / ``UM_SHARE_DEPLOYMENT=cloud`` assembles ONLY the
-  UM share stack, never reads/probes Qoder / CLIProxy / model_sync / zcode,
-  keeps the loopback Host/Origin/CSRF/session gates and defaults to 18096
-  with STRICT port validation;
+  UM share stack and never assembles the retired cards,
+  keeps the loopback Host/Origin/CSRF/session gates and defaults to 8096
+  with STRICT port validation (the legacy 18096 stays an explicit value during
+  the expand-contract window);
 * the cloud registry marks the Tailscale/Funnel chain actions as honestly
   unassembled (disabled + explicit reason; submit refused before any row) while
   the Windows local registry keeps them enabled;
@@ -33,7 +34,6 @@ import os
 import sys
 import tempfile
 import threading
-import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,22 +43,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "chat2api"))
 
-import console_adapters  # noqa: E402
-import console_share_actions  # noqa: E402
-import console_share_production  # noqa: E402
-import share_broker_ops  # noqa: E402
-import share_broker_protocol as bp  # noqa: E402
+from console import adapters as console_adapters  # noqa: E402
+from console import share_actions as console_share_actions  # noqa: E402
+from console import share_production as console_share_production  # noqa: E402
+import share.broker_ops as share_broker_ops  # noqa: E402
+import share.broker_protocol as bp  # noqa: E402
 import usagesrv  # noqa: E402  (no role env set -> the local default)
-from share_broker_client import BrokerClient  # noqa: E402
-from share_broker_protocol import BrokerResult  # noqa: E402
-from share_entry import ShareServer  # noqa: E402
-from share_management import BrokerClientAdapter, ShareManager  # noqa: E402
-from console_operations import (  # noqa: E402
-    OperationError,
-    OperationManager,
-    OperationUnavailable,
-)
-import share_management  # noqa: E402
+from share.broker_protocol import BrokerResult  # noqa: E402
+from share_auth import ShareGate  # noqa: E402
+from share.management import BrokerClientAdapter, ShareManager  # noqa: E402
+import share.management as share_management  # noqa: E402
 
 
 # --------------------------------------------------------------------- helpers
@@ -177,8 +171,12 @@ class DeploymentRoleTests(unittest.TestCase):
         self.assertEqual(usagesrv._resolve_port("local", {}), 8001)
         # B0：本地装配只保留 UM 卡片；退役来源卡片不注册。
         names = {spec.name for spec in console_adapters.build_registry()}
-        for name in ("model.catalog", "account.um_status", "share.start"):
+        for name in ("model.catalog", "account.um_status"):
             self.assertIn(name, names)
+        # The retired Windows local share actions are not registered (#33).
+        for absent in ("share.start", "share.stop", "share.estop",
+                        "share.retry_stop"):
+            self.assertNotIn(absent, names)
         for retired in ("qoder.status", "cliproxy.status",
                          "qoderglobal.status", "m365.settings_save"):
             self.assertNotIn(retired, names)
@@ -190,8 +188,12 @@ class DeploymentRoleTests(unittest.TestCase):
         self.assertEqual(
             usagesrv._resolve_deployment_role({"UM_SHARE_DEPLOYMENT": "CLOUD"}),
             "cloud")
-        self.assertEqual(usagesrv._resolve_port("cloud", {}), 18096)
+        self.assertEqual(usagesrv._resolve_port("cloud", {}), 8096)
         self.assertEqual(usagesrv._resolve_port("local", {}), 8001)
+        # Expand-contract (2026-11-14): the old cloud port stays an explicit
+        # value for one release cycle; the DEFAULT above is already 8096.
+        self.assertEqual(
+            usagesrv._resolve_port("cloud", {"USAGESRV_PORT": "18096"}), 18096)
         self.assertEqual(
             usagesrv._resolve_port("cloud", {"USAGESRV_PORT": "18097"}), 18097)
         for bad in ("0", "65536", "", " 18096", "+18096", "0x4650",
@@ -216,20 +218,33 @@ class DeploymentRoleTests(unittest.TestCase):
             usagesrv._resolve_deployment_role(
                 {"UM_SHARE_ROLE": "cloud", "UM_SHARE_DEPLOYMENT": "local"})
 
-    def test_cloud_module_reads_18096_and_loopback_gates(self):
+    def test_cloud_module_reads_8096_and_loopback_gates(self):
         with tempfile.TemporaryDirectory() as directory:
             tmp = SimpleNamespace(name=directory)
             module = _load_cloud_usagesrv(tmp)
             self.assertEqual(module.DEPLOYMENT_ROLE, "cloud")
-            self.assertEqual(module.PORT, 18096)
+            self.assertEqual(module.PORT, 8096)
             self.assertEqual(module.HOST, "127.0.0.1")
-            self.assertTrue(module.host_allowed("127.0.0.1:18096"))
-            self.assertFalse(module.host_allowed("evil.example:18096"))
+            self.assertTrue(module.host_allowed("127.0.0.1:8096"))
+            self.assertFalse(module.host_allowed("evil.example:8096"))
             self.assertTrue(module.origin_allowed(
-                "http://127.0.0.1:18096"))
+                "http://127.0.0.1:8096"))
             self.assertFalse(module.origin_allowed(
                 "http://127.0.0.1:8001"))
             self.assertFalse(module.origin_allowed("https://evil.example"))
+
+    def test_cloud_module_accepts_the_legacy_port_explicitly(self):
+        # Expand-contract (2026-11-14): the old cloud port is not a second
+        # listener. It only works when an operator explicitly configures it.
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = SimpleNamespace(name=directory)
+            module = _load_cloud_usagesrv(tmp, USAGESRV_PORT="18096")
+            self.assertEqual(module.PORT, 18096)
+            self.assertTrue(module.host_allowed("127.0.0.1:18096"))
+            self.assertTrue(module.origin_allowed(
+                "http://127.0.0.1:18096"))
+            self.assertFalse(module.origin_allowed(
+                "http://127.0.0.1:8096"))
 
     def test_host_and_origin_are_derived_from_the_resolved_port(self):
         # 2026-11-01: Host/Origin are not hardcoded to a port; the same
@@ -265,55 +280,22 @@ class CloudAssemblyTests(unittest.TestCase):
             self.assertNotIn(absent, names)
         specs = {spec.name: spec for spec in
                  console_adapters.build_cloud_registry()}
-        # The four layered open/close chain actions need the Windows TS service /
-        # Funnel orchestration. They stay in the catalogue (the console can show
-        # WHY) but NO enabled TS/Funnel action may exist in the cloud role.
-        enabled_names = {name for name, spec in specs.items() if spec.enabled}
-        self.assertFalse(
-            enabled_names & console_adapters.CLOUD_SHARE_ORCH_ACTIONS)
-        for name in sorted(console_adapters.CLOUD_SHARE_ORCH_ACTIONS):
-            self.assertIn(name, specs)
-            self.assertFalse(specs[name].enabled, name)
-            self.assertEqual(
-                specs[name].disabled_reason,
-                console_adapters.CLOUD_SHARE_ORCH_DISABLED_REASON)
-            self.assertIn("Tailscale/Funnel 编排未装配",
-                          specs[name].disabled_reason)
+        # The retired Windows local layered chain actions are NOT in the
+        # cloud catalogue at all (#33).
+        for name in ("share.start", "share.stop", "share.estop",
+                      "share.retry_stop"):
+            self.assertNotIn(name, specs)
         # The remaining share cards are genuinely usable on the cloud.
         for name in ("share.status", "share.diagnostics",
-                      "share.backend_login", "share.backend_login_cancel",
-                      "share.backend_reauthenticate",
-                      "share.backend_restart", "share.gateway_restart"):
+                      "share.gateway_restart"):
             self.assertTrue(specs[name].enabled, name)
             self.assertIsNone(specs[name].disabled_reason, name)
-        # D18-10: the whole-chain lifecycle actions are CLOUD-ONLY and
-        # enabled; they drive the broker + 8110 only (no TS/Funnel seams).
-        for name in ("share.chain_start", "share.chain_stop",
-                      "share.chain_estop"):
-            self.assertTrue(specs[name].enabled, name)
-            self.assertIsNone(specs[name].disabled_reason, name)
-        self.assertIs(specs["share.chain_start"].handler,
-                      console_share_actions.chain_start)
-        self.assertIs(specs["share.chain_stop"].handler,
-                      console_share_actions.chain_stop)
-        self.assertIs(specs["share.chain_estop"].handler,
-                      console_share_actions.chain_estop)
-        self.assertIs(specs["share.backend_login_cancel"].handler,
-                      console_share_actions.backend_login_cancel)
-        # D18-6: the bounded auth wait accepts the full 30 minute human
-        # login window (1800s), not the old 600s cap.
-        auth_budget = specs["share.chain_start"].param_schema[
-            "backend_auth_budget_s"]
-        self.assertEqual(auth_budget["max"], 1800)
-        self.assertEqual(
-            console_adapters._SHARE_OPEN_BUDGET_SCHEMA[
-                "backend_auth_budget_s"]["max"], 1800)
-        # The cloud-only chain actions do not leak into the local catalogue.
-        local_names = {spec.name for spec in
-                       console_adapters.build_registry()}
-        for name in ("share.chain_start", "share.chain_stop",
-                       "share.chain_estop"):
-            self.assertNotIn(name, local_names)
+        self.assertIs(specs["share.status"].handler,
+                      console_share_actions.share_status)
+        self.assertIs(specs["share.diagnostics"].handler,
+                      console_share_actions.diagnostics)
+        self.assertIs(specs["share.gateway_restart"].handler,
+                      console_share_actions.gateway_restart)
         self.assertEqual(specs["service.start"].resource_fn(
             "share-gateway", {}), "share:orchestration")
         with self.assertRaises(Exception):
@@ -328,73 +310,17 @@ class CloudAssemblyTests(unittest.TestCase):
             specs["service.restart"].resource_fn("share-gateway", {}),
             "share:orchestration")
 
-    def test_cloud_submit_refuses_unassembled_ts_funnel_actions(self):
-        with tempfile.TemporaryDirectory() as directory:
-            manager = OperationManager(
-                os.path.join(directory, "state.sqlite3"),
-                console_adapters.build_cloud_registry(),
-                os.path.join(directory, "locks"))
-            try:
-                for name in sorted(console_adapters.CLOUD_SHARE_ORCH_ACTIONS):
-                    with self.subTest(action=name):
-                        with self.assertRaises(OperationUnavailable) as cm:
-                            manager.submit(name, "share")
-                        self.assertEqual(cm.exception.code, "action_disabled")
-                        self.assertEqual(
-                            cm.exception.reason,
-                            console_adapters.CLOUD_SHARE_ORCH_DISABLED_REASON)
-                # A refused action never creates an operation row.
-                self.assertEqual(manager.list_operations(), [])
-            finally:
-                manager.close()
-
-    def test_local_registry_keeps_the_ts_funnel_chain_enabled(self):
-        # Building the cloud registry first must never mutate the local one.
-        cloud = {spec.name: spec for spec in
-                 console_adapters.build_cloud_registry()}
+    def test_local_registry_has_no_share_actions(self):
+        # The retired Windows local share chain actions are NOT registered
+        # anywhere (#33); the local registry keeps service/account/model cards.
         local = {spec.name: spec for spec in console_adapters.build_registry()}
-        for name in sorted(console_adapters.CLOUD_SHARE_ORCH_ACTIONS):
-            self.assertFalse(cloud[name].enabled, name)
-            self.assertTrue(local[name].enabled, name)
-            self.assertIsNone(local[name].disabled_reason, name)
-        # The local-only public repair cards stay present and enabled.
-        for name in ("share.public_check", "share.public_retry",
-                      "share.repair_limits"):
-            self.assertNotIn(name, cloud)
-            self.assertTrue(local[name].enabled, name)
-
-    def test_cloud_backend_login_keeps_the_wired_control_channel(self):
-        specs = {spec.name: spec for spec in
-                 console_adapters.build_cloud_registry()}
-        login = specs["share.backend_login"]
-        self.assertTrue(login.enabled)
-        self.assertIsNone(login.disabled_reason)
-        self.assertIs(login.handler, console_share_actions.backend_login)
-        # The cloud production assembly keeps the dedicated-backend control
-        # channel (_BACKEND_LOGIN + _BACKEND_OPS) and drops ONLY the
-        # Tailscale/Funnel seams.
-        seams = console_share_production.production_seams(
-            broker=_SnapshotBroker(), cloud=True)
-        self.assertIs(seams["_BACKEND_LOGIN"],
-                      console_share_production.production_backend_login)
-        self.assertIn("_BACKEND_OPS", seams)
-        for name in ("_TS_SERVICE_CONTROL", "_TS_SERVICE_STATUS",
-                      "_CONNECTIVITY_OK", "_CONNECTIVITY_STATE",
-                      "_FUNNEL_CONTROL", "_FUNNEL_OBSERVED"):
-            self.assertNotIn(name, seams)
-        # The wired handler reaches the control-channel seam (stubbed here):
-        # neither a fake success nor an unwired refusal.
-        sentinel = {"triggered": True, "state": "logging_in"}
-        with mock.patch.object(console_share_actions, "_BACKEND_LOGIN",
-                                lambda **_kwargs: sentinel):
-            self.assertIs(console_share_actions.backend_login("share", {}),
-                          sentinel)
-        # An unwired control channel stays an explicit, honest refusal.
-        with mock.patch.object(console_share_actions, "_BACKEND_LOGIN", None):
-            with self.assertRaises(OperationError) as cm:
-                console_share_actions.backend_login("share", {})
-            self.assertEqual(cm.exception.code,
-                             "share_backend_login_unwired")
+        for name in ("share.start", "share.stop", "share.estop",
+                      "share.retry_stop", "share.public_check",
+                      "share.public_retry", "share.repair_limits",
+                      "share.status", "share.diagnostics"):
+            self.assertNotIn(name, local)
+        self.assertIn("service.start", local)
+        self.assertIn("account.um_status", local)
 
     def test_cloud_edge_status_is_a_read_only_systemd_probe(self):
         # D18-10: the whole-chain start reports the public edge as a LAYER
@@ -453,8 +379,7 @@ class CloudAssemblyTests(unittest.TestCase):
                 payload = module.build_summary()
         self.assertEqual(payload["role"], "cloud")
         self.assertEqual(payload["services"], {})
-        self.assertIsNone(payload["qoderQuota"]["cn"])
-        self.assertIsNone(payload["qoderQuota"]["global"])
+        self.assertNotIn("qoderQuota", payload)
         self.assertNotIn("qoder", payload["services"])
         self.assertNotIn("chat2api", payload["services"])
         self.assertNotIn("dsh", payload["services"])
@@ -543,8 +468,6 @@ class CloudHttpGateTests(unittest.TestCase):
 
     def test_non_um_read_faces_are_explicitly_not_assembled(self):
         for path in ("/api/console/stats", "/api/console/logs",
-                      "/api/console/quota-snapshot",
-                      "/api/console/model-pending",
                       "/api/console/gateway-connection?service=Qoder"):
             with self.subTest(path=path):
                 status, payload = self._request(
@@ -555,37 +478,10 @@ class CloudHttpGateTests(unittest.TestCase):
                 self.assertEqual(payload["error"], "capability_not_assembled")
                 self.assertEqual(payload["role"], "cloud")
 
-    def test_cloud_unassembled_chain_action_is_refused_over_http(self):
-        # The action list shows the TS/Funnel chain cards as DISABLED with the
-        # cloud reason, and a submit is refused (403 action_disabled) before any
-        # operation row exists — never a fake success or an unhandled seam error.
-        status, payload = self._request(
-            "GET", "/api/console/actions",
-            {"Host": "127.0.0.1:%d" % self.port})
-        self.assertEqual(status, 200)
-        by_name = {i["action"]: i for i in payload["actions"]}
-        for name in sorted(console_adapters.CLOUD_SHARE_ORCH_ACTIONS):
-            with self.subTest(action=name):
-                self.assertFalse(by_name[name]["enabled"], name)
-                self.assertIn("Tailscale/Funnel 编排未装配",
-                              by_name[name]["disabled_reason"])
-        status, payload = self._request(
-            "POST", "/api/console/operations",
-            {"Host": "127.0.0.1:%d" % self.port},
-            {"action": "share.start", "target": "share"})
-        self.assertEqual(status, 403)
-        self.assertEqual(payload["error"], "action_disabled")
-        self.assertIn("Tailscale/Funnel 编排未装配", payload["reason"])
-        status, payload = self._request(
-            "GET", "/api/console/operations",
-            {"Host": "127.0.0.1:%d" % self.port})
-        self.assertEqual(status, 200)
-        self.assertEqual(payload["operations"], [])
-
     def _isolate_capacity_seams(self):
         """Keep the status read from wiring the real broker in this test."""
         saved = {name: getattr(console_share_actions, name) for name in (
-            "_MAINTENANCE_STATUS", "_BROKER_OPS", "_FUNNEL_OBSERVED")}
+            "_MAINTENANCE_STATUS", "_BROKER_OPS")}
         for name in saved:
             self.addCleanup(setattr, console_share_actions, name, saved[name])
             setattr(console_share_actions, name, None)
@@ -604,7 +500,7 @@ class CloudHttpGateTests(unittest.TestCase):
         null with explicit reasons.
         """
         self._isolate_capacity_seams()
-        from share_store import ShareStore
+        from share.store import ShareStore
         store = ShareStore(Path(self.tmp.name) / "share.db")
         try:
             store.set_share_max_concurrency(32)
@@ -633,7 +529,7 @@ class CloudHttpGateTests(unittest.TestCase):
     def test_cloud_share_status_capacity_note_follows_configured_value(self):
         """The note states the payload's configured cap, never a fixed 128."""
         self._isolate_capacity_seams()
-        from share_store import ShareStore
+        from share.store import ShareStore
         store = ShareStore(Path(self.tmp.name) / "share.db")
         try:
             store.set_share_max_concurrency(64)
@@ -727,57 +623,6 @@ class CloudHttpGateTests(unittest.TestCase):
         self.assertEqual([s["key"] for s in payload["services"]],
                          ["share-gateway"])
 
-    def test_cloud_status_get_never_wires_tailscale_seams(self):
-        """The status facade's lazy self-wiring must follow the cloud role.
-
-        A bare GET /api/console/share-management/status wires the share seams
-        itself (it must not depend on the operations chain having run first).
-        That lazy wiring has to pass the CLOUD flag: a provisioned broker config
-        (the real cloud deployment) would otherwise let production_seams() install
-        the local Tailscale/Funnel seams into a cloud process.
-        """
-        watched = ("_TS_SERVICE_CONTROL", "_TS_SERVICE_STATUS",
-                   "_CONNECTIVITY_OK", "_CONNECTIVITY_STATE",
-                   "_FUNNEL_CONTROL", "_FUNNEL_OBSERVED")
-        saved = {name: getattr(console_share_actions, name)
-                 for name in watched}
-        saved_ops = console_share_actions._BROKER_OPS
-        self.addCleanup(lambda: setattr(
-            console_share_actions, "_BROKER_OPS", saved_ops))
-        for name, value in saved.items():
-            self.addCleanup(setattr, console_share_actions, name, value)
-            setattr(console_share_actions, name, None)
-        console_share_actions._BROKER_OPS = None
-
-        class _Broker:
-            def snapshot(self):
-                return {"name": "fake", "state": "ok"}
-
-            def host_verify(self, check):
-                return BrokerResult.ok({"check": check, "verdict": None,
-                                         "detail": "fake",
-                                         "checked_at": None})
-
-        with mock.patch.object(
-                console_share_production, "_default_broker",
-                return_value=_Broker()), \
-                mock.patch.object(
-                    console_share_production, "production_backend_observe",
-                    return_value={"auth_state": None, "running": None}):
-            status, payload = self._request(
-                "GET", "/api/console/share-management/status",
-                {"Host": "127.0.0.1:%d" % self.port})
-        self.assertEqual(status, 200)
-        # The cloud assembly ran (broker gate + backend observation wired)...
-        self.assertIsNotNone(console_share_actions._BROKER_OPS)
-        # ...but no Tailscale/Funnel seam was installed into this process.
-        for name in watched:
-            self.assertIsNone(getattr(console_share_actions, name), name)
-        self.assertNotIn("gateway_running", payload)
-        self.assertNotIn("funnel_on", payload)
-
-
-# ------------------------------------------------ Linux host ops (pid file)
 class LinuxHostOpsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -899,30 +744,6 @@ class LinuxHostOpsTests(unittest.TestCase):
         self.assertEqual(observed["detail"], "limits_net_unreadable")
         self.assertIsNone(self._ops().verify_limits())
 
-    def test_linux_backend_ops_use_proc_identity(self):
-        backend_dir = self.root / "backend"
-        os.environ["CONSOLE_SHARE_BACKEND_DIR"] = str(backend_dir)
-        self.addCleanup(os.environ.pop, "CONSOLE_SHARE_BACKEND_DIR", None)
-
-        def spawner(command, env):
-            self.table.add(5002, command, port=8110)
-            self.spawned.append(list(command))
-            return SimpleNamespace(pid=5002)
-
-        ops = console_share_production._LinuxBackendOps(
-            gateway_dir=str(self.root / "chat2api"), port=8110,
-            spawner=spawner, proc_root=str(self.proc),
-            kill_fn=self.table.kill,
-            exe_reader=lambda _path: sys.executable,
-            clock=lambda: 0.0, sleeper=lambda _seconds: None)
-        self.assertTrue(ops.start())
-        self.assertTrue(ops.start())          # idempotent: no second spawn
-        self.assertEqual(len(self.spawned), 1)
-        state = ops.backend_pid_state()
-        self.assertEqual(state["state"], "running")
-        self.assertTrue(ops.stop())
-        self.assertTrue(ops.verify_closed())
-        self.assertIn((5002, 15), self.table.signals)
 
 
 # ------------------------------------------------ Linux instance identity
@@ -952,7 +773,7 @@ class LinuxInstanceIdentityTests(unittest.TestCase):
         self.assertEqual(evidence["uid"], os.stat(self.proc / "7001").st_uid)
         self.assertGreater(evidence["creation_epoch"], 0)
         for overrides in (
-                {"expected_port": 8110},
+                {"expected_port": 28110},
                 {"expected_cmdline_marker": "share_entry.py"},
                 {"expected_image": "/usr/bin/other-python"}):
             with self.subTest(overrides=overrides):
@@ -1039,7 +860,7 @@ class LinuxBrokerEntryTests(unittest.TestCase):
         plan = share_broker_ops.linux_server_plan(self._args())
         self.assertEqual(plan["transport"], "unix_socket")
         self.assertIs(plan["server_class"],
-                      __import__("share_broker_server").UnixSocketBrokerServer)
+                      __import__("share.broker_server", fromlist=["UnixSocketBrokerServer"]).UnixSocketBrokerServer)
         for overrides in (
                 {"socket_path": "\\\\.\\pipe\\um-share-broker"},
                 {"socket_path": "relative.sock"},
@@ -1054,13 +875,11 @@ class LinuxBrokerEntryTests(unittest.TestCase):
         """A4/A7/A8: the Linux product class must not inherit the base
         transport's NotImplementedError dispatch. The chain test runs the REAL
         linux_main entry; this cross-platform assertion pins the class wiring."""
-        import share_broker_server as srv
+        import share.broker_server as srv
         self.assertIs(srv.UnixSocketBrokerServer._dispatch,
                       srv._ManagementDispatch._dispatch)
         self.assertIsNot(srv.UnixSocketBrokerServer._dispatch,
-                         srv.BoundedPipeServer._dispatch)
-        self.assertIs(srv.ManagementPipeServer._dispatch,
-                      srv._ManagementDispatch._dispatch)
+                         srv.BoundedSocketServer._dispatch)
 
     def test_unix_instance_call_verifies_identity_before_sending(self):
         _SignedEchoTransport.paths = []
@@ -1101,7 +920,7 @@ class LinuxBrokerEntryTests(unittest.TestCase):
             # (Windows uses DPAPI and needs no file). Provisioning a TEMP key
             # file keeps this real-chain test host-independent without changing
             # anything it verifies; on Windows the env entry is never read.
-            import share_secret_protection
+            import share.secret_protection as share_secret_protection
             key_file = self.root / "share-secret.key"
             key_file.write_bytes(os.urandom(share_secret_protection.KEY_SIZE))
             os.chmod(key_file, 0o600)
@@ -1134,9 +953,7 @@ class LinuxBrokerEntryTests(unittest.TestCase):
                                broker=BrokerClientAdapter(_ProjectionBroker()))
         created = manager.create_key("friendA")
         self.assertTrue(created["published"])
-        server = ShareServer(("127.0.0.1", 0), config,
-                              auth_mode="projection")
-        self.addCleanup(server.server_close)
+        server = ShareGate(config, auth_mode="projection")
         key_id = created["key_id"]
         self.assertTrue(server.acquire(
             key_id, generation=created["desired_generation"],

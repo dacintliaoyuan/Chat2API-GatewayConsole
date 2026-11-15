@@ -15,11 +15,14 @@ carries "filled / not filled" as a value the session only ever tests for
 non-emptiness, and the session must never print, return or store it.
 """
 
+import atexit
 import http.client
 import importlib.util
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -64,6 +67,24 @@ MFA_MARKER = chat2api.UMPASS_MFA_SELECTORS[0]
 
 ACCOUNT = "uc59xxxx@um.edu.mo"
 PASSWORD = "offline-placeholder"
+
+
+def _write_login_display(marker, auth, socket_path, display=":99",
+                          pid=None):
+    """Write the runtime state the on-demand display publishes.
+
+    The display unit writes this file only while a manual takeover is active;
+    ``browser_login`` reads it to decide between headless and the visible
+    login window.  The test writes the same shape with throwaway paths.
+    """
+    marker.write_text(
+        "UM_LOGIN_DISPLAY=%s\n"
+        "UM_LOGIN_XAUTHORITY=%s\n"
+        "UM_LOGIN_DISPLAY_SOCKET=%s\n"
+        "UM_LOGIN_DISPLAY_PID=%s\n"
+        % (display, auth, socket_path,
+           os.getpid() if pid is None else pid),
+        encoding="utf-8")
 
 
 class _FakeElement:
@@ -172,15 +193,18 @@ class _FakeSite:
 
 
 class _FakeContext:
-    def __init__(self, page):
+    def __init__(self, page, close_error=None):
         self.pages = [page]
         self.closed = False
+        self.close_error = close_error
 
     def new_page(self):
         raise AssertionError("the session must reuse the existing page")
 
     def close(self):
         self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
 
 
 def _element(selector, site, *, value="", visible=True, on_click=None):
@@ -275,18 +299,32 @@ def _build_site(token="fresh-token", *, sso_button=True, submit=True,
 class _Harness:
     """Drives the real ``browser_login`` against an offline fake site."""
 
-    def __init__(self, site, verdicts=("valid",)):
+    def __init__(self, site, verdicts=("valid",), close_error=None,
+                 profile_dir=None):
         self.site = site
         self.verdicts = list(verdicts)
+        self.close_error = close_error
         self.probes = []
         self.notes = []
         self.created = []
         self.reported = []
+        self.profile_dir = profile_dir or tempfile.mkdtemp(
+            prefix="chat2api-browser-login-")
+        atexit.register(shutil.rmtree, self.profile_dir, ignore_errors=True)
 
     def _context_factory(self, _edge, _profile_dir):
-        context = _FakeContext(self.site)
+        context = _FakeContext(self.site, close_error=self.close_error)
         self.created.append(context)
         return context
+
+    @staticmethod
+    def _no_processes(_profile_dir):
+        return []
+
+    @staticmethod
+    def _never_signal(pid, sig):
+        raise AssertionError("unexpected browser cleanup signal: %s %s"
+                             % (pid, sig))
 
     def _credential_probe(self, base_url, token):
         self.probes.append((base_url, token))
@@ -312,13 +350,15 @@ class _Harness:
         ):
             result = chat2api.browser_login(
                 BASE_URL,
-                "profile-dir",
+                self.profile_dir,
                 timeout_s,
                 on_context=self._on_context,
                 cancel_event=cancel_event,
                 context_factory=self._context_factory,
                 credential_probe=self._credential_probe,
                 on_progress=self._on_progress,
+                process_lister=self._no_processes,
+                process_signal=self._never_signal,
             )
         self.output = output.getvalue()
         return result
@@ -390,40 +430,71 @@ class TwoStepFlowTests(unittest.TestCase):
         # the prompt out and only then reads the token.
         self.assertEqual(harness.click_selectors(), [SSO_BUTTON, SUBMIT_BUTTON])
 
-    def test_missing_prefill_never_submits_and_the_human_finishes(self):
+    def test_duo_prompt_wait_is_not_manual_takeover(self):
+        site = _FakeSite(DUO_URL)
+        harness = _Harness(site)
+        started = time.monotonic()
+
+        with self.assertRaises(chat2api.LoginStalled) as ctx:
+            harness.run(timeout_s=0.3)
+        elapsed = time.monotonic() - started
+
+        # ticket #13：Duo 推送等待必须继续等手机批准，不能当 manual 立即
+        # 结束；等待期间不上报 manual_reason，结束后才按超时原因如实报告。
+        self.assertEqual(ctx.exception.reason, "duo_prompt_waiting")
+        self.assertGreaterEqual(elapsed, 0.3)
+        self.assertEqual(harness.manual_reasons(), [])
+        self.assertIn("awaiting_duo", harness.phases())
+        self.assertEqual(harness.click_selectors(), [])
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+    def test_missing_prefill_ends_the_round_for_manual_takeover(self):
         site = _build_site(password="")
         harness = _Harness(site)
+        started = time.monotonic()
 
-        def human_fills_the_form(fake):
-            fake.elements[PASSWORD_FIELD] = [
-                _element(PASSWORD_FIELD, fake, value=PASSWORD)]
-            fake.set_token("human-token")
+        with self.assertRaises(chat2api.LoginStalled) as ctx:
+            harness.run(timeout_s=5)
+        elapsed = time.monotonic() - started
 
-        site.script = [harness.human_step("umpass_prefill_missing",
-                                           human_fills_the_form)]
-
-        token = harness.run()
-
-        self.assertEqual(token, "human-token")
+        # ticket #13：自动填充缺失需要本人补全，属于真正 manual 阶段：
+        # 立即结束本轮，不提交表单，也不保留浏览器。
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:umpass_prefill_missing")
+        self.assertLess(elapsed, 1.0)
         self.assertEqual(harness.click_selectors(), [SSO_BUTTON])
-        self.assertIn("umpass_prefill_missing", harness.manual_reasons())
+        self.assertEqual(harness.manual_reasons(), ["umpass_prefill_missing"])
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
 
-    def test_mfa_prompt_is_left_to_a_human(self):
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
+
+    def test_mfa_prompt_ends_the_round_for_manual_takeover(self):
         site = _build_site(mfa=True)
         harness = _Harness(site)
+        started = time.monotonic()
 
-        def human_completes_the_mfa(fake):
-            fake.elements.pop(MFA_MARKER)
-            fake.set_token("mfa-token")
+        with self.assertRaises(chat2api.LoginStalled) as ctx:
+            harness.run(timeout_s=5)
+        elapsed = time.monotonic() - started
 
-        site.script = [harness.human_step("umpass_mfa_required",
-                                          human_completes_the_mfa)]
-
-        token = harness.run()
-
-        self.assertEqual(token, "mfa-token")
+        # ticket #13：MFA 验证码属于真正 manual 阶段：立即结束本轮并返回
+        # 带原因的错误码，绝不等满 30 分钟或 5 分钟空闲预算。
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:umpass_mfa_required")
+        self.assertLess(elapsed, 1.0)
         self.assertEqual(harness.click_selectors(), [SSO_BUTTON])
-        self.assertIn("umpass_mfa_required", harness.manual_reasons())
+        self.assertEqual(harness.manual_reasons(), ["umpass_mfa_required"])
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+        # 浏览器已释放：同一 profile 可以立即开新一轮。
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
 
     def test_swallowed_submit_is_retried_once_then_accepted(self):
         site = _build_site(swallowed=1)
@@ -492,13 +563,24 @@ class ClickSafetyGateTests(unittest.TestCase):
         site = _FakeSite(LOOKALIKE_URL)
         site.elements = {SSO_BUTTON: [_element(SSO_BUTTON, site)]}
         harness = _Harness(site)
+        started = time.monotonic()
 
         with self.assertRaises(chat2api.LoginStalled) as ctx:
-            harness.run(timeout_s=0.3)
+            harness.run(timeout_s=5)
+        elapsed = time.monotonic() - started
 
-        self.assertEqual(ctx.exception.reason, "unrecognized_page")
+        # ticket #13：未知页面属于真正 manual 阶段：立即结束本轮并释放浏览器。
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:unrecognized_page")
+        self.assertLess(elapsed, 1.0)
         self.assertEqual(harness.click_selectors(), [])
         self.assertEqual(harness.notes[0]["origin"], LOOKALIKE_URL)
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
 
     def test_lookalike_sso_host_is_not_the_sso_page(self):
         site = _FakeSite(LOOKALIKE_URL)
@@ -510,9 +592,11 @@ class ClickSafetyGateTests(unittest.TestCase):
         harness = _Harness(site)
 
         with self.assertRaises(chat2api.LoginStalled) as ctx:
-            harness.run(timeout_s=0.3)
+            harness.run(timeout_s=5)
 
-        self.assertEqual(ctx.exception.reason, "unrecognized_page")
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:unrecognized_page")
         self.assertEqual(harness.click_selectors(), [])
 
     def test_missing_button_on_the_login_page_never_clicks(self):
@@ -597,7 +681,9 @@ class FallbackSelectorIdentityTests(unittest.TestCase):
         with self.assertRaises(chat2api.LoginStalled) as ctx:
             harness.run(timeout_s=0.3)
 
-        self.assertEqual(ctx.exception.reason, "umpass_mfa_required")
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:umpass_mfa_required")
         self.assertEqual(harness.click_selectors(), [SSO_BUTTON])
 
 
@@ -628,7 +714,7 @@ class RealDomLoginPageTests(unittest.TestCase):
         cls.manager = sync_playwright().start()
         try:
             cls.browser = cls.manager.chromium.launch(headless=True)
-        except Exception as exc:  # pragma: no cover - 未安装浏览器
+        except Exception as exc:  # noqa: BLE001 — 无浏览器时跳过（环境缺失）  # pragma: no cover
             cls.manager.stop()
             raise unittest.SkipTest("headless Chromium unavailable: %s: %s"
                                     % (type(exc).__name__, exc))
@@ -642,6 +728,8 @@ class RealDomLoginPageTests(unittest.TestCase):
         self.served = []
         self.notes = []
         self.probes = []
+        self.profile_dir = tempfile.mkdtemp(prefix="chat2api-dom-profile-")
+        self.addCleanup(shutil.rmtree, self.profile_dir, ignore_errors=True)
         self.entry_html = _fixture("um_openwebui_entry_desensitized.html")
         self.websso_html = _fixture("um_websso_adfs_desensitized.html")
         self.context = type(self).browser.new_context()
@@ -677,10 +765,12 @@ class RealDomLoginPageTests(unittest.TestCase):
             redirect_stdout(io.StringIO()),
         ):
             return chat2api.browser_login(
-                BASE_URL, "profile-dir", timeout_s,
+                BASE_URL, self.profile_dir, timeout_s,
                 context_factory=self._context_factory,
                 credential_probe=self._probe,
-                on_progress=self.notes.append)
+                on_progress=self.notes.append,
+                process_lister=lambda _profile: [],
+                process_signal=lambda _pid, _sig: True)
 
     def _run_stalled(self, timeout_s=3):
         with self.assertRaises(chat2api.LoginStalled) as caught:
@@ -721,7 +811,8 @@ class RealDomLoginPageTests(unittest.TestCase):
         self.websso_html = _fixture("um_websso_mfa_desensitized.html")
         exc = self._run_stalled(timeout_s=3)
 
-        self.assertEqual(exc.reason, "umpass_mfa_required")
+        self.assertEqual(
+            exc.reason, "manual_takeover_required:umpass_mfa_required")
         self.assertIn(WEBSO_ORIGIN + "/adfs/ls/", self.served)
         self.assertNotIn(WEBSO_ORIGIN + "/adfs/ls/submitted", self.served)
         self.assertNotIn(WEBSO_ORIGIN + "/adfs/ls/otp-clicked", self.served)
@@ -732,9 +823,10 @@ class RealDomLoginPageTests(unittest.TestCase):
         # 如实报出 unrecognized_page 与它看到的页面。
         self.entry_html = self.entry_html.replace(
             WEBSO_ORIGIN + "/adfs/ls/", OTHER_ORIGIN + "/sso")
-        exc = self._run_stalled(timeout_s=3)
+        exc = self._run_stalled(timeout_s=5)
 
-        self.assertEqual(exc.reason, "unrecognized_page")
+        self.assertEqual(
+            exc.reason, "manual_takeover_required:unrecognized_page")
         # 页面确实被加载（导航发生了），但页面上的控件一次都没被点。
         self.assertIn(OTHER_ORIGIN + "/sso", self.served)
         self.assertNotIn(WEBSO_ORIGIN + "/adfs/ls/submitted", self.served)
@@ -768,14 +860,238 @@ class SessionLifecycleTests(unittest.TestCase):
             mock.patch("playwright.sync_api.sync_playwright", return_value=FakeManager()),
             redirect_stdout(io.StringIO()),
         ):
-            token = chat2api.browser_login(
-                BASE_URL, "profile-dir", 1,
-                credential_probe=lambda base_url, bearer: ("valid", None, 200),
-            )
+            with tempfile.TemporaryDirectory(
+                    prefix="chat2api-real-playwright-") as profile_dir:
+                token = chat2api.browser_login(
+                    BASE_URL, profile_dir, 1,
+                    credential_probe=lambda base_url, bearer: ("valid", None, 200),
+                    process_lister=lambda _profile: [],
+                    process_signal=lambda _pid, _sig: True,
+                )
 
         self.assertEqual(token, "fresh-token")
         self.assertTrue(context.closed)
         self.assertEqual(stopped, [True])
+
+    def test_playwright_stop_failure_is_reported_as_cleanup_failure(self):
+        # ticket #42 item 7：playwright.stop() 失败与 ctx.close() 失败一样，
+        # 必须显式映射为 browser_cleanup_failed，并释放 profile 锁。
+        site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
+        context = _FakeContext(site)
+
+        class FakeManager:
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=lambda *args, **kwargs: context),
+                    stop=self._fail,
+                )
+
+            @staticmethod
+            def _fail():
+                raise RuntimeError("stop exploded")
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-profile-") as profile_dir:
+            with (
+                mock.patch.object(chat2api, "find_edge",
+                                  return_value="fake-edge"),
+                mock.patch("playwright.sync_api.sync_playwright",
+                           return_value=FakeManager()),
+                redirect_stdout(io.StringIO()),
+            ):
+                with self.assertRaises(chat2api.LoginCleanupFailed) as caught:
+                    chat2api.browser_login(
+                        BASE_URL, profile_dir, 1,
+                        credential_probe=lambda base_url, bearer:
+                        ("valid", None, 200),
+                        process_lister=lambda _profile: [],
+                        process_signal=lambda _pid, _sig: True,
+                    )
+        self.assertEqual(caught.exception.reason,
+                         "browser_cleanup_failed")
+        self.assertIn("stop exploded", str(caught.exception))
+        self.assertTrue(context.closed)
+        self.assertFalse(os.path.exists(profile_dir))
+        # stop 失败也必须释放 profile 单实例锁，下一轮才不会被误判 busy。
+        lock = chat2api._acquire_profile_login_lock(profile_dir)
+        self.assertIsNotNone(lock)
+        chat2api._release_profile_login_lock(lock)
+
+    def test_launch_is_headless_and_reuses_the_given_profile(self):
+        site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
+        context = _FakeContext(site)
+        launches = []
+
+        class FakeManager:
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=lambda *args, **kwargs: (
+                            launches.append((args, kwargs)) or context),
+                    ),
+                    stop=lambda: None,
+                )
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-profile-") as profile_dir:
+            with (
+                mock.patch.object(chat2api, "find_edge",
+                                  return_value="fake-edge"),
+                mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
+                                  os.path.join(profile_dir, "absent.env")),
+                mock.patch.dict(os.environ, {
+                    chat2api.LOGIN_DISPLAY_FILE_ENV:
+                        os.path.join(profile_dir, "absent.env")}),
+                mock.patch("playwright.sync_api.sync_playwright",
+                           return_value=FakeManager()),
+                redirect_stdout(io.StringIO()),
+            ):
+                token = chat2api.browser_login(
+                    BASE_URL, profile_dir, 1,
+                    credential_probe=lambda base_url, bearer:
+                    ("valid", None, 200),
+                    process_lister=lambda _profile: [],
+                    process_signal=lambda _pid, _sig: True,
+                )
+
+        # Ticket #42 item 2: the test owns a temporary profile, never a
+        # production directory; the fixture removes it on exit.
+        self.assertFalse(os.path.exists(profile_dir))
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(len(launches), 1)
+        args, kwargs = launches[0]
+        # 同一个 profile 目录交给持久化上下文，不再派生专用目录。
+        self.assertEqual(args, (profile_dir,))
+        # 默认无窗口：真实启动参数必须是 headless，且不注入 display 环境。
+        self.assertIs(kwargs.get("headless"), True)
+        self.assertNotIn("env", kwargs)
+        self.assertNotIn("args", kwargs)
+
+    def test_launch_is_headful_when_the_manual_display_is_active(self):
+        site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
+        context = _FakeContext(site)
+        launches = []
+
+        class FakeManager:
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=lambda *args, **kwargs: (
+                            launches.append((args, kwargs)) or context),
+                    ),
+                    stop=lambda: None,
+                )
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-display-") as tmp:
+            auth = Path(tmp) / "display.auth"
+            auth.write_text("", encoding="utf-8")
+            display_socket = Path(tmp) / "X99"
+            display_socket.write_text("", encoding="utf-8")
+            marker = Path(tmp) / "login-display.env"
+            _write_login_display(marker, auth, display_socket)
+            with tempfile.TemporaryDirectory(
+                    prefix="chat2api-login-profile-") as profile_dir:
+                with (
+                    mock.patch.object(chat2api, "find_edge",
+                                      return_value="fake-edge"),
+                    mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
+                                      str(marker)),
+                    mock.patch.dict(os.environ, {
+                        chat2api.LOGIN_DISPLAY_FILE_ENV: str(marker),
+                        "WAYLAND_DISPLAY": "wayland-0"}),
+                    mock.patch("playwright.sync_api.sync_playwright",
+                               return_value=FakeManager()),
+                    redirect_stdout(io.StringIO()),
+                ):
+                    token = chat2api.browser_login(
+                        BASE_URL, profile_dir, 1,
+                        credential_probe=lambda base_url, bearer:
+                        ("valid", None, 200),
+                        process_lister=lambda _profile: [],
+                        process_signal=lambda _pid, _sig: True,
+                    )
+
+        self.assertFalse(os.path.exists(profile_dir))
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(len(launches), 1)
+        args, kwargs = launches[0]
+        self.assertEqual(args, (profile_dir,))
+        # 人工接管已拉起 display：新轮次必须在同一 profile 上开可见窗口。
+        self.assertIs(kwargs.get("headless"), False)
+        self.assertEqual(kwargs.get("args"), ["--start-maximized"])
+        self.assertIs(kwargs.get("no_viewport"), True)
+        env = kwargs.get("env") or {}
+        self.assertEqual(env.get("DISPLAY"), ":99")
+        self.assertEqual(env.get("XAUTHORITY"), str(auth))
+        # display 是 X11；残留的 Wayland 提示不能把浏览器切到别的后端。
+        self.assertNotIn("WAYLAND_DISPLAY", env)
+
+    def test_stale_manual_display_state_stays_headless(self):
+        site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
+        context = _FakeContext(site)
+        launches = []
+
+        class FakeManager:
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=lambda *args, **kwargs: (
+                            launches.append((args, kwargs)) or context),
+                    ),
+                    stop=lambda: None,
+                )
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-display-") as tmp:
+            auth = Path(tmp) / "display.auth"
+            auth.write_text("", encoding="utf-8")
+            marker = Path(tmp) / "login-display.env"
+            # X socket 不在：display 已停止，残留的 runtime state 不能把
+            # 默认路径变成可见窗口。
+            _write_login_display(
+                marker, auth, Path(tmp) / "missing-X99")
+            with tempfile.TemporaryDirectory(
+                    prefix="chat2api-login-profile-") as profile_dir:
+                with (
+                    mock.patch.object(chat2api, "find_edge",
+                                      return_value="fake-edge"),
+                    mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE",
+                                      str(marker)),
+                    mock.patch.dict(os.environ, {
+                        chat2api.LOGIN_DISPLAY_FILE_ENV: str(marker)}),
+                    mock.patch("playwright.sync_api.sync_playwright",
+                               return_value=FakeManager()),
+                    redirect_stdout(io.StringIO()),
+                ):
+                    token = chat2api.browser_login(
+                        BASE_URL, profile_dir, 1,
+                        credential_probe=lambda base_url, bearer:
+                        ("valid", None, 200),
+                        process_lister=lambda _profile: [],
+                        process_signal=lambda _pid, _sig: True,
+                    )
+
+        self.assertFalse(os.path.exists(profile_dir))
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(len(launches), 1)
+        _args, kwargs = launches[0]
+        self.assertIs(kwargs.get("headless"), True)
+        self.assertNotIn("env", kwargs)
+
+    def test_posix_without_a_display_drives_the_fake_flow(self):
+        site = _build_site()
+        harness = _Harness(site)
+
+        with mock.patch.object(chat2api.sys, "platform", "linux"), \
+             mock.patch.dict(os.environ, {"DISPLAY": "",
+                                         "WAYLAND_DISPLAY": ""}):
+            token = harness.run()
+
+        # POSIX 无 DISPLAY/WAYLAND_DISPLAY 也必须走通 headless 自动流程。
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(harness.click_selectors(), [SSO_BUTTON, SUBMIT_BUTTON])
 
     def setUp(self):
         _patch_click_budget(self, settle_s=30.0)
@@ -804,11 +1120,140 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertEqual(harness.click_selectors(), [])
         self.assertEqual([c.closed for c in harness.created], [True])
 
+    def test_idle_timeout_closes_the_context_and_reports_the_reason(self):
+        site = _FakeSite(OPENWEBUI_URL)
+        harness = _Harness(site)
+
+        with mock.patch.object(chat2api, "LOGIN_IDLE_TIMEOUT_S", 0.05):
+            with self.assertRaises(chat2api.LoginStalled) as ctx:
+                harness.run(timeout_s=1)
+
+        self.assertEqual(ctx.exception.reason, "idle_timeout")
+        self.assertIn("no progress", str(ctx.exception))
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
+
+    def test_default_idle_timeout_is_five_minutes(self):
+        self.assertEqual(chat2api.LOGIN_IDLE_TIMEOUT_S, 300.0)
+
+    def test_duo_wait_keeps_the_idle_timeout_alive(self):
+        # ticket #41：Duo 推送等待是真实进展，手机批准可能超过空闲
+        # 超时；等待期间必须刷新 idle deadline，不能按 idle_timeout 结束。
+        class _SlowDuoApproval(_FakeSite):
+            def __init__(self):
+                super().__init__(DUO_URL)
+                self.started = time.monotonic()
+
+            def wait_for_timeout(self, ms):
+                time.sleep(ms / 1000.0)
+                if time.monotonic() - self.started >= 0.2:
+                    self.navigate(OPENWEBUI_HOME)
+                    self.set_token("duo-approved-token")
+
+        harness = _Harness(_SlowDuoApproval())
+        with mock.patch.object(chat2api, "LOGIN_IDLE_TIMEOUT_S", 0.05), \
+                mock.patch.object(chat2api, "LOGIN_POLL_INTERVAL_MS", 10):
+            token = harness.run(timeout_s=2)
+
+        self.assertEqual(token, "duo-approved-token")
+        self.assertIn("awaiting_duo", harness.phases())
+        self.assertEqual(harness.manual_reasons(), [])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+    def test_navigation_failure_is_retried_once_before_manual(self):
+        site = _build_site()
+        site.url = ""
+        site.goto_calls = []
+
+        def flaky_goto(url, wait_until=None, timeout=None):
+            site.goto_calls.append(url)
+            if len(site.goto_calls) == 1:
+                raise RuntimeError("navigation failed")
+            site.url = OPENWEBUI_URL
+
+        site.goto = flaky_goto
+        harness = _Harness(site)
+
+        token = harness.run()
+
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(site.goto_calls, [BASE_URL, BASE_URL])
+        self.assertEqual(harness.manual_reasons(), [])
+
+    def test_navigation_failure_is_bounded_and_then_manual(self):
+        site = _build_site()
+        site.url = ""
+        site.goto_calls = []
+
+        def always_failing_goto(url, wait_until=None, timeout=None):
+            site.goto_calls.append(url)
+            raise RuntimeError("navigation failed")
+
+        site.goto = always_failing_goto
+        harness = _Harness(site)
+
+        with self.assertRaises(chat2api.LoginStalled) as ctx:
+            harness.run(timeout_s=1)
+
+        self.assertEqual(
+            ctx.exception.reason,
+            "manual_takeover_required:unrecognized_page")
+        self.assertEqual(site.goto_calls, [BASE_URL, BASE_URL])
+        self.assertEqual(harness.manual_reasons(), ["unrecognized_page"])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+    def test_total_budget_still_ends_the_session_before_the_idle_timeout(self):
+        site = _FakeSite(OPENWEBUI_URL)
+        harness = _Harness(site)
+
+        with mock.patch.object(chat2api, "LOGIN_IDLE_TIMEOUT_S", 300.0):
+            with self.assertRaises(chat2api.LoginStalled) as ctx:
+                harness.run(timeout_s=0.2)
+
+        self.assertEqual(ctx.exception.reason, "timeout")
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+    def test_progress_resets_the_idle_deadline(self):
+        class ProgressingSite(_FakeSite):
+            """A page that keeps changing while the automatic flow waits."""
+
+            def __init__(self):
+                super().__init__(OPENWEBUI_URL)
+                self.progress = 0
+
+            def wait_for_timeout(self, ms):
+                super().wait_for_timeout(ms)
+                time.sleep(0.002)
+                self.progress += 1
+                self.url = OPENWEBUI_URL if self.progress % 2 else DUO_URL
+                if self.progress >= 60:
+                    self.set_token("progress-token")
+
+        harness = _Harness(ProgressingSite())
+
+        with mock.patch.object(chat2api, "LOGIN_IDLE_TIMEOUT_S", 0.05):
+            token = harness.run(timeout_s=5)
+
+        self.assertEqual(token, "progress-token")
+        self.assertEqual(harness.manual_reasons(), [])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
     def test_missing_edge_is_an_explicit_error(self):
-        with mock.patch.object(chat2api, "find_edge", return_value=None):
-            with self.assertRaises(RuntimeError) as ctx:
-                chat2api.browser_login(BASE_URL, "profile-dir", 1)
-        self.assertIn("Edge was not found", str(ctx.exception))
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-profile-") as profile_dir:
+            with mock.patch.object(chat2api, "find_edge",
+                                   return_value=None):
+                with self.assertRaises(RuntimeError) as ctx:
+                    chat2api.browser_login(BASE_URL, profile_dir, 1)
+            self.assertIn("Edge was not found", str(ctx.exception))
+
+        self.assertFalse(
+            os.path.exists(profile_dir),
+            "ticket #42：测试 profile 必须是临时目录并在退出后清理")
 
     def test_context_is_reported_and_released(self):
         site = _build_site()
@@ -819,6 +1264,52 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertEqual(len(harness.created), 1)
         self.assertEqual(harness.reported, [harness.created[0], None])
         self.assertEqual([c.closed for c in harness.created], [True])
+
+    def test_context_close_failure_is_reported_instead_of_success(self):
+        harness = _Harness(_build_site(),
+                           close_error=RuntimeError("close exploded"))
+
+        with self.assertRaises(chat2api.LoginCleanupFailed) as ctx:
+            harness.run()
+
+        self.assertEqual(ctx.exception.reason, "browser_cleanup_failed")
+        self.assertIn("close exploded", str(ctx.exception))
+        self.assertIsNone(ctx.exception.primary)
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertTrue(harness.created[0].closed)
+
+    def test_cleanup_failure_keeps_the_session_failure_visible(self):
+        harness = _Harness(_FakeSite(OPENWEBUI_URL),
+                           close_error=RuntimeError("close exploded"))
+
+        with self.assertRaises(chat2api.LoginCleanupFailed) as ctx:
+            harness.run(timeout_s=0.2)
+
+        self.assertEqual(ctx.exception.reason, "browser_cleanup_failed")
+        self.assertIsInstance(ctx.exception.__cause__, chat2api.LoginStalled)
+        self.assertEqual(ctx.exception.__cause__.reason, "timeout")
+        self.assertIs(ctx.exception.primary, ctx.exception.__cause__)
+        self.assertIn("timeout", str(ctx.exception))
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertTrue(harness.created[0].closed)
+
+    def test_failure_closes_the_context_and_releases_the_session(self):
+        harness = _Harness(_build_site())
+
+        def failing_probe(_base_url, _token):
+            raise RuntimeError("probe exploded")
+
+        with mock.patch.object(harness, "_credential_probe",
+                               side_effect=failing_probe):
+            with self.assertRaises(RuntimeError) as ctx:
+                harness.run()
+
+        self.assertIn("probe exploded", str(ctx.exception))
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
 
 
 class AdminLoginWindowTests(unittest.TestCase):
@@ -941,6 +1432,12 @@ class AdminLoginWindowTests(unittest.TestCase):
         status, payload = self._request("GET", "/health")
         self.assertEqual(status, 200)
         self.assertEqual(payload["status"], "ok")
+        # Ticket #15：取消后状态/health 都是 cancelled，窗口不延长。
+        self.assertEqual(payload["authentication"]["state"], "cancelled")
+        self.assertIsNone(payload["authentication"]["error"])
+        self.assertEqual(payload["login_window_deadline_epoch"],
+                         first_deadline)
+        self.assertNotIn(self.STUB_TOKEN, json.dumps(payload))
 
         # An ordinary request never reopens the cancelled round.
         self.assertFalse(self.proxy.refresh(wait=False))
@@ -960,6 +1457,467 @@ class AdminLoginWindowTests(unittest.TestCase):
         while len(self.login_calls) < 2 and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertEqual(len(self.login_calls), 2)
+
+    # ------------------------------------------------------- ticket #15
+
+    def test_manual_takeover_reason_and_window_are_visible(self):
+        # Ticket #15：真正 manual 阶段结束后，状态和 health 都要让操作员
+        # 看到 manual_takeover_required:<reason> 与窗口截止时间；窗口只由
+        # 显式登录开启一次。
+        with mock.patch.object(
+                chat2api, "browser_login",
+                side_effect=chat2api.LoginStalled(
+                    "manual_takeover_required:umpass_mfa_required",
+                    "last page https://websso.um.edu.mo/")):
+            status, payload = self._request("POST", "/admin/auth/login")
+            self.assertEqual(status, 202, payload)
+            deadline = payload["login_window_deadline_epoch"]
+            self.assertIsNotNone(deadline)
+            self._await_recovery_thread()
+
+        status, payload = self._request("GET", "/admin/auth/status")
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(
+            payload["error"],
+            "manual_takeover_required:umpass_mfa_required")
+        self.assertEqual(payload["recovery"]["pause_reason"],
+                         "manual_takeover_required:umpass_mfa_required")
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+
+        status, payload = self._request("GET", "/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["authentication"]["state"], "failed")
+        self.assertEqual(
+            payload["authentication"]["error"],
+            "manual_takeover_required:umpass_mfa_required")
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+        self.assertEqual(payload["login_window_s"], 1800)
+        self.assertNotIn(self.STUB_TOKEN, json.dumps(payload))
+
+    def test_successful_login_reports_valid_and_clears_the_error(self):
+        # Ticket #15：成功后状态为 valid、error/login 为空；窗口截止时间
+        # 保持本轮固定值，控制台响应不含 token。
+        status, payload = self._request("POST", "/admin/auth/login")
+        self.assertEqual(status, 202, payload)
+        deadline = payload["login_window_deadline_epoch"]
+        self.assertIsNotNone(deadline)
+        self.release.set()
+        self._await_recovery_thread()
+
+        status, payload = self._request("GET", "/admin/auth/status")
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["state"], "valid")
+        self.assertIsNone(payload["error"])
+        self.assertIsNone(payload["login"])
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+
+        status, payload = self._request("GET", "/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["authentication"]["state"], "valid")
+        self.assertIsNone(payload["authentication"]["error"])
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+        self.assertNotIn(self.STUB_TOKEN, json.dumps(payload))
+
+    def test_credential_rejection_reports_failed_state(self):
+        # Ticket #15：凭据被拒后状态为 failed 且保留真实原因；
+        # health 只暴露 manual 原因码，其他失败原因留在控制令牌门后。
+        with mock.patch.object(
+                chat2api, "browser_login",
+                side_effect=chat2api.LoginCredentialRejected(
+                    "upstream_credential_rejected")):
+            status, payload = self._request("POST", "/admin/auth/login")
+            self.assertEqual(status, 202, payload)
+            deadline = payload["login_window_deadline_epoch"]
+            self._await_recovery_thread()
+
+        status, payload = self._request("GET", "/admin/auth/status")
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["error"], "upstream_credential_rejected")
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+
+        status, payload = self._request("GET", "/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["authentication"]["state"], "failed")
+        self.assertIsNone(payload["authentication"]["error"])
+        self.assertEqual(payload["login_window_deadline_epoch"], deadline)
+        self.assertNotIn(self.STUB_TOKEN, json.dumps(payload))
+
+
+class ProfileSingleInstanceLockTests(unittest.TestCase):
+    """ticket #11：同一 profile 同时只允许一个登录浏览器。"""
+
+    def setUp(self):
+        self.profile = tempfile.mkdtemp(prefix="chat2api-profile-lock-")
+        self.addCleanup(shutil.rmtree, self.profile, ignore_errors=True)
+
+    @staticmethod
+    def _empty_lister(_profile):
+        return []
+
+    @staticmethod
+    def _never_signal(pid, sig):
+        raise AssertionError("unexpected signal %s to pid %s" % (sig, pid))
+
+    def test_second_login_is_rejected_while_the_first_is_running(self):
+        site = _build_site()
+        started = threading.Event()
+        release = threading.Event()
+        contexts = []
+        results = {}
+        errors = []
+
+        def factory(_edge, profile):
+            contexts.append(profile)
+            started.set()
+            release.wait(5)
+            return _FakeContext(site)
+
+        def first():
+            try:
+                results["token"] = chat2api.browser_login(
+                    BASE_URL, self.profile, 2,
+                    context_factory=factory,
+                    credential_probe=lambda _base, _token: ("valid", None, 200),
+                    process_lister=self._empty_lister,
+                    process_signal=self._never_signal,
+                )
+            except BaseException as exc:  # noqa: BLE001 - reported below
+                errors.append(exc)
+
+        thread = threading.Thread(target=first)
+        thread.start()
+        self.assertTrue(started.wait(5), "the first login never opened")
+        with self.assertRaises(chat2api.LoginBusy) as caught:
+            chat2api.browser_login(
+                BASE_URL, self.profile, 2,
+                context_factory=lambda _edge, _profile: self.fail(
+                    "the second request must not open a browser"),
+                process_lister=lambda _profile: self.fail(
+                    "cleanup must not run while another session holds the lock"),
+                process_signal=self._never_signal,
+            )
+        self.assertEqual(caught.exception.reason, "login_already_running")
+
+        release.set()
+        thread.join(5)
+        self.assertFalse(thread.is_alive(), "the first login never finished")
+        self.assertEqual(errors, [])
+        self.assertEqual(results.get("token"), "fresh-token")
+        self.assertEqual(contexts, [self.profile])
+
+    def test_missing_lock_primitive_is_not_reported_as_busy(self):
+        # ticket #41：没有 OS 锁原语是配置错误，不是另一个登录
+        # 会话占用；必须报告可读的 unavailable 原因。
+        with (
+            mock.patch.object(chat2api, "find_edge",
+                              return_value="fake-edge"),
+            mock.patch.object(
+                chat2api, "_profile_login_lock_primitive",
+                return_value=(None, None)),
+        ):
+            with self.assertRaises(chat2api.LoginUnavailable) as caught:
+                chat2api.browser_login(
+                    BASE_URL, self.profile, 1,
+                    context_factory=lambda _edge, _profile: self.fail(
+                        "a missing lock primitive must not open a browser"),
+                    process_lister=self._empty_lister,
+                    process_signal=self._never_signal,
+                )
+        self.assertEqual(caught.exception.reason, "login_lock_unavailable")
+        self.assertIn("lock primitive", caught.exception.detail)
+
+    def test_lock_file_error_is_not_reported_as_busy(self):
+        # ticket #41：锁文件不可创建/读取是文件系统错误，不能伪装成
+        # login_already_running。
+        with (
+            mock.patch.object(chat2api, "find_edge",
+                              return_value="fake-edge"),
+            mock.patch.object(
+                chat2api.os, "open",
+                side_effect=OSError("permission denied")),
+        ):
+            with self.assertRaises(chat2api.LoginUnavailable) as caught:
+                chat2api.browser_login(
+                    BASE_URL, self.profile, 1,
+                    context_factory=lambda _edge, _profile: self.fail(
+                        "a lock file error must not open a browser"),
+                    process_lister=self._empty_lister,
+                    process_signal=self._never_signal,
+                )
+        self.assertEqual(caught.exception.reason, "login_lock_file_error")
+        self.assertIn("permission denied", caught.exception.detail)
+
+    def test_a_different_profile_is_not_blocked(self):
+        other_profile = tempfile.mkdtemp(prefix="chat2api-other-profile-")
+        self.addCleanup(shutil.rmtree, other_profile, ignore_errors=True)
+        lock = chat2api._acquire_profile_login_lock(self.profile)
+        self.assertIsNotNone(lock)
+        self.addCleanup(chat2api._release_profile_login_lock, lock)
+
+        site = _build_site()
+        token = chat2api.browser_login(
+            BASE_URL, other_profile, 2,
+            context_factory=lambda _edge, _profile: _FakeContext(site),
+            credential_probe=lambda _base, _token: ("valid", None, 200),
+            process_lister=self._empty_lister,
+            process_signal=self._never_signal,
+        )
+        self.assertEqual(token, "fresh-token")
+
+    def test_lock_file_lives_in_the_profile_and_records_the_owner(self):
+        lock = chat2api._acquire_profile_login_lock(self.profile)
+        self.assertIsNotNone(lock)
+        self.addCleanup(chat2api._release_profile_login_lock, lock)
+
+        self.assertEqual(os.path.dirname(lock.path), os.path.abspath(self.profile))
+        self.assertEqual(os.path.basename(lock.path),
+                         chat2api.PROFILE_LOGIN_LOCK_NAME)
+        owner = chat2api._read_profile_lock_owner(self.profile)
+        self.assertIsNotNone(owner)
+        self.assertEqual(owner.get("pid"), os.getpid())
+        self.assertIn("process_started_epoch", owner)
+
+    def test_lock_is_released_after_a_failed_session(self):
+        def failing_factory(_edge, _profile):
+            raise RuntimeError("launch failed")
+
+        with self.assertRaises(RuntimeError):
+            chat2api.browser_login(
+                BASE_URL, self.profile, 1,
+                context_factory=failing_factory,
+                process_lister=self._empty_lister,
+                process_signal=self._never_signal,
+            )
+
+        site = _build_site()
+        token = chat2api.browser_login(
+            BASE_URL, self.profile, 2,
+            context_factory=lambda _edge, _profile: _FakeContext(site),
+            credential_probe=lambda _base, _token: ("valid", None, 200),
+            process_lister=self._empty_lister,
+            process_signal=self._never_signal,
+        )
+        self.assertEqual(token, "fresh-token")
+
+    def test_lock_is_released_when_the_holder_process_dies(self):
+        marker = os.path.join(self.profile, "child-locked")
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _CHILD_LOCK_SCRIPT,
+             str(CHAT2API_PATH), self.profile, marker],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self.addCleanup(self._stop_child, proc)
+
+        deadline = time.monotonic() + 20
+        while not os.path.exists(marker):
+            if proc.poll() is not None:
+                stderr = proc.stderr.read().decode("utf-8", "replace")
+                self.fail("the lock child exited early: %s" % stderr)
+            if time.monotonic() >= deadline:
+                self.fail("the lock child never acquired the profile lock")
+            time.sleep(0.02)
+
+        with open(marker, encoding="utf-8") as handle:
+            child_pid = int(handle.read())
+        owner = chat2api._read_profile_lock_owner(self.profile)
+        self.assertIsNotNone(owner)
+        self.assertEqual(owner.get("pid"), child_pid)
+
+        with self.assertRaises(chat2api.LoginBusy):
+            chat2api.browser_login(
+                BASE_URL, self.profile, 1,
+                context_factory=lambda _edge, _profile: self.fail(
+                    "a locked profile must not open a browser"),
+                process_lister=self._empty_lister,
+                process_signal=self._never_signal,
+            )
+
+        proc.terminate()
+        proc.wait(10)
+
+        site = _build_site()
+        token = chat2api.browser_login(
+            BASE_URL, self.profile, 2,
+            context_factory=lambda _edge, _profile: _FakeContext(site),
+            credential_probe=lambda _base, _token: ("valid", None, 200),
+            process_lister=self._empty_lister,
+            process_signal=self._never_signal,
+        )
+        self.assertEqual(token, "fresh-token")
+
+    @staticmethod
+    def _stop_child(proc):
+        if proc.poll() is None:
+            proc.kill()
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                pass
+        if proc.stderr is not None:
+            proc.stderr.close()
+
+
+class ProfileBrowserCleanupTests(unittest.TestCase):
+    """ticket #11：打开前只清理同 profile 的旧 Chromium，先 TERM 后 KILL。"""
+
+    def setUp(self):
+        self.profile = tempfile.mkdtemp(prefix="chat2api-profile-cleanup-")
+        self.other_profile = tempfile.mkdtemp(
+            prefix="chat2api-other-cleanup-")
+        self.addCleanup(shutil.rmtree, self.profile, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, self.other_profile, ignore_errors=True)
+        self.signals = []
+        self.alive = {}
+
+    @staticmethod
+    def _process(pid, name, argv):
+        return chat2api.ProfileBrowserProcess(
+            pid=pid, name=name, argv=tuple(argv))
+
+    def _lister(self, _profile):
+        return list(self.alive.values())
+
+    def _signal(self, pid, sig):
+        self.signals.append((pid, sig))
+        if sig == chat2api.PROFILE_BROWSER_TERM_SIGNAL:
+            self.alive.pop(pid, None)
+        return True
+
+    @staticmethod
+    def _empty_lister(_profile):
+        return []
+
+    def test_only_chromium_with_the_exact_same_profile_is_terminated(self):
+        same_profile = self._process(
+            101, "msedge.exe",
+            ["msedge.exe", "--user-data-dir=" + self.profile])
+        other_profile = self._process(
+            202, "chrome.exe",
+            ["chrome.exe", "--user-data-dir=" + self.other_profile])
+        firefox = self._process(
+            303, "firefox.exe",
+            ["firefox.exe", "--user-data-dir=" + self.profile])
+        prefix_profile = self._process(
+            404, "chromium",
+            ["chromium", "--user-data-dir=" + self.profile + "-copy"])
+        subdirectory = self._process(
+            505, "google-chrome",
+            ["google-chrome", "--user-data-dir=" + self.profile + "/Default"])
+        self.alive = {process.pid: process for process in (
+            same_profile, other_profile, firefox, prefix_profile, subdirectory)}
+
+        terminated = chat2api._cleanup_profile_browsers(
+            self.profile,
+            lister=self._lister,
+            signal_process=self._signal,
+            term_wait_s=0.05,
+            kill_wait_s=0.05,
+        )
+
+        self.assertEqual(terminated, [101])
+        self.assertEqual(self.signals, [
+            (101, chat2api.PROFILE_BROWSER_TERM_SIGNAL)])
+        self.assertEqual(set(self.alive), {202, 303, 404, 505})
+
+    def test_sigterm_that_does_not_finish_escalates_to_sigkill(self):
+        target = self._process(
+            111, "msedge.exe",
+            ["msedge.exe", "--user-data-dir", self.profile])
+        self.alive = {target.pid: target}
+
+        def stubborn_signal(pid, sig):
+            self.signals.append((pid, sig))
+            if sig == chat2api.PROFILE_BROWSER_KILL_SIGNAL:
+                self.alive.pop(pid, None)
+            return True
+
+        terminated = chat2api._cleanup_profile_browsers(
+            self.profile,
+            lister=self._lister,
+            signal_process=stubborn_signal,
+            term_wait_s=0.05,
+            kill_wait_s=0.05,
+        )
+
+        self.assertEqual(terminated, [111])
+        self.assertEqual([sig for _pid, sig in self.signals], [
+            chat2api.PROFILE_BROWSER_TERM_SIGNAL,
+            chat2api.PROFILE_BROWSER_KILL_SIGNAL,
+        ])
+
+    def test_stale_browser_is_cleaned_before_the_context_opens(self):
+        target = self._process(
+            121, "msedge.exe",
+            ["msedge.exe", "--user-data-dir=" + self.profile])
+        self.alive = {target.pid: target}
+        events = []
+
+        def signal(pid, sig):
+            events.append(("signal", pid, sig))
+            if sig == chat2api.PROFILE_BROWSER_KILL_SIGNAL:
+                self.alive.pop(pid, None)
+            return True
+
+        def factory(_edge, profile):
+            events.append(("open", profile))
+            return _FakeContext(_build_site())
+
+        token = chat2api.browser_login(
+            BASE_URL, self.profile, 2,
+            context_factory=factory,
+            credential_probe=lambda _base, _token: ("valid", None, 200),
+            process_lister=self._lister,
+            process_signal=signal,
+        )
+
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(events[0], (
+            "signal", 121, chat2api.PROFILE_BROWSER_TERM_SIGNAL))
+        self.assertEqual(events[-1], ("open", self.profile))
+
+    def test_unreadable_process_table_refuses_the_session_and_releases_the_lock(self):
+        opened = []
+        with self.assertRaises(chat2api.LoginUnavailable) as caught:
+            chat2api.browser_login(
+                BASE_URL, self.profile, 1,
+                context_factory=lambda _edge, profile: opened.append(profile),
+                process_lister=lambda _profile: None,
+                process_signal=lambda _pid, _sig: True,
+            )
+        self.assertEqual(caught.exception.reason,
+                         "profile_cleanup_unavailable")
+        self.assertEqual(opened, [])
+
+        site = _build_site()
+        token = chat2api.browser_login(
+            BASE_URL, self.profile, 2,
+            context_factory=lambda _edge, _profile: _FakeContext(site),
+            credential_probe=lambda _base, _token: ("valid", None, 200),
+            process_lister=self._empty_lister,
+            process_signal=lambda _pid, _sig: True,
+        )
+        self.assertEqual(token, "fresh-token")
+
+
+_CHILD_LOCK_SCRIPT = """\
+import importlib.util
+import os
+import sys
+import time
+
+spec = importlib.util.spec_from_file_location(
+    "chat2api_profile_lock_child", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+lock = module._acquire_profile_login_lock(sys.argv[2])
+if lock is None:
+    raise SystemExit(3)
+with open(sys.argv[3], "w", encoding="utf-8") as marker:
+    marker.write(str(os.getpid()))
+time.sleep(60)
+"""
 
 
 if __name__ == "__main__":

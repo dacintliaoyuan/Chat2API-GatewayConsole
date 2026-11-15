@@ -21,9 +21,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from share_broker_client import (BrokerClient, NamedPipeBrokerTransport)  # noqa: E402
-from share_broker_protocol import DEFAULT_DEADLINE_SECONDS  # noqa: E402
-from share_management import BrokerError, NoopBroker  # noqa: E402
+from share.broker_client import (BrokerClient, UnixSocketBrokerTransport)  # noqa: E402
+from share.broker_protocol import DEFAULT_DEADLINE_SECONDS  # noqa: E402
+from share.management import BrokerError, NoopBroker  # noqa: E402
 
 _HERE = Path(__file__).resolve().parents[1]
 
@@ -35,11 +35,6 @@ _ISOLATION_ATTEMPTS = []
 _ISOLATION_PATCHERS = []
 _ISOLATION_MODULES = []
 _ISOLATION_TEMP = None
-
-
-def _refuse_real_kernel(*args, **kwargs):
-    _ISOLATION_ATTEMPTS.append("real_named_pipe_kernel")
-    raise AssertionError("offline test attempted a real named-pipe kernel")
 
 
 def _guard_usage_module(module):
@@ -70,9 +65,9 @@ def _guard_usage_module(module):
 
 def setUpModule():
     global _ISOLATION_TEMP, _ISOLATION_SAVED_SEAMS
-    import share_broker_client
-    import share_broker_server
-    import console_share_actions
+    import share.broker_client as share_broker_client
+    import share.broker_server as share_broker_server
+    from console import share_actions as console_share_actions
     _ISOLATION_ATTEMPTS.clear()
     _ISOLATION_TEMP = tempfile.TemporaryDirectory(prefix="offline-management-")
     root = Path(_ISOLATION_TEMP.name)
@@ -91,16 +86,13 @@ def setUpModule():
     _ISOLATION_SAVED_SEAMS = {
         name: value for name, value in vars(console_share_actions).items()
         if name.startswith("_") and name.upper() == name}
-    for owner, name in ((share_broker_client.NamedPipeBrokerTransport,
-                         "_declare_real_kernel"),
-                        (share_broker_server, "_declared_kernel")):
-        patcher = mock.patch.object(owner, name, _refuse_real_kernel)
-        patcher.start()
-        _ISOLATION_PATCHERS.append(patcher)
+    # The retired Windows named-pipe transport is gone with the old local
+    # share chain (#33).
+    _ = (share_broker_client, share_broker_server)
 
 
 def tearDownModule():
-    import console_share_actions
+    from console import share_actions as console_share_actions
     try:
         for module, old_console, _old_share in _ISOLATION_MODULES:
             current = module._console_manager
@@ -129,19 +121,6 @@ def _load_usagesrv():
     return module
 
 
-class _MissingPipeKernel:
-    def CreateFileW(self, *args):
-        return 0xFFFFFFFFFFFFFFFF
-
-    def GetLastError(self):
-        return 2  # ERROR_FILE_NOT_FOUND, injected before any real OS boundary.
-
-
-class _MissingPipeTransport(NamedPipeBrokerTransport):
-    def __init__(self, pipe_name, kernel=None):
-        super().__init__(pipe_name, kernel=kernel or _MissingPipeKernel())
-
-
 class WiringTestBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -164,11 +143,6 @@ class WiringTestBase(unittest.TestCase):
         self.usagesrv.SHARE_MANAGEMENT_CONFIG_FILE = str(self.config_path)
         self.addCleanup(setattr, self.usagesrv,
                         "SHARE_MANAGEMENT_CONFIG_FILE", old_config)
-        import share_broker_client
-        patcher = mock.patch.object(share_broker_client,
-                                   "NamedPipeBrokerTransport", _MissingPipeTransport)
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
     def _reset_manager(self):
         with self.usagesrv._share_manager_lock:
@@ -192,9 +166,10 @@ class WiringTestBase(unittest.TestCase):
     @staticmethod
     def valid_config(**overrides):
         cfg = {
-            "schema_version": 1,
+            "schema_version": 2,
             "enabled": True,
-            "pipe_name": r"\\.\pipe\um-w3-test-broker",
+            "transport": "unix_socket",
+            "socket_path": str(Path(tempfile.mkdtemp()) / "broker.sock"),
             "control_key_file": None,  # filled by caller
         }
         cfg.update(overrides)
@@ -231,7 +206,7 @@ class CorruptConfigTests(WiringTestBase):
         self._assert_broker_error()
 
     def test_wrong_schema_is_broker_error(self):
-        self.write_config(self.valid_config(schema_version=2,
+        self.write_config(self.valid_config(schema_version=1,
                                             control_key_file="x"))
         self._assert_broker_error()
 
@@ -252,10 +227,10 @@ class CorruptConfigTests(WiringTestBase):
                                             control_key_file="x"))
         self._assert_broker_error()
 
-    def test_bad_pipe_name_is_broker_error(self):
-        for pipe in ("", "127.0.0.1:9100", "\\\\.\\pipe\\", 123, None):
-            with self.subTest(pipe=pipe):
-                self.write_config(self.valid_config(pipe_name=pipe,
+    def test_bad_socket_path_is_broker_error(self):
+        for socket_path in ("", "relative/broker.sock", 123, None):
+            with self.subTest(socket_path=socket_path):
+                self.write_config(self.valid_config(socket_path=socket_path,
                                                     control_key_file="x"))
                 self._assert_broker_error()
 
@@ -285,6 +260,8 @@ class ValidConfigTests(WiringTestBase):
         self.assertEqual(client._secret, "w3-test-control-key-secret")
         self.assertEqual(client._timeout, DEFAULT_DEADLINE_SECONDS)
 
+    @unittest.skipUnless(os.name == "posix",
+                         "AF_UNIX broker transport is POSIX-only")
     def test_factory_returns_fresh_transport_per_exchange(self):
         # §214.2: 首参必须是 transport 工厂——client.call 内部执行
         # factory().open()，传实例会破坏一次交换一连接的 R44-1 契约。
@@ -294,8 +271,7 @@ class ValidConfigTests(WiringTestBase):
         t1 = client._factory()
         t2 = client._factory()
         self.assertIsNot(t1, t2)
-        self.assertIsInstance(t1, NamedPipeBrokerTransport)
-        self.assertEqual(t1.pipe_name, r"\\.\pipe\um-w3-test-broker")
+        self.assertIsInstance(t1, UnixSocketBrokerTransport)
 
     def test_call_without_broker_reports_not_installed_quickly(self):
         # An injected Win32 facade returns ERROR_FILE_NOT_FOUND (2); the

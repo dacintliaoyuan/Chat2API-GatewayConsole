@@ -4,7 +4,6 @@ import * as readiness from "../../src/console/share-readiness.ts";
 import {
   localShareReadiness,
   publicShareReadings,
-  latestShareOperationWasStop,
   publicSupervisionReading,
   publicSupervisionStale,
   publicRecoveryReading,
@@ -31,27 +30,6 @@ const sample = {
   publicIp: "1.1.1.1",
   model: "fixture",
 };
-
-test("a newer lifecycle operation supersedes an old stop before a later outage", () => {
-  const stop = { action: "share.stop", state: "succeeded", created_at: 10 };
-  const start = { action: "share.start", state: "succeeded", created_at: 20 };
-  assert.equal(latestShareOperationWasStop([stop, start]), false);
-  assert.equal(
-    latestShareOperationWasStop([{ ...start, state: "failed" }, stop]),
-    false
-  );
-  assert.equal(
-    latestShareOperationWasStop([
-      start,
-      { ...stop, action: "share.retry_stop", created_at: 30 },
-    ]),
-    true
-  );
-  assert.equal(
-    latestShareOperationWasStop([{ ...stop, state: "failed" }]),
-    false
-  );
-});
 
 test("Funnel mapping alone cannot prove local readiness", () => {
   assert.equal(

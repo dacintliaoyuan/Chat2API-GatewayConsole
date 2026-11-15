@@ -31,7 +31,6 @@ import time
 import unittest
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GATEWAY = os.path.dirname(HERE)
@@ -98,7 +97,7 @@ class IsolatedBackendTests(unittest.TestCase):
                         "http://127.0.0.1:%d/health" % cls.port, timeout=2) as r:
                     cls.health = json.loads(r.read().decode("utf-8"))
                 break
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — 测试替身故意模拟后端失败
                 time.sleep(0.5)
         if cls.health is None:
             cls.tearDownClass()
@@ -115,7 +114,7 @@ class IsolatedBackendTests(unittest.TestCase):
             cls.proc.terminate()
             try:
                 cls.proc.wait(timeout=10)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — 测试替身故意模拟后端失败
                 cls.proc.kill()
         # Leave the tmp dir for forensics on failure; tempfile cleans on GC.
 

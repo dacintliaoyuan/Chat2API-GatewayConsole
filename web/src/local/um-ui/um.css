@@ -1,5 +1,5 @@
 /* Local UM console pages (handoff r3). Shell, tokens and base components come
-   from shell/; nothing here is read by the cloud console or the old workbench.
+   from shell/; nothing here is read by the cloud console.
    Content stays on solid surfaces; only the shell's navigation layer is glass. */
 
 /* The tooltip sits outside .um-console (it is appended to the stage). */
@@ -629,62 +629,6 @@
 .um-usage-title .card-meta {
   margin: 3px 0 0;
 }
-.um-cost {
-  flex: none;
-}
-.um-cost[data-um-state] {
-  display: grid;
-  justify-items: end;
-  padding: 6px 12px;
-  border: 1px dashed var(--md-outline-variant);
-  border-radius: var(--md-r-m);
-}
-.um-cost-btn {
-  display: grid;
-  justify-items: end;
-  padding: 7px 14px;
-  border: 0;
-  border-radius: var(--md-r-m);
-  background: var(--md-surface-low);
-  text-align: right;
-  appearance: none;
-  transition: background-color var(--md-dur-short) var(--md-ease);
-}
-.um-cost-btn:hover {
-  background: var(--md-surface-container);
-}
-.um-cost-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--md-on-surface-variant);
-}
-.um-cost-value {
-  font-size: 22px;
-  line-height: 1.3;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
-}
-.um-cost-value.um-absent {
-  font-size: 15px;
-}
-.um-cost-sub {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--md-on-surface-variant);
-}
-.um-cost-btn[aria-expanded="true"] .um-chevron {
-  transform: rotate(180deg);
-}
-.um-cost-detail {
-  margin-top: 14px;
-  padding: 6px 16px 12px;
-  border-radius: var(--md-r-m);
-  background: var(--md-surface-low);
-}
-
 .um-kpis {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -830,7 +774,7 @@
 .um-line[data-quality="lower"] {
   stroke-dasharray: 2 3;
 }
-/* An estimate stays solid — every cost bucket is one — and the tooltip says ≈. */
+/* An estimate stays solid and the tooltip says ≈. */
 .um-line[data-quality="estimated"] {
   stroke-opacity: 0.88;
 }
@@ -1650,8 +1594,7 @@ tr.is-archived td {
    rail still leaves only 220px after the page's padding), so the three entries
    become a top bar with their names: the current page stays a word, every tab is
    at least 44px tall, and the content keeps the window's full width. The rules
-   are scoped to .um-console, so the cloud console and the old workbench keep
-   their own shell. Desktop 1280px never matches this block. */
+   are scoped to .um-console, so the cloud console keeps its own shell. Desktop 1280px never matches this block. */
 @media (max-width: 720px) {
   .um-console.app-shell {
     grid-template-columns: minmax(0, 1fr);
@@ -1834,14 +1777,6 @@ tr.is-archived td {
     height: 44px;
   }
 
-  .um-console .um-usage-head .um-cost {
-    justify-self: start;
-  }
-  .um-console .um-cost-btn,
-  .um-console .um-cost[data-um-state] {
-    justify-items: start;
-    text-align: left;
-  }
   .um-console .um-trend-body {
     gap: 16px;
   }
@@ -1867,13 +1802,6 @@ tr.is-archived td {
   }
   .um-usage-head {
     gap: 8px;
-  }
-  .um-cost {
-    justify-self: stretch;
-  }
-  .um-cost-btn {
-    justify-items: start;
-    text-align: left;
   }
   .um-facts > div {
     grid-template-columns: 5.2rem minmax(0, 1fr);

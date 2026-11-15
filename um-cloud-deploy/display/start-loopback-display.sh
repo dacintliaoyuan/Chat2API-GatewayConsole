@@ -4,8 +4,15 @@
 # Xvfb never listens on TCP (-nolisten tcp); x11vnc binds 127.0.0.1 only
 # (-localhost).  The browser reaches it through the console's same-origin
 # /display/ WebSocket proxy; the VNC port is never opened in the cloud security
-# group.  The persistent Chromium profile belongs to the 8110 child, not to this
+# group.  The persistent Chromium profile belongs to the 8100 process, not to this
 # display process.
+#
+# Expand-contract (2026-11-14): x11vnc moved 5901 -> 8097.  console.env's
+# CONSOLE_DISPLAY_VNC_PORT is authoritative so the console proxy and x11vnc
+# never disagree; UM_VNC_PORT (the unit's new default) is the fallback, and the
+# legacy 5901 is still accepted as an explicit value for one release cycle.
+# Only that ONE key is read: the display service does not import the whole
+# console environment.
 #
 # The persistent VNC auth file is root-only.  systemd LoadCredential gives this
 # service a private read-only copy at $CREDENTIALS_DIRECTORY/vnc.passwd; the source
@@ -13,11 +20,21 @@
 set -euo pipefail
 
 DISPLAY_NUM="${UM_DISPLAY:-:99}"
-VNC_PORT="${UM_VNC_PORT:-5901}"
+CONSOLE_ENV_FILE="${UM_CONSOLE_ENV_FILE:-/etc/um-share/console.env}"
+CONSOLE_VNC_PORT=""
+if [ -r "$CONSOLE_ENV_FILE" ]; then
+  CONSOLE_VNC_PORT="$(sed -n 's/^[[:space:]]*CONSOLE_DISPLAY_VNC_PORT[[:space:]]*=[[:space:]]*//p' \
+    "$CONSOLE_ENV_FILE" | tail -n 1 | tr -d '\r')"
+fi
+VNC_PORT="${CONSOLE_VNC_PORT:-${UM_VNC_PORT:-8097}}"
 VNC_AUTH_SOURCE="${UM_VNC_AUTH_SOURCE:-/etc/um-share/vnc.passwd}"
 VNC_AUTH_SOCKET="${UM_VNC_AUTH_SOCKET:-/run/um-share/vnc-auth.sock}"
 PYTHON="${UM_DEPLOY_PYTHON:-python3.14}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# The 8100 child reads this file to decide whether a new login round opens a
+# visible browser.  It exists only while this on-demand display runs, so the
+# default path stays headless.
+DISPLAY_STATE_FILE="${UM_LOGIN_DISPLAY_FILE:-/run/um-share/login-display.env}"
 fail() {
   echo "$1" >&2
   exit "$2"
@@ -83,11 +100,31 @@ mkdir -p "$(dirname "$VNC_AUTH_SOCKET")"
 AUTH_HELPER_PID=$!
 X11VNC_PID=""
 cleanup() {
+  rm -f "$DISPLAY_STATE_FILE"
   for pid in "$XVFB_PID" "$AUTH_HELPER_PID" "$X11VNC_PID"; do
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   done
 }
 trap cleanup EXIT INT TERM
+
+write_display_state() {
+  local tmp="${DISPLAY_STATE_FILE}.$$"
+  mkdir -p "$(dirname "$DISPLAY_STATE_FILE")"
+  umask 077
+  {
+    printf 'UM_LOGIN_DISPLAY=%s\n' "$DISPLAY_NUM"
+    printf 'UM_LOGIN_XAUTHORITY=%s\n' "$AUTH_FILE"
+    printf 'UM_LOGIN_DISPLAY_SOCKET=%s\n' "$socket"
+    printf 'UM_LOGIN_DISPLAY_PID=%s\n' "$$"
+  } > "$tmp" || {
+    rm -f "$tmp"
+    fail "cannot write login display state: $DISPLAY_STATE_FILE" 74
+  }
+  mv -f "$tmp" "$DISPLAY_STATE_FILE" || {
+    rm -f "$tmp"
+    fail "cannot publish login display state: $DISPLAY_STATE_FILE" 74
+  }
+}
 
 socket="/tmp/.X11-unix/X${DISPLAY_NUM#:}"
 for _ in $(seq 1 50); do
@@ -102,6 +139,11 @@ for _ in $(seq 1 50); do
 done
 [ -S "$VNC_AUTH_SOCKET" ] || \
   fail "vnc auth helper did not create $VNC_AUTH_SOCKET" 70
+
+# Publish the runtime state only after Xvfb and the auth helper are ready.
+# A new login round now opens its visible browser on this display; the default
+# path (no state file) remains headless.
+write_display_state
 
 # fbsetbg is what fluxbox runs to apply a style background.  This minimal
 # image ships no wallpaper setter, so the real fbsetbg pops a CENTERED

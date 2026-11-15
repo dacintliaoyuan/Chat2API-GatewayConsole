@@ -20,14 +20,13 @@ instead of forging a log line or looking like a claimable id.
 
 import importlib.util
 import json
-import queue
 import re
 import socket
 import sys
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -999,7 +998,7 @@ class TestChat2ApiStreaming(unittest.TestCase):
     def test_share_backend_keeps_streamed_reasoning(self):
         # D18-5: the dedicated share backend keeps the upstream's reasoning
         # channels in a client-visible SSE stream, exactly like the private
-        # 8000 chain. The Qoder-only delta filter is gone.
+        # 8000 chain. The source-only delta filter is gone.
         with self.stream_request("reasoning-kept") as response:
             self.assertEqual(response.status_code, 200)
             lines, _ = self.read_to_eof(response)
@@ -1059,10 +1058,10 @@ class TestChat2ApiStreaming(unittest.TestCase):
         self.assertEqual(record["status"], "upstream_eof_without_done")
 
     def test_zero_data_chunked_truncation_fails_before_200(self):
-        # The exact 2026-09-08 wire combination that reached ZCode as
+        # The exact 2026-09-08 wire combination that reached a local client as
         # reason=unknown retryable=false: chunked headers, zero data events,
         # then a cut without the terminating chunk. The 502 carries the same
-        # detail the in-band event used to, and ZCode demonstrably retries
+        # detail the in-band event used to, and a local client demonstrably retries
         # HTTP 502 (unlike in-band stream errors).
         started = time.monotonic()
         with self.stream_request("zero-data-chunked-truncate") as response:

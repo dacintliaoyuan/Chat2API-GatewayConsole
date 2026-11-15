@@ -16,7 +16,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import console_public_probe as probe
+from console import public_probe as probe
 
 
 PUBLIC_URL = 'https://fixture.tail-test.ts.net'

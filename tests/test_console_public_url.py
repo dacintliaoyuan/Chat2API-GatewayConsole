@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import console_public_url as public_url  # noqa: E402
+from console import public_url as public_url  # noqa: E402
 
 
 CONFIGURED = "https://dacintapi.de5.net"
@@ -81,38 +81,6 @@ class PublicOriginTests(unittest.TestCase):
                 self.assertEqual(public_url.public_origin(environ),
                                  (None, "public_origin_unconfigured"
                                   if raw is None else "public_origin_invalid"))
-
-
-class ResolveTests(unittest.TestCase):
-    def test_configured_origin_wins_over_tailscale(self):
-        with configured(CONFIGURED):
-            resolved = public_url.resolve(TS_URL)
-        self.assertEqual(tuple(resolved), (CONFIGURED, "configured"))
-        self.assertEqual(resolved.url, CONFIGURED)
-        self.assertEqual(resolved.source, "configured")
-        self.assertEqual(resolved.reason, "")
-
-    def test_invalid_configuration_does_not_fall_back_to_tailscale(self):
-        with configured("http://dacintapi.de5.net"):
-            resolved = public_url.resolve(TS_URL)
-        self.assertEqual(tuple(resolved), (None, None))
-        self.assertEqual(resolved.reason, "public_origin_invalid")
-
-    def test_unconfigured_keeps_the_tailscale_funnel_url(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("CONSOLE_PUBLIC_ORIGIN", None)
-            resolved = public_url.resolve(TS_URL)
-        self.assertEqual(tuple(resolved), (TS_URL, "tailscale"))
-        self.assertEqual(resolved.reason, "")
-
-    def test_unconfigured_without_tailscale_is_unavailable(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("CONSOLE_PUBLIC_ORIGIN", None)
-            for ts_url in (None, "", "not-a-url", "http://x.ts.net"):
-                with self.subTest(ts_url=ts_url):
-                    resolved = public_url.resolve(ts_url)
-                    self.assertEqual(tuple(resolved), (None, None))
-                    self.assertEqual(resolved.reason, "public_url_unavailable")
 
 
 if __name__ == "__main__":

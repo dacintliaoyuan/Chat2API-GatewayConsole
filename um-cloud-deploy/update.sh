@@ -5,8 +5,7 @@
 #   * systemd supervises the broker host (um-share-broker.service);
 #   * the broker host owns the 8100 child (LinuxHostOps);
 #   * systemd supervises the console (um-share-console.service);
-#   * the console owns the 8110 child (LinuxBackendOps).
-# This script never starts 8100 or 8110 with a bare Popen.  It stops the managed
+# This script never starts 8100 with a bare Popen.  It stops the managed
 # cloudflared unit first (no new public requests), asks the broker to drain/wait/stop, and only
 # switches the "current" symlink after the 15-minute gate.  Data directories are
 # outside the release and are never deleted or rewritten.
@@ -147,10 +146,6 @@ run_recovery() {
     chown root:"$UM_BROKER_GROUP" "$UM_ETC/share-management.json"
     chmod 0640 "$UM_ETC/share-management.json"
   fi
-  if [ -f "$UM_ETC/prices.json" ]; then
-    chown root:"$UM_BROKER_GROUP" "$UM_ETC/prices.json"
-    chmod 0640 "$UM_ETC/prices.json"
-  fi
 }
 
 exec 9>"$UM_DEPLOY_LOCK"
@@ -290,7 +285,7 @@ restore_edge() {
 # health_gate probes both ports, so it runs only when both units were active.
 # Return 0 only when every originally-active object is serving again.
 restore_units() {
-  local failed=0
+  local failed=0 console_listen_port
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ]; then
     systemctl start um-share-broker.service || failed=1
     brokerctl start-explicit || failed=1
@@ -300,7 +295,8 @@ restore_units() {
   fi
   [ "$failed" -eq 0 ] || return 1
   if [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
-    wait_port_open 127.0.0.1 18096 "$UM_HEALTH_TIMEOUT_S" || return 1
+    console_listen_port="$(console_port)" || return 1
+    wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
   fi
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ]; then
     wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || return 1
@@ -469,10 +465,12 @@ abort_before_switch() {
 }
 
 start_switch() {
+  local console_listen_port
   systemctl start um-share-broker.service || return 1
   brokerctl start-explicit || return 1
   systemctl start um-share-console.service || return 1
-  wait_port_open 127.0.0.1 18096 "$UM_HEALTH_TIMEOUT_S" || return 1
+  console_listen_port="$(console_port)" || return 1
+  wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
   wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || return 1
   health_gate || return 1
   return 0
@@ -543,22 +541,13 @@ else
 fi
 
 if [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
-  log "stopping the console unit (stops its 8110 child via control-group)"
+  log "stopping the console unit"
   if ! systemctl stop um-share-console.service; then
     log "console stop failed; restoring the units and the public edge"
     rc=0
     compensate_switch || rc=$?
     if [ "$rc" -eq 0 ]; then
       die "cannot stop the console unit" "$EX_OSERR"
-    fi
-    die_compensation_failed "$rc"
-  fi
-  if ! wait_port_closed 127.0.0.1 8110 120; then
-    log "8110 is still listening after the console stop; no version switch"
-    rc=0
-    compensate_switch || rc=$?
-    if [ "$rc" -eq 0 ]; then
-      die "8110 is still listening after the console stop" "$EX_OSERR"
     fi
     die_compensation_failed "$rc"
   fi
@@ -683,17 +672,14 @@ fi
 # Stop what the forward switch started before restoring the previous release.
 # start_switch starts both units regardless of their prior state, so both are
 # stopped here.  A stop is accepted only when confirmed: the console stop must
-# also close 8110, and the broker unit must be stopped and inactive afterwards.
+# the broker unit must be stopped and inactive afterwards.
 # The broker CLI stop only stops the 8100 host child, not the unit itself, so the
 # unit stop always runs whatever the CLI returned.  Return 0 only when both stops
 # are confirmed.
 stop_switch_units() {
   local failed=0
   if ! systemctl stop um-share-console.service; then
-    log "ERROR: the console unit did not stop; its 8110 child may still be running"
-    failed=1
-  elif ! wait_port_closed 127.0.0.1 8110 120; then
-    log "ERROR: 8110 is still listening after the console stop"
+    log "ERROR: the console unit did not stop"
     failed=1
   fi
   if ! brokerctl --broker-drain-max 30 --drain-budget 60 --poll-interval 1 stop 2>/dev/null; then

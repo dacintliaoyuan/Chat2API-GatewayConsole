@@ -176,20 +176,23 @@ export async function runUm(c) {
       `页面报错：${errors.slice(0, 2).join(" | ")}`
     );
     await ctx.close();
-    // The old workbench stays reachable in a candidate (its own gate drives it).
+    // The workbench escape hatch is retired: `?console=workbench` must open the
+    // UM console, and the old `.workbench` shell must never mount.
     const legacy = await c.newPage({ waitForContent: false, settle: 50 });
     await legacy.page.goto(`${c.BASE}?console=workbench`, {
       waitUntil: "load",
     });
+    const legacyUm = await legacy.page
+      .waitForSelector(".um-content > .um-page", { timeout: 20000 })
+      .then(
+        () => true,
+        () => false
+      );
+    const legacyWorkbench = await legacy.page.locator(".workbench").count();
     check(
       "F1",
-      await legacy.page
-        .waitForSelector(".workbench .wb-content", { timeout: 20000 })
-        .then(
-          () => true,
-          () => false
-        ),
-      "?console=workbench 应仍能打开旧工作台"
+      legacyUm && legacyWorkbench === 0,
+      "?console=workbench 应打开 UM 控制台，旧工作台不得再挂载"
     );
     await legacy.ctx.close();
   }
@@ -214,29 +217,6 @@ export async function runUm(c) {
     );
     const all = await text(page, "body");
     check("F2", !/命中率/.test(all), "页面不应出现缓存命中率");
-    const place = await page.evaluate(() => {
-      const card = document.querySelector(".um-usage")?.getBoundingClientRect(),
-        cost = document
-          .querySelector(".um-usage-head .um-cost")
-          ?.getBoundingClientRect(),
-        kpis = document.querySelector(".um-kpis")?.getBoundingClientRect();
-      return card && cost && kpis
-        ? {
-            rightGap: Math.round(card.right - cost.right),
-            aboveKpis: cost.bottom <= kpis.top + 1,
-          }
-        : null;
-    });
-    check(
-      "F2",
-      !!place && place.rightGap <= 24 && place.aboveKpis,
-      `人民币参考费用应在用量区右上角、五项之上：${JSON.stringify(place)}`
-    );
-    check(
-      "F2",
-      /≈¥/.test(await text(page, ".um-cost")),
-      "正常情景的参考费用应带 ≈（参考估算）"
-    );
     check(
       "F2",
       /排行与图表同一时段/.test(await text(page, ".um-trend")),
@@ -298,7 +278,7 @@ export async function runUm(c) {
           "true",
       "速度只画折线：折线图按钮应显示选中并关闭"
     );
-    // r4: 折线图 switches Token / 费用 / 请求 between stacked bars and lines over
+    // r4: 折线图 switches Token / 请求 between stacked bars and lines over
     // the same window, models and figures; it no longer opens a date table.
     await page.click('[data-um-metric="tokens"]');
     await page.waitForTimeout(300);
@@ -347,9 +327,6 @@ export async function runUm(c) {
           bars.scope.replace(/ · (≥ 下界为短虚线|≈ 估算见悬浮明细)/g, ""),
       "切换柱/线不应改变时段、排行与数值（线型质量说明可不同）"
     );
-    await page.click('[data-um-metric="cost"]');
-    await page.waitForTimeout(300);
-    check("F2", (await shape()).lines > 0, "折线模式下费用也应画线");
     await page.click('[data-um-metric="tokens"]');
     await page.click('[data-um-toggle="line"]');
     await page.waitForTimeout(300);
@@ -367,16 +344,6 @@ export async function runUm(c) {
       (await page.getAttribute('[data-um-range="30d"]', "aria-pressed")) ===
         "true" && (await text(page, ".um-trend-scope")) !== scope7,
       "切到 30 天后图表与排行的时段应一起变化"
-    );
-    await page.click('[data-um-toggle="cost"]');
-    await page.waitForTimeout(200);
-    const costDetail = await text(page, "#um-cost-detail");
-    check(
-      "F2",
-      /价格来源/.test(costDetail) &&
-        /汇率/.test(costDetail) &&
-        /覆盖范围/.test(costDetail),
-      "费用详情应列出价格来源、汇率与覆盖范围"
     );
     // Keyboard: the chart takes focus and steps day by day with the tooltip.
     await page.focus("[data-um-chart]");
@@ -495,33 +462,18 @@ export async function runUm(c) {
     await ctx.close();
 
     for (const [scenario, expect] of [
-      ["zero", { kpi: /^0$/, cost: /¥0/, why: "零用量应显示明确的 0 与 ¥0" }],
-      [
-        "attention",
-        {
-          kpi: /未报告/,
-          cost: /≥¥/,
-          why: "需处理情景应显示未报告与 ≥ 下界（有未定价请求）",
-        },
-      ],
-      [
-        "down",
-        {
-          kpi: /./,
-          cost: /缺失/,
-          why: "服务停止情景的费用应为缺失（价格从未同步），不是零",
-        },
-      ],
+      ["zero", { kpi: /^0$/, why: "零用量应显示明确的 0" }],
+      ["attention", { kpi: /未报告/, why: "需处理情景应显示未报告" }],
+      ["down", { kpi: /./, why: "服务停止情景仍显示原始用量读面" }],
     ]) {
       const s = await open({ scenario });
       const kpis = await s.page.$$eval(".um-kpi-value", (vs) =>
         vs.map((v) => v.innerText.trim())
       );
-      const cost = await text(s.page, ".um-cost");
       check(
         "F2",
-        kpis.some((v) => expect.kpi.test(v)) && expect.cost.test(cost),
-        `${expect.why}：五项 ${JSON.stringify(kpis)}，费用「${cost.replace(/\s+/g, " ")}」`
+        kpis.some((v) => expect.kpi.test(v)),
+        `${expect.why}：五项 ${JSON.stringify(kpis)}`
       );
       if (scenario === "down") {
         check(
@@ -529,7 +481,6 @@ export async function runUm(c) {
           (await s.page.$$(".um-usage .um-stale")).length > 0,
           "读取失败时今日用量应沿用旧数据并标明时间"
         );
-        check("F2", /不是零费用/.test(cost), "价格未同步应注明不是零费用");
         check(
           "F2",
           /启动 UM 服务/.test(await text(s.page, ".um-status-row")),
@@ -651,11 +602,10 @@ export async function runUm(c) {
           "模型",
           "结果",
           "输入 / 输出 Token",
-          "参考费用",
           "耗时",
           "速度",
         ]),
-      `请求表列应为 时间／模型／结果／输入/输出 Token／参考费用／耗时／速度，实际 ${JSON.stringify(heads)}`
+      `请求表列应为 时间／模型／结果／输入/输出 Token／耗时／速度，实际 ${JSON.stringify(heads)}`
     );
     await page.click('[data-um-rwin="7d"]');
     await page.waitForTimeout(500);
@@ -829,8 +779,8 @@ export async function runUm(c) {
     // F5: one shared selection bar; a click runs at once, no dialog, no double submit.
     check(
       "F5",
-      await page.isDisabled('[data-um-test="speedtest"]'),
-      "未选模型时测速应关闭"
+      await page.isDisabled('[data-um-test="context"]'),
+      "未选模型时上下文探测应关闭"
     );
     await page.check('[data-um-pick="claude-sonnet-4-6"]');
     await page.check('[data-um-pick="deepseek-v3.2"]');
@@ -839,42 +789,42 @@ export async function runUm(c) {
       /已选 2 个/.test(await text(page, ".um-selbar")),
       "选择栏应显示已选 2 个"
     );
-    await page.click('[data-um-test="speedtest"]');
+    await page.click('[data-um-test="context"]');
     const after = await page.evaluate(() => ({
       dialog: !!document.querySelector("dialog[open]"),
       disabled:
-        document.querySelector('[data-um-test="speedtest"]')?.disabled ?? null,
+        document.querySelector('[data-um-test="context"]')?.disabled ?? null,
       run: !!document.querySelector(".um-run"),
     }));
     check(
       "F5",
       !after.dialog && after.disabled === true && after.run,
-      `点击测速应直接执行、无确认框且按钮立即关闭：${JSON.stringify(after)}`
+      `点击上下文探测应直接执行、无确认框且按钮立即关闭：${JSON.stringify(after)}`
     );
     const done = await until(
       page,
       () =>
-        /最近一次测速 · 已结束/.test(
+        /最近一次上下文探测 · 已结束/.test(
           document.querySelector(".um-run")?.innerText ?? ""
         ),
       null,
       15000
     );
-    check("F5", done, "测速应在合成驱动下结束");
+    check("F5", done, "上下文探测应在合成驱动下结束");
     const states = await page.$$eval(".um-run-item", (items) =>
       items.map((i) => i.getAttribute("data-state"))
     );
     check(
       "F5",
-      JSON.stringify(states) === JSON.stringify(["done", "failed"]),
-      `逐模型结果应为已完成＋失败（上游限流不重试）：${JSON.stringify(states)}`
+      JSON.stringify(states) === JSON.stringify(["done", "partial"]),
+      `逐模型结果应为已完成＋部分完成（上游限流不构成上限）：${JSON.stringify(states)}`
     );
     await page.click('[data-um-rundetail="claude-sonnet-4-6"]');
     await page.waitForTimeout(200);
     check(
       "F5",
-      /整次平均，含等待/.test(await text(page, ".um-run-detail")),
-      "测速详情应写明速度口径"
+      /字符步进/.test(await text(page, ".um-run-detail")),
+      "上下文详情应写明字符步进口径"
     );
 
     // Context probe on every model, then stop the rest.
@@ -1019,7 +969,7 @@ export async function runUm(c) {
             .querySelector('[data-um-model-more="deepseek-v3.2"]')
             ?.getAttribute("aria-expanded"),
           focus: document.activeElement?.getAttribute("data-um-model-more"),
-          full: /Connection reset by peer[\s\S]*这次不计速度/.test(
+          full: /通过 16万 字符[\s\S]*上游限流（HTTP 429，不构成上限）/.test(
             document.querySelector(".um-model-table .um-req-detail")
               ?.textContent ?? ""
           ),
@@ -1234,7 +1184,7 @@ export async function runUm(c) {
       height: 768,
     });
     await page.evaluate(() => {
-      document.querySelector(".shell-main").scrollTop = 200;
+      document.querySelector(".shell-main").scrollTop = 100;
     });
     await page.waitForTimeout(250);
     const bar = await page.evaluate(() => {
@@ -1262,8 +1212,8 @@ export async function runUm(c) {
     await ctx.close();
   }
 
-  // The r5 review's other three points: the cost button must not fall back to a
-  // native outset border; the preview banner's links keep the banner ink in both
+  // The r5 review's other points: buttons must not fall back to a native
+  // outset border; the preview banner's links keep the banner ink in both
   // themes; and the y-axis label (12px in CSS, measured at 12px) stays inside the
   // SVG's left edge.
   for (const theme of c.THEMES) {

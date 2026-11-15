@@ -20,7 +20,7 @@ export type Reading =
   | { kind: "exact"; value: number }
   /** Part of the population is missing: the true figure is at least `value`. */
   | { kind: "atLeast"; value: number; note?: string }
-  /** A computed figure, e.g. reference prices applied to recorded tokens. */
+  /** A computed figure over recorded tokens. */
   | { kind: "estimate"; value: number; note?: string }
   /** The source does not report this figure (e.g. a reply without cache usage). */
   | { kind: "unreported"; note?: string }
@@ -115,27 +115,10 @@ export type UmToday = {
   speed: { value: Reading; basis: SpeedBasis; samples: number | null };
 };
 
-/** The day's reference cost: UM's own ledger priced with the effective UM
- *  prices followed from Magpie. Not synced is not zero. */
-export type UmCost = {
-  cny: Reading;
-  price: {
-    state: "synced" | "unsynced" | "failed";
-    source: string | null;
-    snapshotAt: number | null;
-    version: string | null;
-    failure: string | null;
-  };
-  fx: { rate: number | null; version: string | null };
-  unpricedRequests: number | null;
-  estimatedRequests: number | null;
-};
-
 export type TrendRange = "7d" | "14d" | "30d";
 /** All figures of one model (or of all models) over one bucket. */
 export type UmBucket = {
   tokens: Reading;
-  costCny: Reading;
   requests: Reading;
   speed: Reading;
 };
@@ -166,7 +149,6 @@ export type UmIssue = {
     | "login"
     | "service"
     | "catalog"
-    | "price"
     | "test";
   title: string;
   detail: string;
@@ -184,7 +166,6 @@ export type UmOverview = {
   login: Load<UmLogin>;
   verify: Load<UmVerify>;
   today: Load<UmToday>;
-  cost: Load<UmCost>;
   trend: Load<UmTrend>;
   /** Recent problems; the window is named in `window`, e.g. 「近 24 小时」. */
   issues: Load<{ window: string; items: UmIssue[] }>;
@@ -226,7 +207,6 @@ export type UmRequestRow = {
   output: Reading;
   cacheRead: Reading;
   reasoning: Reading;
-  costCny: Reading;
   durationMs: Reading;
   /** Only a real measurement; otherwise missing. */
   firstTokenMs: Reading;
@@ -316,7 +296,6 @@ export type UmModelRow = {
     source: "catalog" | "local" | "unknown";
     defaultLevel: string | null;
   };
-  lastSpeed: { at: number; ok: boolean; summary: string } | null;
   lastContext: { at: number; ok: boolean; summary: string } | null;
 };
 export type UmCatalog = {
@@ -331,7 +310,6 @@ export type UmCatalogRefresh =
   /** The list keeps the last good catalog, shown as stale from `catalog.at`. */
   | { state: "failed"; at: number; reason: string };
 
-export type TestKind = "speedtest" | "context";
 export type ModelTestState =
   "waiting" | "running" | "done" | "failed" | "partial" | "not_run";
 export type UmTestDetail = {
@@ -349,7 +327,6 @@ export type UmTestDetail = {
 };
 export type UmTestRun = {
   id: string;
-  kind: TestKind;
   startedAt: number;
   state: "submitting" | "running" | "finished";
   /** Stop asked for: the request in flight may still finish. */
@@ -365,11 +342,10 @@ export type UmTestRun = {
   }[];
   note: string | null;
 };
-export type HistoryFilter = { model: string | null; kind: TestKind | null };
+export type HistoryFilter = { model: string | null };
 export type UmTestRecord = {
   key: string;
   model: string;
-  kind: TestKind;
   at: number;
   result: ModelTestState;
   summary: string;
@@ -385,7 +361,6 @@ export type UmModels = {
   runtime: Load<{ label: string; value: string }[]>;
   actions: {
     refresh: Capability;
-    speedtest: Capability;
     context: Capability;
     stop: Capability;
   };
@@ -438,7 +413,7 @@ export type UmEvent =
   | { type: "maintenance.earlier"; cursor: string }
   | { type: "models.refreshCatalog" }
   /** Explicit UM model ids, deduplicated, never empty. */
-  | { type: "models.test"; kind: TestKind; models: string[] }
+  | { type: "models.test"; models: string[] }
   | { type: "models.stop"; runId: string }
   | { type: "models.history"; filter: HistoryFilter };
 
@@ -459,7 +434,6 @@ export function unwiredState(): UmViewState {
       login: { state: "unwired" },
       verify: { state: "unwired" },
       today: { state: "unwired" },
-      cost: { state: "unwired" },
       trend: { state: "unwired" },
       issues: { state: "unwired" },
       actions: {
@@ -488,13 +462,12 @@ export function unwiredState(): UmViewState {
       refresh: { state: "idle" },
       run: null,
       history: {
-        filter: { model: null, kind: null },
+        filter: { model: null },
         records: { state: "unwired" },
       },
       runtime: { state: "unwired" },
       actions: {
         refresh: closed,
-        speedtest: closed,
         context: closed,
         stop: closed,
       },

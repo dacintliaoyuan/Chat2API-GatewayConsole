@@ -8,7 +8,6 @@ import {
   ContractError,
   FixtureTransport,
   FIXTURE_CONNECTION_BODIES,
-  FIXTURE_CONNECTION_CONFIG_UNCONFIRMED,
   FIXTURE_CONNECTION_KEY,
   FIXTURE_CONNECTION_STATES,
   GATEWAY_ORDER_FORMAT_VERSION,
@@ -20,7 +19,6 @@ import {
   copyGatewayConnectionField,
   count,
   createFetchTransport,
-  encodeSyncScope,
   gatewayConnectionFixtureReads,
   gatewayConnectionFixtureResponse,
   joinModelDetails,
@@ -30,7 +28,6 @@ import {
   normalizeGatewayConnection,
   normalizeLogPage,
   normalizeShareUsage,
-  normalizeSettingsApply,
   reorderGatewaySubset,
   PaneWidthPreferences,
   PANE_WIDTH_FORMAT_VERSION,
@@ -47,11 +44,6 @@ const actions = [
   "model.catalog",
   "model.context_overrides",
   "model.context_probe_preview",
-  "model.sync_preview",
-  "model.settings_save",
-  "model.settings_preview",
-  "model.settings_apply",
-  "model.sync_apply",
   "model.context_probe_run",
 ].map((action) => ({
   action,
@@ -178,34 +170,25 @@ const share = {
       keyName: "研发",
       deleted: false,
       requests: 4,
-      knownCostUsd: 0,
-      estimatedCostUsd: 0.0001,
       inputTokens: 50,
       outputTokens: 10,
       unknownRequests: 1,
-      unpricedRequests: 1,
       models: [
         {
           model: "test-model",
           requests: 4,
-          knownCostUsd: 0,
-          estimatedCostUsd: 0.0001,
           inputTokens: 50,
           outputTokens: 10,
           unknownRequests: 1,
-          unpricedRequests: 1,
         },
       ],
       days: [
         {
           day: "2026-10-02",
           requests: 4,
-          knownCostUsd: 0,
-          estimatedCostUsd: 0.0001,
           inputTokens: 50,
           outputTokens: 10,
           unknownRequests: 1,
-          unpricedRequests: 1,
         },
       ],
     },
@@ -213,14 +196,8 @@ const share = {
   unattributed: {
     key_id: null,
     requests: 1,
-    costCny: null,
-    knownCostCny: 0,
-    estimatedCostCny: null,
-    costCnyPartial: true,
-    knownCostCnyPartial: false,
-    estimatedCostCnyPartial: true,
   },
-  coverage: { records: 5, priceFn: true },
+  coverage: { records: 5 },
 };
 for (const row of [
   share.keys[0],
@@ -229,12 +206,8 @@ for (const row of [
 ]) {
   row.coverage = {
     records: 4,
-    pricedRequests: 2,
     unknownTimeRequests: 0,
-    pricingUnavailableRequests: 0,
-    costComplete: false,
   };
-  row.priceVersions = ["fixture-price-v1"];
   row.tokenUsage = {
     totalTokens: 40,
     inputTokens: 30,
@@ -251,33 +224,7 @@ for (const row of [
     unknownRequests: 1,
     complete: false,
   };
-  row.costCny = 0.0012;
-  row.knownCostCny = 0.0008;
-  row.estimatedCostCny = 0.0004;
-  row.costCnyPartial = true;
-  row.knownCostCnyPartial = true;
-  row.estimatedCostCnyPartial = false;
 }
-// The per-model row is fully convertible in this fixture; the key/day rows are
-// lower bounds, so the partial flag must stay attached to the exact row.
-share.keys[0].models[0].costCnyPartial = false;
-share.keys[0].models[0].knownCostCnyPartial = false;
-share.keys[0].models[0].estimatedCostCnyPartial = false;
-const preview = {
-  selection: { "um|test-model": 2 },
-  preview_token: "a".repeat(64),
-  changes: [
-    {
-      key: "um|test-model",
-      applied: null,
-      draft: contexts.overrides[0].settings_draft,
-    },
-  ],
-  plan: { status: "ready" },
-  warnings: [],
-  status: "ready",
-};
-
 function scenario(operations = {}) {
   return {
     name: "offline-contract",
@@ -290,20 +237,6 @@ function scenario(operations = {}) {
       "model.catalog": [{ result: catalog }],
       "model.context_overrides": [{ result: contexts }],
       "model.context_probe_preview": [{ result: evidence }],
-      "model.settings_preview": [{ result: preview }],
-      "model.settings_apply": [
-        {
-          result: {
-            applied: ["um|test-model"],
-            deferred: [],
-            deferred_restored: [],
-            status: "normal",
-          },
-        },
-      ],
-      "model.settings_save": [
-        { result: { draft_version: 3, draft: { alias: "别名" } } },
-      ],
       ...operations,
     },
   };
@@ -395,10 +328,10 @@ test("model joins use source + real model identity and separate character/Token 
   zero.records[0].token_evidence = 0;
   assert.equal(normalizeContextEvidence(zero)[0].verifiedTokenFloor, 0);
   const other = structuredClone(contexts);
-  other.overrides[0].source = "qoder_global";
+  other.overrides[0].source = "bogus_source";
   assert.equal(
     joinModelDetails(normalized, normalizeContexts(other), []).find(
-      (row) => row.key === "qoder_global|test-model"
+      (row) => row.key === "bogus_source|test-model"
     ).catalog,
     null
   );
@@ -408,7 +341,7 @@ test("history and per-client readback stay independent from the applied record",
   const snapshot = structuredClone(contexts);
   snapshot.overrides[0].client_readbacks = [
     {
-      consumer: "ZCode",
+      consumer: "fixture-client",
       state: "ok",
       contextTokens: 64000,
       alias: "old name",
@@ -460,33 +393,6 @@ test("log lookup passes an exact bounded identity independently of the text quer
   );
 });
 
-test("sync all/selected is explicit and empty selected scope is rejected", () => {
-  assert.deepEqual(encodeSyncScope({ mode: "all" }), { scope_mode: "all" });
-  assert.throws(() => encodeSyncScope({ mode: "selected" }), ContractError);
-  assert.throws(
-    () => encodeSyncScope({ mode: "selected", models: { um: [] } }),
-    ContractError
-  );
-  assert.throws(
-    () => encodeSyncScope({ mode: "all", sources: ["um"] }),
-    ContractError
-  );
-  assert.deepEqual(
-    encodeSyncScope({
-      mode: "selected",
-      sources: ["um", "um"],
-      consumers: ["ZCode"],
-      models: { um: ["test-model"] },
-    }),
-    {
-      scope_mode: "selected",
-      sources: '["um"]',
-      consumers: '["ZCode"]',
-      models: { um: ["test-model"] },
-    }
-  );
-});
-
 test("logs preserve structured null fields, raw fallback and a genuine zero rate", () => {
   const view = normalizeLogPage(logs);
   assert.equal(view.events[0].requestId, "fixture-id");
@@ -496,91 +402,21 @@ test("logs preserve structured null fields, raw fallback and a genuine zero rate
   assert.equal(view.events[1].rawMessage, "unknown runtime text");
 });
 
-test("key name and stable identity are independent; missing local coverage is not zero", () => {
+test("key name and stable identity are independent", () => {
   const view = normalizeShareUsage(share);
   assert.equal(view.keys[0].keyName, "研发");
-  assert.equal(view.keys[0].knownCostUsd, 0);
   assert.equal(view.keys[0].coverage.unknownRequests, 1);
-  assert.equal(view.keys[0].days[0].coverage.localCoverageAvailable, true);
-  assert.equal(view.keys[0].days[0].coverage.costComplete, false);
   assert.equal(view.keys[0].tokenUsage.totalTokens, 40);
   assert.equal(view.keys[0].tokenUsage.lowerBoundTokens, 20);
   assert.equal(view.keys[0].tokenUsage.estimatedTokens, 0);
   const legacy = structuredClone(share);
   delete legacy.keys[0].days[0].unknownRequests;
-  delete legacy.keys[0].days[0].unpricedRequests;
   legacy.keys[0].keyName = null;
-  assert.equal(
-    normalizeShareUsage(legacy).keys[0].days[0].coverage.localCoverageAvailable,
-    false
-  );
   assert.equal(
     normalizeShareUsage(legacy).keys[0].days[0].coverage.unknownRequests,
     null
   );
   assert.equal(normalizeShareUsage(legacy).keys[0].keyId, "fixture-stable-key");
-});
-
-test("CNY fields normalize per row and a legacy response stays unknown, never zero", () => {
-  const view = normalizeShareUsage(share);
-  assert.equal(view.keys[0].costCny, 0.0012);
-  assert.equal(view.keys[0].knownCostCny, 0.0008);
-  assert.equal(view.keys[0].estimatedCostCny, 0.0004);
-  assert.equal(view.keys[0].coverage.costCnyPartial, true);
-  assert.equal(view.keys[0].coverage.knownCostCnyPartial, true);
-  assert.equal(view.keys[0].coverage.estimatedCostCnyPartial, false);
-  assert.equal(view.keys[0].models[0].costCny, 0.0012);
-  assert.equal(view.keys[0].models[0].coverage.costCnyPartial, false);
-  assert.equal(view.keys[0].models[0].coverage.knownCostCnyPartial, false);
-  assert.equal(view.keys[0].models[0].coverage.estimatedCostCnyPartial, false);
-  assert.equal(view.keys[0].days[0].estimatedCostCny, 0.0004);
-  assert.equal(view.keys[0].days[0].coverage.costCnyPartial, true);
-  assert.equal(view.unattributed.costCny, null);
-  assert.equal(view.unattributed.knownCostCny, 0);
-  assert.equal(view.unattributed.estimatedCostCny, null);
-  assert.equal(view.unattributed.coverage.costCnyPartial, true);
-  assert.equal(view.unattributed.coverage.knownCostCnyPartial, false);
-  assert.equal(view.unattributed.coverage.estimatedCostCnyPartial, true);
-  // A pre-CNY response (fields absent) keeps null: unknown is not zero, and the
-  // normaliser does not reject the legacy shape.
-  const legacy = structuredClone(share);
-  for (const row of [
-    legacy.keys[0],
-    ...legacy.keys[0].models,
-    ...legacy.keys[0].days,
-    legacy.unattributed,
-  ]) {
-    delete row.costCny;
-    delete row.knownCostCny;
-    delete row.estimatedCostCny;
-    delete row.costCnyPartial;
-    delete row.knownCostCnyPartial;
-    delete row.estimatedCostCnyPartial;
-  }
-  const old = normalizeShareUsage(legacy);
-  assert.equal(old.keys[0].costCny, null);
-  assert.equal(old.keys[0].knownCostCny, null);
-  assert.equal(old.keys[0].estimatedCostCny, null);
-  assert.equal(old.keys[0].coverage.costCnyPartial, null);
-  assert.equal(old.keys[0].coverage.knownCostCnyPartial, null);
-  assert.equal(old.keys[0].coverage.estimatedCostCnyPartial, null);
-  assert.equal(old.keys[0].models[0].costCny, null);
-  assert.equal(old.keys[0].days[0].knownCostCny, null);
-  assert.equal(old.keys[0].days[0].coverage.costCnyPartial, null);
-  assert.equal(old.unattributed.costCny, null);
-  assert.equal(old.unattributed.knownCostCny, null);
-  assert.equal(old.unattributed.estimatedCostCny, null);
-  assert.equal(old.unattributed.coverage.costCnyPartial, null);
-  assert.equal(old.unattributed.undated, null);
-  // Malformed CNY values are unknown, never coerced into a number.
-  const broken = structuredClone(share);
-  broken.keys[0].costCny = "0.0012";
-  broken.keys[0].knownCostCny = -1;
-  broken.keys[0].costCnyPartial = "true";
-  const rejected = normalizeShareUsage(broken).keys[0];
-  assert.equal(rejected.costCny, null);
-  assert.equal(rejected.knownCostCny, null);
-  assert.equal(rejected.coverage.costCnyPartial, null);
 });
 
 test("the unattributed bucket carries its own Token split and is never merged into a key", () => {
@@ -591,23 +427,12 @@ test("the unattributed bucket carries its own Token split and is never merged in
   payload.unattributed = {
     key_id: null,
     requests: 1,
-    knownCostUsd: 0.5,
-    estimatedCostUsd: 0.25,
-    costCny: null,
-    knownCostCny: 3.5,
-    estimatedCostCny: null,
-    costCnyPartial: true,
     inputTokens: 50,
     outputTokens: 10,
     unknownRequests: 1,
-    unpricedRequests: 0,
-    priceVersions: ["fixture-price-v1"],
     coverage: {
       records: 1,
-      pricedRequests: 1,
       unknownTimeRequests: 0,
-      pricingUnavailableRequests: 0,
-      costComplete: true,
     },
     tokenUsage: {
       totalTokens: 60,
@@ -625,65 +450,30 @@ test("the unattributed bucket carries its own Token split and is never merged in
       unknownRequests: 0,
       complete: true,
     },
-    models: [{ model: "test-model", requests: 1, knownCostUsd: 0.5 }],
-    days: [{ day: "2026-10-02", requests: 1, knownCostUsd: 0.5 }],
+    models: [{ model: "test-model", requests: 1 }],
+    days: [{ day: "2026-10-02", requests: 1 }],
     undated: {
       day: null,
       requests: 1,
-      knownCostUsd: 0.5,
-      costCny: null,
-      knownCostCny: 3.5,
-      estimatedCostCny: null,
-      costCnyPartial: true,
     },
   };
   const view = normalizeShareUsage(payload);
   assert.equal(view.unattributed.keyId, null);
   assert.equal(view.unattributed.tokenUsage.totalTokens, 60);
   assert.equal(view.unattributed.tokenUsage.inputTokens, 50);
-  assert.equal(view.unattributed.knownCostUsd, 0.5);
-  assert.equal(view.unattributed.costCny, null);
-  assert.equal(view.unattributed.knownCostCny, 3.5);
-  assert.equal(view.unattributed.estimatedCostCny, null);
-  assert.equal(view.unattributed.coverage.costCnyPartial, true);
   assert.equal(view.unattributed.coverage.records, 1);
   assert.equal(view.unattributed.models[0].identity, "test-model");
   assert.equal(view.unattributed.days[0].identity, "2026-10-02");
-  assert.equal(view.unattributed.days[0].knownCostUsd, 0.5);
-  assert.equal(view.unattributed.undated.knownCostUsd, 0.5);
-  assert.equal(view.unattributed.undated.knownCostCny, 3.5);
-  assert.equal(view.unattributed.undated.costCny, null);
-  assert.equal(view.unattributed.undated.coverage.costCnyPartial, true);
   assert.equal(view.keys.length, normalizeShareUsage(share).keys.length);
   // A payload that carries no split keeps nulls and no rows - never a fabricated
   // complete total, and never a row spread over the keys.
   const legacy = normalizeShareUsage(share).unattributed;
   assert.equal(legacy.tokenUsage.totalTokens, null);
   assert.equal(legacy.coverage.records, null);
-  assert.equal(legacy.knownCostUsd, null);
   assert.deepEqual(legacy.models, []);
   assert.deepEqual(legacy.days, []);
   assert.equal(legacy.undated, null);
   assert.equal(normalizeShareUsage(share).keys.length, 1);
-});
-
-test("settings deferral is not applied success, and inconsistent overlap is rejected", () => {
-  const result = normalizeSettingsApply({
-    applied: [],
-    deferred: ["um|test-model"],
-    status: "pending",
-    pendingDetails: [{ kind: "provider_write_deferred" }],
-  });
-  assert.deepEqual(result.applied, []);
-  assert.deepEqual(result.deferred, ["um|test-model"]);
-  assert.throws(
-    () =>
-      normalizeSettingsApply({
-        applied: ["um|test-model"],
-        deferred: ["um|test-model"],
-      }),
-    ContractError
-  );
 });
 
 test("catalog shape errors do not become an empty successful directory", () => {
@@ -749,18 +539,11 @@ test("fixture client traverses real submit/poll envelope without fetch or model 
 
 test("unregistered/disabled actions are detected before POST", async () => {
   const fixture = scenario();
-  fixture.actions = fixture.actions.filter(
-    (row) => row.action !== "model.settings_preview"
-  );
   fixture.actions.find(
     (row) => row.action === "model.context_probe_run"
   ).enabled = false;
   const transport = new FixtureTransport(fixture);
   const client = new BackendClient(transport, clock());
-  await assert.rejects(
-    client.previewSettings({ "um|test-model": 2 }),
-    ActionUnavailableError
-  );
   await assert.rejects(
     client.runAction(
       "model.context_probe_run",
@@ -771,134 +554,6 @@ test("unregistered/disabled actions are detected before POST", async () => {
     ActionUnavailableError
   );
   assert.equal(posts(transport).length, 0);
-});
-
-test("uncertain submit is reported without retry or false failure/success", async () => {
-  const transport = new FixtureTransport(
-    scenario({
-      "model.settings_save": [{ submitError: "network_lost_after_send" }],
-    })
-  );
-  const client = new BackendClient(transport, clock());
-  const result = await client.saveSettings(
-    "um",
-    "test-model",
-    { alias: "别名" },
-    2
-  );
-  assert.equal(result.state, "unconfirmed");
-  assert.equal(result.operationId, null);
-  assert.equal(posts(transport).length, 1);
-});
-
-test("polling uncertainty retains the accepted operation ID for reconciliation", async () => {
-  const transport = new FixtureTransport(
-    scenario({ "model.settings_save": [{ pollError: "status_unavailable" }] })
-  );
-  const client = new BackendClient(transport, clock());
-  const result = await client.saveSettings(
-    "um",
-    "test-model",
-    { alias: "别名" },
-    2
-  );
-  assert.equal(result.state, "unconfirmed");
-  assert.equal(result.operationId, "fixture-1");
-  assert.equal(posts(transport).length, 1);
-});
-
-test("definitive version conflict remains a refusal, and alias patch does not erase fields", async () => {
-  const transport = new FixtureTransport(
-    scenario({
-      "model.settings_save": [
-        { rejection: { status: 409, body: { error: "version_conflict" } } },
-      ],
-    })
-  );
-  const client = new BackendClient(transport, clock());
-  const result = await client.saveSettings(
-    "um",
-    "test-model",
-    { alias: "别名" },
-    2
-  );
-  assert.equal(result.state, "refused");
-  assert.match(result.reason, /version_conflict/);
-  assert.deepEqual(posts(transport)[0].body.params, {
-    source: "um",
-    model_id: "test-model",
-    alias: "别名",
-    expected_draft_version: 2,
-  });
-});
-
-test("settings apply binds the exact preview selection and token", async () => {
-  const transport = new FixtureTransport(scenario());
-  const client = new BackendClient(transport, clock());
-  const selection = { "um|test-model": 2 };
-  const bound = await client.previewSettings(selection);
-  selection["um|test-model"] = 3;
-  assert.equal(bound.selection["um|test-model"], 2);
-  assert.throws(() => client.applySettings(bound, selection), ContractError);
-  assert.equal(posts(transport).length, 1);
-  const result = await client.applySettings(bound, { "um|test-model": 2 });
-  assert.equal(result.state, "succeeded");
-  assert.deepEqual(posts(transport)[1].body.params, {
-    selection: { "um|test-model": 2 },
-    preview_token: "a".repeat(64),
-  });
-});
-
-test("empty settings selection is never interpreted as all", async () => {
-  const transport = new FixtureTransport(scenario());
-  const client = new BackendClient(transport, clock());
-  await assert.rejects(client.previewSettings({}), ContractError);
-  assert.equal(posts(transport).length, 0);
-});
-
-test("local operation cancellation is unknown until server terminal state", async () => {
-  const fixture = scenario({
-    "model.settings_save": [{ states: ["queued", "queued"] }],
-  });
-  const transport = new FixtureTransport(fixture);
-  const client = new BackendClient(transport, clock());
-  const result = await client.runAction(
-    "model.settings_save",
-    "model",
-    { source: "um", model_id: "test-model", alias: "x" },
-    { intent: "draft", timeoutMs: 2, pollIntervalMs: 1 }
-  );
-  assert.equal(result.state, "unconfirmed");
-  assert.match(result.reason, /deadline/);
-  assert.equal(
-    transport.calls.filter((call) => call.path.endsWith("/cancel")).length,
-    0
-  );
-});
-
-test("same-resource duplicate submission is blocked while the first POST is in flight", async () => {
-  const fixtureTransport = new FixtureTransport(scenario());
-  const gate = deferred();
-  const started = deferred();
-  const transport = {
-    request: async (request) => {
-      if (request.method === "POST" && request.path === "/operations") {
-        started.resolve();
-        await gate.promise;
-      }
-      return fixtureTransport.request(request);
-    },
-  };
-  const client = new BackendClient(transport, clock());
-  const first = client.saveSettings("um", "test-model", { alias: "first" }, 2);
-  await started.promise;
-  await assert.rejects(
-    client.saveSettings("um", "test-model", { alias: "second" }, 2),
-    ActionBusyError
-  );
-  gate.resolve();
-  assert.equal((await first).state, "succeeded");
-  assert.equal(posts(fixtureTransport).length, 1);
 });
 
 test("share read errors keep version/auth/transport state separate and never invent zero", async () => {
@@ -953,27 +608,6 @@ test("fetch adapter uses same-origin session/CSRF contract and omits credentials
   );
 });
 
-test("wrong operation identity cannot be installed as a model result", async () => {
-  const transport = new FixtureTransport(scenario());
-  const guarded = {
-    request: async (request) => {
-      const response = await transport.request(request);
-      if (request.path.startsWith("/operations/") && response.body?.operation)
-        response.body.operation.action = "model.catalog";
-      return response;
-    },
-  };
-  const client = new BackendClient(guarded, clock());
-  const result = await client.saveSettings(
-    "um",
-    "test-model",
-    { alias: "x" },
-    2
-  );
-  assert.equal(result.state, "unconfirmed");
-  assert.match(result.reason, /identity/);
-});
-
 test("failed model refresh preserves last data and marks it stale", async () => {
   let fail = false;
   const sample = {
@@ -1013,109 +647,6 @@ test("model refresh discards older results even if the old read ignores cancella
   old.resolve(normalizeCatalog(catalog));
   assert.equal(await first, false);
   assert.equal(session.models.value[0].catalog.displayName, "fresh");
-});
-
-test("apply success and readback failure remain distinct", async () => {
-  const sample = {
-    applySettings: async () => ({
-      state: "succeeded",
-      operationId: "fixture",
-      operation: { result: { applied: ["um|test-model"], deferred: [] } },
-      reason: null,
-    }),
-    readCatalog: async () => {
-      throw new Error("readback_unavailable");
-    },
-    readContexts: async () => normalizeContexts(contexts),
-    readContextEvidence: async () => normalizeContextEvidence(evidence),
-  };
-  const session = new BackendSession(sample);
-  const result = await session.applySettingsAndReadback(
-    preview,
-    preview.selection
-  );
-  assert.equal(result.operation.state, "succeeded");
-  assert.deepEqual(result.application.applied, ["um|test-model"]);
-  assert.equal(result.readback, "failed");
-  assert.equal(result.models, null);
-});
-
-test("deferred application leaves actual readback unclaimed", async () => {
-  let readbackCalls = 0;
-  const sample = {
-    applySettings: async () => ({
-      state: "succeeded",
-      operationId: "fixture",
-      operation: {
-        result: {
-          applied: [],
-          deferred: ["um|test-model"],
-          note: "ZCode running",
-        },
-      },
-      reason: null,
-    }),
-    readCatalog: async () => {
-      readbackCalls++;
-      return normalizeCatalog(catalog);
-    },
-  };
-  const session = new BackendSession(sample);
-  const result = await session.applySettingsAndReadback(
-    preview,
-    preview.selection
-  );
-  assert.equal(result.readback, "not_requested");
-  assert.equal(readbackCalls, 0);
-  assert.deepEqual(result.application.deferred, ["um|test-model"]);
-});
-
-test("disposed session never starts readback after a late successful apply", async () => {
-  const accepted = deferred();
-  let reads = 0;
-  const sample = {
-    applySettings: () => accepted.promise,
-    readCatalog: async () => {
-      reads++;
-      return normalizeCatalog(catalog);
-    },
-  };
-  const session = new BackendSession(sample);
-  const waiting = session.applySettingsAndReadback(preview, preview.selection);
-  session.dispose();
-  accepted.resolve({
-    state: "succeeded",
-    operationId: "fixture",
-    operation: { result: { applied: ["um|test-model"], deferred: [] } },
-    reason: null,
-  });
-  const result = await waiting;
-  assert.equal(result.operation.state, "succeeded");
-  assert.equal(result.readback, "failed");
-  assert.equal(result.reason, "session_disposed_after_apply");
-  assert.equal(reads, 0);
-  assert.equal(await session.refreshModels(), false);
-  assert.equal(
-    (await session.applySettingsAndReadback(preview, preview.selection))
-      .operation.state,
-    "refused"
-  );
-});
-
-test("cancel during readback cannot install a returned client snapshot", async () => {
-  const pending = deferred();
-  const controller = new AbortController();
-  const sample = {
-    readCatalog: () => pending.promise,
-    readContexts: async () => normalizeContexts(contexts),
-    readContextEvidence: async () => normalizeContextEvidence(evidence),
-  };
-  const session = new BackendSession(sample);
-  const reading = session.refreshModels(controller.signal);
-  controller.abort();
-  pending.resolve(normalizeCatalog(catalog));
-  assert.equal(await reading, false);
-  assert.equal(session.models.value, null);
 });
 
 // Gateway sidebar order preference (Plan-Revision 12): every case below runs on
@@ -1400,45 +931,75 @@ test("an external update between moves is a complete sequence swap, not a corrup
   assert.throws(() => first.save(["gw-a"], ["gw-a", "gw-b"]), ContractError);
 });
 
-// Rev15 connection info read face: the five fixtures below carry invented
-// values; the sentinel is not a real key and no case reads a real file or gateway.
+// Rev15 connection info read face: the fixture carries only the chat2api
+// absent shape; the sentinel is not a real key and no case reads a real file or
+// gateway. The other key states are synthetic bodies built inline, never a live
+// read face.
+function presentConnectionBody(overrides = {}) {
+  return {
+    ok: true,
+    service: "chat2api",
+    display_name: "chat2api",
+    port: 8000,
+    health_path: "/health",
+    health_path_source: "descriptor",
+    base_url: "http://127.0.0.1:8000/v1",
+    protocol: "openai-compatible",
+    protocol_path: "/v1",
+    runtime_state: "Running",
+    runtime_healthy: true,
+    auth: "bearer",
+    key_state: "present",
+    key_plaintext: FIXTURE_CONNECTION_KEY,
+    key_source: "env:CHAT2API_LOCAL_API_KEY",
+    key_source_state: "present",
+    key_in_use: "per_request",
+    reason: "合成夹具：权威环境变量可读且非空",
+    evidence: ["合成夹具：进程环境可读"],
+    checked_epoch: 1790920800,
+    ...overrides,
+  };
+}
+
+function needsKeyConnectionBody() {
+  return presentConnectionBody({
+    key_state: "needs_key_unconfigured",
+    key_plaintext: null,
+    key_source_state: "absent",
+    key_in_use: "startup_env",
+  });
+}
+
+function unreadableConnectionBody() {
+  return presentConnectionBody({
+    key_state: "unreadable",
+    key_plaintext: null,
+    key_source_state: "unreadable",
+    key_in_use: "config_consumed",
+  });
+}
+
+function unknownConnectionBody() {
+  return presentConnectionBody({
+    key_state: "unknown",
+    key_plaintext: null,
+    key_source_state: "unknown",
+    key_in_use: "config_consumed",
+  });
+}
+
+function connectionResponse(service, body) {
+  return { status: 200, body: { ...structuredClone(body), service } };
+}
+
 test("connection key states mirror the read face and never degrade to a no-key state", () => {
-  assert.deepEqual(
-    [...FIXTURE_CONNECTION_STATES],
-    ["present", "absent", "needs_key_unconfigured", "unreadable", "unknown"]
-  );
-  for (const state of FIXTURE_CONNECTION_STATES) {
-    const view = normalizeGatewayConnection(
-      gatewayConnectionFixtureResponse("Qoder", state).body
-    );
-    assert.equal(view.keyState, state);
-    assert.equal(
-      view.keyPlaintext,
-      state === "present" ? FIXTURE_CONNECTION_KEY : null
-    );
-    assert.ok(
-      ["per_request", "startup_env", "config_consumed", "unknown"].includes(
-        view.keyInUse
-      )
-    );
-  }
-  const unknown = normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.unknown);
-  assert.equal(unknown.keyState, "unknown");
-  assert.notEqual(unknown.keyState, "absent");
-  assert.notEqual(unknown.keyState, "needs_key_unconfigured");
-  assert.equal(unknown.keyPlaintext, null);
-  assert.equal(unknown.baseUrl, null);
-  assert.equal(unknown.port, null);
-  assert.equal(unknown.auth, "unknown");
+  assert.deepEqual([...FIXTURE_CONNECTION_STATES], ["absent"]);
   const absent = normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.absent);
+  assert.equal(absent.keyState, "absent");
   assert.equal(absent.auth, "loopback_no_key");
   assert.equal(absent.keySourceState, "absent");
   assert.equal(absent.keyPlaintext, null);
-  const unreadable = normalizeGatewayConnection(
-    FIXTURE_CONNECTION_BODIES.unreadable
-  );
-  assert.equal(unreadable.keySourceState, "unreadable");
-  assert.equal(unreadable.alternateProtocols[0].path, "/v1beta");
+  assert.equal(absent.keyInUse, "startup_env");
   // An out-of-contract state is a contract error, never a silent "no key".
   for (const [field, value] of [
     ["key_state", "auth_free_loopback"],
@@ -1448,9 +1009,7 @@ test("connection key states mirror the read face and never degrade to a no-key s
     ["key_in_use", "file_value"],
     ["key_in_use", null],
   ]) {
-    const body = structuredClone(
-      gatewayConnectionFixtureResponse("Qoder", "present").body
-    );
+    const body = structuredClone(FIXTURE_CONNECTION_BODIES.absent);
     body[field] = value;
     assert.throws(() => normalizeGatewayConnection(body), ContractError);
   }
@@ -1461,68 +1020,59 @@ test("the key-in-use mechanism keeps file value and in-use value apart", () => {
   // Rev15 R32-KEY-ACTIVE: the read face must say how the shown value is
   // consumed; an unknown mechanism stays "unknown" instead of being coerced.
   assert.equal(
-    normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.present).keyInUse,
+    normalizeGatewayConnection(presentConnectionBody()).keyInUse,
     "per_request"
   );
   assert.equal(
-    normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.needs_key_unconfigured)
-      .keyInUse,
+    normalizeGatewayConnection(needsKeyConnectionBody()).keyInUse,
     "startup_env"
   );
   assert.equal(
-    normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.unreadable).keyInUse,
+    normalizeGatewayConnection(unreadableConnectionBody()).keyInUse,
     "config_consumed"
   );
   assert.equal(
-    normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.unknown).keyInUse,
-    "unknown"
+    normalizeGatewayConnection(unknownConnectionBody()).keyInUse,
+    "config_consumed"
   );
-  const late = normalizeGatewayConnection(
-    FIXTURE_CONNECTION_BODIES.needs_key_unconfigured
-  );
-  assert.ok(late.reason.includes("启动后"));
-  assert.ok(late.reason.includes("可能不生效"));
 });
 
 test("a known key state must name a mechanism and absent stays startup_env", () => {
   // Rev15 R32-KEY-ACTIVE cross-field mirror: a state that carries (or needs)
-  // a value always names how the instance consumes it, while `unknown` keeps
-  // both `unknown` and a mechanism the file source confirmed
-  // (console_gateway_connection.py:596 then :637 for the only `absent`).
-  for (const state of FIXTURE_CONNECTION_STATES)
-    assert.equal(
-      normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES[state]).keyInUse,
-      FIXTURE_CONNECTION_BODIES[state].key_in_use
-    );
-  for (const state of ["present", "needs_key_unconfigured", "unreadable"]) {
-    for (const value of ["unknown", null, "file_value"]) {
-      const body = structuredClone(FIXTURE_CONNECTION_BODIES[state]);
-      body.key_in_use = value;
-      assert.throws(() => normalizeGatewayConnection(body), ContractError);
-    }
-  }
+  // a value always names how the instance consumes it, while `unknown` keeps a
+  // mechanism the file source confirmed.
+  assert.equal(
+    normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.absent).keyInUse,
+    "startup_env"
+  );
   for (const value of ["unknown", "per_request", "config_consumed"]) {
     const body = structuredClone(FIXTURE_CONNECTION_BODIES.absent);
     body.key_in_use = value;
     assert.throws(() => normalizeGatewayConnection(body), ContractError);
   }
-  // `unknown` stays honest: the CLIProxy config-unconfirmed read keeps
+  for (const state of ["present", "needs_key_unconfigured", "unreadable"]) {
+    for (const value of ["unknown", null, "file_value"]) {
+      const body = structuredClone(presentConnectionBody());
+      body.key_state = state;
+      body.key_plaintext =
+        state === "present" ? FIXTURE_CONNECTION_KEY : null;
+      body.key_in_use = value;
+      assert.throws(() => normalizeGatewayConnection(body), ContractError);
+    }
+  }
+  // `unknown` stays honest: the config-unconfirmed read keeps
   // `bearer`/`config_consumed` instead of being coerced into "no key".
-  const cliproxy = normalizeGatewayConnection(
-    FIXTURE_CONNECTION_CONFIG_UNCONFIRMED
-  );
-  assert.equal(cliproxy.keyState, "unknown");
-  assert.equal(cliproxy.auth, "bearer");
-  assert.equal(cliproxy.keyInUse, "config_consumed");
-  assert.equal(cliproxy.keyPlaintext, null);
+  const unknown = normalizeGatewayConnection(unknownConnectionBody());
+  assert.equal(unknown.keyState, "unknown");
+  assert.equal(unknown.auth, "bearer");
+  assert.equal(unknown.keyInUse, "config_consumed");
+  assert.equal(unknown.keyPlaintext, null);
 });
 
 test("the connection copy helper copies baseUrl/keyPlaintext and reports the real outcome", async () => {
   // Synthetic values only: the clipboard is an injected stub that records what
   // it was asked to write; nothing here touches the DOM or a real clipboard.
-  const view = normalizeGatewayConnection(
-    gatewayConnectionFixtureResponse("Qoder", "present").body
-  );
+  const view = normalizeGatewayConnection(presentConnectionBody());
   const written = [];
   const clipboard = {
     writeText: async (value) => {
@@ -1546,9 +1096,7 @@ test("the connection copy helper copies baseUrl/keyPlaintext and reports the rea
 });
 
 test("a refused clipboard write is an explicit failure, never a success", async () => {
-  const view = normalizeGatewayConnection(
-    gatewayConnectionFixtureResponse("Qoder", "present").body
-  );
+  const view = normalizeGatewayConnection(presentConnectionBody());
   const denied = {
     writeText: async () => {
       throw new DOMException("synthetic denial", "NotAllowedError");
@@ -1594,13 +1142,13 @@ test("copying a state without a plaintext key is refused instead of claiming suc
       calls += 1;
     },
   };
-  for (const state of [
-    "absent",
-    "needs_key_unconfigured",
-    "unreadable",
-    "unknown",
+  for (const body of [
+    FIXTURE_CONNECTION_BODIES.absent,
+    needsKeyConnectionBody(),
+    unreadableConnectionBody(),
+    unknownConnectionBody(),
   ]) {
-    const view = normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES[state]);
+    const view = normalizeGatewayConnection(body);
     assert.equal(view.keyPlaintext, null);
     assert.deepEqual(
       await copyGatewayConnectionField(view, "keyPlaintext", clipboard),
@@ -1618,7 +1166,7 @@ test("copying a state without a plaintext key is refused instead of claiming suc
   );
   // A plaintext key that does not belong to a `present` state is refused.
   const smuggled = {
-    ...normalizeGatewayConnection(FIXTURE_CONNECTION_BODIES.present),
+    ...normalizeGatewayConnection(presentConnectionBody()),
     keyState: "needs_key_unconfigured",
   };
   assert.deepEqual(
@@ -1631,13 +1179,23 @@ test("copying a state without a plaintext key is refused instead of claiming suc
 test("a switched or cleared binding never copies the dropped key or a late response", async () => {
   const gate = deferred();
   const started = deferred();
-  const inner = new FixtureTransport(connectionScenario());
+  const reads = {
+    "/gateway-connection?service=chat2api": connectionResponse(
+      "chat2api",
+      presentConnectionBody()
+    ),
+    "/gateway-connection?service=chat2api-alt": connectionResponse(
+      "chat2api-alt",
+      unreadableConnectionBody()
+    ),
+  };
+  const inner = new FixtureTransport(connectionScenario(reads));
   const transport = {
     request: async (request) => {
-      if (request.path === "/gateway-connection?service=Qoder") {
+      if (request.path === "/gateway-connection?service=chat2api") {
         started.resolve();
         await gate.promise; // deliberately ignores abort
-        return gatewayConnectionFixtureResponse("Qoder", "present");
+        return connectionResponse("chat2api", presentConnectionBody());
       }
       return inner.request(request);
     },
@@ -1651,10 +1209,10 @@ test("a switched or cleared binding never copies the dropped key or a late respo
   const binding = new GatewayConnectionBinding(
     new BackendClient(transport, clock())
   );
-  const pending = binding.select("Qoder");
+  const pending = binding.select("chat2api");
   await started.promise;
-  const switched = await binding.select("CLIProxy");
-  assert.equal(switched.service, "CLIProxy");
+  const switched = await binding.select("chat2api-alt");
+  assert.equal(switched.service, "chat2api-alt");
   assert.equal(switched.result.value.keyState, "unreadable");
   assert.equal(switched.result.value.keyPlaintext, null);
   const refused = await copyGatewayConnectionField(
@@ -1669,7 +1227,7 @@ test("a switched or cleared binding never copies the dropped key or a late respo
   });
   gate.resolve();
   assert.equal(await pending, null);
-  assert.equal(binding.current.service, "CLIProxy");
+  assert.equal(binding.current.service, "chat2api-alt");
   assert.equal(binding.current.result.value.keyPlaintext, null);
   assert.equal(written.length, 0);
 });
@@ -1686,14 +1244,18 @@ test("a key state and auth pair the read face never produces is refused", () => 
     ["unknown", "loopback_no_key"],
     ["unreadable", "loopback_no_key"],
   ]) {
-    const body = structuredClone(FIXTURE_CONNECTION_BODIES[keyState]);
+    const body =
+      keyState === "absent"
+        ? structuredClone(FIXTURE_CONNECTION_BODIES.absent)
+        : presentConnectionBody();
+    body.key_state = keyState;
     body.auth = auth;
     assert.throws(() => normalizeGatewayConnection(body), ContractError);
   }
 });
 
 test("the plaintext connection key lives only in the read result, never in errors", async () => {
-  const body = gatewayConnectionFixtureResponse("Qoder", "present").body;
+  const body = presentConnectionBody();
   const view = normalizeGatewayConnection(body);
   assert.equal(view.keyPlaintext, FIXTURE_CONNECTION_KEY);
   assert.ok(!view.reason.includes(FIXTURE_CONNECTION_KEY));
@@ -1724,30 +1286,38 @@ test("the plaintext connection key lives only in the read result, never in error
     ContractError
   );
   const reads = {
-    "/gateway-connection?service=Qoder": {
+    "/gateway-connection?service=chat2api": {
       status: 400,
       body: { error: "service_out_of_scope" },
     },
   };
-  const result = await connectionClient(reads).readGatewayConnection("Qoder");
+  const result = await connectionClient(reads).readGatewayConnection(
+    "chat2api"
+  );
   assert.equal(result.state, "error");
   assert.equal(result.value, null);
   assert.ok(!result.reason.includes(FIXTURE_CONNECTION_KEY));
 });
 
 test("the connection read is one narrow GET bound to the requested service", async () => {
-  const transport = new FixtureTransport(connectionScenario());
+  const reads = {
+    "/gateway-connection?service=chat2api": connectionResponse(
+      "chat2api",
+      presentConnectionBody()
+    ),
+  };
+  const transport = new FixtureTransport(connectionScenario(reads));
   const client = new BackendClient(transport, clock());
-  const result = await client.readGatewayConnection("Qoder");
+  const result = await client.readGatewayConnection("chat2api");
   assert.equal(result.state, "ready");
-  assert.equal(result.value.service, "Qoder");
-  assert.equal(result.value.baseUrl, "http://127.0.0.1:8095/v1");
+  assert.equal(result.value.service, "chat2api");
+  assert.equal(result.value.baseUrl, "http://127.0.0.1:8000/v1");
   assert.equal(result.value.keyState, "present");
   assert.equal(result.value.keyPlaintext, FIXTURE_CONNECTION_KEY);
   assert.equal(result.value.alternateProtocols.length, 0);
   assert.equal(transport.calls.length, 1);
   assert.equal(transport.calls[0].method, "GET");
-  assert.equal(transport.calls[0].path, "/gateway-connection?service=Qoder");
+  assert.equal(transport.calls[0].path, "/gateway-connection?service=chat2api");
   assert.equal(transport.calls[0].access, "session");
   await assert.rejects(client.readGatewayConnection("  "), ContractError);
   const failing = {
@@ -1758,7 +1328,7 @@ test("the connection read is one narrow GET bound to the requested service", asy
   const timedOut = await new BackendClient(
     failing,
     clock()
-  ).readGatewayConnection("Qoder");
+  ).readGatewayConnection("chat2api");
   assert.equal(timedOut.state, "error");
   assert.equal(timedOut.value, null);
   assert.equal(timedOut.reason, "request_timeout");
@@ -1767,13 +1337,23 @@ test("the connection read is one narrow GET bound to the requested service", asy
 test("switching gateways clears the previous key and a late response is never installed", async () => {
   const gate = deferred();
   const started = deferred();
-  const inner = new FixtureTransport(connectionScenario());
+  const reads = {
+    "/gateway-connection?service=chat2api": connectionResponse(
+      "chat2api",
+      presentConnectionBody()
+    ),
+    "/gateway-connection?service=chat2api-alt": connectionResponse(
+      "chat2api-alt",
+      unreadableConnectionBody()
+    ),
+  };
+  const inner = new FixtureTransport(connectionScenario(reads));
   const transport = {
     request: async (request) => {
-      if (request.path === "/gateway-connection?service=Qoder") {
+      if (request.path === "/gateway-connection?service=chat2api") {
         started.resolve();
         await gate.promise; // deliberately ignores abort
-        return gatewayConnectionFixtureResponse("Qoder", "present");
+        return connectionResponse("chat2api", presentConnectionBody());
       }
       return inner.request(request);
     },
@@ -1781,30 +1361,36 @@ test("switching gateways clears the previous key and a late response is never in
   const binding = new GatewayConnectionBinding(
     new BackendClient(transport, clock())
   );
-  const first = binding.select("Qoder");
+  const first = binding.select("chat2api");
   await started.promise;
   assert.equal(binding.current, null);
-  const second = await binding.select("CLIProxy");
-  assert.equal(second.service, "CLIProxy");
+  const second = await binding.select("chat2api-alt");
+  assert.equal(second.service, "chat2api-alt");
   assert.equal(second.result.state, "ready");
   assert.equal(second.result.value.keyState, "unreadable");
   assert.equal(second.result.value.keyPlaintext, null);
   gate.resolve();
   assert.equal(await first, null);
-  assert.equal(binding.current.service, "CLIProxy");
+  assert.equal(binding.current.service, "chat2api-alt");
   assert.equal(binding.current.result.value.keyPlaintext, null);
 });
 
 test("clearing a binding drops the key immediately and refuses a later response", async () => {
   const gate = deferred();
   const started = deferred();
-  const inner = new FixtureTransport(connectionScenario());
+  const reads = {
+    "/gateway-connection?service=chat2api": connectionResponse(
+      "chat2api",
+      presentConnectionBody()
+    ),
+  };
+  const inner = new FixtureTransport(connectionScenario(reads));
   const transport = {
     request: async (request) => {
-      if (request.path === "/gateway-connection?service=Qoder") {
+      if (request.path === "/gateway-connection?service=chat2api") {
         started.resolve();
         await gate.promise;
-        return gatewayConnectionFixtureResponse("Qoder", "present");
+        return connectionResponse("chat2api", presentConnectionBody());
       }
       return inner.request(request);
     },
@@ -1812,7 +1398,7 @@ test("clearing a binding drops the key immediately and refuses a later response"
   const binding = new GatewayConnectionBinding(
     new BackendClient(transport, clock())
   );
-  const pending = binding.select("Qoder");
+  const pending = binding.select("chat2api");
   await started.promise;
   binding.clear();
   assert.equal(binding.current, null);
@@ -1823,29 +1409,33 @@ test("clearing a binding drops the key immediately and refuses a later response"
 
 test("a failed read for the new gateway never retains the previous key", async () => {
   const reads = gatewayConnectionFixtureReads();
-  reads["/gateway-connection?service=CLIProxy"] = {
+  reads["/gateway-connection?service=chat2api-alt"] = {
     status: 503,
     body: { error: "runtime status unavailable" },
   };
+  reads["/gateway-connection?service=chat2api"] = connectionResponse(
+    "chat2api",
+    presentConnectionBody()
+  );
   const binding = new GatewayConnectionBinding(connectionClient(reads));
-  const first = await binding.select("Qoder");
+  const first = await binding.select("chat2api");
   assert.equal(first.result.value.keyPlaintext, FIXTURE_CONNECTION_KEY);
-  const second = await binding.select("CLIProxy");
+  const second = await binding.select("chat2api-alt");
   assert.equal(second.result.state, "error");
   assert.equal(second.result.value, null);
-  assert.equal(binding.current.service, "CLIProxy");
+  assert.equal(binding.current.service, "chat2api-alt");
   assert.equal(binding.current.result.value, null);
 });
 
 test("a response bound to another service identity is refused, not installed", async () => {
   const reads = {
-    "/gateway-connection?service=Qoder": gatewayConnectionFixtureResponse(
-      "CLIProxy",
-      "present"
+    "/gateway-connection?service=chat2api": connectionResponse(
+      "chat2api-alt",
+      presentConnectionBody()
     ),
   };
   const binding = new GatewayConnectionBinding(connectionClient(reads));
-  const view = await binding.select("Qoder");
+  const view = await binding.select("chat2api");
   assert.equal(view.result.state, "error");
   assert.equal(view.result.value, null);
   assert.match(view.result.reason, /different service/);
