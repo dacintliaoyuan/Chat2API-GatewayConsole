@@ -216,6 +216,38 @@ fn a_done_without_finish_reason_is_an_incomplete_stream() {
 }
 
 #[test]
+fn an_empty_finish_reason_is_not_a_finish_reason() {
+    let temp = TempDir::new("um-rust-chat-errors-");
+    let stub = ChatStub::start();
+    let content = content_event();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![
+            ChatChunk::now(content.clone()),
+            ChatChunk::now(
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"oops\"},\"finish_reason\":\"\"}]}
+
+"
+                .to_vec(),
+            ),
+            ChatChunk::now(done_event()),
+        ],
+        hold: Duration::ZERO,
+    });
+    let gateway = gateway(&stub, &temp, 0);
+    let mut client = StreamingClient::send(gateway.addr, &request()).expect("stream request");
+    let raw = client
+        .read_all(Duration::from_secs(5))
+        .expect("read stream");
+    let (status, _, body) = parse_raw_response(&raw);
+    assert_eq!(status, 200);
+    let error = in_band_error(&body);
+    assert_eq!(
+        error["error"]["code"],
+        json!("upstream_missing_finish_reason")
+    );
+}
+
+#[test]
 fn a_successful_stream_never_writes_an_error_event() {
     let temp = TempDir::new("um-rust-chat-errors-");
     let stub = ChatStub::start();

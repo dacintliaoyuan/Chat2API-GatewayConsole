@@ -661,10 +661,7 @@ fn process_event(
         }
         if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
             for choice in choices {
-                if choice
-                    .get("finish_reason")
-                    .is_some_and(|value| !value.is_null())
-                {
+                if choice.get("finish_reason").is_some_and(truthy) {
                     saw_finish = true;
                 }
                 let Some(delta) = choice.get("delta").and_then(Value::as_object) else {
@@ -674,8 +671,8 @@ fn process_event(
                     .get("content")
                     .and_then(Value::as_str)
                     .is_some_and(|text| !text.is_empty())
-                    || delta.contains_key("tool_calls")
-                    || delta.contains_key("function_call")
+                    || delta.get("tool_calls").is_some_and(truthy)
+                    || delta.get("function_call").is_some_and(truthy)
                 {
                     substantive = true;
                 }
@@ -891,17 +888,20 @@ fn data_value(line: &str) -> &str {
     value.strip_prefix(' ').unwrap_or(value)
 }
 
-fn explicit_error_reason(chunk: &Value) -> Option<String> {
-    let error = chunk.get("error")?;
-    let truthy = match error {
+fn truthy(value: &Value) -> bool {
+    match value {
         Value::Null => false,
         Value::Bool(value) => *value,
         Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
         Value::String(value) => !value.is_empty(),
         Value::Array(value) => !value.is_empty(),
         Value::Object(value) => !value.is_empty(),
-    };
-    if !truthy {
+    }
+}
+
+fn explicit_error_reason(chunk: &Value) -> Option<String> {
+    let error = chunk.get("error")?;
+    if !truthy(error) {
         return None;
     }
     let message = match error {
