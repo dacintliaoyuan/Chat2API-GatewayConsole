@@ -2541,7 +2541,15 @@ def _login_display(environ=None):
                     continue
                 key, value = line.split("=", 1)
                 values[key.strip()] = value.strip()
-    except (OSError, UnicodeError):
+    except OSError as exc:
+        _logger.warning(
+            "manual display state unreadable (%s); using headless login",
+            exc)
+        return None
+    except UnicodeError as exc:
+        _logger.warning(
+            "manual display state malformed (%s); using headless login",
+            exc)
         return None
     display = values.get("UM_LOGIN_DISPLAY", "")
     auth = values.get("UM_LOGIN_XAUTHORITY", "")
@@ -2549,19 +2557,34 @@ def _login_display(environ=None):
     pid = values.get("UM_LOGIN_DISPLAY_PID", "")
     number = display[1:].split(".")[0]
     if not display or not auth or not socket_path:
+        _logger.warning(
+            "manual display state incomplete (display/auth/socket missing); "
+            "using headless login")
         return None
     if not display.startswith(":") or not number.isdigit():
+        _logger.warning(
+            "manual display state invalid DISPLAY=%r; using headless login",
+            display)
         return None
     if not os.path.isfile(auth) or not os.access(auth, os.R_OK):
+        _logger.warning(
+            "manual display XAUTHORITY is missing or unreadable; "
+            "using headless login")
         return None
     if not os.path.exists(socket_path):
+        _logger.warning(
+            "manual display socket is missing; using headless login")
         return None
     if pid:
         try:
             pid_number = int(pid)
         except ValueError:
+            _logger.warning(
+                "manual display PID is not an integer; using headless login")
             return None
         if pid_number <= 0 or not _display_process_alive(pid_number):
+            _logger.warning(
+                "manual display process is gone; using headless login")
             return None
     return {"DISPLAY": display, "XAUTHORITY": auth}
 
@@ -2683,6 +2706,9 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     except BaseException:
         _release_profile_login_lock(lock)
         raise
+    # Ticket review: the outer finally reads this even when context creation
+    # itself fails, so it must be defined before the try.
+    session_error = None
     try:
         if context_factory is not None:
             ctx = context_factory(edge, profile_dir)
@@ -2704,7 +2730,6 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                 )
             ctx = playwright.chromium.launch_persistent_context(
                 profile_dir, **launch_options)
-        session_error = None
         try:
             if on_context:
                 on_context(ctx)

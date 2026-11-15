@@ -879,7 +879,7 @@ class LinuxBrokerEntryTests(unittest.TestCase):
         self.assertIs(srv.UnixSocketBrokerServer._dispatch,
                       srv._ManagementDispatch._dispatch)
         self.assertIsNot(srv.UnixSocketBrokerServer._dispatch,
-                         srv.BoundedPipeServer._dispatch)
+                         srv.BoundedSocketServer._dispatch)
 
     def test_unix_instance_call_verifies_identity_before_sending(self):
         _SignedEchoTransport.paths = []

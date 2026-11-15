@@ -466,6 +466,22 @@ class DisplayStateRouteTest(unittest.TestCase):
                 self.assertEqual(payload["label"], "需要人工接管")
                 self.assertIn(reason, payload["detail"])
 
+    def test_display_state_accepts_a_bare_reason_while_logging_in(self):
+        # 旧实例在 logging_in 里只给裸原因；它已经结束本轮，必须显示
+        # "需要人工接管"，而不是继续显示等待 MFA。
+        for reason in login_contract.LOGIN_TERMINAL_MANUAL_REASONS:
+            with self.subTest(reason=reason):
+                payload = self._state(auth={
+                    "state": "logging_in",
+                    "label": "登录中（需人工：%s）" % reason,
+                    "error": reason,
+                    "observed_at": 1700000001,
+                    "login_window_deadline_epoch": 2800.0,
+                })
+                self.assertEqual(payload["state"], "failed")
+                self.assertEqual(payload["label"], "需要人工接管")
+                self.assertIn(reason, payload["detail"])
+
     def test_display_state_keeps_cleanup_failure_and_primary_reason(self):
         # ticket #42 item 16：清理失败与原始 manual 原因都要显示。
         payload = self._state(auth={
@@ -522,10 +538,10 @@ class DisplayStateRouteTest(unittest.TestCase):
                 console_um_adapter, "resolve_chat2api_base_url",
                 return_value="http://127.0.0.1:1"),
             mock.patch.object(
-                console_um_adapter, "_read_control_token",
+                console_um_adapter, "read_control_token",
                 return_value="token"),
             mock.patch.object(
-                console_um_adapter, "_read_auth_status",
+                console_um_adapter, "read_auth_status",
                 side_effect=RuntimeError(secret)),
         ):
             observed = usagesrv._console_auth_observation()
@@ -616,10 +632,10 @@ class ConsoleAuthObservationTest(unittest.TestCase):
                                                 "port": 8100}]},
                                   False, 0.0)), \
                 mock.patch.object(
-                    console_um_adapter, "_read_control_token",
+                    console_um_adapter, "read_control_token",
                     return_value="test-control-token") as read_token, \
                 mock.patch.object(
-                    console_um_adapter, "_read_auth_status",
+                    console_um_adapter, "read_auth_status",
                     return_value={
                         "state": "failed",
                         "label": "认证失败（需人工）",
@@ -663,10 +679,10 @@ class ConsoleAuthObservationTest(unittest.TestCase):
                                                 "port": 8100}]},
                                   False, 0.0)), \
                 mock.patch.object(
-                    console_um_adapter, "_read_control_token",
+                    console_um_adapter, "read_control_token",
                     return_value="test-control-token"), \
                 mock.patch.object(
-                    console_um_adapter, "_read_auth_status",
+                    console_um_adapter, "read_auth_status",
                     side_effect=OperationError(
                         "status_unreachable",
                         "查询失败：chat2api 服务不可达，凭据状态未知")):

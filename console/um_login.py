@@ -64,6 +64,7 @@ import urllib.request
 from login_contract import (
     LOGIN_TERMINAL_MANUAL_REASONS,
     MANUAL_TAKEOVER_REQUIRED_PREFIX,
+    terminal_manual_reason,
 )
 from console import adapters as console_adapters
 from console import um_adapter as console_um_adapter
@@ -232,7 +233,7 @@ def _post_force_login(base_url, token):
 def _read_auth_status(base_url, token):
     """One GET /admin/auth/status read; state None means 'unknown'.
 
-    Ticket #41: the read delegates to ``console_um_adapter._read_auth_status``
+    Ticket #41: the read delegates to ``console_um_adapter.read_auth_status``
     so the console uses the SAME classification (``control_denied`` /
     ``status_unreachable`` / ``status_query_failed`` / ``status_schema``)
     instead of collapsing every failure into ``state=None, error=None``. A
@@ -245,7 +246,7 @@ def _read_auth_status(base_url, token):
     masked) and bounds each poll request to the historical 5s.
     """
     try:
-        status = console_um_adapter._read_auth_status(
+        status = console_um_adapter.read_auth_status(
             base_url, token, timeout=_STATUS_POLL_TIMEOUT_S)
     except OperationError as exc:
         return {"state": None, "error": None, "recovery": None,
@@ -290,18 +291,9 @@ def _terminal_login_failure(status):
     recovery_state = recovery.get("state")
     pause_reason = recovery.get("pause_reason")
 
-    manual = None
-    for reason in (error, pause_reason, primary):
-        if not isinstance(reason, str):
-            continue
-        if reason.startswith(_MANUAL_TAKEOVER_PREFIX):
-            if reason[len(_MANUAL_TAKEOVER_PREFIX):] in _TERMINAL_MANUAL_REASONS:
-                manual = reason
-                break
-            continue
-        if reason in _TERMINAL_MANUAL_REASONS:
-            manual = _MANUAL_TAKEOVER_PREFIX + reason
-            break
+    manual_reason = terminal_manual_reason(error, pause_reason, primary)
+    manual = (None if manual_reason is None
+              else _MANUAL_TAKEOVER_PREFIX + manual_reason)
     if manual is not None:
         message = "登录需要人工接管（%s）；本轮已结束，浏览器已关闭" % manual
         if isinstance(error, str) and error != manual:
@@ -338,6 +330,26 @@ def _terminal_status_read_failure(status):
         % (read_error.get("message") or code))
 
 
+def _classify_auth_status(status):
+    """Return the observed state, or raise the terminal outcome.
+
+    Shared by the polling loop and the final recheck so both treat a valid,
+    cancelled, manual-takeover, exhausted-recovery or unreadable status the
+    same way (ticket #42 review).
+    """
+    if status["state"] == "valid":
+        return status["state"]
+    read_failure = _terminal_status_read_failure(status)
+    if read_failure is not None:
+        raise read_failure
+    if _login_cancelled(status):
+        raise OperationCancelled()
+    failure = _terminal_login_failure(status)
+    if failure is not None:
+        raise OperationError(*failure)
+    return status["state"]
+
+
 def _wait_login_valid(base_url, token, ctx, budget_s, interval_s):
     """Poll auth status until valid or the console budget is exhausted.
 
@@ -359,17 +371,9 @@ def _wait_login_valid(base_url, token, ctx, budget_s, interval_s):
         if ctx is not None:
             ctx.raise_if_cancelled()
         status = _read_auth_status(base_url, token)
-        if status["state"] == "valid":
-            return (status["state"], time.monotonic() - started, False,
-                    None)
-        read_failure = _terminal_status_read_failure(status)
-        if read_failure is not None:
-            raise read_failure
-        if _login_cancelled(status):
-            raise OperationCancelled()
-        failure = _terminal_login_failure(status)
-        if failure is not None:
-            raise OperationError(*failure)
+        state = _classify_auth_status(status)
+        if state == "valid":
+            return (state, time.monotonic() - started, False, None)
         if time.monotonic() >= deadline:
             break
         time.sleep(interval_s)
@@ -377,17 +381,10 @@ def _wait_login_valid(base_url, token, ctx, budget_s, interval_s):
     if ctx is not None:
         ctx.raise_if_cancelled()
     status = _read_auth_status(base_url, token)
-    if status["state"] == "valid":
-        return (status["state"], time.monotonic() - started, True, None)
-    read_failure = _terminal_status_read_failure(status)
-    if read_failure is not None:
-        raise read_failure
-    if _login_cancelled(status):
-        raise OperationCancelled()
-    failure = _terminal_login_failure(status)
-    if failure is not None:
-        raise OperationError(*failure)
-    return (status["state"], time.monotonic() - started, True,
+    state = _classify_auth_status(status)
+    if state == "valid":
+        return (state, time.monotonic() - started, True, None)
+    return (state, time.monotonic() - started, True,
             status.get("read_error"))
 
 
@@ -467,7 +464,7 @@ def relogin_um(target, params, ctx=None):
 
     # Token errors (absent/unreadable/empty) pass through unchanged; the
     # token value itself never enters messages, steps or results.
-    token = console_um_adapter._read_control_token()
+    token = console_um_adapter.read_control_token()
     _report(ctx, "已读取管理控制令牌")
 
     start_wait_s = _budget_value(params, "start_wait_s", _START_WAIT_DEFAULT_S)

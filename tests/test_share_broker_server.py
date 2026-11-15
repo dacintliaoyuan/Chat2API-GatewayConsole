@@ -100,7 +100,7 @@ class _ConnectionServer(srv.UnixSocketBrokerServer):
         self.coordinator = coordinator
         # Bypass the POSIX platform gate of the real transport: this double
         # never opens a socket. Everything else is the REAL base constructor.
-        srv.BoundedPipeServer.__init__(
+        srv.BoundedSocketServer.__init__(
             self, "in-memory-management-endpoint",
             deadline_seconds=deadline_seconds, state_dir=state_dir,
             clock=clock,

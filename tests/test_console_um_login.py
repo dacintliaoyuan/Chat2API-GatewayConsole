@@ -184,7 +184,7 @@ class ConsoleUmLoginTests(unittest.TestCase):
             status_code=status_code, status_raw=status_raw)
         self.addCleanup(stub.stop)
         token_patcher = mock.patch.object(
-            console_um_login.console_um_adapter, "_read_control_token",
+            console_um_login.console_um_adapter, "read_control_token",
             return_value="isolated-test-control-token")
         token_patcher.start()
         self.addCleanup(token_patcher.stop)
@@ -706,7 +706,7 @@ class ConsoleAuthStatusReadTests(unittest.TestCase):
             "checked_epoch": 1,
         }
         with mock.patch.object(
-                console_um_adapter, "_read_auth_status",
+                console_um_adapter, "read_auth_status",
                 return_value=status) as read:
             console_um_login._read_auth_status("http://127.0.0.1:1", "token")
         self.assertEqual(read.call_args.kwargs.get("timeout"), 5.0)
@@ -745,6 +745,20 @@ class ConsoleAuthStatusReadTests(unittest.TestCase):
         self.assertEqual(failure[0], "login_failed")
         self.assertIn("browser_cleanup_failed", failure[1])
         self.assertIn("timeout", failure[1])
+
+    def test_legacy_manual_prefix_still_ends_the_wait(self):
+        # 旧实例把软信号写成 manual_takeover:<reason>；控制台仍须把它
+        # 当终端人工接管，而不是继续等到预算耗尽。
+        status = {
+            "state": "failed",
+            "error": "manual_takeover:umpass_mfa_required",
+            "recovery": {"state": "exhausted",
+                         "pause_reason": "manual_takeover:umpass_mfa_required"},
+        }
+        failure = console_um_login._terminal_login_failure(status)
+        self.assertIsNotNone(failure)
+        self.assertEqual(failure[0], "login_manual_takeover_required")
+        self.assertIn("umpass_mfa_required", failure[1])
 
     def test_terminal_manual_contract_is_shared_with_the_service(self):
         # ticket #42 item 12：terminal 原因与前缀只有一份定义，console 直接

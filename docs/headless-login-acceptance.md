@@ -52,6 +52,17 @@ Playwright 的 `chromium_headless_shell-1248`，`setUpClass` 报
   - `bash scripts/check.sh --full`：Python 套件 `Ran 2310 tests in 704.794s`，`OK (skipped=63)`；local 套件 `Ran 54 tests in 20.947s`，`OK`；其余编译、ruff、share-names、retired-features、check-generated、tsc、契约、日志与 UM 检查全部通过，EXIT=0。
 - 未验证范围：上述记录来自 #41 的 Windows 本机运行，不是 #42 的回归证据；真实云端 systemd、真实 UM 登录/MFA/Duo 与部署后 headless 行为仍未在目标机复验。
 
+## #42 low findings 验证记录
+
+- 工作目录：`.worktrees/integration-final`
+- 被测状态：`integration/feature-retirement-cleanup` @ `30586d2`（#42 实现 `74a4c8e`）
+- 命令与结果：
+  - `python -m unittest tests.test_chat2api_browser_login tests.test_chat2api_reauth_recovery tests.test_console_um_login tests.test_console_um_adapter tests.test_console_display_route tests.test_domain_docs_headless_login tests.test_console_stats tests.test_share_management tests.test_chat2api_auth_wait tests.test_chat2api_linux_platform tests.test_r19_local_isolation`：`Ran 380 tests`，`OK (skipped=7)`。
+  - `python -m unittest tests.test_fake_um_server` 连续 3 次：`Ran 50 tests` / `OK`，三次 EXIT=0；barrier teardown 的 `ConnectionAbortedError` 未复现。
+  - `bash scripts/check.sh --quick`：EXIT=0；前端 80 + 4 + 12 + 69 项通过，关键 Python 回归 135 项 `OK (skipped=5)`。
+  - `bash scripts/check.sh --full`：`Ran 2329 tests / OK (skipped=63)`，`local/tests Ran 54 / OK`，EXIT=0。
+- 未验证范围：真实云端 systemd、真实 UM 登录/MFA/Duo、部署后 headless 行为仍未在目标机复验；上述记录不是目标机证据。
+
 ## RSS 基线
 
 基线目的：在改动部署到目标云机之前，记录当前生产 release `s2-20261113b`

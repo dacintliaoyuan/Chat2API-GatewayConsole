@@ -91,7 +91,7 @@ def _wire_maintenance_sink(coordinator, sink):
         target = inner
 
 
-class BoundedPipeServer:
+class BoundedSocketServer:
     """Bounded connection-cycle server base (R37 contract, one worker/cycle).
 
     The POSIX AF_UNIX transport (``UnixSocketBrokerServer``) is the only
@@ -112,10 +112,10 @@ class BoundedPipeServer:
     _unconfirmed_abandoned = 0
     _accounting_lock = threading.Lock()
 
-    def __init__(self, pipe_name,
+    def __init__(self, socket_path,
                  deadline_seconds=DEFAULT_DEADLINE_SECONDS, state_dir=None,
                  clock=time.monotonic, dispatch_deadline_seconds=None):
-        self.pipe_name = pipe_name
+        self.socket_path = socket_path
         self._deadline = float(deadline_seconds)
         # R44-4 (contract §6.4): the DISPATCH budget is a separate,
         # OPTIONAL bound. None keeps dispatch inside the connected read
@@ -391,7 +391,7 @@ class BoundedPipeServer:
         payload = {"pid": os.getpid(),
                    "server": cls.__name__,
                    "state": "stopped" if self._stop.is_set() else "serving",
-                   "pipe_name": self.pipe_name,
+                   "pipe_name": self.socket_path,
                    "cycles": self._cycles,
                    "last_error": self._last_error,
                    "unconfirmed_workers": cls._unconfirmed_abandoned,
@@ -537,7 +537,7 @@ def _reclaim_stale_socket(path):
         errno.EADDRINUSE, f"unix socket endpoint is already served: {path}")
 
 
-class _UnixSocketTransport(BoundedPipeServer):
+class _UnixSocketTransport(BoundedSocketServer):
     """POSIX AF_UNIX SOCK_STREAM transport for the bounded cycle (R37/R41-4).
 
     One connection cycle = accept -> bounded read -> dispatch -> bounded write

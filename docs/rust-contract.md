@@ -3,24 +3,24 @@
 - 状态：冻结（#37 交付；随父 spec #36 评审后生效）；本文件不包含 Rust 实现。
 - 基线：`integration/rust-contract` @ `d131333`（2026-11-14 11:26:56 +0800）。
 - 测量时点：2026-11-14 19:48（UTC+08:00）。
-- 范围：8100 分享网关、18096 控制台、broker、Key 管理、用量账本、display、Cloudflare 检查、部署与备份。
-- 不包含：headless 登录行为（spec #8）、端口 18096/5901 重排（#40）、前端重写、真实云端 systemd/UM 登录验收。
+- 范围：8100 分享网关、云端控制台（默认 8096）、broker、Key 管理、用量账本、display、Cloudflare 检查、部署与备份。
+- 不包含：headless 登录行为（spec #8）、端口重排（已由 #40 完成，本契约只记录配置事实）、前端重写、真实云端 systemd/UM 登录验收。
 
 本文件把“保留的最终功能集”写成可测试的 HTTP/API 契约。Rust 只 port 这里列出的行为；任何未列出的端点、字段、错误码都不进入 Rust 轨道。
 
 ## 1. 冻结规则
 
-1. **端点以本文件的表为准**。8100 的分享白名单只有 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`（`um-cloud-deploy/cloudflared/check-ingress.py:26`）；18096 的 `share-management` 面只包含下面列出的固定路由，不做任意 URL/action 代理。
+1. **端点以本文件的表为准**。8100 的分享白名单只有 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`（`um-cloud-deploy/cloudflared/check-ingress.py:26`）；云端控制台的 `share-management` 面只包含下面列出的固定路由，不做任意 URL/action 代理。
 2. **成功、合法空结果、取消、暂时失败、配置错误、数据损坏必须可区分**。未知不折成 0、false 或空列表；读不到就返回错误或 `null` 加原因。
 3. **明文只在一次性响应里**。Key 明文只在 create/rotate 的即时 no-store 响应和单 Key readback 里出现；不进入日志、操作记录、列表、URL 或 Rust 错误消息。
 4. **副作用只走已列出的边界**。Rust 不得新增第二套 SQLite、第二套 broker、第二个 8100 启动者或第二个 display relay。
-5. **端口不混入本轨道**。当前部署与仓库默认值分开记录；#40 的 8096/8097 只作为配置默认值，Rust 不硬编码旧端口。
+5. **端口不混入本轨道**。#40 已完成，8096/8097 是仓库与部署模板的默认值；兼容窗口内旧端口仍可显式配置，Rust 只读环境变量，不硬编码端口。
 
 ## 2. 端口与进程拓扑
 
 ### 2.1 当前部署与仓库默认值
 
-| 端口 | 服务 | 当前云端部署（2026-11-14 实测） | 仓库默认值 @ `d131333` | #40 之后仓库默认值 | 兼容窗口 |
+| 端口 | 服务 | 当前云端部署（旧 release，2026-11-14 实测） | 仓库默认值 @ `d131333` | 当前仓库默认值（#40 已合入） | 兼容窗口 |
 |---|---|---|---|---|---|
 | 8000 | 本机 chat2api / UM 主链 | 不适用（云端不装配） | 8000（`chat2api/chat2api.py` 默认） | 8000 | 不变 |
 | 8001 | 本机控制台宿主 | 不适用（云端不装配） | 8001（`usagesrv.py:101`） | 8001 | 不变 |
@@ -32,9 +32,9 @@
 
 说明：
 
-- #40 当前未合入本分支；`ports/40` 与 `integration/ports` 仍停在基线 `d131333`。上表“#40 之后”列是 #40 已确认的决策，不是本分支已经生效的代码。
+- #40 已合入本分支；8096/8097 已是仓库与部署模板默认值，旧 18096/5901 只在一个云端发布周期内作为显式配置值保留。
 - 兼容窗口为**一个云端发布周期**。窗口内旧端口只作为**显式配置值**被接受；同一时刻只监听配置指定的一个端口，不双端口监听。
-- 非法端口值继续 fail closed；Rust 不得把旧端口写死，也不得在 #40 完成前抢跑端口重排。
+- 非法端口值继续 fail closed；Rust 不得把旧端口写死，也不得同时监听新旧两个端口。
 - 8100 分享段允许非 loopback 的例外只在部署登记时成立；当前云端实测仍为 loopback。
 
 ### 2.2 进程与 systemd 边界
@@ -42,12 +42,12 @@
 ```text
 systemd
 ├── um-share-broker.service   → share/broker_ops.py → chat2api.py :8100
-├── um-share-console.service  → usagesrv.py :18096
-└── um-share-display.service  → Xvfb :99 + x11vnc :5901（可选）
+├── um-share-console.service  → usagesrv.py :8096（兼容窗口内旧 18096 仍可显式配置）
+└── um-share-display.service  → Xvfb :99 + x11vnc :8097（兼容旧 5901）
 ```
 
 - 8100 只由 broker 拉起：`um-share-broker.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`（`um-cloud-deploy/systemd/um-share-broker.service`）。
-- 18096 只监听 loopback；公网入口只反代 8100 分享白名单，不反代 18096/5901（`um-cloud-deploy/README.md`）。
+- 云端控制台默认只监听 loopback 8096（旧 18096 仅兼容窗口内显式配置）；公网入口只反代 8100 分享白名单，不反代控制台或 display（`um-cloud-deploy/README.md`）。
 - 控制台 unit 对 `/run/um-share` 只读、`NoExecPaths` 禁止直接执行 `chat2api.py`，因此控制台不能成为第二个 8100 启动者（`um-cloud-deploy/systemd/um-share-console.service`）。
 - 部署 unit 的 `KillMode=control-group` 是最终 cgroup 围栏；`systemctl stop` 不留下孤儿进程。
 
@@ -73,7 +73,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 - 云端版本：Ubuntu，内核 `7.0.0-38-generic` x86_64；Python `3.14.4`；发布版本 `s2-20261113b`（manifest `generated_at=2026-11-13T04:01:52Z`）。
 - 测量时间：2026-11-14 19:48（UTC+08:00）；系统 uptime 2 天 19 小时；`um-share-broker.service`、`um-share-console.service`、`um-share-display.service` 均为 `active (running)`。
-- 两次采样相隔约 2 秒；8100/Xvfb/x11vnc/broker 的 RSS 不变，18096 从 111048 KiB 变为 111044 KiB（±4 KiB）。下表取第二次值。
+- 两次采样相隔约 2 秒；8100/Xvfb/x11vnc/broker 的 RSS 不变，旧部署 18096 从 111048 KiB 变为 111044 KiB（±4 KiB）。下表取第二次值。
 - `idle` 判据：没有登录窗口、没有在途分享请求；`display-state` 读面为 `state=valid`，`operator.owner_present=false`；`/health` 的 watch 线程存活。读取本身只发只读 GET，不触发登录。
 - RSS 是 `ps` 的 `rss`（KiB）与 `/proc/<pid>/status` 的 `VmRSS` 交叉核对值；RSS 包含共享页，不是 PSS，不能直接当作 Rust 进程的“净内存”。
 
@@ -90,10 +90,9 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 未验证范围：
 
-- **登录中 RSS 未测量**：没有维护者授权触发重登；不打开可见浏览器、不启动登录窗口。
-- **登录后 RSS 未测量**：同上；不能用“当前认证有效”冒充一次登录后的内存读数。
+- **登录中/登录后 RSS 未在本契约的新代码上测量**：`docs/headless-login-acceptance.md` 记录了旧 release `s2-20261113b` 的一次真实登录中 Chromium RSS（约 852,228 KiB），不能当作本契约 headless 代码的读数。
 - **Chromium idle RSS 不存在**：`pgrep` 未发现 `chrom`/`playwright`/`headless_shell` 进程；不能把“未运行”写成 0 MiB。
-- **#40 之后的 8096/8097 未测量**：本分支没有 #40 代码；云端仍监听旧端口。
+- **8096/8097 未测量**：本契约的 idle 基线在旧部署 18096/5901 上测得；#40 已把仓库默认改为 8096/8097，但新端口未在云端复测。
 - 本基线不是性能目标，也不能证明 Rust 一定更省内存；Rust 切片验收必须用同一命令、同一 idle 判据重新测量。
 
 ## 4. 契约覆盖矩阵
@@ -110,12 +109,12 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | 8100 | `/v1/embeddings` | 非分享模式 Bearer；分享模式 404 `route_not_shared` | JSON 透传 | 400/401/413/404/502/503 | 无 | 请求总预算 | 无账本行 | UM 上游 |
 | 8100 | `/api/v1/embeddings` | 非分享模式 Bearer；分享模式不经分享 Key 门，公网不反代 | JSON 透传 | 400/401/413/502/503 | 无 | 请求总预算 | 无账本行 | UM 上游 |
 | 8100 | `/admin/auth/*`、`/admin/share/revoke`、`/admin/shutdown` | 控制令牌 | JSON | 403 | 无 | 无 | 登录/撤销有界 | 浏览器、撤销在途、停止服务 |
-| 18096 | `/health`、`/api/summary`、`/api/console/*` 只读 | loopback Host/Origin；写面按路由：facade 需同源标记/控制令牌，operations 只受同源门 | JSON no-store | 400/401/403/404/409/410/413/502/503 | 无 SSE | display/操作/TTL | 读无；写按 Key/操作 | SQLite、账本、日志、broker |
-| 18096 | `/api/console/share-management/*` 写面 | 同源标记或控制令牌 | JSON no-store | 400/403/404/409/410/413/503 | 无 | 写请求前端 20s 预算 | idempotency_key + row_version | SQLite、投影发布、安全日志 |
-| 18096 | `/display`、`/display/` | 同源 + display 授权（display session、控制令牌或 Tailscale Serve 身份） | HTML/JS | 400/403/404/409/413/415/426/502/503 | 无 | grant 60s、session 300s、idle 900s | 单次 grant | operator 状态 |
-| 18096 | `/display/launcher.js`、`/display/launcher-state.js`、`/display/<asset>`、`/display/session`、GET `/display/grant` | 同源 | JS/JSON | 400/403/404/409/413/415/426/502/503 | 无 | session 300s、idle 900s | 无 | noVNC 静态树 |
-| 18096 | POST `/display/grant` | 同源 + 有效单次 grant | JSON | 400/403/404/409/413/415/426/502/503 | 无 | grant 60s | 单次 grant | grant 存储 |
-| 18096 | `/display/websockify` | display session + operator generation | RFB WebSocket | 400/403/409/426/503 | RFB WebSocket | idle 900s、session 14400s | 单次 operator | x11vnc 网络、operator 状态 |
+| 8096（旧 18096） | `/health`、`/api/summary`、`/api/console/*` 只读 | loopback Host/Origin；写面按路由：facade 需同源标记/控制令牌，operations 只受同源门 | JSON no-store | 400/401/403/404/409/410/413/502/503 | 无 SSE | display/操作/TTL | 读无；写按 Key/操作 | SQLite、账本、日志、broker |
+| 8096（旧 18096） | `/api/console/share-management/*` 写面 | 同源标记或控制令牌 | JSON no-store | 400/403/404/409/410/413/503 | 无 | 写请求前端 20s 预算 | idempotency_key + row_version | SQLite、投影发布、安全日志 |
+| 8096（旧 18096） | `/display`、`/display/` | 同源 + display 授权（display session、控制令牌或 Tailscale Serve 身份） | HTML/JS | 400/403/404/409/413/415/426/502/503 | 无 | grant 60s、session 300s、idle 900s | 单次 grant | operator 状态 |
+| 8096（旧 18096） | `/display/launcher.js`、`/display/launcher-state.js`、`/display/<asset>`、`/display/session`、GET `/display/grant` | 同源 | JS/JSON | 400/403/404/409/413/415/426/502/503 | 无 | session 300s、idle 900s | 无 | noVNC 静态树 |
+| 8096（旧 18096） | POST `/display/grant` | 同源 + 有效单次 grant | JSON | 400/403/404/409/413/415/426/502/503 | 无 | grant 60s | 单次 grant | grant 存储 |
+| 8096（旧 18096） | `/display/websockify` | display session + operator generation | RFB WebSocket | 400/403/409/426/503 | RFB WebSocket | idle 900s、session 14400s | 单次 operator | x11vnc 网络、operator 状态 |
 | broker | AF_UNIX 管理通道 | HMAC-SHA256 + 时间窗 + replay | 一行 JSON，最大 1 MiB | 固定结果码表 | 无 | 10s/90s/30s/130s | request_id 一次性 | 投影、pid、信号、Popen |
 | Key 管理 | SQLite + `/api/share/*` | 管理面鉴权 | JSON | 400/401/404/409/410/503 | 无 | 发布 fail-closed | idempotency_key + row_version | SQLite、投影、安全日志 |
 | 用量账本 | 只读查询 | 随宿主面 | JSON | 400/502/503 | 无 | 有界读取 | 只读 | 无写入 |
@@ -202,11 +201,11 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 - 注册实例控制 AF_UNIX 通道；只应答 `instance-status`、`load`、`drain`、`emergency`、`resume`，绝不调用管理动作（`chat2api/chat2api.py:9023-9100`）。
 - `/admin/shutdown` 只停止本进程；不停止上游 UM。
 
-## 6. 18096 控制台
+## 6. 云端控制台（默认 8096，兼容旧 18096）
 
 ### 6.1 端点与角色边界
 
-18096 是云端控制台宿主（`usagesrv.py`）。云端角色只装配 UM 分享；非 UM 读面明确返回 503 `capability_not_assembled`，不探测也不读取（`usagesrv.py:3043-3062`）。
+云端控制台宿主（`usagesrv.py`）默认监听 8096；旧 18096 只在一个发布周期内作为显式配置值保留。本节端点行以 8096（旧 18096）标注该服务面。云端角色只装配 UM 分享；非 UM 读面明确返回 503 `capability_not_assembled`，不探测也不读取（`usagesrv.py:3043-3062`）。
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |---|---|---|---|
@@ -259,9 +258,9 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | POST | `/api/share/start`、`/stop`、`/emergency-stop` | 控制令牌或会话+CSRF | 202 受理 |
 | ANY | `/gw/usagesrv/...` | 同实际路径 | 开发/兼容前缀，剥离后走同一路由 |
 
-补充：`/api/share/*` 是 18096 上的旧管理面，走会话/控制令牌鉴权；它不在 Cloudflare 公网白名单内，公网入口仍只有 8100 的四条 `/v1` 路径。
+补充：`/api/share/*` 是云端控制台上的旧管理面（默认 8096），走会话/控制令牌鉴权；它不在 Cloudflare 公网白名单内，公网入口仍只有 8100 的四条 `/v1` 路径。
 
-补充：`web/src/cloud/cloud-writes.ts:106-111` 仍会调用 `POST /api/console/share-management/backend-login-cancel`，但当前 18096 没有该路由，实际返回 404 `unknown path`。这是 #34 已退役的专用后端登录动作；不纳入 Rust 契约，登录/display 的呈现由 spec #8 决定。
+补充：`web/src/cloud/cloud-writes.ts:106-111` 仍会调用 `POST /api/console/share-management/backend-login-cancel`，但当前云端控制台没有该路由，实际返回 404 `unknown path`。这是 #34 已退役的专用后端登录动作；不纳入 Rust 契约，登录/display 的呈现由 spec #8 决定。
 
 ### 6.2 鉴权与请求边界
 
@@ -305,7 +304,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 ### 6.4 超时、取消与幂等
 
-- 18096 没有 SSE；所有响应都是 `Cache-Control: no-store` 的 JSON。
+- 云端控制台没有 SSE；所有响应都是 `Cache-Control: no-store` 的 JSON。
 - display grant TTL 60 秒；display session TTL 300 秒；最多 64 个待用 grant、64 个会话；最多 2 个并发 relay；idle 900 秒；单会话最长 14400 秒；握手 10 秒；关闭宽限 5 秒（`console/display_proxy.py:102-107,218-245`）。
 - 分享写面前端预算 20 秒，display 写面 30 秒（`web/src/cloud/cloud-writes.ts`）；超时是“未确认”，不是成功。
 - 操作取消是协作式：`cancel_requested` 只是请求，执行器在下一个检查点退出；不会强杀子进程。
@@ -598,7 +597,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 - 运行 `bash scripts/check.sh --full`（同上）：退出码 0；`Ran 2310 tests` / `OK (skipped=63)`，`local/tests` `Ran 54 tests` / `OK`。
 - 运行 `python -m unittest tests.test_chat2api_linux_platform tests.test_cloud_display_on_demand tests.test_console_display_proxy`（同上）：退出码 0。
 - 未运行 Rust 编译/测试：本票只产出测量、契约与切片计划，未创建 Cargo 工程。
-- 登录中/登录后 RSS 未验证；没有维护者授权触发重登。
+- 登录中/登录后 RSS 未在本契约的新代码上验证；旧 release 的登录中 Chromium 读数见 `docs/headless-login-acceptance.md`。
 - Chromium 未运行，没有 idle RSS；登录相关 display 行为以 spec #8 为准。
-- #40 未合入本分支；8096/8097 只是决策记录，未在云端验证。
+- #40 已合入本分支；8096/8097 未在云端复测。
 - 未执行真实 Cloudflare Tunnel 变更、UM 上游登录、broker 重启或生产备份/恢复。

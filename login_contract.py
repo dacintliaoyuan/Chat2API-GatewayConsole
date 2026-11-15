@@ -14,9 +14,37 @@ The module is deliberately dependency-free: importing it has no side effects.
 # round) and an on-demand visible display.
 MANUAL_TAKEOVER_REQUIRED_PREFIX = "manual_takeover_required:"
 
+# Pre-#41 chat2api published the soft signal under this shorter prefix. The
+# console and display read faces still accept it so an older instance names the
+# manual step instead of reporting a generic failure.
+LEGACY_MANUAL_TAKEOVER_PREFIX = "manual_takeover:"
+MANUAL_TAKEOVER_PREFIXES = (
+    MANUAL_TAKEOVER_REQUIRED_PREFIX, LEGACY_MANUAL_TAKEOVER_PREFIX)
+
 # Ticket #41: only these stages end THIS round at once. A click the page
 # swallowed or a control the session could not recognize leaves the automatic flow
 # stopped but the token poll running, so it is a soft manual signal and never a
 # terminal manual-takeover code.
 LOGIN_TERMINAL_MANUAL_REASONS = frozenset((
     "umpass_mfa_required", "umpass_prefill_missing", "unrecognized_page"))
+
+
+def terminal_manual_reason(*values):
+    """Return the bare terminal manual reason carried by any value, or None.
+
+    Both the canonical and the legacy prefix are accepted; a bare reason is
+    accepted too, because an older instance may publish it without a prefix.
+    Keeping the parse here stops the console and the display read face from
+    drifting apart (ticket #42 item 12).
+    """
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        reason = value
+        for prefix in MANUAL_TAKEOVER_PREFIXES:
+            if reason.startswith(prefix):
+                reason = reason[len(prefix):]
+                break
+        if reason in LOGIN_TERMINAL_MANUAL_REASONS:
+            return reason
+    return None

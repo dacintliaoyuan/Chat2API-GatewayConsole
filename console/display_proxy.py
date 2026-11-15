@@ -116,7 +116,6 @@ _AUTH_UNSET = object()
 # window the old port is still accepted when CONSOLE_DISPLAY_VNC_PORT names it
 # explicitly; it is never a second default and there is never a second listener.
 DEFAULT_VNC_PORT = 8097
-LEGACY_VNC_COMPAT_PORTS = frozenset({5901})
 
 STATIC_TYPES = {
     ".js": "text/javascript; charset=utf-8",

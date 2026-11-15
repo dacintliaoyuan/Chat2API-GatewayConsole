@@ -196,13 +196,8 @@ def _recovery_summary(value):
         if isinstance(number, bool) or not isinstance(number, int):
             return None
         summary[key] = number
-    next_attempt = value.get("next_attempt_epoch")
-    if (isinstance(next_attempt, bool)
-            or not isinstance(next_attempt, (int, float))
-            or not math.isfinite(float(next_attempt))):
-        summary["next_attempt_epoch"] = None
-    else:
-        summary["next_attempt_epoch"] = float(next_attempt)
+    summary["next_attempt_epoch"] = _coerce_number(
+        value.get("next_attempt_epoch"))
     pause_reason = value.get("pause_reason")
     summary["pause_reason"] = _coerce_text(pause_reason)
     # Ticket #42 item 16: a cleanup failure can mask the session outcome. The
@@ -223,8 +218,8 @@ def um_auth_status(target, params, ctx=None):
         ctx.raise_if_cancelled()
 
     base_url = resolve_chat2api_base_url()
-    token = _read_control_token()
-    status = _read_auth_status(base_url, token)
+    token = read_control_token()
+    status = read_auth_status(base_url, token)
     return {
         **status,
         "source": "memory-state",
@@ -304,6 +299,16 @@ def _read_auth_status(base_url, token, timeout=_TIMEOUT_S):
         "primary": _coerce_text(payload.get("primary")),
         "checked_epoch": int(time.time()),
     }
+
+
+def read_control_token(path=None):
+    """Public read of the admin control token for read-face callers."""
+    return _read_control_token(path)
+
+
+def read_auth_status(base_url, token, timeout=_TIMEOUT_S):
+    """Public auth-status read shared by the console and the display face."""
+    return _read_auth_status(base_url, token, timeout=timeout)
 
 
 def um_verify_account(target, params, ctx=None):

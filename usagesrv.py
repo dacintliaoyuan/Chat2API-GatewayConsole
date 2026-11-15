@@ -48,8 +48,8 @@ from share.store import (Disabled, StoreError, SecretUnavailable,  # noqa: E402
 from console import public_url as console_public_url  # noqa: E402
 from console import stats as console_stats  # noqa: E402
 from login_contract import (  # noqa: E402
-    LOGIN_TERMINAL_MANUAL_REASONS,
     MANUAL_TAKEOVER_REQUIRED_PREFIX,
+    terminal_manual_reason,
 )
 
 CHAT2API_LOG = os.environ.get("CHAT2API_USAGE_LOG") or \
@@ -108,7 +108,6 @@ LOCAL_DEFAULT_PORT = 8001
 # window the old port is still accepted when USAGESRV_PORT names it explicitly;
 # it is never a second default and there is never a second listener.
 CLOUD_DEFAULT_PORT = 8096
-CLOUD_LEGACY_COMPAT_PORTS = frozenset({18096})
 
 
 class DeploymentRoleError(RuntimeError):
@@ -955,20 +954,21 @@ def _console_auth_observation():
     keeps the primary cleanup outcome alongside the cleanup failure. No token or
     login page is copied into the observation.
     """
-    operation_error = None
+    operation_error_type = None
     try:
         from console import um_adapter as console_um_adapter
-        from console.operations import OperationError as operation_error
+        from console.operations import OperationError as operation_error_type
 
         snapshot = None
         if CLOUD_ROLE:
             snapshot, _cached, _age = console_services_snapshot()
         base_url = console_um_adapter.resolve_chat2api_base_url(
             cloud=CLOUD_ROLE, snapshot=snapshot)
-        token = console_um_adapter._read_control_token(CONTROL_TOKEN_FILE)
-        status = console_um_adapter._read_auth_status(base_url, token)
+        token = console_um_adapter.read_control_token(CONTROL_TOKEN_FILE)
+        status = console_um_adapter.read_auth_status(base_url, token)
     except Exception as exc:  # noqa: BLE001  a display read must stay honest
-        if operation_error is not None and isinstance(exc, operation_error):
+        if (operation_error_type is not None
+                and isinstance(exc, operation_error_type)):
             return {"state": None, "label": None, "error": None,
                     "primary": None,
                     "observed_at": None,
@@ -2573,18 +2573,7 @@ class Handler(BaseHTTPRequestHandler):
         shared contract module, so the service, console adapter and display
         cannot drift apart.
         """
-        for value in values:
-            if not isinstance(value, str):
-                continue
-            reason = value
-            for prefix in (MANUAL_TAKEOVER_REQUIRED_PREFIX,
-                           "manual_takeover:"):
-                if reason.startswith(prefix):
-                    reason = reason[len(prefix):]
-                    break
-            if reason in LOGIN_TERMINAL_MANUAL_REASONS:
-                return reason
-        return None
+        return terminal_manual_reason(*values)
 
     @staticmethod
     def _console_display_state_of(auth, display):
@@ -2607,6 +2596,9 @@ class Handler(BaseHTTPRequestHandler):
                 reason = reason.split(":", 1)[1]
                 break
         manual_reason = Handler._console_manual_reason(error, primary)
+        prefixed_manual = (isinstance(error, str)
+                           and error.startswith(
+                               MANUAL_TAKEOVER_REQUIRED_PREFIX))
         read_error = auth.get("read_error")
         read_detail = None
         if isinstance(read_error, dict):
@@ -2636,6 +2628,12 @@ class Handler(BaseHTTPRequestHandler):
                     error, primary)
             return "failed", "登录失败", error
         if state in ("logging_in", "needs_login"):
+            # A bare terminal reason is an older instance that did not prefix
+            # the code; it has already ended the round, so show the manual
+            # takeover. A prefixed reason while logging_in is still the MFA
+            # wait (ticket #15), not a finished round.
+            if manual_reason is not None and not prefixed_manual:
+                return "failed", "需要人工接管", error
             if reason in ("umpass_mfa_required", "umpass_prefill_missing",
                           "unrecognized_page", "duo_prompt_waiting"):
                 return "waiting_mfa", "等待 MFA（本人操作）", error

@@ -124,7 +124,7 @@ class UnixSocketContractTests(unittest.TestCase):
     def test_adapter_hierarchy(self):
         self.assertTrue(issubclass(UnixSocketBrokerTransport, BrokerTransport))
         self.assertTrue(issubclass(srv.UnixSocketBrokerServer,
-                                   srv.BoundedPipeServer))
+                                   srv.BoundedSocketServer))
         self.assertTrue(issubclass(sip.UnixSocketInstanceServer,
                                    srv.UnixSocketBrokerServer))
 
