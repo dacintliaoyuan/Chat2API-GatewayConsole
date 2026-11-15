@@ -66,6 +66,18 @@ class RustConsoleReadsFixtureTests(unittest.TestCase):
             usage["requests"]["limit2"]["nextCursor"], "9")
         self.assertEqual(
             usage["http"]["requestsInvalidCursor"]["status"], 400)
+        self.assertEqual(
+            fixture["ac4"]["cloudOps"]["valid"]["security"]["records"], 2)
+        self.assertEqual(
+            fixture["ac4"]["cloudOps"]["valid"]["security"]["pending_remote"], 1)
+        self.assertEqual(
+            fixture["ac4"]["displaySession"]["reason"], "display_disabled")
+        self.assertEqual(
+            fixture["ac4"]["displayStates"]["manual"]["state"], "failed")
+        self.assertEqual(len(fixture["capabilityExplicit"]), 14)
+        for case in fixture["capabilityExplicit"].values():
+            self.assertEqual(case["status"], 503)
+            self.assertEqual(case["body"]["error"], "capability_not_assembled")
 
 
 if __name__ == "__main__":

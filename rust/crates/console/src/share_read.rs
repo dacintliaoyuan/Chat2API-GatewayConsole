@@ -44,6 +44,16 @@ pub trait ShareReadSeams: Send + Sync {
     fn attribution(&self) -> Option<Value> {
         None
     }
+
+    /// One read-only auth observation for the display-state face.
+    fn auth_observation(&self) -> Option<Value> {
+        None
+    }
+
+    /// The display relay availability, when this deployment assembles one.
+    fn display_availability(&self) -> Option<Value> {
+        None
+    }
 }
 
 pub struct UnwiredSeams;

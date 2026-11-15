@@ -8,7 +8,9 @@
 
 pub mod actions;
 pub mod body;
+pub mod cloud_ops;
 pub mod config;
+pub mod display;
 pub mod error;
 pub mod metering;
 pub mod operations;

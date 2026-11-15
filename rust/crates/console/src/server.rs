@@ -22,7 +22,9 @@ use crate::body::{
     read_console_body, reject_duplicate_sensitive_header, reject_unknown_fields,
     CONSOLE_MAX_REQUEST_BYTES,
 };
+use crate::cloud_ops::cloud_ops_status;
 use crate::config::{ConfigError, ConsoleConfig, Role};
+use crate::display::{display_session, display_state};
 use crate::error::ConsoleError;
 use crate::metering::{self, UsageFilters};
 use crate::operations::OperationsReader;
@@ -277,6 +279,21 @@ fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Resp
         }
         ["share-usage"] => share_usage_response(state, raw_target, false),
         ["share-usage", "requests"] => share_usage_response(state, raw_target, true),
+        ["cloud-ops"] => send_json(
+            200,
+            &cloud_ops_status(state.config.security_state_file.as_deref()),
+        ),
+        ["share-management", "display-session"] => send_json(
+            200,
+            &display_session(state.share_seams.display_availability()),
+        ),
+        ["share-management", "display-state"] => send_json(
+            200,
+            &display_state(
+                state.share_seams.auth_observation(),
+                state.share_seams.display_availability(),
+            ),
+        ),
         ["operations"] => match state.operations.list(raw_target) {
             Ok(payload) => send_json(200, &payload),
             Err(error) => error.response(),

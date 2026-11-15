@@ -1,4 +1,337 @@
 {
+ "ac4": {
+  "cloudOps": {
+   "invalid": {
+    "available": true,
+    "reasons": [
+     "security_unavailable"
+    ],
+    "security": {
+     "available": false,
+     "configured": true,
+     "reason": "BackupSecurityError: security state unreadable: bad-security.json"
+    },
+    "unresolved": {
+     "note": "本读面只透出安全状态文件现有字段；远端导出确认与运行态 generation ACK 未由本读面验证",
+     "remote_export_confirmed": "not_checked_here",
+     "runtime_generation_ack": "not_checked_here"
+    }
+   },
+   "unconfigured": {
+    "available": false,
+    "reasons": [],
+    "security": {
+     "available": false,
+     "configured": false
+    },
+    "unresolved": {
+     "note": "本读面只透出安全状态文件现有字段；远端导出确认与运行态 generation ACK 未由本读面验证",
+     "remote_export_confirmed": "not_checked_here",
+     "runtime_generation_ack": "not_checked_here"
+    }
+   },
+   "valid": {
+    "available": true,
+    "reasons": [],
+    "security": {
+     "available": true,
+     "configured": true,
+     "exported_at": "2026-11-15T00:00:00+00:00",
+     "generation_floor": 3,
+     "pending_remote": 1,
+     "records": 2
+    },
+    "unresolved": {
+     "note": "本读面只透出安全状态文件现有字段；远端导出确认与运行态 generation ACK 未由本读面验证",
+     "remote_export_confirmed": "not_checked_here",
+     "runtime_generation_ack": "not_checked_here"
+    }
+   }
+  },
+  "displaySession": {
+   "available": false,
+   "expires_at": null,
+   "mode": "novnc",
+   "operator": {
+    "generation": 0,
+    "owned_by_me": false,
+    "owner_present": false,
+    "stale": false
+   },
+   "reason": "display_disabled",
+   "url": null
+  },
+  "displayStates": {
+   "cancelled": {
+    "auth_error": null,
+    "auth_primary": null,
+    "available": true,
+    "detail": null,
+    "display": {
+     "available": false,
+     "reason": "display_disabled"
+    },
+    "label": "本轮登录已取消",
+    "login_window_deadline_epoch": null,
+    "observed_at": 1700000000,
+    "operator": {
+     "generation": 0,
+     "owned_by_me": false,
+     "owner_present": false,
+     "stale": false
+    },
+    "state": "cancelled"
+   },
+   "manual": {
+    "auth_error": null,
+    "auth_primary": null,
+    "available": true,
+    "detail": "manual_takeover_required:umpass_mfa_required",
+    "display": {
+     "available": false,
+     "reason": "display_disabled"
+    },
+    "label": "需要人工接管",
+    "login_window_deadline_epoch": 1700000600,
+    "observed_at": 1700000000,
+    "operator": {
+     "generation": 0,
+     "owned_by_me": false,
+     "owner_present": false,
+     "stale": false
+    },
+    "state": "failed"
+   },
+   "readError": {
+    "auth_error": {
+     "code": "auth_observation_failed",
+     "message": "URLError: unreachable"
+    },
+    "auth_primary": null,
+    "available": true,
+    "detail": "认证状态读取失败（auth_observation_failed）：URLError: unreachable；显示不可用：display_disabled",
+    "display": {
+     "available": false,
+     "reason": "display_disabled"
+    },
+    "label": "显示连接中断",
+    "login_window_deadline_epoch": null,
+    "observed_at": null,
+    "operator": {
+     "generation": 0,
+     "owned_by_me": false,
+     "owner_present": false,
+     "stale": false
+    },
+    "state": "display_disconnected"
+   },
+   "unwired": {
+    "auth_error": {
+     "code": "auth_observation_failed",
+     "message": "unwired"
+    },
+    "auth_primary": null,
+    "available": true,
+    "detail": "认证状态读取失败（auth_observation_failed）：unwired；显示不可用：display_disabled",
+    "display": {
+     "available": false,
+     "reason": "display_disabled"
+    },
+    "label": "显示连接中断",
+    "login_window_deadline_epoch": null,
+    "observed_at": null,
+    "operator": {
+     "generation": 0,
+     "owned_by_me": false,
+     "owner_present": false,
+     "stale": false
+    },
+    "state": "display_disconnected"
+   },
+   "valid": {
+    "auth_error": null,
+    "auth_primary": null,
+    "available": true,
+    "detail": null,
+    "display": {
+     "available": false,
+     "reason": "display_disabled"
+    },
+    "label": "登录有效",
+    "login_window_deadline_epoch": 1700000600,
+    "observed_at": 1700000000,
+    "operator": {
+     "generation": 0,
+     "owned_by_me": false,
+     "owner_present": false,
+     "stale": false
+    },
+    "state": "valid"
+   },
+   "waitingMfa": {
+    "auth_error": null,
+    "auth_primary": null,
+    "available": true,
+    "detail": "duo_prompt_waiting",
+    "display": {
+     "available": false,
+     "reason": "display_disabled"
+    },
+    "label": "等待 MFA（本人操作）",
+    "login_window_deadline_epoch": 1700000600,
+    "observed_at": 1700000000,
+    "operator": {
+     "generation": 0,
+     "owned_by_me": false,
+     "owner_present": false,
+     "stale": false
+    },
+    "state": "waiting_mfa"
+   }
+  }
+ },
+ "capabilityExplicit": {
+  "gateway-connection": {
+   "body": {
+    "capability": "gateway-connection",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "log-entries": {
+   "body": {
+    "capability": "log-entries",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "log-overview": {
+   "body": {
+    "capability": "log-overview",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "log-sources": {
+   "body": {
+    "capability": "log-sources",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "logs": {
+   "body": {
+    "capability": "logs",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "stats": {
+   "body": {
+    "capability": "stats",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "um/logs": {
+   "body": {
+    "capability": "um",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "um/maintenance": {
+   "body": {
+    "capability": "um",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "um/request-logs": {
+   "body": {
+    "capability": "um",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "um/requests": {
+   "body": {
+    "capability": "um",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "um/today": {
+   "body": {
+    "capability": "um",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "um/trend": {
+   "body": {
+    "capability": "um",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "usage-rates": {
+   "body": {
+    "capability": "usage-rates",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  },
+  "usage-tokens": {
+   "body": {
+    "capability": "usage-tokens",
+    "detail": "云端角色只装配 UM 分享：该读面未装配，不探测/不读取非 UM 资源",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "cacheControl": "no-store",
+   "status": 503
+  }
+ },
  "metadata": {
   "fixture": true,
   "fixtureKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",

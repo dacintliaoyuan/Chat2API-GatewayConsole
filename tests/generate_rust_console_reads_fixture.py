@@ -664,6 +664,135 @@ def usage_section(server, root, module):
         "ledger": ledger.read_text(encoding="utf-8"),
     }
 
+
+class _DisplayDummy:
+    _console_display_availability = staticmethod(
+        lambda: {"available": False, "reason": "display_proxy_unavailable"})
+    _console_operator_default = staticmethod(
+        lambda: {"owned_by_me": False, "owner_present": False,
+                 "generation": 0, "stale": False})
+    _console_display_authorized = staticmethod(lambda: False)
+    _console_display_state_of = staticmethod(
+        lambda auth, display: (None, None, None))
+    _console_operator_state = lambda self: {
+        "owned_by_me": False, "owner_present": False,
+        "generation": 0, "stale": False}
+
+
+def _display_payload(module):
+    dummy = _DisplayDummy()
+    dummy._console_display_availability = staticmethod(
+        module.Handler._console_display_availability)
+    dummy._console_display_state_of = staticmethod(
+        module.Handler._console_display_state_of)
+    dummy._console_operator_state = lambda: module.Handler._console_operator_state(dummy)
+    dummy._console_operator_default = staticmethod(
+        module.Handler._console_operator_default)
+    return dummy
+
+
+def ac4_section(module, server, root):
+    security = root / "security.json"
+    security.write_text(json.dumps(SECURITY_STATE), encoding="utf-8")
+    previous = os.environ.get("UM_CLOUD_SECURITY_STATE")
+
+    def cloud_ops(state_path):
+        os.environ["UM_CLOUD_SECURITY_STATE"] = state_path
+        payload = module.cloud_ops_status()
+        payload.pop("read_at", None)
+        return payload
+
+    try:
+        cloud_ops_cases = {
+            "unconfigured": cloud_ops(""),
+            "valid": cloud_ops(str(security)),
+            "invalid": cloud_ops("bad-security.json"),
+        }
+    finally:
+        if previous is None:
+            os.environ.pop("UM_CLOUD_SECURITY_STATE", None)
+        else:
+            os.environ["UM_CLOUD_SECURITY_STATE"] = previous
+
+    dummy = _display_payload(module)
+    display_session = module.Handler._console_display_session_payload(dummy)
+    observations = {
+        "unwired": {
+            "state": None, "label": None, "error": None, "primary": None,
+            "observed_at": None, "login_window_deadline_epoch": None,
+            "read_error": {
+                "code": "auth_observation_failed", "message": "unwired"},
+        },
+        "valid": {
+            "state": "valid", "label": "登录有效", "error": None,
+            "primary": None, "observed_at": 1700000000,
+            "login_window_deadline_epoch": 1700000600, "read_error": None,
+        },
+        "waitingMfa": {
+            "state": "logging_in", "label": "正在登录",
+            "error": "duo_prompt_waiting", "primary": None,
+            "observed_at": 1700000000,
+            "login_window_deadline_epoch": 1700000600, "read_error": None,
+        },
+        "manual": {
+            "state": "failed", "label": "登录失败",
+            "error": "manual_takeover_required:umpass_mfa_required",
+            "primary": None, "observed_at": 1700000000,
+            "login_window_deadline_epoch": 1700000600, "read_error": None,
+        },
+        "cancelled": {
+            "state": "cancelled", "label": "本轮登录已取消", "error": None,
+            "primary": None, "observed_at": 1700000000,
+            "login_window_deadline_epoch": None, "read_error": None,
+        },
+        "readError": {
+            "state": None, "label": None, "error": None, "primary": None,
+            "observed_at": None, "login_window_deadline_epoch": None,
+            "read_error": {
+                "code": "auth_observation_failed",
+                "message": "URLError: unreachable",
+            },
+        },
+    }
+    display_states = {}
+    for name, observation in observations.items():
+        module._console_auth_observation = lambda: dict(observation)
+        display_states[name] = module.Handler._console_display_state_payload(
+            dummy)
+    module._console_auth_observation = _default_auth_observation
+    return {
+        "cloudOps": cloud_ops_cases,
+        "displaySession": display_session,
+        "displayStates": display_states,
+    }
+
+
+def _default_auth_observation():
+    return {
+        "state": None, "label": None, "error": None, "primary": None,
+        "observed_at": None, "login_window_deadline_epoch": None,
+        "read_error": {
+            "code": "auth_observation_failed", "message": "unwired"},
+    }
+
+
+def explicit_capability_section(server):
+    paths = (
+        "usage-tokens", "usage-rates", "logs", "log-sources",
+        "log-entries", "log-overview", "gateway-connection", "um/today",
+        "um/trend", "um/requests", "um/logs", "um/request-logs",
+        "um/maintenance", "stats",
+    )
+    results = {}
+    for path in paths:
+        result = request(server, "GET", f"/api/console/{path}")
+        results[path] = {
+            "status": result["status"],
+            "body": result["body"],
+            "cacheControl": result["headers"].get("cache-control"),
+        }
+    return results
+
 def main():
     fixture = {"metadata": {
         "fixture": True,
@@ -693,6 +822,8 @@ def main():
         fixture["shareKeys"] = keys_section(server)
         fixture["shareSecret"] = secret_section(server, seeded)
         fixture["shareUsage"] = usage_section(server, root, module)
+        fixture["ac4"] = ac4_section(module, server, root)
+        fixture["capabilityExplicit"] = explicit_capability_section(server)
         return fixture
     finally:
         server.shutdown()
