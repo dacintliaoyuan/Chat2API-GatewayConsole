@@ -8,6 +8,7 @@
 //! S3b slice behind [`management::ManagementHandler`].
 
 pub mod actions;
+pub mod budget;
 pub mod codec;
 pub mod error;
 pub mod hmac;
