@@ -737,7 +737,11 @@ fn handle_console_write(
                 return ConsoleError::body_open(400, "invalid idempotency_key").response();
             }
         };
-        let params = body.get("params").and_then(Value::as_object);
+        let params = match body.get("params") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(params)) => Some(params),
+            _ => return ConsoleError::body_open(400, "invalid_params").response(),
+        };
         match manager.submit(&action, &target, params, idempotency_key) {
             Ok((deduplicated, operation)) => send_json(
                 if deduplicated { 200 } else { 201 },

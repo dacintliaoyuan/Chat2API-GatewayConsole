@@ -669,6 +669,15 @@ fn http_submit_validation_and_cancel_errors_match_python() {
         .unwrap()
         .contains("share-gateway"));
 
+    let invalid_params = request(
+        &console,
+        "POST",
+        "/api/console/operations",
+        Some(json!({"action": "share.status", "target": "share-gateway", "params": []})),
+    );
+    assert_eq!(invalid_params.status, 400);
+    assert_eq!(invalid_params.json()["error"], "invalid_params");
+
     let invalid_target = request(
         &console,
         "POST",
