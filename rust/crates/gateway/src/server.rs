@@ -22,7 +22,7 @@ use crate::gate::{
 };
 use crate::http::{read_request, write_response, BodyRead, Headers, Request, Response};
 use crate::ledger::Ledger;
-use crate::messages::{handle_messages, valid_messages_request};
+use crate::messages::handle_messages;
 use crate::readonly::ProxyState;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -266,7 +266,7 @@ fn dispatch_inner(
         );
     }
 
-    if request.method == "POST" && path == "/v1/messages" {
+    if request.method == "POST" && (path == "/v1/messages" || path == "/api/v1/messages") {
         if let Err(error) = local_key_allowed(state, request) {
             return (RouteOutcome::Response(error.response()), admission);
         }
@@ -436,30 +436,6 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
                 return GatewayError::invalid_request("key_id is required").response();
             };
             Response::json(200, &json!({"released": gate.terminate_key(key_id)}))
-        }
-        "/api/v1/messages" => {
-            if let Err(error) = local_key_allowed(state, request) {
-                return error.response();
-            }
-            if let Err(error) = origin_allowed(state, request) {
-                return error.response();
-            }
-            let body = match read_json_body(
-                request,
-                BodyPolicy::Share {
-                    max_request_bytes: state.config.share_max_request_bytes,
-                },
-            ) {
-                Ok(body) => body,
-                Err(error) => return error.response(),
-            };
-            let Some(body) = body else {
-                return GatewayError::unsupported_messages_request().response();
-            };
-            if !valid_messages_request(&body) {
-                return GatewayError::unsupported_messages_request().response();
-            }
-            GatewayError::not_implemented("messages_alias_s2a").response()
         }
         "/v1/responses" | "/api/v1/responses" => {
             if let Err(error) = local_key_allowed(state, request) {
