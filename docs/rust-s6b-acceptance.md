@@ -67,8 +67,16 @@ git -c core.whitespace=cr-at-eol diff --check
 - `bash scripts/check.sh --full`：退出码 0。
 - 另跑 `python -m unittest discover -s tests -p "test_*.py"`：Ran 2385 tests，
   `OK (skipped=63)`；`local/tests` 在 `check.sh --full` 的捕获尾部为 Ran 54 tests、`OK`。
-- `bash scripts/check-rust-s6b.sh`：退出码 0。
+- `bash scripts/check-rust-s6b.sh`：首次退出码 0。
 - `git -c core.whitespace=cr-at-eol diff --check`：退出码 0。
+
+既有失败（与本票无关，单独重跑通过）：
+
+- 最终再跑 `bash scripts/check-rust-s6b.sh` 时，`um-gateway --test chat_disconnect`
+  的 `a_pre_commit_disconnect_records_client_disconnected_without_a_200` 在 Windows 上
+  因 `ConnectionAborted (10053)` 失败一次。该测试属于 S1b 的 `crates/gateway`，
+  本票未改该 crate；单独重跑 `cargo test -p um-gateway --test chat_disconnect
+  --offline` 三次均为 2 passed、0 failed。
 
 定向测试（S6b）：
 
