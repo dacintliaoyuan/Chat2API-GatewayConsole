@@ -64,7 +64,7 @@
 | `cargo clippy --manifest-path rust/Cargo.toml --all-targets --offline` | 退出码 0；无 warning |
 | `python -m unittest tests.test_chat2api_endpoints tests.test_chat2api_stream tests.test_usage_boundary` | `Ran 90 tests in 137.681s`；`OK` |
 | `python -m unittest discover -s tests -p "test_*.py"` | `Ran 2367 tests in 761.636s`；`OK (skipped=63)` |
-| `bash scripts/check.sh --full` | 待运行 |
+| `bash scripts/check.sh --full` | 退出码 0；`Ran 2367 tests in 725.173s` / `OK (skipped=63)`，`local/tests` `Ran 54 tests` / `OK` |
 
 ## 未验证范围
 
