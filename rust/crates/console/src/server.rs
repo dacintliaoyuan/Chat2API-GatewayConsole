@@ -15,7 +15,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
-use um_gateway::http::{read_request_with_body_cap, write_response, Headers, Request, Response};
+use um_gateway::http::{
+    read_request_with_body_cap, write_response, BodyRead, Headers, Request, Response,
+};
 
 use crate::actions::action_catalogue;
 use crate::body::{
@@ -30,7 +32,8 @@ use crate::metering::{self, UsageFilters};
 use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActionExecutor};
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
-use crate::share_auth::{control_token_ok, management_auth, SessionState};
+use crate::session::{SessionState, SESSION_COOKIE, SESSION_TTL_SECONDS};
+use crate::share_auth::{control_token_ok, management_auth};
 use crate::share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
 use crate::share_write::{
     console_public_row, ShareWriteError, ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams,
@@ -128,7 +131,7 @@ impl ConsoleServer {
                 config.share_secret_key_file.clone(),
                 write_seams,
             ),
-            session: SessionState::new(),
+            session: SessionState::with_code_file(config.usage_session_code_file.clone()),
             config: config.clone(),
             runtime,
             summary: SummaryCache::new(),
@@ -272,6 +275,18 @@ fn dispatch(state: &AppState, request: &Request) -> Response {
         }
         return ConsoleError::unknown_path().response();
     }
+    if path == "/api/session" {
+        if method == "POST" {
+            return handle_session_exchange(state, request);
+        }
+        return ConsoleError::unknown_path().response();
+    }
+    if path == "/api/session/reissue" {
+        if method == "POST" {
+            return handle_session_reissue(state, request);
+        }
+        return ConsoleError::unknown_path().response();
+    }
     if path.starts_with("/api/share/") {
         return handle_share_read(state, request, &target);
     }
@@ -298,6 +313,56 @@ fn dispatch(state: &AppState, request: &Request) -> Response {
         }
         "POST" | "PATCH" | "DELETE" => handle_console_write(state, method, &rest, request),
         _ => ConsoleError::unknown_path().response(),
+    }
+}
+
+/// `usagesrv.py::do_POST /api/session`: a lenient body read (any JSON
+/// failure is the empty object) then a one-time bootstrap-code exchange.
+fn handle_session_exchange(state: &AppState, request: &Request) -> Response {
+    if let Err(error) = reject_duplicate_sensitive_header(&request.headers) {
+        return error.response();
+    }
+    let body = session_body(request);
+    let code = body.get("code").and_then(Value::as_str);
+    let Some(token) = state.session.exchange(code) else {
+        return ConsoleError::new(403, json!({"error": "invalid bootstrap code"})).response();
+    };
+    let cookie = format!(
+        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL_SECONDS}"
+    );
+    send_json(200, &json!({"ok": true})).with_header("Set-Cookie", cookie)
+}
+
+/// `usagesrv.py::do_POST /api/session/reissue`: the local control token is
+/// required; the new code invalidates the previous one.
+fn handle_session_reissue(state: &AppState, request: &Request) -> Response {
+    if let Err(error) = reject_duplicate_sensitive_header(&request.headers) {
+        return error.response();
+    }
+    let token_ok = control_token_ok(
+        state.config.control_token_file.as_deref(),
+        request.headers.get("X-Admin-Control"),
+    );
+    if !token_ok {
+        return ConsoleError::new(403, json!({"error": "control token required"})).response();
+    }
+    match state.session.reissue(true) {
+        Some(code) => send_json(200, &json!({"ok": true, "code": code})),
+        None => ConsoleError::new(403, json!({"error": "control token required"})).response(),
+    }
+}
+
+/// `usagesrv.py::do_POST /api/session` body: `json.loads` failure is the
+/// empty object; the route never rejects the body shape.
+fn session_body(request: &Request) -> Map<String, Value> {
+    match &request.body {
+        BodyRead::Complete(bytes) if !bytes.is_empty() => {
+            match serde_json::from_slice::<Value>(bytes) {
+                Ok(Value::Object(map)) => map,
+                _ => Map::new(),
+            }
+        }
+        _ => Map::new(),
     }
 }
 

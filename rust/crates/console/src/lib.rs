@@ -18,6 +18,7 @@ pub mod operation_manager;
 pub mod operations;
 pub mod runtime;
 pub mod server;
+pub mod session;
 pub mod share_auth;
 pub mod share_read;
 pub mod share_write;
@@ -30,6 +31,7 @@ pub use runtime::{
     RuntimeSnapshot,
 };
 pub use server::{AppState, ConsoleServer, ServerError, ServerHandle};
+pub use session::SessionState;
 pub use share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
 pub use share_write::{ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams};
 pub use summary::{build_cloud_summary, SummaryCache};

@@ -20,4 +20,4 @@ pub use projection::{
     fingerprint, parse_projection_payload, AllowPath, DenyAll, PosixAcl, ProjectionAcl,
     ProjectionError, ProtectedProjectionWriter,
 };
-pub use store::{KeyRow, OperationRow, ShareStore};
+pub use store::{random_token_urlsafe, KeyRow, OperationRow, ShareStore};

@@ -33,6 +33,7 @@ pub const PUBLIC_ORIGIN_ENV: &str = "CONSOLE_PUBLIC_ORIGIN";
 pub const SECURITY_STATE_FILE_ENV: &str = "UM_CLOUD_SECURITY_STATE";
 pub const CONTROL_TOKEN_FILE_ENV: &str = "USAGE_CONTROL_TOKEN_FILE";
 pub const SHARE_BACKEND_DIR_ENV: &str = "CONSOLE_SHARE_BACKEND_DIR";
+pub const USAGE_SESSION_CODE_FILE_ENV: &str = "USAGE_SESSION_CODE_FILE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -97,6 +98,7 @@ pub struct ConsoleConfig {
     pub security_state_file: Option<PathBuf>,
     pub control_token_file: Option<PathBuf>,
     pub share_backend_dir: Option<PathBuf>,
+    pub usage_session_code_file: Option<PathBuf>,
 }
 
 impl Default for ConsoleConfig {
@@ -122,6 +124,7 @@ impl Default for ConsoleConfig {
             security_state_file: None,
             control_token_file: None,
             share_backend_dir: None,
+            usage_session_code_file: None,
         }
     }
 }
@@ -283,6 +286,11 @@ impl ConsoleConfig {
         if let Ok(value) = std::env::var(SHARE_BACKEND_DIR_ENV) {
             if !value.trim().is_empty() {
                 config.share_backend_dir = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var(USAGE_SESSION_CODE_FILE_ENV) {
+            if !value.trim().is_empty() {
+                config.usage_session_code_file = Some(PathBuf::from(value));
             }
         }
         Ok(config)
