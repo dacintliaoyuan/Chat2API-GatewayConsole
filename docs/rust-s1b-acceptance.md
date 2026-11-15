@@ -52,10 +52,14 @@
 
 | 命令 | 实际结果 |
 |---|---|
-| `cargo test --manifest-path rust/Cargo.toml --offline -j 1` | 全部 Rust workspace 测试通过；新增 S1b 测试 31 个 |
-| `python -m unittest tests.test_chat2api_endpoints tests.test_chat2api_stream tests.test_chat2api_request_rejection` | `Ran 80 tests`；`OK` |
-| `python -m unittest discover -s tests -p "test_*.py"` | 见下方复跑结果 |
-| `bash scripts/check.sh --full` | 见下方复跑结果 |
+| `cargo test --manifest-path rust/Cargo.toml --offline -j 1` | 退出码 0；S0/S1a/S1b/S3a 全部测试通过，新增 S1b 测试 33 个 |
+| `cargo fmt --manifest-path rust/Cargo.toml -- --check` | 退出码 0 |
+| `cargo clippy --manifest-path rust/Cargo.toml --all-targets --offline` | 退出码 0；无 warning |
+| `python -m unittest tests.test_chat2api_endpoints tests.test_chat2api_stream tests.test_chat2api_request_rejection` | `Ran 80 tests in 133.875s`；`OK` |
+| `python -m unittest discover -s tests -p "test_*.py"` | `Ran 2356 tests in 775.397s`；`OK (skipped=63)` |
+| `bash scripts/check.sh --full` | 退出码 0；`Ran 2356 tests in 759.460s` / `OK (skipped=63)`，`local/tests` `Ran 54 tests` / `OK` |
+| `python -m unittest tests.test_rust_gateway_fixture tests.test_rust_contract_fixture tests.test_rust_broker_fixture` | `Ran 7 tests`；`OK` |
+| `git -c core.whitespace=cr-at-eol diff --check` | 退出码 0 |
 
 ## 未验证范围
 
