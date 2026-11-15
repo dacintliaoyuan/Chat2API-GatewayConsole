@@ -11,6 +11,7 @@ pub mod body;
 pub mod cloud_ops;
 pub mod config;
 pub mod display;
+pub mod display_grant;
 pub mod error;
 pub mod lock;
 pub mod metering;
@@ -25,6 +26,7 @@ pub mod share_write;
 pub mod summary;
 
 pub use config::{ConsoleConfig, EntryKind, Role};
+pub use display_grant::{DisplayGrantError, DisplayGrants, DisplaySession};
 pub use error::ConsoleError;
 pub use runtime::{
     LinuxPidFileConfig, LinuxPidFileFacts, ProcessProbe, RuntimeError, RuntimeFacts,

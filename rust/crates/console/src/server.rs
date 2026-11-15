@@ -27,6 +27,7 @@ use crate::body::{
 use crate::cloud_ops::cloud_ops_status;
 use crate::config::{ConfigError, ConsoleConfig, Role};
 use crate::display::{display_session, display_state};
+use crate::display_grant::{DisplayGrants, DISPLAY_SESSION_COOKIE};
 use crate::error::ConsoleError;
 use crate::metering::{self, UsageFilters};
 use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActionExecutor};
@@ -66,6 +67,7 @@ pub struct AppState {
     pub share_seams: Arc<dyn ShareReadSeams>,
     pub share_write: ShareWriteStore,
     pub session: SessionState,
+    pub display_grants: DisplayGrants,
     services_cache: Mutex<Option<(Value, Instant)>>,
 }
 
@@ -132,6 +134,7 @@ impl ConsoleServer {
                 write_seams,
             ),
             session: SessionState::with_code_file(config.usage_session_code_file.clone()),
+            display_grants: DisplayGrants::new(),
             config: config.clone(),
             runtime,
             summary: SummaryCache::new(),
@@ -490,6 +493,12 @@ fn handle_share_management_write(
         response.close = true;
         return response;
     }
+    if method == "POST" && rest == ["display-grant"] {
+        return handle_display_grant(state, request);
+    }
+    if method == "POST" && rest == ["display-operator"] {
+        return handle_display_operator(state, request);
+    }
     let body = match read_console_body(request) {
         Ok(body) => body,
         Err(error) => return error.response(),
@@ -755,6 +764,163 @@ fn handle_share_management_write(
         }
         _ => ConsoleError::unknown_path().response(),
     }
+}
+
+/// `_console_display_grant_payload`: bind a one-time grant to the
+/// management subject that proved itself here. A bare loopback request is not
+/// an administrator, so an SSH `-L` client cannot mint a display grant.
+fn handle_display_grant(state: &AppState, request: &Request) -> Response {
+    if let Some(reason) = display_unavailable_reason(state) {
+        return ConsoleError::new(503, json!({"error": reason})).response();
+    }
+    let Some(origin) = request_origin(state, request) else {
+        return ConsoleError::new(403, json!({"error": "display_authorization_required"}))
+            .response();
+    };
+    let Some(subject) = display_subject(state, request, &origin) else {
+        return ConsoleError::new(403, json!({"error": "display_authorization_required"}))
+            .response();
+    };
+    match state.display_grants.issue(subject, &origin) {
+        Ok((grant, expires_at)) => send_json(
+            200,
+            &json!({
+                "grant": grant,
+                "expires_at": expires_at,
+                "origin": origin,
+                "url": format!("/display/grant#grant={grant}"),
+            }),
+        ),
+        Err(error) => ConsoleError::new(503, json!({"error": error.code})).response(),
+    }
+}
+
+/// `_console_display_operator_payload`: acquire or explicitly take over the
+/// single-page operator for a live display session.
+fn handle_display_operator(state: &AppState, request: &Request) -> Response {
+    if let Some(reason) = display_unavailable_reason(state) {
+        return ConsoleError::new(503, json!({"error": reason})).response();
+    }
+    let body = match read_console_body(request) {
+        Ok(body) => body,
+        Err(error) => return error.response(),
+    };
+    if let Err(error) = reject_unknown_fields(&body, &["action"]) {
+        return error.response();
+    }
+    let action = match body.get("action").and_then(Value::as_str) {
+        Some(action) if action == "acquire" || action == "takeover" => action,
+        _ => {
+            return ConsoleError::new(400, json!({"error": "display_operator_action_invalid"}))
+                .response();
+        }
+    };
+    let Some(origin) = request_origin(state, request) else {
+        return ConsoleError::new(403, json!({"error": "display_authorization_required"}))
+            .response();
+    };
+    if has_proxy_metadata(&request.headers) {
+        // No Tailscale Serve policy is assembled here, so proxy metadata is
+        // never trusted as an identity (fail closed).
+        return ConsoleError::new(403, json!({"error": "display_authorization_required"}))
+            .response();
+    }
+    let session = request
+        .headers
+        .get("Cookie")
+        .and_then(|header| crate::session::cookie_value(header, DISPLAY_SESSION_COOKIE));
+    let result = state
+        .display_grants
+        .acquire_operator(session.as_deref(), &origin, action);
+    if result["acquired"].as_bool() == Some(true) {
+        return send_json(
+            200,
+            &json!({
+                "acquired": true,
+                "generation": result["generation"],
+                "took_over": result["took_over"].as_bool().unwrap_or(false),
+            }),
+        );
+    }
+    match result["error"].as_str() {
+        Some("display_operator_exists") => send_json(
+            409,
+            &json!({
+                "error": "display_operator_exists",
+                "generation": result["generation"],
+                "owner_label": result["owner_label"],
+            }),
+        ),
+        Some("display_session_required") => {
+            send_json(409, &json!({"error": "display_session_required"}))
+        }
+        Some("display_operator_action_invalid") => {
+            send_json(400, &json!({"error": "display_operator_action_invalid"}))
+        }
+        _ => send_json(409, &json!({"error": "display_operator_unavailable"})),
+    }
+}
+
+/// `_console_display_availability` for the write face: `None` is an
+/// unassembled relay, an unavailable fact keeps its exact reason.
+fn display_unavailable_reason(state: &AppState) -> Option<String> {
+    match state.share_seams.display_availability() {
+        None => Some("display_proxy_unavailable".to_string()),
+        Some(availability) if availability["available"].as_bool() == Some(true) => None,
+        Some(availability) => Some(
+            availability["reason"]
+                .as_str()
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or("display_disabled")
+                .to_string(),
+        ),
+    }
+}
+
+/// The accepted console origin for a grant, or `None` (fail closed).
+fn request_origin(state: &AppState, request: &Request) -> Option<String> {
+    let host = request.headers.get("Host")?;
+    if !host_allowed(host) || !origin_allowed(request.headers.get("Origin"), state.config.port) {
+        return None;
+    }
+    Some(format!("http://{host}"))
+}
+
+/// `display_request_subject`: only the admin control token, the usage session
+/// or an existing display session can bind a grant.
+fn display_subject(state: &AppState, request: &Request, origin: &str) -> Option<&'static str> {
+    if has_proxy_metadata(&request.headers) {
+        return None;
+    }
+    if control_token_ok(
+        state.config.control_token_file.as_deref(),
+        request.headers.get("X-Admin-Control"),
+    ) {
+        return Some("control-token");
+    }
+    let cookie = request.headers.get("Cookie");
+    if state.session.valid(cookie) {
+        return Some("usage-session");
+    }
+    let display_cookie =
+        cookie.and_then(|header| crate::session::cookie_value(header, DISPLAY_SESSION_COOKIE));
+    if state
+        .display_grants
+        .validate_session(display_cookie.as_deref().unwrap_or_default(), origin)
+        .is_some()
+    {
+        return Some("display-session");
+    }
+    None
+}
+
+/// `console/tailnet.py::has_proxy_metadata`: any Tailscale/forwarding header
+/// means the request claims a proxy identity this candidate does not assemble.
+fn has_proxy_metadata(headers: &Headers) -> bool {
+    headers.iter().any(|header| {
+        let name = header.name.to_ascii_lowercase();
+        name.starts_with("tailscale-") || name.starts_with("x-forwarded-") || name == "forwarded"
+    })
 }
 
 fn share_write_error(error: &ShareWriteError) -> Response {
