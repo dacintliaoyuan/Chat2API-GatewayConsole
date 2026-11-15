@@ -763,6 +763,8 @@ pub enum ChatAttempt {
 pub struct SeenChatRequest {
     pub path: String,
     pub authorization: Option<String>,
+    pub anthropic_version: Option<String>,
+    pub anthropic_beta: Option<String>,
     pub body: Value,
 }
 
@@ -911,10 +913,14 @@ fn serve_chat(
         return Ok(());
     }
     let authorization = request.header("authorization");
+    let anthropic_version = request.header("anthropic-version");
+    let anthropic_beta = request.header("anthropic-beta");
     let body = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
     seen.lock().expect("chat seen").push(SeenChatRequest {
         path,
         authorization,
+        anthropic_version,
+        anthropic_beta,
         body,
     });
     let attempt = attempts

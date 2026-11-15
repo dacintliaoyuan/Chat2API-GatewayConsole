@@ -247,6 +247,28 @@ pub fn post_chat(
     streaming: bool,
     deadline: Instant,
 ) -> Result<UpstreamResponse, UpstreamFailure> {
+    post_compat(
+        config,
+        "/api/chat/completions",
+        body,
+        streaming,
+        deadline,
+        &[],
+    )
+}
+
+/// Open one compatibility `POST` request with the stored upstream bearer.
+///
+/// Python `Proxy.call` forwards the selected compatibility path and the optional
+/// Anthropic headers; the client's local credential never leaves this process.
+pub fn post_compat(
+    config: &GatewayConfig,
+    path: &str,
+    body: &[u8],
+    streaming: bool,
+    deadline: Instant,
+    extra_headers: &[(String, String)],
+) -> Result<UpstreamResponse, UpstreamFailure> {
     let (host, port) = parse_upstream_base_url(&config.upstream_base_url)
         .map_err(|_| UpstreamFailure::ConnectionError)?;
     let address = format!("{host}:{port}")
@@ -274,13 +296,20 @@ pub fn post_chat(
     let _ = upstream.set_read_timeout(Some(read_timeout.max(Duration::from_millis(1))));
     let _ = upstream.set_write_timeout(Some(setup_timeout.max(Duration::from_millis(1))));
     let mut request = format!(
-        "POST /api/chat/completions HTTP/1.1\r\nHost: {host}:{port}\r\n\
+        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\n\
              Authorization: Bearer {}\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n",
+             Content-Length: {}\r\nConnection: close\r\n",
         config.upstream_token,
         body.len()
     )
     .into_bytes();
+    for (name, value) in extra_headers {
+        request.extend_from_slice(name.as_bytes());
+        request.extend_from_slice(b": ");
+        request.extend_from_slice(value.as_bytes());
+        request.extend_from_slice(b"\r\n");
+    }
+    request.extend_from_slice(b"\r\n");
     request.extend_from_slice(body);
     upstream
         .write_all(&request)

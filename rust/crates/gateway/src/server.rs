@@ -22,7 +22,7 @@ use crate::gate::{
 };
 use crate::http::{read_request, write_response, BodyRead, Headers, Request, Response};
 use crate::ledger::Ledger;
-use crate::messages::valid_messages_request;
+use crate::messages::{handle_messages, valid_messages_request};
 use crate::readonly::ProxyState;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -266,6 +266,23 @@ fn dispatch_inner(
         );
     }
 
+    if request.method == "POST" && path == "/v1/messages" {
+        if let Err(error) = local_key_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        if let Err(error) = origin_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        let result = handle_messages(state, request, stream, admission.take());
+        return (
+            match result {
+                ChatResult::Response(response) => RouteOutcome::Response(response),
+                ChatResult::Written { close } => RouteOutcome::Written { close },
+            },
+            None,
+        );
+    }
+
     let response = match request.method.as_str() {
         "GET" => handle_get(state, request),
         "POST" => handle_post(state, request),
@@ -420,7 +437,7 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
             };
             Response::json(200, &json!({"released": gate.terminate_key(key_id)}))
         }
-        "/v1/messages" | "/api/v1/messages" => {
+        "/api/v1/messages" => {
             if let Err(error) = local_key_allowed(state, request) {
                 return error.response();
             }
@@ -442,7 +459,7 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
             if !valid_messages_request(&body) {
                 return GatewayError::unsupported_messages_request().response();
             }
-            GatewayError::not_implemented("messages_forwarding_s1b").response()
+            GatewayError::not_implemented("messages_alias_s2a").response()
         }
         "/v1/responses" | "/api/v1/responses" => {
             if let Err(error) = local_key_allowed(state, request) {
