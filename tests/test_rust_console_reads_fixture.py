@@ -38,6 +38,17 @@ class RustConsoleReadsFixtureTests(unittest.TestCase):
                          ["body"]["gateway_running"], False)
         self.assertNotIn("gateway_running",
                          fixture["shareStatus"]["cases"]["unconfirmed"]["body"])
+        self.assertEqual(len(fixture["shareKeys"]["body"]["keys"]), 6)
+        outcomes = fixture["shareSecret"]
+        self.assertEqual(outcomes["plaintext"]["status"], 200)
+        self.assertIn("secret", outcomes["plaintext"]["body"])
+        self.assertEqual(outcomes["legacy"]["body"]["reason"], "legacy")
+        self.assertEqual(
+            outcomes["undecryptable"]["body"]["reason"], "undecryptable")
+        self.assertEqual(
+            outcomes["versionConflict"]["body"]["reason"], "version_conflict")
+        self.assertEqual(outcomes["deleted"]["status"], 410)
+        self.assertEqual(outcomes["unknown"]["status"], 404)
 
 
 if __name__ == "__main__":

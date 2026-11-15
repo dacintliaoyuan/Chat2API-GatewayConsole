@@ -84,9 +84,10 @@ impl ConsoleServer {
         config.validate_candidate().map_err(ServerError::Config)?;
         let state = Arc::new(AppState {
             operations: OperationsReader::new(config.console_state_file.clone()),
-            share: ShareReadStore::with_public_origin(
+            share: ShareReadStore::with_options(
                 config.share_store_file.clone().unwrap_or_default(),
                 config.public_origin.clone(),
+                config.share_secret_key_file.clone(),
             ),
             share_seams,
             config: config.clone(),
@@ -262,6 +263,17 @@ fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Resp
             Ok(payload) => send_json(200, &payload),
             Err(error) => error.response(),
         },
+        ["share-management", "keys"] => match state.share.keys() {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
+        ["share-management", "keys", key_id, "secret"] => {
+            let expected = query_value(raw_target, "expected_row_version");
+            match state.share.secret(key_id, expected.as_deref()) {
+                Ok((status, payload)) => send_json(status, &payload),
+                Err(error) => error.response(),
+            }
+        }
         ["operations"] => match state.operations.list(raw_target) {
             Ok(payload) => send_json(200, &payload),
             Err(error) => error.response(),
@@ -499,4 +511,44 @@ pub fn operation_view_for_tests(row: &rusqlite::Row<'_>) -> rusqlite::Result<Val
 /// Test seam: read one body through the console boundary.
 pub fn read_body_for_tests(request: &Request) -> Result<Map<String, Value>, ConsoleError> {
     read_console_body(request)
+}
+
+/// One query-string value, Python `parse_qs` default semantics: the first
+/// value wins, a blank value is absent, and `+`/`%XX` are decoded.
+fn query_value(raw_target: &str, name: &str) -> Option<String> {
+    let query = raw_target.split_once('?')?.1;
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if decode_query_part(key) != name {
+            continue;
+        }
+        let value = decode_query_part(value);
+        return if value.is_empty() { None } else { Some(value) };
+    }
+    None
+}
+
+fn decode_query_part(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => output.push(b' '),
+            b'%' if index + 2 < bytes.len() => {
+                let high = (bytes[index + 1] as char).to_digit(16);
+                let low = (bytes[index + 2] as char).to_digit(16);
+                match (high, low) {
+                    (Some(high), Some(low)) => {
+                        output.push((high * 16 + low) as u8);
+                        index += 2;
+                    }
+                    _ => output.push(b'%'),
+                }
+            }
+            byte => output.push(byte),
+        }
+        index += 1;
+    }
+    String::from_utf8_lossy(&output).to_string()
 }

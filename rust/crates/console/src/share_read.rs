@@ -53,6 +53,7 @@ impl ShareReadSeams for UnwiredSeams {}
 pub struct ShareReadStore {
     path: PathBuf,
     public_origin: Option<String>,
+    secret_key_file: Option<PathBuf>,
 }
 
 impl ShareReadStore {
@@ -60,13 +61,19 @@ impl ShareReadStore {
         Self {
             path,
             public_origin: std::env::var(PUBLIC_ORIGIN_ENV).ok(),
+            secret_key_file: std::env::var_os(SHARE_SECRET_KEY_FILE_ENV).map(PathBuf::from),
         }
     }
 
-    pub fn with_public_origin(path: PathBuf, public_origin: Option<String>) -> Self {
+    pub fn with_options(
+        path: PathBuf,
+        public_origin: Option<String>,
+        secret_key_file: Option<PathBuf>,
+    ) -> Self {
         Self {
             path,
             public_origin,
+            secret_key_file,
         }
     }
 
@@ -287,8 +294,7 @@ impl ShareReadStore {
         if algo != um_store::secret::SECRET_ALGO_AESGCM_FILE_KEY {
             return Ok(secret_unavailable(key_id, "undecryptable"));
         }
-        let key_file = std::env::var_os(SHARE_SECRET_KEY_FILE_ENV).map(PathBuf::from);
-        let key = match um_store::secret::load_key_file(key_file.as_deref()) {
+        let key = match um_store::secret::load_key_file(self.secret_key_file.as_deref()) {
             Ok(key) => key,
             Err(_) => return Ok(secret_unavailable(key_id, "undecryptable")),
         };

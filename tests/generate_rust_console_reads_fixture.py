@@ -305,7 +305,7 @@ def seed_share_store(path):
         connection.commit()
     finally:
         connection.close()
-    return export_store(path)
+    return {"keys": KEYS, "store": export_store(path)}
 
 
 def export_store(path):
@@ -445,6 +445,66 @@ def _default_attribution():
     return None
 
 
+def keys_section(server):
+    result = request(server, "GET", "/api/console/share-management/keys")
+    return {
+        "status": result["status"],
+        "body": result["body"],
+        "cacheControl": result["headers"].get("cache-control"),
+    }
+
+
+def secret_section(server, seeded):
+    """Pin the four readback outcomes through the real console read path.
+
+    The Python owner refuses `aesgcm-file-key-v1` decryption on Windows (the
+    Windows owner writes DPAPI rows), so this generator substitutes ONLY the
+    platform-guarded decrypt primitive with the same Python AES-GCM scheme the
+    POSIX owner uses. The manager, store lookup and HTTP read face stay real.
+    """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    import share.store as store_module
+
+    def posix_unprotect(blob, algo=None):
+        if algo != "aesgcm-file-key-v1":
+            raise store_module.StoreError("unknown share secret algorithm")
+        return AESGCM(FIXTURE_KEY).decrypt(
+            bytes(blob[:12]), bytes(blob[12:]), b"aesgcm-file-key-v1"
+        ).decode("utf-8")
+
+    original = store_module.unprotect_secret
+    store_module.unprotect_secret = posix_unprotect
+    try:
+        active = seeded["keys"]["active1"]
+        rotated = seeded["keys"]["rotated"]
+        cases = {
+            "plaintext": (active["key_id"], None),
+            "plaintextExpected": (active["key_id"], 1),
+            "versionConflict": (active["key_id"], 2),
+            "legacy": (seeded["keys"]["legacy"]["key_id"], None),
+            "undecryptable": (seeded["keys"]["undecryptable"]["key_id"], None),
+            "deleted": (seeded["keys"]["deleted"]["key_id"], None),
+            "unknown": ("no-such-key", None),
+            "invalidExpected": (active["key_id"], "abc"),
+            "zeroExpected": (active["key_id"], 0),
+            "rotated": (rotated["key_id"], rotated["row_version"]),
+        }
+        results = {}
+        for name, (key_id, expected) in cases.items():
+            target = f"/api/console/share-management/keys/{key_id}/secret"
+            if expected is not None:
+                target += f"?expected_row_version={expected}"
+            result = request(server, "GET", target)
+            results[name] = {
+                "status": result["status"],
+                "body": result["body"],
+                "cacheControl": result["headers"].get("cache-control"),
+            }
+        return results
+    finally:
+        store_module.unprotect_secret = original
+
+
 def main():
     fixture = {"metadata": {
         "fixture": True,
@@ -452,13 +512,15 @@ def main():
         "generatedFrom": "usagesrv.py + share/management.py + share/store.py"
                         " + console/share_actions.py",
         "role": "cloud",
+        "fixtureKeyHex": FIXTURE_KEY.hex(),
     }}
     tmp = tempfile.TemporaryDirectory(prefix="um-rust-console-reads-")
     root = Path(tmp.name)
     patcher = mock.patch.dict(os.environ, cloud_env(root))
     patcher.start()
     module = load_cloud_usagesrv()
-    store_seed = seed_share_store(root / "share.db")
+    seeded = seed_share_store(root / "share.db")
+    store_seed = seeded["store"]
     module._share_manager = None
     server = ThreadingHTTPServer(("127.0.0.1", 0), module.Handler)
     server.daemon_threads = True
@@ -466,6 +528,11 @@ def main():
     try:
         fixture["shareStatus"] = status_section(
             module, server, root, store_seed)
+        fixture["shareStatus"]["keys"] = seeded["keys"]
+        module._share_manager = None
+        module.get_share_manager()
+        fixture["shareKeys"] = keys_section(server)
+        fixture["shareSecret"] = secret_section(server, seeded)
         return fixture
     finally:
         server.shutdown()
