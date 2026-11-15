@@ -365,7 +365,11 @@ def cloud_fixture():
     for name, (text, host) in ingress_cases.items():
         path = ingress_root / f"{name}.yml"
         path.write_text(text, encoding="utf-8")
-        fixture["ingress"][name] = checker.check_ingress(path, expect_host=host)
+        fixture["ingress"][name] = {
+            "config": text,
+            "expectHost": host,
+            "result": checker.check_ingress(path, expect_host=host),
+        }
     invalid_yaml = ingress_root / "invalid.yml"
     invalid_yaml.write_text("ingress: [\n", encoding="utf-8")
     result = checker.check_ingress(invalid_yaml, expect_host="fixture.example")
@@ -407,7 +411,10 @@ def cloud_fixture():
         os.environ.pop("CONSOLE_PUBLIC_ORIGIN", None)
         fixture["publicHost"]["unconfigured"] = {
             "accepted": {url: probe.public_host(url) for url in accepted},
-            "rejected": {repr(url): probe.public_host(url) for url in rejected},
+            "rejected": [
+                {"input": url, "result": probe.public_host(url)}
+                for url in rejected
+            ],
             "sources": {
                 url: probe.public_source(
                     url.split("//", 1)[1].split(":", 1)[0])
@@ -478,6 +485,7 @@ def cloud_fixture():
                         ttl=30),
         ],
     }
+    fixture["dnsSources"] = cases
     for name, sources in cases.items():
         fixture["dnsAggregate"][name] = strip_timing(
             normalize(probe._aggregate_dns(sources, 0.0)))
@@ -485,10 +493,10 @@ def cloud_fixture():
     answers = {
         "aAndAaaa": {
             "Answer": [
-                {"type": 1, "data": "203.0.113.10", "TTL": 60},
-                {"type": 1, "data": "203.0.113.10", "TTL": 30},
-                {"type": 1, "data": "203.0.113.11", "TTL": 120},
-                {"type": 28, "data": "2001:db8::1", "TTL": 60},
+                {"type": 1, "data": "8.8.8.8", "TTL": 60},
+                {"type": 1, "data": "8.8.8.8", "TTL": 30},
+                {"type": 1, "data": "8.8.4.4", "TTL": 120},
+                {"type": 28, "data": "2606:4700:4700::1111", "TTL": 60},
                 {"type": 1, "data": "127.0.0.1", "TTL": 60},
                 {"type": 1, "data": "not-an-address", "TTL": 60},
             ],
@@ -497,18 +505,19 @@ def cloud_fixture():
         "noAnswer": {},
         "truncated": {
             "Answer": [
-                {"type": 1, "data": f"198.51.100.{index}", "TTL": 60}
+                {"type": 1, "data": f"8.8.8.{index}", "TTL": 60}
                 for index in range(1, 8)
             ],
         },
         "badTtl": {
             "Answer": [
-                {"type": 1, "data": "203.0.113.10", "TTL": True},
-                {"type": 1, "data": "203.0.113.11", "TTL": -1},
-                {"type": 1, "data": "203.0.113.12", "TTL": 300},
+                {"type": 1, "data": "8.8.8.8", "TTL": True},
+                {"type": 1, "data": "8.8.4.4", "TTL": -1},
+                {"type": 1, "data": "1.1.1.1", "TTL": 300},
             ],
         },
     }
+    fixture["dnsAnswersInputs"] = answers
     for name, data in answers.items():
         addresses, ttl, truncated = probe._addresses_from_answers(data)
         fixture["dnsAnswers"][name] = {
@@ -516,26 +525,31 @@ def cloud_fixture():
             "ttl": ttl,
             "truncated": truncated,
         }
-    fixture["negativeTtl"] = {
-        "soa": probe._negative_ttl({
+    negative_inputs = {
+        "soa": {
             "Authority": [
                 {"type": 6, "TTL": 60, "data": "ns 1 2 3 4 5 120"},
             ],
-        }),
-        "minimum": probe._negative_ttl({
+        },
+        "minimum": {
             "Authority": [
                 {"type": 6, "TTL": 120, "data": "ns 1 2 3 4 5 60"},
             ],
-        }),
-        "missing": probe._negative_ttl({"Authority": []}),
-        "bad": probe._negative_ttl({
+        },
+        "missing": {"Authority": []},
+        "bad": {
             "Authority": [
                 {"type": 6, "TTL": -1, "data": "ns 1 2 3 4 5 -1"},
             ],
-        }),
+        },
+    }
+    fixture["negativeTtlInputs"] = negative_inputs
+    fixture["negativeTtl"] = {
+        name: probe._negative_ttl(data)
+        for name, data in negative_inputs.items()
     }
 
-    for name, entries in {
+    summarize_inputs = {
         "allOk": [entry("ok"), entry("ok")],
         "allOkUnchecked": [entry("ok"), unchecked()],
         "allFailed": [entry("failed"), entry("failed")],
@@ -543,7 +557,9 @@ def cloud_fixture():
         "mixed": [entry("ok"), entry("failed")],
         "mixedUnchecked": [entry("ok"), entry("failed"), unchecked()],
         "noneChecked": [unchecked(), unchecked()],
-    }.items():
+    }
+    fixture["summarizeInputs"] = summarize_inputs
+    for name, entries in summarize_inputs.items():
         fixture["summarize"][name] = summarize_case(entries)
 
     fixture["exitCodes"] = {

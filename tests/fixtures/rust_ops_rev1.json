@@ -654,14 +654,21 @@
   },
   "dnsAnswers": {
    "aAndAaaa": {
-    "addresses": [],
+    "addresses": [
+     "8.8.8.8",
+     "8.8.4.4"
+    ],
     "truncated": false,
-    "ttl": null
+    "ttl": 60
    },
    "badTtl": {
-    "addresses": [],
+    "addresses": [
+     "8.8.8.8",
+     "8.8.4.4",
+     "1.1.1.1"
+    ],
     "truncated": false,
-    "ttl": null
+    "ttl": 300
    },
    "empty": {
     "addresses": [],
@@ -674,10 +681,389 @@
     "ttl": null
    },
    "truncated": {
-    "addresses": [],
-    "truncated": false,
-    "ttl": null
+    "addresses": [
+     "8.8.8.1",
+     "8.8.8.2",
+     "8.8.8.3",
+     "8.8.8.4"
+    ],
+    "truncated": true,
+    "ttl": 60
    }
+  },
+  "dnsAnswersInputs": {
+   "aAndAaaa": {
+    "Answer": [
+     {
+      "TTL": 60,
+      "data": "8.8.8.8",
+      "type": 1
+     },
+     {
+      "TTL": 30,
+      "data": "8.8.8.8",
+      "type": 1
+     },
+     {
+      "TTL": 120,
+      "data": "8.8.4.4",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "2606:4700:4700::1111",
+      "type": 28
+     },
+     {
+      "TTL": 60,
+      "data": "127.0.0.1",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "not-an-address",
+      "type": 1
+     }
+    ]
+   },
+   "badTtl": {
+    "Answer": [
+     {
+      "TTL": true,
+      "data": "8.8.8.8",
+      "type": 1
+     },
+     {
+      "TTL": -1,
+      "data": "8.8.4.4",
+      "type": 1
+     },
+     {
+      "TTL": 300,
+      "data": "1.1.1.1",
+      "type": 1
+     }
+    ]
+   },
+   "empty": {
+    "Answer": []
+   },
+   "noAnswer": {},
+   "truncated": {
+    "Answer": [
+     {
+      "TTL": 60,
+      "data": "8.8.8.1",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.2",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.3",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.4",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.5",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.6",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.7",
+      "type": 1
+     }
+    ]
+   }
+  },
+  "dnsSources": {
+   "bothEmpty": [
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "empty",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "empty",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "empty",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "empty",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "bothError": [
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "error",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "error",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "error",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "error",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "bothNxdomain": [
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "nxdomain",
+     "elapsed_ms": 1,
+     "negative_ttl_s": 60,
+     "source": "cloudflare",
+     "state": "nxdomain",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "nxdomain",
+     "elapsed_ms": 1,
+     "negative_ttl_s": 120,
+     "source": "nextdns",
+     "state": "nxdomain",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "bothOk": [
+    {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "ok",
+     "status": null,
+     "ttl_s": 60
+    },
+    {
+     "addresses": [
+      "203.0.113.11"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "ok",
+     "status": null,
+     "ttl_s": 30
+    }
+   ],
+   "bothTimeout": [
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "timeout",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "timeout",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "timeout",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "timeout",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "notChecked": [
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "not_checked",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "not_checked",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "not_checked",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "not_checked",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "okAndEmpty": [
+    {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "ok",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "empty",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "empty",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "okAndError": [
+    {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "ok",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "error",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "error",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "okAndNxdomain": [
+    {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "ok",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "nxdomain",
+     "elapsed_ms": 1,
+     "negative_ttl_s": 120,
+     "source": "nextdns",
+     "state": "nxdomain",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "truncated": [
+    {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": true,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "ok",
+     "status": null,
+     "ttl_s": 60
+    },
+    {
+     "addresses": [
+      "203.0.113.11"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "ok",
+     "status": null,
+     "ttl_s": 30
+    }
+   ]
   },
   "exitCodes": {
    "degraded": 1,
@@ -687,180 +1073,204 @@
   },
   "ingress": {
    "catchAllMissing": {
-    "ok": false,
-    "problems": [
-     "missing the catch-all http_status:404 rule"
-    ],
-    "rules": [
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     }
-    ]
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "missing the catch-all http_status:404 rule"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      }
+     ]
+    }
    },
    "catchAllWithHost": {
-    "ok": false,
-    "problems": [
-     "the catch-all rule must not name a hostname or path"
-    ],
-    "rules": [
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "the catch-all rule must not name a hostname or path"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    },
    "duplicatePath": {
-    "ok": false,
-    "problems": [
-     "duplicate API path: /v1/models"
-    ],
-    "rules": [
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "duplicate API path: /v1/models"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    },
    "emptyIngress": {
-    "ok": false,
-    "problems": [
-     "ingress must be a non-empty list"
-    ],
-    "rules": []
+    "config": "ingress: []\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "ingress must be a non-empty list"
+     ],
+     "rules": []
+    }
    },
    "example": {
-    "ok": true,
-    "problems": [],
-    "rules": [
-     {
-      "hostname": "dacintapi.de5.net",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "dacintapi.de5.net",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "dacintapi.de5.net",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "dacintapi.de5.net",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "# Cloudflare Tunnel ingress for the UM cloud share API.\n#\n# This file is the public edge contract (D18-1): only the four shared API\n# paths are routed to the loopback 8100 gateway.  The private management\n# console, the share backend and the display are NEVER published here; the\n# catch-all answers 404 for every other path.\n#\n# Install with `install.sh --with-cloudflared` (default off).  The tunnel token\n# lives in /etc/um-share/cloudflared.env, not in this file.\ningress:\n  - hostname: dacintapi.de5.net\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n  - hostname: dacintapi.de5.net\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n  - hostname: dacintapi.de5.net\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n  - hostname: dacintapi.de5.net\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n  - service: http_status:404\n",
+    "expectHost": "dacintapi.de5.net",
+    "result": {
+     "ok": true,
+     "problems": [],
+     "rules": [
+      {
+       "hostname": "dacintapi.de5.net",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "dacintapi.de5.net",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "dacintapi.de5.net",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "dacintapi.de5.net",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    },
    "forbiddenPort": {
-    "ok": false,
-    "problems": [
-     "rule 2 publishes private port 8096: http://127.0.0.1:8096",
-     "rule 2 service must be http://127.0.0.1:8100: http://127.0.0.1:8096"
-    ],
-    "rules": [
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/console",
-      "service": "http://127.0.0.1:8096"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/console$\n    service: http://127.0.0.1:8096\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 2 publishes private port 8096: http://127.0.0.1:8096",
+      "rule 2 service must be http://127.0.0.1:8100: http://127.0.0.1:8096"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/console",
+       "service": "http://127.0.0.1:8096"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    },
    "invalidYaml": {
     "ok": false,
@@ -868,193 +1278,221 @@
     "rules": []
    },
    "missingIngress": {
-    "ok": false,
-    "problems": [
-     "ingress must be a non-empty list"
-    ],
-    "rules": []
+    "config": "hostname: fixture.example\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "ingress must be a non-empty list"
+     ],
+     "rules": []
+    }
    },
    "missingPath": {
-    "ok": false,
-    "problems": [
-     "missing shared API path: /v1/responses"
-    ],
-    "rules": [
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "missing shared API path: /v1/responses"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    },
    "multipleCatchAll": {
-    "ok": false,
-    "problems": [
-     "more than one catch-all rule"
-    ],
-    "rules": [
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "more than one catch-all rule"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    },
    "noService": {
-    "ok": false,
-    "problems": [
-     "rule 4 has no service"
-    ],
-    "rules": [
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/extra",
-      "service": null
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/extra$\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 4 has no service"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/extra",
+       "service": null
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    },
    "nonMappingRule": {
-    "ok": false,
-    "problems": [
-     "rule 1 must be a mapping"
-    ],
-    "rules": [
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - not-a-mapping\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 1 must be a mapping"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    },
    "notSharedPath": {
-    "ok": false,
-    "problems": [
-     "rule 4 path is not a shared API path: ^/v1/embeddings$"
-    ],
-    "rules": [
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/embeddings",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/embeddings$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 4 path is not a shared API path: ^/v1/embeddings$"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/embeddings",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    },
    "rootNotMapping": {
-    "ok": false,
-    "problems": [
-     "config must be a mapping"
-    ],
-    "rules": []
+    "config": "- ingress\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "config must be a mapping"
+     ],
+     "rules": []
+    }
    },
    "unreadable": {
     "ok": false,
@@ -1062,71 +1500,79 @@
     "rules": []
    },
    "wrongHost": {
-    "ok": false,
-    "problems": [
-     "rule 0 hostname is other.example, expected fixture.example"
-    ],
-    "rules": [
-     {
-      "hostname": "other.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "ingress:\n  - hostname: other.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 0 hostname is other.example, expected fixture.example"
+     ],
+     "rules": [
+      {
+       "hostname": "other.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    },
    "wrongService": {
-    "ok": false,
-    "problems": [
-     "rule 0 service must be http://127.0.0.1:8100: http://127.0.0.1:8101",
-     "missing shared API path: /v1/models"
-    ],
-    "rules": [
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/models",
-      "service": "http://127.0.0.1:8101"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/chat/completions",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/messages",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": "fixture.example",
-      "path": "/v1/responses",
-      "service": "http://127.0.0.1:8100"
-     },
-     {
-      "hostname": null,
-      "path": null,
-      "service": "http_status:404"
-     }
-    ]
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8101\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8100\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 0 service must be http://127.0.0.1:8100: http://127.0.0.1:8101",
+      "missing shared API path: /v1/models"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8101"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
    }
   },
   "negativeTtl": {
@@ -1134,6 +1580,38 @@
    "minimum": 60,
    "missing": null,
    "soa": 60
+  },
+  "negativeTtlInputs": {
+   "bad": {
+    "Authority": [
+     {
+      "TTL": -1,
+      "data": "ns 1 2 3 4 5 -1",
+      "type": 6
+     }
+    ]
+   },
+   "minimum": {
+    "Authority": [
+     {
+      "TTL": 120,
+      "data": "ns 1 2 3 4 5 60",
+      "type": 6
+     }
+    ]
+   },
+   "missing": {
+    "Authority": []
+   },
+   "soa": {
+    "Authority": [
+     {
+      "TTL": 60,
+      "data": "ns 1 2 3 4 5 120",
+      "type": 6
+     }
+    ]
+   }
   },
   "publicHost": {
    "configured": {
@@ -1158,30 +1636,96 @@
      "https://fixture.tail-test.ts.net/": "fixture.tail-test.ts.net",
      "https://fixture.tail-test.ts.net:443": "fixture.tail-test.ts.net"
     },
-    "rejected": {
-     "''": null,
-     "'http://fixture.tail-test.ts.net'": null,
-     "'https://-x.ts.net'": null,
-     "'https://127.0.0.1'": null,
-     "'https://[::1]'": null,
-     "'https://example.com'": null,
-     "'https://fixture.tail-test.ts.net#x'": null,
-     "'https://fixture.tail-test.ts.net.evil.invalid'": null,
-     "'https://fixture.tail-test.ts.net/v1'": null,
-     "'https://fixture.tail-test.ts.net:444'": null,
-     "'https://fixture.tail-test.ts.net:80'": null,
-     "'https://fixture.tail-test.ts.net?x=1'": null,
-     "'https://fixture\\\\.tail-test.ts.net'": null,
-     "'https://localhost'": null,
-     "'https://ts.net'": null,
-     "'https://user@fixture.tail-test.ts.net'": null,
-     "'https://x-.ts.net'": null,
-     "'https://x..ts.net'": null,
-     "'https://x_.ts.net'": null,
-     "'https://xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ts.net'": null,
-     "'https://\u6d4b\u8bd5.ts.net'": null,
-     "None": null
-    },
+    "rejected": [
+     {
+      "input": null,
+      "result": null
+     },
+     {
+      "input": "",
+      "result": null
+     },
+     {
+      "input": "http://fixture.tail-test.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://127.0.0.1",
+      "result": null
+     },
+     {
+      "input": "https://localhost",
+      "result": null
+     },
+     {
+      "input": "https://[::1]",
+      "result": null
+     },
+     {
+      "input": "https://example.com",
+      "result": null
+     },
+     {
+      "input": "https://ts.net",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net.evil.invalid",
+      "result": null
+     },
+     {
+      "input": "https://user@fixture.tail-test.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net/v1",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net?x=1",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net#x",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net:80",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net:444",
+      "result": null
+     },
+     {
+      "input": "https://-x.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://x-.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://x..ts.net",
+      "result": null
+     },
+     {
+      "input": "https://x_.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://fixture\\.tail-test.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://\u6d4b\u8bd5.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ts.net",
+      "result": null
+     }
+    ],
     "sources": {
      "https://fixture.tail-test.ts.net": "tailscale",
      "https://fixture.tail-test.ts.net/": "tailscale",
@@ -1413,6 +1957,187 @@
     "source": "tailscale",
     "version": 1
    }
+  },
+  "summarizeInputs": {
+   "allFailed": [
+    {
+     "certificate": "failed",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "connection_failed",
+     "state": "failed",
+     "tls": "failed"
+    },
+    {
+     "certificate": "failed",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "connection_failed",
+     "state": "failed",
+     "tls": "failed"
+    }
+   ],
+   "allFailedUnchecked": [
+    {
+     "certificate": "failed",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "connection_failed",
+     "state": "failed",
+     "tls": "failed"
+    },
+    {
+     "certificate": "not_checked",
+     "checked_at_epoch": null,
+     "dns": "not_checked",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "not_checked",
+     "state": "unchecked",
+     "tls": "not_checked"
+    }
+   ],
+   "allOk": [
+    {
+     "certificate": "ok",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "ok",
+     "state": "ok",
+     "tls": "ok"
+    },
+    {
+     "certificate": "ok",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "ok",
+     "state": "ok",
+     "tls": "ok"
+    }
+   ],
+   "allOkUnchecked": [
+    {
+     "certificate": "ok",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "ok",
+     "state": "ok",
+     "tls": "ok"
+    },
+    {
+     "certificate": "not_checked",
+     "checked_at_epoch": null,
+     "dns": "not_checked",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "not_checked",
+     "state": "unchecked",
+     "tls": "not_checked"
+    }
+   ],
+   "mixed": [
+    {
+     "certificate": "ok",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "ok",
+     "state": "ok",
+     "tls": "ok"
+    },
+    {
+     "certificate": "failed",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "connection_failed",
+     "state": "failed",
+     "tls": "failed"
+    }
+   ],
+   "mixedUnchecked": [
+    {
+     "certificate": "ok",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "ok",
+     "state": "ok",
+     "tls": "ok"
+    },
+    {
+     "certificate": "failed",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "connection_failed",
+     "state": "failed",
+     "tls": "failed"
+    },
+    {
+     "certificate": "not_checked",
+     "checked_at_epoch": null,
+     "dns": "not_checked",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "not_checked",
+     "state": "unchecked",
+     "tls": "not_checked"
+    }
+   ],
+   "noneChecked": [
+    {
+     "certificate": "not_checked",
+     "checked_at_epoch": null,
+     "dns": "not_checked",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "not_checked",
+     "state": "unchecked",
+     "tls": "not_checked"
+    },
+    {
+     "certificate": "not_checked",
+     "checked_at_epoch": null,
+     "dns": "not_checked",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "not_checked",
+     "state": "unchecked",
+     "tls": "not_checked"
+    }
+   ]
   }
  },
  "deploy": {

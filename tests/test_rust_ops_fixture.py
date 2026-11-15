@@ -64,6 +64,27 @@ class RustOpsFixtureTests(unittest.TestCase):
             "every invalid filter must stay recorded",
         )
 
+    def test_cloudflare_surface_records_every_acceptance_case(self):
+        fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        cloud = fixture["cloudflare"]
+        self.assertIn("bothOk", cloud["dnsSources"])
+        self.assertTrue(cloud["ingress"]["example"]["result"]["ok"])
+        self.assertFalse(cloud["ingress"]["missingPath"]["result"]["ok"])
+        self.assertEqual(cloud["ingress"]["invalidYaml"]["problemPrefix"], "invalid YAML:")
+        self.assertEqual(cloud["ingress"]["unreadable"]["problemPrefix"], "config unreadable:")
+        self.assertEqual(cloud["dnsAggregate"]["bothTimeout"]["state"], "timeout")
+        self.assertEqual(cloud["dnsAggregate"]["bothNxdomain"]["state"], "nxdomain")
+        self.assertEqual(cloud["dnsAggregate"]["truncated"]["addresses_truncated"], True)
+        self.assertEqual(cloud["dnsAnswers"]["aAndAaaa"]["addresses"], ["8.8.8.8", "8.8.4.4"])
+        self.assertEqual(cloud["negativeTtl"]["soa"], 60)
+        self.assertEqual(cloud["summarize"]["allOkUnchecked"]["overall"], "degraded")
+        self.assertEqual(cloud["summarize"]["allFailedUnchecked"]["overall"], "incomplete")
+        self.assertEqual(cloud["exitCodes"]["notChecked"], 2)
+        self.assertEqual(cloud["deadline"]["tooSmall"], 0.1)
+        self.assertEqual(cloud["check"]["dnsTruncated"]["overall"], "degraded")
+        self.assertEqual(cloud["check"]["dnsTruncated"]["reason"], "addresses_truncated")
+        self.assertEqual(cloud["check"]["unchecked"]["overall"], "not_checked")
+
 
 if __name__ == "__main__":
     unittest.main()

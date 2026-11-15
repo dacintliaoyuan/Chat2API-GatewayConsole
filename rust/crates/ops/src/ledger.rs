@@ -29,6 +29,11 @@ const BEIJING_OFFSET_SECONDS: i32 = 8 * 3600;
 pub trait Clock {
     fn now_ms(&self) -> f64;
     fn utc_iso_seconds(&self) -> String;
+
+    /// Monotonic milliseconds used only for bounded elapsed/deadline checks.
+    fn monotonic_ms(&self) -> f64 {
+        self.now_ms()
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]

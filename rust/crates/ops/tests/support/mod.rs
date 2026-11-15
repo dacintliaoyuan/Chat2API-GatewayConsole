@@ -58,3 +58,30 @@ pub fn normalize_checked_at(value: &Value) -> Value {
         other => other.clone(),
     }
 }
+
+pub fn strip_timing(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut output = Map::new();
+            for (key, item) in map {
+                if matches!(
+                    key.as_str(),
+                    "checked_at_utc" | "checked_at_epoch" | "elapsed_ms"
+                ) {
+                    continue;
+                }
+                output.insert(key.clone(), strip_timing(item));
+            }
+            Value::Object(output)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(strip_timing).collect()),
+        other => other.clone(),
+    }
+}
+
+pub fn env_map(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+        .collect()
+}
