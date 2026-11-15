@@ -31,11 +31,13 @@ pub const SECURITY_STATUSES: [&str; 4] = ["pending", "applied", "remote_confirme
 
 type IdSource = Box<dyn FnMut() -> String>;
 type TimeSource = Box<dyn FnMut() -> String>;
+type SecretSource = Box<dyn FnMut() -> String>;
 
 pub struct ShareStore {
     connection: Connection,
     next_id: IdSource,
     now: TimeSource,
+    next_secret: SecretSource,
     secret_key: Option<Vec<u8>>,
 }
 
@@ -53,14 +55,16 @@ impl ShareStore {
             connection,
             next_id: Box::new(random_uuid),
             now: Box::new(utc_now),
+            next_secret: Box::new(|| format!("um-share-{}", random_token_urlsafe(32))),
             secret_key: Some(key),
         })
     }
 
     /// Test seam: deterministic uuid/timestamp sources.
-    pub fn set_sources(&mut self, ids: IdSource, now: TimeSource) {
+    pub fn set_sources(&mut self, ids: IdSource, now: TimeSource, secrets: SecretSource) {
         self.next_id = ids;
         self.now = now;
+        self.next_secret = secrets;
     }
 
     pub fn connection(&self) -> &Connection {
@@ -75,6 +79,10 @@ impl ShareStore {
 
     fn timestamp(&mut self) -> String {
         (self.now)()
+    }
+
+    fn new_secret(&mut self) -> String {
+        (self.next_secret)()
     }
 
     // ---------------------------------------------------------- generation
@@ -162,12 +170,18 @@ impl ShareStore {
         generation: i64,
         instance_id: Option<&str>,
     ) -> Result<Vec<String>, StoreError> {
+        let record_ids: Vec<String> = {
+            let mut statement = self.connection.prepare(
+                "SELECT record_id FROM security WHERE generation<=? AND status IN ('pending','applied') ORDER BY generation, recorded_at",
+            )?;
+            let rows =
+                statement.query_map(params![generation], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        if record_ids.is_empty() {
+            return Ok(record_ids);
+        }
         let now = self.timestamp();
-        let mut statement = self.connection.prepare(
-            "SELECT record_id FROM security WHERE generation<=? AND status IN ('pending','applied') ORDER BY generation, recorded_at",
-        )?;
-        let rows = statement.query_map(params![generation], |row| row.get::<_, String>(0))?;
-        let record_ids: Vec<String> = rows.collect::<Result<_, _>>()?;
         self.connection.execute(
             "UPDATE security SET status='applied', applied_at=?, applied_generation=?, instance_id=? WHERE generation<=? AND status IN ('pending','applied')",
             params![now, generation, instance_id, generation],
@@ -445,9 +459,10 @@ impl ShareStore {
         }
         let max_concurrency = max_concurrency.unwrap_or(NEW_KEY_DEFAULT_MAX_CONCURRENCY);
         self.validate_key_max_concurrency(max_concurrency)?;
-        let secret = secret.map(str::to_string).unwrap_or_else(|| {
-            format!("um-share-{}", random_token_urlsafe(32))
-        });
+        let secret = match secret {
+            Some(secret) => secret.to_string(),
+            None => self.new_secret(),
+        };
         self.in_transaction(|store| {
             if let Some(idempotency_key) = idempotency_key {
                 if let Some(existing) = store.find_any_operation(idempotency_key)? {
@@ -547,15 +562,14 @@ impl ShareStore {
         key_id: &str,
         expected: i64,
         set_sql: &str,
-        values: &[Value],
+        values: &[Bind],
     ) -> Result<(), StoreError> {
-        let mut sql = format!("UPDATE keys SET {set_sql} WHERE key_id=? AND row_version=?");
-        let mut bound: Vec<Value> = values.to_vec();
-        bound.push(Value::String(key_id.to_string()));
-        bound.push(Value::from(expected));
-        let mut statement = self.connection.prepare(&mut sql)?;
-        let changed = statement.execute(rusqlite::params_from_iter(bound.iter().map(value_to_sql)))?;
-        let _ = &mut sql;
+        let sql = format!("UPDATE keys SET {set_sql} WHERE key_id=? AND row_version=?");
+        let mut bound: Vec<Bind> = values.to_vec();
+        bound.push(Bind::Text(key_id.to_string()));
+        bound.push(Bind::Int(expected));
+        let mut statement = self.connection.prepare(&sql)?;
+        let changed = statement.execute(rusqlite::params_from_iter(bound.iter()))?;
         if changed == 0 {
             return Err(StoreError::VersionMismatch("row_version conflict".to_string()));
         }
@@ -587,7 +601,7 @@ impl ShareStore {
                 key_id,
                 expected,
                 "name=?, updated_at=?, row_version=row_version+1",
-                &[Value::String(new_name.to_string()), Value::String(now)],
+                &[Bind::Text(new_name.to_string()), Bind::Text(now)],
             );
             if let Err(error) = result {
                 return Err(match error {
@@ -637,12 +651,12 @@ impl ShareStore {
             }
             let expected = Self::resolve_expected_version(&row, expected_row_version)?;
             let mut columns: Vec<String> = Vec::new();
-            let mut values: Vec<Value> = Vec::new();
+            let mut values: Vec<Bind> = Vec::new();
             let mut revoking = false;
             if let Some(new_name) = new_name {
                 if new_name != row.name {
                     columns.push("name=?".to_string());
-                    values.push(Value::String(new_name.to_string()));
+                    values.push(Bind::Text(new_name.to_string()));
                 }
             }
             if enabled == Some(false) {
@@ -650,12 +664,12 @@ impl ShareStore {
                 columns.push("deleted_at=?".to_string());
                 columns.push("secret_blob=NULL".to_string());
                 columns.push("secret_algo=NULL".to_string());
-                values.push(Value::String(store.timestamp()));
+                values.push(Bind::Text(store.timestamp()));
             }
             if let Some(max_concurrency) = max_concurrency {
                 if max_concurrency != row.max_concurrency {
                     columns.push("max_concurrency=?".to_string());
-                    values.push(Value::from(max_concurrency));
+                    values.push(Bind::Int(max_concurrency));
                     if max_concurrency < row.max_concurrency {
                         revoking = true;
                     }
@@ -666,7 +680,7 @@ impl ShareStore {
             }
             columns.push("updated_at=?".to_string());
             columns.push("row_version=row_version+1".to_string());
-            values.push(Value::String(store.timestamp()));
+            values.push(Bind::Text(store.timestamp()));
             if enabled == Some(false) || revoking {
                 let action = if revoking && enabled != Some(false) {
                     "limit_lower"
@@ -734,7 +748,7 @@ impl ShareStore {
                 ));
             }
             let expected = Self::resolve_expected_version(&row, expected_row_version)?;
-            let secret = format!("um-share-{}", random_token_urlsafe(32));
+            let secret = store.new_secret();
             let (blob, algo) = store.protect_for_new_row(&secret)?;
             let new_version = row.secret_version + 1;
             let generation = store.next_generation()?;
@@ -745,12 +759,12 @@ impl ShareStore {
                 expected,
                 "secret_hash=?, secret_version=?, masked_key=?, secret_blob=?, secret_algo=?, updated_at=?, row_version=row_version+1",
                 &[
-                    Value::String(secret_hash(&secret)),
-                    Value::from(new_version),
-                    Value::String(mask_secret(&secret)),
-                    blob.clone().map(Value::from).unwrap_or(Value::Null),
-                    algo.clone().map(Value::from).unwrap_or(Value::Null),
-                    Value::String(now),
+                    Bind::Text(secret_hash(&secret)),
+                    Bind::Int(new_version),
+                    Bind::Text(mask_secret(&secret)),
+                    blob.clone().map(Bind::Blob).unwrap_or(Bind::Null),
+                    algo.clone().map(Bind::Text).unwrap_or(Bind::Null),
+                    Bind::Text(now),
                 ],
             )?;
             store.bump_desired()?;
@@ -798,10 +812,7 @@ impl ShareStore {
                 key_id,
                 expected,
                 "enabled=0, deleted_at=?, secret_blob=NULL, secret_algo=NULL, updated_at=?, row_version=row_version+1",
-                &[
-                    Value::String(now.clone()),
-                    Value::String(now.clone()),
-                ],
+                &[Bind::Text(now.clone()), Bind::Text(now.clone())],
             )?;
             store.bump_desired()?;
             store.record_publish_intent(true, "delete", Some(key_id))?;
@@ -996,14 +1007,14 @@ impl ShareStore {
             "SELECT id,kind,idempotency_key,status,payload,created_at FROM ops",
         );
         let mut clauses = Vec::new();
-        let mut bound: Vec<Value> = Vec::new();
+        let mut bound: Vec<Bind> = Vec::new();
         if let Some(kind) = kind {
             clauses.push("kind=?");
-            bound.push(Value::String(kind.to_string()));
+            bound.push(Bind::Text(kind.to_string()));
         }
         if let Some(status) = status {
             clauses.push("status=?");
-            bound.push(Value::String(status.to_string()));
+            bound.push(Bind::Text(status.to_string()));
         }
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
@@ -1012,7 +1023,7 @@ impl ShareStore {
         sql.push_str(" ORDER BY created_at");
         let mut statement = self.connection.prepare(&sql)?;
         let rows = statement.query_map(
-            rusqlite::params_from_iter(bound.iter().map(value_to_sql)),
+            rusqlite::params_from_iter(bound.iter()),
             |row| operation_row(row),
         )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
@@ -1225,33 +1236,31 @@ fn public_security_row(row: &Row) -> Value {
     })
 }
 
-fn value_to_sql(value: &Value) -> rusqlite::types::ToSqlOutput<'_> {
-    use rusqlite::types::ValueRef;
+/// One SQL-bound value that keeps bytes as a BLOB (never a JSON array/text).
+#[derive(Debug, Clone)]
+pub enum Bind {
+    Null,
+    Int(i64),
+    Text(String),
+    Blob(Vec<u8>),
+}
 
-    match value {
-        Value::Null => rusqlite::types::ToSqlOutput::Borrowed(ValueRef::Null),
-        Value::Bool(flag) => {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Integer(*flag as i64))
-        }
-        Value::Number(number) => {
-            if let Some(value) = number.as_i64() {
-                rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Integer(value))
-            } else if let Some(value) = number.as_u64() {
-                rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Integer(value as i64))
-            } else {
-                rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Real(
-                    number.as_f64().unwrap_or_default(),
-                ))
+impl rusqlite::ToSql for Bind {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        use rusqlite::types::ValueRef;
+
+        Ok(match self {
+            Bind::Null => rusqlite::types::ToSqlOutput::Borrowed(ValueRef::Null),
+            Bind::Int(value) => {
+                rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Integer(*value))
             }
-        }
-        Value::String(text) => {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Text(text.clone()))
-        }
-        Value::Array(_) | Value::Object(_) => {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Text(
-                value.to_string(),
-            ))
-        }
+            Bind::Text(value) => {
+                rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Text(value.clone()))
+            }
+            Bind::Blob(value) => {
+                rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Blob(value.clone()))
+            }
+        })
     }
 }
 

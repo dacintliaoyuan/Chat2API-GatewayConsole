@@ -18,6 +18,7 @@ sha2 = "0.10"
 um-contract = { path = "../contract" }
 
 [dev-dependencies]
+hex = "0.4"
 tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]

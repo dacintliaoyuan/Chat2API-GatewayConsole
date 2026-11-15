@@ -169,11 +169,20 @@ fn secret_error(message: String) -> StoreError {
 
 /// Seal one secret exactly like `protect_secret_aesgcm`.
 pub fn protect_with_key(secret: &str, key: &[u8]) -> Result<Vec<u8>, StoreError> {
-    let cipher = cipher(key)?;
     let nonce = random_nonce()?;
+    protect_with_nonce(secret, key, &nonce)
+}
+
+/// Seal one secret with an explicit nonce (fixture comparison only).
+pub fn protect_with_nonce(
+    secret: &str,
+    key: &[u8],
+    nonce: &[u8; NONCE_SIZE],
+) -> Result<Vec<u8>, StoreError> {
+    let cipher = cipher(key)?;
     let sealed = cipher
         .encrypt(
-            Nonce::from_slice(&nonce),
+            Nonce::from_slice(nonce),
             Payload {
                 msg: secret.as_bytes(),
                 aad: aad(),
@@ -181,7 +190,7 @@ pub fn protect_with_key(secret: &str, key: &[u8]) -> Result<Vec<u8>, StoreError>
         )
         .map_err(|_| secret_error("share secret protection failed".to_string()))?;
     let mut blob = Vec::with_capacity(NONCE_SIZE + sealed.len());
-    blob.extend_from_slice(&nonce);
+    blob.extend_from_slice(nonce);
     blob.extend_from_slice(&sealed);
     Ok(blob)
 }

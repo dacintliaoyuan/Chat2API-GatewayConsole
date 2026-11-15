@@ -882,6 +882,8 @@
   "projection": {
     "accepted": [
       {
+        "canonical": "{\"config_generation\": 3, \"data\": [{\"enabled\": true, \"key_id\": \"k1\", \"max_concurrency\": 16, \"name\": \"n1\", \"secret_hash\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"secret_version\": 1}], \"schema_version\": 2, \"share_max_concurrency\": 64}",
+        "fingerprint": "ebc9a9e379f53ab8916e8a3e27db7e3a9dfc9258e7b8dd9a342c6e61211dbca0",
         "input": {
           "config_generation": 3,
           "data": [
@@ -914,6 +916,8 @@
         }
       },
       {
+        "canonical": "{\"config_generation\": 1, \"data\": [], \"schema_version\": 1}",
+        "fingerprint": "e2d443c3393ebfc4ad6a519a28cf7d63bd7eab762e59185872dc8db7bde9bd33",
         "input": {
           "config_generation": 1,
           "data": [],
@@ -927,6 +931,8 @@
         }
       },
       {
+        "canonical": "{\"config_generation\": 2, \"data\": [{\"enabled\": false, \"key_id\": \"k1\", \"max_concurrency\": 64, \"name\": \"n1\", \"secret_hash\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"secret_version\": 2}], \"schema_version\": 2, \"share_max_concurrency\": 128}",
+        "fingerprint": "32cfeff2d959fd76b8eaa5fa59750c566f0e446eb8ccefe3134c4e6eb6662605",
         "input": {
           "config_generation": 2,
           "data": [
@@ -1466,15 +1472,19 @@
   "secret_vectors": [
     {
       "aad": "aesgcm-file-key-v1",
-      "blob_hex": "7bd198addd4df1d825c9c545704dbca9e37165671db75717b9ffd1e0a19a3bd45aa14b4e01d1afbe782e7591fbef5f",
+      "blob_hex": "0000000000000000000000007bd198addd4df1d825c9c545704dbca9e37165671db75717b9ffd1e0a19a3bd45aa14b4e01d1afbe782e7591fbef5f",
+      "hash": "ba5260459f41020f5621b3c5ac6b5dfd310f29997170b62a76b623685eab8ddb",
       "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "mask": "um-share-****cdef",
       "nonce_hex": "000000000000000000000000",
       "plaintext": "um-share-alpha-0123456789abcdef"
     },
     {
       "aad": "aesgcm-file-key-v1",
-      "blob_hex": "02aec84600e41a03f936026c794a62e9f95dbbeea7b42ee592b96488f86fad8e2ae63c9bb764d00e0ba9014c6b1d",
+      "blob_hex": "01010101010101010101010102aec84600e41a03f936026c794a62e9f95dbbeea7b42ee592b96488f86fad8e2ae63c9bb764d00e0ba9014c6b1d",
+      "hash": "e68a9a333c473277fcd5f3d0e51f7d56c8a7660401cbce7c2687662b93c771aa",
       "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "mask": "um-share-****cdef",
       "nonce_hex": "010101010101010101010101",
       "plaintext": "um-share-beta-0123456789abcdef"
     }

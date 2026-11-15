@@ -404,10 +404,15 @@ def _projection_section(root):
                    "secret_version": 1, "enabled": True,
                    "max_concurrency": 16}]},
     ]
+    from share.management import _fingerprint
+    from share.broker_protocol import encode_frame
+
     parsed = []
     for payload in accepted:
         parsed.append({"input": payload,
-                       "output": protocol.parse_projection_payload(payload)})
+                       "output": protocol.parse_projection_payload(payload),
+                       "fingerprint": _fingerprint(payload),
+                       "canonical": encode_frame(payload).decode("utf-8").rstrip()})
     refused = []
     for payload in rejected:
         try:
@@ -429,11 +434,13 @@ def _secret_vectors():
     vectors = []
     for index, secret in enumerate((ALPHA_SECRET, BETA_SECRET)):
         nonce = bytes([index]) * 12
-        blob = AESGCM(key).encrypt(
+        blob = nonce + AESGCM(key).encrypt(
             nonce, secret.encode("utf-8"), b"aesgcm-file-key-v1")
         vectors.append({"key_hex": key.hex(), "nonce_hex": nonce.hex(),
                         "aad": "aesgcm-file-key-v1", "plaintext": secret,
-                        "blob_hex": blob.hex()})
+                        "blob_hex": blob.hex(),
+                        "hash": store._hash(secret),
+                        "mask": store._mask(secret)})
     return vectors
 
 
