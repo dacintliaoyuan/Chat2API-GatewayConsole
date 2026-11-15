@@ -997,7 +997,7 @@ fn arguments_or_empty(value: Option<&Value>) -> String {
     match value {
         Some(Value::String(arguments)) => arguments.clone(),
         Some(Value::Null) | None => "{}".to_string(),
-        Some(value) => serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()),
+        Some(value) => python_json_dumps(value),
     }
 }
 
@@ -1567,7 +1567,12 @@ fn forward_aggregate(
                         .response(),
                 );
             };
-            record_translated_usage(context, &translated, Some(&translated["usage"]), "ok");
+            let ledger_usage = if via_messages {
+                translated.get("usage")
+            } else {
+                data.get("usage")
+            };
+            record_translated_usage(context, &translated, ledger_usage, "ok");
             return ChatResult::Response(Response::json(200, &translated));
         }
         if status == "client_disconnected" {
