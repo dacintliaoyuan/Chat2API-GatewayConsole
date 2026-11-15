@@ -96,7 +96,7 @@ fn request_body_gate_cases_match_python() {
 
     let too_large = client_request(
         console.addr,
-        &ClientRequest::post("/api/console/services", vec![b'x'; 65537])
+        &ClientRequest::post("/api/console/services", Vec::new())
             .header("Content-Length", "65537")
             .without_content_length(),
     )
@@ -180,6 +180,25 @@ fn request_body_gate_cases_match_python() {
     )
     .expect("null body");
     assert_case(&null_body, &fixture["boundary"]["nullBody"], "nullBody");
+}
+
+#[test]
+fn declared_too_large_is_rejected_before_reading_the_body() {
+    let fixture = fixture();
+    let temp = temp();
+    let console = start_console(&temp);
+    let response = client_request(
+        console.addr,
+        &ClientRequest::post("/api/console/services", Vec::new())
+            .header("Content-Length", "65537")
+            .without_content_length(),
+    )
+    .expect("declared too large");
+    assert_closing_case(
+        &response,
+        &fixture["boundary"]["tooLarge"],
+        "declaredTooLarge",
+    );
 }
 
 #[test]

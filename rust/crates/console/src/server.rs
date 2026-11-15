@@ -15,10 +15,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
-use um_gateway::http::{read_request, write_response, Headers, Request, Response};
+use um_gateway::http::{read_request_with_body_cap, write_response, Headers, Request, Response};
 
 use crate::actions::action_catalogue;
-use crate::body::{read_console_body, reject_duplicate_sensitive_header, reject_unknown_fields};
+use crate::body::{
+    read_console_body, reject_duplicate_sensitive_header, reject_unknown_fields,
+    CONSOLE_MAX_REQUEST_BYTES,
+};
 use crate::config::{ConfigError, ConsoleConfig, Role};
 use crate::error::ConsoleError;
 use crate::operations::OperationsReader;
@@ -161,7 +164,11 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(IDLE_CONNECTION_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IDLE_CONNECTION_TIMEOUT));
     loop {
-        let request = match read_request(&mut stream, IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)) {
+        let request = match read_request_with_body_cap(
+            &mut stream,
+            IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            CONSOLE_MAX_REQUEST_BYTES,
+        ) {
             Ok(Some(request)) => request,
             Ok(None) => return,
             Err(_) => {

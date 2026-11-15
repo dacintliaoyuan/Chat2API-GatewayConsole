@@ -150,6 +150,17 @@ pub fn read_request(
     stream: &mut TcpStream,
     peer_ip: std::net::IpAddr,
 ) -> io::Result<Option<Request>> {
+    read_request_with_body_cap(stream, peer_ip, HARD_BODY_CAP)
+}
+
+/// Read one request, refusing a declared body above `max_body` BEFORE reading
+/// it. The Python console checks `Content-Length` before it reads the body, so a
+/// declared-too-large request must not wait for bytes that may never arrive.
+pub fn read_request_with_body_cap(
+    stream: &mut TcpStream,
+    peer_ip: std::net::IpAddr,
+    max_body: u64,
+) -> io::Result<Option<Request>> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     let header_end = loop {
@@ -207,6 +218,7 @@ pub fn read_request(
             Err(_) => BodyRead::InvalidLength,
             Ok(length) if length < 0 => BodyRead::NegativeLength,
             Ok(length) if length as u64 > HARD_BODY_CAP => BodyRead::TooLarge(length as u64),
+            Ok(length) if length as u64 > max_body => BodyRead::TooLarge(length as u64),
             Ok(length) => {
                 let length = length as usize;
                 while leftover.len() < length {
