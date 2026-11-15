@@ -244,11 +244,22 @@ while (done.size < TICKETS.length) {
         }
       }
       const implementer = agent(`实现员·#${ticket}`, {
-        system: "先读 tdd-mattpocock，按红绿切片执行。读 spec #26 和你的 ticket（gh issue view），在指定 worktree 工作。只改本 ticket 的文件。跑定向测试。提交。不要 push。提交后把集成分支 tip merge 进你的分支；冲突就报告，不要伪造成功。",
+        system: "先读 tdd-mattpocock，按红绿切片执行。读 spec #26 和你的 ticket（gh issue view），在指定 worktree 工作。只改本 ticket 的文件。每个验收条目单独提交并返回该条目的 commit 与定向测试输出；连续 20 分钟没有新 commit 就停下来报告，不要空转。不要 push。提交后把集成分支 tip merge 进你的分支；冲突就报告，不要伪造成功。",
       });
-      return await implementer.ask<ImplementResult>(
-        `spec #26；ticket #${ticket}；worktree ${worktree}；branch ${ticketBranch}；集成分支 ${INTEGRATION}。实现 ticket 的验收标准，跑定向测试，提交，merge 集成分支 tip，返回 ImplementResult。`,
+      const implementation = await implementer.ask<ImplementResult>(
+        `spec #26；ticket #${ticket}；worktree ${worktree}；branch ${ticketBranch}；集成分支 ${INTEGRATION}。按验收条目逐个实现：每条提交一次并返回 commit + 定向测试输出；全部完成后 merge 集成分支 tip，返回 ImplementResult。`,
       );
+      const sliceLog = await world.run(
+        "git",
+        ["-C", worktree, "log", "--oneline", `${INTEGRATION}..${ticketBranch}`],
+      );
+      if (sliceLog.exitCode !== 0 || sliceLog.stdout.trim() === "") {
+        return {
+          ...implementation,
+          problems: [...implementation.problems, "实现 ask 返回后没有新 commit"],
+        } satisfies ImplementResult;
+      }
+      return implementation;
     }),
   );
   results.push(...waveResults);
@@ -286,7 +297,7 @@ while (done.size < TICKETS.length) {
     });
   }
   const gate = await world.run(
-    "C:/Program Files/Git/bin/bash.exe",
+    "bash",
     ["scripts/check.sh", "--quick"],
     { timeoutMs: 900000, output: { tail: 8192 } },
   );
@@ -298,7 +309,7 @@ while (done.size < TICKETS.length) {
       `集成分支 ${INTEGRATION}；第 ${wave} 波 tickets ${JSON.stringify(ready)}；快速门禁失败：\n${(gate.stderr + "\n" + gate.stdout).slice(-8000)}\n修复并提交，返回 ImplementResult。`,
     );
     const recheck = await world.run(
-      "C:/Program Files/Git/bin/bash.exe",
+      "bash",
       ["scripts/check.sh", "--quick"],
       { timeoutMs: 900000, output: { tail: 8192 } },
     );
