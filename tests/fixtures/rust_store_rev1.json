@@ -1,0 +1,1482 @@
+{
+  "lifecycle": [
+    {
+      "result": {
+        "config_generation": 2,
+        "key_id": "00000000-0000-0000-0000-000000000001",
+        "mk": "um-share-****cdef",
+        "name": "alpha",
+        "plaintext_viewable": true,
+        "secret": "um-share-alpha-0123456789abcdef"
+      },
+      "step": "create-alpha"
+    },
+    {
+      "result": {
+        "config_generation": 3,
+        "key_id": "00000000-0000-0000-0000-000000000004",
+        "mk": "um-share-****cdef",
+        "name": "beta",
+        "plaintext_viewable": true,
+        "secret": "um-share-beta-0123456789abcdef"
+      },
+      "step": "create-beta"
+    },
+    {
+      "result": {
+        "error": "Conflict",
+        "message": "name 'alpha' already in use as an active identity"
+      },
+      "step": "create-duplicate"
+    },
+    {
+      "result": {
+        "config_generation": 3,
+        "key_id": "00000000-0000-0000-0000-000000000001",
+        "replayed": true,
+        "secret_unavailable": true,
+        "secret_version": null
+      },
+      "step": "replay-create"
+    },
+    {
+      "result": {
+        "created_at": "2026-11-15T00:00:01.000001Z",
+        "deleted_at": null,
+        "enabled": true,
+        "key_id": "00000000-0000-0000-0000-000000000001",
+        "masked_key": "um-share-****cdef",
+        "max_concurrency": 16,
+        "name": "alpha",
+        "plaintext_viewable": true,
+        "row_version": 1,
+        "secret_version": 1,
+        "updated_at": "2026-11-15T00:00:01.000001Z"
+      },
+      "step": "get-alpha"
+    },
+    {
+      "result": {
+        "created_at": "2026-11-15T00:00:01.000001Z",
+        "deleted_at": null,
+        "enabled": true,
+        "key_id": "00000000-0000-0000-0000-000000000001",
+        "masked_key": "um-share-****cdef",
+        "max_concurrency": 16,
+        "name": "alpha-renamed",
+        "plaintext_viewable": true,
+        "row_version": 2,
+        "secret_version": 1,
+        "updated_at": "2026-11-15T00:00:07.000007Z"
+      },
+      "step": "rename-alpha"
+    },
+    {
+      "result": {
+        "error": "VersionMismatch",
+        "message": "row_version conflict: expected 1, current 2"
+      },
+      "step": "stale-rename"
+    },
+    {
+      "result": {
+        "created_at": "2026-11-15T00:00:01.000001Z",
+        "deleted_at": null,
+        "enabled": true,
+        "key_id": "00000000-0000-0000-0000-000000000001",
+        "masked_key": "um-share-****cdef",
+        "max_concurrency": 8,
+        "name": "alpha-renamed",
+        "plaintext_viewable": true,
+        "row_version": 3,
+        "secret_version": 1,
+        "updated_at": "2026-11-15T00:00:09.000009Z"
+      },
+      "step": "lower-concurrency"
+    },
+    {
+      "result": {
+        "error": "StoreError",
+        "message": "enabled is not writable: a disabled or revoked identity cannot be re-enabled"
+      },
+      "step": "reject-enable"
+    },
+    {
+      "result": {
+        "config_generation": 6,
+        "key_id": "00000000-0000-0000-0000-000000000004",
+        "mk": "um-share-****wxyz",
+        "plaintext_viewable": true,
+        "secret": "um-share-rotated-token-0123456789abcdefghijklmnopqrstuvwxyz",
+        "secret_version": 2
+      },
+      "step": "rotate-beta"
+    },
+    {
+      "result": {
+        "config_generation": 6,
+        "key_id": "00000000-0000-0000-0000-000000000004",
+        "replayed": true,
+        "secret_unavailable": true,
+        "secret_version": 2
+      },
+      "step": "replay-rotate"
+    },
+    {
+      "result": {
+        "error": "Conflict",
+        "message": "idempotency key already used to rotate a different key"
+      },
+      "step": "rotate-other-target"
+    },
+    {
+      "result": {
+        "deleted_at": "2026-11-15T00:00:16.000016Z",
+        "key_id": "00000000-0000-0000-0000-000000000004"
+      },
+      "step": "delete-beta"
+    },
+    {
+      "result": {
+        "already_deleted": true,
+        "deleted_at": "2026-11-15T00:00:16.000016Z",
+        "key_id": "00000000-0000-0000-0000-000000000004"
+      },
+      "step": "delete-again"
+    },
+    {
+      "result": {
+        "error": "Disabled",
+        "message": "deleted identity has no readable secret"
+      },
+      "step": "reveal-deleted"
+    },
+    {
+      "result": true,
+      "step": "verify-alpha"
+    },
+    {
+      "result": false,
+      "step": "verify-wrong"
+    },
+    {
+      "result": [
+        {
+          "action": "limit_lower",
+          "applied_at": null,
+          "applied_generation": null,
+          "generation": 5,
+          "instance_id": null,
+          "key_id": "00000000-0000-0000-0000-000000000001",
+          "record_id": "00000000-0000-0000-0000-000000000008",
+          "recorded_at": "2026-11-15T00:00:10.000010Z",
+          "remote_confirmed_at": null,
+          "remote_receipt": null,
+          "secret_version": 1,
+          "status": "pending"
+        },
+        {
+          "action": "rotate",
+          "applied_at": null,
+          "applied_generation": null,
+          "generation": 6,
+          "instance_id": null,
+          "key_id": "00000000-0000-0000-0000-000000000004",
+          "record_id": "00000000-0000-0000-0000-00000000000a",
+          "recorded_at": "2026-11-15T00:00:12.000012Z",
+          "remote_confirmed_at": null,
+          "remote_receipt": null,
+          "secret_version": 2,
+          "status": "pending"
+        },
+        {
+          "action": "delete",
+          "applied_at": null,
+          "applied_generation": null,
+          "generation": 7,
+          "instance_id": null,
+          "key_id": "00000000-0000-0000-0000-000000000004",
+          "record_id": "00000000-0000-0000-0000-00000000000d",
+          "recorded_at": "2026-11-15T00:00:17.000017Z",
+          "remote_confirmed_at": null,
+          "remote_receipt": null,
+          "secret_version": 2,
+          "status": "pending"
+        }
+      ],
+      "step": "security-records"
+    },
+    {
+      "result": {
+        "applied_generation": 3,
+        "config_generation": 7,
+        "in_sync": false,
+        "schema_version": 3,
+        "security_applied": [],
+        "security_in_sync": false,
+        "security_pending": 3
+      },
+      "step": "commit-applied"
+    },
+    {
+      "result": [
+        {
+          "action": "limit_lower",
+          "applied_at": null,
+          "applied_generation": null,
+          "generation": 5,
+          "instance_id": null,
+          "key_id": "00000000-0000-0000-0000-000000000001",
+          "record_id": "00000000-0000-0000-0000-000000000008",
+          "recorded_at": "2026-11-15T00:00:10.000010Z",
+          "remote_confirmed_at": null,
+          "remote_receipt": null,
+          "secret_version": 1,
+          "status": "pending"
+        },
+        {
+          "action": "rotate",
+          "applied_at": null,
+          "applied_generation": null,
+          "generation": 6,
+          "instance_id": null,
+          "key_id": "00000000-0000-0000-0000-000000000004",
+          "record_id": "00000000-0000-0000-0000-00000000000a",
+          "recorded_at": "2026-11-15T00:00:12.000012Z",
+          "remote_confirmed_at": null,
+          "remote_receipt": null,
+          "secret_version": 2,
+          "status": "pending"
+        },
+        {
+          "action": "delete",
+          "applied_at": null,
+          "applied_generation": null,
+          "generation": 7,
+          "instance_id": null,
+          "key_id": "00000000-0000-0000-0000-000000000004",
+          "record_id": "00000000-0000-0000-0000-00000000000d",
+          "recorded_at": "2026-11-15T00:00:17.000017Z",
+          "remote_confirmed_at": null,
+          "remote_receipt": null,
+          "secret_version": 2,
+          "status": "pending"
+        }
+      ],
+      "step": "security-after-ack"
+    },
+    {
+      "result": {
+        "changed": true,
+        "config_generation": 8,
+        "previous": 64,
+        "replayed": false,
+        "share_max_concurrency": 32
+      },
+      "step": "set-limit-lower"
+    },
+    {
+      "result": {
+        "changed": false,
+        "config_generation": 8,
+        "replayed": true,
+        "share_max_concurrency": 32
+      },
+      "step": "replay-limit"
+    },
+    {
+      "result": {
+        "generation": {
+          "applied_generation": 3,
+          "config_generation": 8,
+          "in_sync": false,
+          "schema_version": 3,
+          "security_in_sync": false,
+          "security_pending": 4
+        },
+        "keys": [
+          {
+            "created_at": "2026-11-15T00:00:01.000001Z",
+            "deleted_at": null,
+            "enabled": true,
+            "key_id": "00000000-0000-0000-0000-000000000001",
+            "masked_key": "um-share-****cdef",
+            "max_concurrency": 8,
+            "name": "alpha-renamed",
+            "plaintext_viewable": true,
+            "row_version": 3,
+            "secret_version": 1,
+            "updated_at": "2026-11-15T00:00:09.000009Z"
+          },
+          {
+            "created_at": "2026-11-15T00:00:04.000004Z",
+            "deleted_at": "2026-11-15T00:00:16.000016Z",
+            "enabled": false,
+            "key_id": "00000000-0000-0000-0000-000000000004",
+            "masked_key": "um-share-****wxyz",
+            "max_concurrency": 16,
+            "name": "beta",
+            "plaintext_viewable": false,
+            "row_version": 3,
+            "secret_version": 2,
+            "updated_at": "2026-11-15T00:00:16.000016Z"
+          }
+        ],
+        "operations": [
+          {
+            "idempotency_key": null,
+            "kind": "publish",
+            "payload": {
+              "action_kind": "create",
+              "key_id": "00000000-0000-0000-0000-000000000001",
+              "revoking": false,
+              "target_generation": 2
+            },
+            "status": "pending"
+          },
+          {
+            "idempotency_key": "create-alpha",
+            "kind": "create",
+            "payload": {
+              "key_id": "00000000-0000-0000-0000-000000000001",
+              "name": "alpha"
+            },
+            "status": "ok"
+          },
+          {
+            "idempotency_key": null,
+            "kind": "publish",
+            "payload": {
+              "action_kind": "create",
+              "key_id": "00000000-0000-0000-0000-000000000004",
+              "revoking": false,
+              "target_generation": 3
+            },
+            "status": "pending"
+          },
+          {
+            "idempotency_key": null,
+            "kind": "publish",
+            "payload": {
+              "action_kind": "rename",
+              "key_id": "00000000-0000-0000-0000-000000000001",
+              "revoking": false,
+              "target_generation": 4
+            },
+            "status": "pending"
+          },
+          {
+            "idempotency_key": null,
+            "kind": "publish",
+            "payload": {
+              "action_kind": "update",
+              "key_id": "00000000-0000-0000-0000-000000000001",
+              "revoking": true,
+              "target_generation": 5
+            },
+            "status": "pending"
+          },
+          {
+            "idempotency_key": null,
+            "kind": "publish",
+            "payload": {
+              "action_kind": "rotate",
+              "key_id": "00000000-0000-0000-0000-000000000004",
+              "revoking": true,
+              "target_generation": 6
+            },
+            "status": "pending"
+          },
+          {
+            "idempotency_key": "rotate-beta",
+            "kind": "rotate",
+            "payload": {
+              "key_id": "00000000-0000-0000-0000-000000000004",
+              "secret_version": 2
+            },
+            "status": "ok"
+          },
+          {
+            "idempotency_key": null,
+            "kind": "publish",
+            "payload": {
+              "action_kind": "delete",
+              "key_id": "00000000-0000-0000-0000-000000000004",
+              "revoking": true,
+              "target_generation": 7
+            },
+            "status": "pending"
+          },
+          {
+            "idempotency_key": null,
+            "kind": "publish",
+            "payload": {
+              "action_kind": "set_share_limits",
+              "key_id": null,
+              "revoking": true,
+              "target_generation": 8
+            },
+            "status": "pending"
+          },
+          {
+            "idempotency_key": "limits-1",
+            "kind": "set_share_limits",
+            "payload": {
+              "share_max_concurrency": 32
+            },
+            "status": "ok"
+          }
+        ],
+        "projection": {
+          "config_generation": 8,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "00000000-0000-0000-0000-000000000001",
+              "max_concurrency": 8,
+              "name": "alpha-renamed",
+              "secret_hash": "ba5260459f41020f5621b3c5ac6b5dfd310f29997170b62a76b623685eab8ddb",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 32
+        },
+        "security": {
+          "floor": 8,
+          "records": [
+            {
+              "action": "limit_lower",
+              "applied_at": null,
+              "applied_generation": null,
+              "generation": 5,
+              "instance_id": null,
+              "key_id": "00000000-0000-0000-0000-000000000001",
+              "record_id": "00000000-0000-0000-0000-000000000008",
+              "recorded_at": "2026-11-15T00:00:10.000010Z",
+              "remote_confirmed_at": null,
+              "remote_receipt": null,
+              "secret_version": 1,
+              "status": "pending"
+            },
+            {
+              "action": "rotate",
+              "applied_at": null,
+              "applied_generation": null,
+              "generation": 6,
+              "instance_id": null,
+              "key_id": "00000000-0000-0000-0000-000000000004",
+              "record_id": "00000000-0000-0000-0000-00000000000a",
+              "recorded_at": "2026-11-15T00:00:12.000012Z",
+              "remote_confirmed_at": null,
+              "remote_receipt": null,
+              "secret_version": 2,
+              "status": "pending"
+            },
+            {
+              "action": "delete",
+              "applied_at": null,
+              "applied_generation": null,
+              "generation": 7,
+              "instance_id": null,
+              "key_id": "00000000-0000-0000-0000-000000000004",
+              "record_id": "00000000-0000-0000-0000-00000000000d",
+              "recorded_at": "2026-11-15T00:00:17.000017Z",
+              "remote_confirmed_at": null,
+              "remote_receipt": null,
+              "secret_version": 2,
+              "status": "pending"
+            },
+            {
+              "action": "limit_lower",
+              "applied_at": null,
+              "applied_generation": null,
+              "generation": 8,
+              "instance_id": null,
+              "key_id": null,
+              "record_id": "00000000-0000-0000-0000-00000000000f",
+              "recorded_at": "2026-11-15T00:00:19.000019Z",
+              "remote_confirmed_at": null,
+              "remote_receipt": null,
+              "secret_version": null,
+              "status": "pending"
+            }
+          ],
+          "state": {
+            "exported_at": "2026-11-15T00:00:22.000022Z",
+            "format": "um-share-security-state-v1",
+            "generation_floor": 8,
+            "pending_remote": 4,
+            "records": [
+              {
+                "action": "limit_lower",
+                "applied_at": null,
+                "applied_generation": null,
+                "generation": 5,
+                "instance_id": null,
+                "key_id": "00000000-0000-0000-0000-000000000001",
+                "record_id": "00000000-0000-0000-0000-000000000008",
+                "recorded_at": "2026-11-15T00:00:10.000010Z",
+                "remote_confirmed_at": null,
+                "remote_receipt": null,
+                "secret_version": 1,
+                "status": "pending"
+              },
+              {
+                "action": "rotate",
+                "applied_at": null,
+                "applied_generation": null,
+                "generation": 6,
+                "instance_id": null,
+                "key_id": "00000000-0000-0000-0000-000000000004",
+                "record_id": "00000000-0000-0000-0000-00000000000a",
+                "recorded_at": "2026-11-15T00:00:12.000012Z",
+                "remote_confirmed_at": null,
+                "remote_receipt": null,
+                "secret_version": 2,
+                "status": "pending"
+              },
+              {
+                "action": "delete",
+                "applied_at": null,
+                "applied_generation": null,
+                "generation": 7,
+                "instance_id": null,
+                "key_id": "00000000-0000-0000-0000-000000000004",
+                "record_id": "00000000-0000-0000-0000-00000000000d",
+                "recorded_at": "2026-11-15T00:00:17.000017Z",
+                "remote_confirmed_at": null,
+                "remote_receipt": null,
+                "secret_version": 2,
+                "status": "pending"
+              },
+              {
+                "action": "limit_lower",
+                "applied_at": null,
+                "applied_generation": null,
+                "generation": 8,
+                "instance_id": null,
+                "key_id": null,
+                "record_id": "00000000-0000-0000-0000-00000000000f",
+                "recorded_at": "2026-11-15T00:00:19.000019Z",
+                "remote_confirmed_at": null,
+                "remote_receipt": null,
+                "secret_version": null,
+                "status": "pending"
+              }
+            ]
+          }
+        }
+      },
+      "step": "snapshot"
+    },
+    {
+      "result": {
+        "created_at": "2026-11-15T00:00:20.000020Z",
+        "id": "00000000-0000-0000-0000-000000000010",
+        "idempotency_key": null,
+        "kind": "publish",
+        "payload": {
+          "action_kind": "set_share_limits",
+          "key_id": null,
+          "revoking": true,
+          "target_generation": 8
+        },
+        "status": "pending"
+      },
+      "step": "pending-intent"
+    }
+  ],
+  "migration": {
+    "columns": {
+      "configgen": [
+        [
+          "schema_version",
+          "INTEGER",
+          1,
+          null,
+          0
+        ],
+        [
+          "config_generation",
+          "INTEGER",
+          1,
+          null,
+          0
+        ],
+        [
+          "applied_generation",
+          "INTEGER",
+          1,
+          "0",
+          0
+        ]
+      ],
+      "keys": [
+        [
+          "key_id",
+          "TEXT",
+          0,
+          null,
+          1
+        ],
+        [
+          "name",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "secret_hash",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "secret_version",
+          "INTEGER",
+          1,
+          "1",
+          0
+        ],
+        [
+          "masked_key",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "enabled",
+          "INTEGER",
+          1,
+          "1",
+          0
+        ],
+        [
+          "created_at",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "updated_at",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "deleted_at",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "row_version",
+          "INTEGER",
+          1,
+          "1",
+          0
+        ],
+        [
+          "max_concurrency",
+          "INTEGER",
+          1,
+          "1",
+          0
+        ],
+        [
+          "secret_blob",
+          "BLOB",
+          0,
+          null,
+          0
+        ],
+        [
+          "secret_algo",
+          "TEXT",
+          0,
+          null,
+          0
+        ]
+      ],
+      "meta": [
+        [
+          "key",
+          "TEXT",
+          0,
+          null,
+          1
+        ],
+        [
+          "value",
+          "TEXT",
+          1,
+          null,
+          0
+        ]
+      ],
+      "ops": [
+        [
+          "id",
+          "TEXT",
+          0,
+          null,
+          1
+        ],
+        [
+          "kind",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "idempotency_key",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "status",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "payload",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "created_at",
+          "TEXT",
+          1,
+          null,
+          0
+        ]
+      ],
+      "security": [
+        [
+          "record_id",
+          "TEXT",
+          0,
+          null,
+          1
+        ],
+        [
+          "key_id",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "generation",
+          "INTEGER",
+          1,
+          null,
+          0
+        ],
+        [
+          "action",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "secret_version",
+          "INTEGER",
+          0,
+          null,
+          0
+        ],
+        [
+          "status",
+          "TEXT",
+          1,
+          "'pending'",
+          0
+        ],
+        [
+          "recorded_at",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "applied_at",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "applied_generation",
+          "INTEGER",
+          0,
+          null,
+          0
+        ],
+        [
+          "instance_id",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "remote_confirmed_at",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "remote_receipt",
+          "TEXT",
+          0,
+          null,
+          0
+        ]
+      ]
+    },
+    "configgen": [
+      {
+        "applied_generation": 0,
+        "config_generation": 1,
+        "schema_version": 3
+      }
+    ],
+    "legacy_row": [
+      {
+        "deleted_at": null,
+        "enabled": 1,
+        "key_id": "legacy-key",
+        "masked_key": "legacy-****",
+        "max_concurrency": 1,
+        "name": "legacy",
+        "row_version": 4,
+        "secret_algo": null,
+        "secret_blob": null,
+        "secret_version": 3
+      }
+    ],
+    "meta": {
+      "schema_version": "3",
+      "share_max_concurrency": "2"
+    },
+    "setup_sql": "\n        CREATE TABLE meta (\n            key TEXT PRIMARY KEY, value TEXT NOT NULL\n        );\n        CREATE TABLE keys (\n            key_id TEXT PRIMARY KEY,\n            name TEXT NOT NULL,\n            secret_hash TEXT NOT NULL,\n            secret_version INTEGER NOT NULL DEFAULT 1,\n            masked_key TEXT NOT NULL,\n            enabled INTEGER NOT NULL DEFAULT 1,\n            created_at TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            deleted_at TEXT,\n            row_version INTEGER NOT NULL DEFAULT 1,\n            UNIQUE(name, deleted_at)\n        );\n        CREATE TABLE ops (\n            id TEXT PRIMARY KEY,\n            kind TEXT NOT NULL,\n            idempotency_key TEXT,\n            status TEXT NOT NULL,\n            payload TEXT,\n            created_at TEXT NOT NULL,\n            UNIQUE(idempotency_key)\n        );\n        CREATE TABLE configgen (\n            schema_version INTEGER NOT NULL,\n            config_generation INTEGER NOT NULL,\n            applied_generation INTEGER NOT NULL DEFAULT 0\n        );\n        CREATE TABLE security (\n            record_id TEXT PRIMARY KEY,\n            key_id TEXT,\n            generation INTEGER NOT NULL,\n            action TEXT NOT NULL,\n            secret_version INTEGER,\n            status TEXT NOT NULL DEFAULT 'pending',\n            recorded_at TEXT NOT NULL,\n            applied_at TEXT,\n            applied_generation INTEGER,\n            instance_id TEXT,\n            remote_confirmed_at TEXT,\n            remote_receipt TEXT\n        );\n        INSERT INTO meta(key,value) VALUES('schema_version','1');\n        INSERT INTO configgen(schema_version,config_generation,applied_generation)\n            VALUES(1,1,0);\n        INSERT INTO keys(key_id,name,secret_hash,secret_version,masked_key,\n            enabled,created_at,updated_at,deleted_at,row_version)\n            VALUES('legacy-key','legacy','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',3,'legacy-****',1,\n            '2026-11-14T00:00:00.000000Z','2026-11-14T00:00:00.000000Z',\n            NULL,4);\n        "
+  },
+  "projection": {
+    "accepted": [
+      {
+        "input": {
+          "config_generation": 3,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        },
+        "output": {
+          "config_generation": 3,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      },
+      {
+        "input": {
+          "config_generation": 1,
+          "data": [],
+          "schema_version": 1
+        },
+        "output": {
+          "config_generation": 1,
+          "data": [],
+          "schema_version": 1,
+          "share_max_concurrency": 2
+        }
+      },
+      {
+        "input": {
+          "config_generation": 2,
+          "data": [
+            {
+              "enabled": false,
+              "key_id": "k1",
+              "max_concurrency": 64,
+              "name": "n1",
+              "secret_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "secret_version": 2
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 128
+        },
+        "output": {
+          "config_generation": 2,
+          "data": [
+            {
+              "enabled": false,
+              "key_id": "k1",
+              "max_concurrency": 48,
+              "name": "n1",
+              "secret_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "secret_version": 2
+            }
+          ],
+          "schema_version": 2,
+          "share_max_concurrency": 64
+        }
+      }
+    ],
+    "rejected": [
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [],
+          "schema_version": true
+        },
+        "message": "unsupported projection schema"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [],
+          "schema_version": 3
+        },
+        "message": "unsupported projection schema"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": -1,
+          "data": [],
+          "schema_version": 2
+        },
+        "message": "invalid projection generation"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": "x",
+          "schema_version": 2
+        },
+        "message": "invalid projection data"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [],
+          "schema_version": 2,
+          "unknown": 1
+        },
+        "message": "projection has unknown fields"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [
+            {
+              "enabled": true,
+              "extra": 1,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2
+        },
+        "message": "projection entry has unknown field(s): ['extra']"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2
+        },
+        "message": "invalid projection digest"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2
+        },
+        "message": "invalid projection digest"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 0
+            }
+          ],
+          "schema_version": 2
+        },
+        "message": "invalid secret version"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [
+            {
+              "enabled": 1,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2
+        },
+        "message": "invalid enabled state"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 0,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2
+        },
+        "message": "projection field max_concurrency must be an integer in 1..64"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 65,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2
+        },
+        "message": "projection field max_concurrency must be an integer in 1..64"
+      },
+      {
+        "code": "bad_request",
+        "input": {
+          "config_generation": 1,
+          "data": [
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n1",
+              "secret_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "secret_version": 1
+            },
+            {
+              "enabled": true,
+              "key_id": "k1",
+              "max_concurrency": 16,
+              "name": "n2",
+              "secret_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "secret_version": 1
+            }
+          ],
+          "schema_version": 2
+        },
+        "message": "duplicate projection identity"
+      }
+    ]
+  },
+  "schema": {
+    "columns": {
+      "configgen": [
+        [
+          "schema_version",
+          "INTEGER",
+          1,
+          null,
+          0
+        ],
+        [
+          "config_generation",
+          "INTEGER",
+          1,
+          null,
+          0
+        ],
+        [
+          "applied_generation",
+          "INTEGER",
+          1,
+          "0",
+          0
+        ]
+      ],
+      "keys": [
+        [
+          "key_id",
+          "TEXT",
+          0,
+          null,
+          1
+        ],
+        [
+          "name",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "secret_hash",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "secret_version",
+          "INTEGER",
+          1,
+          "1",
+          0
+        ],
+        [
+          "masked_key",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "secret_blob",
+          "BLOB",
+          0,
+          null,
+          0
+        ],
+        [
+          "secret_algo",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "enabled",
+          "INTEGER",
+          1,
+          "1",
+          0
+        ],
+        [
+          "max_concurrency",
+          "INTEGER",
+          1,
+          "1",
+          0
+        ],
+        [
+          "created_at",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "updated_at",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "deleted_at",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "row_version",
+          "INTEGER",
+          1,
+          "1",
+          0
+        ]
+      ],
+      "meta": [
+        [
+          "key",
+          "TEXT",
+          0,
+          null,
+          1
+        ],
+        [
+          "value",
+          "TEXT",
+          1,
+          null,
+          0
+        ]
+      ],
+      "ops": [
+        [
+          "id",
+          "TEXT",
+          0,
+          null,
+          1
+        ],
+        [
+          "kind",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "idempotency_key",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "status",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "payload",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "created_at",
+          "TEXT",
+          1,
+          null,
+          0
+        ]
+      ],
+      "security": [
+        [
+          "record_id",
+          "TEXT",
+          0,
+          null,
+          1
+        ],
+        [
+          "key_id",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "generation",
+          "INTEGER",
+          1,
+          null,
+          0
+        ],
+        [
+          "action",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "secret_version",
+          "INTEGER",
+          0,
+          null,
+          0
+        ],
+        [
+          "status",
+          "TEXT",
+          1,
+          "'pending'",
+          0
+        ],
+        [
+          "recorded_at",
+          "TEXT",
+          1,
+          null,
+          0
+        ],
+        [
+          "applied_at",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "applied_generation",
+          "INTEGER",
+          0,
+          null,
+          0
+        ],
+        [
+          "instance_id",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "remote_confirmed_at",
+          "TEXT",
+          0,
+          null,
+          0
+        ],
+        [
+          "remote_receipt",
+          "TEXT",
+          0,
+          null,
+          0
+        ]
+      ]
+    },
+    "configgen": [
+      {
+        "applied_generation": 0,
+        "config_generation": 1,
+        "schema_version": 3
+      }
+    ],
+    "indexes": [
+      [
+        "idx_keys_active_name",
+        1
+      ],
+      [
+        "sqlite_autoindex_keys_2",
+        1
+      ],
+      [
+        "sqlite_autoindex_keys_1",
+        1
+      ]
+    ],
+    "meta": {
+      "schema_version": "3",
+      "share_max_concurrency": "64"
+    },
+    "objects": {
+      "index:idx_keys_active_name": "CREATE UNIQUE INDEX idx_keys_active_name ON keys(name) WHERE deleted_at IS NULL",
+      "index:idx_security_generation": "CREATE INDEX idx_security_generation ON security(generation)",
+      "table:configgen": "CREATE TABLE configgen ( schema_version INTEGER NOT NULL, config_generation INTEGER NOT NULL, applied_generation INTEGER NOT NULL DEFAULT 0 )",
+      "table:keys": "CREATE TABLE keys ( key_id TEXT PRIMARY KEY, name TEXT NOT NULL, secret_hash TEXT NOT NULL, secret_version INTEGER NOT NULL DEFAULT 1, masked_key TEXT NOT NULL, secret_blob BLOB, secret_algo TEXT, enabled INTEGER NOT NULL DEFAULT 1, max_concurrency INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, row_version INTEGER NOT NULL DEFAULT 1, UNIQUE(name, deleted_at) )",
+      "table:meta": "CREATE TABLE meta ( key TEXT PRIMARY KEY, value TEXT NOT NULL )",
+      "table:ops": "CREATE TABLE ops ( id TEXT PRIMARY KEY, kind TEXT NOT NULL, idempotency_key TEXT, status TEXT NOT NULL, payload TEXT, created_at TEXT NOT NULL, UNIQUE(idempotency_key) )",
+      "table:security": "CREATE TABLE security ( record_id TEXT PRIMARY KEY, key_id TEXT, generation INTEGER NOT NULL, action TEXT NOT NULL, secret_version INTEGER, status TEXT NOT NULL DEFAULT 'pending', recorded_at TEXT NOT NULL, applied_at TEXT, applied_generation INTEGER, instance_id TEXT, remote_confirmed_at TEXT, remote_receipt TEXT )"
+    },
+    "projection_schema_version": 2,
+    "schema_version": 3
+  },
+  "secret_vectors": [
+    {
+      "aad": "aesgcm-file-key-v1",
+      "blob_hex": "7bd198addd4df1d825c9c545704dbca9e37165671db75717b9ffd1e0a19a3bd45aa14b4e01d1afbe782e7591fbef5f",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "000000000000000000000000",
+      "plaintext": "um-share-alpha-0123456789abcdef"
+    },
+    {
+      "aad": "aesgcm-file-key-v1",
+      "blob_hex": "02aec84600e41a03f936026c794a62e9f95dbbeea7b42ee592b96488f86fad8e2ae63c9bb764d00e0ba9014c6b1d",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "010101010101010101010101",
+      "plaintext": "um-share-beta-0123456789abcdef"
+    }
+  ]
+}
