@@ -39,12 +39,7 @@ fn share_mode_route_cases_match_python() {
             "status for {}",
             case["name"]
         );
-        assert_eq!(
-            response.json(),
-            case["body"],
-            "body for {}",
-            case["name"]
-        );
+        assert_eq!(response.json(), case["body"], "body for {}", case["name"]);
     }
 }
 

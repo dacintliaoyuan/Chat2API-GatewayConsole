@@ -155,8 +155,7 @@ impl GatewayConfig {
         }
         if let Ok(value) = std::env::var("CHAT2API_SHARE_MAX_REQUEST_BYTES") {
             if let Ok(parsed) = value.parse::<u64>() {
-                config.share_max_request_bytes =
-                    parsed.clamp(1, MAX_SHARE_REQUEST_BYTES);
+                config.share_max_request_bytes = parsed.clamp(1, MAX_SHARE_REQUEST_BYTES);
             }
         }
         if let Ok(value) = std::env::var("CHAT2API_CONTROL_TOKEN_FILE") {
@@ -192,7 +191,8 @@ impl GatewayConfig {
                 "share request body limit must be 1..1073741824".to_string(),
             ));
         }
-        if self.local_max_request_bytes == 0 || self.local_max_request_bytes > CONSOLE_MAX_REQUEST_BYTES
+        if self.local_max_request_bytes == 0
+            || self.local_max_request_bytes > CONSOLE_MAX_REQUEST_BYTES
         {
             return Err(ConfigError(
                 "console request body limit must be 1..65536".to_string(),
@@ -219,9 +219,9 @@ pub fn parse_upstream_base_url(value: &str) -> Result<(String, u16), ConfigError
     }
     let (host, port) = match rest.rsplit_once(':') {
         Some((host, port)) => {
-            let port = port.parse::<u16>().map_err(|_| {
-                ConfigError(format!("invalid upstream port in {value}"))
-            })?;
+            let port = port
+                .parse::<u16>()
+                .map_err(|_| ConfigError(format!("invalid upstream port in {value}")))?;
             (host, port)
         }
         None => (rest, 80),
@@ -235,10 +235,7 @@ pub fn parse_upstream_base_url(value: &str) -> Result<(String, u16), ConfigError
 }
 
 /// Parse one share configuration document.
-pub fn parse_share_config(
-    document: &str,
-    auth_mode: AuthMode,
-) -> Result<ShareConfig, ConfigError> {
+pub fn parse_share_config(document: &str, auth_mode: AuthMode) -> Result<ShareConfig, ConfigError> {
     let value: Value = serde_json::from_str(document)
         .map_err(|_| ConfigError("Invalid sharing configuration".to_string()))?;
     parse_share_config_value(&value, auth_mode)
@@ -257,11 +254,13 @@ pub fn parse_share_config_value(
     if object.contains_key("clients") {
         if auth_mode == AuthMode::Projection {
             return Err(ConfigError(
-                "Legacy client configuration is not allowed in projection mode"
-                    .to_string(),
+                "Legacy client configuration is not allowed in projection mode".to_string(),
             ));
         }
-        if projection_markers.iter().any(|marker| object.contains_key(*marker)) {
+        if projection_markers
+            .iter()
+            .any(|marker| object.contains_key(*marker))
+        {
             return Err(ConfigError(
                 "Mixed sharing configuration format".to_string(),
             ));
@@ -302,7 +301,10 @@ pub fn parse_share_config_value(
         });
     }
 
-    if projection_markers.iter().any(|marker| object.contains_key(*marker)) {
+    if projection_markers
+        .iter()
+        .any(|marker| object.contains_key(*marker))
+    {
         if auth_mode == AuthMode::Legacy {
             return Err(ConfigError(
                 "Projection configuration is not allowed in legacy mode".to_string(),
@@ -311,22 +313,20 @@ pub fn parse_share_config_value(
         return parse_projection(object);
     }
 
-    Err(ConfigError(
-        "Unsupported sharing configuration".to_string(),
-    ))
+    Err(ConfigError("Unsupported sharing configuration".to_string()))
 }
 
-fn parse_projection(
-    object: &serde_json::Map<String, Value>,
-) -> Result<ShareConfig, ConfigError> {
-    let allowed: BTreeSet<&str> =
-        ["schema_version", "config_generation", "data", "share_max_concurrency"]
-            .into_iter()
-            .collect();
+fn parse_projection(object: &serde_json::Map<String, Value>) -> Result<ShareConfig, ConfigError> {
+    let allowed: BTreeSet<&str> = [
+        "schema_version",
+        "config_generation",
+        "data",
+        "share_max_concurrency",
+    ]
+    .into_iter()
+    .collect();
     if object.keys().any(|key| !allowed.contains(key.as_str())) {
-        return Err(ConfigError(
-            "projection has unknown fields".to_string(),
-        ));
+        return Err(ConfigError("projection has unknown fields".to_string()));
     }
     let schema = object
         .get("schema_version")
@@ -386,9 +386,7 @@ fn parse_projection(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| ConfigError("invalid projection identity".to_string()))?;
         if !seen_ids.insert(key_id.to_string()) || !seen_names.insert(name.to_string()) {
-            return Err(ConfigError(
-                "duplicate projection identity".to_string(),
-            ));
+            return Err(ConfigError("duplicate projection identity".to_string()));
         }
         let digest = item
             .get("secret_hash")
@@ -463,7 +461,10 @@ pub fn load_share_config(
     auth_mode: AuthMode,
 ) -> Result<ShareConfig, ConfigError> {
     let document = fs::read_to_string(path).map_err(|error| {
-        ConfigError(format!("cannot read share config {}: {error}", path.display()))
+        ConfigError(format!(
+            "cannot read share config {}: {error}",
+            path.display()
+        ))
     })?;
     parse_share_config(&document, auth_mode)
 }

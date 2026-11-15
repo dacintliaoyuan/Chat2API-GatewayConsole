@@ -88,11 +88,7 @@ impl GatewayError {
     }
 
     pub fn invalid_body() -> Self {
-        Self::new(
-            400,
-            "Request body must be a JSON object",
-            "invalid_body",
-        )
+        Self::new(400, "Request body must be a JSON object", "invalid_body")
     }
 
     pub fn payload_too_large() -> Self {
@@ -100,11 +96,7 @@ impl GatewayError {
     }
 
     pub fn unsupported_chat_request() -> Self {
-        Self::new(
-            400,
-            "unsupported_chat_request",
-            "unsupported_chat_request",
-        )
+        Self::new(400, "unsupported_chat_request", "unsupported_chat_request")
     }
 
     pub fn unsupported_messages_request() -> Self {
@@ -116,11 +108,7 @@ impl GatewayError {
     }
 
     pub fn unsupported_responses_request() -> Self {
-        Self::new(
-            400,
-            "unsupported_responses_request",
-            "chat2api_error",
-        )
+        Self::new(400, "unsupported_responses_request", "chat2api_error")
     }
 
     pub fn route_not_shared() -> Self {
@@ -132,16 +120,11 @@ impl GatewayError {
     }
 
     pub fn invalid_api_key() -> Self {
-        Self::new(401, "invalid_api_key", "share_gateway_error")
-            .with_code("invalid_api_key")
+        Self::new(401, "invalid_api_key", "share_gateway_error").with_code("invalid_api_key")
     }
 
     pub fn local_auth_error() -> Self {
-        Self::new(
-            401,
-            "Local API key missing or invalid",
-            "local_auth_error",
-        )
+        Self::new(401, "Local API key missing or invalid", "local_auth_error")
     }
 
     pub fn origin_denied() -> Self {
@@ -166,12 +149,8 @@ impl GatewayError {
     }
 
     pub fn sharing_limit_reached(reason: Option<&str>, detail: Option<&str>) -> Self {
-        let mut error = Self::new(
-            429,
-            "sharing_limit_reached",
-            "share_gateway_error",
-        )
-        .with_code("sharing_limit_reached");
+        let mut error = Self::new(429, "sharing_limit_reached", "share_gateway_error")
+            .with_code("sharing_limit_reached");
         error.reason = Some(
             reason
                 .map(|reason| Value::String(reason.to_string()))
@@ -212,12 +191,8 @@ impl GatewayError {
     }
 
     pub fn not_implemented(feature: &str) -> Self {
-        Self::new(
-            501,
-            "not_implemented",
-            "not_implemented",
-        )
-        .with_detail(Value::String(feature.to_string()))
+        Self::new(501, "not_implemented", "not_implemented")
+            .with_detail(Value::String(feature.to_string()))
     }
 
     // ----- console (8002) request-boundary codes (usagesrv.py) -----
@@ -241,6 +216,10 @@ impl GatewayError {
             .map(|field| format!("'{field}'"))
             .collect::<Vec<_>>()
             .join(", ");
-        Self::new(400, format!("unknown field(s): [{list}]"), "invalid_request")
+        Self::new(
+            400,
+            format!("unknown field(s): [{list}]"),
+            "invalid_request",
+        )
     }
 }

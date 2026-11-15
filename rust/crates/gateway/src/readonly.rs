@@ -81,11 +81,12 @@ impl UpstreamClient {
             .map_err(|_| UpstreamFailure::ConnectionError)?
             .next()
             .ok_or(UpstreamFailure::ConnectionError)?;
-        let mut stream = TcpStream::connect_timeout(&address, self.timeout)
-            .map_err(|error| match error.kind() {
+        let mut stream = TcpStream::connect_timeout(&address, self.timeout).map_err(|error| {
+            match error.kind() {
                 std::io::ErrorKind::TimedOut => UpstreamFailure::Timeout,
                 _ => UpstreamFailure::ConnectionError,
-            })?;
+            }
+        })?;
         let _ = stream.set_read_timeout(Some(self.timeout));
         let _ = stream.set_write_timeout(Some(self.timeout));
         let mut request = format!(
@@ -117,9 +118,7 @@ impl UpstreamClient {
     }
 }
 
-fn read_upstream_response(
-    stream: &mut TcpStream,
-) -> Result<UpstreamResponse, UpstreamFailure> {
+fn read_upstream_response(stream: &mut TcpStream) -> Result<UpstreamResponse, UpstreamFailure> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {
@@ -275,9 +274,7 @@ impl ProxyState {
                 }
             }
             Err(UpstreamFailure::Timeout) => (None, Some("timeout"), None),
-            Err(UpstreamFailure::ConnectionError) => {
-                (None, Some("network_error"), None)
-            }
+            Err(UpstreamFailure::ConnectionError) => (None, Some("network_error"), None),
         };
         let mut freshness = self.config_freshness.lock().expect("config poisoned");
         freshness.attempt_epoch = Some(epoch_now());
@@ -292,11 +289,7 @@ impl ProxyState {
                 "at_epoch": epoch_now(),
                 "upstream_status": status,
             }));
-            self.record_reachability(
-                "unknown",
-                Some("config_probe_failed"),
-                status,
-            );
+            self.record_reachability("unknown", Some("config_probe_failed"), status);
         }
     }
 
@@ -353,17 +346,9 @@ impl ProxyState {
         }
     }
 
-    fn record_reachability(
-        &self,
-        state: &str,
-        reason: Option<&str>,
-        upstream_status: Option<u16>,
-    ) {
+    fn record_reachability(&self, state: &str, reason: Option<&str>, upstream_status: Option<u16>) {
         let now = epoch_now();
-        let mut upstream = self
-            .upstream_state
-            .lock()
-            .expect("upstream state poisoned");
+        let mut upstream = self.upstream_state.lock().expect("upstream state poisoned");
         let previous = upstream.state.clone();
         let had_observation = upstream.checked_epoch.is_some();
         let changed = previous != state;
@@ -391,10 +376,7 @@ impl ProxyState {
     }
 
     fn upstream_snapshot(&self) -> Value {
-        let upstream = self
-            .upstream_state
-            .lock()
-            .expect("upstream state poisoned");
+        let upstream = self.upstream_state.lock().expect("upstream state poisoned");
         json!({
             "state": upstream.state,
             "reason": upstream.reason,
@@ -479,9 +461,7 @@ impl ProxyState {
         }
         match self.upstream.get_json("/api/models", Some(&self.bearer)) {
             Err(UpstreamFailure::Timeout) => ("unknown", Some("timeout"), None),
-            Err(UpstreamFailure::ConnectionError) => {
-                ("unknown", Some("network_error"), None)
-            }
+            Err(UpstreamFailure::ConnectionError) => ("unknown", Some("network_error"), None),
             Ok((status, payload)) => {
                 if status == 401 || status == 403 {
                     ("rejected", Some("upstream_rejected"), Some(status))
@@ -544,9 +524,7 @@ impl ProxyState {
         let observed = self.upstream.get_json("/api/models", Some(&self.bearer));
         let fetched = match observed {
             Ok((status, payload)) if status == 200 => payload.and_then(|payload| {
-                if payload.is_object()
-                    && payload.get("data").and_then(Value::as_array).is_some()
-                {
+                if payload.is_object() && payload.get("data").and_then(Value::as_array).is_some() {
                     Some(payload)
                 } else {
                     None

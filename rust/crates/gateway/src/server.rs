@@ -13,17 +13,11 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::body::{
-    read_json_body, reject_unknown_fields, BodyPolicy,
-};
+use crate::body::{read_json_body, reject_unknown_fields, BodyPolicy};
 use crate::config::{AuthMode, ConfigError, GatewayConfig};
 use crate::error::GatewayError;
-use crate::gate::{
-    constant_time_eq, ensure_control_token, InflightCtx, RefusalReason, ShareGate,
-};
-use crate::http::{
-    read_request, write_response, BodyRead, Headers, Request, Response,
-};
+use crate::gate::{constant_time_eq, ensure_control_token, InflightCtx, RefusalReason, ShareGate};
+use crate::http::{read_request, write_response, BodyRead, Headers, Request, Response};
 use crate::readonly::ProxyState;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -77,9 +71,7 @@ impl GatewayServer {
         });
         let listener = TcpListener::bind((config.bind_host.as_str(), config.bind_port))
             .map_err(ServerError::Io)?;
-        listener
-            .set_nonblocking(true)
-            .map_err(ServerError::Io)?;
+        listener.set_nonblocking(true).map_err(ServerError::Io)?;
         let addr = listener.local_addr().map_err(ServerError::Io)?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = Arc::clone(&shutdown);
@@ -172,10 +164,8 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
             Ok(Some(request)) => request,
             Ok(None) => return,
             Err(_) => {
-                let response = GatewayError::invalid_request(
-                    "Invalid request line or headers",
-                )
-                .response();
+                let response =
+                    GatewayError::invalid_request("Invalid request line or headers").response();
                 let _ = write_response(&mut stream, &response);
                 return;
             }
@@ -250,11 +240,9 @@ fn admit_share(
 ) -> Result<Admission, GatewayError> {
     let path = request.path();
     if path.starts_with("/v1/models") {
-        model_catalog_limit(request.raw_target())
-            .map_err(|_| GatewayError::route_not_shared())?;
+        model_catalog_limit(request.raw_target()).map_err(|_| GatewayError::route_not_shared())?;
     } else if path.starts_with("/v1/messages") {
-        messages_query(request.raw_target())
-            .map_err(|_| GatewayError::route_not_shared())?;
+        messages_query(request.raw_target()).map_err(|_| GatewayError::route_not_shared())?;
     } else if !matches!(path, "/v1/chat/completions" | "/v1/responses") {
         return Err(GatewayError::route_not_shared());
     }
@@ -383,8 +371,7 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
             };
             Response::json(200, &json!({"released": gate.terminate_key(key_id)}))
         }
-        "/v1/chat/completions" | "/api/chat/completions"
-        | "/api/v1/chat/completions" => {
+        "/v1/chat/completions" | "/api/chat/completions" | "/api/v1/chat/completions" => {
             if let Err(error) = local_key_allowed(state, request) {
                 return error.response();
             }
@@ -538,10 +525,7 @@ fn local_key_allowed(state: &AppState, request: &Request) -> Result<(), GatewayE
         return Ok(());
     }
     let authorization = request.headers.get("Authorization").unwrap_or_default();
-    let mut supplied = if authorization
-        .to_ascii_lowercase()
-        .starts_with("bearer ")
-    {
+    let mut supplied = if authorization.to_ascii_lowercase().starts_with("bearer ") {
         authorization[7..].trim()
     } else {
         ""
@@ -566,13 +550,8 @@ fn control_allowed(state: &AppState, request: &Request) -> Result<(), GatewayErr
         return Err(GatewayError::control_denied_endpoint());
     }
     let expected = state.control_token.as_deref().unwrap_or_default();
-    let supplied = request
-        .headers
-        .get("X-Admin-Control")
-        .unwrap_or_default();
-    if expected.is_empty()
-        || !constant_time_eq(supplied.as_bytes(), expected.as_bytes())
-    {
+    let supplied = request.headers.get("X-Admin-Control").unwrap_or_default();
+    if expected.is_empty() || !constant_time_eq(supplied.as_bytes(), expected.as_bytes()) {
         return Err(GatewayError::control_denied_token());
     }
     Ok(())
@@ -592,7 +571,10 @@ pub fn is_local_control_request(peer_ip: IpAddr, host: &str, origin: Option<&str
     } else {
         host.split(':').next().unwrap_or_default()
     };
-    matches!(hostname.to_ascii_lowercase().as_str(), "127.0.0.1" | "localhost" | "::1")
+    matches!(
+        hostname.to_ascii_lowercase().as_str(),
+        "127.0.0.1" | "localhost" | "::1"
+    )
 }
 
 /// Accept only Harness's bounded catalog query.
@@ -668,10 +650,18 @@ pub fn valid_chat_request(body: &serde_json::Map<String, Value>) -> bool {
     if body.keys().any(|key| !allowed.contains(&key.as_str())) {
         return false;
     }
-    if !body.get("model").and_then(Value::as_str).is_some_and(|value| !value.is_empty()) {
+    if !body
+        .get("model")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+    {
         return false;
     }
-    if !body.get("messages").and_then(Value::as_array).is_some_and(|value| !value.is_empty()) {
+    if !body
+        .get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|value| !value.is_empty())
+    {
         return false;
     }
     if !matches!(body.get("stream"), None | Some(Value::Bool(_))) {
@@ -700,10 +690,18 @@ pub fn valid_messages_request(body: &serde_json::Map<String, Value>) -> bool {
     if body.keys().any(|key| !allowed.contains(&key.as_str())) {
         return false;
     }
-    if !body.get("model").and_then(Value::as_str).is_some_and(|value| !value.is_empty()) {
+    if !body
+        .get("model")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+    {
         return false;
     }
-    if !body.get("messages").and_then(Value::as_array).is_some_and(|value| !value.is_empty()) {
+    if !body
+        .get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|value| !value.is_empty())
+    {
         return false;
     }
     if !body

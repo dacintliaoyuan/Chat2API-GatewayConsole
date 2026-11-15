@@ -23,7 +23,9 @@ fn version_is_route_not_shared_in_share_mode() {
     .expect("share version");
     assert_eq!(
         u64::from(response.status),
-        fixture["readOnly"]["versionShare"]["status"].as_u64().unwrap()
+        fixture["readOnly"]["versionShare"]["status"]
+            .as_u64()
+            .unwrap()
     );
     assert_eq!(response.json(), fixture["readOnly"]["versionShare"]["body"]);
     assert_eq!(response.header("connection"), Some("close"));

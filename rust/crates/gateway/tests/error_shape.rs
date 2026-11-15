@@ -19,7 +19,14 @@ fn assert_unified(body: &Value) {
         .get("error")
         .and_then(Value::as_object)
         .unwrap_or_else(|| panic!("error is not an object: {body}"));
-    let allowed = ["message", "type", "detail", "code", "reason", "upstream_status"];
+    let allowed = [
+        "message",
+        "type",
+        "detail",
+        "code",
+        "reason",
+        "upstream_status",
+    ];
     for key in error.keys() {
         assert!(allowed.contains(&key.as_str()), "unexpected key: {key}");
     }

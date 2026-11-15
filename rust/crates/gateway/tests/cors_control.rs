@@ -34,7 +34,9 @@ fn cors_options_and_origin_cases_match_python() {
     .expect("options allowed");
     assert_eq!(
         u64::from(allowed.status),
-        fixture["cors"]["optionsAllowed"]["status"].as_u64().unwrap()
+        fixture["cors"]["optionsAllowed"]["status"]
+            .as_u64()
+            .unwrap()
     );
     assert_eq!(
         allowed.header("access-control-allow-origin"),
@@ -88,7 +90,10 @@ fn cors_options_and_origin_cases_match_python() {
         u64::from(origin_denied.status),
         fixture["cors"]["originDenied"]["status"].as_u64().unwrap()
     );
-    assert_eq!(origin_denied.json(), fixture["cors"]["originDenied"]["body"]);
+    assert_eq!(
+        origin_denied.json(),
+        fixture["cors"]["originDenied"]["body"]
+    );
     assert_eq!(
         origin_denied.header("access-control-allow-origin"),
         fixture["cors"]["originDenied"]["allowOrigin"].as_str()
@@ -124,9 +129,7 @@ fn control_request(name: &str, _case: &Value) -> ClientRequest {
     match name {
         "missing" => {}
         "wrong-token" => {
-            request = request
-                .header("X-Admin-Control", "wrong")
-                .json_body("{}");
+            request = request.header("X-Admin-Control", "wrong").json_body("{}");
         }
         "origin-present" => {
             request = request
@@ -243,8 +246,7 @@ fn every_error_response_actively_closes_the_connection() {
 
     let (missing, closed) = client_request_and_check_close(
         gateway.addr,
-        &ClientRequest::post("/admin/share/revoke", "")
-            .json_body("{}"),
+        &ClientRequest::post("/admin/share/revoke", "").json_body("{}"),
     )
     .expect("missing token");
     assert_eq!(

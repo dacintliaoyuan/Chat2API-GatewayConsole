@@ -23,15 +23,12 @@ pub const ALLOWED_ORIGIN: &str = "https://allowed.example";
 pub const DENIED_ORIGIN: &str = "https://denied.example";
 
 pub fn fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../tests/fixtures/rust_gateway_rev1.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/rust_gateway_rev1.json")
 }
 
 pub fn fixture() -> Value {
-    serde_json::from_str(
-        &std::fs::read_to_string(fixture_path()).expect("read gateway fixture"),
-    )
-    .expect("parse gateway fixture")
+    serde_json::from_str(&std::fs::read_to_string(fixture_path()).expect("read gateway fixture"))
+        .expect("parse gateway fixture")
 }
 
 pub fn shape(value: &Value) -> Value {
@@ -102,10 +99,7 @@ impl TempDir {
         let root = std::env::temp_dir();
         for _ in 0..100 {
             let sequence = SEQUENCE.fetch_add(1, Ordering::SeqCst);
-            let path = root.join(format!(
-                "{prefix}{}-{sequence}",
-                std::process::id()
-            ));
+            let path = root.join(format!("{prefix}{}-{sequence}", std::process::id()));
             match std::fs::create_dir(&path) {
                 Ok(()) => return Self { path },
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -254,7 +248,12 @@ fn serve_stub(
         Some(request) => request,
         None => return Ok(()),
     };
-    let path = request.path.split('?').next().unwrap_or_default().to_string();
+    let path = request
+        .path
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .to_string();
     let authorization = request.header("authorization");
     let models_header = request.header("x-chat2api-models");
     seen.lock().expect("stub seen").push(SeenRequest {
@@ -283,9 +282,7 @@ fn serve_stub(
         )
     } else if path == "/api/models" {
         let body = match authorization.as_deref() {
-            Some(value) if value.contains("rejected-token") => {
-                (401, json!({"detail": "rejected"}))
-            }
+            Some(value) if value.contains("rejected-token") => (401, json!({"detail": "rejected"})),
             Some(value) if value.contains("error-token") => {
                 (500, json!({"detail": "upstream failed"}))
             }
@@ -301,9 +298,9 @@ fn serve_stub(
             ),
         };
         if behaviour.delay > Duration::ZERO
-            && !authorization
-                .as_deref()
-                .is_some_and(|value| value.contains("rejected-token") || value.contains("error-token"))
+            && !authorization.as_deref().is_some_and(|value| {
+                value.contains("rejected-token") || value.contains("error-token")
+            })
         {
             thread::sleep(behaviour.delay);
         }
@@ -359,10 +356,8 @@ impl ClientRequest {
     }
 
     pub fn bearer(mut self, secret: &str) -> Self {
-        self.headers.push((
-            "Authorization".to_string(),
-            format!("Bearer {secret}"),
-        ));
+        self.headers
+            .push(("Authorization".to_string(), format!("Bearer {secret}")));
         self
     }
 
@@ -578,11 +573,7 @@ impl Drop for GatewayServerHandle {
     }
 }
 
-pub fn start_gateway(
-    stub: &StubUpstream,
-    temp: &TempDir,
-    share: bool,
-) -> Gateway {
+pub fn start_gateway(stub: &StubUpstream, temp: &TempDir, share: bool) -> Gateway {
     let share_config = if share {
         Some(temp.write("share.json", &legacy_share_config()))
     } else {
@@ -606,10 +597,7 @@ pub fn start_gateway(
     }
 }
 
-pub fn start_projection_gateway(
-    stub: &StubUpstream,
-    temp: &TempDir,
-) -> Gateway {
+pub fn start_projection_gateway(stub: &StubUpstream, temp: &TempDir) -> Gateway {
     let share_config = Some(temp.write("share-projection.json", &projection_share_config()));
     let control = temp.write("control.token", CONTROL_TOKEN);
     let config = GatewayConfig {

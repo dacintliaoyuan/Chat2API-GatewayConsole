@@ -9,10 +9,7 @@ use serde_json::{json, Value};
 
 use support::*;
 
-fn request_case(
-    gateway: &Gateway,
-    case: &Value,
-) -> ClientResponse {
+fn request_case(gateway: &Gateway, case: &Value) -> ClientResponse {
     let method = case["method"].as_str().expect("method");
     let target = case["target"].as_str().expect("target");
     let mut request = if method == "GET" {
@@ -34,10 +31,7 @@ fn request_case(
             request = request.header("Authorization", "Bearer ");
         }
         "overlong-authorization" => {
-            request = request.header(
-                "Authorization",
-                &format!("Bearer {}", "x".repeat(257)),
-            );
+            request = request.header("Authorization", &format!("Bearer {}", "x".repeat(257)));
         }
         "wrong-prefix" => {
             request = request.header("Authorization", &format!("Token {SHARE_SECRET}"));
@@ -123,7 +117,10 @@ fn duplicate_and_overlong_credentials_never_reach_the_digest_lookup() {
             json!("invalid_api_key"),
             "{name}"
         );
-        assert_eq!(response.json()["error"]["type"], json!("share_gateway_error"));
+        assert_eq!(
+            response.json()["error"]["type"],
+            json!("share_gateway_error")
+        );
         assert_eq!(response.header("connection"), Some("close"));
     }
 }
@@ -154,11 +151,9 @@ fn projection_config_is_not_downgraded_to_legacy() {
         }],
     })
     .to_string();
-    let config = um_gateway::config::parse_share_config(
-        &document,
-        um_gateway::config::AuthMode::Projection,
-    )
-    .expect("projection parses");
+    let config =
+        um_gateway::config::parse_share_config(&document, um_gateway::config::AuthMode::Projection)
+            .expect("projection parses");
     assert_eq!(config.config_generation, 1);
     assert_eq!(config.entries[0].max_concurrency, 1);
     assert_eq!(config.share_max_concurrency, 2);

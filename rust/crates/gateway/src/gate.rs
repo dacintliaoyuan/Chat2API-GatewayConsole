@@ -18,8 +18,7 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 
 use crate::config::{
-    load_share_config, AuthMode, ConfigError, ShareConfig, ShareEntry,
-    LEGACY_KEY_MAX_CONCURRENCY,
+    load_share_config, AuthMode, ConfigError, ShareConfig, ShareEntry, LEGACY_KEY_MAX_CONCURRENCY,
 };
 use crate::http::Headers;
 
@@ -160,8 +159,7 @@ impl ShareGate {
             .entries
             .iter()
             .find(|entry| {
-                entry.enabled
-                    && constant_time_eq(entry.secret_hash.as_bytes(), digest.as_bytes())
+                entry.enabled && constant_time_eq(entry.secret_hash.as_bytes(), digest.as_bytes())
             })?
             .clone();
         let mut guard = self.guard.lock().expect("share gate poisoned");
@@ -189,8 +187,7 @@ impl ShareGate {
             }
             return false;
         }
-        let (key_limit, share_max, config) = if generation.is_some() || secret_version.is_some()
-        {
+        let (key_limit, share_max, config) = if generation.is_some() || secret_version.is_some() {
             let fresh = match load_share_config(&self.config_path, self.auth_mode) {
                 Ok(fresh) => fresh,
                 Err(_) => return false,
@@ -209,7 +206,11 @@ impl ShareGate {
                     return false;
                 }
             }
-            (entry.max_concurrency, fresh.share_max_concurrency, Some(fresh))
+            (
+                entry.max_concurrency,
+                fresh.share_max_concurrency,
+                Some(fresh),
+            )
         } else {
             let key_limit = guard
                 .config
@@ -230,11 +231,7 @@ impl ShareGate {
             }
         }
         guard.history.retain(|_, entries| !entries.is_empty());
-        let recent_len = guard
-            .history
-            .get(key_id)
-            .map(VecDeque::len)
-            .unwrap_or(0);
+        let recent_len = guard.history.get(key_id).map(VecDeque::len).unwrap_or(0);
         if guard.active.get(key_id).copied().unwrap_or(0) >= key_limit {
             if let Some(reason) = reason_out.as_deref_mut() {
                 reason.set(
@@ -290,14 +287,8 @@ impl ShareGate {
 
     pub fn register_inflight(&self, key_id: &str, ctx: Arc<InflightCtx>) {
         let mut guard = self.guard.lock().expect("share gate poisoned");
-        let contexts = guard
-            .inflight
-            .entry(key_id.to_string())
-            .or_default();
-        if !contexts
-            .iter()
-            .any(|existing| Arc::ptr_eq(existing, &ctx))
-        {
+        let contexts = guard.inflight.entry(key_id.to_string()).or_default();
+        if !contexts.iter().any(|existing| Arc::ptr_eq(existing, &ctx)) {
             contexts.push(ctx);
         }
     }
@@ -434,5 +425,9 @@ fn generate_control_token() -> String {
             .to_le_bytes(),
     );
     hasher.update(SEQUENCE.fetch_add(1, Ordering::SeqCst).to_le_bytes());
-    hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

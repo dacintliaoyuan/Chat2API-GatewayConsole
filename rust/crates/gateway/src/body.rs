@@ -57,12 +57,8 @@ pub fn read_json_body(
     policy: BodyPolicy,
 ) -> Result<Option<serde_json::Map<String, Value>>, GatewayError> {
     match policy {
-        BodyPolicy::Share { max_request_bytes } => {
-            share_body(request, max_request_bytes)
-        }
-        BodyPolicy::Console { max_request_bytes } => {
-            console_body(request, max_request_bytes)
-        }
+        BodyPolicy::Share { max_request_bytes } => share_body(request, max_request_bytes),
+        BodyPolicy::Console { max_request_bytes } => console_body(request, max_request_bytes),
     }
 }
 
@@ -87,8 +83,8 @@ fn share_body(
             if bytes.is_empty() {
                 return Ok(None);
             }
-            let payload: Value = serde_json::from_slice(bytes)
-                .map_err(|_| GatewayError::invalid_json())?;
+            let payload: Value =
+                serde_json::from_slice(bytes).map_err(|_| GatewayError::invalid_json())?;
             match payload {
                 Value::Object(object) => Ok(Some(object)),
                 _ => Err(GatewayError::invalid_body()),
@@ -102,9 +98,7 @@ fn console_body(
     max_request_bytes: u64,
 ) -> Result<Option<serde_json::Map<String, Value>>, GatewayError> {
     reject_duplicate_sensitive_header(&request.headers)?;
-    if request.headers.has("Transfer-Encoding")
-        || request.headers.has("Content-Encoding")
-    {
+    if request.headers.has("Transfer-Encoding") || request.headers.has("Content-Encoding") {
         return Err(GatewayError::console_body(400, "unsupported_body_encoding"));
     }
     let lengths = request.headers.get_all("Content-Length");
@@ -153,18 +147,10 @@ fn console_body(
                 _ => Err(GatewayError::console_body(400, "invalid_json")),
             }
         }
-        BodyRead::InvalidLength => {
-            Err(GatewayError::console_body(400, "invalid_content_length"))
-        }
-        BodyRead::NegativeLength => {
-            Err(GatewayError::console_body(413, "request_too_large"))
-        }
-        BodyRead::TooLarge(_) => {
-            Err(GatewayError::console_body(413, "request_too_large"))
-        }
-        BodyRead::Incomplete => {
-            Err(GatewayError::console_body(400, "incomplete_body"))
-        }
+        BodyRead::InvalidLength => Err(GatewayError::console_body(400, "invalid_content_length")),
+        BodyRead::NegativeLength => Err(GatewayError::console_body(413, "request_too_large")),
+        BodyRead::TooLarge(_) => Err(GatewayError::console_body(413, "request_too_large")),
+        BodyRead::Incomplete => Err(GatewayError::console_body(400, "incomplete_body")),
     }
 }
 

@@ -146,7 +146,10 @@ impl Response {
 pub struct ReadError;
 
 /// Read one request from `stream`; `Ok(None)` is a clean EOF between requests.
-pub fn read_request(stream: &mut TcpStream, peer_ip: std::net::IpAddr) -> io::Result<Option<Request>> {
+pub fn read_request(
+    stream: &mut TcpStream,
+    peer_ip: std::net::IpAddr,
+) -> io::Result<Option<Request>> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     let header_end = loop {

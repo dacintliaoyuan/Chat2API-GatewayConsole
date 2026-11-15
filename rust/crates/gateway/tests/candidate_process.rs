@@ -97,11 +97,7 @@ fn the_candidate_refuses_8003_and_non_loopback_before_bind() {
         ("non-loopback", "0.0.0.0", "0"),
     ] {
         let mut command = candidate_command(&temp, &stub);
-        command
-            .arg("--host")
-            .arg(host)
-            .arg("--port")
-            .arg(port);
+        command.arg("--host").arg(host).arg("--port").arg(port);
         let output = command.output().expect("run rejected candidate");
         assert!(
             !output.status.success(),

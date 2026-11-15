@@ -33,7 +33,9 @@ fn health_ready_version_and_models_match_the_python_shapes() {
     let ready = get(gateway.addr, "/ready");
     assert_eq!(
         u64::from(ready.status),
-        fixture["readOnly"]["readyValid"]["status"].as_u64().unwrap()
+        fixture["readOnly"]["readyValid"]["status"]
+            .as_u64()
+            .unwrap()
     );
     assert_eq!(
         shape(&ready.json()),
@@ -43,7 +45,9 @@ fn health_ready_version_and_models_match_the_python_shapes() {
     let version_share = get(gateway.addr, "/v1/version");
     assert_eq!(
         u64::from(version_share.status),
-        fixture["readOnly"]["versionShare"]["status"].as_u64().unwrap()
+        fixture["readOnly"]["versionShare"]["status"]
+            .as_u64()
+            .unwrap()
     );
     assert_eq!(
         version_share.json(),
@@ -70,7 +74,9 @@ fn health_ready_version_and_models_match_the_python_shapes() {
     .expect("raw fresh models");
     assert_eq!(
         u64::from(raw_fresh.status),
-        fixture["readOnly"]["modelsRawFresh"]["status"].as_u64().unwrap()
+        fixture["readOnly"]["modelsRawFresh"]["status"]
+            .as_u64()
+            .unwrap()
     );
     assert_eq!(
         raw_fresh.json(),
@@ -223,7 +229,10 @@ fn options_response_matches_python() {
     )
     .expect("options");
     assert_eq!(response.status, 204);
-    assert_eq!(response.header("access-control-allow-origin"), Some(ALLOWED_ORIGIN));
+    assert_eq!(
+        response.header("access-control-allow-origin"),
+        Some(ALLOWED_ORIGIN)
+    );
     assert_eq!(
         response.header("access-control-allow-methods"),
         Some("GET, POST, OPTIONS")

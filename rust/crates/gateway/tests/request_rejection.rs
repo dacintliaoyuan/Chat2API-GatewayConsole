@@ -40,14 +40,11 @@ fn share_request(name: &str, case: &Value) -> ClientRequest {
             );
         }
         "unknown-messages-field" => {
-            request = request.json_body(
-                r#"{"model":"m","max_tokens":1,"messages":[],"unknown":1}"#,
-            );
+            request =
+                request.json_body(r#"{"model":"m","max_tokens":1,"messages":[],"unknown":1}"#);
         }
         "unknown-responses-field" => {
-            request = request.json_body(
-                r#"{"model":"m","input":"hi","unknown":1}"#,
-            );
+            request = request.json_body(r#"{"model":"m","input":"hi","unknown":1}"#);
         }
         "payload-too-large" => {
             request = request
@@ -61,8 +58,8 @@ fn share_request(name: &str, case: &Value) -> ClientRequest {
 }
 
 fn console_request(name: &str, _case: &Value) -> ClientRequest {
-    let mut request = ClientRequest::post("/admin/share/revoke", "")
-        .header("X-Admin-Control", CONTROL_TOKEN);
+    let mut request =
+        ClientRequest::post("/admin/share/revoke", "").header("X-Admin-Control", CONTROL_TOKEN);
     request.body = None;
     match name {
         "invalid-content-length" => {
@@ -171,7 +168,8 @@ fn the_share_body_limit_is_32_mib_by_default() {
     let server = GatewayServer::start(config).expect("small limit gateway");
     let addr = server.addr();
     let case = &fixture["bodyRejection"]["share"]["payload-too-large"];
-    let response = client_request(addr, &share_request("payload-too-large", case)).expect("oversize");
+    let response =
+        client_request(addr, &share_request("payload-too-large", case)).expect("oversize");
     assert_eq!(response.status, 413);
     assert_eq!(response.json(), case["body"]);
 }
@@ -197,8 +195,7 @@ fn console_body_cases_match_python() {
         let body = response.json();
         if name == "duplicate-sensitive-header" {
             assert_eq!(
-                body["error"]["message"],
-                case["message"],
+                body["error"]["message"], case["message"],
                 "message for {name}"
             );
         } else if name == "duplicate-content-length" {
@@ -209,17 +206,12 @@ fn console_body_cases_match_python() {
             );
         } else if name == "unknown-field" {
             assert_eq!(
-                body["error"]["message"],
-                case["body"]["error"],
+                body["error"]["message"], case["body"]["error"],
                 "message for {name}"
             );
             assert_eq!(body["error"]["type"], json!("invalid_request"));
         } else {
-            assert_eq!(
-                body["error"]["message"],
-                case["code"],
-                "code for {name}"
-            );
+            assert_eq!(body["error"]["message"], case["code"], "code for {name}");
         }
         assert_eq!(response.header("connection"), Some("close"), "{name}");
     }

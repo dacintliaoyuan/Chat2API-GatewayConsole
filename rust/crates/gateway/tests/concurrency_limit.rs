@@ -66,7 +66,10 @@ fn per_key_concurrency_is_refused_with_its_python_reason() {
     )
     .expect("second request");
     assert_429(&second, &fixture, "per_key_concurrency");
-    let first = first.join().expect("first request").expect("first response");
+    let first = first
+        .join()
+        .expect("first request")
+        .expect("first response");
     assert_eq!(
         first.status,
         200,
@@ -147,20 +150,10 @@ fn state_not_accepting_is_the_fourth_reason() {
     let share = temp.write("share.json", &legacy_share_config());
     let gate = Arc::new(ShareGate::new(&share, AuthMode::Auto).expect("gate"));
     let mut reason = RefusalReason::default();
-    assert!(gate.acquire(
-        "friend",
-        None,
-        None,
-        Some(&mut reason)
-    ));
+    assert!(gate.acquire("friend", None, None, Some(&mut reason)));
     gate.set_state(GateState::Draining);
     let mut refused = RefusalReason::default();
-    assert!(!gate.acquire(
-        "friend",
-        None,
-        None,
-        Some(&mut refused)
-    ));
+    assert!(!gate.acquire("friend", None, None, Some(&mut refused)));
     let expected = reason_case(&fixture, "state_not_accepting");
     assert_eq!(refused.reason.as_deref(), expected["reason"].as_str());
     assert_eq!(refused.detail.as_deref(), expected["detail"].as_str());
