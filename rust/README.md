@@ -1,7 +1,8 @@
 # Rust workspace（S0 骨架）
 
-本目录是 Rust 重写的 workspace 根。S0 只建立工程骨架、HTTP 测试 harness 与
-临时数据目录，不实现任何生产端点，也不切换生产端口。
+本目录是 Rust 重写的 workspace 根。S0 建立工程骨架、HTTP 测试 harness 与
+临时数据目录；S1a 增加候选网关 crate（8003 只读面、分享 Key 门与请求拒绝），
+仍不切换生产端口。
 
 ## 结构
 
