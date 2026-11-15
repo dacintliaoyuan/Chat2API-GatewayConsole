@@ -8,11 +8,13 @@
 
 use std::collections::HashMap;
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::{
@@ -21,6 +23,10 @@ use crate::chat::{
 use crate::error::GatewayError;
 use crate::gate::Admission;
 use crate::http::{write_chunk, write_response_head, Request, Response};
+use crate::ledger::{
+    anthropic_message_usage, anthropic_output_estimate, anthropic_usage_fields, merge_usage_max,
+    message_tokens, usage_fields_to_json, NormalizedUsage, UsageRecord,
+};
 use crate::server::AppState;
 use crate::upstream::{post_compat, NextItem, StreamReader, UpstreamBody, UpstreamResponse};
 
@@ -96,7 +102,14 @@ impl Drop for AdmissionGuard<'_> {
 
 struct MessagesContext<'a> {
     state: &'a AppState,
+    model: &'a str,
+    started_at: Instant,
     deadline: Instant,
+    client_stream: bool,
+    input_estimate: u64,
+    key_id: Option<&'a str>,
+    request_id: Option<&'a str>,
+    attribution: &'a str,
     upstream_body: Map<String, Value>,
     anthropic_headers: Vec<(String, String)>,
     origin: Option<String>,
@@ -109,6 +122,13 @@ pub fn handle_messages(
     stream: &mut TcpStream,
     admission: Option<Admission>,
 ) -> ChatResult {
+    let key_id = admission.as_ref().map(|value| value.key_id.clone());
+    let request_id = key_id.as_ref().map(|_| random_request_id());
+    let attribution = if key_id.is_some() {
+        "verified"
+    } else {
+        "absent"
+    };
     let _guard = AdmissionGuard { state, admission };
     let body = match read_json_body(
         request,
@@ -126,10 +146,22 @@ pub fn handle_messages(
         return ChatResult::Response(GatewayError::unsupported_messages_request().response());
     }
     let client_stream = body.get("stream").is_some_and(truthy);
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     let started_at = Instant::now();
     let context = MessagesContext {
         state,
+        model: &model,
+        started_at,
         deadline: started_at + state.config.request_total,
+        client_stream,
+        input_estimate: message_tokens(body.get("messages")),
+        key_id: key_id.as_deref(),
+        request_id: request_id.as_deref(),
+        attribution,
         upstream_body: body,
         anthropic_headers: anthropic_headers(request),
         origin: request
@@ -145,12 +177,34 @@ pub fn handle_messages(
     }
 }
 
+fn record_usage(
+    context: &MessagesContext<'_>,
+    status: &str,
+    usage: Option<&Value>,
+    output_estimate: u64,
+) {
+    context.state.ledger.record(UsageRecord {
+        model: context.model,
+        stream: context.client_stream,
+        started_at: context.started_at,
+        usage,
+        input_estimate: context.input_estimate,
+        output_estimate,
+        status,
+        protocol: Some("messages"),
+        key_id: context.key_id,
+        request_id: context.request_id,
+        attribution: context.attribution,
+    });
+}
+
 fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
     let mut fast_retries = 0u32;
     let mut slow_retries = 0u32;
     let mut physical_attempts = 0u32;
     loop {
         if Instant::now() >= context.deadline {
+            record_usage(context, "request_deadline_exceeded", None, 0);
             return ChatResult::Response(
                 GatewayError::new(
                     502,
@@ -161,6 +215,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
             );
         }
         if physical_attempts >= context.state.config.max_physical_attempts {
+            record_usage(context, "upstream_attempt_budget_exhausted", None, 0);
             return ChatResult::Response(
                 GatewayError::new(
                     502,
@@ -193,10 +248,12 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                         retry_delay(context, fast_retries, slow),
                         context.deadline,
                     ) {
+                        record_usage(context, "request_deadline_exceeded", None, 0);
                         return ChatResult::Response(deadline_response());
                     }
                     continue;
                 }
+                record_usage(context, failure.name(), None, 0);
                 return ChatResult::Response(
                     GatewayError::new(
                         502,
@@ -221,6 +278,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                 let delay = retry_delay(context, fast_retries, slow);
                 drop(response);
                 if !sleep_with_deadline(delay, context.deadline) {
+                    record_usage(context, "request_deadline_exceeded", None, 0);
                     return ChatResult::Response(
                         GatewayError::new(
                             502,
@@ -238,6 +296,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
         let raw = match response.body.read_all() {
             Ok(raw) => raw,
             Err(failure) => {
+                record_usage(context, failure.name(), None, 0);
                 return ChatResult::Response(
                     GatewayError::new(
                         502,
@@ -248,6 +307,15 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                 );
             }
         };
+        if status == 200 {
+            let payload = serde_json::from_slice::<Value>(&raw).ok();
+            let usage = payload.as_ref().and_then(anthropic_message_usage);
+            let output_estimate = payload.as_ref().map(anthropic_output_estimate).unwrap_or(0);
+            let usage_value = usage.as_ref().map(usage_fields_to_json);
+            record_usage(context, "ok", usage_value.as_ref(), output_estimate);
+        } else {
+            record_usage(context, &format!("HTTP{status}"), None, 0);
+        }
         return ChatResult::Response(passthrough_response(status, &response, raw));
     }
 }
@@ -258,9 +326,11 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
     let mut physical_attempts = 0u32;
     loop {
         if Instant::now() >= context.deadline {
+            record_usage(context, "request_deadline_exceeded", None, 0);
             return ChatResult::Response(deadline_response());
         }
         if physical_attempts >= context.state.config.max_physical_attempts {
+            record_usage(context, "upstream_attempt_budget_exhausted", None, 0);
             return ChatResult::Response(
                 GatewayError::new(
                     502,
@@ -273,6 +343,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
         let slot = match context.state.stream_readers.acquire_until(context.deadline) {
             Some(slot) => slot,
             None => {
+                record_usage(context, "concurrency_limit", None, 0);
                 return ChatResult::Response(
                     GatewayError::new(
                         503,
@@ -284,7 +355,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                         context.state.config.max_stream_readers
                     )))
                     .response(),
-                )
+                );
             }
         };
         physical_attempts += 1;
@@ -311,10 +382,12 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                         retry_delay(context, fast_retries, slow),
                         context.deadline,
                     ) {
+                        record_usage(context, "request_deadline_exceeded", None, 0);
                         return ChatResult::Response(deadline_response());
                     }
                     continue;
                 }
+                record_usage(context, failure.name(), None, 0);
                 return ChatResult::Response(
                     GatewayError::new(
                         502,
@@ -340,6 +413,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 drop(response);
                 slot.release();
                 if !sleep_with_deadline(delay, context.deadline) {
+                    record_usage(context, "request_deadline_exceeded", None, 0);
                     return ChatResult::Response(
                         GatewayError::new(
                             502,
@@ -357,6 +431,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 Ok(raw) => raw,
                 Err(failure) => {
                     slot.release();
+                    record_usage(context, failure.name(), None, 0);
                     return ChatResult::Response(
                         GatewayError::new(
                             502,
@@ -368,6 +443,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 }
             };
             slot.release();
+            record_usage(context, &format!("HTTP{status}"), None, 0);
             return ChatResult::Response(passthrough_response(status, &response, raw));
         }
         let upstream_headers = response.headers.clone();
@@ -380,6 +456,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
             attempt_started,
         );
         if outcome.status == MessagesStreamStatus::ClientDisconnected {
+            record_stream_usage(context, &outcome);
             return ChatResult::Written { close: true };
         }
         if !outcome.committed && outcome.status.is_retryable_precommit() {
@@ -391,6 +468,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 }
                 if !sleep_with_deadline(retry_delay(context, fast_retries, slow), context.deadline)
                 {
+                    record_usage(context, "request_deadline_exceeded", None, 0);
                     return ChatResult::Response(deadline_response());
                 }
                 continue;
@@ -398,11 +476,24 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
         }
         if outcome.committed && outcome.status == MessagesStreamStatus::UpstreamReadError {
             write_stream_error(stream, &outcome);
+            record_stream_usage(context, &outcome);
         } else if !outcome.committed && !outcome.status.is_success() {
+            record_usage(context, "upstream_stream_error", None, 0);
             return ChatResult::Response(stream_error_response(&outcome));
+        } else {
+            record_stream_usage(context, &outcome);
         }
         return ChatResult::Written { close: true };
     }
+}
+
+fn record_stream_usage(context: &MessagesContext<'_>, outcome: &MessagesStreamOutcome) {
+    record_usage(
+        context,
+        outcome.status.reason(),
+        outcome.usage.as_ref(),
+        outcome.output_chars / 4,
+    );
 }
 
 struct MessagesSseState {
@@ -412,6 +503,7 @@ struct MessagesSseState {
     saw_terminal: bool,
     status: MessagesStreamStatus,
     exception: Option<&'static str>,
+    usage: AnthropicUsageAccumulator,
 }
 
 impl MessagesSseState {
@@ -423,6 +515,58 @@ impl MessagesSseState {
             saw_terminal: false,
             status: MessagesStreamStatus::Ok,
             exception: None,
+            usage: AnthropicUsageAccumulator::default(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct AnthropicUsageAccumulator {
+    fields: NormalizedUsage,
+    saw_input: bool,
+    saw_output: bool,
+    output_chars: u64,
+}
+
+impl AnthropicUsageAccumulator {
+    fn observe(&mut self, event: &Value) {
+        let event_type = event.get("type").and_then(Value::as_str);
+        match event_type {
+            Some("message_start") => {
+                let usage = event
+                    .get("message")
+                    .and_then(Value::as_object)
+                    .and_then(|message| message.get("usage"));
+                let fields = anthropic_usage_fields(usage, true, false);
+                self.saw_input = !fields.is_empty();
+                self.merge(fields);
+            }
+            Some("message_delta") => {
+                let fields = anthropic_usage_fields(event.get("usage"), false, true);
+                if fields.completion_tokens.is_some() {
+                    self.saw_output = true;
+                }
+                self.merge(fields);
+            }
+            _ => {}
+        }
+    }
+
+    fn merge(&mut self, fields: NormalizedUsage) {
+        self.fields = merge_usage_max(self.fields.clone(), fields);
+    }
+
+    fn observe_text(&mut self, piece: Option<&str>) {
+        if let Some(piece) = piece.filter(|piece| !piece.is_empty()) {
+            self.output_chars += piece.chars().count() as u64;
+        }
+    }
+
+    fn usage(&self) -> Option<Value> {
+        if self.fields.is_empty() {
+            None
+        } else {
+            Some(usage_fields_to_json(&self.fields))
         }
     }
 }
@@ -430,6 +574,8 @@ impl MessagesSseState {
 struct MessagesStreamOutcome {
     committed: bool,
     status: MessagesStreamStatus,
+    usage: Option<Value>,
+    output_chars: u64,
     exception: Option<&'static str>,
     elapsed: Duration,
 }
@@ -538,6 +684,8 @@ fn consume_stream(
     MessagesStreamOutcome {
         committed: state.committed,
         status: state.status,
+        usage: state.usage.usage(),
+        output_chars: state.usage.output_chars,
         exception: state.exception,
         elapsed: attempt_started.elapsed(),
     }
@@ -580,6 +728,7 @@ fn process_event(
     let mut tool_action = false;
     let mut terminal = false;
     if let Some(event) = event.as_ref() {
+        state.usage.observe(event);
         if let Some(delta) = event.get("delta").and_then(Value::as_object) {
             if let Some(text) = delta.get("text").and_then(Value::as_str) {
                 text_piece = Some(text);
@@ -611,6 +760,8 @@ fn process_event(
             }
         }
     }
+    state.usage.observe_text(thinking_piece);
+    state.usage.observe_text(text_piece);
 
     if state.committed {
         if write_chunk(stream, &wire).is_err() {
@@ -791,4 +942,22 @@ fn truthy(value: &Value) -> bool {
         Value::Array(value) => !value.is_empty(),
         Value::Object(value) => !value.is_empty(),
     }
+}
+
+/// Python `secrets.token_hex(16)`: 32 lowercase hex characters.
+fn random_request_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = Sha256::new();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    hasher.update(nanos.to_le_bytes());
+    hasher.update(COUNTER.fetch_add(1, Ordering::SeqCst).to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    let digest = hasher.finalize();
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
