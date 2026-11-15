@@ -101,11 +101,7 @@ fn request_body_gate_cases_match_python() {
             .without_content_length(),
     )
     .expect("too large");
-    assert_closing_case(
-        &too_large,
-        &fixture["boundary"]["tooLarge"],
-        "tooLarge",
-    );
+    assert_closing_case(&too_large, &fixture["boundary"]["tooLarge"], "tooLarge");
 
     let transfer_encoding = client_request(
         console.addr,
@@ -162,8 +158,7 @@ fn request_body_gate_cases_match_python() {
 
     let invalid_json = client_request(
         console.addr,
-        &ClientRequest::post("/api/console/services", b"{")
-            .json_body(b"{".to_vec()),
+        &ClientRequest::post("/api/console/services", b"{").json_body(b"{".to_vec()),
     )
     .expect("invalid json");
     assert_closing_case(
@@ -174,27 +169,17 @@ fn request_body_gate_cases_match_python() {
 
     let non_object = client_request(
         console.addr,
-        &ClientRequest::post("/api/console/services", b"[]")
-            .json_body(b"[]".to_vec()),
+        &ClientRequest::post("/api/console/services", b"[]").json_body(b"[]".to_vec()),
     )
     .expect("non object");
-    assert_closing_case(
-        &non_object,
-        &fixture["boundary"]["nonObject"],
-        "nonObject",
-    );
+    assert_closing_case(&non_object, &fixture["boundary"]["nonObject"], "nonObject");
 
     let null_body = client_request(
         console.addr,
-        &ClientRequest::post("/api/console/services", b"null")
-            .json_body(b"null".to_vec()),
+        &ClientRequest::post("/api/console/services", b"null").json_body(b"null".to_vec()),
     )
     .expect("null body");
-    assert_case(
-        &null_body,
-        &fixture["boundary"]["nullBody"],
-        "nullBody",
-    );
+    assert_case(&null_body, &fixture["boundary"]["nullBody"], "nullBody");
 }
 
 #[test]
@@ -205,8 +190,7 @@ fn unknown_fields_match_python() {
     let body = br#"{"unknown":1}"#;
     let response = client_request(
         console.addr,
-        &ClientRequest::post("/api/console/operations", body.to_vec())
-            .json_body(body.to_vec()),
+        &ClientRequest::post("/api/console/operations", body.to_vec()).json_body(body.to_vec()),
     )
     .expect("unknown fields");
     assert_case(
@@ -227,11 +211,7 @@ fn empty_post_and_foreign_origin_match_python() {
         &ClientRequest::post("/api/console/services", Vec::new()),
     )
     .expect("empty post");
-    assert_case(
-        &empty_post,
-        &fixture["boundary"]["emptyPost"],
-        "emptyPost",
-    );
+    assert_case(&empty_post, &fixture["boundary"]["emptyPost"], "emptyPost");
 
     let foreign_host = client_request(
         console.addr,
@@ -251,8 +231,7 @@ fn empty_post_and_foreign_origin_match_python() {
 
     let foreign_origin = client_request(
         console.addr,
-        &ClientRequest::get("/api/console/services")
-            .header("Origin", "http://127.0.0.1:8001"),
+        &ClientRequest::get("/api/console/services").header("Origin", "http://127.0.0.1:8001"),
     )
     .expect("foreign origin");
     assert_eq!(

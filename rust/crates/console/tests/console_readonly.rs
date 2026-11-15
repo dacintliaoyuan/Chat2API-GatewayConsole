@@ -276,8 +276,7 @@ struct PanicRuntime;
 impl um_console::runtime::RuntimeFacts for PanicRuntime {
     fn snapshot(
         &self,
-    ) -> Result<um_console::runtime::RuntimeSnapshot, um_console::runtime::RuntimeError>
-    {
+    ) -> Result<um_console::runtime::RuntimeSnapshot, um_console::runtime::RuntimeError> {
         panic!("a cloud capability refusal must not read runtime facts");
     }
 }
@@ -286,11 +285,7 @@ impl um_console::runtime::RuntimeFacts for PanicRuntime {
 fn non_um_read_faces_are_capability_not_assembled_without_probing() {
     let fixture = fixture();
     let temp = temp();
-    let console = start_console_with(
-        &temp,
-        std::sync::Arc::new(PanicRuntime),
-        |_| {},
-    );
+    let console = start_console_with(&temp, std::sync::Arc::new(PanicRuntime), |_| {});
     for (prefix, case) in fixture["capability"].as_object().unwrap() {
         let response = get(console.addr, &format!("/api/console/{prefix}"));
         assert_eq!(
@@ -310,11 +305,7 @@ fn non_um_read_faces_are_capability_not_assembled_without_probing() {
 fn capability_gate_precedes_the_request_body() {
     let fixture = fixture();
     let temp = temp();
-    let console = start_console_with(
-        &temp,
-        std::sync::Arc::new(PanicRuntime),
-        |_| {},
-    );
+    let console = start_console_with(&temp, std::sync::Arc::new(PanicRuntime), |_| {});
     let response = client_request(
         console.addr,
         &ClientRequest::post("/api/console/stats", b"{\"x\":1}")

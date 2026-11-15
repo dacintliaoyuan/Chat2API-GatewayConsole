@@ -108,6 +108,17 @@ impl ProcessProbe for SystemProcessProbe {
     }
 }
 
+/// Paths and identity facts for the read-only Linux pid-file runtime.
+pub struct LinuxPidFileConfig {
+    pub pid_file: PathBuf,
+    pub state_dir: PathBuf,
+    pub proc_root: PathBuf,
+    pub expected_entry: String,
+    pub entry_kind: EntryKind,
+    pub expected_port: u16,
+    pub expected_uid: Option<u32>,
+}
+
 /// Read-only Linux pid-file facts for the UM share entry.
 pub struct LinuxPidFileFacts {
     pid_file: PathBuf,
@@ -122,36 +133,29 @@ pub struct LinuxPidFileFacts {
 
 impl LinuxPidFileFacts {
     pub fn from_config(config: &ConsoleConfig) -> Self {
-        Self {
-            pid_file: config.gateway_pid_file.clone(),
-            state_dir: config.gateway_state_dir.clone(),
-            proc_root: config.proc_root.clone(),
-            expected_entry: config.gateway_entry.clone(),
-            entry_kind: config.gateway_entry_kind,
-            expected_port: config.gateway_port,
-            expected_uid: config.expected_uid,
-            probe: Arc::new(SystemProcessProbe),
-        }
+        Self::new(
+            LinuxPidFileConfig {
+                pid_file: config.gateway_pid_file.clone(),
+                state_dir: config.gateway_state_dir.clone(),
+                proc_root: config.proc_root.clone(),
+                expected_entry: config.gateway_entry.clone(),
+                entry_kind: config.gateway_entry_kind,
+                expected_port: config.gateway_port,
+                expected_uid: config.expected_uid,
+            },
+            Arc::new(SystemProcessProbe),
+        )
     }
 
-    pub fn new(
-        pid_file: impl Into<PathBuf>,
-        state_dir: impl Into<PathBuf>,
-        proc_root: impl Into<PathBuf>,
-        expected_entry: impl Into<String>,
-        entry_kind: EntryKind,
-        expected_port: u16,
-        expected_uid: Option<u32>,
-        probe: Arc<dyn ProcessProbe>,
-    ) -> Self {
+    pub fn new(config: LinuxPidFileConfig, probe: Arc<dyn ProcessProbe>) -> Self {
         Self {
-            pid_file: pid_file.into(),
-            state_dir: state_dir.into(),
-            proc_root: proc_root.into(),
-            expected_entry: expected_entry.into(),
-            entry_kind,
-            expected_port,
-            expected_uid,
+            pid_file: config.pid_file,
+            state_dir: config.state_dir,
+            proc_root: config.proc_root,
+            expected_entry: config.expected_entry,
+            entry_kind: config.entry_kind,
+            expected_port: config.expected_port,
+            expected_uid: config.expected_uid,
             probe,
         }
     }

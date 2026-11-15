@@ -64,9 +64,7 @@ fn read_listen_addr(child: &mut Child) -> std::net::SocketAddr {
 #[test]
 fn the_candidate_process_binds_only_an_ephemeral_loopback_port() {
     let temp = temp();
-    let mut child = candidate_command(&temp)
-        .spawn()
-        .expect("spawn candidate");
+    let mut child = candidate_command(&temp).spawn().expect("spawn candidate");
     let addr = read_listen_addr(&mut child);
     let mut guard = ChildGuard { child };
     assert!(addr.ip().is_loopback(), "candidate must bind loopback");

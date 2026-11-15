@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use um_console::config::EntryKind;
-use um_console::runtime::{LinuxPidFileFacts, ProcessProbe};
+use um_console::runtime::{LinuxPidFileConfig, LinuxPidFileFacts, ProcessProbe};
 
 use support::*;
 
@@ -48,13 +48,15 @@ fn facts(
         calls: AtomicUsize::new(0),
     });
     let facts = LinuxPidFileFacts::new(
-        pid_file,
-        temp.path().join("run"),
-        proc_root,
-        "chat2api.py",
-        EntryKind::Python,
-        8003,
-        None,
+        LinuxPidFileConfig {
+            pid_file,
+            state_dir: temp.path().join("run"),
+            proc_root,
+            expected_entry: "chat2api.py".to_string(),
+            entry_kind: EntryKind::Python,
+            expected_port: 8003,
+            expected_uid: None,
+        },
         probe.clone(),
     );
     (facts, probe)
@@ -81,13 +83,15 @@ fn absent_pid_file_is_stopped_without_a_liveness_probe() {
         calls: AtomicUsize::new(0),
     });
     let facts = LinuxPidFileFacts::new(
-        temp.path().join("missing.pid"),
-        temp.path().join("run"),
-        temp.path().join("proc"),
-        "chat2api.py",
-        EntryKind::Python,
-        8003,
-        None,
+        LinuxPidFileConfig {
+            pid_file: temp.path().join("missing.pid"),
+            state_dir: temp.path().join("run"),
+            proc_root: temp.path().join("proc"),
+            expected_entry: "chat2api.py".to_string(),
+            entry_kind: EntryKind::Python,
+            expected_port: 8003,
+            expected_uid: None,
+        },
         probe.clone(),
     );
     let snapshot = facts.status();
@@ -135,13 +139,15 @@ fn wrong_port_is_conflict() {
         ],
     );
     let facts = LinuxPidFileFacts::new(
-        pid_file,
-        temp.path().join("run"),
-        proc_root,
-        "chat2api.py",
-        EntryKind::Python,
-        8003,
-        None,
+        LinuxPidFileConfig {
+            pid_file,
+            state_dir: temp.path().join("run"),
+            proc_root,
+            expected_entry: "chat2api.py".to_string(),
+            entry_kind: EntryKind::Python,
+            expected_port: 8003,
+            expected_uid: None,
+        },
         Arc::new(FakeProbe {
             alive: Some(true),
             calls: AtomicUsize::new(0),
@@ -171,13 +177,15 @@ fn wrong_entry_is_conflict() {
         ],
     );
     let facts = LinuxPidFileFacts::new(
-        pid_file,
-        temp.path().join("run"),
-        proc_root,
-        "chat2api.py",
-        EntryKind::Python,
-        8003,
-        None,
+        LinuxPidFileConfig {
+            pid_file,
+            state_dir: temp.path().join("run"),
+            proc_root,
+            expected_entry: "chat2api.py".to_string(),
+            entry_kind: EntryKind::Python,
+            expected_port: 8003,
+            expected_uid: None,
+        },
         Arc::new(FakeProbe {
             alive: Some(true),
             calls: AtomicUsize::new(0),
@@ -202,13 +210,15 @@ fn native_entry_requires_the_binary_not_an_interpreter() {
         &["/opt/um-share/um-gateway", "--port", "8003"],
     );
     let native = LinuxPidFileFacts::new(
-        pid_file.clone(),
-        temp.path().join("run"),
-        proc_root.clone(),
-        "um-gateway",
-        EntryKind::Native,
-        8003,
-        None,
+        LinuxPidFileConfig {
+            pid_file: pid_file.clone(),
+            state_dir: temp.path().join("run"),
+            proc_root: proc_root.clone(),
+            expected_entry: "um-gateway".to_string(),
+            entry_kind: EntryKind::Native,
+            expected_port: 8003,
+            expected_uid: None,
+        },
         Arc::new(FakeProbe {
             alive: Some(true),
             calls: AtomicUsize::new(0),
@@ -227,13 +237,15 @@ fn native_entry_requires_the_binary_not_an_interpreter() {
         ],
     );
     let interpreter = LinuxPidFileFacts::new(
-        pid_file,
-        temp.path().join("run"),
-        proc_root,
-        "um-gateway",
-        EntryKind::Native,
-        8003,
-        None,
+        LinuxPidFileConfig {
+            pid_file,
+            state_dir: temp.path().join("run"),
+            proc_root,
+            expected_entry: "um-gateway".to_string(),
+            entry_kind: EntryKind::Native,
+            expected_port: 8003,
+            expected_uid: None,
+        },
         Arc::new(FakeProbe {
             alive: Some(true),
             calls: AtomicUsize::new(0),

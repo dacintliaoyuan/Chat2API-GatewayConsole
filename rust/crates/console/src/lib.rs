@@ -17,6 +17,9 @@ pub mod summary;
 
 pub use config::{ConsoleConfig, EntryKind, Role};
 pub use error::ConsoleError;
-pub use runtime::{LinuxPidFileFacts, ProcessProbe, RuntimeError, RuntimeFacts, RuntimeSnapshot};
+pub use runtime::{
+    LinuxPidFileConfig, LinuxPidFileFacts, ProcessProbe, RuntimeError, RuntimeFacts,
+    RuntimeSnapshot,
+};
 pub use server::{AppState, ConsoleServer, ServerError, ServerHandle};
 pub use summary::{build_cloud_summary, SummaryCache};
