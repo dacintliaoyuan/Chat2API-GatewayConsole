@@ -28,6 +28,13 @@ pub struct FakeBroker {
     pub omit_counts: Mutex<bool>,
     pub emergency: Mutex<Value>,
     pub emergency_calls: Mutex<usize>,
+    pub start_calls: Mutex<Vec<(bool, Option<String>)>>,
+    pub stop_calls: Mutex<usize>,
+    pub emergency_action_calls: Mutex<usize>,
+    pub gateway_running: Mutex<Option<bool>>,
+    pub probe: Mutex<Option<Value>>,
+    pub probed: Mutex<Vec<(String, String)>>,
+    pub probed_private: Mutex<Vec<String>>,
 }
 
 impl FakeBroker {
@@ -44,6 +51,13 @@ impl FakeBroker {
             omit_counts: Mutex::new(false),
             emergency: Mutex::new(json!({"state": "stopped", "stopped": true})),
             emergency_calls: Mutex::new(0),
+            start_calls: Mutex::new(Vec::new()),
+            stop_calls: Mutex::new(0),
+            emergency_action_calls: Mutex::new(0),
+            gateway_running: Mutex::new(None),
+            probe: Mutex::new(None),
+            probed: Mutex::new(Vec::new()),
+            probed_private: Mutex::new(Vec::new()),
         }
     }
 
@@ -112,6 +126,48 @@ impl ShareWriteSeams for FakeBroker {
     fn emergency_stop(&self) -> Result<Value, ShareWriteError> {
         *self.emergency_calls.lock().unwrap() += 1;
         Ok(self.emergency.lock().unwrap().clone())
+    }
+
+    fn start(
+        &self,
+        explicit: bool,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, ShareWriteError> {
+        self.start_calls
+            .lock()
+            .unwrap()
+            .push((explicit, idempotency_key.map(str::to_string)));
+        Ok(json!({"operation_id": "op-start", "status": "pending", "broker": null}))
+    }
+
+    fn graceful_stop(&self, _idempotency_key: Option<&str>) -> Result<Value, ShareWriteError> {
+        *self.stop_calls.lock().unwrap() += 1;
+        Ok(json!({"operation_id": "op-stop", "status": "pending", "broker": null}))
+    }
+
+    fn emergency_stop_action(
+        &self,
+        _idempotency_key: Option<&str>,
+    ) -> Result<Value, ShareWriteError> {
+        *self.emergency_action_calls.lock().unwrap() += 1;
+        Ok(json!({"operation_id": "op-emergency", "status": "pending", "broker": null}))
+    }
+
+    fn gateway_running(&self) -> Option<bool> {
+        *self.gateway_running.lock().unwrap()
+    }
+
+    fn probe_models(&self, secret: &str, public_url: &str) -> Option<Value> {
+        self.probed
+            .lock()
+            .unwrap()
+            .push((secret.to_string(), public_url.to_string()));
+        self.probe.lock().unwrap().clone()
+    }
+
+    fn probe_models_private(&self, secret: &str) -> Option<Value> {
+        self.probed_private.lock().unwrap().push(secret.to_string());
+        self.probe.lock().unwrap().clone()
     }
 }
 
@@ -191,4 +247,53 @@ pub fn open_store(path: &Path, key_file: &Path) -> um_store::ShareStore {
         um_store::secret::load_key_file(Some(key_file)).expect("key file"),
     )
     .expect("open store")
+}
+
+pub fn start_legacy_console(temp: &TempDataDir, broker: Arc<FakeBroker>) -> Console {
+    start_legacy_console_with_public_origin(temp, broker, None)
+}
+
+pub fn start_legacy_console_with_public_origin(
+    temp: &TempDataDir,
+    broker: Arc<FakeBroker>,
+    public_origin: Option<&str>,
+) -> Console {
+    let key_file = key_file(temp);
+    let store_path = temp.path().join("share.db");
+    let control = temp.path().join("control-token");
+    std::fs::write(&control, "fixture-control-token").expect("control token");
+    let mut config = base_config(temp);
+    config.share_store_file = Some(store_path);
+    config.share_secret_key_file = Some(key_file);
+    config.control_token_file = Some(control);
+    config.public_origin = public_origin.map(str::to_string);
+    let server = um_console::ConsoleServer::start_with_wiring(
+        config,
+        stopped_runtime(),
+        Arc::new(um_console::UnwiredSeams),
+        Arc::new(um_console::operation_manager::UnwiredActionExecutor),
+        broker,
+    )
+    .expect("start candidate console");
+    Console::from_server(server)
+}
+
+pub fn start_unwired_legacy_console(temp: &TempDataDir) -> Console {
+    let key_file = key_file(temp);
+    let store_path = temp.path().join("share.db");
+    let control = temp.path().join("control-token");
+    std::fs::write(&control, "fixture-control-token").expect("control token");
+    let mut config = base_config(temp);
+    config.share_store_file = Some(store_path);
+    config.share_secret_key_file = Some(key_file);
+    config.control_token_file = Some(control);
+    let server = um_console::ConsoleServer::start_with_wiring(
+        config,
+        stopped_runtime(),
+        Arc::new(um_console::UnwiredSeams),
+        Arc::new(um_console::operation_manager::UnwiredActionExecutor),
+        Arc::new(um_console::UnwiredWriteSeams),
+    )
+    .expect("start candidate console");
+    Console::from_server(server)
 }

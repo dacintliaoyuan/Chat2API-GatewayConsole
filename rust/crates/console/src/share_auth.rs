@@ -1,78 +1,15 @@
-//! S5b: the legacy `/api/share/*` read-only management face auth.
+//! S5b: the legacy `/api/share/*` management face auth.
 //!
 //! Reads require the HttpOnly usage session or the local control token
-//! (`usagesrv.py::_management_auth`). Writes belong to S6; this candidate
-//! never performs them. The public ingress never reverse-proxies this face.
+//! (`usagesrv.py::_management_auth`). Writes (S6b) accept the control token,
+//! or the usage session plus the same-origin CSRF marker. The public ingress
+//! never reverse-proxies this face.
 
 use std::path::Path;
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SESSION_COOKIE: &str = "usage_session";
-pub const SESSION_TTL_SECONDS: u64 = 12 * 3600;
+pub use crate::session::{constant_time_eq, SessionState};
+
 pub const CONTROL_TOKEN_MAX_BYTES: u64 = 1024;
-
-#[derive(Debug, Default)]
-pub struct SessionState {
-    inner: Mutex<Option<(String, u64)>>,
-}
-
-impl SessionState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn issue(&self, token: String) {
-        let expires = epoch_seconds() + SESSION_TTL_SECONDS;
-        if let Ok(mut inner) = self.inner.lock() {
-            *inner = Some((token, expires));
-        }
-    }
-
-    pub fn clear(&self) {
-        if let Ok(mut inner) = self.inner.lock() {
-            *inner = None;
-        }
-    }
-
-    pub fn valid(&self, cookie_header: Option<&str>) -> bool {
-        let Some(cookie_header) = cookie_header else {
-            return false;
-        };
-        let expected = match self.inner.lock() {
-            Ok(inner) => match inner.as_ref() {
-                Some((token, expires)) if epoch_seconds() <= *expires => token.clone(),
-                _ => return false,
-            },
-            Err(_) => return false,
-        };
-        let supplied = match cookie_value(cookie_header, SESSION_COOKIE) {
-            Some(value) => value,
-            None => return false,
-        };
-        constant_time_eq(supplied.as_bytes(), expected.as_bytes())
-    }
-}
-
-fn epoch_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
-}
-
-/// One cookie value from a Cookie header; a malformed header yields `None`.
-fn cookie_value(header: &str, name: &str) -> Option<String> {
-    for part in header.split(';') {
-        let Some((key, value)) = part.trim().split_once('=') else {
-            continue;
-        };
-        if key == name {
-            return Some(value.trim_matches('"').to_string());
-        }
-    }
-    None
-}
 
 /// `usagesrv.py::control_token_ok`: the control token file is read with the
 /// private-secret gate, and the supplied value must hmac-match it. The value is
@@ -141,14 +78,32 @@ pub fn management_auth(
     control_token_ok(control_token_file, supplied_token) || session.valid(cookie_header)
 }
 
-/// A constant-time byte comparison (never early-exit on a mismatch).
-pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
+/// `usagesrv.py::_management_auth(write=True)`: a write is allowed with the
+/// control token, or with the usage session plus the same-origin JS marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagementAuth {
+    Control,
+    Session,
+    Missing,
+    CsrfRequired,
+}
+
+pub fn management_write_auth(
+    session: &SessionState,
+    control_token_file: Option<&Path>,
+    cookie_header: Option<&str>,
+    supplied_token: Option<&str>,
+    requested_with: Option<&str>,
+    write: bool,
+) -> ManagementAuth {
+    if control_token_ok(control_token_file, supplied_token) {
+        return ManagementAuth::Control;
     }
-    let mut difference = 0u8;
-    for (left, right) in left.iter().zip(right.iter()) {
-        difference |= left ^ right;
+    if !session.valid(cookie_header) {
+        return ManagementAuth::Missing;
     }
-    difference == 0
+    if write && requested_with != Some("XMLHttpRequest") {
+        return ManagementAuth::CsrfRequired;
+    }
+    ManagementAuth::Session
 }

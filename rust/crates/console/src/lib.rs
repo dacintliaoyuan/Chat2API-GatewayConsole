@@ -11,6 +11,7 @@ pub mod body;
 pub mod cloud_ops;
 pub mod config;
 pub mod display;
+pub mod display_grant;
 pub mod error;
 pub mod lock;
 pub mod metering;
@@ -18,18 +19,21 @@ pub mod operation_manager;
 pub mod operations;
 pub mod runtime;
 pub mod server;
+pub mod session;
 pub mod share_auth;
 pub mod share_read;
 pub mod share_write;
 pub mod summary;
 
 pub use config::{ConsoleConfig, EntryKind, Role};
+pub use display_grant::{DisplayGrantError, DisplayGrants, DisplaySession};
 pub use error::ConsoleError;
 pub use runtime::{
     LinuxPidFileConfig, LinuxPidFileFacts, ProcessProbe, RuntimeError, RuntimeFacts,
     RuntimeSnapshot,
 };
 pub use server::{AppState, ConsoleServer, ServerError, ServerHandle};
+pub use session::SessionState;
 pub use share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
 pub use share_write::{ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams};
 pub use summary::{build_cloud_summary, SummaryCache};

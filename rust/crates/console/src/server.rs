@@ -15,7 +15,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
-use um_gateway::http::{read_request_with_body_cap, write_response, Headers, Request, Response};
+use um_gateway::http::{
+    read_request_with_body_cap, write_response, BodyRead, Headers, Request, Response,
+};
 
 use crate::actions::action_catalogue;
 use crate::body::{
@@ -25,12 +27,14 @@ use crate::body::{
 use crate::cloud_ops::cloud_ops_status;
 use crate::config::{ConfigError, ConsoleConfig, Role};
 use crate::display::{display_session, display_state};
+use crate::display_grant::{DisplayGrants, DISPLAY_SESSION_COOKIE};
 use crate::error::ConsoleError;
 use crate::metering::{self, UsageFilters};
 use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActionExecutor};
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
-use crate::share_auth::{control_token_ok, management_auth, SessionState};
+use crate::session::{SessionState, SESSION_COOKIE, SESSION_TTL_SECONDS};
+use crate::share_auth::{control_token_ok, management_write_auth, ManagementAuth};
 use crate::share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
 use crate::share_write::{
     console_public_row, ShareWriteError, ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams,
@@ -63,6 +67,7 @@ pub struct AppState {
     pub share_seams: Arc<dyn ShareReadSeams>,
     pub share_write: ShareWriteStore,
     pub session: SessionState,
+    pub display_grants: DisplayGrants,
     services_cache: Mutex<Option<(Value, Instant)>>,
 }
 
@@ -128,7 +133,8 @@ impl ConsoleServer {
                 config.share_secret_key_file.clone(),
                 write_seams,
             ),
-            session: SessionState::new(),
+            session: SessionState::with_code_file(config.usage_session_code_file.clone()),
+            display_grants: DisplayGrants::new(),
             config: config.clone(),
             runtime,
             summary: SummaryCache::new(),
@@ -272,8 +278,20 @@ fn dispatch(state: &AppState, request: &Request) -> Response {
         }
         return ConsoleError::unknown_path().response();
     }
+    if path == "/api/session" {
+        if method == "POST" {
+            return handle_session_exchange(state, request);
+        }
+        return ConsoleError::unknown_path().response();
+    }
+    if path == "/api/session/reissue" {
+        if method == "POST" {
+            return handle_session_reissue(state, request);
+        }
+        return ConsoleError::unknown_path().response();
+    }
     if path.starts_with("/api/share/") {
-        return handle_share_read(state, request, &target);
+        return handle_share_api(state, request, &target);
     }
     if !path.starts_with("/api/console/") {
         return ConsoleError::unknown_path().response();
@@ -301,59 +319,397 @@ fn dispatch(state: &AppState, request: &Request) -> Response {
     }
 }
 
-fn handle_share_read(state: &AppState, request: &Request, raw_target: &str) -> Response {
+/// `usagesrv.py::do_POST /api/session`: a lenient body read (any JSON
+/// failure is the empty object) then a one-time bootstrap-code exchange.
+fn handle_session_exchange(state: &AppState, request: &Request) -> Response {
     if let Err(error) = reject_duplicate_sensitive_header(&request.headers) {
         return error.response();
     }
-    let authorized = management_auth(
+    let body = session_body(request);
+    let code = body.get("code").and_then(Value::as_str);
+    let Some(token) = state.session.exchange(code) else {
+        return ConsoleError::new(403, json!({"error": "invalid bootstrap code"})).response();
+    };
+    let cookie = format!(
+        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL_SECONDS}"
+    );
+    send_json(200, &json!({"ok": true})).with_header("Set-Cookie", cookie)
+}
+
+/// `usagesrv.py::do_POST /api/session/reissue`: the local control token is
+/// required; the new code invalidates the previous one.
+fn handle_session_reissue(state: &AppState, request: &Request) -> Response {
+    if let Err(error) = reject_duplicate_sensitive_header(&request.headers) {
+        return error.response();
+    }
+    let token_ok = control_token_ok(
+        state.config.control_token_file.as_deref(),
+        request.headers.get("X-Admin-Control"),
+    );
+    if !token_ok {
+        return ConsoleError::new(403, json!({"error": "control token required"})).response();
+    }
+    match state.session.reissue(true) {
+        Some(code) => send_json(200, &json!({"ok": true, "code": code})),
+        None => ConsoleError::new(403, json!({"error": "control token required"})).response(),
+    }
+}
+
+/// `usagesrv.py::do_POST /api/session` body: `json.loads` failure is the
+/// empty object; the route never rejects the body shape.
+fn session_body(request: &Request) -> Map<String, Value> {
+    match &request.body {
+        BodyRead::Complete(bytes) if !bytes.is_empty() => {
+            match serde_json::from_slice::<Value>(bytes) {
+                Ok(Value::Object(map)) => map,
+                _ => Map::new(),
+            }
+        }
+        _ => Map::new(),
+    }
+}
+
+fn handle_share_api(state: &AppState, request: &Request, raw_target: &str) -> Response {
+    if let Err(error) = reject_duplicate_sensitive_header(&request.headers) {
+        return error.response();
+    }
+    let method = request.method.as_str();
+    let write = method != "GET";
+    let auth = management_write_auth(
         &state.session,
         state.config.control_token_file.as_deref(),
         request.headers.get("Cookie"),
         request.headers.get("X-Admin-Control"),
+        request.headers.get("X-Requested-With"),
+        write,
     );
-    if !authorized {
-        let mut response = ConsoleError::new(
-            401,
-            json!({"error": "share management credentials required"}),
-        )
-        .response();
-        response.close = true;
-        return response;
+    match auth {
+        ManagementAuth::Control | ManagementAuth::Session => {}
+        ManagementAuth::Missing => {
+            let mut response = ConsoleError::new(
+                401,
+                json!({"error": "share management credentials required"}),
+            )
+            .response();
+            response.close = true;
+            return response;
+        }
+        ManagementAuth::CsrfRequired => {
+            let mut response =
+                ConsoleError::new(403, json!({"error": "session CSRF marker required"})).response();
+            response.close = true;
+            return response;
+        }
     }
     let path = raw_target.split('?').next().unwrap_or(raw_target);
     let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
     let rest: Vec<&str> = segments.iter().skip(2).copied().collect();
-    if request.method.as_str() != "GET" {
-        // Writes belong to S6; the candidate never fakes a mutation.
-        return ConsoleError::not_implemented("share_write_s6").response();
-    }
-    match rest.as_slice() {
-        ["usage"] => share_usage_response(state, raw_target, false),
-        ["usage", "requests"] => share_usage_response(state, raw_target, true),
-        ["status"] => match state.share.raw_status(state.share_seams.broker_snapshot()) {
-            Ok(payload) => send_json(200, &payload),
-            Err(error) => error.response(),
-        },
-        ["keys"] => match state.share.share_keys() {
-            Ok(payload) => send_json(200, &payload),
-            Err(error) => error.response(),
-        },
-        ["keys", key_id] => match state.share.share_key(key_id) {
-            Ok(payload) => send_json(200, &payload),
-            Err(error) => error.response(),
-        },
-        ["keys", key_id, "secret"] => {
-            let expected = query_value(raw_target, "expected_row_version");
-            match state.share.secret(key_id, expected.as_deref()) {
-                Ok((status, payload)) => send_json(status, &payload),
+    if !write {
+        return match rest.as_slice() {
+            ["usage"] => share_usage_response(state, raw_target, false),
+            ["usage", "requests"] => share_usage_response(state, raw_target, true),
+            ["status"] => match state.share.raw_status(state.share_seams.broker_snapshot()) {
+                Ok(payload) => send_json(200, &payload),
                 Err(error) => error.response(),
+            },
+            ["keys"] => match state.share.share_keys() {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => error.response(),
+            },
+            ["keys", key_id] => match state.share.share_key(key_id) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => error.response(),
+            },
+            ["keys", key_id, "secret"] => {
+                let expected = query_value(raw_target, "expected_row_version");
+                match state.share.secret(key_id, expected.as_deref()) {
+                    Ok((status, payload)) => send_json(status, &payload),
+                    Err(error) => error.response(),
+                }
+            }
+            ["operations", operation_id] => match state.share.operation(operation_id) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => error.response(),
+            },
+            _ => ConsoleError::unknown_path().response(),
+        };
+    }
+    let body = match read_console_body(request) {
+        Ok(body) => body,
+        Err(error) => return error.response(),
+    };
+    let writer = &state.share_write;
+    match (method, rest.as_slice()) {
+        ("POST", ["limits", "normalize"]) => {
+            if let Err(error) = reject_unknown_fields(&body, &[]) {
+                return error.response();
+            }
+            match writer.normalize_limits() {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
             }
         }
-        ["operations", operation_id] => match state.share.operation(operation_id) {
-            Ok(payload) => send_json(200, &payload),
-            Err(error) => error.response(),
-        },
+        ("POST", ["keys"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["name", "idempotency_key", "max_concurrency"])
+            {
+                return error.response();
+            }
+            let name = match body.get("name") {
+                Some(Value::String(name)) if (1..=64).contains(&name.chars().count()) => {
+                    name.clone()
+                }
+                _ => return ConsoleError::body_open(400, "invalid name").response(),
+            };
+            let idempotency_key = match optional_idempotency_key(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let max_concurrency = match optional_max_concurrency(
+                &body,
+                SHARE_KEY_MAX_CONCURRENCY_MAX,
+                "max_concurrency must be an integer in 1..48",
+            ) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match writer.create_key_legacy(&name, max_concurrency, idempotency_key.as_deref()) {
+                Ok(payload) => send_json(201, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("POST", ["keys", key_id, "test"]) => {
+            if let Err(error) = reject_unknown_fields(&body, &["expected_row_version"]) {
+                return error.response();
+            }
+            let expected = match required_positive_expected_version(
+                &body,
+                "invalid key_id or expected_row_version",
+            ) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            if key_id.is_empty() || key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id or expected_row_version")
+                    .response();
+            }
+            let payload = writer.test_key(
+                key_id,
+                expected,
+                false,
+                state.config.public_origin.as_deref(),
+            );
+            send_json(200, &payload)
+        }
+        ("POST", ["keys", key_id, "rotate"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["idempotency_key", "expected_row_version"])
+            {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let idempotency_key = match optional_idempotency_key(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let expected = match required_expected_version(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match writer.rotate_key_legacy(key_id, idempotency_key.as_deref(), expected) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("POST", ["keys", key_id, "revoke-and-terminate"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["idempotency_key", "expected_row_version"])
+            {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let idempotency_key = match optional_idempotency_key(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let expected = match required_positive_expected_version(
+                &body,
+                "expected_row_version must be a positive integer",
+            ) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match writer.revoke_and_terminate_key(key_id, expected, idempotency_key.as_deref()) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("PATCH", ["keys", key_id]) => {
+            if body.contains_key("enabled") {
+                return ConsoleError::body_open(400, "enabled_not_writable").response();
+            }
+            if let Err(error) =
+                reject_unknown_fields(&body, &["name", "max_concurrency", "expected_row_version"])
+            {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let name = match body.get("name") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(name)) if (1..=64).contains(&name.chars().count()) => {
+                    Some(name.clone())
+                }
+                _ => return ConsoleError::body_open(400, "invalid name").response(),
+            };
+            let max_concurrency = match optional_max_concurrency(
+                &body,
+                SHARE_KEY_MAX_CONCURRENCY_MAX,
+                "max_concurrency must be an integer in 1..48",
+            ) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let expected = match required_expected_version(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match writer.update_key(key_id, name.as_deref(), max_concurrency, expected) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("PATCH", ["settings"]) => {
+            if let Err(error) =
+                reject_unknown_fields(&body, &["share_max_concurrency", "expected_share_max"])
+            {
+                return error.response();
+            }
+            let share_max = match body.get("share_max_concurrency") {
+                Some(Value::Number(number)) => match number.as_i64() {
+                    Some(value) if (1..=64).contains(&value) => value,
+                    _ => {
+                        return ConsoleError::body_open(
+                            400,
+                            "share_max_concurrency must be an integer in 1..64",
+                        )
+                        .response();
+                    }
+                },
+                _ => {
+                    return ConsoleError::body_open(
+                        400,
+                        "share_max_concurrency must be an integer in 1..64",
+                    )
+                    .response();
+                }
+            };
+            let expected = match body.get("expected_share_max") {
+                None | Some(Value::Null) => None,
+                Some(Value::Number(number)) => match number.as_i64() {
+                    Some(value) => Some(value),
+                    None => {
+                        return ConsoleError::body_open(
+                            400,
+                            "expected_share_max must be an integer",
+                        )
+                        .response();
+                    }
+                },
+                _ => {
+                    return ConsoleError::body_open(400, "expected_share_max must be an integer")
+                        .response();
+                }
+            };
+            match writer.set_share_limits(share_max, expected) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("DELETE", ["keys", key_id]) => {
+            if let Err(error) = reject_unknown_fields(&body, &["expected_row_version"]) {
+                return error.response();
+            }
+            if key_id.chars().count() > 128 {
+                return ConsoleError::body_open(400, "invalid key_id").response();
+            }
+            let expected = match required_expected_version(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            match writer.delete_key(key_id, expected) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
+        ("POST", ["start"]) | ("POST", ["stop"]) | ("POST", ["emergency-stop"]) => {
+            if let Err(error) = reject_unknown_fields(&body, &["idempotency_key"]) {
+                return error.response();
+            }
+            let idempotency_key = match optional_idempotency_key(&body) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let result = match rest.as_slice() {
+                ["start"] => writer.start(false, idempotency_key.as_deref()),
+                ["stop"] => writer.stop(idempotency_key.as_deref()),
+                _ => writer.emergency_stop_legacy(idempotency_key.as_deref()),
+            };
+            match result {
+                Ok(payload) => send_json(202, &payload),
+                Err(error) => share_write_error(&error),
+            }
+        }
         _ => ConsoleError::unknown_path().response(),
+    }
+}
+
+const SHARE_KEY_MAX_CONCURRENCY_MAX: i64 = 48;
+
+fn optional_idempotency_key(body: &Map<String, Value>) -> Result<Option<String>, Response> {
+    match body.get("idempotency_key") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(key)) if (1..=128).contains(&key.chars().count()) => {
+            Ok(Some(key.clone()))
+        }
+        _ => Err(ConsoleError::body_open(400, "invalid idempotency_key").response()),
+    }
+}
+
+fn optional_max_concurrency(
+    body: &Map<String, Value>,
+    max: i64,
+    message: &str,
+) -> Result<Option<i64>, Response> {
+    match body.get("max_concurrency") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => match number.as_i64() {
+            Some(value) if (1..=max).contains(&value) => Ok(Some(value)),
+            _ => Err(ConsoleError::body_open(400, message).response()),
+        },
+        _ => Err(ConsoleError::body_open(400, message).response()),
+    }
+}
+
+fn required_expected_version(body: &Map<String, Value>) -> Result<i64, Response> {
+    required_positive_expected_version(body, "expected_row_version required")
+}
+
+fn required_positive_expected_version(
+    body: &Map<String, Value>,
+    message: &str,
+) -> Result<i64, Response> {
+    match body.get("expected_row_version") {
+        Some(Value::Number(number)) => match number.as_i64() {
+            Some(value) if value >= 1 => Ok(value),
+            _ => Err(ConsoleError::body_open(400, message).response()),
+        },
+        _ => Err(ConsoleError::body_open(400, message).response()),
     }
 }
 
@@ -424,6 +780,12 @@ fn handle_share_management_write(
         .response();
         response.close = true;
         return response;
+    }
+    if method == "POST" && rest == ["display-grant"] {
+        return handle_display_grant(state, request);
+    }
+    if method == "POST" && rest == ["display-operator"] {
+        return handle_display_operator(state, request);
     }
     let body = match read_console_body(request) {
         Ok(body) => body,
@@ -690,6 +1052,163 @@ fn handle_share_management_write(
         }
         _ => ConsoleError::unknown_path().response(),
     }
+}
+
+/// `_console_display_grant_payload`: bind a one-time grant to the
+/// management subject that proved itself here. A bare loopback request is not
+/// an administrator, so an SSH `-L` client cannot mint a display grant.
+fn handle_display_grant(state: &AppState, request: &Request) -> Response {
+    if let Some(reason) = display_unavailable_reason(state) {
+        return ConsoleError::new(503, json!({"error": reason})).response();
+    }
+    let Some(origin) = request_origin(state, request) else {
+        return ConsoleError::new(403, json!({"error": "display_authorization_required"}))
+            .response();
+    };
+    let Some(subject) = display_subject(state, request, &origin) else {
+        return ConsoleError::new(403, json!({"error": "display_authorization_required"}))
+            .response();
+    };
+    match state.display_grants.issue(subject, &origin) {
+        Ok((grant, expires_at)) => send_json(
+            200,
+            &json!({
+                "grant": grant,
+                "expires_at": expires_at,
+                "origin": origin,
+                "url": format!("/display/grant#grant={grant}"),
+            }),
+        ),
+        Err(error) => ConsoleError::new(503, json!({"error": error.code})).response(),
+    }
+}
+
+/// `_console_display_operator_payload`: acquire or explicitly take over the
+/// single-page operator for a live display session.
+fn handle_display_operator(state: &AppState, request: &Request) -> Response {
+    if let Some(reason) = display_unavailable_reason(state) {
+        return ConsoleError::new(503, json!({"error": reason})).response();
+    }
+    let body = match read_console_body(request) {
+        Ok(body) => body,
+        Err(error) => return error.response(),
+    };
+    if let Err(error) = reject_unknown_fields(&body, &["action"]) {
+        return error.response();
+    }
+    let action = match body.get("action").and_then(Value::as_str) {
+        Some(action) if action == "acquire" || action == "takeover" => action,
+        _ => {
+            return ConsoleError::new(400, json!({"error": "display_operator_action_invalid"}))
+                .response();
+        }
+    };
+    let Some(origin) = request_origin(state, request) else {
+        return ConsoleError::new(403, json!({"error": "display_authorization_required"}))
+            .response();
+    };
+    if has_proxy_metadata(&request.headers) {
+        // No Tailscale Serve policy is assembled here, so proxy metadata is
+        // never trusted as an identity (fail closed).
+        return ConsoleError::new(403, json!({"error": "display_authorization_required"}))
+            .response();
+    }
+    let session = request
+        .headers
+        .get("Cookie")
+        .and_then(|header| crate::session::cookie_value(header, DISPLAY_SESSION_COOKIE));
+    let result = state
+        .display_grants
+        .acquire_operator(session.as_deref(), &origin, action);
+    if result["acquired"].as_bool() == Some(true) {
+        return send_json(
+            200,
+            &json!({
+                "acquired": true,
+                "generation": result["generation"],
+                "took_over": result["took_over"].as_bool().unwrap_or(false),
+            }),
+        );
+    }
+    match result["error"].as_str() {
+        Some("display_operator_exists") => send_json(
+            409,
+            &json!({
+                "error": "display_operator_exists",
+                "generation": result["generation"],
+                "owner_label": result["owner_label"],
+            }),
+        ),
+        Some("display_session_required") => {
+            send_json(409, &json!({"error": "display_session_required"}))
+        }
+        Some("display_operator_action_invalid") => {
+            send_json(400, &json!({"error": "display_operator_action_invalid"}))
+        }
+        _ => send_json(409, &json!({"error": "display_operator_unavailable"})),
+    }
+}
+
+/// `_console_display_availability` for the write face: `None` is an
+/// unassembled relay, an unavailable fact keeps its exact reason.
+fn display_unavailable_reason(state: &AppState) -> Option<String> {
+    match state.share_seams.display_availability() {
+        None => Some("display_proxy_unavailable".to_string()),
+        Some(availability) if availability["available"].as_bool() == Some(true) => None,
+        Some(availability) => Some(
+            availability["reason"]
+                .as_str()
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or("display_disabled")
+                .to_string(),
+        ),
+    }
+}
+
+/// The accepted console origin for a grant, or `None` (fail closed).
+fn request_origin(state: &AppState, request: &Request) -> Option<String> {
+    let host = request.headers.get("Host")?;
+    if !host_allowed(host) || !origin_allowed(request.headers.get("Origin"), state.config.port) {
+        return None;
+    }
+    Some(format!("http://{host}"))
+}
+
+/// `display_request_subject`: only the admin control token, the usage session
+/// or an existing display session can bind a grant.
+fn display_subject(state: &AppState, request: &Request, origin: &str) -> Option<&'static str> {
+    if has_proxy_metadata(&request.headers) {
+        return None;
+    }
+    if control_token_ok(
+        state.config.control_token_file.as_deref(),
+        request.headers.get("X-Admin-Control"),
+    ) {
+        return Some("control-token");
+    }
+    let cookie = request.headers.get("Cookie");
+    if state.session.valid(cookie) {
+        return Some("usage-session");
+    }
+    let display_cookie =
+        cookie.and_then(|header| crate::session::cookie_value(header, DISPLAY_SESSION_COOKIE));
+    if state
+        .display_grants
+        .validate_session(display_cookie.as_deref().unwrap_or_default(), origin)
+        .is_some()
+    {
+        return Some("display-session");
+    }
+    None
+}
+
+/// `console/tailnet.py::has_proxy_metadata`: any Tailscale/forwarding header
+/// means the request claims a proxy identity this candidate does not assemble.
+fn has_proxy_metadata(headers: &Headers) -> bool {
+    headers.iter().any(|header| {
+        let name = header.name.to_ascii_lowercase();
+        name.starts_with("tailscale-") || name.starts_with("x-forwarded-") || name == "forwarded"
+    })
 }
 
 fn share_write_error(error: &ShareWriteError) -> Response {

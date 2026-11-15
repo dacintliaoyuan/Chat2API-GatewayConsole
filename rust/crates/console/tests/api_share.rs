@@ -195,18 +195,30 @@ fn raw_status_without_a_broker_is_an_honest_offline_snapshot() {
 }
 
 #[test]
-fn write_methods_are_not_implemented_by_the_read_only_face() {
+fn write_methods_now_use_the_s6b_write_face() {
     let fixture = reads_fixture();
     let temp = temp();
     seed_share_store(&temp, &fixture["shareStatus"]["storeSeed"]);
     let console = start_api_share_console(&temp, &fixture);
-    let response = client_request(
+    let missing = client_request(
+        console.addr,
+        &ClientRequest::post("/api/share/keys", b"{}".to_vec())
+            .json_body(json!({"name": "no-credentials"}).to_string().into_bytes()),
+    )
+    .expect("request");
+    assert_eq!(missing.status, 401);
+    assert_eq!(
+        missing.json(),
+        json!({"error": "share management credentials required"})
+    );
+
+    let created = client_request(
         console.addr,
         &ClientRequest::post("/api/share/keys", b"{}".to_vec())
             .header("X-Admin-Control", CONTROL_TOKEN)
-            .json_body(b"{}".to_vec()),
+            .json_body(json!({"name": "created-by-s6b"}).to_string().into_bytes()),
     )
     .expect("request");
-    assert_eq!(response.status, 501);
-    assert_eq!(response.json()["error"], json!("not_implemented"));
+    assert_eq!(created.status, 201);
+    assert_eq!(created.json()["name"], json!("created-by-s6b"));
 }
