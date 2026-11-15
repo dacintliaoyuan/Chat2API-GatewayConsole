@@ -59,11 +59,11 @@
 
 | 命令 | 实际结果 |
 |---|---|
-| `cargo test --manifest-path rust/Cargo.toml --offline -p um-gateway` | 退出码 0；24 个测试二进制共 104 个测试通过 |
+| `cargo test --manifest-path rust/Cargo.toml --offline -p um-gateway` | 退出码 0；26 个测试二进制共 104 个测试通过 |
 | `cargo fmt --manifest-path rust/Cargo.toml -- --check` | 退出码 0 |
 | `cargo clippy --manifest-path rust/Cargo.toml --all-targets --offline` | 退出码 0；无 warning |
 | `python -m unittest tests.test_chat2api_endpoints tests.test_chat2api_stream tests.test_usage_boundary` | `Ran 90 tests in 137.681s`；`OK` |
-| `python -m unittest discover -s tests -p "test_*.py"` | 待运行 |
+| `python -m unittest discover -s tests -p "test_*.py"` | `Ran 2367 tests in 761.636s`；`OK (skipped=63)` |
 | `bash scripts/check.sh --full` | 待运行 |
 
 ## 未验证范围
