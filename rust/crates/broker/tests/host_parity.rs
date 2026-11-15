@@ -74,7 +74,7 @@ impl FakeHost {
 }
 
 impl HostOps for FakeHost {
-    fn start_host(&mut self, explicit: bool) -> Option<bool> {
+    fn start_host(&mut self, explicit: bool, _deadline_s: f64) -> Option<bool> {
         self.record(json!({"start_host": explicit}));
         *self.running.borrow_mut() = self
             .config
@@ -84,7 +84,7 @@ impl HostOps for FakeHost {
         Some(*self.running.borrow())
     }
 
-    fn stop_host(&mut self) -> Option<bool> {
+    fn stop_host(&mut self, _deadline_s: f64) -> Option<bool> {
         self.record(json!({"stop_host": true}));
         *self.closed.borrow_mut() = self
             .config
@@ -100,7 +100,7 @@ impl HostOps for FakeHost {
         )
     }
 
-    fn verify_running(&mut self) -> Option<bool> {
+    fn verify_running(&mut self, _deadline_s: f64) -> Option<bool> {
         self.record(json!({"verify_running": true}));
         let mut sequence = self.sequence.borrow_mut();
         if !sequence.is_empty() {
@@ -109,7 +109,7 @@ impl HostOps for FakeHost {
         Some(*self.running.borrow())
     }
 
-    fn verify_closed(&mut self) -> Option<bool> {
+    fn verify_closed(&mut self, _deadline_s: f64) -> Option<bool> {
         self.record(json!({"verify_closed": true}));
         Some(*self.closed.borrow())
     }
@@ -158,7 +158,13 @@ struct FakeChannel {
 }
 
 impl InstanceChannel for FakeChannel {
-    fn call(&mut self, action: &str, fields: &Value, instance_id: &str) -> Result<Value, String> {
+    fn call(
+        &mut self,
+        action: &str,
+        fields: &Value,
+        instance_id: &str,
+        _deadline_s: f64,
+    ) -> Result<Value, String> {
         self.calls.borrow_mut().push(json!({
             "instance_call": {
                 "action": action,

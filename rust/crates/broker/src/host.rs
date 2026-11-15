@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 
 use crate::error::{BrokerResult, ResultCode};
-use crate::publish::{InstanceChannel, InstanceRegistry};
+use crate::publish::{InstanceChannel, InstanceRegistry, WIRE_DEADLINE_SECONDS};
 
 pub const DRAIN_WINDOW_SECONDS: f64 = 60.0;
 pub const STOP_BUDGET_SECONDS: f64 = 20.0;
@@ -378,7 +378,12 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         let Some(current) = current else {
             return BrokerResult::err(ResultCode::Unconfirmed, "no registered instance");
         };
-        let status = match self.channel.call("instance-status", &json!({}), &current) {
+        let status = match self.channel.call(
+            "instance-status",
+            &json!({}),
+            &current,
+            WIRE_DEADLINE_SECONDS,
+        ) {
             Ok(response) if response.get("ok") == Some(&Value::Bool(true)) => {
                 response.get("result").cloned().unwrap_or_else(|| json!({}))
             }
@@ -403,7 +408,10 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
             return BrokerResult::err(ResultCode::Blocked, "instance is stopped");
         }
         let active = status.get("active_count").and_then(Value::as_i64);
-        match self.channel.call("drain", &json!({}), &current) {
+        match self
+            .channel
+            .call("drain", &json!({}), &current, WIRE_DEADLINE_SECONDS)
+        {
             Ok(response) if response.get("ok") == Some(&Value::Bool(true)) => {
                 let drain_result = response.get("result").cloned().unwrap_or_else(|| json!({}));
                 if drain_result.get("state").and_then(Value::as_str) != Some("draining") {
@@ -483,7 +491,10 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
             return BrokerResult::err(ResultCode::InstanceMismatch, "instance or round changed");
         }
         let current = current.unwrap();
-        match self.channel.call("resume", &json!({}), &current) {
+        match self
+            .channel
+            .call("resume", &json!({}), &current, WIRE_DEADLINE_SECONDS)
+        {
             Ok(response) if response.get("ok") == Some(&Value::Bool(true)) => {
                 let (ok, ended) = self.leases.end(component, lease_id);
                 if !ok || ended.is_none() {
@@ -536,7 +547,12 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         let lease = self.leases.current().cloned();
         let mut instance = Value::Null;
         if let Some(current) = self.instances.current() {
-            if let Ok(response) = self.channel.call("instance-status", &json!({}), &current) {
+            if let Ok(response) = self.channel.call(
+                "instance-status",
+                &json!({}),
+                &current,
+                WIRE_DEADLINE_SECONDS,
+            ) {
                 if let Some(result) = response.get("result") {
                     instance = json!({
                         "instance_id": result.get("instance_id").cloned().unwrap_or(json!(current)),
@@ -559,7 +575,7 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
     /// ONE bounded 8100 single-layer restart gated on the three host proofs.
     pub fn gateway_restart(&mut self, component: &str, budget_s: i64) -> BrokerResult {
         let started = self.now();
-        if self.host.verify_running() != Some(true) {
+        if self.host.verify_running(WIRE_DEADLINE_SECONDS) != Some(true) {
             return BrokerResult::err(
                 ResultCode::Blocked,
                 "gateway identity unconfirmed or stopped",
@@ -579,10 +595,10 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
             "last_outcome": Value::Null,
         });
         let mut stopped_confirmed = false;
-        self.host.stop_host();
-        let deadline = self.now() + budget_s as f64;
-        while self.now() < deadline {
-            if self.host.verify_closed() == Some(true) {
+        let stop_deadline = self.now() + budget_s as f64;
+        self.host.stop_host(stop_deadline - self.now());
+        while self.now() < stop_deadline {
+            if self.host.verify_closed(stop_deadline - self.now()) == Some(true) {
                 stopped_confirmed = true;
                 break;
             }
@@ -590,10 +606,10 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
         }
         let mut running_confirmed = false;
         if stopped_confirmed {
-            self.host.start_host(true);
-            let deadline = self.now() + budget_s as f64;
-            while self.now() < deadline {
-                if self.host.verify_running() == Some(true) {
+            let start_deadline = self.now() + budget_s as f64;
+            self.host.start_host(true, start_deadline - self.now());
+            while self.now() < start_deadline {
+                if self.host.verify_running(start_deadline - self.now()) == Some(true) {
                     running_confirmed = true;
                     break;
                 }
@@ -691,9 +707,9 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
     /// `host-verify`: the fixed running/closed evidence.
     pub fn host_verify(&mut self, check: &str) -> BrokerResult {
         let verdict = if check == "running" {
-            self.host.verify_running()
+            self.host.verify_running(WIRE_DEADLINE_SECONDS)
         } else {
-            self.host.verify_closed()
+            self.host.verify_closed(WIRE_DEADLINE_SECONDS)
         };
         let key = if check == "running" {
             "host_running"
@@ -705,10 +721,10 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
 
     /// `host-stop`: stop then verify closure, never only the stop's return.
     pub fn host_stop(&mut self) -> BrokerResult {
-        if self.host.stop_host() != Some(true) {
+        if self.host.stop_host(WIRE_DEADLINE_SECONDS) != Some(true) {
             return BrokerResult::err(ResultCode::Unconfirmed, "host stop did not confirm success");
         }
-        if self.host.verify_closed() != Some(true) {
+        if self.host.verify_closed(WIRE_DEADLINE_SECONDS) != Some(true) {
             return BrokerResult::err(ResultCode::Unconfirmed, "host stop did not verify closure");
         }
         BrokerResult::ok(json!({"host_stopped": true}))
@@ -774,7 +790,10 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
             return;
         }
         let current = current.unwrap();
-        match self.channel.call("resume", &json!({}), &current) {
+        match self
+            .channel
+            .call("resume", &json!({}), &current, WIRE_DEADLINE_SECONDS)
+        {
             Ok(response) if response.get("ok") == Some(&Value::Bool(true)) => {
                 let now = self.leases.now();
                 self.leases.expire_due(now);
