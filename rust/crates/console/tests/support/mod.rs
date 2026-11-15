@@ -284,3 +284,152 @@ pub fn write_proc_cmdline(root: &std::path::Path, pid: u32, argv: &[&str]) {
     }
     std::fs::write(directory.join("cmdline"), bytes).expect("write cmdline");
 }
+
+pub struct StaticShareSeams {
+    pub broker_snapshot: Option<Value>,
+    pub gateway_running: Option<bool>,
+    pub maintenance: Option<Value>,
+    pub attribution: Option<Value>,
+}
+
+impl StaticShareSeams {
+    pub fn new() -> Self {
+        Self {
+            broker_snapshot: None,
+            gateway_running: None,
+            maintenance: None,
+            attribution: None,
+        }
+    }
+}
+
+impl Default for StaticShareSeams {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl um_console::ShareReadSeams for StaticShareSeams {
+    fn broker_snapshot(&self) -> Option<Value> {
+        self.broker_snapshot.clone()
+    }
+
+    fn gateway_running(&self) -> Option<bool> {
+        self.gateway_running
+    }
+
+    fn maintenance_status(&self) -> Option<Value> {
+        self.maintenance.clone()
+    }
+
+    fn attribution(&self) -> Option<Value> {
+        self.attribution.clone()
+    }
+}
+
+pub fn start_console_with_seams(
+    temp: &TempDataDir,
+    configure: impl FnOnce(&mut ConsoleConfig),
+    seams: std::sync::Arc<dyn um_console::ShareReadSeams>,
+) -> Console {
+    let mut config = base_config(temp);
+    configure(&mut config);
+    let server = ConsoleServer::start_with_seams(config, stopped_runtime(), seams)
+        .expect("start candidate console");
+    let addr = server.addr();
+    Console { server, addr }
+}
+
+/// Recreate the fixture's share store in a fresh SQLite file.
+pub fn seed_share_store(temp: &TempDataDir, seed: &Value) -> PathBuf {
+    let path = temp.path().join("share.db");
+    let connection = rusqlite::Connection::open(&path).expect("open share store");
+    let blob_columns: Vec<(String, String)> = seed["blobColumns"]
+        .as_array()
+        .expect("blob columns")
+        .iter()
+        .map(|entry| {
+            (
+                entry[0].as_str().expect("table").to_string(),
+                entry[1].as_str().expect("column").to_string(),
+            )
+        })
+        .collect();
+    for ddl in seed["ddl"].as_array().expect("ddl") {
+        connection
+            .execute_batch(ddl.as_str().expect("ddl"))
+            .expect("create share schema");
+    }
+    for table in ["meta", "keys", "ops", "configgen", "security"] {
+        let columns: Vec<String> = seed["columns"][table]
+            .as_array()
+            .expect("columns")
+            .iter()
+            .map(|column| column.as_str().expect("column").to_string())
+            .collect();
+        let placeholders = vec!["?"; columns.len()].join(",");
+        let insert = format!(
+            "INSERT INTO {table} ({}) VALUES ({placeholders})",
+            columns.join(",")
+        );
+        for row in seed["rows"][table].as_array().expect("rows") {
+            let values: Vec<rusqlite::types::Value> = row
+                .as_array()
+                .expect("row")
+                .iter()
+                .zip(columns.iter())
+                .map(|(value, column)| {
+                    let blob = blob_columns.iter().any(|(blob_table, blob_column)| {
+                        blob_table == table && blob_column == column
+                    });
+                    if blob {
+                        if value.is_null() {
+                            return rusqlite::types::Value::Null;
+                        }
+                        let text = value.as_str().expect("blob hex");
+                        let mut bytes = Vec::with_capacity(text.len() / 2);
+                        let raw = text.as_bytes();
+                        for pair in raw.chunks(2) {
+                            let high = (pair[0] as char).to_digit(16).expect("hex");
+                            let low = (pair[1] as char).to_digit(16).expect("hex");
+                            bytes.push((high * 16 + low) as u8);
+                        }
+                        rusqlite::types::Value::Blob(bytes)
+                    } else {
+                        json_to_sql(value)
+                    }
+                })
+                .collect();
+            connection
+                .execute(&insert, rusqlite::params_from_iter(values))
+                .expect("insert share row");
+        }
+    }
+    path
+}
+
+fn json_to_sql(value: &Value) -> rusqlite::types::Value {
+    use rusqlite::types::Value as SqlValue;
+    match value {
+        Value::Null => SqlValue::Null,
+        Value::Bool(value) => SqlValue::Integer(i64::from(*value)),
+        Value::Number(number) => match number.as_i64() {
+            Some(value) => SqlValue::Integer(value),
+            None => SqlValue::Real(number.as_f64().unwrap_or_default()),
+        },
+        Value::String(value) => SqlValue::Text(value.clone()),
+        other => SqlValue::Text(other.to_string()),
+    }
+}
+
+pub fn reads_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/fixtures/rust_console_reads_rev1.json")
+}
+
+pub fn reads_fixture() -> Value {
+    serde_json::from_str(
+        &std::fs::read_to_string(reads_fixture_path()).expect("read reads fixture"),
+    )
+    .expect("parse reads fixture")
+}

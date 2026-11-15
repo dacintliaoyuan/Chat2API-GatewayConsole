@@ -26,6 +26,7 @@ use crate::config::{ConfigError, ConsoleConfig, Role};
 use crate::error::ConsoleError;
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
+use crate::share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
 use crate::summary::SummaryCache;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -49,6 +50,8 @@ pub struct AppState {
     pub runtime: Arc<dyn RuntimeFacts>,
     pub summary: SummaryCache,
     pub operations: OperationsReader,
+    pub share: ShareReadStore,
+    pub share_seams: Arc<dyn ShareReadSeams>,
     services_cache: Mutex<Option<(Value, Instant)>>,
 }
 
@@ -70,9 +73,22 @@ impl ConsoleServer {
         config: ConsoleConfig,
         runtime: Arc<dyn RuntimeFacts>,
     ) -> Result<ServerHandle, ServerError> {
+        Self::start_with_seams(config, runtime, Arc::new(UnwiredSeams))
+    }
+
+    pub fn start_with_seams(
+        config: ConsoleConfig,
+        runtime: Arc<dyn RuntimeFacts>,
+        share_seams: Arc<dyn ShareReadSeams>,
+    ) -> Result<ServerHandle, ServerError> {
         config.validate_candidate().map_err(ServerError::Config)?;
         let state = Arc::new(AppState {
             operations: OperationsReader::new(config.console_state_file.clone()),
+            share: ShareReadStore::with_public_origin(
+                config.share_store_file.clone().unwrap_or_default(),
+                config.public_origin.clone(),
+            ),
+            share_seams,
             config: config.clone(),
             runtime,
             summary: SummaryCache::new(),
@@ -242,6 +258,10 @@ fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Resp
         ["services"] => services_response(state),
         ["health"] => health_response(state),
         ["actions"] => send_json(200, &action_catalogue()),
+        ["share-management", "status"] => match state.share.status(&*state.share_seams) {
+            Ok(payload) => send_json(200, &payload),
+            Err(error) => error.response(),
+        },
         ["operations"] => match state.operations.list(raw_target) {
             Ok(payload) => send_json(200, &payload),
             Err(error) => error.response(),

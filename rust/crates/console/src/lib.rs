@@ -13,6 +13,7 @@ pub mod error;
 pub mod operations;
 pub mod runtime;
 pub mod server;
+pub mod share_read;
 pub mod summary;
 
 pub use config::{ConsoleConfig, EntryKind, Role};
@@ -22,4 +23,5 @@ pub use runtime::{
     RuntimeSnapshot,
 };
 pub use server::{AppState, ConsoleServer, ServerError, ServerHandle};
+pub use share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
 pub use summary::{build_cloud_summary, SummaryCache};

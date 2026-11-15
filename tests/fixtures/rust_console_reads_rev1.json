@@ -1,0 +1,387 @@
+{
+ "metadata": {
+  "fixture": true,
+  "generatedFrom": "usagesrv.py + share/management.py + share/store.py + console/share_actions.py",
+  "role": "cloud",
+  "source": "tests/generate_rust_console_reads_fixture.py"
+ },
+ "shareStatus": {
+  "cases": {
+   "confirmedRunning": {
+    "body": {
+     "active_keys": 6,
+     "applied_generation": 4,
+     "attribution": {
+      "file_ready": true,
+      "file_reason": "ok",
+      "instance_loaded": {
+       "value": "unknown"
+      },
+      "key_chars": 43,
+      "key_file": "/run/um-share/run/share-attribution.key",
+      "request_attribution_observed": false
+     },
+     "blocked": false,
+     "blocked_publications": [],
+     "broker": {
+      "diag": [
+       {
+        "ok": true,
+        "stage": "publish"
+       }
+      ],
+      "pid": 4242,
+      "running": true,
+      "version": "2.0.0"
+     },
+     "capacity": {
+      "checked_at": 1700000000,
+      "configured": 32,
+      "in_flight": 3,
+      "in_flight_reason": null,
+      "note": "configured 是用户配置的准入上限（当前部署 32），不是上游实测承载量；in_flight 来自受限后台的实例状态，排队数与上游容量本读面未暴露/未实测",
+      "queued": null,
+      "queued_reason": "not_exposed",
+      "upstream_capacity": null,
+      "upstream_capacity_measured": false,
+      "upstream_capacity_reason": "not_measured"
+     },
+     "desired_generation": 4,
+     "gateway_running": true,
+     "in_sync": true,
+     "last_publication_failure": null,
+     "limits_clamped_keys": 0,
+     "limits_normalization_required": false,
+     "pending_revocation": false,
+     "schema_version": 3,
+     "security_in_sync": true,
+     "security_pending": 0,
+     "share_max_concurrency": 32,
+     "share_max_concurrency_stored": 32,
+     "share_url": "https://share.example.test",
+     "share_url_reason": "",
+     "share_url_source": "configured",
+     "total_keys": 6
+    },
+    "cacheControl": "no-store",
+    "lastCheckAtType": "number",
+    "status": 200
+   },
+   "confirmedStopped": {
+    "body": {
+     "active_keys": 6,
+     "applied_generation": 4,
+     "attribution": {
+      "file_ready": true,
+      "file_reason": "ok",
+      "instance_loaded": {
+       "value": "unknown"
+      },
+      "key_chars": 43,
+      "key_file": "/run/um-share/run/share-attribution.key",
+      "request_attribution_observed": false
+     },
+     "blocked": false,
+     "blocked_publications": [],
+     "broker": {
+      "error_code": "deadline_exceeded",
+      "running": false
+     },
+     "capacity": {
+      "checked_at": 1700000000,
+      "configured": 32,
+      "in_flight": 3,
+      "in_flight_reason": null,
+      "note": "configured 是用户配置的准入上限（当前部署 32），不是上游实测承载量；in_flight 来自受限后台的实例状态，排队数与上游容量本读面未暴露/未实测",
+      "queued": null,
+      "queued_reason": "not_exposed",
+      "upstream_capacity": null,
+      "upstream_capacity_measured": false,
+      "upstream_capacity_reason": "not_measured"
+     },
+     "desired_generation": 4,
+     "gateway_running": false,
+     "in_sync": true,
+     "last_publication_failure": null,
+     "limits_clamped_keys": 0,
+     "limits_normalization_required": false,
+     "pending_revocation": false,
+     "schema_version": 3,
+     "security_in_sync": true,
+     "security_pending": 0,
+     "share_max_concurrency": 32,
+     "share_max_concurrency_stored": 32,
+     "share_url": "https://share.example.test",
+     "share_url_reason": "",
+     "share_url_source": "configured",
+     "total_keys": 6
+    },
+    "cacheControl": "no-store",
+    "lastCheckAtType": "number",
+    "status": 200
+   },
+   "unconfirmed": {
+    "body": {
+     "active_keys": 6,
+     "applied_generation": 4,
+     "attribution": {
+      "file_ready": true,
+      "file_reason": "ok",
+      "instance_loaded": {
+       "value": "unknown"
+      },
+      "key_chars": 43,
+      "key_file": "/run/um-share/run/share-attribution.key",
+      "request_attribution_observed": false
+     },
+     "blocked": false,
+     "blocked_publications": [],
+     "broker": {},
+     "capacity": {
+      "checked_at": 1700000000,
+      "configured": 32,
+      "in_flight": 3,
+      "in_flight_reason": null,
+      "note": "configured 是用户配置的准入上限（当前部署 32），不是上游实测承载量；in_flight 来自受限后台的实例状态，排队数与上游容量本读面未暴露/未实测",
+      "queued": null,
+      "queued_reason": "not_exposed",
+      "upstream_capacity": null,
+      "upstream_capacity_measured": false,
+      "upstream_capacity_reason": "not_measured"
+     },
+     "desired_generation": 4,
+     "in_sync": true,
+     "last_publication_failure": null,
+     "limits_clamped_keys": 0,
+     "limits_normalization_required": false,
+     "pending_revocation": false,
+     "schema_version": 3,
+     "security_in_sync": true,
+     "security_pending": 0,
+     "share_max_concurrency": 32,
+     "share_max_concurrency_stored": 32,
+     "share_url": "https://share.example.test",
+     "share_url_reason": "",
+     "share_url_source": "configured",
+     "total_keys": 6
+    },
+    "cacheControl": "no-store",
+    "lastCheckAtType": "number",
+    "status": 200
+   }
+  },
+  "storeSeed": {
+   "blobColumns": [
+    [
+     "keys",
+     "secret_blob"
+    ],
+    [
+     "keys",
+     "secret_blob"
+    ],
+    [
+     "keys",
+     "secret_blob"
+    ],
+    [
+     "keys",
+     "secret_blob"
+    ],
+    [
+     "keys",
+     "secret_blob"
+    ],
+    [
+     "keys",
+     "secret_blob"
+    ]
+   ],
+   "columns": {
+    "configgen": [
+     "schema_version",
+     "config_generation",
+     "applied_generation"
+    ],
+    "keys": [
+     "key_id",
+     "name",
+     "secret_hash",
+     "secret_version",
+     "masked_key",
+     "secret_blob",
+     "secret_algo",
+     "enabled",
+     "max_concurrency",
+     "created_at",
+     "updated_at",
+     "deleted_at",
+     "row_version"
+    ],
+    "meta": [
+     "key",
+     "value"
+    ],
+    "ops": [
+     "id",
+     "kind",
+     "idempotency_key",
+     "status",
+     "payload",
+     "created_at"
+    ],
+    "security": [
+     "record_id",
+     "key_id",
+     "generation",
+     "action",
+     "secret_version",
+     "status",
+     "recorded_at",
+     "applied_at",
+     "applied_generation",
+     "instance_id",
+     "remote_confirmed_at",
+     "remote_receipt"
+    ]
+   },
+   "ddl": [
+    "CREATE TABLE configgen (\n                    schema_version INTEGER NOT NULL,\n                    config_generation INTEGER NOT NULL,\n                    applied_generation INTEGER NOT NULL DEFAULT 0\n                )",
+    "CREATE TABLE keys (\n                    key_id TEXT PRIMARY KEY,\n                    name TEXT NOT NULL,\n                    secret_hash TEXT NOT NULL,\n                    secret_version INTEGER NOT NULL DEFAULT 1,\n                    masked_key TEXT NOT NULL,\n                    secret_blob BLOB,\n                    secret_algo TEXT,\n                    enabled INTEGER NOT NULL DEFAULT 1,\n                    max_concurrency INTEGER NOT NULL DEFAULT 1,\n                    created_at TEXT NOT NULL,\n                    updated_at TEXT NOT NULL,\n                    deleted_at TEXT,\n                    row_version INTEGER NOT NULL DEFAULT 1,\n                    UNIQUE(name, deleted_at)\n                )",
+    "CREATE TABLE meta (\n                    key TEXT PRIMARY KEY, value TEXT NOT NULL\n                )",
+    "CREATE TABLE ops (\n                    id TEXT PRIMARY KEY,\n                    kind TEXT NOT NULL,\n                    idempotency_key TEXT,\n                    status TEXT NOT NULL,\n                    payload TEXT,\n                    created_at TEXT NOT NULL,\n                    UNIQUE(idempotency_key)\n                )",
+    "CREATE TABLE security (\n                    record_id TEXT PRIMARY KEY,\n                    key_id TEXT,\n                    generation INTEGER NOT NULL,\n                    action TEXT NOT NULL,\n                    secret_version INTEGER,\n                    status TEXT NOT NULL DEFAULT 'pending',\n                    recorded_at TEXT NOT NULL,\n                    applied_at TEXT,\n                    applied_generation INTEGER,\n                    instance_id TEXT,\n                    remote_confirmed_at TEXT,\n                    remote_receipt TEXT\n                )",
+    "CREATE UNIQUE INDEX idx_keys_active_name\n                    ON keys(name) WHERE deleted_at IS NULL",
+    "CREATE INDEX idx_security_generation\n                    ON security(generation)"
+   ],
+   "rows": {
+    "configgen": [
+     [
+      3,
+      4,
+      4
+     ]
+    ],
+    "keys": [
+     [
+      "key-active-1",
+      "alpha",
+      "ba5260459f41020f5621b3c5ac6b5dfd310f29997170b62a76b623685eab8ddb",
+      1,
+      "um-share-****cdef",
+      "000102030405060708090a0b326ffb68ad84b07ea020fbfbd988555db2e4b400c54d6844010687e6790c66987b1d6da54efd752b1ceba039d849b2",
+      "aesgcm-file-key-v1",
+      1,
+      8,
+      "2026-11-15T00:00:01+00:00",
+      "2026-11-15T00:00:01+00:00",
+      null,
+      1
+     ],
+     [
+      "key-active-2",
+      "beta",
+      "e68a9a333c473277fcd5f3d0e51f7d56c8a7660401cbce7c2687662b93c771aa",
+      1,
+      "um-share-****cdef",
+      "000102030405060708090a0b326ffb68ad84b07ea023f2ffd0c4485cb1e5b301c64c6745590586e1780fb1bac9ec5abc0f36daea6f79aeed2ec4",
+      "aesgcm-file-key-v1",
+      1,
+      16,
+      "2026-11-15T00:00:02+00:00",
+      "2026-11-15T00:00:02+00:00",
+      null,
+      1
+     ],
+     [
+      "key-deleted-1",
+      "deleted",
+      "f3e0d8c1381c5e59ff795190724ce28275c39ac95dc42eb16330904043492d75",
+      1,
+      "um-share-****9abc",
+      "000102030405060708090a0b326ffb68ad84b07ea025f2e7d49d1d09aee6b606c34f6a4a0f5fdce47f0a8edac0d5cf282d72600cc5ed2961c86b",
+      "aesgcm-file-key-v1",
+      0,
+      16,
+      "2026-11-15T00:00:03+00:00",
+      "2026-11-15T00:00:09+00:00",
+      "2026-11-15T00:00:09+00:00",
+      2
+     ],
+     [
+      "key-legacy-1",
+      "legacy",
+      "3e79c82adb9b40f6b69eebbe81ec9f9e43b8285202e8d62a4aaa77862261cc29",
+      1,
+      "um-share-****abcd",
+      null,
+      null,
+      1,
+      16,
+      "2026-11-15T00:00:04+00:00",
+      "2026-11-15T00:00:04+00:00",
+      null,
+      1
+     ],
+     [
+      "key-undecryptable-1",
+      "undecryptable",
+      "20bb05002e01bd036dcc1668517ed2e3c5bc3c02127708a99344a4e3f39b1fb2",
+      1,
+      "um-share-****2345",
+      "000102030405060708090a0b326ffb68ad84b07ea034f9efd48a0a14f3a2e6569c1e724c0955d6b1282a010dfe929921ba075f0754955e5969",
+      "bogus-scheme-v9",
+      1,
+      16,
+      "2026-11-15T00:00:05+00:00",
+      "2026-11-15T00:00:05+00:00",
+      null,
+      1
+     ],
+     [
+      "key-rotated-1",
+      "rotated",
+      "137cec7ad909bf650be5093e4214b69919fd4be2454d864f99eceb5f175610b5",
+      2,
+      "um-share-****9abc",
+      "000102030405060708090a0b326ffb68ad84b07ea033f8ffd09d1d09aee6b606c34f6a4a0f5fdce47f0a80bb0450932cf4d143404019d44d3d35",
+      "aesgcm-file-key-v1",
+      1,
+      16,
+      "2026-11-15T00:00:06+00:00",
+      "2026-11-15T00:00:07+00:00",
+      null,
+      2
+     ],
+     [
+      "key-version-1",
+      "version",
+      "cc7343bb6b1c57e2d46998a199e199c8eaf7700d464a7303774c7677d21477bd",
+      1,
+      "um-share-****9abc",
+      "000102030405060708090a0b326ffb68ad84b07ea037f2f9c2801703aee6b606c34f6a4a0f5fdce47f0a53a045d66604d32544f739cfda48a67b",
+      "aesgcm-file-key-v1",
+      1,
+      16,
+      "2026-11-15T00:00:07+00:00",
+      "2026-11-15T00:00:07+00:00",
+      null,
+      1
+     ]
+    ],
+    "meta": [
+     [
+      "share_max_concurrency",
+      "32"
+     ],
+     [
+      "schema_version",
+      "3"
+     ]
+    ],
+    "ops": [],
+    "security": []
+   }
+  }
+ }
+}
