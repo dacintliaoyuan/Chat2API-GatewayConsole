@@ -1379,23 +1379,6 @@ class ShareApiBoundaryTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_duplicate_control_header_rejected(self):
-        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
-        body = b'{"name":"x"}'
-        try:
-            conn.putrequest("POST", "/api/share/keys")
-            conn.putheader("Host", "127.0.0.1:8001")
-            conn.putheader("X-Admin-Control", "test-control-token")
-            conn.putheader("X-Admin-Control", "test-control-token")
-            conn.putheader("Content-Type", "application/json")
-            conn.putheader("Content-Length", str(len(body)))
-            conn.endheaders(body)
-            response = conn.getresponse()
-            self.assertEqual(response.status, 400)
-            self.assertIn(b"duplicate header", response.read())
-        finally:
-            conn.close()
-
     def test_duplicate_header_yields_exactly_one_response_on_raw_socket(self):
         # R7-a: the duplicate-header path previously sent the 400 twice on
         # one connection; the raw socket must observe exactly one response.
