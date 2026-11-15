@@ -205,6 +205,20 @@ fn dispatch(
     request: &Request,
     stream: &TcpStream,
 ) -> (Response, Option<Admission>) {
+    let (mut response, admission) = dispatch_inner(state, request, stream);
+    if response.header("access-control-allow-origin").is_none() {
+        if let Some(origin) = cors_allow_origin(state, &request.headers) {
+            response = response.with_header("Access-Control-Allow-Origin", origin);
+        }
+    }
+    (response, admission)
+}
+
+fn dispatch_inner(
+    state: &AppState,
+    request: &Request,
+    stream: &TcpStream,
+) -> (Response, Option<Admission>) {
     if request.method == "OPTIONS" {
         return (options_response(state, &request.headers), None);
     }

@@ -662,3 +662,52 @@ pub fn body_field<'a>(body: &'a Value, field: &str) -> &'a Value {
         .and_then(|error| error.get(field))
         .unwrap_or(&Value::Null)
 }
+
+/// Send one request and report whether the server closed the socket after it.
+pub fn client_request_and_check_close(
+    addr: SocketAddr,
+    request: &ClientRequest,
+) -> std::io::Result<(ClientResponse, bool)> {
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let mut raw = format!("{} {} HTTP/1.1\r\n", request.method, request.target);
+    let has_host = request
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("host"));
+    if !has_host {
+        raw.push_str(&format!("Host: {addr}\r\n"));
+    }
+    for (name, value) in &request.headers {
+        raw.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if let Some(body) = &request.body {
+        let has_length = request
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+        if !has_length {
+            raw.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        }
+    }
+    raw.push_str("\r\n");
+    stream.write_all(raw.as_bytes())?;
+    if let Some(body) = &request.body {
+        stream.write_all(body)?;
+    }
+    stream.flush()?;
+    let response = read_client_response(&mut stream)?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    let mut byte = [0u8; 1];
+    let closed = match stream.read(&mut byte) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+        ),
+    };
+    Ok((response, closed))
+}
