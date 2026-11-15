@@ -1,0 +1,23 @@
+[package]
+name = "um-gateway"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "um_gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "um-gateway-candidate"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[dev-dependencies]
+um-contract = { path = "../contract" }
+um-test-harness = { path = "../test-harness" }
