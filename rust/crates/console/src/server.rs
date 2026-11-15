@@ -123,8 +123,8 @@ impl ConsoleServer {
                 config.share_secret_key_file.clone(),
             ),
             share_seams,
-            share_write: ShareWriteStore::new(
-                config.share_store_file.clone().unwrap_or_default(),
+            share_write: ShareWriteStore::from_config(
+                config.share_store_file.clone(),
                 config.share_secret_key_file.clone(),
                 write_seams,
             ),

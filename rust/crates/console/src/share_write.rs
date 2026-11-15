@@ -117,7 +117,7 @@ struct AckCounts {
 }
 
 pub struct ShareWriteStore {
-    path: PathBuf,
+    path: Option<PathBuf>,
     secret_key_file: Option<PathBuf>,
     seams: Arc<dyn ShareWriteSeams>,
     last_published: Mutex<Option<(i64, String)>>,
@@ -128,6 +128,14 @@ pub struct ShareWriteStore {
 impl ShareWriteStore {
     pub fn new(
         path: PathBuf,
+        secret_key_file: Option<PathBuf>,
+        seams: Arc<dyn ShareWriteSeams>,
+    ) -> Self {
+        Self::from_config(Some(path), secret_key_file, seams)
+    }
+
+    pub fn from_config(
+        path: Option<PathBuf>,
         secret_key_file: Option<PathBuf>,
         seams: Arc<dyn ShareWriteSeams>,
     ) -> Self {
@@ -142,8 +150,13 @@ impl ShareWriteStore {
     }
 
     fn open(&self) -> Result<ShareStore, ShareWriteError> {
+        let Some(path) = &self.path else {
+            return Err(ShareWriteError::store(StoreError::Other(
+                "share store path is not configured".to_string(),
+            )));
+        };
         let key = load_key_file(self.secret_key_file.as_deref())?;
-        ShareStore::open_with_key(&self.path, key).map_err(ShareWriteError::store)
+        ShareStore::open_with_key(path, key).map_err(ShareWriteError::store)
     }
 
     pub fn create_key(

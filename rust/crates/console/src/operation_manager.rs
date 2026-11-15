@@ -309,10 +309,12 @@ impl OperationManagerSlot {
         let Some(path) = &self.db_path else {
             return Err(ConsoleError::console_unavailable());
         };
-        let lock_dir = self
-            .lock_dir
-            .clone()
-            .unwrap_or_else(|| path.with_extension("locks"));
+        let lock_dir = self.lock_dir.clone().unwrap_or_else(|| {
+            path.parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(|parent| parent.join("console-locks"))
+                .unwrap_or_else(|| path.with_extension("locks"))
+        });
         let manager = Arc::new(OperationManager::new(
             path.clone(),
             lock_dir,
