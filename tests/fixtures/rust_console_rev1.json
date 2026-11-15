@@ -108,6 +108,12 @@
    },
    "status": 400
   },
+  "duplicateContentLength": {
+   "body": {
+    "error": "duplicate header: Content-Length"
+   },
+   "status": 400
+  },
   "duplicateContentType": {
    "body": {
     "error": "duplicate header: Content-Type"

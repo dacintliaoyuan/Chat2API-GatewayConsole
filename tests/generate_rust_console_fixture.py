@@ -257,6 +257,9 @@ def generate():
             [("Content-Type", "application/json"),
              ("Content-Type", "application/json"),
              ("Content-Length", "2")])
+        duplicate_content_length = raw_request(
+            server, "POST", "/api/console/services",
+            [("Content-Length", "2"), ("Content-Length", "2")], body=b"{}")
         invalid_content_length = raw_request(
             server, "POST", "/api/console/services",
             [("Content-Length", "not-a-number")])
@@ -423,6 +426,10 @@ def generate():
                 "duplicateContentType": {
                     "status": duplicate_content_type["status"],
                     "body": duplicate_content_type["body"],
+                },
+                "duplicateContentLength": {
+                    "status": duplicate_content_length["status"],
+                    "body": duplicate_content_length["body"],
                 },
                 "invalidContentLength": {
                     "status": invalid_content_length["status"],
