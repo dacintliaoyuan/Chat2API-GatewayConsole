@@ -118,7 +118,7 @@ pub fn reject_unknown_fields(
         .map(|field| format!("'{field}'"))
         .collect::<Vec<_>>()
         .join(", ");
-    Err(ConsoleError::body(
+    Err(ConsoleError::body_open(
         400,
         &format!("unknown field(s): [{list}]"),
     ))

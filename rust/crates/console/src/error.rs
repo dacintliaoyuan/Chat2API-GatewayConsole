@@ -57,6 +57,12 @@ impl ConsoleError {
         Self::new(status, json!({"error": code})).closing()
     }
 
+    /// A body-field rejection after the body was fully read: Python keeps the
+    /// connection open (`_reject_unknown_fields` does not set close_connection).
+    pub fn body_open(status: u16, code: &str) -> Self {
+        Self::new(status, json!({"error": code}))
+    }
+
     pub fn capability_not_assembled(prefix: &str) -> Self {
         Self::new(
             503,

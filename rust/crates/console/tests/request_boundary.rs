@@ -217,6 +217,11 @@ fn unknown_fields_match_python() {
         &fixture["boundary"]["unknownFields"],
         "unknownFields",
     );
+    assert_eq!(
+        response.header("connection"),
+        None,
+        "a fully read body keeps the connection open like Python"
+    );
 }
 
 #[test]
