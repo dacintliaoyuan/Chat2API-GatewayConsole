@@ -9,6 +9,10 @@
 
 pub mod codec;
 pub mod error;
+pub mod hmac;
+pub mod management;
 pub mod peer;
+pub mod replay;
+pub mod request;
 pub mod socket_policy;
 pub mod transport;

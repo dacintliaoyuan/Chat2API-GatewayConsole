@@ -91,6 +91,7 @@
       "body": {
         "action": "status",
         "fields": {},
+        "mac": "0af671bfae129265c15370e177bccc6b9638d502d7a9c840631477a3b6c60178",
         "request_id": "r-1",
         "ts": 1,
         "v": 2
@@ -114,6 +115,7 @@
           "generation": 3
         },
         "instance_id": "i-1",
+        "mac": "f88627f23825d658f3ed78da100f28a96e98f6421ea3dee339f10c517941295c",
         "request_id": "r-2",
         "ts": 2,
         "v": 2
@@ -142,6 +144,7 @@
             "schema_version": 1
           }
         },
+        "mac": "9cf53b92e25c0048e612f9193bf81b9f8a0721274a3cbd81006e7003feffbde3",
         "request_id": "r-3",
         "ts": 3,
         "v": 2
@@ -164,7 +167,7 @@
     "sourceHashEncoding": "utf8-lf",
     "sourceHashes": {
       "share/broker_protocol.py": "dbf7507c125b03bd915a190b052d7e5dac47a4dda80f7ef1fe6a15bbdf7554c2",
-      "tests/generate_rust_broker_fixture.py": "1da529f18bf6bb0ca20cded4a846a76f8931b0c560d40043cc2a3c533eced643"
+      "tests/generate_rust_broker_fixture.py": "9c49010dc3be48e897a3e507e12c965a395c50d24568790633476a383ebfce28"
     }
   }
 }

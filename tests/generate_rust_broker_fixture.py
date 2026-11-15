@@ -106,7 +106,7 @@ def _hmac_vectors():
                        hashlib.sha256).hexdigest()
         vectors.append({"secret": "test-broker-secret",
                         "signedKeys": list(signed_keys),
-                        "body": body,
+                        "body": dict(body, mac=mac),
                         "payload": payload,
                         "mac": mac})
     return vectors
