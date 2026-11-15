@@ -1,7 +1,8 @@
-# Rust workspace（S0 骨架 + S1a 候选网关 + S3a broker 控制通道）
+# Rust workspace（S0 骨架 + S1a/S1b 候选网关 + S3a broker 控制通道）
 
 本目录是 Rust 重写的 workspace 根。S0 建立工程骨架、HTTP 测试 harness 与
 临时数据目录；S1a 增加候选网关 crate（8003 只读面、分享 Key 门与请求拒绝），
+S1b 增加 Chat 非流式/SSE 转发、提交门、超时重试、断开取消与分享账本；
 S3a 增加 broker 控制通道的协议内核与 POSIX AF_UNIX 适配器。本目录不切换
 任何生产端口。
 
@@ -13,9 +14,10 @@ rust/
 └── crates/
     ├── broker/                S3a broker 控制通道（帧、HMAC、replay、action、AF_UNIX 策略）
     ├── contract/              只读契约夹具的类型与加载器
-    ├── gateway/               S1a 候选网关：只读面、Key 门、请求拒绝
+    ├── gateway/               S1a/S1b 候选网关：只读面、Key 门、Chat 转发、SSE、账本
     └── test-harness/          临时 loopback HTTP server、临时数据目录
 ```
+
 
 `tests/fixtures/rust_contract_rev1.json` 由
 `tests/generate_rust_contract_fixture.py` 从 `docs/rust-contract.md` 与
@@ -29,7 +31,8 @@ Rust broker 测试只反序列化该夹具里的 canonical JSON、帧与 HMAC �
 
 后续切片（S1–S8）在 `crates/` 下增加实现 crate，并复用本目录的 harness。
 验收记录见 [docs/rust-s0-acceptance.md](../docs/rust-s0-acceptance.md)、
-[docs/rust-s1a-acceptance.md](../docs/rust-s1a-acceptance.md) 与
+[docs/rust-s1a-acceptance.md](../docs/rust-s1a-acceptance.md)、
+[docs/rust-s1b-acceptance.md](../docs/rust-s1b-acceptance.md) 与
 [docs/rust-s3a-acceptance.md](../docs/rust-s3a-acceptance.md)。
 
 ## 命令
@@ -58,3 +61,7 @@ aarch64-linux-android --tests` 只做 `cfg(unix)` 代码的类型检查；AF_UNI
   broker 或 display relay。
 - `um-broker` 不 spawn 进程、不执行 shell、不接受任意路径/服务名；动作由固定
   `Action` 枚举承载，字段由固定白名单校验。
+- `um-gateway` 的 Chat 转发只在临时 loopback 上游上测试；账本路径必须由
+  `CHAT2API_USAGE_LOG` 或测试配置显式给出，未配置时不写任何账本。SSE 生产者
+  在取消后由自己的 `finally` 关闭上游并释放 reader 槽；客户端断开不触发第二次
+  状态行或把部分完成写成成功。
