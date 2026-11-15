@@ -112,6 +112,35 @@ fn summary_matches_python_cloud_shape() {
 }
 
 #[test]
+fn summary_is_cloud_role_and_does_not_read_a_private_ledger() {
+    let fixture = fixture();
+    let temp = temp();
+    let ledger = temp.path().join("usage-chat2api.jsonl");
+    std::fs::write(
+        &ledger,
+        "{\"model\":\"private-sentinel\",\"input_tokens\":99}
+",
+    )
+    .expect("write private ledger sentinel");
+    let console = start_console_with(&temp, stopped_runtime(), |config| {
+        // The cloud summary must not carry a private-ledger source at all.
+        config.console_state_file = Some(temp.path().join("state.sqlite3"));
+    });
+    let response = get(console.addr, "/api/summary");
+    let body = response.json();
+    assert_eq!(response.status, 200);
+    assert_eq!(body["role"], fixture["summary"]["role"]);
+    assert_eq!(body["assembly"], fixture["summary"]["assembly"]);
+    assert_eq!(body["services"], fixture["summary"]["services"]);
+    assert_eq!(body["services"], json!({}));
+    assert_eq!(body.get("sources"), None);
+    assert_eq!(body["dsh"]["url"], Value::Null);
+    assert_eq!(body["dshMergedIntoTotal"]["day"], Value::Null);
+    assert!(!body.to_string().contains("private-sentinel"));
+    assert!(ledger.exists());
+}
+
+#[test]
 fn services_match_python_shape_and_cache_metadata() {
     let fixture = fixture();
     let temp = temp();
