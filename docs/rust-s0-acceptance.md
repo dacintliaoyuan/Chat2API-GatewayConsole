@@ -45,7 +45,18 @@
 | `python -m unittest tests.test_retired_features tests.test_check_gate` | `Ran 11 tests`；`OK` |
 | `bash scripts/check-rust-s0.sh` | 退出码 0 |
 | `bash scripts/check.sh --quick` | 退出码 0 |
+| `bash scripts/check.sh --full` | Python 全量 `Ran 2354 tests`，`FAILED (failures=1, errors=1, skipped=63)`；两条失败单独重跑均 `OK`，见下方说明 |
 | `git -c core.whitespace=cr-at-eol diff --check` | 退出码 0 |
+
+全量门禁的两条失败：
+
+- `test_share_management.ShareApiBoundaryTests.test_duplicate_control_header_rejected`
+  （`ConnectionAbortedError`）。
+- `test_chat2api_reauth_instances.EarlyReleaseHandoverTests.test_a1_early_release_continues_without_a_second_manual_trigger`
+  （2 秒窗口内未观察到第二次登录窗口）。
+
+两条失败单独重跑均 `OK`；本票未修改这两个模块，按既有 Windows 连接/
+时序抖动记录，不写成 S0 通过证据。`local/tests` `Ran 54 tests` / `OK`。
 
 ## 无生产端口切换
 
@@ -69,8 +80,6 @@
 
 ## 未验证范围
 
-- 未运行 `bash scripts/check.sh --full`；本票 parity 门禁只要求
-  `check-generated`、两个定向 unittest 与 diff check。
 - 未在云端或 WSL/Linux 运行 `um-cloud-deploy/run-linux-checks.sh`。
 - 未启动真实 Rust 候选进程、未切换 8002/8003/8097、未执行 UM 登录或
   Cloudflare/备份操作。
