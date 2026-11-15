@@ -244,14 +244,12 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                     if slow {
                         slow_retries += 1;
                     }
-                    if !sleep_with_deadline(
+                    if sleep_with_deadline(
                         retry_delay(context, fast_retries, slow),
                         context.deadline,
                     ) {
-                        record_usage(context, "request_deadline_exceeded", None, 0);
-                        return ChatResult::Response(deadline_response());
+                        continue;
                     }
-                    continue;
                 }
                 record_usage(context, failure.name(), None, 0);
                 return ChatResult::Response(
@@ -378,14 +376,12 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                     if slow {
                         slow_retries += 1;
                     }
-                    if !sleep_with_deadline(
+                    if sleep_with_deadline(
                         retry_delay(context, fast_retries, slow),
                         context.deadline,
                     ) {
-                        record_usage(context, "request_deadline_exceeded", None, 0);
-                        return ChatResult::Response(deadline_response());
+                        continue;
                     }
-                    continue;
                 }
                 record_usage(context, failure.name(), None, 0);
                 return ChatResult::Response(
@@ -468,8 +464,8 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 }
                 if !sleep_with_deadline(retry_delay(context, fast_retries, slow), context.deadline)
                 {
-                    record_usage(context, "request_deadline_exceeded", None, 0);
-                    return ChatResult::Response(deadline_response());
+                    record_usage(context, "upstream_stream_error", None, 0);
+                    return ChatResult::Response(stream_error_response(&outcome));
                 }
                 continue;
             }
