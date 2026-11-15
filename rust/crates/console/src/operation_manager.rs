@@ -275,6 +275,55 @@ struct Inner {
     generations: HashMap<String, i64>,
 }
 
+/// Lazy manager construction, like Python's `get_console_manager`: the
+/// read-only faces never create the state database or mark rows interrupted.
+pub struct OperationManagerSlot {
+    inner: Mutex<Option<Arc<OperationManager>>>,
+    db_path: Option<PathBuf>,
+    lock_dir: Option<PathBuf>,
+    executor: Arc<dyn ActionExecutor>,
+}
+
+impl OperationManagerSlot {
+    pub fn new(
+        db_path: Option<PathBuf>,
+        lock_dir: Option<PathBuf>,
+        executor: Arc<dyn ActionExecutor>,
+    ) -> Self {
+        Self {
+            inner: Mutex::new(None),
+            db_path,
+            lock_dir,
+            executor,
+        }
+    }
+
+    pub fn get(&self) -> Result<Arc<OperationManager>, ConsoleError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ConsoleError::console_unavailable())?;
+        if let Some(manager) = inner.as_ref() {
+            return Ok(Arc::clone(manager));
+        }
+        let Some(path) = &self.db_path else {
+            return Err(ConsoleError::console_unavailable());
+        };
+        let lock_dir = self
+            .lock_dir
+            .clone()
+            .unwrap_or_else(|| path.with_extension("locks"));
+        let manager = Arc::new(OperationManager::new(
+            path.clone(),
+            lock_dir,
+            cloud_registry(),
+            Arc::clone(&self.executor),
+        )?);
+        *inner = Some(Arc::clone(&manager));
+        Ok(manager)
+    }
+}
+
 pub struct OperationManager {
     db_path: PathBuf,
     lock_dir: PathBuf,

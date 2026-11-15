@@ -20,6 +20,7 @@ pub mod runtime;
 pub mod server;
 pub mod share_auth;
 pub mod share_read;
+pub mod share_write;
 pub mod summary;
 
 pub use config::{ConsoleConfig, EntryKind, Role};
@@ -30,4 +31,5 @@ pub use runtime::{
 };
 pub use server::{AppState, ConsoleServer, ServerError, ServerHandle};
 pub use share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
+pub use share_write::{ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams};
 pub use summary::{build_cloud_summary, SummaryCache};

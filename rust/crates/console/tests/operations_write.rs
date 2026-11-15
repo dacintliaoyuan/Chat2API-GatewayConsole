@@ -548,6 +548,7 @@ fn start_write_console(temp: &TempDataDir, executor: Arc<dyn ActionExecutor>) ->
         support::stopped_runtime(),
         Arc::new(um_console::UnwiredSeams),
         executor,
+        Arc::new(um_console::UnwiredWriteSeams),
     )
     .expect("start candidate console");
     support::Console::from_server(server)
@@ -734,6 +735,7 @@ fn http_operations_write_is_unavailable_without_a_console_state_file() {
         support::stopped_runtime(),
         Arc::new(um_console::UnwiredSeams),
         Arc::new(RecordingExecutor),
+        Arc::new(um_console::UnwiredWriteSeams),
     )
     .expect("start candidate console");
     let console = support::Console::from_server(server);
