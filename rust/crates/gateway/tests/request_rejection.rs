@@ -151,7 +151,10 @@ fn revoke_uses_the_share_body_boundary_like_python() {
     assert_eq!(response.json(), json!({"released": 0}));
 
     // The share limit, not the 64 KiB console limit, bounds the body.
-    let oversized = format!(r#"{{"key_id":"friend","padding":"{}"}}"#, "x".repeat(70_000));
+    let oversized = format!(
+        r#"{{"key_id":"friend","padding":"{}"}}"#,
+        "x".repeat(70_000)
+    );
     let response = client_request(gateway.addr, &revoke_request().json_body(&oversized))
         .expect("revoke above the console limit");
     assert_eq!(response.status, 200);
@@ -174,10 +177,7 @@ fn revoke_uses_the_share_body_boundary_like_python() {
     )
     .expect("revoke with negative length");
     assert_eq!(response.status, 413);
-    assert_eq!(
-        response.json()["error"]["type"],
-        json!("payload_too_large")
-    );
+    assert_eq!(response.json()["error"]["type"], json!("payload_too_large"));
 }
 
 #[test]
@@ -198,12 +198,9 @@ fn share_route_refuses_a_declared_oversize_body_before_reading_it() {
         .bearer(SHARE_SECRET)
         .header("Content-Length", "11");
     request.body = None;
-    let response = client_request_with_timeout(
-        server.addr(),
-        &request,
-        std::time::Duration::from_secs(2),
-    )
-    .expect("declared oversize without body bytes");
+    let response =
+        client_request_with_timeout(server.addr(), &request, std::time::Duration::from_secs(2))
+            .expect("declared oversize without body bytes");
     assert_eq!(response.status, 413);
     assert_eq!(
         response.json(),

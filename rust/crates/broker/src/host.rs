@@ -300,8 +300,8 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
             notification_failed = true;
         }
         let host_stopped = self.host.stop_host(stop_deadline - self.now()) == Some(true);
-        let closed = host_stopped
-            && self.host.verify_closed(stop_deadline - self.now()) == Some(true);
+        let closed =
+            host_stopped && self.host.verify_closed(stop_deadline - self.now()) == Some(true);
         if closed {
             self.closure_epoch += 1;
             self.leases.clear();
@@ -349,8 +349,8 @@ impl<H: HostOps, I: InstanceChannel> HostCoordinator<H, I> {
             notification_failed = true;
         }
         let host_stopped = self.host.stop_host(stop_deadline - self.now()) == Some(true);
-        let closed = host_stopped
-            && self.host.verify_closed(stop_deadline - self.now()) == Some(true);
+        let closed =
+            host_stopped && self.host.verify_closed(stop_deadline - self.now()) == Some(true);
         let confirmed = closed;
         if confirmed {
             self.closure_epoch += 1;

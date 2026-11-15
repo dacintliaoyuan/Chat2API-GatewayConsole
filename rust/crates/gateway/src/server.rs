@@ -223,9 +223,7 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
 fn body_read_cap(state: &AppState, head: &RequestHead) -> u64 {
     let path = head.path();
     let reads_body = head.method == "POST"
-        && (path.starts_with("/v1/")
-            || path.starts_with("/api/")
-            || path == "/admin/share/revoke");
+        && (path.starts_with("/v1/") || path.starts_with("/api/") || path == "/admin/share/revoke");
     if !reads_body {
         return HARD_BODY_CAP;
     }

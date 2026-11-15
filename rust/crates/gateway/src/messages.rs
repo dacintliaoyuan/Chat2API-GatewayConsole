@@ -16,9 +16,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::body::{read_json_body, BodyPolicy};
-use crate::chat::{
-    line_text, ChatResult, ClientWatcher, PRELUDE_MAX_BYTES, SSE_CONTENT_TYPE,
-};
+use crate::chat::{line_text, ChatResult, ClientWatcher, PRELUDE_MAX_BYTES, SSE_CONTENT_TYPE};
 use crate::error::GatewayError;
 use crate::gate::Admission;
 use crate::http::{write_chunk, write_response_head, Request, Response};

@@ -133,10 +133,13 @@ fn a_second_stream_is_admitted_while_the_first_upstream_is_still_open() {
     assert!(!stub.closed(), "the first upstream is still open");
 
     let mut second_request = request();
-    second_request.headers.retain(|(name, _)| name != "Authorization");
     second_request
         .headers
-        .push(("Authorization".to_string(), format!("Bearer {SECOND_SECRET}")));
+        .retain(|(name, _)| name != "Authorization");
+    second_request.headers.push((
+        "Authorization".to_string(),
+        format!("Bearer {SECOND_SECRET}"),
+    ));
     let mut second = StreamingClient::send(gateway.addr, &second_request).expect("second stream");
     let raw = second
         .read_until(b"\"content\":\"OK\"", Duration::from_secs(2))

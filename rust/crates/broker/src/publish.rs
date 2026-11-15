@@ -131,33 +131,40 @@ impl<W: ProjectionWriter, I: InstanceChannel> PublishCoordinator<W, I> {
             return BrokerResult::err(ResultCode::Unconfirmed, "no registered instance");
         }
         let mut current = current_id.clone().unwrap_or_default();
-        let response = match self.channel.call("load", &load_fields, &current, WIRE_DEADLINE_SECONDS) {
-            Ok(response) => response,
-            Err(_) => {
-                if !self.refresh_discovery() {
-                    return BrokerResult::err(ResultCode::Unconfirmed, "instance load failed");
-                }
-                (current_id, registration) = self.instances.lock().unwrap().snapshot();
-                current = match current_id.clone() {
-                    Some(current) => current,
-                    None => {
-                        return BrokerResult::err(
-                            ResultCode::Unconfirmed,
-                            "no registered instance after refresh",
-                        )
+        let response =
+            match self
+                .channel
+                .call("load", &load_fields, &current, WIRE_DEADLINE_SECONDS)
+            {
+                Ok(response) => response,
+                Err(_) => {
+                    if !self.refresh_discovery() {
+                        return BrokerResult::err(ResultCode::Unconfirmed, "instance load failed");
                     }
-                };
-                match self.channel.call("load", &load_fields, &current, WIRE_DEADLINE_SECONDS) {
-                    Ok(response) => response,
-                    Err(error) => {
-                        return BrokerResult::err(
-                            ResultCode::Unconfirmed,
-                            format!("instance load failed: {error}"),
-                        )
+                    (current_id, registration) = self.instances.lock().unwrap().snapshot();
+                    current = match current_id.clone() {
+                        Some(current) => current,
+                        None => {
+                            return BrokerResult::err(
+                                ResultCode::Unconfirmed,
+                                "no registered instance after refresh",
+                            )
+                        }
+                    };
+                    match self
+                        .channel
+                        .call("load", &load_fields, &current, WIRE_DEADLINE_SECONDS)
+                    {
+                        Ok(response) => response,
+                        Err(error) => {
+                            return BrokerResult::err(
+                                ResultCode::Unconfirmed,
+                                format!("instance load failed: {error}"),
+                            )
+                        }
                     }
                 }
-            }
-        };
+            };
         let result = response
             .get("result")
             .and_then(Value::as_object)
