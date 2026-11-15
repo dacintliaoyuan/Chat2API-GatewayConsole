@@ -100,7 +100,7 @@ fn the_console_unknown_field_response_is_an_object() {
 #[test]
 fn sharing_limit_carries_code_reason_and_detail() {
     let error = GatewayError::sharing_limit_reached(
-        "per_key_concurrency",
+        Some("per_key_concurrency"),
         Some("per-key concurrency limit reached (max 1 in-flight requests for this key)"),
     );
     let body = error.body();

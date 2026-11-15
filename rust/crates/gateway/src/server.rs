@@ -270,7 +270,7 @@ fn admit_share(
         Some(&mut reason),
     ) {
         return Err(GatewayError::sharing_limit_reached(
-            reason.reason.as_deref().unwrap_or(""),
+            reason.reason.as_deref(),
             reason.detail.as_deref(),
         ));
     }
@@ -328,11 +328,12 @@ fn handle_get(state: &AppState, request: &Request) -> Response {
                 Err(error) => error.response(),
             }
         }
-        path if path.starts_with("/admin/") => {
+        "/admin/auth/status" | "/admin/auth/verify" | "/admin/auth/login"
+        | "/admin/auth/cancel" | "/admin/shutdown" => {
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
             }
-            GatewayError::not_implemented("admin_read_surface_s1a").response()
+            GatewayError::not_implemented("admin_surface_s1a").response()
         }
         path if path.starts_with("/api/") => {
             if let Err(error) = control_allowed(state, request) {
@@ -475,6 +476,13 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
                 return error.response();
             }
             GatewayError::not_implemented("embeddings_forwarding_s2").response()
+        }
+        "/admin/auth/status" | "/admin/auth/verify" | "/admin/auth/login"
+        | "/admin/auth/cancel" | "/admin/shutdown" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            GatewayError::not_implemented("admin_surface_s1a").response()
         }
         path if path.starts_with("/api/") => {
             if let Err(error) = control_allowed(state, request) {
