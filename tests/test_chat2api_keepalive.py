@@ -72,7 +72,8 @@ def _recv_response(sock):
 class KeepAliveCloseTests(unittest.TestCase):
     def setUp(self):
         self.proxy = StubProxy()
-        self.server = chat2api.ThreadingHTTPServer(("127.0.0.1", 0), chat2api.Handler)
+        self.server = chat2api.GatewayHTTPServer(("127.0.0.1", 0),
+                                                chat2api.Handler)
         self.server.proxy = self.proxy
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -132,6 +133,12 @@ class KeepAliveCloseTests(unittest.TestCase):
         self.assertEqual(b'{"status": "ok"}', body)
 
     # ---------- the contract ----------
+
+    def test_listen_backlog_is_128(self):
+        # A burst of new connections must fit the listen queue instead of the
+        # stdlib default of 5. The class attribute is read at bind time.
+        self.assertEqual(chat2api.GatewayHTTPServer.request_queue_size, 128)
+        self.assertEqual(self.server.request_queue_size, 128)
 
     def test_error_responses_close_connection(self):
         cases = [

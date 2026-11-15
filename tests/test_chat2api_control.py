@@ -53,7 +53,7 @@ class StubProxy:
 
 
 def ensure_module_server(proxy):
-    server = chat2api.ThreadingHTTPServer(("127.0.0.1", 0), chat2api.Handler)
+    server = chat2api.GatewayHTTPServer(("127.0.0.1", 0), chat2api.Handler)
     server.proxy = proxy
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

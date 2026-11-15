@@ -357,7 +357,7 @@ class StubUpstreamHandler(BaseHTTPRequestHandler):
         elif scenario == "slow-downstream":
             # A 256 KiB answer: the fake upstream finishes quickly, but the
             # client reads nothing for a while, so the downstream write is
-            # still pending when the test checks the reader slot.
+            # still pending when the test checks the producer.
             piece = "d" * 4096
             for _ in range(64):
                 self._send_chunk(_sse(_chunk(content=piece)))
@@ -1904,15 +1904,6 @@ class _LedgerAssertions:
     def reader_thread_count():
         return sum(1 for t in threading.enumerate()
                    if t.name == "chat2api-upstream-reader")
-
-    def wait_reader_slots_restored(self, before, timeout=6):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if chat2api._reader_slots._value >= before:
-                return
-            time.sleep(0.05)
-        self.fail(f"reader slots not restored within {timeout}s "
-                  f"({chat2api._reader_slots._value} != {before})")
 
     def wait_reader_threads_reclaimed(self, baseline, timeout=6):
         deadline = time.monotonic() + timeout
