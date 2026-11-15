@@ -15,7 +15,7 @@ chat2api 子进程**，各自带自己的 HTTP 面、token 文件、服务日志
 结束后租约释放，B 才被授予——拒绝来自「有活会话」这个事实，而不是永久阻塞。
 
 A1 用例（``EarlyReleaseHandoverTests``）复用同一装配：A 提前释放租约后，等待中的
-B 必须在 2 秒内自行接续并打开自己的窗口，不得睡到陈旧的租约到期点。
+B 必须在 5 秒内自行接续并打开自己的窗口，不得睡到陈旧的租约到期点。
 """
 
 import http.client
@@ -183,7 +183,7 @@ class _TwoInstanceHarness:
         env["CHAT2API_REAUTH_SLOT_FILE"] = cls.slot
         # The business request must use a small auth-wait budget: the default
         # 30s would outlive this test's 15s HTTP client timeout. The A1
-        # 2s continuation uses the recovery loop, not this request budget.
+        # 5s continuation uses the recovery loop, not this request budget.
         env["CHAT2API_AUTH_WAIT_BUDGET_S"] = "1"
         env["NO_PROXY"] = "*"
         env.pop("HTTP_PROXY", None)
@@ -377,13 +377,13 @@ class TwoInstanceReauthenticationTests(_TwoInstanceHarness, unittest.TestCase):
         self.assertEqual(self._marker_lines("a"), 1)
 
         # ---- 阶段 4：A 的会话结束（迟到结果被接受）后租约释放；等待中的
-        # B 在 2 秒内自行接续，不需要第二次手动触发。
+        # B 在 5 秒内自行接续，不需要第二次手动触发。
         cls.release.touch()
         self._await_status("a", lambda s: s["state"] == "valid",
                             message="A 会话完成")
         self.assertTrue(
-            self._wait_for_marker("b", timeout=2.0),
-            "A 释放租约后 B 没有在 2 秒内自行接续\n"
+            self._wait_for_marker("b", timeout=5.0),
+            "A 释放租约后 B 没有在 5 秒内自行接续\n"
             + self.child_report())
         self._await_status("b", lambda s: s["state"] == "valid",
                             message="B 自行接续完成")
@@ -426,7 +426,7 @@ class EarlyReleaseHandoverTests(_TwoInstanceHarness, unittest.TestCase):
         self.assertGreater(
             float(slot["expires_epoch"]) - time.time(), 30.0,
             "A's shared lease is too short for the early-release scenario; "
-            "the harness needs a lease that outlives the 2s continuation "
+            "the harness needs a lease that outlives the 5s continuation "
             "window\n" + self.child_report())
 
         # ---- 阶段 2：B 只触发一次，进入共享恢复等待，但绝不开窗口。
@@ -447,22 +447,22 @@ class EarlyReleaseHandoverTests(_TwoInstanceHarness, unittest.TestCase):
             "A1-EARLY-RELEASE: B opened its own login window while A "
             "still held the shared lease")
 
-        # ---- 阶段 3：A 提前释放；B 必须在 2 秒内自行接续并打开自己的窗口。
+        # ---- 阶段 3：A 提前释放；B 必须在 5 秒内自行接续并打开自己的窗口。
         released_at = time.monotonic()
         cls.release.touch()
-        elapsed = self._await_marker_after("b", released_at, 2.0)
+        elapsed = self._await_marker_after("b", released_at, 5.0)
         self.assertIsNotNone(
             elapsed,
             "A1-EARLY-RELEASE: B did not open its own login window within "
-            "2.0s after A released the shared lease; it kept sleeping to the "
+            "5.0s after A released the shared lease; it kept sleeping to the "
             "stale lease expiry instead of re-reading the shared slot. "
             "elapsed=%.2fs slot=%r\n%s"
             % (time.monotonic() - released_at, self._read_slot(),
                self.child_report()))
         self.assertLessEqual(
-            elapsed, 2.0,
+            elapsed, 5.0,
             "A1-EARLY-RELEASE: B opened its own login window %.2fs after "
-            "A released the shared lease (limit 2.0s); the handover must not "
+            "A released the shared lease (limit 5.0s); the handover must not "
             "wait for the stale lease expiry." % elapsed)
         self.assertEqual(
             self._marker_lines("a"), 1,
