@@ -9,14 +9,21 @@
 rust/
 ├── Cargo.toml                 workspace 根
 └── crates/
+    ├── contract/              只读契约夹具的类型与加载器
     └── test-harness/          临时 loopback HTTP server、临时数据目录
 ```
+
+`tests/fixtures/rust_contract_rev1.json` 由
+`tests/generate_rust_contract_fixture.py` 从 `docs/rust-contract.md` 与
+当前 Python 常量生成。Rust 测试只反序列化该夹具，不手写端点、错误码、
+SSE 事件名或超时预算。
 
 后续切片（S1–S8）在 `crates/` 下增加实现 crate，并复用本目录的 harness。
 
 ## 命令
 
 ```bash
+python tests/generate_rust_contract_fixture.py
 cargo test --manifest-path rust/Cargo.toml
 ```
 

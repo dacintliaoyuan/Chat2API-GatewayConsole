@@ -1,0 +1,877 @@
+{
+  "cloudflare": {
+    "catchAll": "http_status:404",
+    "readOnly": true,
+    "sharePaths": [
+      "/v1/models",
+      "/v1/chat/completions",
+      "/v1/messages",
+      "/v1/responses"
+    ],
+    "source": "um-cloud-deploy/cloudflared/check-ingress.py:26-30"
+  },
+  "endpoints": [
+    {
+      "auth": "同实际路径",
+      "description": "开发/兼容前缀，剥离后走同一路由",
+      "method": "ANY",
+      "path": "/gw/usagesrv/...",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源标记或控制令牌",
+      "description": "删除 Key",
+      "method": "DELETE",
+      "path": "/api/console/share-management/keys/{id}",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "旧管理面写",
+      "method": "DELETE",
+      "path": "/api/share/keys/{id}",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "loopback Host/Origin",
+      "description": "托管 `web/dist`；构建身份 role/line/sourceHash 不匹配返回 500",
+      "method": "GET",
+      "path": "/",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "动作目录",
+      "method": "GET",
+      "path": "/api/console/actions",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "安全状态只读面",
+      "method": "GET",
+      "path": "/api/console/cloud-ops",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "连接信息；云端角色 503",
+      "method": "GET",
+      "path": "/api/console/gateway-connection",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "服务与健康",
+      "method": "GET",
+      "path": "/api/console/health",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "日志读面；云端角色 503",
+      "method": "GET",
+      "path": "/api/console/log-entries",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "日志读面；云端角色 503",
+      "method": "GET",
+      "path": "/api/console/log-overview",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "日志读面；云端角色 503",
+      "method": "GET",
+      "path": "/api/console/log-sources",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "日志读面；云端角色 503",
+      "method": "GET",
+      "path": "/api/console/logs",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "操作记录",
+      "method": "GET",
+      "path": "/api/console/operations",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "操作记录",
+      "method": "GET",
+      "path": "/api/console/operations/{id}",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "服务与健康",
+      "method": "GET",
+      "path": "/api/console/services",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "broker 控制通道是否响应",
+      "method": "GET",
+      "path": "/api/console/share-management/control-status",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "launcher 可用性、operator 状态",
+      "method": "GET",
+      "path": "/api/console/share-management/display-session",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "认证观察 + display 事实",
+      "method": "GET",
+      "path": "/api/console/share-management/display-state",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "Key 列表；不含明文/哈希",
+      "method": "GET",
+      "path": "/api/console/share-management/keys",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "单 Key 明文 readback，no-store",
+      "method": "GET",
+      "path": "/api/console/share-management/keys/{id}/secret",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "分享状态、代次、容量、broker",
+      "method": "GET",
+      "path": "/api/console/share-management/status",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "分享用量汇总/逐请求",
+      "method": "GET",
+      "path": "/api/console/share-usage",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "分享用量汇总/逐请求",
+      "method": "GET",
+      "path": "/api/console/share-usage/requests",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "有界统计；云端角色 503",
+      "method": "GET",
+      "path": "/api/console/stats",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "UM 主链读面",
+      "method": "GET",
+      "path": "/api/console/um/logs",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "UM 主链读面",
+      "method": "GET",
+      "path": "/api/console/um/maintenance",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "UM 主链读面",
+      "method": "GET",
+      "path": "/api/console/um/request-logs",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "UM 主链读面",
+      "method": "GET",
+      "path": "/api/console/um/requests",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "UM 主链读面",
+      "method": "GET",
+      "path": "/api/console/um/today",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "UM 主链读面",
+      "method": "GET",
+      "path": "/api/console/um/trend",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "本机 Token/速率读面；云端角色 503",
+      "method": "GET",
+      "path": "/api/console/usage-rates",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（只读）",
+      "description": "本机 Token/速率读面；云端角色 503",
+      "method": "GET",
+      "path": "/api/console/usage-tokens",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "会话或控制令牌",
+      "description": "旧管理面只读",
+      "method": "GET",
+      "path": "/api/share/keys",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "会话或控制令牌",
+      "description": "旧管理面只读",
+      "method": "GET",
+      "path": "/api/share/keys/{id}",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "会话或控制令牌",
+      "description": "旧管理面只读",
+      "method": "GET",
+      "path": "/api/share/keys/{id}/secret",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "会话或控制令牌",
+      "description": "旧管理面只读",
+      "method": "GET",
+      "path": "/api/share/operations/{id}",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "会话或控制令牌",
+      "description": "旧管理面只读",
+      "method": "GET",
+      "path": "/api/share/status",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "会话或控制令牌",
+      "description": "旧管理面只读",
+      "method": "GET",
+      "path": "/api/share/usage",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "会话或控制令牌",
+      "description": "旧管理面只读",
+      "method": "GET",
+      "path": "/api/share/usage/requests",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无",
+      "description": "云端汇总；角色 `cloud`，不读私人账本",
+      "method": "GET",
+      "path": "/api/summary",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源 + display 授权",
+      "description": "重定向到 `/display/`",
+      "method": "GET",
+      "path": "/display",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源 + display 授权",
+      "description": "noVNC launcher 页面",
+      "method": "GET",
+      "path": "/display/",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源",
+      "description": "launcher 模块与只读 noVNC 静态树，防穿越",
+      "method": "GET",
+      "path": "/display/<asset>",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源",
+      "description": "launcher 页面，fragment 兑换",
+      "method": "GET",
+      "path": "/display/grant",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源",
+      "description": "launcher 模块与只读 noVNC 静态树，防穿越",
+      "method": "GET",
+      "path": "/display/launcher-state.js",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源",
+      "description": "launcher 模块与只读 noVNC 静态树，防穿越",
+      "method": "GET",
+      "path": "/display/launcher.js",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源",
+      "description": "`{authorized, expires_at}`",
+      "method": "GET",
+      "path": "/display/session",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "display session 或控制令牌或 Tailscale Serve 身份",
+      "description": "WebSocket RFB 中继",
+      "method": "GET",
+      "path": "/display/websockify",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无",
+      "description": "`{status, service, port}`",
+      "method": "GET",
+      "path": "/health",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "loopback Host/Origin",
+      "description": "托管 `web/dist`；构建身份 role/line/sourceHash 不匹配返回 500",
+      "method": "GET",
+      "path": "/index.html",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源标记或控制令牌",
+      "description": "改名、改每 Key 并发",
+      "method": "PATCH",
+      "path": "/api/console/share-management/keys/{id}",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源标记或控制令牌",
+      "description": "改全局并发 1..64",
+      "method": "PATCH",
+      "path": "/api/console/share-management/settings",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "旧管理面写",
+      "method": "PATCH",
+      "path": "/api/share/keys/{id}",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "旧管理面写",
+      "method": "PATCH",
+      "path": "/api/share/settings",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（同源写边界）",
+      "description": "提交动作；201/200",
+      "method": "POST",
+      "path": "/api/console/operations",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无（同源写边界）",
+      "description": "协作取消",
+      "method": "POST",
+      "path": "/api/console/operations/{id}/cancel",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "管理身份",
+      "description": "一次性 display grant",
+      "method": "POST",
+      "path": "/api/console/share-management/display-grant",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源标记或控制令牌",
+      "description": "`acquire`/`takeover`",
+      "method": "POST",
+      "path": "/api/console/share-management/display-operator",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源标记或控制令牌",
+      "description": "创建 Key，明文只回一次",
+      "method": "POST",
+      "path": "/api/console/share-management/keys",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源标记或控制令牌",
+      "description": "撤销并终止该 Key 在途请求",
+      "method": "POST",
+      "path": "/api/console/share-management/keys/{id}/revoke-and-terminate",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源标记或控制令牌",
+      "description": "轮换，明文只回一次",
+      "method": "POST",
+      "path": "/api/console/share-management/keys/{id}/rotate",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源标记或控制令牌",
+      "description": "公网 Key 自检",
+      "method": "POST",
+      "path": "/api/console/share-management/keys/{id}/test",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源标记或控制令牌",
+      "description": "本机 Key 自检",
+      "method": "POST",
+      "path": "/api/console/share-management/keys/{id}/test-private",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "引导码",
+      "description": "兑换 HttpOnly 会话 Cookie，TTL 12 小时",
+      "method": "POST",
+      "path": "/api/session",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "`X-Admin-Control`",
+      "description": "重新签发引导码",
+      "method": "POST",
+      "path": "/api/session/reissue",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "202 受理",
+      "method": "POST",
+      "path": "/api/share/emergency-stop",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "旧管理面写",
+      "method": "POST",
+      "path": "/api/share/keys",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "旧管理面写",
+      "method": "POST",
+      "path": "/api/share/keys/{id}/revoke-and-terminate",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "旧管理面写",
+      "method": "POST",
+      "path": "/api/share/keys/{id}/rotate",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "旧管理面写",
+      "method": "POST",
+      "path": "/api/share/keys/{id}/test",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "显式归一化",
+      "method": "POST",
+      "path": "/api/share/limits/normalize",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "202 受理",
+      "method": "POST",
+      "path": "/api/share/start",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "控制令牌或会话+CSRF",
+      "description": "202 受理",
+      "method": "POST",
+      "path": "/api/share/stop",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "同源 + 有效单次 grant",
+      "description": "单次 grant 换 HttpOnly Cookie",
+      "method": "POST",
+      "path": "/display/grant",
+      "source": "docs/rust-contract.md#6.1",
+      "surface": "console"
+    },
+    {
+      "auth": "无",
+      "description": "健康快照",
+      "method": "GET",
+      "path": "/",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "认证观察、主动核验、登录、取消登录",
+      "method": "GET",
+      "path": "/admin/auth/cancel",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "认证观察、主动核验、登录、取消登录",
+      "method": "GET",
+      "path": "/admin/auth/login",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "认证观察、主动核验、登录、取消登录",
+      "method": "GET",
+      "path": "/admin/auth/status",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "认证观察、主动核验、登录、取消登录",
+      "method": "GET",
+      "path": "/admin/auth/verify",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "上游 `api/*` 透传",
+      "method": "GET",
+      "path": "/api/*",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代",
+      "description": "本机模型目录别名",
+      "method": "GET",
+      "path": "/api/models",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代",
+      "description": "本机模型目录别名",
+      "method": "GET",
+      "path": "/api/v1/models",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "无",
+      "description": "健康快照",
+      "method": "GET",
+      "path": "/health",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "无",
+      "description": "凭据有效且上游可达才 200，否则 503",
+      "method": "GET",
+      "path": "/ready",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "分享模式：分享 Key；非分享模式：按本地 Key 规则",
+      "description": "目录；支持 `limit`/`beta=true` 的受限查询",
+      "method": "GET",
+      "path": "/v1/models",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "非分享模式：本地 Key（非 loopback 绑定时）；分享模式 404 `route_not_shared`",
+      "description": "版本与重试策略",
+      "method": "GET",
+      "path": "/v1/version",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "无",
+      "description": "204，CORS 允许方法与头",
+      "method": "OPTIONS",
+      "path": "*",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "认证观察、主动核验、登录、取消登录",
+      "method": "POST",
+      "path": "/admin/auth/cancel",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "认证观察、主动核验、登录、取消登录",
+      "method": "POST",
+      "path": "/admin/auth/login",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "认证观察、主动核验、登录、取消登录",
+      "method": "POST",
+      "path": "/admin/auth/status",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "认证观察、主动核验、登录、取消登录",
+      "method": "POST",
+      "path": "/admin/auth/verify",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "关闭某分享 Key 的在途请求",
+      "method": "POST",
+      "path": "/admin/share/revoke",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "异步停止进程",
+      "method": "POST",
+      "path": "/admin/shutdown",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "本地控制令牌",
+      "description": "上游 `api/*` 透传",
+      "method": "POST",
+      "path": "/api/*",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代",
+      "description": "本机兼容别名",
+      "method": "POST",
+      "path": "/api/chat/completions",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代",
+      "description": "本机兼容别名",
+      "method": "POST",
+      "path": "/api/v1/chat/completions",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代",
+      "description": "本机兼容别名",
+      "method": "POST",
+      "path": "/api/v1/embeddings",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代",
+      "description": "本机兼容别名",
+      "method": "POST",
+      "path": "/api/v1/messages",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代",
+      "description": "本机兼容别名",
+      "method": "POST",
+      "path": "/api/v1/responses",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "分享模式：`Authorization: Bearer`",
+      "description": "OpenAI Chat；`stream=true` 返回 SSE",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "非分享模式：Bearer；分享模式 404 `route_not_shared`",
+      "description": "OpenAI 兼容透传，不记账",
+      "method": "POST",
+      "path": "/v1/embeddings",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "分享模式：Bearer 或 `X-Api-Key`",
+      "description": "Anthropic Messages；字节透传，支持 SSE",
+      "method": "POST",
+      "path": "/v1/messages",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    },
+    {
+      "auth": "分享模式：Bearer",
+      "description": "Responses 子集，JSON 或事件流",
+      "method": "POST",
+      "path": "/v1/responses",
+      "source": "docs/rust-contract.md#5.1",
+      "surface": "gateway"
+    }
+  ],
+  "metadata": {
+    "contract": "docs/rust-contract.md",
+    "contractVersion": "rust-contract-v1",
+    "fixture": true,
+    "generatedFrom": "tests/generate_rust_contract_fixture.py",
+    "sourceHashEncoding": "utf8-lf",
+    "sourceHashes": {
+      "docs/rust-contract.md": "a3d03a1c15679e609acd65acbabcc61a30932ac5681b65d558e3d913f7dd716a",
+      "tests/generate_rust_contract_fixture.py": "3ab479c7d0f16d6c7f8b70f86171419257534f2530bee6cbb0e3150dedaf9999",
+      "um-cloud-deploy/cloudflared/check-ingress.py": "8bc85e85c00ce1675cac5cea08f07095386dc145fea98a9edb018977f539011f"
+    },
+    "surfaces": [
+      "console",
+      "gateway"
+    ]
+  },
+  "ports": {
+    "legacyAliases": [],
+    "production": [
+      5173,
+      8000,
+      8001,
+      8002,
+      8003,
+      8097,
+      8099
+    ],
+    "source": "docs/rust-contract.md#2.1",
+    "target": {
+      "candidate_preview": 8099,
+      "chat2api": 8000,
+      "cloud_console": 8002,
+      "cloud_gateway": 8003,
+      "display": 8097,
+      "local_console": 8001,
+      "vite_dev": 5173
+    }
+  }
+}
