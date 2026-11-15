@@ -14,10 +14,14 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::body::{read_json_body, reject_unknown_fields, BodyPolicy};
+use crate::chat::{handle_chat, ChatResult, ReaderSlots};
 use crate::config::{AuthMode, ConfigError, GatewayConfig};
 use crate::error::GatewayError;
-use crate::gate::{constant_time_eq, ensure_control_token, InflightCtx, RefusalReason, ShareGate};
+use crate::gate::{
+    constant_time_eq, ensure_control_token, Admission, InflightCtx, RefusalReason, ShareGate,
+};
 use crate::http::{read_request, write_response, BodyRead, Headers, Request, Response};
+use crate::ledger::Ledger;
 use crate::readonly::ProxyState;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -33,6 +37,8 @@ pub struct AppState {
     pub control_token: Option<String>,
     pub local_api_key: String,
     pub require_local_api_key: bool,
+    pub ledger: Arc<Ledger>,
+    pub stream_readers: Arc<ReaderSlots>,
 }
 
 /// A started candidate server.
@@ -61,6 +67,8 @@ impl GatewayServer {
         proxy.probe_config();
         let local_api_key = config.local_api_key.clone();
         let require_local_api_key = !local_api_key.is_empty();
+        let ledger = Arc::new(Ledger::new(config.usage_log.clone()));
+        let stream_readers = Arc::new(ReaderSlots::new(config.max_stream_readers));
         let state = Arc::new(AppState {
             config: config.clone(),
             proxy,
@@ -68,6 +76,8 @@ impl GatewayServer {
             control_token,
             local_api_key,
             require_local_api_key,
+            ledger,
+            stream_readers,
         });
         let listener = TcpListener::bind((config.bind_host.as_str(), config.bind_port))
             .map_err(ServerError::Io)?;
@@ -151,9 +161,9 @@ impl std::fmt::Display for ServerError {
 
 impl std::error::Error for ServerError {}
 
-struct Admission {
-    key_id: String,
-    ctx: Arc<InflightCtx>,
+enum RouteOutcome {
+    Response(Response),
+    Written { close: bool },
 }
 
 fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAddr) {
@@ -170,9 +180,14 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
                 return;
             }
         };
-        let (response, admission) = dispatch(&state, &request, &stream);
-        let close = response.close;
-        let write_ok = write_response(&mut stream, &response).is_ok();
+        let (outcome, admission) = dispatch(&state, &request, &mut stream);
+        let (close, write_ok) = match outcome {
+            RouteOutcome::Response(response) => {
+                let close = response.close;
+                (close, write_response(&mut stream, &response).is_ok())
+            }
+            RouteOutcome::Written { close } => (close, true),
+        };
         release_admission(&state, admission);
         if close || !write_ok {
             return;
@@ -193,24 +208,33 @@ fn release_admission(state: &AppState, admission: Option<Admission>) {
 fn dispatch(
     state: &AppState,
     request: &Request,
-    stream: &TcpStream,
-) -> (Response, Option<Admission>) {
-    let (mut response, admission) = dispatch_inner(state, request, stream);
-    if response.header("access-control-allow-origin").is_none() {
-        if let Some(origin) = cors_allow_origin(state, &request.headers) {
-            response = response.with_header("Access-Control-Allow-Origin", origin);
+    stream: &mut TcpStream,
+) -> (RouteOutcome, Option<Admission>) {
+    let (outcome, admission) = dispatch_inner(state, request, stream);
+    let outcome = match outcome {
+        RouteOutcome::Response(mut response) => {
+            if response.header("access-control-allow-origin").is_none() {
+                if let Some(origin) = cors_allow_origin(state, &request.headers) {
+                    response = response.with_header("Access-Control-Allow-Origin", origin);
+                }
+            }
+            RouteOutcome::Response(response)
         }
-    }
-    (response, admission)
+        written => written,
+    };
+    (outcome, admission)
 }
 
 fn dispatch_inner(
     state: &AppState,
     request: &Request,
-    stream: &TcpStream,
-) -> (Response, Option<Admission>) {
+    stream: &mut TcpStream,
+) -> (RouteOutcome, Option<Admission>) {
     if request.method == "OPTIONS" {
-        return (options_response(state, &request.headers), None);
+        return (
+            RouteOutcome::Response(options_response(state, &request.headers)),
+            None,
+        );
     }
 
     let path = request.path();
@@ -220,8 +244,19 @@ fn dispatch_inner(
         let allow_api_key = request.method == "GET" || path.starts_with("/v1/messages");
         match admit_share(state, request, stream, allow_api_key) {
             Ok(value) => admission = Some(value),
-            Err(error) => return (error.response(), None),
+            Err(error) => return (RouteOutcome::Response(error.response()), None),
         }
+    }
+
+    if request.method == "POST" && is_chat_path(path) {
+        let result = handle_chat(state, request, stream, admission.take());
+        return (
+            match result {
+                ChatResult::Response(response) => RouteOutcome::Response(response),
+                ChatResult::Written { close } => RouteOutcome::Written { close },
+            },
+            None,
+        );
     }
 
     let response = match request.method.as_str() {
@@ -229,7 +264,14 @@ fn dispatch_inner(
         "POST" => handle_post(state, request),
         _ => GatewayError::unknown_path(path).response(),
     };
-    (response, admission)
+    (RouteOutcome::Response(response), admission)
+}
+
+fn is_chat_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/chat/completions" | "/api/chat/completions" | "/api/v1/chat/completions"
+    )
 }
 
 fn admit_share(
@@ -370,30 +412,6 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
                 return GatewayError::invalid_request("key_id is required").response();
             };
             Response::json(200, &json!({"released": gate.terminate_key(key_id)}))
-        }
-        "/v1/chat/completions" | "/api/chat/completions" | "/api/v1/chat/completions" => {
-            if let Err(error) = local_key_allowed(state, request) {
-                return error.response();
-            }
-            if let Err(error) = origin_allowed(state, request) {
-                return error.response();
-            }
-            let body = match read_json_body(
-                request,
-                BodyPolicy::Share {
-                    max_request_bytes: state.config.share_max_request_bytes,
-                },
-            ) {
-                Ok(body) => body,
-                Err(error) => return error.response(),
-            };
-            let Some(body) = body else {
-                return GatewayError::unsupported_chat_request().response();
-            };
-            if !valid_chat_request(&body) {
-                return GatewayError::unsupported_chat_request().response();
-            }
-            GatewayError::not_implemented("chat_forwarding_s1b").response()
         }
         "/v1/messages" | "/api/v1/messages" => {
             if let Err(error) = local_key_allowed(state, request) {

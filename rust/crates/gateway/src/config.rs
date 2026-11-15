@@ -29,6 +29,17 @@ pub const DEFAULT_SHARE_MAX_REQUEST_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_SHARE_REQUEST_BYTES: u64 = 1024 * 1024 * 1024;
 pub const CONSOLE_MAX_REQUEST_BYTES: u64 = 65536;
 pub const DEFAULT_UPSTREAM_TIMEOUT: Duration = Duration::from_secs(15);
+pub const DEFAULT_REQUEST_TOTAL_SECONDS: u64 = 360;
+pub const MIN_REQUEST_TOTAL_SECONDS: u64 = 10;
+pub const MAX_REQUEST_TOTAL_SECONDS: u64 = 3600;
+pub const DEFAULT_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(120);
+pub const DEFAULT_SOCKET_SILENCE_TIMEOUT: Duration = Duration::from_secs(180);
+pub const DEFAULT_MAX_STREAM_READERS: usize = 128;
+pub const DEFAULT_MAX_FAST_RETRIES: u32 = 5;
+pub const DEFAULT_MAX_SLOW_RETRIES: u32 = 2;
+pub const DEFAULT_MAX_PHYSICAL_ATTEMPTS: u32 = 12;
+pub const DEFAULT_RETRY_DELAY_BASE: Duration = Duration::from_millis(500);
+pub const DEFAULT_SLOW_RETRY_THRESHOLD: Duration = Duration::from_secs(30);
 
 /// Share-configuration format fixed at instance start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +95,21 @@ pub struct GatewayConfig {
     pub share_max_request_bytes: u64,
     pub local_max_request_bytes: u64,
     pub upstream_timeout: Duration,
+    /// Share ledger path; `None` keeps the candidate from writing any ledger.
+    pub usage_log: Option<PathBuf>,
+    /// Total wall-clock budget of one Chat request.
+    pub request_total: Duration,
+    /// First substantive SSE event budget.
+    pub first_byte_timeout: Duration,
+    /// One upstream socket-read silence budget.
+    pub socket_silence_timeout: Duration,
+    /// Concurrent streaming reader cap.
+    pub max_stream_readers: usize,
+    pub max_fast_retries: u32,
+    pub max_slow_retries: u32,
+    pub max_physical_attempts: u32,
+    pub retry_delay_base: Duration,
+    pub slow_retry_threshold: Duration,
     /// A candidate never binds a governed production port.
     pub candidate: bool,
 }
@@ -103,6 +129,16 @@ impl Default for GatewayConfig {
             share_max_request_bytes: DEFAULT_SHARE_MAX_REQUEST_BYTES,
             local_max_request_bytes: CONSOLE_MAX_REQUEST_BYTES,
             upstream_timeout: DEFAULT_UPSTREAM_TIMEOUT,
+            usage_log: None,
+            request_total: Duration::from_secs(DEFAULT_REQUEST_TOTAL_SECONDS),
+            first_byte_timeout: DEFAULT_FIRST_BYTE_TIMEOUT,
+            socket_silence_timeout: DEFAULT_SOCKET_SILENCE_TIMEOUT,
+            max_stream_readers: DEFAULT_MAX_STREAM_READERS,
+            max_fast_retries: DEFAULT_MAX_FAST_RETRIES,
+            max_slow_retries: DEFAULT_MAX_SLOW_RETRIES,
+            max_physical_attempts: DEFAULT_MAX_PHYSICAL_ATTEMPTS,
+            retry_delay_base: DEFAULT_RETRY_DELAY_BASE,
+            slow_retry_threshold: DEFAULT_SLOW_RETRY_THRESHOLD,
             candidate: true,
         }
     }
@@ -163,6 +199,16 @@ impl GatewayConfig {
                 config.control_token_file = Some(PathBuf::from(value));
             }
         }
+        if let Ok(value) = std::env::var("CHAT2API_USAGE_LOG") {
+            if !value.trim().is_empty() {
+                config.usage_log = Some(PathBuf::from(value));
+            }
+        }
+        config.request_total = parse_request_total_seconds(
+            std::env::var("CHAT2API_MAX_REQUEST_SECONDS")
+                .ok()
+                .as_deref(),
+        );
         config
     }
 
@@ -186,6 +232,11 @@ impl GatewayConfig {
                 self.bind_port
             )));
         }
+        if self.max_stream_readers == 0 {
+            return Err(ConfigError(
+                "stream reader limit must be at least 1".to_string(),
+            ));
+        }
         if !(1..=MAX_SHARE_REQUEST_BYTES).contains(&self.share_max_request_bytes) {
             return Err(ConfigError(
                 "share request body limit must be 1..1073741824".to_string(),
@@ -201,6 +252,15 @@ impl GatewayConfig {
         parse_upstream_base_url(&self.upstream_base_url)?;
         Ok(())
     }
+}
+
+/// Parse the total request budget; invalid values keep the default and valid
+/// values are clamped to 10..3600 seconds, exactly like Python.
+pub fn parse_request_total_seconds(value: Option<&str>) -> Duration {
+    let seconds = value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_REQUEST_TOTAL_SECONDS);
+    Duration::from_secs(seconds.clamp(MIN_REQUEST_TOTAL_SECONDS, MAX_REQUEST_TOTAL_SECONDS))
 }
 
 /// Parse and validate the upstream base URL. Only plain HTTP is supported by the

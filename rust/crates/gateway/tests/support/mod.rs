@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -698,4 +698,503 @@ pub fn client_request_and_check_close(
         ),
     };
     Ok((response, closed))
+}
+
+// ---------------------------------------------------------------------------
+// Chat forwarding stub (S1b).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct ChatChunk {
+    pub delay: Duration,
+    pub bytes: Vec<u8>,
+}
+
+impl ChatChunk {
+    pub fn now(bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            delay: Duration::ZERO,
+            bytes: bytes.into(),
+        }
+    }
+
+    pub fn after(delay: Duration, bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            delay,
+            bytes: bytes.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ChatAttempt {
+    Json {
+        status: u16,
+        body: Value,
+    },
+    Sse {
+        chunks: Vec<ChatChunk>,
+        hold: Duration,
+    },
+    SseChunked {
+        chunks: Vec<ChatChunk>,
+        hold: Duration,
+    },
+    HttpStatus {
+        status: u16,
+        body: String,
+        retry_after: Option<String>,
+    },
+    Silent {
+        hold: Duration,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct SeenChatRequest {
+    pub path: String,
+    pub authorization: Option<String>,
+    pub body: Value,
+}
+
+pub struct ChatStub {
+    addr: SocketAddr,
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+    attempts: Arc<Mutex<VecDeque<ChatAttempt>>>,
+    seen: Arc<Mutex<Vec<SeenChatRequest>>>,
+    closed: Arc<AtomicBool>,
+    connections: Arc<AtomicUsize>,
+}
+
+impl ChatStub {
+    pub fn start() -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind chat stub");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking chat stub");
+        let addr = listener.local_addr().expect("chat stub addr");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let attempts = Arc::new(Mutex::new(VecDeque::new()));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+        let connections = Arc::new(AtomicUsize::new(0));
+        let worker_shutdown = Arc::clone(&shutdown);
+        let worker_attempts = Arc::clone(&attempts);
+        let worker_seen = Arc::clone(&seen);
+        let worker_closed = Arc::clone(&closed);
+        let worker_connections = Arc::clone(&connections);
+        let handle = thread::spawn(move || {
+            while !worker_shutdown.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        worker_connections.fetch_add(1, Ordering::SeqCst);
+                        let attempts = Arc::clone(&worker_attempts);
+                        let seen = Arc::clone(&worker_seen);
+                        let closed = Arc::clone(&worker_closed);
+                        let shutdown = Arc::clone(&worker_shutdown);
+                        thread::spawn(move || {
+                            let _ = serve_chat(stream, &attempts, &seen, &closed, &shutdown);
+                        });
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            addr,
+            shutdown,
+            handle: Some(handle),
+            attempts,
+            seen,
+            closed,
+            connections,
+        }
+    }
+
+    pub fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    pub fn push(&self, attempt: ChatAttempt) {
+        self.attempts
+            .lock()
+            .expect("chat attempts")
+            .push_back(attempt);
+    }
+
+    pub fn push_all(&self, attempts: Vec<ChatAttempt>) {
+        let mut queue = self.attempts.lock().expect("chat attempts");
+        queue.extend(attempts);
+    }
+
+    pub fn attempts(&self) -> usize {
+        self.seen.lock().expect("chat seen").len()
+    }
+
+    pub fn seen(&self) -> Vec<SeenChatRequest> {
+        self.seen.lock().expect("chat seen").clone()
+    }
+
+    pub fn closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+    pub fn reset_closed(&self) {
+        self.closed.store(false, Ordering::SeqCst);
+    }
+
+    pub fn connections(&self) -> usize {
+        self.connections.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for ChatStub {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.shutdown.store(true, Ordering::SeqCst);
+            let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(200));
+            let _ = handle.join();
+        }
+    }
+}
+
+fn serve_chat(
+    mut stream: TcpStream,
+    attempts: &Mutex<VecDeque<ChatAttempt>>,
+    seen: &Mutex<Vec<SeenChatRequest>>,
+    closed: &AtomicBool,
+    shutdown: &AtomicBool,
+) -> std::io::Result<()> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let Some(request) = read_client_request(&mut stream)? else {
+        return Ok(());
+    };
+    let path = request
+        .path
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    if request.method == "GET" {
+        let payload = if path == "/api/config" {
+            json!({
+                "name": "Open WebUI",
+                "version": "0.7.0-fixture",
+                "features": {"enable_api_keys": false},
+                "oauth": {"providers": {"fixture-sso": {}}},
+            })
+        } else {
+            json!({"object": "list", "data": []})
+        };
+        let raw = serde_json::to_vec(&payload).unwrap_or_default();
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n",
+            raw.len()
+        );
+        stream.write_all(head.as_bytes())?;
+        stream.write_all(&raw)?;
+        stream.flush()?;
+        return Ok(());
+    }
+    let authorization = request.header("authorization");
+    let body = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+    seen.lock().expect("chat seen").push(SeenChatRequest {
+        path,
+        authorization,
+        body,
+    });
+    let attempt = attempts
+        .lock()
+        .expect("chat attempts")
+        .pop_front()
+        .unwrap_or(ChatAttempt::Json {
+            status: 500,
+            body: json!({"error": "no scripted chat attempt"}),
+        });
+    match attempt {
+        ChatAttempt::Json { status, body } => {
+            let raw = serde_json::to_vec(&body).unwrap_or_default();
+            let head = format!(
+                "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                if status == 200 { "OK" } else { "Error" },
+                raw.len()
+            );
+            stream.write_all(head.as_bytes())?;
+            stream.write_all(&raw)?;
+            stream.flush()?;
+        }
+        ChatAttempt::HttpStatus {
+            status,
+            body,
+            retry_after,
+        } => {
+            let raw = body.into_bytes();
+            let mut head = format!(
+                "HTTP/1.1 {status} Error\r\nContent-Type: text/plain\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n",
+                raw.len()
+            );
+            if let Some(retry_after) = retry_after {
+                head.push_str(&format!("Retry-After: {retry_after}\r\n"));
+            }
+            head.push_str("\r\n");
+            stream.write_all(head.as_bytes())?;
+            stream.write_all(&raw)?;
+            stream.flush()?;
+        }
+        ChatAttempt::Sse { chunks, hold } => {
+            stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                  Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
+            )?;
+            stream.flush()?;
+            for chunk in chunks {
+                if !chunk.delay.is_zero() {
+                    thread::sleep(chunk.delay);
+                }
+                if stream.write_all(&chunk.bytes).is_err() {
+                    closed.store(true, Ordering::SeqCst);
+                    return Ok(());
+                }
+                let _ = stream.flush();
+            }
+            hold_until_peer_closes(&mut stream, hold, closed, shutdown);
+        }
+        ChatAttempt::SseChunked { chunks, hold } => {
+            stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                  Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            )?;
+            stream.flush()?;
+            for chunk in chunks {
+                if !chunk.delay.is_zero() {
+                    thread::sleep(chunk.delay);
+                }
+                let frame = format!("{:X}\r\n", chunk.bytes.len()).into_bytes();
+                if stream.write_all(&frame).is_err()
+                    || stream.write_all(&chunk.bytes).is_err()
+                    || stream.write_all(b"\r\n").is_err()
+                {
+                    closed.store(true, Ordering::SeqCst);
+                    return Ok(());
+                }
+                let _ = stream.flush();
+            }
+            if stream.write_all(b"0\r\n\r\n").is_err() {
+                closed.store(true, Ordering::SeqCst);
+                return Ok(());
+            }
+            let _ = stream.flush();
+            hold_until_peer_closes(&mut stream, hold, closed, shutdown);
+        }
+        ChatAttempt::Silent { hold } => {
+            stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                  Connection: close\r\n\r\n",
+            )?;
+            stream.flush()?;
+            hold_until_peer_closes(&mut stream, hold, closed, shutdown);
+        }
+    }
+    Ok(())
+}
+
+fn hold_until_peer_closes(
+    stream: &mut TcpStream,
+    hold: Duration,
+    closed: &AtomicBool,
+    shutdown: &AtomicBool,
+) {
+    let deadline = Instant::now() + hold;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(20)));
+    let mut byte = [0u8; 1];
+    while Instant::now() < deadline && !shutdown.load(Ordering::SeqCst) {
+        match stream.peek(&mut byte) {
+            Ok(0) => {
+                closed.store(true, Ordering::SeqCst);
+                return;
+            }
+            Ok(_) => thread::sleep(Duration::from_millis(20)),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(_) => {
+                closed.store(true, Ordering::SeqCst);
+                return;
+            }
+        }
+    }
+}
+
+pub struct StreamingClient {
+    stream: TcpStream,
+    buffer: Vec<u8>,
+}
+
+impl StreamingClient {
+    pub fn send(addr: SocketAddr, request: &ClientRequest) -> std::io::Result<Self> {
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+        let mut raw = format!("{} {} HTTP/1.1\r\n", request.method, request.target);
+        raw.push_str(&format!("Host: {addr}\r\n"));
+        for (name, value) in &request.headers {
+            raw.push_str(&format!("{name}: {value}\r\n"));
+        }
+        if let Some(body) = &request.body {
+            let has_length = request
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+            if !has_length {
+                raw.push_str(&format!("Content-Length: {}\r\n", body.len()));
+            }
+        }
+        raw.push_str("\r\n");
+        stream.write_all(raw.as_bytes())?;
+        if let Some(body) = &request.body {
+            stream.write_all(body)?;
+        }
+        stream.flush()?;
+        Ok(Self {
+            stream,
+            buffer: Vec::new(),
+        })
+    }
+
+    /// Read some bytes; `None` means the read timed out.
+    pub fn read_some(&mut self, timeout: Duration) -> std::io::Result<Option<Vec<u8>>> {
+        let _ = self.stream.set_read_timeout(Some(timeout));
+        let mut chunk = [0u8; 4096];
+        match self.stream.read(&mut chunk) {
+            Ok(0) => Ok(Some(Vec::new())),
+            Ok(read) => {
+                self.buffer.extend_from_slice(&chunk[..read]);
+                Ok(Some(chunk[..read].to_vec()))
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Read until `needle` appears or the overall timeout expires.
+    pub fn read_until(&mut self, needle: &[u8], timeout: Duration) -> std::io::Result<Vec<u8>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self
+                .buffer
+                .windows(needle.len())
+                .any(|window| window == needle)
+            {
+                return Ok(std::mem::take(&mut self.buffer));
+            }
+            if Instant::now() >= deadline {
+                return Ok(std::mem::take(&mut self.buffer));
+            }
+            let _ = self.read_some(Duration::from_millis(50))?;
+        }
+    }
+
+    /// Read to EOF or the overall timeout.
+    pub fn read_all(&mut self, timeout: Duration) -> std::io::Result<Vec<u8>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if Instant::now() >= deadline {
+                break;
+            }
+            match self.read_some(Duration::from_millis(50))? {
+                Some(bytes) => {
+                    if bytes.is_empty() {
+                        break;
+                    }
+                }
+                None => {}
+            }
+        }
+        Ok(std::mem::take(&mut self.buffer))
+    }
+}
+
+pub fn start_chat_gateway(
+    stub: &ChatStub,
+    temp: &TempDir,
+    share: bool,
+    configure: impl FnOnce(&mut GatewayConfig),
+) -> Gateway {
+    let share_config = if share {
+        Some(temp.write("share.json", &legacy_share_config()))
+    } else {
+        None
+    };
+    let control = temp.write("control.token", CONTROL_TOKEN);
+    let mut config = GatewayConfig {
+        upstream_base_url: stub.url(),
+        upstream_token: STUB_TOKEN.to_string(),
+        share_config,
+        control_token_file: Some(control),
+        allowed_origins: [ALLOWED_ORIGIN.to_string()].into_iter().collect(),
+        ..GatewayConfig::default()
+    };
+    configure(&mut config);
+    config.candidate = true;
+    let server = GatewayServer::start(config).expect("start chat candidate gateway");
+    let addr = server.addr();
+    Gateway {
+        server: GatewayServerHandle { inner: server },
+        addr,
+    }
+}
+
+pub fn parse_raw_response(raw: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let header_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|position| position + 4)
+        .unwrap_or(raw.len());
+    let head = String::from_utf8_lossy(&raw[..header_end]);
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(0);
+    let mut headers = Vec::new();
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    (status, headers, raw[header_end..].to_vec())
+}
+
+pub fn sse_payloads(body: &[u8]) -> Vec<Value> {
+    let text = String::from_utf8_lossy(body);
+    text.split("\n\n")
+        .filter_map(|event| {
+            let payload = event
+                .lines()
+                .filter(|line| line.starts_with("data:"))
+                .map(|line| {
+                    let value = line.strip_prefix("data:").unwrap_or(line);
+                    value.strip_prefix(' ').unwrap_or(value)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if payload.is_empty() || payload == "[DONE]" {
+                None
+            } else {
+                serde_json::from_str(&payload).ok()
+            }
+        })
+        .collect()
 }
