@@ -9703,7 +9703,9 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         finally:
-            r.close()
+            close = getattr(r, "close", None)
+            if close is not None:
+                close()
 
     def _passthrough_stream(self, r: requests.Response, request_deadline=None,
                             request_id="-", usage=None):
