@@ -388,6 +388,7 @@ pub struct StreamReader {
     finished: Arc<AtomicBool>,
     error: Arc<Mutex<Option<StreamError>>>,
     cancel: Arc<AtomicBool>,
+    slot: Option<Arc<ReaderSlot>>,
 }
 
 impl StreamReader {
@@ -416,6 +417,7 @@ impl StreamReader {
             finished,
             error,
             cancel,
+            slot,
         }
     }
 
@@ -453,6 +455,14 @@ impl StreamReader {
     /// Stop at the next byte; the producer closes the upstream socket itself.
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    /// Release the reader slot before a retry; the producer's later release is
+    /// idempotent.
+    pub fn release_slot(&self) {
+        if let Some(slot) = &self.slot {
+            slot.release();
+        }
     }
 
     /// Wait for the producer to close the upstream and release its permit.

@@ -582,8 +582,10 @@ fn consume_stream(
                 break;
             }
             NextItem::Error(error) => {
-                state.status = if error.timed_out {
+                state.status = if error.timed_out && !state.committed {
                     StreamStatus::UpstreamFirstByteTimeout
+                } else if error.timed_out && Instant::now() >= context.deadline {
+                    StreamStatus::RequestDeadlineExceeded
                 } else {
                     StreamStatus::UpstreamReadError
                 };
@@ -608,7 +610,7 @@ fn consume_stream(
         }
     }
     reader.cancel();
-    let _ = reader.wait_finished(Duration::from_secs(2));
+    reader.release_slot();
     drop(reader);
     StreamOutcome {
         committed: state.committed,
