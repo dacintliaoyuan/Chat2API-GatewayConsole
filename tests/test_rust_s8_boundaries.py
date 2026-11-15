@@ -91,6 +91,47 @@ class RustS8BoundaryTests(unittest.TestCase):
         self.assertNotIn("rust/target", manifest)
         self.assertNotIn("rust/crates/ops", manifest)
 
+    def test_no_backup_or_restore_runs_without_an_explicit_command(self):
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="um-rust-s8-marker-") as tmp:
+            marker = Path(tmp) / "ran"
+            script = Path(tmp) / "fake_backup_restore.py"
+            script.write_text(
+                "from pathlib import Path" + chr(10)
+                + f"Path({str(marker)!r}).write_text('ran')" + chr(10),
+                encoding="utf-8",
+            )
+            binary = (
+                ROOT / "rust" / "target" / "debug"
+                / ("um-ops.exe" if __import__("os").name == "nt" else "um-ops")
+            )
+            if not binary.is_file():
+                self.skipTest("um-ops candidate binary is not built")
+            for args in (
+                ["--help"],
+                ["--backup-restore", str(script), "deploy", "paths"],
+                ["--backup-restore", str(script), "ledger", "summary",
+                 "--ledger", str(Path(tmp) / "missing.jsonl")],
+            ):
+                subprocess.run([str(binary), *args], capture_output=True,
+                               check=False)
+                self.assertFalse(marker.exists(), args)
+
+    def test_the_s8_gate_never_runs_a_stateful_tool(self):
+        gate = read(ROOT / "scripts" / "check-rust-s8.sh")
+        for forbidden in (
+            "backup_restore.py",
+            "update.sh",
+            "rollback.sh",
+            "public_probe.py",
+            "cloudflared",
+            "--deployment-restore",
+            "--retry-pending",
+        ):
+            self.assertNotIn(forbidden, gate)
+
     def test_the_public_probe_defaults_to_python(self):
         cli = read(RUST / "src" / "main.rs")
         self.assertIn('public_probe: PathBuf::from("console/public_probe.py")', cli)
