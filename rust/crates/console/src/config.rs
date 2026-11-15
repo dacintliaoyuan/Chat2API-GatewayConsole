@@ -26,6 +26,7 @@ pub const GATEWAY_ENTRY_KIND_ENV: &str = "UM_SHARE_GATEWAY_ENTRY_KIND";
 pub const PROC_ROOT_ENV: &str = "UM_SHARE_PROC_ROOT";
 pub const EXPECTED_UID_ENV: &str = "UM_SHARE_EXPECTED_UID";
 pub const CONSOLE_STATE_FILE_ENV: &str = "CONSOLE_STATE_FILE";
+pub const CONSOLE_LOCK_DIR_ENV: &str = "CONSOLE_LOCK_DIR";
 pub const SHARE_STORE_FILE_ENV: &str = "SHARE_STORE_FILE";
 pub const SHARE_SECRET_KEY_FILE_ENV: &str = "CHAT2API_SHARE_SECRET_KEY_FILE";
 pub const PUBLIC_ORIGIN_ENV: &str = "CONSOLE_PUBLIC_ORIGIN";
@@ -82,6 +83,7 @@ pub struct ConsoleConfig {
     pub role: Role,
     pub candidate: bool,
     pub console_state_file: Option<PathBuf>,
+    pub console_lock_dir: Option<PathBuf>,
     pub gateway_pid_file: PathBuf,
     pub gateway_state_dir: PathBuf,
     pub gateway_port: u16,
@@ -106,6 +108,7 @@ impl Default for ConsoleConfig {
             role: Role::Cloud,
             candidate: true,
             console_state_file: None,
+            console_lock_dir: None,
             gateway_pid_file: PathBuf::from(DEFAULT_GATEWAY_PID_FILE),
             gateway_state_dir: PathBuf::from(DEFAULT_GATEWAY_STATE_DIR),
             gateway_port: DEFAULT_GATEWAY_PORT,
@@ -247,6 +250,11 @@ impl ConsoleConfig {
         if let Ok(value) = std::env::var(CONSOLE_STATE_FILE_ENV) {
             if !value.trim().is_empty() {
                 config.console_state_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var(CONSOLE_LOCK_DIR_ENV) {
+            if !value.trim().is_empty() {
+                config.console_lock_dir = Some(PathBuf::from(value));
             }
         }
         if let Ok(value) = std::env::var(SHARE_STORE_FILE_ENV) {

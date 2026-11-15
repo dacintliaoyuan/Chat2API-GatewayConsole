@@ -89,6 +89,13 @@ impl Drop for Console {
     }
 }
 
+impl Console {
+    pub fn from_server(server: um_console::ServerHandle) -> Self {
+        let addr = server.addr();
+        Console { server, addr }
+    }
+}
+
 pub fn start_console_with(
     temp: &TempDataDir,
     runtime: Arc<dyn RuntimeFacts>,

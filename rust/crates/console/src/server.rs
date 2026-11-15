@@ -27,6 +27,9 @@ use crate::config::{ConfigError, ConsoleConfig, Role};
 use crate::display::{display_session, display_state};
 use crate::error::ConsoleError;
 use crate::metering::{self, UsageFilters};
+use crate::operation_manager::{
+    cloud_registry, OperationError, OperationManager, UnwiredActionExecutor,
+};
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
 use crate::share_auth::{management_auth, SessionState};
@@ -54,6 +57,7 @@ pub struct AppState {
     pub runtime: Arc<dyn RuntimeFacts>,
     pub summary: SummaryCache,
     pub operations: OperationsReader,
+    pub operation_manager: Option<Arc<OperationManager>>,
     pub share: ShareReadStore,
     pub share_seams: Arc<dyn ShareReadSeams>,
     pub session: SessionState,
@@ -86,9 +90,39 @@ impl ConsoleServer {
         runtime: Arc<dyn RuntimeFacts>,
         share_seams: Arc<dyn ShareReadSeams>,
     ) -> Result<ServerHandle, ServerError> {
+        Self::start_with_wiring(
+            config,
+            runtime,
+            share_seams,
+            Arc::new(UnwiredActionExecutor),
+        )
+    }
+
+    pub fn start_with_wiring(
+        config: ConsoleConfig,
+        runtime: Arc<dyn RuntimeFacts>,
+        share_seams: Arc<dyn ShareReadSeams>,
+        executor: Arc<dyn crate::operation_manager::ActionExecutor>,
+    ) -> Result<ServerHandle, ServerError> {
         config.validate_candidate().map_err(ServerError::Config)?;
+        let operation_manager = match &config.console_state_file {
+            Some(path) => Some(Arc::new(
+                OperationManager::new(
+                    path.clone(),
+                    config
+                        .console_lock_dir
+                        .clone()
+                        .unwrap_or_else(|| path.with_extension("locks")),
+                    cloud_registry(),
+                    executor,
+                )
+                .map_err(|_| ServerError::Console("console subsystem unavailable".to_string()))?,
+            )),
+            None => None,
+        };
         let state = Arc::new(AppState {
             operations: OperationsReader::new(config.console_state_file.clone()),
+            operation_manager,
             share: ShareReadStore::with_options(
                 config.share_store_file.clone().unwrap_or_default(),
                 config.public_origin.clone(),
@@ -169,6 +203,7 @@ impl Drop for ServerHandle {
 #[derive(Debug)]
 pub enum ServerError {
     Config(ConfigError),
+    Console(String),
     Io(std::io::Error),
 }
 
@@ -176,6 +211,7 @@ impl std::fmt::Display for ServerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Config(error) => write!(formatter, "{error}"),
+            Self::Console(error) => write!(formatter, "{error}"),
             Self::Io(error) => write!(formatter, "{error}"),
         }
     }
@@ -384,12 +420,114 @@ fn handle_console_write(
         {
             return error.response();
         }
-        // S6 owns operation submission; S5a only owns the read face and
-        // its request boundary.
-        return ConsoleError::not_implemented("operations_submit_s6").response();
+        let Some(manager) = &state.operation_manager else {
+            return ConsoleError::console_unavailable().response();
+        };
+        let action = match body.get("action").and_then(Value::as_str) {
+            Some(action) if (1..=64).contains(&action.chars().count()) => action.to_string(),
+            _ => return ConsoleError::body_open(400, "invalid action").response(),
+        };
+        let target = match body.get("target") {
+            None | Some(Value::Null) => String::new(),
+            Some(Value::String(target)) if target.chars().count() <= 64 => target.clone(),
+            _ => return ConsoleError::body_open(400, "invalid target").response(),
+        };
+        let idempotency_key = match body.get("idempotency_key") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(key)) if (1..=128).contains(&key.chars().count()) => {
+                Some(key.as_str())
+            }
+            _ => {
+                return ConsoleError::body_open(400, "invalid idempotency_key").response();
+            }
+        };
+        let params = body.get("params").and_then(Value::as_object);
+        match manager.submit(&action, &target, params, idempotency_key) {
+            Ok((deduplicated, operation)) => send_json(
+                if deduplicated { 200 } else { 201 },
+                &json!({"operation": operation}),
+            ),
+            Err(error) => operation_error_response(&error),
+        }
+    } else if method == "POST" && rest.len() == 3 && rest[0] == "operations" && rest[2] == "cancel"
+    {
+        let Some(manager) = &state.operation_manager else {
+            return ConsoleError::console_unavailable().response();
+        };
+        if rest[1].is_empty() || rest[1].chars().count() > 64 {
+            return ConsoleError::body_open(400, "invalid operation id").response();
+        }
+        match manager.cancel(rest[1]) {
+            Ok(operation) => send_json(200, &json!({"requested": true, "operation": operation})),
+            Err(error) => operation_error_response(&error),
+        }
+    } else {
+        ConsoleError::unknown_path().response()
     }
-    let _ = state;
-    ConsoleError::unknown_path().response()
+}
+
+/// `usagesrv.py::_console_error_status` + `_console_error_detail`.
+fn operation_error_response(error: &OperationError) -> Response {
+    let status = match error.code.as_str() {
+        "invalid_action" => 404,
+        "action_disabled" => 403,
+        "invalid_params" | "invalid_target" | "invalid_idempotency_key" | "invalid_resource" => 400,
+        "idempotency_key_conflict" => 409,
+        "operation_not_found" => 404,
+        "operation_already_finished" => 409,
+        _ => 500,
+    };
+    let code = if status == 500 {
+        "console_error".to_string()
+    } else {
+        error.code.clone()
+    };
+    let mut payload = json!({"error": code});
+    if let Some(reason) = &error.reason {
+        payload["reason"] = json!(reason);
+    }
+    if matches!(
+        error.code.as_str(),
+        "invalid_params" | "invalid_target" | "invalid_idempotency_key" | "invalid_resource"
+    ) {
+        if let Some(detail) = safe_detail(&error.message) {
+            payload["detail"] = json!(detail);
+        }
+    }
+    ConsoleError::new(status, payload).response()
+}
+
+/// The Python `_console_error_detail` shape check: single line, no path
+/// separators/drive letters/long token that could be a secret or internal id.
+fn safe_detail(message: &str) -> Option<String> {
+    let text = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    if text.contains('/') || text.contains('\\') {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let mut run = 0usize;
+    for index in 0..bytes.len() {
+        let byte = bytes[index];
+        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.' || byte == b'-' {
+            run += 1;
+            if run >= 24 {
+                return None;
+            }
+        } else {
+            run = 0;
+        }
+        if index + 1 < bytes.len()
+            && byte.is_ascii_alphabetic()
+            && bytes[index + 1] == b':'
+            && (index == 0 || !bytes[index - 1].is_ascii_alphanumeric())
+        {
+            return None;
+        }
+    }
+    Some(text.chars().take(200).collect())
 }
 
 fn services_response(state: &AppState) -> Response {
