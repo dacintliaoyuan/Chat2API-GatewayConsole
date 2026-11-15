@@ -14,6 +14,7 @@ pub mod error;
 pub mod gate;
 pub mod http;
 pub mod ledger;
+pub mod messages;
 pub mod readonly;
 pub mod server;
 pub mod upstream;

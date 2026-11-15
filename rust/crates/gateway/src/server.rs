@@ -22,6 +22,7 @@ use crate::gate::{
 };
 use crate::http::{read_request, write_response, BodyRead, Headers, Request, Response};
 use crate::ledger::Ledger;
+use crate::messages::valid_messages_request;
 use crate::readonly::ProxyState;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -696,50 +697,6 @@ pub fn valid_chat_request(body: &serde_json::Map<String, Value>) -> bool {
         return false;
     }
     !body.contains_key("store") || body.get("store") == Some(&Value::Bool(false))
-}
-
-/// Shape-only admission for one shared Messages body.
-pub fn valid_messages_request(body: &serde_json::Map<String, Value>) -> bool {
-    let allowed = [
-        "max_tokens",
-        "messages",
-        "metadata",
-        "model",
-        "stop_sequences",
-        "stream",
-        "system",
-        "temperature",
-        "thinking",
-        "tool_choice",
-        "tools",
-        "top_k",
-        "top_p",
-    ];
-    if body.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return false;
-    }
-    if !body
-        .get("model")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty())
-    {
-        return false;
-    }
-    if !body
-        .get("messages")
-        .and_then(Value::as_array)
-        .is_some_and(|value| !value.is_empty())
-    {
-        return false;
-    }
-    if !body
-        .get("max_tokens")
-        .and_then(Value::as_u64)
-        .is_some_and(|value| value >= 1)
-    {
-        return false;
-    }
-    body.get("stream").map_or(true, Value::is_boolean)
 }
 
 /// Test seam: the body policy used for a route group.
