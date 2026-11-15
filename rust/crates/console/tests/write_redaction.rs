@@ -171,13 +171,12 @@ fn plaintext_and_management_secrets_stay_out_of_reads_errors_and_logs() {
         ("GET", "/api/share/not-a-route".to_string(), json!({})),
     ];
     for (method, target, body) in error_cases {
-        let headers: &[(&str, &str)] = if target == "/api/session" {
-            &[]
-        } else if target == "/api/session/reissue" {
-            &[]
-        } else {
-            &control
-        };
+        let headers: &[(&str, &str)] =
+            if target == "/api/session" || target == "/api/session/reissue" {
+                &[]
+            } else {
+                &control
+            };
         let response = request(&console, method, &target, headers, Some(body));
         assert!(response.status >= 400, "{method} {target}");
         for secret in &secrets {
