@@ -124,3 +124,41 @@ fn the_candidate_refuses_the_local_role() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn the_candidate_serves_the_share_read_faces_without_binding_8002() {
+    let temp = temp();
+    let store = temp.path().join("share.db");
+    let mut command = candidate_command(&temp);
+    command
+        .env("USAGESRV_PORT", "8002")
+        .env("SHARE_STORE_FILE", &store)
+        .env("CONSOLE_PUBLIC_ORIGIN", "https://share.example.test");
+    let mut child = command.spawn().expect("spawn candidate");
+    let addr = read_listen_addr(&mut child);
+    let mut guard = ChildGuard { child };
+    assert!(addr.ip().is_loopback());
+    assert!(addr.port() >= 1024);
+    assert_ne!(addr.port(), 8002);
+    assert_ne!(addr.port(), 8003);
+    assert!(!production_ports().contains(&addr.port()));
+
+    let health = client_request(addr, &ClientRequest::get("/health")).expect("candidate health");
+    assert_eq!(health.status, 200);
+    assert_eq!(health.json()["port"], json!(8002));
+    let status = client_request(
+        addr,
+        &ClientRequest::get("/api/console/share-management/status"),
+    )
+    .expect("candidate share status");
+    assert_eq!(status.status, 500);
+    assert_eq!(status.json(), json!({"error": "share management error"}));
+    assert!(
+        !store.exists(),
+        "the read face must not create the share store"
+    );
+    assert!(
+        guard.child.try_wait().expect("candidate status").is_none(),
+        "the candidate must still be serving after the read faces"
+    );
+}
