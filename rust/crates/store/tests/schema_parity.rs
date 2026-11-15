@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 use rusqlite::Connection;
 use serde_json::{json, Value};
-use um_store::schema::table_columns;
 use um_store::ShareStore;
 
 fn fixture() -> Value {
@@ -78,10 +77,7 @@ fn meta_rows(connection: &Connection) -> Value {
         .unwrap();
     let rows = statement
         .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
         .unwrap();
     let mut map = serde_json::Map::new();

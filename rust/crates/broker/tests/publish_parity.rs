@@ -10,9 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use um_broker::error::{BrokerResult, ResultCode};
-use um_broker::publish::{
-    InstanceChannel, InstanceRegistry, ProjectionWriter, PublishCoordinator,
-};
+use um_broker::publish::{InstanceChannel, InstanceRegistry, ProjectionWriter, PublishCoordinator};
 
 fn fixture() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -49,19 +47,16 @@ impl ProjectionWriter for FakeWriter {
     }
 }
 
+type AfterLoad = Rc<RefCell<Box<dyn FnMut()>>>;
+
 struct FakeChannel {
     calls: Rc<RefCell<Vec<Value>>>,
     queue: Rc<RefCell<Vec<Value>>>,
-    after_load: Option<Rc<RefCell<Box<dyn FnMut()>>>>,
+    after_load: Option<AfterLoad>,
 }
 
 impl InstanceChannel for FakeChannel {
-    fn call(
-        &mut self,
-        action: &str,
-        fields: &Value,
-        instance_id: &str,
-    ) -> Result<Value, String> {
+    fn call(&mut self, action: &str, fields: &Value, instance_id: &str) -> Result<Value, String> {
         self.calls.borrow_mut().push(json!({
             "instance_call": {
                 "action": action,
@@ -110,10 +105,7 @@ fn the_publish_chain_matches_python() {
         let writer_calls = Rc::new(RefCell::new(Vec::new()));
         let channel_calls = Rc::new(RefCell::new(Vec::new()));
         let queue = Rc::new(RefCell::new(
-            case["responses"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default(),
+            case["responses"].as_array().cloned().unwrap_or_default(),
         ));
         let discovery_calls = Rc::new(RefCell::new(0usize));
 
@@ -123,21 +115,15 @@ fn the_publish_chain_matches_python() {
                 let mode = mode.to_string();
                 let registry = Arc::clone(&registry);
                 let fired = Rc::new(RefCell::new(false));
-                let instance = case["after_load_instance"]
-                    .as_str()
-                    .unwrap()
-                    .to_string();
+                let instance = case["after_load_instance"].as_str().unwrap().to_string();
                 Some(Rc::new(RefCell::new(Box::new(move || {
                     if mode == "once" && *fired.borrow() {
                         return;
                     }
                     *fired.borrow_mut() = true;
-                    registry
-                        .lock()
-                        .unwrap()
-                        .register(instance.clone())
-                        .unwrap();
-                }) as Box<dyn FnMut()>)))
+                    registry.lock().unwrap().register(instance.clone()).unwrap();
+                })
+                    as Box<dyn FnMut()>)))
             }
         };
         let mut coordinator = PublishCoordinator::new(
@@ -233,7 +219,9 @@ fn terminate_keys_is_forwarded_only_when_present() {
     assert!(coordinator
         .publish(&projection, 4, &fingerprint, Some(&keys))
         .ok_flag());
-    assert!(coordinator.publish(&projection, 4, &fingerprint, None).ok_flag());
+    assert!(coordinator
+        .publish(&projection, 4, &fingerprint, None)
+        .ok_flag());
     let calls = channel_calls.borrow();
     assert_eq!(
         calls[0]["instance_call"]["fields"]["terminate_keys"],

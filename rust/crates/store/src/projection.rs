@@ -85,7 +85,9 @@ pub fn parse_projection_payload(payload: &Value) -> Result<Value, ProjectionErro
         .keys()
         .any(|key| !TOP_LEVEL_KEYS.contains(&key.as_str()))
     {
-        return Err(ProjectionError::bad_request("projection has unknown fields"));
+        return Err(ProjectionError::bad_request(
+            "projection has unknown fields",
+        ));
     }
     let share_max = match object.get("share_max_concurrency") {
         None => PROJECTION_DEFAULT_SHARE_MAX_CONCURRENCY,
@@ -130,10 +132,11 @@ pub fn parse_projection_payload(payload: &Value) -> Result<Value, ProjectionErro
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| ProjectionError::bad_request("invalid projection identity"))?;
-        if seen_ids.iter().any(|seen| seen == key_id)
-            || seen_names.iter().any(|seen| seen == name)
+        if seen_ids.iter().any(|seen| seen == key_id) || seen_names.iter().any(|seen| seen == name)
         {
-            return Err(ProjectionError::bad_request("duplicate projection identity"));
+            return Err(ProjectionError::bad_request(
+                "duplicate projection identity",
+            ));
         }
         seen_ids.push(key_id.to_string());
         seen_names.push(name.to_string());
@@ -211,7 +214,9 @@ impl ProjectionAcl for AllowPath {
         if path == self.0 {
             Ok(())
         } else {
-            Err(format!("projection ACL check failed: unexpected path {path:?}"))
+            Err(format!(
+                "projection ACL check failed: unexpected path {path:?}"
+            ))
         }
     }
 }
@@ -258,9 +263,7 @@ impl ProjectionAcl for PosixAcl {
             let metadata = match std::fs::symlink_metadata(path) {
                 Ok(metadata) => metadata,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(_) => {
-                    return Err(format!("projection unreadable: {}", path.display()))
-                }
+                Err(_) => return Err(format!("projection unreadable: {}", path.display())),
             };
             if metadata.file_type().is_symlink() {
                 return Err(format!("projection is a symlink: {}", path.display()));
@@ -313,9 +316,9 @@ impl<A: ProjectionAcl> ProtectedProjectionWriter<A> {
         let mut last_written = None;
         if path.exists() {
             let text = std::fs::read_to_string(&path).map_err(|_| {
-                ProjectionError::bad_request(format!(
-                    "protected projection file is corrupt; refusing publication over it"
-                ))
+                ProjectionError::bad_request(
+                    "protected projection file is corrupt; refusing publication over it",
+                )
             })?;
             let existing: Value = serde_json::from_str(&text).map_err(|_| {
                 ProjectionError::bad_request(
@@ -387,22 +390,20 @@ impl<A: ProjectionAcl> ProtectedProjectionWriter<A> {
                 .and_then(|name| name.to_str())
                 .unwrap_or("projection")
         ));
-        let text = serde_json::to_string_pretty(projection).map_err(|_| {
-            ProjectionError::bad_request("projection cannot be serialized")
-        })?;
-        std::fs::write(&temp, text).map_err(|_| {
-            ProjectionError::bad_request("temp projection write failed")
-        })?;
-        let reread_text = std::fs::read_to_string(&temp).map_err(|_| {
-            ProjectionError::bad_request("temp projection readback failed")
-        })?;
-        let reread: Value = serde_json::from_str(&reread_text).map_err(|_| {
-            ProjectionError::bad_request("temp projection readback mismatch")
-        })?;
+        let text = serde_json::to_string_pretty(projection)
+            .map_err(|_| ProjectionError::bad_request("projection cannot be serialized"))?;
+        std::fs::write(&temp, text)
+            .map_err(|_| ProjectionError::bad_request("temp projection write failed"))?;
+        let reread_text = std::fs::read_to_string(&temp)
+            .map_err(|_| ProjectionError::bad_request("temp projection readback failed"))?;
+        let reread: Value = serde_json::from_str(&reread_text)
+            .map_err(|_| ProjectionError::bad_request("temp projection readback mismatch"))?;
         parse_projection_payload(&reread)?;
         if fingerprint(&reread) != computed {
             let _ = std::fs::remove_file(&temp);
-            return Err(ProjectionError::bad_request("temp projection readback mismatch"));
+            return Err(ProjectionError::bad_request(
+                "temp projection readback mismatch",
+            ));
         }
         if let Err(detail) = self.acl.check(&self.path) {
             let _ = std::fs::remove_file(&temp);
