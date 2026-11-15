@@ -115,7 +115,7 @@ pub fn handle_chat(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let client_stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let client_stream = body.get("stream").is_some_and(truthy);
     let started_at = Instant::now();
     let deadline = started_at + state.config.request_total;
     let mut upstream_body = body.clone();
