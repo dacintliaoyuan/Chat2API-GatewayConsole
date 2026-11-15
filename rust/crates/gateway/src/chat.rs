@@ -1,0 +1,1067 @@
+//! Chat Completions forwarding (`POST /v1/chat/completions` and the two local
+//! compatibility aliases).
+//!
+//! This is the S1b slice: non-stream JSON relay, SSE byte passthrough, the
+//! pre-commit staging/commit gate, pre-commit 502 vs post-commit in-band error,
+//! the first-byte/silence/total budgets, hidden retries before any SSE event,
+//! client-disconnect cancellation and the share ledger row. The Python behavior
+//! being ported is `chat2api.Handler._chat` and `_UpstreamStream`.
+
+use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
+
+use crate::body::{read_json_body, BodyPolicy};
+use crate::error::GatewayError;
+use crate::gate::{Admission, ShareGate};
+use crate::http::{write_chunk, write_response_head, Request, Response};
+use crate::ledger::{estimate_tokens, merge_usage_snapshots, message_tokens, UsageRecord};
+use crate::server::{valid_chat_request, AppState};
+use crate::upstream::{NextItem, StreamReader, UpstreamBody};
+
+/// SSE content type used after the 200 commit.
+pub const SSE_CONTENT_TYPE: &str = "text/event-stream; charset=utf-8";
+/// Maximum held-back prelude bytes before the 200 commit.
+pub const PRELUDE_MAX_BYTES: usize = 64 * 1024;
+/// Python `STREAM_ERROR_MESSAGES` values.
+pub const UPSTREAM_EOF_WITHOUT_DONE: &str =
+    "Upstream closed the stream before the completion finished (no [DONE] received).";
+pub const UPSTREAM_READ_ERROR: &str = "Upstream connection failed while streaming.";
+pub const UPSTREAM_FIRST_BYTE_TIMEOUT: &str =
+    "Upstream sent no stream data within the first-byte budget.";
+pub const UPSTREAM_MISSING_FINISH_REASON: &str =
+    "Upstream finished the stream ([DONE]) without a finish_reason; the completion is incomplete.";
+pub const UPSTREAM_PRELUDE_OVERFLOW: &str =
+    "Upstream sent too much non-event data before the first event; the held-back prelude exceeded its byte bound.";
+pub const UPSTREAM_STREAM_ERROR: &str =
+    "Upstream reported an explicit stream error; the completion is incomplete.";
+pub const REQUEST_DEADLINE_EXCEEDED: &str = "Upstream request could not start another attempt";
+
+/// The outcome of one Chat route.
+pub enum ChatResult {
+    /// A normal response, written by the connection loop.
+    Response(Response),
+    /// The route wrote the response itself; `close` ends the connection.
+    Written { close: bool },
+}
+
+struct AdmissionGuard<'a> {
+    gate: Option<&'a ShareGate>,
+    admission: Option<Admission>,
+}
+
+impl Drop for AdmissionGuard<'_> {
+    fn drop(&mut self) {
+        if let (Some(gate), Some(admission)) = (self.gate, self.admission.take()) {
+            gate.unregister_inflight(&admission.key_id, &admission.ctx);
+            gate.release(&admission.key_id);
+        }
+    }
+}
+
+/// Serve one Chat request.
+pub fn handle_chat(
+    state: &AppState,
+    request: &Request,
+    stream: &mut TcpStream,
+    admission: Option<Admission>,
+) -> ChatResult {
+    let key_id = admission.as_ref().map(|value| value.key_id.clone());
+    let request_id = key_id.as_ref().map(|_| random_request_id());
+    let attribution = if key_id.is_some() {
+        "verified"
+    } else {
+        "absent"
+    };
+    let _guard = AdmissionGuard {
+        gate: state.gate.as_deref(),
+        admission,
+    };
+    let body = match read_json_body(
+        request,
+        BodyPolicy::Share {
+            max_request_bytes: state.config.share_max_request_bytes,
+        },
+    ) {
+        Ok(Some(body)) => body,
+        Ok(None) => Map::new(),
+        Err(error) => return ChatResult::Response(error.response()),
+    };
+    if state.gate.is_some() && !valid_chat_request(&body) {
+        return ChatResult::Response(GatewayError::unsupported_chat_request().response());
+    }
+    if !body
+        .get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|messages| !messages.is_empty())
+    {
+        return ChatResult::Response(
+            GatewayError::new(
+                400,
+                "Request body is missing the messages field",
+                "chat2api_error",
+            )
+            .response(),
+        );
+    }
+
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let client_stream = body.get("stream").is_some_and(truthy);
+    let started_at = Instant::now();
+    let deadline = started_at + state.config.request_total;
+    let mut upstream_body = body.clone();
+    if client_stream {
+        upstream_body
+            .entry("stream_options".to_string())
+            .or_insert_with(|| json!({"include_usage": true}));
+        upstream_body.insert("stream".to_string(), Value::Bool(true));
+    }
+    let origin = request
+        .headers
+        .get("Origin")
+        .filter(|origin| state.config.allowed_origins.contains(*origin))
+        .map(str::to_string);
+    let context = ChatContext {
+        state,
+        model: &model,
+        started_at,
+        deadline,
+        input_estimate: message_tokens(upstream_body.get("messages")),
+        key_id: key_id.as_deref(),
+        request_id: request_id.as_deref(),
+        attribution,
+        upstream_body,
+        origin,
+    };
+    if client_stream {
+        forward_stream(&context, stream)
+    } else {
+        forward_json(&context)
+    }
+}
+
+struct ChatContext<'a> {
+    state: &'a AppState,
+    model: &'a str,
+    started_at: Instant,
+    deadline: Instant,
+    input_estimate: u64,
+    key_id: Option<&'a str>,
+    request_id: Option<&'a str>,
+    attribution: &'a str,
+    upstream_body: Map<String, Value>,
+    origin: Option<String>,
+}
+
+fn forward_json(context: &ChatContext<'_>) -> ChatResult {
+    let mut body = context.upstream_body.clone();
+    let mut compat_retry_used = false;
+    let mut fast_retries = 0u32;
+    let mut slow_retries = 0u32;
+    let mut physical_attempts = 0u32;
+    loop {
+        if Instant::now() >= context.deadline {
+            return ChatResult::Response(deadline_response());
+        }
+        if physical_attempts >= context.state.config.max_physical_attempts {
+            return ChatResult::Response(physical_budget_response());
+        }
+        physical_attempts += 1;
+        let attempt_started = Instant::now();
+        let mut response = match crate::upstream::post_chat(
+            &context.state.config,
+            &serde_json::to_vec(&Value::Object(body.clone())).unwrap_or_default(),
+            false,
+            context.deadline,
+        ) {
+            Ok(response) => response,
+            Err(failure) => {
+                let elapsed = attempt_started.elapsed();
+                let slow = elapsed >= context.state.config.slow_retry_threshold;
+                if retry_available(context, fast_retries, slow_retries, physical_attempts, slow) {
+                    fast_retries += 1;
+                    if slow {
+                        slow_retries += 1;
+                    }
+                    let delay = retry_delay(context, fast_retries, slow);
+                    if !sleep_with_deadline(delay, context.deadline) {
+                        return ChatResult::Response(deadline_response());
+                    }
+                    continue;
+                }
+                return ChatResult::Response(
+                    GatewayError::new(502, "Upstream request failed", failure.name()).response(),
+                );
+            }
+        };
+        let status = response.status;
+        if status == 400 && body.contains_key("stream_options") && !compat_retry_used {
+            body.remove("stream_options");
+            compat_retry_used = true;
+            drop(response);
+            continue;
+        }
+        if status != 200 {
+            let elapsed = attempt_started.elapsed();
+            let slow = elapsed >= context.state.config.slow_retry_threshold;
+            if retryable_status(status)
+                && retry_available(context, fast_retries, slow_retries, physical_attempts, slow)
+            {
+                fast_retries += 1;
+                if slow {
+                    slow_retries += 1;
+                }
+                let delay = retry_delay(context, fast_retries, slow);
+                drop(response);
+                if !sleep_with_deadline(delay, context.deadline) {
+                    return ChatResult::Response(deadline_response());
+                }
+                continue;
+            }
+            return ChatResult::Response(upstream_status_error(status, response));
+        }
+        let raw = match response.body.read_all() {
+            Ok(raw) => raw,
+            Err(_) => {
+                return ChatResult::Response(
+                    GatewayError::new(502, "Upstream returned invalid JSON", "JSONDecodeError")
+                        .response(),
+                )
+            }
+        };
+        let data: Value = match serde_json::from_slice(&raw) {
+            Ok(data) => data,
+            Err(_) => {
+                return ChatResult::Response(
+                    GatewayError::new(502, "Upstream returned invalid JSON", "JSONDecodeError")
+                        .response(),
+                )
+            }
+        };
+        let Value::Object(data) = data else {
+            return ChatResult::Response(
+                GatewayError::new(
+                    502,
+                    "Upstream returned an invalid JSON shape",
+                    json_type_name(&data),
+                )
+                .response(),
+            );
+        };
+        if let Some(reason) = explicit_error_reason(&Value::Object(data.clone())) {
+            return ChatResult::Response(
+                GatewayError::new(502, "Upstream request failed", "upstream_explicit_error")
+                    .with_detail(json!({
+                        "reason": "upstream_explicit_error",
+                        "upstream_message": reason,
+                    }))
+                    .response(),
+            );
+        }
+        let out_est = data
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .map(estimate_tokens)
+            .unwrap_or(0);
+        context.state.ledger.record(UsageRecord {
+            model: context.model,
+            stream: false,
+            started_at: context.started_at,
+            usage: data.get("usage"),
+            input_estimate: context.input_estimate,
+            output_estimate: out_est,
+            status: "ok",
+            protocol: Some("chat"),
+            key_id: context.key_id,
+            request_id: context.request_id,
+            attribution: context.attribution,
+        });
+        let mut response = Response::new(200, raw);
+        response = response.with_header("Content-Type", "application/json; charset=utf-8");
+        return ChatResult::Response(response);
+    }
+}
+
+fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResult {
+    let mut fast_retries = 0u32;
+    let mut slow_retries = 0u32;
+    let mut physical_attempts = 0u32;
+    let mut compat_retry_used = false;
+    let mut upstream_body = context.upstream_body.clone();
+    loop {
+        if Instant::now() >= context.deadline {
+            return ChatResult::Response(deadline_response());
+        }
+        if physical_attempts >= context.state.config.max_physical_attempts {
+            return ChatResult::Response(physical_budget_response());
+        }
+        let slot = match acquire_reader(&context.state.stream_readers, context.deadline) {
+            Some(slot) => slot,
+            None => {
+                return ChatResult::Response(
+                    GatewayError::new(
+                        503,
+                        "Too many concurrent streaming requests",
+                        "too_many_concurrent_streams",
+                    )
+                    .with_detail(json!(format!(
+                        "concurrent reader limit {} reached; retry later",
+                        context.state.config.max_stream_readers
+                    )))
+                    .response(),
+                )
+            }
+        };
+        physical_attempts += 1;
+        let attempt_started = Instant::now();
+        let response = match crate::upstream::post_chat(
+            &context.state.config,
+            &serde_json::to_vec(&Value::Object(upstream_body.clone())).unwrap_or_default(),
+            true,
+            context.deadline,
+        ) {
+            Ok(response) => response,
+            Err(failure) => {
+                slot.release();
+                let elapsed = attempt_started.elapsed();
+                let slow = elapsed >= context.state.config.slow_retry_threshold;
+                if retry_available(context, fast_retries, slow_retries, physical_attempts, slow) {
+                    fast_retries += 1;
+                    if slow {
+                        slow_retries += 1;
+                    }
+                    let delay = retry_delay(context, fast_retries, slow);
+                    if !sleep_with_deadline(delay, context.deadline) {
+                        return ChatResult::Response(deadline_response());
+                    }
+                    continue;
+                }
+                return ChatResult::Response(
+                    GatewayError::new(502, "Upstream request failed", failure.name()).response(),
+                );
+            }
+        };
+        if response.status == 400
+            && upstream_body.contains_key("stream_options")
+            && !compat_retry_used
+        {
+            compat_retry_used = true;
+            upstream_body.remove("stream_options");
+            drop(response);
+            slot.release();
+            continue;
+        }
+        if response.status != 200 {
+            let elapsed = attempt_started.elapsed();
+            let slow = elapsed >= context.state.config.slow_retry_threshold;
+            if retryable_status(response.status)
+                && retry_available(context, fast_retries, slow_retries, physical_attempts, slow)
+            {
+                fast_retries += 1;
+                if slow {
+                    slow_retries += 1;
+                }
+                let delay = retry_delay(context, fast_retries, slow);
+                drop(response);
+                slot.release();
+                if !sleep_with_deadline(delay, context.deadline) {
+                    return ChatResult::Response(deadline_response());
+                }
+                continue;
+            }
+            return ChatResult::Response(upstream_status_error(response.status, response));
+        }
+        let outcome = consume_stream(context, stream, response.body, slot);
+        if outcome.status == StreamStatus::ClientDisconnected {
+            record_stream_usage(context, &outcome);
+            return ChatResult::Written { close: true };
+        }
+        if !outcome.committed
+            && matches!(
+                outcome.status,
+                StreamStatus::UpstreamEofWithoutDone
+                    | StreamStatus::UpstreamReadError
+                    | StreamStatus::UpstreamFirstByteTimeout
+            )
+        {
+            let slow = outcome.elapsed >= context.state.config.slow_retry_threshold;
+            if retry_available(context, fast_retries, slow_retries, physical_attempts, slow) {
+                fast_retries += 1;
+                if slow {
+                    slow_retries += 1;
+                }
+                if outcome.reasoning_chars > 0 {
+                    context.state.ledger.record(UsageRecord {
+                        model: context.model,
+                        stream: true,
+                        started_at: context.started_at,
+                        usage: outcome.usage.as_ref(),
+                        input_estimate: context.input_estimate,
+                        output_estimate: outcome.reasoning_chars / 4,
+                        status: "upstream_transient_retried",
+                        protocol: Some("chat"),
+                        key_id: context.key_id,
+                        request_id: context.request_id,
+                        attribution: context.attribution,
+                    });
+                }
+                let delay = retry_delay(context, fast_retries, slow);
+                if !sleep_with_deadline(delay, context.deadline) {
+                    return ChatResult::Response(deadline_response());
+                }
+                continue;
+            }
+        }
+        if outcome.committed {
+            if !outcome.status.is_success() {
+                write_stream_error(stream, outcome.status, &outcome);
+            }
+        } else if !outcome.status.is_success() {
+            record_stream_usage(context, &outcome);
+            return ChatResult::Response(stream_error_response(&outcome));
+        }
+        record_stream_usage(context, &outcome);
+        return ChatResult::Written { close: true };
+    }
+}
+
+struct SseState {
+    committed: bool,
+    staged: Vec<u8>,
+    event_raw: Vec<u8>,
+    event_lines: Vec<String>,
+    saw_finish_reason: bool,
+    done_seen: bool,
+    usage: Option<Value>,
+    completion_chars: u64,
+    reasoning_chars: u64,
+    data_lines: u64,
+    status: StreamStatus,
+    exception: Option<&'static str>,
+    explicit_reason: Option<String>,
+}
+
+impl SseState {
+    fn new() -> Self {
+        Self {
+            committed: false,
+            staged: Vec::new(),
+            event_raw: Vec::new(),
+            event_lines: Vec::new(),
+            saw_finish_reason: false,
+            done_seen: false,
+            usage: None,
+            completion_chars: 0,
+            reasoning_chars: 0,
+            data_lines: 0,
+            status: StreamStatus::Ok,
+            exception: None,
+            explicit_reason: None,
+        }
+    }
+}
+
+struct StreamOutcome {
+    committed: bool,
+    status: StreamStatus,
+    usage: Option<Value>,
+    completion_chars: u64,
+    reasoning_chars: u64,
+    data_lines: u64,
+    exception: Option<&'static str>,
+    explicit_reason: Option<String>,
+    elapsed: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamStatus {
+    Ok,
+    UpstreamEofWithoutDone,
+    UpstreamReadError,
+    UpstreamFirstByteTimeout,
+    UpstreamPreludeOverflow,
+    UpstreamStreamError,
+    UpstreamMissingFinishReason,
+    RequestDeadlineExceeded,
+    ClientDisconnected,
+}
+
+impl StreamStatus {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::UpstreamEofWithoutDone => "upstream_eof_without_done",
+            Self::UpstreamReadError => "upstream_read_error",
+            Self::UpstreamFirstByteTimeout => "upstream_first_byte_timeout",
+            Self::UpstreamPreludeOverflow => "upstream_prelude_overflow",
+            Self::UpstreamStreamError => "upstream_stream_error",
+            Self::UpstreamMissingFinishReason => "upstream_missing_finish_reason",
+            Self::RequestDeadlineExceeded => "request_deadline_exceeded",
+            Self::ClientDisconnected => "client_disconnected",
+        }
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Self::UpstreamEofWithoutDone => UPSTREAM_EOF_WITHOUT_DONE,
+            Self::UpstreamReadError => UPSTREAM_READ_ERROR,
+            Self::UpstreamFirstByteTimeout => UPSTREAM_FIRST_BYTE_TIMEOUT,
+            Self::UpstreamMissingFinishReason => UPSTREAM_MISSING_FINISH_REASON,
+            Self::UpstreamPreludeOverflow => UPSTREAM_PRELUDE_OVERFLOW,
+            Self::UpstreamStreamError => UPSTREAM_STREAM_ERROR,
+            Self::RequestDeadlineExceeded => REQUEST_DEADLINE_EXCEEDED,
+            Self::Ok => "Upstream stream failed.",
+            Self::ClientDisconnected => "Client disconnected.",
+        }
+    }
+
+    fn is_success(self) -> bool {
+        self == Self::Ok
+    }
+}
+
+enum EventAction {
+    Continue,
+    Stop(StreamStatus),
+}
+
+fn consume_stream(
+    context: &ChatContext<'_>,
+    stream: &mut TcpStream,
+    body: UpstreamBody,
+    slot: Arc<ReaderSlot>,
+) -> StreamOutcome {
+    let watcher = ClientWatcher::start(stream);
+    let reader = StreamReader::start(body, Some(slot));
+    let mut state = SseState::new();
+    let first_byte_deadline = Instant::now()
+        + context
+            .state
+            .config
+            .first_byte_timeout
+            .min(context.deadline - Instant::now());
+    loop {
+        if watcher.as_ref().is_some_and(ClientWatcher::disconnected) {
+            state.status = StreamStatus::ClientDisconnected;
+            break;
+        }
+        if Instant::now() >= context.deadline {
+            state.status = StreamStatus::RequestDeadlineExceeded;
+            break;
+        }
+        if !state.committed && Instant::now() >= first_byte_deadline {
+            state.status = StreamStatus::UpstreamFirstByteTimeout;
+            break;
+        }
+        match reader.next_item(Duration::from_millis(50)) {
+            NextItem::Timeout => continue,
+            NextItem::End => {
+                if !state.event_raw.is_empty() {
+                    if let EventAction::Stop(status) =
+                        process_event(stream, context, &mut state, false)
+                    {
+                        state.status = status;
+                    }
+                }
+                if state.status.is_success() && !state.done_seen {
+                    state.status = StreamStatus::UpstreamEofWithoutDone;
+                }
+                break;
+            }
+            NextItem::Error(error) => {
+                state.status = if error.timed_out && !state.committed {
+                    StreamStatus::UpstreamFirstByteTimeout
+                } else if error.timed_out && Instant::now() >= context.deadline {
+                    StreamStatus::RequestDeadlineExceeded
+                } else {
+                    StreamStatus::UpstreamReadError
+                };
+                state.exception = Some(error.name);
+                break;
+            }
+            NextItem::Line(line) => {
+                state.event_raw.extend_from_slice(&line);
+                let text = line_text(&line);
+                if text.is_empty() {
+                    let action = process_event(stream, context, &mut state, true);
+                    state.event_raw.clear();
+                    state.event_lines.clear();
+                    if let EventAction::Stop(status) = action {
+                        state.status = status;
+                        break;
+                    }
+                } else {
+                    state.event_lines.push(text);
+                }
+            }
+        }
+    }
+    reader.cancel();
+    reader.release_slot();
+    drop(reader);
+    StreamOutcome {
+        committed: state.committed,
+        status: state.status,
+        usage: state.usage,
+        completion_chars: state.completion_chars,
+        reasoning_chars: state.reasoning_chars,
+        data_lines: state.data_lines,
+        exception: state.exception,
+        explicit_reason: state.explicit_reason,
+        elapsed: context.started_at.elapsed(),
+    }
+}
+
+fn process_event(
+    stream: &mut TcpStream,
+    context: &ChatContext<'_>,
+    state: &mut SseState,
+    had_separator: bool,
+) -> EventAction {
+    let data_lines: Vec<&String> = state
+        .event_lines
+        .iter()
+        .filter(|line| line.starts_with("data:"))
+        .collect();
+    let payload = data_lines
+        .iter()
+        .map(|line| data_value(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let chunk = if !payload.is_empty() && payload != "[DONE]" {
+        serde_json::from_str::<Value>(&payload).ok()
+    } else {
+        None
+    };
+    if let Some(chunk) = chunk.as_ref() {
+        if let Some(reason) = explicit_error_reason(chunk) {
+            state.data_lines += data_lines.len() as u64;
+            state.explicit_reason = Some(reason);
+            return EventAction::Stop(StreamStatus::UpstreamStreamError);
+        }
+    }
+    let mut substantive = false;
+    let mut saw_finish = false;
+    if let Some(Value::Object(chunk)) = chunk.as_ref() {
+        if let Some(usage) = chunk.get("usage") {
+            state.usage = merge_usage_snapshots(state.usage.as_ref(), usage);
+        }
+        if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
+            for choice in choices {
+                if choice.get("finish_reason").is_some_and(truthy) {
+                    saw_finish = true;
+                }
+                let Some(delta) = choice.get("delta").and_then(Value::as_object) else {
+                    continue;
+                };
+                if delta
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.is_empty())
+                    || delta.get("tool_calls").is_some_and(truthy)
+                    || delta.get("function_call").is_some_and(truthy)
+                {
+                    substantive = true;
+                }
+                if let Some(text) = delta.get("content").and_then(Value::as_str) {
+                    state.completion_chars += text.chars().count() as u64;
+                }
+                let reasoning = delta
+                    .get("reasoning_content")
+                    .or_else(|| delta.get("reasoning"))
+                    .and_then(Value::as_str);
+                if let Some(text) = reasoning {
+                    state.reasoning_chars += text.chars().count() as u64;
+                }
+            }
+        }
+        if saw_finish {
+            substantive = true;
+        }
+    } else if !data_lines.is_empty() && !payload.is_empty() && payload != "[DONE]" {
+        substantive = true;
+    }
+    state.saw_finish_reason |= saw_finish;
+    if !data_lines.is_empty() {
+        state.data_lines += data_lines.len() as u64;
+    }
+    let raw = std::mem::take(&mut state.event_raw);
+    let _ = had_separator;
+    if payload == "[DONE]" {
+        if !state.saw_finish_reason {
+            return EventAction::Stop(StreamStatus::UpstreamMissingFinishReason);
+        }
+        state.done_seen = true;
+        if state.committed {
+            let _ = write_chunk(stream, &raw);
+        }
+        return EventAction::Stop(StreamStatus::Ok);
+    }
+    if substantive {
+        if !state.committed && !commit(stream, context, state) {
+            return EventAction::Stop(StreamStatus::ClientDisconnected);
+        }
+        let _ = write_chunk(stream, &raw);
+        return EventAction::Continue;
+    }
+    if state.committed {
+        let _ = write_chunk(stream, &raw);
+    } else {
+        state.staged.extend_from_slice(&raw);
+        if state.staged.len() > PRELUDE_MAX_BYTES {
+            return EventAction::Stop(StreamStatus::UpstreamPreludeOverflow);
+        }
+    }
+    EventAction::Continue
+}
+
+fn commit(stream: &mut TcpStream, context: &ChatContext<'_>, state: &mut SseState) -> bool {
+    state.committed = true;
+    let mut headers = vec![
+        ("Content-Type".to_string(), SSE_CONTENT_TYPE.to_string()),
+        ("Cache-Control".to_string(), "no-cache".to_string()),
+        ("Connection".to_string(), "close".to_string()),
+    ];
+    if let Some(origin) = &context.origin {
+        headers.push(("Access-Control-Allow-Origin".to_string(), origin.clone()));
+    }
+    if write_response_head(stream, 200, &headers).is_err() {
+        return false;
+    }
+    let staged = std::mem::take(&mut state.staged);
+    write_chunk(stream, &staged).is_ok()
+}
+
+fn record_stream_usage(context: &ChatContext<'_>, outcome: &StreamOutcome) {
+    let output_chars = outcome.completion_chars + outcome.reasoning_chars;
+    let out_est = if outcome.status.is_success() {
+        (output_chars / 4).max(1)
+    } else {
+        output_chars / 4
+    };
+    context.state.ledger.record(UsageRecord {
+        model: context.model,
+        stream: true,
+        started_at: context.started_at,
+        usage: outcome.usage.as_ref(),
+        input_estimate: context.input_estimate,
+        output_estimate: out_est,
+        status: outcome.status.reason(),
+        protocol: Some("chat"),
+        key_id: context.key_id,
+        request_id: context.request_id,
+        attribution: context.attribution,
+    });
+}
+
+fn stream_error_response(outcome: &StreamOutcome) -> Response {
+    GatewayError::new(502, outcome.status.message(), "upstream_stream_error")
+        .with_detail(stream_error_detail(outcome))
+        .response()
+}
+
+fn write_stream_error(stream: &mut TcpStream, status: StreamStatus, outcome: &StreamOutcome) {
+    let payload = json!({"error": {
+        "message": status.message(),
+        "type": "upstream_stream_error",
+        "code": status.reason(),
+        "detail": stream_error_detail(outcome),
+    }});
+    let raw = serde_json::to_vec(&payload).unwrap_or_default();
+    let mut event = Vec::new();
+    event.extend_from_slice(b"data: ");
+    event.extend_from_slice(&raw);
+    event.extend_from_slice(b"\n\n");
+    let _ = write_chunk(stream, &event);
+}
+
+fn stream_error_detail(outcome: &StreamOutcome) -> Value {
+    let mut detail = json!({
+        "reason": outcome.status.reason(),
+        "events": outcome.data_lines,
+        "duration_s": (outcome.elapsed.as_secs_f64() * 10.0).round() / 10.0,
+    });
+    if let Some(exception) = outcome.exception {
+        detail["exception"] = json!(exception);
+    }
+    if let Some(reason) = &outcome.explicit_reason {
+        detail["upstream_message"] = json!(reason);
+    }
+    detail
+}
+
+fn upstream_status_error(status: u16, mut response: crate::upstream::UpstreamResponse) -> Response {
+    if status == 401 {
+        return GatewayError::reauthentication_required(Some("upstream_rejected")).response();
+    }
+    let text = response
+        .body
+        .read_prefix(2048)
+        .ok()
+        .map(|raw| String::from_utf8_lossy(&raw).to_string())
+        .unwrap_or_default();
+    if status == 400 || status == 422 {
+        return GatewayError::new(
+            status,
+            "Upstream rejected the request; the server log has structured diagnostics",
+            "upstream_request_rejected",
+        )
+        .response();
+    }
+    GatewayError::new(502, "Upstream request failed", "chat2api_error")
+        .with_detail(Value::String(format!("HTTP {status}: {text}")))
+        .response()
+}
+
+fn retry_available(
+    context: &ChatContext<'_>,
+    fast_retries: u32,
+    slow_retries: u32,
+    physical_attempts: u32,
+    slow: bool,
+) -> bool {
+    fast_retries < context.state.config.max_fast_retries
+        && (!slow || slow_retries < context.state.config.max_slow_retries)
+        && physical_attempts < context.state.config.max_physical_attempts
+        && Instant::now() < context.deadline
+}
+
+fn retry_delay(context: &ChatContext<'_>, retry_number: u32, slow: bool) -> Duration {
+    if slow {
+        return context.state.config.retry_delay_base * 2;
+    }
+    let exponent = retry_number.saturating_sub(1).min(4);
+    (context.state.config.retry_delay_base * (1u32 << exponent)).min(Duration::from_secs(2))
+}
+
+fn sleep_with_deadline(delay: Duration, deadline: Instant) -> bool {
+    if delay.is_zero() {
+        return Instant::now() < deadline;
+    }
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return false;
+    }
+    thread::sleep(delay.min(remaining));
+    Instant::now() < deadline
+}
+
+fn retryable_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
+}
+
+fn deadline_response() -> Response {
+    GatewayError::new(502, REQUEST_DEADLINE_EXCEEDED, "request_deadline_exceeded").response()
+}
+
+fn physical_budget_response() -> Response {
+    GatewayError::new(
+        502,
+        "Upstream request could not start another attempt",
+        "upstream_attempt_budget_exhausted",
+    )
+    .response()
+}
+
+fn line_text(line: &[u8]) -> String {
+    let text = String::from_utf8_lossy(line);
+    text.trim_end_matches('\n')
+        .trim_end_matches('\r')
+        .to_string()
+}
+
+fn data_value(line: &str) -> &str {
+    let value = line.strip_prefix("data:").unwrap_or(line);
+    value.strip_prefix(' ').unwrap_or(value)
+}
+
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+    }
+}
+
+fn explicit_error_reason(chunk: &Value) -> Option<String> {
+    let error = chunk.get("error")?;
+    if !truthy(error) {
+        return None;
+    }
+    let message = match error {
+        Value::Object(map) => map.get("message"),
+        other => Some(other),
+    };
+    match message {
+        Some(Value::String(text)) if !text.trim().is_empty() => Some(sanitize_reason(text)),
+        _ => Some("upstream reported an explicit stream error".to_string()),
+    }
+}
+
+fn sanitize_reason(text: &str) -> String {
+    let text = text.replace(['\r', '\n'], " ");
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.chars().take(200).collect()
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "int",
+        Value::String(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
+    }
+}
+
+fn random_request_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = Sha256::new();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    hasher.update(nanos.to_le_bytes());
+    hasher.update(COUNTER.fetch_add(1, Ordering::SeqCst).to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    let digest = hasher.finalize();
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The bounded concurrent streaming reader set.
+pub struct ReaderSlots {
+    capacity: usize,
+    available: Mutex<usize>,
+    condvar: Condvar,
+}
+
+impl ReaderSlots {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            available: Mutex::new(capacity),
+            condvar: Condvar::new(),
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Take one reader slot; `None` when the cap is reached.
+    pub fn try_acquire(self: &Arc<Self>) -> Option<Arc<ReaderSlot>> {
+        let mut available = self.available.lock().expect("reader slots poisoned");
+        if *available == 0 {
+            return None;
+        }
+        *available -= 1;
+        Some(Arc::new(ReaderSlot {
+            slots: Arc::clone(self),
+            released: AtomicBool::new(false),
+        }))
+    }
+
+    /// Take one reader slot before `deadline`.
+    pub fn acquire_until(self: &Arc<Self>, deadline: Instant) -> Option<Arc<ReaderSlot>> {
+        loop {
+            if let Some(slot) = self.try_acquire() {
+                return Some(slot);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn release(&self) {
+        let mut available = self.available.lock().expect("reader slots poisoned");
+        *available += 1;
+        self.condvar.notify_one();
+    }
+}
+
+/// One reader slot that releases exactly once.
+pub struct ReaderSlot {
+    slots: Arc<ReaderSlots>,
+    released: AtomicBool,
+}
+
+impl ReaderSlot {
+    /// Release the slot; a second release is a no-op.
+    pub fn release(&self) {
+        if !self.released.swap(true, Ordering::SeqCst) {
+            self.slots.release();
+        }
+    }
+}
+
+fn acquire_reader(slots: &Arc<ReaderSlots>, deadline: Instant) -> Option<Arc<ReaderSlot>> {
+    slots.acquire_until(deadline)
+}
+
+struct ClientWatcher {
+    flag: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+}
+
+impl ClientWatcher {
+    fn start(stream: &TcpStream) -> Option<Self> {
+        let clone = stream.try_clone().ok()?;
+        let _ = clone.set_read_timeout(Some(Duration::from_millis(100)));
+        let flag = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let worker_flag = Arc::clone(&flag);
+        let worker_done = Arc::clone(&done);
+        thread::spawn(move || {
+            let mut byte = [0u8; 1];
+            while !worker_done.load(Ordering::SeqCst) {
+                match clone.peek(&mut byte) {
+                    Ok(0) => {
+                        worker_flag.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    Ok(_) => thread::sleep(Duration::from_millis(20)),
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            || error.kind() == std::io::ErrorKind::TimedOut => {}
+                    Err(_) => {
+                        worker_flag.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
+        });
+        Some(Self { flag, done })
+    }
+
+    fn disconnected(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for ClientWatcher {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::SeqCst);
+    }
+}

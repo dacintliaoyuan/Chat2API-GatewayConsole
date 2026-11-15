@@ -8,12 +8,15 @@
 //! `501 not_implemented` only after the route, credential and body gates.
 
 pub mod body;
+pub mod chat;
 pub mod config;
 pub mod error;
 pub mod gate;
 pub mod http;
+pub mod ledger;
 pub mod readonly;
 pub mod server;
+pub mod upstream;
 
 pub use body::{read_json_body, BodyPolicy};
 pub use config::{AuthMode, GatewayConfig};

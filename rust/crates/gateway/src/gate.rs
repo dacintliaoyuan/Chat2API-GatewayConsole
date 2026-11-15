@@ -93,6 +93,12 @@ impl InflightCtx {
     }
 }
 
+/// One admitted share request: the verified Key and its in-flight context.
+pub struct Admission {
+    pub key_id: String,
+    pub ctx: Arc<InflightCtx>,
+}
+
 struct GateStateData {
     state: GateState,
     config: ShareConfig,

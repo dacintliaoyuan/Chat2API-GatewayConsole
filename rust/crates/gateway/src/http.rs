@@ -239,34 +239,52 @@ pub fn read_request(
 
 /// Write one response and report whether the connection must be closed.
 pub fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()> {
-    let mut head = format!(
-        "HTTP/1.1 {} {}\r\n",
-        response.status,
-        reason_phrase(response.status)
-    );
+    let mut headers = response.headers.clone();
     let mut has_length = false;
     let mut has_connection = false;
-    for (name, value) in &response.headers {
+    for (name, _) in &headers {
         if name.eq_ignore_ascii_case("content-length") {
             has_length = true;
         }
         if name.eq_ignore_ascii_case("connection") {
             has_connection = true;
         }
+    }
+    if !has_length {
+        headers.push((
+            "Content-Length".to_string(),
+            response.body.len().to_string(),
+        ));
+    }
+    if response.close && !has_connection {
+        headers.push(("Connection".to_string(), "close".to_string()));
+    }
+    write_response_head(stream, response.status, &headers)?;
+    stream.write_all(&response.body)?;
+    stream.flush()
+}
+
+/// Write one status line and header block without a body or a length.
+pub fn write_response_head(
+    stream: &mut TcpStream,
+    status: u16,
+    headers: &[(String, String)],
+) -> io::Result<()> {
+    let mut head = format!("HTTP/1.1 {status} {}\r\n", reason_phrase(status));
+    for (name, value) in headers {
         head.push_str(name);
         head.push_str(": ");
         head.push_str(value);
         head.push_str("\r\n");
     }
-    if !has_length {
-        head.push_str(&format!("Content-Length: {}\r\n", response.body.len()));
-    }
-    if response.close && !has_connection {
-        head.push_str("Connection: close\r\n");
-    }
     head.push_str("\r\n");
     stream.write_all(head.as_bytes())?;
-    stream.write_all(&response.body)?;
+    stream.flush()
+}
+
+/// Write one already-framed body chunk and flush it downstream.
+pub fn write_chunk(stream: &mut TcpStream, bytes: &[u8]) -> io::Result<()> {
+    stream.write_all(bytes)?;
     stream.flush()
 }
 
