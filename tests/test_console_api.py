@@ -1027,15 +1027,23 @@ class ConsoleShareUsageRouteTests(ConsoleApiTestBase):
         self.assertEqual(by_id["r3"]["keyName"], "乙钥匙")
         self.assertIs(by_id["r3"]["deleted"], True)
         # 前端统一走 /gw/usagesrv 别名；管理面同一份载荷。
+        # checkedAt 是本次读取的墙钟；并发负载下两次读取可能跨秒，不能作为
+        # “同一份载荷”的比较字段。
+        def without_checked_at(payload):
+            return {key: value for key, value in payload.items()
+                    if key != "checkedAt"}
+
         status, alias_raw = self.req(
             "GET", "/gw/usagesrv/api/console/share-usage/requests?limit=2")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(alias_raw), page)
+        self.assertEqual(without_checked_at(json.loads(alias_raw)),
+                         without_checked_at(page))
         status, management_raw = self.req(
             "GET", "/api/share/usage/requests?limit=2",
             headers={"X-Admin-Control": _CONTROL_TOKEN})
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(management_raw), page)
+        self.assertEqual(without_checked_at(json.loads(management_raw)),
+                         without_checked_at(page))
         # 第二页只含更旧记录；到底后 nextCursor 为 null。
         status, second_raw = self.req(
             "GET", "/api/console/share-usage/requests?limit=2&cursor=3")
