@@ -93,23 +93,10 @@ fn cloud_ops_matches_python_for_configured_and_unreadable_states() {
     for (name, path) in [
         ("unconfigured", None),
         ("valid", Some(security.as_path())),
-        ("invalid", Some(bad.as_path())),
+        ("invalid", Some(std::path::Path::new("bad-security.json"))),
     ] {
         let mut payload = cloud_ops::cloud_ops_status_for_tests(path);
         payload.as_object_mut().expect("object").remove("read_at");
-        if name == "invalid" {
-            assert_eq!(payload["available"], cases[name]["available"]);
-            assert_eq!(
-                payload["security"]["configured"],
-                cases[name]["security"]["configured"]
-            );
-            assert_eq!(
-                payload["security"]["available"],
-                cases[name]["security"]["available"]
-            );
-            assert_eq!(payload["reasons"], cases[name]["reasons"]);
-            continue;
-        }
         assert_eq!(payload, cases[name], "{name}");
     }
 }

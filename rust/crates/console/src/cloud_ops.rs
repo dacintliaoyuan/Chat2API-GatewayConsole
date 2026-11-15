@@ -66,13 +66,25 @@ pub struct SecurityError(pub String);
 
 /// `um-cloud-deploy/backup_restore/package.py::read_security_state`.
 fn read_security_state(path: &Path) -> Result<Value, String> {
-    let raw = std::fs::read(path).map_err(|_| "security state unreadable".to_string())?;
+    let raw = std::fs::read(path).map_err(|_| {
+        format!(
+            "BackupSecurityError: security state unreadable: {}",
+            path.display()
+        )
+    })?;
     if raw.len() as u64 > MAX_SECURITY_BYTES {
-        return Err("security state is unexpectedly large".to_string());
+        return Err(format!(
+            "BackupSecurityError: security state is unexpectedly large: {}",
+            path.display()
+        ));
     }
-    let payload: Value =
-        serde_json::from_slice(&raw).map_err(|_| "security state is not valid JSON".to_string())?;
-    validate_security_state(&payload)
+    let payload: Value = serde_json::from_slice(&raw).map_err(|_| {
+        format!(
+            "BackupSecurityError: security state is not valid JSON: {}",
+            path.display()
+        )
+    })?;
+    validate_security_state(&payload).map_err(|message| format!("BackupSecurityError: {message}"))
 }
 
 fn validate_security_state(payload: &Value) -> Result<Value, String> {
