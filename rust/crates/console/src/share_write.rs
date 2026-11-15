@@ -498,7 +498,7 @@ impl ShareWriteStore {
                         && record
                             .get("generation")
                             .and_then(Value::as_i64)
-                            .map(|generation| generation <= generation)
+                            .map(|record_generation| record_generation <= generation)
                             .unwrap_or(false)
                 })
                 .collect::<Vec<_>>(),

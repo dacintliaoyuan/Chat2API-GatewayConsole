@@ -10,8 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use um_console::share_write::{
-    console_public_row, ShareWriteError, ShareWriteErrorKind, ShareWriteSeams, ShareWriteStore,
-    UnwiredWriteSeams,
+    ShareWriteError, ShareWriteErrorKind, ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams,
 };
 use um_console::ShareReadStore;
 use um_store::ShareStore;

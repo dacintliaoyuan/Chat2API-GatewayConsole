@@ -882,7 +882,7 @@ fn validate_params(
     let params = params.cloned().unwrap_or_default();
     let raw = serde_json::to_string(&params)
         .map_err(|_| OperationError::new("invalid_params", "params must be finite JSON"))?;
-    if raw.as_bytes().len() > MAX_PARAM_BYTES {
+    if raw.len() > MAX_PARAM_BYTES {
         return Err(OperationError::new("invalid_params", "params too large"));
     }
     let schema = spec.param_schema.as_object().cloned().unwrap_or_default();

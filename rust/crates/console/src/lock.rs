@@ -113,6 +113,7 @@ fn try_open_exclusive(path: &Path) -> std::io::Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .share_mode(0)
         .open(path)
 }
@@ -124,6 +125,7 @@ fn try_open_exclusive(path: &Path) -> std::io::Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .mode(0o600)
         .open(path)?;
     use std::os::unix::io::AsRawFd;
@@ -148,6 +150,7 @@ fn try_open_exclusive(path: &Path) -> std::io::Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)
 }
 

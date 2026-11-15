@@ -302,7 +302,7 @@ fn cancel_of_a_queued_operation_never_executes_it() {
         .expect("first submit");
     let first_id = first["id"].as_str().unwrap().to_string();
     let deadline = Instant::now() + Duration::from_secs(10);
-    while executor.calls.lock().unwrap().len() < 1 {
+    while executor.calls.lock().unwrap().is_empty() {
         assert!(Instant::now() < deadline, "first operation never started");
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -490,7 +490,7 @@ fn successful_restart_bumps_the_generation_and_cancels_queued_operations() {
         .expect("first restart");
     let first_id = first["id"].as_str().unwrap().to_string();
     let deadline = Instant::now() + Duration::from_secs(10);
-    while executor.calls.lock().unwrap().len() < 1 {
+    while executor.calls.lock().unwrap().is_empty() {
         assert!(Instant::now() < deadline, "first restart never started");
         std::thread::sleep(Duration::from_millis(5));
     }
