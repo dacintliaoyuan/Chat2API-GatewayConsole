@@ -249,6 +249,12 @@ fn dispatch_inner(
     }
 
     if request.method == "POST" && is_chat_path(path) {
+        if let Err(error) = local_key_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
+        if let Err(error) = origin_allowed(state, request) {
+            return (RouteOutcome::Response(error.response()), admission);
+        }
         let result = handle_chat(state, request, stream, admission.take());
         return (
             match result {
