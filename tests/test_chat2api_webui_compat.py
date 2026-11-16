@@ -419,7 +419,7 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
         self.assertEqual(payloads[0]["choices"][0]["delta"]["content"],
                          "hello world")
         last = payloads[-1]["error"]
-        self.assertEqual(last["type"], "upstream_stream_error")
+        self.assertEqual(last["type"], "upstream_error")
         self.assertEqual(last["code"], "upstream_stream_error")
         self.assertEqual(last["detail"]["reason"], "upstream_stream_error")
         self.assertEqual(last["detail"]["upstream_message"],
@@ -450,7 +450,7 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
             for p in payloads))
         self.assertNotIn("data: [DONE]", events)
         self.assertEqual(payloads[-1]["error"]["type"],
-                         "upstream_stream_error")
+                         "upstream_error")
 
         (record,) = self.wait_usage_records()
         self.assertEqual(record["status"], "upstream_stream_error")

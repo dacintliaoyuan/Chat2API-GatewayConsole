@@ -565,8 +565,9 @@ class TestChat2ApiEndpoints(unittest.TestCase):
 
     def test_messages_stream_eof_without_message_stop_is_not_ok(self):
         # The upstream dies after a stop_reason with no message_stop: the
-        # client sees exactly the upstream's bytes (no synthesized
-        # message_stop), and the ledger must not claim "ok" for a truncated
+        # client sees exactly the upstream's bytes plus ONE local Anthropic
+        # in-band error with a machine code, never a synthesized
+        # message_stop. The ledger must not claim "ok" for a truncated
         # completion.
         events = [
             sse_event("message_start", json.dumps({
@@ -583,9 +584,27 @@ class TestChat2ApiEndpoints(unittest.TestCase):
                 "delta": {"stop_reason": "end_turn", "stop_sequence": None},
                 "usage": {"output_tokens": 3}})),
         ]
-        body = self._stream_messages(events)
-        self.assertEqual(body, b"".join(events))
-        self.assertNotIn(b"message_stop", body)
+        StubUpstreamHandler.messages_events = events
+        with requests.post(
+                f"{self.base}/v1/messages",
+                json={"model": "claude-x", "max_tokens": 16, "stream": True,
+                      "messages": [{"role": "user", "content": "hi"}]},
+                headers={**self.auth, "Anthropic-Version": "2023-06-01"},
+                stream=True, timeout=10) as response:
+            self.assertEqual(response.status_code, 200)
+            header_id = response.headers.get("X-Request-Id")
+            self.assertRegex(header_id or "", r"^[0-9a-f]{12}$")
+            body = response.content
+        self.assertTrue(body.startswith(b"".join(events)))
+        self.assertNotIn(b"event: message_stop", body)
+        self.assertIn(b"event: error", body)
+        error_block = body.split(b"event: error\ndata: ", 1)[1]
+        payload = json.loads(error_block.split(b"\n\n", 1)[0])
+        self.assertEqual(payload["type"], "error")
+        self.assertEqual(payload["error"]["type"], "api_error")
+        self.assertEqual(payload["error"]["code"],
+                         "upstream_eof_without_event")
+        self.assertEqual(payload["error"]["request_id"], header_id)
         row = self._ledger_row()
         self.assertEqual(row["status"], "upstream_eof_without_event")
 

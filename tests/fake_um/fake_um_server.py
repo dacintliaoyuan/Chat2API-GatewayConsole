@@ -69,6 +69,13 @@ MODE_MISSING_TERMINAL = "missing_terminal"
 MODE_EXPLICIT_5XX = "explicit_5xx"
 MODE_INVALID_AUTH = "invalid_auth"
 MODE_EXPLICIT_STREAM_ERROR = "explicit_stream_error"
+# Transport disconnects for the pre-commit/post-commit staging contract
+# (ticket #64). They close the chunked stream WITHOUT the terminating chunk,
+# which is exactly how a broken upstream reaches the proxy: a clean
+# ``_end_stream`` would be an EOF, not a transport failure.
+MODE_DISCONNECT_BEFORE_FIRST = "disconnect_before_first"
+MODE_DISCONNECT_AFTER_FIRST = "disconnect_after_first"
+MODE_EXPLICIT_STREAM_ERROR_AFTER_FIRST = "explicit_stream_error_after_first"
 # Long-request / resource-fallback verification modes. They are deliberately
 # separate from the short ``comments_only``/``silent`` modes so existing tests
 # keep their exact byte/EOF contract.
@@ -88,6 +95,9 @@ MODES = frozenset((
     MODE_EXPLICIT_5XX,
     MODE_INVALID_AUTH,
     MODE_EXPLICIT_STREAM_ERROR,
+    MODE_DISCONNECT_BEFORE_FIRST,
+    MODE_DISCONNECT_AFTER_FIRST,
+    MODE_EXPLICIT_STREAM_ERROR_AFTER_FIRST,
     MODE_SILENT_AFTER_FIRST,
     MODE_COMMENTS_UNTIL,
     MODE_NONSTREAM_HANG,
@@ -104,6 +114,9 @@ STREAM_ONLY_MODES = frozenset((
     MODE_COMMENTS_ONLY,
     MODE_MISSING_TERMINAL,
     MODE_EXPLICIT_STREAM_ERROR,
+    MODE_DISCONNECT_BEFORE_FIRST,
+    MODE_DISCONNECT_AFTER_FIRST,
+    MODE_EXPLICIT_STREAM_ERROR_AFTER_FIRST,
     MODE_SILENT_AFTER_FIRST,
     MODE_COMMENTS_UNTIL,
     MODE_REASONING_LOOP,
@@ -878,6 +891,33 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
         model = _request_model(payload, config.model)
         include_usage = _include_usage(payload)
         self._start_stream()
+        if mode == MODE_DISCONNECT_BEFORE_FIRST:
+            # Headers arrive, then the connection dies before the terminating
+            # chunk: the proxy sees a transport failure, not a clean EOF.
+            self._sleep(config.silent_s)
+            return
+        if mode == MODE_DISCONNECT_AFTER_FIRST:
+            # One substantive content chunk commits the downstream 200; the
+            # upstream then dies without the terminating chunk.
+            created = int(time.time())
+            completion_id = "chatcmpl-" + secrets.token_hex(8)
+            self._chat_chunk(completion_id, created, model,
+                             {"role": "assistant", "content": "first-visible"},
+                             None)
+            self._sleep(0.05)
+            return
+        if mode == MODE_EXPLICIT_STREAM_ERROR_AFTER_FIRST:
+            # The same commit boundary, but the upstream reports its failure as
+            # an explicit error event instead of a transport disconnect.
+            created = int(time.time())
+            completion_id = "chatcmpl-" + secrets.token_hex(8)
+            self._chat_chunk(completion_id, created, model,
+                             {"role": "assistant", "content": "first-visible"},
+                             None)
+            self._write_chunk(
+                b'data: {"error": {"message": "fake upstream failure", '
+                b'"type": "server_error"}}\n\n')
+            return
         if mode == MODE_SILENT:
             # Headers arrive, no data ever does: the proxy must see a clean
             # zero-event EOF, not a chunked framing error.
@@ -977,6 +1017,47 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
         config = self.fake.config
         model = _request_model(payload, config.model)
         self._start_stream()
+        if mode == MODE_DISCONNECT_BEFORE_FIRST:
+            # Headers arrive, then the connection dies before the terminating
+            # chunk: the proxy sees a transport failure, not a clean EOF.
+            self._sleep(config.silent_s)
+            return
+        if mode in (MODE_DISCONNECT_AFTER_FIRST,
+                    MODE_EXPLICIT_STREAM_ERROR_AFTER_FIRST):
+            # One substantive text delta commits the downstream 200. The
+            # disconnect variant then dies without the terminating chunk; the
+            # explicit variant reports an Anthropic error event instead.
+            message_id = "msg_" + secrets.token_hex(12)
+            self._anthropic_event("message_start", {
+                "type": "message_start",
+                "message": {
+                    "id": message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model,
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            })
+            self._anthropic_event("content_block_start", {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            })
+            self._anthropic_event("content_block_delta", {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "first-visible"},
+            })
+            if mode == MODE_EXPLICIT_STREAM_ERROR_AFTER_FIRST:
+                self._write_chunk(
+                    b'event: error\ndata: {"type":"error","error":'
+                    b'{"type":"api_error","message":"fake upstream failure"}}'
+                    b'\n\n')
+            self._sleep(0.05)
+            return
         if mode == MODE_SILENT:
             self._sleep(config.silent_s)
             self._end_stream()
