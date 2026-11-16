@@ -730,6 +730,8 @@ dependencies = [
  "sha2",
  "tempfile",
  "um-contract",
+ "um-gateway",
+ "um-ops",
 ]
 
 [[package]]

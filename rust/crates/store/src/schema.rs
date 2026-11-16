@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 use crate::error::StoreError;
 
@@ -97,6 +97,26 @@ pub fn open_connection(path: &Path) -> Result<Connection, StoreError> {
         .execute("PRAGMA foreign_keys=ON", [])
         .map_err(|error| StoreError::Other(format!("cannot open share store: {error}")))?;
     initialize(&connection)?;
+    Ok(connection)
+}
+
+/// Open an existing store READ-ONLY for parity checks.
+///
+/// A read-only open never creates the file, never runs the schema DDL and never
+/// migrates it.  The caller must pass the production file (or an isolated copy of
+/// it); a missing file is a refused read, not an empty store.
+pub fn open_connection_read_only(path: &Path) -> Result<Connection, StoreError> {
+    if !path.is_file() {
+        return Err(StoreError::Other(format!(
+            "cannot open share store: missing file {}",
+            path.display()
+        )));
+    }
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| StoreError::Other(format!("cannot open share store: {error}")))?;
+    connection
+        .execute("PRAGMA query_only=ON", [])
+        .map_err(|error| StoreError::Other(format!("cannot open share store: {error}")))?;
     Ok(connection)
 }
 

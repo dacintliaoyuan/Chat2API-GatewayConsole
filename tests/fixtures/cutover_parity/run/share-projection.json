@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "config_generation": 8,
+  "share_max_concurrency": 32,
+  "data": [
+    {
+      "key_id": "00000000-0000-0000-0000-000000000001",
+      "name": "alpha-renamed",
+      "secret_hash": "ba5260459f41020f5621b3c5ac6b5dfd310f29997170b62a76b623685eab8ddb",
+      "secret_version": 1,
+      "enabled": true,
+      "max_concurrency": 8
+    },
+    {
+      "key_id": "legacy-key",
+      "name": "legacy",
+      "secret_hash": "1b387faeb510b3968accf441f00dac7401a7e51fade44ce474b18e8e6faf79db",
+      "secret_version": 1,
+      "enabled": true,
+      "max_concurrency": 1
+    }
+  ]
+}

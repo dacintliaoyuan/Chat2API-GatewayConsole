@@ -17,7 +17,7 @@ use crate::error::StoreError;
 use crate::ids::{random_uuid, utc_now};
 use crate::projection::fingerprint;
 use crate::schema::{
-    open_connection, KEY_MAX_CONCURRENCY_MAX, KEY_MAX_CONCURRENCY_MIN,
+    open_connection, open_connection_read_only, KEY_MAX_CONCURRENCY_MAX, KEY_MAX_CONCURRENCY_MIN,
     NEW_KEY_DEFAULT_MAX_CONCURRENCY, PROJECTION_SCHEMA_VERSION, SCHEMA_VERSION,
     SHARE_MAX_CONCURRENCY_MAX, SHARE_MAX_CONCURRENCY_MIN,
 };
@@ -57,6 +57,22 @@ impl ShareStore {
             now: Box::new(utc_now),
             next_secret: Box::new(|| format!("um-share-{}", random_token_urlsafe(32))),
             secret_key: Some(key),
+        })
+    }
+
+    /// Open an existing store READ-ONLY for parity checks.
+    ///
+    /// No DDL, migration, journal or key-file load runs on this path; a missing
+    /// file is refused instead of being created.  Read methods are still the same
+    /// ones the writer uses, so the parity check sees the writer's real queries.
+    pub fn open_read_only(path: &Path) -> Result<Self, StoreError> {
+        let connection = open_connection_read_only(path)?;
+        Ok(Self {
+            connection,
+            next_id: Box::new(random_uuid),
+            now: Box::new(utc_now),
+            next_secret: Box::new(String::new),
+            secret_key: None,
         })
     }
 

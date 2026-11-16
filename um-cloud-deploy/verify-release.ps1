@@ -147,6 +147,8 @@ foreach ($required in @(
     'um-cloud-deploy/update.sh',
     'um-cloud-deploy/rollback.sh',
     'um-cloud-deploy/rollback-drill.sh',
+    'um-cloud-deploy/cutover_gate.py',
+    'um-cloud-deploy/cutover-gate.sh',
     'um-cloud-deploy/package-release.sh',
     'um-cloud-deploy/bin/um-share-brokerctl.py',
     'um-cloud-deploy/systemd/um-share-broker.service',
