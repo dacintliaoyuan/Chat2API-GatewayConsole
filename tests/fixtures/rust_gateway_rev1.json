@@ -61,9 +61,11 @@
    "invalid-content-length": {
     "body": {
      "error": {
+      "code": "invalid_request",
       "detail": null,
       "message": "Invalid Content-Length header",
-      "type": "invalid_request"
+      "param": "Content-Length",
+      "type": "invalid_request_error"
      }
     },
     "status": 400,
@@ -72,9 +74,11 @@
    "invalid-json": {
     "body": {
      "error": {
+      "code": "invalid_json",
       "detail": null,
       "message": "Request body is not valid JSON",
-      "type": "invalid_json"
+      "param": null,
+      "type": "invalid_request_error"
      }
     },
     "status": 400,
@@ -83,9 +87,11 @@
    "non-object": {
     "body": {
      "error": {
+      "code": "invalid_body",
       "detail": null,
       "message": "Request body must be a JSON object",
-      "type": "invalid_body"
+      "param": null,
+      "type": "invalid_request_error"
      }
     },
     "status": 400,
@@ -94,9 +100,11 @@
    "payload-too-large": {
     "body": {
      "error": {
+      "code": "payload_too_large",
       "detail": null,
       "message": "Request body too large",
-      "type": "payload_too_large"
+      "param": null,
+      "type": "invalid_request_error"
      }
     },
     "status": 413,
@@ -105,9 +113,11 @@
    "unknown-chat-field": {
     "body": {
      "error": {
+      "code": "unsupported_chat_request",
       "detail": null,
       "message": "unsupported_chat_request",
-      "type": "unsupported_chat_request"
+      "param": null,
+      "type": "invalid_request_error"
      }
     },
     "status": 400,
@@ -116,10 +126,11 @@
    "unknown-messages-field": {
     "body": {
      "error": {
-      "detail": null,
+      "code": "unsupported_messages_request",
       "message": "unsupported_messages_request",
-      "type": "unsupported_messages_request"
-     }
+      "type": "invalid_request_error"
+     },
+     "type": "error"
     },
     "status": 400,
     "target": "/v1/messages"
@@ -127,9 +138,11 @@
    "unknown-responses-field": {
     "body": {
      "error": {
+      "code": "unsupported_responses_request",
       "detail": null,
       "message": "unsupported_responses_request",
-      "type": "chat2api_error"
+      "param": null,
+      "type": "invalid_request_error"
      }
     },
     "status": 400,
@@ -146,9 +159,11 @@
   "host-foreign": {
    "body": {
     "error": {
+     "code": "local_management_denied",
      "detail": null,
      "message": "Local management endpoint denied",
-     "type": "chat2api_error"
+     "param": null,
+     "type": "permission_error"
     }
    },
    "status": 403
@@ -156,9 +171,11 @@
   "missing": {
    "body": {
     "error": {
+     "code": "invalid_control_token",
      "detail": null,
      "message": "Local management token missing or invalid",
-     "type": "chat2api_error"
+     "param": null,
+     "type": "authentication_error"
     }
    },
    "status": 403
@@ -166,9 +183,11 @@
   "origin-present": {
    "body": {
     "error": {
+     "code": "local_management_denied",
      "detail": null,
      "message": "Local management endpoint denied",
-     "type": "chat2api_error"
+     "param": null,
+     "type": "permission_error"
     }
    },
    "status": 403
@@ -182,9 +201,11 @@
   "wrong-token": {
    "body": {
     "error": {
+     "code": "invalid_control_token",
      "detail": null,
      "message": "Local management token missing or invalid",
-     "type": "chat2api_error"
+     "param": null,
+     "type": "authentication_error"
     }
    },
    "status": 403
@@ -209,9 +230,11 @@
    "allowOrigin": null,
    "body": {
     "error": {
+     "code": "origin_denied",
      "detail": null,
      "message": "Browser origins are not allowed by default; list the origin in CHAT2API_ALLOWED_ORIGINS to permit it",
-     "type": "origin_denied"
+     "param": "Origin",
+     "type": "permission_error"
     }
    },
    "status": 403
@@ -393,9 +416,11 @@
   "versionShare": {
    "body": {
     "error": {
+     "code": "route_not_shared",
      "detail": null,
      "message": "route_not_shared",
-     "type": "route_not_shared"
+     "param": null,
+     "type": "not_found_error"
     }
    },
    "status": 404
@@ -437,7 +462,8 @@
       "code": "invalid_api_key",
       "detail": null,
       "message": "invalid_api_key",
-      "type": "share_gateway_error"
+      "param": null,
+      "type": "authentication_error"
      }
     },
     "method": "GET",
@@ -451,7 +477,8 @@
       "code": "invalid_api_key",
       "detail": null,
       "message": "invalid_api_key",
-      "type": "share_gateway_error"
+      "param": null,
+      "type": "authentication_error"
      }
     },
     "method": "GET",
@@ -465,7 +492,8 @@
       "code": "invalid_api_key",
       "detail": null,
       "message": "invalid_api_key",
-      "type": "share_gateway_error"
+      "param": null,
+      "type": "authentication_error"
      }
     },
     "method": "GET",
@@ -479,7 +507,8 @@
       "code": "invalid_api_key",
       "detail": null,
       "message": "invalid_api_key",
-      "type": "share_gateway_error"
+      "param": null,
+      "type": "authentication_error"
      }
     },
     "method": "GET",
@@ -491,10 +520,10 @@
     "body": {
      "error": {
       "code": "invalid_api_key",
-      "detail": null,
       "message": "invalid_api_key",
-      "type": "share_gateway_error"
-     }
+      "type": "authentication_error"
+     },
+     "type": "error"
     },
     "method": "POST",
     "name": "different-values",
@@ -504,10 +533,11 @@
    {
     "body": {
      "error": {
-      "detail": null,
+      "code": "unsupported_messages_request",
       "message": "unsupported_messages_request",
-      "type": "unsupported_messages_request"
-     }
+      "type": "invalid_request_error"
+     },
+     "type": "error"
     },
     "method": "POST",
     "name": "same-values",
@@ -517,10 +547,11 @@
    {
     "body": {
      "error": {
-      "detail": null,
+      "code": "unsupported_messages_request",
       "message": "unsupported_messages_request",
-      "type": "unsupported_messages_request"
-     }
+      "type": "invalid_request_error"
+     },
+     "type": "error"
     },
     "method": "POST",
     "name": "api-key-only-messages",
@@ -533,7 +564,8 @@
       "code": "invalid_api_key",
       "detail": null,
       "message": "invalid_api_key",
-      "type": "share_gateway_error"
+      "param": null,
+      "type": "authentication_error"
      }
     },
     "method": "POST",
@@ -545,10 +577,10 @@
     "body": {
      "error": {
       "code": "invalid_api_key",
-      "detail": null,
       "message": "invalid_api_key",
-      "type": "share_gateway_error"
-     }
+      "type": "authentication_error"
+     },
+     "type": "error"
     },
     "method": "POST",
     "name": "duplicate-api-key",
@@ -561,7 +593,8 @@
       "code": "invalid_api_key",
       "detail": null,
       "message": "invalid_api_key",
-      "type": "share_gateway_error"
+      "param": null,
+      "type": "authentication_error"
      }
     },
     "method": "GET",
@@ -598,9 +631,11 @@
    {
     "body": {
      "error": {
+      "code": "route_not_shared",
       "detail": null,
       "message": "route_not_shared",
-      "type": "route_not_shared"
+      "param": null,
+      "type": "not_found_error"
      }
     },
     "method": "GET",
@@ -611,9 +646,11 @@
    {
     "body": {
      "error": {
+      "code": "route_not_shared",
       "detail": null,
       "message": "route_not_shared",
-      "type": "route_not_shared"
+      "param": null,
+      "type": "not_found_error"
      }
     },
     "method": "POST",
@@ -624,9 +661,11 @@
    {
     "body": {
      "error": {
+      "code": "route_not_shared",
       "detail": null,
       "message": "route_not_shared",
-      "type": "route_not_shared"
+      "param": null,
+      "type": "not_found_error"
      }
     },
     "method": "GET",
@@ -637,9 +676,11 @@
    {
     "body": {
      "error": {
+      "code": "unsupported_chat_request",
       "detail": null,
       "message": "unsupported_chat_request",
-      "type": "unsupported_chat_request"
+      "param": null,
+      "type": "invalid_request_error"
      }
     },
     "method": "POST",
@@ -650,10 +691,11 @@
    {
     "body": {
      "error": {
-      "detail": null,
+      "code": "unsupported_messages_request",
       "message": "unsupported_messages_request",
-      "type": "unsupported_messages_request"
-     }
+      "type": "invalid_request_error"
+     },
+     "type": "error"
     },
     "method": "POST",
     "name": "messages",
@@ -663,9 +705,11 @@
    {
     "body": {
      "error": {
+      "code": "unsupported_responses_request",
       "detail": null,
       "message": "unsupported_responses_request",
-      "type": "chat2api_error"
+      "param": null,
+      "type": "invalid_request_error"
      }
     },
     "method": "POST",
@@ -714,9 +758,11 @@
    {
     "body": {
      "error": {
+      "code": "route_not_shared",
       "detail": null,
       "message": "route_not_shared",
-      "type": "route_not_shared"
+      "param": null,
+      "type": "not_found_error"
      }
     },
     "method": "GET",
@@ -727,9 +773,11 @@
    {
     "body": {
      "error": {
+      "code": "route_not_shared",
       "detail": null,
       "message": "route_not_shared",
-      "type": "route_not_shared"
+      "param": null,
+      "type": "not_found_error"
      }
     },
     "method": "GET",
@@ -740,9 +788,11 @@
    {
     "body": {
      "error": {
+      "code": "route_not_shared",
       "detail": null,
       "message": "route_not_shared",
-      "type": "route_not_shared"
+      "param": null,
+      "type": "not_found_error"
      }
     },
     "method": "GET",
@@ -753,9 +803,11 @@
    {
     "body": {
      "error": {
+      "code": "route_not_shared",
       "detail": null,
       "message": "route_not_shared",
-      "type": "route_not_shared"
+      "param": null,
+      "type": "not_found_error"
      }
     },
     "method": "GET",
@@ -766,9 +818,11 @@
    {
     "body": {
      "error": {
+      "code": "route_not_shared",
       "detail": null,
       "message": "route_not_shared",
-      "type": "route_not_shared"
+      "param": null,
+      "type": "not_found_error"
      }
     },
     "method": "GET",
@@ -779,10 +833,11 @@
    {
     "body": {
      "error": {
-      "detail": null,
+      "code": "unsupported_messages_request",
       "message": "unsupported_messages_request",
-      "type": "unsupported_messages_request"
-     }
+      "type": "invalid_request_error"
+     },
+     "type": "error"
     },
     "method": "POST",
     "name": "messages-beta",
@@ -792,10 +847,11 @@
    {
     "body": {
      "error": {
-      "detail": null,
+      "code": "route_not_shared",
       "message": "route_not_shared",
-      "type": "route_not_shared"
-     }
+      "type": "not_found_error"
+     },
+     "type": "error"
     },
     "method": "POST",
     "name": "messages-unknown-query",
