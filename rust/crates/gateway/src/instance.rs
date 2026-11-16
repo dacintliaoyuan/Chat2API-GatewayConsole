@@ -186,6 +186,9 @@ impl InstanceHandler {
                         released += self.gate.terminate_key(key);
                     }
                 }
+                self.gate
+                    .reload()
+                    .map_err(|_| ("internal_error", "projection reload failed"))?;
                 let snapshot = self.gate.snapshot();
                 Ok(json!({
                     "instance_id": self.instance_id,

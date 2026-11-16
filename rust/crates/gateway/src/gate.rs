@@ -154,6 +154,19 @@ impl ShareGate {
         })
     }
 
+    /// Re-read the projection file, replacing the in-memory config.
+    ///
+    /// The broker's `load` ACK must state the generation the writer just
+    /// placed at the projection path; a stale in-memory config would answer
+    /// with an older generation and the security journal intent would stay
+    /// unconfirmed.
+    pub fn reload(&self) -> Result<(), ConfigError> {
+        let config = load_share_config(&self.config_path, self.auth_mode)?;
+        let mut guard = self.guard.lock().expect("share gate poisoned");
+        guard.config = config;
+        Ok(())
+    }
+
     pub fn set_state(&self, state: GateState) {
         let mut guard = self.guard.lock().expect("share gate poisoned");
         guard.state = state;
