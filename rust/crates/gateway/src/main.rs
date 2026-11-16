@@ -1,14 +1,16 @@
-//! Candidate gateway entry point.
+//! Gateway entry point.
 //!
-//! The binary only binds an ephemeral loopback port. It prints the actual
-//! address so a test (or an operator) can address the candidate, then serves
-//! until the process is stopped. No production port, `chat2api.py`, broker or
-//! display relay is started.
+//! Candidate mode is the default: the binary only binds an ephemeral loopback
+//! port. Production mode must be selected explicitly with
+//! `--mode production` and only binds 8003/8002 on loopback. It prints the
+//! actual address so a test (or an operator) can address the gateway, then serves
+//! until the process is stopped. No `chat2api.py`, broker or display relay is
+//! started.
 
 use std::io::Write;
 use std::process::ExitCode;
 
-use um_gateway::config::{AuthMode, GatewayConfig};
+use um_gateway::config::{AuthMode, BindMode, GatewayConfig};
 use um_gateway::GatewayServer;
 
 fn main() -> ExitCode {
@@ -16,6 +18,11 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
+            "--mode" => match args.next().as_deref().and_then(BindMode::parse) {
+                Some(BindMode::Candidate) => config.candidate = true,
+                Some(BindMode::Production) => config.candidate = false,
+                None => return usage("--mode must be candidate or production"),
+            },
             "--host" => match args.next() {
                 Some(value) => config.bind_host = value,
                 None => return usage("--host requires a value"),
@@ -47,10 +54,14 @@ fn main() -> ExitCode {
             "--no-browser" => config.browser_disabled = true,
             "--help" | "-h" => {
                 println!(
-                    "usage: um-gateway-candidate --upstream-base-url URL \
-                     [--host 127.0.0.1] [--port 0] [--token TOKEN] \
+                    "usage: um-gateway-candidate [--mode candidate|production] \
+                     --upstream-base-url URL [--host 127.0.0.1] \
+                     [--port 0|8003|8002] [--token TOKEN] \
                      [--share-config PATH] [--auth-mode projection|legacy] \
-                     [--control-token-file PATH] [--no-browser]"
+                     [--control-token-file PATH] [--no-browser]\n\
+                     modes: candidate (default) binds an ephemeral loopback port only; \
+                     production must be selected explicitly and binds 8003 or 8002 \
+                     on loopback only"
                 );
                 return ExitCode::SUCCESS;
             }

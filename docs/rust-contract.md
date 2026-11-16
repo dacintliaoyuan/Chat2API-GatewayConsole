@@ -35,7 +35,7 @@
 - 目标契约：云端控制台 8002、云端网关 8003、display 8097；旧 8100/8096/18096/5901 不保留兼容别名，Rust 切换时一次性生效。
 - 没有兼容窗口：同一时刻只监听目标端口；旧端口监听按未登记处理。
 - 非法端口值继续 fail closed；Rust 不得把旧端口写死，也不得同时监听新旧两个端口。
-- 8003 分享段允许非 loopback 的例外只在部署登记时成立；当前云端实测仍为 loopback。
+- 8003 分享段在 Rust production 模式下只允许 loopback 绑定；非 loopback 例外尚未实现，需要时另行登记。
 
 ### 2.2 进程与 systemd 边界
 
@@ -50,6 +50,13 @@ systemd
 - 云端控制台默认只监听 loopback 8002（旧 18096 不保留兼容别名）；公网入口只反代 8003 分享白名单，不反代控制台或 display（`um-cloud-deploy/README.md`）。
 - 控制台 unit 对 `/run/um-share` 只读、`NoExecPaths` 禁止直接执行 `chat2api.py`，因此控制台不能成为第二个 8003 启动者（`um-cloud-deploy/systemd/um-share-console.service`）。
 - 部署 unit 的 `KillMode=control-group` 是最终 cgroup 围栏；`systemctl stop` 不留下孤儿进程。
+
+### 2.3 Rust 二进制启动模式
+
+- Rust 网关二进制默认以 candidate 模式启动：只绑定临时 loopback 端口（`--port 0`），拒绝 8003/8002/8100 及其他任何非零端口；candidate 不作为生产服务由 systemd 拉起。
+- production 模式必须显式选择 `--mode production`：只允许绑定 `127.0.0.1:8003` 或 `127.0.0.1:8002`；非 loopback 主机、端口 0、8000/8001/8100/8096 等其他端口都在 bind 前拒绝。
+- 两种模式共用同一套路由、鉴权、账本和错误契约；模式只改变绑定策略与启动入口，不改变 parity 行为。
+- 部署 unit 用 `--mode production --port 8003` 或 `--mode production --port 8002` 启动，并用 `/health`、`/ready` 验收；unit 文件由部署轨道维护，不在本契约的 Rust 代码范围内。
 
 ## 3. 云端 idle RSS 基线
 

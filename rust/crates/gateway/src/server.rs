@@ -1,9 +1,11 @@
-//! Candidate gateway HTTP router.
+//! Gateway HTTP router.
 //!
-//! The candidate binds only a loopback ephemeral port (`127.0.0.1:0` by default)
-//! and refuses a governed production port before the bind. It never starts
-//! `chat2api.py`, the broker or the display relay, and it never reads or writes
-//! production data.
+//! The default candidate mode binds only a loopback ephemeral port
+//! (`127.0.0.1:0`) and refuses a governed production port before the bind.
+//! Production mode must be selected explicitly and binds only 8003/8002 on
+//! loopback. Both modes share the same routes, authentication, ledger and error
+//! contracts. The gateway never starts `chat2api.py`, the broker or the display
+//! relay, and it never reads or writes production data on its own.
 
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,7 +39,7 @@ use crate::responses::handle_responses;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A running candidate gateway.
+/// A running gateway.
 pub struct GatewayServer;
 
 /// The state shared by every accepted connection.
@@ -53,7 +55,7 @@ pub struct AppState {
     pub reauth: Arc<ReauthenticationService>,
 }
 
-/// A started candidate server.
+/// A started gateway server.
 pub struct ServerHandle {
     addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
@@ -62,12 +64,12 @@ pub struct ServerHandle {
 }
 
 impl GatewayServer {
-    /// Start a candidate server; the socket is bound before the thread starts.
+    /// Start a gateway server; the socket is bound before the thread starts.
     pub fn start(config: GatewayConfig) -> Result<ServerHandle, ServerError> {
         Self::start_with_reauth(config, None)
     }
 
-    /// Start a candidate server with an optional re-authentication provider.
+    /// Start a gateway server with an optional re-authentication provider.
     ///
     /// `None` assembles the production seam: [`MissingLoginProvider`] normally,
     /// or [`BrowserDisabledProvider`] when `--no-browser` was selected. Tests use
@@ -76,7 +78,7 @@ impl GatewayServer {
         config: GatewayConfig,
         provider: Option<Arc<dyn ReauthenticationProvider>>,
     ) -> Result<ServerHandle, ServerError> {
-        config.validate_candidate().map_err(ServerError::Config)?;
+        config.validate_bind_policy().map_err(ServerError::Config)?;
         let provider = provider.unwrap_or_else(|| {
             if config.browser_disabled {
                 Arc::new(BrowserDisabledProvider) as Arc<dyn ReauthenticationProvider>

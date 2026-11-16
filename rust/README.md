@@ -22,6 +22,11 @@ S8 增加 `um-ops`
 `um-ops` 只转发它们的 CLI/JSON、归档与退出码。
 本目录不切换任何生产端口或生产工具，Python 仍是回滚权威。
 
+`um-gateway-candidate` 默认以 candidate 模式只绑定临时 loopback 端口；显式
+`--mode production` 开启 production 模式，只允许 `127.0.0.1:8003` 或
+`127.0.0.1:8002`，非 loopback 与其他端口在 bind 前拒绝。两种模式共用同一套
+路由、鉴权、账本与错误契约，模式只改变绑定策略和启动入口。
+
 ## 结构
 
 ```text
@@ -101,8 +106,9 @@ aarch64-linux-android --tests` 只做 `cfg(unix)` 代码的类型检查；AF_UNI
 - `TempDataDir` 只在 OS 临时目录下创建自己的目录，拒绝绝对路径和 `..`
   穿越，`close()`/drop 时删除；不会读写 `data/`、`profile/`、`tmp/`、
   `output/`、`/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share`。
-- 本目录不监听 `AGENTS.md` 端口表里的生产端口，也不启动 `chat2api.py`、
-  broker 或 display relay。
+- 本目录默认不监听 `AGENTS.md` 端口表里的生产端口；显式
+  `--mode production` 的 `um-gateway-candidate` 只允许绑定 8003/8002 loopback
+  供 systemd 切换，且任何模式都不启动 `chat2api.py`、broker 或 display relay。
 - `um-broker` 不 spawn 进程、不执行 shell、不接受任意路径/服务名；动作由固定
   `Action` 枚举承载，字段由固定白名单校验。
 - `um-gateway` 的 Chat 转发只在临时 loopback 上游上测试；账本路径必须由
