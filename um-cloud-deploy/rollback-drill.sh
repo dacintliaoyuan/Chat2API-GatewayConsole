@@ -213,8 +213,8 @@ main() {
   require_cmd flock
   require_cmd install
   require_cmd python3.14
-  exec 9>"$UM_DEPLOY_LOCK"
-  flock -n 9 || die "another deploy operation holds $UM_DEPLOY_LOCK" "$EX_TEMPFAIL"
+  # rollback.sh takes the deploy lock itself; holding it here too would make
+  # the child's own flock fail on the inherited descriptor.
   drill_execute
   exit "$EX_OK"
 }
