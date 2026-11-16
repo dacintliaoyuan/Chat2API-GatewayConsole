@@ -127,6 +127,10 @@ impl LoginPage for FakePage {
     fn click(&self, _target: &VisibleTarget) -> Result<(), String> {
         Ok(())
     }
+
+    fn fill(&self, _selectors: &[&str], _value: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 struct FakeFactoryState {
@@ -291,6 +295,8 @@ fn login_config(temp: &TempDir) -> LoginConfig {
         max_attempts_per_window: 3,
         max_sessions: 6,
         browser_disabled: false,
+        um_account: String::new(),
+        um_password: String::new(),
     }
 }
 

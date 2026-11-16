@@ -200,6 +200,10 @@ pub struct LoginConfig {
     pub max_attempts_per_window: usize,
     pub max_sessions: usize,
     pub browser_disabled: bool,
+    /// UMPASS account and password the login executor may type into an empty
+    /// ADFS form; both empty keeps the historical manual prefill path.
+    pub um_account: String,
+    pub um_password: String,
 }
 
 impl LoginConfig {
@@ -226,6 +230,14 @@ impl LoginConfig {
             max_attempts_per_window: config.reauth_max_attempts_per_window,
             max_sessions: config.login_max_sessions,
             browser_disabled: config.browser_disabled,
+            um_account: std::env::var("CHAT2API_UM_ACCOUNT")
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+            um_password: std::env::var("CHAT2API_UM_PASSWORD")
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
         }
     }
 }
@@ -1298,7 +1310,15 @@ fn drive_login(
             } else if !page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
                 || !page.field_filled(&UMPASS_PASSWORD_SELECTORS)
             {
-                return stop_for_manual(inner, round, page, "umpass_prefill_missing");
+                if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
+                    return stop_for_manual(inner, round, page, "umpass_prefill_missing");
+                }
+                let filled = page
+                    .fill(&UMPASS_ACCOUNT_SELECTORS, &inner.config.um_account)
+                    .and_then(|_| page.fill(&UMPASS_PASSWORD_SELECTORS, &inner.config.um_password));
+                if filled.is_err() {
+                    return stop_for_manual(inner, round, page, "umpass_prefill_missing");
+                }
             } else if let Some(target) = page.one_visible(&UMPASS_SUBMIT_SELECTORS) {
                 *count += 1;
                 match click_and_observe(inner, session, page, &target, &url) {

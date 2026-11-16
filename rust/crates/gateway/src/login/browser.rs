@@ -76,6 +76,7 @@ pub trait LoginPage: Send {
     fn field_filled(&self, selectors: &[&str]) -> bool;
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget>;
     fn click(&self, target: &VisibleTarget) -> Result<(), String>;
+    fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String>;
 }
 
 /// One launched browser and its page.
@@ -545,6 +546,15 @@ impl LoginPage for RealPage {
             Err(error) => Err(error),
         }
     }
+
+    fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String> {
+        let expression = fill_expression(selectors, value);
+        match self.evaluate(&expression) {
+            Ok(Value::Bool(true)) => Ok(()),
+            Ok(_) => Err("login field disappeared".to_string()),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 impl RealPage {
@@ -630,6 +640,31 @@ fn one_visible_expression(selectors: &[&str]) -> String {
          var marker='um-login-'+Math.random().toString(36).slice(2);\
          found[0].setAttribute('data-um-login-target',marker);\
          return {{selector:'[data-um-login-target=\"'+marker+'\"]',index:0}};}})({selectors})"
+    )
+}
+
+fn fill_expression(selectors: &[&str], value: &str) -> String {
+    let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
+    let value = serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        "(function(selectors,value){{var visible=function(el){{var r=el.getBoundingClientRect();\
+         var s=getComputedStyle(el);return !!(r.width||r.height||el.getClientRects().length)\
+         && s.visibility!=='hidden'&&s.display!=='none';}};\
+         var matches=function(sel){{var marker=sel.indexOf(':has-text(\"');\
+         if(marker>=0){{var base=sel.slice(0,marker);\
+         var text=sel.slice(marker+11);if(text[text.length-1]===')')text=text.slice(0,-1);\
+         if(text[text.length-1]==='\"')text=text.slice(0,-1);\
+         try{{return Array.prototype.slice.call(document.querySelectorAll(base)).filter(function(el){{\
+         return visible(el)&&(el.textContent||'').indexOf(text)>=0;}});}}catch(e){{return [];}}}}\
+         try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
+         catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
+         var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
+         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length===0)return false;\
+         var el=found[0];var proto=Object.getPrototypeOf(el);\
+         var desc=Object.getOwnPropertyDescriptor(proto,'value');\
+         if(desc&&desc.set){{desc.set.call(el,value);}}else{{el.value=value;}}\
+         el.dispatchEvent(new Event('input',{{bubbles:true}}));\
+         el.dispatchEvent(new Event('change',{{bubbles:true}}));el.focus();return true;}})({selectors},{value})"
     )
 }
 
