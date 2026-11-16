@@ -22,7 +22,7 @@ use crate::gate::{Admission, ShareGate};
 use crate::http::{write_chunk, write_response_head, Request, Response};
 use crate::ledger::{estimate_tokens, merge_usage_snapshots, message_tokens, UsageRecord};
 use crate::server::{valid_chat_request, AppState};
-use crate::upstream::{NextItem, StreamReader, UpstreamBody};
+use crate::upstream::{NextItem, StreamReader, UpstreamBody, UpstreamFailure};
 
 /// SSE content type used after the 200 commit.
 pub const SSE_CONTENT_TYPE: &str = "text/event-stream; charset=utf-8";
@@ -198,9 +198,7 @@ fn forward_json(context: &ChatContext<'_>) -> ChatResult {
                     }
                     continue;
                 }
-                return ChatResult::Response(
-                    GatewayError::new(502, "Upstream request failed", failure.name()).response(),
-                );
+                return ChatResult::Response(upstream_failure_response(failure));
             }
         };
         let status = response.status;
@@ -223,7 +221,7 @@ fn forward_json(context: &ChatContext<'_>) -> ChatResult {
                 let delay = retry_delay(context, fast_retries, slow);
                 drop(response);
                 if !sleep_with_deadline(delay, context.deadline) {
-                    return ChatResult::Response(deadline_response());
+                    return ChatResult::Response(deadline_response_with_last_status(status));
                 }
                 continue;
             }
@@ -331,9 +329,7 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
                     }
                     continue;
                 }
-                return ChatResult::Response(
-                    GatewayError::new(502, "Upstream request failed", failure.name()).response(),
-                );
+                return ChatResult::Response(upstream_failure_response(failure));
             }
         };
         if response.status == 400
@@ -346,9 +342,10 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
             continue;
         }
         if response.status != 200 {
+            let status = response.status;
             let elapsed = attempt_started.elapsed();
             let slow = elapsed >= context.state.config.slow_retry_threshold;
-            if retryable_status(response.status)
+            if retryable_status(status)
                 && retry_available(context, fast_retries, slow_retries, physical_attempts, slow)
             {
                 fast_retries += 1;
@@ -358,11 +355,11 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
                 let delay = retry_delay(context, fast_retries, slow);
                 drop(response);
                 if !sleep_with_deadline(delay, context.deadline) {
-                    return ChatResult::Response(deadline_response());
+                    return ChatResult::Response(deadline_response_with_last_status(status));
                 }
                 continue;
             }
-            return ChatResult::Response(upstream_status_error(response.status, response));
+            return ChatResult::Response(upstream_status_error(status, response));
         }
         let outcome = consume_stream(context, stream, response.body);
         if outcome.status == StreamStatus::ClientDisconnected {
@@ -746,9 +743,12 @@ fn record_stream_usage(context: &ChatContext<'_>, outcome: &StreamOutcome) {
 }
 
 fn stream_error_response(outcome: &StreamOutcome) -> Response {
-    GatewayError::new(502, outcome.status.message(), "upstream_stream_error")
-        .with_detail(stream_error_detail(outcome))
-        .response()
+    let error = match outcome.status {
+        StreamStatus::UpstreamFirstByteTimeout => GatewayError::upstream_timeout(),
+        StreamStatus::RequestDeadlineExceeded => GatewayError::request_deadline_exceeded(None),
+        _ => GatewayError::new(502, outcome.status.message(), "upstream_stream_error"),
+    };
+    error.with_detail(stream_error_detail(outcome)).response()
 }
 
 fn write_stream_error(stream: &mut TcpStream, status: StreamStatus, outcome: &StreamOutcome) {
@@ -783,8 +783,13 @@ fn stream_error_detail(outcome: &StreamOutcome) -> Value {
 }
 
 fn upstream_status_error(status: u16, mut response: crate::upstream::UpstreamResponse) -> Response {
+    let retry_after = response.headers.get("retry-after").cloned();
     if status == 401 {
-        return GatewayError::reauthentication_required(Some("upstream_rejected")).response();
+        let mut error = GatewayError::reauthentication_required(Some("upstream_rejected"));
+        if let Some(retry_after) = retry_after.filter(|value| !value.is_empty()) {
+            error = error.with_retry_after(retry_after);
+        }
+        return error.response();
     }
     let text = response
         .body
@@ -792,17 +797,18 @@ fn upstream_status_error(status: u16, mut response: crate::upstream::UpstreamRes
         .ok()
         .map(|raw| String::from_utf8_lossy(&raw).to_string())
         .unwrap_or_default();
-    if status == 400 || status == 422 {
-        return GatewayError::new(
-            status,
-            "Upstream rejected the request; the server log has structured diagnostics",
-            "upstream_request_rejected",
-        )
-        .response();
+    GatewayError::upstream_status_error(status, Some(&text), retry_after.as_deref()).response()
+}
+
+fn upstream_failure_response(failure: UpstreamFailure) -> Response {
+    match failure {
+        UpstreamFailure::Timeout => {
+            GatewayError::upstream_timeout_with_reason(failure.name()).response()
+        }
+        UpstreamFailure::ConnectionError | UpstreamFailure::Protocol => {
+            GatewayError::upstream_transport_failure(failure.name()).response()
+        }
     }
-    GatewayError::new(502, "Upstream request failed", "chat2api_error")
-        .with_detail(Value::String(format!("HTTP {status}: {text}")))
-        .response()
 }
 
 fn retry_available(
@@ -843,7 +849,11 @@ fn retryable_status(status: u16) -> bool {
 }
 
 fn deadline_response() -> Response {
-    GatewayError::new(502, REQUEST_DEADLINE_EXCEEDED, "request_deadline_exceeded").response()
+    GatewayError::request_deadline_exceeded(None).response()
+}
+
+fn deadline_response_with_last_status(status: u16) -> Response {
+    GatewayError::request_deadline_exceeded(Some(status)).response()
 }
 
 fn physical_budget_response() -> Response {

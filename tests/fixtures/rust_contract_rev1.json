@@ -1335,12 +1335,14 @@
     {
       "codes": [
         "route_not_shared",
-        "unknown_path"
+        "unknown_path",
+        "upstream_request_rejected"
       ],
-      "description": "未知路径；分享模式下非白名单路由",
+      "description": "未知路径；分享模式下非白名单路由；上游 404（保留原状态）",
       "messages": [
         "route_not_shared",
-        "unknown_path"
+        "unknown_path",
+        "upstream_request_rejected"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 404,
@@ -1372,11 +1374,25 @@
     },
     {
       "codes": [
-        "payload_too_large"
+        "upstream_request_rejected"
       ],
-      "description": "请求体超过上限",
+      "description": "上游 409（保留原状态）",
       "messages": [
-        "payload_too_large"
+        "upstream_request_rejected"
+      ],
+      "source": "docs/rust-contract.md#5.4",
+      "status": 409,
+      "surface": "gateway"
+    },
+    {
+      "codes": [
+        "payload_too_large",
+        "upstream_request_rejected"
+      ],
+      "description": "请求体超过上限；上游 413（保留原状态）",
+      "messages": [
+        "payload_too_large",
+        "upstream_request_rejected"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 413,
@@ -1384,11 +1400,13 @@
     },
     {
       "codes": [
-        "unsupported_content_encoding"
+        "unsupported_content_encoding",
+        "upstream_request_rejected"
       ],
-      "description": "请求体压缩编码不支持",
+      "description": "请求体压缩编码不支持；上游 415（保留原状态）",
       "messages": [
-        "unsupported_content_encoding"
+        "unsupported_content_encoding",
+        "upstream_request_rejected"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 415,
@@ -1396,14 +1414,28 @@
     },
     {
       "codes": [
-        "sharing_limit_reached"
+        "sharing_limit_reached",
+        "upstream_rate_limited"
       ],
-      "description": "并发、限速或停止接受",
+      "description": "并发、限速或停止接受；上游 429（保留原状态）",
       "messages": [
-        "sharing_limit_reached"
+        "sharing_limit_reached",
+        "upstream_rate_limited"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 429,
+      "surface": "gateway"
+    },
+    {
+      "codes": [
+        "upstream_unavailable"
+      ],
+      "description": "上游 500（保留原状态）",
+      "messages": [
+        "upstream_unavailable"
+      ],
+      "source": "docs/rust-contract.md#5.4",
+      "status": 500,
       "surface": "gateway"
     },
     {
@@ -1427,7 +1459,7 @@
         "upstream_request_failed",
         "chat2api_error"
       ],
-      "description": "上游失败、超时、流错误",
+      "description": "上游失败、超时、流错误；连接/DNS/TLS/代理失败",
       "messages": [
         "upstream_unavailable",
         "upstream_request_rejected",
@@ -1443,12 +1475,14 @@
     {
       "codes": [
         "reauthentication_required",
-        "share_config_unavailable"
+        "share_config_unavailable",
+        "upstream_unavailable"
       ],
-      "description": "需要交互登录；分享配置不可读；`too_many_concurrent_streams` 已由 ADR 0004 标记 retired",
+      "description": "需要交互登录；分享配置不可读；上游 503（保留原状态）；`too_many_concurrent_streams` 已由 ADR 0004 标记 retired",
       "messages": [
         "reauthentication_required",
-        "share_config_unavailable"
+        "share_config_unavailable",
+        "upstream_unavailable"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 503,
@@ -1456,11 +1490,13 @@
     },
     {
       "codes": [
-        "upstream_timeout"
+        "upstream_timeout",
+        "request_deadline_exceeded"
       ],
-      "description": "网关等待上游超时",
+      "description": "网关等待上游超时；上游 504 保留原状态",
       "messages": [
-        "upstream_timeout"
+        "upstream_timeout",
+        "request_deadline_exceeded"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 504,
@@ -1752,7 +1788,7 @@
       "chat2api/chat2api.py": "5475955c7ae07a8244260065fa73c0982b977353b2dffafcd9488bafff28fad4",
       "chat2api/share_auth.py": "2eea208b3934ddccf7d6e0126fedcbfed96ce2e086cfb1a1f910485f21465766",
       "console/display_proxy.py": "5aada84d79e18c9d6899fd31bfce05098ebc23a990d00cfd81a11f50e326b01c",
-      "docs/rust-contract.md": "b20ed69ce5dfaf69c1e99e3e22c746bb9704205b749897b0d3467d5933015bc8",
+      "docs/rust-contract.md": "259b5224444ae4793e1ec120b3cc937ac0413c63e1c1fc871c3dc5a55e7d92f3",
       "share/broker_protocol.py": "dbf7507c125b03bd915a190b052d7e5dac47a4dda80f7ef1fe6a15bbdf7554c2",
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
       "share/store.py": "7bb5b3f1e302de5579043d482a3172548c716b8a619366a0373727d88e714b33",

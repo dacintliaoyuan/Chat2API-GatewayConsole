@@ -169,7 +169,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 - 首字节预算 120 秒；上游单次 socket 静默预算 180 秒；请求总预算默认 360 秒，环境变量可调但夹在 10..3600 秒（`chat2api/chat2api.py:377-385,440-444`）。
 - 200 头只在首个“实质数据”事件出现后提交；提交前的元数据/思考事件可短暂暂存，以便早期重复循环或零数据断流仍可隐藏重试（`chat2api/chat2api.py:8043-8080,8417-8431`）。
-- 提交前失败返回 502；提交后失败写 in-band `error` 事件并结束流，绝不把部分完成当成功（`chat2api/chat2api.py:599-613,8060-8077`）。
+- 提交前失败返回 502；首字节、响应头等待、socket 静默或总预算超时返回 504 `upstream_timeout` / `request_deadline_exceeded`；提交后失败写 in-band `error` 事件并结束流，绝不把部分完成当成功（`chat2api/chat2api.py:599-613,8060-8077`）。
 - 预提交暂存上限 64 KiB；未成行字节缓冲上限 1 MiB；生产者/消费者队列上限 256；并发流 reader 上限已取消（ADR 0004，`too_many_concurrent_streams` retired）（`chat2api/chat2api.py:388-403`）。
 - 重试：快速失败最多 5 次，慢失败（耗时达到 30 秒）最多 2 次，物理尝试上限 12；可重试状态为 408/429/500/502/503/504；只在客户端尚未收到任何 SSE 事件前重试（`chat2api/chat2api.py:522-548,7015-7030`）。
 - 客户端断开在每个字节检查；断开后关闭上游、取消 reader 生产线程，账本记 `client_disconnected`（`chat2api/chat2api.py:6160-6175,8080-8003`）。
@@ -194,16 +194,22 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | 401 | `invalid_api_key` / `local_auth_error` | 分享 Key 无效；非 loopback 绑定缺少本地 Key |
 | 402 | `upstream_quota_exhausted` | 上游额度耗尽 |
 | 403 | `origin_denied` / `upstream_forbidden` / `reauthentication_failed` / `control_denied_endpoint` / `control_denied_token` | 浏览器来源、上游权限、重登录失败、控制令牌、本机管理边界 |
-| 404 | `route_not_shared` / `unknown_path` | 未知路径；分享模式下非白名单路由 |
+| 404 | `route_not_shared` / `unknown_path` / `upstream_request_rejected` | 未知路径；分享模式下非白名单路由；上游 404（保留原状态） |
 | 405 | `method_not_allowed` | API 路径的方法未实现 |
 | 408 | `request_timeout` | 请求体读取超时 |
-| 413 | `payload_too_large` | 请求体超过上限 |
-| 415 | `unsupported_content_encoding` | 请求体压缩编码不支持 |
-| 429 | `sharing_limit_reached` | 并发、限速或停止接受 |
+| 409 | `upstream_request_rejected` | 上游 409（保留原状态） |
+| 413 | `payload_too_large` / `upstream_request_rejected` | 请求体超过上限；上游 413（保留原状态） |
+| 415 | `unsupported_content_encoding` / `upstream_request_rejected` | 请求体压缩编码不支持；上游 415（保留原状态） |
+| 429 | `sharing_limit_reached` / `upstream_rate_limited` | 并发、限速或停止接受；上游 429（保留原状态） |
+| 500 | `upstream_unavailable` | 上游 500（保留原状态） |
 | 501 | `not_implemented` | 尚未装配的本机管理面 |
-| 502 | `upstream_unavailable` / `upstream_request_rejected` / `upstream_stream_error` / `request_deadline_exceeded` / `upstream_request_failed` / `chat2api_error` | 上游失败、超时、流错误 |
-| 503 | `reauthentication_required` / `share_config_unavailable` | 需要交互登录；分享配置不可读；`too_many_concurrent_streams` 已由 ADR 0004 标记 retired |
-| 504 | `upstream_timeout` | 网关等待上游超时 |
+| 502 | `upstream_unavailable` / `upstream_request_rejected` / `upstream_stream_error` / `request_deadline_exceeded` / `upstream_request_failed` / `chat2api_error` | 上游失败、超时、流错误；连接/DNS/TLS/代理失败 |
+| 503 | `reauthentication_required` / `share_config_unavailable` / `upstream_unavailable` | 需要交互登录；分享配置不可读；上游 503（保留原状态）；`too_many_concurrent_streams` 已由 ADR 0004 标记 retired |
+| 504 | `upstream_timeout` / `request_deadline_exceeded` | 网关等待上游超时；上游 504 保留原状态 |
+
+上游状态映射（#60）：上游 4xx/5xx 保留原 HTTP 状态码，错误体按客户端协议重建，不透传上游 body。Chat/Responses 使用 OpenAI 形，`/v1/messages` 使用 Anthropic 形；`detail` 带 `upstream_status` 与有界的 `upstream_message`（单行，最多 200 字符），`upstream_status` 也作为顶层附加诊断保留。401 仍转 503 `reauthentication_required`，reason 为 `upstream_rejected`，上游存在 `Retry-After` 时保留该响应头。402 → `upstream_quota_exhausted`，403 → `upstream_forbidden`，429 → `upstream_rate_limited`，504 → `upstream_timeout`；其余 4xx → `upstream_request_rejected`，其余 5xx → `upstream_unavailable`。
+
+连接、DNS、TLS 或代理失败返回 502 `upstream_unavailable`；首字节、响应头等待、socket 静默或总预算超时返回 504 `upstream_timeout` / `request_deadline_exceeded`；上游自己的 504 保留 504。重试耗尽后返回最后一次上游状态；最后一次是传输错误则返回 502；等待重试撞到总预算则返回 504 `request_deadline_exceeded` 并在 `detail.last_upstream_status` 记录最后一次状态。
 
 ### 5.5 副作用
 

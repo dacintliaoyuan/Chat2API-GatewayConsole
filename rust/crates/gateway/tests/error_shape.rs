@@ -84,6 +84,8 @@ fn every_gateway_error_constructor_uses_the_unified_shape() {
         GatewayError::models_unavailable().body(),
         GatewayError::upstream_rejected(400).body(),
         GatewayError::upstream_request_failed(500, "upstream exploded").body(),
+        GatewayError::upstream_status_error(403, Some("forbidden"), None).body(),
+        GatewayError::request_deadline_exceeded(Some(502)).body(),
         GatewayError::upstream_forbidden().body(),
         GatewayError::upstream_quota_exhausted().body(),
         GatewayError::reauthentication_failed().body(),
@@ -158,6 +160,68 @@ fn upstream_unavailable_carries_upstream_status() {
     let body = GatewayError::upstream_unavailable(None).body();
     assert_unified(&body);
     assert_eq!(body["error"]["upstream_status"], Value::Null);
+}
+
+#[test]
+fn preserved_upstream_status_errors_keep_their_category_code_and_detail() {
+    for (status, category, code) in [
+        (402, "rate_limit_error", "upstream_quota_exhausted"),
+        (403, "permission_error", "upstream_forbidden"),
+        (404, "upstream_error", "upstream_request_rejected"),
+        (409, "upstream_error", "upstream_request_rejected"),
+        (413, "upstream_error", "upstream_request_rejected"),
+        (415, "upstream_error", "upstream_request_rejected"),
+        (429, "rate_limit_error", "upstream_rate_limited"),
+        (500, "upstream_error", "upstream_unavailable"),
+        (502, "upstream_error", "upstream_unavailable"),
+        (503, "upstream_error", "upstream_unavailable"),
+        (504, "upstream_error", "upstream_timeout"),
+    ] {
+        let body = GatewayError::upstream_status_error(status, Some("upstream text"), None).body();
+        assert_unified(&body);
+        assert_eq!(body["error"]["type"], json!(category), "{status}: {body}");
+        assert_eq!(body["error"]["code"], json!(code), "{status}: {body}");
+        assert_eq!(body["error"]["param"], Value::Null, "{status}: {body}");
+        assert_eq!(
+            body["error"]["detail"]["upstream_status"],
+            json!(status),
+            "{status}: {body}"
+        );
+        assert_eq!(
+            body["error"]["detail"]["upstream_message"],
+            json!("upstream text"),
+            "{status}: {body}"
+        );
+        assert_eq!(
+            body["error"]["upstream_status"],
+            json!(status),
+            "{status}: {body}"
+        );
+    }
+}
+
+#[test]
+fn a_401_upstream_status_is_a_503_reauthentication_error() {
+    let error = GatewayError::upstream_status_error(401, Some("expired"), Some("12"));
+    let body = error.body();
+    assert_unified(&body);
+    assert_eq!(body["error"]["type"], json!("authentication_error"));
+    assert_eq!(body["error"]["code"], json!("reauthentication_required"));
+    assert_eq!(body["error"]["detail"], json!("upstream_rejected"));
+    assert!(body["error"].get("upstream_status").is_none());
+    let response = error.response();
+    assert_eq!(response.status, 503);
+    assert_eq!(response.header("retry-after"), Some("12"));
+}
+
+#[test]
+fn a_total_deadline_keeps_the_last_upstream_status_in_detail() {
+    let body = GatewayError::request_deadline_exceeded(Some(503)).body();
+    assert_unified(&body);
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
+    assert_eq!(body["error"]["code"], json!("request_deadline_exceeded"));
+    assert_eq!(body["error"]["detail"]["last_upstream_status"], json!(503));
+    assert_eq!(body["error"]["upstream_status"], json!(503));
 }
 
 #[test]

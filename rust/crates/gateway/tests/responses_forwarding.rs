@@ -188,7 +188,7 @@ fn an_invalid_responses_body_is_refused_before_the_upstream() {
 }
 
 #[test]
-fn a_non_200_upstream_response_keeps_the_python_error_mapping() {
+fn a_non_200_upstream_response_preserves_the_status_and_rebuilds_the_body() {
     let temp = TempDir::new("um-rust-responses-status-");
     let stub = ChatStub::start();
     stub.push(ChatAttempt::HttpStatus {
@@ -211,12 +211,18 @@ fn a_non_200_upstream_response_keeps_the_python_error_mapping() {
     .expect("responses request");
     assert_eq!(response.status, 400);
     assert_eq!(
-        response.json()["error"]["message"],
-        json!("upstream_request_rejected")
-    );
-    assert_eq!(
-        response.json()["error"]["detail"]["upstream_status"],
-        json!(400)
+        response.json(),
+        json!({"error": {
+            "message": "Upstream rejected the request",
+            "type": "upstream_error",
+            "code": "upstream_request_rejected",
+            "param": null,
+            "detail": {
+                "upstream_status": 400,
+                "upstream_message": "{\"detail\":\"bad\"}",
+            },
+            "upstream_status": 400,
+        }})
     );
     let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
     assert_eq!(rows[0]["status"], json!("HTTP400"));

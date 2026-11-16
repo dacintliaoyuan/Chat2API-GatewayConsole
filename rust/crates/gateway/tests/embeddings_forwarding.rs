@@ -1,6 +1,6 @@
 //! S2b acceptance 5/6: embeddings are relayed unchanged and write no ledger
-//! row; an upstream non-200 answer is mapped like `_compat_proxy` (401 -> 503
-//! reauthentication, 400/422 -> the same status, others -> 502); the shared
+//! row; an upstream non-200 answer preserves its status and rebuilds the
+//! OpenAI-shaped error body (401 -> 503 reauthentication); the shared
 //! `/v1/embeddings` route is `404 route_not_shared`, while the local
 //! `/api/v1/embeddings` alias bypasses the share-Key gate and is not in the
 //! public Cloudflare whitelist.
@@ -101,11 +101,15 @@ fn a_400_embedding_response_keeps_the_status_without_a_ledger_row() {
     assert_eq!(
         response.json(),
         json!({"error": {
-            "message": "Upstream rejected the request; the server log has structured diagnostics",
+            "message": "Upstream rejected the request",
             "type": "upstream_error",
             "code": "upstream_request_rejected",
             "param": null,
-            "detail": null,
+            "detail": {
+                "upstream_status": 400,
+                "upstream_message": "{\"error\":\"bad input\"}",
+            },
+            "upstream_status": 400,
         }})
     );
     assert!(
@@ -148,7 +152,7 @@ fn a_401_embedding_response_is_a_503_reauthentication_error() {
 }
 
 #[test]
-fn a_500_embedding_response_is_a_502_with_the_bounded_text() {
+fn a_500_embedding_response_keeps_the_status_with_the_bounded_text() {
     let temp = TempDir::new("um-rust-embeddings-status-");
     let stub = ChatStub::start();
     stub.push(ChatAttempt::HttpStatus {
@@ -166,15 +170,19 @@ fn a_500_embedding_response_is_a_502_with_the_bounded_text() {
     });
     let response = client_request(gateway.addr, &request("/v1/embeddings", &embedding_body()))
         .expect("embeddings request");
-    assert_eq!(response.status, 502);
+    assert_eq!(response.status, 500);
     assert_eq!(
         response.json(),
         json!({"error": {
             "message": "Upstream request failed",
             "type": "upstream_error",
-            "code": "chat2api_error",
+            "code": "upstream_unavailable",
             "param": null,
-            "detail": "HTTP 500: upstream exploded",
+            "detail": {
+                "upstream_status": 500,
+                "upstream_message": "upstream exploded",
+            },
+            "upstream_status": 500,
         }})
     );
     assert!(!ledger.exists());

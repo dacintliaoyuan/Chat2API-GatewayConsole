@@ -105,7 +105,10 @@ fn slow_failures_retry_twice() {
         config.max_physical_attempts = 12;
     });
     let response = support::client_request(gateway.addr, &request(false)).expect("slow retries");
-    assert_eq!(response.status, 502);
+    assert_eq!(response.status, 504);
+    let body = response.json();
+    assert_eq!(body["error"]["code"], json!("upstream_timeout"));
+    assert_eq!(body["error"]["detail"]["upstream_status"], json!(504));
     assert_eq!(stub.attempts(), 3, "one attempt plus two slow retries");
 }
 

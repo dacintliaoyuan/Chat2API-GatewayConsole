@@ -768,6 +768,11 @@ pub enum ChatAttempt {
     Silent {
         hold: Duration,
     },
+    /// Accept the request and hold without writing a response head; exercises
+    /// the upstream response-head wait budget.
+    HeadSilent {
+        hold: Duration,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1044,6 +1049,9 @@ fn serve_chat(
                   Connection: close\r\n\r\n",
             )?;
             stream.flush()?;
+            hold_until_peer_closes(&mut stream, hold, closed, shutdown);
+        }
+        ChatAttempt::HeadSilent { hold } => {
             hold_until_peer_closes(&mut stream, hold, closed, shutdown);
         }
     }
