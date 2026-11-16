@@ -17,6 +17,11 @@ RELEASE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET_VERSION=""
 DRAIN_BUDGET="$UM_DRAIN_BUDGET_S"
 NO_EDGE=0
+# The rollback target is normally the Python release at 8100; the CURRENT release
+# may be Rust at 8003.  A failed rollback restores the current release, so the two
+# ports are separate.  Neither is hardcoded in the probes below.
+HEALTH_PORT="${TARGET_PORT:-$GATEWAY_PORT_DEFAULT}"
+CURRENT_HEALTH_PORT="${CURRENT_TARGET_PORT:-$GATEWAY_PORT_DEFAULT}"
 RECOVER_BACKUP=""
 RECOVER_SECURITY_STATE=""
 
@@ -27,6 +32,12 @@ Usage: rollback.sh [--to VERSION] [options]
 Options:
   --to VERSION         installed release version (default: previous symlink)
   --drain-budget SEC   total drain budget, 2..900 (default 900)
+  --health-port PORT   gateway port of the TARGET release (default:
+                       $TARGET_PORT or 8100; the Python rollback release)
+  --current-health-port PORT
+                       gateway port of the CURRENT release, used when a failed
+                       rollback restores it (default: $CURRENT_TARGET_PORT or
+                       8100; pass 8003 when the current release is Rust)
   --no-edge            do not stop/start the managed cloudflared unit
   --recover-backup PATH explicit recovery only: restore this sealed backup;
                         the release version is NOT switched
@@ -46,6 +57,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --to) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; TARGET_VERSION="$2"; shift 2 ;;
     --drain-budget) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; DRAIN_BUDGET="$2"; shift 2 ;;
+    --health-port) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; HEALTH_PORT="$2"; shift 2 ;;
+    --current-health-port) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; CURRENT_HEALTH_PORT="$2"; shift 2 ;;
     --no-edge) NO_EDGE=1; shift ;;
     --recover-backup) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_BACKUP="$2"; shift 2 ;;
     --recover-security-state) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_SECURITY_STATE="$2"; shift 2 ;;
@@ -61,6 +74,8 @@ esac
   echo "--drain-budget must be within 2..900 seconds" >&2
   exit "$EX_USAGE"
 }
+validate_port "--health-port" "$HEALTH_PORT"
+validate_port "--current-health-port" "$CURRENT_HEALTH_PORT"
 # The live current release may be an r16 CLI: name its broker drain deadline
 # explicitly so every accepted budget is also valid there.  A 1-second budget
 # cannot reserve a positive deadline and is refused above.
@@ -154,6 +169,12 @@ if [ -z "$RECOVER_BACKUP" ]; then
     die "release manifest missing: $TARGET" "$EX_NOINPUT"
   verify_release_manifest "$TARGET" "$TARGET/RELEASE-MANIFEST.json" || \
     die "target release manifest verification failed" "$EX_DATAERR"
+  # A rollback release must be able to start the merged Python gateway: its
+  # broker unit has to allow writes to /var/lib/um-share-console, or the share
+  # gateway child dies with "Read-only file system" and the rollback is not a
+  # rollback.
+  require_share_backend_write_path \
+    "$TARGET/um-cloud-deploy/systemd/um-share-broker.service"
 
   if [ "$TARGET_VERSION" = "$CURRENT_VERSION" ]; then
     log "release $TARGET_VERSION is already current"
@@ -203,7 +224,8 @@ restore_edge() {
 
 # Restore exactly the units that were active before the switch and wait for their
 # listeners.  A unit that was already inactive is neither started nor waited for;
-# health_gate probes both ports, so it runs only when both units were active.
+# health_gate probes the console and the CURRENT release's gateway port, so it runs
+# only when both units were active.
 # Return 0 only when every originally-active object is serving again.
 restore_units() {
   local failed=0 console_listen_port
@@ -220,10 +242,10 @@ restore_units() {
     wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
   fi
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ]; then
-    wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || return 1
+    wait_port_open 127.0.0.1 "$CURRENT_HEALTH_PORT" "$UM_HEALTH_TIMEOUT_S" || return 1
   fi
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ] && [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
-    health_gate || return 1
+    health_gate "$CURRENT_HEALTH_PORT" || return 1
   fi
   return 0
 }
@@ -373,8 +395,8 @@ start_switch() {
   systemctl start um-share-console.service || return 1
   console_listen_port="$(console_port)" || return 1
   wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
-  wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || return 1
-  health_gate || return 1
+  wait_port_open 127.0.0.1 "$HEALTH_PORT" "$UM_HEALTH_TIMEOUT_S" || return 1
+  health_gate "$HEALTH_PORT" || return 1
   return 0
 }
 
@@ -382,7 +404,7 @@ start_switch() {
 # loaded at process start, so starting the unit again after the link move is not
 # enough while the old process stays alive.  Stop the unit before the target link
 # moves and confirm it is inactive; the broker CLI drain above only stopped the
-# 8100 child.  A failed stop is a hard precondition, never a version switch.
+# share gateway child.  A failed stop is a hard precondition, never a version switch.
 stop_broker_before_switch() {
   if ! systemctl stop um-share-broker.service; then
     return 1
@@ -568,9 +590,9 @@ fi
 # start_switch starts both units regardless of their prior state, so both are
 # stopped here.  A stop is accepted only when confirmed: the console stop must
 # the broker unit must be stopped and inactive afterwards.
-# The broker CLI stop only stops the 8100 host child, not the unit itself, so the
-# unit stop always runs whatever the CLI returned.  Return 0 only when both stops
-# are confirmed.
+# The broker CLI stop only stops the share gateway host child, not the unit
+# itself, so the unit stop always runs whatever the CLI returned.  Return 0 only
+# when both stops are confirmed.
 stop_switch_units() {
   local failed=0
   if ! systemctl stop um-share-console.service; then

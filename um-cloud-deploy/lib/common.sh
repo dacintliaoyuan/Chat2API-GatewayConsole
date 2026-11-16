@@ -59,6 +59,10 @@ UM_HEALTH_TIMEOUT_S="${UM_HEALTH_TIMEOUT_S:-60}"
 # the legacy 18096 explicitly for one release cycle), so the ops scripts never
 # hardcode a port that could disagree with the running service.
 CONSOLE_PORT_DEFAULT=8096
+# The share gateway is 8100 in the Python release.  A version switch names the
+# target release's port explicitly (8003 for Rust); this is only the default the
+# scripts fall back to, never a hardcoded probe.
+GATEWAY_PORT_DEFAULT=8100
 
 log() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2
@@ -323,7 +327,26 @@ console_port() {
   printf '%s\n' "$value"
 }
 
+# Validate a port named on the command line or in an environment fallback.  The
+# version switch must fail closed on a malformed value instead of probing 0 or a
+# different service.
+validate_port() {
+  local label="$1" value="$2"
+  case "$value" in
+    ''|*[!0-9]*)
+      die "$label must be 1..65535 (actual=$value)" "$EX_USAGE"
+      ;;
+  esac
+  if [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+    die "$label must be 1..65535 (actual=$value)" "$EX_USAGE"
+  fi
+}
+
+# The health gate probes the console plus the share gateway at the given port.
+# update.sh/rollback.sh pass the TARGET release's port (8003 when switching to
+# Rust, 8100 when rolling back to Python); the default stays the Python port.
 health_gate() {
+  local gateway_port="${1:-$GATEWAY_PORT_DEFAULT}"
   local console_code gateway_code port
   port="$(console_port)" || return 1
   console_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
@@ -336,15 +359,60 @@ health_gate() {
       ;;
   esac
   gateway_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
-    http://127.0.0.1:8100/v1/models 2>/dev/null || true)"
+    "http://127.0.0.1:$gateway_port/v1/models" 2>/dev/null || true)"
   case "$gateway_code" in
     200|401|403) ;;
     *)
-      log "gateway HTTP probe failed: $gateway_code"
+      log "gateway HTTP probe failed: $gateway_code (port $gateway_port)"
       return 1
       ;;
   esac
   return 0
+}
+
+# The rollback drill requires a real 200 from /ready: 503 means the process is
+# up but the UM session or upstream is not, so it is not a successful drill.
+wait_ready_http() {
+  local port="${1:-$GATEWAY_PORT_DEFAULT}"
+  local path="${2:-/ready}" timeout_s="${3:-$UM_HEALTH_TIMEOUT_S}"
+  local deadline code=""
+  deadline=$(( $(date +%s) + timeout_s ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
+      "http://127.0.0.1:$port$path" 2>/dev/null || true)"
+    if [ "$code" = "200" ]; then
+      log "gateway readiness probe returned 200: $path on port $port"
+      return 0
+    fi
+    sleep 1
+  done
+  log "gateway readiness probe did not return 200: $path on port $port (last=$code)"
+  return 1
+}
+
+# A rollback must not lose persistent state.  The drill checks these before and
+# after; it never deletes or rewrites them.
+require_data_dirs() {
+  local dir
+  for dir in "$@"; do
+    [ -d "$dir" ] || \
+      die "rollback would lose data directory: $dir" "$EX_NOINPUT"
+  done
+}
+
+# The broker unit starts the merged 8100 child, which writes the UM token,
+# browser profile and service log under /var/lib/um-share-console.  With
+# ProtectSystem=strict the child exits with "Read-only file system" unless that
+# path is in ReadWritePaths, so a rollback release without it can never start the
+# gateway.
+require_share_backend_write_path() {
+  local unit="$1"
+  [ -f "$unit" ] || die "unit template missing: $unit" "$EX_NOINPUT"
+  if ! grep -Eq '^[[:space:]]*ReadWritePaths=.*/var/lib/um-share-console([[:space:]]|$)' \
+      "$unit"; then
+    die "unit template does not allow /var/lib/um-share-console writes: $unit" \
+      "$EX_DATAERR"
+  fi
 }
 
 _brokerctl_run() {

@@ -203,6 +203,11 @@ for path in sorted(payload.rglob("*")):
 print("normalized %d script file(s) to LF" % len(rewritten))
 PY
 
+# The packaged release is the Python rollback point: its broker unit template
+# must keep /var/lib/um-share-console writable for the merged 8100 child.
+require_share_backend_write_path \
+  "$PAYLOAD/um-cloud-deploy/systemd/um-share-broker.service"
+
 # Final manifest: hashes the PAYLOAD, not the source.  The deployment files
 # are already copied, so their hashes are the packaged bytes.
 "$PYTHON" "$PAYLOAD/um-cloud-deploy/make-manifest.py" \
