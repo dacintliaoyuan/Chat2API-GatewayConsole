@@ -17,7 +17,7 @@ use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::{handle_chat, ChatResult};
 use crate::config::{AuthMode, ConfigError, GatewayConfig};
 use crate::embeddings::handle_embeddings;
-use crate::error::GatewayError;
+use crate::error::{ErrorProtocol, GatewayError};
 use crate::gate::{
     constant_time_eq, ensure_control_token, Admission, InflightCtx, RefusalReason, ShareGate,
 };
@@ -277,13 +277,14 @@ fn dispatch_inner(
     }
 
     let path = request.path();
+    let protocol = error_protocol(path);
     let share_mode = state.gate.is_some();
     let mut admission = None;
     if share_mode && path.starts_with("/v1/") {
         let allow_api_key = request.method == "GET" || path.starts_with("/v1/messages");
         match admit_share(state, request, stream, allow_api_key) {
             Ok(value) => admission = Some(value),
-            Err(error) => return (RouteOutcome::Response(error.response()), None),
+            Err(error) => return (RouteOutcome::Response(error.response_for(protocol)), None),
         }
     }
 
@@ -306,10 +307,16 @@ fn dispatch_inner(
 
     if request.method == "POST" && (path == "/v1/messages" || path == "/api/v1/messages") {
         if let Err(error) = local_key_allowed(state, request) {
-            return (RouteOutcome::Response(error.response()), admission);
+            return (
+                RouteOutcome::Response(error.response_for(protocol)),
+                admission,
+            );
         }
         if let Err(error) = origin_allowed(state, request) {
-            return (RouteOutcome::Response(error.response()), admission);
+            return (
+                RouteOutcome::Response(error.response_for(protocol)),
+                admission,
+            );
         }
         let result = handle_messages(state, request, stream, admission.take());
         return (
@@ -391,6 +398,16 @@ fn is_chat_path(path: &str) -> bool {
         path,
         "/v1/chat/completions" | "/api/chat/completions" | "/api/v1/chat/completions"
     )
+}
+
+/// `/v1/messages` and its local alias use the Anthropic error shape; every
+/// other gateway route uses the OpenAI shape.
+fn error_protocol(path: &str) -> ErrorProtocol {
+    if path == "/v1/messages" || path == "/api/v1/messages" {
+        ErrorProtocol::Anthropic
+    } else {
+        ErrorProtocol::OpenAi
+    }
 }
 
 fn admit_share(

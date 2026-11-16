@@ -162,7 +162,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 - 分享模式的 Chat 请求只接受白名单字段；`store` 必须为 `false`；`messages` 必须为非空列表（`chat2api/share_auth.py:75-78,1145-1158`）。
 - 分享模式的 Messages 请求只接受 `MESSAGES_FIELDS`；`max_tokens` 必须是正整数，`stream` 必须是 bool；未知字段拒绝，绝不补默认值（`chat2api/share_auth.py:1159-1190`）。
 - 成功响应：Chat 非流式为 JSON；Chat 流式、Messages 流式为上游 SSE 字节透传；Responses 为翻译后的 JSON 或 Responses 事件流。
-- 错误体统一为 `{"error": {"message": ..., "type": ..., "detail": ...}}`，可附加 `code`、`reason`、`upstream_status`（`chat2api/chat2api.py:5962-5973`）。
+- 错误体统一使用协议感知的信封（`docs/adr/0003-protocol-aware-error-contract.md`）：Chat/Responses/models/version 与本地 `/api/*` 使用 OpenAI 形 `{"error": {"message", "type", "code", "param", "detail"}}`；`/v1/messages` 的本地错误使用 Anthropic 形 `{"type": "error", "error": {"type", "message", "code", "param", "detail"}}`。`type` 是错误类别（`invalid_request_error`、`authentication_error`、`permission_error`、`not_found_error`、`rate_limit_error`、`api_error`、`overloaded_error`、`upstream_error`），`code` 是稳定机器码，`param` 是出错字段名或 `null`，`detail` 是结构化诊断扩展；`reason` 与 `upstream_status` 继续作为附加诊断保留。8001 控制台的 `{"error": "机器码"}` 形状不变。
 - 所有响应不发 CORS 头，除非 Origin 在 `CHAT2API_ALLOWED_ORIGINS` 白名单内；错误响应主动关闭连接（`chat2api/chat2api.py:5945-5960`）。
 
 ### 5.3 流式、超时、取消与重试
@@ -180,16 +180,30 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 ### 5.4 错误码
 
+所有 8003 自产错误使用统一信封：Chat/Responses/models/version 与本地 `/api/*` 为 OpenAI 形
+`{"error": {"message", "type", "code", "param", "detail"}}`；`/v1/messages` 为 Anthropic 形
+`{"type": "error", "error": {"type", "message", "code", "param", "detail"}}`。`type` 是类别
+（`invalid_request_error`、`authentication_error`、`permission_error`、`not_found_error`、
+`rate_limit_error`、`api_error`、`overloaded_error`、`upstream_error`），`code` 是稳定机器码，
+`param` 是字段名或 `null`，`detail` 是结构化诊断扩展。8001 控制台的
+`{"error": "机器码"}` 形状不变。
+
 | HTTP | 错误 | 触发 |
 |---|---|---|
 | 400 | `invalid_request` / `invalid_json` / `invalid_body` / `unsupported_chat_request` / `unsupported_messages_request` / `unsupported_responses_request` | 请求形状不合法 |
 | 401 | `invalid_api_key` / `local_auth_error` | 分享 Key 无效；非 loopback 绑定缺少本地 Key |
-| 403 | `origin_denied` / `Local management endpoint denied` / `Local management token missing or invalid` | 浏览器来源、控制令牌、本机管理边界 |
-| 404 | `Unknown path: ...` / `route_not_shared` | 未知路径；分享模式下非白名单路由 |
+| 402 | `upstream_quota_exhausted` | 上游额度耗尽 |
+| 403 | `origin_denied` / `upstream_forbidden` / `reauthentication_failed` / `control_denied_endpoint` / `control_denied_token` | 浏览器来源、上游权限、重登录失败、控制令牌、本机管理边界 |
+| 404 | `route_not_shared` / `unknown_path` | 未知路径；分享模式下非白名单路由 |
+| 405 | `method_not_allowed` | API 路径的方法未实现 |
+| 408 | `request_timeout` | 请求体读取超时 |
 | 413 | `payload_too_large` | 请求体超过上限 |
+| 415 | `unsupported_content_encoding` | 请求体压缩编码不支持 |
 | 429 | `sharing_limit_reached` | 并发、限速或停止接受 |
-| 502 | `upstream_unavailable` / `upstream_request_rejected` / `upstream_stream_error` / `request_deadline_exceeded` | 上游失败、超时、流错误 |
-| 503 | `reauthentication_required` | 需要交互登录（`too_many_concurrent_streams` 已 retired，见 ADR 0004） |
+| 501 | `not_implemented` | 尚未装配的本机管理面 |
+| 502 | `upstream_unavailable` / `upstream_request_rejected` / `upstream_stream_error` / `request_deadline_exceeded` / `upstream_request_failed` / `chat2api_error` | 上游失败、超时、流错误 |
+| 503 | `reauthentication_required` / `share_config_unavailable` | 需要交互登录；分享配置不可读；`too_many_concurrent_streams` 已由 ADR 0004 标记 retired |
+| 504 | `upstream_timeout` | 网关等待上游超时 |
 
 ### 5.5 副作用
 

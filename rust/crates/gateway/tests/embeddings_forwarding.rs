@@ -102,7 +102,9 @@ fn a_400_embedding_response_keeps_the_status_without_a_ledger_row() {
         response.json(),
         json!({"error": {
             "message": "Upstream rejected the request; the server log has structured diagnostics",
-            "type": "upstream_request_rejected",
+            "type": "upstream_error",
+            "code": "upstream_request_rejected",
+            "param": null,
             "detail": null,
         }})
     );
@@ -136,7 +138,9 @@ fn a_401_embedding_response_is_a_503_reauthentication_error() {
         response.json(),
         json!({"error": {
             "message": "Open WebUI authentication requires an interactive sign-in",
-            "type": "reauthentication_required",
+            "type": "authentication_error",
+            "code": "reauthentication_required",
+            "param": null,
             "detail": "upstream_rejected",
         }})
     );
@@ -167,7 +171,9 @@ fn a_500_embedding_response_is_a_502_with_the_bounded_text() {
         response.json(),
         json!({"error": {
             "message": "Upstream request failed",
-            "type": "chat2api_error",
+            "type": "upstream_error",
+            "code": "chat2api_error",
+            "param": null,
             "detail": "HTTP 500: upstream exploded",
         }})
     );

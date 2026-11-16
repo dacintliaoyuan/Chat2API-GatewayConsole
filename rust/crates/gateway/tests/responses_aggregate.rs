@@ -208,10 +208,7 @@ fn an_aggregate_failure_is_a_502_and_never_a_partial_success() {
         response.json()["error"]["detail"],
         json!({"reason": "upstream_missing_terminal"})
     );
-    assert_eq!(
-        response.json()["error"]["type"],
-        json!("upstream_stream_error")
-    );
+    assert_eq!(response.json()["error"]["type"], json!("upstream_error"));
     let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
     assert_eq!(
         rows[0]["status"],
@@ -251,10 +248,7 @@ fn an_explicit_error_chunk_is_an_upstream_explicit_error() {
         response.json()["error"]["detail"]["upstream_message"],
         json!("boom")
     );
-    assert_eq!(
-        response.json()["error"]["type"],
-        json!("upstream_explicit_error")
-    );
+    assert_eq!(response.json()["error"]["type"], json!("upstream_error"));
 }
 
 #[test]

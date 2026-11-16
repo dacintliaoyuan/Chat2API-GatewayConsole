@@ -166,7 +166,7 @@ fn an_oversized_prelude_fails_before_the_200() {
     let response = support::client_request(gateway.addr, &request()).expect("prelude overflow");
     assert_eq!(response.status, 502);
     let body = response.json();
-    assert_eq!(body["error"]["type"], json!("upstream_stream_error"));
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
     assert_eq!(
         body["error"]["detail"]["reason"],
         json!("upstream_prelude_overflow")

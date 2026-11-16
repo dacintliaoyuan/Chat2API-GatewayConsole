@@ -9,6 +9,34 @@ use serde_json::{json, Value};
 
 use support::*;
 
+fn expected_error(case: &Value) -> Value {
+    let old = &case["body"]["error"];
+    let code = old["code"]
+        .as_str()
+        .or_else(|| old["type"].as_str())
+        .expect("old error code");
+    let category = match code {
+        "invalid_api_key" => "authentication_error",
+        "unsupported_messages_request" | "unsupported_chat_request" => "invalid_request_error",
+        other => panic!("unexpected credential error code: {other}"),
+    };
+    let error = json!({
+        "message": old["message"],
+        "type": category,
+        "code": code,
+        "param": null,
+        "detail": null,
+    });
+    if case["target"]
+        .as_str()
+        .is_some_and(|target| target.starts_with("/v1/messages"))
+    {
+        json!({"type": "error", "error": error})
+    } else {
+        json!({"error": error})
+    }
+}
+
 fn request_case(gateway: &Gateway, case: &Value) -> ClientResponse {
     let method = case["method"].as_str().expect("method");
     let target = case["target"].as_str().expect("target");
@@ -84,7 +112,16 @@ fn every_credential_shape_matches_the_python_gate() {
             "status for {}",
             case["name"]
         );
-        assert_eq!(response.json(), case["body"], "body for {}", case["name"]);
+        if case["status"] == json!(200) {
+            assert_eq!(response.json(), case["body"], "body for {}", case["name"]);
+        } else {
+            assert_eq!(
+                response.json(),
+                expected_error(case),
+                "body for {}",
+                case["name"]
+            );
+        }
     }
 }
 
@@ -119,7 +156,7 @@ fn duplicate_and_overlong_credentials_never_reach_the_digest_lookup() {
         );
         assert_eq!(
             response.json()["error"]["type"],
-            json!("share_gateway_error")
+            json!("authentication_error")
         );
         assert_eq!(response.header("connection"), Some("close"));
     }

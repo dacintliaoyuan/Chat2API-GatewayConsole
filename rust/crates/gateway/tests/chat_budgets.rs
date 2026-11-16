@@ -107,7 +107,7 @@ fn a_silent_upstream_hits_the_first_byte_budget() {
     assert_eq!(response.status, 502);
     assert!(started.elapsed() < Duration::from_secs(1));
     let body = response.json();
-    assert_eq!(body["error"]["type"], json!("upstream_stream_error"));
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
     assert_eq!(
         body["error"]["detail"]["reason"],
         json!("upstream_first_byte_timeout")
@@ -176,7 +176,7 @@ fn the_total_budget_stops_retrying_before_any_upstream_data() {
     assert_eq!(response.status, 502);
     assert!(started.elapsed() < Duration::from_secs(2));
     let body = response.json();
-    assert_eq!(body["error"]["type"], json!("request_deadline_exceeded"));
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
     assert_eq!(stub.attempts(), 1);
 }
 

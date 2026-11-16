@@ -92,7 +92,13 @@ fn cors_options_and_origin_cases_match_python() {
     );
     assert_eq!(
         origin_denied.json(),
-        fixture["cors"]["originDenied"]["body"]
+        json!({"error": {
+            "message": fixture["cors"]["originDenied"]["body"]["error"]["message"],
+            "type": "permission_error",
+            "code": "origin_denied",
+            "param": null,
+            "detail": null,
+        }})
     );
     assert_eq!(
         origin_denied.header("access-control-allow-origin"),
@@ -121,6 +127,24 @@ fn cors_options_and_origin_cases_match_python() {
     .expect("models denied origin");
     assert_eq!(models_denied.status, 200);
     assert_eq!(models_denied.header("access-control-allow-origin"), None);
+}
+
+fn expected_control_error(name: &str, case: &Value) -> Value {
+    if name == "valid" {
+        return case["body"].clone();
+    }
+    let code = if name == "host-foreign" || name == "origin-present" {
+        "control_denied_endpoint"
+    } else {
+        "control_denied_token"
+    };
+    json!({"error": {
+        "message": case["body"]["error"]["message"],
+        "type": "permission_error",
+        "code": code,
+        "param": null,
+        "detail": null,
+    }})
 }
 
 fn control_request(name: &str, _case: &Value) -> ClientRequest {
@@ -169,7 +193,11 @@ fn control_token_gate_cases_match_python() {
             case["status"].as_u64().unwrap(),
             "status for {name}"
         );
-        assert_eq!(response.json(), case["body"], "body for {name}");
+        assert_eq!(
+            response.json(),
+            expected_control_error(name, case),
+            "body for {name}"
+        );
     }
 }
 

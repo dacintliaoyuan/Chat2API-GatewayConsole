@@ -135,12 +135,16 @@ pub fn handle_messages(
     ) {
         Ok(Some(body)) => body,
         Ok(None) => {
-            return ChatResult::Response(GatewayError::unsupported_messages_request().response())
+            return ChatResult::Response(
+                GatewayError::unsupported_messages_request().anthropic_response(),
+            )
         }
-        Err(error) => return ChatResult::Response(error.response()),
+        Err(error) => return ChatResult::Response(error.anthropic_response()),
     };
     if state.gate.is_some() && !valid_messages_request(&body) {
-        return ChatResult::Response(GatewayError::unsupported_messages_request().response());
+        return ChatResult::Response(
+            GatewayError::unsupported_messages_request().anthropic_response(),
+        );
     }
     let client_stream = body.get("stream").is_some_and(truthy);
     let model = body
@@ -226,7 +230,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                     "Upstream compatibility endpoint exceeded the request deadline",
                     "request_deadline_exceeded",
                 )
-                .response(),
+                .anthropic_response(),
             );
         }
         if physical_attempts >= context.state.config.max_physical_attempts {
@@ -237,7 +241,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                     "Upstream compatibility endpoint exhausted the physical request budget",
                     "upstream_attempt_budget_exhausted",
                 )
-                .response(),
+                .anthropic_response(),
             );
         }
         physical_attempts += 1;
@@ -273,7 +277,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                         "Failed to reach upstream compatibility endpoint",
                         failure.name(),
                     )
-                    .response(),
+                    .anthropic_response(),
                 );
             }
         };
@@ -299,7 +303,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                             "request_deadline_exceeded",
                         )
                         .with_detail(Value::String(format!("HTTP {status}")))
-                        .response(),
+                        .anthropic_response(),
                     );
                 }
                 continue;
@@ -315,7 +319,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                 .unwrap_or_default();
             let ledger_status = compat_ledger_status(status);
             record_usage(context, &ledger_status, None, 0);
-            return ChatResult::Response(compat_upstream_error(status, &text).response());
+            return ChatResult::Response(compat_upstream_error(status, &text).anthropic_response());
         }
         let raw = match response.body.read_all() {
             Ok(raw) => raw,
@@ -327,7 +331,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                         "Failed to reach upstream compatibility endpoint",
                         failure.name(),
                     )
-                    .response(),
+                    .anthropic_response(),
                 );
             }
         };
@@ -357,7 +361,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                     "Upstream compatibility endpoint exhausted the physical request budget",
                     "upstream_attempt_budget_exhausted",
                 )
-                .response(),
+                .anthropic_response(),
             );
         }
         physical_attempts += 1;
@@ -393,7 +397,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                         "Failed to reach upstream compatibility endpoint",
                         failure.name(),
                     )
-                    .response(),
+                    .anthropic_response(),
                 );
             }
         };
@@ -419,7 +423,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                             "request_deadline_exceeded",
                         )
                         .with_detail(Value::String(format!("HTTP {status}")))
-                        .response(),
+                        .anthropic_response(),
                     );
                 }
                 continue;
@@ -433,7 +437,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 .unwrap_or_default();
             let ledger_status = compat_ledger_status(status);
             record_usage(context, &ledger_status, None, 0);
-            return ChatResult::Response(compat_upstream_error(status, &text).response());
+            return ChatResult::Response(compat_upstream_error(status, &text).anthropic_response());
         }
         let upstream_headers = response.headers.clone();
         let outcome = consume_stream(
@@ -834,7 +838,7 @@ fn stream_error_response(outcome: &MessagesStreamOutcome) -> Response {
         "upstream_stream_error",
     )
     .with_detail(Value::String(outcome.status.reason().to_string()))
-    .response()
+    .anthropic_response()
 }
 
 fn write_stream_error(stream: &mut TcpStream, outcome: &MessagesStreamOutcome) {
@@ -844,6 +848,11 @@ fn write_stream_error(stream: &mut TcpStream, outcome: &MessagesStreamOutcome) {
         "message": format!(
             "Upstream connection failed mid-stream ({name}); the completion is incomplete."
         ),
+        "code": "upstream_stream_error",
+        "detail": {
+            "reason": outcome.status.reason(),
+            "exception": name,
+        },
     }});
     let mut event = b"event: error\ndata: ".to_vec();
     if let Ok(raw) = serde_json::to_vec(&payload) {
@@ -916,7 +925,7 @@ fn deadline_response() -> Response {
         "Upstream compatibility endpoint exceeded the request deadline",
         "request_deadline_exceeded",
     )
-    .response()
+    .anthropic_response()
 }
 
 fn truthy(value: &Value) -> bool {

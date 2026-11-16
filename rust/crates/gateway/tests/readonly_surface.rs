@@ -51,7 +51,13 @@ fn health_ready_version_and_models_match_the_python_shapes() {
     );
     assert_eq!(
         version_share.json(),
-        fixture["readOnly"]["versionShare"]["body"]
+        json!({"error": {
+            "message": fixture["readOnly"]["versionShare"]["body"]["error"]["message"],
+            "type": "not_found_error",
+            "code": "route_not_shared",
+            "param": null,
+            "detail": null,
+        }})
     );
 
     let models = client_request(
@@ -93,9 +99,10 @@ fn health_ready_version_and_models_match_the_python_shapes() {
         unauthenticated.json(),
         json!({"error": {
             "message": "invalid_api_key",
-            "type": "share_gateway_error",
+            "type": "authentication_error",
             "detail": null,
             "code": "invalid_api_key",
+            "param": null,
         }})
     );
 }
@@ -142,8 +149,13 @@ fn upstream_version_failure_is_a_502() {
     );
     assert_eq!(
         body_field(&version.json(), "type"),
+        &json!("upstream_error")
+    );
+    assert_eq!(
+        body_field(&version.json(), "code"),
         &json!("ConnectionError")
     );
+    assert_eq!(body_field(&version.json(), "param"), &Value::Null);
     let _ = stub;
 }
 
@@ -256,7 +268,9 @@ fn error_response_always_carries_the_unified_shape() {
     let body = response.json();
     assert_eq!(response.status, 404);
     assert_eq!(body_field(&body, "message"), &json!("route_not_shared"));
-    assert_eq!(body_field(&body, "type"), &json!("route_not_shared"));
+    assert_eq!(body_field(&body, "type"), &json!("not_found_error"));
+    assert_eq!(body_field(&body, "code"), &json!("route_not_shared"));
+    assert_eq!(body_field(&body, "param"), &Value::Null);
     assert_eq!(body_field(&body, "detail"), &Value::Null);
     assert_eq!(response.header("connection"), Some("close"));
 }

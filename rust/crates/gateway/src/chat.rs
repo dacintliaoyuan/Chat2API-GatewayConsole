@@ -754,8 +754,9 @@ fn stream_error_response(outcome: &StreamOutcome) -> Response {
 fn write_stream_error(stream: &mut TcpStream, status: StreamStatus, outcome: &StreamOutcome) {
     let payload = json!({"error": {
         "message": status.message(),
-        "type": "upstream_stream_error",
+        "type": "upstream_error",
         "code": status.reason(),
+        "param": null,
         "detail": stream_error_detail(outcome),
     }});
     let raw = serde_json::to_vec(&payload).unwrap_or_default();

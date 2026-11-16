@@ -1302,13 +1302,31 @@
     },
     {
       "codes": [
-        "origin_denied"
+        "upstream_quota_exhausted"
       ],
-      "description": "浏览器来源、控制令牌、本机管理边界",
+      "description": "上游额度耗尽",
+      "messages": [
+        "upstream_quota_exhausted"
+      ],
+      "source": "docs/rust-contract.md#5.4",
+      "status": 402,
+      "surface": "gateway"
+    },
+    {
+      "codes": [
+        "origin_denied",
+        "upstream_forbidden",
+        "reauthentication_failed",
+        "control_denied_endpoint",
+        "control_denied_token"
+      ],
+      "description": "浏览器来源、上游权限、重登录失败、控制令牌、本机管理边界",
       "messages": [
         "origin_denied",
-        "Local management endpoint denied",
-        "Local management token missing or invalid"
+        "upstream_forbidden",
+        "reauthentication_failed",
+        "control_denied_endpoint",
+        "control_denied_token"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 403,
@@ -1316,15 +1334,40 @@
     },
     {
       "codes": [
-        "route_not_shared"
+        "route_not_shared",
+        "unknown_path"
       ],
       "description": "未知路径；分享模式下非白名单路由",
       "messages": [
-        "Unknown path: ...",
-        "route_not_shared"
+        "route_not_shared",
+        "unknown_path"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 404,
+      "surface": "gateway"
+    },
+    {
+      "codes": [
+        "method_not_allowed"
+      ],
+      "description": "API 路径的方法未实现",
+      "messages": [
+        "method_not_allowed"
+      ],
+      "source": "docs/rust-contract.md#5.4",
+      "status": 405,
+      "surface": "gateway"
+    },
+    {
+      "codes": [
+        "request_timeout"
+      ],
+      "description": "请求体读取超时",
+      "messages": [
+        "request_timeout"
+      ],
+      "source": "docs/rust-contract.md#5.4",
+      "status": 408,
       "surface": "gateway"
     },
     {
@@ -1341,6 +1384,18 @@
     },
     {
       "codes": [
+        "unsupported_content_encoding"
+      ],
+      "description": "请求体压缩编码不支持",
+      "messages": [
+        "unsupported_content_encoding"
+      ],
+      "source": "docs/rust-contract.md#5.4",
+      "status": 415,
+      "surface": "gateway"
+    },
+    {
+      "codes": [
         "sharing_limit_reached"
       ],
       "description": "并发、限速或停止接受",
@@ -1353,17 +1408,33 @@
     },
     {
       "codes": [
+        "not_implemented"
+      ],
+      "description": "尚未装配的本机管理面",
+      "messages": [
+        "not_implemented"
+      ],
+      "source": "docs/rust-contract.md#5.4",
+      "status": 501,
+      "surface": "gateway"
+    },
+    {
+      "codes": [
         "upstream_unavailable",
         "upstream_request_rejected",
         "upstream_stream_error",
-        "request_deadline_exceeded"
+        "request_deadline_exceeded",
+        "upstream_request_failed",
+        "chat2api_error"
       ],
       "description": "上游失败、超时、流错误",
       "messages": [
         "upstream_unavailable",
         "upstream_request_rejected",
         "upstream_stream_error",
-        "request_deadline_exceeded"
+        "request_deadline_exceeded",
+        "upstream_request_failed",
+        "chat2api_error"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 502,
@@ -1371,14 +1442,28 @@
     },
     {
       "codes": [
-        "reauthentication_required"
+        "reauthentication_required",
+        "share_config_unavailable"
       ],
-      "description": "需要交互登录；`too_many_concurrent_streams` 已由 ADR 0004 标记 retired",
+      "description": "需要交互登录；分享配置不可读；`too_many_concurrent_streams` 已由 ADR 0004 标记 retired",
       "messages": [
-        "reauthentication_required"
+        "reauthentication_required",
+        "share_config_unavailable"
       ],
       "source": "docs/rust-contract.md#5.4",
       "status": 503,
+      "surface": "gateway"
+    },
+    {
+      "codes": [
+        "upstream_timeout"
+      ],
+      "description": "网关等待上游超时",
+      "messages": [
+        "upstream_timeout"
+      ],
+      "source": "docs/rust-contract.md#5.4",
+      "status": 504,
       "surface": "gateway"
     },
     {
@@ -1667,7 +1752,7 @@
       "chat2api/chat2api.py": "5475955c7ae07a8244260065fa73c0982b977353b2dffafcd9488bafff28fad4",
       "chat2api/share_auth.py": "2eea208b3934ddccf7d6e0126fedcbfed96ce2e086cfb1a1f910485f21465766",
       "console/display_proxy.py": "5aada84d79e18c9d6899fd31bfce05098ebc23a990d00cfd81a11f50e326b01c",
-      "docs/rust-contract.md": "ce4c80bfe59bc00ba53236f591221603f1a8c41ef5f2d517ea843711bd7ec395",
+      "docs/rust-contract.md": "b20ed69ce5dfaf69c1e99e3e22c746bb9704205b749897b0d3467d5933015bc8",
       "share/broker_protocol.py": "dbf7507c125b03bd915a190b052d7e5dac47a4dda80f7ef1fe6a15bbdf7554c2",
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
       "share/store.py": "7bb5b3f1e302de5579043d482a3172548c716b8a619366a0373727d88e714b33",
