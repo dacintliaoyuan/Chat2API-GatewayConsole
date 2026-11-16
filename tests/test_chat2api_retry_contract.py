@@ -84,8 +84,6 @@ class RetryContractTestBase(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
 
     def script(self, entries):
         self.fake.set_script(entries)

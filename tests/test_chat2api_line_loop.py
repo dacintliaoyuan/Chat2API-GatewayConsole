@@ -180,8 +180,6 @@ class StubServerTests(unittest.TestCase):
         # request lands in the temp ledger, never the production one.
         harness.install_tracked_server(self, server, name="chat2api-gateway")
         self.base = f"http://127.0.0.1:{server.server_port}"
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
 
     def request(self, path, model):
         r = requests.post(

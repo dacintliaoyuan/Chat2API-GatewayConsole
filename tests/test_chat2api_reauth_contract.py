@@ -113,8 +113,6 @@ class ReauthContractTestBase(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
 
         args = SimpleNamespace(
             base_url=self.fake.base_url,

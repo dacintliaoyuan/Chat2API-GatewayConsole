@@ -610,12 +610,6 @@ _UPSTREAM_TRANSIENT_EXCEPTIONS = (
 )
 _REPETITION_PREFLIGHT_MAX_BYTES = 2 * 1024 * 1024
 
-# Hard cap on concurrent upstream reader threads/connections. Cancelled
-# readers can outlive their handler (bounded by the silence window above), so
-# a flurry of cancels must not push the thread/connection count without limit.
-STREAM_MAX_CONCURRENT_READERS = 128
-_reader_slots = threading.BoundedSemaphore(STREAM_MAX_CONCURRENT_READERS)
-
 # N1: opt-in upstream transport for the NON-streaming Chat endpoint. When it is
 # enabled, a client that sent ``stream=false`` is still answered with ONE complete
 # JSON body, but the UM request itself selects SSE (``stream=true`` plus
@@ -628,9 +622,9 @@ NONSTREAM_UPSTREAM_AGGREGATE = False
 
 # Per-HTTP-request cumulative authentication wait budget (A3). It is created
 # at the Handler message boundary and passed down to every internal 401 re-send,
-# compatibility retry and hidden retry of THAT request. It is independent of the
-# stream-reader slots below: a request waiting for authentication must never
-# consume a streaming slot before it actually opens a stream. The generic
+# compatibility retry and hidden retry of THAT request. It is independent of
+# stream-reader capacity: a request waiting for authentication opens no upstream
+# reader until authentication actually succeeds. The generic
 # in-process default is 30 seconds; main() resolves the 8000/8100 default (180,
 # D18-5) and an explicit CLI/env value (clamped to 1..180).
 try:
@@ -777,7 +771,6 @@ _ERROR_TYPE_BY_CODE = {
     "request_deadline_exceeded": "upstream_error",
     "upstream_attempt_budget_exhausted": "upstream_error",
     "degenerate_repetition": "upstream_error",
-    "too_many_concurrent_streams": "overloaded_error",
     "share_revoke_unassembled": "api_error",
     "api_error": "api_error",
 }
@@ -5805,7 +5798,7 @@ class Proxy:
 
     def call(self, method: str, path: str, stream: bool = False,
              physical_budget=None, request_deadline=None,
-             auth_wait_budget=None, cancel_check=None, reader_lease=None,
+             auth_wait_budget=None, cancel_check=None,
              **kwargs):
         """Request with the ONE per-request reauthentication contract.
 
@@ -5905,12 +5898,8 @@ class Proxy:
             return timeout
 
         def refresh_before_retry():
-            # Authentication waiting has no upstream reader running. Release
-            # the streaming-reader slot for the wait and re-acquire it before
-            # the real upstream send; a full limit must fail here instead of
-            # leaving an unbounded upstream connection or reader behind.
-            if reader_lease is not None:
-                reader_lease.release()
+            # Authentication waiting has no upstream reader running, so the
+            # streaming-reader capacity is not held during the wait.
             try:
                 ok = self.refresh(
                     deadline=request_deadline,
@@ -5920,10 +5909,6 @@ class Proxy:
                 raise ReauthenticationThrottled("auth_wait_timeout")
             except _AuthWaitCapacityExceeded:
                 raise ReauthenticationThrottled("auth_wait_capacity")
-            if ok and reader_lease is not None:
-                if not reader_lease.acquire(blocking=False):
-                    raise _ReaderSlotUnavailable(
-                        "stream reader capacity exhausted after auth wait")
             return ok
 
         reauth_state = (auth_wait_budget
@@ -6252,10 +6237,6 @@ class _AuthWaitCapacityExceeded(RuntimeError):
     """The per-instance authentication-wait slot cap is exhausted."""
 
 
-class _ReaderSlotUnavailable(RuntimeError):
-    """The streaming-reader slot could not be re-acquired after auth wait."""
-
-
 class _ReauthAttemptState:
     """One reauthentication claim shared by every retry of a logical request.
 
@@ -6362,39 +6343,6 @@ class _AuthWaitBudget(_ReauthAttemptState):
             if self._segments == 0 and self._segment_started is not None:
                 self.used += max(0.0, self._now() - self._segment_started)
                 self._segment_started = None
-
-
-class _ReaderSlotLease:
-    """One streaming-reader slot with idempotent release.
-
-    A streaming request takes the slot before opening upstream (so a full limit
-    refuses without an upstream connection), releases it while waiting for
-    authentication, and re-acquires it before the real upstream read. The
-    handler and the producer may both release it; only the first release returns
-    the semaphore unit.
-    """
-
-    def __init__(self, semaphore):
-        self._semaphore = semaphore
-        self._held = False
-        self._lock = threading.Lock()
-
-    def acquire(self, blocking=True, timeout=None):
-        with self._lock:
-            if self._held:
-                return True
-            if not self._semaphore.acquire(blocking=blocking, timeout=timeout):
-                return False
-            self._held = True
-            return True
-
-    def release(self):
-        with self._lock:
-            if not self._held:
-                return False
-            self._held = False
-            self._semaphore.release()
-            return True
 
 
 class _PhysicalBudgetExceeded(RuntimeError):
@@ -7430,16 +7378,14 @@ class _UpstreamStream:
     so a full queue can never hide the end of the stream from the consumer.
 
     The producer owns response.close() in its own finally, so the handler
-    never touches the upstream socket. Each producer holds one slot of the
-    module-level reader semaphore, which caps the total number of concurrent
-    reader threads and upstream connections.
+    never touches the upstream socket. There is no local cap on the number of
+    concurrent producer threads; the operating system and UM bound them.
     """
 
-    def __init__(self, response, reader_slot=None):
+    def __init__(self, response):
         self.response = response
         self._queue = queue.Queue(maxsize=_UPSTREAM_QUEUE_MAX)
         self._thread = None
-        self._slot = reader_slot
         self._finished = False
         self._error = None
 
@@ -7505,10 +7451,6 @@ class _UpstreamStream:
                 self.response.close()
             except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                 pass
-            if self._slot is not None:
-                # Close the connection first, then return the slot to the
-                # reader cap exactly once (only the producer releases here).
-                self._slot.release()
 
     def next_item(self, timeout_s):
         """Return the next SSE line, _UPSTREAM_END, or raise the stored error.
@@ -7742,22 +7684,21 @@ class Handler(BaseHTTPRequestHandler):
                                else None)},
                 "upstream_stream_error")
 
-    def _consume_aggregate_stream(self, response, aggregator, reader_lease):
+    def _consume_aggregate_stream(self, response, aggregator):
         """Read one upstream SSE stream into a complete aggregated body.
 
-        The producer owns the response and the reader slot from ``start()``: it
-        closes the socket and releases the slot in its own finally, so this method
-        never closes either after a successful start. Returns
-        ``(data, status, exc)``: ``data`` is the aggregated body only after the
-        protocol's success terminal (Chat: BOTH ``[DONE]`` and a non-empty
-        ``finish_reason``; Messages: ``message_stop``); otherwise ``status`` is
-        ``client_disconnected``, an aggregator failure reason, or
+        The producer owns the response from ``start()``: it closes the socket in
+        its own finally, so this method never closes it after a successful start.
+        Returns ``(data, status, exc)``: ``data`` is the aggregated body only
+        after the protocol's success terminal (Chat: BOTH ``[DONE]`` and a
+        non-empty ``finish_reason``; Messages: ``message_stop``); otherwise
+        ``status`` is ``client_disconnected``, an aggregator failure reason, or
         ``upstream_read_error`` for a transport failure. A partial completion is
         never returned as a success.
         """
         upstream = None
         try:
-            upstream = _UpstreamStream(response, reader_slot=reader_lease)
+            upstream = _UpstreamStream(response)
             upstream.start()
         except Exception as exc:  # noqa: BLE001 — 启动失败要分类为 upstream_read_error
             if upstream is not None:
@@ -7766,7 +7707,6 @@ class Handler(BaseHTTPRequestHandler):
                 response.close()
             except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                 pass
-            reader_lease.release()
             return None, "upstream_read_error", exc
         try:
             while True:
@@ -8580,22 +8520,9 @@ class Handler(BaseHTTPRequestHandler):
                 # completion as a success.
                 aggregate = _NonStreamChatAggregator(
                     default_model=chat_body.get("model") or body["model"])
-                aggregate_lease = _ReaderSlotLease(_reader_slots)
-                if not aggregate_lease.acquire(blocking=False):
-                    try:
-                        r.close()
-                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
-                        pass
-                    record_usage(body["model"], False, started_at, None,
-                                  input_est, 0,
-                                  status="concurrency_limit")
-                    self._error(503, "Too many concurrent streaming requests",
-                                error_code="too_many_concurrent_streams")
-                    return
                 upstream_owned = True
                 aggregate_data, aggregate_status, aggregate_exc = (
-                    self._consume_aggregate_stream(
-                        r, aggregate, aggregate_lease))
+                    self._consume_aggregate_stream(r, aggregate))
                 translated = None
                 if aggregate_data is not None:
                     try:
@@ -8837,22 +8764,9 @@ class Handler(BaseHTTPRequestHandler):
                 # return a partial message as a success.
                 aggregate = _NonStreamAnthropicAggregator(
                     default_model=messages_body.get("model") or body["model"])
-                aggregate_lease = _ReaderSlotLease(_reader_slots)
-                if not aggregate_lease.acquire(blocking=False):
-                    try:
-                        r.close()
-                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
-                        pass
-                    record_usage(body["model"], False, started_at, None,
-                                  input_est, 0,
-                                  status="concurrency_limit")
-                    self._error(503, "Too many concurrent streaming requests",
-                                error_code="too_many_concurrent_streams")
-                    return
                 upstream_owned = True
                 aggregate_data, aggregate_status, aggregate_exc = (
-                    self._consume_aggregate_stream(
-                        r, aggregate, aggregate_lease))
+                    self._consume_aggregate_stream(r, aggregate))
                 translated = None
                 if aggregate_data is not None:
                     try:
@@ -9571,20 +9485,8 @@ class Handler(BaseHTTPRequestHandler):
                 # field stays the client's own (False).
                 aggregate = _NonStreamAnthropicAggregator(
                     default_model=messages_model)
-                aggregate_lease = _ReaderSlotLease(_reader_slots)
-                if not aggregate_lease.acquire(blocking=False):
-                    try:
-                        response.close()
-                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
-                        pass
-                    self._error(503, "Too many concurrent streaming requests",
-                                error_code="too_many_concurrent_streams")
-                    log_summary("concurrency_limit")
-                    record_messages_usage("concurrency_limit")
-                    return
                 aggregate_data, aggregate_status, aggregate_exc = (
-                    self._consume_aggregate_stream(
-                        response, aggregate, aggregate_lease))
+                    self._consume_aggregate_stream(response, aggregate))
                 if aggregate_data is not None:
                     try:
                         self._json(200, aggregate_data)
@@ -9877,7 +9779,7 @@ class Handler(BaseHTTPRequestHandler):
             log_probe_retry(kind, status, delay_s, slow)
             return delay_s
 
-        def open_chat_response(reader_lease=None):
+        def open_chat_response():
             """Open one chat response, transparently retrying transient setup failures.
 
             Every real HTTP request consumes the shared physical budget,
@@ -9905,8 +9807,7 @@ class Handler(BaseHTTPRequestHandler):
                         physical_budget=physical_budget,
                         request_deadline=request_deadline,
                         auth_wait_budget=auth_wait_budget,
-                        cancel_check=cancel_check,
-                        reader_lease=reader_lease)
+                        cancel_check=cancel_check)
                 except ReauthenticationRequired:
                     raise
                 except _RequestCancelled:
@@ -9916,22 +9817,12 @@ class Handler(BaseHTTPRequestHandler):
                     slow = _attempt_is_slow(elapsed)
                     if transient_retry_available(slow):
                         # The pre-output credential check can wait up to the
-                        # full authentication budget. Release the streaming
-                        # reader slot for that wait and take it back before the
-                        # retry send, exactly like the post-401 re-send path
-                        # (refresh_before_retry); otherwise a 180-second wait
-                        # would hold one of the reader slots and concurrent
-                        # clients would see a spurious 503.
-                        if reader_lease is not None:
-                            reader_lease.release()
+                        # full authentication budget. No upstream reader is
+                        # running during that wait, so no streaming-reader
+                        # capacity is held while concurrent clients wait.
                         outcome = _pre_output_verify(
                             proxy, auth_wait_budget, request_deadline,
                             cancel_check, "chat_setup", request_id)
-                        if outcome == "retry" and reader_lease is not None:
-                            if not reader_lease.acquire(blocking=False):
-                                raise _ReaderSlotUnavailable(
-                                    "stream reader capacity exhausted after "
-                                    "pre-output auth wait")
                         if outcome == "original":
                             raise
                         if outcome in ("cancelled", "stopped"):
@@ -10009,37 +9900,18 @@ class Handler(BaseHTTPRequestHandler):
                     # upstream status and Retry-After for the client.
                 return rr, compat_retry_used
 
-        # Concurrency cap for streaming readers: acquire BEFORE any upstream
-        # access, so a full limit refuses with a clean 503 without ever
-        # touching the upstream. From here on the streaming slot is owned by
-        # this handler inside ONE finally: before the reader producer takes
-        # over, every path closes the current response and returns the slot;
-        # once start() succeeds the producer owns both and releases the slot.
-        reader_lease = (_ReaderSlotLease(_reader_slots)
-                        if upstream_stream else None)
-        if reader_lease is not None and not reader_lease.acquire(blocking=False):
-            log_failure("concurrency_limit_rejected", 503)
-            self._error(
-                503, "Too many concurrent streaming requests",
-                f"concurrent reader limit {STREAM_MAX_CONCURRENT_READERS} "
-                "reached; retry later", error_code="too_many_concurrent_streams")
-            return
         # Streaming reads are bounded per socket read by chat_call_timeout()
         # above (STREAM_SOCKET_TIMEOUT_S cap, also clipped to the request
         # deadline); the NATIVE non-stream path and the non-stream client of
-        # the aggregate path use the existing flat 600s read cap.
+        # the aggregate path use the existing flat 600s read cap. There is no
+        # local cap on concurrent streaming readers: the operating system and
+        # UM bound threads and upstream connections.
         response = None
         compat_retry_used = False
+        producer_started = False
         try:
             try:
-                r, compat_retry_used = open_chat_response(reader_lease)
-            except _ReaderSlotUnavailable:
-                log_failure("concurrency_limit_reacquire_failed", 503)
-                self._error(
-                    503, "Too many concurrent streaming requests",
-                    f"concurrent reader limit {STREAM_MAX_CONCURRENT_READERS} "
-                    "reached; retry later", error_code="too_many_concurrent_streams")
-                return
+                r, compat_retry_used = open_chat_response()
             except ReauthenticationRequired as exc:
                 reauth_failed = isinstance(exc, ReauthenticationFailed)
                 log_failure("reauthentication_failed" if reauth_failed
@@ -10104,6 +9976,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 429 whose value is above the 8s local wait budget).
                 retry_headers = _upstream_retry_after_headers(r)
                 r.close()
+                response = None
                 if status_code == 401:
                     # The retry used a credential that was just published;
                     # its explicit rejection is a reauthentication failure,
@@ -10154,6 +10027,7 @@ class Handler(BaseHTTPRequestHandler):
                                 error_code="invalid_upstream_response")
                     return
                 r.close()
+                response = None
                 if not isinstance(data, dict):
                     log_failure("upstream_invalid_json_shape", 502,
                                 upstream_status=r.status_code,
@@ -10222,7 +10096,7 @@ class Handler(BaseHTTPRequestHandler):
             # gateway/network failures may be retried transparently; after
             # visible output, errors stay in-band because replaying a second
             # completion would concatenate two answers.
-            upstream = _UpstreamStream(r, reader_slot=reader_lease)
+            upstream = _UpstreamStream(r)
             # Trace headers of the response that feeds the visible stream: the
             # stream-end log line reports these so a production stall carries
             # the upstream request id it can be claimed by.
@@ -10236,15 +10110,13 @@ class Handler(BaseHTTPRequestHandler):
                             "producer thread could not start",
                             error_code="upstream_stream_error")
                 return
-            reader_lease = None  # ownership transferred to the producer
+            producer_started = True  # the producer owns the response now
         finally:
-            if reader_lease is not None:
-                if response is not None:
-                    try:
-                        response.close()
-                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
-                        pass
-                reader_lease.release()
+            if not producer_started and response is not None:
+                try:
+                    response.close()
+                except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
+                    pass
 
         if not client_stream:
             # N1: the upstream transport is SSE but the client asked for ONE
@@ -10252,8 +10124,8 @@ class Handler(BaseHTTPRequestHandler):
             # malformed frame, an explicit upstream error, an incomplete
             # terminal (a bare [DONE] or a bare finish_reason) or a broken
             # connection is a 502, never a partial 200.
-            # The reader slot stays owned by the producer (released in its
-            # finally); a client disconnect cancels the read and records the
+            # The producer owns the response (closed in its finally); a client
+            # disconnect cancels the read and records the
             # cancelled turn exactly like the stream path, while the ledger's
             # stream field stays the client's own (False). A failed aggregate
             # records ONE ``aggregate_<reason>`` row (usage/estimate from the
@@ -10347,8 +10219,8 @@ class Handler(BaseHTTPRequestHandler):
                     pass
             if aggregate_status == "client_disconnected":
                 # The downstream is gone (or the 200 body could not be
-                # written): close it, and keep the reader slot owned by the
-                # producer until it releases in its own finally.
+                # written): close it, and keep the upstream response owned
+                # by the producer until it closes in its own finally.
                 self.close_connection = True
             if aggregate_status == "ok":
                 out_est = 0
@@ -10443,9 +10315,7 @@ class Handler(BaseHTTPRequestHandler):
         def start_hidden_retry_attempt(stage):
             """Open a fresh streaming attempt while no visible body was sent."""
             nonlocal upstream_trace
-            retry_lease = _ReaderSlotLease(_reader_slots)
-            remaining = request_deadline - time.monotonic()
-            if remaining <= 0:
+            if time.monotonic() >= request_deadline:
                 log_failure(f"{stage}_retry_deadline", 504,
                             exc_name="RequestDeadlineExceeded")
                 fail_hidden_retry(
@@ -10456,26 +10326,12 @@ class Handler(BaseHTTPRequestHandler):
                         if last_upstream_status is not None else None),
                     usage_status="request_deadline_exceeded")
                 return None
-            if not retry_lease.acquire(timeout=min(2.0, remaining)):
-                log_failure(f"{stage}_retry_concurrency_limit", 502,
-                            exc_name="RetrySlotUnavailable")
-                fail_hidden_retry("RetrySlotUnavailable")
-                return None
 
             retry_response = None
-            slot_owned = True
+            retry_owned = True
             try:
                 try:
-                    rr, _compat = open_chat_response(retry_lease)
-                except _ReaderSlotUnavailable as exc:
-                    # Authentication succeeded, but another request took the
-                    # freed reader slot before the real re-send. Fail before
-                    # opening any upstream connection; the retry lease was
-                    # already released by Proxy.call's re-acquire failure.
-                    log_failure(f"{stage}_retry_concurrency_limit", 502,
-                                exc_name=type(exc).__name__)
-                    fail_hidden_retry("RetrySlotUnavailable")
-                    return None
+                    rr, _compat = open_chat_response()
                 except ReauthenticationRequired as exc:
                     reauth_failed = isinstance(exc, ReauthenticationFailed)
                     status = 403 if reauth_failed else 503
@@ -10548,8 +10404,7 @@ class Handler(BaseHTTPRequestHandler):
                         usage_status=f"HTTP{status_code}")
                     return None
 
-                retry_upstream = _UpstreamStream(
-                    rr, reader_slot=retry_lease)
+                retry_upstream = _UpstreamStream(rr)
                 try:
                     retry_upstream.start()
                 except Exception as exc:  # noqa: BLE001 — 重试生产者启动失败要转成重试失败
@@ -10561,16 +10416,15 @@ class Handler(BaseHTTPRequestHandler):
                 # stream-end log line must report ITS trace headers, not the
                 # discarded attempt's.
                 upstream_trace = _upstream_trace_headers(rr)
-                slot_owned = False
+                retry_owned = False
                 return retry_upstream
             finally:
-                if slot_owned:
+                if retry_owned:
                     if retry_response is not None:
                         try:
                             retry_response.close()
                         except Exception:  # noqa: BLE001 — 关闭重试响应是尽力而为
                             pass
-                    retry_lease.release()
 
         repetition_final_origin = None
         preflight_enabled = (
@@ -10611,7 +10465,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 if action == "upstream_retry":
-                    _release_upstream_reader(upstream)
+                    upstream.cancel()
                     outcome = _pre_output_verify(
                         proxy, auth_wait_budget, request_deadline, cancel_check,
                         "chat_preflight", request_id)
@@ -10639,7 +10493,7 @@ class Handler(BaseHTTPRequestHandler):
                     elapsed = time.monotonic() - stream_attempt_started
                     slow = _attempt_is_slow(elapsed)
                     if not transient_retry_available(slow):
-                        _release_upstream_reader(upstream)
+                        upstream.cancel()
                         retry_status, retry_code = _hidden_retry_failure(
                             retry_reason)
                         fail_hidden_retry(
@@ -10652,7 +10506,7 @@ class Handler(BaseHTTPRequestHandler):
                     transient_retries_done += 1
                     if slow:
                         slow_retries_done += 1
-                    _release_upstream_reader(upstream)
+                    upstream.cancel()
                     delay_s = _retry_delay_seconds(
                         transient_retries_done, elapsed, slow=slow)
                     log_upstream_retry(
@@ -11201,35 +11055,21 @@ class Handler(BaseHTTPRequestHandler):
         touching the relayed bytes: the wire form below is still the upstream's
         exact bytes, so the Anthropic byte-fidelity contract is unchanged.
         """
-        slot = _reader_slots
-        if not slot.acquire(blocking=False):
-            # The compat response has already been opened before we can decide
-            # whether a local reader slot exists. Release it immediately when
-            # the cap is full; otherwise a rejected request would still leave
-            # an idle upstream connection behind.
-            try:
-                r.close()
-            except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
-                pass
-            self._error(503, "Too many concurrent streaming requests",
-                        error_code="too_many_concurrent_streams")
-            return "concurrency_limit"
-
         upstream = None
-        slot_owned = True
+        producer_started = False
         deadline = (request_deadline if request_deadline is not None
                     else time.monotonic() + STREAM_FIRST_BYTE_TIMEOUT_S)
         first_data_deadline = min(
             deadline, time.monotonic() + STREAM_FIRST_BYTE_TIMEOUT_S)
 
         try:
-            upstream = _UpstreamStream(r, reader_slot=slot)
+            upstream = _UpstreamStream(r)
             try:
                 upstream.start()
             except Exception as exc:
                 raise _CompatStreamRetryable(
                     f"producer_start_failed:{type(exc).__name__}") from exc
-            slot_owned = False  # producer now owns response.close() + slot.release()
+            producer_started = True  # the producer owns response.close() now
 
             event_lines = []
             prelude = []
@@ -11495,11 +11335,11 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             if upstream is not None:
                 upstream.cancel()
-            if slot_owned:
+            if not producer_started:
                 try:
                     r.close()
-                finally:
-                    slot.release()
+                except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
+                    pass
 
 
 
@@ -11592,6 +11432,18 @@ class _ShareInstanceControl:
                     "result": {"detail": "unknown instance action"}}
         return {"v": 2, "request_id": request_id, "ok": True,
                 "error_code": "ok", "result": result}
+
+
+class GatewayHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTP server with a listen backlog for connection bursts.
+
+    ``request_queue_size`` is a class attribute read by
+    ``socketserver.TCPServer.server_bind()`` before ``listen()``, so it takes
+    effect at bind time. The stdlib default of 5 drops bursts of new
+    share-gateway connections before the accept loop can pick them up.
+    """
+
+    request_queue_size = 128
 
 
 def main():
@@ -11744,7 +11596,7 @@ def main():
             "binding chat2api to a non-loopback address requires "
             "CHAT2API_LOCAL_API_KEY")
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = GatewayHTTPServer((args.host, args.port), Handler)
     server.proxy = proxy
     server.share_gate = (_load_share_auth().ShareGate(args.share_config,
                                     auth_mode=args.auth_mode)
@@ -12068,22 +11920,6 @@ def _missing_browser_error(platform=None):
             "Microsoft Edge was not found on Windows; on Linux none of "
             "chromium, chromium-browser, google-chrome or microsoft-edge "
             "was found in PATH")
-
-
-def _release_upstream_reader(upstream):
-    """Stop a failed pre-output stream and return its reader slot BEFORE wait.
-
-    The producer still owns the socket and releases the same slot in its own
-    finally; the lease release is idempotent, so the authentication wait never
-    holds the streaming-reader capacity while it waits for recovery.
-    """
-    slot = getattr(upstream, "_slot", None)
-    if slot is not None:
-        try:
-            slot.release()
-        except Exception:  # noqa: BLE001 — 释放读槽是幂等清理
-            pass
-    upstream.cancel()
 
 
 def _clamp_auth_wait_budget(raw, fallback):

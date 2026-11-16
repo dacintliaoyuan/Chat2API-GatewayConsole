@@ -161,8 +161,6 @@ class UpstreamStatusTestBase(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
 
     def start_gateway(self, base_url):
         args = SimpleNamespace(

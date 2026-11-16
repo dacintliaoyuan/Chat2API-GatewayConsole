@@ -170,9 +170,9 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 - 首字节预算 120 秒；上游单次 socket 静默预算 180 秒；请求总预算默认 360 秒，环境变量可调但夹在 10..3600 秒（`chat2api/chat2api.py:377-385,440-444`）。
 - 200 头只在首个“实质数据”事件出现后提交；提交前的元数据/思考事件可短暂暂存，以便早期重复循环或零数据断流仍可隐藏重试（`chat2api/chat2api.py:8043-8080,8417-8431`）。
 - 提交前失败返回 502；提交后失败写 in-band `error` 事件并结束流，绝不把部分完成当成功（`chat2api/chat2api.py:599-613,8060-8077`）。
-- 预提交暂存上限 64 KiB；未成行字节缓冲上限 1 MiB；生产者/消费者队列上限 256；并发流 reader 上限 128（`chat2api/chat2api.py:388-403,558-559`）。ADR 0004 已取消 reader 槽位上限（本地 8000 与云端 8100/8003 都不再限制流式读取并发，`too_many_concurrent_streams` 标记 retired），本节其余预算不变。
+- 预提交暂存上限 64 KiB；未成行字节缓冲上限 1 MiB；生产者/消费者队列上限 256；并发流 reader 上限已取消（ADR 0004，`too_many_concurrent_streams` retired）（`chat2api/chat2api.py:388-403`）。
 - 重试：快速失败最多 5 次，慢失败（耗时达到 30 秒）最多 2 次，物理尝试上限 12；可重试状态为 408/429/500/502/503/504；只在客户端尚未收到任何 SSE 事件前重试（`chat2api/chat2api.py:522-548,7015-7030`）。
-- 客户端断开在每个字节检查；断开后关闭上游，账本记 `client_disconnected`（`chat2api/chat2api.py:6160-6175,8080-8003`）。ADR 0004 取消 reader 槽后不再有可提前释放的槽位；取消的 reader 仍可能活最多 180 秒，由 OS/UM 兜底。
+- 客户端断开在每个字节检查；断开后关闭上游、取消 reader 生产线程，账本记 `client_disconnected`（`chat2api/chat2api.py:6160-6175,8080-8003`）。
 - Messages 流要求官方事件序列；`message_stop` 前 EOF 不算成功；`error` 事件立即终止（`tests/test_chat2api_endpoints.py:501-610`）。
 - Responses 流事件为 `response.created`、`response.output_text.delta`、`response.function_call_arguments.delta`、`response.completed`、`response.incomplete`、`response.failed`（`chat2api/chat2api.py:6720-6760,6955-6985`）。
 - 非流式 Chat/Messages 可由 `--nonstream-upstream-aggregate` 选择上游 SSE 聚合，但只对已验证的 (key, model, protocol) 三元组；默认仍走上游非流式（`chat2api/chat2api.py:7490-7535`）。
@@ -189,7 +189,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | 413 | `payload_too_large` | 请求体超过上限 |
 | 429 | `sharing_limit_reached` | 并发、限速或停止接受 |
 | 502 | `upstream_unavailable` / `upstream_request_rejected` / `upstream_stream_error` / `request_deadline_exceeded` | 上游失败、超时、流错误 |
-| 503 | `reauthentication_required` | 需要交互登录；`too_many_concurrent_streams` 已由 ADR 0004 标记 retired |
+| 503 | `reauthentication_required` | 需要交互登录（`too_many_concurrent_streams` 已 retired，见 ADR 0004） |
 
 ### 5.5 副作用
 

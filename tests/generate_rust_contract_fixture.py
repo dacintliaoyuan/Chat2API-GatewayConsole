@@ -325,7 +325,6 @@ def _boundaries(contract: str) -> dict:
     line_buffer = _doc_number(
         streaming, r"未成行字节缓冲上限 (\d+) MiB", "line buffer") * 1024 * 1024
     queue_max = _doc_number(streaming, r"生产者/消费者队列上限 (\d+)", "queue")
-    readers = _doc_number(streaming, r"并发流 reader 上限 (\d+)", "readers")
     retry_match = re.search(
         r"快速失败最多 (\d+) 次，慢失败（耗时达到 (\d+) 秒）最多 (\d+) 次，"
         r"物理尝试上限 (\d+)", streaming)
@@ -345,8 +344,6 @@ def _boundaries(contract: str) -> dict:
              "Python line buffer drifted from docs/rust-contract.md#5.3")
     _require(gateway._UPSTREAM_QUEUE_MAX == queue_max,
              "Python queue bound drifted from docs/rust-contract.md#5.3")
-    _require(gateway.STREAM_MAX_CONCURRENT_READERS == readers,
-             "Python reader bound drifted from docs/rust-contract.md#5.3")
     fast, slow_threshold, slow, physical = (int(value) for value in retry_match.groups())
     _require(gateway.UPSTREAM_AUTO_RETRIES == fast,
              "Python fast retry count drifted from docs/rust-contract.md#5.3")
@@ -434,9 +431,6 @@ def _boundaries(contract: str) -> dict:
              "source": CONTRACT_RELATIVE + "#5.3"},
             {"surface": "gateway", "name": "queue_max",
              "value": queue_max, "unit": "entries",
-             "source": CONTRACT_RELATIVE + "#5.3"},
-            {"surface": "gateway", "name": "reader_max",
-             "value": readers, "unit": "concurrent",
              "source": CONTRACT_RELATIVE + "#5.3"},
             {"surface": "broker", "name": "wire_deadline",
              "value": wire, "unit": "seconds",

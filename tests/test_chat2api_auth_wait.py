@@ -142,7 +142,7 @@ class StubUpstream(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         if StubUpstream.sse:
-            # A real SSE stream so the streaming path (reader lease, producer
+            # A real SSE stream so the streaming path (producer
             # ownership, [DONE] termination) runs end to end.
             payload = (b'data: {"choices":[{"delta":{"content":"hi"},'
                        b'"finish_reason":"stop"}]}\n\n'
@@ -1331,8 +1331,8 @@ class AuthWaitCapacityTests(AuthWaitTestBase):
             login.assert_not_called()
 
 
-class AuthWaitReaderSlotTests(AuthWaitTestBase):
-    """R3: a streaming auth wait releases the reader slot it will re-acquire."""
+class AuthWaitStreamingTests(AuthWaitTestBase):
+    """R3: streaming requests wait for authentication without a reader cap."""
 
     def _run_stream_worker(self, result):
         try:
@@ -1340,52 +1340,19 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
         except Exception as exc:  # noqa: BLE001 — 客户端可能看到已关闭 socket
             result["error"] = exc
 
-    def test_a6_stream_auth_wait_releases_the_reader_slot(self):
-        self._hold_lease()
-        auth_slots = self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
-        StubUpstream.statuses = [401]
-        result = {}
-        worker = threading.Thread(target=self._run_stream_worker,
-                                  args=(result,), daemon=True)
-        with (
-            self._wait_patches(budget=1.0, recheck=0.02, deadline=2.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
-            mock.patch.object(chat2api, "browser_login",
-                              side_effect=AssertionError("unexpected browser")),
-        ):
-            try:
-                worker.start()
-                self.assertTrue(
-                    self._wait_until(lambda: auth_slots._value == 1,
-                                     timeout=1.0),
-                    "the request never entered the auth wait")
-                self.assertEqual(
-                    reader_slots._value, 1,
-                    "an authentication waiter reserved a stream-reader slot")
-            finally:
-                self.proxy.shutdown()
-                worker.join(2)
-                self.assertFalse(worker.is_alive())
-                response = result.get("response")
-                if response is not None:
-                    response.close()
-
     def test_a6_second_stream_is_not_rejected_for_concurrency(self):
-        # R3: with ONE reader slot and TWO auth-wait slots, the second
+        # R3: with ONE auth-wait slot and TWO streaming requests, the second
         # streaming request must be admitted while the first waits for auth. It
-        # may wait for auth and time out, but it must NOT be rejected as
-        # too_many_concurrent_streams: no reader is running at that moment.
+        # may wait for auth and time out; the point is that it is admitted
+        # rather than rejected before reaching the authentication wait.
         self._hold_lease()
         auth_slots = self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
         StubUpstream.statuses = [401]
         result = {}
         worker = threading.Thread(target=self._run_stream_worker,
                                   args=(result,), daemon=True)
         with (
             self._wait_patches(budget=0.3, recheck=0.02, deadline=1.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
             mock.patch.object(chat2api, "browser_login",
                               side_effect=AssertionError("unexpected browser")),
         ):
@@ -1418,17 +1385,15 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                 if response is not None:
                     response.close()
 
-    def test_a6_stream_auth_wait_timeout_releases_the_reader_slot(self):
+    def test_a6_stream_auth_wait_timeout_is_reported(self):
         self._hold_lease()
         auth_slots = self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
         StubUpstream.statuses = [401]
         result = {}
         worker = threading.Thread(target=self._run_stream_worker,
                                   args=(result,), daemon=True)
         with (
             self._wait_patches(budget=0.2, recheck=0.02, deadline=1.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
             mock.patch.object(chat2api, "browser_login",
                               side_effect=AssertionError("unexpected browser")),
         ):
@@ -1438,9 +1403,6 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                     self._wait_until(lambda: auth_slots._value == 1,
                                      timeout=1.0),
                     "the request never entered the auth wait")
-                self.assertEqual(
-                    reader_slots._value, 1,
-                    "an authentication waiter reserved a stream-reader slot")
                 worker.join(2)
                 self.assertFalse(worker.is_alive())
                 response = result.get("response")
@@ -1448,9 +1410,6 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                 self.assertEqual(response.status_code, 503)
                 self.assertEqual(response.json()["error"]["detail"],
                                  AUTH_WAIT_TIMEOUT)
-                self.assertEqual(reader_slots._value, 1,
-                                 "the reader slot was not returned after "
-                                 "the auth-wait timeout")
             finally:
                 self.proxy.shutdown()
                 worker.join(2)
@@ -1458,15 +1417,13 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                 if response is not None:
                     response.close()
 
-    def test_a6_stream_auth_wait_cancel_releases_the_reader_slot(self):
+    def test_a6_stream_auth_wait_cancel_ends_the_request(self):
         self._hold_lease()
         auth_slots = self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
         StubUpstream.statuses = [401]
         sock = self._raw_stream_chat_request()
         with (
             self._wait_patches(budget=1.0, recheck=0.02, deadline=2.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
             mock.patch.object(chat2api, "browser_login",
                               side_effect=AssertionError("unexpected browser")),
         ):
@@ -1475,32 +1432,24 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                     self._wait_until(lambda: auth_slots._value == 1,
                                      timeout=1.0),
                     "the request never entered the auth wait")
-                self.assertEqual(
-                    reader_slots._value, 1,
-                    "an authentication waiter reserved a stream-reader slot")
                 sock.close()
                 self.assertTrue(
                     self._wait_until(
                         lambda: self.server.active_requests() == 0,
                         timeout=2.0),
                     "the disconnected request did not end its auth wait")
-                self.assertEqual(
-                    reader_slots._value, 1,
-                    "the reader slot was not returned after cancellation")
             finally:
                 sock.close()
                 self.proxy.shutdown()
 
-    def test_a6_stream_auth_recovery_reacquires_and_returns_the_slot(self):
+    def test_a6_stream_auth_recovery_completes(self):
         self._hold_lease()
         self._release_lease_later(0.05)
         self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
         StubUpstream.statuses = [401, 200]
         StubUpstream.sse = True
         with (
             self._wait_patches(budget=1.0, recheck=0.02, deadline=2.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
             mock.patch.object(chat2api, "browser_login",
                               return_value="fresh-token"),
             mock.patch.object(chat2api.TokenStore, "save"),
@@ -1513,89 +1462,14 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
             finally:
                 response.close()
         self.assertEqual(StubUpstream.posts, 2)
-        self.assertTrue(
-            self._wait_until(lambda: reader_slots._value == 1, timeout=1.0),
-            "the reader slot was not returned after the recovered stream")
 
-    def test_a6_stream_auth_reacquire_failure_is_a_clean_503(self):
-        self._hold_lease()
-        self._release_lease_later(0.2)
-        auth_slots = self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
-        holder_acquired = threading.Event()
-        holder_release = threading.Event()
-        StubUpstream.statuses = [401, 200]
-        StubUpstream.sse = True
-
-        def hold_slot():
-            reader_slots.acquire()
-            holder_acquired.set()
-            holder_release.wait(5)
-            reader_slots.release()
-
-        holder = threading.Thread(target=hold_slot, daemon=True)
-
-        def fake_login(*args, **kwargs):
-            # Give the competing streaming request time to take the slot
-            # this request released before authentication.
-            time.sleep(0.2)
-            return "fresh-token"
-
-        result = {}
-        worker = threading.Thread(target=self._run_stream_worker,
-                                  args=(result,), daemon=True)
-        with (
-            self._wait_patches(budget=1.0, recheck=0.02, deadline=3.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
-            mock.patch.object(chat2api, "browser_login",
-                              side_effect=fake_login),
-            mock.patch.object(chat2api.TokenStore, "save"),
-        ):
-            try:
-                worker.start()
-                self.assertTrue(
-                    self._wait_until(lambda: auth_slots._value == 1,
-                                     timeout=1.0),
-                    "the request never entered the auth wait")
-                holder.start()
-                self.assertTrue(holder_acquired.wait(1.0),
-                                "the competing stream never took the "
-                                "freed reader slot")
-                worker.join(3)
-                self.assertFalse(worker.is_alive())
-                response = result.get("response")
-                self.assertIsNotNone(response)
-                try:
-                    self.assertEqual(response.status_code, 503)
-                    self.assertEqual(
-                        response.json()["error"]["type"],
-                        "overloaded_error")
-                    self.assertEqual(
-                        response.json()["error"]["code"],
-                        "too_many_concurrent_streams")
-                    self.assertEqual(
-                        StubUpstream.posts, 1,
-                        "the failed re-acquire must not open another upstream "
-                        "connection")
-                finally:
-                    response.close()
-            finally:
-                holder_release.set()
-                if holder.ident is not None:
-                    holder.join(2)
-                self.proxy.shutdown()
-                worker.join(2)
-        self.assertFalse(holder.is_alive())
-        self.assertEqual(reader_slots._value, 1)
-
-    def test_a6_stream_hidden_retry_auth_wait_releases_the_slot(self):
+    def test_a6_stream_hidden_retry_auth_wait_completes(self):
         self._hold_lease()
         self._release_lease_later(0.05)
         self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
         # First attempt: 200 with no data -> the pre-output check retries.
-        # Hidden retry: 401 -> the request's ONE auth wait runs while the
-        # reader slot must be released. Re-send: 200 SSE.
+        # Hidden retry: 401 -> the request's ONE auth wait runs. Re-send:
+        # 200 SSE.
         StubUpstream.statuses = [200, 401, 200]
         StubUpstream.sse = True
         StubUpstream.empty_post_indices = frozenset({0})
@@ -1615,7 +1489,6 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                                   args=(result,), daemon=True)
         with (
             self._wait_patches(budget=1.0, recheck=0.02, deadline=3.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
             mock.patch.object(chat2api, "browser_login",
                               side_effect=fake_login),
             mock.patch.object(chat2api.TokenStore, "save"),
@@ -1629,10 +1502,6 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                 self.assertTrue(
                     login_entered.wait(2),
                     "the hidden retry never reached its auth wait")
-                self.assertEqual(
-                    reader_slots._value, 1,
-                    "the hidden retry reserved a stream-reader slot while "
-                    "waiting for authentication")
                 let_login_finish.set()
                 worker.join(3)
                 self.assertFalse(worker.is_alive())
@@ -1653,11 +1522,6 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                     response.close()
         self.assertEqual(StubUpstream.posts, 3)
         self.assertEqual(len(login_calls), 1)
-        self.assertTrue(
-            self._wait_until(lambda: reader_slots._value == 1, timeout=1.0),
-            "the reader slot was not returned after the hidden retry")
-
-
 class AuthWaitLeaseRoundTests(AuthWaitTestBase):
     """R4: a finished round's cleanup never releases the next round's lease."""
 

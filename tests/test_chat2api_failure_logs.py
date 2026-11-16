@@ -170,8 +170,6 @@ class TestChat2ApiFailureLogs(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
 
     def chat_post(self, model, stream=True):
         return requests.post(

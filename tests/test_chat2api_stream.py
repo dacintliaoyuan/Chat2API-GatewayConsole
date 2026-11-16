@@ -637,10 +637,6 @@ class TestChat2ApiStreaming(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
-        # Isolate the module-level reader semaphore per test: cancelled
-        # producers from a previous test may still be draining their slots.
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
         StubUpstreamHandler.posts = 0
 
     # ---------- helpers ----------
@@ -708,20 +704,6 @@ class TestChat2ApiStreaming(unittest.TestCase):
                 return
             time.sleep(0.1)
         self.fail(f"reader threads not reclaimed within {timeout}s")
-
-    def wait_reader_slots_restored(self, before, timeout=6):
-        """Wait until the reader semaphore is back to `before` slots.
-
-        The handler thread releases the slot AFTER the response bytes are
-        already on the wire, so a client-side assert can race the release.
-        """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if chat2api._reader_slots._value >= before:
-                return
-            time.sleep(0.05)
-        self.fail(f"reader slots not restored within {timeout}s "
-                  f"({chat2api._reader_slots._value} != {before})")
 
     def assert_in_band_error(self, event, reason):
         payload = json.loads(event[len("data:"):])
@@ -1236,7 +1218,6 @@ class TestChat2ApiStreaming(unittest.TestCase):
         # The replay loop has already run and succeeded here, so this pins
         # the body-data write try/except; the replay-loop variant is
         # test_prelude_replay_write_failure_is_client_disconnected.
-        before = chat2api._reader_slots._value
         records_before = len(self.current_records())
         error_calls = []
 
@@ -1260,7 +1241,6 @@ class TestChat2ApiStreaming(unittest.TestCase):
             response.close()
         self.assertIn(b": keepalive ping", body)  # prelude replay landed
         self.assertNotIn(b"data:", body)          # first data never reached
-        self.wait_reader_slots_restored(before)
         self.assertEqual(error_calls, [])
         (record,) = self.wait_usage_records(count=records_before + 1,
                                             timeout=6)
@@ -1270,11 +1250,10 @@ class TestChat2ApiStreaming(unittest.TestCase):
         # A downstream that dies while a HELD COMMENT is replayed inside the
         # prelude loop (`for held in prelude` in the commit/replay try block)
         # must end as client_disconnected, get no second status line, and
-        # release the reader slot. _FailOnWrite with prefix b":" fires only
+        # close the upstream producer. _FailOnWrite with prefix b":" fires only
         # on a comment line - headers and data payloads never start with ":" -
         # so the injected failure provably lands in the replay loop, unlike
         # the body-data variant above.
-        before = chat2api._reader_slots._value
         records_before = len(self.current_records())
         error_calls = []
         writers = []
@@ -1301,7 +1280,6 @@ class TestChat2ApiStreaming(unittest.TestCase):
         self.assertEqual(body, b"")
         self.assertTrue(writers and writers[0].triggered
                         and writers[0].triggered.startswith(b":"))
-        self.wait_reader_slots_restored(before)
         self.assertEqual(error_calls, [])
         (record,) = self.wait_usage_records(count=records_before + 1,
                                             timeout=6)
@@ -1384,40 +1362,46 @@ class TestChat2ApiStreaming(unittest.TestCase):
         (record,) = self.wait_usage_records()
         self.assertEqual(record["status"], "upstream_missing_finish_reason")
 
-    def test_reader_slot_cap_rejects_excess_streams_without_upstream_call(self):
-        with mock.patch.object(chat2api, "STREAM_MAX_CONCURRENT_READERS", 1):
-            chat2api._reader_slots = threading.BoundedSemaphore(1)
-            holder_done = []
+    def test_many_concurrent_streams_are_not_rejected(self):
+        # The former 128-reader cap is gone: a burst larger than that cap
+        # must not produce 503 too_many_concurrent_streams. Every stream is
+        # admitted and completes normally.
+        self.assertFalse(hasattr(chat2api, "STREAM_MAX_CONCURRENT_READERS"))
+        self.assertFalse(hasattr(chat2api, "_reader_slots"))
+        count = 130
+        barrier = threading.Barrier(count)
+        responses = []
+        failures = []
 
-            def hold():
-                with self.stream_request("ok") as response:
-                    self.read_to_eof(response)
-                holder_done.append(True)
-
-            holder = threading.Thread(target=hold)
-            holder.start()
-            time.sleep(0.4)  # the first stream holds the single slot
-            calls_before = StubUpstreamHandler.posts
-            excess = self.stream_request("ok")
+        def open_stream():
             try:
-                self.assertEqual(excess.status_code, 503)
-                error = excess.json()["error"]
-                self.assertEqual(error["type"], "overloaded_error")
-                self.assertEqual(error["code"], "too_many_concurrent_streams")
-            finally:
-                excess.close()
-            # The slot is acquired before any upstream access: a refused
-            # request must never have touched the upstream (no model call).
-            self.assertEqual(StubUpstreamHandler.posts, calls_before,
-                             "rejected request must not call the upstream")
-            holder.join(10)
-            self.assertTrue(holder_done)
+                barrier.wait(20)
+                responses.append(self.stream_request("ok", timeout=30))
+            except Exception as exc:  # noqa: BLE001 — 汇总后统一断言
+                failures.append(exc)
 
-    def test_slot_returned_when_first_upstream_call_times_out(self):
+        threads = [threading.Thread(target=open_stream)
+                   for _ in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        try:
+            self.assertEqual(failures, [])
+            self.assertEqual(len(responses), count)
+            for response in responses:
+                if response.status_code != 200:
+                    self.fail(
+                        f"concurrent stream rejected with "
+                        f"{response.status_code}: {response.text[:200]}")
+        finally:
+            for response in responses:
+                response.close()
+
+    def test_first_upstream_call_timeout_then_next_request_works(self):
         # R5: a network-level failure on the FIRST upstream call (before any
-        # headers) must not leak the reader slot, and the next normal request
+        # headers) must not poison the gateway, and the next normal request
         # must still work end to end.
-        before = chat2api._reader_slots._value
         calls = {"n": 0}
         real_request = chat2api.requests.request
 
@@ -1438,7 +1422,6 @@ class TestChat2ApiStreaming(unittest.TestCase):
                 self.assertEqual(error["detail"]["reason"], "ReadTimeout")
             finally:
                 response.close()
-        self.wait_reader_slots_restored(before)
         self.assertEqual(StubUpstreamHandler.posts, 0,
                          "failed request must not have called the upstream")
 
@@ -1447,10 +1430,9 @@ class TestChat2ApiStreaming(unittest.TestCase):
             lines, _ = self.read_to_eof(response)
         self.assertEqual(lines[-1], "data: [DONE]")
 
-    def test_slot_returned_when_400_retry_fails(self):
-        # R5: the stream_options 400-retry path must also return the slot when
-        # the retry itself fails at the network level.
-        before = chat2api._reader_slots._value
+    def test_400_retry_failure_then_next_request_works(self):
+        # R5: the stream_options 400-retry path must not poison the gateway
+        # when the retry itself fails at the network level.
         calls = {"n": 0}
         real_request = chat2api.requests.request
 
@@ -1467,7 +1449,6 @@ class TestChat2ApiStreaming(unittest.TestCase):
                 self.assertEqual(response.status_code, 502)
             finally:
                 response.close()
-        self.wait_reader_slots_restored(before)
         self.assertEqual(StubUpstreamHandler.posts, 1)  # only the 400 call
 
         with self.stream_request("ok") as response:
@@ -1475,13 +1456,11 @@ class TestChat2ApiStreaming(unittest.TestCase):
             lines, _ = self.read_to_eof(response)
         self.assertEqual(lines[-1], "data: [DONE]")
 
-    def test_slot_returned_when_response_header_write_fails(self):
+    def test_response_header_write_failure_is_client_disconnected(self):
         # R4-2 + A4: a client that dies while the 200 headers are being
-        # written must not leak the reader slot (end_headers raises on the
-        # dead socket), must be accounted as client_disconnected, and must
-        # never receive a second status line (no 502 retry after a partial
-        # header write).
-        before = chat2api._reader_slots._value
+        # written must be accounted as client_disconnected, and must never
+        # receive a second status line (no 502 retry after a partial header
+        # write).
         records_before = len(self.current_records())
         error_calls = []
         with mock.patch.object(
@@ -1492,18 +1471,16 @@ class TestChat2ApiStreaming(unittest.TestCase):
                                   error_calls.append(a)):
             with self.assertRaises(requests.exceptions.RequestException):
                 self.stream_request("ok")
-        self.wait_reader_slots_restored(before)
         self.assertEqual(error_calls, [])
         (record,) = self.wait_usage_records(count=records_before + 1,
                                             timeout=6)
         self.assertEqual(record["status"], "client_disconnected")
 
-    def test_slot_returned_when_producer_start_fails(self):
-        # R4-2: if the producer thread cannot start, the handler must still
-        # return the slot and close the upstream response it already owns.
-        # The 200 is still pending at that point, so the client gets a 502
-        # instead of a connection dropped without any response.
-        before = chat2api._reader_slots._value
+    def test_producer_start_failure_is_502(self):
+        # R4-2: if the producer thread cannot start, the handler must close
+        # the upstream response it already owns. The 200 is still pending at
+        # that point, so the client gets a 502 instead of a connection
+        # dropped without any response.
         with mock.patch.object(
                 chat2api._UpstreamStream, "start",
                 side_effect=RuntimeError("thread start failed")):
@@ -1515,7 +1492,6 @@ class TestChat2ApiStreaming(unittest.TestCase):
                 self.assertEqual(error["code"], "upstream_stream_error")
             finally:
                 response.close()
-        self.wait_reader_slots_restored(before)
 
     # ---------- _UpstreamStream unit tests ----------
 
