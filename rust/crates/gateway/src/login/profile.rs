@@ -770,9 +770,16 @@ mod tests {
         assert!(owner["acquired_epoch"]
             .as_f64()
             .is_some_and(|value| value > 0.0));
-        assert_eq!(
-            owner["process_started_epoch"],
-            json!(process_start_epoch(std::process::id()))
+        // The recorded start time is a 100ns-tick FILETIME projection; serde_json's
+        // default float parser may be off by 1 ULP, so compare at microsecond
+        // precision instead of bit equality.
+        let recorded = owner["process_started_epoch"]
+            .as_f64()
+            .expect("recorded start time");
+        let fresh = process_start_epoch(std::process::id()).expect("fresh start time");
+        assert!(
+            (recorded - fresh).abs() < 1e-6,
+            "recorded {recorded} != fresh {fresh}"
         );
         drop(lock);
         let _ = fs::remove_dir_all(dir);
