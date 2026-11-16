@@ -177,18 +177,181 @@ fn a_missing_done_yields_a_failed_response() {
         config.socket_silence_timeout = Duration::from_secs(2);
     });
     let raw = start_stream(&gateway);
-    let events = event_payloads(&raw);
+    let (status, headers, body) = parse_raw_response(&raw);
+    assert_eq!(status, 200);
+    let events = event_payloads(&body);
     let last = events.last().expect("a terminal event");
     assert_eq!(last.0, "response.failed");
     assert_eq!(
         last.1["response"]["error"]["code"],
         json!("upstream_eof_without_done")
     );
-    assert!(!event_names(&raw)
+    assert_eq!(
+        last.1["response"]["error"]["detail"]["reason"],
+        json!("upstream_eof_without_done")
+    );
+    let header_id = headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("x-request-id"))
+        .map(|(_, value)| value.as_str())
+        .expect("X-Request-Id header");
+    assert_eq!(
+        last.1["response"]["error"]["detail"]["request_id"],
+        json!(header_id)
+    );
+    assert!(!event_names(&body)
         .iter()
         .any(|name| name == "response.completed"));
     let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
     assert_eq!(rows[0]["status"], json!("upstream_eof_without_done"));
+}
+
+#[test]
+fn response_created_is_staged_until_the_first_substantive_event() {
+    let temp = TempDir::new("um-rust-responses-created-stage-");
+    let stub = ChatStub::start();
+    let content = chat_events()[0].clone();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![
+            ChatChunk::after(Duration::from_millis(300), content.clone()),
+            ChatChunk::now(chat_events()[3].clone()),
+            ChatChunk::now(chat_events()[4].clone()),
+        ],
+        hold: Duration::ZERO,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+    });
+    let mut client = StreamingClient::send(gateway.addr, &request()).expect("stream request");
+    assert_eq!(
+        client
+            .read_some(Duration::from_millis(100))
+            .expect("first read"),
+        None,
+        "the 200 must not be committed before substantive output"
+    );
+    let raw = client.read_all(Duration::from_secs(5)).expect("read SSE");
+    let (status, _, body) = parse_raw_response(&raw);
+    assert_eq!(status, 200);
+    let names = event_names(&body);
+    assert_eq!(names.first().map(String::as_str), Some("response.created"));
+    assert!(names
+        .iter()
+        .any(|name| name == "response.output_text.delta"));
+    assert!(names.iter().any(|name| name == "response.completed"));
+}
+
+#[test]
+fn a_pre_commit_eof_is_retried_before_the_200() {
+    let temp = TempDir::new("um-rust-responses-precommit-retry-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: Vec::new(),
+        hold: Duration::ZERO,
+    });
+    stub.push(ChatAttempt::Sse {
+        chunks: chat_events().into_iter().map(ChatChunk::now).collect(),
+        hold: Duration::ZERO,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+        config.retry_delay_base = Duration::ZERO;
+        config.max_fast_retries = 1;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 12;
+    });
+    let raw = start_stream(&gateway);
+    let (status, _, body) = parse_raw_response(&raw);
+    assert_eq!(status, 200);
+    assert_eq!(
+        stub.attempts(),
+        2,
+        "the zero-event attempt was retried once"
+    );
+    let names = event_names(&body);
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| *name == "response.created")
+            .count(),
+        1,
+        "the client sees exactly one response.created"
+    );
+    assert!(names.iter().any(|name| name == "response.completed"));
+    assert!(!names.iter().any(|name| name == "response.failed"));
+}
+
+#[test]
+fn a_pre_commit_metadata_eof_is_retried_before_the_200() {
+    let temp = TempDir::new("um-rust-responses-precommit-metadata-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![ChatChunk::now(
+            b"data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n"
+                .to_vec(),
+        )],
+        hold: Duration::ZERO,
+    });
+    stub.push(ChatAttempt::Sse {
+        chunks: chat_events().into_iter().map(ChatChunk::now).collect(),
+        hold: Duration::ZERO,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+        config.retry_delay_base = Duration::ZERO;
+        config.max_fast_retries = 1;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 12;
+    });
+    let raw = start_stream(&gateway);
+    let (status, _, body) = parse_raw_response(&raw);
+    assert_eq!(status, 200);
+    assert_eq!(stub.attempts(), 2, "metadata alone never commits the 200");
+    let names = event_names(&body);
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| *name == "response.created")
+            .count(),
+        1
+    );
+    assert!(names.iter().any(|name| name == "response.completed"));
+    assert!(!names.iter().any(|name| name == "response.failed"));
+}
+
+#[test]
+fn a_pre_commit_eof_without_retry_is_502() {
+    let temp = TempDir::new("um-rust-responses-precommit-502-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: Vec::new(),
+        hold: Duration::ZERO,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+        config.max_fast_retries = 0;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 1;
+    });
+    let response = support::client_request(gateway.addr, &request()).expect("pre-commit EOF");
+    assert_eq!(response.status, 502);
+    let body = response.json();
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
+    assert_eq!(body["error"]["code"], json!("upstream_stream_error"));
+    assert_eq!(
+        body["error"]["detail"]["reason"],
+        json!("upstream_eof_without_done")
+    );
+    assert!(response.header("x-request-id").is_some());
+    assert_eq!(stub.attempts(), 1);
 }
 
 #[test]
@@ -224,8 +387,65 @@ fn a_length_finish_reason_is_incomplete() {
 }
 
 #[test]
-fn an_upstream_error_chunk_yields_a_failed_response() {
+fn a_post_commit_error_chunk_yields_a_failed_response() {
     let temp = TempDir::new("um-rust-responses-error-chunk-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![
+            ChatChunk::now(chat_events()[0].clone()),
+            ChatChunk::now(b"data: {\"error\":{\"message\":\"boom\"}}\n\n".to_vec()),
+        ],
+        hold: Duration::ZERO,
+    });
+    let ledger = temp.path().join("usage.jsonl");
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+        config.retry_delay_base = Duration::ZERO;
+        config.max_fast_retries = 5;
+        config.max_slow_retries = 2;
+        config.max_physical_attempts = 12;
+    });
+    let raw = start_stream(&gateway);
+    let (status, headers, body) = parse_raw_response(&raw);
+    assert_eq!(status, 200);
+    let events = event_payloads(&body);
+    let last = events.last().expect("a terminal event");
+    assert_eq!(last.0, "response.failed");
+    assert_eq!(
+        last.1["response"]["error"]["code"],
+        json!("upstream_stream_error")
+    );
+    assert_eq!(
+        last.1["response"]["error"]["detail"]["reason"],
+        json!("upstream_stream_error")
+    );
+    assert_eq!(
+        last.1["response"]["error"]["detail"]["upstream_message"],
+        json!("boom")
+    );
+    let header_id = headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("x-request-id"))
+        .map(|(_, value)| value.as_str())
+        .expect("X-Request-Id header");
+    assert_eq!(
+        last.1["response"]["error"]["detail"]["request_id"],
+        json!(header_id)
+    );
+    assert!(!event_names(&body)
+        .iter()
+        .any(|name| name == "response.completed"));
+    assert_eq!(stub.attempts(), 1, "a committed stream is never retried");
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert_eq!(rows[0]["status"], json!("upstream_stream_error"));
+}
+
+#[test]
+fn an_error_chunk_before_the_200_is_502() {
+    let temp = TempDir::new("um-rust-responses-error-chunk-precommit-");
     let stub = ChatStub::start();
     stub.push(ChatAttempt::Sse {
         chunks: vec![ChatChunk::now(
@@ -237,12 +457,22 @@ fn an_upstream_error_chunk_yields_a_failed_response() {
         config.request_total = Duration::from_secs(5);
         config.first_byte_timeout = Duration::from_secs(2);
         config.socket_silence_timeout = Duration::from_secs(2);
+        config.max_fast_retries = 0;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 1;
     });
-    let raw = start_stream(&gateway);
-    let events = event_payloads(&raw);
-    let last = events.last().expect("a terminal event");
-    assert_eq!(last.0, "response.failed");
-    assert_eq!(last.1["response"]["error"]["code"], json!("upstream_error"));
+    let response = support::client_request(gateway.addr, &request()).expect("pre-commit error");
+    assert_eq!(response.status, 502);
+    let body = response.json();
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
+    assert_eq!(body["error"]["code"], json!("upstream_stream_error"));
+    assert_eq!(
+        body["error"]["detail"]["reason"],
+        json!("upstream_stream_error")
+    );
+    assert_eq!(body["error"]["detail"]["upstream_message"], json!("boom"));
+    assert!(response.header("x-request-id").is_some());
+    assert_eq!(stub.attempts(), 1, "an explicit error is not retried");
 }
 
 fn anthropic_events() -> Vec<Vec<u8>> {
@@ -392,43 +622,195 @@ fn messages_stream_events_follow_the_python_shape_and_order() {
 fn a_missing_message_stop_yields_a_failed_response() {
     let temp = TempDir::new("um-rust-responses-no-stop-");
     let stub = ChatStub::start();
+    let chunks: Vec<ChatChunk> = anthropic_events()
+        .into_iter()
+        .take(3)
+        .map(ChatChunk::now)
+        .collect();
     stub.push(ChatAttempt::Sse {
-        chunks: vec![ChatChunk::now(event(
-            "message_start",
-            json!({
-                "type": "message_start",
-                "message": {"id": "msg_1", "type": "message",
-                              "role": "assistant", "model": "m",
-                              "content": [], "usage": {"input_tokens": 7,
-                                                      "output_tokens": 0}},
-            }),
-        ))],
+        chunks,
         hold: Duration::ZERO,
     });
+    let ledger = temp.path().join("usage.jsonl");
     let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.usage_log = Some(ledger.clone());
         config.request_total = Duration::from_secs(5);
         config.first_byte_timeout = Duration::from_secs(2);
         config.socket_silence_timeout = Duration::from_secs(2);
     });
     let mut client = StreamingClient::send(gateway.addr, &image_request()).expect("stream request");
     let raw = client.read_all(Duration::from_secs(5)).expect("read SSE");
-    let events = event_payloads(&raw);
+    let (status, headers, body) = parse_raw_response(&raw);
+    assert_eq!(status, 200);
+    let events = event_payloads(&body);
     let last = events.last().expect("a terminal event");
     assert_eq!(last.0, "response.failed");
     assert_eq!(
         last.1["response"]["error"]["code"],
         json!("upstream_eof_without_message_stop")
     );
+    assert_eq!(
+        last.1["response"]["error"]["detail"]["reason"],
+        json!("upstream_eof_without_message_stop")
+    );
+    let header_id = headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("x-request-id"))
+        .map(|(_, value)| value.as_str())
+        .expect("X-Request-Id header");
+    assert_eq!(
+        last.1["response"]["error"]["detail"]["request_id"],
+        json!(header_id)
+    );
+    assert!(!event_names(&body)
+        .iter()
+        .any(|name| name == "response.completed"));
+    let rows = wait_jsonl(&ledger, 1, Duration::from_secs(2));
+    assert_eq!(
+        rows[0]["status"],
+        json!("upstream_eof_without_message_stop")
+    );
 }
 
 #[test]
-fn an_error_event_yields_a_failed_response() {
+fn a_pre_commit_missing_message_stop_is_retried_before_the_200() {
+    let temp = TempDir::new("um-rust-responses-precommit-stop-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![ChatChunk::now(anthropic_events()[0].clone())],
+        hold: Duration::ZERO,
+    });
+    stub.push(ChatAttempt::Sse {
+        chunks: anthropic_events().into_iter().map(ChatChunk::now).collect(),
+        hold: Duration::ZERO,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+        config.retry_delay_base = Duration::ZERO;
+        config.max_fast_retries = 1;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 12;
+    });
+    let mut client = StreamingClient::send(gateway.addr, &image_request()).expect("stream request");
+    let raw = client.read_all(Duration::from_secs(5)).expect("read SSE");
+    let (status, _, body) = parse_raw_response(&raw);
+    assert_eq!(status, 200);
+    assert_eq!(
+        stub.attempts(),
+        2,
+        "message_start alone never commits the 200"
+    );
+    let names = event_names(&body);
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| *name == "response.created")
+            .count(),
+        1
+    );
+    assert!(names.iter().any(|name| name == "response.completed"));
+    assert!(!names.iter().any(|name| name == "response.failed"));
+}
+
+#[test]
+fn a_pre_commit_missing_message_stop_without_retry_is_502() {
+    let temp = TempDir::new("um-rust-responses-precommit-stop-502-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![ChatChunk::now(anthropic_events()[0].clone())],
+        hold: Duration::ZERO,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+        config.max_fast_retries = 0;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 1;
+    });
+    let response =
+        support::client_request(gateway.addr, &image_request()).expect("pre-commit message_stop");
+    assert_eq!(response.status, 502);
+    let body = response.json();
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
+    assert_eq!(body["error"]["code"], json!("upstream_stream_error"));
+    assert_eq!(
+        body["error"]["detail"]["reason"],
+        json!("upstream_eof_without_message_stop")
+    );
+    assert!(response.header("x-request-id").is_some());
+    assert_eq!(stub.attempts(), 1);
+}
+
+#[test]
+fn a_post_commit_error_event_yields_a_failed_response() {
     let temp = TempDir::new("um-rust-responses-message-error-");
+    let stub = ChatStub::start();
+    let mut chunks: Vec<ChatChunk> = anthropic_events()
+        .into_iter()
+        .take(3)
+        .map(ChatChunk::now)
+        .collect();
+    chunks.push(ChatChunk::now(event(
+        "error",
+        json!({"type": "error", "error": {"type": "overloaded", "message": "overloaded"}}),
+    )));
+    stub.push(ChatAttempt::Sse {
+        chunks,
+        hold: Duration::ZERO,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.request_total = Duration::from_secs(5);
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+        config.max_fast_retries = 5;
+        config.max_slow_retries = 2;
+        config.max_physical_attempts = 12;
+    });
+    let mut client = StreamingClient::send(gateway.addr, &image_request()).expect("stream request");
+    let raw = client.read_all(Duration::from_secs(5)).expect("read SSE");
+    let (status, headers, body) = parse_raw_response(&raw);
+    assert_eq!(status, 200);
+    let events = event_payloads(&body);
+    let last = events.last().expect("a terminal event");
+    assert_eq!(last.0, "response.failed");
+    assert_eq!(
+        last.1["response"]["error"]["code"],
+        json!("upstream_stream_error")
+    );
+    assert_eq!(
+        last.1["response"]["error"]["detail"]["reason"],
+        json!("upstream_stream_error")
+    );
+    assert_eq!(
+        last.1["response"]["error"]["detail"]["upstream_message"],
+        json!("overloaded")
+    );
+    let header_id = headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("x-request-id"))
+        .map(|(_, value)| value.as_str())
+        .expect("X-Request-Id header");
+    assert_eq!(
+        last.1["response"]["error"]["detail"]["request_id"],
+        json!(header_id)
+    );
+    assert!(!event_names(&body)
+        .iter()
+        .any(|name| name == "response.completed"));
+    assert_eq!(stub.attempts(), 1, "a committed stream is never retried");
+}
+
+#[test]
+fn an_error_event_before_the_200_is_502() {
+    let temp = TempDir::new("um-rust-responses-message-error-precommit-");
     let stub = ChatStub::start();
     stub.push(ChatAttempt::Sse {
         chunks: vec![ChatChunk::now(event(
             "error",
-            json!({"type": "error", "error": {"type": "overloaded"}}),
+            json!({"type": "error", "error": {"type": "overloaded", "message": "overloaded"}}),
         ))],
         hold: Duration::ZERO,
     });
@@ -436,13 +818,26 @@ fn an_error_event_yields_a_failed_response() {
         config.request_total = Duration::from_secs(5);
         config.first_byte_timeout = Duration::from_secs(2);
         config.socket_silence_timeout = Duration::from_secs(2);
+        config.max_fast_retries = 0;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 1;
     });
-    let mut client = StreamingClient::send(gateway.addr, &image_request()).expect("stream request");
-    let raw = client.read_all(Duration::from_secs(5)).expect("read SSE");
-    let events = event_payloads(&raw);
-    let last = events.last().expect("a terminal event");
-    assert_eq!(last.0, "response.failed");
-    assert_eq!(last.1["response"]["error"]["code"], json!("upstream_error"));
+    let response = support::client_request(gateway.addr, &image_request())
+        .expect("pre-commit upstream error event");
+    assert_eq!(response.status, 502);
+    let body = response.json();
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
+    assert_eq!(body["error"]["code"], json!("upstream_stream_error"));
+    assert_eq!(
+        body["error"]["detail"]["reason"],
+        json!("upstream_stream_error")
+    );
+    assert_eq!(
+        body["error"]["detail"]["upstream_message"],
+        json!("overloaded")
+    );
+    assert!(response.header("x-request-id").is_some());
+    assert_eq!(stub.attempts(), 1);
 }
 
 #[test]

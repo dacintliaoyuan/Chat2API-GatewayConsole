@@ -15,7 +15,11 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::body::{read_json_body, BodyPolicy};
-use crate::chat::{line_text, ChatResult, ClientWatcher};
+use crate::chat::{
+    explicit_error_reason, line_text, ChatResult, ClientWatcher, PRELUDE_MAX_BYTES,
+    UPSTREAM_EOF_WITHOUT_DONE, UPSTREAM_FIRST_BYTE_TIMEOUT, UPSTREAM_PRELUDE_OVERFLOW,
+    UPSTREAM_READ_ERROR, UPSTREAM_STREAM_ERROR,
+};
 use crate::error::{ErrorProtocol, GatewayError};
 use crate::event_log::{AttemptStats, FinalFailure};
 use crate::gate::Admission;
@@ -47,6 +51,9 @@ pub const RESPONSES_FIELDS: [&str; 17] = [
     "reasoning",
     "include",
 ];
+
+const UPSTREAM_EOF_WITHOUT_MESSAGE_STOP: &str =
+    "Upstream closed the stream before message_stop; the completion is incomplete.";
 
 /// Python `valid_responses_request`: shape-only admission of the frozen subset.
 pub fn valid_responses_request(body: &Map<String, Value>) -> bool {
@@ -1734,6 +1741,20 @@ fn forward_stream_with_inner(
     let mut last = LastAttempt::default();
     let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget);
     let limits = RetryLimits::from_config(&context.state.config);
+    let created_at = unix_seconds();
+    let response_id = format!("resp_{}", random_hex(12));
+    let created = json!({
+        "type": "response.created",
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": "in_progress",
+            "model": context.model,
+            "output": [],
+        },
+    });
+    let created_event = encode_sse_event("response.created", &created);
     loop {
         if Instant::now() >= context.deadline {
             record_usage(context, "request_deadline_exceeded", None, 0);
@@ -1802,44 +1823,6 @@ fn forward_stream_with_inner(
                 }
             }
         }
-        let mut headers = vec![
-            ("Content-Type".to_string(), "text/event-stream".to_string()),
-            ("Cache-Control".to_string(), "no-store".to_string()),
-            (
-                "X-Request-Id".to_string(),
-                context.http_request_id.to_string(),
-            ),
-            ("Connection".to_string(), "close".to_string()),
-        ];
-        if let Some(origin) = &context.origin {
-            headers.push(("Access-Control-Allow-Origin".to_string(), origin.clone()));
-        }
-        if write_response_head(stream, 200, &headers).is_err() {
-            return ChatResult::Written {
-                close: true,
-                failed: false,
-            };
-        }
-        let created_at = unix_seconds();
-        let response_id = format!("resp_{}", random_hex(12));
-        let created = json!({
-            "type": "response.created",
-            "response": {
-                "id": response_id,
-                "object": "response",
-                "created_at": created_at,
-                "status": "in_progress",
-                "model": context.model,
-                "output": [],
-            },
-        });
-        if write_sse_event(stream, "response.created", &created).is_err() {
-            record_usage(context, "client_disconnected", None, 0);
-            return ChatResult::Written {
-                close: true,
-                failed: false,
-            };
-        }
         let mut translator = ResponsesStreamTranslator::new(
             context.model.to_string(),
             response_id.clone(),
@@ -1849,73 +1832,96 @@ fn forward_stream_with_inner(
         );
         let watcher = ClientWatcher::start(stream);
         let reader = StreamReader::start(response.body);
-        let mut output_chars = 0u64;
-        let mut status = "ok".to_string();
-        let mut usage = Value::Object(Map::new());
-        let mut terminal = false;
-        let mut client_disconnected = false;
+        let mut state = ResponsesStreamState::new(created_event.clone());
+        let first_byte_deadline = Instant::now()
+            + context
+                .state
+                .config
+                .first_byte_timeout
+                .min(context.deadline.saturating_duration_since(Instant::now()));
         loop {
             if watcher.as_ref().is_some_and(ClientWatcher::disconnected) {
-                client_disconnected = true;
+                state.status = "client_disconnected".to_string();
+                break;
+            }
+            if Instant::now() >= context.deadline {
+                state.status = "request_deadline_exceeded".to_string();
+                state.failure = Some(ResponsesStreamFailure::local(
+                    "request_deadline_exceeded",
+                    "Upstream request exceeded the total request budget.",
+                    json!({"reason": "request_deadline_exceeded"}),
+                    false,
+                ));
+                break;
+            }
+            if !state.committed && Instant::now() >= first_byte_deadline {
+                state.status = "upstream_first_byte_timeout".to_string();
+                state.failure = Some(ResponsesStreamFailure::local(
+                    "upstream_first_byte_timeout",
+                    UPSTREAM_FIRST_BYTE_TIMEOUT,
+                    json!({"reason": "upstream_first_byte_timeout"}),
+                    true,
+                ));
                 break;
             }
             match reader.next_item(Duration::from_millis(50)) {
                 NextItem::Timeout => continue,
                 NextItem::End => {
                     for (name, payload) in translator.finish() {
-                        update_stream_status(
-                            &name,
-                            &payload,
-                            &mut status,
-                            &mut usage,
-                            &mut output_chars,
-                            &mut terminal,
-                        );
-                        if write_sse_event(stream, &name, &payload).is_err() {
-                            client_disconnected = true;
+                        if !handle_responses_stream_event(
+                            stream, context, &mut state, &name, &payload,
+                        ) {
+                            break;
+                        }
+                        if state.terminal {
                             break;
                         }
                     }
                     break;
                 }
                 NextItem::Error(error) => {
-                    let failed = json!({
-                        "type": "response.failed",
-                        "response": {
-                            "id": response_id,
-                            "object": "response",
-                            "created_at": created_at,
-                            "status": "failed",
-                            "model": context.model,
-                            "output": [],
-                            "error": {
-                                "code": "upstream_stream_error",
-                                "message": "upstream stream failed",
-                                "request_id": context.http_request_id,
-                            },
-                        },
-                    });
-                    status = "upstream_stream_error".to_string();
-                    let _ = write_sse_event(stream, "response.failed", &failed);
-                    let _ = error;
+                    if error.timed_out && !state.committed {
+                        state.status = "upstream_first_byte_timeout".to_string();
+                        state.failure = Some(ResponsesStreamFailure::local(
+                            "upstream_first_byte_timeout",
+                            UPSTREAM_FIRST_BYTE_TIMEOUT,
+                            json!({"reason": "upstream_first_byte_timeout"}),
+                            true,
+                        ));
+                    } else if error.timed_out && Instant::now() >= context.deadline {
+                        state.status = "request_deadline_exceeded".to_string();
+                        state.failure = Some(ResponsesStreamFailure::local(
+                            "request_deadline_exceeded",
+                            "Upstream request exceeded the total request budget.",
+                            json!({"reason": "request_deadline_exceeded"}),
+                            false,
+                        ));
+                    } else {
+                        state.status = "upstream_read_error".to_string();
+                        state.failure = Some(ResponsesStreamFailure::local(
+                            "upstream_read_error",
+                            UPSTREAM_READ_ERROR,
+                            json!({
+                                "reason": "upstream_read_error",
+                                "exception": error.name,
+                            }),
+                            true,
+                        ));
+                    }
                     break;
                 }
                 NextItem::Line(line) => {
                     for (name, payload) in translator.feed_line(&line_text(&line)) {
-                        update_stream_status(
-                            &name,
-                            &payload,
-                            &mut status,
-                            &mut usage,
-                            &mut output_chars,
-                            &mut terminal,
-                        );
-                        if write_sse_event(stream, &name, &payload).is_err() {
-                            client_disconnected = true;
+                        if !handle_responses_stream_event(
+                            stream, context, &mut state, &name, &payload,
+                        ) {
+                            break;
+                        }
+                        if state.terminal {
                             break;
                         }
                     }
-                    if client_disconnected || terminal {
+                    if state.status == "client_disconnected" || state.terminal {
                         break;
                     }
                 }
@@ -1923,19 +1929,313 @@ fn forward_stream_with_inner(
         }
         reader.cancel();
         drop(reader);
-        if client_disconnected {
-            record_stream_usage(context, &status, &usage, output_chars);
+        if state.status == "client_disconnected" {
+            record_stream_usage(context, &state.status, &state.usage, state.output_chars);
             return ChatResult::Written {
                 close: true,
                 failed: false,
             };
         }
-        record_stream_usage(context, &status, &usage, output_chars);
+        if !state.committed {
+            if state
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.retryable)
+            {
+                if let Some(plan) = retry_state.plan(
+                    RetryOutcome::Stream,
+                    &limits,
+                    context.deadline,
+                    attempt_started.elapsed(),
+                ) {
+                    if !retry::sleep_with_deadline(plan.delay, context.deadline) {
+                        record_usage(context, "request_deadline_exceeded", None, 0);
+                        return ChatResult::Response(last.deadline_error().response());
+                    }
+                    continue;
+                }
+            }
+            record_stream_usage(context, &state.status, &state.usage, state.output_chars);
+            return ChatResult::Response(precommit_stream_error_response(&state, context));
+        }
+        if !state.failure_written && state.status != "ok" && state.status != "incomplete" {
+            let failure = state.failure.clone().unwrap_or_else(|| {
+                ResponsesStreamFailure::local(
+                    "upstream_stream_error",
+                    UPSTREAM_STREAM_ERROR,
+                    json!({"reason": "upstream_stream_error"}),
+                    false,
+                )
+            });
+            let payload = response_failed_payload(
+                &response_id,
+                created_at,
+                context.model,
+                context.http_request_id,
+                &failure,
+            );
+            let _ = write_sse_event(stream, "response.failed", &payload);
+            state.failure_written = true;
+        }
+        record_stream_usage(context, &state.status, &state.usage, state.output_chars);
         return ChatResult::Written {
             close: true,
-            failed: status != "ok",
+            failed: state.status != "ok",
         };
     }
+}
+
+#[derive(Clone)]
+struct ResponsesStreamFailure {
+    code: String,
+    message: String,
+    detail: Value,
+    retryable: bool,
+}
+
+impl ResponsesStreamFailure {
+    fn from_payload(payload: &Value) -> Self {
+        let error = payload
+            .get("response")
+            .and_then(|response| response.get("error"));
+        let code = error
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or("upstream_stream_error")
+            .to_string();
+        let message = error
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("Upstream stream failed")
+            .to_string();
+        let mut detail = error
+            .and_then(|error| error.get("detail"))
+            .cloned()
+            .unwrap_or_else(|| json!({"reason": code}));
+        if let Some(object) = detail.as_object_mut() {
+            object
+                .entry("reason".to_string())
+                .or_insert_with(|| json!(code));
+        }
+        Self {
+            retryable: matches!(
+                code.as_str(),
+                "upstream_eof_without_done" | "upstream_eof_without_message_stop"
+            ),
+            code,
+            message,
+            detail,
+        }
+    }
+
+    fn local(code: &str, message: impl Into<String>, detail: Value, retryable: bool) -> Self {
+        Self {
+            code: code.to_string(),
+            message: message.into(),
+            detail,
+            retryable,
+        }
+    }
+}
+
+struct ResponsesStreamState {
+    committed: bool,
+    prelude: Vec<u8>,
+    status: String,
+    usage: Value,
+    output_chars: u64,
+    terminal: bool,
+    failure: Option<ResponsesStreamFailure>,
+    failure_written: bool,
+}
+
+impl ResponsesStreamState {
+    fn new(prelude: Vec<u8>) -> Self {
+        Self {
+            committed: false,
+            prelude,
+            status: "ok".to_string(),
+            usage: Value::Object(Map::new()),
+            output_chars: 0,
+            terminal: false,
+            failure: None,
+            failure_written: false,
+        }
+    }
+}
+
+/// Process one translated Responses event.
+///
+/// The 200 head and the staged `response.created`/prelude are written only at
+/// the first substantive event (`response.output_text.delta` or
+/// `response.function_call_arguments.delta`) or a successful terminal event. A
+/// failure before that point stays a pre-commit HTTP error, so it can be retried
+/// without the client seeing a 200; after commit the failure is one in-band
+/// `response.failed` event and the stream stops without a success terminal.
+fn handle_responses_stream_event(
+    stream: &mut TcpStream,
+    context: &ResponsesContext<'_>,
+    state: &mut ResponsesStreamState,
+    name: &str,
+    payload: &Value,
+) -> bool {
+    update_stream_status(
+        name,
+        payload,
+        &mut state.status,
+        &mut state.usage,
+        &mut state.output_chars,
+        &mut state.terminal,
+    );
+    let terminal = matches!(
+        name,
+        "response.completed" | "response.incomplete" | "response.failed"
+    );
+    let substantive = matches!(
+        name,
+        "response.output_text.delta" | "response.function_call_arguments.delta"
+    );
+    let event = encode_sse_event(name, payload);
+    if state.committed {
+        if write_chunk(stream, &event).is_err() {
+            state.status = "client_disconnected".to_string();
+            return false;
+        }
+        if name == "response.failed" {
+            state.failure_written = true;
+        }
+        state.terminal |= terminal;
+        return true;
+    }
+    if name == "response.failed" {
+        state.failure = Some(ResponsesStreamFailure::from_payload(payload));
+        state.terminal = true;
+        return false;
+    }
+    if substantive || terminal {
+        if !commit_responses_stream(stream, context, state) {
+            state.status = "client_disconnected".to_string();
+            return false;
+        }
+        if write_chunk(stream, &event).is_err() {
+            state.status = "client_disconnected".to_string();
+            return false;
+        }
+        state.terminal |= terminal;
+        return true;
+    }
+    state.prelude.extend_from_slice(&event);
+    if state.prelude.len() > PRELUDE_MAX_BYTES {
+        state.status = "upstream_prelude_overflow".to_string();
+        state.failure = Some(ResponsesStreamFailure::local(
+            "upstream_prelude_overflow",
+            UPSTREAM_PRELUDE_OVERFLOW,
+            json!({"reason": "upstream_prelude_overflow"}),
+            false,
+        ));
+        state.terminal = true;
+        return false;
+    }
+    true
+}
+
+fn commit_responses_stream(
+    stream: &mut TcpStream,
+    context: &ResponsesContext<'_>,
+    state: &mut ResponsesStreamState,
+) -> bool {
+    state.committed = true;
+    let mut headers = vec![
+        ("Content-Type".to_string(), "text/event-stream".to_string()),
+        ("Cache-Control".to_string(), "no-store".to_string()),
+        (
+            "X-Request-Id".to_string(),
+            context.http_request_id.to_string(),
+        ),
+        ("Connection".to_string(), "close".to_string()),
+    ];
+    if let Some(origin) = &context.origin {
+        headers.push(("Access-Control-Allow-Origin".to_string(), origin.clone()));
+    }
+    if write_response_head(stream, 200, &headers).is_err() {
+        return false;
+    }
+    let prelude = std::mem::take(&mut state.prelude);
+    write_chunk(stream, &prelude).is_ok()
+}
+
+fn precommit_stream_error_response(
+    state: &ResponsesStreamState,
+    context: &ResponsesContext<'_>,
+) -> Response {
+    let failure = state.failure.as_ref();
+    let code = failure
+        .map(|failure| failure.code.as_str())
+        .unwrap_or("upstream_stream_error");
+    let reason = failure
+        .and_then(|failure| failure.detail.get("reason").and_then(Value::as_str))
+        .unwrap_or(code);
+    let message = failure
+        .map(|failure| failure.message.as_str())
+        .unwrap_or("Upstream stream failed");
+    let mut detail = failure
+        .map(|failure| failure.detail.clone())
+        .unwrap_or_else(|| json!({"reason": reason}));
+    if let Some(object) = detail.as_object_mut() {
+        object
+            .entry("reason".to_string())
+            .or_insert_with(|| json!(reason));
+        object
+            .entry("request_id".to_string())
+            .or_insert_with(|| json!(context.http_request_id));
+    }
+    match reason {
+        "upstream_first_byte_timeout" => GatewayError::upstream_timeout()
+            .with_detail(detail)
+            .response(),
+        "request_deadline_exceeded" => GatewayError::request_deadline_exceeded(None)
+            .with_detail(detail)
+            .response(),
+        _ => GatewayError::new(502, message, "upstream_stream_error")
+            .with_detail(detail)
+            .response(),
+    }
+}
+
+fn response_failed_payload(
+    response_id: &str,
+    created_at: i64,
+    model: &str,
+    request_id: &str,
+    failure: &ResponsesStreamFailure,
+) -> Value {
+    let mut detail = failure.detail.clone();
+    if let Some(object) = detail.as_object_mut() {
+        object
+            .entry("reason".to_string())
+            .or_insert_with(|| json!(failure.code));
+        object
+            .entry("request_id".to_string())
+            .or_insert_with(|| json!(request_id));
+    }
+    let mut error = GatewayError::new(502, failure.message.clone(), failure.code.clone())
+        .with_detail(detail)
+        .object();
+    if let Some(object) = error.as_object_mut() {
+        object.insert("request_id".to_string(), json!(request_id));
+    }
+    json!({
+        "type": "response.failed",
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": "failed",
+            "model": model,
+            "output": [],
+            "error": error,
+        },
+    })
 }
 
 fn record_stream_usage(
@@ -1997,11 +2297,15 @@ fn update_stream_status(
     }
 }
 
-fn write_sse_event(stream: &mut TcpStream, name: &str, payload: &Value) -> std::io::Result<()> {
+fn encode_sse_event(name: &str, payload: &Value) -> Vec<u8> {
     let mut event = format!("event: {name}\ndata: ");
     event.push_str(&serde_json::to_string(payload).unwrap_or_default());
     event.push_str("\n\n");
-    write_chunk(stream, event.as_bytes())
+    event.into_bytes()
+}
+
+fn write_sse_event(stream: &mut TcpStream, name: &str, payload: &Value) -> std::io::Result<()> {
+    write_chunk(stream, &encode_sse_event(name, payload))
 }
 
 fn upstream_status_name(status: u16) -> String {
@@ -2139,8 +2443,22 @@ impl ResponsesStreamTranslator {
         }
     }
 
-    fn failed(&mut self, code: &str, message: &str) -> Vec<(String, Value)> {
+    fn failed(&mut self, code: &str, message: &str, mut detail: Value) -> Vec<(String, Value)> {
         self.terminal = true;
+        if let Some(object) = detail.as_object_mut() {
+            object
+                .entry("reason".to_string())
+                .or_insert_with(|| json!(code));
+            object
+                .entry("request_id".to_string())
+                .or_insert_with(|| json!(self.request_id));
+        }
+        let mut error = GatewayError::new(502, message, code)
+            .with_detail(detail)
+            .object();
+        if let Some(object) = error.as_object_mut() {
+            object.insert("request_id".to_string(), json!(self.request_id));
+        }
         vec![(
             "response.failed".to_string(),
             json!({
@@ -2152,11 +2470,7 @@ impl ResponsesStreamTranslator {
                     "status": "failed",
                     "model": self.model,
                     "output": [],
-                    "error": {
-                        "code": code,
-                        "message": message,
-                        "request_id": self.request_id,
-                    },
+                    "error": error,
                 },
             }),
         )]
@@ -2178,7 +2492,13 @@ impl ResponsesStreamTranslator {
             return Vec::new();
         };
         if chunk.get("error").is_some_and(truthy) {
-            return self.failed("upstream_error", "upstream stream failed");
+            let reason = explicit_error_reason(&Value::Object(chunk.clone()))
+                .unwrap_or_else(|| "upstream reported an explicit stream error".to_string());
+            return self.failed(
+                "upstream_stream_error",
+                "Upstream reported an explicit stream error; the completion is incomplete.",
+                json!({"upstream_message": reason}),
+            );
         }
         if let Some(usage) = chunk.get("usage").and_then(Value::as_object) {
             self.usage = Value::Object(usage.clone());
@@ -2322,7 +2642,8 @@ impl ResponsesStreamTranslator {
         if !self.done_seen {
             events.extend(self.failed(
                 "upstream_eof_without_done",
-                "upstream stream ended without [DONE]",
+                UPSTREAM_EOF_WITHOUT_DONE,
+                json!({}),
             ));
             return events;
         }
@@ -2692,7 +3013,15 @@ impl ResponsesStreamTranslator {
                 self.saw_message_stop = true;
                 self.finish_messages()
             }
-            "error" => self.failed("upstream_error", "upstream stream failed"),
+            "error" => {
+                let reason = explicit_error_reason(&Value::Object(event.clone()))
+                    .unwrap_or_else(|| "upstream reported an explicit stream error".to_string());
+                self.failed(
+                    "upstream_stream_error",
+                    "Upstream reported an explicit stream error; the completion is incomplete.",
+                    json!({"upstream_message": reason}),
+                )
+            }
             _ => Vec::new(),
         }
     }
@@ -2789,7 +3118,8 @@ impl ResponsesStreamTranslator {
         if !self.saw_message_stop {
             return self.failed(
                 "upstream_eof_without_message_stop",
-                "upstream stream ended without message_stop",
+                UPSTREAM_EOF_WITHOUT_MESSAGE_STOP,
+                json!({}),
             );
         }
         let mut events = Vec::new();

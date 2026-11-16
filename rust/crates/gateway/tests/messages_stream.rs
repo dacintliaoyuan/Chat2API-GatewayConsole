@@ -42,6 +42,26 @@ fn event(name: &str, data: Value) -> Vec<u8> {
     .into_bytes()
 }
 
+fn event_payloads(body: &[u8]) -> Vec<(String, Value)> {
+    let text = String::from_utf8_lossy(body);
+    text.split("\n\n")
+        .filter_map(|chunk| {
+            let name = chunk
+                .lines()
+                .find_map(|line| line.strip_prefix("event: "))?
+                .to_string();
+            let data = chunk
+                .lines()
+                .filter(|line| line.starts_with("data:"))
+                .map(|line| line.strip_prefix("data:").unwrap_or(line))
+                .map(str::trim_start)
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some((name, serde_json::from_str::<Value>(&data).ok()?))
+        })
+        .collect()
+}
+
 fn official_events() -> Vec<Vec<u8>> {
     vec![
         event(
@@ -180,15 +200,129 @@ fn eof_before_message_stop_is_not_a_success() {
         config.request_total = Duration::from_secs(5);
     });
     let raw = start_stream(&gateway);
-    let (status, _, body) = parse_raw_response(&raw);
+    let (status, headers, body) = parse_raw_response(&raw);
     assert_eq!(status, 200);
-    assert_eq!(body, events.concat());
+    assert!(
+        body.starts_with(&events.concat()),
+        "the upstream bytes are relayed verbatim"
+    );
     assert!(
         !body
-            .windows(b"message_stop".len())
-            .any(|window| window == b"message_stop"),
+            .windows(b"event: message_stop".len())
+            .any(|window| window == b"event: message_stop"),
         "the relay must never synthesize a missing message_stop"
     );
+    let payloads = event_payloads(&body);
+    let (name, error) = payloads.last().expect("one local in-band error");
+    assert_eq!(name, "error");
+    assert_eq!(error["type"], json!("error"));
+    assert_eq!(error["error"]["type"], json!("api_error"));
+    assert_eq!(error["error"]["code"], json!("upstream_eof_without_event"));
+    assert_eq!(
+        error["error"]["detail"]["reason"],
+        json!("upstream_eof_without_event")
+    );
+    let header_id = headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("x-request-id"))
+        .map(|(_, value)| value.as_str())
+        .expect("X-Request-Id header");
+    assert_eq!(error["error"]["detail"]["request_id"], json!(header_id));
+}
+
+#[test]
+fn a_pre_commit_eof_is_retried_before_the_200() {
+    let temp = TempDir::new("um-rust-messages-precommit-retry-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: Vec::new(),
+        hold: Duration::ZERO,
+    });
+    stub.push(ChatAttempt::Sse {
+        chunks: official_events().into_iter().map(ChatChunk::now).collect(),
+        hold: Duration::ZERO,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+        config.request_total = Duration::from_secs(5);
+        config.retry_delay_base = Duration::ZERO;
+        config.max_fast_retries = 1;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 12;
+    });
+    let raw = start_stream(&gateway);
+    let (status, _, body) = parse_raw_response(&raw);
+    assert_eq!(status, 200);
+    assert_eq!(
+        stub.attempts(),
+        2,
+        "the zero-event attempt was retried once"
+    );
+    assert_eq!(body, official_events().concat());
+    assert!(!event_payloads(&body)
+        .iter()
+        .any(|(name, _)| name == "error"));
+}
+
+#[test]
+fn a_pre_commit_eof_is_an_anthropic_502() {
+    let temp = TempDir::new("um-rust-messages-precommit-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: Vec::new(),
+        hold: Duration::ZERO,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.max_fast_retries = 0;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 1;
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+        config.request_total = Duration::from_secs(5);
+    });
+    let response = support::client_request(gateway.addr, &request()).expect("pre-commit EOF");
+    assert_eq!(response.status, 502);
+    assert!(response.header("x-request-id").is_some());
+    let body = response.json();
+    assert_eq!(body["type"], json!("error"));
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
+    assert_eq!(body["error"]["code"], json!("upstream_stream_error"));
+    assert_eq!(body["error"]["detail"], json!("upstream_eof_without_event"));
+    assert_eq!(stub.attempts(), 1, "no retry budget was configured");
+}
+
+#[test]
+fn an_error_event_before_the_200_is_an_anthropic_502() {
+    let temp = TempDir::new("um-rust-messages-error-precommit-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::Sse {
+        chunks: vec![ChatChunk::now(event(
+            "error",
+            json!({
+                "type": "error",
+                "error": {"type": "overloaded_error", "message": "overloaded"},
+            }),
+        ))],
+        hold: Duration::ZERO,
+    });
+    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
+        config.max_fast_retries = 0;
+        config.max_slow_retries = 0;
+        config.max_physical_attempts = 1;
+        config.first_byte_timeout = Duration::from_secs(2);
+        config.socket_silence_timeout = Duration::from_secs(2);
+        config.request_total = Duration::from_secs(5);
+    });
+    let response =
+        support::client_request(gateway.addr, &request()).expect("pre-commit error event");
+    assert_eq!(response.status, 502);
+    let body = response.json();
+    assert_eq!(body["type"], json!("error"));
+    assert_eq!(body["error"]["type"], json!("upstream_error"));
+    assert_eq!(body["error"]["code"], json!("upstream_stream_error"));
+    assert_eq!(body["error"]["detail"], json!("upstream_stream_error"));
+    assert_eq!(stub.attempts(), 1, "an explicit error is not retried");
 }
 
 #[test]

@@ -438,8 +438,14 @@ fn forward_stream_inner(
                 continue;
             }
         }
-        if outcome.committed && outcome.status == MessagesStreamStatus::UpstreamReadError {
-            write_stream_error(stream, &outcome, context.http_request_id);
+        if outcome.committed && !outcome.status.is_success() {
+            if matches!(
+                outcome.status,
+                MessagesStreamStatus::UpstreamReadError
+                    | MessagesStreamStatus::UpstreamEofWithoutEvent
+            ) {
+                write_stream_error(stream, &outcome, context.http_request_id);
+            }
             record_stream_usage(context, &outcome);
         } else if !outcome.committed && !outcome.status.is_success() {
             record_usage(context, "upstream_stream_error", None, 0);
@@ -738,6 +744,12 @@ fn process_event(
             EventAction::Continue
         };
     }
+    if terminal && state.status == MessagesStreamStatus::UpstreamStreamError {
+        // An upstream error before any substantive event never reaches the
+        // client: the 200 stays uncommitted so the request can fail as HTTP 502
+        // (or be retried) instead of relaying an error behind a success status.
+        return EventAction::Stop(state.status);
+    }
     state.staged.extend_from_slice(&wire);
     if state.staged.len() > PRELUDE_MAX_BYTES {
         if !flush_prelude(stream, context, state, upstream_headers) {
@@ -825,19 +837,41 @@ fn stream_error_response(outcome: &MessagesStreamOutcome) -> Response {
 }
 
 fn write_stream_error(stream: &mut TcpStream, outcome: &MessagesStreamOutcome, request_id: &str) {
-    let name = outcome.exception.unwrap_or("ConnectionError");
-    let payload = json!({"type": "error", "error": {
-        "type": "api_error",
-        "message": format!(
-            "Upstream connection failed mid-stream ({name}); the completion is incomplete."
+    let (code, message, reason) = match outcome.status {
+        MessagesStreamStatus::UpstreamReadError => {
+            let name = outcome.exception.unwrap_or("ConnectionError");
+            (
+                "upstream_stream_error",
+                format!(
+                    "Upstream connection failed mid-stream ({name}); the completion is incomplete."
+                ),
+                "upstream_read_error",
+            )
+        }
+        MessagesStreamStatus::UpstreamEofWithoutEvent => (
+            "upstream_eof_without_event",
+            "Upstream closed the stream before the terminal event; the completion is incomplete."
+                .to_string(),
+            "upstream_eof_without_event",
         ),
-        "code": "upstream_stream_error",
+        _ => (
+            "upstream_stream_error",
+            "Upstream stream failed; the completion is incomplete.".to_string(),
+            outcome.status.reason(),
+        ),
+    };
+    let mut payload = json!({"type": "error", "error": {
+        "type": "api_error",
+        "message": message,
+        "code": code,
         "detail": {
-            "reason": outcome.status.reason(),
-            "exception": name,
+            "reason": reason,
             "request_id": request_id,
         },
     }});
+    if let Some(exception) = outcome.exception {
+        payload["error"]["detail"]["exception"] = json!(exception);
+    }
     let mut event = b"event: error\ndata: ".to_vec();
     if let Ok(raw) = serde_json::to_vec(&payload) {
         event.extend_from_slice(&raw);

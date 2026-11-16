@@ -147,9 +147,17 @@ impl GatewayError {
         error
     }
 
+    /// The OpenAI-shaped `error` object without the outer `{"error": ...}` key.
+    ///
+    /// An in-band SSE error reuses this object so a committed stream reports the
+    /// same `message`/`type`/`code`/`param`/`detail` envelope as an HTTP error.
+    pub fn object(&self) -> Value {
+        Value::Object(self.error_object())
+    }
+
     /// The OpenAI-shaped body.
     pub fn body(&self) -> Value {
-        json!({"error": Value::Object(self.error_object())})
+        json!({"error": self.object()})
     }
 
     /// The Anthropic-shaped body; the machine code and diagnostics stay inside
@@ -158,7 +166,7 @@ impl GatewayError {
     pub fn anthropic_body(&self) -> Value {
         json!({
             "type": "error",
-            "error": Value::Object(self.error_object()),
+            "error": self.object(),
         })
     }
 
