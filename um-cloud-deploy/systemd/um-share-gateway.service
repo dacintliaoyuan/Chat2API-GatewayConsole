@@ -1,0 +1,125 @@
+[Unit]
+Description=UM share gateway host (single authority for the Rust 8003 gateway)
+Documentation=file:///opt/um-share/current/um-cloud-deploy/README.md
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/um-share/current/share/broker_ops.py
+ConditionPathExists=/opt/um-share/current/bin/um-gateway
+ConditionPathExists=/etc/um-share/gateway-control.key
+
+[Service]
+Type=simple
+User=um-share
+Group=um-share
+WorkingDirectory=/opt/um-share/current
+EnvironmentFile=/etc/um-share/gateway.env
+EnvironmentFile=-/etc/um-share/console.env
+# The Rust gateway keeps the console's token/profile under the writable
+# console state, never inside the read-only release.  The environment file also
+# carries these on an installed host; the explicit values keep the gateway child
+# correct even when the optional console.env predates the merged process.
+Environment=CHAT2API_TOKEN_FILE=/var/lib/um-share-console/share-backend/token.json
+Environment=CHAT2API_PROFILE_DIR=/var/lib/um-share-console/share-backend/edge-profile
+Environment=CHAT2API_SERVICE_LOG=/var/lib/um-share-console/share-backend/share-backend.log
+Environment=CHAT2API_USAGE_LOG=/var/lib/um-share-console/share-backend/usage-share-backend.jsonl
+Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token
+# The browser launch gets these only when the on-demand display is active; the
+# default headless path never connects to them.
+Environment=DISPLAY=:99
+Environment=XAUTHORITY=/run/um-share/display.auth
+# The gateway persists its revoke state under the state directory, never inside
+# the release: ProtectSystem=strict keeps /opt/um-share/current read-only.
+# install.sh appends
+# CHAT2API_SHARE_REVOKE_STATE_FILE=/var/lib/um-share/share-revoke.state
+# to gateway.env, and the gateway child inherits this EnvironmentFile.
+Environment=PYTHONPATH=/opt/um-share/current
+UMask=0077
+# Fail the START, never silently run without metering: gateway.env must set
+# UM_SHARE_UID.
+ExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly broker /etc/systemd/system/um-share-gateway.service /etc/um-share/gateway.env
+ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share/broker_ops.py \
+  --socket-path /run/um-share/broker.sock \
+  --key-file /etc/um-share/broker-control.key \
+  --instance-key-file /etc/um-share/instance.key \
+  --registration-file /var/lib/um-share/run/instance-registration.json \
+  --instance-socket-prefix /run/um-share/instance- \
+  --projection-path /var/lib/um-share/run/share-projection.json \
+  --broker-dir /var/lib/um-share/broker \
+  --host-pid-file /run/um-share/share-gateway.pid \
+  --state-dir /run/um-share \
+  --expected-uid ${UM_SHARE_UID} \
+  --host-entry-kind native \
+  --expect-instance-image /opt/um-share/current/bin/um-gateway \
+  --expect-instance-cmdline-marker um-gateway \
+  --expect-instance-port 8003 \
+  --host-command /opt/um-share/current/bin/um-gateway \
+    --mode production \
+    --port 8003 \
+    --upstream-base-url https://chat.genai.um.edu.mo \
+    --share-config /var/lib/um-share/run/share-projection.json \
+    --auth-mode projection \
+    --token-file /var/lib/um-share-console/share-backend/token.json \
+    --profile-dir /var/lib/um-share-console/share-backend/edge-profile \
+    --login-display-file /run/um-share/login-display.env \
+    --control-token-file /etc/um-share/admin-control-token \
+    --login-timeout 1800
+# The broker host owns the ONLY Popen that starts the Rust gateway.  The console
+# unit is fenced with NoExecPaths for the same binary, so a console
+# "service.start" can never become a second launcher.
+# The broker creates its AF_UNIX socket asynchronously after ExecStart, so an
+# immediate start races it and answers not_installed.  Wait up to 10 s
+# (50 x 0.2 s) for the socket, then retry the restricted start; success
+# exits 0.  The leading "-" keeps the broker unit active when a persisted stop
+# intent correctly refuses the automatic start; an operator start uses
+# `brokerctl start-explicit`.
+ExecStartPost=-/bin/sh -c 'i=0; while [ $$i -lt 50 ]; do \
+  if [ -S /run/um-share/broker.sock ] && \
+     /opt/um-share/bin/um-share-brokerctl.py start; then exit 0; fi; \
+  i=$$((i+1)); sleep 0.2; done; exit 1'
+# A 15-minute total drain is enforced by the helper: wait for ESTABLISHED
+# connections to 8003 to reach zero, then send the broker drain verb (its own
+# bounded in-flight wait + final stop + closure verification).  A timed-out
+# update never switches the current symlink.
+ExecStop=/opt/um-share/bin/um-share-brokerctl.py --drain-budget ${UM_DRAIN_BUDGET_S} --poll-interval 5 stop
+TimeoutStartSec=120
+TimeoutStopSec=960
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+# The Rust gateway child is spawned with start_new_session=True but stays in
+# this service cgroup: control-group is the final cleanup fence.
+LimitNOFILE=65536
+TasksMax=512
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=um-share
+StateDirectoryMode=0750
+RuntimeDirectory=um-share
+RuntimeDirectoryMode=0700
+# The display unit keeps its Xvfb auth cookie under /run/um-share.  Without
+# preserve, this unit's stop wipes the directory out from under the RUNNING Xvfb
+# and the login window dies with "(EE) Failed to open authorization file".
+RuntimeDirectoryPreserve=yes
+LogsDirectory=um-share
+LogsDirectoryMode=0750
+ConfigurationDirectory=um-share
+ConfigurationDirectoryMode=0750
+# /var/lib/um-share is the persistent state fence (StateDirectory=um-share);
+# the gateway's revoke state lives there.  The Rust gateway also writes the UM
+# token, browser profile and service log under /var/lib/um-share-console; without
+# that path in ReadWritePaths the gateway exits at startup with "Read-only file
+# system" and the unit can never start 8003.
+ReadWritePaths=/var/lib/um-share /run/um-share /var/log/um-share /var/lib/um-share-console
+
+[Install]
+WantedBy=multi-user.target

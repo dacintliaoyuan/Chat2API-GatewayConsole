@@ -3,15 +3,15 @@
 #
 # Public edge for the UM cloud share.
 #
-# Only the share whitelist is exposed, and only to the loopback 8100 entry:
+# Only the share whitelist is exposed, and only to the loopback 8003 Rust entry:
 #   GET  /v1/models
 #   POST /v1/chat/completions
 #   POST /v1/messages
 #   POST /v1/responses
 #
-# 8096 (private management console) is NEVER
-# reverse-proxied here.  8100 itself is also not opened in the cloud security
-# group; Caddy is the only public listener.
+# 8002 (private management console) is NEVER reverse-proxied here.  8003 itself
+# is also not opened in the cloud security group; Caddy is only a historical
+# fallback listener.  The Python rollback release keeps 8100/8096.
 #
 # Replace the site address and email before enabling.  Keep DNS-only in
 # Cloudflare (no orange cloud) and keep 80/443 as the only public ingress.
@@ -21,7 +21,7 @@
 }
 
 (um_share_proxy) {
-	reverse_proxy 127.0.0.1:8100 {
+	reverse_proxy 127.0.0.1:8003 {
 		# SSE must flush every event immediately, not after a buffer.
 		flush_interval -1
 		transport http {

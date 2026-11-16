@@ -4,7 +4,7 @@
 # Xvfb never listens on TCP (-nolisten tcp); x11vnc binds 127.0.0.1 only
 # (-localhost).  The browser reaches it through the console's same-origin
 # /display/ WebSocket proxy; the VNC port is never opened in the cloud security
-# group.  The persistent Chromium profile belongs to the 8100 process, not to this
+# group.  The persistent Chromium profile belongs to the 8003 gateway process, not to this
 # display process.
 #
 # Expand-contract (2026-11-14): x11vnc moved 5901 -> 8097.  console.env's
@@ -31,7 +31,7 @@ VNC_AUTH_SOURCE="${UM_VNC_AUTH_SOURCE:-/etc/um-share/vnc.passwd}"
 VNC_AUTH_SOCKET="${UM_VNC_AUTH_SOCKET:-/run/um-share/vnc-auth.sock}"
 PYTHON="${UM_DEPLOY_PYTHON:-python3.14}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# The 8100 child reads this file to decide whether a new login round opens a
+# The 8003 gateway reads this file to decide whether a new login round opens a
 # visible browser.  It exists only while this on-demand display runs, so the
 # default path stays headless.
 DISPLAY_STATE_FILE="${UM_LOGIN_DISPLAY_FILE:-/run/um-share/login-display.env}"

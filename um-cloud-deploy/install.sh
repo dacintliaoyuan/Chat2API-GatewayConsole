@@ -24,6 +24,7 @@ CLOUDFLARED_TOKEN_FILE=""
 WHEELHOUSE=""
 RECOVER_BACKUP=""
 RECOVER_SECURITY_STATE=""
+HEALTH_PORT=""
 
 usage() {
   cat <<'EOF'
@@ -52,6 +53,9 @@ Options:
   --recover-security-state PATH
                         independent latest security state (required with
                         --recover-backup)
+  --health-port PORT    gateway port the install health gate probes (default:
+                        the target release's port, 8003 for Rust, 8100 for
+                        the Python rollback release)
   -h, --help            show this help
 
 Exit codes:
@@ -83,6 +87,7 @@ while [ "$#" -gt 0 ]; do
     --cloudflared-token-file) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; CLOUDFLARED_TOKEN_FILE="$2"; shift 2 ;;
     --recover-backup) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_BACKUP="$2"; shift 2 ;;
     --recover-security-state) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_SECURITY_STATE="$2"; shift 2 ;;
+    --health-port) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; HEALTH_PORT="$2"; shift 2 ;;
     -h|--help) usage; exit "$EX_OK" ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit "$EX_USAGE" ;;
   esac
@@ -295,14 +300,32 @@ else
   chmod -R go-w "$TARGET"
 fi
 find "$TARGET/um-cloud-deploy" -type f \
-  \( -name '*.sh' -o -path '*/bin/*.py' \) -exec chmod 0755 {} +
+  \( -name '*.sh' -o -path '*/bin/*.py' \
+     -o -path '*/bin/um-gateway' -o -path '*/bin/um-console' \) \
+  -exec chmod 0755 {} +
 
-# A release installed as the Python rollback target must allow the merged
-# gateway child to write its token, browser profile and service log under the
-# writable console state.  Refuse a template that would start 8100 read-only
-# before `current` moves.
-require_share_backend_write_path \
+# The manifest freezes whether this release runs the Python rollback gateway or
+# the Rust 8003 production entry.  The unit set and the health gate follow that
+# runtime instead of a hardcoded 8100.
+TARGET_RUNTIME="$(release_runtime "$TARGET")"
+TARGET_GATEWAY_UNIT="$(release_gateway_unit "$TARGET_RUNTIME")"
+mapfile -t TARGET_UNITS < <(release_units "$TARGET_RUNTIME")
+if [ -z "$HEALTH_PORT" ]; then
+  HEALTH_PORT="$(release_gateway_port "$TARGET_RUNTIME")"
+fi
+validate_port "--health-port" "$HEALTH_PORT"
+
+# A release installed as a rollback target must allow the merged gateway child to
+# write its token, browser profile and service log under the writable console
+# state.  Refuse a template that would start the gateway read-only before
+# `current` moves.
+if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+  require_share_backend_write_path \
+    "$TARGET/um-cloud-deploy/systemd/um-share-gateway.service"
+else
+  require_share_backend_write_path \
   "$TARGET/um-cloud-deploy/systemd/um-share-broker.service"
+fi
 
 # The running console's effective share-key path is resolved before `current`
 # moves: an old deployment without the console.env line used
@@ -461,10 +484,17 @@ check_deployment_assembly() {
   py="$(deploy_python)" || die "python interpreter not found" "$EX_OSERR"
   [ -f "$release/um-cloud-deploy/backup_restore.py" ] || \
     die "backup_restore.py missing in $release" "$EX_NOINPUT"
-  run_as_share "$py" "$release/um-cloud-deploy/backup_restore.py" \
-    --check-deployment-assembly broker \
-    "$UM_SYSTEMD_DIR/um-share-broker.service" "$UM_ETC/broker.env" \
-    >/dev/null || die "broker deployment assembly check failed" "$EX_SOFTWARE"
+  if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+    run_as_share "$py" "$release/um-cloud-deploy/backup_restore.py" \
+      --check-deployment-assembly broker \
+      "$UM_SYSTEMD_DIR/um-share-gateway.service" "$UM_ETC/gateway.env" \
+      >/dev/null || die "gateway deployment assembly check failed" "$EX_SOFTWARE"
+  else
+    run_as_share "$py" "$release/um-cloud-deploy/backup_restore.py" \
+      --check-deployment-assembly broker \
+      "$UM_SYSTEMD_DIR/um-share-broker.service" "$UM_ETC/broker.env" \
+      >/dev/null || die "broker deployment assembly check failed" "$EX_SOFTWARE"
+  fi
   run_as_share "$py" "$release/um-cloud-deploy/backup_restore.py" \
     --check-deployment-assembly console \
     "$UM_SYSTEMD_DIR/um-share-console.service" "$UM_ETC/console.env" \
@@ -502,10 +532,25 @@ if [ ! -e "$UM_ETC/share-management.json" ]; then
     "$TARGET/um-cloud-deploy/config/share-management.json.example" \
     "$UM_ETC/share-management.json"
 fi
-if [ ! -e "$UM_ETC/broker.env" ]; then
-  install -m 0640 -o root -g "$UM_BROKER_GROUP" \
-    "$TARGET/um-cloud-deploy/config/broker.env.example" \
-    "$UM_ETC/broker.env"
+if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+  if [ ! -e "$UM_ETC/gateway.env" ]; then
+    install -m 0640 -o root -g "$UM_BROKER_GROUP" \
+      "$TARGET/um-cloud-deploy/config/gateway.env.example" \
+      "$UM_ETC/gateway.env"
+  fi
+  # Keep broker.env as the same 8003 fallback when an operator or a
+  # transition helper still reads it.  It is not a second service configuration.
+  if [ ! -e "$UM_ETC/broker.env" ]; then
+    install -m 0640 -o root -g "$UM_BROKER_GROUP" \
+      "$TARGET/um-cloud-deploy/config/broker.env.example" \
+      "$UM_ETC/broker.env"
+  fi
+else
+  if [ ! -e "$UM_ETC/broker.env" ]; then
+    install -m 0640 -o root -g "$UM_BROKER_GROUP" \
+      "$TARGET/um-cloud-deploy/config/broker-python.env.example" \
+      "$UM_ETC/broker.env"
+  fi
 fi
 if [ ! -e "$UM_ETC/console.env" ]; then
   install -m 0640 -o root -g "$UM_BROKER_GROUP" \
@@ -514,12 +559,20 @@ if [ ! -e "$UM_ETC/console.env" ]; then
 fi
 # Replace the placeholders with the real uid only when the file was just
 # created; an existing file is left untouched.
+if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+  if ! grep -q '^UM_SHARE_UID=' "$UM_ETC/gateway.env" 2>/dev/null; then
+    printf 'UM_SHARE_UID=%s\n' "$(id -u "$UM_BROKER_USER")" >> "$UM_ETC/gateway.env"
+  fi
+fi
 if ! grep -q '^UM_SHARE_UID=' "$UM_ETC/broker.env" 2>/dev/null; then
   printf 'UM_SHARE_UID=%s\n' "$(id -u "$UM_BROKER_USER")" >> "$UM_ETC/broker.env"
 fi
 if ! grep -q '^UM_SHARE_UID=' "$UM_ETC/console.env" 2>/dev/null; then
   printf 'UM_SHARE_UID=%s\n' "$(id -u "$UM_BROKER_USER")" >> "$UM_ETC/console.env"
 fi
+# The target release owns the ports; an upgrade from Python must rewrite the
+# installed 8100/8096 lines to 8003/8002 (and a rollback must restore them).
+sync_runtime_env "$TARGET_RUNTIME"
 # The POSIX share-key encryption key is persistent deployment state, not
 # release material: the product default is <current>/data/share-secret.key, which
 # would disappear when `current` switches.  "install" keeps an existing effective
@@ -590,8 +643,7 @@ fi
 ln -sfn "$TARGET/um-cloud-deploy/bin" "$UM_PREFIX/bin.tmp.$$"
 mv -Tf "$UM_PREFIX/bin.tmp.$$" "$UM_PREFIX/bin"
 
-install_units "$TARGET" um-share-broker.service um-share-console.service \
-  um-share-display.service || \
+install_units "$TARGET" "${TARGET_UNITS[@]}" || \
   die "cannot install systemd units" "$EX_OSFILE"
 
 if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
@@ -627,11 +679,25 @@ if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
     die "cannot install cloudflared.service" "$EX_OSFILE"
 fi
 systemctl daemon-reload
-systemctl enable um-share-broker.service um-share-console.service
+systemctl enable "$TARGET_GATEWAY_UNIT" "$CONSOLE_UNIT"
+# Disable the other runtime's gateway unit so a reboot cannot start two
+# gateway hosts.  A missing unit is not an error.
+if [ "$TARGET_GATEWAY_UNIT" = "$RUST_GATEWAY_UNIT" ]; then
+  systemctl disable "$PYTHON_GATEWAY_UNIT" 2>/dev/null || true
+else
+  systemctl disable "$RUST_GATEWAY_UNIT" 2>/dev/null || true
+fi
 if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
   systemctl enable cloudflared.service
 fi
 check_deployment_assembly "$TARGET"
+# A test may drive only this tail; a missing runtime fact falls back to the
+# Python rollback release, never to an unbound variable under set -u.
+RELEASE_RUNTIME_RUST="${RELEASE_RUNTIME_RUST:-rust}"
+TARGET_RUNTIME="${TARGET_RUNTIME:-python}"
+TARGET_GATEWAY_UNIT="${TARGET_GATEWAY_UNIT:-um-share-broker.service}"
+CONSOLE_UNIT="${CONSOLE_UNIT:-um-share-console.service}"
+DISPLAY_UNIT="${DISPLAY_UNIT:-um-share-display.service}"
 
 # Explicit recovery is a requested data operation, not a service start:
 # --no-start only skips starting services, never the restore.  run_recovery dies
@@ -642,22 +708,42 @@ if [ -n "$RECOVER_BACKUP" ]; then
 fi
 
 if [ "$NO_START" -eq 0 ]; then
-  systemctl restart um-share-broker.service
-  brokerctl start-explicit || \
-    die "broker start did not confirm 8100" "$EX_UNAVAILABLE"
-  systemctl restart um-share-console.service
-  if [ "$WITH_DISPLAY" -eq 1 ]; then
-    systemctl enable --now um-share-display.service
+  if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+    systemctl restart "$TARGET_GATEWAY_UNIT"
+    brokerctl start-explicit || \
+      die "gateway start did not confirm $HEALTH_PORT" "$EX_UNAVAILABLE"
+    systemctl restart "$CONSOLE_UNIT"
+    if [ "$WITH_DISPLAY" -eq 1 ]; then
+      systemctl enable --now "$DISPLAY_UNIT"
+    fi
+    if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
+      systemctl restart cloudflared.service
+    fi
+    console_listen_port="$(console_port)" || exit "$EX_DATAERR"
+    wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || \
+      die "console $console_listen_port did not open" "$EX_UNAVAILABLE"
+    wait_port_open 127.0.0.1 "$HEALTH_PORT" "$UM_HEALTH_TIMEOUT_S" || \
+      die "share gateway $HEALTH_PORT did not open (check gateway start)" "$EX_UNAVAILABLE"
+    health_gate "$HEALTH_PORT" || \
+      die "health gate failed ($console_listen_port/$HEALTH_PORT HTTP)" "$EX_UNAVAILABLE"
+  else
+    systemctl restart um-share-broker.service
+    brokerctl start-explicit || \
+      die "broker start did not confirm 8100" "$EX_UNAVAILABLE"
+    systemctl restart um-share-console.service
+    if [ "$WITH_DISPLAY" -eq 1 ]; then
+      systemctl enable --now um-share-display.service
+    fi
+    if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
+      systemctl restart cloudflared.service
+    fi
+    console_listen_port="$(console_port)" || exit "$EX_DATAERR"
+    wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || \
+      die "console $console_listen_port did not open" "$EX_UNAVAILABLE"
+    wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || \
+      die "share gateway 8100 did not open (check broker start)" "$EX_UNAVAILABLE"
+    health_gate || die "health gate failed ($console_listen_port/8100 HTTP)" "$EX_UNAVAILABLE"
   fi
-  if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
-    systemctl restart cloudflared.service
-  fi
-  console_listen_port="$(console_port)" || exit "$EX_DATAERR"
-  wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || \
-    die "console $console_listen_port did not open" "$EX_UNAVAILABLE"
-  wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || \
-    die "share gateway 8100 did not open (check broker start)" "$EX_UNAVAILABLE"
-  health_gate || die "health gate failed ($console_listen_port/8100 HTTP)" "$EX_UNAVAILABLE"
 else
   log "services were not started (--no-start)"
 fi

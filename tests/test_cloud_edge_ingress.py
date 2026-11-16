@@ -2,10 +2,11 @@
 """D18-1: the Cloudflare Tunnel ingress is read-only and API-only.
 
 The public edge must route exactly the four shared API paths to the loopback
-8100 gateway and answer every other path with 404.  The private console (8096),
-the display (8097) and their expand-contract legacy aliases (18096/5901) must
-never appear as an ingress service.  ``check-ingress.py`` only reads the file and
-reports ``{ok, problems, rules}``; it never writes or reloads a tunnel.
+8003 Rust gateway and answer every other path with 404.  The private console
+(8002), the display (8097) and the retired Python ports
+(8100/8096/18096/5901) must never appear as an ingress service.
+``check-ingress.py`` only reads the file and reports
+``{ok, problems, rules}``; it never writes or reloads a tunnel.
 
 Run from ``ai-gateway``:
 
@@ -26,7 +27,7 @@ CONFIG = DEPLOY / "config" / "cloudflared.yml.example"
 HOST = "dacintapi.de5.net"
 API_PATHS = ("/v1/models", "/v1/chat/completions", "/v1/messages",
              "/v1/responses")
-FORBIDDEN_PORTS = ("8096", "8097", "18096", "5901")
+FORBIDDEN_PORTS = ("8002", "8097", "8100", "8096", "18096", "5901")
 
 
 def _load_checker():
@@ -49,7 +50,7 @@ def _config(rules):
     return "ingress:\n" + "\n".join(rules) + "\n"
 
 
-def _api_rule(path, host=HOST, service="http://127.0.0.1:8100"):
+def _api_rule(path, host=HOST, service="http://127.0.0.1:8003"):
     return (f"  - hostname: {host}\n"
             f"    path: ^{path}$\n"
             f"    service: {service}\n")
@@ -64,7 +65,7 @@ class CloudflaredIngressExampleTests(unittest.TestCase):
         self.assertEqual(5, len(result["rules"]))
         services = [rule["service"] for rule in result["rules"]]
         self.assertEqual(
-            ["http://127.0.0.1:8100"] * 4 + ["http_status:404"], services)
+            ["http://127.0.0.1:8003"] * 4 + ["http_status:404"], services)
 
     def test_example_routes_each_api_path_once(self):
         checker = _load_checker()

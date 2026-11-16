@@ -34,6 +34,7 @@ from pathlib import Path
 
 SCHEMA_VERSION = 2
 GENERATOR = "um-cloud-deploy/make-manifest.py"
+RUNTIMES = ("python", "rust")
 
 STATIC_ROOTS = [
     "usagesrv.py",
@@ -394,6 +395,7 @@ def _build(args) -> dict:
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "release_version": args.version,
+        "runtime": getattr(args, "runtime", "python"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "generator": GENERATOR,
         "source_root": ".",
@@ -456,6 +458,10 @@ def main(argv=None) -> int:
                         help="um-cloud-deploy directory inside the root")
     parser.add_argument("--version", required=True,
                         help="release version (e.g. s2-20261101)")
+    parser.add_argument("--runtime", choices=RUNTIMES, default="python",
+                        help="release runtime: python keeps the 8100/8096 "
+                             "rollback release; rust installs the 8003/8002 "
+                             "gateway release")
     parser.add_argument("--dependencies", type=Path,
                         default=Path(__file__).resolve().parent / "dependencies.lock.json",
                         help="dependencies.lock.json")

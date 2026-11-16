@@ -54,6 +54,7 @@ case "${1:-}" in
       tests.test_console_share_production \
       tests.test_cloud_deploy_assembly \
       tests.test_cloud_rollback_release \
+      tests.test_cloud_deploy_rust_release \
       tests.test_manifest_stability
     web_run npm run check:cloud-console
     ;;

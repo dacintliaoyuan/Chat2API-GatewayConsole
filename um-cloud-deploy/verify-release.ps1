@@ -142,18 +142,30 @@ else {
     Add-Error 'web_dist.included must be an explicit boolean'
 }
 
-foreach ($required in @(
+$runtime = [string]$manifest.runtime
+if ([string]::IsNullOrWhiteSpace($runtime)) { $runtime = 'python' }
+if ($runtime -notin @('python', 'rust')) {
+    Add-Error "unexpected manifest runtime: $runtime"
+}
+$requiredFiles = @(
     'um-cloud-deploy/install.sh',
     'um-cloud-deploy/update.sh',
     'um-cloud-deploy/rollback.sh',
     'um-cloud-deploy/rollback-drill.sh',
     'um-cloud-deploy/package-release.sh',
     'um-cloud-deploy/bin/um-share-brokerctl.py',
-    'um-cloud-deploy/systemd/um-share-broker.service',
     'um-cloud-deploy/systemd/um-share-console.service',
     'um-cloud-deploy/Caddyfile.example',
     'um-cloud-deploy/requirements.lock'
-)) {
+)
+if ($runtime -eq 'rust') {
+    $requiredFiles += 'um-cloud-deploy/bin/um-gateway'
+    $requiredFiles += 'um-cloud-deploy/systemd/um-share-gateway.service'
+}
+else {
+    $requiredFiles += 'um-cloud-deploy/systemd/um-share-broker.service'
+}
+foreach ($required in $requiredFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $required) -PathType Leaf)) {
         Add-Error "required deployment file missing: $required"
     }

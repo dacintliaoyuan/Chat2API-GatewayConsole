@@ -1,0 +1,60 @@
+[Unit]
+Description=UM share console (Python rollback, loopback 8096)
+Documentation=file:///opt/um-share/current/um-cloud-deploy/README.md
+After=network-online.target um-share-broker.service
+Wants=network-online.target
+ConditionPathExists=/opt/um-share/current/usagesrv.py
+ConditionPathExists=/etc/um-share/share-management.json
+
+[Service]
+Type=simple
+User=um-share
+Group=um-share
+WorkingDirectory=/opt/um-share/current
+EnvironmentFile=/etc/um-share/console.env
+# The Python rollback release keeps 8096/8100.  The installed console.env is
+# authoritative for the listener; the explicit values keep the unit correct when an
+# old environment file predates the rollback ports.
+Environment=USAGESRV_PORT=8096
+Environment=UM_SHARE_GATEWAY_PORT=8100
+UMask=0077
+# Fail the START when console.env no longer wires the security read face: an
+# unconfigured console must not look like a healthy one.
+ExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly console /etc/systemd/system/um-share-console.service /etc/um-share/console.env
+ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/usagesrv.py
+# Single-authority fence: the console may READ the broker pid/intent for
+# status, but it may not write /run/um-share (ReadOnlyPaths) and it may not
+# execute chat2api.py directly (NoExecPaths).  A console service.start
+# therefore cannot spawn a second 8100; it fails before a live gateway exists.
+# The console never starts a second share process: the broker owns the only
+# Popen.  The merged 8100 process re-reads the projection file itself.
+ReadOnlyPaths=-/run/um-share
+InaccessiblePaths=
+NoExecPaths=-/opt/um-share/current/chat2api/chat2api.py
+ReadWritePaths=/var/lib/um-share-console /var/log/um-share-console
+TimeoutStartSec=120
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+LimitNOFILE=65536
+TasksMax=512
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StateDirectory=um-share-console
+StateDirectoryMode=0750
+LogsDirectory=um-share-console
+LogsDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

@@ -34,12 +34,18 @@ GOVERNED_SINGLETONS = frozenset({5173})
 # 5901 -> 8097, both inside the 8090-8099 segment, so the audit now covers
 # them.  The old ports are explicit compatibility aliases for one release cycle
 # (expand-contract): a listener there is LEGACY-ALIAS, not UNREGISTERED.
+# 2026-11-16 (Rust cutover): the target contract is the paired 8003 gateway
+# and 8002 cloud console.  The Python rollback release keeps 8100/8096, so those
+# allocations stay registered until the rollback release is retired; a live 8002 or
+# 8003 listener is never UNREGISTERED.
 PORT_ALLOCATIONS: dict[int, tuple[str, str]] = {
     8000: ("chat2api", "loopback"),
     8001: ("usagesrv console backend", "loopback"),
+    8002: ("usagesrv cloud console backend", "loopback"),
+    8003: ("um-share gateway", "loopback"),
     8096: ("usagesrv cloud console backend", "loopback"),
     8097: ("display x11vnc", "loopback"),
-    8100: ("um-share gateway", "loopback"),
+    8100: ("um-share gateway (Python rollback)", "loopback"),
     5173: ("Console dev server (vite)", "loopback"),
 }
 

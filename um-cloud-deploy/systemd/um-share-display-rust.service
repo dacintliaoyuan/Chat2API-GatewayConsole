@@ -1,0 +1,64 @@
+[Unit]
+Description=UM share loopback Xvfb + x11vnc display (Rust 8003 release; private web/SSH window only)
+Documentation=file:///opt/um-share/current/um-cloud-deploy/display/README.md
+After=network-online.target um-share-gateway.service
+Wants=network-online.target um-share-gateway.service
+# The Rust 8003 gateway launches the visible browser and must reach Xvfb's
+# /tmp/.X11-unix socket.  Both units keep PrivateTmp=true; joining the
+# gateway host's namespace puts the socket where the gateway can connect to it
+# without opening a TCP X listener or sharing the host /tmp.  PartOf keeps the
+# display on the same lifecycle as the gateway host whose namespace it joins.
+JoinsNamespaceOf=um-share-gateway.service
+PartOf=um-share-gateway.service
+ConditionPathExists=/etc/um-share/vnc.passwd
+ConditionPathExists=/opt/um-share/current/um-cloud-deploy/display/start-loopback-display.sh
+
+[Service]
+Type=simple
+User=um-share
+Group=um-share
+Environment=UM_DISPLAY=:99
+# The target contract is 8097.  The start script reads
+# CONSOLE_DISPLAY_VNC_PORT from console.env so x11vnc and the console proxy
+# keep the SAME port; UM_VNC_PORT is only the fallback.
+Environment=UM_VNC_PORT=8097
+Environment=UM_VNC_AUTH_SOURCE=/etc/um-share/vnc.passwd
+Environment=UM_VNC_AUTH_PATH=%d/vnc.passwd
+Environment=UM_VNC_AUTH_SOCKET=/run/um-share/vnc-auth.sock
+Environment=XAUTHORITY=/run/um-share/display.auth
+EnvironmentFile=/etc/um-share/gateway.env
+# Preserve the runtime directory across a gateway restart.  The gateway unit
+# declares RuntimeDirectory=um-share, so systemd deletes /run/um-share when that
+# unit stops - which silently removed display.auth under the RUNNING Xvfb
+# ("(EE) Failed to open authorization file") and killed the login window even
+# though the display unit stayed up.  RuntimeDirectoryPreserve=yes keeps the
+# directory in place for the next start instead of wiping it.
+RuntimeDirectoryPreserve=yes
+# The persistent VNC auth file is root-only.  LoadCredential copies it into a
+# per-service read-only credential file owned by the service user; the service
+# never reads /etc/um-share/vnc.passwd itself.
+LoadCredential=vnc.passwd:/etc/um-share/vnc.passwd
+UMask=0077
+ExecStart=/opt/um-share/current/um-cloud-deploy/display/start-loopback-display.sh
+ReadWritePaths=/run/um-share
+InaccessiblePaths=-/etc/um-share/vnc.passwd
+TimeoutStartSec=30
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=3
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RemoveIPC=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

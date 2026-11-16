@@ -64,6 +64,21 @@ CONSOLE_PORT_DEFAULT=8096
 # scripts fall back to, never a hardcoded probe.
 GATEWAY_PORT_DEFAULT=8100
 
+# Release runtimes.  A Python release keeps the broker + 8100 child; a Rust
+# release keeps the broker host but launches /opt/um-share/current/bin/um-gateway
+# with `--mode production --port 8003`.  The release manifest is the authority;
+# an older Python release without the field falls back to the unit files it ships.
+RELEASE_RUNTIME_PYTHON=python
+RELEASE_RUNTIME_RUST=rust
+PYTHON_GATEWAY_UNIT=um-share-broker.service
+RUST_GATEWAY_UNIT=um-share-gateway.service
+CONSOLE_UNIT=um-share-console.service
+DISPLAY_UNIT=um-share-display.service
+PYTHON_GATEWAY_PORT=8100
+RUST_GATEWAY_PORT=8003
+PYTHON_CONSOLE_PORT=8096
+RUST_CONSOLE_PORT=8002
+
 log() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2
 }
@@ -113,6 +128,198 @@ python_bin() {
     return 0
   fi
   return 1
+}
+
+# The release runtime is frozen in RELEASE-MANIFEST.json.  An older Python
+# release has no field, so the unit set it actually ships decides: the Rust
+# release ships um-share-gateway.service and bin/um-gateway; the Python rollback
+# release ships um-share-broker.service and no Rust binary.  An unreadable or
+# unknown field never guesses Rust: it falls back to the Python unit evidence.
+release_runtime() {
+  local release="$1" runtime="" py
+  if [ -f "$release/RELEASE-MANIFEST.json" ]; then
+    py="$(python_bin)" || py=""
+    if [ -n "$py" ]; then
+      runtime="$("$py" - "$release/RELEASE-MANIFEST.json" <<'PY' 2>/dev/null
+import json
+import sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(0)
+print(data.get("runtime", ""))
+PY
+)"
+    fi
+  fi
+  case "$runtime" in
+    "$RELEASE_RUNTIME_PYTHON"|"$RELEASE_RUNTIME_RUST")
+      printf '%s\n' "$runtime"
+      return 0
+      ;;
+  esac
+  if [ -f "$release/bin/um-gateway" ] || \
+     [ -f "$release/um-cloud-deploy/systemd/$RUST_GATEWAY_UNIT" ]; then
+    printf '%s\n' "$RELEASE_RUNTIME_RUST"
+  else
+    printf '%s\n' "$RELEASE_RUNTIME_PYTHON"
+  fi
+}
+
+release_gateway_unit() {
+  local runtime="${1:-$RELEASE_RUNTIME_PYTHON}"
+  if [ "$runtime" = "$RELEASE_RUNTIME_RUST" ]; then
+    printf '%s\n' "$RUST_GATEWAY_UNIT"
+  else
+    printf '%s\n' "$PYTHON_GATEWAY_UNIT"
+  fi
+}
+
+release_console_unit() {
+  printf '%s\n' "$CONSOLE_UNIT"
+}
+
+release_display_unit() {
+  printf '%s\n' "$DISPLAY_UNIT"
+}
+
+release_gateway_port() {
+  local runtime="${1:-$RELEASE_RUNTIME_PYTHON}"
+  if [ "$runtime" = "$RELEASE_RUNTIME_RUST" ]; then
+    printf '%s\n' "$RUST_GATEWAY_PORT"
+  else
+    printf '%s\n' "$PYTHON_GATEWAY_PORT"
+  fi
+}
+
+release_console_port() {
+  local runtime="${1:-$RELEASE_RUNTIME_PYTHON}"
+  if [ "$runtime" = "$RELEASE_RUNTIME_RUST" ]; then
+    printf '%s\n' "$RUST_CONSOLE_PORT"
+  else
+    printf '%s\n' "$PYTHON_CONSOLE_PORT"
+  fi
+}
+
+# The units a release installs: the gateway host unit (Python broker or Rust
+# gateway host), the console unit and the optional display unit.  Print one per
+# line so callers can use mapfile.
+release_units() {
+  local runtime="${1:-$RELEASE_RUNTIME_PYTHON}"
+  release_gateway_unit "$runtime"
+  release_console_unit
+  release_display_unit
+}
+
+# Replace one KEY=VALUE line in an existing env file without changing the rest of
+# the file.  The value is written literally (ports and unit paths only), through a
+# temporary file in the same directory so a failed write cannot truncate the env.
+set_env_value() {
+  local file="$1" key="$2" value="$3"
+  [ -f "$file" ] || return 0
+  [ -r "$file" ] && [ -w "$file" ] || \
+    die "environment file is not readable and writable: $file" "$EX_NOINPUT"
+  local tmp="${file}.tmp.$$"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { replaced = 0 }
+    index($0, key "=") == 1 {
+      if (!replaced) {
+        print key "=" value
+        replaced = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!replaced) {
+        print key "=" value
+      }
+    }
+  ' "$file" > "$tmp" || {
+    rm -f -- "$tmp"
+    die "cannot rewrite environment file: $file" "$EX_IOERR"
+  }
+  cat "$tmp" > "$file" || {
+    rm -f -- "$tmp"
+    die "cannot update environment file: $file" "$EX_IOERR"
+  }
+  rm -f -- "$tmp"
+}
+
+# Keep the installed env files on the target release's ports.  An existing
+# deployment may still carry 8100/8096; the Rust target must switch both the
+# gateway and the console to 8003/8002, and a Python rollback must restore
+# 8100/8096.  Only the port keys are rewritten; secrets and operator choices
+# stay untouched.
+sync_runtime_env() {
+  local runtime="$1"
+  local console_env="$UM_ETC/console.env"
+  local gateway_env="$UM_ETC/gateway.env"
+  local gateway_port console_port
+  gateway_port="$(release_gateway_port "$runtime")"
+  console_port="$(release_console_port "$runtime")"
+  if [ -f "$console_env" ]; then
+    set_env_value "$console_env" USAGESRV_PORT "$console_port"
+    set_env_value "$console_env" UM_SHARE_GATEWAY_PORT "$gateway_port"
+    set_env_value "$console_env" CONSOLE_DISPLAY_VNC_HOST "127.0.0.1"
+    set_env_value "$console_env" CONSOLE_DISPLAY_VNC_PORT "8097"
+  fi
+  if [ "$runtime" = "$RELEASE_RUNTIME_RUST" ]; then
+    if [ -f "$gateway_env" ]; then
+      set_env_value "$gateway_env" UM_SHARE_GATEWAY_PORT "$gateway_port"
+      set_env_value "$gateway_env" UM_SHARE_GATEWAY_ENTRY_KIND "native"
+      set_env_value "$gateway_env" UM_SHARE_GATEWAY_ENTRY \
+        "/opt/um-share/current/bin/um-gateway"
+      set_env_value "$gateway_env" UM_SHARE_GATEWAY_MODE "production"
+    fi
+    # broker.env is the compatibility copy some transition helpers still read.
+    if [ -f "$UM_ETC/broker.env" ]; then
+      set_env_value "$UM_ETC/broker.env" UM_SHARE_GATEWAY_PORT "$gateway_port"
+      set_env_value "$UM_ETC/broker.env" UM_SHARE_GATEWAY_ENTRY_KIND "native"
+    fi
+  elif [ -f "$UM_ETC/broker.env" ]; then
+    set_env_value "$UM_ETC/broker.env" UM_SHARE_GATEWAY_PORT "$gateway_port"
+  fi
+}
+
+# Create the runtime-specific host env when an update moves between runtimes.
+# install.sh creates the env for a fresh install; update/rollback call this before
+# starting the target so a Python deployment does not keep a 8100 gateway.env when
+# it switches to the Rust 8003 release.
+ensure_runtime_env() {
+  local release="$1" runtime="$2"
+  local example
+  # A test or a partially installed host may have no /etc/um-share yet;
+  # install.sh owns the first creation, so update/rollback only maintain an
+  # existing deployment directory.
+  [ -d "$UM_ETC" ] || return 0
+  if [ "$runtime" = "$RELEASE_RUNTIME_RUST" ]; then
+    if [ ! -e "$UM_ETC/gateway.env" ]; then
+      example="$release/um-cloud-deploy/config/gateway.env.example"
+      [ -f "$example" ] || \
+        example="$release/um-cloud-deploy/config/broker.env.example"
+      [ -f "$example" ] || return 0
+      install -m 0640 -o root -g "$UM_BROKER_GROUP" \
+        "$example" "$UM_ETC/gateway.env" || return 1
+    fi
+    if ! grep -q '^UM_SHARE_UID=' "$UM_ETC/gateway.env" 2>/dev/null; then
+      printf 'UM_SHARE_UID=%s\n' "$(id -u "$UM_BROKER_USER")" >> \
+        "$UM_ETC/gateway.env"
+    fi
+  else
+    if [ ! -e "$UM_ETC/broker.env" ]; then
+      example="$release/um-cloud-deploy/config/broker-python.env.example"
+      [ -f "$example" ] || \
+        example="$release/um-cloud-deploy/config/broker.env.example"
+      [ -f "$example" ] || return 0
+      install -m 0640 -o root -g "$UM_BROKER_GROUP" \
+        "$example" "$UM_ETC/broker.env" || return 1
+    fi
+    if ! grep -q '^UM_SHARE_UID=' "$UM_ETC/broker.env" 2>/dev/null; then
+      printf 'UM_SHARE_UID=%s\n' "$(id -u "$UM_BROKER_USER")" >> \
+        "$UM_ETC/broker.env"
+    fi
+  fi
 }
 
 ensure_dir() {
@@ -413,6 +620,16 @@ require_share_backend_write_path() {
     die "unit template does not allow /var/lib/um-share-console writes: $unit" \
       "$EX_DATAERR"
   fi
+}
+
+# The target release's gateway host unit must allow the console state writes.
+# The Python rollback release checks um-share-broker.service; the Rust release
+# checks um-share-gateway.service.  A release whose own gateway unit cannot
+# write the token/profile/log directory is never a valid rollback or switch target.
+require_release_gateway_write_path() {
+  local release="$1" runtime="$2" unit
+  unit="$(release_gateway_unit "$runtime")"
+  require_share_backend_write_path "$release/um-cloud-deploy/systemd/$unit"
 }
 
 _brokerctl_run() {

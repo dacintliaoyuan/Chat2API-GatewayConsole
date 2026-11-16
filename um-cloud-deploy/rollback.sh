@@ -22,6 +22,10 @@ NO_EDGE=0
 # ports are separate.  Neither is hardcoded in the probes below.
 HEALTH_PORT="${TARGET_PORT:-$GATEWAY_PORT_DEFAULT}"
 CURRENT_HEALTH_PORT="${CURRENT_TARGET_PORT:-$GATEWAY_PORT_DEFAULT}"
+# Track whether the operator named the ports: when they did not, the release
+# runtime decides the default after the manifests are read.
+HEALTH_PORT_SET=0
+CURRENT_HEALTH_PORT_SET=0
 RECOVER_BACKUP=""
 RECOVER_SECURITY_STATE=""
 
@@ -57,8 +61,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --to) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; TARGET_VERSION="$2"; shift 2 ;;
     --drain-budget) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; DRAIN_BUDGET="$2"; shift 2 ;;
-    --health-port) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; HEALTH_PORT="$2"; shift 2 ;;
-    --current-health-port) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; CURRENT_HEALTH_PORT="$2"; shift 2 ;;
+    --health-port) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; HEALTH_PORT="$2"; HEALTH_PORT_SET=1; shift 2 ;;
+    --current-health-port) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; CURRENT_HEALTH_PORT="$2"; CURRENT_HEALTH_PORT_SET=1; shift 2 ;;
     --no-edge) NO_EDGE=1; shift ;;
     --recover-backup) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_BACKUP="$2"; shift 2 ;;
     --recover-security-state) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_SECURITY_STATE="$2"; shift 2 ;;
@@ -145,6 +149,11 @@ PREVIOUS_LINK="$UM_PREFIX/previous"
 [ -L "$CURRENT_LINK" ] || die "no current release" "$EX_NOINPUT"
 CURRENT_TARGET="$(readlink -f "$CURRENT_LINK")"
 CURRENT_VERSION="$(basename "$CURRENT_TARGET")"
+CURRENT_RUNTIME="$(release_runtime "$CURRENT_TARGET")"
+CURRENT_GATEWAY_UNIT="$(release_gateway_unit "$CURRENT_RUNTIME")"
+if [ "$CURRENT_HEALTH_PORT_SET" -eq 0 ]; then
+  CURRENT_HEALTH_PORT="$(release_gateway_port "$CURRENT_RUNTIME")"
+fi
 # Repair the persistent share-key wiring before the checkpoint and the switch.
 # Explicit recovery is the exception: the sealed backup carries the share-key
 # file, and a configured live path may be missing precisely because recovery
@@ -169,29 +178,56 @@ if [ -z "$RECOVER_BACKUP" ]; then
     die "release manifest missing: $TARGET" "$EX_NOINPUT"
   verify_release_manifest "$TARGET" "$TARGET/RELEASE-MANIFEST.json" || \
     die "target release manifest verification failed" "$EX_DATAERR"
-  # A rollback release must be able to start the merged Python gateway: its
-  # broker unit has to allow writes to /var/lib/um-share-console, or the share
-  # gateway child dies with "Read-only file system" and the rollback is not a
-  # rollback.
-  require_share_backend_write_path \
+  # A rollback release must be able to start its gateway: the Python release's
+  # broker unit and the Rust release's gateway unit both have to allow writes to
+  # /var/lib/um-share-console, or the child dies with "Read-only file system"
+  # and the rollback is not a rollback.
+  TARGET_RUNTIME="$(release_runtime "$TARGET")"
+  if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+    require_share_backend_write_path \
+      "$TARGET/um-cloud-deploy/systemd/um-share-gateway.service"
+  else
+    require_share_backend_write_path \
     "$TARGET/um-cloud-deploy/systemd/um-share-broker.service"
+  fi
+  if [ "$HEALTH_PORT_SET" -eq 0 ]; then
+    HEALTH_PORT="$(release_gateway_port "$TARGET_RUNTIME")"
+  fi
 
   if [ "$TARGET_VERSION" = "$CURRENT_VERSION" ]; then
     log "release $TARGET_VERSION is already current"
     exit "$EX_OK"
   fi
+else
+  TARGET_RUNTIME="$CURRENT_RUNTIME"
 fi
+if [ -z "$RECOVER_BACKUP" ]; then
+  ensure_runtime_env "$TARGET" "$TARGET_RUNTIME" || \
+    die "cannot prepare the target runtime environment" "$EX_SOFTWARE"
+  sync_runtime_env "$TARGET_RUNTIME"
+fi
+TARGET_GATEWAY_UNIT="$(release_gateway_unit "$TARGET_RUNTIME")"
+mapfile -t TARGET_UNITS < <(release_units "$TARGET_RUNTIME")
 
 CLOUDFLARED_MANAGED=0
 CLOUDFLARED_WAS_ACTIVE=0
+# A test may drive only this tail; a missing runtime/unit fact falls back to
+# the Python rollback release, never to an unbound variable under set -u.
+TARGET_RUNTIME="${TARGET_RUNTIME:-$RELEASE_RUNTIME_PYTHON}"
+CURRENT_RUNTIME="${CURRENT_RUNTIME:-$RELEASE_RUNTIME_PYTHON}"
+TARGET_GATEWAY_UNIT="${TARGET_GATEWAY_UNIT:-$(release_gateway_unit "$TARGET_RUNTIME")}"
+CURRENT_GATEWAY_UNIT="${CURRENT_GATEWAY_UNIT:-$(release_gateway_unit "$CURRENT_RUNTIME")}"
+if [ "${TARGET_UNITS+x}" != "x" ]; then
+  mapfile -t TARGET_UNITS < <(release_units "$TARGET_RUNTIME")
+fi
 CONSOLE_WAS_ACTIVE=0
 BROKER_WAS_ACTIVE=0
 if [ -f "$UM_SYSTEMD_DIR/cloudflared.service" ]; then
   CLOUDFLARED_MANAGED=1
   if unit_active cloudflared.service; then CLOUDFLARED_WAS_ACTIVE=1; fi
 fi
-if unit_active um-share-console.service; then CONSOLE_WAS_ACTIVE=1; fi
-if unit_active um-share-broker.service; then BROKER_WAS_ACTIVE=1; fi
+if unit_active "$CONSOLE_UNIT"; then CONSOLE_WAS_ACTIVE=1; fi
+if unit_active "${CURRENT_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}"; then BROKER_WAS_ACTIVE=1; fi
 
 # Start the cloudflared edge only when this deployment manages it AND it was
 # active before the switch.  An unmanaged or inactive edge is never started: the
@@ -230,11 +266,11 @@ restore_edge() {
 restore_units() {
   local failed=0 console_listen_port
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ]; then
-    systemctl start um-share-broker.service || failed=1
+    systemctl start "${CURRENT_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" || failed=1
     brokerctl start-explicit || failed=1
   fi
   if [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
-    systemctl start um-share-console.service || failed=1
+    systemctl start "$CONSOLE_UNIT" || failed=1
   fi
   [ "$failed" -eq 0 ] || return 1
   if [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
@@ -259,7 +295,7 @@ report_switch_residue() {
   current="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
   bin="$(readlink -f "$UM_PREFIX/bin" 2>/dev/null || true)"
   log "ERROR: actual residue: $CURRENT_LINK -> ${current:-unreadable}; $UM_PREFIX/bin -> ${bin:-unreadable}"
-  for unit in um-share-broker.service um-share-console.service; do
+  for unit in "$PYTHON_GATEWAY_UNIT" "$RUST_GATEWAY_UNIT"; do
     state="$(systemctl is-active "$unit" 2>/dev/null || true)"
     wants="$(systemctl show -p Wants --value "$unit" 2>/dev/null || true)"
     exec_start="$(systemctl show -p ExecStart --value "$unit" 2>/dev/null || true)"
@@ -390,9 +426,9 @@ compensate_switch() {
 # state because the target release owns both.
 start_switch() {
   local console_listen_port
-  systemctl start um-share-broker.service || return 1
+  systemctl start "${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" || return 1
   brokerctl start-explicit || return 1
-  systemctl start um-share-console.service || return 1
+  systemctl start "$CONSOLE_UNIT" || return 1
   console_listen_port="$(console_port)" || return 1
   wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
   wait_port_open 127.0.0.1 "$HEALTH_PORT" "$UM_HEALTH_TIMEOUT_S" || return 1
@@ -406,10 +442,10 @@ start_switch() {
 # moves and confirm it is inactive; the broker CLI drain above only stopped the
 # share gateway child.  A failed stop is a hard precondition, never a version switch.
 stop_broker_before_switch() {
-  if ! systemctl stop um-share-broker.service; then
+  if ! systemctl stop "${CURRENT_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}"; then
     return 1
   fi
-  if unit_active um-share-broker.service; then
+  if unit_active "${CURRENT_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}"; then
     return 1
   fi
   return 0
@@ -466,7 +502,7 @@ else
 fi
 
 if [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
-  if ! systemctl stop um-share-console.service; then
+  if ! systemctl stop "$CONSOLE_UNIT"; then
     log "console stop failed; restoring the units and the public edge"
     rc=0
     compensate_switch || rc=$?
@@ -560,10 +596,21 @@ fi
 # unit would still name the removed budget arguments or pull the broker up through
 # Wants=.  Install after the link move and before daemon-reload; a failure restores
 # the current release's units and links.
-if ! install_units "$TARGET"; then
+if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+  install_units "$TARGET" "${TARGET_UNITS[@]}" || install_failed=1
+else
+  install_units "$TARGET" || install_failed=1
+fi
+if [ "${install_failed:-0}" -eq 1 ]; then
   log "systemd unit installation failed; restoring $CURRENT_TARGET"
-  install_units "$CURRENT_TARGET" || \
-    log "ERROR: cannot reinstall the current release's units"
+  if [ "$CURRENT_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+    install_units "$CURRENT_TARGET" \
+      "$RUST_GATEWAY_UNIT" "$CONSOLE_UNIT" "$DISPLAY_UNIT" || \
+      log "ERROR: cannot reinstall the current release's units"
+  else
+    install_units "$CURRENT_TARGET" || \
+      log "ERROR: cannot reinstall the current release's units"
+  fi
   systemctl daemon-reload || \
     log "ERROR: cannot reload systemd after the failed unit installation"
   rc=0
@@ -575,8 +622,14 @@ if ! install_units "$TARGET"; then
 fi
 if ! systemctl daemon-reload; then
   log "systemd daemon-reload failed; restoring $CURRENT_TARGET units and links"
-  install_units "$CURRENT_TARGET" || \
-    log "ERROR: cannot reinstall the current release's units"
+  if [ "$CURRENT_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+    install_units "$CURRENT_TARGET" \
+      "$RUST_GATEWAY_UNIT" "$CONSOLE_UNIT" "$DISPLAY_UNIT" || \
+      log "ERROR: cannot reinstall the current release's units"
+  else
+    install_units "$CURRENT_TARGET" || \
+      log "ERROR: cannot reinstall the current release's units"
+  fi
   systemctl daemon-reload || \
     log "ERROR: cannot reload systemd after restoring the current units"
   rc=0
@@ -586,6 +639,15 @@ if ! systemctl daemon-reload; then
   fi
   die_compensation_failed "$rc"
 fi
+# The enabled unit must match "current": disable the previous runtime's gateway
+# so a reboot cannot start two hosts, then enable the target pair.  A missing old
+# unit is not an error.
+if [ "${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" != "${CURRENT_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" ]; then
+  systemctl disable "${CURRENT_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" 2>/dev/null || true
+fi
+systemctl enable "${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" "$CONSOLE_UNIT" || \
+  log "WARNING: cannot enable ${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}/$CONSOLE_UNIT"
+
 # Stop what the forward switch started before restoring the current release.
 # start_switch starts both units regardless of their prior state, so both are
 # stopped here.  A stop is accepted only when confirmed: the console stop must
@@ -595,18 +657,18 @@ fi
 # when both stops are confirmed.
 stop_switch_units() {
   local failed=0
-  if ! systemctl stop um-share-console.service; then
+  if ! systemctl stop "$CONSOLE_UNIT"; then
     log "ERROR: the console unit did not stop"
     failed=1
   fi
   if ! brokerctl --broker-drain-max 30 --drain-budget 60 --poll-interval 1 stop 2>/dev/null; then
-    log "WARNING: the broker CLI stop did not confirm; stopping the broker unit directly"
+    log "WARNING: the broker CLI stop did not confirm; stopping the gateway unit directly"
   fi
-  if ! systemctl stop um-share-broker.service 2>/dev/null; then
-    log "ERROR: the broker unit did not stop"
+  if ! systemctl stop "${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" 2>/dev/null; then
+    log "ERROR: the gateway unit did not stop"
     failed=1
-  elif unit_active um-share-broker.service; then
-    log "ERROR: the broker unit is still active after its stop"
+  elif unit_active "${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}"; then
+    log "ERROR: the gateway unit is still active after its stop"
     failed=1
   fi
   return "$failed"

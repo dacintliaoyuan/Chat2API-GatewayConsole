@@ -2,9 +2,10 @@
 """Read-only validator for the Cloudflare Tunnel ingress file.
 
 D18-1: the public edge routes only the four shared API paths to the loopback
-8100 gateway and answers everything else with 404.  This checker never writes,
-reloads or restarts a tunnel; it only parses the config and reports
-``{ok, problems, rules}``.
+8003 Rust gateway and answers everything else with 404.  This checker never
+writes, reloads or restarts a tunnel; it only parses the config and reports
+``{ok, problems, rules}``.  The Python rollback release keeps 8100; the public
+edge is switched by the maintainer, not by this checker.
 
 Run from ``ai-gateway``:
 
@@ -26,9 +27,11 @@ except ImportError as exc:  # pragma: no cover - deployment installs PyYAML
 DEFAULT_HOST = "dacintapi.de5.net"
 API_PATHS = ("/v1/models", "/v1/chat/completions", "/v1/messages",
              "/v1/responses")
-API_SERVICE = "http://127.0.0.1:8100"
+API_SERVICE = "http://127.0.0.1:8003"
 CATCH_ALL = "http_status:404"
-FORBIDDEN_PORTS = ("8096", "8097", "18096", "5901")
+# 8002 is the private console, 8097 the display; 8100/8096/18096/5901 are
+# retired Python ports.  None may appear as a public ingress service.
+FORBIDDEN_PORTS = ("8002", "8097", "8100", "8096", "18096", "5901")
 
 
 def _normalise_path(path):
@@ -97,15 +100,18 @@ def check_ingress(config, *, expect_host=DEFAULT_HOST):
                 problems.append(
                     "the catch-all rule must not name a hostname or path")
             continue
-        if service != API_SERVICE:
-            problems.append(
-                f"rule {index} service must be {API_SERVICE}: {service}")
-            continue
+        # Hostname evidence comes before the service target: a rule that names a
+        # private or wrong service and also lost its hostname must report the
+        # missing hostname, not only the target mismatch.
         if not isinstance(hostname, str) or not hostname:
             problems.append(f"rule {index} has no hostname")
         elif expect_host and hostname != expect_host:
             problems.append(
                 f"rule {index} hostname is {hostname}, expected {expect_host}")
+        if service != API_SERVICE:
+            problems.append(
+                f"rule {index} service must be {API_SERVICE}: {service}")
+            continue
         normalised = _normalise_path(path)
         if normalised is None:
             problems.append(f"rule {index} has no path")

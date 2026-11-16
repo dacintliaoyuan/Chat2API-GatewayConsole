@@ -1,23 +1,26 @@
 # Cloudflare Tunnel ingress for the UM cloud share API.
 #
 # This file is the public edge contract (D18-1): only the four shared API
-# paths are routed to the loopback 8100 gateway.  The private management
-# console, the share backend and the display are NEVER published here; the
-# catch-all answers 404 for every other path.
+# paths are routed to the loopback 8003 Rust gateway.  The private management
+# console, the display and the retired Python ports are NEVER published here;
+# the catch-all answers 404 for every other path.
 #
 # Install with `install.sh --with-cloudflared` (default off).  The tunnel token
 # lives in /etc/um-share/cloudflared.env, not in this file.
+#
+# The 8003 change is maintainer-only: the agent validates this file and the
+# public edge, but never rewrites the Cloudflare dashboard/API ingress.
 ingress:
   - hostname: dacintapi.de5.net
     path: ^/v1/models$
-    service: http://127.0.0.1:8100
+    service: http://127.0.0.1:8003
   - hostname: dacintapi.de5.net
     path: ^/v1/chat/completions$
-    service: http://127.0.0.1:8100
+    service: http://127.0.0.1:8003
   - hostname: dacintapi.de5.net
     path: ^/v1/messages$
-    service: http://127.0.0.1:8100
+    service: http://127.0.0.1:8003
   - hostname: dacintapi.de5.net
     path: ^/v1/responses$
-    service: http://127.0.0.1:8100
+    service: http://127.0.0.1:8003
   - service: http_status:404

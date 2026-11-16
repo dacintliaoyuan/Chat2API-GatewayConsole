@@ -41,6 +41,8 @@
 
 `8000-8009` 是网关/控制台配对段：8000/8001 本机对，8002/8003 云端对，8004–8009 预留。`8090-8099` 是控制台/管理段，`8100-8119` 是分享段（唯一允许非 loopback 的段，偏离须登记），`8300-8399` 是协议网关段。
 
+`um-cloud-deploy` 的 `RELEASE-MANIFEST.json` 用 `runtime: python|rust` 冻结发布运行时：Rust release 安装 `um-share-gateway.service`（8003）与 8002 console unit，Python release 仍用 `um-share-broker.service`（8100）与 8096 console unit 作为回滚目标。`package-release.sh --runtime rust --rust-bin <um-gateway>` 打包 Rust 二进制；`install.sh`/`update.sh`/`rollback.sh` 按 manifest 选择 unit 与健康门端口，`rollback-drill.sh` 仍负责 Rust→Python 演练。
+
 **三态**：表中「代码默认」是当前 Python 进程的默认监听；线上实际监听以 `ss -ltnp` 为准，可能仍是上一个 release 的默认值；「Rust 目标」在 Rust 重写时一次性生效。旧 `18096`/`5901` 是云端控制台与 display 的旧端口，当前 release 仍允许显式配置（`USAGESRV_PORT=18096`、`CONSOLE_DISPLAY_VNC_PORT=5901`），审计记为 `LEGACY-ALIAS`，同一时刻只监听配置指定的一个端口；Rust 切换时旧 `8100`/`8096`/`18096`/`5901` 不保留兼容别名。
 
 目标契约与 unit/CLI 改名（`um-share-broker.service` → `um-share-gateway.service`，`um-share-brokerctl.py` → `um-share-gatewayctl.py`）的决策记录见 [ADR 0001](docs/adr/0001-one-frontend-two-consoles-build-time-role.md) §端口配对；broker 仍是内部拉起者，不新增第二个进程。

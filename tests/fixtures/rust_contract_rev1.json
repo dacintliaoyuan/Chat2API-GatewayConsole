@@ -1761,7 +1761,7 @@
       "share/store.py": "7bb5b3f1e302de5579043d482a3172548c716b8a619366a0373727d88e714b33",
       "shared/responses_protocol.py": "eafa7d6735fe7d99eed81160084e887644022ec159ab27cac62f03463e8092fe",
       "tests/generate_rust_contract_fixture.py": "12fde49eb324868efb56fa8f5ad0a2fb9f572347e8d2f26973c9f168841e92a5",
-      "um-cloud-deploy/cloudflared/check-ingress.py": "8bc85e85c00ce1675cac5cea08f07095386dc145fea98a9edb018977f539011f"
+      "um-cloud-deploy/cloudflared/check-ingress.py": "b585fd49602a534adbb6b34833312944e967410865be9b7be4841ab5d18847a7"
     },
     "surfaces": [
       "console",
