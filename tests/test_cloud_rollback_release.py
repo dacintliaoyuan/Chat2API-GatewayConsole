@@ -68,6 +68,9 @@ class RollbackReleaseUnitTests(unittest.TestCase):
         self.assertLess(
             install.index("require_share_backend_write_path"),
             install.index("install_units \"$TARGET\""))
+        self.assertLess(
+            install.index("require_share_backend_write_path"),
+            install.index('ln -sfn "$UM_RELEASES/$VERSION" "$UM_PREFIX/current.tmp.$$"'))
 
     def test_package_release_refuses_a_payload_without_the_write_path(self):
         package = _read("package-release.sh")
