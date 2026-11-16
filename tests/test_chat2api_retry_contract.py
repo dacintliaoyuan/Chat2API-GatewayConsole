@@ -12,6 +12,7 @@ and a retry wait that hits the 540s wall budget is 504 with the last status.
 """
 
 import importlib.util
+import json
 import sys
 import threading
 import time
@@ -24,7 +25,16 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _chat2api_http_harness as harness  # noqa: E402
-from fake_um.fake_um_server import FakeUM  # noqa: E402
+from fake_um.fake_um_server import (  # noqa: E402
+    FakeUM,
+    MODE_DISCONNECT_AFTER_FIRST,
+    MODE_DISCONNECT_BEFORE_FIRST,
+    MODE_EXPLICIT_STREAM_ERROR,
+    MODE_EXPLICIT_STREAM_ERROR_AFTER_FIRST,
+    MODE_MISSING_TERMINAL,
+    MODE_NORMAL,
+    MODE_SILENT,
+)
 
 CHAT2API_PATH = Path(__file__).resolve().parents[1] / "chat2api" / "chat2api.py"
 SPEC = importlib.util.spec_from_file_location(
@@ -101,14 +111,21 @@ class RetryContractTestBase(unittest.TestCase):
                   "stream": stream},
             timeout=timeout)
 
-    def post_responses(self, stream=False, timeout=15):
+    def post_responses(self, stream=False, timeout=15, body=None):
+        if body is None:
+            body = {"model": "stub-model", "input": "hi", "stream": stream}
         return requests.post(
             f"{self.base}/v1/responses",
-            json={"model": "stub-model", "input": "hi", "stream": stream},
-            timeout=timeout)
+            json=body,
+            timeout=timeout, stream=stream)
 
     def assert_posts(self, count):
         self.assertEqual(self.fake.state()["request_count"], count)
+
+    def assert_path_posts(self, path, count):
+        recent = self.fake.state()["recent"]
+        self.assertEqual(
+            sum(1 for entry in recent if entry["path"] == path), count)
 
 
 class RetryMatrixTests(RetryContractTestBase):
@@ -279,6 +296,48 @@ class RetryMatrixTests(RetryContractTestBase):
             response.close()
 
 
+class ChatStreamStagingTests(RetryContractTestBase):
+    """Chat pre-commit staging and in-band envelope (ticket #64)."""
+
+    def test_precommit_transport_disconnect_is_retried(self):
+        # The chunked stream dies before any data event: no 200 was
+        # committed, so the hidden reopen cannot concatenate two answers.
+        self.script([MODE_DISCONNECT_BEFORE_FIRST, MODE_NORMAL])
+        with self.no_delay():
+            response = self.post_chat(stream=True)
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("data: [DONE]", response.text)
+            self.assertNotIn('"error"', response.text)
+            self.assert_path_posts("/api/chat/completions", 2)
+        finally:
+            response.close()
+
+    def test_postcommit_transport_disconnect_is_in_band(self):
+        self.script([MODE_DISCONNECT_AFTER_FIRST])
+        with self.no_delay():
+            response = self.post_chat(stream=True)
+        try:
+            self.assertEqual(response.status_code, 200)
+            body = response.text
+            self.assertIn("first-visible", body)
+            self.assertNotIn("data: [DONE]", body)
+            payloads = [json.loads(line[len("data: "):])
+                        for line in body.splitlines()
+                        if line.startswith("data: ")
+                        and line[len("data: "):] != "[DONE]"]
+            error = payloads[-1]["error"]
+            self.assertEqual(error["type"], "upstream_error")
+            self.assertEqual(error["code"], "upstream_read_error")
+            self.assertEqual(error["detail"]["reason"],
+                             "upstream_read_error")
+            self.assertEqual(error["request_id"],
+                             response.headers.get("X-Request-Id"))
+            self.assert_path_posts("/api/chat/completions", 1)
+        finally:
+            response.close()
+
+
 class MessagesRetryTests(RetryContractTestBase):
     def test_messages_retry_after_above_budget_keeps_status_and_header(self):
         self.script([{"status": 429,
@@ -349,6 +408,267 @@ class ResponsesRetryTests(RetryContractTestBase):
             error = response.json()["error"]
             self.assertEqual(error["code"], "request_deadline_exceeded")
             self.assertEqual(error["detail"]["last_upstream_status"], 503)
+        finally:
+            response.close()
+
+
+class ResponsesStreamStagingTests(RetryContractTestBase):
+    """Responses pre-commit staging and in-band failures (ticket #64)."""
+
+    @staticmethod
+    def response_events(response):
+        events = []
+        for block in response.text.split("\n\n"):
+            if not block.startswith("event: "):
+                continue
+            lines = block.splitlines()
+            name = lines[0][len("event: "):]
+            data = next(line[len("data: "):] for line in lines
+                        if line.startswith("data: "))
+            events.append((name, json.loads(data)))
+        return events
+
+    @staticmethod
+    def image_tool_body(stream=True):
+        return {"model": "stub-model", "stream": stream, "input": [
+            {"type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "hi"}]},
+            {"type": "function_call", "call_id": "c1", "name": "shot",
+             "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1",
+             "output": [{"type": "input_text", "text": "shot"},
+                        {"type": "input_image",
+                         "image_url": "data:image/png;base64,AAAA"}]}],
+            "tools": [{"type": "function", "name": "shot",
+                       "parameters": {"type": "object"}}],
+            "max_output_tokens": 64}
+
+    def assert_no_terminal(self, events):
+        names = [name for name, _ in events]
+        self.assertNotIn("response.completed", names)
+        self.assertEqual(names[-1], "response.failed")
+
+    def test_precommit_transport_disconnect_is_retried(self):
+        # The upstream closes the chunked stream before the first substantive
+        # event: nothing reached the client, so the hidden reopen is safe.
+        self.script([MODE_DISCONNECT_BEFORE_FIRST, MODE_NORMAL])
+        with self.no_delay():
+            response = self.post_responses(stream=True)
+        try:
+            self.assertEqual(response.status_code, 200)
+            names = [name for name, _ in self.response_events(response)]
+            self.assertIn("response.output_text.delta", names)
+            self.assertIn("response.completed", names)
+            self.assertNotIn("response.failed", names)
+            self.assert_posts(2)
+        finally:
+            response.close()
+
+    def test_precommit_clean_eof_is_retried(self):
+        # A clean EOF before any substantive event is the same pre-commit
+        # failure: the buffered response.created never committed a 200.
+        self.script([MODE_SILENT, MODE_NORMAL])
+        with self.no_delay():
+            response = self.post_responses(stream=True)
+        try:
+            self.assertEqual(response.status_code, 200)
+            names = [name for name, _ in self.response_events(response)]
+            self.assertIn("response.completed", names)
+            self.assertNotIn("response.failed", names)
+            self.assert_posts(2)
+        finally:
+            response.close()
+
+    def test_postcommit_transport_disconnect_is_response_failed(self):
+        self.script([MODE_DISCONNECT_AFTER_FIRST])
+        with self.no_delay():
+            response = self.post_responses(stream=True)
+        try:
+            self.assertEqual(response.status_code, 200)
+            events = self.response_events(response)
+            names = [name for name, _ in events]
+            self.assertIn("response.output_text.delta", names)
+            self.assert_no_terminal(events)
+            failed = [payload for name, payload in events
+                      if name == "response.failed"][-1]
+            error = failed["response"]["error"]
+            self.assertEqual(error["code"], "upstream_read_error")
+            self.assertEqual(error["detail"]["reason"], "upstream_read_error")
+            self.assertEqual(error["request_id"],
+                             response.headers.get("X-Request-Id"))
+            self.assert_posts(1)
+        finally:
+            response.close()
+
+    def test_postcommit_missing_done_is_response_failed(self):
+        self.script([MODE_MISSING_TERMINAL])
+        with self.no_delay():
+            response = self.post_responses(stream=True)
+        try:
+            self.assertEqual(response.status_code, 200)
+            events = self.response_events(response)
+            self.assert_no_terminal(events)
+            failed = [payload for name, payload in events
+                      if name == "response.failed"][-1]
+            error = failed["response"]["error"]
+            self.assertEqual(error["code"], "upstream_eof_without_done")
+            self.assertEqual(error["detail"]["reason"],
+                             "upstream_eof_without_done")
+            self.assert_posts(1)
+        finally:
+            response.close()
+
+    def test_postcommit_upstream_error_is_response_failed(self):
+        self.script([MODE_EXPLICIT_STREAM_ERROR_AFTER_FIRST])
+        with self.no_delay():
+            response = self.post_responses(stream=True)
+        try:
+            self.assertEqual(response.status_code, 200)
+            events = self.response_events(response)
+            self.assertIn("response.output_text.delta",
+                          [name for name, _ in events])
+            self.assert_no_terminal(events)
+            failed = [payload for name, payload in events
+                      if name == "response.failed"][-1]
+            self.assertEqual(failed["response"]["error"]["code"],
+                             "upstream_error")
+            self.assert_posts(1)
+        finally:
+            response.close()
+
+    def test_precommit_upstream_error_is_502(self):
+        # An explicit upstream error is definitive, never retried, and no 200
+        # was committed: the client gets an honest HTTP error.
+        self.script([MODE_EXPLICIT_STREAM_ERROR])
+        with self.no_delay():
+            response = self.post_responses(stream=True)
+        try:
+            self.assertEqual(response.status_code, 502)
+            error = response.json()["error"]
+            self.assertEqual(error["code"], "upstream_error")
+            self.assert_posts(1)
+        finally:
+            response.close()
+
+    def test_via_messages_precommit_disconnect_is_retried(self):
+        self.script([MODE_DISCONNECT_BEFORE_FIRST, MODE_NORMAL])
+        with self.no_delay():
+            response = self.post_responses(
+                stream=True, body=self.image_tool_body())
+        try:
+            self.assertEqual(response.status_code, 200)
+            names = [name for name, _ in self.response_events(response)]
+            self.assertIn("response.completed", names)
+            self.assertNotIn("response.failed", names)
+            self.assert_posts(2)
+        finally:
+            response.close()
+
+    def test_via_messages_postcommit_disconnect_is_response_failed(self):
+        self.script([MODE_DISCONNECT_AFTER_FIRST])
+        with self.no_delay():
+            response = self.post_responses(
+                stream=True, body=self.image_tool_body())
+        try:
+            self.assertEqual(response.status_code, 200)
+            events = self.response_events(response)
+            names = [name for name, _ in events]
+            self.assertIn("response.output_text.delta", names)
+            self.assert_no_terminal(events)
+            failed = [payload for name, payload in events
+                      if name == "response.failed"][-1]
+            self.assertEqual(failed["response"]["error"]["code"],
+                             "upstream_read_error")
+            self.assert_posts(1)
+        finally:
+            response.close()
+
+    def test_via_messages_postcommit_missing_stop_is_response_failed(self):
+        self.script([MODE_MISSING_TERMINAL])
+        with self.no_delay():
+            response = self.post_responses(
+                stream=True, body=self.image_tool_body())
+        try:
+            self.assertEqual(response.status_code, 200)
+            events = self.response_events(response)
+            self.assert_no_terminal(events)
+            failed = [payload for name, payload in events
+                      if name == "response.failed"][-1]
+            self.assertEqual(failed["response"]["error"]["code"],
+                             "upstream_eof_without_message_stop")
+            self.assert_posts(1)
+        finally:
+            response.close()
+
+
+class MessagesStreamStagingTests(RetryContractTestBase):
+    """Messages local in-band errors use the Anthropic shape (ticket #64)."""
+
+    @staticmethod
+    def message_events(response):
+        events = []
+        for block in response.text.split("\n\n"):
+            if not block.startswith("event: "):
+                continue
+            lines = block.splitlines()
+            name = lines[0][len("event: "):]
+            data = next(line[len("data: "):] for line in lines
+                        if line.startswith("data: "))
+            events.append((name, json.loads(data)))
+        return events
+
+    def test_precommit_disconnect_is_retried(self):
+        self.script([MODE_DISCONNECT_BEFORE_FIRST, MODE_NORMAL])
+        with self.no_delay():
+            response = self.post_messages(stream=True)
+        try:
+            self.assertEqual(response.status_code, 200)
+            names = [name for name, _ in self.message_events(response)]
+            self.assertIn("message_stop", names)
+            self.assertNotIn("error", names)
+            self.assert_path_posts("/api/v1/messages", 2)
+        finally:
+            response.close()
+
+    def test_postcommit_disconnect_emits_anthropic_error(self):
+        self.script([MODE_DISCONNECT_AFTER_FIRST])
+        with self.no_delay():
+            response = self.post_messages(stream=True)
+        try:
+            self.assertEqual(response.status_code, 200)
+            events = self.message_events(response)
+            names = [name for name, _ in events]
+            self.assertIn("content_block_delta", names)
+            self.assertNotIn("message_stop", names)
+            self.assertEqual(names[-1], "error")
+            error = events[-1][1]["error"]
+            self.assertEqual(events[-1][1]["type"], "error")
+            self.assertEqual(error["type"], "api_error")
+            self.assertEqual(error["code"], "upstream_read_error")
+            self.assertEqual(error["detail"]["reason"],
+                             "upstream_read_error")
+            self.assertEqual(error["request_id"],
+                             response.headers.get("X-Request-Id"))
+            self.assert_path_posts("/api/v1/messages", 1)
+        finally:
+            response.close()
+
+    def test_missing_message_stop_emits_anthropic_error(self):
+        self.script([MODE_MISSING_TERMINAL])
+        with self.no_delay():
+            response = self.post_messages(stream=True)
+        try:
+            self.assertEqual(response.status_code, 200)
+            events = self.message_events(response)
+            names = [name for name, _ in events]
+            self.assertNotIn("message_stop", names)
+            self.assertEqual(names[-1], "error")
+            error = events[-1][1]["error"]
+            self.assertEqual(error["type"], "api_error")
+            self.assertEqual(error["code"], "upstream_eof_without_event")
+            self.assertEqual(error["request_id"],
+                             response.headers.get("X-Request-Id"))
+            self.assert_path_posts("/api/v1/messages", 1)
         finally:
             response.close()
 

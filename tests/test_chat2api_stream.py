@@ -726,7 +726,9 @@ class TestChat2ApiStreaming(unittest.TestCase):
     def assert_in_band_error(self, event, reason):
         payload = json.loads(event[len("data:"):])
         self.assertIn("error", payload)
-        self.assertEqual(payload["error"]["type"], "upstream_stream_error")
+        self.assertEqual(payload["error"]["type"], "upstream_error")
+        self.assertEqual(payload["error"]["code"], reason)
+        self.assertIsNone(payload["error"]["param"])
         self.assertEqual(payload["error"]["detail"]["reason"], reason)
 
     @staticmethod
@@ -1019,9 +1021,15 @@ class TestChat2ApiStreaming(unittest.TestCase):
     def test_upstream_eof_without_done_is_reported_in_band(self):
         with self.stream_request("eof-no-done") as response:
             self.assertEqual(response.status_code, 200)
+            header_id = response.headers.get("X-Request-Id")
+            self.assertRegex(header_id or "", r"^[0-9a-f]{12}$")
             lines, _ = self.read_to_eof(response)
         self.assertNotIn("data: [DONE]", lines)
         self.assert_in_band_error(lines[-1], "upstream_eof_without_done")
+        payload = json.loads(lines[-1][len("data:"):])
+        # The in-band error carries the SAME correlation id as the response
+        # header, so a stream failure can be claimed on the gateway side.
+        self.assertEqual(payload["error"]["request_id"], header_id)
 
         (record,) = self.wait_usage_records()
         self.assertEqual(record["status"], "upstream_eof_without_done")

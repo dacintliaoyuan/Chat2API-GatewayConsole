@@ -678,6 +678,23 @@ STREAM_ERROR_MESSAGES = {
         "incomplete.",
 }
 
+# Responses events that count as the first substantive UM output (ticket #64):
+# only actual text or tool-argument deltas may commit the downstream 200. Every
+# other event (response.created, output_item.added, content_part.added, ...) is a
+# protocol control event and stays buffered until one of these arrives.
+_RESPONSES_SUBSTANTIVE_EVENTS = frozenset({
+    "response.output_text.delta",
+    "response.function_call_arguments.delta",
+})
+
+# A Responses stream that ends without its success terminal is retryable while no
+# substantive event has reached the client: the upstream delivered no output, so a
+# hidden reopen cannot concatenate two answers.
+_RESPONSES_RETRYABLE_TERMINAL_CODES = frozenset({
+    "upstream_eof_without_done",
+    "upstream_eof_without_message_stop",
+})
+
 # Error envelope contract (ADR 0003 / spec #58). ``type`` is the client-facing
 # category, ``code`` is the stable machine-readable contract and must keep every
 # spelling an earlier release emitted. ``param`` names the offending field (or is
@@ -8438,8 +8455,8 @@ class Handler(BaseHTTPRequestHandler):
             return (max(0.001, min(15.0, remaining)),
                     max(0.001, min(read_cap, remaining)))
 
-        try:
-            r, response_text = _open_upstream_response_with_retries(
+        def open_upstream_attempt():
+            return _open_upstream_response_with_retries(
                 proxy, "POST", "/api/chat/completions",
                 stream=upstream_stream, json_body=chat_body, headers={},
                 timeout=responses_call_timeout,
@@ -8447,37 +8464,40 @@ class Handler(BaseHTTPRequestHandler):
                 request_deadline=request_deadline,
                 cancel_check=cancel_check, request_id=request_id,
                 endpoint="/v1/responses")
-        except ReauthenticationRequired as exc:
-            status = ("reauthentication_failed"
-                      if isinstance(exc, ReauthenticationFailed)
-                      else "reauthentication_required")
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status=status)
-            self._reauthentication_exception(exc)
-            return
-        except _RequestCancelled:
-            self.close_connection = True
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="client_disconnected")
-            return
-        except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
-            deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
-            status = ("request_deadline_exceeded" if deadline_exceeded
-                       else "upstream_attempt_budget_exhausted")
-            detail = {"reason": status}
-            last_status = getattr(exc, "last_upstream_status", None)
-            if last_status is not None:
-                detail["last_upstream_status"] = last_status
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status=status)
-            self._error(
-                504 if deadline_exceeded else 502,
-                ("Upstream request exceeded the request deadline"
-                 if deadline_exceeded else
-                 "Upstream request could not start another attempt"),
-                detail, error_code=status)
-            return
-        except requests.RequestException as exc:
+
+        def handle_open_failure(exc):
+            """Answer one failed upstream open; return None after answering."""
+            if isinstance(exc, ReauthenticationRequired):
+                status = ("reauthentication_failed"
+                          if isinstance(exc, ReauthenticationFailed)
+                          else "reauthentication_required")
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status=status)
+                self._reauthentication_exception(exc)
+                return None
+            if isinstance(exc, _RequestCancelled):
+                self.close_connection = True
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status="client_disconnected")
+                return None
+            if isinstance(exc, (_RequestDeadlineExceeded,
+                               _PhysicalBudgetExceeded)):
+                deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
+                status = ("request_deadline_exceeded" if deadline_exceeded
+                           else "upstream_attempt_budget_exhausted")
+                detail = {"reason": status}
+                last_status = getattr(exc, "last_upstream_status", None)
+                if last_status is not None:
+                    detail["last_upstream_status"] = last_status
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status=status)
+                self._error(
+                    504 if deadline_exceeded else 502,
+                    ("Upstream request exceeded the request deadline"
+                     if deadline_exceeded else
+                     "Upstream request could not start another attempt"),
+                    detail, error_code=status)
+                return None
             timeout = _is_upstream_timeout(exc)
             status = "upstream_timeout" if timeout else "upstream_unreachable"
             record_usage(body["model"], client_stream, started_at, None,
@@ -8492,22 +8512,41 @@ class Handler(BaseHTTPRequestHandler):
                  "Upstream request failed"),
                 detail,
                 error_code=status)
-            return
-        try:
+            return None
+
+        def open_checked_attempt():
+            """Open one upstream response; None means the failure was answered."""
+            try:
+                r, response_text = open_upstream_attempt()
+            except (ReauthenticationRequired, _RequestCancelled,
+                    _RequestDeadlineExceeded, _PhysicalBudgetExceeded,
+                    requests.RequestException) as exc:
+                return handle_open_failure(exc)
             if r.status_code != 200:
-                if not response_text:
-                    response_text = _bounded_upstream_error_text(r)
-                if r.status_code == 401:
-                    status = "reauthentication_required"
-                    self._reauthentication_error("upstream_rejected")
-                else:
-                    status = f"HTTP{r.status_code}"
-                    self._upstream_status_error(
-                        r.status_code, response_text,
-                        extra_headers=_upstream_retry_after_headers(r))
-                record_usage(body["model"], client_stream, started_at, None,
-                              input_est, 0, status=status)
-                return
+                try:
+                    if not response_text:
+                        response_text = _bounded_upstream_error_text(r)
+                    if r.status_code == 401:
+                        status = "reauthentication_required"
+                        self._reauthentication_error("upstream_rejected")
+                    else:
+                        status = f"HTTP{r.status_code}"
+                        self._upstream_status_error(
+                            r.status_code, response_text,
+                            extra_headers=_upstream_retry_after_headers(r))
+                    record_usage(body["model"], client_stream, started_at, None,
+                                  input_est, 0, status=status)
+                finally:
+                    r.close()
+                return None
+            return r, response_text
+
+        opened = open_checked_attempt()
+        if opened is None:
+            return
+        r, response_text = opened
+        response_holder = [r]
+        try:
             if not client_stream and not upstream_stream:
                 try:
                     payload = r.json()
@@ -8608,73 +8647,33 @@ class Handler(BaseHTTPRequestHandler):
                                   aggregate.output_estimate(),
                                   status=f"aggregate_{aggregate_status}")
                 return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Request-Id", self._ensure_request_id())
-            self.send_header("Connection", "close")
-            self.end_headers()
             response_id = "resp_" + secrets.token_hex(12)
             created_at = int(time.time())
-            usage = {}
-            output_chars = 0
-            status = "ok"
-
-            def send_event(name, payload):
-                if name == "response.failed":
-                    error = (payload.get("response") or {}).get("error")
-                    if isinstance(error, dict):
-                        error.setdefault("request_id",
-                                          self._ensure_request_id())
-                self.wfile.write(("event: " + name + "\ndata: "
-                                  + json.dumps(payload) + "\n\n").encode())
-                self.wfile.flush()
-
-            try:
-                for name, payload in responses_stream_events(
-                        r, body["model"], response_id, created_at):
-                    send_event(name, payload)
-                    if name == "response.output_text.delta":
-                        output_chars += len(payload.get("delta") or "")
-                    elif name == "response.function_call_arguments.delta":
-                        output_chars += len(payload.get("delta") or "")
-                    elif name in ("response.completed",
-                                  "response.incomplete"):
-                        response = payload.get("response") or {}
-                        usage = response.get("usage") or {}
-                        status = ("ok" if name == "response.completed"
-                                  else "incomplete")
-                    elif name == "response.failed":
-                        error = ((payload.get("response") or {})
-                                 .get("error") or {})
-                        status = error.get("code") or "upstream_error"
-            except (requests.RequestException, OSError) as exc:
-                if isinstance(exc, requests.RequestException):
-                    status = "upstream_stream_error"
-                    try:
-                        send_event("response.failed", {
-                            "type": "response.failed",
-                            "response": {"id": response_id,
-                                         "object": "response",
-                                         "created_at": created_at,
-                                         "status": "failed",
-                                         "model": body["model"], "output": [],
-                                         "error": {
-                                             "code": status,
-                                             "message": "upstream stream "
-                                                        "failed"}}})
-                    except (OSError, ConnectionError):
-                        status = "client_disconnected"
-                else:
-                    status = "client_disconnected"
-            finally:
-                out_est = (max(1, output_chars // 4)
-                           if status == "ok" else output_chars // 4)
-                record_usage(body["model"], client_stream, started_at, usage,
-                              input_est, out_est, status=status)
+            result = self._relay_responses_stream(
+                response_holder,
+                lambda resp: responses_stream_events(
+                    resp, body["model"], response_id, created_at),
+                open_attempt=open_checked_attempt,
+                request_id=request_id,
+                request_deadline=request_deadline,
+                model=body["model"],
+                response_id=response_id,
+                created_at=created_at,
+                started_at=started_at,
+                input_est=input_est,
+                client_stream=client_stream)
+            if result is None:
+                return
+            status, usage, output_chars = result
+            out_est = (max(1, output_chars // 4)
+                       if status == "ok" else output_chars // 4)
+            record_usage(body["model"], client_stream, started_at, usage,
+                          input_est, out_est, status=status)
         finally:
             if not upstream_owned:
-                r.close()
+                current = response_holder[0]
+                if current is not None:
+                    current.close()
 
     def _responses_via_messages(self, body, auth_wait_budget=None,
                                  request_deadline=None, cancel_check=None):
@@ -8715,8 +8714,8 @@ class Handler(BaseHTTPRequestHandler):
             return (max(0.001, min(15.0, remaining)),
                     max(0.001, min(read_cap, remaining)))
 
-        try:
-            r, response_text = _open_upstream_response_with_retries(
+        def open_upstream_attempt():
+            return _open_upstream_response_with_retries(
                 proxy, "POST", "/api/v1/messages",
                 stream=upstream_stream, json_body=messages_body,
                 headers={"Anthropic-Version": "2023-06-01"},
@@ -8725,37 +8724,40 @@ class Handler(BaseHTTPRequestHandler):
                 request_deadline=request_deadline,
                 cancel_check=cancel_check, request_id=request_id,
                 endpoint="/v1/responses (messages)")
-        except ReauthenticationRequired as exc:
-            status = ("reauthentication_failed"
-                      if isinstance(exc, ReauthenticationFailed)
-                      else "reauthentication_required")
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status=status)
-            self._reauthentication_exception(exc)
-            return
-        except _RequestCancelled:
-            self.close_connection = True
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="client_disconnected")
-            return
-        except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
-            deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
-            status = ("request_deadline_exceeded" if deadline_exceeded
-                       else "upstream_attempt_budget_exhausted")
-            detail = {"reason": status}
-            last_status = getattr(exc, "last_upstream_status", None)
-            if last_status is not None:
-                detail["last_upstream_status"] = last_status
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status=status)
-            self._error(
-                504 if deadline_exceeded else 502,
-                ("Upstream request exceeded the request deadline"
-                 if deadline_exceeded else
-                 "Upstream request could not start another attempt"),
-                detail, error_code=status)
-            return
-        except requests.RequestException as exc:
+
+        def handle_open_failure(exc):
+            """Answer one failed upstream open; return None after answering."""
+            if isinstance(exc, ReauthenticationRequired):
+                status = ("reauthentication_failed"
+                          if isinstance(exc, ReauthenticationFailed)
+                          else "reauthentication_required")
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status=status)
+                self._reauthentication_exception(exc)
+                return None
+            if isinstance(exc, _RequestCancelled):
+                self.close_connection = True
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status="client_disconnected")
+                return None
+            if isinstance(exc, (_RequestDeadlineExceeded,
+                               _PhysicalBudgetExceeded)):
+                deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
+                status = ("request_deadline_exceeded" if deadline_exceeded
+                           else "upstream_attempt_budget_exhausted")
+                detail = {"reason": status}
+                last_status = getattr(exc, "last_upstream_status", None)
+                if last_status is not None:
+                    detail["last_upstream_status"] = last_status
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status=status)
+                self._error(
+                    504 if deadline_exceeded else 502,
+                    ("Upstream request exceeded the request deadline"
+                     if deadline_exceeded else
+                     "Upstream request could not start another attempt"),
+                    detail, error_code=status)
+                return None
             timeout = _is_upstream_timeout(exc)
             status = "upstream_timeout" if timeout else "upstream_unreachable"
             record_usage(body["model"], client_stream, started_at, None,
@@ -8770,22 +8772,41 @@ class Handler(BaseHTTPRequestHandler):
                  "Upstream request failed"),
                 detail,
                 error_code=status)
-            return
-        try:
+            return None
+
+        def open_checked_attempt():
+            """Open one upstream response; None means the failure was answered."""
+            try:
+                r, response_text = open_upstream_attempt()
+            except (ReauthenticationRequired, _RequestCancelled,
+                    _RequestDeadlineExceeded, _PhysicalBudgetExceeded,
+                    requests.RequestException) as exc:
+                return handle_open_failure(exc)
             if r.status_code != 200:
-                if not response_text:
-                    response_text = _bounded_upstream_error_text(r)
-                if r.status_code == 401:
-                    status = "reauthentication_required"
-                    self._reauthentication_error("upstream_rejected")
-                else:
-                    status = f"HTTP{r.status_code}"
-                    self._upstream_status_error(
-                        r.status_code, response_text,
-                        extra_headers=_upstream_retry_after_headers(r))
-                record_usage(body["model"], client_stream, started_at, None,
-                              input_est, 0, status=status)
-                return
+                try:
+                    if not response_text:
+                        response_text = _bounded_upstream_error_text(r)
+                    if r.status_code == 401:
+                        status = "reauthentication_required"
+                        self._reauthentication_error("upstream_rejected")
+                    else:
+                        status = f"HTTP{r.status_code}"
+                        self._upstream_status_error(
+                            r.status_code, response_text,
+                            extra_headers=_upstream_retry_after_headers(r))
+                    record_usage(body["model"], client_stream, started_at, None,
+                                  input_est, 0, status=status)
+                finally:
+                    r.close()
+                return None
+            return r, response_text
+
+        opened = open_checked_attempt()
+        if opened is None:
+            return
+        r, response_text = opened
+        response_holder = [r]
+        try:
             if not client_stream and not upstream_stream:
                 try:
                     payload = r.json()
@@ -8886,73 +8907,252 @@ class Handler(BaseHTTPRequestHandler):
                                   input_est, aggregate.output_estimate(),
                                   status=f"aggregate_{aggregate_status}")
                 return
+            response_id = "resp_" + secrets.token_hex(12)
+            created_at = int(time.time())
+            result = self._relay_responses_stream(
+                response_holder,
+                lambda resp: messages_stream_events(
+                    resp, body["model"], response_id, created_at),
+                open_attempt=open_checked_attempt,
+                request_id=request_id,
+                request_deadline=request_deadline,
+                model=body["model"],
+                response_id=response_id,
+                created_at=created_at,
+                started_at=started_at,
+                input_est=input_est,
+                client_stream=client_stream)
+            if result is None:
+                return
+            status, usage, output_chars = result
+            out_est = (max(1, output_chars // 4)
+                       if status == "ok" else output_chars // 4)
+            record_usage(body["model"], client_stream, started_at, usage,
+                          input_est, out_est, status=status)
+        finally:
+            if not upstream_owned:
+                current = response_holder[0]
+                if current is not None:
+                    current.close()
+
+    def _send_responses_event(self, name, payload):
+        """Send one translated Responses SSE event.
+
+        ``response.failed`` is the Responses protocol's in-band failure event. Its
+        error object keeps the unified envelope fields: ``type`` is the category,
+        ``code`` is the stable machine code, ``param`` is null, ``detail.reason``
+        keeps the stream reason and ``request_id`` is the SAME value as the
+        ``X-Request-Id`` response header (or the one a pre-commit error would
+        have carried).
+        """
+        if name == "response.failed":
+            response = payload.get("response") or {}
+            error = response.get("error")
+            if isinstance(error, dict):
+                code = error.get("code") or "upstream_error"
+                error.setdefault("type", _error_category(502, code))
+                error.setdefault("code", code)
+                error.setdefault("param", None)
+                error.setdefault("request_id", self._ensure_request_id())
+                error.setdefault("detail", {"reason": code})
+        self.wfile.write(("event: " + name + "\ndata: "
+                          + json.dumps(payload) + "\n\n").encode())
+        self.wfile.flush()
+
+    def _relay_responses_stream(self, response_holder, events_factory, *,
+                                 open_attempt, request_id,
+                                 request_deadline, model, response_id,
+                                 created_at, started_at, input_est,
+                                 client_stream):
+        """Relay one Responses stream with pre-commit staging (ticket #64).
+
+        ``response.created`` and every other non-substantive event stay buffered
+        until the first output-text or function-argument delta (or a success
+        terminal) arrives; only then is the downstream 200 committed. A transport
+        failure or a truncated upstream before that point is retried with the same
+        transient budgets, and after the commit it becomes one in-band
+        ``response.failed`` with the same machine code and ``X-Request-Id``. No
+        terminal event is written after a failure, so a partial completion is
+        never reported as success.
+
+        Returns ``(status, usage, output_chars)``. ``None`` means the retry's
+        ``open_attempt`` already answered the request (and recorded its ledger
+        row).
+        """
+        response = response_holder[0]
+        prelude = []
+        committed = False
+        status = "ok"
+        usage = {}
+        output_chars = 0
+        retries_done = 0
+        slow_retries_done = 0
+
+        def close_response():
+            nonlocal response
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:  # noqa: BLE001 — 关闭上游响应是尽力而为
+                    pass
+                response = None
+                response_holder[0] = None
+
+        def commit_headers():
+            nonlocal committed
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Request-Id", self._ensure_request_id())
             self.send_header("Connection", "close")
             self.end_headers()
-            response_id = "resp_" + secrets.token_hex(12)
-            created_at = int(time.time())
-            usage = {}
-            output_chars = 0
-            status = "ok"
+            self.close_connection = True
+            committed = True
+            for held_name, held_payload in prelude:
+                self._send_responses_event(held_name, held_payload)
+            prelude.clear()
 
-            def send_event(name, payload):
-                if name == "response.failed":
-                    error = (payload.get("response") or {}).get("error")
-                    if isinstance(error, dict):
-                        error.setdefault("request_id",
-                                          self._ensure_request_id())
-                self.wfile.write(("event: " + name + "\ndata: "
-                                  + json.dumps(payload) + "\n\n").encode())
-                self.wfile.flush()
+        def retry_available(slow):
+            return (UPSTREAM_AUTO_RETRY and
+                    retries_done < UPSTREAM_AUTO_RETRIES and
+                    (not slow or
+                     slow_retries_done < UPSTREAM_SLOW_AUTO_RETRIES) and
+                    time.monotonic() < request_deadline)
 
+        def fail_precommit(code, exc_name=None):
+            """Answer a pre-commit failure as a normal HTTP error."""
+            detail = {"reason": code, "events": 0,
+                      "duration_s": round(time.time() - started_at, 1)}
+            if exc_name:
+                detail["exception"] = exc_name
+            timeout = (code == "upstream_timeout" or
+                       (exc_name is not None and "Timeout" in exc_name))
+            error_code = "upstream_timeout" if timeout else code
             try:
-                for name, payload in messages_stream_events(
-                        r, body["model"], response_id, created_at):
-                    send_event(name, payload)
-                    if name == "response.output_text.delta":
+                self._error(
+                    504 if timeout else 502,
+                    STREAM_ERROR_MESSAGES.get(
+                        code, "Upstream stream failed before any output."),
+                    detail, error_code=error_code)
+            except (ConnectionError, OSError, ValueError):
+                pass  # the client left before the pre-commit error landed
+            record_usage(model, client_stream, started_at, None, input_est, 0,
+                         status=error_code)
+            return None
+
+        def fail_postcommit(code):
+            """Write the one in-band failure; never a terminal event."""
+            try:
+                self._send_responses_event("response.failed", {
+                    "type": "response.failed",
+                    "response": {"id": response_id,
+                                 "object": "response",
+                                 "created_at": created_at,
+                                 "status": "failed",
+                                 "model": model, "output": [],
+                                 "error": {
+                                     "code": code,
+                                     "message": STREAM_ERROR_MESSAGES.get(
+                                         code, "Upstream stream failed.")}}})
+            except (OSError, ConnectionError):
+                return "client_disconnected"
+            return code
+
+        while True:
+            attempt_started = time.monotonic()
+            retry_requested = False
+            retry_reason = None
+            try:
+                for name, payload in events_factory(response):
+                    if name in _RESPONSES_SUBSTANTIVE_EVENTS:
+                        if not committed:
+                            commit_headers()
+                        self._send_responses_event(name, payload)
                         output_chars += len(payload.get("delta") or "")
-                    elif name == "response.function_call_arguments.delta":
-                        output_chars += len(payload.get("delta") or "")
-                    elif name in ("response.completed",
-                                  "response.incomplete"):
-                        response = payload.get("response") or {}
-                        usage = response.get("usage") or {}
+                        continue
+                    if name in ("response.completed", "response.incomplete"):
+                        if not committed:
+                            commit_headers()
+                        self._send_responses_event(name, payload)
+                        response_payload = payload.get("response") or {}
+                        usage = response_payload.get("usage") or {}
                         status = ("ok" if name == "response.completed"
                                   else "incomplete")
-                    elif name == "response.failed":
-                        error = ((payload.get("response") or {})
-                                 .get("error") or {})
-                        status = error.get("code") or "upstream_error"
-            except (requests.RequestException, OSError) as exc:
-                if isinstance(exc, requests.RequestException):
-                    status = "upstream_stream_error"
-                    try:
-                        send_event("response.failed", {
-                            "type": "response.failed",
-                            "response": {"id": response_id,
-                                         "object": "response",
-                                         "created_at": created_at,
-                                         "status": "failed",
-                                         "model": body["model"], "output": [],
-                                         "error": {
-                                             "code": status,
-                                             "message": "upstream stream "
-                                                        "failed"}}})
-                    except (OSError, ConnectionError):
-                        status = "client_disconnected"
+                        return status, usage, output_chars
+                    if name == "response.failed":
+                        error = (payload.get("response") or {}).get(
+                            "error") or {}
+                        code = error.get("code") or "upstream_error"
+                        if (not committed and
+                                code in _RESPONSES_RETRYABLE_TERMINAL_CODES):
+                            retry_requested = True
+                            retry_reason = code
+                            break
+                        if not committed:
+                            return fail_precommit(code)
+                        return (fail_postcommit(code), {}, output_chars)
+                    if not committed:
+                        prelude.append((name, payload))
+                    else:
+                        self._send_responses_event(name, payload)
                 else:
-                    status = "client_disconnected"
-            finally:
-                out_est = (max(1, output_chars // 4)
-                           if status == "ok" else output_chars // 4)
-                record_usage(body["model"], client_stream, started_at, usage,
-                              input_est, out_est, status=status)
-        finally:
-            if not upstream_owned:
-                r.close()
+                    # The generator ended without a terminal event.
+                    code = "upstream_eof_without_done"
+                    if not committed:
+                        retry_requested = True
+                        retry_reason = code
+                    else:
+                        return (fail_postcommit(code), {}, output_chars)
+            except requests.RequestException as exc:
+                if not committed:
+                    retry_requested = True
+                    retry_reason = type(exc).__name__
+                else:
+                    return (fail_postcommit("upstream_read_error"), {},
+                            output_chars)
+            except OSError:
+                return "client_disconnected", {}, output_chars
+
+            if not retry_requested:
+                return status, usage, output_chars
+
+            elapsed = time.monotonic() - attempt_started
+            slow = _attempt_is_slow(elapsed)
+            if not retry_available(slow):
+                if committed:
+                    return (fail_postcommit("upstream_read_error"), {},
+                            output_chars)
+                timeout = ("Timeout" in (retry_reason or "") or
+                           "timeout" in (retry_reason or ""))
+                return fail_precommit(
+                    "upstream_timeout" if timeout else
+                    ("upstream_read_error"
+                     if retry_reason not in
+                     _RESPONSES_RETRYABLE_TERMINAL_CODES else
+                     retry_reason),
+                    exc_name=retry_reason)
+            retries_done += 1
+            if slow:
+                slow_retries_done += 1
+            delay_s = _retry_delay_seconds(retries_done, elapsed, slow=slow)
+            _logger.warning(
+                "responses stream-retry request=%s model=%s retry=%d/%d "
+                "slow_retry=%d/%d reason=%s delay_s=%.2f",
+                request_id, model, retries_done, UPSTREAM_AUTO_RETRIES,
+                slow_retries_done, UPSTREAM_SLOW_AUTO_RETRIES,
+                retry_reason, delay_s)
+            if not _sleep_with_deadline(delay_s, request_deadline):
+                if committed:
+                    return (fail_postcommit("upstream_read_error"), {},
+                            output_chars)
+                return fail_precommit("upstream_timeout",
+                                      exc_name="RequestDeadlineExceeded")
+            close_response()
+            opened = open_attempt()
+            if opened is None:
+                return None
+            response, _response_text = opened
+            response_holder[0] = response
 
     def _compat_proxy(self, upstream_path, allow_stream=False,
                       forward_anthropic_headers=False,
@@ -10942,11 +11142,16 @@ class Handler(BaseHTTPRequestHandler):
         The 200 headers were already sent, so this event carries the SAME
         ``X-Request-Id`` value the response header announced (or the one a
         pre-commit error would have carried) to keep the failure correlatable.
+        The OpenAI-shaped envelope is the same one ``_error`` uses for a normal
+        error: ``type`` is the category, ``code`` is the stable machine code,
+        ``param`` is null and ``detail.reason`` keeps the stream failure reason.
         """
+        error_code = status
         payload = {"error": {"message": STREAM_ERROR_MESSAGES.get(
                                  status, "Upstream stream failed."),
-                             "type": "upstream_stream_error",
-                             "code": status,
+                             "type": _error_category(502, error_code),
+                             "code": error_code,
+                             "param": None,
                              "request_id": self._ensure_request_id(),
                              "detail": detail}}
         self.wfile.write(
@@ -11055,10 +11260,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 committed = True
 
-            def emit_in_band_error(message):
+            def emit_in_band_error(message, code="upstream_read_error"):
                 payload = {"type": "error", "error": {
                     "type": "api_error", "message": message,
-                    "request_id": self._ensure_request_id()}}
+                    "code": code,
+                    "request_id": self._ensure_request_id(),
+                    "detail": {"reason": code}}}
                 self.wfile.write(
                     b"event: error\ndata: "
                     + json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -11159,7 +11366,8 @@ class Handler(BaseHTTPRequestHandler):
                         emit_in_band_error(
                             "[chat2api:degenerate_repetition] Upstream model "
                             "fell into a repetition loop; the proxy cut the stream. "
-                            "This completion is incomplete.")
+                            "This completion is incomplete.",
+                            code="degenerate_repetition")
                         status = "degenerate_repetition"
                         return False
                     self.wfile.write(wire)
@@ -11220,7 +11428,8 @@ class Handler(BaseHTTPRequestHandler):
                                 else type(exc).__name__) from exc
                         emit_in_band_error(
                             f"Upstream connection failed mid-stream "
-                            f"({type(exc).__name__}); the completion is incomplete.")
+                            f"({type(exc).__name__}); the completion is incomplete.",
+                            code="upstream_read_error")
                         status = "upstream_read_error"
                         return status
                     except Exception as exc:  # noqa: BLE001 — 未提交的兼容流失败要转成 502
@@ -11233,7 +11442,8 @@ class Handler(BaseHTTPRequestHandler):
                             return status
                         emit_in_band_error(
                             f"Upstream stream failed ({type(exc).__name__}); "
-                            "the completion is incomplete.")
+                            "the completion is incomplete.",
+                            code="upstream_read_error")
                         status = "upstream_read_error"
                         return status
 
@@ -11250,8 +11460,15 @@ class Handler(BaseHTTPRequestHandler):
                             # A clean EOF without a terminal event is a
                             # TRUNCATED completion: the client saw the
                             # upstream's bytes, so this is not retryable,
-                            # but it must never be recorded as "ok".
+                            # but it must never be recorded as "ok". The
+                            # local in-band error uses the Anthropic shape
+                            # and carries the machine code, without a
+                            # synthetic message_stop.
                             status = "upstream_eof_without_event"
+                            emit_in_band_error(
+                                "Upstream stream ended without message_stop; "
+                                "the completion is incomplete.",
+                                code=status)
                         return status
 
                     if item:

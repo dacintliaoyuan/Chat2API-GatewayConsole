@@ -341,6 +341,9 @@ class TestChat2ApiClientErrors(unittest.TestCase):
                 errors.append(obj["error"])
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0]["request_id"], header_id)
+        self.assertEqual(errors[0]["code"], "upstream_eof_without_done")
+        self.assertEqual(errors[0]["detail"]["reason"],
+                         "upstream_eof_without_done")
 
     # ---------- final failure log ----------
 
