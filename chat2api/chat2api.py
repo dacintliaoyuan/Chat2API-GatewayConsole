@@ -450,6 +450,11 @@ def _share_max_request_bytes():
 
 
 SHARE_MAX_REQUEST_BYTES = _share_max_request_bytes()
+# One request body must arrive within this budget. A client that opens a
+# connection, declares a Content-Length and then stalls mid-body would otherwise
+# pin a handler thread indefinitely (slowloris). This is the BODY read budget,
+# distinct from the upstream/request wall-clock budgets below.
+REQUEST_BODY_TIMEOUT_S = 60.0
 # Total wall-clock budget for ONE chat request's transparent retry loop
 # (reasoning-only phase). Attempt counts alone would let a silent gateway
 # (~120s first-byte budget x 6 attempts) pin an unattended client for ~12
@@ -744,6 +749,50 @@ def _is_anthropic_error_path(path: str | None) -> bool:
     except (TypeError, ValueError):
         return False
     return route in ("/v1/messages", "/api/v1/messages")
+
+
+# Methods implemented by each exact gateway route. Unknown ``/api/`` paths are the
+# control-token passthrough and accept both; every other unknown path is a 404,
+# exactly like the GET/POST dispatch. The table drives the 405 + ``Allow`` reply
+# for every method the gateway does not implement, replacing the historical 501 HTML.
+_API_ROUTE_METHODS = {
+    "/": ("GET",),
+    "/health": ("GET",),
+    "/ready": ("GET",),
+    "/v1/version": ("GET",),
+    "/v1/models": ("GET",),
+    "/api/models": ("GET",),
+    "/api/v1/models": ("GET",),
+    "/admin/auth/status": ("GET",),
+    "/admin/auth/verify": ("GET",),
+    "/v1/chat/completions": ("POST",),
+    "/api/chat/completions": ("POST",),
+    "/api/v1/chat/completions": ("POST",),
+    "/v1/embeddings": ("POST",),
+    "/api/v1/embeddings": ("POST",),
+    "/v1/messages": ("POST",),
+    "/api/v1/messages": ("POST",),
+    "/v1/responses": ("POST",),
+    "/api/v1/responses": ("POST",),
+    "/admin/share/revoke": ("POST",),
+    "/admin/auth/login": ("POST",),
+    "/admin/auth/cancel": ("POST",),
+    "/admin/shutdown": ("POST",),
+}
+
+
+def _allowed_methods_for_path(path: str | None):
+    """Return the implemented methods for one route, or None when unknown."""
+    try:
+        route = urllib.parse.urlparse(path or "").path
+    except (TypeError, ValueError):
+        return None
+    methods = _API_ROUTE_METHODS.get(route)
+    if methods is not None:
+        return methods
+    if route.startswith("/api/"):
+        return ("GET", "POST")
+    return None
 
 
 # Upstream status preservation (ADR 0003 / spec #58 / ticket #60). The status
@@ -5915,6 +5964,10 @@ class _RequestDeadlineExceeded(RuntimeError):
     """No new upstream work may start after the per-request wall deadline."""
 
 
+class _RequestBodyTimeout(RuntimeError):
+    """The client did not finish sending its request body in time."""
+
+
 
 
 
@@ -6789,7 +6842,9 @@ def _format_output_budget(diag):
 
 
 def _log_upstream_reject(request_id, status_code, model, requested_model,
-                         stream, body, response_text, output_budget):
+                         stream, body, response_text, output_budget,
+                         tries=0, physical_attempts=0,
+                         max_physical_attempts=MAX_TOTAL_ATTEMPTS):
     """One shared upstream 400/422 reject line for chat and Messages.
 
     Emits the structure-only diagnostics, the sanitized upstream error
@@ -6815,10 +6870,12 @@ def _log_upstream_reject(request_id, status_code, model, requested_model,
     diag = _upstream_reject_diagnostics(body)
     err_msg, err_type, err_code = _extract_upstream_reject_error(response_text)
     _logger.warning(
-        "upstream_reject request=%s status=%d forwarded_model=%s "
+        "upstream_reject request=%s status=%d tries=%d "
+        "physical_attempts=%d/%d forwarded_model=%s "
         "requested_model=%s stream=%s error_type=%s error_code=%s "
         "error_message=%r %s output_budget %s",
-        request_id, status_code,
+        request_id, status_code, tries, physical_attempts,
+        max_physical_attempts,
         _sanitize_upstream_error_value(model, _OUTPUT_BUDGET_STR_CAP),
         _sanitize_upstream_error_value(requested_model,
                                        _OUTPUT_BUDGET_STR_CAP),
@@ -7147,6 +7204,21 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     # ---------- helpers ----------
+    def _ensure_request_id(self):
+        """Return this downstream request's stable correlation id.
+
+        The id is generated lazily so an error answered before the body is read
+        (405/408/413/415, local auth) still carries one, and the SAME id is
+        reused by the error header, the streamed error event and the final
+        failure log of one request. ``handle_one_request`` resets it per request
+        so a keep-alive connection never reuses the previous id.
+        """
+        request_id = getattr(self, "_request_id", None)
+        if not request_id:
+            request_id = secrets.token_hex(6)
+            self._request_id = request_id
+        return request_id
+
     def _json(self, code: int, obj: dict, extra_headers=None):
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
@@ -7159,7 +7231,16 @@ class Handler(BaseHTTPRequestHandler):
             # Closing after this response: HTTP/1.1 clients assume keep-alive
             # unless the header says otherwise, so announce it explicitly.
             self.send_header("Connection", "close")
-        for key, value in (extra_headers or {}).items():
+        headers = {}
+        if code >= 400:
+            # A gateway-generated error must never be cached by an
+            # intermediary and must carry the request id; successful bodies
+            # keep their existing headers.
+            headers["X-Request-Id"] = self._ensure_request_id()
+            headers["Cache-Control"] = "no-store"
+        if extra_headers:
+            headers.update(extra_headers)
+        for key, value in headers.items():
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
@@ -7173,7 +7254,8 @@ class Handler(BaseHTTPRequestHandler):
         ``detail``. Anthropic Messages carries the top-level ``type: error`` and
         an ``error`` object with ``type``/``message``/``code`` (plus ``detail``
         when diagnostics exist). The HTTP status is never changed here: status
-        mapping is a separate contract ticket.
+        mapping is a separate contract ticket. ``_json`` adds ``no-store`` and
+        ``X-Request-Id`` to every self-produced error.
         """
         # Errors may fire before the request body is read (unknown path,
         # rejected control token, invalid local key). Reusing the connection
@@ -7197,6 +7279,29 @@ class Handler(BaseHTTPRequestHandler):
         if extra:
             error.update(extra)
         self._json(status, {"error": error}, extra_headers)
+
+    def __getattr__(self, name):
+        """Answer unimplemented HTTP methods with JSON 405, never 501 HTML.
+
+        BaseHTTPRequestHandler only looks up ``do_<METHOD>`` and, when absent,
+        emits its built-in 501 HTML page. Returning this dispatcher for any
+        unknown ``do_*`` method keeps every API route inside the JSON error
+        contract; the dispatcher itself decides 405 + ``Allow`` for a known route
+        and 404 for an unknown path.
+        """
+        if name.startswith("do_") and len(name) > 3:
+            return self._handle_unsupported_method
+        raise AttributeError(name)
+
+    def _handle_unsupported_method(self):
+        path = urllib.parse.urlparse(self.path).path
+        allowed = _allowed_methods_for_path(path)
+        if allowed is None:
+            self._error(404, f"Unknown path: {path}", error_code="not_found")
+            return
+        self._error(405, "Method not allowed",
+                     error_code="method_not_allowed",
+                     extra_headers={"Allow": ", ".join(allowed)})
 
     def _reauthentication_error(self, detail=None):
         proxy = getattr(self.server, "proxy", None)
@@ -7381,6 +7486,77 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin if origin in ALLOWED_ORIGINS else None
 
+    def _unsupported_content_encoding(self):
+        """Return the unsupported Content-Encoding tokens, or None.
+
+        ``identity`` (and an absent header) means the body is already the JSON
+        bytes this gateway parses. This batch does not decompress request
+        bodies: gzip/br/zstd are all answered with 415, so the declared size
+        limit keeps applying to the bytes actually received and a compressed
+        payload can never expand past it.
+        """
+        raw = self.headers.get("Content-Encoding")
+        if raw is None:
+            return None
+        codings = [part.strip().lower() for part in raw.split(",")
+                   if part.strip()]
+        if not codings or all(coding == "identity" for coding in codings):
+            return None
+        return ", ".join(codings)
+
+    def _read_body_bytes(self, length):
+        """Read exactly ``length`` body bytes within one total time budget.
+
+        A client that declares a body and then stalls must not pin this handler
+        forever. The socket timeout is set from the remaining body budget on
+        every read, and the deadline is checked between reads, so a slow trickle
+        cannot extend the 60-second budget indefinitely. The previous socket
+        timeout is restored afterwards (the connection is normally closed after
+        the 408 anyway, but a non-error caller must not inherit it).
+        """
+        connection = getattr(self, "connection", None)
+        previous_timeout = None
+        if connection is not None:
+            try:
+                previous_timeout = connection.gettimeout()
+            except (AttributeError, OSError):
+                connection = None
+        deadline = time.monotonic() + REQUEST_BODY_TIMEOUT_S
+        chunks = []
+        remaining = length
+        try:
+            while remaining > 0:
+                remaining_budget = deadline - time.monotonic()
+                if remaining_budget <= 0:
+                    raise _RequestBodyTimeout(
+                        f"request body read exceeded "
+                        f"{REQUEST_BODY_TIMEOUT_S:g}s")
+                if connection is not None:
+                    try:
+                        connection.settimeout(max(0.001, remaining_budget))
+                    except (AttributeError, OSError):
+                        connection = None
+                chunk = self.rfile.read1(min(remaining, 65536))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            return b"".join(chunks)
+        except TimeoutError as exc:
+            raise _RequestBodyTimeout(
+                f"request body read exceeded {REQUEST_BODY_TIMEOUT_S:g}s"
+            ) from exc
+        finally:
+            if connection is not None:
+                try:
+                    connection.settimeout(previous_timeout)
+                except (AttributeError, OSError) as exc:
+                    # The connection is already gone; restoring its timeout
+                    # cannot change this response and must not mask it.
+                    _logger.debug(
+                        "request body timeout restore skipped: %s",
+                        type(exc).__name__)
+
     def _read_body(self):
         """Parse one JSON object body; every error is answered inline (None)."""
         try:
@@ -7389,6 +7565,14 @@ class Handler(BaseHTTPRequestHandler):
             self._error(400, "Invalid Content-Length header",
                         error_code="invalid_request",
                         param="Content-Length")
+            return None
+        unsupported_encoding = self._unsupported_content_encoding()
+        if unsupported_encoding is not None:
+            self._error(
+                415,
+                f"Unsupported Content-Encoding: {unsupported_encoding}",
+                error_code="unsupported_content_encoding",
+                param="Content-Encoding")
             return None
         limit = (SHARE_MAX_REQUEST_BYTES
                  if getattr(self.server, "share_gate", None) is not None
@@ -7400,8 +7584,18 @@ class Handler(BaseHTTPRequestHandler):
         if length == 0:
             return {}
         try:
-            body = json.loads(self.rfile.read(length))
+            raw_body = self._read_body_bytes(length)
+        except _RequestBodyTimeout:
+            self._error(408, "Request body read timed out",
+                        error_code="request_timeout")
+            return None
         except (OSError, ValueError, RecursionError):
+            self._error(400, "Request body is not valid JSON",
+                        error_code="invalid_json")
+            return None
+        try:
+            body = json.loads(raw_body)
+        except (ValueError, RecursionError):
             self._error(400, "Request body is not valid JSON",
                         error_code="invalid_json")
             return None
@@ -7423,6 +7617,9 @@ class Handler(BaseHTTPRequestHandler):
         """
         self._share_key_id = None
         self._share_ctx = None
+        # One id per downstream request; a keep-alive connection must never
+        # reuse the previous request's id in an error header or stream event.
+        self._request_id = None
         try:
             super().handle_one_request()
         finally:
@@ -8010,6 +8207,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Request-Id", self._ensure_request_id())
             self.send_header("Connection", "close")
             self.end_headers()
             response_id = "resp_" + secrets.token_hex(12)
@@ -8019,6 +8217,11 @@ class Handler(BaseHTTPRequestHandler):
             status = "ok"
 
             def send_event(name, payload):
+                if name == "response.failed":
+                    error = (payload.get("response") or {}).get("error")
+                    if isinstance(error, dict):
+                        error.setdefault("request_id",
+                                          self._ensure_request_id())
                 self.wfile.write(("event: " + name + "\ndata: "
                                   + json.dumps(payload) + "\n\n").encode())
                 self.wfile.flush()
@@ -8249,6 +8452,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Request-Id", self._ensure_request_id())
             self.send_header("Connection", "close")
             self.end_headers()
             response_id = "resp_" + secrets.token_hex(12)
@@ -8258,6 +8462,11 @@ class Handler(BaseHTTPRequestHandler):
             status = "ok"
 
             def send_event(name, payload):
+                if name == "response.failed":
+                    error = (payload.get("response") or {}).get("error")
+                    if isinstance(error, dict):
+                        error.setdefault("request_id",
+                                          self._ensure_request_id())
                 self.wfile.write(("event: " + name + "\ndata: "
                                   + json.dumps(payload) + "\n\n").encode())
                 self.wfile.flush()
@@ -8360,7 +8569,7 @@ class Handler(BaseHTTPRequestHandler):
 
         deadline = (time.monotonic() + MAX_REQUEST_SECONDS
                     if request_deadline is None else request_deadline)
-        compat_request_id = secrets.token_hex(6)
+        compat_request_id = self._ensure_request_id()
         started_compat = time.monotonic()
         # record_usage derives duration_ms from the wall clock, while the log
         # lines below measure against the monotonic start; the ledger therefore
@@ -8460,11 +8669,11 @@ class Handler(BaseHTTPRequestHandler):
         def log_summary(final):
             _logger.info(
                 "request summary request=%s endpoint=%s final=%s "
-                "physical_attempts=%d/%d logical_attempts=%d "
+                "tries=%d physical_attempts=%d/%d "
                 "upstream_retries=%d slow_retries=%d "
                 "repetition_retries=%d duration_ms=%d",
                 compat_request_id, upstream_path, final,
-                physical_budget.used, MAX_TOTAL_ATTEMPTS, logical_attempts,
+                logical_attempts, physical_budget.used, MAX_TOTAL_ATTEMPTS,
                 transient_retries_done, slow_retries_done,
                 repetition_retries_done,
                 int((time.monotonic() - started_compat) * 1000))
@@ -8750,7 +8959,9 @@ class Handler(BaseHTTPRequestHandler):
                     compat_request_id, status_code, model=messages_model,
                     requested_model=messages_model, stream=client_stream,
                     body=body, response_text=response_text,
-                    output_budget=messages_output_budget)
+                    output_budget=messages_output_budget,
+                    tries=logical_attempts,
+                    physical_attempts=physical_budget.used)
             self._passthrough(response)
             log_summary(f"HTTP{status_code}")
             record_messages_usage(f"HTTP{status_code}", payload=payload)
@@ -8775,9 +8986,9 @@ class Handler(BaseHTTPRequestHandler):
         req_model = body.get("model") or ""
         started_at = time.time()
         # Per-request id so every failure log line of one downstream request
-        # can be tied together in chat2api.log; it is written only to the log
-        # and never added to any response body.
-        request_id = secrets.token_hex(6)
+        # can be tied together in chat2api.log. The SAME value is returned in
+        # the X-Request-Id error header and in any in-band stream error event.
+        request_id = self._ensure_request_id()
         # The client's response mode and the upstream transport mode are
         # separate (N1): R13 aggregates only a fully selected (verified key,
         # model, protocol) triple, while every existing caller keeps the native
@@ -8804,7 +9015,8 @@ class Handler(BaseHTTPRequestHandler):
             self._error(400, image_error["message"],
                         error_code=image_error["type"], param="messages")
             _logger.info(
-                "request summary request=%s final=%s physical_attempts=0/%d "
+                "request summary request=%s final=%s tries=0 "
+                "physical_attempts=0/%d "
                 "upstream_retries=0 slow_retries=0 repetition_retries=0 "
                 "images_before=%d images_after=%d images_trimmed=%d duration_ms=%d",
                 request_id, image_error["type"], MAX_TOTAL_ATTEMPTS,
@@ -8867,14 +9079,17 @@ class Handler(BaseHTTPRequestHandler):
             # exception class name - never the upstream response body, the
             # request messages, or credentials.
             _logger.warning(
-                "chat failure request=%s stage=%s upstream_status=%s "
+                "chat failure request=%s stage=%s tries=%d "
+                "physical_attempts=%d/%d upstream_status=%s "
                 "exception=%s downstream=%d stream=%s model=%s duration_ms=%d",
-                request_id, stage,
+                request_id, stage, logical_attempts, physical_budget.used,
+                MAX_TOTAL_ATTEMPTS,
                 "-" if upstream_status is None else upstream_status,
                 exc_name or "-", downstream_code, client_stream, req_model,
                 int((time.time() - started_at) * 1000))
 
         physical_budget = _PhysicalRequestBudget(MAX_TOTAL_ATTEMPTS)
+        logical_attempts = 0
         transient_retries_done = 0
         slow_retries_done = 0
         repetition_retries_done = 0
@@ -8935,7 +9150,7 @@ class Handler(BaseHTTPRequestHandler):
             failure budget, but it still consumes one physical request.
             """
             nonlocal transient_retries_done, slow_retries_done, compat_retry_seen
-            nonlocal last_upstream_status
+            nonlocal last_upstream_status, logical_attempts
             compat_retry_used = False
             while True:
                 if time.monotonic() >= request_deadline:
@@ -8944,6 +9159,7 @@ class Handler(BaseHTTPRequestHandler):
                 if physical_budget.remaining <= 0:
                     raise _PhysicalBudgetExceeded(
                         "chat physical request budget exhausted")
+                logical_attempts += 1
                 attempt_started = time.monotonic()
                 try:
                     rr = proxy.call(
@@ -9144,7 +9360,9 @@ class Handler(BaseHTTPRequestHandler):
                         model=body.get("model") or "",
                         requested_model=req_model, stream=client_stream, body=body,
                         response_text=response_text,
-                        output_budget=output_budget)
+                        output_budget=output_budget,
+                        tries=logical_attempts,
+                        physical_attempts=physical_budget.used)
                     self._upstream_status_error(status_code, response_text)
                     return
                 log_failure("compat_retry_non_200" if compat_retry_used
@@ -9211,10 +9429,12 @@ class Handler(BaseHTTPRequestHandler):
                 record_usage(req_model, False, started_at, usage,
                              _message_tokens(body.get("messages")), out_est)
                 _logger.info(
-                    "request summary request=%s final=ok physical_attempts=%d/%d "
+                    "request summary request=%s final=ok tries=%d "
+                    "physical_attempts=%d/%d "
                     "upstream_retries=%d slow_retries=%d "
                     "images_before=%d images_after=%d images_trimmed=%d duration_ms=%d",
-                    request_id, physical_budget.used, MAX_TOTAL_ATTEMPTS,
+                    request_id, logical_attempts, physical_budget.used,
+                    MAX_TOTAL_ATTEMPTS,
                     transient_retries_done, slow_retries_done,
                     image_stats["images_before"], image_stats["images_after"],
                     image_stats["images_trimmed"],
@@ -9394,11 +9614,13 @@ class Handler(BaseHTTPRequestHandler):
                     aggregator.output_estimate(),
                     status=f"aggregate_{aggregate_status}")
             _logger.info(
-                "request summary request=%s final=%s physical_attempts=%d/%d "
+                "request summary request=%s final=%s tries=%d "
+                "physical_attempts=%d/%d "
                 "upstream_retries=%d slow_retries=%d "
                 "images_before=%d images_after=%d images_trimmed=%d "
                 "duration_ms=%d",
-                request_id, aggregate_status, physical_budget.used,
+                request_id, aggregate_status, logical_attempts,
+                physical_budget.used,
                 MAX_TOTAL_ATTEMPTS, transient_retries_done,
                 slow_retries_done, image_stats["images_before"],
                 image_stats["images_after"], image_stats["images_trimmed"],
@@ -9415,6 +9637,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type",
                              "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Request-Id", self._ensure_request_id())
             self.send_header("Connection", "close")
             origin = self._cors_allow_origin()
             if origin:
@@ -9864,6 +10087,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header(
                         "Content-Type", "text/event-stream; charset=utf-8")
                     self.send_header("Cache-Control", "no-cache")
+                    self.send_header("X-Request-Id",
+                                     self._ensure_request_id())
                     self.send_header("Connection", "close")
                     origin = self._cors_allow_origin()
                     if origin:
@@ -10061,12 +10286,14 @@ class Handler(BaseHTTPRequestHandler):
             # from evidence (are 5 retries too few/too many?) after a week.
             try:
                 _logger.info(
-                    "request summary request=%s final=%s physical_attempts=%d/%d "
+                    "request summary request=%s final=%s tries=%d "
+                    "physical_attempts=%d/%d "
                     "upstream_retries=%d slow_retries=%d "
                     "repetition_retries=%d line_loop_hits=%d "
                     "images_before=%d images_after=%d "
                     "images_trimmed=%d duration_ms=%d",
-                    request_id, status, physical_budget.used, MAX_TOTAL_ATTEMPTS,
+                    request_id, status, logical_attempts,
+                    physical_budget.used, MAX_TOTAL_ATTEMPTS,
                     transient_retries_done, slow_retries_done,
                     repetition_retries_done, line_loop_observer.hits,
                     image_stats["images_before"],
@@ -10139,11 +10366,17 @@ class Handler(BaseHTTPRequestHandler):
         return detail
 
     def _stream_error_event(self, status, detail):
-        """Send one in-band SSE error event; never a second HTTP status."""
+        """Send one in-band SSE error event; never a second HTTP status.
+
+        The 200 headers were already sent, so this event carries the SAME
+        ``X-Request-Id`` value the response header announced (or the one a
+        pre-commit error would have carried) to keep the failure correlatable.
+        """
         payload = {"error": {"message": STREAM_ERROR_MESSAGES.get(
                                  status, "Upstream stream failed."),
                              "type": "upstream_stream_error",
                              "code": status,
+                             "request_id": self._ensure_request_id(),
                              "detail": detail}}
         self.wfile.write(
             b"data: " + json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -10240,6 +10473,7 @@ class Handler(BaseHTTPRequestHandler):
                 for k, v in r.headers.items():
                     if k.lower() in ("content-type", "cache-control"):
                         self.send_header(k, v)
+                self.send_header("X-Request-Id", self._ensure_request_id())
                 origin = self._cors_allow_origin()
                 if origin:
                     self.send_header("Access-Control-Allow-Origin", origin)
@@ -10249,10 +10483,13 @@ class Handler(BaseHTTPRequestHandler):
                 committed = True
 
             def emit_in_band_error(message):
+                payload = {"type": "error", "error": {
+                    "type": "api_error", "message": message,
+                    "request_id": self._ensure_request_id()}}
                 self.wfile.write(
-                    b'event: error\ndata: {"type":"error","error":'
-                    b'{"type":"api_error","message":'
-                    + json.dumps(message).encode("utf-8") + b"}}\n\n")
+                    b"event: error\ndata: "
+                    + json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                    + b"\n\n")
                 self.wfile.flush()
 
             def feed_guard(piece):
