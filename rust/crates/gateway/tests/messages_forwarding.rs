@@ -1,8 +1,9 @@
 //! S2a acceptance 4: the non-stream Anthropic JSON body is relayed unchanged
 //! through the Python compatibility path (`POST /api/v1/messages`), with the
 //! stored upstream bearer and the client's `Anthropic-Version`/`Anthropic-Beta`
-//! headers. An upstream non-200 answer is mapped like `_compat_proxy`:
-//! 401 -> 503 reauthentication, 400/422 -> the same status, others -> 502.
+//! headers. An upstream non-200 answer preserves its status and rebuilds the
+//! Anthropic-shaped error body; 401 -> 503 reauthentication, the remaining
+//! 4xx/5xx -> the same status with `detail.upstream_status`/`upstream_message`.
 //!
 //! Python source: `chat2api/chat2api.py:7467-7473` (route), `_compat_proxy`
 //! at `chat2api/chat2api.py:7990-8470` and `_passthrough` at
@@ -142,11 +143,15 @@ fn a_400_upstream_response_keeps_the_status_without_passthrough() {
     assert_eq!(
         response.json(),
         json!({"type": "error", "error": {
-            "message": "Upstream rejected the request; the server log has structured diagnostics",
+            "message": "Upstream rejected the request",
             "type": "upstream_error",
             "code": "upstream_request_rejected",
             "param": null,
-            "detail": null,
+            "detail": {
+                "upstream_status": 400,
+                "upstream_message": "{\"error\":{\"message\":\"bad request\",\"type\":\"invalid_request_error\"},\"type\":\"error\"}",
+            },
+            "upstream_status": 400,
         }})
     );
     assert_eq!(stub.attempts(), 1);
@@ -183,7 +188,7 @@ fn a_401_upstream_response_is_a_503_reauthentication_error() {
 }
 
 #[test]
-fn a_500_upstream_response_is_a_502_with_the_bounded_text() {
+fn a_500_upstream_response_keeps_the_status_with_the_bounded_text() {
     let temp = TempDir::new("um-rust-messages-json-");
     let stub = ChatStub::start();
     stub.push(ChatAttempt::HttpStatus {
@@ -199,15 +204,19 @@ fn a_500_upstream_response_is_a_502_with_the_bounded_text() {
     });
     let response = client_request(gateway.addr, &request(&messages_body(Some(false))))
         .expect("messages request");
-    assert_eq!(response.status, 502);
+    assert_eq!(response.status, 500);
     assert_eq!(
         response.json(),
         json!({"type": "error", "error": {
             "message": "Upstream request failed",
             "type": "upstream_error",
-            "code": "chat2api_error",
+            "code": "upstream_unavailable",
             "param": null,
-            "detail": "HTTP 500: upstream exploded",
+            "detail": {
+                "upstream_status": 500,
+                "upstream_message": "upstream exploded",
+            },
+            "upstream_status": 500,
         }})
     );
 }

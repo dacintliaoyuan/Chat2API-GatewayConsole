@@ -43,6 +43,9 @@ pub struct GatewayError {
     /// Boxed so the error stays under clippy's large-error threshold.
     pub reason: Option<Box<Value>>,
     pub upstream_status: Option<u16>,
+    /// An upstream `Retry-After` value that stays attached to the response
+    /// headers, never to the JSON body.
+    pub retry_after: Option<Box<String>>,
 }
 
 impl GatewayError {
@@ -58,6 +61,7 @@ impl GatewayError {
             detail: None,
             reason: None,
             upstream_status: None,
+            retry_after: None,
         }
     }
 
@@ -85,6 +89,18 @@ impl GatewayError {
     pub fn with_upstream_status(mut self, status: u16) -> Self {
         self.upstream_status = Some(status);
         self
+    }
+
+    pub fn with_retry_after(mut self, value: impl Into<String>) -> Self {
+        self.retry_after = Some(Box::new(value.into()));
+        self
+    }
+
+    fn with_retry_after_header(&self, response: Response) -> Response {
+        match &self.retry_after {
+            Some(value) => response.with_header("Retry-After", value.as_ref().clone()),
+            None => response,
+        }
     }
 
     fn error_object(&self) -> Map<String, Value> {
@@ -131,11 +147,13 @@ impl GatewayError {
     }
 
     pub fn response(&self) -> Response {
-        Response::json(self.status, &self.body()).closing()
+        self.with_retry_after_header(Response::json(self.status, &self.body()))
+            .closing()
     }
 
     pub fn anthropic_response(&self) -> Response {
-        Response::json(self.status, &self.anthropic_body()).closing()
+        self.with_retry_after_header(Response::json(self.status, &self.anthropic_body()))
+            .closing()
     }
 
     pub fn response_for(&self, protocol: ErrorProtocol) -> Response {
@@ -349,6 +367,72 @@ impl GatewayError {
         Self::new(504, "Upstream request timed out", "upstream_timeout")
     }
 
+    /// A first-byte, response-head or socket-silence wait expired.
+    pub fn upstream_timeout_with_reason(reason: &str) -> Self {
+        Self::upstream_timeout().with_detail(json!({"reason": reason}))
+    }
+
+    /// The gateway's total request budget expired before another attempt could
+    /// start. The last upstream status, when one was seen, stays in
+    /// `detail.last_upstream_status`.
+    pub fn request_deadline_exceeded(last_upstream_status: Option<u16>) -> Self {
+        let mut error = Self::new(
+            504,
+            "Upstream request could not start another attempt",
+            "request_deadline_exceeded",
+        );
+        if let Some(status) = last_upstream_status {
+            error.detail = Some(Box::new(json!({"last_upstream_status": status})));
+            error.upstream_status = Some(status);
+        }
+        error
+    }
+
+    /// A connection, DNS, TLS or proxy failure: the upstream never produced an
+    /// HTTP response.
+    pub fn upstream_transport_failure(reason: &str) -> Self {
+        Self::new(502, "Upstream request failed", "upstream_unavailable")
+            .with_detail(json!({"reason": reason}))
+    }
+
+    /// Rebuild one preserved upstream 4xx/5xx response.
+    ///
+    /// The upstream status is kept as-is except for 401, which stays the
+    /// gateway's own reauthentication state. The upstream body is never relayed
+    /// raw: `detail.upstream_message` carries a bounded single-line copy.
+    pub fn upstream_status_error(
+        status: u16,
+        upstream_message: Option<&str>,
+        retry_after: Option<&str>,
+    ) -> Self {
+        if status == 401 {
+            let mut error = Self::reauthentication_required(Some("upstream_rejected"));
+            if let Some(retry_after) = retry_after.filter(|value| !value.is_empty()) {
+                error = error.with_retry_after(retry_after);
+            }
+            return error;
+        }
+        let (message, code) = match status {
+            402 => ("Upstream quota is exhausted", "upstream_quota_exhausted"),
+            403 => ("Upstream denied the request", "upstream_forbidden"),
+            429 => ("Upstream rate limit reached", "upstream_rate_limited"),
+            504 => ("Upstream request timed out", "upstream_timeout"),
+            400..=499 => ("Upstream rejected the request", "upstream_request_rejected"),
+            _ => ("Upstream request failed", "upstream_unavailable"),
+        };
+        let mut detail = Map::new();
+        detail.insert("upstream_status".to_string(), json!(status));
+        if let Some(message) = upstream_message
+            .map(bounded_upstream_message)
+            .filter(|message| !message.is_empty())
+        {
+            detail.insert("upstream_message".to_string(), json!(message));
+        }
+        Self::new(status, message, code)
+            .with_upstream_status(status)
+            .with_detail(Value::Object(detail))
+    }
+
     // ----- console (8002) request-boundary codes (usagesrv.py) -----
 
     pub fn console_body(status: u16, code: &str) -> Self {
@@ -377,12 +461,26 @@ impl GatewayError {
     }
 }
 
+/// Bound one upstream text for `detail.upstream_message`.
+///
+/// The whole body is never relayed: line breaks collapse to single spaces and
+/// the result is capped at 200 characters, matching the explicit-stream-error
+/// bound already used by the Chat path.
+pub fn bounded_upstream_message(text: &str) -> String {
+    let collapsed = text
+        .replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    collapsed.chars().take(200).collect()
+}
+
 /// Map one status/code pair onto the protocol-neutral error category.
 fn category_for(status: u16, code: &str) -> &'static str {
     match code {
         "reauthentication_required" | "reauthentication_failed" => "authentication_error",
         "upstream_forbidden" => "permission_error",
-        "upstream_quota_exhausted" => "rate_limit_error",
+        "upstream_quota_exhausted" | "upstream_rate_limited" => "rate_limit_error",
         "share_config_unavailable" | "share_revoke_unassembled" | "not_implemented" => "api_error",
         "request_deadline_exceeded" | "upstream_attempt_budget_exhausted" => "upstream_error",
         _ if code.starts_with("upstream_") => "upstream_error",

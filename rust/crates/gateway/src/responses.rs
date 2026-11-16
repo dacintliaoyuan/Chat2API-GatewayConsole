@@ -23,7 +23,7 @@ use crate::http::{write_chunk, write_response_head, Request, Response};
 use crate::ledger::{message_tokens, UsageRecord};
 use crate::nonstream::{AggregateFailure, ChatCompletionAggregator};
 use crate::server::AppState;
-use crate::upstream::{post_compat, NextItem, StreamReader};
+use crate::upstream::{post_compat, NextItem, StreamReader, UpstreamFailure, UpstreamResponse};
 
 /// The frozen Responses request field whitelist.
 pub const RESPONSES_FIELDS: [&str; 17] = [
@@ -1303,51 +1303,36 @@ fn forward_json(
                     }
                 }
                 record_usage(context, failure.name(), None, 0);
-                return ChatResult::Response(
-                    GatewayError::new(
-                        502,
-                        "Failed to reach upstream compatibility endpoint",
-                        failure.name(),
-                    )
-                    .response(),
-                );
+                return ChatResult::Response(upstream_failure_error(failure).response());
             }
         };
         if response.status != 200 {
+            let status = response.status;
             let elapsed = attempt_started.elapsed();
             let slow = elapsed >= context.state.config.slow_retry_threshold;
-            if retryable_status(response.status)
+            if retryable_status(status)
                 && retry_available(context, fast_retries, slow_retries, physical_attempts, slow)
             {
                 fast_retries += 1;
                 if slow {
                     slow_retries += 1;
                 }
-                let _status = response.status;
                 let delay = retry_delay(context, fast_retries, slow);
                 drop(response);
                 if !sleep_with_deadline(delay, context.deadline) {
                     record_usage(context, "request_deadline_exceeded", None, 0);
-                    return ChatResult::Response(deadline_response());
+                    return ChatResult::Response(deadline_response_with_last_status(status));
                 }
                 continue;
             }
-            let status = response.status;
             record_usage(context, &upstream_status_name(status), None, 0);
-            return ChatResult::Response(upstream_status_error(status));
+            return ChatResult::Response(upstream_status_error(status, response));
         }
         let raw = match response.body.read_all() {
             Ok(raw) => raw,
             Err(failure) => {
                 record_usage(context, failure.name(), None, 0);
-                return ChatResult::Response(
-                    GatewayError::new(
-                        502,
-                        "Failed to reach upstream compatibility endpoint",
-                        failure.name(),
-                    )
-                    .response(),
-                );
+                return ChatResult::Response(upstream_failure_error(failure).response());
             }
         };
         let payload: Value = match serde_json::from_slice(&raw) {
@@ -1446,20 +1431,14 @@ fn forward_aggregate(
                     }
                 }
                 record_usage(context, failure.name(), None, 0);
-                return ChatResult::Response(
-                    GatewayError::new(
-                        502,
-                        "Failed to reach upstream compatibility endpoint",
-                        failure.name(),
-                    )
-                    .response(),
-                );
+                return ChatResult::Response(upstream_failure_error(failure).response());
             }
         };
         if response.status != 200 {
+            let status = response.status;
             let elapsed = attempt_started.elapsed();
             let slow = elapsed >= context.state.config.slow_retry_threshold;
-            if retryable_status(response.status)
+            if retryable_status(status)
                 && retry_available(context, fast_retries, slow_retries, physical_attempts, slow)
             {
                 fast_retries += 1;
@@ -1470,13 +1449,12 @@ fn forward_aggregate(
                 drop(response);
                 if !sleep_with_deadline(delay, context.deadline) {
                     record_usage(context, "request_deadline_exceeded", None, 0);
-                    return ChatResult::Response(deadline_response());
+                    return ChatResult::Response(deadline_response_with_last_status(status));
                 }
                 continue;
             }
-            let status = response.status;
             record_usage(context, &upstream_status_name(status), None, 0);
-            return ChatResult::Response(upstream_status_error(status));
+            return ChatResult::Response(upstream_status_error(status, response));
         }
         let mut aggregator = ChatCompletionAggregator::new(Some(context.model));
         let watcher = ClientWatcher::start(stream);
@@ -1506,7 +1484,11 @@ fn forward_aggregate(
                     break;
                 }
                 NextItem::Error(error) => {
-                    status = "upstream_read_error".to_string();
+                    status = if error.timed_out {
+                        "upstream_timeout".to_string()
+                    } else {
+                        "upstream_read_error".to_string()
+                    };
                     exception = Some(error.name.to_string());
                     break;
                 }
@@ -1588,6 +1570,9 @@ fn aggregate_status(failure: &AggregateFailure) -> &'static str {
 
 fn aggregate_failure_response(status: &str, exception: Option<&str>) -> Response {
     match status {
+        "upstream_timeout" => GatewayError::upstream_timeout()
+            .with_detail(json!({"reason": "upstream_timeout"}))
+            .response(),
         "upstream_explicit_error" => {
             GatewayError::new(502, "Upstream request failed", "upstream_explicit_error")
                 .with_detail(json!({
@@ -1696,38 +1681,30 @@ fn forward_stream_with(
                     }
                 }
                 record_usage(context, failure.name(), None, 0);
-                return ChatResult::Response(
-                    GatewayError::new(
-                        502,
-                        "Failed to reach upstream compatibility endpoint",
-                        failure.name(),
-                    )
-                    .response(),
-                );
+                return ChatResult::Response(upstream_failure_error(failure).response());
             }
         };
         if response.status != 200 {
+            let status = response.status;
             let elapsed = attempt_started.elapsed();
             let slow = elapsed >= context.state.config.slow_retry_threshold;
-            if retryable_status(response.status)
+            if retryable_status(status)
                 && retry_available(context, fast_retries, slow_retries, physical_attempts, slow)
             {
                 fast_retries += 1;
                 if slow {
                     slow_retries += 1;
                 }
-                let _status = response.status;
                 let delay = retry_delay(context, fast_retries, slow);
                 drop(response);
                 if !sleep_with_deadline(delay, context.deadline) {
                     record_usage(context, "request_deadline_exceeded", None, 0);
-                    return ChatResult::Response(deadline_response());
+                    return ChatResult::Response(deadline_response_with_last_status(status));
                 }
                 continue;
             }
-            let status = response.status;
             record_usage(context, &upstream_status_name(status), None, 0);
-            return ChatResult::Response(upstream_status_error(status));
+            return ChatResult::Response(upstream_status_error(status, response));
         }
         let mut headers = vec![
             ("Content-Type".to_string(), "text/event-stream".to_string()),
@@ -1951,12 +1928,20 @@ fn retryable_status(status: u16) -> bool {
 }
 
 fn deadline_response() -> Response {
-    GatewayError::new(
-        502,
-        "Upstream request could not start another attempt",
-        "request_deadline_exceeded",
-    )
-    .response()
+    GatewayError::request_deadline_exceeded(None).response()
+}
+
+fn deadline_response_with_last_status(status: u16) -> Response {
+    GatewayError::request_deadline_exceeded(Some(status)).response()
+}
+
+fn upstream_failure_error(failure: UpstreamFailure) -> GatewayError {
+    match failure {
+        UpstreamFailure::Timeout => GatewayError::upstream_timeout_with_reason(failure.name()),
+        UpstreamFailure::ConnectionError | UpstreamFailure::Protocol => {
+            GatewayError::upstream_transport_failure(failure.name())
+        }
+    }
 }
 
 fn physical_budget_response() -> Response {
@@ -1976,18 +1961,22 @@ fn upstream_status_name(status: u16) -> String {
     }
 }
 
-fn upstream_status_error(status: u16) -> Response {
+fn upstream_status_error(status: u16, mut response: UpstreamResponse) -> Response {
+    let retry_after = response.headers.get("retry-after").cloned();
     if status == 401 {
-        return GatewayError::reauthentication_required(Some("upstream_rejected")).response();
+        let mut error = GatewayError::reauthentication_required(Some("upstream_rejected"));
+        if let Some(retry_after) = retry_after.filter(|value| !value.is_empty()) {
+            error = error.with_retry_after(retry_after);
+        }
+        return error.response();
     }
-    if status == 400 || status == 422 {
-        return GatewayError::new(status, "upstream_request_rejected", "chat2api_error")
-            .with_detail(json!({"upstream_status": status}))
-            .response();
-    }
-    GatewayError::new(502, "upstream_unavailable", "upstream_unavailable")
-        .with_detail(json!({"upstream_status": status}))
-        .response()
+    let text = response
+        .body
+        .read_prefix(2048)
+        .ok()
+        .map(|raw| String::from_utf8_lossy(&raw).to_string())
+        .unwrap_or_default();
+    GatewayError::upstream_status_error(status, Some(&text), retry_after.as_deref()).response()
 }
 
 fn unix_seconds() -> i64 {

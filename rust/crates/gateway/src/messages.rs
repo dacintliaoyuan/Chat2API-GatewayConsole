@@ -25,7 +25,9 @@ use crate::ledger::{
     message_tokens, usage_fields_to_json, NormalizedUsage, UsageRecord,
 };
 use crate::server::AppState;
-use crate::upstream::{post_compat, NextItem, StreamReader, UpstreamBody, UpstreamResponse};
+use crate::upstream::{
+    post_compat, NextItem, StreamReader, UpstreamBody, UpstreamFailure, UpstreamResponse,
+};
 
 /// The frozen Anthropic Messages field whitelist.
 ///
@@ -178,13 +180,18 @@ pub fn handle_messages(
     }
 }
 
-/// Python `_compat_proxy`: 401 is a reauthentication failure, 400/422 keeps
-/// the upstream status, everything else is `upstream_unavailable`.
-fn compat_upstream_error(status: u16, text: &str) -> GatewayError {
-    match status {
-        401 => GatewayError::reauthentication_required(Some("upstream_rejected")),
-        400 | 422 => GatewayError::upstream_rejected(status),
-        _ => GatewayError::upstream_request_failed(status, text),
+/// Python `_compat_proxy`: the upstream status is preserved except for 401,
+/// which stays the gateway's reauthentication state.
+fn compat_upstream_error(status: u16, text: &str, retry_after: Option<&str>) -> GatewayError {
+    GatewayError::upstream_status_error(status, Some(text), retry_after)
+}
+
+fn upstream_failure_error(failure: UpstreamFailure) -> GatewayError {
+    match failure {
+        UpstreamFailure::Timeout => GatewayError::upstream_timeout_with_reason(failure.name()),
+        UpstreamFailure::ConnectionError | UpstreamFailure::Protocol => {
+            GatewayError::upstream_transport_failure(failure.name())
+        }
     }
 }
 
@@ -225,12 +232,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
         if Instant::now() >= context.deadline {
             record_usage(context, "request_deadline_exceeded", None, 0);
             return ChatResult::Response(
-                GatewayError::new(
-                    502,
-                    "Upstream compatibility endpoint exceeded the request deadline",
-                    "request_deadline_exceeded",
-                )
-                .anthropic_response(),
+                GatewayError::request_deadline_exceeded(None).anthropic_response(),
             );
         }
         if physical_attempts >= context.state.config.max_physical_attempts {
@@ -271,14 +273,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                     }
                 }
                 record_usage(context, failure.name(), None, 0);
-                return ChatResult::Response(
-                    GatewayError::new(
-                        502,
-                        "Failed to reach upstream compatibility endpoint",
-                        failure.name(),
-                    )
-                    .anthropic_response(),
-                );
+                return ChatResult::Response(upstream_failure_error(failure).anthropic_response());
             }
         };
         if response.status != 200 {
@@ -297,13 +292,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                 if !sleep_with_deadline(delay, context.deadline) {
                     record_usage(context, "request_deadline_exceeded", None, 0);
                     return ChatResult::Response(
-                        GatewayError::new(
-                            502,
-                            "Upstream compatibility endpoint reached the request deadline",
-                            "request_deadline_exceeded",
-                        )
-                        .with_detail(Value::String(format!("HTTP {status}")))
-                        .anthropic_response(),
+                        GatewayError::request_deadline_exceeded(Some(status)).anthropic_response(),
                     );
                 }
                 continue;
@@ -311,6 +300,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
         }
         let status = response.status;
         if status != 200 {
+            let retry_after = response.headers.get("retry-after").cloned();
             let text = response
                 .body
                 .read_prefix(2048)
@@ -319,20 +309,15 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
                 .unwrap_or_default();
             let ledger_status = compat_ledger_status(status);
             record_usage(context, &ledger_status, None, 0);
-            return ChatResult::Response(compat_upstream_error(status, &text).anthropic_response());
+            return ChatResult::Response(
+                compat_upstream_error(status, &text, retry_after.as_deref()).anthropic_response(),
+            );
         }
         let raw = match response.body.read_all() {
             Ok(raw) => raw,
             Err(failure) => {
                 record_usage(context, failure.name(), None, 0);
-                return ChatResult::Response(
-                    GatewayError::new(
-                        502,
-                        "Failed to reach upstream compatibility endpoint",
-                        failure.name(),
-                    )
-                    .anthropic_response(),
-                );
+                return ChatResult::Response(upstream_failure_error(failure).anthropic_response());
             }
         };
         let payload = serde_json::from_slice::<Value>(&raw).ok();
@@ -391,14 +376,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                     }
                 }
                 record_usage(context, failure.name(), None, 0);
-                return ChatResult::Response(
-                    GatewayError::new(
-                        502,
-                        "Failed to reach upstream compatibility endpoint",
-                        failure.name(),
-                    )
-                    .anthropic_response(),
-                );
+                return ChatResult::Response(upstream_failure_error(failure).anthropic_response());
             }
         };
         if response.status != 200 {
@@ -417,18 +395,13 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 if !sleep_with_deadline(delay, context.deadline) {
                     record_usage(context, "request_deadline_exceeded", None, 0);
                     return ChatResult::Response(
-                        GatewayError::new(
-                            502,
-                            "Upstream compatibility endpoint reached the request deadline",
-                            "request_deadline_exceeded",
-                        )
-                        .with_detail(Value::String(format!("HTTP {status}")))
-                        .anthropic_response(),
+                        GatewayError::request_deadline_exceeded(Some(status)).anthropic_response(),
                     );
                 }
                 continue;
             }
             let status = response.status;
+            let retry_after = response.headers.get("retry-after").cloned();
             let text = response
                 .body
                 .read_prefix(2048)
@@ -437,7 +410,9 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
                 .unwrap_or_default();
             let ledger_status = compat_ledger_status(status);
             record_usage(context, &ledger_status, None, 0);
-            return ChatResult::Response(compat_upstream_error(status, &text).anthropic_response());
+            return ChatResult::Response(
+                compat_upstream_error(status, &text, retry_after.as_deref()).anthropic_response(),
+            );
         }
         let upstream_headers = response.headers.clone();
         let outcome = consume_stream(
@@ -832,13 +807,17 @@ fn commit_headers(
 }
 
 fn stream_error_response(outcome: &MessagesStreamOutcome) -> Response {
-    GatewayError::new(
-        502,
-        "Upstream compatibility stream failed before any event",
-        "upstream_stream_error",
-    )
-    .with_detail(Value::String(outcome.status.reason().to_string()))
-    .anthropic_response()
+    let error = match outcome.status {
+        MessagesStreamStatus::UpstreamFirstByteTimeout => GatewayError::upstream_timeout(),
+        _ => GatewayError::new(
+            502,
+            "Upstream compatibility stream failed before any event",
+            "upstream_stream_error",
+        ),
+    };
+    error
+        .with_detail(Value::String(outcome.status.reason().to_string()))
+        .anthropic_response()
 }
 
 fn write_stream_error(stream: &mut TcpStream, outcome: &MessagesStreamOutcome) {
@@ -920,12 +899,7 @@ fn retryable_status(status: u16) -> bool {
 }
 
 fn deadline_response() -> Response {
-    GatewayError::new(
-        502,
-        "Upstream compatibility endpoint exceeded the request deadline",
-        "request_deadline_exceeded",
-    )
-    .anthropic_response()
+    GatewayError::request_deadline_exceeded(None).anthropic_response()
 }
 
 fn truthy(value: &Value) -> bool {

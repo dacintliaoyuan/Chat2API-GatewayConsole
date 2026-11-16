@@ -14,7 +14,7 @@ use crate::chat::ChatResult;
 use crate::error::GatewayError;
 use crate::http::{Request, Response};
 use crate::server::AppState;
-use crate::upstream::post_compat;
+use crate::upstream::{post_compat, UpstreamFailure};
 
 /// Serve one embeddings request.
 pub fn handle_embeddings(
@@ -39,14 +39,7 @@ pub fn handle_embeddings(
     let mut physical_attempts = 0u32;
     loop {
         if Instant::now() >= deadline {
-            return ChatResult::Response(
-                GatewayError::new(
-                    502,
-                    "Upstream compatibility endpoint exceeded the request deadline",
-                    "request_deadline_exceeded",
-                )
-                .response(),
-            );
+            return ChatResult::Response(GatewayError::request_deadline_exceeded(None).response());
         }
         if physical_attempts >= state.config.max_physical_attempts {
             return ChatResult::Response(
@@ -88,14 +81,7 @@ pub fn handle_embeddings(
                         continue;
                     }
                 }
-                return ChatResult::Response(
-                    GatewayError::new(
-                        502,
-                        "Failed to reach upstream compatibility endpoint",
-                        failure.name(),
-                    )
-                    .response(),
-                );
+                return ChatResult::Response(upstream_failure_error(failure).response());
             }
         };
         if retryable_status(response.status) {
@@ -118,13 +104,7 @@ pub fn handle_embeddings(
                 drop(response);
                 if !sleep_with_deadline(delay, deadline) {
                     return ChatResult::Response(
-                        GatewayError::new(
-                            502,
-                            "Upstream compatibility endpoint reached the request deadline",
-                            "request_deadline_exceeded",
-                        )
-                        .with_detail(serde_json::json!(format!("HTTP {status}")))
-                        .response(),
+                        GatewayError::request_deadline_exceeded(Some(status)).response(),
                     );
                 }
                 continue;
@@ -132,25 +112,21 @@ pub fn handle_embeddings(
         }
         let status = response.status;
         if status != 200 {
+            let retry_after = response.headers.get("retry-after").cloned();
             let text = response
                 .body
                 .read_prefix(2048)
                 .ok()
                 .map(|raw| String::from_utf8_lossy(&raw).to_string())
                 .unwrap_or_default();
-            return ChatResult::Response(compat_upstream_error(status, &text).response());
+            return ChatResult::Response(
+                compat_upstream_error(status, &text, retry_after.as_deref()).response(),
+            );
         }
         let raw = match response.body.read_all() {
             Ok(raw) => raw,
             Err(failure) => {
-                return ChatResult::Response(
-                    GatewayError::new(
-                        502,
-                        "Failed to reach upstream compatibility endpoint",
-                        failure.name(),
-                    )
-                    .response(),
-                )
+                return ChatResult::Response(upstream_failure_error(failure).response())
             }
         };
         let mut translated = Response::new(status, raw);
@@ -163,13 +139,18 @@ pub fn handle_embeddings(
     }
 }
 
-/// Python `_compat_proxy`: 401 is a reauthentication failure, 400/422 keeps
-/// the upstream status, everything else is `upstream_unavailable`.
-fn compat_upstream_error(status: u16, text: &str) -> GatewayError {
-    match status {
-        401 => GatewayError::reauthentication_required(Some("upstream_rejected")),
-        400 | 422 => GatewayError::upstream_rejected(status),
-        _ => GatewayError::upstream_request_failed(status, text),
+/// Python `_compat_proxy`: the upstream status is preserved except for 401,
+/// which stays the gateway's reauthentication state.
+fn compat_upstream_error(status: u16, text: &str, retry_after: Option<&str>) -> GatewayError {
+    GatewayError::upstream_status_error(status, Some(text), retry_after)
+}
+
+fn upstream_failure_error(failure: UpstreamFailure) -> GatewayError {
+    match failure {
+        UpstreamFailure::Timeout => GatewayError::upstream_timeout_with_reason(failure.name()),
+        UpstreamFailure::ConnectionError | UpstreamFailure::Protocol => {
+            GatewayError::upstream_transport_failure(failure.name())
+        }
     }
 }
 

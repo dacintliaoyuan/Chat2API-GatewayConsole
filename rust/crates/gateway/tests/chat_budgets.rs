@@ -1,5 +1,8 @@
 //! S1b acceptance 4: first-byte 120 s, one upstream socket silence 180 s and
 //! the total request budget 360 s (environment override clamped to 10..3600).
+//! A first-byte timeout answers 504 `upstream_timeout`; a retry wait that
+//! crosses the total budget answers 504 `request_deadline_exceeded` with
+//! `detail.last_upstream_status`.
 //!
 //! Python constants: `chat2api/chat2api.py:400-402,457-462`. The behavior is
 //! `_chat`'s `first_data_deadline`, `chat_call_timeout()` and the producer's
@@ -104,10 +107,11 @@ fn a_silent_upstream_hits_the_first_byte_budget() {
     });
     let started = Instant::now();
     let response = support::client_request(gateway.addr, &request()).expect("first-byte timeout");
-    assert_eq!(response.status, 502);
+    assert_eq!(response.status, 504);
     assert!(started.elapsed() < Duration::from_secs(1));
     let body = response.json();
     assert_eq!(body["error"]["type"], json!("upstream_error"));
+    assert_eq!(body["error"]["code"], json!("upstream_timeout"));
     assert_eq!(
         body["error"]["detail"]["reason"],
         json!("upstream_first_byte_timeout")
@@ -173,10 +177,12 @@ fn the_total_budget_stops_retrying_before_any_upstream_data() {
     });
     let started = Instant::now();
     let response = support::client_request(gateway.addr, &request()).expect("total budget");
-    assert_eq!(response.status, 502);
+    assert_eq!(response.status, 504);
     assert!(started.elapsed() < Duration::from_secs(2));
     let body = response.json();
     assert_eq!(body["error"]["type"], json!("upstream_error"));
+    assert_eq!(body["error"]["code"], json!("request_deadline_exceeded"));
+    assert_eq!(body["error"]["detail"]["last_upstream_status"], json!(502));
     assert_eq!(stub.attempts(), 1);
 }
 
