@@ -27,6 +27,13 @@ Environment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token
 # default headless path never connects to them.
 Environment=DISPLAY=:99
 Environment=XAUTHORITY=/run/um-share/display.auth
+# The login browser needs a writable HOME/TMPDIR for its profile and crashpad
+# database; ProtectHome=read-only makes /home read-only, so point them at the
+# writable console state directory.
+Environment=HOME=/var/lib/um-share-console/share-backend
+Environment=TMPDIR=/tmp
+Environment=XDG_CONFIG_HOME=/var/lib/um-share-console/share-backend/.config
+Environment=XDG_CACHE_HOME=/var/lib/um-share-console/share-backend/.cache
 # The gateway persists its revoke state under the state directory, never inside
 # the release: ProtectSystem=strict keeps /opt/um-share/current read-only.
 # install.sh appends
