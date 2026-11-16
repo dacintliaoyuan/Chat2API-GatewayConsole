@@ -49,6 +49,14 @@ _Avoid_: 自动重登录、按需登录、重启服务
 一次显式强制重新登录选择在本机桌面显示浏览器窗口，供本人完成 UM SSO；自动重登录与按需登录默认 headless。没有可用显示时明确返回不可用，不静默降级成 headless。
 _Avoid_: 自动弹窗、云端专用实例窗口、把 headless 伪装成可见
 
+**Duo 推送等待 (Duo push wait)**:
+自动登录在 UMPASS 之后等待本人批准 Duo 推送的阶段；它不是失败，也不是终端人工接管，自动轮次会在此期间打开可见窗口。控制台显示“等待本人确认 Duo 推送”。
+_Avoid_: 自动重登录失败、登录超时、人工接管已结束
+
+**人工接管等待 (Manual takeover wait)**:
+自动流程遇到只能本人完成的步骤时，等待操作员在可见窗口完成的阶段；控制台返回 `login_manual_takeover_required` 并提供「打开可见窗口」，不把等待当成失败。
+_Avoid_: 登录失败、自动重试、后台线程已结束
+
 **candidate 模式 (Candidate mode)**:
 Rust 二进制只绑定临时 loopback 端口、供 parity 测试使用的运行模式；它不能绑定生产端口，也不作为生产服务被 systemd 拉起。
 _Avoid_: 生产模式、临时端口即生产、candidate 即回滚点
