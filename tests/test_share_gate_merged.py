@@ -8,7 +8,9 @@ import json
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from collections import deque
 from email.message import Message
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -156,8 +158,11 @@ class MergedHttpTests(unittest.TestCase):
     def test_models_admission_rejection_is_429(self):
         self.assertTrue(self.server.share_gate.acquire("friend", 0, 1))
         self.addCleanup(self.server.share_gate.release, "friend")
-        status, payload = self._request({"Authorization": "Bearer secret"})
+        status, headers, payload = self._request_path(
+            "GET", "/v1/models", {"Authorization": "Bearer secret"})
         self.assertEqual(status, 429)
+        # A concurrency slot frees as soon as an in-flight request ends.
+        self.assertEqual(headers.get("Retry-After"), "1")
         error = payload["error"]
         self.assertEqual(error["type"], "rate_limit_error")
         self.assertEqual(error["code"], "sharing_limit_reached")
@@ -166,6 +171,28 @@ class MergedHttpTests(unittest.TestCase):
         self.assertIn("per-key concurrency", error["detail"]["detail"])
         # The existing top-level reason stays for share admission consumers.
         self.assertEqual(error["reason"], "per_key_concurrency")
+
+    def test_key_rate_limit_has_precise_retry_after(self):
+        now = time.monotonic()
+        with self.server.share_gate.guard:
+            self.server.share_gate.history["friend"] = deque([now] * 20)
+        status, headers, payload = self._request_path(
+            "GET", "/v1/models", {"Authorization": "Bearer secret"})
+        self.assertEqual(status, 429)
+        self.assertEqual(payload["error"]["detail"]["reason"],
+                         "key_rate_limit")
+        retry_after = int(headers.get("Retry-After"))
+        self.assertGreaterEqual(retry_after, 1)
+        self.assertLessEqual(retry_after, 60)
+
+    def test_state_not_accepting_is_not_retryable(self):
+        self.server.share_gate.set_state("draining")
+        status, headers, payload = self._request_path(
+            "GET", "/v1/models", {"Authorization": "Bearer secret"})
+        self.assertEqual(status, 429)
+        self.assertEqual(headers.get("X-Should-Retry"), "false")
+        self.assertEqual(payload["error"]["detail"]["reason"],
+                         "state_not_accepting")
 
     def test_messages_share_key_error_uses_anthropic_envelope(self):
         status, _headers, payload = self._request_path(
