@@ -148,11 +148,13 @@ impl GatewayError {
 
     pub fn response(&self) -> Response {
         self.with_retry_after_header(Response::json(self.status, &self.body()))
+            .with_header("Cache-Control", "no-store")
             .closing()
     }
 
     pub fn anthropic_response(&self) -> Response {
         self.with_retry_after_header(Response::json(self.status, &self.anthropic_body()))
+            .with_header("Cache-Control", "no-store")
             .closing()
     }
 

@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::{line_text, ChatResult, ClientWatcher, PRELUDE_MAX_BYTES, SSE_CONTENT_TYPE};
 use crate::error::GatewayError;
+use crate::event_log::{AttemptStats, FinalFailure};
 use crate::gate::Admission;
 use crate::http::{write_chunk, write_response_head, Request, Response};
 use crate::ledger::{
@@ -108,6 +109,7 @@ struct MessagesContext<'a> {
     input_estimate: u64,
     key_id: Option<&'a str>,
     request_id: Option<&'a str>,
+    http_request_id: &'a str,
     attribution: &'a str,
     upstream_body: Map<String, Value>,
     anthropic_headers: Vec<(String, String)>,
@@ -164,6 +166,7 @@ pub fn handle_messages(
         input_estimate: message_tokens(body.get("messages")),
         key_id: key_id.as_deref(),
         request_id: request_id.as_deref(),
+        http_request_id: &request.request_id,
         attribution,
         upstream_body: body,
         anthropic_headers: anthropic_headers(request),
@@ -224,7 +227,27 @@ fn record_usage(
     });
 }
 
+fn log_final_failure(context: &MessagesContext<'_>, stats: &AttemptStats, result: &ChatResult) {
+    let Some(final_status) = result.final_failure_status() else {
+        return;
+    };
+    context.state.event_log.final_failure(FinalFailure {
+        request_id: context.http_request_id,
+        protocol: "messages",
+        final_status,
+        stats: *stats,
+        started_at: context.started_at,
+    });
+}
+
 fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
+    let mut stats = AttemptStats::default();
+    let result = forward_json_inner(context, &mut stats);
+    log_final_failure(context, &stats, &result);
+    result
+}
+
+fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -> ChatResult {
     let mut fast_retries = 0u32;
     let mut slow_retries = 0u32;
     let mut physical_attempts = 0u32;
@@ -247,6 +270,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
             );
         }
         physical_attempts += 1;
+        stats.record_attempt();
         let attempt_started = Instant::now();
         let mut response = match post_compat(
             &context.state.config,
@@ -330,6 +354,17 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
 }
 
 fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> ChatResult {
+    let mut stats = AttemptStats::default();
+    let result = forward_stream_inner(context, stream, &mut stats);
+    log_final_failure(context, &stats, &result);
+    result
+}
+
+fn forward_stream_inner(
+    context: &MessagesContext<'_>,
+    stream: &mut TcpStream,
+    stats: &mut AttemptStats,
+) -> ChatResult {
     let mut fast_retries = 0u32;
     let mut slow_retries = 0u32;
     let mut physical_attempts = 0u32;
@@ -350,6 +385,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
             );
         }
         physical_attempts += 1;
+        stats.record_attempt();
         let attempt_started = Instant::now();
         let mut response = match post_compat(
             &context.state.config,
@@ -424,7 +460,10 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
         );
         if outcome.status == MessagesStreamStatus::ClientDisconnected {
             record_stream_usage(context, &outcome);
-            return ChatResult::Written { close: true };
+            return ChatResult::Written {
+                close: true,
+                failed: false,
+            };
         }
         if !outcome.committed && outcome.status.is_retryable_precommit() {
             let slow = outcome.elapsed >= context.state.config.slow_retry_threshold;
@@ -442,7 +481,7 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
             }
         }
         if outcome.committed && outcome.status == MessagesStreamStatus::UpstreamReadError {
-            write_stream_error(stream, &outcome);
+            write_stream_error(stream, &outcome, context.http_request_id);
             record_stream_usage(context, &outcome);
         } else if !outcome.committed && !outcome.status.is_success() {
             record_usage(context, "upstream_stream_error", None, 0);
@@ -450,7 +489,10 @@ fn forward_stream(context: &MessagesContext<'_>, stream: &mut TcpStream) -> Chat
         } else {
             record_stream_usage(context, &outcome);
         }
-        return ChatResult::Written { close: true };
+        return ChatResult::Written {
+            close: true,
+            failed: outcome.committed && !outcome.status.is_success(),
+        };
     }
 }
 
@@ -799,6 +841,10 @@ fn commit_headers(
     if let Some(value) = upstream_headers.get("cache-control") {
         headers.push(("Cache-Control".to_string(), value.clone()));
     }
+    headers.push((
+        "X-Request-Id".to_string(),
+        context.http_request_id.to_string(),
+    ));
     if let Some(origin) = &context.origin {
         headers.push(("Access-Control-Allow-Origin".to_string(), origin.clone()));
     }
@@ -820,7 +866,7 @@ fn stream_error_response(outcome: &MessagesStreamOutcome) -> Response {
         .anthropic_response()
 }
 
-fn write_stream_error(stream: &mut TcpStream, outcome: &MessagesStreamOutcome) {
+fn write_stream_error(stream: &mut TcpStream, outcome: &MessagesStreamOutcome, request_id: &str) {
     let name = outcome.exception.unwrap_or("ConnectionError");
     let payload = json!({"type": "error", "error": {
         "type": "api_error",
@@ -831,6 +877,7 @@ fn write_stream_error(stream: &mut TcpStream, outcome: &MessagesStreamOutcome) {
         "detail": {
             "reason": outcome.status.reason(),
             "exception": name,
+            "request_id": request_id,
         },
     }});
     let mut event = b"event: error\ndata: ".to_vec();

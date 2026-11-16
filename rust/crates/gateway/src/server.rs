@@ -18,12 +18,13 @@ use crate::chat::{handle_chat, ChatResult};
 use crate::config::{AuthMode, ConfigError, GatewayConfig};
 use crate::embeddings::handle_embeddings;
 use crate::error::{ErrorProtocol, GatewayError};
+use crate::event_log::EventLog;
 use crate::gate::{
     constant_time_eq, ensure_control_token, Admission, InflightCtx, RefusalReason, ShareGate,
 };
 use crate::http::{
-    read_request_body, read_request_head, write_response, BodyRead, Headers, Request, RequestHead,
-    Response, HARD_BODY_CAP,
+    random_hex, read_request_body, read_request_head, write_response, BodyRead, Headers, Request,
+    RequestHead, Response, HARD_BODY_CAP,
 };
 use crate::ledger::Ledger;
 use crate::messages::handle_messages;
@@ -44,6 +45,7 @@ pub struct AppState {
     pub local_api_key: String,
     pub require_local_api_key: bool,
     pub ledger: Arc<Ledger>,
+    pub event_log: Arc<EventLog>,
 }
 
 /// A started candidate server.
@@ -73,6 +75,7 @@ impl GatewayServer {
         let local_api_key = config.local_api_key.clone();
         let require_local_api_key = !local_api_key.is_empty();
         let ledger = Arc::new(Ledger::new(config.usage_log.clone()));
+        let event_log = Arc::new(EventLog::new(config.service_log.clone()));
         let state = Arc::new(AppState {
             config: config.clone(),
             proxy,
@@ -81,6 +84,7 @@ impl GatewayServer {
             local_api_key,
             require_local_api_key,
             ledger,
+            event_log,
         });
         let listener = TcpListener::bind((config.bind_host.as_str(), config.bind_port))
             .map_err(ServerError::Io)?;
@@ -181,18 +185,62 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
             Ok(Some(head)) => head,
             Ok(None) => return,
             Err(_) => {
-                let response =
-                    GatewayError::invalid_request("Invalid request line or headers").response();
+                let request_id = random_hex(16);
+                let response = with_error_headers(
+                    GatewayError::invalid_request("Invalid request line or headers").response(),
+                    &request_id,
+                );
                 let _ = write_response(&mut stream, &response);
                 return;
             }
         };
+        let path = head.path().to_string();
+        // Method semantics come before authentication and before the body is
+        // read: an unimplemented method on a known API path is a 405 with
+        // `Allow`, not a 501/404 or a body-read timeout. In share mode the
+        // non-whitelisted `/v1/*` paths keep their 404 `route_not_shared`
+        // answer, so the route gate keeps precedence over the method check.
+        let share_path_is_hidden = state.gate.is_some()
+            && path.starts_with("/v1/")
+            && !matches!(
+                path.as_str(),
+                "/v1/models" | "/v1/chat/completions" | "/v1/messages" | "/v1/responses"
+            );
+        if head.method != "OPTIONS" && !share_path_is_hidden {
+            if let Some(allow) = allowed_methods(&path) {
+                if !method_allowed(allow, &head.method) {
+                    let mut response =
+                        GatewayError::method_not_allowed().response_for(error_protocol(&path));
+                    response = response.with_header("Allow", allow);
+                    if let Some(origin) = cors_allow_origin(&state, &head.headers) {
+                        response = response.with_header("Access-Control-Allow-Origin", origin);
+                    }
+                    let response = with_error_headers(response, &head.request_id);
+                    let _ = write_response(&mut stream, &response);
+                    return;
+                }
+            }
+        }
+        let request_id = head.request_id.clone();
         let max_body = body_read_cap(&state, &head);
-        let request = match read_request_body(&mut stream, head, max_body) {
+        let _ = stream.set_read_timeout(Some(state.config.body_read_timeout));
+        let body_result = read_request_body(&mut stream, head, max_body);
+        let _ = stream.set_read_timeout(Some(IDLE_CONNECTION_TIMEOUT));
+        let request = match body_result {
             Ok((request, _trailing)) => request,
+            Err(error) if is_timeout_error(&error) => {
+                let response = with_error_headers(
+                    GatewayError::request_timeout().response_for(error_protocol(&path)),
+                    &request_id,
+                );
+                let _ = write_response(&mut stream, &response);
+                return;
+            }
             Err(_) => {
-                let response =
-                    GatewayError::invalid_request("Invalid request line or headers").response();
+                let response = with_error_headers(
+                    GatewayError::invalid_request("Invalid request line or headers").response(),
+                    &request_id,
+                );
                 let _ = write_response(&mut stream, &response);
                 return;
             }
@@ -210,6 +258,59 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream, peer_ip: IpAdd
             return;
         }
     }
+}
+
+/// The methods implemented for a known API path; `None` keeps the path's
+/// existing 404 behavior (unknown paths are not 405s).
+fn allowed_methods(path: &str) -> Option<&'static str> {
+    match path {
+        "/" | "/health" | "/ready" | "/v1/version" | "/v1/models" | "/api/models"
+        | "/api/v1/models" => Some("GET"),
+        "/v1/chat/completions"
+        | "/api/chat/completions"
+        | "/api/v1/chat/completions"
+        | "/v1/messages"
+        | "/api/v1/messages"
+        | "/v1/responses"
+        | "/api/v1/responses"
+        | "/v1/embeddings"
+        | "/api/v1/embeddings"
+        | "/admin/share/revoke" => Some("POST"),
+        "/admin/auth/status" | "/admin/auth/verify" | "/admin/auth/login"
+        | "/admin/auth/cancel" | "/admin/shutdown" => Some("GET, POST"),
+        _ => None,
+    }
+}
+
+fn method_allowed(allow: &str, method: &str) -> bool {
+    allow
+        .split(',')
+        .map(str::trim)
+        .any(|allowed| allowed == method)
+}
+
+fn is_timeout_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    )
+}
+
+/// Add the error-response headers every self-produced error carries.
+///
+/// The request ID is generated once per request, so an in-band stream error can
+/// repeat the same value inside its event body.
+fn with_error_headers(mut response: Response, request_id: &str) -> Response {
+    if response.status < 400 {
+        return response;
+    }
+    if response.header("cache-control").is_none() {
+        response = response.with_header("Cache-Control", "no-store");
+    }
+    if response.header("x-request-id").is_none() {
+        response = response.with_header("X-Request-Id", request_id);
+    }
+    response
 }
 
 /// The pre-read body cap for one request.
@@ -252,6 +353,7 @@ fn dispatch(
     let (outcome, admission) = dispatch_inner(state, request, stream);
     let outcome = match outcome {
         RouteOutcome::Response(mut response) => {
+            response = with_error_headers(response, &request.request_id);
             if response.header("access-control-allow-origin").is_none() {
                 if let Some(origin) = cors_allow_origin(state, &request.headers) {
                     response = response.with_header("Access-Control-Allow-Origin", origin);
@@ -299,7 +401,7 @@ fn dispatch_inner(
         return (
             match result {
                 ChatResult::Response(response) => RouteOutcome::Response(response),
-                ChatResult::Written { close } => RouteOutcome::Written { close },
+                ChatResult::Written { close, .. } => RouteOutcome::Written { close },
             },
             None,
         );
@@ -322,7 +424,7 @@ fn dispatch_inner(
         return (
             match result {
                 ChatResult::Response(response) => RouteOutcome::Response(response),
-                ChatResult::Written { close } => RouteOutcome::Written { close },
+                ChatResult::Written { close, .. } => RouteOutcome::Written { close },
             },
             None,
         );
@@ -339,7 +441,7 @@ fn dispatch_inner(
         return (
             match result {
                 ChatResult::Response(response) => RouteOutcome::Response(response),
-                ChatResult::Written { close } => RouteOutcome::Written { close },
+                ChatResult::Written { close, .. } => RouteOutcome::Written { close },
             },
             None,
         );
@@ -356,7 +458,7 @@ fn dispatch_inner(
         return (
             match result {
                 ChatResult::Response(response) => RouteOutcome::Response(response),
-                ChatResult::Written { close } => RouteOutcome::Written { close },
+                ChatResult::Written { close, .. } => RouteOutcome::Written { close },
             },
             None,
         );

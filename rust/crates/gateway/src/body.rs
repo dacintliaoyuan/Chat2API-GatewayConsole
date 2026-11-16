@@ -66,6 +66,24 @@ fn share_body(
     request: &Request,
     max_request_bytes: u64,
 ) -> Result<Option<serde_json::Map<String, Value>>, GatewayError> {
+    // The gateway never decodes compressed bodies: a non-identity
+    // `Content-Encoding` is a 415, not an `invalid_json` parse failure. gzip is
+    // refused too because this transport has no decompressor; br/zstd are the
+    // cases the contract requires to be rejected.
+    if request
+        .headers
+        .get_all("Content-Encoding")
+        .iter()
+        .any(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .any(|value| !value.eq_ignore_ascii_case("identity"))
+        })
+    {
+        return Err(GatewayError::unsupported_content_encoding());
+    }
     match &request.body {
         BodyRead::InvalidLength => Err(GatewayError::invalid_request(
             "Invalid Content-Length header",

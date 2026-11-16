@@ -501,7 +501,7 @@ impl RawRequest {
     }
 }
 
-fn read_client_response(stream: &mut TcpStream) -> std::io::Result<ClientResponse> {
+pub fn read_client_response(stream: &mut TcpStream) -> std::io::Result<ClientResponse> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     let header_end = loop {

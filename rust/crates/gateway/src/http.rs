@@ -9,8 +9,11 @@
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// Maximum header block accepted before the request is refused.
 pub const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -85,6 +88,9 @@ pub struct Request {
     pub headers: Headers,
     pub body: BodyRead,
     pub peer_ip: std::net::IpAddr,
+    /// The gateway request ID used for error response headers and in-band
+    /// stream errors. It is generated once per request, not once per error.
+    pub request_id: String,
 }
 
 impl Request {
@@ -157,6 +163,9 @@ pub struct RequestHead {
     pub target: String,
     pub headers: Headers,
     pub peer_ip: std::net::IpAddr,
+    /// Generated as soon as the head parses so body-read errors can still
+    /// report the same request ID as every other error on this request.
+    pub request_id: String,
     leftover: Vec<u8>,
 }
 
@@ -225,6 +234,7 @@ pub fn read_request_head(
         target,
         headers,
         peer_ip,
+        request_id: random_hex(16),
         leftover: raw[header_end..].to_vec(),
     }))
 }
@@ -243,6 +253,7 @@ pub fn read_request_body(
         target,
         headers,
         peer_ip,
+        request_id,
         mut leftover,
     } = head;
     let mut buffer = [0u8; 4096];
@@ -272,6 +283,7 @@ pub fn read_request_body(
                                 headers,
                                 body: BodyRead::Incomplete,
                                 peer_ip,
+                                request_id,
                             },
                             leftover,
                         ));
@@ -291,6 +303,7 @@ pub fn read_request_body(
             headers,
             body,
             peer_ip,
+            request_id,
         },
         trailing,
     ))
@@ -397,6 +410,7 @@ pub fn reason_phrase(status: u16) -> &'static str {
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        408 => "Request Timeout",
         409 => "Conflict",
         410 => "Gone",
         413 => "Payload Too Large",
@@ -410,4 +424,23 @@ pub fn reason_phrase(status: u16) -> &'static str {
         504 => "Gateway Timeout",
         _ => "Unknown",
     }
+}
+
+/// Python `secrets.token_hex(bytes)`: lowercase hex with `2 * bytes` chars.
+pub(crate) fn random_hex(bytes: usize) -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = Sha256::new();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    hasher.update(nanos.to_le_bytes());
+    hasher.update(COUNTER.fetch_add(1, Ordering::SeqCst).to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    let digest = hasher.finalize();
+    let mut output = String::new();
+    for byte in digest.iter().take(bytes) {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
