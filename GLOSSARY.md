@@ -37,6 +37,18 @@ _Avoid_: 登录窗口、刷新 token、可见窗口
 一次登录交互是否创建可见浏览器窗口的呈现选择；默认 headless-first，正常路径不创建可见窗口，不要求 `DISPLAY` 或 `WAYLAND_DISPLAY`，并复用同一 profile。
 _Avoid_: 默认可见窗口、每次新建专用 profile
 
+**按需登录 (On-demand login)**:
+控制台先核验当前 UM 凭据，仅在凭据缺失或被拒时才触发登录轮次；当前凭据有效时跳过登录，不打开窗口。它与强制重新登录、自动重登录分别计量。
+_Avoid_: 每次点击都登录、把有效凭据当成掉线
+
+**强制重新登录 (Forced re-login)**:
+维护者在本地控制台显式请求的一次重新认证；跳过“当前凭据有效”的按需核验，直接触发登录轮次，并可选是否显示可见登录窗口。自动重登录仍保持 headless。
+_Avoid_: 自动重登录、按需登录、重启服务
+
+**可见登录窗口 (Visible login window)**:
+一次显式强制重新登录选择在本机桌面显示浏览器窗口，供本人完成 UM SSO；自动重登录与按需登录默认 headless。没有可用显示时明确返回不可用，不静默降级成 headless。
+_Avoid_: 自动弹窗、云端专用实例窗口、把 headless 伪装成可见
+
 **登录浏览器单实例 (Single login-browser instance per profile)**:
 同一 profile 目录在同一时刻最多只有一个登录浏览器；按 profile 目录持有 OS 级文件锁（POSIX `flock` / Windows `msvcrt.locking`），锁文件放在 profile 目录并附带 pid 与进程启动时间用于诊断，进程退出后锁自动释放。打开前只清理同 profile 的旧 Chromium（先 SIGTERM，等待，再 SIGKILL），不碰其他浏览器。
 _Avoid_: 全局单浏览器、同 profile 多开
