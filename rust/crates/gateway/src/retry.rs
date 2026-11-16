@@ -6,10 +6,14 @@
 //!
 //! * 408, 429, 500, 502, 503, 504, 529, 520-524, transport failures and
 //!   gateway waits use the full fast/slow budget;
-//! * 402 and 403 are probed once each, counted separately from the fast budget;
+//! * 402 and a 403 with ordinary permission text are probed once each, counted
+//!   separately from the fast budget;
+//! * a 401 and a 403 whose text names a missing/expired UM session trigger the
+//!   ONE shared re-authentication session of #63, at most once per logical
+//!   request, and resend the same request once when the session restores;
 //! * 400/422 are probed once only when the upstream text names a transient
 //!   condition;
-//! * 404/405/409/413/415 and 401 never enter transient retry.
+//! * 404/405/409/413/415 never enter transient retry.
 //!
 //! `Retry-After` at most 8 seconds replaces the local backoff; a longer value
 //! stops retrying this candidate and is returned to the client. `X-Should-Retry:
@@ -86,6 +90,8 @@ pub enum RetryClass {
     Full,
     /// A one-shot probe outside the fast/slow counters.
     Probe(ProbeKind),
+    /// A 401 or 403 authentication-text trigger for the shared session.
+    Reauthentication(ReauthenticationTrigger),
     /// A status that is returned to the client as-is.
     None,
 }
@@ -97,15 +103,16 @@ pub enum ProbeKind {
     Quota,
     /// 403 with ordinary permission text.
     Forbidden,
-    /// 403 whose text names a missing/expired UM session.
-    ForbiddenAuthentication,
     /// 400/422 whose text names a transient condition.
     Conditional,
 }
 
-/// The #63 interception point for a 403 authentication-text probe.
+/// The #63 trigger of one shared re-authentication session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReauthenticationTrigger {
+    /// Any upstream 401.
+    Unauthorized,
+    /// A 403 whose text names a missing/expired UM session.
     ForbiddenAuthenticationText,
 }
 
@@ -142,12 +149,24 @@ pub struct RetryState {
     quota_probes: u32,
     forbidden_probes: u32,
     conditional_probes: u32,
+    reauth_considered: bool,
+    reauth_sessions: u32,
 }
 
 impl RetryState {
     /// Record one attempt that reached the upstream client.
     pub fn record_attempt(&mut self) {
         self.physical_attempts += 1;
+    }
+
+    /// Record one re-authentication session that actually ran.
+    pub fn record_reauth_session(&mut self) {
+        self.reauth_sessions += 1;
+    }
+
+    /// Whether a re-authentication session ran for this logical request.
+    pub fn reauth_attempted(&self) -> bool {
+        self.reauth_sessions > 0
     }
 
     /// Decide whether one attempt may be retried and how long to wait first.
@@ -206,8 +225,17 @@ impl RetryState {
                         let slow = elapsed >= limits.slow_retry_threshold;
                         Some(RetryPlan {
                             delay: retry_after.unwrap_or_else(|| self.probe_delay(limits, slow)),
-                            reauthentication: (kind == ProbeKind::ForbiddenAuthentication)
-                                .then_some(ReauthenticationTrigger::ForbiddenAuthenticationText),
+                            reauthentication: None,
+                        })
+                    }
+                    RetryClass::Reauthentication(trigger) => {
+                        if self.reauth_considered {
+                            return None;
+                        }
+                        self.reauth_considered = true;
+                        Some(RetryPlan {
+                            delay: Duration::ZERO,
+                            reauthentication: Some(trigger),
                         })
                     }
                     RetryClass::None => None,
@@ -231,7 +259,7 @@ impl RetryState {
     fn probe_available(&self, kind: ProbeKind) -> bool {
         match kind {
             ProbeKind::Quota => self.quota_probes < 1,
-            ProbeKind::Forbidden | ProbeKind::ForbiddenAuthentication => self.forbidden_probes < 1,
+            ProbeKind::Forbidden => self.forbidden_probes < 1,
             ProbeKind::Conditional => self.conditional_probes < 1,
         }
     }
@@ -239,7 +267,7 @@ impl RetryState {
     fn consume_probe(&mut self, kind: ProbeKind) {
         match kind {
             ProbeKind::Quota => self.quota_probes += 1,
-            ProbeKind::Forbidden | ProbeKind::ForbiddenAuthentication => self.forbidden_probes += 1,
+            ProbeKind::Forbidden => self.forbidden_probes += 1,
             ProbeKind::Conditional => self.conditional_probes += 1,
         }
     }
@@ -298,6 +326,14 @@ impl LastAttempt {
         self.status
     }
 
+    pub fn text(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+
+    pub fn retry_after(&self) -> Option<&str> {
+        self.retry_after.as_deref()
+    }
+
     pub fn error(&self) -> GatewayError {
         if let Some(status) = self.status {
             GatewayError::upstream_status_error(
@@ -329,9 +365,10 @@ impl LastAttempt {
 pub fn classify_status(status: u16, body_text: Option<&str>) -> RetryClass {
     match status {
         408 | 429 | 500 | 502 | 503 | 504 | 529 | 520..=524 => RetryClass::Full,
+        401 => RetryClass::Reauthentication(ReauthenticationTrigger::Unauthorized),
         402 => RetryClass::Probe(ProbeKind::Quota),
         403 if body_text.is_some_and(is_reauthentication_text) => {
-            RetryClass::Probe(ProbeKind::ForbiddenAuthentication)
+            RetryClass::Reauthentication(ReauthenticationTrigger::ForbiddenAuthenticationText)
         }
         403 => RetryClass::Probe(ProbeKind::Forbidden),
         400 | 422 if body_text.is_some_and(is_transient_text) => {

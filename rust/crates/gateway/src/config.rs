@@ -36,6 +36,21 @@ pub const DEFAULT_BODY_READ_TIMEOUT_SECONDS: u64 = 60;
 pub const DEFAULT_REQUEST_TOTAL_SECONDS: u64 = 540;
 pub const MIN_REQUEST_TOTAL_SECONDS: u64 = 10;
 pub const MAX_REQUEST_TOTAL_SECONDS: u64 = 3600;
+/// The cumulative authentication wait of one logical request (#63).
+pub const DEFAULT_AUTH_WAIT_BUDGET_SECONDS: f64 = 30.0;
+pub const MIN_AUTH_WAIT_BUDGET_SECONDS: f64 = 0.01;
+pub const MAX_AUTH_WAIT_BUDGET_SECONDS: f64 = 180.0;
+/// Concurrent authentication waiters, not login sessions.
+pub const DEFAULT_AUTH_WAIT_MAX_CONCURRENT: usize = 128;
+pub const MIN_AUTH_WAIT_MAX_CONCURRENT: usize = 1;
+pub const MAX_AUTH_WAIT_MAX_CONCURRENT: usize = 1024;
+/// The authentication wait rechecks the shared session at this interval.
+pub const DEFAULT_AUTH_WAIT_RECHECK_SECONDS: f64 = 1.0;
+pub const MIN_AUTH_WAIT_RECHECK_SECONDS: f64 = 0.01;
+pub const MAX_AUTH_WAIT_RECHECK_SECONDS: f64 = 1.0;
+/// The rolling global sign-in start window and cap (#63).
+pub const DEFAULT_REAUTH_ATTEMPT_WINDOW_SECONDS: u64 = 900;
+pub const DEFAULT_REAUTH_MAX_ATTEMPTS_PER_WINDOW: usize = 3;
 pub const DEFAULT_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(120);
 pub const DEFAULT_SOCKET_SILENCE_TIMEOUT: Duration = Duration::from_secs(180);
 pub const DEFAULT_MAX_FAST_RETRIES: u32 = 5;
@@ -185,6 +200,18 @@ pub struct GatewayConfig {
     pub body_read_timeout: Duration,
     /// Total wall-clock budget of one Chat request.
     pub request_total: Duration,
+    /// Cumulative authentication wait of one logical request (#63).
+    pub auth_wait_budget: Duration,
+    /// Concurrent authentication waiters (#63), not login sessions.
+    pub auth_wait_max_concurrent: usize,
+    /// How often a waiting request rechecks the shared session.
+    pub auth_wait_recheck: Duration,
+    /// Rolling global sign-in start window.
+    pub reauth_attempt_window: Duration,
+    /// Global sign-in starts allowed inside one rolling window.
+    pub reauth_max_attempts_per_window: usize,
+    /// The explicit `--no-browser` mode; a real login provider may ignore it.
+    pub browser_disabled: bool,
     /// First substantive SSE event budget.
     pub first_byte_timeout: Duration,
     /// One upstream socket-read silence budget.
@@ -220,6 +247,12 @@ impl Default for GatewayConfig {
             service_log: None,
             body_read_timeout: Duration::from_secs(DEFAULT_BODY_READ_TIMEOUT_SECONDS),
             request_total: Duration::from_secs(DEFAULT_REQUEST_TOTAL_SECONDS),
+            auth_wait_budget: Duration::from_secs_f64(DEFAULT_AUTH_WAIT_BUDGET_SECONDS),
+            auth_wait_max_concurrent: DEFAULT_AUTH_WAIT_MAX_CONCURRENT,
+            auth_wait_recheck: Duration::from_secs_f64(DEFAULT_AUTH_WAIT_RECHECK_SECONDS),
+            reauth_attempt_window: Duration::from_secs(DEFAULT_REAUTH_ATTEMPT_WINDOW_SECONDS),
+            reauth_max_attempts_per_window: DEFAULT_REAUTH_MAX_ATTEMPTS_PER_WINDOW,
+            browser_disabled: false,
             first_byte_timeout: DEFAULT_FIRST_BYTE_TIMEOUT,
             socket_silence_timeout: DEFAULT_SOCKET_SILENCE_TIMEOUT,
             max_fast_retries: DEFAULT_MAX_FAST_RETRIES,
@@ -307,6 +340,21 @@ impl GatewayConfig {
                 .ok()
                 .as_deref(),
         );
+        config.auth_wait_budget =
+            parse_auth_wait_budget(std::env::var("CHAT2API_AUTH_WAIT_BUDGET_S").ok().as_deref());
+        config.auth_wait_max_concurrent = parse_auth_wait_max_concurrent(
+            std::env::var("CHAT2API_AUTH_WAIT_MAX_CONCURRENT")
+                .ok()
+                .as_deref(),
+        );
+        config.auth_wait_recheck = parse_auth_wait_recheck(
+            std::env::var("CHAT2API_AUTH_WAIT_RECHECK_S")
+                .ok()
+                .as_deref(),
+        );
+        config.browser_disabled = std::env::var("CHAT2API_NO_BROWSER")
+            .ok()
+            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes"));
         config.nonstream_upstream_aggregate =
             std::env::var("CHAT2API_NONSTREAM_UPSTREAM_AGGREGATE")
                 .ok()
@@ -371,6 +419,36 @@ pub fn parse_request_total_seconds(value: Option<&str>) -> Duration {
         MIN_REQUEST_TOTAL_SECONDS as i64,
         MAX_REQUEST_TOTAL_SECONDS as i64,
     ) as u64)
+}
+
+/// Parse the per-request cumulative authentication-wait budget.
+pub fn parse_auth_wait_budget(value: Option<&str>) -> Duration {
+    let seconds = value
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or(DEFAULT_AUTH_WAIT_BUDGET_SECONDS);
+    Duration::from_secs_f64(
+        seconds.clamp(MIN_AUTH_WAIT_BUDGET_SECONDS, MAX_AUTH_WAIT_BUDGET_SECONDS),
+    )
+}
+
+/// Parse the concurrent authentication-wait slot count.
+pub fn parse_auth_wait_max_concurrent(value: Option<&str>) -> usize {
+    let count = value
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_AUTH_WAIT_MAX_CONCURRENT);
+    count.clamp(MIN_AUTH_WAIT_MAX_CONCURRENT, MAX_AUTH_WAIT_MAX_CONCURRENT)
+}
+
+/// Parse the authentication-wait recheck interval.
+pub fn parse_auth_wait_recheck(value: Option<&str>) -> Duration {
+    let seconds = value
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or(DEFAULT_AUTH_WAIT_RECHECK_SECONDS);
+    Duration::from_secs_f64(
+        seconds.clamp(MIN_AUTH_WAIT_RECHECK_SECONDS, MAX_AUTH_WAIT_RECHECK_SECONDS),
+    )
 }
 
 /// Parse and validate the upstream base URL. Only plain HTTP is supported by the

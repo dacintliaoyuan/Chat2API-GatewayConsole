@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use um_gateway::config::{AuthMode, GatewayConfig};
+use um_gateway::reauth::ReauthenticationProvider;
 use um_gateway::GatewayServer;
 
 pub const STUB_TOKEN: &str = "fixture-upstream-token";
@@ -1215,6 +1216,16 @@ pub fn start_chat_gateway(
     share: bool,
     configure: impl FnOnce(&mut GatewayConfig),
 ) -> Gateway {
+    start_chat_gateway_with_reauth(stub, temp, share, None, configure)
+}
+
+pub fn start_chat_gateway_with_reauth(
+    stub: &ChatStub,
+    temp: &TempDir,
+    share: bool,
+    provider: Option<Arc<dyn ReauthenticationProvider>>,
+    configure: impl FnOnce(&mut GatewayConfig),
+) -> Gateway {
     let share_config = if share {
         Some(temp.write("share.json", &legacy_share_config()))
     } else {
@@ -1231,7 +1242,8 @@ pub fn start_chat_gateway(
     };
     configure(&mut config);
     config.candidate = true;
-    let server = GatewayServer::start(config).expect("start chat candidate gateway");
+    let server =
+        GatewayServer::start_with_reauth(config, provider).expect("start chat candidate gateway");
     let addr = server.addr();
     Gateway {
         server: GatewayServerHandle { inner: server },

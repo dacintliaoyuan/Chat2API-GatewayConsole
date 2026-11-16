@@ -44,12 +44,13 @@ fn main() -> ExitCode {
                 Some(value) => config.control_token_file = Some(value.into()),
                 None => return usage("--control-token-file requires a path"),
             },
+            "--no-browser" => config.browser_disabled = true,
             "--help" | "-h" => {
                 println!(
                     "usage: um-gateway-candidate --upstream-base-url URL \
                      [--host 127.0.0.1] [--port 0] [--token TOKEN] \
                      [--share-config PATH] [--auth-mode projection|legacy] \
-                     [--control-token-file PATH]"
+                     [--control-token-file PATH] [--no-browser]"
                 );
                 return ExitCode::SUCCESS;
             }

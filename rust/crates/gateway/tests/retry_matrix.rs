@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use um_gateway::retry::{
-    classify_status, is_reauthentication_text, is_transient_text, parse_retry_after, ProbeKind,
-    RetryClass, RETRY_AFTER_MAX,
+    classify_status, is_reauthentication_text, is_transient_text, parse_retry_after,
+    ReauthenticationTrigger, RetryClass, RETRY_AFTER_MAX,
 };
 
 use support::{
@@ -204,28 +204,16 @@ fn quota_and_permission_statuses_are_probed_once_each() {
 
 #[test]
 fn forbidden_authentication_text_is_a_reauthentication_trigger() {
-    let temp = TempDir::new("um-rust-reauth-trigger-");
-    let stub = ChatStub::start();
     assert_eq!(
         classify_status(403, Some("Not authenticated")),
-        RetryClass::Probe(ProbeKind::ForbiddenAuthentication)
+        RetryClass::Reauthentication(ReauthenticationTrigger::ForbiddenAuthenticationText)
+    );
+    assert_eq!(
+        classify_status(401, None),
+        RetryClass::Reauthentication(ReauthenticationTrigger::Unauthorized)
     );
     assert!(is_reauthentication_text("please log in"));
     assert!(!is_reauthentication_text("forbidden"));
-
-    stub.push(ChatAttempt::HttpStatus {
-        status: 403,
-        body: "Not authenticated".to_string(),
-        retry_after: None,
-    });
-    push_json_success(&stub);
-    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
-        retry_budget(config);
-        config.max_fast_retries = 0;
-    });
-    let response = client_request(gateway.addr, &chat_request()).expect("auth 403 probe");
-    assert_eq!(response.status, 200);
-    assert_eq!(stub.attempts(), 2);
 }
 
 #[test]
