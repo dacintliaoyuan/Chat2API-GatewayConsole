@@ -29,6 +29,10 @@ use crate::http::{
 use crate::ledger::Ledger;
 use crate::messages::handle_messages;
 use crate::readonly::ProxyState;
+use crate::reauth::{
+    BrowserDisabledProvider, MissingLoginProvider, ReauthenticationProvider,
+    ReauthenticationService,
+};
 use crate::responses::handle_responses;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -46,6 +50,7 @@ pub struct AppState {
     pub require_local_api_key: bool,
     pub ledger: Arc<Ledger>,
     pub event_log: Arc<EventLog>,
+    pub reauth: Arc<ReauthenticationService>,
 }
 
 /// A started candidate server.
@@ -59,7 +64,27 @@ pub struct ServerHandle {
 impl GatewayServer {
     /// Start a candidate server; the socket is bound before the thread starts.
     pub fn start(config: GatewayConfig) -> Result<ServerHandle, ServerError> {
+        Self::start_with_reauth(config, None)
+    }
+
+    /// Start a candidate server with an optional re-authentication provider.
+    ///
+    /// `None` assembles the production seam: [`MissingLoginProvider`] normally,
+    /// or [`BrowserDisabledProvider`] when `--no-browser` was selected. Tests use
+    /// `Some` to script a real session without opening a browser.
+    pub fn start_with_reauth(
+        config: GatewayConfig,
+        provider: Option<Arc<dyn ReauthenticationProvider>>,
+    ) -> Result<ServerHandle, ServerError> {
         config.validate_candidate().map_err(ServerError::Config)?;
+        let provider = provider.unwrap_or_else(|| {
+            if config.browser_disabled {
+                Arc::new(BrowserDisabledProvider) as Arc<dyn ReauthenticationProvider>
+            } else {
+                Arc::new(MissingLoginProvider) as Arc<dyn ReauthenticationProvider>
+            }
+        });
+        let reauth = Arc::new(ReauthenticationService::from_config(&config, provider));
         let gate = match &config.share_config {
             Some(path) => Some(Arc::new(
                 ShareGate::new(path, config.auth_mode).map_err(ServerError::Config)?,
@@ -85,6 +110,7 @@ impl GatewayServer {
             require_local_api_key,
             ledger,
             event_log,
+            reauth,
         });
         let listener = TcpListener::bind((config.bind_host.as_str(), config.bind_port))
             .map_err(ServerError::Io)?;

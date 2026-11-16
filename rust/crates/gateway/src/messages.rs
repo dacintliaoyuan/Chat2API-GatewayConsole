@@ -24,6 +24,7 @@ use crate::ledger::{
     anthropic_message_usage, anthropic_output_estimate, anthropic_usage_fields, merge_usage_max,
     message_tokens, usage_fields_to_json, NormalizedUsage, UsageRecord,
 };
+use crate::reauth::{self, AuthWaitBudget, StatusAction};
 use crate::retry::{self, LastAttempt, RetryLimits, RetryOutcome, RetryState};
 use crate::server::AppState;
 use crate::upstream::{post_compat, NextItem, StreamReader, UpstreamBody, UpstreamResponse};
@@ -233,6 +234,7 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
 fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -> ChatResult {
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
+    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget);
     let limits = RetryLimits::from_config(&context.state.config);
     loop {
         if Instant::now() >= context.deadline {
@@ -241,7 +243,9 @@ fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -
         }
         if retry_state.physical_attempts >= context.state.config.max_physical_attempts {
             record_usage(context, "upstream_attempt_budget_exhausted", None, 0);
-            return ChatResult::Response(last.error().anthropic_response());
+            return ChatResult::Response(
+                reauth::final_error(&last, &retry_state).anthropic_response(),
+            );
         }
         retry_state.record_attempt();
         stats.record_attempt();
@@ -275,39 +279,32 @@ fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -
         };
         let status = response.status;
         if status != 200 {
-            let elapsed = attempt_started.elapsed();
-            let retry_after = response.headers.get("retry-after").cloned();
-            let mut text =
-                retry::needs_body_for_classification(status).then(|| response.read_error_text());
-            last.record_status(status, text.clone(), retry_after.clone());
-            let plan = retry_state.plan(
-                RetryOutcome::Status {
-                    status,
-                    headers: &response.headers,
-                    body_text: text.as_deref(),
-                },
-                &limits,
+            match reauth::handle_non_success(
+                context.state,
+                &mut retry_state,
+                &mut last,
+                response,
+                attempt_started.elapsed(),
                 context.deadline,
-                elapsed,
-            );
-            if let Some(plan) = plan {
-                // #63 trigger point: `plan.reauthentication` starts the
-                // shared re-authentication session instead of this probe.
-                let _reauthentication = plan.reauthentication;
-                drop(response);
-                if !retry::sleep_with_deadline(plan.delay, context.deadline) {
-                    record_usage(context, "request_deadline_exceeded", None, 0);
-                    return ChatResult::Response(last.deadline_error().anthropic_response());
+                &mut auth_wait_budget,
+            ) {
+                StatusAction::Retry => continue,
+                StatusAction::Final {
+                    error,
+                    status,
+                    deadline_exceeded,
+                } => {
+                    let ledger_status = if deadline_exceeded {
+                        "request_deadline_exceeded".to_string()
+                    } else {
+                        status
+                            .map(compat_ledger_status)
+                            .unwrap_or_else(|| "request_deadline_exceeded".to_string())
+                    };
+                    record_usage(context, &ledger_status, None, 0);
+                    return ChatResult::Response(error.anthropic_response());
                 }
-                continue;
             }
-            if text.is_none() && status != 401 {
-                text = Some(response.read_error_text());
-                last.record_status(status, text, retry_after);
-            }
-            let ledger_status = compat_ledger_status(status);
-            record_usage(context, &ledger_status, None, 0);
-            return ChatResult::Response(last.response(ErrorProtocol::Anthropic));
         }
         let raw = match response.body.read_all() {
             Ok(raw) => raw,
@@ -340,6 +337,7 @@ fn forward_stream_inner(
 ) -> ChatResult {
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
+    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget);
     let limits = RetryLimits::from_config(&context.state.config);
     loop {
         if Instant::now() >= context.deadline {
@@ -348,12 +346,14 @@ fn forward_stream_inner(
         }
         if retry_state.physical_attempts >= context.state.config.max_physical_attempts {
             record_usage(context, "upstream_attempt_budget_exhausted", None, 0);
-            return ChatResult::Response(last.error().anthropic_response());
+            return ChatResult::Response(
+                reauth::final_error(&last, &retry_state).anthropic_response(),
+            );
         }
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let mut response = match post_compat(
+        let response = match post_compat(
             &context.state.config,
             "/api/v1/messages",
             &serde_json::to_vec(&Value::Object(context.upstream_body.clone())).unwrap_or_default(),
@@ -382,39 +382,32 @@ fn forward_stream_inner(
         };
         let status = response.status;
         if status != 200 {
-            let elapsed = attempt_started.elapsed();
-            let retry_after = response.headers.get("retry-after").cloned();
-            let mut text =
-                retry::needs_body_for_classification(status).then(|| response.read_error_text());
-            last.record_status(status, text.clone(), retry_after.clone());
-            let plan = retry_state.plan(
-                RetryOutcome::Status {
-                    status,
-                    headers: &response.headers,
-                    body_text: text.as_deref(),
-                },
-                &limits,
+            match reauth::handle_non_success(
+                context.state,
+                &mut retry_state,
+                &mut last,
+                response,
+                attempt_started.elapsed(),
                 context.deadline,
-                elapsed,
-            );
-            if let Some(plan) = plan {
-                // #63 trigger point: `plan.reauthentication` starts the
-                // shared re-authentication session instead of this probe.
-                let _reauthentication = plan.reauthentication;
-                drop(response);
-                if !retry::sleep_with_deadline(plan.delay, context.deadline) {
-                    record_usage(context, "request_deadline_exceeded", None, 0);
-                    return ChatResult::Response(last.deadline_error().anthropic_response());
+                &mut auth_wait_budget,
+            ) {
+                StatusAction::Retry => continue,
+                StatusAction::Final {
+                    error,
+                    status,
+                    deadline_exceeded,
+                } => {
+                    let ledger_status = if deadline_exceeded {
+                        "request_deadline_exceeded".to_string()
+                    } else {
+                        status
+                            .map(compat_ledger_status)
+                            .unwrap_or_else(|| "request_deadline_exceeded".to_string())
+                    };
+                    record_usage(context, &ledger_status, None, 0);
+                    return ChatResult::Response(error.anthropic_response());
                 }
-                continue;
             }
-            if text.is_none() && status != 401 {
-                text = Some(response.read_error_text());
-                last.record_status(status, text, retry_after);
-            }
-            let ledger_status = compat_ledger_status(status);
-            record_usage(context, &ledger_status, None, 0);
-            return ChatResult::Response(last.response(ErrorProtocol::Anthropic));
         }
         let upstream_headers = response.headers.clone();
         let outcome = consume_stream(

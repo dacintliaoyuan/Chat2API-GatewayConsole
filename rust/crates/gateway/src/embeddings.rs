@@ -13,6 +13,7 @@ use crate::chat::ChatResult;
 use crate::error::ErrorProtocol;
 use crate::event_log::{AttemptStats, FinalFailure};
 use crate::http::{Request, Response};
+use crate::reauth::{self, AuthWaitBudget, StatusAction};
 use crate::retry::{self, LastAttempt, RetryLimits, RetryOutcome, RetryState};
 use crate::server::AppState;
 use crate::upstream::post_compat;
@@ -59,13 +60,14 @@ fn handle_embeddings_inner(
     let deadline = Instant::now() + state.config.request_total;
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
+    let mut auth_wait_budget = AuthWaitBudget::new(state.config.auth_wait_budget);
     let limits = RetryLimits::from_config(&state.config);
     loop {
         if Instant::now() >= deadline {
             return ChatResult::Response(last.deadline_error().response());
         }
         if retry_state.physical_attempts >= state.config.max_physical_attempts {
-            return ChatResult::Response(last.error().response());
+            return ChatResult::Response(reauth::final_error(&last, &retry_state).response());
         }
         retry_state.record_attempt();
         stats.record_attempt();
@@ -97,36 +99,20 @@ fn handle_embeddings_inner(
         };
         let status = response.status;
         if status != 200 {
-            let elapsed = attempt_started.elapsed();
-            let retry_after = response.headers.get("retry-after").cloned();
-            let mut text =
-                retry::needs_body_for_classification(status).then(|| response.read_error_text());
-            last.record_status(status, text.clone(), retry_after.clone());
-            let plan = retry_state.plan(
-                RetryOutcome::Status {
-                    status,
-                    headers: &response.headers,
-                    body_text: text.as_deref(),
-                },
-                &limits,
+            match reauth::handle_non_success(
+                state,
+                &mut retry_state,
+                &mut last,
+                response,
+                attempt_started.elapsed(),
                 deadline,
-                elapsed,
-            );
-            if let Some(plan) = plan {
-                // #63 trigger point: `plan.reauthentication` starts the
-                // shared re-authentication session instead of this probe.
-                let _reauthentication = plan.reauthentication;
-                drop(response);
-                if !retry::sleep_with_deadline(plan.delay, deadline) {
-                    return ChatResult::Response(last.deadline_error().response());
+                &mut auth_wait_budget,
+            ) {
+                StatusAction::Retry => continue,
+                StatusAction::Final { error, .. } => {
+                    return ChatResult::Response(error.response());
                 }
-                continue;
             }
-            if text.is_none() && status != 401 {
-                text = Some(response.read_error_text());
-                last.record_status(status, text, retry_after);
-            }
-            return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
         }
         let raw = match response.body.read_all() {
             Ok(raw) => raw,

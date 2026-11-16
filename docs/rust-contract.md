@@ -167,11 +167,11 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 ### 5.3 流式、超时、取消与重试
 
-- 首字节预算 120 秒；上游单次 socket 静默预算 180 秒；请求总预算默认 360 秒，环境变量可调但夹在 10..3600 秒（`chat2api/chat2api.py:377-385,440-444`）。
+- 首字节预算 120 秒；上游单次 socket 静默预算 180 秒；请求总预算默认 360 秒（Rust 目标 540 秒；认证等待计入 Rust 的 540 秒总预算），环境变量可调但夹在 10..3600 秒（`chat2api/chat2api.py:377-385,440-444`）。
 - 200 头只在首个“实质数据”事件出现后提交；提交前的元数据/思考事件可短暂暂存，以便早期重复循环或零数据断流仍可隐藏重试（`chat2api/chat2api.py:8043-8080,8417-8431`）。
 - 提交前失败返回 502；首字节、响应头等待、socket 静默或总预算超时返回 504 `upstream_timeout` / `request_deadline_exceeded`；提交后失败写 in-band `error` 事件并结束流，绝不把部分完成当成功（`chat2api/chat2api.py:599-613,8060-8077`）。
 - 预提交暂存上限 64 KiB；未成行字节缓冲上限 1 MiB；生产者/消费者队列上限 256；并发流 reader 上限已取消（ADR 0004，`too_many_concurrent_streams` retired）（`chat2api/chat2api.py:388-403`）。
-- 重试：快速失败最多 5 次，慢失败（耗时达到 30 秒）最多 2 次，物理尝试上限 12；可重试状态为 408/429/500/502/503/504；只在客户端尚未收到任何 SSE 事件前重试（`chat2api/chat2api.py:522-548,7015-7030`）。
+- 重试：快速失败最多 5 次，慢失败（耗时达到 30 秒）最多 2 次，物理尝试上限 12；408/429/500/502/503/504/529/520-524、传输失败与网关等待使用完整预算；402 与 403 权限文字只探测一次；400/422 只在文字表示瞬态时探测一次；404/405/409/413/415 不重试；401 与 403 认证文字触发共享重登录（见 5.4）；只在客户端尚未收到任何 SSE 事件前重试。可重试状态为 408/429/500/502/503/504（`chat2api/chat2api.py:522-548,7015-7030`）。
 - 客户端断开在每个字节检查；断开后关闭上游、取消 reader 生产线程，账本记 `client_disconnected`（`chat2api/chat2api.py:6160-6175,8080-8003`）。
 - Messages 流要求官方事件序列；`message_stop` 前 EOF 不算成功；`error` 事件立即终止（`tests/test_chat2api_endpoints.py:501-610`）。
 - Responses 流事件为 `response.created`、`response.output_text.delta`、`response.function_call_arguments.delta`、`response.completed`、`response.incomplete`、`response.failed`（`chat2api/chat2api.py:6720-6760,6955-6985`）。
@@ -211,12 +211,16 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 连接、DNS、TLS 或代理失败返回 502 `upstream_unavailable`；首字节、响应头等待、socket 静默或总预算超时返回 504 `upstream_timeout` / `request_deadline_exceeded`；上游自己的 504 保留 504。重试耗尽后返回最后一次上游状态；最后一次是传输错误则返回 502；等待重试撞到总预算则返回 504 `request_deadline_exceeded` 并在 `detail.last_upstream_status` 记录最后一次状态。
 
+重登录触发与预算（#63）：上游 401，或 403 且 `upstream_message` 命中 `Not authenticated`/`sign in`/`session expired`/`authentication required`/`please log in`（大小写不敏感）时，每个逻辑请求最多启动一次共享重登录会话；会话恢复后重发一次。重发后仍 401 → 503 `reauthentication_required`；403 认证文字 → 403 `reauthentication_failed`，`detail.reauthentication_attempted` 为 `true`；403 权限、Cloudflare challenge、402、404 不触发重登录。认证等待每个逻辑请求累计 30 秒、最多 128 个并发等待者、每秒复查一次，并计入 540 秒总预算。等待超时 → 503 `reauthentication_required`，`reason` 为 `auth_wait_timeout`；等待槽满 → `reason` 为 `auth_wait_capacity`；滚动 900 秒内 3 次全局启动上限 → `reason` 为 `global_attempt_cap`，有确定下次窗口时带 `Retry-After`；`--no-browser` → `reason` 为 `BrowserDisabled`。认证等待类的 503 仍以 `detail: upstream_rejected` 保留原 401 映射，`reason` 是 #63 的附加诊断字段；403 `reauthentication_failed` 的 `detail` 带 `reauthentication_attempted`、`upstream_status` 与有界 `upstream_message`。
+
+Rust 8003 当前没有浏览器登录实现：默认装配的 provider 立即返回 503 `reauthentication_required`，`reason` 为 `reauth_unavailable`（`--no-browser` 时为 `BrowserDisabled`），不假装会话已运行；`/admin/auth/login` 与 `/admin/auth/cancel` 仍返回 501 `not_implemented`。测试通过 `GatewayServer::start_with_reauth` 注入脚本化 provider 验证触发、重发、最终状态与预算；真实登录接入是后续缺口。
+
 ### 5.5 副作用
 
 - 读投影文件；每次鉴权重新读取，不写投影。
 - 追加用量账本 `usage-share-backend.jsonl`；写失败则本进程禁用记账，但绝不阻断代理（`chat2api/chat2api.py:2502-2512`）。
 - 追加服务日志 `share-backend.log`；日志不含凭据、请求体或响应体。
-- 登录/刷新时写 token/API Key 文件与浏览器 profile；只有显式登录或 401 恢复才打开可见浏览器。
+- 登录/刷新时写 token/API Key 文件与浏览器 profile；只有显式登录或 401 恢复才打开可见浏览器。Rust 8003 当前没有这条浏览器登录实现，默认 provider 如实返回 `reauth_unavailable`，不创建 profile、不打开浏览器。
 - 撤销状态文件 `share-revoke.state` 与投影快照，原子写（`chat2api/share_auth.py:475-526`）。
 - 注册实例控制 AF_UNIX 通道；只应答 `instance-status`、`load`、`drain`、`emergency`、`resume`，绝不调用管理动作（`chat2api/chat2api.py:9023-9100`）。
 - `/admin/shutdown` 只停止本进程；不停止上游 UM。
