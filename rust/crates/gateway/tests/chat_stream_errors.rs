@@ -135,7 +135,7 @@ fn a_post_commit_eof_writes_one_in_band_error_and_no_done() {
     let raw = client
         .read_all(Duration::from_secs(5))
         .expect("read stream");
-    let (status, _, body) = parse_raw_response(&raw);
+    let (status, headers, body) = parse_raw_response(&raw);
     assert_eq!(status, 200);
     assert!(body.starts_with(&content), "content was forwarded");
     assert!(
@@ -149,6 +149,12 @@ fn a_post_commit_eof_writes_one_in_band_error_and_no_done() {
         error["error"]["detail"]["reason"],
         json!("upstream_eof_without_done")
     );
+    let header_id = headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("x-request-id"))
+        .map(|(_, value)| value.as_str())
+        .expect("X-Request-Id header");
+    assert_eq!(error["error"]["detail"]["request_id"], json!(header_id));
 }
 
 #[test]
@@ -168,15 +174,26 @@ fn a_post_commit_explicit_error_keeps_its_sanitized_message() {
     let raw = client
         .read_all(Duration::from_secs(5))
         .expect("read stream");
-    let (status, _, body) = parse_raw_response(&raw);
+    let (status, headers, body) = parse_raw_response(&raw);
     assert_eq!(status, 200);
     let error = in_band_error(&body);
     assert_eq!(error["error"]["type"], json!("upstream_error"));
     assert_eq!(error["error"]["code"], json!("upstream_stream_error"));
+    assert_eq!(error["error"]["param"], Value::Null);
     assert_eq!(
         error["error"]["detail"]["upstream_message"],
         json!("upstream boom")
     );
+    assert!(
+        !body.windows(12).any(|window| window == b"data: [DONE]"),
+        "an in-band error must not be followed by [DONE]"
+    );
+    let header_id = headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("x-request-id"))
+        .map(|(_, value)| value.as_str())
+        .expect("X-Request-Id header");
+    assert_eq!(error["error"]["detail"]["request_id"], json!(header_id));
     assert_eq!(
         sse_payloads(&body)
             .into_iter()

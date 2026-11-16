@@ -813,13 +813,9 @@ fn write_stream_error(
     outcome: &StreamOutcome,
     request_id: &str,
 ) {
-    let payload = json!({"error": {
-        "message": status.message(),
-        "type": "upstream_error",
-        "code": status.reason(),
-        "param": null,
-        "detail": stream_error_detail(outcome, request_id),
-    }});
+    let payload = json!({"error": GatewayError::new(502, status.message(), status.reason())
+        .with_detail(stream_error_detail(outcome, request_id))
+        .object()});
     let raw = serde_json::to_vec(&payload).unwrap_or_default();
     let mut event = Vec::new();
     event.extend_from_slice(b"data: ");
@@ -867,7 +863,7 @@ fn truthy(value: &Value) -> bool {
     }
 }
 
-fn explicit_error_reason(chunk: &Value) -> Option<String> {
+pub(crate) fn explicit_error_reason(chunk: &Value) -> Option<String> {
     let error = chunk.get("error")?;
     if !truthy(error) {
         return None;
