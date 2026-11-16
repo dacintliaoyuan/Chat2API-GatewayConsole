@@ -24,6 +24,8 @@ const code = buildSync({
       `export { modelsHtml, catalogIds, testBlockReason, stopBlockReason, refreshBlockReason } from "./src/local/um-ui/models.ts";`,
       `export { TrendView, SeriesColors, monotonePath, drawableRuns } from "./src/local/um-ui/charts.ts";`,
       `export { unwiredState } from "./src/local/um-ui/contract.ts";`,
+      `export { overviewHtml } from "./src/local/um-ui/overview.ts";`,
+      `export { UmDataController } from "./src/local/um-data/um-data-controller.ts";`,
     ].join("\n"),
     resolveDir: fileURLToPath(new URL("..", import.meta.url)),
     sourcefile: "um-views-entry.ts",
@@ -43,7 +45,14 @@ const code = buildSync({
 const module = { exports: {} };
 vm.runInContext(
   code,
-  vm.createContext({ module, exports: module.exports, console })
+  vm.createContext({
+    module,
+    exports: module.exports,
+    console,
+    queueMicrotask,
+    setTimeout,
+    clearTimeout,
+  })
 );
 const um = module.exports;
 
@@ -827,4 +836,71 @@ test("model views dedupe the catalog and gate each control on the reason they dr
     /不支持/,
     "an unknown thinking source is not read as 「不支持」"
   );
+});
+
+test("the login card keeps on-demand login and adds the forced visible entry", () => {
+  const overview = um.unwiredState().overview;
+  overview.login = ready({
+    state: "valid",
+    word: "有效",
+    detail: "当前认证有效",
+    checkedAt: 1,
+  });
+  overview.actions.login = open;
+  const valid = um.overviewHtml(overview, { metric: "tokens", line: false }, {});
+  assert.doesNotMatch(valid, /data-um-act="login"/);
+  assert.match(valid, /data-um-force-login/);
+  assert.match(valid, /强制重新登录（可见窗口）/);
+  overview.login = ready({
+    state: "needs_login",
+    word: "需要登录",
+    detail: "当前认证需要重新登录",
+    checkedAt: 1,
+  });
+  const needs = um.overviewHtml(overview, { metric: "tokens", line: false }, {});
+  assert.match(needs, /data-um-act="login"/);
+  assert.match(needs, /检查并按需登录/);
+  assert.match(needs, /data-um-force-login/);
+});
+
+test("a forced login event reaches account.login with force and visible", async () => {
+  const calls = [];
+  let controller;
+  const result = {
+    state: "succeeded",
+    operation: { result: {} },
+    operationId: "op-forced-login",
+    reason: null,
+  };
+  const client = {
+    runAction: async (action, target, params, options) => {
+      calls.push({ action, target, params, options });
+      controller.disposed = true;
+      return result;
+    },
+  };
+  const gate = {
+    verdict: () => ({ state: "confirmed", reason: "" }),
+    onChange: () => () => {},
+  };
+  controller = new um.UmDataController({ gate, client, summaryClient: client });
+  controller.capabilities = new Map([
+    [
+      "account.login",
+      {
+        action: "account.login",
+        enabled: true,
+        cancelable: true,
+        disabledReason: null,
+        description: null,
+      },
+    ],
+  ]);
+  controller.handleEvent({ type: "um.login", force: true, visible: true });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].action, "account.login");
+  assert.equal(calls[0].target, "account");
+  assert.equal(calls[0].params.force, true);
+  assert.equal(calls[0].params.visible, true);
 });

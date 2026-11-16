@@ -161,6 +161,10 @@ export type UmIssue = {
 export type MaintenanceAction =
   "verify" | "login" | "start" | "stop" | "restart";
 
+/** ADR 0005: the additive `account.login` parameters. `visible` asks this
+ *  explicit forced round for a local window and is valid only with `force`. */
+export type UmLoginParams = { force?: boolean; visible?: boolean };
+
 export type UmOverview = {
   service: Load<UmService>;
   login: Load<UmLogin>;
@@ -401,8 +405,16 @@ export type UmEvent =
   | { type: "refresh"; page: UmPage; view: RequestsView | null }
   | { type: "trend.range"; range: TrendRange }
   | { type: "um.verify" }
-  /** 检查并按需登录: verify first, open the sign-in window only if needed. */
-  | { type: "um.login" }
+  /** 检查并按需登录: verify first, open the sign-in window only if needed.
+   *  `force` skips that verification; `visible` asks the forced round for a
+   *  visible window (ADR 0005). `params` is accepted as the same additive
+   *  shape so a controller call site can pass the object directly. */
+  | {
+      type: "um.login";
+      force?: boolean;
+      visible?: boolean;
+      params?: UmLoginParams;
+    }
   | { type: "um.service"; action: "start" | "stop" | "restart" }
   | { type: "requests.query"; query: RequestQuery }
   | { type: "requests.earlier"; cursor: string }
