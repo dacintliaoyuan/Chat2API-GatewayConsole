@@ -3,7 +3,7 @@ use std::fs;
 use std::process::Command;
 
 use serde_json::{json, Value};
-use um_ops::ingress::check_ingress;
+use um_ops::ingress::{check_ingress, API_PATHS, API_SERVICE, FORBIDDEN_PORTS};
 use um_ops::public_probe::{
     addresses_from_answers, aggregate_dns, bounded_check_deadline, check_exit_code,
     check_public_connection, negative_ttl, public_host, public_origin, public_source,
@@ -20,6 +20,17 @@ fn expected(path: &[&str]) -> Value {
         value = value.get(*key).cloned().expect("fixture key");
     }
     value
+}
+
+fn api_ingress_config(service: &str) -> String {
+    let mut text = String::from("ingress:\n");
+    for path in API_PATHS {
+        text.push_str(&format!(
+            "  - hostname: fixture.example\n    path: ^{path}$\n    service: {service}\n"
+        ));
+    }
+    text.push_str("  - service: http_status:404\n");
+    text
 }
 
 struct FixtureTransport {
@@ -151,6 +162,63 @@ fn the_ingress_check_matches_the_python_checker() {
         fs::write(&path, case["config"].as_str().expect("config text")).expect("ingress config");
         let host = case["expectHost"].as_str().expect("expect host");
         assert_eq!(check_ingress(&path, host), case["result"], "{name}");
+    }
+}
+
+#[test]
+fn the_ingress_checker_enforces_the_target_loopback_port() {
+    assert_eq!(API_SERVICE, "http://127.0.0.1:8003");
+    for port in ["8002", "8097", "8100", "8096", "18096", "5901"] {
+        assert!(
+            FORBIDDEN_PORTS.contains(&port),
+            "missing forbidden port {port}"
+        );
+    }
+
+    let temp = temp();
+    let target = temp.path().join("target.yml");
+    fs::write(&target, api_ingress_config(API_SERVICE)).expect("target ingress");
+    let result = check_ingress(&target, "fixture.example");
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["problems"], json!([]), "{result}");
+
+    let legacy = temp.path().join("legacy.yml");
+    fs::write(&legacy, api_ingress_config("http://127.0.0.1:8100")).expect("legacy ingress");
+    let result = check_ingress(&legacy, "fixture.example");
+    assert_eq!(result["ok"], false, "{result}");
+    let problems = result["problems"].as_array().expect("problems");
+    assert!(
+        problems.iter().any(|problem| problem
+            .as_str()
+            .unwrap_or_default()
+            .contains("private port 8100:")),
+        "{problems:?}"
+    );
+    assert!(
+        problems.iter().any(|problem| problem
+            .as_str()
+            .unwrap_or_default()
+            .contains("service must be http://127.0.0.1:8003")),
+        "{problems:?}"
+    );
+
+    for port in ["8002", "8097", "8096", "18096", "5901"] {
+        let path = temp.path().join(format!("port-{port}.yml"));
+        fs::write(
+            &path,
+            api_ingress_config(&format!("http://127.0.0.1:{port}")),
+        )
+        .expect("private port ingress");
+        let result = check_ingress(&path, "fixture.example");
+        assert_eq!(result["ok"], false, "{port}: {result}");
+        let problems = result["problems"].as_array().expect("problems");
+        let marker = format!("private port {port}:");
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.as_str().unwrap_or_default().contains(&marker)),
+            "{port}: {problems:?}"
+        );
     }
 }
 

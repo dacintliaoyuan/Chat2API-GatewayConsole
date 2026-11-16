@@ -97,7 +97,13 @@
         500,
         502,
         503,
-        504
+        504,
+        520,
+        521,
+        522,
+        523,
+        524,
+        529
       ],
       "slowFailureThresholdSeconds": 30,
       "slowFailuresMax": 2,
@@ -209,7 +215,7 @@
         "source": "docs/rust-contract.md#5.3",
         "surface": "gateway",
         "unit": "seconds",
-        "value": 360.0
+        "value": 540.0
       },
       {
         "name": "prelude_max",
@@ -231,13 +237,6 @@
         "surface": "gateway",
         "unit": "entries",
         "value": 256.0
-      },
-      {
-        "name": "reader_max",
-        "source": "docs/rust-contract.md#5.3",
-        "surface": "gateway",
-        "unit": "concurrent",
-        "value": 128.0
       },
       {
         "name": "wire_deadline",
@@ -1785,15 +1784,15 @@
     "generatedFrom": "tests/generate_rust_contract_fixture.py",
     "sourceHashEncoding": "utf8-lf",
     "sourceHashes": {
-      "chat2api/chat2api.py": "5475955c7ae07a8244260065fa73c0982b977353b2dffafcd9488bafff28fad4",
-      "chat2api/share_auth.py": "2eea208b3934ddccf7d6e0126fedcbfed96ce2e086cfb1a1f910485f21465766",
+      "chat2api/chat2api.py": "ea40cea1f4f029cd7861428e331c8dfeeddda3f07c3c5399f75a7d7dc3457309",
+      "chat2api/share_auth.py": "160d94cbfb1167557a0ecae97a8501a9dfbe01ca8416bb51c526c429d830a01d",
       "console/display_proxy.py": "5aada84d79e18c9d6899fd31bfce05098ebc23a990d00cfd81a11f50e326b01c",
-      "docs/rust-contract.md": "fa57da2452d3e87231c93b6a79d2423b1e14a01acbb1afb302882cfd42b37268",
+      "docs/rust-contract.md": "fe4d79356dde4421f72a276234d1bf8c7bd197a2f4e679a18fbbc1dab2ba9714",
       "share/broker_protocol.py": "dbf7507c125b03bd915a190b052d7e5dac47a4dda80f7ef1fe6a15bbdf7554c2",
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
       "share/store.py": "7bb5b3f1e302de5579043d482a3172548c716b8a619366a0373727d88e714b33",
       "shared/responses_protocol.py": "eafa7d6735fe7d99eed81160084e887644022ec159ab27cac62f03463e8092fe",
-      "tests/generate_rust_contract_fixture.py": "e2feca7569c67da1b4d836ee24585483944a4a48d7e41c003b319d909bb49003",
+      "tests/generate_rust_contract_fixture.py": "12fde49eb324868efb56fa8f5ad0a2fb9f572347e8d2f26973c9f168841e92a5",
       "um-cloud-deploy/cloudflared/check-ingress.py": "8bc85e85c00ce1675cac5cea08f07095386dc145fea98a9edb018977f539011f"
     },
     "surfaces": [

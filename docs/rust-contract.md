@@ -167,11 +167,11 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 ### 5.3 流式、超时、取消与重试
 
-- 首字节预算 120 秒；上游单次 socket 静默预算 180 秒；请求总预算默认 360 秒（Rust 目标 540 秒；认证等待计入 Rust 的 540 秒总预算），环境变量可调但夹在 10..3600 秒（`chat2api/chat2api.py:377-385,440-444`）。
+- 首字节预算 120 秒；上游单次 socket 静默预算 180 秒；请求总预算默认 540 秒（认证等待计入 540 秒总预算），环境变量可调但夹在 10..3600 秒（`chat2api/chat2api.py:377-385,440-444`）。
 - 200 头只在首个“实质数据”事件出现后提交；提交前的元数据/思考事件可短暂暂存，以便早期重复循环或零数据断流仍可隐藏重试（`chat2api/chat2api.py:8043-8080,8417-8431`）。
 - 提交前失败返回 502；首字节、响应头等待、socket 静默或总预算超时返回 504 `upstream_timeout` / `request_deadline_exceeded`；提交后失败写 in-band `error` 事件并结束流，绝不把部分完成当成功（`chat2api/chat2api.py:599-613,8060-8077`）。
 - 预提交暂存上限 64 KiB；未成行字节缓冲上限 1 MiB；生产者/消费者队列上限 256；并发流 reader 上限已取消（ADR 0004，`too_many_concurrent_streams` retired）（`chat2api/chat2api.py:388-403`）。
-- 重试：快速失败最多 5 次，慢失败（耗时达到 30 秒）最多 2 次，物理尝试上限 12；408/429/500/502/503/504/529/520-524、传输失败与网关等待使用完整预算；402 与 403 权限文字只探测一次；400/422 只在文字表示瞬态时探测一次；404/405/409/413/415 不重试；401 与 403 认证文字触发共享重登录（见 5.4）；只在客户端尚未收到任何 SSE 事件前重试。可重试状态为 408/429/500/502/503/504（`chat2api/chat2api.py:522-548,7015-7030`）。
+- 重试：快速失败最多 5 次，慢失败（耗时达到 30 秒）最多 2 次，物理尝试上限 12；408/429/500/502/503/504/529/520-524、传输失败与网关等待使用完整预算；402 与 403 权限文字只探测一次；400/422 只在文字表示瞬态时探测一次；404/405/409/413/415 不重试；401 与 403 认证文字触发共享重登录（见 5.4）；只在客户端尚未收到任何 SSE 事件前重试。`Retry-After` 不超过 8 秒时等待后重试，超过 8 秒时保留原状态与响应头返回客户端；`X-Should-Retry: false` 停止重试。可重试状态为 408/429/500/502/503/504/520/521/522/523/524/529（`chat2api/chat2api.py:522-548,7015-7030`）。
 - 客户端断开在每个字节检查；断开后关闭上游、取消 reader 生产线程，账本记 `client_disconnected`（`chat2api/chat2api.py:6160-6175,8080-8003`）。
 - Messages 流要求官方事件序列；`message_stop` 前 EOF 不算成功；`error` 事件立即终止（`tests/test_chat2api_endpoints.py:501-610`）。
 - Responses 流事件为 `response.created`、`response.output_text.delta`、`response.function_call_arguments.delta`、`response.completed`、`response.incomplete`、`response.failed`（`chat2api/chat2api.py:6720-6760,6955-6985`）。
