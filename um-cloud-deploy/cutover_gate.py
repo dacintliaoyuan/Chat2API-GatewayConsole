@@ -24,6 +24,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,6 +49,10 @@ def _python() -> str:
     override = os.environ.get("UM_GATE_PYTHON")
     if override:
         return override
+    # The gate runs inside the interpreter that owns the project dependencies;
+    # a Windows "python3" alias may be the Store stub without site-packages.
+    if sys.executable:
+        return sys.executable
     for name in ("python3.14", "python3", "python"):
         found = shutil.which(name)
         if found:
