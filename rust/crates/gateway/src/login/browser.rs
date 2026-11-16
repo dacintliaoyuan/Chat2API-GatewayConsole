@@ -582,7 +582,7 @@ fn selector_count_expression(selectors: &[&str]) -> String {
          return visible(el)&&(el.textContent||'').trim()===text;}});}}\
          var marker=sel.indexOf(':has-text(\"');if(marker>=0){{var base=sel.slice(0,marker);\
          var text=sel.slice(marker+11);if(text[text.length-1]===')')text=text.slice(0,-1);\
-         if(text[0]==='\"')text=text.slice(1,-1);\
+         if(text[text.length-1]==='\"')text=text.slice(0,-1);\
          try{{return Array.prototype.slice.call(document.querySelectorAll(base)).filter(function(el){{\
          return visible(el)&&(el.textContent||'').indexOf(text)>=0;}});}}catch(e){{return [];}}}}\
          try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
@@ -620,7 +620,7 @@ fn one_visible_expression(selectors: &[&str]) -> String {
          return visible(el)&&(el.textContent||'').trim()===text;}});}}\
          var marker=sel.indexOf(':has-text(\"');if(marker>=0){{var base=sel.slice(0,marker);\
          var text=sel.slice(marker+11);if(text[text.length-1]===')')text=text.slice(0,-1);\
-         if(text[0]==='\"')text=text.slice(1,-1);\
+         if(text[text.length-1]==='\"')text=text.slice(0,-1);\
          try{{return Array.prototype.slice.call(document.querySelectorAll(base)).filter(function(el){{\
          return visible(el)&&(el.textContent||'').indexOf(text)>=0;}});}}catch(e){{return [];}}}}\
          try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
