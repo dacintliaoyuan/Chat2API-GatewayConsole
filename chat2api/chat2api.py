@@ -2493,9 +2493,17 @@ def _umpass_credential_rejected(page) -> bool:
     return page.field_filled(UMPASS_PASSWORD_SELECTORS)
 
 
-def _check_login_window(page, closed_check):
-    """Raise the transient window-closed signal when the page is gone (A2)."""
+def _check_login_window(page, closed_check, visible=False):
+    """Raise the window-closed signal when the page is gone (A2).
+
+    A forced visible round is an explicit operator interaction: closing its
+    window ends THIS round as an operator cancel (D18-6) instead of a reopenable
+    transient failure. The automatic/on-demand display path keeps the transient
+    signal so its recovery semantics stay unchanged.
+    """
     if closed_check():
+        if visible:
+            raise LoginCancelled("window_closed")
         raise LoginWindowClosed(
             "window_closed", "last page %s" % (page.url() or "unknown"))
 
@@ -2596,7 +2604,8 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                   on_context=None, cancel_event=None,
                   context_factory=None, credential_probe=None,
                   on_progress=None, cancel_login_event=None,
-                  process_lister=None, process_signal=None) -> str:
+                  process_lister=None, process_signal=None,
+                  visible=False) -> str:
     """Open a Chromium-family browser and drive the two-step UM SSO.
 
     The SAME on-disk profile passed by the caller is reused (cookie, autofill
@@ -2604,7 +2613,12 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     no visible window; it requires neither DISPLAY nor WAYLAND_DISPLAY. When the
     operator has explicitly started the on-demand manual display, this round opens
     a visible window on that display instead, so the human can finish the step
-    there. Windows drives Microsoft Edge from its installation paths; Linux drives
+    there. ``visible=True`` is the explicit forced re-login presentation choice
+    (ADR 0005): Windows shows Edge on the local desktop directly, while Linux
+    shows a window only when DISPLAY is available and otherwise raises
+    ``LoginUnavailable("visible_login_unavailable")`` instead of silently
+    downgrading to headless. Automatic re-login always passes ``visible=False``.
+    Windows drives Microsoft Edge from its installation paths; Linux drives
     the first Chromium-family binary found in PATH (or the explicit
     ``CHAT2API_BROWSER_PATH`` override). Controlled flow (A13-1/A13-3): the Open
     WebUI login page's "使用 UMPASS 继续" entry, then the UMPASS form whose
@@ -2619,6 +2633,8 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     ``cancel_login_event`` cancels it when the operator explicitly cancels THIS
     round (D18-6): the latter raises ``LoginCancelled`` so the recovery loop
     ends the round instead of treating a closed window as a reopenable failure.
+    For a forced visible round, closing the window itself is also an operator
+    cancel (``LoginCancelled``), never a transient failure.
 
     Ticket #11: the whole session is guarded by the profile's OS single-instance
     lock (released automatically when this process dies) and, while the lock is
@@ -2645,6 +2661,13 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     persistent context, ``classify_credential``, the OS process table and
     ``os.kill``.
     """
+    display_env = _login_display()
+    if (visible and display_env is None
+            and sys.platform.startswith("linux")
+            and not (os.environ.get("DISPLAY") or "").strip()):
+        raise LoginUnavailable(
+            "visible_login_unavailable",
+            "a visible login window requires DISPLAY on this platform")
     try:
         edge = find_edge()
     except BrowserConfigError as exc:
@@ -2653,11 +2676,11 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             "%s: %s" % (exc.reason, exc.detail)) from exc
     if not edge:
         raise LoginUnavailable(*_missing_browser_error(sys.platform))
-    display_env = _login_display()
-    headful = display_env is not None
+    headful = visible or display_env is not None
     print("=" * 60)
     if headful:
-        print(f"Opening visible browser on {display_env['DISPLAY']} "
+        where = display_env["DISPLAY"] if display_env else "the local desktop"
+        print(f"Opening visible browser on {where} "
               f"({edge}): {base_url}")
         print("Finish the manual step in the login window.")
     else:
@@ -2716,23 +2739,31 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
         if context_factory is not None:
             ctx = context_factory(edge, profile_dir)
         else:
-            playwright = manager.start()
             launch_options = {
                 "headless": not headful,
                 "executable_path": edge,
             }
             if headful:
-                browser_env = {**os.environ, **display_env}
-                # The on-demand display is X11; a stale Wayland hint must not
-                # make Chromium pick a different backend.
-                browser_env.pop("WAYLAND_DISPLAY", None)
                 launch_options.update(
                     args=["--start-maximized"],
                     no_viewport=True,
-                    env=browser_env,
                 )
-            ctx = playwright.chromium.launch_persistent_context(
-                profile_dir, **launch_options)
+                if display_env is not None:
+                    browser_env = {**os.environ, **display_env}
+                    # The on-demand display is X11; a stale Wayland hint must
+                    # not make Chromium pick a different backend.
+                    browser_env.pop("WAYLAND_DISPLAY", None)
+                    launch_options["env"] = browser_env
+            try:
+                playwright = manager.start()
+                ctx = playwright.chromium.launch_persistent_context(
+                    profile_dir, **launch_options)
+            except LoginUnavailable:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 浏览器启动失败属于不可用
+                raise LoginUnavailable(
+                    "browser_launch_failed",
+                    "%s: %s" % (type(exc).__name__, exc)) from exc
         try:
             if on_context:
                 on_context(ctx)
@@ -2768,7 +2799,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
 
             while time.time() < deadline:
                 raise_if_cancelled()
-                _check_login_window(page, page.is_closed)
+                _check_login_window(page, page.is_closed, visible)
                 if time.monotonic() >= idle_deadline:
                     raise LoginStalled(
                         "idle_timeout",
@@ -2888,7 +2919,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                             if outcome == "advanced":
                                 mark_progress()
                             note("umpass_submitted", origin=url)
-                            _check_login_window(page, page.is_closed)
+                            _check_login_window(page, page.is_closed, visible)
                             if _umpass_credential_rejected(page):
                                 # Structural evidence only: the visible form
                                 # reported an error and the autofilled
@@ -2901,7 +2932,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                 except Exception:
                     # A vanished window is a transient (reopenable) signal,
                     # never a password rejection or a silent timeout.
-                    _check_login_window(page, page.is_closed)
+                    _check_login_window(page, page.is_closed, visible)
                     raise
 
             if manual_reason is None and stage == "duo":
@@ -3732,6 +3763,9 @@ class Proxy:
             "last_failure_epoch": None,
             "last_failure_reason": None,
             "pause_reason": None,
+            # ADR 0005: the explicit forced login's presentation choice for
+            # THIS recovery round. Automatic triggers always leave it False.
+            "visible": False,
         }
         self._recovery_thread = None
         # Serial boundary between the FINAL credential commit (save +
@@ -4403,7 +4437,7 @@ class Proxy:
         self._auth_condition.notify_all()
         return True
 
-    def _begin_recovery_cycle_locked(self, force=False):
+    def _begin_recovery_cycle_locked(self, force=False, visible=False):
         """Start the ONE recovery cycle of this instance; lock held (A1/A3).
 
         A running cycle is joined, never duplicated, so the startup check, a
@@ -4414,6 +4448,11 @@ class Proxy:
         evidence the management entry reports; every later retry is owned by the
         single scheduler thread. The rolling global cap is still enforced by the
         shared slot, so a manual retry cannot bypass it.
+
+        ADR 0005: ``visible`` is stored on the round and read by the scheduler
+        right before it opens a session. An explicit visible request joining a
+        waiting automatic round upgrades that round, so its next session is
+        visible; automatic triggers pass ``False`` and never downgrade a round.
         """
         thread = self._recovery_thread
         if thread is not None and thread.is_alive():
@@ -4422,7 +4461,11 @@ class Proxy:
                 # Ticket #41 (spec #8 story 12): a repeated explicit login
                 # joins the CURRENT round, including a round that is only
                 # waiting for a refused gate. It must not open a second
-                # cycle or reset the 6-session budget.
+                # cycle or reset the 6-session budget. A visible request
+                # only upgrades the round; a running session keeps the
+                # presentation it was launched with.
+                if visible:
+                    self._recovery["visible"] = True
                 return True
             # A thread that already published valid/idle (or a terminal pause)
             # is still finishing its finally block. It is NOT the cycle to
@@ -4441,6 +4484,7 @@ class Proxy:
             "last_failure_epoch": None,
             "last_failure_reason": None,
             "pause_reason": None,
+            "visible": bool(visible),
         })
         self._auth_failure_primary = None
         _logger.info("reauthentication cycle started round=%s force=%s thread=%s",
@@ -4518,8 +4562,13 @@ class Proxy:
         thread.start()
         return True
 
-    def _perform_recovery_session(self, generation, login_cancel):
+    def _perform_recovery_session(self, generation, login_cancel,
+                                  visible=False):
         """Open ONE login interaction (visible or headless) and classify it (A2).
+
+        ``visible`` is the presentation choice stored on THIS recovery round
+        (ADR 0005): only an explicit forced login may set it, so automatic
+        re-login stays headless. It is passed straight to ``browser_login``.
 
         Returns ``(outcome, reason, primary)`` where outcome is ``valid``
         (credentials committed), ``manual`` (the window needs a human),
@@ -4543,6 +4592,7 @@ class Proxy:
                 cancel_event=self._shutdown_event,
                 cancel_login_event=login_cancel,
                 on_progress=self._note_login_progress,
+                visible=visible,
             )
         except LoginCancelled as exc:
             return "cancelled", exc.reason, None
@@ -4780,8 +4830,10 @@ class Proxy:
                             self._auth_state = "logging_in"
                             self._auth_error = None
                             self._auth_condition.notify_all()
+                with self._auth_condition:
+                    visible = bool(self._recovery.get("visible"))
                 outcome, detail, primary = self._perform_recovery_session(
-                    generation, login_cancel)
+                    generation, login_cancel, visible=visible)
                 # Release the lease as soon as the session ends and BEFORE
                 # publishing its outcome: a waiter that observes the terminal
                 # state must never see this instance still owning the lease.
@@ -5063,7 +5115,7 @@ class Proxy:
             return None
         return min(delay, AUTH_WAIT_RETRY_AFTER_MAX_S)
 
-    def refresh(self, force=False, wait=True, deadline=None,
+    def refresh(self, force=False, wait=True, visible=False, deadline=None,
                 auth_wait_budget=None, cancel_check=None) -> bool:
         """Join or start the ONE automatic recovery cycle (A1/A3).
 
@@ -5074,6 +5126,11 @@ class Proxy:
         bypass it. ``wait`` joins the cycle's terminal result bounded by the
         caller's own deadline and the request-scoped auth-wait budget;
         ``wait=False`` returns as soon as a cycle exists.
+
+        ADR 0005: ``visible`` is the explicit forced login's presentation
+        choice and is stored on the recovery round; the round's scheduler passes
+        it to ``browser_login``. Automatic 401/watch triggers never pass it, so
+        they stay headless.
         """
         if self.args.no_browser:
             with self._auth_condition:
@@ -5096,7 +5153,8 @@ class Proxy:
                     # start the 30-minute window; an ordinary 401/watch
                     # refresh never does.
                     self._begin_login_window_locked()
-                started = self._begin_recovery_cycle_locked(force=force)
+                started = self._begin_recovery_cycle_locked(
+                    force=force, visible=visible)
                 if not started:
                     return False
         finally:
@@ -7112,8 +7170,13 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin if origin in ALLOWED_ORIGINS else None
 
-    def _read_body(self):
-        """Parse one JSON object body; every error is answered inline (None)."""
+    def _read_body(self, error_type=None):
+        """Parse one JSON object body; every error is answered inline (None).
+
+        ``error_type`` lets an endpoint that defines its own body contract report
+        a malformed JSON/body with that type instead of the generic
+        ``invalid_json``/``invalid_body``.
+        """
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):
@@ -7133,11 +7196,11 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
         except (OSError, ValueError, RecursionError):
             self._error(400, "Request body is not valid JSON",
-                        error_type="invalid_json")
+                        error_type=error_type or "invalid_json")
             return None
         if not isinstance(body, dict):
             self._error(400, "Request body must be a JSON object",
-                        error_type="invalid_body")
+                        error_type=error_type or "invalid_body")
             return None
         return body
 
@@ -7426,12 +7489,20 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"released": gate.terminate_key(key_id)})
         elif path == "/admin/auth/login":
             if self._control_allowed():
-                # These admin handlers never read the request body; the 202
-                # must close the connection so leftover bytes cannot desync a
-                # reused socket (same failure class as _error). Closing is
-                # preferred over draining the unneeded body.
+                # ADR 0005: the optional body is {"visible": bool}; an empty
+                # body keeps the historical headless default. The 202 closes
+                # the connection because the login round runs in the background
+                # and the response is only a fire-and-forget acknowledgement.
+                body = self._read_body(error_type="invalid_request")
+                if body is None:
+                    return
+                visible = body.get("visible", False)
+                if not isinstance(visible, bool):
+                    self._error(400, "visible must be a boolean",
+                                error_type="invalid_request")
+                    return
                 self.close_connection = True
-                proxy.refresh(force=True, wait=False)
+                proxy.refresh(force=True, wait=False, visible=visible)
                 self._json(202, proxy.auth_status())
         elif path == "/admin/auth/cancel":
             # D18-6: end THIS login round without stopping the service. The

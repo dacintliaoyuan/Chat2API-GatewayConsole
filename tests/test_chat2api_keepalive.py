@@ -40,8 +40,8 @@ class StubProxy:
     def health_snapshot(self):
         return {"status": "ok"}
 
-    def refresh(self, force=False, wait=False):
-        self.refresh_calls.append((force, wait))
+    def refresh(self, force=False, wait=False, visible=False):
+        self.refresh_calls.append((force, wait, visible))
 
     def shutdown(self):
         pass
@@ -168,7 +168,7 @@ class KeepAliveCloseTests(unittest.TestCase):
             head, _ = _recv_response(sock)
             self.assertIn(b" 202", head.split(b"\r\n")[0])
             self.assertIn(b"connection: close", head.lower())
-            self.assertEqual([(True, False)], self.proxy.refresh_calls)
+            self.assertEqual([(True, False, False)], self.proxy.refresh_calls)
             self.assert_reuse_is_closed(sock)
         finally:
             sock.close()

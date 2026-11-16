@@ -342,7 +342,7 @@ class _Harness:
     def _on_context(self, context):
         self.reported.append(context)
 
-    def run(self, timeout_s=2, cancel_event=None):
+    def run(self, timeout_s=2, cancel_event=None, visible=False):
         with (
             mock.patch.object(chat2api, "find_edge",
                               return_value=r"C:\fake\msedge.exe"),
@@ -359,6 +359,7 @@ class _Harness:
                 on_progress=self._on_progress,
                 process_lister=self._no_processes,
                 process_signal=self._never_signal,
+                visible=visible,
             )
         self.output = output.getvalue()
         return result
@@ -953,6 +954,7 @@ class SessionLifecycleTests(unittest.TestCase):
                     ("valid", None, 200),
                     process_lister=lambda _profile: [],
                     process_signal=lambda _pid, _sig: True,
+                    visible=False,
                 )
 
         # Ticket #42 item 2: the test owns a temporary profile, never a
@@ -967,6 +969,191 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertIs(kwargs.get("headless"), True)
         self.assertNotIn("env", kwargs)
         self.assertNotIn("args", kwargs)
+
+    def test_launch_is_headful_when_visible_is_requested(self):
+        site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
+        context = _FakeContext(site)
+        launches = []
+
+        class FakeManager:
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=lambda *args, **kwargs: (
+                            launches.append((args, kwargs)) or context),
+                    ),
+                    stop=lambda: None,
+                )
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-profile-") as profile_dir:
+            absent = os.path.join(profile_dir, "absent.env")
+            with (
+                mock.patch.object(chat2api.sys, "platform", "win32"),
+                mock.patch.object(chat2api, "find_edge",
+                                  return_value="fake-edge"),
+                mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE", absent),
+                mock.patch.dict(os.environ, {
+                    chat2api.LOGIN_DISPLAY_FILE_ENV: absent}),
+                mock.patch("playwright.sync_api.sync_playwright",
+                           return_value=FakeManager()),
+                redirect_stdout(io.StringIO()),
+            ):
+                token = chat2api.browser_login(
+                    BASE_URL, profile_dir, 1,
+                    credential_probe=lambda base_url, bearer:
+                    ("valid", None, 200),
+                    process_lister=lambda _profile: [],
+                    process_signal=lambda _pid, _sig: True,
+                    visible=True,
+                )
+
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(len(launches), 1)
+        args, kwargs = launches[0]
+        self.assertEqual(args, (profile_dir,))
+        # ADR 0005：显式可见登录必须直接开可见窗口，不依赖 display state。
+        self.assertIs(kwargs.get("headless"), False)
+        self.assertEqual(kwargs.get("args"), ["--start-maximized"])
+        self.assertIs(kwargs.get("no_viewport"), True)
+        self.assertNotIn("env", kwargs)
+
+    def test_visible_login_without_display_is_unavailable(self):
+        opened = []
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-profile-") as profile_dir:
+            absent = os.path.join(profile_dir, "absent.env")
+            with (
+                mock.patch.object(chat2api.sys, "platform", "linux"),
+                mock.patch.object(chat2api, "find_edge",
+                                  return_value="fake-edge"),
+                mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE", absent),
+                mock.patch.dict(os.environ, {
+                    chat2api.LOGIN_DISPLAY_FILE_ENV: absent,
+                    "DISPLAY": "",
+                    "WAYLAND_DISPLAY": "wayland-0",
+                }),
+                redirect_stdout(io.StringIO()),
+            ):
+                with self.assertRaises(chat2api.LoginUnavailable) as caught:
+                    chat2api.browser_login(
+                        BASE_URL, profile_dir, 1,
+                        context_factory=lambda _edge, profile: opened.append(
+                            profile),
+                        process_lister=lambda _profile: [],
+                        process_signal=lambda _pid, _sig: True,
+                        visible=True,
+                    )
+
+        # 没有 DISPLAY 时明确不可用，绝不静默降级成 headless。
+        self.assertEqual(caught.exception.reason,
+                         "visible_login_unavailable")
+        self.assertEqual(opened, [])
+
+    def test_visible_login_uses_the_ambient_display_on_linux(self):
+        site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
+        context = _FakeContext(site)
+        launches = []
+
+        class FakeManager:
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=lambda *args, **kwargs: (
+                            launches.append((args, kwargs)) or context),
+                    ),
+                    stop=lambda: None,
+                )
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-profile-") as profile_dir:
+            absent = os.path.join(profile_dir, "absent.env")
+            with (
+                mock.patch.object(chat2api.sys, "platform", "linux"),
+                mock.patch.object(chat2api, "find_edge",
+                                  return_value="fake-edge"),
+                mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE", absent),
+                mock.patch.dict(os.environ, {
+                    chat2api.LOGIN_DISPLAY_FILE_ENV: absent,
+                    "DISPLAY": ":0",
+                    "WAYLAND_DISPLAY": "",
+                }),
+                mock.patch("playwright.sync_api.sync_playwright",
+                           return_value=FakeManager()),
+                redirect_stdout(io.StringIO()),
+            ):
+                token = chat2api.browser_login(
+                    BASE_URL, profile_dir, 1,
+                    credential_probe=lambda base_url, bearer:
+                    ("valid", None, 200),
+                    process_lister=lambda _profile: [],
+                    process_signal=lambda _pid, _sig: True,
+                    visible=True,
+                )
+
+        self.assertEqual(token, "fresh-token")
+        self.assertEqual(len(launches), 1)
+        _args, kwargs = launches[0]
+        self.assertIs(kwargs.get("headless"), False)
+        # 环境本身已有 DISPLAY：沿用继承环境，不注入 display state。
+        self.assertNotIn("env", kwargs)
+
+    def test_browser_launch_failure_is_login_unavailable(self):
+        class FakeManager:
+            @staticmethod
+            def _fail_launch(*args, **kwargs):
+                raise RuntimeError("launch exploded")
+
+            def start(self):
+                return SimpleNamespace(
+                    chromium=SimpleNamespace(
+                        launch_persistent_context=self._fail_launch),
+                    stop=lambda: None,
+                )
+
+        with tempfile.TemporaryDirectory(
+                prefix="chat2api-login-profile-") as profile_dir:
+            absent = os.path.join(profile_dir, "absent.env")
+            with (
+                mock.patch.object(chat2api.sys, "platform", "win32"),
+                mock.patch.object(chat2api, "find_edge",
+                                  return_value="fake-edge"),
+                mock.patch.object(chat2api, "LOGIN_DISPLAY_FILE", absent),
+                mock.patch.dict(os.environ, {
+                    chat2api.LOGIN_DISPLAY_FILE_ENV: absent}),
+                mock.patch("playwright.sync_api.sync_playwright",
+                           return_value=FakeManager()),
+                redirect_stdout(io.StringIO()),
+            ):
+                with self.assertRaises(chat2api.LoginUnavailable) as caught:
+                    chat2api.browser_login(
+                        BASE_URL, profile_dir, 1,
+                        process_lister=lambda _profile: [],
+                        process_signal=lambda _pid, _sig: True,
+                    )
+
+        # 浏览器启动失败是明确的不可用，不是未分类的 terminal 失败。
+        self.assertEqual(caught.exception.reason, "browser_launch_failed")
+        self.assertIn("launch exploded", str(caught.exception))
+
+    def test_closing_the_visible_window_cancels_the_round(self):
+        class _ClosedSite(_FakeSite):
+            def is_closed(self):
+                return True
+
+        harness = _Harness(_ClosedSite(OPENWEBUI_URL))
+
+        with mock.patch.object(chat2api.sys, "platform", "win32"):
+            with self.assertRaises(chat2api.LoginCancelled) as caught:
+                harness.run(visible=True)
+
+        self.assertEqual(caught.exception.reason, "window_closed")
+        self.assertEqual(harness.click_selectors(), [])
+        self.assertEqual([c.closed for c in harness.created], [True])
+        # 窗口关闭是操作员取消，不是 failed；profile 锁必须已释放。
+        retry = _Harness(_build_site(), profile_dir=harness.profile_dir)
+        self.assertEqual(retry.run(), "fresh-token")
 
     def test_launch_is_headful_when_the_manual_display_is_active(self):
         site = _FakeSite(OPENWEBUI_HOME, token="fresh-token")
@@ -1374,11 +1561,21 @@ class AdminLoginWindowTests(unittest.TestCase):
         harness.install_tracked_server(self, server, name="login-window")
         self.port = server.server_port
 
-    def _request(self, method, path):
+    def _request(self, method, path, body=None, raw_body=None):
+        if raw_body is not None:
+            data = raw_body
+        elif body is not None:
+            data = json.dumps(body).encode("utf-8")
+        elif method == "POST":
+            data = b""
+        else:
+            data = None
+        headers = {"X-Admin-Control": self.control_token}
+        if data:
+            headers["Content-Type"] = "application/json"
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         try:
-            conn.request(method, path, body=b"" if method == "POST" else None,
-                          headers={"X-Admin-Control": self.control_token})
+            conn.request(method, path, body=data, headers=headers)
             response = conn.getresponse()
             payload = json.loads(response.read().decode("utf-8"))
             return response.status, payload
@@ -1543,6 +1740,79 @@ class AdminLoginWindowTests(unittest.TestCase):
         self.assertIsNone(payload["authentication"]["error"])
         self.assertEqual(payload["login_window_deadline_epoch"], deadline)
         self.assertNotIn(self.STUB_TOKEN, json.dumps(payload))
+
+    # ------------------------------------------------------- ADR 0005
+
+    def test_visible_login_body_is_forwarded_to_the_runner(self):
+        status, payload = self._request(
+            "POST", "/admin/auth/login", body={"visible": True})
+        self.assertEqual(status, 202, payload)
+        deadline = time.monotonic() + 5.0
+        while not self.login_calls and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(len(self.login_calls), 1)
+        self.assertIs(self.login_calls[0].get("visible"), True)
+        # 显式可见选择属于本次 recovery 轮次。
+        self.assertIs(self.proxy.auth_status()["recovery"]["visible"], True)
+
+        self.release.set()
+        self._await_recovery_thread()
+
+    def test_invalid_visible_body_is_rejected_without_starting_a_login(self):
+        cases = (
+            ({"visible": "yes"}, None),
+            ({"visible": 1}, None),
+            ({"visible": None}, None),
+            ([True], None),
+            (None, b"not-json"),
+        )
+        for body, raw_body in cases:
+            with self.subTest(body=body, raw_body=raw_body):
+                status, payload = self._request(
+                    "POST", "/admin/auth/login",
+                    body=body, raw_body=raw_body)
+                self.assertEqual(status, 400, payload)
+                self.assertEqual(payload["error"]["type"],
+                                 "invalid_request")
+        self.assertEqual(self.login_calls, [])
+
+    def test_closing_the_visible_window_ends_the_round_cancelled(self):
+        with mock.patch.object(
+                chat2api, "browser_login",
+                side_effect=chat2api.LoginCancelled("window_closed")):
+            status, payload = self._request(
+                "POST", "/admin/auth/login", body={"visible": True})
+            self.assertEqual(status, 202, payload)
+            self._await_recovery_thread()
+
+        status, payload = self._request("GET", "/admin/auth/status")
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["state"], "cancelled")
+        self.assertEqual(payload["error"], "cancelled")
+        self.assertIs(payload["recovery"]["visible"], True)
+
+        # 取消不是 failed：服务保持运行，health 如实反映 cancelled。
+        status, payload = self._request("GET", "/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["authentication"]["state"], "cancelled")
+
+    def test_automatic_refresh_after_a_visible_round_is_headless(self):
+        status, payload = self._request(
+            "POST", "/admin/auth/login", body={"visible": True})
+        self.assertEqual(status, 202, payload)
+        self.release.set()
+        self._await_recovery_thread()
+        self.assertEqual(self.proxy.auth_status()["state"], "valid")
+
+        # 自动恢复（401/watch 路径）始终 headless，即使上一轮显式可见。
+        self.assertTrue(self.proxy.refresh(wait=False))
+        deadline = time.monotonic() + 5.0
+        while len(self.login_calls) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(len(self.login_calls), 2)
+        self.assertIs(self.login_calls[1].get("visible"), False)
+        self._await_recovery_thread()
 
 
 class ProfileSingleInstanceLockTests(unittest.TestCase):
