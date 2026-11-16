@@ -20,6 +20,7 @@ pub mod messages;
 pub mod nonstream;
 pub mod readonly;
 pub mod responses;
+pub mod retry;
 pub mod server;
 pub mod upstream;
 

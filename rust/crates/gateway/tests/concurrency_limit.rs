@@ -67,6 +67,7 @@ fn per_key_concurrency_is_refused_with_its_python_reason() {
     )
     .expect("second request");
     assert_429(&second, &fixture, "per_key_concurrency");
+    assert_eq!(second.header("retry-after"), Some("1"));
     let first = first
         .join()
         .expect("first request")
@@ -117,6 +118,7 @@ fn global_share_concurrency_is_refused_with_its_python_reason() {
     )
     .expect("third request");
     assert_429(&third, &fixture, "share_concurrency");
+    assert_eq!(third.header("retry-after"), Some("1"));
     assert_eq!(first.join().unwrap().unwrap().status, 200);
     assert_eq!(second.join().unwrap().unwrap().status, 200);
 }
@@ -142,6 +144,42 @@ fn the_twenty_first_request_in_a_minute_hits_the_key_rate_limit() {
     )
     .expect("rate limited request");
     assert_429(&refused, &fixture, "key_rate_limit");
+    let retry_after = refused
+        .header("retry-after")
+        .expect("key_rate_limit carries an exact Retry-After")
+        .parse::<u64>()
+        .expect("integer Retry-After");
+    assert!(
+        (1..=60).contains(&retry_after),
+        "Retry-After must stay inside the 60 second window: {retry_after}"
+    );
+}
+
+#[test]
+fn state_not_accepting_answers_with_x_should_retry_false() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let stub = StubUpstream::start();
+    let gateway = start_gateway(&stub, &temp, true);
+    gateway
+        .server
+        .state()
+        .gate
+        .as_ref()
+        .expect("share gate")
+        .set_state(GateState::Draining);
+
+    let response = client_request(
+        gateway.addr,
+        &ClientRequest::get("/v1/models").bearer(SHARE_SECRET),
+    )
+    .expect("state_not_accepting request");
+    assert_eq!(response.status, 429);
+    assert_eq!(response.header("x-should-retry"), Some("false"));
+    assert_eq!(response.header("retry-after"), None);
+    assert_eq!(
+        response.json()["error"]["reason"],
+        json!("state_not_accepting")
+    );
 }
 
 #[test]

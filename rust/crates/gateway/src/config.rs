@@ -31,7 +31,9 @@ pub const CONSOLE_MAX_REQUEST_BYTES: u64 = 65536;
 pub const DEFAULT_UPSTREAM_TIMEOUT: Duration = Duration::from_secs(15);
 /// A request body must finish within this budget; a stalled body gets 408.
 pub const DEFAULT_BODY_READ_TIMEOUT_SECONDS: u64 = 60;
-pub const DEFAULT_REQUEST_TOTAL_SECONDS: u64 = 360;
+/// The total request budget includes hidden retries and authentication waits;
+/// spec #58 raised it from 360 to 540 seconds so a full retry cycle still fits.
+pub const DEFAULT_REQUEST_TOTAL_SECONDS: u64 = 540;
 pub const MIN_REQUEST_TOTAL_SECONDS: u64 = 10;
 pub const MAX_REQUEST_TOTAL_SECONDS: u64 = 3600;
 pub const DEFAULT_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(120);

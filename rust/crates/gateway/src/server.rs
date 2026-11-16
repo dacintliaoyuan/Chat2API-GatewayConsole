@@ -541,10 +541,17 @@ fn admit_share(
     ) {
         Ok(true) => {}
         Ok(false) => {
-            return Err(GatewayError::sharing_limit_reached(
+            let mut error = GatewayError::sharing_limit_reached(
                 reason.reason.as_deref(),
                 reason.detail.as_deref(),
-            ))
+            );
+            if let Some(seconds) = reason.retry_after_seconds {
+                error = error.with_retry_after(seconds.to_string());
+            }
+            if let Some(should_retry) = reason.should_retry {
+                error = error.with_should_retry(should_retry);
+            }
+            return Err(error);
         }
         Err(error) => return Err(GatewayError::share_config_unavailable(error.to_string())),
     }

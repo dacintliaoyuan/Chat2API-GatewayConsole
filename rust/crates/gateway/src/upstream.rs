@@ -26,6 +26,8 @@ pub const MAX_UPSTREAM_HEADER_BYTES: usize = 64 * 1024;
 pub const MAX_UPSTREAM_BODY_BYTES: usize = 64 * 1024 * 1024;
 /// Largest not-yet-complete SSE line held by the producer.
 pub const MAX_UPSTREAM_LINE_BYTES: usize = 1024 * 1024;
+/// Largest upstream error-body prefix used for classification and diagnostics.
+pub const MAX_UPSTREAM_ERROR_TEXT: usize = 2048;
 /// Backpressure bound of the SSE producer/consumer queue.
 pub const UPSTREAM_QUEUE_MAX: usize = 256;
 /// Connect/write cap of one upstream request, like Python's 15 second setup cap.
@@ -56,6 +58,19 @@ pub struct UpstreamResponse {
     pub status: u16,
     pub headers: HashMap<String, String>,
     pub body: UpstreamBody,
+}
+
+impl UpstreamResponse {
+    /// Read the bounded error-body prefix used for retry classification and
+    /// `detail.upstream_message`. A read failure yields an empty string, exactly
+    /// like the pre-#61 final-error path.
+    pub fn read_error_text(&mut self) -> String {
+        self.body
+            .read_prefix(MAX_UPSTREAM_ERROR_TEXT)
+            .ok()
+            .map(|raw| String::from_utf8_lossy(&raw).to_string())
+            .unwrap_or_default()
+    }
 }
 
 /// The decoded body of one upstream response.

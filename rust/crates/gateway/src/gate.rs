@@ -33,12 +33,19 @@ pub const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 pub struct RefusalReason {
     pub reason: Option<String>,
     pub detail: Option<String>,
+    /// The exact wait until the per-key rate window frees a slot, or the
+    /// one-second concurrency hint.
+    pub retry_after_seconds: Option<u64>,
+    /// The explicit retry signal; `state_not_accepting` sets `false`.
+    pub should_retry: Option<bool>,
 }
 
 impl RefusalReason {
     fn set(&mut self, reason: &str, detail: String) {
         self.reason = Some(reason.to_string());
         self.detail = Some(detail);
+        self.retry_after_seconds = None;
+        self.should_retry = None;
     }
 }
 
@@ -199,6 +206,7 @@ impl ShareGate {
                     "the share is draining or stopped and is not accepting new requests"
                         .to_string(),
                 );
+                reason.should_retry = Some(false);
             }
             return Ok(false);
         }
@@ -244,6 +252,11 @@ impl ShareGate {
         }
         guard.history.retain(|_, entries| !entries.is_empty());
         let recent_len = guard.history.get(key_id).map(VecDeque::len).unwrap_or(0);
+        let oldest_recent = guard
+            .history
+            .get(key_id)
+            .and_then(|entries| entries.front())
+            .copied();
         if guard.active.get(key_id).copied().unwrap_or(0) >= key_limit {
             if let Some(reason) = reason_out.as_mut() {
                 reason.set(
@@ -252,6 +265,7 @@ impl ShareGate {
                         "per-key concurrency limit reached (max {key_limit} in-flight requests for this key)"
                     ),
                 );
+                reason.retry_after_seconds = Some(1);
             }
             return Ok(false);
         }
@@ -263,6 +277,7 @@ impl ShareGate {
                         "global share concurrency limit reached (max {share_max} in-flight requests)"
                     ),
                 );
+                reason.retry_after_seconds = Some(1);
             }
             return Ok(false);
         }
@@ -271,6 +286,20 @@ impl ShareGate {
                 reason.set(
                     "key_rate_limit",
                     "per-key rate limit reached (max 20 requests per minute)".to_string(),
+                );
+                // The window is sliding: the exact wait is until the oldest of
+                // the twenty recorded requests leaves it. The bound is 1..=60 so
+                // the header is always a definite, non-zero wait.
+                reason.retry_after_seconds = Some(
+                    oldest_recent
+                        .map(|oldest| {
+                            let wait = (oldest + RATE_LIMIT_WINDOW)
+                                .saturating_duration_since(now)
+                                .as_secs_f64()
+                                .ceil() as u64;
+                            wait.clamp(1, 60)
+                        })
+                        .unwrap_or(1),
                 );
             }
             return Ok(false);

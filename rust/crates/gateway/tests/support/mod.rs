@@ -760,6 +760,13 @@ pub enum ChatAttempt {
         body: String,
         retry_after: Option<String>,
     },
+    /// A status response carrying both retry headers.
+    HttpStatusWithHeaders {
+        status: u16,
+        body: String,
+        retry_after: Option<String>,
+        should_retry: Option<String>,
+    },
     DelayedHttpStatus {
         delay: Duration,
         status: u16,
@@ -984,19 +991,21 @@ fn serve_chat(
             body,
             retry_after,
         } => {
-            let raw = body.into_bytes();
-            let mut head = format!(
-                "HTTP/1.1 {status} Error\r\nContent-Type: text/plain\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n",
-                raw.len()
-            );
-            if let Some(retry_after) = retry_after {
-                head.push_str(&format!("Retry-After: {retry_after}\r\n"));
-            }
-            head.push_str("\r\n");
-            stream.write_all(head.as_bytes())?;
-            stream.write_all(&raw)?;
-            stream.flush()?;
+            write_status_response(&mut stream, status, &body, retry_after.as_deref(), None)?;
+        }
+        ChatAttempt::HttpStatusWithHeaders {
+            status,
+            body,
+            retry_after,
+            should_retry,
+        } => {
+            write_status_response(
+                &mut stream,
+                status,
+                &body,
+                retry_after.as_deref(),
+                should_retry.as_deref(),
+            )?;
         }
         ChatAttempt::Sse { chunks, hold } => {
             stream.write_all(
@@ -1056,6 +1065,31 @@ fn serve_chat(
         }
     }
     Ok(())
+}
+
+fn write_status_response(
+    stream: &mut TcpStream,
+    status: u16,
+    body: &str,
+    retry_after: Option<&str>,
+    should_retry: Option<&str>,
+) -> std::io::Result<()> {
+    let raw = body.as_bytes();
+    let mut head = format!(
+        "HTTP/1.1 {status} Error\r\nContent-Type: text/plain\r\n\
+         Content-Length: {}\r\nConnection: close\r\n",
+        raw.len()
+    );
+    if let Some(retry_after) = retry_after {
+        head.push_str(&format!("Retry-After: {retry_after}\r\n"));
+    }
+    if let Some(should_retry) = should_retry {
+        head.push_str(&format!("X-Should-Retry: {should_retry}\r\n"));
+    }
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(raw)?;
+    stream.flush()
 }
 
 fn hold_until_peer_closes(
