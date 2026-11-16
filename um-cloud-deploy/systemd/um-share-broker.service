@@ -117,9 +117,11 @@ LogsDirectoryMode=0750
 ConfigurationDirectory=um-share
 ConfigurationDirectoryMode=0750
 # /var/lib/um-share is the persistent state fence (StateDirectory=um-share);
-# the 8100 gateway's revoke state lives there.  Do not widen this to the
-# release tree: /opt/um-share/current must stay read-only at runtime.
-ReadWritePaths=/var/lib/um-share /run/um-share /var/log/um-share
+# the 8100 gateway's revoke state lives there.  The merged 8100 child also
+# inherits CHAT2API_SERVICE_LOG/CHAT2API_PROFILE_DIR/CHAT2API_TOKEN_FILE under
+# /var/lib/um-share-console; without that path in ReadWritePaths the child exits
+# at startup with "Read-only file system" and the broker can never start 8100.
+ReadWritePaths=/var/lib/um-share /run/um-share /var/log/um-share /var/lib/um-share-console
 
 [Install]
 WantedBy=multi-user.target
