@@ -903,7 +903,7 @@ class TestAuthWatchVisibility(unittest.TestCase):
                          ["last_failure_epoch", "last_failure_reason",
                           "max_sessions", "next_attempt_epoch",
                           "pause_reason", "round", "session_starts",
-                          "state"])
+                          "state", "visible"])
         self.assertEqual(recovery["state"], "idle")
         self.assertEqual(recovery["round"], 0)
         self.assertEqual(recovery["session_starts"], 0)
