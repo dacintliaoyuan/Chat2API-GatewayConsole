@@ -9,7 +9,7 @@
 
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -29,11 +29,13 @@ use crate::http::{
     RequestHead, Response, HARD_BODY_CAP,
 };
 use crate::ledger::Ledger;
+use crate::login::{
+    CredentialProbe, HttpCredentialProbe, LoginBrowserFactory, LoginService, SystemBrowserFactory,
+};
 use crate::messages::handle_messages;
 use crate::readonly::ProxyState;
 use crate::reauth::{
-    BrowserDisabledProvider, MissingLoginProvider, ReauthenticationProvider,
-    ReauthenticationService,
+    MissingLoginProvider, ReauthLimits, ReauthenticationProvider, ReauthenticationService,
 };
 use crate::responses::handle_responses;
 
@@ -45,7 +47,7 @@ pub struct GatewayServer;
 /// The state shared by every accepted connection.
 pub struct AppState {
     pub config: GatewayConfig,
-    pub proxy: ProxyState,
+    pub proxy: Arc<ProxyState>,
     pub gate: Option<Arc<ShareGate>>,
     pub control_token: Option<String>,
     pub local_api_key: String,
@@ -53,6 +55,7 @@ pub struct AppState {
     pub ledger: Arc<Ledger>,
     pub event_log: Arc<EventLog>,
     pub reauth: Arc<ReauthenticationService>,
+    pub login: Option<Arc<LoginService>>,
 }
 
 /// A started gateway server.
@@ -71,22 +74,85 @@ impl GatewayServer {
 
     /// Start a gateway server with an optional re-authentication provider.
     ///
-    /// `None` assembles the production seam: [`MissingLoginProvider`] normally,
-    /// or [`BrowserDisabledProvider`] when `--no-browser` was selected. Tests use
-    /// `Some` to script a real session without opening a browser.
+    /// `None` assembles the production login executor: the real
+    /// [`LoginService`] with the system browser factory and the HTTP
+    /// credential probe. Tests use `Some` to script a session without opening
+    /// a browser; the admin `/admin/auth/*` surface is then unassembled.
     pub fn start_with_reauth(
         config: GatewayConfig,
         provider: Option<Arc<dyn ReauthenticationProvider>>,
     ) -> Result<ServerHandle, ServerError> {
+        Self::start_internal(config, provider, None)
+    }
+
+    /// Start a candidate server with an injected login executor seam.
+    ///
+    /// The injected factory and probe never open a real browser in tests; the
+    /// real login service still owns the profile lock, token store, status,
+    /// verify, login and cancel surfaces.
+    pub fn start_with_login(
+        config: GatewayConfig,
+        factory: Arc<dyn LoginBrowserFactory>,
+        probe: Arc<dyn CredentialProbe>,
+    ) -> Result<ServerHandle, ServerError> {
+        Self::start_internal(config, None, Some((factory, probe)))
+    }
+
+    fn start_internal(
+        config: GatewayConfig,
+        provider: Option<Arc<dyn ReauthenticationProvider>>,
+        login_seam: Option<(Arc<dyn LoginBrowserFactory>, Arc<dyn CredentialProbe>)>,
+    ) -> Result<ServerHandle, ServerError> {
         config.validate_bind_policy().map_err(ServerError::Config)?;
-        let provider = provider.unwrap_or_else(|| {
-            if config.browser_disabled {
-                Arc::new(BrowserDisabledProvider) as Arc<dyn ReauthenticationProvider>
-            } else {
-                Arc::new(MissingLoginProvider) as Arc<dyn ReauthenticationProvider>
+        let bearer = Arc::new(Mutex::new(config.upstream_token.clone()));
+        let proxy = Arc::new(
+            ProxyState::new_with_bearer(&config, Arc::clone(&bearer))
+                .map_err(ServerError::Config)?,
+        );
+        proxy.probe_config();
+        let login = if provider.is_some() {
+            None
+        } else {
+            let (factory, probe): (Arc<dyn LoginBrowserFactory>, Arc<dyn CredentialProbe>) =
+                match login_seam {
+                    Some(seam) => seam,
+                    None => {
+                        let probe = HttpCredentialProbe::from_config(&config)
+                            .map_err(ServerError::Config)?;
+                        (
+                            Arc::new(SystemBrowserFactory),
+                            Arc::new(probe) as Arc<dyn CredentialProbe>,
+                        )
+                    }
+                };
+            Some(Arc::new(LoginService::from_gateway(
+                &config,
+                factory,
+                probe,
+                Arc::clone(&proxy) as Arc<dyn crate::login::CredentialSink>,
+            )))
+        };
+        if let Some(login) = &login {
+            if let Some(document) = login.saved_token() {
+                if !document.token.is_empty() {
+                    proxy.set_bearer(&document.token);
+                }
             }
-        });
-        let reauth = Arc::new(ReauthenticationService::from_config(&config, provider));
+        }
+        let provider = provider
+            .or_else(|| {
+                login
+                    .clone()
+                    .map(|login| login as Arc<dyn ReauthenticationProvider>)
+            })
+            .unwrap_or_else(|| Arc::new(MissingLoginProvider) as Arc<dyn ReauthenticationProvider>);
+        let mut limits = ReauthLimits::from_config(&config);
+        if login.is_some() {
+            // The login executor owns the rolling global start limit because
+            // the explicit `/admin/auth/login` entry must be gated too.
+            limits.max_attempts_per_window = usize::MAX;
+        }
+        let reauth = Arc::new(ReauthenticationService::new(provider, limits));
         let gate = match &config.share_config {
             Some(path) => Some(Arc::new(
                 ShareGate::new(path, config.auth_mode).map_err(ServerError::Config)?,
@@ -97,8 +163,6 @@ impl GatewayServer {
             .control_token_file
             .as_ref()
             .and_then(|path| ensure_control_token(path));
-        let proxy = ProxyState::new(&config).map_err(ServerError::Config)?;
-        proxy.probe_config();
         let local_api_key = config.local_api_key.clone();
         let require_local_api_key = !local_api_key.is_empty();
         let ledger = Arc::new(Ledger::new(config.usage_log.clone()));
@@ -113,6 +177,7 @@ impl GatewayServer {
             ledger,
             event_log,
             reauth,
+            login,
         });
         let listener = TcpListener::bind((config.bind_host.as_str(), config.bind_port))
             .map_err(ServerError::Io)?;
@@ -166,6 +231,9 @@ impl ServerHandle {
 
     pub fn shutdown(&mut self) {
         if let Some(handle) = self.handle.take() {
+            if let Some(login) = &self.state.login {
+                login.shutdown();
+            }
             self.shutdown.store(true, Ordering::SeqCst);
             let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(200));
             let _ = handle.join();
@@ -303,9 +371,11 @@ fn allowed_methods(path: &str) -> Option<&'static str> {
         | "/api/v1/responses"
         | "/v1/embeddings"
         | "/api/v1/embeddings"
-        | "/admin/share/revoke" => Some("POST"),
-        "/admin/auth/status" | "/admin/auth/verify" | "/admin/auth/login"
-        | "/admin/auth/cancel" | "/admin/shutdown" => Some("GET, POST"),
+        | "/admin/share/revoke"
+        | "/admin/auth/login"
+        | "/admin/auth/cancel"
+        | "/admin/shutdown" => Some("POST"),
+        "/admin/auth/status" | "/admin/auth/verify" => Some("GET"),
         _ => None,
     }
 }
@@ -601,10 +671,85 @@ fn admit_share(
     })
 }
 
+fn health_snapshot(state: &AppState) -> Value {
+    let mut snapshot = state.proxy.health_snapshot();
+    let Some(login) = &state.login else {
+        return snapshot;
+    };
+    let status = login.status();
+    let Some(object) = snapshot.as_object_mut() else {
+        return snapshot;
+    };
+    let error = status.get("error").cloned().unwrap_or(Value::Null);
+    let manual_error = error
+        .as_str()
+        .filter(|error| error.starts_with(crate::login::MANUAL_TAKEOVER_REQUIRED_PREFIX))
+        .map(|error| Value::String(error.to_string()))
+        .unwrap_or(Value::Null);
+    let primary = status.get("primary").cloned().unwrap_or(Value::Null);
+    object.insert(
+        "authentication".to_string(),
+        json!({
+            "state": status.get("state").cloned().unwrap_or(Value::Null),
+            "label": status.get("label").cloned().unwrap_or(Value::Null),
+            "error": manual_error,
+            "primary": health_primary(&primary),
+        }),
+    );
+    object.insert(
+        "watch".to_string(),
+        status.get("watch").cloned().unwrap_or(Value::Null),
+    );
+    let recovery = status.get("recovery").cloned().unwrap_or(Value::Null);
+    object.insert(
+        "recovery".to_string(),
+        json!({
+            "state": recovery.get("state").cloned().unwrap_or(Value::Null),
+            "session_starts": recovery.get("session_starts").cloned().unwrap_or(Value::Null),
+            "max_sessions": recovery.get("max_sessions").cloned().unwrap_or(Value::Null),
+            "next_attempt_epoch": recovery
+                .get("next_attempt_epoch")
+                .cloned()
+                .unwrap_or(Value::Null),
+        }),
+    );
+    object.insert(
+        "login_window_deadline_epoch".to_string(),
+        status
+            .get("login_window_deadline_epoch")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    object.insert(
+        "login_window_s".to_string(),
+        status.get("login_window_s").cloned().unwrap_or(Value::Null),
+    );
+    snapshot
+}
+
+/// `/health` has no control token: only a reason code or class name may pass.
+fn health_primary(value: &Value) -> Value {
+    let Some(value) = value.as_str() else {
+        return Value::Null;
+    };
+    if !value.is_empty()
+        && value.split(':').all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|character| character == '_' || character.is_alphanumeric())
+        })
+    {
+        Value::String(value.to_string())
+    } else {
+        Value::Null
+    }
+}
+
 fn handle_get(state: &AppState, request: &Request) -> Response {
     let path = request.path();
     match path {
-        "/" | "/health" => Response::json(200, &state.proxy.health_snapshot()),
+        "/" | "/health" => Response::json(200, &health_snapshot(state)),
         "/ready" => {
             let (ready, snapshot) = state.proxy.readiness_snapshot();
             Response::json(if ready { 200 } else { 503 }, &snapshot)
@@ -637,12 +782,26 @@ fn handle_get(state: &AppState, request: &Request) -> Response {
                 Err(error) => error.response(),
             }
         }
-        "/admin/auth/status" | "/admin/auth/verify" | "/admin/auth/login"
-        | "/admin/auth/cancel" | "/admin/shutdown" => {
+        "/admin/auth/status" => {
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
             }
-            GatewayError::not_implemented("admin_surface_s1a").response()
+            match &state.login {
+                Some(login) => Response::json(200, &login.status()),
+                None => GatewayError::not_implemented("login_unassembled").response(),
+            }
+        }
+        "/admin/auth/verify" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            Response::json(200, &state.proxy.verify_snapshot())
+        }
+        "/admin/auth/login" | "/admin/auth/cancel" | "/admin/shutdown" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            GatewayError::method_not_allowed().response()
         }
         path if path.starts_with("/api/") => {
             if let Err(error) = control_allowed(state, request) {
@@ -692,8 +851,42 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
             };
             Response::json(200, &json!({"released": gate.terminate_key(key_id)}))
         }
-        "/admin/auth/status" | "/admin/auth/verify" | "/admin/auth/login"
-        | "/admin/auth/cancel" | "/admin/shutdown" => {
+        "/admin/auth/login" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            let body = match read_json_body(request, body_policy_for(state, state.gate.is_some())) {
+                Ok(body) => body.unwrap_or_default(),
+                Err(error) => return error.response(),
+            };
+            let visible = match body.get("visible") {
+                None => false,
+                Some(Value::Bool(value)) => *value,
+                Some(_) => {
+                    return GatewayError::invalid_request("visible must be a boolean").response()
+                }
+            };
+            match &state.login {
+                Some(login) => Response::json(202, &login.start_explicit(visible)).closing(),
+                None => GatewayError::not_implemented("login_unassembled").response(),
+            }
+        }
+        "/admin/auth/cancel" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            match &state.login {
+                Some(login) => Response::json(200, &login.cancel()).closing(),
+                None => GatewayError::not_implemented("login_unassembled").response(),
+            }
+        }
+        "/admin/auth/status" | "/admin/auth/verify" => {
+            if let Err(error) = control_allowed(state, request) {
+                return error.response();
+            }
+            GatewayError::method_not_allowed().response()
+        }
+        "/admin/shutdown" => {
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
             }

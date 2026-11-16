@@ -463,35 +463,6 @@ fn a_404_never_starts_a_session() {
 }
 
 #[test]
-fn the_default_assembled_provider_reports_the_rust_gap() {
-    let temp = TempDir::new("um-rust-reauth-default-");
-    let stub = ChatStub::start();
-    push_status(&stub, 401, "upstream rejected");
-    let gateway = start_chat_gateway(&stub, &temp, true, |config| {
-        retry_budget(config);
-    });
-    let response = client_request(gateway.addr, &chat_request()).expect("default reauth");
-    assert_eq!(response.status, 503);
-    let body = response.json();
-    assert_eq!(
-        body["error"]["code"],
-        json!("reauthentication_required"),
-        "{body}"
-    );
-    assert_eq!(
-        body["error"]["detail"],
-        json!("upstream_rejected"),
-        "{body}"
-    );
-    assert_eq!(
-        body["error"]["reason"],
-        json!("reauth_unavailable"),
-        "{body}"
-    );
-    assert_eq!(stub.attempts(), 1);
-}
-
-#[test]
 fn no_browser_reports_the_browser_disabled_reason() {
     let temp = TempDir::new("um-rust-reauth-no-browser-");
     let stub = ChatStub::start();

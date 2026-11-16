@@ -51,6 +51,19 @@ pub const MAX_AUTH_WAIT_RECHECK_SECONDS: f64 = 1.0;
 /// The rolling global sign-in start window and cap (#63).
 pub const DEFAULT_REAUTH_ATTEMPT_WINDOW_SECONDS: u64 = 900;
 pub const DEFAULT_REAUTH_MAX_ATTEMPTS_PER_WINDOW: usize = 3;
+/// The explicit login round's total browser budget (Python `--login-timeout`).
+pub const DEFAULT_LOGIN_TIMEOUT_SECONDS: u64 = 1800;
+pub const MIN_LOGIN_TIMEOUT_SECONDS: u64 = 1;
+pub const MAX_LOGIN_TIMEOUT_SECONDS: u64 = 86_400;
+/// A login session with no observable progress is closed after this.
+pub const DEFAULT_LOGIN_IDLE_TIMEOUT_SECONDS: u64 = 300;
+pub const DEFAULT_LOGIN_POLL_INTERVAL_MS: u64 = 1000;
+pub const DEFAULT_LOGIN_CLICK_OBSERVE_TIMEOUT_MS: u64 = 8000;
+pub const DEFAULT_LOGIN_STAGE_SETTLE_TIMEOUT_SECONDS: u64 = 20;
+pub const DEFAULT_LOGIN_MAX_CLICKS_PER_STAGE: usize = 2;
+pub const DEFAULT_LOGIN_NAVIGATION_ATTEMPTS: usize = 2;
+/// The Python recovery cycle's bounded session budget.
+pub const DEFAULT_LOGIN_MAX_SESSIONS: usize = 6;
 pub const DEFAULT_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(120);
 pub const DEFAULT_SOCKET_SILENCE_TIMEOUT: Duration = Duration::from_secs(180);
 pub const DEFAULT_MAX_FAST_RETRIES: u32 = 5;
@@ -242,6 +255,28 @@ pub struct GatewayConfig {
     pub reauth_max_attempts_per_window: usize,
     /// The explicit `--no-browser` mode; a real login provider may ignore it.
     pub browser_disabled: bool,
+    /// Python-compatible credential file; `None` uses the role default.
+    pub token_file: Option<PathBuf>,
+    /// The browser profile directory; `None` uses the role default.
+    pub profile_dir: Option<PathBuf>,
+    /// The on-demand manual display marker file.
+    pub login_display_file: Option<PathBuf>,
+    /// Total budget of one login browser session.
+    pub login_timeout: Duration,
+    /// A session with no observable progress is closed after this.
+    pub login_idle_timeout: Duration,
+    /// How often the login page state machine polls.
+    pub login_poll_interval: Duration,
+    /// How long one click is observed before a retry is allowed.
+    pub login_click_observe_timeout: Duration,
+    /// How long a page gets to settle before it is treated as changed.
+    pub login_stage_settle_timeout: Duration,
+    /// Each login stage may be clicked once plus one evidence-backed retry.
+    pub login_max_clicks_per_stage: usize,
+    /// A failed first navigation is retried once before the page is unknown.
+    pub login_navigation_attempts: usize,
+    /// Bounded login sessions per recovery round.
+    pub login_max_sessions: usize,
     /// First substantive SSE event budget.
     pub first_byte_timeout: Duration,
     /// One upstream socket-read silence budget.
@@ -284,6 +319,21 @@ impl Default for GatewayConfig {
             reauth_attempt_window: Duration::from_secs(DEFAULT_REAUTH_ATTEMPT_WINDOW_SECONDS),
             reauth_max_attempts_per_window: DEFAULT_REAUTH_MAX_ATTEMPTS_PER_WINDOW,
             browser_disabled: false,
+            token_file: None,
+            profile_dir: None,
+            login_display_file: None,
+            login_timeout: Duration::from_secs(DEFAULT_LOGIN_TIMEOUT_SECONDS),
+            login_idle_timeout: Duration::from_secs(DEFAULT_LOGIN_IDLE_TIMEOUT_SECONDS),
+            login_poll_interval: Duration::from_millis(DEFAULT_LOGIN_POLL_INTERVAL_MS),
+            login_click_observe_timeout: Duration::from_millis(
+                DEFAULT_LOGIN_CLICK_OBSERVE_TIMEOUT_MS,
+            ),
+            login_stage_settle_timeout: Duration::from_secs(
+                DEFAULT_LOGIN_STAGE_SETTLE_TIMEOUT_SECONDS,
+            ),
+            login_max_clicks_per_stage: DEFAULT_LOGIN_MAX_CLICKS_PER_STAGE,
+            login_navigation_attempts: DEFAULT_LOGIN_NAVIGATION_ATTEMPTS,
+            login_max_sessions: DEFAULT_LOGIN_MAX_SESSIONS,
             first_byte_timeout: DEFAULT_FIRST_BYTE_TIMEOUT,
             socket_silence_timeout: DEFAULT_SOCKET_SILENCE_TIMEOUT,
             max_fast_retries: DEFAULT_MAX_FAST_RETRIES,
@@ -361,6 +411,21 @@ impl GatewayConfig {
                 config.control_token_file = Some(PathBuf::from(value));
             }
         }
+        if let Ok(value) = std::env::var("CHAT2API_TOKEN_FILE") {
+            if !value.trim().is_empty() {
+                config.token_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var("CHAT2API_PROFILE_DIR") {
+            if !value.trim().is_empty() {
+                config.profile_dir = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var("CHAT2API_LOGIN_DISPLAY_FILE") {
+            if !value.trim().is_empty() {
+                config.login_display_file = Some(PathBuf::from(value));
+            }
+        }
         if let Ok(value) = std::env::var("CHAT2API_USAGE_LOG") {
             if !value.trim().is_empty() {
                 config.usage_log = Some(PathBuf::from(value));
@@ -391,6 +456,54 @@ impl GatewayConfig {
         config.browser_disabled = std::env::var("CHAT2API_NO_BROWSER")
             .ok()
             .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes"));
+        config.login_timeout =
+            parse_login_timeout(std::env::var("CHAT2API_LOGIN_TIMEOUT_S").ok().as_deref());
+        config.login_idle_timeout = parse_duration_seconds(
+            std::env::var("CHAT2API_LOGIN_IDLE_TIMEOUT_S")
+                .ok()
+                .as_deref(),
+            DEFAULT_LOGIN_IDLE_TIMEOUT_SECONDS,
+        );
+        config.login_poll_interval = parse_duration_millis(
+            std::env::var("CHAT2API_LOGIN_POLL_INTERVAL_MS")
+                .ok()
+                .as_deref(),
+            DEFAULT_LOGIN_POLL_INTERVAL_MS,
+        );
+        config.login_click_observe_timeout = parse_duration_millis(
+            std::env::var("CHAT2API_LOGIN_CLICK_OBSERVE_TIMEOUT_MS")
+                .ok()
+                .as_deref(),
+            DEFAULT_LOGIN_CLICK_OBSERVE_TIMEOUT_MS,
+        );
+        config.login_stage_settle_timeout = parse_duration_seconds(
+            std::env::var("CHAT2API_LOGIN_STAGE_SETTLE_TIMEOUT_S")
+                .ok()
+                .as_deref(),
+            DEFAULT_LOGIN_STAGE_SETTLE_TIMEOUT_SECONDS,
+        );
+        config.login_max_clicks_per_stage = parse_usize(
+            std::env::var("CHAT2API_LOGIN_MAX_CLICKS_PER_STAGE")
+                .ok()
+                .as_deref(),
+            DEFAULT_LOGIN_MAX_CLICKS_PER_STAGE,
+            1,
+            10,
+        );
+        config.login_navigation_attempts = parse_usize(
+            std::env::var("CHAT2API_LOGIN_NAVIGATION_ATTEMPTS")
+                .ok()
+                .as_deref(),
+            DEFAULT_LOGIN_NAVIGATION_ATTEMPTS,
+            1,
+            10,
+        );
+        config.login_max_sessions = parse_usize(
+            std::env::var("CHAT2API_LOGIN_MAX_SESSIONS").ok().as_deref(),
+            DEFAULT_LOGIN_MAX_SESSIONS,
+            1,
+            100,
+        );
         config.nonstream_upstream_aggregate =
             std::env::var("CHAT2API_NONSTREAM_UPSTREAM_AGGREGATE")
                 .ok()
@@ -460,6 +573,36 @@ impl GatewayConfig {
         parse_upstream_base_url(&self.upstream_base_url)?;
         Ok(())
     }
+}
+
+/// Parse the login browser budget; invalid values keep the default.
+pub fn parse_login_timeout(value: Option<&str>) -> Duration {
+    let seconds = value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_LOGIN_TIMEOUT_SECONDS);
+    Duration::from_secs(seconds.clamp(MIN_LOGIN_TIMEOUT_SECONDS, MAX_LOGIN_TIMEOUT_SECONDS))
+}
+
+fn parse_duration_seconds(value: Option<&str>, fallback: u64) -> Duration {
+    let seconds = value
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(fallback as f64);
+    Duration::from_secs_f64(seconds)
+}
+
+fn parse_duration_millis(value: Option<&str>, fallback: u64) -> Duration {
+    let millis = value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(fallback);
+    Duration::from_millis(millis.max(1))
+}
+
+fn parse_usize(value: Option<&str>, fallback: usize, minimum: usize, maximum: usize) -> usize {
+    value
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(fallback)
+        .clamp(minimum, maximum)
 }
 
 /// Parse the total request budget; invalid values keep the default and valid

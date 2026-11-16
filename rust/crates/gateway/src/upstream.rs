@@ -257,12 +257,14 @@ impl UpstreamBody {
 /// Open one `POST /api/chat/completions` request.
 pub fn post_chat(
     config: &GatewayConfig,
+    bearer: &str,
     body: &[u8],
     streaming: bool,
     deadline: Instant,
 ) -> Result<UpstreamResponse, UpstreamFailure> {
     post_compat(
         config,
+        bearer,
         "/api/chat/completions",
         body,
         streaming,
@@ -277,6 +279,7 @@ pub fn post_chat(
 /// Anthropic headers; the client's local credential never leaves this process.
 pub fn post_compat(
     config: &GatewayConfig,
+    bearer: &str,
     path: &str,
     body: &[u8],
     streaming: bool,
@@ -313,7 +316,7 @@ pub fn post_compat(
         "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\n\
              Authorization: Bearer {}\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n",
-        config.upstream_token,
+        bearer,
         body.len()
     )
     .into_bytes();

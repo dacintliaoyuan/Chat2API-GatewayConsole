@@ -7,13 +7,14 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
 use crate::config::{parse_upstream_base_url, ConfigError, GatewayConfig};
 use crate::error::GatewayError;
+use crate::login::CredentialSink;
 
 pub const CHAT2API_VERSION: &str = "1.0.0";
 pub const CHAT2API_SOURCE_REV: &str = "e2d60349";
@@ -220,7 +221,7 @@ struct UpstreamState {
 /// The read-only proxy state shared by every request.
 pub struct ProxyState {
     pub base_url: String,
-    pub bearer: String,
+    bearer: Arc<Mutex<String>>,
     pub build_id: String,
     upstream_config: Mutex<Option<Value>>,
     config_freshness: Mutex<ConfigFreshness>,
@@ -231,13 +232,20 @@ pub struct ProxyState {
 
 impl ProxyState {
     pub fn new(config: &GatewayConfig) -> Result<Self, ConfigError> {
+        Self::new_with_bearer(config, Arc::new(Mutex::new(config.upstream_token.clone())))
+    }
+
+    pub fn new_with_bearer(
+        config: &GatewayConfig,
+        bearer: Arc<Mutex<String>>,
+    ) -> Result<Self, ConfigError> {
         let build_id = std::env::var("CHAT2API_BUILD")
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_BUILD_ID.to_string());
         Ok(Self {
             base_url: config.upstream_base_url.clone(),
-            bearer: config.upstream_token.clone(),
+            bearer,
             build_id,
             upstream_config: Mutex::new(None),
             config_freshness: Mutex::new(ConfigFreshness::default()),
@@ -332,7 +340,7 @@ impl ProxyState {
     }
 
     fn auth_state(&self) -> &'static str {
-        if self.bearer.is_empty() {
+        if self.bearer().is_empty() {
             "needs_login"
         } else {
             "valid"
@@ -456,10 +464,11 @@ impl ProxyState {
     }
 
     fn classify_credential(&self) -> (&'static str, Option<&'static str>, Option<u16>) {
-        if self.bearer.is_empty() {
+        let bearer = self.bearer();
+        if bearer.is_empty() {
             return ("needs_login", Some("no_local_credential"), None);
         }
-        match self.upstream.get_json("/api/models", Some(&self.bearer)) {
+        match self.upstream.get_json("/api/models", Some(&bearer)) {
             Err(UpstreamFailure::Timeout) => ("unknown", Some("timeout"), None),
             Err(UpstreamFailure::ConnectionError) => ("unknown", Some("network_error"), None),
             Ok((status, payload)) => {
@@ -521,7 +530,8 @@ impl ProxyState {
 
     /// The model catalog; `raw_fresh` is the share entry's strict refresh.
     pub fn models(&self, raw_fresh: bool) -> Result<(Value, bool), GatewayError> {
-        let observed = self.upstream.get_json("/api/models", Some(&self.bearer));
+        let bearer = self.bearer();
+        let observed = self.upstream.get_json("/api/models", Some(&bearer));
         let fetched = match observed {
             Ok((200, payload)) => payload.filter(|payload| {
                 payload.is_object() && payload.get("data").and_then(Value::as_array).is_some()
@@ -555,6 +565,40 @@ impl ProxyState {
     /// Whether the current bearer is accepted right now.
     pub fn credential_valid(&self) -> bool {
         self.classify_credential().0 == "valid"
+    }
+
+    /// The current in-memory bearer.
+    pub fn bearer(&self) -> String {
+        self.bearer.lock().expect("bearer poisoned").clone()
+    }
+
+    /// Publish a newly committed credential into the running process.
+    pub fn set_bearer(&self, token: &str) {
+        *self.bearer.lock().expect("bearer poisoned") = token.to_string();
+    }
+
+    /// Drop the cached catalog after a credential change.
+    pub fn invalidate_models(&self) {
+        *self.models_cache.lock().expect("models cache poisoned") = None;
+    }
+
+    /// The `/admin/auth/verify` single-shot observation.
+    pub fn verify_snapshot(&self) -> Value {
+        let (verdict, reason, upstream_status) = self.classify_credential();
+        json!({
+            "verify": verdict,
+            "reason": reason,
+            "upstream_status": upstream_status,
+            "checked_epoch": epoch_now() as u64,
+            "note": "single-shot upstream /api/models probe; auth state and model cache untouched",
+        })
+    }
+}
+
+impl CredentialSink for ProxyState {
+    fn publish_credential(&self, token: &str, _api_key: Option<&str>) {
+        self.set_bearer(token);
+        self.invalidate_models();
     }
 }
 
