@@ -548,8 +548,20 @@ impl LoginPage for RealPage {
     }
 
     fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String> {
-        let expression = fill_expression(selectors, value);
-        match self.evaluate(&expression) {
+        // Focus and clear the field first, then insert the text through the
+        // DevTools Input domain: ADFS's Knockout binding only observes real
+        // input events, so a plain value assignment would leave its observable
+        // empty and the submit would post an empty password.
+        let focus = fill_focus_expression(selectors);
+        match self.evaluate(&focus) {
+            Ok(Value::Bool(true)) => {}
+            Ok(_) => return Err("login field disappeared".to_string()),
+            Err(error) => return Err(error),
+        }
+        self.call("Input.insertText", serde_json::json!({"text": value}))
+            .map_err(|error| error.to_string())?;
+        let settle = fill_settle_expression(selectors);
+        match self.evaluate(&settle) {
             Ok(Value::Bool(true)) => Ok(()),
             Ok(_) => Err("login field disappeared".to_string()),
             Err(error) => Err(error),
@@ -643,11 +655,10 @@ fn one_visible_expression(selectors: &[&str]) -> String {
     )
 }
 
-fn fill_expression(selectors: &[&str], value: &str) -> String {
+fn fill_focus_expression(selectors: &[&str]) -> String {
     let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
-    let value = serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string());
     format!(
-        "(function(selectors,value){{var visible=function(el){{var r=el.getBoundingClientRect();\
+        "(function(selectors){{var visible=function(el){{var r=el.getBoundingClientRect();\
          var s=getComputedStyle(el);return !!(r.width||r.height||el.getClientRects().length)\
          && s.visibility!=='hidden'&&s.display!=='none';}};\
          var matches=function(sel){{var marker=sel.indexOf(':has-text(\"');\
@@ -660,11 +671,28 @@ fn fill_expression(selectors: &[&str], value: &str) -> String {
          catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
          var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
          if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length===0)return false;\
-         var el=found[0];var proto=Object.getPrototypeOf(el);\
-         var desc=Object.getOwnPropertyDescriptor(proto,'value');\
-         if(desc&&desc.set){{desc.set.call(el,value);}}else{{el.value=value;}}\
-         el.dispatchEvent(new Event('input',{{bubbles:true}}));\
-         el.dispatchEvent(new Event('change',{{bubbles:true}}));el.focus();return true;}})({selectors},{value})"
+         var el=found[0];el.focus();el.select&&el.select();return true;}})({selectors})"
+    )
+}
+
+fn fill_settle_expression(selectors: &[&str]) -> String {
+    let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
+    format!(
+        "(function(selectors){{var visible=function(el){{var r=el.getBoundingClientRect();\
+         var s=getComputedStyle(el);return !!(r.width||r.height||el.getClientRects().length)\
+         && s.visibility!=='hidden'&&s.display!=='none';}};\
+         var matches=function(sel){{var marker=sel.indexOf(':has-text(\"');\
+         if(marker>=0){{var base=sel.slice(0,marker);\
+         var text=sel.slice(marker+11);if(text[text.length-1]===')')text=text.slice(0,-1);\
+         if(text[text.length-1]==='\"')text=text.slice(0,-1);\
+         try{{return Array.prototype.slice.call(document.querySelectorAll(base)).filter(function(el){{\
+         return visible(el)&&(el.textContent||'').indexOf(text)>=0;}});}}catch(e){{return [];}}}}\
+         try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
+         catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
+         var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
+         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length===0)return false;\
+         var el=found[0];el.dispatchEvent(new Event('change',{{bubbles:true}}));\
+         return el.value.length>0;}})({selectors})"
     )
 }
 
