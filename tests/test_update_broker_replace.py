@@ -303,6 +303,8 @@ class BrokerReplaceOrderTests(unittest.TestCase):
                 NO_EDGE="0",
                 DRAIN_BUDGET="900",
                 DRAIN_MAX="90",
+                HEALTH_PORT="8100",
+                CURRENT_HEALTH_PORT="8100",
                 UM_PREFIX=_posix(prefix),
                 UM_SYSTEMD_DIR=_posix(systemd_dir),
                 UM_HEALTH_TIMEOUT_S="1",

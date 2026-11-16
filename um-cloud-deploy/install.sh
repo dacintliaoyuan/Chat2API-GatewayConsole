@@ -297,6 +297,13 @@ fi
 find "$TARGET/um-cloud-deploy" -type f \
   \( -name '*.sh' -o -path '*/bin/*.py' \) -exec chmod 0755 {} +
 
+# A release installed as the Python rollback target must allow the merged
+# gateway child to write its token, browser profile and service log under the
+# writable console state.  Refuse a template that would start 8100 read-only
+# before `current` moves.
+require_share_backend_write_path \
+  "$TARGET/um-cloud-deploy/systemd/um-share-broker.service"
+
 # The running console's effective share-key path is resolved before `current`
 # moves: an old deployment without the console.env line used
 # <current>/data/share-secret.key.  The wiring below must migrate that key,

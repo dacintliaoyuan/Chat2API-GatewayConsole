@@ -1,6 +1,6 @@
 # UM 分享云端部署包
 
-本目录是 UM 分享上云（S2）的离线发布与运维材料：manifest、依赖锁定、systemd 模板、显示入口、显式备份恢复工具与安装/更新/回滚脚本。它不修改产品 Python 源码、tests、web 或构建守卫，也不执行真实部署。
+本目录是 UM 分享上云（S2）的离线发布与运维材料：manifest、依赖锁定、systemd 模板、显示入口、显式备份恢复工具与安装/更新/回滚/回滚演练脚本。它不修改产品 Python 源码、tests、web 或构建守卫，也不执行真实部署。
 
 公网入口是 Cloudflare Tunnel（`https://dacintapi.de5.net/v1` → `127.0.0.1:8100`）；Caddy 只保留历史回退样例。
 
@@ -121,23 +121,52 @@ tar -xzf /root/um-share-<version>.tar.gz -C /opt/um-share/.incoming
 /opt/um-share/.incoming/um-share-<version>/um-cloud-deploy/update.sh \
   --release /root/um-share-<version>.tar.gz \
   --sha256 <archive-sha256> \
-  --drain-budget 900
+  --drain-budget 900 \
+  --health-port <target-gateway-port>
 rm -rf /opt/um-share/.incoming/um-share-<version>
 ```
 
 更新顺序：停 cloudflared → `um-share-brokerctl.py --drain-budget 900 --poll-interval 5 stop`（未排空返回 75，不切换版本）→ `host-stop` → 停控制台 unit → 原子切换 `current` 符号链接。健康门失败自动切回 `previous`；回滚到原版本成功返回 68，回滚/补偿未完成返回 69。锁是 `/run/um-share/deploy.lock` 的非阻塞 `flock`，另一个部署操作返回 75。
 
+健康门按目标 release 的网关端口探测，不再硬编码 8100：`--health-port` 指定目标端口（默认 `$TARGET_PORT` 或 8100；切 Rust 8003 时传 8003），`--current-health-port` 指定失败补偿时恢复的当前 release 端口（默认 `$CURRENT_TARGET_PORT` 或 8100；当前是 Rust 8003 时传 8003）。控制台端口仍从 `console.env` 的 `USAGESRV_PORT` 读取。
+
 回滚运行当前 release 自己的 `rollback.sh`；目标版本必须已安装且 manifest 校验通过。回滚不删除 release、数据、密钥或备份，只切符号链接并重启 unit：
 
 ```bash
-/opt/um-share/releases/<current-version>/um-cloud-deploy/rollback.sh   --drain-budget 900
+/opt/um-share/releases/<current-version>/um-cloud-deploy/rollback.sh \
+  --drain-budget 900 \
+  --health-port 8100 \
+  --current-health-port 8003
 ```
+
+回滚 release 的 broker unit 模板必须包含 `/var/lib/um-share-console` 的 `ReadWritePaths`：合并的 8100 子进程在该目录写 token、浏览器 profile 和服务日志，缺少时以 `Read-only file system` 退出，回滚就无法启动 Python。`install.sh`、`package-release.sh` 和 `rollback.sh` 都会在安装/打包/切换前校验模板，缺少该路径时失败关闭。
 
 显式数据恢复同样运行当前 release 自己的脚本：
 
 ```bash
 /opt/um-share/releases/<current-version>/um-cloud-deploy/rollback.sh   --recover-backup /var/lib/um-share/backup-remote/um-share-<id>.umbak   --recover-security-state /var/lib/um-share/security-state.json   --drain-budget 900
 ```
+
+### Rust → Python 回滚演练
+
+`rollback-drill.sh` 在维护窗口内演练“停 Rust、启 Python 回滚 release、验证 `/ready`”。它默认只打印计划；加 `--execute` 才停/启 unit：
+
+```bash
+# 只打印计划（不需要 root）
+/opt/um-share/releases/<python-version>/um-cloud-deploy/rollback-drill.sh \
+  --to <python-version> \
+  --health-port 8100 \
+  --current-health-port 8003
+
+# 实际演练（root；先确认公网入口已停）
+/opt/um-share/releases/<python-version>/um-cloud-deploy/rollback-drill.sh \
+  --to <python-version> \
+  --health-port 8100 \
+  --current-health-port 8003 \
+  --execute
+```
+
+演练先用 `rollback.sh` 停当前 Rust release、切换 `current`/`bin`、安装并启动 Python unit；随后停掉仍以其他 unit 名存活的 Rust 进程，等待 8100 端口，要求 `/ready` 返回 200（503 表示进程在但 UM 会话或上游未就绪，演练失败），再探测 `/v1/models`，并在前后都要求 `/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share` 仍存在。脚本不删除、不重写这些目录；`--data-dir` 可替换默认目录列表，`--rust-unit` 可重复指定要停的 Rust unit。
 
 运行数据在 `/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share`，不在 release 内，不删除、不覆盖。预算保护与自动备份已从默认装配移除；`backup_restore.py` 只保留显式备份/恢复入口，由运维单独授权执行。
 

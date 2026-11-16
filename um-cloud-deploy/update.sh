@@ -3,9 +3,9 @@
 #
 # The ONLY lifecycle authority is:
 #   * systemd supervises the broker host (um-share-broker.service);
-#   * the broker host owns the 8100 child (LinuxHostOps);
+#   * the broker host owns the share gateway child (LinuxHostOps);
 #   * systemd supervises the console (um-share-console.service);
-# This script never starts 8100 with a bare Popen.  It stops the managed
+# This script never starts the share gateway with a bare Popen.  It stops the managed
 # cloudflared unit first (no new public requests), asks the broker to drain/wait/stop, and only
 # switches the "current" symlink after the 15-minute gate.  Data directories are
 # outside the release and are never deleted or rewritten.
@@ -26,6 +26,11 @@ SHA256=""
 DRAIN_BUDGET="$UM_DRAIN_BUDGET_S"
 SKIP_DRAIN=0
 NO_EDGE=0
+# The target release's gateway port.  Switching to Rust passes 8003; a Python
+# release keeps the Python default.  The current release's port is separate because
+# a failed switch restores the OLD release (for example Rust 8003 -> Python 8100).
+HEALTH_PORT="${TARGET_PORT:-$GATEWAY_PORT_DEFAULT}"
+CURRENT_HEALTH_PORT="${CURRENT_TARGET_PORT:-$GATEWAY_PORT_DEFAULT}"
 RECOVER_BACKUP=""
 RECOVER_SECURITY_STATE=""
 
@@ -39,6 +44,11 @@ Options:
   --version VERSION    expected/installed version
   --sha256 HEX         expected archive SHA-256
   --drain-budget SEC   total drain budget, 2..900 (default 900)
+  --health-port PORT   gateway port of the TARGET release (default:
+                       $TARGET_PORT or 8100; pass 8003 when switching to Rust)
+  --current-health-port PORT
+                       gateway port of the CURRENT release, used when a failed
+                       switch restores it (default: $CURRENT_TARGET_PORT or 8100)
   --skip-drain          emergency only: do not wait/drain; refuses by default
   --no-edge             do not stop/start the managed cloudflared unit
   --recover-backup PATH explicit recovery only: restore this sealed backup
@@ -62,6 +72,8 @@ while [ "$#" -gt 0 ]; do
     --version) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; VERSION="$2"; shift 2 ;;
     --sha256) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; SHA256="$2"; shift 2 ;;
     --drain-budget) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; DRAIN_BUDGET="$2"; shift 2 ;;
+    --health-port) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; HEALTH_PORT="$2"; shift 2 ;;
+    --current-health-port) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; CURRENT_HEALTH_PORT="$2"; shift 2 ;;
     --skip-drain) SKIP_DRAIN=1; shift ;;
     --no-edge) NO_EDGE=1; shift ;;
     --recover-backup) [ "$#" -ge 2 ] || { usage >&2; exit "$EX_USAGE"; }; RECOVER_BACKUP="$2"; shift 2 ;;
@@ -84,6 +96,8 @@ esac
   echo "--drain-budget must be within 2..900 seconds" >&2
   exit "$EX_USAGE"
 }
+validate_port "--health-port" "$HEALTH_PORT"
+validate_port "--current-health-port" "$CURRENT_HEALTH_PORT"
 # The live current release may be an r16 CLI: name its broker drain deadline
 # explicitly so every accepted budget is also valid there.  A 1-second budget
 # cannot reserve a positive deadline and is refused above.
@@ -282,7 +296,8 @@ restore_edge() {
 
 # Restore exactly the units that were active before the switch and wait for their
 # listeners.  A unit that was already inactive is neither started nor waited for;
-# health_gate probes both ports, so it runs only when both units were active.
+# health_gate probes the console and the CURRENT release's gateway port, so it runs
+# only when both units were active.
 # Return 0 only when every originally-active object is serving again.
 restore_units() {
   local failed=0 console_listen_port
@@ -299,10 +314,10 @@ restore_units() {
     wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
   fi
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ]; then
-    wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || return 1
+    wait_port_open 127.0.0.1 "$CURRENT_HEALTH_PORT" "$UM_HEALTH_TIMEOUT_S" || return 1
   fi
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ] && [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
-    health_gate || return 1
+    health_gate "$CURRENT_HEALTH_PORT" || return 1
   fi
   return 0
 }
@@ -471,8 +486,8 @@ start_switch() {
   systemctl start um-share-console.service || return 1
   console_listen_port="$(console_port)" || return 1
   wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
-  wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || return 1
-  health_gate || return 1
+  wait_port_open 127.0.0.1 "$HEALTH_PORT" "$UM_HEALTH_TIMEOUT_S" || return 1
+  health_gate "$HEALTH_PORT" || return 1
   return 0
 }
 
@@ -480,7 +495,7 @@ start_switch() {
 # loaded at process start, so starting the unit again after the link move is not
 # enough while the old process stays alive.  Stop the unit before the current link
 # moves and confirm it is inactive; the broker CLI drain above only stopped the
-# 8100 child.  A failed stop is a hard precondition, never a version switch.
+# share gateway child.  A failed stop is a hard precondition, never a version switch.
 stop_broker_before_switch() {
   if ! systemctl stop um-share-broker.service; then
     return 1
@@ -673,9 +688,9 @@ fi
 # start_switch starts both units regardless of their prior state, so both are
 # stopped here.  A stop is accepted only when confirmed: the console stop must
 # the broker unit must be stopped and inactive afterwards.
-# The broker CLI stop only stops the 8100 host child, not the unit itself, so the
-# unit stop always runs whatever the CLI returned.  Return 0 only when both stops
-# are confirmed.
+# The broker CLI stop only stops the share gateway host child, not the unit itself,
+# so the unit stop always runs whatever the CLI returned.  Return 0 only when both
+# stops are confirmed.
 stop_switch_units() {
   local failed=0
   if ! systemctl stop um-share-console.service; then
