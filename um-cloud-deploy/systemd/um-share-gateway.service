@@ -4,7 +4,7 @@ Documentation=file:///opt/um-share/current/um-cloud-deploy/README.md
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/opt/um-share/current/share/broker_ops.py
-ConditionPathExists=/opt/um-share/current/bin/um-gateway
+ConditionPathExists=/opt/um-share/bin/um-gateway
 ConditionPathExists=/etc/um-share/broker-control.key
 
 [Service]
@@ -49,10 +49,10 @@ ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share/broker_ops.p
   --state-dir /run/um-share \
   --expected-uid ${UM_SHARE_UID} \
   --host-entry-kind native \
-  --expect-instance-image /opt/um-share/current/bin/um-gateway \
+  --expect-instance-image /opt/um-share/bin/um-gateway \
   --expect-instance-cmdline-marker um-gateway \
   --expect-instance-port 8003 \
-  --host-command /opt/um-share/current/bin/um-gateway \
+  --host-command /opt/um-share/bin/um-gateway \
     --mode production \
     --port 8003 \
     --upstream-base-url https://chat.genai.um.edu.mo \

@@ -65,7 +65,7 @@ CONSOLE_PORT_DEFAULT=8096
 GATEWAY_PORT_DEFAULT=8100
 
 # Release runtimes.  A Python release keeps the broker + 8100 child; a Rust
-# release keeps the broker host but launches /opt/um-share/current/bin/um-gateway
+# release keeps the broker host but launches /opt/um-share/bin/um-gateway
 # with `--mode production --port 8003`.  The release manifest is the authority;
 # an older Python release without the field falls back to the unit files it ships.
 RELEASE_RUNTIME_PYTHON=python
@@ -269,7 +269,7 @@ sync_runtime_env() {
       set_env_value "$gateway_env" UM_SHARE_GATEWAY_PORT "$gateway_port"
       set_env_value "$gateway_env" UM_SHARE_GATEWAY_ENTRY_KIND "native"
       set_env_value "$gateway_env" UM_SHARE_GATEWAY_ENTRY \
-        "/opt/um-share/current/bin/um-gateway"
+        "/opt/um-share/bin/um-gateway"
       set_env_value "$gateway_env" UM_SHARE_GATEWAY_MODE "production"
     fi
     # broker.env is the compatibility copy some transition helpers still read.
