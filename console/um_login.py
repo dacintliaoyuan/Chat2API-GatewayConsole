@@ -5,9 +5,12 @@ Semantics reuse the legacy console ``Invoke-Chat2ApiReauthentication``:
 chat2api's ``POST /admin/auth/login`` is the ONLY force re-login entry and
 the backend login thread has no cancel endpoint. This adapter therefore:
 
-* verifies current credentials through the restricted verify endpoint;
-  valid credentials skip the login POST, while unknown verification
+* by default verifies current credentials through the restricted verify
+  endpoint; valid credentials skip the login POST, while unknown verification
   refuses to open a login browser;
+* an explicit ``force=true`` skips that verification and starts ONE login
+  round directly; ``visible=true`` asks that round to show a local window and
+  is valid only together with ``force`` (ADR 0005);
 * never calls refresh and never sends any billing request (the login POST
   remains the established force re-entry for credentials needing login);
 * treats the console-side wait budgets as bounds on WAITING, not as proof
@@ -38,18 +41,24 @@ Injected params (bounded, optional; defaults match the console contract):
 * ``poll_interval_s`` (default 1.0): step for both wait loops (tests use
   small values). Non-numeric or negative values fall back to the default;
   values are capped at 3600s so a bad injection cannot wait unbounded.
+* ``force`` / ``visible`` (both optional bool, default false): an explicit
+  forced re-login skips the on-demand verification; ``visible`` may only be
+  requested together with ``force`` and asks chat2api for a visible window.
 
 Error codes: status_unavailable / start_failed / login_unreachable /
-login_verification_unknown / login_timeout_not_settled /
-login_manual_takeover_required / login_failed / stop_failed, plus
-restricted verification errors from console_um_adapter. Ticket #15: a
-terminal manual-takeover round and an exhausted recovery fail
-immediately with the reason instead of waiting for the console budget; a
-bare ``failed`` that chat2api may still retry keeps waiting. An operator
-cancel of THIS round propagates as OperationCancelled (the task layer's
-cancelled state) after restoring the service. Cancellation propagates as
-OperationCancelled and is mapped by the task layer. The token is never
-included in messages or results.
+login_busy / login_unavailable / login_verification_unknown /
+login_timeout_not_settled / login_manual_takeover_required / login_failed /
+stop_failed, plus restricted verification errors from console_um_adapter.
+``login_busy`` means another login browser owns the profile, and
+``login_unavailable`` means the visible window cannot be opened (no display or
+no usable browser). A cancelled login round maps to OperationCancelled.
+
+Ticket #15: a terminal manual-takeover round and an exhausted recovery fail
+immediately with the reason instead of waiting for the console budget; a bare
+``failed`` that chat2api may still retry keeps waiting. An operator cancel of
+THIS round propagates as OperationCancelled (the task layer's cancelled state)
+after restoring the service. Cancellation propagates as OperationCancelled and is
+mapped by the task layer. The token is never included in messages or results.
 
 Decision recorded here: a definitive-looking intermediate state (e.g.
 ``failed``) is NOT fast-failed; chat2api may retry internally, so the
@@ -57,6 +66,7 @@ console keeps polling within its budget and the budget-exhaustion recheck
 reports the actually observed final state honestly.
 """
 
+import json
 import time
 import urllib.error
 import urllib.request
@@ -79,6 +89,16 @@ _START_WAIT_DEFAULT_S = 30.0
 _LOGIN_BUDGET_DEFAULT_S = 190.0
 _INTERVAL_DEFAULT_S = 1.0
 _BUDGET_MAX_S = 3600.0
+
+# Login-round outcomes shared with the gateway's explicit login entry
+# (ADR 0005). The console maps them onto distinct operation results instead
+# of collapsing a busy profile or an unavailable display into a generic
+# unreachable failure. ``login_already_running`` is the current gateway's
+# profile-lock reason; the others are the published outcome names.
+_LOGIN_CANCELLED_CODES = frozenset(("cancelled", "login_cancelled"))
+_LOGIN_BUSY_CODES = frozenset(("login_busy", "login_already_running"))
+_LOGIN_UNAVAILABLE_CODES = frozenset((
+    "login_unavailable", "visible_login_unavailable"))
 
 # Ticket #15/#42: the chat2api terminal manual-takeover code and reasons are
 # shared with the service through ONE contract module; the three reasons are also
@@ -109,6 +129,94 @@ def _budget_value(params, key, default):
     if value < 0.0:
         return default
     return min(value, _BUDGET_MAX_S)
+
+
+def _bool_param(params, key):
+    """Read one optional bool parameter; a present non-bool is a request error.
+
+    The manager's schema already rejects non-bools, but the handler is also
+    called directly by tests and by older callers, so the same contract is
+    enforced here instead of silently treating a typo as False.
+    """
+    raw = params.get(key) if isinstance(params, dict) else None
+    if raw is None:
+        return False
+    if not isinstance(raw, bool):
+        raise OperationError("invalid_params", "%s must be a bool" % key)
+    return raw
+
+
+def _login_code(value):
+    """Normalize one status/error field to a known login-round outcome code."""
+    if not isinstance(value, str):
+        return None
+    code = value.strip().split(":", 1)[0].strip()
+    if code in _LOGIN_CANCELLED_CODES:
+        return "cancelled"
+    if code in _LOGIN_BUSY_CODES:
+        return "login_busy"
+    if code in _LOGIN_UNAVAILABLE_CODES:
+        return "login_unavailable"
+    return None
+
+
+def _login_round_code(status):
+    """The login-round outcome carried by a status payload, or None.
+
+    The gateway may publish the outcome as the round state, the error code, the
+    recovery pause reason, or the primary failure masked by a cleanup failure.
+    """
+    recovery = status.get("recovery") or {}
+    for value in (status.get("state"), status.get("error"),
+                   status.get("primary"), recovery.get("pause_reason")):
+        code = _login_code(value)
+        if code is not None:
+            return code
+    return None
+
+
+def _login_round_error(code, detail=None):
+    """Map a known login-round outcome onto its console operation error."""
+    if code == "cancelled":
+        return OperationCancelled()
+    if code == "login_busy":
+        message = "登录未开始：同一 profile 已有登录浏览器占用（login_busy）"
+    else:
+        message = ("登录未开始：无法打开登录窗口"
+                   "（login_unavailable / visible_login_unavailable）")
+    if isinstance(detail, str) and detail.strip():
+        message += "：%s" % " ".join(detail.split())[:300]
+    return OperationError(code, message)
+
+
+def _response_code(payload):
+    """Find a login-round outcome code in one HTTP error body.
+
+    The gateway's error envelope may carry the code at the top level or under
+    ``error`` / ``error.detail``; all shapes are read without trusting the
+    body for anything else.
+    """
+    if not isinstance(payload, dict):
+        return None
+    candidates = [payload.get("code"), payload.get("error"),
+                  payload.get("reason"), payload.get("state"),
+                  payload.get("message")]
+    error = payload.get("error")
+    if isinstance(error, dict):
+        candidates.extend([error.get("code"), error.get("type"),
+                            error.get("reason"), error.get("state"),
+                            error.get("message")])
+        detail = error.get("detail")
+        if isinstance(detail, dict):
+            candidates.extend([detail.get("code"), detail.get("reason"),
+                                detail.get("state")])
+        elif isinstance(detail, str):
+            candidates.append(detail)
+    for value in candidates:
+        code = _login_code(value)
+        if code is not None:
+            return code
+    return None
 
 
 def _chat2api_state(snapshot):
@@ -193,25 +301,45 @@ def _start_and_confirm(ctx, budget_s, interval_s):
         time.sleep(interval_s)
 
 
-def _post_force_login(base_url, token):
-    """POST /admin/auth/login with only the X-Admin-Control header.
+def _post_force_login(base_url, token, visible=False):
+    """POST /admin/auth/login with the X-Admin-Control header and JSON body.
 
-    No Origin header is sent (urllib default). 202 is the only accepted
-    answer; the response body is drained (best effort) but not trusted -
-    the follow-up status polling is the authority for login progress.
+    No Origin header is sent (urllib default). The body carries only the
+    per-round presentation choice: ``{"visible": <bool>}``. 202 is the only
+    accepted answer; the response body is drained (best effort) but not trusted -
+    the follow-up status polling is the authority for login progress. A non-202
+    answer is read for the gateway's own login-round outcome so a busy profile
+    or an unavailable display is reported as such instead of a generic
+    unreachable failure.
     """
+    body = json.dumps({"visible": bool(visible)}).encode("utf-8")
     request = urllib.request.Request(
         base_url.rstrip("/") + "/admin/auth/login",
-        headers={"X-Admin-Control": token}, method="POST")
+        data=body,
+        headers={"X-Admin-Control": token,
+                 "Content-Type": "application/json"},
+        method="POST")
     try:
         with urllib.request.urlopen(request, timeout=_LOGIN_TIMEOUT_S) as resp:
             status_code = resp.status
             resp.read()
     except urllib.error.HTTPError as exc:
         try:
+            raw = exc.read()
+        except Exception:  # noqa: BLE001 — 读取错误体失败时退回状态码
+            raw = b""
+        try:
             exc.close()
         except Exception:  # noqa: BLE001 — 释放 HTTPError 是尽力而为
             pass
+        payload = None
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            payload = None
+        code = _response_code(payload)
+        if code is not None:
+            raise _login_round_error(code)
         raise OperationError(
             "login_unreachable",
             "登录请求未完成：chat2api 返回 HTTP %d（期望 202）" % exc.code)
@@ -265,7 +393,8 @@ def _login_cancelled(status):
     recovery = status.get("recovery") or {}
     return (status.get("state") == "cancelled"
             or status.get("error") == "cancelled"
-            or recovery.get("pause_reason") == "cancelled")
+            or recovery.get("pause_reason") == "cancelled"
+            or status.get("primary") == "cancelled")
 
 
 def _terminal_login_failure(status):
@@ -339,6 +468,12 @@ def _classify_auth_status(status):
         raise read_failure
     if _login_cancelled(status):
         raise OperationCancelled()
+    round_code = _login_round_code(status)
+    if round_code is not None:
+        # A busy profile or an unavailable visible window is a definitive
+        # outcome for THIS round, not a transient status read: waiting for the
+        # full budget cannot produce a different answer.
+        raise _login_round_error(round_code)
     failure = _terminal_login_failure(status)
     if failure is not None:
         raise OperationError(*failure)
@@ -447,15 +582,27 @@ def _timeout_message(final_state, waited, fact, read_error=None):
 def relogin_um(target, params, ctx=None):
     """Verify UM credentials and re-login only when needed, restoring state.
 
-    See the module docstring for the lock order, cancel semantics and the
-    honest-timeout contract. Returns only on full success (credentials
-    verified valid or login settled to valid, AND the service state is back
-    to its pre-operation shape or the
-    service was left untouched because it was already running).
+    ``force=true`` skips the on-demand verification and sends the single login
+    POST directly (ADR 0005); ``visible=true`` is accepted only with
+    ``force`` and asks that explicit round for a visible window. See the module
+    docstring for the lock order, cancel semantics and the honest-timeout
+    contract. Returns only on full success (credentials verified valid or login
+    settled to valid, AND the service state is back to its pre-operation shape
+    or the service was left untouched because it was already running).
     """
     if ctx is not None:
         ctx.raise_if_cancelled()
-    _report(ctx, "开始 UM 登录编排：先核验当前认证，仅在需要时重新登录")
+    force = _bool_param(params, "force")
+    visible = _bool_param(params, "visible")
+    if visible and not force:
+        raise OperationError(
+            "invalid_params",
+            "visible=true 只能与 force=true 一起使用；可见窗口只用于显式强制重新登录")
+    if force:
+        _report(ctx, "开始 UM 登录编排：显式强制重新登录（%s）"
+                % ("可见窗口" if visible else "headless"))
+    else:
+        _report(ctx, "开始 UM 登录编排：先核验当前认证，仅在需要时重新登录")
 
     # Token errors (absent/unreadable/empty) pass through unchanged; the
     # token value itself never enters messages, steps or results.
@@ -478,37 +625,49 @@ def relogin_um(target, params, ctx=None):
         _report(ctx, "chat2api 已启动（快照确认 Running）")
 
     login_skipped = False
+    state, waited, at_recheck, read_error = None, 0.0, False, None
     try:
         base_url = console_um_adapter.resolve_chat2api_base_url()
         if ctx is not None:
             ctx.raise_if_cancelled()
-        _report(ctx, "通过受限核验端点确认当前认证，尚未发送登录请求")
-        try:
-            verification = console_um_adapter._verify_account(base_url, token)
-        except OperationError as exc:
-            raise OperationError(
-                exc.code, "无法确认当前认证，暂不打开登录：" + exc.message)
-        if ctx is not None:
-            ctx.raise_if_cancelled()
-        verify_state = verification["verify"]
-        if verify_state == "valid":
-            login_skipped = True
-            state, waited, at_recheck = "valid", 0.0, False
-            read_error = None
-            _report(ctx, "当前账号有效，无需重新登录，未发送登录请求")
-        elif verify_state in ("needs_login", "rejected"):
-            # Phase 3: the single force re-login entry, only after a
-            # definitive credential result. A rejected credential/access
-            # is not necessarily expired, but the user may reauthenticate.
-            _post_force_login(base_url, token)
+        if force:
+            # ADR 0005: the explicit forced re-login skips the on-demand
+            # verification, even when the current credential is still valid.
+            _report(ctx, "显式强制重新登录：跳过按需核验，直接发送登录请求（%s）"
+                    % ("可见窗口" if visible else "headless"))
+            _post_force_login(base_url, token, visible=visible)
             _report(ctx, "登录请求已被 chat2api 接受（202），开始等待登录完成")
             # Phase 4 + 5: bounded cooperative polling with a final recheck.
             state, waited, at_recheck, read_error = _wait_login_valid(
                 base_url, token, ctx, login_budget_s, interval_s)
         else:
-            raise OperationError(
-                "login_verification_unknown",
-                "无法确认当前认证，暂不打开登录；受限核验结果为 unknown")
+            _report(ctx, "通过受限核验端点确认当前认证，尚未发送登录请求")
+            try:
+                verification = console_um_adapter._verify_account(base_url, token)
+            except OperationError as exc:
+                raise OperationError(
+                    exc.code, "无法确认当前认证，暂不打开登录：" + exc.message)
+            if ctx is not None:
+                ctx.raise_if_cancelled()
+            verify_state = verification["verify"]
+            if verify_state == "valid":
+                login_skipped = True
+                state, waited, at_recheck = "valid", 0.0, False
+                read_error = None
+                _report(ctx, "当前账号有效，无需重新登录，未发送登录请求")
+            elif verify_state in ("needs_login", "rejected"):
+                # Phase 3: the single force re-login entry, only after a
+                # definitive credential result. A rejected credential/access
+                # is not necessarily expired, but the user may reauthenticate.
+                _post_force_login(base_url, token)
+                _report(ctx, "登录请求已被 chat2api 接受（202），开始等待登录完成")
+                # Phase 4 + 5: bounded cooperative polling with a final recheck.
+                state, waited, at_recheck, read_error = _wait_login_valid(
+                    base_url, token, ctx, login_budget_s, interval_s)
+            else:
+                raise OperationError(
+                    "login_verification_unknown",
+                    "无法确认当前认证，暂不打开登录；受限核验结果为 unknown")
     except BaseException as exc:  # noqa: BLE001 — 恢复服务后原样重抛，不吞异常
         kind, fact = _restore_service_state(ctx, started_by_us)
         _report(ctx, fact)

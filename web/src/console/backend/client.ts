@@ -178,6 +178,12 @@ export interface RunActionOptions {
   onProgress?: (operation: Operation) => void;
   resourceKey?: string;
 }
+/** The operation body's params. `force`/`visible` are the ADR 0005 additive
+ *  `account.login` fields; every other action keeps using the same JSON object. */
+export type RunActionParams = JsonObject & {
+  force?: boolean;
+  visible?: boolean;
+};
 
 /** HTTP/operation seam only. No UI imports, timers on construction, tokens or automatic probes. */
 export class BackendClient {
@@ -227,7 +233,7 @@ export class BackendClient {
   async runAction(
     action: string,
     target: string,
-    params: JsonObject,
+    params: RunActionParams,
     options: RunActionOptions
   ): Promise<OperationResult> {
     const intent = actionIntents[action];

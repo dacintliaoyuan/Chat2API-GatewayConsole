@@ -7,7 +7,7 @@
       "model_sync/sync.py": "3fc589dcb8a228a717c675b52d94b84b8d3f17a6c8a9d119f4477403c8cc7ce4",
       "model_sync/sync_core.py": "b6b4e99bf2491b1e89df6632ef5232d67a583f14d4ad361746e91a3c37efcaa7",
       "console/model_actions.py": "3825b6396ff83ff747df70514f96005a40488b9da1e5765ab1543152e24be648",
-      "console/adapters.py": "7cab2788a0a62acaa3e4183be0701a5590ace1dd2640f80fd08b9797cea603b3",
+      "console/adapters.py": "11ed90db0d768d1457daafbe27b69b2d08b59798b454df348eaa565050e09102",
       "console/operations.py": "e97c8822b4689503fface9748c2be00ab1eee3e8dab00cce0c0126c54da8a7e2",
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
       "console/stats.py": "3fae809c0c051108c37627b7fdc7111f75c035c71526bcef212236b3216dae59",
@@ -41,6 +41,12 @@
             "type": "int",
             "min": 1,
             "max": 10
+          },
+          "force": {
+            "type": "bool"
+          },
+          "visible": {
+            "type": "bool"
           }
         }
       },
@@ -268,7 +274,7 @@
     "sources": [
       "um"
     ],
-    "checked_epoch": 1794723194
+    "checked_epoch": 1794812994
   },
   "scoped_catalog": {
     "catalogs": {
@@ -296,7 +302,7 @@
     "sources": [
       "um"
     ],
-    "checked_epoch": 1794723194
+    "checked_epoch": 1794812994
   },
   "context_overrides": {
     "overrides": [

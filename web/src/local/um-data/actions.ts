@@ -15,6 +15,7 @@ import type {
   Failure,
   MaintenanceAction,
   UmEvent,
+  UmLoginParams,
   UmTestRun,
 } from "../um-ui/contract";
 import { CATALOG_FRESH_SOURCE } from "./state";
@@ -72,6 +73,18 @@ const ACTION_PENDING_NOTE: Readonly<Record<MaintenanceAction, string>> = {
  *  request per model, no retry, one shared 20-request budget for context. */
 const MAX_BATCH_MODELS = 20;
 
+/** The login event's additive params (ADR 0005). The view emits the fields
+ *  directly; a controller caller may pass the same object as `params`. */
+function loginParams(
+  event: Extract<UmEvent, { type: "um.login" }>
+): UmLoginParams {
+  if (event.params) return event.params;
+  const params: UmLoginParams = {};
+  if (event.force !== undefined) params.force = event.force;
+  if (event.visible !== undefined) params.visible = event.visible;
+  return params;
+}
+
 export class UmDataActions extends UmDataReads {
   handleEvent(event: UmEvent): void {
     if (this.disposed) return;
@@ -89,7 +102,7 @@ export class UmDataActions extends UmDataReads {
         void this.runMaintenance("verify");
         return;
       case "um.login":
-        void this.runMaintenance("login");
+        void this.runMaintenance("login", loginParams(event));
         return;
       case "um.service":
         void this.runMaintenance(event.action);
@@ -421,20 +434,29 @@ export class UmDataActions extends UmDataReads {
 
   // ---------------------------------------------------------------- maintenance
 
-  protected async runMaintenance(action: MaintenanceAction): Promise<void> {
+  protected async runMaintenance(
+    action: MaintenanceAction,
+    params: UmLoginParams = {}
+  ): Promise<void> {
     if (this.state.overview.progress[action]?.state === "pending") return;
     const gate = this.actionEnabled(ACTION[action]);
     if (!gate.ok) {
       this.finishProgress(action, "failed", gate.reason);
       return;
     }
+    const note =
+      action === "login" && params.force === true
+        ? params.visible === true
+          ? "显式强制重新登录（可见窗口）"
+          : "显式强制重新登录"
+        : ACTION_PENDING_NOTE[action];
     this.patchOverview({
       progress: {
         ...this.state.overview.progress,
         [action]: {
           state: "pending",
           since: this.now(),
-          note: ACTION_PENDING_NOTE[action],
+          note,
         },
       },
     });
@@ -443,7 +465,7 @@ export class UmDataActions extends UmDataReads {
       const result = await this.client.runAction(
         ACTION[action],
         action === "verify" || action === "login" ? "account" : CHAT2API,
-        {},
+        params,
         {
           intent: ACTION_INTENT[action],
           timeoutMs: ACTION_TIMEOUT[action],
