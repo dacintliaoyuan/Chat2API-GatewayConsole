@@ -1,0 +1,986 @@
+{
+  "dataFiles": {
+    "run/share-projection.json": {
+      "sha256": "beadef00801bb0d4cc4604366167ad513c9ae714bbd9cd4d385f8b41dc4be179",
+      "size": 619
+    },
+    "share-backend/edge-profile/login-browser.lock": {
+      "sha256": "6f4c64c82e8135a07935567fde57a68c9f199ec8c526c24a1dca1560fefaba77",
+      "size": 157
+    },
+    "share-backend/token.json": {
+      "sha256": "021d44c7832b5e9325fe0ad806d4d7b25c37e99e85e499402778574a9ffcf8fe",
+      "size": 144
+    },
+    "share-backend/usage-share-backend.jsonl": {
+      "sha256": "94e01f43446ebacc8b17e3f10db5e4217e95244e7f5124bd5b6eb68c4e189116",
+      "size": 2623
+    },
+    "share-store.sql": {
+      "sha256": "cdbe150aa1250dfaf7cb2f10eebb70afe4d7e64d184df1652f9c0316d3997551",
+      "size": 6294
+    }
+  },
+  "metadata": {
+    "dataRoot": "tests/fixtures/cutover_parity",
+    "fixture": true,
+    "generator": "tests/generate_cutover_parity_fixture.py",
+    "productionPaths": [
+      "/var/lib/um-share",
+      "/var/lib/um-share-console",
+      "/etc/um-share"
+    ],
+    "source": "real Python ShareStore/ProjectionWriter/record_usage/TokenStore",
+    "ticket": 72
+  },
+  "python": {
+    "ledger": {
+      "requests": {
+        "checkedAt": "<checkedAt>",
+        "coverage": {
+          "attributedRequests": 5,
+          "attributionReasons": {
+            "absent": 1
+          },
+          "cacheReportedRequests": 1,
+          "cacheUnknownRequests": 0,
+          "cacheUnreportedRequests": 5,
+          "excludedUnknownTimeRequests": 0,
+          "filters": {
+            "key": null,
+            "model": null,
+            "result": null,
+            "window": "all"
+          },
+          "ledger": "usage-share-backend.jsonl",
+          "ledgerPresent": true,
+          "ledgerReadable": true,
+          "limit": 50,
+          "olderRecordsUnread": false,
+          "readLimit": 200000,
+          "recordsMatched": 6,
+          "recordsReturned": 6,
+          "recordsScanned": 6,
+          "recordsTotal": 6,
+          "truncated": false,
+          "unattributedRequests": 1,
+          "unknownUsageRequests": 1,
+          "unparsedLines": 0
+        },
+        "filters": {
+          "key": null,
+          "model": null,
+          "result": null,
+          "window": "all"
+        },
+        "nextCursor": null,
+        "rows": [
+          {
+            "attribution": "verified",
+            "cacheReportStatus": "unreported",
+            "cacheTokens": null,
+            "day": "2026-11-16",
+            "durationMs": 122,
+            "inputTokens": 15,
+            "keyId": "key-alpha",
+            "model": "cutover-parity-model",
+            "outputTokens": 2,
+            "reasoningTokens": 0,
+            "requestId": "r6",
+            "result": "failed",
+            "status": "upstream_read_error",
+            "time": "2026-11-16T08:00:00+08:00",
+            "usageSource": "partial"
+          },
+          {
+            "attribution": "verified",
+            "cacheReportStatus": "unreported",
+            "cacheTokens": null,
+            "day": "2026-11-16",
+            "durationMs": 122,
+            "inputTokens": 40,
+            "keyId": "key-alpha",
+            "model": "cutover-parity-model",
+            "outputTokens": 4,
+            "reasoningTokens": 0,
+            "requestId": "r5",
+            "result": "cancelled",
+            "status": "client_disconnected",
+            "time": "2026-11-16T08:00:00+08:00",
+            "usageSource": "upstream"
+          },
+          {
+            "attribution": "absent",
+            "cacheReportStatus": "unreported",
+            "cacheTokens": null,
+            "day": "2026-11-16",
+            "durationMs": 122,
+            "inputTokens": null,
+            "keyId": null,
+            "model": "cutover-parity-model",
+            "outputTokens": null,
+            "reasoningTokens": null,
+            "requestId": "r4",
+            "result": "success",
+            "status": "ok",
+            "time": "2026-11-16T08:00:00+08:00",
+            "usageSource": "none"
+          },
+          {
+            "attribution": "verified",
+            "cacheReportStatus": "unreported",
+            "cacheTokens": null,
+            "day": "2026-11-16",
+            "durationMs": 122,
+            "inputTokens": 10,
+            "keyId": "key-deleted",
+            "model": "cutover-parity-model",
+            "outputTokens": 5,
+            "reasoningTokens": 0,
+            "requestId": "r3",
+            "result": "success",
+            "status": "ok",
+            "time": "2026-11-16T08:00:00+08:00",
+            "usageSource": "estimated"
+          },
+          {
+            "attribution": "verified",
+            "cacheReportStatus": "unreported",
+            "cacheTokens": null,
+            "day": "2026-11-16",
+            "durationMs": 122,
+            "inputTokens": 200,
+            "keyId": "key-alpha",
+            "model": "cutover-parity-model",
+            "outputTokens": 7,
+            "reasoningTokens": 0,
+            "requestId": "r2",
+            "result": "success",
+            "status": "ok",
+            "time": "2026-11-16T08:00:00+08:00",
+            "usageSource": "partial"
+          },
+          {
+            "attribution": "verified",
+            "cacheReportStatus": "reported",
+            "cacheTokens": 0,
+            "day": "2026-11-16",
+            "durationMs": 122,
+            "inputTokens": 100,
+            "keyId": "key-alpha",
+            "model": "cutover-parity-model",
+            "outputTokens": 10,
+            "reasoningTokens": 0,
+            "requestId": "r1",
+            "result": "success",
+            "status": "ok",
+            "time": "2026-11-16T08:00:00+08:00",
+            "usageSource": "upstream"
+          }
+        ],
+        "truncated": false
+      },
+      "summary": {
+        "checkedAt": "<checkedAt>",
+        "coverage": {
+          "attributed": 5,
+          "attributionReasons": {
+            "absent": 1
+          },
+          "cacheReportedRequests": 1,
+          "cacheUnknownRequests": 0,
+          "cacheUnreportedRequests": 5,
+          "excludedUnknownTimeRequests": 0,
+          "incompleteRequests": 2,
+          "ledger": "usage-share-backend.jsonl",
+          "ledgerPresent": true,
+          "ledgerReadable": true,
+          "limit": 200000,
+          "records": 6,
+          "recordsMatched": 6,
+          "recordsScanned": 6,
+          "recordsTotal": 6,
+          "truncated": false,
+          "unattributed": 1,
+          "unknownTimeRequests": 0,
+          "unknownUsageRequests": 1,
+          "unparsedLines": 0
+        },
+        "filters": {
+          "key": null,
+          "model": null,
+          "result": null,
+          "window": "all"
+        },
+        "keys": [
+          {
+            "coverage": {
+              "cacheReportedRequests": 1,
+              "cacheUnknownRequests": 0,
+              "cacheUnreportedRequests": 3,
+              "completeUsageRequests": 1,
+              "estimatedUsageRequests": 0,
+              "partialUsageRequests": 3,
+              "records": 4,
+              "unknownTimeRequests": 0,
+              "unknownUsageRequests": 0
+            },
+            "days": [
+              {
+                "coverage": {
+                  "cacheReportedRequests": 1,
+                  "cacheUnknownRequests": 0,
+                  "cacheUnreportedRequests": 3,
+                  "completeUsageRequests": 1,
+                  "estimatedUsageRequests": 0,
+                  "partialUsageRequests": 3,
+                  "records": 4,
+                  "unknownTimeRequests": 0,
+                  "unknownUsageRequests": 0
+                },
+                "day": "2026-11-16",
+                "inputTokens": 355,
+                "outputTokens": 23,
+                "requests": 4,
+                "tokenUsage": {
+                  "cacheReportedRequests": 1,
+                  "cacheUnknownRequests": 0,
+                  "cacheUnreportedRequests": 3,
+                  "cachedInputTokens": 0,
+                  "complete": false,
+                  "completeRequests": 1,
+                  "estimatedInputTokens": null,
+                  "estimatedOutputTokens": null,
+                  "estimatedRequests": 0,
+                  "estimatedTokens": null,
+                  "inputTokens": 100,
+                  "lowerBoundInputTokens": 255,
+                  "lowerBoundOutputTokens": 13,
+                  "lowerBoundRequests": 3,
+                  "lowerBoundTokens": 268,
+                  "outputTokens": 10,
+                  "totalTokens": 110,
+                  "unknownRequests": 0
+                },
+                "unknownRequests": 0
+              }
+            ],
+            "inputTokens": 355,
+            "key_id": "key-alpha",
+            "models": [
+              {
+                "coverage": {
+                  "cacheReportedRequests": 1,
+                  "cacheUnknownRequests": 0,
+                  "cacheUnreportedRequests": 3,
+                  "completeUsageRequests": 1,
+                  "estimatedUsageRequests": 0,
+                  "partialUsageRequests": 3,
+                  "records": 4,
+                  "unknownTimeRequests": 0,
+                  "unknownUsageRequests": 0
+                },
+                "inputTokens": 355,
+                "model": "cutover-parity-model",
+                "outputTokens": 23,
+                "requests": 4,
+                "tokenUsage": {
+                  "cacheReportedRequests": 1,
+                  "cacheUnknownRequests": 0,
+                  "cacheUnreportedRequests": 3,
+                  "cachedInputTokens": 0,
+                  "complete": false,
+                  "completeRequests": 1,
+                  "estimatedInputTokens": null,
+                  "estimatedOutputTokens": null,
+                  "estimatedRequests": 0,
+                  "estimatedTokens": null,
+                  "inputTokens": 100,
+                  "lowerBoundInputTokens": 255,
+                  "lowerBoundOutputTokens": 13,
+                  "lowerBoundRequests": 3,
+                  "lowerBoundTokens": 268,
+                  "outputTokens": 10,
+                  "totalTokens": 110,
+                  "unknownRequests": 0
+                },
+                "unknownRequests": 0
+              }
+            ],
+            "outputTokens": 23,
+            "requests": 4,
+            "tokenUsage": {
+              "cacheReportedRequests": 1,
+              "cacheUnknownRequests": 0,
+              "cacheUnreportedRequests": 3,
+              "cachedInputTokens": 0,
+              "complete": false,
+              "completeRequests": 1,
+              "estimatedInputTokens": null,
+              "estimatedOutputTokens": null,
+              "estimatedRequests": 0,
+              "estimatedTokens": null,
+              "inputTokens": 100,
+              "lowerBoundInputTokens": 255,
+              "lowerBoundOutputTokens": 13,
+              "lowerBoundRequests": 3,
+              "lowerBoundTokens": 268,
+              "outputTokens": 10,
+              "totalTokens": 110,
+              "unknownRequests": 0
+            },
+            "undated": null,
+            "unknownRequests": 0
+          },
+          {
+            "coverage": {
+              "cacheReportedRequests": 0,
+              "cacheUnknownRequests": 0,
+              "cacheUnreportedRequests": 1,
+              "completeUsageRequests": 0,
+              "estimatedUsageRequests": 1,
+              "partialUsageRequests": 0,
+              "records": 1,
+              "unknownTimeRequests": 0,
+              "unknownUsageRequests": 0
+            },
+            "days": [
+              {
+                "coverage": {
+                  "cacheReportedRequests": 0,
+                  "cacheUnknownRequests": 0,
+                  "cacheUnreportedRequests": 1,
+                  "completeUsageRequests": 0,
+                  "estimatedUsageRequests": 1,
+                  "partialUsageRequests": 0,
+                  "records": 1,
+                  "unknownTimeRequests": 0,
+                  "unknownUsageRequests": 0
+                },
+                "day": "2026-11-16",
+                "inputTokens": 10,
+                "outputTokens": 5,
+                "requests": 1,
+                "tokenUsage": {
+                  "cacheReportedRequests": 0,
+                  "cacheUnknownRequests": 0,
+                  "cacheUnreportedRequests": 1,
+                  "cachedInputTokens": null,
+                  "complete": false,
+                  "completeRequests": 0,
+                  "estimatedInputTokens": 10,
+                  "estimatedOutputTokens": 5,
+                  "estimatedRequests": 1,
+                  "estimatedTokens": 15,
+                  "inputTokens": null,
+                  "lowerBoundInputTokens": null,
+                  "lowerBoundOutputTokens": null,
+                  "lowerBoundRequests": 0,
+                  "lowerBoundTokens": null,
+                  "outputTokens": null,
+                  "totalTokens": null,
+                  "unknownRequests": 0
+                },
+                "unknownRequests": 0
+              }
+            ],
+            "inputTokens": 10,
+            "key_id": "key-deleted",
+            "models": [
+              {
+                "coverage": {
+                  "cacheReportedRequests": 0,
+                  "cacheUnknownRequests": 0,
+                  "cacheUnreportedRequests": 1,
+                  "completeUsageRequests": 0,
+                  "estimatedUsageRequests": 1,
+                  "partialUsageRequests": 0,
+                  "records": 1,
+                  "unknownTimeRequests": 0,
+                  "unknownUsageRequests": 0
+                },
+                "inputTokens": 10,
+                "model": "cutover-parity-model",
+                "outputTokens": 5,
+                "requests": 1,
+                "tokenUsage": {
+                  "cacheReportedRequests": 0,
+                  "cacheUnknownRequests": 0,
+                  "cacheUnreportedRequests": 1,
+                  "cachedInputTokens": null,
+                  "complete": false,
+                  "completeRequests": 0,
+                  "estimatedInputTokens": 10,
+                  "estimatedOutputTokens": 5,
+                  "estimatedRequests": 1,
+                  "estimatedTokens": 15,
+                  "inputTokens": null,
+                  "lowerBoundInputTokens": null,
+                  "lowerBoundOutputTokens": null,
+                  "lowerBoundRequests": 0,
+                  "lowerBoundTokens": null,
+                  "outputTokens": null,
+                  "totalTokens": null,
+                  "unknownRequests": 0
+                },
+                "unknownRequests": 0
+              }
+            ],
+            "outputTokens": 5,
+            "requests": 1,
+            "tokenUsage": {
+              "cacheReportedRequests": 0,
+              "cacheUnknownRequests": 0,
+              "cacheUnreportedRequests": 1,
+              "cachedInputTokens": null,
+              "complete": false,
+              "completeRequests": 0,
+              "estimatedInputTokens": 10,
+              "estimatedOutputTokens": 5,
+              "estimatedRequests": 1,
+              "estimatedTokens": 15,
+              "inputTokens": null,
+              "lowerBoundInputTokens": null,
+              "lowerBoundOutputTokens": null,
+              "lowerBoundRequests": 0,
+              "lowerBoundTokens": null,
+              "outputTokens": null,
+              "totalTokens": null,
+              "unknownRequests": 0
+            },
+            "undated": null,
+            "unknownRequests": 0
+          }
+        ],
+        "requests": 6,
+        "results": {
+          "cancelled": 1,
+          "coverage": {
+            "unknownResult": 0
+          },
+          "failed": 1,
+          "success": 4,
+          "total": 6,
+          "unknown": 0
+        },
+        "unattributed": {
+          "coverage": {
+            "cacheReportedRequests": 0,
+            "cacheUnknownRequests": 0,
+            "cacheUnreportedRequests": 1,
+            "completeUsageRequests": 0,
+            "estimatedUsageRequests": 0,
+            "partialUsageRequests": 0,
+            "records": 1,
+            "unknownTimeRequests": 0,
+            "unknownUsageRequests": 1
+          },
+          "days": [
+            {
+              "coverage": {
+                "cacheReportedRequests": 0,
+                "cacheUnknownRequests": 0,
+                "cacheUnreportedRequests": 1,
+                "completeUsageRequests": 0,
+                "estimatedUsageRequests": 0,
+                "partialUsageRequests": 0,
+                "records": 1,
+                "unknownTimeRequests": 0,
+                "unknownUsageRequests": 1
+              },
+              "day": "2026-11-16",
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "requests": 0,
+              "tokenUsage": {
+                "cacheReportedRequests": 0,
+                "cacheUnknownRequests": 0,
+                "cacheUnreportedRequests": 1,
+                "cachedInputTokens": null,
+                "complete": false,
+                "completeRequests": 0,
+                "estimatedInputTokens": null,
+                "estimatedOutputTokens": null,
+                "estimatedRequests": 0,
+                "estimatedTokens": null,
+                "inputTokens": null,
+                "lowerBoundInputTokens": null,
+                "lowerBoundOutputTokens": null,
+                "lowerBoundRequests": 0,
+                "lowerBoundTokens": null,
+                "outputTokens": null,
+                "totalTokens": null,
+                "unknownRequests": 1
+              },
+              "unknownRequests": 1
+            }
+          ],
+          "inputTokens": 0,
+          "key_id": null,
+          "models": [
+            {
+              "coverage": {
+                "cacheReportedRequests": 0,
+                "cacheUnknownRequests": 0,
+                "cacheUnreportedRequests": 1,
+                "completeUsageRequests": 0,
+                "estimatedUsageRequests": 0,
+                "partialUsageRequests": 0,
+                "records": 1,
+                "unknownTimeRequests": 0,
+                "unknownUsageRequests": 1
+              },
+              "inputTokens": 0,
+              "model": "cutover-parity-model",
+              "outputTokens": 0,
+              "requests": 0,
+              "tokenUsage": {
+                "cacheReportedRequests": 0,
+                "cacheUnknownRequests": 0,
+                "cacheUnreportedRequests": 1,
+                "cachedInputTokens": null,
+                "complete": false,
+                "completeRequests": 0,
+                "estimatedInputTokens": null,
+                "estimatedOutputTokens": null,
+                "estimatedRequests": 0,
+                "estimatedTokens": null,
+                "inputTokens": null,
+                "lowerBoundInputTokens": null,
+                "lowerBoundOutputTokens": null,
+                "lowerBoundRequests": 0,
+                "lowerBoundTokens": null,
+                "outputTokens": null,
+                "totalTokens": null,
+                "unknownRequests": 1
+              },
+              "unknownRequests": 1
+            }
+          ],
+          "outputTokens": 0,
+          "requests": 1,
+          "tokenUsage": {
+            "cacheReportedRequests": 0,
+            "cacheUnknownRequests": 0,
+            "cacheUnreportedRequests": 1,
+            "cachedInputTokens": null,
+            "complete": false,
+            "completeRequests": 0,
+            "estimatedInputTokens": null,
+            "estimatedOutputTokens": null,
+            "estimatedRequests": 0,
+            "estimatedTokens": null,
+            "inputTokens": null,
+            "lowerBoundInputTokens": null,
+            "lowerBoundOutputTokens": null,
+            "lowerBoundRequests": 0,
+            "lowerBoundTokens": null,
+            "outputTokens": null,
+            "totalTokens": null,
+            "unknownRequests": 1
+          },
+          "undated": null,
+          "unknownRequests": 1
+        }
+      }
+    },
+    "profile": {
+      "lock_hex": "007b2261637175697265645f65706f6368223a20313730303030303030302e32352c2022706964223a20343234322c202270726f636573735f737461727465645f65706f6368223a20313730303030303030302e302c202270726f66696c655f646972223a20222f7661722f6c69622f756d2d73686172652d636f6e736f6c652f73686172652d6261636b656e642f656467652d70726f66696c65227d",
+      "owner": {
+        "acquired_epoch": 1700000000.25,
+        "pid": 4242,
+        "process_started_epoch": 1700000000.0,
+        "profile_dir": "/var/lib/um-share-console/share-backend/edge-profile"
+      }
+    },
+    "projection": {
+      "fingerprint": "b77810aca43f3b709b89d38d4badd8d645a134fef9ee3ca6b2f2f0b15816a287",
+      "parsed": {
+        "config_generation": 8,
+        "data": [
+          {
+            "enabled": true,
+            "key_id": "00000000-0000-0000-0000-000000000001",
+            "max_concurrency": 8,
+            "name": "alpha-renamed",
+            "secret_hash": "ba5260459f41020f5621b3c5ac6b5dfd310f29997170b62a76b623685eab8ddb",
+            "secret_version": 1
+          },
+          {
+            "enabled": true,
+            "key_id": "legacy-key",
+            "max_concurrency": 1,
+            "name": "legacy",
+            "secret_hash": "1b387faeb510b3968accf441f00dac7401a7e51fade44ce474b18e8e6faf79db",
+            "secret_version": 1
+          }
+        ],
+        "schema_version": 2,
+        "share_max_concurrency": 32
+      },
+      "payload": {
+        "config_generation": 8,
+        "data": [
+          {
+            "enabled": true,
+            "key_id": "00000000-0000-0000-0000-000000000001",
+            "max_concurrency": 8,
+            "name": "alpha-renamed",
+            "secret_hash": "ba5260459f41020f5621b3c5ac6b5dfd310f29997170b62a76b623685eab8ddb",
+            "secret_version": 1
+          },
+          {
+            "enabled": true,
+            "key_id": "legacy-key",
+            "max_concurrency": 1,
+            "name": "legacy",
+            "secret_hash": "1b387faeb510b3968accf441f00dac7401a7e51fade44ce474b18e8e6faf79db",
+            "secret_version": 1
+          }
+        ],
+        "schema_version": 2,
+        "share_max_concurrency": 32
+      }
+    },
+    "store": {
+      "generation": {
+        "applied_generation": 6,
+        "config_generation": 8,
+        "in_sync": false,
+        "schema_version": 3,
+        "security_in_sync": false,
+        "security_pending": 3
+      },
+      "keys": [
+        {
+          "created_at": "2026-11-16T00:00:01.000000Z",
+          "deleted_at": null,
+          "enabled": true,
+          "key_id": "00000000-0000-0000-0000-000000000001",
+          "masked_key": "um-share-****cdef",
+          "max_concurrency": 8,
+          "name": "alpha-renamed",
+          "plaintext_viewable": true,
+          "row_version": 3,
+          "secret_version": 1,
+          "updated_at": "2026-11-16T00:00:08.000000Z"
+        },
+        {
+          "created_at": "2026-11-16T00:00:04.000000Z",
+          "deleted_at": "2026-11-16T00:00:15.000000Z",
+          "enabled": false,
+          "key_id": "00000000-0000-0000-0000-000000000004",
+          "masked_key": "um-share-****wxyz",
+          "max_concurrency": 16,
+          "name": "beta",
+          "plaintext_viewable": false,
+          "row_version": 3,
+          "secret_version": 2,
+          "updated_at": "2026-11-16T00:00:15.000000Z"
+        },
+        {
+          "created_at": "2026-11-16T00:00:10.000000Z",
+          "deleted_at": null,
+          "enabled": true,
+          "key_id": "legacy-key",
+          "masked_key": "um-share-****cdef",
+          "max_concurrency": 1,
+          "name": "legacy",
+          "plaintext_viewable": false,
+          "row_version": 1,
+          "secret_version": 1,
+          "updated_at": "2026-11-16T00:00:10.000000Z"
+        }
+      ],
+      "operations": [
+        {
+          "created_at": "2026-11-16T00:00:02.000000Z",
+          "id": "00000000-0000-0000-0000-000000000002",
+          "idempotency_key": null,
+          "kind": "publish",
+          "payload": {
+            "action_kind": "create",
+            "key_id": "00000000-0000-0000-0000-000000000001",
+            "revoking": false,
+            "target_generation": 2
+          },
+          "status": "pending"
+        },
+        {
+          "created_at": "2026-11-16T00:00:03.000000Z",
+          "id": "00000000-0000-0000-0000-000000000003",
+          "idempotency_key": "create-alpha",
+          "kind": "create",
+          "payload": {
+            "key_id": "00000000-0000-0000-0000-000000000001",
+            "name": "alpha"
+          },
+          "status": "ok"
+        },
+        {
+          "created_at": "2026-11-16T00:00:05.000000Z",
+          "id": "00000000-0000-0000-0000-000000000005",
+          "idempotency_key": null,
+          "kind": "publish",
+          "payload": {
+            "action_kind": "create",
+            "key_id": "00000000-0000-0000-0000-000000000004",
+            "revoking": false,
+            "target_generation": 3
+          },
+          "status": "pending"
+        },
+        {
+          "created_at": "2026-11-16T00:00:07.000000Z",
+          "id": "00000000-0000-0000-0000-000000000006",
+          "idempotency_key": null,
+          "kind": "publish",
+          "payload": {
+            "action_kind": "rename",
+            "key_id": "00000000-0000-0000-0000-000000000001",
+            "revoking": false,
+            "target_generation": 4
+          },
+          "status": "pending"
+        },
+        {
+          "created_at": "2026-11-16T00:00:10.000000Z",
+          "id": "00000000-0000-0000-0000-000000000008",
+          "idempotency_key": null,
+          "kind": "publish",
+          "payload": {
+            "action_kind": "update",
+            "key_id": "00000000-0000-0000-0000-000000000001",
+            "revoking": true,
+            "target_generation": 5
+          },
+          "status": "pending"
+        },
+        {
+          "created_at": "2026-11-16T00:00:13.000000Z",
+          "id": "00000000-0000-0000-0000-00000000000a",
+          "idempotency_key": null,
+          "kind": "publish",
+          "payload": {
+            "action_kind": "rotate",
+            "key_id": "00000000-0000-0000-0000-000000000004",
+            "revoking": true,
+            "target_generation": 6
+          },
+          "status": "pending"
+        },
+        {
+          "created_at": "2026-11-16T00:00:14.000000Z",
+          "id": "00000000-0000-0000-0000-00000000000b",
+          "idempotency_key": "rotate-beta",
+          "kind": "rotate",
+          "payload": {
+            "key_id": "00000000-0000-0000-0000-000000000004",
+            "secret_version": 2
+          },
+          "status": "ok"
+        },
+        {
+          "created_at": "2026-11-16T00:00:17.000000Z",
+          "id": "00000000-0000-0000-0000-00000000000d",
+          "idempotency_key": null,
+          "kind": "publish",
+          "payload": {
+            "action_kind": "delete",
+            "key_id": "00000000-0000-0000-0000-000000000004",
+            "revoking": true,
+            "target_generation": 7
+          },
+          "status": "pending"
+        },
+        {
+          "created_at": "2026-11-16T00:00:19.000000Z",
+          "id": "00000000-0000-0000-0000-00000000000f",
+          "idempotency_key": null,
+          "kind": "publish",
+          "payload": {
+            "action_kind": "set_share_limits",
+            "key_id": null,
+            "revoking": true,
+            "target_generation": 8
+          },
+          "status": "pending"
+        },
+        {
+          "created_at": "2026-11-16T00:00:20.000000Z",
+          "id": "00000000-0000-0000-0000-000000000010",
+          "idempotency_key": "limits-1",
+          "kind": "set_share_limits",
+          "payload": {
+            "share_max_concurrency": 32
+          },
+          "status": "ok"
+        },
+        {
+          "created_at": "2026-11-16T00:00:22.000000Z",
+          "id": "00000000-0000-0000-0000-000000000011",
+          "idempotency_key": "op-1",
+          "kind": "gateway_start",
+          "payload": {
+            "source": "fixture"
+          },
+          "status": "ok"
+        }
+      ],
+      "projection": {
+        "config_generation": 8,
+        "data": [
+          {
+            "enabled": true,
+            "key_id": "00000000-0000-0000-0000-000000000001",
+            "max_concurrency": 8,
+            "name": "alpha-renamed",
+            "secret_hash": "ba5260459f41020f5621b3c5ac6b5dfd310f29997170b62a76b623685eab8ddb",
+            "secret_version": 1
+          },
+          {
+            "enabled": true,
+            "key_id": "legacy-key",
+            "max_concurrency": 1,
+            "name": "legacy",
+            "secret_hash": "1b387faeb510b3968accf441f00dac7401a7e51fade44ce474b18e8e6faf79db",
+            "secret_version": 1
+          }
+        ],
+        "schema_version": 2,
+        "share_max_concurrency": 32
+      },
+      "security": {
+        "floor": 8,
+        "records": [
+          {
+            "action": "limit_lower",
+            "applied_at": "2026-11-16T00:00:21.000000Z",
+            "applied_generation": 5,
+            "generation": 5,
+            "instance_id": "instance-a",
+            "key_id": "00000000-0000-0000-0000-000000000001",
+            "record_id": "00000000-0000-0000-0000-000000000007",
+            "recorded_at": "2026-11-16T00:00:09.000000Z",
+            "remote_confirmed_at": null,
+            "remote_receipt": null,
+            "secret_version": 1,
+            "status": "applied"
+          },
+          {
+            "action": "rotate",
+            "applied_at": null,
+            "applied_generation": null,
+            "generation": 6,
+            "instance_id": null,
+            "key_id": "00000000-0000-0000-0000-000000000004",
+            "record_id": "00000000-0000-0000-0000-000000000009",
+            "recorded_at": "2026-11-16T00:00:11.000000Z",
+            "remote_confirmed_at": null,
+            "remote_receipt": null,
+            "secret_version": 2,
+            "status": "pending"
+          },
+          {
+            "action": "delete",
+            "applied_at": null,
+            "applied_generation": null,
+            "generation": 7,
+            "instance_id": null,
+            "key_id": "00000000-0000-0000-0000-000000000004",
+            "record_id": "00000000-0000-0000-0000-00000000000c",
+            "recorded_at": "2026-11-16T00:00:16.000000Z",
+            "remote_confirmed_at": null,
+            "remote_receipt": null,
+            "secret_version": 2,
+            "status": "pending"
+          },
+          {
+            "action": "limit_lower",
+            "applied_at": null,
+            "applied_generation": null,
+            "generation": 8,
+            "instance_id": null,
+            "key_id": null,
+            "record_id": "00000000-0000-0000-0000-00000000000e",
+            "recorded_at": "2026-11-16T00:00:18.000000Z",
+            "remote_confirmed_at": null,
+            "remote_receipt": null,
+            "secret_version": null,
+            "status": "pending"
+          }
+        ],
+        "state": {
+          "format": "um-share-security-state-v1",
+          "generation_floor": 8,
+          "pending_remote": 4,
+          "records": [
+            {
+              "action": "limit_lower",
+              "applied_at": "2026-11-16T00:00:21.000000Z",
+              "applied_generation": 5,
+              "generation": 5,
+              "instance_id": "instance-a",
+              "key_id": "00000000-0000-0000-0000-000000000001",
+              "record_id": "00000000-0000-0000-0000-000000000007",
+              "recorded_at": "2026-11-16T00:00:09.000000Z",
+              "remote_confirmed_at": null,
+              "remote_receipt": null,
+              "secret_version": 1,
+              "status": "applied"
+            },
+            {
+              "action": "rotate",
+              "applied_at": null,
+              "applied_generation": null,
+              "generation": 6,
+              "instance_id": null,
+              "key_id": "00000000-0000-0000-0000-000000000004",
+              "record_id": "00000000-0000-0000-0000-000000000009",
+              "recorded_at": "2026-11-16T00:00:11.000000Z",
+              "remote_confirmed_at": null,
+              "remote_receipt": null,
+              "secret_version": 2,
+              "status": "pending"
+            },
+            {
+              "action": "delete",
+              "applied_at": null,
+              "applied_generation": null,
+              "generation": 7,
+              "instance_id": null,
+              "key_id": "00000000-0000-0000-0000-000000000004",
+              "record_id": "00000000-0000-0000-0000-00000000000c",
+              "recorded_at": "2026-11-16T00:00:16.000000Z",
+              "remote_confirmed_at": null,
+              "remote_receipt": null,
+              "secret_version": 2,
+              "status": "pending"
+            },
+            {
+              "action": "limit_lower",
+              "applied_at": null,
+              "applied_generation": null,
+              "generation": 8,
+              "instance_id": null,
+              "key_id": null,
+              "record_id": "00000000-0000-0000-0000-00000000000e",
+              "recorded_at": "2026-11-16T00:00:18.000000Z",
+              "remote_confirmed_at": null,
+              "remote_receipt": null,
+              "secret_version": null,
+              "status": "pending"
+            }
+          ]
+        }
+      },
+      "share_max_concurrency": 32
+    },
+    "token": {
+      "api_key": "fixture-api-key",
+      "saved_at": "2026-11-16 00:00:00",
+      "token": "fixture-token-value",
+      "url": "http://127.0.0.1:8000"
+    }
+  }
+}

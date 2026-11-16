@@ -48,3 +48,8 @@ web/docs/
 !.env.example
 *.zip
 .zcode/
+
+# #72 cutover parity fixtures deliberately carry the production ledger and
+# browser-profile lock names; they are isolated test data, not runtime state.
+!tests/fixtures/cutover_parity/**/*.jsonl
+!tests/fixtures/cutover_parity/**/*.lock

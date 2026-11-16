@@ -20,6 +20,8 @@ um-contract = { path = "../contract" }
 [dev-dependencies]
 hex = "0.4"
 tempfile = "3"
+um-gateway = { path = "../gateway" }
+um-ops = { path = "../ops" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

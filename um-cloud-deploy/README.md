@@ -189,6 +189,32 @@ rm -rf /opt/um-share/.incoming/um-share-<version>
 
 运行数据在 `/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share`，不在 release 内，不删除、不覆盖。预算保护与自动备份已从默认装配移除；`backup_restore.py` 只保留显式备份/恢复入口，由运维单独授权执行。
 
+## 切流验收门禁（#72）
+
+`cutover-gate.sh` 把 #73 的三项门禁收敛成一个可重复入口。证据 JSON 的每个门禁都带
+`status` 与 `executed`，计划中的云端 smoke 不会被写成已通过。
+
+```bash
+# 本地 candidate parity：Python parity 测试 + 整个 Rust workspace 测试
+bash um-cloud-deploy/cutover-gate.sh candidate-parity   --evidence /tmp/cutover-candidate.json
+
+# 真实云端 smoke：只打印命令、期望状态和操作员变量，不执行 curl
+bash um-cloud-deploy/cutover-gate.sh cloud-smoke   --base-url http://127.0.0.1:8003   --public-url https://<公网主机>   --share-key-env UM_SHARE_KEY   --evidence /tmp/cutover-smoke.json
+
+# 回滚演练：默认只打印 rollback-drill.sh 计划；--execute 才真正停/启服务
+bash um-cloud-deploy/cutover-gate.sh rollback-drill   --to <python-release> --health-port 8100 --current-health-port 8003   --evidence /tmp/cutover-drill.json
+
+# 三项汇总（smoke 与 drill 仍默认只计划）
+bash um-cloud-deploy/cutover-gate.sh all --to <python-release>   --evidence /tmp/cutover-gate.json
+```
+
+云端 smoke 的操作员变量：`BASE_URL`、`UM_SHARE_KEY`（分享 Key 值只留在环境变量，
+不进入证据）、`UM_LEDGER`、`UM_CONSOLE_URL`、`UM_CONTROL_TOKEN`、`UM_KEY_ID`、
+`UM_KEY_ROW_VERSION`。命令覆盖 `/ready`、`/health`、带/不带 Key 的 `/v1/models`、
+非流式与 SSE `/v1/chat/completions`、SSE 断流、账本行与撤销在途 Key；公网 URL
+额外覆盖 `/v1/models` 与 `/health`。操作员在云端逐条执行并把观测结果写回证据；
+gate 本身不执行这些命令。
+
 ## 退出码
 
 | 码 | 含义 |
