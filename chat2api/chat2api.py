@@ -374,6 +374,7 @@ LOGIN_IDLE_TIMEOUT_S = 300.0
 # at once; the returned code keeps the reason so the operator can decide between a
 # retry (a new round) and an on-demand visible display.
 from login_contract import (  # noqa: E402  (root prepared above)
+    DUO_PROMPT_WAITING_REASON,
     LOGIN_TERMINAL_MANUAL_REASONS,
     MANUAL_TAKEOVER_REQUIRED_PREFIX,
 )
@@ -645,6 +646,9 @@ except ValueError:
 # A definite next attempt is projected as an integer Retry-After, bounded by
 # the rolling global-attempt window (never an unbounded or fabricated value).
 AUTH_WAIT_RETRY_AFTER_MAX_S = 900
+# The Duo push wait is a live manual wait, not a request timeout: a business
+# request gets a short retry hint while the account holder approves the push.
+DUO_PROMPT_RETRY_AFTER_S = 30
 _auth_wait_slots = threading.BoundedSemaphore(AUTH_WAIT_MAX_CONCURRENT)
 
 # In-band stream error messages (after the 200 headers are already sent).
@@ -3050,7 +3054,10 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     Ticket #13: MFA, a missing prefill and an unrecognized page end THIS round
     at once with ``manual_takeover_required:<reason>`` (the finally closes the
     browser and releases the profile lock), while a Duo push prompt is still
-    waited on for the account holder's approval.
+    waited on for the account holder's approval. Ticket #74: a HEADLESS round
+    ends immediately at the Duo prompt with the soft reason
+    ``duo_prompt_waiting``; the recovery scheduler then reopens the same cycle
+    with ``visible=True``, where the push is waited on normally.
 
     ``context_factory(edge, profile_dir)``, ``credential_probe(base_url,
     token)``, ``process_lister(profile_dir)`` and ``process_signal(pid,
@@ -3254,7 +3261,18 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                     # phone approval may take longer than the idle timeout.
                     stage_seen.setdefault(stage, time.time())
                     mark_progress()
-                    note("awaiting_duo", origin=url)
+                    if visible:
+                        note("awaiting_duo", origin=url)
+                    else:
+                        # Ticket #74: an automatic headless round cannot show
+                        # the Duo prompt. Report the wait so the recovery
+                        # scheduler reopens the SAME round with a visible
+                        # window instead of treating it as a failure.
+                        note("awaiting_duo", origin=url,
+                             manual_reason=DUO_PROMPT_WAITING_REASON)
+                        raise LoginStalled(
+                            DUO_PROMPT_WAITING_REASON,
+                            "last page %s" % url)
                 elif stage == "unknown":
                     stage_seen.setdefault(stage, time.time())
                     stop_for_manual("unrecognized_page")
@@ -4680,6 +4698,11 @@ class Proxy:
                 progress["origin"] = urllib.parse.urlunsplit(
                     (parsed.scheme, parsed.netloc, parsed.path, "", ""))
             self._auth_login = progress
+            if progress.get("manual_reason") == DUO_PROMPT_WAITING_REASON:
+                # Ticket #74: an automatic headless round that reached the Duo
+                # push must reopen this SAME cycle with a visible window; it is
+                # a wait, never a failure that consumes the session budget.
+                self._recovery["visible"] = True
             if progress.get("manual_reason"):
                 # Ticket #15/#41: only a true manual stage publishes the
                 # terminal ``manual_takeover_required:<reason>`` code. Ticket
@@ -5265,6 +5288,40 @@ class Proxy:
                         refund_attempt=(outcome == "busy"))
                 granted = False
                 with self._auth_condition:
+                    if (outcome == "manual"
+                            and detail == DUO_PROMPT_WAITING_REASON):
+                        # Ticket #74: a Duo push wait is not a failed session.
+                        if self._recovery["round"] != round_id:
+                            return
+                        if not visible:
+                            # The automatic headless round reached the Duo
+                            # prompt; reopen THIS SAME cycle with a visible
+                            # window. The discovery is not a failure, and it
+                            # must not exhaust the bounded session budget:
+                            # when it was the last allowed session, the
+                            # visible reopen replaces it instead.
+                            self._recovery["visible"] = True
+                            if (self._recovery["session_starts"]
+                                    >= self._recovery["max_sessions"]):
+                                self._recovery["session_starts"] -= 1
+                            self._recovery["state"] = "waiting"
+                            self._recovery["next_attempt_epoch"] = (
+                                self._recovery_now())
+                            self._recovery["last_failure_epoch"] = None
+                            self._recovery["last_failure_reason"] = None
+                            self._recovery["pause_reason"] = None
+                            self._auth_state = "logging_in"
+                            self._auth_error = None
+                            self._auth_condition.notify_all()
+                            continue
+                        # The visible round also ended while Duo was still
+                        # waiting: pause as a manual wait, never claim a
+                        # credential failure or exhaustion.
+                        self._stop_recovery_locked(DUO_PROMPT_WAITING_REASON)
+                        self._auth_state = "needs_login"
+                        self._auth_error = DUO_PROMPT_WAITING_REASON
+                        self._auth_condition.notify_all()
+                        return
                     if outcome == "valid":
                         # The final commit already published the credential
                         # INSIDE _commit_lock; the public "valid" state is
@@ -5854,6 +5911,19 @@ class Proxy:
         if watch_thread and watch_thread is not threading.current_thread():
             watch_thread.join(timeout=3)
 
+    def _auth_wait_throttle_reason(self, fallback):
+        """Name the shared round's state when this request's wait ends.
+
+        Ticket #74: a shared round that is waiting for the account holder's Duo
+        approval is a live manual wait, not ``auth_wait_timeout``. Returning the
+        soft reason lets the client retry while the visible window is open.
+        """
+        with self._auth_condition:
+            login = self._auth_login or {}
+            if login.get("manual_reason") == DUO_PROMPT_WAITING_REASON:
+                return DUO_PROMPT_WAITING_REASON
+        return fallback
+
     def call(self, method: str, path: str, stream: bool = False,
              physical_budget=None, request_deadline=None,
              auth_wait_budget=None, cancel_check=None,
@@ -5930,7 +6000,8 @@ class Proxy:
                 if (request_deadline is None
                         or budget_deadline is None
                         or budget_deadline <= request_deadline):
-                    raise ReauthenticationThrottled("auth_wait_timeout")
+                    raise ReauthenticationThrottled(
+                        self._auth_wait_throttle_reason("auth_wait_timeout"))
             if (request_deadline is not None
                     and time.monotonic() >= request_deadline):
                 raise _RequestDeadlineExceeded(
@@ -5964,7 +6035,8 @@ class Proxy:
                     auth_wait_budget=auth_wait_budget,
                     cancel_check=cancel_check)
             except _AuthWaitTimeout:
-                raise ReauthenticationThrottled("auth_wait_timeout")
+                raise ReauthenticationThrottled(
+                    self._auth_wait_throttle_reason("auth_wait_timeout"))
             except _AuthWaitCapacityExceeded:
                 raise ReauthenticationThrottled("auth_wait_capacity")
             return ok
@@ -7645,9 +7717,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _reauthentication_error(self, detail=None):
         proxy = getattr(self.server, "proxy", None)
-        retry_after = proxy.auth_retry_after() if proxy is not None else None
-        extra_headers = ({"Retry-After": str(retry_after)}
-                         if retry_after else None)
+        if detail == DUO_PROMPT_WAITING_REASON:
+            # Ticket #74: the shared round is still waiting for the account
+            # holder's Duo approval, so this request gets a short retry hint
+            # instead of the (absent) definite next-attempt projection.
+            extra_headers = {"Retry-After": str(DUO_PROMPT_RETRY_AFTER_S)}
+        else:
+            retry_after = (proxy.auth_retry_after()
+                           if proxy is not None else None)
+            extra_headers = ({"Retry-After": str(retry_after)}
+                             if retry_after else None)
         self._error(
             503,
             "Open WebUI authentication requires an interactive sign-in",

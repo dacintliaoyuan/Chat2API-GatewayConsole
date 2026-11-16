@@ -250,7 +250,7 @@ def _umpass_elements(site, *, submit=True, submit_controls=1,
 
 def _build_site(token="fresh-token", *, sso_button=True, submit=True,
                 submit_controls=1, account=ACCOUNT, password=PASSWORD,
-                mfa=False, duo=True, swallowed=0, landing=OPENWEBUI_URL,
+                mfa=False, duo=False, swallowed=0, landing=OPENWEBUI_URL,
                 final_url=OPENWEBUI_HOME, fallback_aliases=False):
     """Wire the fake two-step scenario the real loop must drive.
 
@@ -403,10 +403,12 @@ class TwoStepFlowTests(unittest.TestCase):
         _patch_click_budget(self)
 
     def test_two_step_flow_returns_the_token(self):
-        site = _build_site()
+        site = _build_site(duo=True)
         harness = _Harness(site)
 
-        token = harness.run()
+        # ticket #74：Duo 推送等待只在可见轮继续；headless 自动轮会
+        # 立即结束并交给恢复轮重开可见窗口。
+        token = harness.run(visible=True)
 
         self.assertEqual(token, "fresh-token")
         self.assertEqual(site.goto_calls, [BASE_URL])
@@ -421,32 +423,51 @@ class TwoStepFlowTests(unittest.TestCase):
         self.assertNotIn(ACCOUNT, harness.output)
 
     def test_duo_is_waited_on_and_never_clicked(self):
-        site = _build_site()
+        site = _build_site(duo=True)
         harness = _Harness(site)
 
-        harness.run()
+        harness.run(visible=True)
 
         self.assertIn("awaiting_duo", harness.phases())
         # The Duo prompt's own control is never clicked: the session waits
         # the prompt out and only then reads the token.
         self.assertEqual(harness.click_selectors(), [SSO_BUTTON, SUBMIT_BUTTON])
 
-    def test_duo_prompt_wait_is_not_manual_takeover(self):
+    def test_headless_duo_ends_the_round_for_visible_takeover(self):
         site = _FakeSite(DUO_URL)
         harness = _Harness(site)
         started = time.monotonic()
 
         with self.assertRaises(chat2api.LoginStalled) as ctx:
-            harness.run(timeout_s=0.3)
+            harness.run(timeout_s=5)
         elapsed = time.monotonic() - started
 
-        # ticket #13：Duo 推送等待必须继续等手机批准，不能当 manual 立即
-        # 结束；等待期间不上报 manual_reason，结束后才按超时原因如实报告。
+        # ticket #74：headless 自动轮到达 Duo 后必须立即结束本轮并
+        # 报告 duo_prompt_waiting，由恢复轮重开可见窗口；不能把
+        # 等待手机批准误判成失败或人工接管已结束。
         self.assertEqual(ctx.exception.reason, "duo_prompt_waiting")
-        self.assertGreaterEqual(elapsed, 0.3)
-        self.assertEqual(harness.manual_reasons(), [])
+        self.assertLess(elapsed, 1.0)
+        self.assertEqual(harness.manual_reasons(), ["duo_prompt_waiting"])
         self.assertIn("awaiting_duo", harness.phases())
         self.assertEqual(harness.click_selectors(), [])
+        self.assertEqual(harness.reported, [harness.created[0], None])
+        self.assertEqual([c.closed for c in harness.created], [True])
+
+    def test_visible_duo_timeout_reports_the_duo_wait(self):
+        site = _FakeSite(DUO_URL)
+        harness = _Harness(site)
+        started = time.monotonic()
+
+        with self.assertRaises(chat2api.LoginStalled) as ctx:
+            harness.run(timeout_s=0.3, visible=True)
+        elapsed = time.monotonic() - started
+
+        # 可见轮继续等待本人批准；总预算耗尽时只报告等待原因，
+        # 不把 Duo 等待当成人工接管已结束。
+        self.assertEqual(ctx.exception.reason, "duo_prompt_waiting")
+        self.assertGreaterEqual(elapsed, 0.3)
+        self.assertIn("awaiting_duo", harness.phases())
+        self.assertEqual(harness.manual_reasons(), [])
         self.assertEqual(harness.reported, [harness.created[0], None])
         self.assertEqual([c.closed for c in harness.created], [True])
 
@@ -1343,7 +1364,7 @@ class SessionLifecycleTests(unittest.TestCase):
         harness = _Harness(_SlowDuoApproval())
         with mock.patch.object(chat2api, "LOGIN_IDLE_TIMEOUT_S", 0.05), \
                 mock.patch.object(chat2api, "LOGIN_POLL_INTERVAL_MS", 10):
-            token = harness.run(timeout_s=2)
+            token = harness.run(timeout_s=2, visible=True)
 
         self.assertEqual(token, "duo-approved-token")
         self.assertIn("awaiting_duo", harness.phases())
@@ -1423,7 +1444,7 @@ class SessionLifecycleTests(unittest.TestCase):
         harness = _Harness(ProgressingSite())
 
         with mock.patch.object(chat2api, "LOGIN_IDLE_TIMEOUT_S", 0.05):
-            token = harness.run(timeout_s=5)
+            token = harness.run(timeout_s=5, visible=True)
 
         self.assertEqual(token, "progress-token")
         self.assertEqual(harness.manual_reasons(), [])

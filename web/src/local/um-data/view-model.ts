@@ -73,6 +73,10 @@ const LOGIN_WORD: Readonly<Record<UmLogin["state"], string>> = {
   logging_in: "登录中",
   unknown: "状态未知",
 };
+const DUO_PROMPT_WAITING_REASON = "duo_prompt_waiting";
+const DUO_TAKEOVER_WORD = "等待本人确认 Duo 推送";
+const DUO_TAKEOVER_DETAIL =
+  "自动登录已在 UMPASS 之后等待本人批准 Duo 推送；本轮仍在等待，可打开可见窗口完成确认";
 
 export type TestEntry = {
   model: string;
@@ -331,6 +335,11 @@ export function loginFrom(result: OperationResult): UmLogin {
   const label = rowText(raw, "label");
   const checked = rowNumber(raw, "checked_epoch");
   const stamp = checked === null ? null : Math.round(checked * 1000);
+  const progress = object(raw.login);
+  const phase = rowText(progress, "phase");
+  const origin = rowText(progress, "origin");
+  const manualReason = rowText(progress, "manual_reason");
+  const takeover = manualReason === DUO_PROMPT_WAITING_REASON;
   const mapped: UmLogin["state"] =
     state === "valid"
       ? "valid"
@@ -343,12 +352,17 @@ export function loginFrom(result: OperationResult): UmLogin {
             : "unknown";
   return {
     state: mapped,
-    word: label ?? LOGIN_WORD[mapped],
-    detail:
-      error ??
-      note ??
-      (state === null ? "认证状态无法确认" : `chat2api 内存态：${state}`),
+    word: takeover ? DUO_TAKEOVER_WORD : (label ?? LOGIN_WORD[mapped]),
+    detail: takeover
+      ? DUO_TAKEOVER_DETAIL
+      : (error ??
+        note ??
+        (state === null ? "认证状态无法确认" : `chat2api 内存态：${state}`)),
     checkedAt: stamp,
+    phase,
+    origin,
+    manualReason,
+    takeover,
   };
 }
 

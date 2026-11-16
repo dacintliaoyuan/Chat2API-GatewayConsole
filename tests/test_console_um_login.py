@@ -649,11 +649,12 @@ class ConsoleUmLoginTests(unittest.TestCase):
     def test_24_soft_manual_progress_does_not_end_the_wait(self):
         # ticket #41：只有真正 manual 的三类原因结束本轮；
         # click-swallowed / unrecognized-control 仍在轮询 token。
+        # ticket #74：duo_prompt_waiting 已改为立即返回人工接管，
+        # 不再属于这里的“继续等待”集合。
         for reason in ("openwebui_click_swallowed",
                        "openwebui_button_unrecognized",
                        "umpass_click_swallowed",
-                       "umpass_submit_unrecognized",
-                       "duo_prompt_waiting"):
+                       "umpass_submit_unrecognized"):
             with self.subTest(reason=reason):
                 status = {
                     "state": "logging_in",
@@ -697,6 +698,37 @@ class ConsoleUmLoginTests(unittest.TestCase):
             console_um_login.relogin_um("um", case.params, case.ctx)
         self.assertGreaterEqual(time.monotonic() - started, 0.2)
         self.assertEqual(caught.exception.code, "login_timeout_not_settled")
+
+    def test_28_duo_wait_returns_manual_takeover_without_waiting(self):
+        # ticket #74：控制台看到 login.manual_reason=duo_prompt_waiting
+        # 立即返回稳定的 login_manual_takeover_required，不再等预算耗尽；
+        # 后端轮次仍在等待，消息说明可打开可见窗口。
+        case = self._start_case("Running", status_payload={
+            "state": "logging_in",
+            "label": "登录中（需人工：duo_prompt_waiting）",
+            "error": None,
+            "login": {
+                "phase": "awaiting_duo",
+                "origin": "https://api-1234.duosecurity.com/prompt/xyz",
+                "manual_reason": "duo_prompt_waiting",
+            },
+            "recovery": {
+                "state": "running", "round": 1, "session_starts": 1,
+                "max_sessions": 6, "next_attempt_epoch": None,
+                "pause_reason": None,
+            },
+        }, params={"login_budget_s": 5.0, "poll_interval_s": 0.02})
+        started = time.monotonic()
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertLess(time.monotonic() - started, 1.0)
+        error = caught.exception
+        self.assertEqual(error.code, "login_manual_takeover_required")
+        self.assertEqual(
+            error.message,
+            "登录需要本人确认 Duo 推送；本轮仍在等待，可打开可见窗口")
+        self.assertNotIn("isolated-test-control-token", error.message)
+        self.assertEqual(case.wrapper.call_count, 0)  # was running: no restart
 
     def test_19_unknown_next_attempt_projects_as_null(self):
         # A8/A7: while another instance's live lease is the only reason for

@@ -85,6 +85,14 @@ export type UmLogin = {
   word: string;
   detail: string;
   checkedAt: number | null;
+  /** Ticket #74: the gateway's current login progress, when one is open. */
+  phase?: string | null;
+  /** The login page's sanitized origin; never a query string or token. */
+  origin?: string | null;
+  /** The soft manual reason, e.g. `duo_prompt_waiting`. */
+  manualReason?: string | null;
+  /** True while the gateway waits for the account holder's Duo approval. */
+  takeover?: boolean;
 };
 /** The most recent upstream verification (account.um_verify); null = never run. */
 export type UmVerify = {

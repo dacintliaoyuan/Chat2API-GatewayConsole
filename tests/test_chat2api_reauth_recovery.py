@@ -503,6 +503,70 @@ class RecoveryScheduleContractTests(RecoveryContractTestBase):
         self.assertEqual(status["recovery"]["pause_reason"],
                          "manual_takeover_required:umpass_mfa_required")
 
+    def test_headless_duo_wait_reopens_the_same_cycle_visible(self):
+        # ticket #74：自动 headless 轮次检测到 Duo 后，用可见窗口重开
+        # 同一轮；这次检测不是失败，也不消耗 6 次会话预算。
+        proxy = self._proxy()
+        visible_calls = []
+
+        def fake_login(*_args, **kwargs):
+            visible_calls.append(kwargs.get("visible"))
+            if len(visible_calls) == 1:
+                self.assertFalse(kwargs.get("visible"))
+                proxy._note_login_progress({
+                    "phase": "awaiting_duo",
+                    "origin": "https://api-1234.duosecurity.com/prompt/xyz",
+                    "manual_reason": "duo_prompt_waiting",
+                })
+                raise chat2api.LoginStalled("duo_prompt_waiting",
+                                             "last page duo")
+            self.assertTrue(kwargs.get("visible"))
+            return "fresh-token"
+
+        with (
+            self._grant_patch(),
+            mock.patch.object(
+                chat2api, "_release_reauth_slot_for_round", return_value=True),
+            mock.patch.object(
+                chat2api, "browser_login", side_effect=fake_login),
+        ):
+            self.assertTrue(proxy.refresh(force=True))
+
+        status = proxy.auth_status()
+        self.assertEqual(visible_calls, [False, True])
+        self.assertEqual(status["state"], "valid")
+        self.assertEqual(status["recovery"]["state"], "idle")
+        self.assertEqual(status["recovery"]["session_starts"], 2,
+                         "headless 与可见轮各计一次会话，但都不判失败")
+        self.assertIsNone(status["login"])
+        self.assertIsNone(status["error"])
+
+    def test_visible_duo_wait_pauses_without_a_failure(self):
+        # ticket #74：可见轮也在等待 Duo 时只暂停为人工等待，不判凭据失败。
+        proxy = self._proxy()
+
+        def fake_login(*_args, **_kwargs):
+            self.assertTrue(_kwargs.get("visible"))
+            raise chat2api.LoginStalled("duo_prompt_waiting",
+                                        "last page duo")
+
+        with (
+            self._grant_patch(),
+            mock.patch.object(
+                chat2api, "_release_reauth_slot_for_round", return_value=True),
+            mock.patch.object(
+                chat2api, "browser_login", side_effect=fake_login),
+        ):
+            self.assertFalse(proxy.refresh(force=True, visible=True))
+
+        status = proxy.auth_status()
+        self.assertEqual(status["state"], "needs_login")
+        self.assertEqual(status["error"], "duo_prompt_waiting")
+        self.assertEqual(status["recovery"]["state"], "exhausted")
+        self.assertEqual(status["recovery"]["pause_reason"],
+                         "duo_prompt_waiting")
+        self.assertEqual(status["recovery"]["session_starts"], 1)
+
     def test_soft_manual_progress_is_not_a_terminal_error(self):
         # ticket #41/#42 item 11：click-swallowed/unrecognized-control
         # 只是自动流程停止动作、仍在轮询 token；它只保留在

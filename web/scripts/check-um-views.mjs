@@ -25,6 +25,7 @@ const code = buildSync({
       `export { TrendView, SeriesColors, monotonePath, drawableRuns } from "./src/local/um-ui/charts.ts";`,
       `export { unwiredState } from "./src/local/um-ui/contract.ts";`,
       `export { overviewHtml } from "./src/local/um-ui/overview.ts";`,
+      `export { loginFrom } from "./src/local/um-data/view-model.ts";`,
       `export { UmDataController } from "./src/local/um-data/um-data-controller.ts";`,
     ].join("\n"),
     resolveDir: fileURLToPath(new URL("..", import.meta.url)),
@@ -861,6 +862,41 @@ test("the login card keeps on-demand login and adds the forced visible entry", (
   assert.match(needs, /data-um-act="login"/);
   assert.match(needs, /检查并按需登录/);
   assert.match(needs, /data-um-force-login/);
+});
+
+test("a Duo push wait shows the takeover status and opens a visible window", () => {
+  const result = {
+    state: "succeeded",
+    operation: {
+      result: {
+        state: "logging_in",
+        label: "登录中（需人工：duo_prompt_waiting）",
+        error: null,
+        checked_epoch: 1,
+        login: {
+          phase: "awaiting_duo",
+          origin: "https://api-1234.duosecurity.com/prompt/xyz",
+          manual_reason: "duo_prompt_waiting",
+        },
+      },
+    },
+    operationId: "op-duo-login",
+    reason: null,
+  };
+  const login = um.loginFrom(result);
+  assert.equal(login.takeover, true);
+  assert.equal(login.manualReason, "duo_prompt_waiting");
+  assert.equal(login.phase, "awaiting_duo");
+  assert.equal(login.word, "等待本人确认 Duo 推送");
+  assert.match(login.detail, /本轮仍在等待/);
+  const overview = um.unwiredState().overview;
+  overview.login = ready(login);
+  overview.actions.login = open;
+  const html = um.overviewHtml(overview, { metric: "tokens", line: false }, {});
+  assert.match(html, /等待本人确认 Duo 推送/);
+  assert.match(html, /打开可见窗口/);
+  assert.match(html, /data-um-force-login/);
+  assert.doesNotMatch(html, /强制重新登录（可见窗口）/);
 });
 
 test("a forced login event reaches account.login with force and visible", async () => {

@@ -1752,7 +1752,7 @@
     "generatedFrom": "tests/generate_rust_contract_fixture.py",
     "sourceHashEncoding": "utf8-lf",
     "sourceHashes": {
-      "chat2api/chat2api.py": "59f2a1f0e0227cb5d98b88c9397cceefc88de20cbf5e990729bbf583745f9ef7",
+      "chat2api/chat2api.py": "893f25475b30e53be1fbf3f661819d0e6e521124efb5ab4160c191b2216d5daa",
       "chat2api/share_auth.py": "160d94cbfb1167557a0ecae97a8501a9dfbe01ca8416bb51c526c429d830a01d",
       "console/display_proxy.py": "5aada84d79e18c9d6899fd31bfce05098ebc23a990d00cfd81a11f50e326b01c",
       "docs/rust-contract.md": "ab137f804d3c6d6cc48160f27e3dd5232782125ede12fa276380c5b1a0b11767",

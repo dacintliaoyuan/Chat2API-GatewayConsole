@@ -208,6 +208,41 @@ class UmAuthStatusPassthroughTests(UmAuthStatusTestBase):
         self.assertEqual(result["primary"],
                          "manual_takeover_required:umpass_mfa_required")
 
+    def test_login_progress_fields_pass_through(self):
+        # ticket #74：读面透传当前登录轮次的 phase/origin/manual_reason，
+        # 让控制台显示 Duo 推送等待并提供可见窗口动作。
+        self.server.respond = (200, json.dumps({
+            "state": "logging_in",
+            "label": "登录中（需人工：duo_prompt_waiting）",
+            "error": None,
+            "login": {
+                "phase": "awaiting_duo",
+                "origin": "https://api-1234.duosecurity.com/prompt/xyz",
+                "manual_reason": "duo_prompt_waiting",
+                "detail": "not whitelisted",
+            },
+        }).encode("utf-8"))
+        result = console_um_adapter.um_auth_status("chat2api", {}, None)
+        self.assertEqual(result["login"], {
+            "phase": "awaiting_duo",
+            "origin": "https://api-1234.duosecurity.com/prompt/xyz",
+            "manual_reason": "duo_prompt_waiting",
+        })
+        self.assertNotIn("detail", result["login"])
+
+    def test_malformed_login_progress_is_unknown_not_guessed(self):
+        for login in (None, "duo_prompt_waiting", [], {"phase": 1}):
+            with self.subTest(login=login):
+                self.server.respond = (200, json.dumps({
+                    "state": "logging_in",
+                    "label": "登录中",
+                    "error": None,
+                    "login": login,
+                }).encode("utf-8"))
+                result = console_um_adapter.um_auth_status(
+                    "chat2api", {}, None)
+                self.assertIsNone(result["login"])
+
     def test_stub_receives_control_header_and_no_origin(self):
         console_um_adapter.um_auth_status("chat2api", {}, None)
         captured = self.server.captured
