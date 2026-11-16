@@ -638,6 +638,113 @@ STREAM_ERROR_MESSAGES = {
         "incomplete.",
 }
 
+# Error envelope contract (ADR 0003 / spec #58). ``type`` is the client-facing
+# category, ``code`` is the stable machine-readable contract and must keep every
+# spelling an earlier release emitted. ``param`` names the offending field (or is
+# null), and ``detail`` stays a structured diagnostic extension. The status ->
+# category map is only a fallback: a code-specific category wins, because e.g.
+# a 503 reauthentication error is an upstream failure, not a generic API error.
+_ERROR_CATEGORIES = frozenset({
+    "invalid_request_error",
+    "authentication_error",
+    "permission_error",
+    "not_found_error",
+    "rate_limit_error",
+    "api_error",
+    "overloaded_error",
+    "upstream_error",
+})
+
+_ERROR_TYPE_BY_STATUS = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    402: "permission_error",
+    403: "permission_error",
+    404: "not_found_error",
+    405: "invalid_request_error",
+    408: "invalid_request_error",
+    409: "invalid_request_error",
+    413: "invalid_request_error",
+    415: "invalid_request_error",
+    422: "invalid_request_error",
+    429: "rate_limit_error",
+    500: "api_error",
+    502: "upstream_error",
+    503: "api_error",
+    504: "upstream_error",
+    529: "overloaded_error",
+}
+
+# Stable machine codes and their categories. Codes not listed here use the
+# status fallback above; every code emitted by the gateway must stay in this map
+# so a client can switch on ``code`` without parsing messages.
+_ERROR_TYPE_BY_CODE = {
+    # Local request shape.
+    "invalid_json": "invalid_request_error",
+    "invalid_body": "invalid_request_error",
+    "invalid_request": "invalid_request_error",
+    "unsupported_chat_request": "invalid_request_error",
+    "unsupported_messages_request": "invalid_request_error",
+    "unsupported_responses_request": "invalid_request_error",
+    "too_many_images_current_turn": "invalid_request_error",
+    "too_many_images_history": "invalid_request_error",
+    "image_budget_normalization_failed": "invalid_request_error",
+    "method_not_allowed": "invalid_request_error",
+    "unsupported_content_encoding": "invalid_request_error",
+    "request_timeout": "invalid_request_error",
+    # Authentication / authorization.
+    "invalid_api_key": "authentication_error",
+    "local_auth_error": "authentication_error",
+    "origin_denied": "permission_error",
+    "local_management_denied": "permission_error",
+    "invalid_control_token": "authentication_error",
+    "upstream_forbidden": "permission_error",
+    "reauthentication_failed": "authentication_error",
+    # Routing.
+    "route_not_shared": "not_found_error",
+    "not_found": "not_found_error",
+    # Admission / quota.
+    "sharing_limit_reached": "rate_limit_error",
+    "upstream_quota_exhausted": "rate_limit_error",
+    # Upstream / gateway.
+    "reauthentication_required": "upstream_error",
+    "upstream_unavailable": "upstream_error",
+    "upstream_unreachable": "upstream_error",
+    "upstream_timeout": "upstream_error",
+    "upstream_request_rejected": "invalid_request_error",
+    "upstream_request_failed": "upstream_error",
+    "upstream_explicit_error": "upstream_error",
+    "upstream_stream_error": "upstream_error",
+    "unexpected_upstream_response": "upstream_error",
+    "invalid_upstream_response": "upstream_error",
+    "request_deadline_exceeded": "upstream_error",
+    "upstream_attempt_budget_exhausted": "upstream_error",
+    "degenerate_repetition": "upstream_error",
+    "too_many_concurrent_streams": "overloaded_error",
+    "share_revoke_unassembled": "api_error",
+    "api_error": "api_error",
+}
+
+
+def _error_category(status: int, error_code: str | None) -> str:
+    """Return the client-facing category for one stable machine code."""
+    category = _ERROR_TYPE_BY_CODE.get(error_code or "")
+    if category is None:
+        category = _ERROR_TYPE_BY_STATUS.get(status, "api_error")
+    if category not in _ERROR_CATEGORIES:
+        # A typo in the tables must never leak an unknown category to clients.
+        return "api_error"
+    return category
+
+
+def _is_anthropic_error_path(path: str | None) -> bool:
+    """True when the local error must use the Anthropic Messages shape."""
+    try:
+        route = urllib.parse.urlparse(path or "").path
+    except (TypeError, ValueError):
+        return False
+    return route in ("/v1/messages", "/api/v1/messages")
+
 # Base models that get thinking-level virtual variants (see docstring).
 # You can also add them on the command line with --effort-model.
 EFFORT_MODELS: list[str] = []
@@ -6943,18 +7050,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _error(self, code: int, message: str, detail=None,
-               error_type="chat2api_error", extra_headers=None, extra=None):
+    def _error(self, status: int, message: str, detail=None,
+               error_code: str | None = None, param: str | None = None,
+               extra_headers=None, extra=None):
+        """Send one local error in the client protocol's envelope.
+
+        OpenAI-shaped routes carry ``message``/``type``/``code``/``param``/
+        ``detail``. Anthropic Messages carries the top-level ``type: error`` and
+        an ``error`` object with ``type``/``message``/``code`` (plus ``detail``
+        when diagnostics exist). The HTTP status is never changed here: status
+        mapping is a separate contract ticket.
+        """
         # Errors may fire before the request body is read (unknown path,
         # rejected control token, invalid local key). Reusing the connection
         # would let those unread bytes be parsed as the next request line
         # ("501 Unsupported method ({json}POST)"), so every error closes it.
         self.close_connection = True
+        error_code = error_code or "api_error"
+        error_type = _error_category(status, error_code)
+        if _is_anthropic_error_path(getattr(self, "path", None)):
+            error = {"type": error_type, "message": message,
+                     "code": error_code}
+            if detail is not None:
+                error["detail"] = detail
+            if extra:
+                error.update(extra)
+            self._json(status, {"type": "error", "error": error},
+                       extra_headers)
+            return
         error = {"message": message, "type": error_type,
-                 "detail": detail}
+                 "code": error_code, "param": param, "detail": detail}
         if extra:
             error.update(extra)
-        self._json(code, {"error": error}, extra_headers)
+        self._json(status, {"error": error}, extra_headers)
 
     def _reauthentication_error(self, detail=None):
         proxy = getattr(self.server, "proxy", None)
@@ -6966,12 +7094,12 @@ class Handler(BaseHTTPRequestHandler):
             "Open WebUI authentication requires an interactive sign-in",
             detail,
             "reauthentication_required",
-            extra_headers,
+            extra_headers=extra_headers,
         )
 
     @staticmethod
     def _aggregate_failure_error(status, exc):
-        """Map one failed SSE aggregate onto a 502 (message, detail, type).
+        """Map one failed SSE aggregate onto a 502 (message, detail, code).
 
         The reason is the aggregator's own terminal classification, never a
         guess: an explicit upstream error keeps its sanitized message, a bad frame
@@ -7054,12 +7182,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.client_address[0],
                 self.headers.get("Host", ""),
                 self.headers.get("Origin")):
-            self._error(403, "Local management endpoint denied")
+            self._error(403, "Local management endpoint denied",
+                        error_code="local_management_denied")
             return False
         expected = ensure_control_token(CONTROL_TOKEN_FILE)
         supplied = self.headers.get(CONTROL_HEADER, "")
         if not expected or not hmac.compare_digest(supplied, expected):
-            self._error(403, "Local management token missing or invalid")
+            self._error(403, "Local management token missing or invalid",
+                        error_code="invalid_control_token")
             return False
         return True
 
@@ -7078,7 +7208,8 @@ class Handler(BaseHTTPRequestHandler):
             supplied = self.headers.get("x-api-key", "").strip()
         if not expected or not hmac.compare_digest(supplied, expected):
             self._error(401, "Local API key missing or invalid",
-                        error_type="local_auth_error")
+                        error_code="local_auth_error",
+                        param="Authorization")
             return False
         return True
 
@@ -7099,7 +7230,7 @@ class Handler(BaseHTTPRequestHandler):
         self._error(
             403, "Browser origins are not allowed by default; list the "
             "origin in CHAT2API_ALLOWED_ORIGINS to permit it",
-            error_type="origin_denied")
+            error_code="origin_denied", param="Origin")
         return False
 
     def _cors_allow_origin(self):
@@ -7118,14 +7249,15 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):
             self._error(400, "Invalid Content-Length header",
-                        error_type="invalid_request")
+                        error_code="invalid_request",
+                        param="Content-Length")
             return None
         limit = (SHARE_MAX_REQUEST_BYTES
                  if getattr(self.server, "share_gate", None) is not None
                  else MAX_REQUEST_BYTES)
         if length < 0 or length > limit:
             self._error(413, "Request body too large",
-                        error_type="payload_too_large")
+                        error_code="payload_too_large")
             return None
         if length == 0:
             return {}
@@ -7133,11 +7265,11 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
         except (OSError, ValueError, RecursionError):
             self._error(400, "Request body is not valid JSON",
-                        error_type="invalid_json")
+                        error_code="invalid_json")
             return None
         if not isinstance(body, dict):
             self._error(400, "Request body must be a JSON object",
-                        error_type="invalid_body")
+                        error_code="invalid_body")
             return None
         return body
 
@@ -7193,24 +7325,23 @@ class Handler(BaseHTTPRequestHandler):
                 share.model_catalog_limit(raw_path)
             except ValueError:
                 self._error(404, "route_not_shared",
-                            error_type="route_not_shared")
+                            error_code="route_not_shared")
                 return False
         elif path.startswith("/v1/messages"):
             try:
                 share.messages_query(raw_path)
             except ValueError:
                 self._error(404, "route_not_shared",
-                            error_type="route_not_shared")
+                            error_code="route_not_shared")
                 return False
         elif path not in ("/v1/chat/completions", "/v1/responses"):
             self._error(404, "route_not_shared",
-                        error_type="route_not_shared")
+                        error_code="route_not_shared")
             return False
         auth = gate.authenticate(self.headers, allow_api_key)
         if auth is None:
             self._error(401, "invalid_api_key",
-                        error_type="share_gateway_error",
-                        extra={"code": "invalid_api_key"})
+                        error_code="invalid_api_key")
             return False
         entry, cfg = auth
         reason = {}
@@ -7218,10 +7349,10 @@ class Handler(BaseHTTPRequestHandler):
                             entry["secret_version"], reason_out=reason):
             self._error(
                 429, "sharing_limit_reached",
-                error_type="share_gateway_error",
-                extra={"code": "sharing_limit_reached",
-                       "reason": reason.get("reason"),
-                       "detail": reason.get("detail")})
+                detail={"reason": reason.get("reason"),
+                         "detail": reason.get("detail")},
+                error_code="sharing_limit_reached",
+                extra={"reason": reason.get("reason")})
             return False
         ctx = share._InflightCtx(self.connection)
         gate.register_inflight(entry["key_id"], ctx)
@@ -7281,13 +7412,15 @@ class Handler(BaseHTTPRequestHandler):
                 r = requests.get(f"{proxy.base_url}/api/version", timeout=15)
             except requests.RequestException as exc:
                 self._error(502, "Failed to fetch upstream version",
-                            type(exc).__name__)
+                            type(exc).__name__,
+                            error_code="upstream_unreachable")
                 return
             try:
                 upstream_version = r.json() if r.status_code == 200 else None
             except ValueError as exc:
                 self._error(502, "Upstream version response was not valid JSON",
-                            type(exc).__name__)
+                            type(exc).__name__,
+                            error_code="invalid_upstream_response")
                 return
             finally:
                 r.close()
@@ -7334,10 +7467,11 @@ class Handler(BaseHTTPRequestHandler):
             except _RequestDeadlineExceeded:
                 self._error(
                     502, "Upstream request could not start another attempt",
-                    error_type="request_deadline_exceeded")
+                    error_code="request_deadline_exceeded")
                 return
             if models is None:
-                self._error(502, "Failed to fetch model list (auth may have expired)")
+                self._error(502, "Failed to fetch model list (auth may have expired)",
+                            error_code="upstream_unavailable")
                 return
             extra = {X_MODELS_MARKER: "1"} if want_raw_fresh else None
             self._json(200, models, extra)
@@ -7363,11 +7497,12 @@ class Handler(BaseHTTPRequestHandler):
             except _RequestDeadlineExceeded:
                 self._error(
                     502, "Upstream request could not start another attempt",
-                    error_type="request_deadline_exceeded")
+                    error_code="request_deadline_exceeded")
                 return
             self._passthrough(r)
         else:
-            self._error(404, f"Unknown path: {path}")
+            self._error(404, f"Unknown path: {path}",
+                        error_code="not_found")
 
     # ---------- POST ----------
     def do_POST(self):
@@ -7411,7 +7546,7 @@ class Handler(BaseHTTPRequestHandler):
                     "Share revoke endpoint is not assembled in this role",
                     detail={"released": 0,
                              "reason": "share_backend_unassembled"},
-                    error_type="share_revoke_unassembled")
+                    error_code="share_revoke_unassembled")
                 return
             if not self._control_allowed():
                 return
@@ -7421,7 +7556,7 @@ class Handler(BaseHTTPRequestHandler):
             key_id = body.get("key_id")
             if not isinstance(key_id, str) or not key_id:
                 self._error(400, "key_id is required",
-                            error_type="invalid_request")
+                            error_code="invalid_request", param="key_id")
                 return
             self._json(200, {"released": gate.terminate_key(key_id)})
         elif path == "/admin/auth/login":
@@ -7500,11 +7635,12 @@ class Handler(BaseHTTPRequestHandler):
             except _RequestDeadlineExceeded:
                 self._error(
                     502, "Upstream request could not start another attempt",
-                    error_type="request_deadline_exceeded")
+                    error_code="request_deadline_exceeded")
                 return
             self._passthrough(r)
         else:
-            self._error(404, f"Unknown path: {path}")
+            self._error(404, f"Unknown path: {path}",
+                        error_code="not_found")
 
     def _responses(self, auth_wait_budget=None, request_deadline=None,
                    cancel_check=None):
@@ -7526,7 +7662,8 @@ class Handler(BaseHTTPRequestHandler):
                                   responses_stream_events,
                                   responses_requires_messages)
         if not valid_responses_request(body):
-            self._error(400, "unsupported_responses_request")
+            self._error(400, "unsupported_responses_request",
+                        error_code="unsupported_responses_request")
             return
         if responses_requires_messages(body):
             # Tool results carrying images need the one upstream protocol that
@@ -7577,7 +7714,7 @@ class Handler(BaseHTTPRequestHandler):
                           input_est, 0, status="request_deadline_exceeded")
             self._error(
                 502, "Upstream request could not start another attempt",
-                error_type="request_deadline_exceeded")
+                error_code="request_deadline_exceeded")
             return
         try:
             if r.status_code != 200:
@@ -7587,11 +7724,13 @@ class Handler(BaseHTTPRequestHandler):
                 elif r.status_code in (400, 422):
                     status = f"HTTP{r.status_code}"
                     self._error(r.status_code, "upstream_request_rejected",
-                                 detail={"upstream_status": r.status_code})
+                                 detail={"upstream_status": r.status_code},
+                                 error_code="upstream_request_rejected")
                 else:
                     status = "upstream_unavailable"
                     self._error(502, "upstream_unavailable",
-                                detail={"upstream_status": r.status_code})
+                                detail={"upstream_status": r.status_code},
+                                error_code="upstream_unavailable")
                 record_usage(body["model"], client_stream, started_at, None,
                               input_est, 0, status=status)
                 return
@@ -7604,7 +7743,8 @@ class Handler(BaseHTTPRequestHandler):
                     record_usage(body["model"], False, started_at, None,
                                   input_est, 0,
                                   status="unexpected_upstream_response")
-                    self._error(502, "unexpected_upstream_response")
+                    self._error(502, "unexpected_upstream_response",
+                                error_code="unexpected_upstream_response")
                     return
                 self._json(200, translated)
                 out_chars = 0
@@ -7637,7 +7777,7 @@ class Handler(BaseHTTPRequestHandler):
                                   input_est, 0,
                                   status="concurrency_limit")
                     self._error(503, "Too many concurrent streaming requests",
-                                error_type="too_many_concurrent_streams")
+                                error_code="too_many_concurrent_streams")
                     return
                 upstream_owned = True
                 aggregate_data, aggregate_status, aggregate_exc = (
@@ -7653,7 +7793,8 @@ class Handler(BaseHTTPRequestHandler):
                                       aggregate.usage(), input_est,
                                       aggregate.output_estimate(),
                                       status="unexpected_upstream_response")
-                        self._error(502, "unexpected_upstream_response")
+                        self._error(502, "unexpected_upstream_response",
+                                    error_code="unexpected_upstream_response")
                         return
                     try:
                         self._json(200, translated)
@@ -7663,11 +7804,11 @@ class Handler(BaseHTTPRequestHandler):
                 if aggregate_status == "client_disconnected":
                     self.close_connection = True
                 elif aggregate_status != "ok":
-                    message, detail, error_type = (
+                    message, detail, error_code = (
                         self._aggregate_failure_error(
                             aggregate_status, aggregate_exc))
                     try:
-                        self._error(502, message, detail, error_type)
+                        self._error(502, message, detail, error_code)
                     except (ConnectionError, OSError, ValueError):
                         aggregate_status = "client_disconnected"
                         self.close_connection = True
@@ -7805,7 +7946,7 @@ class Handler(BaseHTTPRequestHandler):
                           input_est, 0, status="request_deadline_exceeded")
             self._error(
                 502, "Upstream request could not start another attempt",
-                error_type="request_deadline_exceeded")
+                error_code="request_deadline_exceeded")
             return
         try:
             if r.status_code != 200:
@@ -7815,11 +7956,13 @@ class Handler(BaseHTTPRequestHandler):
                 elif r.status_code in (400, 422):
                     status = f"HTTP{r.status_code}"
                     self._error(r.status_code, "upstream_request_rejected",
-                                 detail={"upstream_status": r.status_code})
+                                 detail={"upstream_status": r.status_code},
+                                 error_code="upstream_request_rejected")
                 else:
                     status = "upstream_unavailable"
                     self._error(502, "upstream_unavailable",
-                                detail={"upstream_status": r.status_code})
+                                detail={"upstream_status": r.status_code},
+                                error_code="upstream_unavailable")
                 record_usage(body["model"], client_stream, started_at, None,
                               input_est, 0, status=status)
                 return
@@ -7863,7 +8006,7 @@ class Handler(BaseHTTPRequestHandler):
                                   input_est, 0,
                                   status="concurrency_limit")
                     self._error(503, "Too many concurrent streaming requests",
-                                error_type="too_many_concurrent_streams")
+                                error_code="too_many_concurrent_streams")
                     return
                 upstream_owned = True
                 aggregate_data, aggregate_status, aggregate_exc = (
@@ -7880,7 +8023,8 @@ class Handler(BaseHTTPRequestHandler):
                                           aggregate.usage()) or None,
                                       input_est, aggregate.output_estimate(),
                                       status="unexpected_upstream_response")
-                        self._error(502, "unexpected_upstream_response")
+                        self._error(502, "unexpected_upstream_response",
+                                    error_code="unexpected_upstream_response")
                         return
                     try:
                         self._json(200, translated)
@@ -7890,11 +8034,11 @@ class Handler(BaseHTTPRequestHandler):
                 if aggregate_status == "client_disconnected":
                     self.close_connection = True
                 elif aggregate_status != "ok":
-                    message, detail, error_type = (
+                    message, detail, error_code = (
                         self._aggregate_failure_error(
                             aggregate_status, aggregate_exc))
                     try:
-                        self._error(502, message, detail, error_type)
+                        self._error(502, message, detail, error_code)
                     except (ConnectionError, OSError, ValueError):
                         aggregate_status = "client_disconnected"
                         self.close_connection = True
@@ -8008,7 +8152,7 @@ class Handler(BaseHTTPRequestHandler):
                 and upstream_path == "/api/v1/messages" \
                 and not _load_share_auth().valid_messages_request(body):
             self._error(400, "unsupported_messages_request",
-                        error_type="unsupported_messages_request")
+                        error_code="unsupported_messages_request")
             return
         client_stream = allow_stream and bool(body.get("stream"))
         # N2b: stream=false Messages may aggregate only for the selected triple.
@@ -8146,14 +8290,14 @@ class Handler(BaseHTTPRequestHandler):
             if remaining_s <= 0:
                 self._error(
                     502, "Upstream compatibility endpoint exceeded the request deadline",
-                    error_type="request_deadline_exceeded")
+                    error_code="request_deadline_exceeded")
                 log_summary("request_deadline_exceeded")
                 record_messages_usage("request_deadline_exceeded")
                 return
             if physical_budget.remaining <= 0:
                 self._error(
                     502, "Upstream compatibility endpoint exhausted the physical request budget",
-                    error_type="upstream_attempt_budget_exhausted")
+                    error_code="upstream_attempt_budget_exhausted")
                 log_summary("physical_budget_exhausted")
                 record_messages_usage("physical_budget_exhausted")
                 return
@@ -8187,7 +8331,7 @@ class Handler(BaseHTTPRequestHandler):
                               if isinstance(exc, _RequestDeadlineExceeded)
                               else "upstream_attempt_budget_exhausted")
                 self._error(502, "Upstream compatibility endpoint could not start another attempt",
-                            type(exc).__name__, error_type=error_type)
+                            type(exc).__name__, error_code=error_type)
                 log_summary(error_type)
                 record_messages_usage(error_type)
                 return
@@ -8203,7 +8347,8 @@ class Handler(BaseHTTPRequestHandler):
                         type(exc).__name__, elapsed):
                     continue
                 self._error(502, "Failed to reach upstream compatibility endpoint",
-                            type(exc).__name__)
+                            type(exc).__name__,
+                            error_code="upstream_unreachable")
                 log_summary(type(exc).__name__)
                 record_messages_usage(type(exc).__name__)
                 return
@@ -8222,7 +8367,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._error(
                         502, "Upstream compatibility endpoint reached the request deadline",
                         f"HTTP {status_code}",
-                        error_type="request_deadline_exceeded")
+                        error_code="request_deadline_exceeded")
                     log_summary("request_deadline_exceeded")
                     record_messages_usage("request_deadline_exceeded")
                     return
@@ -8266,7 +8411,7 @@ class Handler(BaseHTTPRequestHandler):
                         self._error(
                             502, "Upstream model fell into a repetition loop",
                             detail=reason,
-                            error_type="degenerate_repetition")
+                            error_code="degenerate_repetition")
                         log_summary("degenerate_repetition")
                         record_messages_usage("degenerate_repetition")
                         return
@@ -8281,7 +8426,7 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     self._error(
                         502, "Upstream compatibility stream failed before any event",
-                        detail=str(exc), error_type="upstream_stream_error")
+                        detail=str(exc), error_code="upstream_stream_error")
                     log_summary(f"stream:{exc}")
                     record_messages_usage("upstream_stream_error")
                     return
@@ -8316,7 +8461,7 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                         pass
                     self._error(503, "Too many concurrent streaming requests",
-                                error_type="too_many_concurrent_streams")
+                                error_code="too_many_concurrent_streams")
                     log_summary("concurrency_limit")
                     record_messages_usage("concurrency_limit")
                     return
@@ -8338,11 +8483,11 @@ class Handler(BaseHTTPRequestHandler):
                             "endpoint=%s message=%r", compat_request_id,
                             upstream_path,
                             getattr(aggregate_exc, "message", None))
-                    message, detail, error_type = (
+                    message, detail, error_code = (
                         self._aggregate_failure_error(
                             aggregate_status, aggregate_exc))
                     try:
-                        self._error(502, message, detail, error_type)
+                        self._error(502, message, detail, error_code)
                     except (ConnectionError, OSError, ValueError):
                         aggregate_status = "client_disconnected"
                         self.close_connection = True
@@ -8405,10 +8550,11 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self.server, "share_gate", None) is not None \
                 and not _load_share_auth().valid_chat_request(body):
             self._error(400, "unsupported_chat_request",
-                        error_type="unsupported_chat_request")
+                        error_code="unsupported_chat_request")
             return
         if not body.get("messages"):
-            self._error(400, "Request body is missing the messages field")
+            self._error(400, "Request body is missing the messages field",
+                        error_code="invalid_request", param="messages")
             return
 
         req_model = body.get("model") or ""
@@ -8441,7 +8587,7 @@ class Handler(BaseHTTPRequestHandler):
                 image_stats["images_before"], image_stats["historical_images"],
                 image_stats["current_turn_images"], MAX_IMAGES)
             self._error(400, image_error["message"],
-                        error_type=image_error["type"])
+                        error_code=image_error["type"], param="messages")
             _logger.info(
                 "request summary request=%s final=%s physical_attempts=0/%d "
                 "upstream_retries=0 slow_retries=0 repetition_retries=0 "
@@ -8678,7 +8824,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error(
                 503, "Too many concurrent streaming requests",
                 f"concurrent reader limit {STREAM_MAX_CONCURRENT_READERS} "
-                "reached; retry later", "too_many_concurrent_streams")
+                "reached; retry later", error_code="too_many_concurrent_streams")
             return
         # Streaming reads are bounded per socket read by chat_call_timeout()
         # above (STREAM_SOCKET_TIMEOUT_S cap, also clipped to the request
@@ -8694,7 +8840,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._error(
                     503, "Too many concurrent streaming requests",
                     f"concurrent reader limit {STREAM_MAX_CONCURRENT_READERS} "
-                    "reached; retry later", "too_many_concurrent_streams")
+                    "reached; retry later", error_code="too_many_concurrent_streams")
                 return
             except ReauthenticationRequired as exc:
                 log_failure("reauthentication_required", 503,
@@ -8714,16 +8860,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._error(
                     502, "Upstream request could not start another attempt",
                     type(exc).__name__,
-                    "request_deadline_exceeded" if
-                    isinstance(exc, _RequestDeadlineExceeded) else
-                    "upstream_attempt_budget_exhausted")
+                    error_code=("request_deadline_exceeded" if
+                                isinstance(exc, _RequestDeadlineExceeded) else
+                                "upstream_attempt_budget_exhausted"))
                 return
             except requests.RequestException as exc:
                 log_failure("compat_retry_request_exception"
                             if compat_retry_seen else
                             "upstream_request_exception", 502,
                             exc_name=type(exc).__name__)
-                self._error(502, "Upstream request failed", type(exc).__name__)
+                self._error(502, "Upstream request failed", type(exc).__name__,
+                            error_code="upstream_unreachable")
                 return
             response = r
             if r.status_code != 200:
@@ -8767,13 +8914,14 @@ class Handler(BaseHTTPRequestHandler):
                         status_code,
                         "Upstream rejected the request; the server log has "
                         "structured diagnostics",
-                        error_type="upstream_request_rejected")
+                        error_code="upstream_request_rejected")
                     return
                 log_failure("compat_retry_non_200" if compat_retry_used
                             else "upstream_non_200", 502,
                             upstream_status=status_code)
                 self._error(502, "Upstream request failed",
-                            f"HTTP {status_code}: {response_text}")
+                            f"HTTP {status_code}: {response_text}",
+                            error_code="upstream_request_failed")
                 return
 
             if not upstream_stream:
@@ -8787,7 +8935,8 @@ class Handler(BaseHTTPRequestHandler):
                                 upstream_status=r.status_code,
                                 exc_name=type(exc).__name__)
                     self._error(502, "Upstream returned invalid JSON",
-                                type(exc).__name__)
+                                type(exc).__name__,
+                                error_code="invalid_upstream_response")
                     return
                 r.close()
                 if not isinstance(data, dict):
@@ -8795,7 +8944,8 @@ class Handler(BaseHTTPRequestHandler):
                                 upstream_status=r.status_code,
                                 exc_name="InvalidResponseShape")
                     self._error(502, "Upstream returned an invalid JSON shape",
-                                type(data).__name__)
+                                type(data).__name__,
+                                error_code="invalid_upstream_response")
                     return
                 error_reason = _explicit_upstream_error_reason(data)
                 if error_reason is not None:
@@ -8817,7 +8967,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._error(502, "Upstream request failed",
                                 {"reason": "upstream_explicit_error",
                                  "upstream_message": error_reason},
-                                "upstream_explicit_error")
+                                error_code="upstream_explicit_error")
                     return
                 self._json(200, data)
                 usage = data.get("usage")
@@ -8867,7 +9017,7 @@ class Handler(BaseHTTPRequestHandler):
                             exc_name=type(exc).__name__)
                 self._error(502, "Upstream stream failed to start",
                             "producer thread could not start",
-                            "upstream_stream_error")
+                            error_code="upstream_stream_error")
                 return
             reader_lease = None  # ownership transferred to the producer
         finally:
@@ -8940,7 +9090,7 @@ class Handler(BaseHTTPRequestHandler):
                         502, "Upstream request failed",
                         {"reason": "upstream_explicit_error",
                          "upstream_message": aggregate_reason},
-                        "upstream_explicit_error")
+                        error_code="upstream_explicit_error")
                 except (ConnectionError, OSError, ValueError):
                     pass
             elif aggregate_status == "upstream_bad_frame":
@@ -8949,7 +9099,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._error(
                         502, "Upstream returned an invalid SSE frame",
                         {"reason": "upstream_bad_frame"},
-                        "upstream_stream_error")
+                        error_code="upstream_stream_error")
                 except (ConnectionError, OSError, ValueError):
                     pass
             elif aggregate_status == "upstream_missing_terminal":
@@ -8960,7 +9110,7 @@ class Handler(BaseHTTPRequestHandler):
                         502,
                         "Upstream stream ended without a complete terminal",
                         {"reason": "upstream_missing_terminal"},
-                        "upstream_stream_error")
+                        error_code="upstream_stream_error")
                 except (ConnectionError, OSError, ValueError):
                     pass
             elif aggregate_status == "upstream_read_error":
@@ -8975,7 +9125,7 @@ class Handler(BaseHTTPRequestHandler):
                          "exception": (type(aggregate_exc).__name__
                                        if aggregate_exc is not None
                                        else None)},
-                        "upstream_stream_error")
+                        error_code="upstream_stream_error")
                 except (ConnectionError, OSError, ValueError):
                     pass
             if aggregate_status == "client_disconnected":
@@ -9053,7 +9203,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._error(
                         502, STREAM_ERROR_MESSAGES["upstream_read_error"],
-                        detail, "upstream_stream_error")
+                        detail, error_code="upstream_stream_error")
             except (ConnectionError, OSError, ValueError):
                 pass
             record_usage(
@@ -9656,7 +9806,7 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         self._error(502, STREAM_ERROR_MESSAGES.get(
                             status, "Upstream stream failed."), detail,
-                            "upstream_stream_error")
+                            error_code="upstream_stream_error")
                     except (ConnectionError, OSError, ValueError):
                         pass  # client left before the failure was written
             output_chars = completion_chars + reasoning_chars
@@ -9733,7 +9883,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                 pass
             self._error(503, "Too many concurrent streaming requests",
-                        error_type="too_many_concurrent_streams")
+                        error_code="too_many_concurrent_streams")
             return "concurrency_limit"
 
         upstream = None
@@ -9948,7 +10098,7 @@ class Handler(BaseHTTPRequestHandler):
                             self._error(
                                 502, "Upstream compatibility stream was invalid",
                                 type(exc).__name__,
-                                error_type="upstream_stream_error")
+                                error_code="upstream_stream_error")
                             status = "upstream_read_error"
                             return status
                         emit_in_band_error(

@@ -193,7 +193,8 @@ class Chat2apiSharedImportTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"],
+        self.assertEqual(payload["error"]["type"], "api_error")
+        self.assertEqual(payload["error"]["code"],
                          "share_revoke_unassembled")
         self.assertEqual(payload["error"]["detail"]["released"], 0)
         self.assertEqual(payload["error"]["detail"]["reason"],
