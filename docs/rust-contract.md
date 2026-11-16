@@ -413,6 +413,13 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 | 实例 | `emergency` | 无 | 清在途并停止 |
 | 实例 | `resume` | 无 | 有界排空后恢复接受 |
 
+### 7.2.1 Rust 8003 的实例通道
+
+- Rust 8003 由 `um-share-gateway.service` 以 `--instance-key-file /etc/um-share/instance.key`、`--instance-pipe-prefix /run/um-share/instance-`、`--registration-file /var/lib/um-share/run/instance-registration.json` 启动；socket 父目录 0700、socket 0600，注册文件原子写入，broker 只读。
+- `load` 先重新读取投影文件再 ACK：ACK 的 `generation`/`fingerprint` 来自本次 load，`security_generation` 来自最新投影的 `config_generation`；旧内存投影会让安全日志代次无法确认。
+- `load` 只对一次性 `terminate_keys` 调用 gate 的按 Key 终止；`drain`/`resume` 切换准入状态，`emergency` 清空在途并把状态置为 `stopped`；`instance-status` 返回在途计数与最近代次。
+- 实例通道不可用时 8003 仍提供 HTTP 服务；broker 的 `publish` 会以 `unconfirmed` 失败并由管理面走紧急停止，绝不在无实例通道时伪造在线发布。
+
 ### 7.3 生命周期、超时与副作用
 
 - 默认 wire deadline 10 秒；管理 dispatch deadline 130 秒；排空窗口 60 秒；最终停止预算 20 秒；客户端排空 deadline 90 秒；紧急停止 deadline 30 秒（`share/broker_protocol.py:29-58`）。
