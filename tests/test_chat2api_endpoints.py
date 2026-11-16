@@ -16,6 +16,7 @@ the credential-isolation contract.
 """
 
 import importlib.util
+import http.client
 import io
 import json
 import os
@@ -25,9 +26,11 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import requests
 
@@ -615,8 +618,124 @@ class TestChat2ApiEndpoints(unittest.TestCase):
             f"{self.base}/v1/embeddings", json={"model": "m", "input": "x"},
             timeout=10)
         self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.json()["error"]["type"],
-                         "local_auth_error")
+        self.assertEqual(response.headers.get("Content-Type"),
+                         "application/json; charset=utf-8")
+        error = response.json()["error"]
+        self.assertEqual(error["type"], "authentication_error")
+        self.assertEqual(error["code"], "local_auth_error")
+        self.assertEqual(error["param"], "Authorization")
+        self.assertIsNone(error["detail"])
+
+    def test_invalid_json_returns_400_openai_envelope(self):
+        response = requests.post(
+            f"{self.base}/v1/chat/completions", data=b"{not json",
+            headers={**self.auth, "Content-Type": "application/json"},
+            timeout=10)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.headers.get("Content-Type"),
+                         "application/json; charset=utf-8")
+        error = response.json()["error"]
+        self.assertEqual(error["type"], "invalid_request_error")
+        self.assertEqual(error["code"], "invalid_json")
+        self.assertIsNone(error["param"])
+        self.assertIsNone(error["detail"])
+
+    def test_invalid_content_length_returns_400_invalid_request(self):
+        parsed = urllib.parse.urlparse(self.base)
+        connection = http.client.HTTPConnection(
+            parsed.hostname, parsed.port, timeout=5)
+        try:
+            connection.request(
+                "POST", "/v1/chat/completions", body=b"{}",
+                headers={**self.auth, "Content-Length": "not-a-number"})
+            response = connection.getresponse()
+            status = response.status
+            error = json.loads(response.read() or b"{}")["error"]
+        finally:
+            connection.close()
+        self.assertEqual(status, 400)
+        self.assertEqual(error["type"], "invalid_request_error")
+        self.assertEqual(error["code"], "invalid_request")
+        self.assertEqual(error["param"], "Content-Length")
+        self.assertIsNone(error["detail"])
+
+    def test_non_object_body_returns_400_invalid_body(self):
+        response = requests.post(
+            f"{self.base}/v1/chat/completions", data=b"[]",
+            headers={**self.auth, "Content-Type": "application/json"},
+            timeout=10)
+        self.assertEqual(response.status_code, 400)
+        error = response.json()["error"]
+        self.assertEqual(error["type"], "invalid_request_error")
+        self.assertEqual(error["code"], "invalid_body")
+        self.assertIsNone(error["param"])
+        self.assertIsNone(error["detail"])
+
+    def test_oversized_body_returns_413_payload_too_large(self):
+        with mock.patch.object(chat2api, "MAX_REQUEST_BYTES", 8):
+            response = requests.post(
+                f"{self.base}/v1/chat/completions",
+                data=b'{"messages": []}',
+                headers={**self.auth, "Content-Type": "application/json"},
+                timeout=10)
+        self.assertEqual(response.status_code, 413)
+        error = response.json()["error"]
+        self.assertEqual(error["type"], "invalid_request_error")
+        self.assertEqual(error["code"], "payload_too_large")
+        self.assertIsNone(error["param"])
+        self.assertIsNone(error["detail"])
+
+    def test_origin_denied_returns_403_permission_envelope(self):
+        response = requests.post(
+            f"{self.base}/v1/chat/completions",
+            json={"model": "m", "messages": []},
+            headers={**self.auth, "Origin": "http://evil.example"},
+            timeout=10)
+        self.assertEqual(response.status_code, 403)
+        error = response.json()["error"]
+        self.assertEqual(error["type"], "permission_error")
+        self.assertEqual(error["code"], "origin_denied")
+        self.assertEqual(error["param"], "Origin")
+        self.assertIsNone(error["detail"])
+
+    def test_unknown_v1_path_returns_404_not_found_envelope(self):
+        response = requests.get(f"{self.base}/v1/does-not-exist",
+                               headers=self.auth, timeout=10)
+        self.assertEqual(response.status_code, 404)
+        error = response.json()["error"]
+        self.assertEqual(error["type"], "not_found_error")
+        self.assertEqual(error["code"], "not_found")
+        self.assertIsNone(error["param"])
+        self.assertIsNone(error["detail"])
+
+    def test_messages_local_error_uses_anthropic_envelope(self):
+        response = requests.post(
+            f"{self.base}/v1/messages", data=b"{not json",
+            headers={**self.auth, "Content-Type": "application/json"},
+            timeout=10)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.headers.get("Content-Type"),
+                         "application/json; charset=utf-8")
+        body = response.json()
+        self.assertEqual(body["type"], "error")
+        error = body["error"]
+        self.assertEqual(error["type"], "invalid_request_error")
+        self.assertEqual(error["code"], "invalid_json")
+        self.assertIn("message", error)
+        self.assertNotIn("detail", error)
+
+    def test_messages_missing_local_key_uses_anthropic_envelope(self):
+        response = requests.post(
+            f"{self.base}/v1/messages",
+            json={"model": "m", "max_tokens": 8, "messages": []},
+            timeout=10)
+        self.assertEqual(response.status_code, 401)
+        body = response.json()
+        self.assertEqual(body["type"], "error")
+        error = body["error"]
+        self.assertEqual(error["type"], "authentication_error")
+        self.assertEqual(error["code"], "local_auth_error")
+        self.assertNotIn("detail", error)
 
     # ---------- credential fallback helpers ----------
 
@@ -677,7 +796,7 @@ class RequestBodyContractTests(unittest.TestCase):
         handler._error = record_error
         self.assertIsNone(handler._read_body())
         self.assertEqual(errors[0][0], 400)
-        self.assertEqual(errors[0][2].get("error_type"), "invalid_json")
+        self.assertEqual(errors[0][2].get("error_code"), "invalid_json")
 
 
 if __name__ == "__main__":

@@ -364,7 +364,8 @@ class TestChatNonStreamExplicitError(WebUiCompatTestBase):
             self.assertEqual(response.status_code, 502)
             body = response.json()
         error = body["error"]
-        self.assertEqual(error["type"], "upstream_explicit_error")
+        self.assertEqual(error["type"], "upstream_error")
+        self.assertEqual(error["code"], "upstream_explicit_error")
         self.assertEqual(error["detail"]["reason"], "upstream_explicit_error")
         # 只有净化、限长的原因外发；原始对象（可能携带凭据材料）不透传。
         self.assertEqual(error["detail"]["upstream_message"],
@@ -392,7 +393,8 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
             self.assertEqual(response.status_code, 502)
             body = response.json()
         error = body["error"]
-        self.assertEqual(error["type"], "upstream_stream_error")
+        self.assertEqual(error["type"], "upstream_error")
+        self.assertEqual(error["code"], "upstream_stream_error")
         self.assertEqual(error["detail"]["reason"], "upstream_stream_error")
         self.assertEqual(error["detail"]["upstream_message"],
                          WEBUI_ERROR_MESSAGE)
@@ -468,7 +470,7 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
             with self.stream_request("error-then-eof") as response:
                 self.assertEqual(response.status_code, 502)
                 body = response.json()
-        self.assertEqual(body["error"]["type"], "upstream_stream_error")
+        self.assertEqual(body["error"]["code"], "upstream_stream_error")
         self.assertEqual(StubUpstreamHandler.posts, 1)
         (record,) = self.wait_usage_records()
         self.assertEqual(record["status"], "upstream_stream_error")
@@ -506,7 +508,7 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
         with self.stream_request("comments-then-error") as response:
             self.assertEqual(response.status_code, 502)
             body = response.json()
-        self.assertEqual(body["error"]["type"], "upstream_stream_error")
+        self.assertEqual(body["error"]["code"], "upstream_stream_error")
         self.assertNotIn("keepalive ping", json.dumps(body))
         (record,) = self.wait_usage_records()
         self.assertEqual(record["status"], "upstream_stream_error")

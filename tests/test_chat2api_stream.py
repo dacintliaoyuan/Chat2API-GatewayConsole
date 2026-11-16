@@ -1048,7 +1048,8 @@ class TestChat2ApiStreaming(unittest.TestCase):
         with self.stream_request("silence-close") as response:
             self.assertEqual(response.status_code, 502)
             error = response.json()["error"]
-            self.assertEqual(error["type"], "upstream_stream_error")
+            self.assertEqual(error["type"], "upstream_error")
+            self.assertEqual(error["code"], "upstream_stream_error")
             self.assertEqual(error["detail"]["reason"],
                              "upstream_eof_without_done")
             self.assertEqual(error["detail"]["events"], 0)
@@ -1067,7 +1068,8 @@ class TestChat2ApiStreaming(unittest.TestCase):
         with self.stream_request("zero-data-chunked-truncate") as response:
             self.assertEqual(response.status_code, 502)
             error = response.json()["error"]
-            self.assertEqual(error["type"], "upstream_stream_error")
+            self.assertEqual(error["type"], "upstream_error")
+            self.assertEqual(error["code"], "upstream_stream_error")
             self.assertEqual(error["detail"]["reason"], "upstream_read_error")
             self.assertEqual(error["detail"]["events"], 0)
             self.assertEqual(error["detail"]["exception"],
@@ -1390,7 +1392,8 @@ class TestChat2ApiStreaming(unittest.TestCase):
             try:
                 self.assertEqual(excess.status_code, 503)
                 error = excess.json()["error"]
-                self.assertEqual(error["type"], "too_many_concurrent_streams")
+                self.assertEqual(error["type"], "overloaded_error")
+                self.assertEqual(error["code"], "too_many_concurrent_streams")
             finally:
                 excess.close()
             # The slot is acquired before any upstream access: a refused
@@ -1419,8 +1422,9 @@ class TestChat2ApiStreaming(unittest.TestCase):
             response = self.stream_request("ok")
             try:
                 self.assertEqual(response.status_code, 502)
-                self.assertEqual(
-                    response.json()["error"]["type"], "chat2api_error")
+                error = response.json()["error"]
+                self.assertEqual(error["type"], "upstream_error")
+                self.assertEqual(error["code"], "upstream_unreachable")
             finally:
                 response.close()
         self.wait_reader_slots_restored(before)
@@ -1495,8 +1499,9 @@ class TestChat2ApiStreaming(unittest.TestCase):
             response = self.stream_request("ok")
             try:
                 self.assertEqual(response.status_code, 502)
-                self.assertEqual(response.json()["error"]["type"],
-                                 "upstream_stream_error")
+                error = response.json()["error"]
+                self.assertEqual(error["type"], "upstream_error")
+                self.assertEqual(error["code"], "upstream_stream_error")
             finally:
                 response.close()
         self.wait_reader_slots_restored(before)

@@ -420,8 +420,10 @@ class TestChat2ApiImageBudgetHttp(unittest.TestCase):
             timeout=10)
         self.assertEqual(r.status_code, 400)
         payload = r.json()
-        self.assertEqual(payload["error"]["type"],
+        self.assertEqual(payload["error"]["type"], "invalid_request_error")
+        self.assertEqual(payload["error"]["code"],
                          "too_many_images_current_turn")
+        self.assertEqual(payload["error"]["param"], "messages")
         self.assertIn("Current turn contains", payload["error"]["message"])
         # The decisive contract: zero real upstream requests for a payload
         # the local normalizer already knows UM will reject.

@@ -460,8 +460,12 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["type"], "upstream_error")
+        self.assertEqual(error["code"], "reauthentication_required")
+        self.assertIsNone(error["param"])
         self.assertEqual(error["detail"], AUTH_WAIT_TIMEOUT)
+        self.assertEqual(response.headers.get("Content-Type"),
+                         "application/json; charset=utf-8")
         self._assert_retry_after(response, expected=None)
         self.assertEqual(len(calls), 2,
                          "both auth waits must share one request budget")
@@ -480,7 +484,10 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 502)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "request_deadline_exceeded")
+        self.assertEqual(error["type"], "upstream_error")
+        self.assertEqual(error["code"], "request_deadline_exceeded")
+        self.assertIsNone(error["param"])
+        self.assertEqual(error["detail"], "_RequestDeadlineExceeded")
         self.assertLess(elapsed, 0.5)
         login.assert_not_called()
 
@@ -509,7 +516,7 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], AUTH_WAIT_TIMEOUT)
         self._assert_retry_after(response, expected=None)
         self.assertLess(elapsed, 0.5)
@@ -953,7 +960,7 @@ class AuthWaitExpiryOrderTests(AuthWaitTestBase):
                 error = response.json().get("error") or {}
                 observed.update(
                     http=response.status_code,
-                    error_type=error.get("type"),
+                    error_code=error.get("code"),
                     detail=error.get("detail"),
                     upstream_posts=StubUpstream.posts,
                 )
@@ -972,7 +979,7 @@ class AuthWaitExpiryOrderTests(AuthWaitTestBase):
             observed["http"], 503,
             "an auth budget that expired before the request deadline was "
             "reported as the request deadline: %r" % (observed,))
-        self.assertEqual(observed["error_type"], "reauthentication_required")
+        self.assertEqual(observed["error_code"], "reauthentication_required")
         self.assertEqual(observed["detail"], AUTH_WAIT_TIMEOUT)
         self.assertAlmostEqual(
             observed["deadline_after_join"], observed["first_deadline"],
@@ -987,7 +994,7 @@ class AuthWaitExpiryOrderTests(AuthWaitTestBase):
                                  sync_charge_s=0.7)
         self.assertGreater(observed["charged_s"], 0.2)
         self.assertEqual(observed["http"], 503, observed)
-        self.assertEqual(observed["error_type"], "reauthentication_required")
+        self.assertEqual(observed["error_code"], "reauthentication_required")
         self.assertEqual(observed["detail"], AUTH_WAIT_TIMEOUT)
         self.assertAlmostEqual(
             observed["deadline_after_join"], observed["first_deadline"],
@@ -999,7 +1006,7 @@ class AuthWaitExpiryOrderTests(AuthWaitTestBase):
                                  sync_charge_s=0.7)
         self.assertGreater(observed["charged_s"], 0.5)
         self.assertEqual(observed["http"], 502, observed)
-        self.assertEqual(observed["error_type"],
+        self.assertEqual(observed["error_code"],
                          "request_deadline_exceeded")
         self.assertAlmostEqual(
             observed["deadline_after_join"], observed["first_deadline"],
@@ -1036,7 +1043,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], "global_attempt_cap")
         self._assert_retry_after(response, expected=True)
         self.assertLess(elapsed, 0.5)
@@ -1055,7 +1062,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], AUTH_WAIT_TIMEOUT)
         self._assert_retry_after(response, expected=None)
         self.assertGreaterEqual(elapsed, 0.15)
@@ -1079,7 +1086,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], "slot_corrupt")
         self._assert_retry_after(response, expected=None)
         self.assertLess(elapsed, 0.5)
@@ -1102,7 +1109,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], "attempts_exhausted")
         self._assert_retry_after(response, expected=None)
         self.assertLess(elapsed, 0.5)
@@ -1123,7 +1130,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], "upstream_credential_rejected")
         self._assert_retry_after(response, expected=None)
         self.assertLess(elapsed, 0.5)
@@ -1143,7 +1150,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], "edge_missing")
         self._assert_retry_after(response, expected=None)
         self.assertLess(elapsed, 0.5)
@@ -1240,7 +1247,7 @@ class AuthWaitCapacityTests(AuthWaitTestBase):
                 self.proxy.creds = saved_creds
             self.assertEqual(response.status_code, 503)
             error = response.json()["error"]
-            self.assertEqual(error["type"], "reauthentication_required")
+            self.assertEqual(error["code"], "reauthentication_required")
             self.assertEqual(error["detail"], AUTH_WAIT_CAPACITY)
             self._assert_retry_after(response, expected=None)
             self.assertLess(elapsed, 0.3)
@@ -1390,10 +1397,10 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                     self.assertEqual(second.status_code, 503)
                     error = second.json()["error"]
                     self.assertNotEqual(
-                        error["type"], "too_many_concurrent_streams",
+                        error["code"], "too_many_concurrent_streams",
                         "the second stream was rejected for concurrency while "
                         "no reader was running")
-                    self.assertEqual(error["type"],
+                    self.assertEqual(error["code"],
                                      "reauthentication_required")
                     self.assertEqual(error["detail"], AUTH_WAIT_TIMEOUT)
                     self.assertGreaterEqual(
@@ -1559,6 +1566,9 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                     self.assertEqual(response.status_code, 503)
                     self.assertEqual(
                         response.json()["error"]["type"],
+                        "overloaded_error")
+                    self.assertEqual(
+                        response.json()["error"]["code"],
                         "too_many_concurrent_streams")
                     self.assertEqual(
                         StubUpstream.posts, 1,
@@ -1754,7 +1764,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
             status, payload = self._request("GET", "/v1/models")
             elapsed = time.monotonic() - started
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertLess(elapsed, 1.0)
         self.assertEqual(StubUpstream.gets, 1)
@@ -1765,7 +1775,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
         with self._wait_patches(budget=0.2, recheck=0.02, deadline=0.5):
             status, payload = self._request("GET", "/api/config", control=True)
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertEqual(StubUpstream.gets, 1)
 
@@ -1776,7 +1786,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
             status, payload = self._request(
                 "POST", "/api/config", body={}, control=True)
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertEqual(StubUpstream.posts, 1)
 
@@ -1789,7 +1799,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
         with self._wait_patches(budget=0.2, recheck=0.02, deadline=0.5):
             status, payload = self._request("POST", "/v1/messages", body=body)
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertEqual(StubUpstream.posts, 1)
 
@@ -1801,7 +1811,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
                 "POST", "/v1/embeddings",
                 body={"model": "stub-model", "input": "hi"})
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertEqual(StubUpstream.posts, 1)
 
@@ -1813,7 +1823,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
                 "POST", "/v1/responses",
                 body={"model": "stub-model", "input": "hi"})
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertEqual(StubUpstream.posts, 1)
 
@@ -1903,7 +1913,7 @@ class AuthWaitSecondRejectionTests(AuthWaitTestBase):
         ):
             status, payload = self._request(method, path, body=body)
         self.assertEqual(status, 503, payload)
-        self.assertEqual(payload["error"]["type"],
+        self.assertEqual(payload["error"]["code"],
                          "reauthentication_required", payload)
         self.assertEqual(payload["error"]["detail"],
                          "upstream_rejected", payload)
