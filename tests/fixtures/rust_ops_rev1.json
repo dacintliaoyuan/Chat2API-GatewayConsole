@@ -1,0 +1,5648 @@
+{
+ "cloudflare": {
+  "check": {
+   "allFailed": {
+    "deadline_s": 15.0,
+    "dns": {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "negative_ttl_s": null,
+     "reason": "ok",
+     "sources": [],
+     "state": "ok",
+     "ttl_s": null,
+     "version": 1
+    },
+    "entries": [
+     {
+      "certificate": "failed",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "tls_certificate_invalid",
+      "state": "failed",
+      "tls": "failed"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "all_failed",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "all_entries_failed",
+    "source": "tailscale",
+    "version": 1
+   },
+   "allOk": {
+    "deadline_s": 15.0,
+    "dns": {
+     "addresses": [
+      "203.0.113.10",
+      "203.0.113.11"
+     ],
+     "addresses_truncated": false,
+     "negative_ttl_s": null,
+     "reason": "ok",
+     "sources": [],
+     "state": "ok",
+     "ttl_s": null,
+     "version": 1
+    },
+    "entries": [
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     },
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.11",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "ok",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "ok",
+    "source": "tailscale",
+    "version": 1
+   },
+   "dnsDisagreement": {
+    "deadline_s": 15.0,
+    "dns": {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "negative_ttl_s": null,
+     "reason": "dns_disagreement",
+     "sources": [],
+     "state": "disagreement",
+     "ttl_s": null,
+     "version": 1
+    },
+    "entries": [
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "degraded",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "dns_disagreement",
+    "source": "tailscale",
+    "version": 1
+   },
+   "dnsEmpty": {
+    "deadline_s": 15.0,
+    "dns": {
+     "addresses": [],
+     "addresses_truncated": false,
+     "negative_ttl_s": null,
+     "reason": "dns_empty",
+     "sources": [],
+     "state": "empty",
+     "ttl_s": null,
+     "version": 1
+    },
+    "entries": [],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "not_checked",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "dns_empty",
+    "source": "tailscale",
+    "version": 1
+   },
+   "dnsTimeout": {
+    "deadline_s": 15.0,
+    "dns": {
+     "addresses": [],
+     "addresses_truncated": false,
+     "negative_ttl_s": null,
+     "reason": "dns_timeout",
+     "sources": [],
+     "state": "timeout",
+     "ttl_s": null,
+     "version": 1
+    },
+    "entries": [],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "not_checked",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "dns_timeout",
+    "source": "tailscale",
+    "version": 1
+   },
+   "dnsTruncated": {
+    "deadline_s": 15.0,
+    "dns": {
+     "addresses": [
+      "203.0.113.10",
+      "203.0.113.11"
+     ],
+     "addresses_truncated": true,
+     "negative_ttl_s": null,
+     "reason": "ok",
+     "sources": [],
+     "state": "ok",
+     "ttl_s": null,
+     "version": 1
+    },
+    "entries": [
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     },
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.11",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "degraded",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "addresses_truncated",
+    "source": "tailscale",
+    "version": 1
+   },
+   "dnsUnconfirmed": {
+    "deadline_s": 15.0,
+    "dns": {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "negative_ttl_s": null,
+     "reason": "dns_unconfirmed",
+     "sources": [],
+     "state": "unconfirmed",
+     "ttl_s": null,
+     "version": 1
+    },
+    "entries": [
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "degraded",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "dns_unconfirmed",
+    "source": "tailscale",
+    "version": 1
+   },
+   "invalidUrl": {
+    "deadline_s": 15.0,
+    "dns": null,
+    "entries": [],
+    "host": null,
+    "overall": "not_checked",
+    "public_url": null,
+    "reason": "public_url_unavailable",
+    "source": null,
+    "version": 1
+   },
+   "mixed": {
+    "deadline_s": 15.0,
+    "dns": {
+     "addresses": [
+      "203.0.113.10",
+      "203.0.113.11"
+     ],
+     "addresses_truncated": false,
+     "negative_ttl_s": null,
+     "reason": "ok",
+     "sources": [],
+     "state": "ok",
+     "ttl_s": null,
+     "version": 1
+    },
+    "entries": [
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     },
+     {
+      "certificate": "failed",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.11",
+      "reason": "timeout",
+      "state": "failed",
+      "tls": "failed"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "degraded",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "partial_failure",
+    "source": "tailscale",
+    "version": 1
+   },
+   "unchecked": {
+    "deadline_s": 15.0,
+    "dns": {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "negative_ttl_s": null,
+     "reason": "ok",
+     "sources": [],
+     "state": "ok",
+     "ttl_s": null,
+     "version": 1
+    },
+    "entries": [
+     {
+      "certificate": "not_checked",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "not_checked",
+      "state": "unchecked",
+      "tls": "not_checked"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "not_checked",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "deadline_exceeded",
+    "source": "tailscale",
+    "version": 1
+   }
+  },
+  "deadline": {
+   "default": 15.0,
+   "nan": 15.0,
+   "tooLarge": 15.0,
+   "tooSmall": 0.1,
+   "valid": 30.0
+  },
+  "dnsAggregate": {
+   "bothEmpty": {
+    "addresses": [],
+    "addresses_truncated": false,
+    "negative_ttl_s": null,
+    "reason": "dns_empty",
+    "sources": [
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "empty",
+      "negative_ttl_s": null,
+      "source": "cloudflare",
+      "state": "empty",
+      "status": null,
+      "ttl_s": null
+     },
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "empty",
+      "negative_ttl_s": null,
+      "source": "nextdns",
+      "state": "empty",
+      "status": null,
+      "ttl_s": null
+     }
+    ],
+    "state": "empty",
+    "ttl_s": null,
+    "version": 1
+   },
+   "bothError": {
+    "addresses": [],
+    "addresses_truncated": false,
+    "negative_ttl_s": null,
+    "reason": "dns_failed",
+    "sources": [
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "error",
+      "negative_ttl_s": null,
+      "source": "cloudflare",
+      "state": "error",
+      "status": null,
+      "ttl_s": null
+     },
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "error",
+      "negative_ttl_s": null,
+      "source": "nextdns",
+      "state": "error",
+      "status": null,
+      "ttl_s": null
+     }
+    ],
+    "state": "error",
+    "ttl_s": null,
+    "version": 1
+   },
+   "bothNxdomain": {
+    "addresses": [],
+    "addresses_truncated": false,
+    "negative_ttl_s": 60,
+    "reason": "dns_nxdomain",
+    "sources": [
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "nxdomain",
+      "negative_ttl_s": 60,
+      "source": "cloudflare",
+      "state": "nxdomain",
+      "status": null,
+      "ttl_s": null
+     },
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "nxdomain",
+      "negative_ttl_s": 120,
+      "source": "nextdns",
+      "state": "nxdomain",
+      "status": null,
+      "ttl_s": null
+     }
+    ],
+    "state": "nxdomain",
+    "ttl_s": null,
+    "version": 1
+   },
+   "bothOk": {
+    "addresses": [
+     "203.0.113.10",
+     "203.0.113.11"
+    ],
+    "addresses_truncated": false,
+    "negative_ttl_s": null,
+    "reason": "ok",
+    "sources": [
+     {
+      "addresses": [
+       "203.0.113.10"
+      ],
+      "addresses_truncated": false,
+      "classification": "ok",
+      "negative_ttl_s": null,
+      "source": "cloudflare",
+      "state": "ok",
+      "status": null,
+      "ttl_s": 60
+     },
+     {
+      "addresses": [
+       "203.0.113.11"
+      ],
+      "addresses_truncated": false,
+      "classification": "ok",
+      "negative_ttl_s": null,
+      "source": "nextdns",
+      "state": "ok",
+      "status": null,
+      "ttl_s": 30
+     }
+    ],
+    "state": "ok",
+    "ttl_s": 30,
+    "version": 1
+   },
+   "bothTimeout": {
+    "addresses": [],
+    "addresses_truncated": false,
+    "negative_ttl_s": null,
+    "reason": "dns_timeout",
+    "sources": [
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "timeout",
+      "negative_ttl_s": null,
+      "source": "cloudflare",
+      "state": "timeout",
+      "status": null,
+      "ttl_s": null
+     },
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "timeout",
+      "negative_ttl_s": null,
+      "source": "nextdns",
+      "state": "timeout",
+      "status": null,
+      "ttl_s": null
+     }
+    ],
+    "state": "timeout",
+    "ttl_s": null,
+    "version": 1
+   },
+   "notChecked": {
+    "addresses": [],
+    "addresses_truncated": false,
+    "negative_ttl_s": null,
+    "reason": "dns_not_checked",
+    "sources": [
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "not_checked",
+      "negative_ttl_s": null,
+      "source": "cloudflare",
+      "state": "not_checked",
+      "status": null,
+      "ttl_s": null
+     },
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "not_checked",
+      "negative_ttl_s": null,
+      "source": "nextdns",
+      "state": "not_checked",
+      "status": null,
+      "ttl_s": null
+     }
+    ],
+    "state": "not_checked",
+    "ttl_s": null,
+    "version": 1
+   },
+   "okAndEmpty": {
+    "addresses": [
+     "203.0.113.10"
+    ],
+    "addresses_truncated": false,
+    "negative_ttl_s": null,
+    "reason": "dns_disagreement",
+    "sources": [
+     {
+      "addresses": [
+       "203.0.113.10"
+      ],
+      "addresses_truncated": false,
+      "classification": "ok",
+      "negative_ttl_s": null,
+      "source": "cloudflare",
+      "state": "ok",
+      "status": null,
+      "ttl_s": null
+     },
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "empty",
+      "negative_ttl_s": null,
+      "source": "nextdns",
+      "state": "empty",
+      "status": null,
+      "ttl_s": null
+     }
+    ],
+    "state": "disagreement",
+    "ttl_s": null,
+    "version": 1
+   },
+   "okAndError": {
+    "addresses": [
+     "203.0.113.10"
+    ],
+    "addresses_truncated": false,
+    "negative_ttl_s": null,
+    "reason": "dns_unconfirmed",
+    "sources": [
+     {
+      "addresses": [
+       "203.0.113.10"
+      ],
+      "addresses_truncated": false,
+      "classification": "ok",
+      "negative_ttl_s": null,
+      "source": "cloudflare",
+      "state": "ok",
+      "status": null,
+      "ttl_s": null
+     },
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "error",
+      "negative_ttl_s": null,
+      "source": "nextdns",
+      "state": "error",
+      "status": null,
+      "ttl_s": null
+     }
+    ],
+    "state": "unconfirmed",
+    "ttl_s": null,
+    "version": 1
+   },
+   "okAndNxdomain": {
+    "addresses": [
+     "203.0.113.10"
+    ],
+    "addresses_truncated": false,
+    "negative_ttl_s": 120,
+    "reason": "dns_disagreement",
+    "sources": [
+     {
+      "addresses": [
+       "203.0.113.10"
+      ],
+      "addresses_truncated": false,
+      "classification": "ok",
+      "negative_ttl_s": null,
+      "source": "cloudflare",
+      "state": "ok",
+      "status": null,
+      "ttl_s": null
+     },
+     {
+      "addresses": [],
+      "addresses_truncated": false,
+      "classification": "nxdomain",
+      "negative_ttl_s": 120,
+      "source": "nextdns",
+      "state": "nxdomain",
+      "status": null,
+      "ttl_s": null
+     }
+    ],
+    "state": "disagreement",
+    "ttl_s": null,
+    "version": 1
+   },
+   "truncated": {
+    "addresses": [
+     "203.0.113.10",
+     "203.0.113.11"
+    ],
+    "addresses_truncated": true,
+    "negative_ttl_s": null,
+    "reason": "ok",
+    "sources": [
+     {
+      "addresses": [
+       "203.0.113.10"
+      ],
+      "addresses_truncated": true,
+      "classification": "ok",
+      "negative_ttl_s": null,
+      "source": "cloudflare",
+      "state": "ok",
+      "status": null,
+      "ttl_s": 60
+     },
+     {
+      "addresses": [
+       "203.0.113.11"
+      ],
+      "addresses_truncated": false,
+      "classification": "ok",
+      "negative_ttl_s": null,
+      "source": "nextdns",
+      "state": "ok",
+      "status": null,
+      "ttl_s": 30
+     }
+    ],
+    "state": "ok",
+    "ttl_s": 30,
+    "version": 1
+   }
+  },
+  "dnsAnswers": {
+   "aAndAaaa": {
+    "addresses": [
+     "8.8.8.8",
+     "8.8.4.4"
+    ],
+    "truncated": false,
+    "ttl": 60
+   },
+   "badTtl": {
+    "addresses": [
+     "8.8.8.8",
+     "8.8.4.4",
+     "1.1.1.1"
+    ],
+    "truncated": false,
+    "ttl": 300
+   },
+   "empty": {
+    "addresses": [],
+    "truncated": false,
+    "ttl": null
+   },
+   "noAnswer": {
+    "addresses": [],
+    "truncated": false,
+    "ttl": null
+   },
+   "truncated": {
+    "addresses": [
+     "8.8.8.1",
+     "8.8.8.2",
+     "8.8.8.3",
+     "8.8.8.4"
+    ],
+    "truncated": true,
+    "ttl": 60
+   }
+  },
+  "dnsAnswersInputs": {
+   "aAndAaaa": {
+    "Answer": [
+     {
+      "TTL": 60,
+      "data": "8.8.8.8",
+      "type": 1
+     },
+     {
+      "TTL": 30,
+      "data": "8.8.8.8",
+      "type": 1
+     },
+     {
+      "TTL": 120,
+      "data": "8.8.4.4",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "2606:4700:4700::1111",
+      "type": 28
+     },
+     {
+      "TTL": 60,
+      "data": "127.0.0.1",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "not-an-address",
+      "type": 1
+     }
+    ]
+   },
+   "badTtl": {
+    "Answer": [
+     {
+      "TTL": true,
+      "data": "8.8.8.8",
+      "type": 1
+     },
+     {
+      "TTL": -1,
+      "data": "8.8.4.4",
+      "type": 1
+     },
+     {
+      "TTL": 300,
+      "data": "1.1.1.1",
+      "type": 1
+     }
+    ]
+   },
+   "empty": {
+    "Answer": []
+   },
+   "noAnswer": {},
+   "truncated": {
+    "Answer": [
+     {
+      "TTL": 60,
+      "data": "8.8.8.1",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.2",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.3",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.4",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.5",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.6",
+      "type": 1
+     },
+     {
+      "TTL": 60,
+      "data": "8.8.8.7",
+      "type": 1
+     }
+    ]
+   }
+  },
+  "dnsSources": {
+   "bothEmpty": [
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "empty",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "empty",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "empty",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "empty",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "bothError": [
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "error",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "error",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "error",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "error",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "bothNxdomain": [
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "nxdomain",
+     "elapsed_ms": 1,
+     "negative_ttl_s": 60,
+     "source": "cloudflare",
+     "state": "nxdomain",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "nxdomain",
+     "elapsed_ms": 1,
+     "negative_ttl_s": 120,
+     "source": "nextdns",
+     "state": "nxdomain",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "bothOk": [
+    {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "ok",
+     "status": null,
+     "ttl_s": 60
+    },
+    {
+     "addresses": [
+      "203.0.113.11"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "ok",
+     "status": null,
+     "ttl_s": 30
+    }
+   ],
+   "bothTimeout": [
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "timeout",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "timeout",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "timeout",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "timeout",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "notChecked": [
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "not_checked",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "not_checked",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "not_checked",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "not_checked",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "okAndEmpty": [
+    {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "ok",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "empty",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "empty",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "okAndError": [
+    {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "ok",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "error",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "error",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "okAndNxdomain": [
+    {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "ok",
+     "status": null,
+     "ttl_s": null
+    },
+    {
+     "addresses": [],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "nxdomain",
+     "elapsed_ms": 1,
+     "negative_ttl_s": 120,
+     "source": "nextdns",
+     "state": "nxdomain",
+     "status": null,
+     "ttl_s": null
+    }
+   ],
+   "truncated": [
+    {
+     "addresses": [
+      "203.0.113.10"
+     ],
+     "addresses_truncated": true,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "cloudflare",
+     "state": "ok",
+     "status": null,
+     "ttl_s": 60
+    },
+    {
+     "addresses": [
+      "203.0.113.11"
+     ],
+     "addresses_truncated": false,
+     "checked_at_epoch": 1790341200.0,
+     "classification": "ok",
+     "elapsed_ms": 1,
+     "negative_ttl_s": null,
+     "source": "nextdns",
+     "state": "ok",
+     "status": null,
+     "ttl_s": 30
+    }
+   ]
+  },
+  "exitCodes": {
+   "degraded": 1,
+   "failed": 1,
+   "notChecked": 2,
+   "ok": 0
+  },
+  "ingress": {
+   "catchAllMissing": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "missing the catch-all http_status:404 rule"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      }
+     ]
+    }
+   },
+   "catchAllWithHost": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "the catch-all rule must not name a hostname or path"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "duplicatePath": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "duplicate API path: /v1/models"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "emptyIngress": {
+    "config": "ingress: []\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "ingress must be a non-empty list"
+     ],
+     "rules": []
+    }
+   },
+   "example": {
+    "config": "# Cloudflare Tunnel ingress for the UM cloud share API.\n#\n# This file is the public edge contract (D18-1): only the four shared API\n# paths are routed to the loopback 8100 gateway.  The private management\n# console, the share backend and the display are NEVER published here; the\n# catch-all answers 404 for every other path.\n#\n# Install with `install.sh --with-cloudflared` (default off).  The tunnel token\n# lives in /etc/um-share/cloudflared.env, not in this file.\ningress:\n  - hostname: dacintapi.de5.net\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n  - hostname: dacintapi.de5.net\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n  - hostname: dacintapi.de5.net\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n  - hostname: dacintapi.de5.net\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n  - service: http_status:404\n",
+    "expectHost": "dacintapi.de5.net",
+    "result": {
+     "ok": true,
+     "problems": [],
+     "rules": [
+      {
+       "hostname": "dacintapi.de5.net",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "dacintapi.de5.net",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "dacintapi.de5.net",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "dacintapi.de5.net",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "forbiddenConsolePort": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/console$\n    service: http://127.0.0.1:8002\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 2 publishes private port 8002: http://127.0.0.1:8002",
+      "rule 2 service must be http://127.0.0.1:8003: http://127.0.0.1:8002"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/console",
+       "service": "http://127.0.0.1:8002"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "forbiddenPort": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/console$\n    service: http://127.0.0.1:8096\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 2 publishes private port 8096: http://127.0.0.1:8096",
+      "rule 2 service must be http://127.0.0.1:8003: http://127.0.0.1:8096"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/console",
+       "service": "http://127.0.0.1:8096"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "forbiddenRetiredGatewayPort": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/console$\n    service: http://127.0.0.1:8100\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 2 publishes private port 8100: http://127.0.0.1:8100",
+      "rule 2 service must be http://127.0.0.1:8003: http://127.0.0.1:8100"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/console",
+       "service": "http://127.0.0.1:8100"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "invalidYaml": {
+    "ok": false,
+    "problemPrefix": "invalid YAML:",
+    "rules": []
+   },
+   "missingIngress": {
+    "config": "hostname: fixture.example\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "ingress must be a non-empty list"
+     ],
+     "rules": []
+    }
+   },
+   "missingPath": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "missing shared API path: /v1/responses"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "multipleCatchAll": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "more than one catch-all rule"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "noService": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/extra$\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 4 has no service"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/extra",
+       "service": null
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "nonMappingRule": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - not-a-mapping\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 1 must be a mapping"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "notSharedPath": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/embeddings$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 4 path is not a shared API path: ^/v1/embeddings$"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/embeddings",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "rootNotMapping": {
+    "config": "- ingress\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "config must be a mapping"
+     ],
+     "rules": []
+    }
+   },
+   "unreadable": {
+    "ok": false,
+    "problemPrefix": "config unreadable:",
+    "rules": []
+   },
+   "wrongHost": {
+    "config": "ingress:\n  - hostname: other.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 0 hostname is other.example, expected fixture.example"
+     ],
+     "rules": [
+      {
+       "hostname": "other.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   },
+   "wrongService": {
+    "config": "ingress:\n  - hostname: fixture.example\n    path: ^/v1/models$\n    service: http://127.0.0.1:8101\n\n  - hostname: fixture.example\n    path: ^/v1/chat/completions$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/messages$\n    service: http://127.0.0.1:8003\n\n  - hostname: fixture.example\n    path: ^/v1/responses$\n    service: http://127.0.0.1:8003\n\n  - service: http_status:404\n\n",
+    "expectHost": "fixture.example",
+    "result": {
+     "ok": false,
+     "problems": [
+      "rule 0 service must be http://127.0.0.1:8003: http://127.0.0.1:8101",
+      "missing shared API path: /v1/models"
+     ],
+     "rules": [
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/models",
+       "service": "http://127.0.0.1:8101"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/chat/completions",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/messages",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": "fixture.example",
+       "path": "/v1/responses",
+       "service": "http://127.0.0.1:8003"
+      },
+      {
+       "hostname": null,
+       "path": null,
+       "service": "http_status:404"
+      }
+     ]
+    }
+   }
+  },
+  "negativeTtl": {
+   "bad": null,
+   "minimum": 60,
+   "missing": null,
+   "soa": 60
+  },
+  "negativeTtlInputs": {
+   "bad": {
+    "Authority": [
+     {
+      "TTL": -1,
+      "data": "ns 1 2 3 4 5 -1",
+      "type": 6
+     }
+    ]
+   },
+   "minimum": {
+    "Authority": [
+     {
+      "TTL": 120,
+      "data": "ns 1 2 3 4 5 60",
+      "type": 6
+     }
+    ]
+   },
+   "missing": {
+    "Authority": []
+   },
+   "soa": {
+    "Authority": [
+     {
+      "TTL": 60,
+      "data": "ns 1 2 3 4 5 120",
+      "type": 6
+     }
+    ]
+   }
+  },
+  "publicHost": {
+   "configured": {
+    "host": "fixture.tail-test.ts.net",
+    "otherHost": null,
+    "publicOrigin": [
+     "https://fixture.tail-test.ts.net",
+     ""
+    ],
+    "source": "configured"
+   },
+   "invalidConfigured": {
+    "host": null,
+    "publicOrigin": [
+     null,
+     "public_origin_invalid"
+    ]
+   },
+   "unconfigured": {
+    "accepted": {
+     "https://fixture.tail-test.ts.net": "fixture.tail-test.ts.net",
+     "https://fixture.tail-test.ts.net/": "fixture.tail-test.ts.net",
+     "https://fixture.tail-test.ts.net:443": "fixture.tail-test.ts.net"
+    },
+    "rejected": [
+     {
+      "input": null,
+      "result": null
+     },
+     {
+      "input": "",
+      "result": null
+     },
+     {
+      "input": "http://fixture.tail-test.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://127.0.0.1",
+      "result": null
+     },
+     {
+      "input": "https://localhost",
+      "result": null
+     },
+     {
+      "input": "https://[::1]",
+      "result": null
+     },
+     {
+      "input": "https://example.com",
+      "result": null
+     },
+     {
+      "input": "https://ts.net",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net.evil.invalid",
+      "result": null
+     },
+     {
+      "input": "https://user@fixture.tail-test.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net/v1",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net?x=1",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net#x",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net:80",
+      "result": null
+     },
+     {
+      "input": "https://fixture.tail-test.ts.net:444",
+      "result": null
+     },
+     {
+      "input": "https://-x.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://x-.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://x..ts.net",
+      "result": null
+     },
+     {
+      "input": "https://x_.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://fixture\\.tail-test.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://\u6d4b\u8bd5.ts.net",
+      "result": null
+     },
+     {
+      "input": "https://xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ts.net",
+      "result": null
+     }
+    ],
+    "sources": {
+     "https://fixture.tail-test.ts.net": "tailscale",
+     "https://fixture.tail-test.ts.net/": "tailscale",
+     "https://fixture.tail-test.ts.net:443": "tailscale"
+    }
+   },
+   "unconfiguredOrigin": [
+    null,
+    "public_origin_unconfigured"
+   ]
+  },
+  "summarize": {
+   "allFailed": {
+    "deadline_s": 15.0,
+    "dns": null,
+    "entries": [
+     {
+      "certificate": "failed",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "connection_failed",
+      "state": "failed",
+      "tls": "failed"
+     },
+     {
+      "certificate": "failed",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "connection_failed",
+      "state": "failed",
+      "tls": "failed"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "all_failed",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "all_entries_failed",
+    "source": "tailscale",
+    "version": 1
+   },
+   "allFailedUnchecked": {
+    "deadline_s": 15.0,
+    "dns": null,
+    "entries": [
+     {
+      "certificate": "failed",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "connection_failed",
+      "state": "failed",
+      "tls": "failed"
+     },
+     {
+      "certificate": "not_checked",
+      "dns": "not_checked",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "not_checked",
+      "state": "unchecked",
+      "tls": "not_checked"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "incomplete",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "deadline_exceeded",
+    "source": "tailscale",
+    "version": 1
+   },
+   "allOk": {
+    "deadline_s": 15.0,
+    "dns": null,
+    "entries": [
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     },
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "ok",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "ok",
+    "source": "tailscale",
+    "version": 1
+   },
+   "allOkUnchecked": {
+    "deadline_s": 15.0,
+    "dns": null,
+    "entries": [
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     },
+     {
+      "certificate": "not_checked",
+      "dns": "not_checked",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "not_checked",
+      "state": "unchecked",
+      "tls": "not_checked"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "degraded",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "deadline_exceeded",
+    "source": "tailscale",
+    "version": 1
+   },
+   "mixed": {
+    "deadline_s": 15.0,
+    "dns": null,
+    "entries": [
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     },
+     {
+      "certificate": "failed",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "connection_failed",
+      "state": "failed",
+      "tls": "failed"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "degraded",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "partial_failure",
+    "source": "tailscale",
+    "version": 1
+   },
+   "mixedUnchecked": {
+    "deadline_s": 15.0,
+    "dns": null,
+    "entries": [
+     {
+      "certificate": "ok",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "ok",
+      "state": "ok",
+      "tls": "ok"
+     },
+     {
+      "certificate": "failed",
+      "dns": "ok",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "connection_failed",
+      "state": "failed",
+      "tls": "failed"
+     },
+     {
+      "certificate": "not_checked",
+      "dns": "not_checked",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "not_checked",
+      "state": "unchecked",
+      "tls": "not_checked"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "degraded",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "deadline_exceeded",
+    "source": "tailscale",
+    "version": 1
+   },
+   "noneChecked": {
+    "deadline_s": 15.0,
+    "dns": null,
+    "entries": [
+     {
+      "certificate": "not_checked",
+      "dns": "not_checked",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "not_checked",
+      "state": "unchecked",
+      "tls": "not_checked"
+     },
+     {
+      "certificate": "not_checked",
+      "dns": "not_checked",
+      "host": "fixture.tail-test.ts.net",
+      "ip": "203.0.113.10",
+      "reason": "not_checked",
+      "state": "unchecked",
+      "tls": "not_checked"
+     }
+    ],
+    "host": "fixture.tail-test.ts.net",
+    "overall": "not_checked",
+    "public_url": "https://fixture.tail-test.ts.net",
+    "reason": "deadline_exceeded",
+    "source": "tailscale",
+    "version": 1
+   }
+  },
+  "summarizeInputs": {
+   "allFailed": [
+    {
+     "certificate": "failed",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "connection_failed",
+     "state": "failed",
+     "tls": "failed"
+    },
+    {
+     "certificate": "failed",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "connection_failed",
+     "state": "failed",
+     "tls": "failed"
+    }
+   ],
+   "allFailedUnchecked": [
+    {
+     "certificate": "failed",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "connection_failed",
+     "state": "failed",
+     "tls": "failed"
+    },
+    {
+     "certificate": "not_checked",
+     "checked_at_epoch": null,
+     "dns": "not_checked",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "not_checked",
+     "state": "unchecked",
+     "tls": "not_checked"
+    }
+   ],
+   "allOk": [
+    {
+     "certificate": "ok",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "ok",
+     "state": "ok",
+     "tls": "ok"
+    },
+    {
+     "certificate": "ok",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "ok",
+     "state": "ok",
+     "tls": "ok"
+    }
+   ],
+   "allOkUnchecked": [
+    {
+     "certificate": "ok",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "ok",
+     "state": "ok",
+     "tls": "ok"
+    },
+    {
+     "certificate": "not_checked",
+     "checked_at_epoch": null,
+     "dns": "not_checked",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "not_checked",
+     "state": "unchecked",
+     "tls": "not_checked"
+    }
+   ],
+   "mixed": [
+    {
+     "certificate": "ok",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "ok",
+     "state": "ok",
+     "tls": "ok"
+    },
+    {
+     "certificate": "failed",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "connection_failed",
+     "state": "failed",
+     "tls": "failed"
+    }
+   ],
+   "mixedUnchecked": [
+    {
+     "certificate": "ok",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "ok",
+     "state": "ok",
+     "tls": "ok"
+    },
+    {
+     "certificate": "failed",
+     "checked_at_epoch": 1790341200.0,
+     "dns": "ok",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "connection_failed",
+     "state": "failed",
+     "tls": "failed"
+    },
+    {
+     "certificate": "not_checked",
+     "checked_at_epoch": null,
+     "dns": "not_checked",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "not_checked",
+     "state": "unchecked",
+     "tls": "not_checked"
+    }
+   ],
+   "noneChecked": [
+    {
+     "certificate": "not_checked",
+     "checked_at_epoch": null,
+     "dns": "not_checked",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "not_checked",
+     "state": "unchecked",
+     "tls": "not_checked"
+    },
+    {
+     "certificate": "not_checked",
+     "checked_at_epoch": null,
+     "dns": "not_checked",
+     "elapsed_ms": 0,
+     "host": "fixture.tail-test.ts.net",
+     "ip": "203.0.113.10",
+     "reason": "not_checked",
+     "state": "unchecked",
+     "tls": "not_checked"
+    }
+   ]
+  }
+ },
+ "deploy": {
+  "assembly": {
+   "brokerEnv": "# Broker host environment.  Installed as /etc/um-share/broker.env (0640\n# root:um-share).  UM_SHARE_UID is appended by install.sh; do not put a\n# different numeric uid here by hand.\nUM_SHARE_HOST_STATE_DIR=/run/um-share\nUM_SHARE_GATEWAY_PORT=8100\nUM_DRAIN_BUDGET_S=900\nUM_BROKER_DRAIN_MAX_S=90\n# The 8100 gateway persists its revoke nonces and applied generations here.\n# The broker unit runs ProtectSystem=strict and only /var/lib/um-share is\n# writable, so this must NOT point inside the release tree\n# (/opt/um-share/current).  install.sh appends this key to an existing\n# broker.env; keep both in sync.  The gateway adopts a pre-fix\n# <release>/data/share-revoke.state once at its first start, so an upgrade\n# does not drop a pending security-journal generation.\nCHAT2API_SHARE_REVOKE_STATE_FILE=/var/lib/um-share/share-revoke.state\n",
+   "brokerMissing": [
+    "broker unit does not load an EnvironmentFile",
+    "broker.env does not set UM_SHARE_UID"
+   ],
+   "brokerOk": [],
+   "brokerUnit": "[Unit]\nDescription=UM share broker host (single authority for the 8100 child)\nDocumentation=file:///opt/um-share/current/um-cloud-deploy/README.md\nAfter=network-online.target\nWants=network-online.target\nConditionPathExists=/opt/um-share/current/share/broker_ops.py\nConditionPathExists=/etc/um-share/broker-control.key\n\n[Service]\nType=simple\nUser=um-share\nGroup=um-share\nWorkingDirectory=/opt/um-share/current\nEnvironmentFile=/etc/um-share/broker.env\nEnvironmentFile=-/etc/um-share/console.env\n# The merged 8100 child keeps the console's token/profile under the writable\n# console state, never inside the read-only release.  The environment file also\n# carries these on an installed host; the explicit values keep the broker child\n# correct even when the optional console.env predates the merged process.\nEnvironment=CHAT2API_TOKEN_FILE=/var/lib/um-share-console/share-backend/token.json\nEnvironment=CHAT2API_PROFILE_DIR=/var/lib/um-share-console/share-backend/edge-profile\nEnvironment=CHAT2API_SERVICE_LOG=/var/lib/um-share-console/share-backend/share-backend.log\nEnvironment=CHAT2API_USAGE_LOG=/var/lib/um-share-console/share-backend/usage-share-backend.jsonl\nEnvironment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token\nEnvironmentFile=-/etc/um-share/console.env\nEnvironment=CHAT2API_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token\n# The browser launch gets these only when the on-demand display is active;\n# the default headless path never connects to them.  browser_login also\n# injects the display's published values, so a changed display path does not\n# require a broker restart.\nEnvironment=DISPLAY=:99\nEnvironment=XAUTHORITY=/run/um-share/display.auth\n# The 8100 gateway persists its revoke state under the state directory, never\n# inside the release: ProtectSystem=strict keeps /opt/um-share/current read-only.\n# install.sh appends\n# CHAT2API_SHARE_REVOKE_STATE_FILE=/var/lib/um-share/share-revoke.state\n# to broker.env, and the 8100 child inherits this EnvironmentFile.\n# The gateway child runs as a script (sys.path[0]=chat2api); the shared\n# projection parser lives one level up at the release root.\nEnvironment=PYTHONPATH=/opt/um-share/current\nUMask=0077\n# Fail the START, never silently run without metering: broker.env must set\n# UM_SHARE_UID.\nExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly broker /etc/systemd/system/um-share-broker.service /etc/um-share/broker.env\nExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share/broker_ops.py \\\n  --socket-path /run/um-share/broker.sock \\\n  --key-file /etc/um-share/broker-control.key \\\n  --instance-key-file /etc/um-share/instance.key \\\n  --registration-file /var/lib/um-share/run/instance-registration.json \\\n  --instance-socket-prefix /run/um-share/instance- \\\n  --projection-path /var/lib/um-share/run/share-projection.json \\\n  --broker-dir /var/lib/um-share/broker \\\n  --host-pid-file /run/um-share/share-gateway.pid \\\n  --state-dir /run/um-share \\\n  --expected-uid ${UM_SHARE_UID} \\\n  --expect-instance-image /opt/um-share/venv/bin/python \\\n  --expect-instance-cmdline-marker chat2api.py \\\n  --expect-instance-port 8100 \\\n  --host-command /opt/um-share/venv/bin/python /opt/um-share/current/chat2api/chat2api.py \\\n    --port 8100 \\\n    --base-url https://chat.genai.um.edu.mo \\\n    --login-timeout 1800 \\\n    --share-config /var/lib/um-share/run/share-projection.json \\\n    --auth-mode projection \\\n    --instance-key-file /etc/um-share/instance.key \\\n    --instance-pipe-prefix /run/um-share/instance- \\\n    --registration-file /var/lib/um-share/run/instance-registration.json\n# The broker host owns the ONLY Popen that starts chat2api.py.  The\n# console unit is fenced with InaccessiblePaths for the same script, so a\n# console \"service.start\" can never become a second launcher.\n# The broker creates its AF_UNIX socket asynchronously after ExecStart, so an\n# immediate start races it and answers not_installed.  Wait up to 10 s\n# (50 x 0.2 s) for the socket, then retry the restricted start; success\n# exits 0.  The leading \"-\" keeps the broker unit active when a persisted\n# stop intent correctly refuses the automatic start; an operator start uses\n# `brokerctl start-explicit`.\nExecStartPost=-/bin/sh -c 'i=0; while [ $$i -lt 50 ]; do \\\n  if [ -S /run/um-share/broker.sock ] && \\\n     /opt/um-share/bin/um-share-brokerctl.py start; then exit 0; fi; \\\n  i=$$((i+1)); sleep 0.2; done; exit 1'\n# A 15-minute total drain is enforced by the helper: wait for ESTABLISHED\n# connections to 8100 to reach zero, then send the broker drain verb (its own\n# bounded in-flight wait + final stop + closure verification).  A timed-out\n# update never switches the current symlink.\nExecStop=/opt/um-share/bin/um-share-brokerctl.py --drain-budget ${UM_DRAIN_BUDGET_S} --poll-interval 5 stop\nTimeoutStartSec=120\nTimeoutStopSec=960\nRestart=on-failure\nRestartSec=5\nKillMode=control-group\n# The 8100 child is spawned with start_new_session=True but stays in this\n# service cgroup: control-group is the final cleanup fence.\nLimitNOFILE=65536\nTasksMax=512\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\nLockPersonality=true\nRestrictRealtime=true\nRemoveIPC=true\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nStateDirectory=um-share\nStateDirectoryMode=0750\nRuntimeDirectory=um-share\nRuntimeDirectoryMode=0700\n# The display unit keeps its Xvfb auth cookie under /run/um-share.  Without\n# preserve, this unit's stop wipes the directory out from under the RUNNING Xvfb\n# and the login window dies with \"(EE) Failed to open authorization file\".\nRuntimeDirectoryPreserve=yes\nLogsDirectory=um-share\nLogsDirectoryMode=0750\nConfigurationDirectory=um-share\nConfigurationDirectoryMode=0750\n# /var/lib/um-share is the persistent state fence (StateDirectory=um-share);\n# the 8100 gateway's revoke state lives there.  The merged 8100 child also\n# inherits CHAT2API_SERVICE_LOG/CHAT2API_PROFILE_DIR/CHAT2API_TOKEN_FILE under\n# /var/lib/um-share-console; without that path in ReadWritePaths the child exits\n# at startup with \"Read-only file system\" and the broker can never start 8100.\nReadWritePaths=/var/lib/um-share /run/um-share /var/log/um-share /var/lib/um-share-console\n\n[Install]\nWantedBy=multi-user.target\n",
+   "consoleMissing": [
+    "console unit does not load an EnvironmentFile",
+    "console.env does not set UM_CLOUD_SECURITY_STATE; the console read face would report configured=false",
+    "console.env does not set CHAT2API_SHARE_SECRET_KEY_FILE; the console read face would report configured=false",
+    "console.env does not set UM_SHARE_UID"
+   ],
+   "consoleOk": [],
+   "env": "# Console (8096) environment.  Installed as /etc/um-share/console.env\n# (0640 root:um-share).  UM_SHARE_UID is appended by install.sh.\n# Expand-contract (2026-11-14): the cloud console moved 18096 -> 8096.  The\n# legacy 18096 remains an accepted explicit USAGESRV_PORT for one release\n# cycle; the next release removes the alias.\nUM_SHARE_ROLE=cloud\nUM_SHARE_DEPLOYMENT=cloud\nBASE_URL=https://chat.genai.um.edu.mo\nUSAGESRV_PORT=8096\nUSAGE_CONTROL_TOKEN_FILE=/etc/um-share/admin-control-token\nUSAGE_SESSION_CODE_FILE=/var/lib/um-share-console/session-code\nCONSOLE_STATE_FILE=/var/lib/um-share-console/console-state.sqlite3\nCONSOLE_LOCK_DIR=/var/lib/um-share-console/console-locks\nSHARE_STORE_FILE=/var/lib/um-share-console/share-store.db\n# POSIX share-key encryption key (AES-GCM).  Persistent deployment state, not\n# release material: the product default <release>/data/share-secret.key would\n# vanish when `current` switches releases.  install.sh creates it 0600\n# um-share:um-share and never overwrites it.\nCHAT2API_SHARE_SECRET_KEY_FILE=/var/lib/um-share-console/share-secret.key\nSHARE_MANAGEMENT_CONFIG=/etc/um-share/share-management.json\nCONSOLE_SHARE_BACKEND_DIR=/var/lib/um-share-console/share-backend\n# The merged 8100 child owns the UM login token and browser profile; keep them\n# in the writable console state instead of the read-only release.\nCHAT2API_TOKEN_FILE=/var/lib/um-share-console/share-backend/token.json\nCHAT2API_PROFILE_DIR=/var/lib/um-share-console/share-backend/edge-profile\nCHAT2API_USAGE_LOG=/var/lib/um-share-console/share-backend/usage-share-backend.jsonl\nCHAT2API_SERVICE_LOG=/var/lib/um-share-console/share-backend/share-backend.log\nCONSOLE_SHARE_RUN_ROOT=/var/lib/um-share-console\nUM_SHARE_GATEWAY_PID_FILE=/run/um-share/share-gateway.pid\nUM_SHARE_HOST_STATE_DIR=/run/um-share\nUM_SHARE_GATEWAY_PORT=8100\n# Optional private Tailscale Serve policy: exact ts.net HTTPS origin, owner and\n# concrete PC/phone device IPs.  The file is root-readable only and never in Git;\n# missing or invalid policy leaves remote access closed while 127.0.0.1 stays local.\nUSAGE_TAILNET_CONFIG_FILE=/etc/um-share/console-tailnet-access.json\n# Private web login window.  The display unit is installed but NOT enabled, and\n# the normal headless login does not need it.  When a manual takeover is\n# required, run display/manual-takeover.sh start: it starts the unit for this\n# boot (never enables it) and turns this surface on.  The noVNC page and\n# WebSocket proxy are same-origin under /display/; x11vnc stays 127.0.0.1:8097.\n# Expand-contract (2026-11-14): the display moved 5901 -> 8097.  The legacy\n# 5901 remains an accepted explicit CONSOLE_DISPLAY_VNC_PORT for one release\n# cycle; the display start script reads this line so both sides keep the same port.\nCONSOLE_DISPLAY_ENABLED=0\nCONSOLE_DISPLAY_VNC_HOST=127.0.0.1\nCONSOLE_DISPLAY_VNC_PORT=8097\n# The display service answers VNC challenges on this private Unix socket.\n# The console proxy sends only 16-byte challenges and receives 16-byte\n# responses; it never reads the VNC password and never forwards it to a browser.\nCONSOLE_DISPLAY_VNC_AUTH_SOCKET=/run/um-share/vnc-auth.sock\nCONSOLE_DISPLAY_NOVNC_ROOT=/usr/share/novnc\nCONSOLE_DISPLAY_LAUNCHER_FILE=/opt/um-share/current/um-cloud-deploy/display/novnc-launcher.html\nCONSOLE_DISPLAY_MAX_CONNECTIONS=2\nCONSOLE_DISPLAY_IDLE_TIMEOUT=900\nCONSOLE_DISPLAY_MAX_SESSION=14400\n# Public API origin shown by the console and used by the public probe.  Missing\n# means \"not configured\"; the probe then keeps the legacy .ts.net rule.\nCONSOLE_PUBLIC_ORIGIN=https://dacintapi.de5.net\n# Playwright Chromium executable resolved by install.sh from the installed\n# browser tree.  A stale or non-executable path is a configuration error.\nCHAT2API_BROWSER_PATH=/opt/um-share/pw-browsers/chromium-1248/chrome-linux64/chrome\n# The cloud share does not add an extra per-key dispatch queue.\nCHAT2API_SHARE_DISPATCH_MAX_WAIT_S=0\n# Cloud-ops read face (usagesrv.cloud_ops_status).  Only the independent\n# security journal remains; budget and automatic backup status are no longer part\n# of the deployment.\nUM_CLOUD_SECURITY_STATE=/var/lib/um-share/security-state.json\nPLAYWRIGHT_BROWSERS_PATH=/opt/um-share/pw-browsers\nHOME=/var/lib/um-share-console\n",
+   "unit": "[Unit]\nDescription=UM share console (loopback 8096)\nDocumentation=file:///opt/um-share/current/um-cloud-deploy/README.md\nAfter=network-online.target um-share-broker.service\nWants=network-online.target\nConditionPathExists=/opt/um-share/current/usagesrv.py\nConditionPathExists=/etc/um-share/share-management.json\n\n[Service]\nType=simple\nUser=um-share\nGroup=um-share\nWorkingDirectory=/opt/um-share/current\nEnvironmentFile=/etc/um-share/console.env\nUMask=0077\n# Fail the START when console.env no longer wires the security read face: an\n# unconfigured console must not look like a healthy one.\nExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly console /etc/systemd/system/um-share-console.service /etc/um-share/console.env\nExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/usagesrv.py\n# Single-authority fence: the console may READ the broker pid/intent for\n# status, but it may not write /run/um-share (ReadOnlyPaths) and it may not\n# execute chat2api.py directly (NoExecPaths).  A console service.start\n# therefore cannot spawn a second 8100; it fails before a live gateway exists.\n# The console never starts a second share process: the broker owns the only\n# Popen.  The merged 8100 process re-reads the projection file itself.\nReadOnlyPaths=-/run/um-share\nInaccessiblePaths=\nNoExecPaths=-/opt/um-share/current/chat2api/chat2api.py\nReadWritePaths=/var/lib/um-share-console /var/log/um-share-console\nTimeoutStartSec=120\nTimeoutStopSec=120\nRestart=on-failure\nRestartSec=5\nKillMode=control-group\nLimitNOFILE=65536\nTasksMax=512\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\nLockPersonality=true\nRestrictRealtime=true\nRemoveIPC=true\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nStateDirectory=um-share-console\nStateDirectoryMode=0750\nLogsDirectory=um-share-console\nLogsDirectoryMode=0750\n\n[Install]\nWantedBy=multi-user.target\n",
+   "unknownRole": [
+    "unknown deployment role: 'unknown'"
+   ]
+  },
+  "cli": {
+   "missing": {
+    "body": {
+     "env": "<env>",
+     "ok": false,
+     "problems": [
+      "unit file unreadable: <tmp>\\missing.service: [Errno 2] No such file or directory: 'C:\\\\Users\\\\dacint\\\\AppData\\\\Local\\\\Temp\\\\um-rust-ops-deploy-<tmp>\\\\missing.service'"
+     ],
+     "role": "console",
+     "unit": "<unit>"
+    },
+    "code": 1
+   },
+   "ok": {
+    "body": {
+     "env": "<env>",
+     "ok": true,
+     "role": "console",
+     "unit": "<unit>"
+    },
+    "code": 0
+   },
+   "usage": {
+    "code": 2,
+    "stderr": "usage: backup_restore.py [-h] [--store STORE] [--ledger LEDGER]\n                         [--key-file KEY_FILE] [--remote-dir REMOTE_DIR]\n                         [--remote-prefix REMOTE_PREFIX] [--state STATE]\n                         [--spool SPOOL] [--config CONFIG]\n                         [--security-state SECURITY_STATE] [--print-freshness]\n                         [--retry-pending]\n                         [--check-deployment-assembly ROLE UNIT ENV]\n                         [--deployment-restore]\n                         [--deployment-current DEPLOYMENT_CURRENT]\n                         [--deployment-etc DEPLOYMENT_ETC]\n                         [--deployment-var DEPLOYMENT_VAR]\n                         [--deployment-console-var DEPLOYMENT_CONSOLE_VAR]\n                         [--share-secret-owner SHARE_SECRET_OWNER]\n                         [--share-secret-group SHARE_SECRET_GROUP]\n                         [--restore-backup RESTORE_BACKUP]\n                         [--restore-target RESTORE_TARGET]\n                         [--restore-security-state RESTORE_SECURITY_STATE]\n                         [--allow-existing] [--once]\nbackup_restore.py: error: argument --check-deployment-assembly: expected 3 arguments\n",
+    "stdout": ""
+   }
+  },
+  "paths": {
+   "brokenConsoleEnv": {
+    "error": "BackupError",
+    "message": "console environment file unreadable: <tmp>\\broken-paths\\etc\\console.env: [Errno 13] Permission denied: 'C:\\\\Users\\\\dacint\\\\AppData\\\\Local\\\\Temp\\\\um-rust-ops-deploy-<tmp>\\\\broken-paths\\\\etc\\\\console.env'"
+   },
+   "withConsoleEnv": {
+    "budget_db": "<tmp>\\paths\\var/budget.db",
+    "config": "<tmp>\\paths\\etc/share-management.json",
+    "console": "<tmp>\\paths\\console",
+    "console_var": "<tmp>\\paths\\console",
+    "current": "<tmp>\\paths\\current",
+    "etc": "<tmp>\\paths\\etc",
+    "key_file": "<tmp>\\paths\\etc/backup.key",
+    "ledger": "<tmp>\\paths\\console/share-backend/usage-share-backend.jsonl",
+    "remote_dir": "<tmp>\\paths\\var/backup-remote",
+    "security_state": "<tmp>\\paths\\var/security-state.json",
+    "share_secret_key": "<tmp>\\paths\\share-secret.key",
+    "spool": "<tmp>\\paths\\var/backup-spool",
+    "state": "<tmp>\\paths\\var/backup-freshness.json",
+    "store": "<tmp>\\paths\\console/share-store.db",
+    "var": "<tmp>\\paths\\var"
+   },
+   "withOverride": {
+    "budget_db": "<tmp>\\paths\\var/budget.db",
+    "config": "<tmp>\\paths\\etc/share-management.json",
+    "console": "<tmp>\\paths\\console",
+    "console_var": "<tmp>\\paths\\console",
+    "current": "<tmp>\\paths\\current",
+    "etc": "<tmp>\\paths\\etc",
+    "key_file": "<tmp>\\paths\\etc/backup.key",
+    "ledger": "<tmp>\\paths\\console/share-backend/usage-share-backend.jsonl",
+    "remote_dir": "<tmp>\\paths\\var/backup-remote",
+    "security_state": "<tmp>\\paths\\var/security-state.json",
+    "share_secret_key": "/override/share-secret.key",
+    "spool": "<tmp>\\paths\\var/backup-spool",
+    "state": "<tmp>\\paths\\var/backup-freshness.json",
+    "store": "<tmp>\\paths\\console/share-store.db",
+    "var": "<tmp>\\paths\\var"
+   },
+   "withoutConsoleEnv": {
+    "budget_db": "<tmp>\\paths\\var/budget.db",
+    "config": "<tmp>\\paths\\etc/share-management.json",
+    "console": "<tmp>\\paths\\console",
+    "console_var": "<tmp>\\paths\\console",
+    "current": "<tmp>\\paths\\current",
+    "etc": "<tmp>\\paths\\etc",
+    "key_file": "<tmp>\\paths\\etc/backup.key",
+    "ledger": "<tmp>\\paths\\console/share-backend/usage-share-backend.jsonl",
+    "remote_dir": "<tmp>\\paths\\var/backup-remote",
+    "security_state": "<tmp>\\paths\\var/security-state.json",
+    "share_secret_key": "<tmp>\\paths\\current/data/share-secret.key",
+    "spool": "<tmp>\\paths\\var/backup-spool",
+    "state": "<tmp>\\paths\\var/backup-freshness.json",
+    "store": "<tmp>\\paths\\console/share-store.db",
+    "var": "<tmp>\\paths\\var"
+   }
+  },
+  "rollbackHelp": {
+   "code": 0,
+   "stdout": "Usage: rollback.sh [--to VERSION] [options]\n\nOptions:\n  --to VERSION         installed release version (default: previous symlink)\n  --drain-budget SEC   total drain budget, 2..900 (default 900)\n  --no-edge            do not stop/start the managed cloudflared unit\n  --recover-backup PATH explicit recovery only: restore this sealed backup;\n                        the release version is NOT switched\n  --recover-security-state PATH\n                        independent latest security state (required with\n                        --recover-backup)\n  -h, --help            show this help\n\nExit codes: 0 success; 64 usage; 66 no target; 68 health check failed and the\ncurrent release was restored; 69 rollback/compensation failed (manual intervention\nrequired; the public entry may still be open); 70 software; 71 command missing;\n72 file error; 73 missing release; 74 I/O; 75 drain timed out; 77 permission.\n"
+  },
+  "rollbackUnknown": {
+   "code": 64
+  },
+  "rollbackUsage": {
+   "code": 64
+  },
+  "updateHelp": {
+   "code": 0,
+   "stdout": "Usage: update.sh --release <um-share-VERSION.tar.gz> [options]\n       update.sh --version <VERSION> [options]\n\nOptions:\n  --release PATH       new release tar.gz\n  --version VERSION    expected/installed version\n  --sha256 HEX         expected archive SHA-256\n  --drain-budget SEC   total drain budget, 2..900 (default 900)\n  --skip-drain          emergency only: do not wait/drain; refuses by default\n  --no-edge             do not stop/start the managed cloudflared unit\n  --recover-backup PATH explicit recovery only: restore this sealed backup\n  --recover-security-state PATH\n                        independent latest security state (required with\n                        --recover-backup)\n  -h, --help             show this help\n\nExit codes: 0 success; 64 usage; 65 manifest; 66 missing input;\n68 health check failed and the previous release was restored;\n69 rollback/compensation failed (manual intervention required; the public\nentry may still be open); 70 software; 71 OS/command missing; 72 file error;\n73 version conflict; 74 I/O; 75 drain timed out (no version switch);\n77 permission.\n"
+  },
+  "updateUnknown": {
+   "code": 64
+  },
+  "updateUsage": {
+   "code": 64
+  }
+ },
+ "ledger": {
+  "basic": {
+   "checkedAt": "<checkedAt>",
+   "coverage": {
+    "attributed": 9,
+    "attributionReasons": {
+     "absent": 1,
+     "legacy": 1,
+     "replayed": 1
+    },
+    "cacheReportedRequests": 3,
+    "cacheUnknownRequests": 8,
+    "cacheUnreportedRequests": 1,
+    "excludedUnknownTimeRequests": 0,
+    "incompleteRequests": 2,
+    "ledger": "usage-share-backend.jsonl",
+    "ledgerPresent": true,
+    "ledgerReadable": true,
+    "limit": 200000,
+    "records": 12,
+    "recordsMatched": 12,
+    "recordsScanned": 12,
+    "recordsTotal": 12,
+    "truncated": false,
+    "unattributed": 3,
+    "unknownTimeRequests": 1,
+    "unknownUsageRequests": 1,
+    "unparsedLines": 1
+   },
+   "filters": {
+    "key": null,
+    "model": null,
+    "result": null,
+    "window": "all"
+   },
+   "keys": [
+    {
+     "coverage": {
+      "cacheReportedRequests": 3,
+      "cacheUnknownRequests": 5,
+      "cacheUnreportedRequests": 1,
+      "completeUsageRequests": 6,
+      "estimatedUsageRequests": 1,
+      "partialUsageRequests": 1,
+      "records": 9,
+      "unknownTimeRequests": 1,
+      "unknownUsageRequests": 1
+     },
+     "days": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 4,
+        "cacheUnreportedRequests": 1,
+        "completeUsageRequests": 5,
+        "estimatedUsageRequests": 1,
+        "partialUsageRequests": 1,
+        "records": 8,
+        "unknownTimeRequests": 0,
+        "unknownUsageRequests": 1
+       },
+       "day": "2026-09-25",
+       "inputTokens": 800,
+       "outputTokens": 70,
+       "requests": 7,
+       "tokenUsage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 4,
+        "cacheUnreportedRequests": 1,
+        "cachedInputTokens": 40,
+        "complete": false,
+        "completeRequests": 5,
+        "estimatedInputTokens": 100,
+        "estimatedOutputTokens": 10,
+        "estimatedRequests": 1,
+        "estimatedTokens": 110,
+        "inputTokens": 600,
+        "lowerBoundInputTokens": 100,
+        "lowerBoundOutputTokens": 0,
+        "lowerBoundRequests": 1,
+        "lowerBoundTokens": 100,
+        "outputTokens": 60,
+        "totalTokens": 660,
+        "unknownRequests": 1
+       },
+       "unknownRequests": 1
+      }
+     ],
+     "inputTokens": 900,
+     "key_id": "key-a",
+     "models": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 5,
+        "cacheUnreportedRequests": 1,
+        "completeUsageRequests": 6,
+        "estimatedUsageRequests": 1,
+        "partialUsageRequests": 1,
+        "records": 9,
+        "unknownTimeRequests": 1,
+        "unknownUsageRequests": 1
+       },
+       "inputTokens": 900,
+       "model": "GLM-5.2-NVFP4",
+       "outputTokens": 80,
+       "requests": 8,
+       "tokenUsage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 5,
+        "cacheUnreportedRequests": 1,
+        "cachedInputTokens": 40,
+        "complete": false,
+        "completeRequests": 6,
+        "estimatedInputTokens": 100,
+        "estimatedOutputTokens": 10,
+        "estimatedRequests": 1,
+        "estimatedTokens": 110,
+        "inputTokens": 700,
+        "lowerBoundInputTokens": 100,
+        "lowerBoundOutputTokens": 0,
+        "lowerBoundRequests": 1,
+        "lowerBoundTokens": 100,
+        "outputTokens": 70,
+        "totalTokens": 770,
+        "unknownRequests": 1
+       },
+       "unknownRequests": 1
+      }
+     ],
+     "outputTokens": 80,
+     "requests": 9,
+     "tokenUsage": {
+      "cacheReportedRequests": 3,
+      "cacheUnknownRequests": 5,
+      "cacheUnreportedRequests": 1,
+      "cachedInputTokens": 40,
+      "complete": false,
+      "completeRequests": 6,
+      "estimatedInputTokens": 100,
+      "estimatedOutputTokens": 10,
+      "estimatedRequests": 1,
+      "estimatedTokens": 110,
+      "inputTokens": 700,
+      "lowerBoundInputTokens": 100,
+      "lowerBoundOutputTokens": 0,
+      "lowerBoundRequests": 1,
+      "lowerBoundTokens": 100,
+      "outputTokens": 70,
+      "totalTokens": 770,
+      "unknownRequests": 1
+     },
+     "undated": {
+      "coverage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 1,
+       "cacheUnreportedRequests": 0,
+       "completeUsageRequests": 1,
+       "estimatedUsageRequests": 0,
+       "partialUsageRequests": 0,
+       "records": 1,
+       "unknownTimeRequests": 1,
+       "unknownUsageRequests": 0
+      },
+      "day": null,
+      "inputTokens": 100,
+      "outputTokens": 10,
+      "requests": 1,
+      "tokenUsage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 1,
+       "cacheUnreportedRequests": 0,
+       "cachedInputTokens": null,
+       "complete": true,
+       "completeRequests": 1,
+       "estimatedInputTokens": null,
+       "estimatedOutputTokens": null,
+       "estimatedRequests": 0,
+       "estimatedTokens": null,
+       "inputTokens": 100,
+       "lowerBoundInputTokens": null,
+       "lowerBoundOutputTokens": null,
+       "lowerBoundRequests": 0,
+       "lowerBoundTokens": null,
+       "outputTokens": 10,
+       "totalTokens": 110,
+       "unknownRequests": 0
+      },
+      "unknownRequests": 0
+     },
+     "unknownRequests": 1
+    }
+   ],
+   "requests": 12,
+   "results": {
+    "cancelled": 1,
+    "coverage": {
+     "unknownResult": 0
+    },
+    "failed": 1,
+    "success": 10,
+    "total": 12,
+    "unknown": 0
+   },
+   "unattributed": {
+    "coverage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 3,
+     "cacheUnreportedRequests": 0,
+     "completeUsageRequests": 2,
+     "estimatedUsageRequests": 1,
+     "partialUsageRequests": 0,
+     "records": 3,
+     "unknownTimeRequests": 0,
+     "unknownUsageRequests": 0
+    },
+    "days": [
+     {
+      "coverage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 1,
+       "cacheUnreportedRequests": 0,
+       "completeUsageRequests": 0,
+       "estimatedUsageRequests": 1,
+       "partialUsageRequests": 0,
+       "records": 1,
+       "unknownTimeRequests": 0,
+       "unknownUsageRequests": 0
+      },
+      "day": "2026-09-24",
+      "inputTokens": 1000,
+      "outputTokens": 0,
+      "requests": 1,
+      "tokenUsage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 1,
+       "cacheUnreportedRequests": 0,
+       "cachedInputTokens": null,
+       "complete": false,
+       "completeRequests": 0,
+       "estimatedInputTokens": 1000,
+       "estimatedOutputTokens": 0,
+       "estimatedRequests": 1,
+       "estimatedTokens": 1000,
+       "inputTokens": null,
+       "lowerBoundInputTokens": null,
+       "lowerBoundOutputTokens": null,
+       "lowerBoundRequests": 0,
+       "lowerBoundTokens": null,
+       "outputTokens": null,
+       "totalTokens": null,
+       "unknownRequests": 0
+      },
+      "unknownRequests": 0
+     },
+     {
+      "coverage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 2,
+       "cacheUnreportedRequests": 0,
+       "completeUsageRequests": 2,
+       "estimatedUsageRequests": 0,
+       "partialUsageRequests": 0,
+       "records": 2,
+       "unknownTimeRequests": 0,
+       "unknownUsageRequests": 0
+      },
+      "day": "2026-09-25",
+      "inputTokens": 200,
+      "outputTokens": 20,
+      "requests": 2,
+      "tokenUsage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 2,
+       "cacheUnreportedRequests": 0,
+       "cachedInputTokens": null,
+       "complete": true,
+       "completeRequests": 2,
+       "estimatedInputTokens": null,
+       "estimatedOutputTokens": null,
+       "estimatedRequests": 0,
+       "estimatedTokens": null,
+       "inputTokens": 200,
+       "lowerBoundInputTokens": null,
+       "lowerBoundOutputTokens": null,
+       "lowerBoundRequests": 0,
+       "lowerBoundTokens": null,
+       "outputTokens": 20,
+       "totalTokens": 220,
+       "unknownRequests": 0
+      },
+      "unknownRequests": 0
+     }
+    ],
+    "inputTokens": 1200,
+    "key_id": null,
+    "models": [
+     {
+      "coverage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 3,
+       "cacheUnreportedRequests": 0,
+       "completeUsageRequests": 2,
+       "estimatedUsageRequests": 1,
+       "partialUsageRequests": 0,
+       "records": 3,
+       "unknownTimeRequests": 0,
+       "unknownUsageRequests": 0
+      },
+      "inputTokens": 1200,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 20,
+      "requests": 3,
+      "tokenUsage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 3,
+       "cacheUnreportedRequests": 0,
+       "cachedInputTokens": null,
+       "complete": false,
+       "completeRequests": 2,
+       "estimatedInputTokens": 1000,
+       "estimatedOutputTokens": 0,
+       "estimatedRequests": 1,
+       "estimatedTokens": 1000,
+       "inputTokens": 200,
+       "lowerBoundInputTokens": null,
+       "lowerBoundOutputTokens": null,
+       "lowerBoundRequests": 0,
+       "lowerBoundTokens": null,
+       "outputTokens": 20,
+       "totalTokens": 220,
+       "unknownRequests": 0
+      },
+      "unknownRequests": 0
+     }
+    ],
+    "outputTokens": 20,
+    "requests": 3,
+    "tokenUsage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 3,
+     "cacheUnreportedRequests": 0,
+     "cachedInputTokens": null,
+     "complete": false,
+     "completeRequests": 2,
+     "estimatedInputTokens": 1000,
+     "estimatedOutputTokens": 0,
+     "estimatedRequests": 1,
+     "estimatedTokens": 1000,
+     "inputTokens": 200,
+     "lowerBoundInputTokens": null,
+     "lowerBoundOutputTokens": null,
+     "lowerBoundRequests": 0,
+     "lowerBoundTokens": null,
+     "outputTokens": 20,
+     "totalTokens": 220,
+     "unknownRequests": 0
+    },
+    "undated": null,
+    "unknownRequests": 0
+   }
+  },
+  "empty": {
+   "requests": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributedRequests": 0,
+     "attributionReasons": {},
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "excludedUnknownTimeRequests": 0,
+     "filters": {
+      "key": null,
+      "model": null,
+      "result": null,
+      "window": "all"
+     },
+     "ledger": "empty.jsonl",
+     "ledgerPresent": true,
+     "ledgerReadable": true,
+     "limit": 50,
+     "olderRecordsUnread": false,
+     "readLimit": 200000,
+     "recordsMatched": 0,
+     "recordsReturned": 0,
+     "recordsScanned": 0,
+     "recordsTotal": 0,
+     "truncated": false,
+     "unattributedRequests": 0,
+     "unknownUsageRequests": 0,
+     "unparsedLines": 0
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "all"
+    },
+    "nextCursor": null,
+    "rows": [],
+    "truncated": false
+   },
+   "summary": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributed": 0,
+     "attributionReasons": {},
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "excludedUnknownTimeRequests": 0,
+     "incompleteRequests": 0,
+     "ledger": "empty.jsonl",
+     "ledgerPresent": true,
+     "ledgerReadable": true,
+     "limit": 200000,
+     "records": 0,
+     "recordsMatched": 0,
+     "recordsScanned": 0,
+     "recordsTotal": 0,
+     "truncated": false,
+     "unattributed": 0,
+     "unknownTimeRequests": 0,
+     "unknownUsageRequests": 0,
+     "unparsedLines": 0
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "all"
+    },
+    "keys": [],
+    "requests": 0,
+    "results": {
+     "cancelled": 0,
+     "coverage": {
+      "unknownResult": 0
+     },
+     "failed": 0,
+     "success": 0,
+     "total": 0,
+     "unknown": 0
+    },
+    "unattributed": {
+     "coverage": {
+      "cacheReportedRequests": 0,
+      "cacheUnknownRequests": 0,
+      "cacheUnreportedRequests": 0,
+      "completeUsageRequests": 0,
+      "estimatedUsageRequests": 0,
+      "partialUsageRequests": 0,
+      "records": 0,
+      "unknownTimeRequests": 0,
+      "unknownUsageRequests": 0
+     },
+     "days": [],
+     "inputTokens": 0,
+     "key_id": null,
+     "models": [],
+     "outputTokens": 0,
+     "requests": 0,
+     "tokenUsage": {
+      "cacheReportedRequests": 0,
+      "cacheUnknownRequests": 0,
+      "cacheUnreportedRequests": 0,
+      "cachedInputTokens": null,
+      "complete": false,
+      "completeRequests": 0,
+      "estimatedInputTokens": null,
+      "estimatedOutputTokens": null,
+      "estimatedRequests": 0,
+      "estimatedTokens": null,
+      "inputTokens": null,
+      "lowerBoundInputTokens": null,
+      "lowerBoundOutputTokens": null,
+      "lowerBoundRequests": 0,
+      "lowerBoundTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "unknownRequests": 0
+     },
+     "undated": null,
+     "unknownRequests": 0
+    }
+   }
+  },
+  "errors": {
+   "requestsPrivate": {
+    "error": "ValueError",
+    "message": "refusing to read the private chat2api ledger; pass the share backend ledger explicitly"
+   },
+   "summaryPrivate": {
+    "error": "ValueError",
+    "message": "refusing to read the private chat2api ledger; pass the share backend ledger explicitly"
+   }
+  },
+  "filtered": {
+   "checkedAt": "<checkedAt>",
+   "coverage": {
+    "attributed": 6,
+    "attributionReasons": {},
+    "cacheReportedRequests": 3,
+    "cacheUnknownRequests": 2,
+    "cacheUnreportedRequests": 1,
+    "excludedUnknownTimeRequests": 1,
+    "incompleteRequests": 0,
+    "ledger": "usage-share-backend.jsonl",
+    "ledgerPresent": true,
+    "ledgerReadable": true,
+    "limit": 200000,
+    "records": 6,
+    "recordsMatched": 6,
+    "recordsScanned": 12,
+    "recordsTotal": 12,
+    "truncated": false,
+    "unattributed": 0,
+    "unknownTimeRequests": 0,
+    "unknownUsageRequests": 1,
+    "unparsedLines": 1
+   },
+   "filters": {
+    "key": "key-a",
+    "model": "GLM-5.2-NVFP4",
+    "result": "success",
+    "window": "24h"
+   },
+   "keys": [
+    {
+     "coverage": {
+      "cacheReportedRequests": 3,
+      "cacheUnknownRequests": 2,
+      "cacheUnreportedRequests": 1,
+      "completeUsageRequests": 5,
+      "estimatedUsageRequests": 0,
+      "partialUsageRequests": 0,
+      "records": 6,
+      "unknownTimeRequests": 0,
+      "unknownUsageRequests": 1
+     },
+     "days": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 2,
+        "cacheUnreportedRequests": 1,
+        "completeUsageRequests": 5,
+        "estimatedUsageRequests": 0,
+        "partialUsageRequests": 0,
+        "records": 6,
+        "unknownTimeRequests": 0,
+        "unknownUsageRequests": 1
+       },
+       "day": "2026-09-25",
+       "inputTokens": 600,
+       "outputTokens": 60,
+       "requests": 5,
+       "tokenUsage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 2,
+        "cacheUnreportedRequests": 1,
+        "cachedInputTokens": 40,
+        "complete": false,
+        "completeRequests": 5,
+        "estimatedInputTokens": null,
+        "estimatedOutputTokens": null,
+        "estimatedRequests": 0,
+        "estimatedTokens": null,
+        "inputTokens": 600,
+        "lowerBoundInputTokens": null,
+        "lowerBoundOutputTokens": null,
+        "lowerBoundRequests": 0,
+        "lowerBoundTokens": null,
+        "outputTokens": 60,
+        "totalTokens": 660,
+        "unknownRequests": 1
+       },
+       "unknownRequests": 1
+      }
+     ],
+     "inputTokens": 600,
+     "key_id": "key-a",
+     "models": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 2,
+        "cacheUnreportedRequests": 1,
+        "completeUsageRequests": 5,
+        "estimatedUsageRequests": 0,
+        "partialUsageRequests": 0,
+        "records": 6,
+        "unknownTimeRequests": 0,
+        "unknownUsageRequests": 1
+       },
+       "inputTokens": 600,
+       "model": "GLM-5.2-NVFP4",
+       "outputTokens": 60,
+       "requests": 5,
+       "tokenUsage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 2,
+        "cacheUnreportedRequests": 1,
+        "cachedInputTokens": 40,
+        "complete": false,
+        "completeRequests": 5,
+        "estimatedInputTokens": null,
+        "estimatedOutputTokens": null,
+        "estimatedRequests": 0,
+        "estimatedTokens": null,
+        "inputTokens": 600,
+        "lowerBoundInputTokens": null,
+        "lowerBoundOutputTokens": null,
+        "lowerBoundRequests": 0,
+        "lowerBoundTokens": null,
+        "outputTokens": 60,
+        "totalTokens": 660,
+        "unknownRequests": 1
+       },
+       "unknownRequests": 1
+      }
+     ],
+     "outputTokens": 60,
+     "requests": 6,
+     "tokenUsage": {
+      "cacheReportedRequests": 3,
+      "cacheUnknownRequests": 2,
+      "cacheUnreportedRequests": 1,
+      "cachedInputTokens": 40,
+      "complete": false,
+      "completeRequests": 5,
+      "estimatedInputTokens": null,
+      "estimatedOutputTokens": null,
+      "estimatedRequests": 0,
+      "estimatedTokens": null,
+      "inputTokens": 600,
+      "lowerBoundInputTokens": null,
+      "lowerBoundOutputTokens": null,
+      "lowerBoundRequests": 0,
+      "lowerBoundTokens": null,
+      "outputTokens": 60,
+      "totalTokens": 660,
+      "unknownRequests": 1
+     },
+     "undated": null,
+     "unknownRequests": 1
+    }
+   ],
+   "requests": 6,
+   "results": {
+    "cancelled": 0,
+    "coverage": {
+     "unknownResult": 0
+    },
+    "failed": 0,
+    "success": 6,
+    "total": 6,
+    "unknown": 0
+   },
+   "unattributed": {
+    "coverage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "completeUsageRequests": 0,
+     "estimatedUsageRequests": 0,
+     "partialUsageRequests": 0,
+     "records": 0,
+     "unknownTimeRequests": 0,
+     "unknownUsageRequests": 0
+    },
+    "days": [],
+    "inputTokens": 0,
+    "key_id": null,
+    "models": [],
+    "outputTokens": 0,
+    "requests": 0,
+    "tokenUsage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "cachedInputTokens": null,
+     "complete": false,
+     "completeRequests": 0,
+     "estimatedInputTokens": null,
+     "estimatedOutputTokens": null,
+     "estimatedRequests": 0,
+     "estimatedTokens": null,
+     "inputTokens": null,
+     "lowerBoundInputTokens": null,
+     "lowerBoundOutputTokens": null,
+     "lowerBoundRequests": 0,
+     "lowerBoundTokens": null,
+     "outputTokens": null,
+     "totalTokens": null,
+     "unknownRequests": 0
+    },
+    "undated": null,
+    "unknownRequests": 0
+   }
+  },
+  "inputs": {
+   "basicRecords": [
+    {
+     "attribution": "verified",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 10,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "r1",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 110,
+     "usage_source": "upstream"
+    },
+    {
+     "attribution": "verified",
+     "cache_report_status": "reported",
+     "cached_input_tokens": 20,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 200,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 20,
+     "protocol": "messages",
+     "reasoning_tokens": 0,
+     "request_id": "r2",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": true,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 220,
+     "usage_source": "upstream"
+    },
+    {
+     "attribution": "verified",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 0,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 0,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "unknown-usage",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 0,
+     "usage_source": "none"
+    },
+    {
+     "attribution": "absent",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": null,
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 10,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "direct",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 110,
+     "usage_source": "upstream"
+    },
+    {
+     "attribution": "replayed",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": "",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 10,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "replayed",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 110,
+     "usage_source": "upstream"
+    },
+    {
+     "cached_input_tokens": 0,
+     "duration_ms": 100,
+     "estimated": true,
+     "input_tokens": 1000,
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 0,
+     "reasoning_tokens": 0,
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "2026-09-24T10:00:00+08:00",
+     "total_tokens": 1000
+    },
+    {
+     "attribution": "verified",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 0,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "cut",
+     "service": "chat2api",
+     "status": "client_disconnected",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 110,
+     "usage_source": "partial"
+    },
+    {
+     "attribution": "verified",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 10,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "failed",
+     "service": "chat2api",
+     "status": "upstream_read_error",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 110,
+     "usage_source": "estimated"
+    },
+    {
+     "attribution": "verified",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 10,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "undated",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "not-a-timestamp",
+     "total_tokens": 110,
+     "usage_source": "upstream"
+    },
+    {
+     "attribution": "verified",
+     "cache_report_status": "unreported",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 10,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "unreported",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 110,
+     "usage_source": "upstream"
+    },
+    {
+     "attribution": "verified",
+     "cache_report_status": "reported",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 10,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "explicit-zero",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 110,
+     "usage_source": "upstream"
+    },
+    {
+     "attribution": "verified",
+     "cache_report_status": "reported",
+     "cached_input_tokens": 20,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 10,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "reported-hit",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 110,
+     "usage_source": "upstream"
+    }
+   ],
+   "invalidRecords": [
+    {
+     "attribution": "verified",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 10,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "r1",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 110,
+     "usage_source": "upstream"
+    }
+   ],
+   "privateRecords": [
+    {
+     "attribution": "verified",
+     "cached_input_tokens": 0,
+     "duration_ms": 1000,
+     "estimated": false,
+     "input_tokens": 100,
+     "key_id": "key-a",
+     "model": "GLM-5.2-NVFP4",
+     "output_tokens": 10,
+     "protocol": "chat",
+     "reasoning_tokens": 0,
+     "request_id": "r1",
+     "service": "chat2api",
+     "status": "ok",
+     "stream": false,
+     "time": "2026-09-25T10:00:00+08:00",
+     "total_tokens": 110,
+     "usage_source": "upstream"
+    }
+   ],
+   "truncatedRecords": 200001
+  },
+  "invalid": {
+   "requestsCursor": {
+    "error": "ValueError",
+    "message": "invalid cursor"
+   },
+   "requestsCursorNegative": {
+    "error": "ValueError",
+    "message": "invalid cursor"
+   },
+   "requestsKey": {
+    "error": "ValueError",
+    "message": "invalid key filter"
+   },
+   "requestsLimitLarge": {
+    "error": "ValueError",
+    "message": "limit must be an integer in 1..200"
+   },
+   "requestsLimitZero": {
+    "error": "ValueError",
+    "message": "limit must be an integer in 1..200"
+   },
+   "requestsModel": {
+    "error": "ValueError",
+    "message": "invalid model filter"
+   },
+   "requestsResult": {
+    "error": "ValueError",
+    "message": "invalid result filter"
+   },
+   "requestsWindow": {
+    "error": "ValueError",
+    "message": "invalid window filter"
+   },
+   "summaryKey": {
+    "error": "ValueError",
+    "message": "invalid key filter"
+   },
+   "summaryLimitNegative": {
+    "error": "ValueError",
+    "message": "limit must be a non-negative integer"
+   },
+   "summaryModel": {
+    "error": "ValueError",
+    "message": "invalid model filter"
+   },
+   "summaryResult": {
+    "error": "ValueError",
+    "message": "invalid result filter"
+   },
+   "summaryWindow": {
+    "error": "ValueError",
+    "message": "invalid window filter"
+   }
+  },
+  "limit0": {
+   "checkedAt": "<checkedAt>",
+   "coverage": {
+    "attributed": 0,
+    "attributionReasons": {},
+    "cacheReportedRequests": 0,
+    "cacheUnknownRequests": 0,
+    "cacheUnreportedRequests": 0,
+    "excludedUnknownTimeRequests": 0,
+    "incompleteRequests": 0,
+    "ledger": "usage-share-backend.jsonl",
+    "ledgerPresent": true,
+    "ledgerReadable": true,
+    "limit": 0,
+    "records": 0,
+    "recordsMatched": 0,
+    "recordsScanned": 0,
+    "recordsTotal": 12,
+    "truncated": true,
+    "unattributed": 0,
+    "unknownTimeRequests": 0,
+    "unknownUsageRequests": 0,
+    "unparsedLines": 1
+   },
+   "filters": {
+    "key": null,
+    "model": null,
+    "result": null,
+    "window": "all"
+   },
+   "keys": [],
+   "requests": 0,
+   "results": {
+    "cancelled": 0,
+    "coverage": {
+     "unknownResult": 0
+    },
+    "failed": 0,
+    "success": 0,
+    "total": 0,
+    "unknown": 0
+   },
+   "unattributed": {
+    "coverage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "completeUsageRequests": 0,
+     "estimatedUsageRequests": 0,
+     "partialUsageRequests": 0,
+     "records": 0,
+     "unknownTimeRequests": 0,
+     "unknownUsageRequests": 0
+    },
+    "days": [],
+    "inputTokens": 0,
+    "key_id": null,
+    "models": [],
+    "outputTokens": 0,
+    "requests": 0,
+    "tokenUsage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "cachedInputTokens": null,
+     "complete": false,
+     "completeRequests": 0,
+     "estimatedInputTokens": null,
+     "estimatedOutputTokens": null,
+     "estimatedRequests": 0,
+     "estimatedTokens": null,
+     "inputTokens": null,
+     "lowerBoundInputTokens": null,
+     "lowerBoundOutputTokens": null,
+     "lowerBoundRequests": 0,
+     "lowerBoundTokens": null,
+     "outputTokens": null,
+     "totalTokens": null,
+     "unknownRequests": 0
+    },
+    "undated": null,
+    "unknownRequests": 0
+   }
+  },
+  "limit2": {
+   "checkedAt": "<checkedAt>",
+   "coverage": {
+    "attributed": 2,
+    "attributionReasons": {},
+    "cacheReportedRequests": 2,
+    "cacheUnknownRequests": 0,
+    "cacheUnreportedRequests": 0,
+    "excludedUnknownTimeRequests": 0,
+    "incompleteRequests": 0,
+    "ledger": "usage-share-backend.jsonl",
+    "ledgerPresent": true,
+    "ledgerReadable": true,
+    "limit": 2,
+    "records": 2,
+    "recordsMatched": 2,
+    "recordsScanned": 2,
+    "recordsTotal": 12,
+    "truncated": true,
+    "unattributed": 0,
+    "unknownTimeRequests": 0,
+    "unknownUsageRequests": 0,
+    "unparsedLines": 1
+   },
+   "filters": {
+    "key": null,
+    "model": null,
+    "result": null,
+    "window": "all"
+   },
+   "keys": [
+    {
+     "coverage": {
+      "cacheReportedRequests": 2,
+      "cacheUnknownRequests": 0,
+      "cacheUnreportedRequests": 0,
+      "completeUsageRequests": 2,
+      "estimatedUsageRequests": 0,
+      "partialUsageRequests": 0,
+      "records": 2,
+      "unknownTimeRequests": 0,
+      "unknownUsageRequests": 0
+     },
+     "days": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 2,
+        "cacheUnknownRequests": 0,
+        "cacheUnreportedRequests": 0,
+        "completeUsageRequests": 2,
+        "estimatedUsageRequests": 0,
+        "partialUsageRequests": 0,
+        "records": 2,
+        "unknownTimeRequests": 0,
+        "unknownUsageRequests": 0
+       },
+       "day": "2026-09-25",
+       "inputTokens": 200,
+       "outputTokens": 20,
+       "requests": 2,
+       "tokenUsage": {
+        "cacheReportedRequests": 2,
+        "cacheUnknownRequests": 0,
+        "cacheUnreportedRequests": 0,
+        "cachedInputTokens": 20,
+        "complete": true,
+        "completeRequests": 2,
+        "estimatedInputTokens": null,
+        "estimatedOutputTokens": null,
+        "estimatedRequests": 0,
+        "estimatedTokens": null,
+        "inputTokens": 200,
+        "lowerBoundInputTokens": null,
+        "lowerBoundOutputTokens": null,
+        "lowerBoundRequests": 0,
+        "lowerBoundTokens": null,
+        "outputTokens": 20,
+        "totalTokens": 220,
+        "unknownRequests": 0
+       },
+       "unknownRequests": 0
+      }
+     ],
+     "inputTokens": 200,
+     "key_id": "key-a",
+     "models": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 2,
+        "cacheUnknownRequests": 0,
+        "cacheUnreportedRequests": 0,
+        "completeUsageRequests": 2,
+        "estimatedUsageRequests": 0,
+        "partialUsageRequests": 0,
+        "records": 2,
+        "unknownTimeRequests": 0,
+        "unknownUsageRequests": 0
+       },
+       "inputTokens": 200,
+       "model": "GLM-5.2-NVFP4",
+       "outputTokens": 20,
+       "requests": 2,
+       "tokenUsage": {
+        "cacheReportedRequests": 2,
+        "cacheUnknownRequests": 0,
+        "cacheUnreportedRequests": 0,
+        "cachedInputTokens": 20,
+        "complete": true,
+        "completeRequests": 2,
+        "estimatedInputTokens": null,
+        "estimatedOutputTokens": null,
+        "estimatedRequests": 0,
+        "estimatedTokens": null,
+        "inputTokens": 200,
+        "lowerBoundInputTokens": null,
+        "lowerBoundOutputTokens": null,
+        "lowerBoundRequests": 0,
+        "lowerBoundTokens": null,
+        "outputTokens": 20,
+        "totalTokens": 220,
+        "unknownRequests": 0
+       },
+       "unknownRequests": 0
+      }
+     ],
+     "outputTokens": 20,
+     "requests": 2,
+     "tokenUsage": {
+      "cacheReportedRequests": 2,
+      "cacheUnknownRequests": 0,
+      "cacheUnreportedRequests": 0,
+      "cachedInputTokens": 20,
+      "complete": true,
+      "completeRequests": 2,
+      "estimatedInputTokens": null,
+      "estimatedOutputTokens": null,
+      "estimatedRequests": 0,
+      "estimatedTokens": null,
+      "inputTokens": 200,
+      "lowerBoundInputTokens": null,
+      "lowerBoundOutputTokens": null,
+      "lowerBoundRequests": 0,
+      "lowerBoundTokens": null,
+      "outputTokens": 20,
+      "totalTokens": 220,
+      "unknownRequests": 0
+     },
+     "undated": null,
+     "unknownRequests": 0
+    }
+   ],
+   "requests": 2,
+   "results": {
+    "cancelled": 0,
+    "coverage": {
+     "unknownResult": 0
+    },
+    "failed": 0,
+    "success": 2,
+    "total": 2,
+    "unknown": 0
+   },
+   "unattributed": {
+    "coverage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "completeUsageRequests": 0,
+     "estimatedUsageRequests": 0,
+     "partialUsageRequests": 0,
+     "records": 0,
+     "unknownTimeRequests": 0,
+     "unknownUsageRequests": 0
+    },
+    "days": [],
+    "inputTokens": 0,
+    "key_id": null,
+    "models": [],
+    "outputTokens": 0,
+    "requests": 0,
+    "tokenUsage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "cachedInputTokens": null,
+     "complete": false,
+     "completeRequests": 0,
+     "estimatedInputTokens": null,
+     "estimatedOutputTokens": null,
+     "estimatedRequests": 0,
+     "estimatedTokens": null,
+     "inputTokens": null,
+     "lowerBoundInputTokens": null,
+     "lowerBoundOutputTokens": null,
+     "lowerBoundRequests": 0,
+     "lowerBoundTokens": null,
+     "outputTokens": null,
+     "totalTokens": null,
+     "unknownRequests": 0
+    },
+    "undated": null,
+    "unknownRequests": 0
+   }
+  },
+  "missing": {
+   "requests": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributedRequests": 0,
+     "attributionReasons": {},
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "excludedUnknownTimeRequests": 0,
+     "filters": {
+      "key": null,
+      "model": null,
+      "result": null,
+      "window": "all"
+     },
+     "ledger": "missing.jsonl",
+     "ledgerPresent": false,
+     "ledgerReadable": false,
+     "limit": 50,
+     "olderRecordsUnread": false,
+     "readLimit": 200000,
+     "recordsMatched": 0,
+     "recordsReturned": 0,
+     "recordsScanned": 0,
+     "recordsTotal": 0,
+     "truncated": false,
+     "unattributedRequests": 0,
+     "unknownUsageRequests": 0,
+     "unparsedLines": 0
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "all"
+    },
+    "nextCursor": null,
+    "rows": [],
+    "truncated": false
+   },
+   "summary": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributed": 0,
+     "attributionReasons": {},
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "excludedUnknownTimeRequests": 0,
+     "incompleteRequests": 0,
+     "ledger": "missing.jsonl",
+     "ledgerPresent": false,
+     "ledgerReadable": false,
+     "limit": 200000,
+     "records": 0,
+     "recordsMatched": 0,
+     "recordsScanned": 0,
+     "recordsTotal": 0,
+     "truncated": false,
+     "unattributed": 0,
+     "unknownTimeRequests": 0,
+     "unknownUsageRequests": 0,
+     "unparsedLines": 0
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "all"
+    },
+    "keys": [],
+    "requests": 0,
+    "results": {
+     "cancelled": 0,
+     "coverage": {
+      "unknownResult": 0
+     },
+     "failed": 0,
+     "success": 0,
+     "total": 0,
+     "unknown": 0
+    },
+    "unattributed": {
+     "coverage": {
+      "cacheReportedRequests": 0,
+      "cacheUnknownRequests": 0,
+      "cacheUnreportedRequests": 0,
+      "completeUsageRequests": 0,
+      "estimatedUsageRequests": 0,
+      "partialUsageRequests": 0,
+      "records": 0,
+      "unknownTimeRequests": 0,
+      "unknownUsageRequests": 0
+     },
+     "days": [],
+     "inputTokens": 0,
+     "key_id": null,
+     "models": [],
+     "outputTokens": 0,
+     "requests": 0,
+     "tokenUsage": {
+      "cacheReportedRequests": 0,
+      "cacheUnknownRequests": 0,
+      "cacheUnreportedRequests": 0,
+      "cachedInputTokens": null,
+      "complete": false,
+      "completeRequests": 0,
+      "estimatedInputTokens": null,
+      "estimatedOutputTokens": null,
+      "estimatedRequests": 0,
+      "estimatedTokens": null,
+      "inputTokens": null,
+      "lowerBoundInputTokens": null,
+      "lowerBoundOutputTokens": null,
+      "lowerBoundRequests": 0,
+      "lowerBoundTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "unknownRequests": 0
+     },
+     "undated": null,
+     "unknownRequests": 0
+    }
+   }
+  },
+  "requests": {
+   "basic": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributedRequests": 9,
+     "attributionReasons": {
+      "absent": 1,
+      "legacy": 1,
+      "replayed": 1
+     },
+     "cacheReportedRequests": 3,
+     "cacheUnknownRequests": 8,
+     "cacheUnreportedRequests": 1,
+     "excludedUnknownTimeRequests": 0,
+     "filters": {
+      "key": null,
+      "model": null,
+      "result": null,
+      "window": "all"
+     },
+     "ledger": "usage-share-backend.jsonl",
+     "ledgerPresent": true,
+     "ledgerReadable": true,
+     "limit": 50,
+     "olderRecordsUnread": false,
+     "readLimit": 200000,
+     "recordsMatched": 12,
+     "recordsReturned": 12,
+     "recordsScanned": 12,
+     "recordsTotal": 12,
+     "truncated": false,
+     "unattributedRequests": 3,
+     "unknownUsageRequests": 1,
+     "unparsedLines": 1
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "all"
+    },
+    "nextCursor": null,
+    "rows": [
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 20,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "reported-hit",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 0,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "explicit-zero",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unreported",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "unreported",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": null,
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "undated",
+      "result": "success",
+      "status": "ok",
+      "time": "not-a-timestamp",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "failed",
+      "result": "failed",
+      "status": "upstream_read_error",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "estimated"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 0,
+      "reasoningTokens": 0,
+      "requestId": "cut",
+      "result": "cancelled",
+      "status": "client_disconnected",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "partial"
+     },
+     {
+      "attribution": null,
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-24",
+      "durationMs": 100,
+      "inputTokens": 1000,
+      "keyId": null,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 0,
+      "reasoningTokens": 0,
+      "requestId": null,
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-24T10:00:00+08:00",
+      "usageSource": "estimated"
+     },
+     {
+      "attribution": "replayed",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": null,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "replayed",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "absent",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": null,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "direct",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": null,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": null,
+      "reasoningTokens": null,
+      "requestId": "unknown-usage",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "none"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 20,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 200,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 20,
+      "reasoningTokens": 0,
+      "requestId": "r2",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "r1",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     }
+    ],
+    "truncated": false
+   },
+   "cursor": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributedRequests": 0,
+     "attributionReasons": {
+      "absent": 1,
+      "replayed": 1
+     },
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 2,
+     "cacheUnreportedRequests": 0,
+     "excludedUnknownTimeRequests": 0,
+     "filters": {
+      "key": null,
+      "model": null,
+      "result": null,
+      "window": "all"
+     },
+     "ledger": "usage-share-backend.jsonl",
+     "ledgerPresent": true,
+     "ledgerReadable": true,
+     "limit": 2,
+     "olderRecordsUnread": false,
+     "readLimit": 200000,
+     "recordsMatched": 5,
+     "recordsReturned": 2,
+     "recordsScanned": 12,
+     "recordsTotal": 12,
+     "truncated": false,
+     "unattributedRequests": 2,
+     "unknownUsageRequests": 0,
+     "unparsedLines": 1
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "all"
+    },
+    "nextCursor": "4",
+    "rows": [
+     {
+      "attribution": "replayed",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": null,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "replayed",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "absent",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": null,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "direct",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     }
+    ],
+    "truncated": true
+   },
+   "filters": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributedRequests": 0,
+     "attributionReasons": {},
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "excludedUnknownTimeRequests": 1,
+     "filters": {
+      "key": "unattributed",
+      "model": "GLM-5.2-NVFP4",
+      "result": "cancelled",
+      "window": "24h"
+     },
+     "ledger": "usage-share-backend.jsonl",
+     "ledgerPresent": true,
+     "ledgerReadable": true,
+     "limit": 50,
+     "olderRecordsUnread": false,
+     "readLimit": 200000,
+     "recordsMatched": 0,
+     "recordsReturned": 0,
+     "recordsScanned": 12,
+     "recordsTotal": 12,
+     "truncated": false,
+     "unattributedRequests": 0,
+     "unknownUsageRequests": 0,
+     "unparsedLines": 1
+    },
+    "filters": {
+     "key": "unattributed",
+     "model": "GLM-5.2-NVFP4",
+     "result": "cancelled",
+     "window": "24h"
+    },
+    "nextCursor": null,
+    "rows": [],
+    "truncated": false
+   },
+   "limit2": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributedRequests": 2,
+     "attributionReasons": {},
+     "cacheReportedRequests": 2,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "excludedUnknownTimeRequests": 0,
+     "filters": {
+      "key": null,
+      "model": null,
+      "result": null,
+      "window": "all"
+     },
+     "ledger": "usage-share-backend.jsonl",
+     "ledgerPresent": true,
+     "ledgerReadable": true,
+     "limit": 2,
+     "olderRecordsUnread": false,
+     "readLimit": 200000,
+     "recordsMatched": 12,
+     "recordsReturned": 2,
+     "recordsScanned": 12,
+     "recordsTotal": 12,
+     "truncated": false,
+     "unattributedRequests": 0,
+     "unknownUsageRequests": 0,
+     "unparsedLines": 1
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "all"
+    },
+    "nextCursor": "11",
+    "rows": [
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 20,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "reported-hit",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 0,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "explicit-zero",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     }
+    ],
+    "truncated": true
+   },
+   "limit200": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributedRequests": 9,
+     "attributionReasons": {
+      "absent": 1,
+      "legacy": 1,
+      "replayed": 1
+     },
+     "cacheReportedRequests": 3,
+     "cacheUnknownRequests": 8,
+     "cacheUnreportedRequests": 1,
+     "excludedUnknownTimeRequests": 0,
+     "filters": {
+      "key": null,
+      "model": null,
+      "result": null,
+      "window": "all"
+     },
+     "ledger": "usage-share-backend.jsonl",
+     "ledgerPresent": true,
+     "ledgerReadable": true,
+     "limit": 200,
+     "olderRecordsUnread": false,
+     "readLimit": 200000,
+     "recordsMatched": 12,
+     "recordsReturned": 12,
+     "recordsScanned": 12,
+     "recordsTotal": 12,
+     "truncated": false,
+     "unattributedRequests": 3,
+     "unknownUsageRequests": 1,
+     "unparsedLines": 1
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "all"
+    },
+    "nextCursor": null,
+    "rows": [
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 20,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "reported-hit",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 0,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "explicit-zero",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unreported",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "unreported",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": null,
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "undated",
+      "result": "success",
+      "status": "ok",
+      "time": "not-a-timestamp",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "failed",
+      "result": "failed",
+      "status": "upstream_read_error",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "estimated"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 0,
+      "reasoningTokens": 0,
+      "requestId": "cut",
+      "result": "cancelled",
+      "status": "client_disconnected",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "partial"
+     },
+     {
+      "attribution": null,
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-24",
+      "durationMs": 100,
+      "inputTokens": 1000,
+      "keyId": null,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 0,
+      "reasoningTokens": 0,
+      "requestId": null,
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-24T10:00:00+08:00",
+      "usageSource": "estimated"
+     },
+     {
+      "attribution": "replayed",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": null,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "replayed",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "absent",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": null,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "direct",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": null,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": null,
+      "reasoningTokens": null,
+      "requestId": "unknown-usage",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "none"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 20,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 200,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 20,
+      "reasoningTokens": 0,
+      "requestId": "r2",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "r1",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     }
+    ],
+    "truncated": false
+   },
+   "today": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributedRequests": 8,
+     "attributionReasons": {
+      "absent": 1,
+      "replayed": 1
+     },
+     "cacheReportedRequests": 3,
+     "cacheUnknownRequests": 6,
+     "cacheUnreportedRequests": 1,
+     "excludedUnknownTimeRequests": 1,
+     "filters": {
+      "key": null,
+      "model": null,
+      "result": null,
+      "window": "today"
+     },
+     "ledger": "usage-share-backend.jsonl",
+     "ledgerPresent": true,
+     "ledgerReadable": true,
+     "limit": 50,
+     "olderRecordsUnread": false,
+     "readLimit": 200000,
+     "recordsMatched": 10,
+     "recordsReturned": 10,
+     "recordsScanned": 12,
+     "recordsTotal": 12,
+     "truncated": false,
+     "unattributedRequests": 2,
+     "unknownUsageRequests": 1,
+     "unparsedLines": 1
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "today"
+    },
+    "nextCursor": null,
+    "rows": [
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 20,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "reported-hit",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 0,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "explicit-zero",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unreported",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "unreported",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "failed",
+      "result": "failed",
+      "status": "upstream_read_error",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "estimated"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 0,
+      "reasoningTokens": 0,
+      "requestId": "cut",
+      "result": "cancelled",
+      "status": "client_disconnected",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "partial"
+     },
+     {
+      "attribution": "replayed",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": null,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "replayed",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "absent",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": null,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "direct",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": null,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": null,
+      "reasoningTokens": null,
+      "requestId": "unknown-usage",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "none"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "reported",
+      "cacheTokens": 20,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 200,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 20,
+      "reasoningTokens": 0,
+      "requestId": "r2",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     },
+     {
+      "attribution": "verified",
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": "2026-09-25",
+      "durationMs": 1000,
+      "inputTokens": 100,
+      "keyId": "key-a",
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 10,
+      "reasoningTokens": 0,
+      "requestId": "r1",
+      "result": "success",
+      "status": "ok",
+      "time": "2026-09-25T10:00:00+08:00",
+      "usageSource": "upstream"
+     }
+    ],
+    "truncated": false
+   }
+  },
+  "results": {
+   "checkedAt": "<checkedAt>",
+   "coverage": {
+    "attributed": 1,
+    "attributionReasons": {},
+    "cacheReportedRequests": 0,
+    "cacheUnknownRequests": 1,
+    "cacheUnreportedRequests": 0,
+    "excludedUnknownTimeRequests": 0,
+    "incompleteRequests": 1,
+    "ledger": "usage-share-backend.jsonl",
+    "ledgerPresent": true,
+    "ledgerReadable": true,
+    "limit": 200000,
+    "records": 1,
+    "recordsMatched": 1,
+    "recordsScanned": 12,
+    "recordsTotal": 12,
+    "truncated": false,
+    "unattributed": 0,
+    "unknownTimeRequests": 0,
+    "unknownUsageRequests": 0,
+    "unparsedLines": 1
+   },
+   "filters": {
+    "key": null,
+    "model": null,
+    "result": "cancelled",
+    "window": "all"
+   },
+   "keys": [
+    {
+     "coverage": {
+      "cacheReportedRequests": 0,
+      "cacheUnknownRequests": 1,
+      "cacheUnreportedRequests": 0,
+      "completeUsageRequests": 0,
+      "estimatedUsageRequests": 0,
+      "partialUsageRequests": 1,
+      "records": 1,
+      "unknownTimeRequests": 0,
+      "unknownUsageRequests": 0
+     },
+     "days": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 0,
+        "cacheUnknownRequests": 1,
+        "cacheUnreportedRequests": 0,
+        "completeUsageRequests": 0,
+        "estimatedUsageRequests": 0,
+        "partialUsageRequests": 1,
+        "records": 1,
+        "unknownTimeRequests": 0,
+        "unknownUsageRequests": 0
+       },
+       "day": "2026-09-25",
+       "inputTokens": 100,
+       "outputTokens": 0,
+       "requests": 1,
+       "tokenUsage": {
+        "cacheReportedRequests": 0,
+        "cacheUnknownRequests": 1,
+        "cacheUnreportedRequests": 0,
+        "cachedInputTokens": null,
+        "complete": false,
+        "completeRequests": 0,
+        "estimatedInputTokens": null,
+        "estimatedOutputTokens": null,
+        "estimatedRequests": 0,
+        "estimatedTokens": null,
+        "inputTokens": null,
+        "lowerBoundInputTokens": 100,
+        "lowerBoundOutputTokens": 0,
+        "lowerBoundRequests": 1,
+        "lowerBoundTokens": 100,
+        "outputTokens": null,
+        "totalTokens": null,
+        "unknownRequests": 0
+       },
+       "unknownRequests": 0
+      }
+     ],
+     "inputTokens": 100,
+     "key_id": "key-a",
+     "models": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 0,
+        "cacheUnknownRequests": 1,
+        "cacheUnreportedRequests": 0,
+        "completeUsageRequests": 0,
+        "estimatedUsageRequests": 0,
+        "partialUsageRequests": 1,
+        "records": 1,
+        "unknownTimeRequests": 0,
+        "unknownUsageRequests": 0
+       },
+       "inputTokens": 100,
+       "model": "GLM-5.2-NVFP4",
+       "outputTokens": 0,
+       "requests": 1,
+       "tokenUsage": {
+        "cacheReportedRequests": 0,
+        "cacheUnknownRequests": 1,
+        "cacheUnreportedRequests": 0,
+        "cachedInputTokens": null,
+        "complete": false,
+        "completeRequests": 0,
+        "estimatedInputTokens": null,
+        "estimatedOutputTokens": null,
+        "estimatedRequests": 0,
+        "estimatedTokens": null,
+        "inputTokens": null,
+        "lowerBoundInputTokens": 100,
+        "lowerBoundOutputTokens": 0,
+        "lowerBoundRequests": 1,
+        "lowerBoundTokens": 100,
+        "outputTokens": null,
+        "totalTokens": null,
+        "unknownRequests": 0
+       },
+       "unknownRequests": 0
+      }
+     ],
+     "outputTokens": 0,
+     "requests": 1,
+     "tokenUsage": {
+      "cacheReportedRequests": 0,
+      "cacheUnknownRequests": 1,
+      "cacheUnreportedRequests": 0,
+      "cachedInputTokens": null,
+      "complete": false,
+      "completeRequests": 0,
+      "estimatedInputTokens": null,
+      "estimatedOutputTokens": null,
+      "estimatedRequests": 0,
+      "estimatedTokens": null,
+      "inputTokens": null,
+      "lowerBoundInputTokens": 100,
+      "lowerBoundOutputTokens": 0,
+      "lowerBoundRequests": 1,
+      "lowerBoundTokens": 100,
+      "outputTokens": null,
+      "totalTokens": null,
+      "unknownRequests": 0
+     },
+     "undated": null,
+     "unknownRequests": 0
+    }
+   ],
+   "requests": 1,
+   "results": {
+    "cancelled": 1,
+    "coverage": {
+     "unknownResult": 0
+    },
+    "failed": 0,
+    "success": 0,
+    "total": 1,
+    "unknown": 0
+   },
+   "unattributed": {
+    "coverage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "completeUsageRequests": 0,
+     "estimatedUsageRequests": 0,
+     "partialUsageRequests": 0,
+     "records": 0,
+     "unknownTimeRequests": 0,
+     "unknownUsageRequests": 0
+    },
+    "days": [],
+    "inputTokens": 0,
+    "key_id": null,
+    "models": [],
+    "outputTokens": 0,
+    "requests": 0,
+    "tokenUsage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 0,
+     "cacheUnreportedRequests": 0,
+     "cachedInputTokens": null,
+     "complete": false,
+     "completeRequests": 0,
+     "estimatedInputTokens": null,
+     "estimatedOutputTokens": null,
+     "estimatedRequests": 0,
+     "estimatedTokens": null,
+     "inputTokens": null,
+     "lowerBoundInputTokens": null,
+     "lowerBoundOutputTokens": null,
+     "lowerBoundRequests": 0,
+     "lowerBoundTokens": null,
+     "outputTokens": null,
+     "totalTokens": null,
+     "unknownRequests": 0
+    },
+    "undated": null,
+    "unknownRequests": 0
+   }
+  },
+  "today": {
+   "checkedAt": "<checkedAt>",
+   "coverage": {
+    "attributed": 8,
+    "attributionReasons": {
+     "absent": 1,
+     "replayed": 1
+    },
+    "cacheReportedRequests": 3,
+    "cacheUnknownRequests": 6,
+    "cacheUnreportedRequests": 1,
+    "excludedUnknownTimeRequests": 1,
+    "incompleteRequests": 2,
+    "ledger": "usage-share-backend.jsonl",
+    "ledgerPresent": true,
+    "ledgerReadable": true,
+    "limit": 200000,
+    "records": 10,
+    "recordsMatched": 10,
+    "recordsScanned": 12,
+    "recordsTotal": 12,
+    "truncated": false,
+    "unattributed": 2,
+    "unknownTimeRequests": 0,
+    "unknownUsageRequests": 1,
+    "unparsedLines": 1
+   },
+   "filters": {
+    "key": null,
+    "model": null,
+    "result": null,
+    "window": "today"
+   },
+   "keys": [
+    {
+     "coverage": {
+      "cacheReportedRequests": 3,
+      "cacheUnknownRequests": 4,
+      "cacheUnreportedRequests": 1,
+      "completeUsageRequests": 5,
+      "estimatedUsageRequests": 1,
+      "partialUsageRequests": 1,
+      "records": 8,
+      "unknownTimeRequests": 0,
+      "unknownUsageRequests": 1
+     },
+     "days": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 4,
+        "cacheUnreportedRequests": 1,
+        "completeUsageRequests": 5,
+        "estimatedUsageRequests": 1,
+        "partialUsageRequests": 1,
+        "records": 8,
+        "unknownTimeRequests": 0,
+        "unknownUsageRequests": 1
+       },
+       "day": "2026-09-25",
+       "inputTokens": 800,
+       "outputTokens": 70,
+       "requests": 7,
+       "tokenUsage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 4,
+        "cacheUnreportedRequests": 1,
+        "cachedInputTokens": 40,
+        "complete": false,
+        "completeRequests": 5,
+        "estimatedInputTokens": 100,
+        "estimatedOutputTokens": 10,
+        "estimatedRequests": 1,
+        "estimatedTokens": 110,
+        "inputTokens": 600,
+        "lowerBoundInputTokens": 100,
+        "lowerBoundOutputTokens": 0,
+        "lowerBoundRequests": 1,
+        "lowerBoundTokens": 100,
+        "outputTokens": 60,
+        "totalTokens": 660,
+        "unknownRequests": 1
+       },
+       "unknownRequests": 1
+      }
+     ],
+     "inputTokens": 800,
+     "key_id": "key-a",
+     "models": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 4,
+        "cacheUnreportedRequests": 1,
+        "completeUsageRequests": 5,
+        "estimatedUsageRequests": 1,
+        "partialUsageRequests": 1,
+        "records": 8,
+        "unknownTimeRequests": 0,
+        "unknownUsageRequests": 1
+       },
+       "inputTokens": 800,
+       "model": "GLM-5.2-NVFP4",
+       "outputTokens": 70,
+       "requests": 7,
+       "tokenUsage": {
+        "cacheReportedRequests": 3,
+        "cacheUnknownRequests": 4,
+        "cacheUnreportedRequests": 1,
+        "cachedInputTokens": 40,
+        "complete": false,
+        "completeRequests": 5,
+        "estimatedInputTokens": 100,
+        "estimatedOutputTokens": 10,
+        "estimatedRequests": 1,
+        "estimatedTokens": 110,
+        "inputTokens": 600,
+        "lowerBoundInputTokens": 100,
+        "lowerBoundOutputTokens": 0,
+        "lowerBoundRequests": 1,
+        "lowerBoundTokens": 100,
+        "outputTokens": 60,
+        "totalTokens": 660,
+        "unknownRequests": 1
+       },
+       "unknownRequests": 1
+      }
+     ],
+     "outputTokens": 70,
+     "requests": 8,
+     "tokenUsage": {
+      "cacheReportedRequests": 3,
+      "cacheUnknownRequests": 4,
+      "cacheUnreportedRequests": 1,
+      "cachedInputTokens": 40,
+      "complete": false,
+      "completeRequests": 5,
+      "estimatedInputTokens": 100,
+      "estimatedOutputTokens": 10,
+      "estimatedRequests": 1,
+      "estimatedTokens": 110,
+      "inputTokens": 600,
+      "lowerBoundInputTokens": 100,
+      "lowerBoundOutputTokens": 0,
+      "lowerBoundRequests": 1,
+      "lowerBoundTokens": 100,
+      "outputTokens": 60,
+      "totalTokens": 660,
+      "unknownRequests": 1
+     },
+     "undated": null,
+     "unknownRequests": 1
+    }
+   ],
+   "requests": 10,
+   "results": {
+    "cancelled": 1,
+    "coverage": {
+     "unknownResult": 0
+    },
+    "failed": 1,
+    "success": 8,
+    "total": 10,
+    "unknown": 0
+   },
+   "unattributed": {
+    "coverage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 2,
+     "cacheUnreportedRequests": 0,
+     "completeUsageRequests": 2,
+     "estimatedUsageRequests": 0,
+     "partialUsageRequests": 0,
+     "records": 2,
+     "unknownTimeRequests": 0,
+     "unknownUsageRequests": 0
+    },
+    "days": [
+     {
+      "coverage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 2,
+       "cacheUnreportedRequests": 0,
+       "completeUsageRequests": 2,
+       "estimatedUsageRequests": 0,
+       "partialUsageRequests": 0,
+       "records": 2,
+       "unknownTimeRequests": 0,
+       "unknownUsageRequests": 0
+      },
+      "day": "2026-09-25",
+      "inputTokens": 200,
+      "outputTokens": 20,
+      "requests": 2,
+      "tokenUsage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 2,
+       "cacheUnreportedRequests": 0,
+       "cachedInputTokens": null,
+       "complete": true,
+       "completeRequests": 2,
+       "estimatedInputTokens": null,
+       "estimatedOutputTokens": null,
+       "estimatedRequests": 0,
+       "estimatedTokens": null,
+       "inputTokens": 200,
+       "lowerBoundInputTokens": null,
+       "lowerBoundOutputTokens": null,
+       "lowerBoundRequests": 0,
+       "lowerBoundTokens": null,
+       "outputTokens": 20,
+       "totalTokens": 220,
+       "unknownRequests": 0
+      },
+      "unknownRequests": 0
+     }
+    ],
+    "inputTokens": 200,
+    "key_id": null,
+    "models": [
+     {
+      "coverage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 2,
+       "cacheUnreportedRequests": 0,
+       "completeUsageRequests": 2,
+       "estimatedUsageRequests": 0,
+       "partialUsageRequests": 0,
+       "records": 2,
+       "unknownTimeRequests": 0,
+       "unknownUsageRequests": 0
+      },
+      "inputTokens": 200,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 20,
+      "requests": 2,
+      "tokenUsage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 2,
+       "cacheUnreportedRequests": 0,
+       "cachedInputTokens": null,
+       "complete": true,
+       "completeRequests": 2,
+       "estimatedInputTokens": null,
+       "estimatedOutputTokens": null,
+       "estimatedRequests": 0,
+       "estimatedTokens": null,
+       "inputTokens": 200,
+       "lowerBoundInputTokens": null,
+       "lowerBoundOutputTokens": null,
+       "lowerBoundRequests": 0,
+       "lowerBoundTokens": null,
+       "outputTokens": 20,
+       "totalTokens": 220,
+       "unknownRequests": 0
+      },
+      "unknownRequests": 0
+     }
+    ],
+    "outputTokens": 20,
+    "requests": 2,
+    "tokenUsage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 2,
+     "cacheUnreportedRequests": 0,
+     "cachedInputTokens": null,
+     "complete": true,
+     "completeRequests": 2,
+     "estimatedInputTokens": null,
+     "estimatedOutputTokens": null,
+     "estimatedRequests": 0,
+     "estimatedTokens": null,
+     "inputTokens": 200,
+     "lowerBoundInputTokens": null,
+     "lowerBoundOutputTokens": null,
+     "lowerBoundRequests": 0,
+     "lowerBoundTokens": null,
+     "outputTokens": 20,
+     "totalTokens": 220,
+     "unknownRequests": 0
+    },
+    "undated": null,
+    "unknownRequests": 0
+   }
+  },
+  "truncated": {
+   "requests": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributedRequests": 0,
+     "attributionReasons": {
+      "legacy": 2
+     },
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 2,
+     "cacheUnreportedRequests": 0,
+     "excludedUnknownTimeRequests": 0,
+     "filters": {
+      "key": null,
+      "model": null,
+      "result": null,
+      "window": "all"
+     },
+     "ledger": "truncated.jsonl",
+     "ledgerPresent": true,
+     "ledgerReadable": true,
+     "limit": 2,
+     "olderRecordsUnread": true,
+     "readLimit": 200000,
+     "recordsMatched": 200000,
+     "recordsReturned": 2,
+     "recordsScanned": 200000,
+     "recordsTotal": 200001,
+     "truncated": true,
+     "unattributedRequests": 2,
+     "unknownUsageRequests": 2,
+     "unparsedLines": 0
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "all"
+    },
+    "nextCursor": "200000",
+    "rows": [
+     {
+      "attribution": null,
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": null,
+      "durationMs": null,
+      "inputTokens": null,
+      "keyId": null,
+      "model": null,
+      "outputTokens": null,
+      "reasoningTokens": null,
+      "requestId": null,
+      "result": "unknown",
+      "status": null,
+      "time": null,
+      "usageSource": "none"
+     },
+     {
+      "attribution": null,
+      "cacheReportStatus": "unknown",
+      "cacheTokens": null,
+      "day": null,
+      "durationMs": null,
+      "inputTokens": null,
+      "keyId": null,
+      "model": null,
+      "outputTokens": null,
+      "reasoningTokens": null,
+      "requestId": null,
+      "result": "unknown",
+      "status": null,
+      "time": null,
+      "usageSource": "none"
+     }
+    ],
+    "truncated": true
+   },
+   "summary": {
+    "checkedAt": "<checkedAt>",
+    "coverage": {
+     "attributed": 0,
+     "attributionReasons": {
+      "legacy": 200000
+     },
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 200000,
+     "cacheUnreportedRequests": 0,
+     "excludedUnknownTimeRequests": 0,
+     "incompleteRequests": 0,
+     "ledger": "truncated.jsonl",
+     "ledgerPresent": true,
+     "ledgerReadable": true,
+     "limit": 200000,
+     "records": 200000,
+     "recordsMatched": 200000,
+     "recordsScanned": 200000,
+     "recordsTotal": 200001,
+     "truncated": true,
+     "unattributed": 200000,
+     "unknownTimeRequests": 200000,
+     "unknownUsageRequests": 200000,
+     "unparsedLines": 0
+    },
+    "filters": {
+     "key": null,
+     "model": null,
+     "result": null,
+     "window": "all"
+    },
+    "keys": [],
+    "requests": 200000,
+    "results": {
+     "cancelled": 0,
+     "coverage": {
+      "unknownResult": 200000
+     },
+     "failed": 0,
+     "success": 0,
+     "total": 200000,
+     "unknown": 200000
+    },
+    "unattributed": {
+     "coverage": {
+      "cacheReportedRequests": 0,
+      "cacheUnknownRequests": 200000,
+      "cacheUnreportedRequests": 0,
+      "completeUsageRequests": 0,
+      "estimatedUsageRequests": 0,
+      "partialUsageRequests": 0,
+      "records": 200000,
+      "unknownTimeRequests": 200000,
+      "unknownUsageRequests": 200000
+     },
+     "days": [],
+     "inputTokens": 0,
+     "key_id": null,
+     "models": [
+      {
+       "coverage": {
+        "cacheReportedRequests": 0,
+        "cacheUnknownRequests": 200000,
+        "cacheUnreportedRequests": 0,
+        "completeUsageRequests": 0,
+        "estimatedUsageRequests": 0,
+        "partialUsageRequests": 0,
+        "records": 200000,
+        "unknownTimeRequests": 200000,
+        "unknownUsageRequests": 200000
+       },
+       "inputTokens": 0,
+       "model": "unknown",
+       "outputTokens": 0,
+       "requests": 0,
+       "tokenUsage": {
+        "cacheReportedRequests": 0,
+        "cacheUnknownRequests": 200000,
+        "cacheUnreportedRequests": 0,
+        "cachedInputTokens": null,
+        "complete": false,
+        "completeRequests": 0,
+        "estimatedInputTokens": null,
+        "estimatedOutputTokens": null,
+        "estimatedRequests": 0,
+        "estimatedTokens": null,
+        "inputTokens": null,
+        "lowerBoundInputTokens": null,
+        "lowerBoundOutputTokens": null,
+        "lowerBoundRequests": 0,
+        "lowerBoundTokens": null,
+        "outputTokens": null,
+        "totalTokens": null,
+        "unknownRequests": 200000
+       },
+       "unknownRequests": 200000
+      }
+     ],
+     "outputTokens": 0,
+     "requests": 200000,
+     "tokenUsage": {
+      "cacheReportedRequests": 0,
+      "cacheUnknownRequests": 200000,
+      "cacheUnreportedRequests": 0,
+      "cachedInputTokens": null,
+      "complete": false,
+      "completeRequests": 0,
+      "estimatedInputTokens": null,
+      "estimatedOutputTokens": null,
+      "estimatedRequests": 0,
+      "estimatedTokens": null,
+      "inputTokens": null,
+      "lowerBoundInputTokens": null,
+      "lowerBoundOutputTokens": null,
+      "lowerBoundRequests": 0,
+      "lowerBoundTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "unknownRequests": 200000
+     },
+     "undated": {
+      "coverage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 200000,
+       "cacheUnreportedRequests": 0,
+       "completeUsageRequests": 0,
+       "estimatedUsageRequests": 0,
+       "partialUsageRequests": 0,
+       "records": 200000,
+       "unknownTimeRequests": 200000,
+       "unknownUsageRequests": 200000
+      },
+      "day": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "requests": 0,
+      "tokenUsage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 200000,
+       "cacheUnreportedRequests": 0,
+       "cachedInputTokens": null,
+       "complete": false,
+       "completeRequests": 0,
+       "estimatedInputTokens": null,
+       "estimatedOutputTokens": null,
+       "estimatedRequests": 0,
+       "estimatedTokens": null,
+       "inputTokens": null,
+       "lowerBoundInputTokens": null,
+       "lowerBoundOutputTokens": null,
+       "lowerBoundRequests": 0,
+       "lowerBoundTokens": null,
+       "outputTokens": null,
+       "totalTokens": null,
+       "unknownRequests": 200000
+      },
+      "unknownRequests": 200000
+     },
+     "unknownRequests": 200000
+    }
+   }
+  },
+  "unattributed": {
+   "checkedAt": "<checkedAt>",
+   "coverage": {
+    "attributed": 0,
+    "attributionReasons": {
+     "absent": 1,
+     "legacy": 1,
+     "replayed": 1
+    },
+    "cacheReportedRequests": 0,
+    "cacheUnknownRequests": 3,
+    "cacheUnreportedRequests": 0,
+    "excludedUnknownTimeRequests": 0,
+    "incompleteRequests": 0,
+    "ledger": "usage-share-backend.jsonl",
+    "ledgerPresent": true,
+    "ledgerReadable": true,
+    "limit": 200000,
+    "records": 3,
+    "recordsMatched": 3,
+    "recordsScanned": 12,
+    "recordsTotal": 12,
+    "truncated": false,
+    "unattributed": 3,
+    "unknownTimeRequests": 0,
+    "unknownUsageRequests": 0,
+    "unparsedLines": 1
+   },
+   "filters": {
+    "key": "unattributed",
+    "model": null,
+    "result": null,
+    "window": "all"
+   },
+   "keys": [],
+   "requests": 3,
+   "results": {
+    "cancelled": 0,
+    "coverage": {
+     "unknownResult": 0
+    },
+    "failed": 0,
+    "success": 3,
+    "total": 3,
+    "unknown": 0
+   },
+   "unattributed": {
+    "coverage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 3,
+     "cacheUnreportedRequests": 0,
+     "completeUsageRequests": 2,
+     "estimatedUsageRequests": 1,
+     "partialUsageRequests": 0,
+     "records": 3,
+     "unknownTimeRequests": 0,
+     "unknownUsageRequests": 0
+    },
+    "days": [
+     {
+      "coverage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 1,
+       "cacheUnreportedRequests": 0,
+       "completeUsageRequests": 0,
+       "estimatedUsageRequests": 1,
+       "partialUsageRequests": 0,
+       "records": 1,
+       "unknownTimeRequests": 0,
+       "unknownUsageRequests": 0
+      },
+      "day": "2026-09-24",
+      "inputTokens": 1000,
+      "outputTokens": 0,
+      "requests": 1,
+      "tokenUsage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 1,
+       "cacheUnreportedRequests": 0,
+       "cachedInputTokens": null,
+       "complete": false,
+       "completeRequests": 0,
+       "estimatedInputTokens": 1000,
+       "estimatedOutputTokens": 0,
+       "estimatedRequests": 1,
+       "estimatedTokens": 1000,
+       "inputTokens": null,
+       "lowerBoundInputTokens": null,
+       "lowerBoundOutputTokens": null,
+       "lowerBoundRequests": 0,
+       "lowerBoundTokens": null,
+       "outputTokens": null,
+       "totalTokens": null,
+       "unknownRequests": 0
+      },
+      "unknownRequests": 0
+     },
+     {
+      "coverage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 2,
+       "cacheUnreportedRequests": 0,
+       "completeUsageRequests": 2,
+       "estimatedUsageRequests": 0,
+       "partialUsageRequests": 0,
+       "records": 2,
+       "unknownTimeRequests": 0,
+       "unknownUsageRequests": 0
+      },
+      "day": "2026-09-25",
+      "inputTokens": 200,
+      "outputTokens": 20,
+      "requests": 2,
+      "tokenUsage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 2,
+       "cacheUnreportedRequests": 0,
+       "cachedInputTokens": null,
+       "complete": true,
+       "completeRequests": 2,
+       "estimatedInputTokens": null,
+       "estimatedOutputTokens": null,
+       "estimatedRequests": 0,
+       "estimatedTokens": null,
+       "inputTokens": 200,
+       "lowerBoundInputTokens": null,
+       "lowerBoundOutputTokens": null,
+       "lowerBoundRequests": 0,
+       "lowerBoundTokens": null,
+       "outputTokens": 20,
+       "totalTokens": 220,
+       "unknownRequests": 0
+      },
+      "unknownRequests": 0
+     }
+    ],
+    "inputTokens": 1200,
+    "key_id": null,
+    "models": [
+     {
+      "coverage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 3,
+       "cacheUnreportedRequests": 0,
+       "completeUsageRequests": 2,
+       "estimatedUsageRequests": 1,
+       "partialUsageRequests": 0,
+       "records": 3,
+       "unknownTimeRequests": 0,
+       "unknownUsageRequests": 0
+      },
+      "inputTokens": 1200,
+      "model": "GLM-5.2-NVFP4",
+      "outputTokens": 20,
+      "requests": 3,
+      "tokenUsage": {
+       "cacheReportedRequests": 0,
+       "cacheUnknownRequests": 3,
+       "cacheUnreportedRequests": 0,
+       "cachedInputTokens": null,
+       "complete": false,
+       "completeRequests": 2,
+       "estimatedInputTokens": 1000,
+       "estimatedOutputTokens": 0,
+       "estimatedRequests": 1,
+       "estimatedTokens": 1000,
+       "inputTokens": 200,
+       "lowerBoundInputTokens": null,
+       "lowerBoundOutputTokens": null,
+       "lowerBoundRequests": 0,
+       "lowerBoundTokens": null,
+       "outputTokens": 20,
+       "totalTokens": 220,
+       "unknownRequests": 0
+      },
+      "unknownRequests": 0
+     }
+    ],
+    "outputTokens": 20,
+    "requests": 3,
+    "tokenUsage": {
+     "cacheReportedRequests": 0,
+     "cacheUnknownRequests": 3,
+     "cacheUnreportedRequests": 0,
+     "cachedInputTokens": null,
+     "complete": false,
+     "completeRequests": 2,
+     "estimatedInputTokens": 1000,
+     "estimatedOutputTokens": 0,
+     "estimatedRequests": 1,
+     "estimatedTokens": 1000,
+     "inputTokens": 200,
+     "lowerBoundInputTokens": null,
+     "lowerBoundOutputTokens": null,
+     "lowerBoundRequests": 0,
+     "lowerBoundTokens": null,
+     "outputTokens": 20,
+     "totalTokens": 220,
+     "unknownRequests": 0
+    },
+    "undated": null,
+    "unknownRequests": 0
+   }
+  }
+ },
+ "metadata": {
+  "fixture": true,
+  "generatedFrom": "share/metering.py + console/public_probe.py + um-cloud-deploy/cloudflared/check-ingress.py + um-cloud-deploy/backup_restore",
+  "source": "tests/generate_rust_ops_fixture.py"
+ }
+}

@@ -8,7 +8,9 @@ import json
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from collections import deque
 from email.message import Message
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -119,9 +121,128 @@ class MergedHttpTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def _request_path(self, method, path, headers=None, body=None):
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_address[1], timeout=5)
+        try:
+            connection.request(method, path, body=body,
+                               headers=headers or {})
+            response = connection.getresponse()
+            return (response.status,
+                    dict(response.getheaders()),
+                    json.loads(response.read() or b"{}"))
+        finally:
+            connection.close()
+
     def test_models_requires_the_share_key(self):
-        status, _payload = self._request()
+        status, payload = self._request()
         self.assertEqual(status, 401)
+        error = payload["error"]
+        self.assertEqual(error["type"], "authentication_error")
+        self.assertEqual(error["code"], "invalid_api_key")
+        self.assertIsNone(error["param"])
+        self.assertIsNone(error["detail"])
+
+    def test_models_rejects_an_unshared_query_as_404(self):
+        # The plain catalog path is shared; only an invalid query is refused.
+        status, _headers, payload = self._request_path(
+            "GET", "/v1/models?limit=99999",
+            {"Authorization": "Bearer secret"})
+        self.assertEqual(status, 404)
+        error = payload["error"]
+        self.assertEqual(error["type"], "not_found_error")
+        self.assertEqual(error["code"], "route_not_shared")
+        self.assertIsNone(error["param"])
+        self.assertIsNone(error["detail"])
+
+    def test_models_admission_rejection_is_429(self):
+        self.assertTrue(self.server.share_gate.acquire("friend", 0, 1))
+        self.addCleanup(self.server.share_gate.release, "friend")
+        status, headers, payload = self._request_path(
+            "GET", "/v1/models", {"Authorization": "Bearer secret"})
+        self.assertEqual(status, 429)
+        # A concurrency slot frees as soon as an in-flight request ends.
+        self.assertEqual(headers.get("Retry-After"), "1")
+        error = payload["error"]
+        self.assertEqual(error["type"], "rate_limit_error")
+        self.assertEqual(error["code"], "sharing_limit_reached")
+        self.assertIsNone(error["param"])
+        self.assertEqual(error["detail"]["reason"], "per_key_concurrency")
+        self.assertIn("per-key concurrency", error["detail"]["detail"])
+        # The existing top-level reason stays for share admission consumers.
+        self.assertEqual(error["reason"], "per_key_concurrency")
+
+    def test_key_rate_limit_has_precise_retry_after(self):
+        now = time.monotonic()
+        with self.server.share_gate.guard:
+            self.server.share_gate.history["friend"] = deque([now] * 20)
+        status, headers, payload = self._request_path(
+            "GET", "/v1/models", {"Authorization": "Bearer secret"})
+        self.assertEqual(status, 429)
+        self.assertEqual(payload["error"]["detail"]["reason"],
+                         "key_rate_limit")
+        retry_after = int(headers.get("Retry-After"))
+        self.assertGreaterEqual(retry_after, 1)
+        self.assertLessEqual(retry_after, 60)
+
+    def test_state_not_accepting_is_not_retryable(self):
+        self.server.share_gate.set_state("draining")
+        status, headers, payload = self._request_path(
+            "GET", "/v1/models", {"Authorization": "Bearer secret"})
+        self.assertEqual(status, 429)
+        self.assertEqual(headers.get("X-Should-Retry"), "false")
+        self.assertEqual(payload["error"]["detail"]["reason"],
+                         "state_not_accepting")
+
+    def test_messages_share_key_error_uses_anthropic_envelope(self):
+        status, _headers, payload = self._request_path(
+            "POST", "/v1/messages",
+            body=json.dumps({"model": "m", "max_tokens": 8,
+                             "messages": []}).encode("utf-8"))
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["type"], "error")
+        error = payload["error"]
+        self.assertEqual(error["type"], "authentication_error")
+        self.assertEqual(error["code"], "invalid_api_key")
+        self.assertIn("message", error)
+
+    def test_messages_unshared_query_uses_anthropic_envelope(self):
+        status, _headers, payload = self._request_path(
+            "POST", "/v1/messages?beta=false",
+            {"Authorization": "Bearer secret"},
+            body=json.dumps({"model": "m", "max_tokens": 8,
+                             "messages": []}).encode("utf-8"))
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["type"], "error")
+        error = payload["error"]
+        self.assertEqual(error["type"], "not_found_error")
+        self.assertEqual(error["code"], "route_not_shared")
+
+    def test_chat_unsupported_request_returns_400_machine_code(self):
+        status, _headers, payload = self._request_path(
+            "POST", "/v1/chat/completions",
+            {"Authorization": "Bearer secret"},
+            body=json.dumps({"model": "m", "messages": [{"role": "user",
+                                                         "content": "hi"}],
+                             "n": 2}).encode("utf-8"))
+        self.assertEqual(status, 400)
+        error = payload["error"]
+        self.assertEqual(error["type"], "invalid_request_error")
+        self.assertEqual(error["code"], "unsupported_chat_request")
+        self.assertIsNone(error["param"])
+
+    def test_messages_unsupported_request_uses_anthropic_envelope(self):
+        status, _headers, payload = self._request_path(
+            "POST", "/v1/messages",
+            {"Authorization": "Bearer secret"},
+            body=json.dumps({"model": "m", "max_tokens": 8,
+                             "messages": [{"role": "user", "content": "hi"}],
+                             "unknown_field": True}).encode("utf-8"))
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["type"], "error")
+        error = payload["error"]
+        self.assertEqual(error["type"], "invalid_request_error")
+        self.assertEqual(error["code"], "unsupported_messages_request")
 
     def test_models_accepts_the_authenticated_share_key(self):
         status, payload = self._request(

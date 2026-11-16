@@ -268,6 +268,10 @@ class TrackedHTTPServer(ThreadingHTTPServer):
     """
 
     daemon_threads = True
+    # Burst tests open many connections at once. Match the production
+    # gateway's backlog so the harness never becomes the bottleneck the test
+    # is trying to prove absent from the gateway.
+    request_queue_size = 256
 
     def __init__(self, *args, **kwargs):
         # Remember the port the caller asked for: 0 means the OS assigned it,

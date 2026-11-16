@@ -1,0 +1,136 @@
+# Rust workspace（S0 骨架 + S1a/S1b/S2a 候选网关 + S3a broker 控制通道 + S3b store/发布/启动身份 + S5a 候选 8002 只读核心 + S5b 分享/用量/日志/display 读面 + S6a 8002 operations/Key 写面 + S6b 8002 session/display/旧 share 写面 + S7 display relay + S8 只读 ops parity）
+
+本目录是 Rust 重写的 workspace 根。S0 建立工程骨架、HTTP 测试 harness 与
+临时数据目录；S1a 增加候选网关 crate（8003 只读面、分享 Key 门与请求拒绝），
+S1b 增加 Chat 非流式/SSE 转发、提交门、超时重试、断开取消与分享账本；
+S2a 增加 Anthropic Messages 的非流式/SSE 字节透传、官方事件终止语义与
+usage 账本行；S3a 增加 broker 控制通道的协议内核与 POSIX AF_UNIX 适配器；
+S3b 增加 share store（SQLite schema 3、Key 生命周期、安全日志）、投影原子写、
+`publish` writer→load→ACK、有界 host 生命周期与 broker 的 8003 启动身份；
+S5a 增加候选 8002 控制台 crate（六个只读核心端点、云端 summary、
+`capability_not_assembled` 门与只读 SQLite 读面）；S5b 增加分享状态/Key 明文读回、
+`share-usage` 汇总与逐请求页、cloud-ops、display-session/state 与旧 `/api/share/*`
+只读面（会话/控制令牌）；S6a 增加 operations 写面、分享 Key 写面与 `settings`（同一
+`console-state.sqlite3` schema 1 与 `share-store.db` schema 3，撤销方向 fail closed）；
+S6b 增加 `/api/session` 兑换/重签、display 一次性 grant 与单页 operator、旧
+`/api/share/*` 写面（控制令牌或会话+CSRF）；S7 增加 `/display/` launcher、
+noVNC 静态树、`/display/session`、grant 兑换与 `/display/websockify` RFB 中继
+（RFB 3.8/3.7/3.3 握手、VNC challenge-response、operator 代际与输入过滤）；
+S8 增加 `um-ops`
+只读 parity crate（账本读面、Cloudflare ingress、公网 DNS/TLS 状态机与
+部署装配检查）。备份/恢复、公网探测、更新/回滚仍由 Python/bash 工具执行，
+`um-ops` 只转发它们的 CLI/JSON、归档与退出码。
+本目录不切换任何生产端口或生产工具，Python 仍是回滚权威。
+
+## 结构
+
+```text
+rust/
+├── Cargo.toml                 workspace 根
+└── crates/
+    ├── broker/                S3a 控制通道 + S3b publish/host 生命周期
+    ├── console/               S5a/S5b/S6a/S6b/S7 候选 8002：只读核心、读面、operations/Key/session/display/旧 share 写面与 RFB 中继
+    ├── contract/              只读契约夹具的类型与加载器 + canonical JSON
+    ├── store/                 S3b share store、Key 生命周期与投影 writer
+    ├── gateway/               S1a/S1b/S2a 候选网关：只读面、Key 门、Chat/Messages 转发、SSE、账本
+    ├── ops/                   S8 只读 ops parity：账本、Cloudflare、公网检查、部署装配
+    └── test-harness/          临时 loopback HTTP server、临时数据目录
+```
+
+
+`tests/fixtures/rust_contract_rev1.json` 由
+`tests/generate_rust_contract_fixture.py` 从 `docs/rust-contract.md` 与
+当前 Python 常量生成。Rust 测试只反序列化该夹具，不手写端点、错误码、
+SSE 事件名或超时预算。
+
+`tests/fixtures/rust_broker_wire_rev1.json` 由
+`tests/generate_rust_broker_fixture.py` 从 `share/broker_protocol.py` 生成；
+`tests/fixtures/rust_store_rev1.json` 由
+`tests/generate_rust_store_fixture.py` 从真实 Python `ShareStore`、
+`BrokerHostCoordinator`、`parse_projection_payload` 与 `secret_protection` 生成；
+`tests/fixtures/rust_console_rev1.json` 由
+`tests/generate_rust_console_fixture.py` 从真实 Python 云端 `usagesrv.Handler`
+与 `console/adapters.py` / `console/operations.py` 生成。
+Rust 测试只反序列化夹具，不用自己的序列化器生成期望值。
+
+后续切片（S1–S8）在 `crates/` 下增加实现 crate，并复用本目录的 harness。
+验收记录见 [docs/rust-s0-acceptance.md](../docs/rust-s0-acceptance.md)、
+[docs/rust-s1a-acceptance.md](../docs/rust-s1a-acceptance.md)、
+[docs/rust-s1b-acceptance.md](../docs/rust-s1b-acceptance.md)、
+[docs/rust-s2a-acceptance.md](../docs/rust-s2a-acceptance.md)、
+[docs/rust-s3a-acceptance.md](../docs/rust-s3a-acceptance.md)、
+[docs/rust-s3b-acceptance.md](../docs/rust-s3b-acceptance.md) 与
+[docs/rust-s5a-acceptance.md](../docs/rust-s5a-acceptance.md)、
+[docs/rust-s5b-acceptance.md](../docs/rust-s5b-acceptance.md)、
+[docs/rust-s6a-acceptance.md](../docs/rust-s6a-acceptance.md)、
+[docs/rust-s6b-acceptance.md](../docs/rust-s6b-acceptance.md)、
+[docs/rust-s7-acceptance.md](../docs/rust-s7-acceptance.md) 与
+[docs/rust-s8-acceptance.md](../docs/rust-s8-acceptance.md)。
+
+## 命令
+
+```bash
+python tests/generate_rust_contract_fixture.py
+python tests/generate_rust_gateway_fixture.py
+python tests/generate_rust_broker_fixture.py
+python tests/generate_rust_store_fixture.py
+python tests/generate_rust_console_fixture.py
+python tests/generate_rust_console_reads_fixture.py
+python tests/generate_rust_ops_fixture.py
+cargo test --manifest-path rust/Cargo.toml
+bash scripts/check-rust-s0.sh
+bash scripts/check-rust-broker.sh
+bash scripts/check-rust-s2a.sh
+bash scripts/check-rust-s3b.sh
+bash scripts/check-rust-s5a.sh
+bash scripts/check-rust-s5b.sh
+bash scripts/check-rust-s6a.sh
+bash scripts/check-rust-s6b.sh
+bash scripts/check-rust-s7.sh
+bash scripts/check-rust-s8.sh
+```
+
+`cargo check --manifest-path rust/Cargo.toml -p um-broker --target \
+aarch64-linux-android --tests` 只做 `cfg(unix)` 代码的类型检查；AF_UNIX、
+`SO_PEERCRED` 与真实权限位测试需要在 Linux/WSL 上运行。
+
+## 边界
+
+- `TestServer` 默认绑定 `127.0.0.1:0`，由内核分配临时端口；只有显式传入
+  非 loopback host 或治理段生产端口时才会失败，且失败发生在 bind 之前。
+- `TempDataDir` 只在 OS 临时目录下创建自己的目录，拒绝绝对路径和 `..`
+  穿越，`close()`/drop 时删除；不会读写 `data/`、`profile/`、`tmp/`、
+  `output/`、`/var/lib/um-share`、`/var/lib/um-share-console`、`/etc/um-share`。
+- 本目录不监听 `AGENTS.md` 端口表里的生产端口，也不启动 `chat2api.py`、
+  broker 或 display relay。
+- `um-broker` 不 spawn 进程、不执行 shell、不接受任意路径/服务名；动作由固定
+  `Action` 枚举承载，字段由固定白名单校验。
+- `um-gateway` 的 Chat 转发只在临时 loopback 上游上测试；账本路径必须由
+  `CHAT2API_USAGE_LOG` 或测试配置显式给出，未配置时不写任何账本。SSE 生产者
+  在取消后由自己的 `finally` 关闭上游；ADR 0004 取消了 reader 槽位上限。客户端
+  断开不触发第二次状态行或把部分完成写成成功。
+- `um-store` 只打开调用方给定的那一个 SQLite 文件（`schema.rs` 是唯一
+  `Connection::open` 位置），不创建第二套库、不迁移数据；schema 3 与
+  Python 逐列一致，投影 schema 2 与本地 DB marker 分开。
+- 8003 启动身份由 broker 的 `--host-entry-kind` 选择：`python` 保持旧
+  解释器+脚本身份与旧 unit 回滚路径，`native` 接受 Rust 网关二进制；
+  两者共用同一个 broker、同一个 `LinuxHostOps` 和同一个 8003 启动者。
+- `um-console` 的候选进程只绑定 `127.0.0.1:0`，拒绝 8002 与任何治理段
+  端口；只装配云端角色，只读面不创建/写 `console-state.sqlite3`、不写账本或
+  日志，也不启动 broker、8003 或 display relay。S5b 的 `share-store.db` 只以
+  `SQLITE_OPEN_READ_ONLY` 打开，缺失时不创建；`/api/share/*` 读面要求会话或
+  控制令牌。
+- `um-console` 的写面只打开调用方给定的 `console-state.sqlite3` schema 1 与
+  `share-store.db` schema 3；动作执行与 broker 发布都是注入缝，未接线时诚实失败，
+  不启动 8003、不创建第二套库、不迁移数据。撤销方向未确认发布即 503。
+- S6b 的 `/api/session` 只把一次性引导码写成 Python 的明文 0600 文件；
+  display grant 只存 SHA-256 digest、单次兑换并绑定精确 origin；operator 单页。
+  `/api/share/*` 写面要求控制令牌，或会话 + `X-Requested-With`。candidate 不
+  port `backend-login-cancel`（两处 8002 写面都 404），也不装配 Tailscale 身份。
+- S7 的 display relay 只在测试里连接 `127.0.0.1:0` 的假 x11vnc/RFB 服务，绝不连接
+  真实 8097 display；VNC 密码只由 `PasswordFileVncAuth` 或 display service 的窄
+  helper socket 读取，不进响应、URL 或日志；relay 没有任何日志调用。
+- `um-ops` 只读账本、Cloudflare 配置、注入的公网 DNS/TLS 事实与部署
+  unit/env 文本；不写账本、不改 tunnel、不创建备份。`backup`/`restore`、
+  `cloudflare probe`、`deploy assembly`、`deploy update`/`rollback` 只转发
+  现有 Python/bash CLI 的参数、stdout/stderr、归档与退出码。

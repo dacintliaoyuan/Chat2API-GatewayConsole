@@ -1,0 +1,1316 @@
+#![allow(dead_code)]
+
+use std::collections::{BTreeSet, VecDeque};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+
+use um_gateway::config::{AuthMode, GatewayConfig};
+use um_gateway::reauth::ReauthenticationProvider;
+use um_gateway::GatewayServer;
+
+pub const STUB_TOKEN: &str = "fixture-upstream-token";
+pub const SHARE_SECRET: &str = "secret";
+pub const SECOND_SECRET: &str = "second-secret";
+pub const THIRD_SECRET: &str = "third-secret";
+pub const CONTROL_TOKEN: &str = "fixture-control-token";
+pub const ALLOWED_ORIGIN: &str = "https://allowed.example";
+pub const DENIED_ORIGIN: &str = "https://denied.example";
+
+pub fn fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/rust_gateway_rev1.json")
+}
+
+pub fn fixture() -> Value {
+    serde_json::from_str(&std::fs::read_to_string(fixture_path()).expect("read gateway fixture"))
+        .expect("parse gateway fixture")
+}
+
+pub fn shape(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut output = serde_json::Map::new();
+            for (key, value) in map {
+                output.insert(key.clone(), shape(value));
+            }
+            json!({"object": output})
+        }
+        Value::Array(items) => {
+            if items.is_empty() {
+                json!({"array": []})
+            } else {
+                json!({"array": [shape(&items[0])]})
+            }
+        }
+        Value::Bool(_) => json!("bool"),
+        Value::Number(_) => json!("number"),
+        Value::String(_) => json!("string"),
+        Value::Null => json!("null"),
+    }
+}
+
+pub fn sha256_hex(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(value.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub fn legacy_share_config() -> String {
+    json!({"clients": {
+        "friend": sha256_hex(SHARE_SECRET),
+        "second": sha256_hex(SECOND_SECRET),
+        "third": sha256_hex(THIRD_SECRET),
+    }})
+    .to_string()
+}
+
+pub fn projection_share_config() -> String {
+    json!({
+        "schema_version": 2,
+        "config_generation": 7,
+        "share_max_concurrency": 1,
+        "data": [
+            {"key_id": "friend", "name": "friend",
+             "secret_hash": sha256_hex(SHARE_SECRET),
+             "secret_version": 3, "enabled": true, "max_concurrency": 1},
+            {"key_id": "second", "name": "second",
+             "secret_hash": sha256_hex(SECOND_SECRET),
+             "secret_version": 1, "enabled": true, "max_concurrency": 1},
+            {"key_id": "third", "name": "third",
+             "secret_hash": sha256_hex(THIRD_SECRET),
+             "secret_version": 1, "enabled": true, "max_concurrency": 1},
+        ],
+    })
+    .to_string()
+}
+
+pub struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    pub fn new(prefix: &str) -> Self {
+        static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir();
+        for _ in 0..100 {
+            let sequence = SEQUENCE.fetch_add(1, Ordering::SeqCst);
+            let path = root.join(format!("{prefix}{}-{sequence}", std::process::id()));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self { path },
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("cannot create temp dir: {error}"),
+            }
+        }
+        panic!("cannot allocate a temp dir");
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    pub fn write(&self, name: &str, contents: &str) -> PathBuf {
+        let path = self.path.join(name);
+        std::fs::write(&path, contents).expect("write temp file");
+        path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StubBehaviour {
+    pub delay: Duration,
+    pub models_status: u16,
+    pub models_body: Option<Value>,
+    pub version_status: u16,
+    pub version_body: Option<Value>,
+}
+
+impl Default for StubBehaviour {
+    fn default() -> Self {
+        Self {
+            delay: Duration::ZERO,
+            models_status: 200,
+            models_body: None,
+            version_status: 200,
+            version_body: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SeenRequest {
+    pub path: String,
+    pub authorization: Option<String>,
+    pub models_header: Option<String>,
+}
+
+pub struct StubUpstream {
+    addr: SocketAddr,
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+    behaviour: Arc<Mutex<StubBehaviour>>,
+    seen: Arc<Mutex<Vec<SeenRequest>>>,
+}
+
+impl StubUpstream {
+    pub fn start() -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind stub upstream");
+        listener.set_nonblocking(true).expect("nonblocking stub");
+        let addr = listener.local_addr().expect("stub addr");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let behaviour = Arc::new(Mutex::new(StubBehaviour {
+            delay: Duration::from_millis(0),
+            models_status: 200,
+            models_body: Some(json!({
+                "object": "list",
+                "data": [
+                    {"id": "fixture-model-a", "name": "Fixture A"},
+                    {"id": "fixture-model-b", "name": "Fixture B"},
+                ],
+            })),
+            version_status: 200,
+            version_body: Some(json!({"version": "0.7.0-fixture"})),
+        }));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let worker_shutdown = Arc::clone(&shutdown);
+        let worker_behaviour = Arc::clone(&behaviour);
+        let worker_seen = Arc::clone(&seen);
+        let handle = thread::spawn(move || {
+            while !worker_shutdown.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let behaviour = Arc::clone(&worker_behaviour);
+                        let seen = Arc::clone(&worker_seen);
+                        thread::spawn(move || {
+                            let _ = serve_stub(stream, &behaviour, &seen);
+                        });
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            addr,
+            shutdown,
+            handle: Some(handle),
+            behaviour,
+            seen,
+        }
+    }
+
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    pub fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    pub fn set(&self, behaviour: StubBehaviour) {
+        *self.behaviour.lock().expect("stub behaviour") = behaviour;
+    }
+
+    pub fn seen(&self) -> Vec<SeenRequest> {
+        self.seen.lock().expect("stub seen").clone()
+    }
+}
+
+impl Drop for StubUpstream {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.shutdown.store(true, Ordering::SeqCst);
+            let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(200));
+            let _ = handle.join();
+        }
+    }
+}
+
+fn serve_stub(
+    mut stream: TcpStream,
+    behaviour: &Mutex<StubBehaviour>,
+    seen: &Mutex<Vec<SeenRequest>>,
+) -> std::io::Result<()> {
+    // Accepted sockets inherit the non-blocking listener on Windows; the stub
+    // reads with a timeout, so restore blocking mode first.
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let request = match read_client_request(&mut stream)? {
+        Some(request) => request,
+        None => return Ok(()),
+    };
+    let path = request
+        .path
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    let authorization = request.header("authorization");
+    let models_header = request.header("x-chat2api-models");
+    seen.lock().expect("stub seen").push(SeenRequest {
+        path: path.clone(),
+        authorization: authorization.clone(),
+        models_header,
+    });
+    let behaviour = behaviour.lock().expect("stub behaviour").clone();
+    let (status, payload) = if path == "/api/config" {
+        (
+            200,
+            json!({
+                "name": "Open WebUI",
+                "version": "0.7.0-fixture",
+                "features": {"enable_api_keys": false},
+                "oauth": {"providers": {"fixture-sso": {}}},
+            }),
+        )
+    } else if path == "/api/version" {
+        (
+            behaviour.version_status,
+            behaviour
+                .version_body
+                .clone()
+                .unwrap_or_else(|| json!({"version": "0.7.0-fixture"})),
+        )
+    } else if path == "/api/models" {
+        let body = match authorization.as_deref() {
+            Some(value) if value.contains("rejected-token") => (401, json!({"detail": "rejected"})),
+            Some(value) if value.contains("error-token") => {
+                (500, json!({"detail": "upstream failed"}))
+            }
+            Some(value) if value.contains("invalid-shape-token") => {
+                (200, json!({"not": "a catalog"}))
+            }
+            _ => (
+                behaviour.models_status,
+                behaviour
+                    .models_body
+                    .clone()
+                    .unwrap_or_else(|| json!({"object": "list", "data": []})),
+            ),
+        };
+        if behaviour.delay > Duration::ZERO
+            && !authorization.as_deref().is_some_and(|value| {
+                value.contains("rejected-token") || value.contains("error-token")
+            })
+        {
+            thread::sleep(behaviour.delay);
+        }
+        body
+    } else {
+        (404, json!({"detail": "not found"}))
+    };
+    let raw = serde_json::to_vec(&payload).expect("stub json");
+    let head = format!(
+        "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        if status == 200 { "OK" } else { "Error" },
+        raw.len()
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(&raw)?;
+    stream.flush()
+}
+
+pub struct ClientRequest {
+    pub method: String,
+    pub target: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<Vec<u8>>,
+}
+
+impl ClientRequest {
+    pub fn get(target: &str) -> Self {
+        Self {
+            method: "GET".to_string(),
+            target: target.to_string(),
+            headers: Vec::new(),
+            body: None,
+        }
+    }
+
+    pub fn options(target: &str) -> Self {
+        Self {
+            method: "OPTIONS".to_string(),
+            target: target.to_string(),
+            headers: Vec::new(),
+            body: None,
+        }
+    }
+
+    pub fn post(target: &str, body: &str) -> Self {
+        Self {
+            method: "POST".to_string(),
+            target: target.to_string(),
+            headers: Vec::new(),
+            body: Some(body.as_bytes().to_vec()),
+        }
+    }
+
+    pub fn bearer(mut self, secret: &str) -> Self {
+        self.headers
+            .push(("Authorization".to_string(), format!("Bearer {secret}")));
+        self
+    }
+
+    pub fn header(mut self, name: &str, value: &str) -> Self {
+        self.headers.push((name.to_string(), value.to_string()));
+        self
+    }
+
+    pub fn json_body(mut self, body: &str) -> Self {
+        self.headers
+            .push(("Content-Type".to_string(), "application/json".to_string()));
+        self.body = Some(body.as_bytes().to_vec());
+        self
+    }
+}
+
+pub struct ClientResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl ClientResponse {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+
+    pub fn json(&self) -> Value {
+        serde_json::from_slice(&self.body).unwrap_or(Value::Null)
+    }
+}
+
+pub fn client_request(
+    addr: SocketAddr,
+    request: &ClientRequest,
+) -> std::io::Result<ClientResponse> {
+    client_request_with_timeout(addr, request, Duration::from_secs(10))
+}
+
+pub fn client_request_with_timeout(
+    addr: SocketAddr,
+    request: &ClientRequest,
+    timeout: Duration,
+) -> std::io::Result<ClientResponse> {
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
+    let _ = stream.set_read_timeout(Some(timeout));
+    let mut raw = format!("{} {} HTTP/1.1\r\n", request.method, request.target);
+    let has_host = request
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("host"));
+    if !has_host {
+        raw.push_str(&format!("Host: {addr}\r\n"));
+    }
+    for (name, value) in &request.headers {
+        raw.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if let Some(body) = &request.body {
+        let has_length = request
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+        if !has_length {
+            raw.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        }
+    }
+    raw.push_str("\r\n");
+    stream.write_all(raw.as_bytes())?;
+    if let Some(body) = &request.body {
+        stream.write_all(body)?;
+    }
+    stream.flush()?;
+    read_client_response(&mut stream)
+}
+
+fn read_client_request(stream: &mut TcpStream) -> std::io::Result<Option<RawRequest>> {
+    let mut raw = Vec::new();
+    let mut buffer = [0u8; 4096];
+    let header_end = loop {
+        if let Some(position) = raw.windows(4).position(|window| window == b"\r\n\r\n") {
+            break position + 4;
+        }
+        let read = stream.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(None);
+        }
+        raw.extend_from_slice(&buffer[..read]);
+    };
+    let head = String::from_utf8_lossy(&raw[..header_end]);
+    let mut lines = head.split("\r\n");
+    let request_line = lines.next().unwrap_or_default();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or_default().to_string();
+    let mut headers = Vec::new();
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    let length = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut body = raw[header_end..].to_vec();
+    while body.len() < length {
+        let read = stream.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        body.extend_from_slice(&buffer[..read]);
+    }
+    Ok(Some(RawRequest {
+        method,
+        path,
+        headers,
+        body,
+    }))
+}
+
+struct RawRequest {
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl RawRequest {
+    fn header(&self, name: &str) -> Option<String> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.clone())
+    }
+}
+
+pub fn read_client_response(stream: &mut TcpStream) -> std::io::Result<ClientResponse> {
+    let mut raw = Vec::new();
+    let mut buffer = [0u8; 4096];
+    let header_end = loop {
+        if let Some(position) = raw.windows(4).position(|window| window == b"\r\n\r\n") {
+            break position + 4;
+        }
+        let read = stream.read(&mut buffer)?;
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "connection closed before the response head",
+            ));
+        }
+        raw.extend_from_slice(&buffer[..read]);
+    };
+    let head = String::from_utf8_lossy(&raw[..header_end]);
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid status line")
+        })?;
+    let mut headers = Vec::new();
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    let length = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.parse::<usize>().ok());
+    let mut body = raw[header_end..].to_vec();
+    if let Some(length) = length {
+        while body.len() < length {
+            let read = stream.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            body.extend_from_slice(&buffer[..read]);
+        }
+        body.truncate(length);
+    } else {
+        loop {
+            let read = stream.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            body.extend_from_slice(&buffer[..read]);
+        }
+    }
+    Ok(ClientResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+pub struct Gateway {
+    pub server: GatewayServerHandle,
+    pub addr: SocketAddr,
+}
+
+#[derive(Debug)]
+pub struct GatewayServerHandle {
+    inner: um_gateway::ServerHandle,
+}
+
+impl GatewayServerHandle {
+    pub fn addr(&self) -> SocketAddr {
+        self.inner.addr()
+    }
+
+    pub fn state(&self) -> std::sync::Arc<um_gateway::AppState> {
+        self.inner.state()
+    }
+}
+
+impl Drop for GatewayServerHandle {
+    fn drop(&mut self) {
+        self.inner.shutdown();
+    }
+}
+
+pub fn start_gateway(stub: &StubUpstream, temp: &TempDir, share: bool) -> Gateway {
+    let share_config = if share {
+        Some(temp.write("share.json", &legacy_share_config()))
+    } else {
+        None
+    };
+    let control = temp.write("control.token", CONTROL_TOKEN);
+    let mut config = GatewayConfig {
+        upstream_base_url: stub.url(),
+        upstream_token: STUB_TOKEN.to_string(),
+        share_config,
+        control_token_file: Some(control),
+        allowed_origins: [ALLOWED_ORIGIN.to_string()].into_iter().collect(),
+        ..GatewayConfig::default()
+    };
+    config.candidate = true;
+    let server = GatewayServer::start(config).expect("start candidate gateway");
+    let addr = server.addr();
+    Gateway {
+        server: GatewayServerHandle { inner: server },
+        addr,
+    }
+}
+
+pub fn start_projection_gateway(stub: &StubUpstream, temp: &TempDir) -> Gateway {
+    let share_config = Some(temp.write("share-projection.json", &projection_share_config()));
+    let control = temp.write("control.token", CONTROL_TOKEN);
+    let config = GatewayConfig {
+        upstream_base_url: stub.url(),
+        upstream_token: STUB_TOKEN.to_string(),
+        share_config,
+        control_token_file: Some(control),
+        allowed_origins: [ALLOWED_ORIGIN.to_string()].into_iter().collect(),
+        auth_mode: AuthMode::Projection,
+        ..GatewayConfig::default()
+    };
+    let server = GatewayServer::start(config).expect("start projection gateway");
+    let addr = server.addr();
+    Gateway {
+        server: GatewayServerHandle { inner: server },
+        addr,
+    }
+}
+
+pub fn wait_until<F>(timeout: Duration, mut predicate: F)
+where
+    F: FnMut() -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if predicate() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(predicate(), "condition did not become true in {timeout:?}");
+}
+
+pub fn unique_temp_prefix() -> &'static str {
+    "um-rust-gateway-test-"
+}
+
+pub fn production_ports() -> BTreeSet<u16> {
+    [5173, 8000, 8001, 8002, 8003, 8097, 8099]
+        .into_iter()
+        .collect()
+}
+
+pub fn error_body(response: &ClientResponse) -> Value {
+    response.json()
+}
+
+pub fn body_field<'a>(body: &'a Value, field: &str) -> &'a Value {
+    body.get("error")
+        .and_then(|error| error.get(field))
+        .unwrap_or(&Value::Null)
+}
+
+/// Send one request and report whether the server closed the socket after it.
+pub fn client_request_and_check_close(
+    addr: SocketAddr,
+    request: &ClientRequest,
+) -> std::io::Result<(ClientResponse, bool)> {
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let mut raw = format!("{} {} HTTP/1.1\r\n", request.method, request.target);
+    let has_host = request
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("host"));
+    if !has_host {
+        raw.push_str(&format!("Host: {addr}\r\n"));
+    }
+    for (name, value) in &request.headers {
+        raw.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if let Some(body) = &request.body {
+        let has_length = request
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+        if !has_length {
+            raw.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        }
+    }
+    raw.push_str("\r\n");
+    stream.write_all(raw.as_bytes())?;
+    if let Some(body) = &request.body {
+        stream.write_all(body)?;
+    }
+    stream.flush()?;
+    let response = read_client_response(&mut stream)?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    let mut byte = [0u8; 1];
+    let closed = match stream.read(&mut byte) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+        ),
+    };
+    Ok((response, closed))
+}
+
+// ---------------------------------------------------------------------------
+// Chat forwarding stub (S1b).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct ChatChunk {
+    pub delay: Duration,
+    pub bytes: Vec<u8>,
+}
+
+impl ChatChunk {
+    pub fn now(bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            delay: Duration::ZERO,
+            bytes: bytes.into(),
+        }
+    }
+
+    pub fn after(delay: Duration, bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            delay,
+            bytes: bytes.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ChatAttempt {
+    Json {
+        status: u16,
+        body: Value,
+    },
+    Sse {
+        chunks: Vec<ChatChunk>,
+        hold: Duration,
+    },
+    SseChunked {
+        chunks: Vec<ChatChunk>,
+        hold: Duration,
+    },
+    HttpStatus {
+        status: u16,
+        body: String,
+        retry_after: Option<String>,
+    },
+    /// A status response carrying both retry headers.
+    HttpStatusWithHeaders {
+        status: u16,
+        body: String,
+        retry_after: Option<String>,
+        should_retry: Option<String>,
+    },
+    DelayedHttpStatus {
+        delay: Duration,
+        status: u16,
+        body: String,
+    },
+    Silent {
+        hold: Duration,
+    },
+    /// Accept the request and hold without writing a response head; exercises
+    /// the upstream response-head wait budget.
+    HeadSilent {
+        hold: Duration,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct SeenChatRequest {
+    pub path: String,
+    pub authorization: Option<String>,
+    pub anthropic_version: Option<String>,
+    pub anthropic_beta: Option<String>,
+    pub body: Value,
+}
+
+pub struct ChatStub {
+    addr: SocketAddr,
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+    attempts: Arc<Mutex<VecDeque<ChatAttempt>>>,
+    seen: Arc<Mutex<Vec<SeenChatRequest>>>,
+    closed: Arc<AtomicBool>,
+    connections: Arc<AtomicUsize>,
+}
+
+impl ChatStub {
+    pub fn start() -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind chat stub");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking chat stub");
+        let addr = listener.local_addr().expect("chat stub addr");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let attempts = Arc::new(Mutex::new(VecDeque::new()));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+        let connections = Arc::new(AtomicUsize::new(0));
+        let worker_shutdown = Arc::clone(&shutdown);
+        let worker_attempts = Arc::clone(&attempts);
+        let worker_seen = Arc::clone(&seen);
+        let worker_closed = Arc::clone(&closed);
+        let worker_connections = Arc::clone(&connections);
+        let handle = thread::spawn(move || {
+            while !worker_shutdown.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        worker_connections.fetch_add(1, Ordering::SeqCst);
+                        let attempts = Arc::clone(&worker_attempts);
+                        let seen = Arc::clone(&worker_seen);
+                        let closed = Arc::clone(&worker_closed);
+                        let shutdown = Arc::clone(&worker_shutdown);
+                        thread::spawn(move || {
+                            let _ = serve_chat(stream, &attempts, &seen, &closed, &shutdown);
+                        });
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            addr,
+            shutdown,
+            handle: Some(handle),
+            attempts,
+            seen,
+            closed,
+            connections,
+        }
+    }
+
+    pub fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    pub fn push(&self, attempt: ChatAttempt) {
+        self.attempts
+            .lock()
+            .expect("chat attempts")
+            .push_back(attempt);
+    }
+
+    pub fn push_all(&self, attempts: Vec<ChatAttempt>) {
+        let mut queue = self.attempts.lock().expect("chat attempts");
+        queue.extend(attempts);
+    }
+
+    pub fn attempts(&self) -> usize {
+        self.seen.lock().expect("chat seen").len()
+    }
+
+    pub fn seen(&self) -> Vec<SeenChatRequest> {
+        self.seen.lock().expect("chat seen").clone()
+    }
+
+    pub fn closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+    pub fn reset_closed(&self) {
+        self.closed.store(false, Ordering::SeqCst);
+    }
+
+    pub fn connections(&self) -> usize {
+        self.connections.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for ChatStub {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.shutdown.store(true, Ordering::SeqCst);
+            let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(200));
+            let _ = handle.join();
+        }
+    }
+}
+
+fn serve_chat(
+    mut stream: TcpStream,
+    attempts: &Mutex<VecDeque<ChatAttempt>>,
+    seen: &Mutex<Vec<SeenChatRequest>>,
+    closed: &AtomicBool,
+    shutdown: &AtomicBool,
+) -> std::io::Result<()> {
+    // Accepted sockets inherit the non-blocking listener on Windows; the stub
+    // reads with a timeout, so restore blocking mode first.
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let Some(request) = read_client_request(&mut stream)? else {
+        return Ok(());
+    };
+    let path = request
+        .path
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    if request.method == "GET" {
+        let payload = if path == "/api/config" {
+            json!({
+                "name": "Open WebUI",
+                "version": "0.7.0-fixture",
+                "features": {"enable_api_keys": false},
+                "oauth": {"providers": {"fixture-sso": {}}},
+            })
+        } else {
+            json!({"object": "list", "data": []})
+        };
+        let raw = serde_json::to_vec(&payload).unwrap_or_default();
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n",
+            raw.len()
+        );
+        stream.write_all(head.as_bytes())?;
+        stream.write_all(&raw)?;
+        stream.flush()?;
+        return Ok(());
+    }
+    let authorization = request.header("authorization");
+    let anthropic_version = request.header("anthropic-version");
+    let anthropic_beta = request.header("anthropic-beta");
+    let body = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+    seen.lock().expect("chat seen").push(SeenChatRequest {
+        path,
+        authorization,
+        anthropic_version,
+        anthropic_beta,
+        body,
+    });
+    let attempt = attempts
+        .lock()
+        .expect("chat attempts")
+        .pop_front()
+        .unwrap_or(ChatAttempt::Json {
+            status: 500,
+            body: json!({"error": "no scripted chat attempt"}),
+        });
+    match attempt {
+        ChatAttempt::Json { status, body } => {
+            let raw = serde_json::to_vec(&body).unwrap_or_default();
+            let head = format!(
+                "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                if status == 200 { "OK" } else { "Error" },
+                raw.len()
+            );
+            stream.write_all(head.as_bytes())?;
+            stream.write_all(&raw)?;
+            stream.flush()?;
+        }
+        ChatAttempt::DelayedHttpStatus {
+            delay,
+            status,
+            body,
+        } => {
+            thread::sleep(delay);
+            let raw = body.into_bytes();
+            let head = format!(
+                "HTTP/1.1 {status} Error\r\nContent-Type: text/plain\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                raw.len()
+            );
+            stream.write_all(head.as_bytes())?;
+            stream.write_all(&raw)?;
+            stream.flush()?;
+        }
+        ChatAttempt::HttpStatus {
+            status,
+            body,
+            retry_after,
+        } => {
+            write_status_response(&mut stream, status, &body, retry_after.as_deref(), None)?;
+        }
+        ChatAttempt::HttpStatusWithHeaders {
+            status,
+            body,
+            retry_after,
+            should_retry,
+        } => {
+            write_status_response(
+                &mut stream,
+                status,
+                &body,
+                retry_after.as_deref(),
+                should_retry.as_deref(),
+            )?;
+        }
+        ChatAttempt::Sse { chunks, hold } => {
+            stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\
+                  Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
+            )?;
+            stream.flush()?;
+            for chunk in chunks {
+                if !chunk.delay.is_zero() {
+                    thread::sleep(chunk.delay);
+                }
+                if stream.write_all(&chunk.bytes).is_err() {
+                    closed.store(true, Ordering::SeqCst);
+                    return Ok(());
+                }
+                let _ = stream.flush();
+            }
+            hold_until_peer_closes(&mut stream, hold, closed, shutdown);
+        }
+        ChatAttempt::SseChunked { chunks, hold } => {
+            stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\
+                  Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            )?;
+            stream.flush()?;
+            for chunk in chunks {
+                if !chunk.delay.is_zero() {
+                    thread::sleep(chunk.delay);
+                }
+                let frame = format!("{:X}\r\n", chunk.bytes.len()).into_bytes();
+                if stream.write_all(&frame).is_err()
+                    || stream.write_all(&chunk.bytes).is_err()
+                    || stream.write_all(b"\r\n").is_err()
+                {
+                    closed.store(true, Ordering::SeqCst);
+                    return Ok(());
+                }
+                let _ = stream.flush();
+            }
+            if stream.write_all(b"0\r\n\r\n").is_err() {
+                closed.store(true, Ordering::SeqCst);
+                return Ok(());
+            }
+            let _ = stream.flush();
+            hold_until_peer_closes(&mut stream, hold, closed, shutdown);
+        }
+        ChatAttempt::Silent { hold } => {
+            stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                  Connection: close\r\n\r\n",
+            )?;
+            stream.flush()?;
+            hold_until_peer_closes(&mut stream, hold, closed, shutdown);
+        }
+        ChatAttempt::HeadSilent { hold } => {
+            hold_until_peer_closes(&mut stream, hold, closed, shutdown);
+        }
+    }
+    Ok(())
+}
+
+fn write_status_response(
+    stream: &mut TcpStream,
+    status: u16,
+    body: &str,
+    retry_after: Option<&str>,
+    should_retry: Option<&str>,
+) -> std::io::Result<()> {
+    let raw = body.as_bytes();
+    let mut head = format!(
+        "HTTP/1.1 {status} Error\r\nContent-Type: text/plain\r\n\
+         Content-Length: {}\r\nConnection: close\r\n",
+        raw.len()
+    );
+    if let Some(retry_after) = retry_after {
+        head.push_str(&format!("Retry-After: {retry_after}\r\n"));
+    }
+    if let Some(should_retry) = should_retry {
+        head.push_str(&format!("X-Should-Retry: {should_retry}\r\n"));
+    }
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(raw)?;
+    stream.flush()
+}
+
+fn hold_until_peer_closes(
+    stream: &mut TcpStream,
+    hold: Duration,
+    closed: &AtomicBool,
+    shutdown: &AtomicBool,
+) {
+    let deadline = Instant::now() + hold;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(20)));
+    let mut byte = [0u8; 1];
+    while Instant::now() < deadline && !shutdown.load(Ordering::SeqCst) {
+        match stream.peek(&mut byte) {
+            Ok(0) => {
+                closed.store(true, Ordering::SeqCst);
+                return;
+            }
+            Ok(_) => thread::sleep(Duration::from_millis(20)),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(_) => {
+                closed.store(true, Ordering::SeqCst);
+                return;
+            }
+        }
+    }
+}
+
+pub struct StreamingClient {
+    stream: TcpStream,
+    buffer: Vec<u8>,
+}
+
+impl StreamingClient {
+    pub fn send(addr: SocketAddr, request: &ClientRequest) -> std::io::Result<Self> {
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+        let mut raw = format!("{} {} HTTP/1.1\r\n", request.method, request.target);
+        raw.push_str(&format!("Host: {addr}\r\n"));
+        for (name, value) in &request.headers {
+            raw.push_str(&format!("{name}: {value}\r\n"));
+        }
+        if let Some(body) = &request.body {
+            let has_length = request
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+            if !has_length {
+                raw.push_str(&format!("Content-Length: {}\r\n", body.len()));
+            }
+        }
+        raw.push_str("\r\n");
+        stream.write_all(raw.as_bytes())?;
+        if let Some(body) = &request.body {
+            stream.write_all(body)?;
+        }
+        stream.flush()?;
+        Ok(Self {
+            stream,
+            buffer: Vec::new(),
+        })
+    }
+
+    /// Read some bytes; `None` means the read timed out.
+    pub fn read_some(&mut self, timeout: Duration) -> std::io::Result<Option<Vec<u8>>> {
+        let _ = self.stream.set_read_timeout(Some(timeout));
+        let mut chunk = [0u8; 4096];
+        match self.stream.read(&mut chunk) {
+            Ok(0) => Ok(Some(Vec::new())),
+            Ok(read) => {
+                self.buffer.extend_from_slice(&chunk[..read]);
+                Ok(Some(chunk[..read].to_vec()))
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Read until `needle` appears or the overall timeout expires.
+    pub fn read_until(&mut self, needle: &[u8], timeout: Duration) -> std::io::Result<Vec<u8>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self
+                .buffer
+                .windows(needle.len())
+                .any(|window| window == needle)
+            {
+                return Ok(std::mem::take(&mut self.buffer));
+            }
+            if Instant::now() >= deadline {
+                return Ok(std::mem::take(&mut self.buffer));
+            }
+            let _ = self.read_some(Duration::from_millis(50))?;
+        }
+    }
+
+    /// Read to EOF or the overall timeout.
+    pub fn read_all(&mut self, timeout: Duration) -> std::io::Result<Vec<u8>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if Instant::now() >= deadline {
+                break;
+            }
+            if let Some(bytes) = self.read_some(Duration::from_millis(50))? {
+                if bytes.is_empty() {
+                    break;
+                }
+            }
+        }
+        Ok(std::mem::take(&mut self.buffer))
+    }
+}
+
+pub fn start_chat_gateway(
+    stub: &ChatStub,
+    temp: &TempDir,
+    share: bool,
+    configure: impl FnOnce(&mut GatewayConfig),
+) -> Gateway {
+    start_chat_gateway_with_reauth(stub, temp, share, None, configure)
+}
+
+pub fn start_chat_gateway_with_reauth(
+    stub: &ChatStub,
+    temp: &TempDir,
+    share: bool,
+    provider: Option<Arc<dyn ReauthenticationProvider>>,
+    configure: impl FnOnce(&mut GatewayConfig),
+) -> Gateway {
+    let share_config = if share {
+        Some(temp.write("share.json", &legacy_share_config()))
+    } else {
+        None
+    };
+    let control = temp.write("control.token", CONTROL_TOKEN);
+    let mut config = GatewayConfig {
+        upstream_base_url: stub.url(),
+        upstream_token: STUB_TOKEN.to_string(),
+        share_config,
+        control_token_file: Some(control),
+        allowed_origins: [ALLOWED_ORIGIN.to_string()].into_iter().collect(),
+        ..GatewayConfig::default()
+    };
+    configure(&mut config);
+    config.candidate = true;
+    let server =
+        GatewayServer::start_with_reauth(config, provider).expect("start chat candidate gateway");
+    let addr = server.addr();
+    Gateway {
+        server: GatewayServerHandle { inner: server },
+        addr,
+    }
+}
+
+pub fn parse_raw_response(raw: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let header_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|position| position + 4)
+        .unwrap_or(raw.len());
+    let head = String::from_utf8_lossy(&raw[..header_end]);
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(0);
+    let mut headers = Vec::new();
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    (status, headers, raw[header_end..].to_vec())
+}
+
+pub fn sse_payloads(body: &[u8]) -> Vec<Value> {
+    let text = String::from_utf8_lossy(body);
+    text.split("\n\n")
+        .filter_map(|event| {
+            let payload = event
+                .lines()
+                .filter(|line| line.starts_with("data:"))
+                .map(|line| {
+                    let value = line.strip_prefix("data:").unwrap_or(line);
+                    value.strip_prefix(' ').unwrap_or(value)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if payload.is_empty() || payload == "[DONE]" {
+                None
+            } else {
+                serde_json::from_str(&payload).ok()
+            }
+        })
+        .collect()
+}
+
+pub fn read_jsonl(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+pub fn wait_jsonl(path: &std::path::Path, count: usize, timeout: Duration) -> Vec<Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let rows = read_jsonl(path);
+        if rows.len() >= count || Instant::now() >= deadline {
+            return rows;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}

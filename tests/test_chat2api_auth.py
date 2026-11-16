@@ -547,7 +547,7 @@ class TestHealthEndpoint(unittest.TestCase):
             no_browser=False,
         )
         proxy = chat2api.Proxy({}, args)
-        server = chat2api.ThreadingHTTPServer(("127.0.0.1", 0), chat2api.Handler)
+        server = chat2api.GatewayHTTPServer(("127.0.0.1", 0), chat2api.Handler)
         server.proxy = proxy
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -903,7 +903,7 @@ class TestAuthWatchVisibility(unittest.TestCase):
                          ["last_failure_epoch", "last_failure_reason",
                           "max_sessions", "next_attempt_epoch",
                           "pause_reason", "round", "session_starts",
-                          "state"])
+                          "state", "visible"])
         self.assertEqual(recovery["state"], "idle")
         self.assertEqual(recovery["round"], 0)
         self.assertEqual(recovery["session_starts"], 0)

@@ -11,6 +11,7 @@ import type {
   TrendRange,
   UmConsoleHandle,
   UmEvent,
+  UmLoginParams,
   UmPage,
   UmViewState,
 } from "./contract";
@@ -533,10 +534,19 @@ export function mountUmConsole(
     );
   }
 
-  function maintenance(action: MaintenanceAction): void {
+  function maintenance(
+    action: MaintenanceAction,
+    params?: UmLoginParams
+  ): void {
     if (!allowed(action)) return;
     if (action === "verify") {
       emit({ type: "um.verify" });
+      return;
+    }
+    if (action === "login" && params) {
+      // The explicit forced re-login is already the deliberate click (ADR
+      // 0005); it skips the on-demand confirm and asks for a visible window.
+      emit({ type: "um.login", ...params });
       return;
     }
     const copy = CONFIRM[action];
@@ -666,6 +676,10 @@ export function mountUmConsole(
         page: route.page,
         view: route.page === "requests" ? route.view : null,
       });
+      return;
+    }
+    if ((el = pick("[data-um-force-login]"))) {
+      maintenance("login", { force: true, visible: true });
       return;
     }
     if ((el = pick("[data-um-act]"))) {

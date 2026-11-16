@@ -170,8 +170,6 @@ class TestChat2ApiFailureLogs(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
 
     def chat_post(self, model, stream=True):
         return requests.post(
@@ -196,13 +194,13 @@ class TestChat2ApiFailureLogs(unittest.TestCase):
         self.start_chat2api(f"http://127.0.0.1:{self.stub.server_port}")
         with self.assertLogs("chat2api", level="WARNING") as cm:
             response = self.chat_post("fail-non200")
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 503)
         lines = self.failure_lines(cm)
         self.assertEqual(len(lines), 1)
         fields = dict(_FIELDS.findall(lines[0]))
         self.assertEqual(fields["stage"], "upstream_non_200")
         self.assertEqual(fields["upstream_status"], "503")
-        self.assertEqual(fields["downstream"], "502")
+        self.assertEqual(fields["downstream"], "503")
         self.assertEqual(fields["exception"], "-")
         self.assertEqual(fields["stream"], "True")
         self.assertRegex(fields["request"], r"^[0-9a-f]{12}$")
@@ -215,7 +213,7 @@ class TestChat2ApiFailureLogs(unittest.TestCase):
         self.start_chat2api(f"http://127.0.0.1:{self.stub.server_port}")
         with self.assertLogs("chat2api", level="WARNING") as cm:
             response = self.chat_post("fail-non200", stream=False)
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 503)
         fields = dict(_FIELDS.findall(
             self.failure_lines(cm)[0]))
         self.assertEqual(fields["stream"], "False")
@@ -225,14 +223,14 @@ class TestChat2ApiFailureLogs(unittest.TestCase):
         self.start_chat2api(f"http://127.0.0.1:{self.stub.server_port}")
         with self.assertLogs("chat2api", level="WARNING") as cm:
             response = self.chat_post("compat-retry-non200")
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 503)
         self.assertEqual(StubUpstreamHandler.posts, 2)
         lines = self.failure_lines(cm)
         self.assertEqual(len(lines), 1)
         fields = dict(_FIELDS.findall(lines[0]))
         self.assertEqual(fields["stage"], "compat_retry_non_200")
         self.assertEqual(fields["upstream_status"], "503")
-        self.assertEqual(fields["downstream"], "502")
+        self.assertEqual(fields["downstream"], "503")
         self.assert_no_sensitive(cm.output)
 
     def test_connection_refused_classified(self):

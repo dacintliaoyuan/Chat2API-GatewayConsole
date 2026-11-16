@@ -1,0 +1,29 @@
+[package]
+name = "um-console"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "um_console"
+path = "src/lib.rs"
+
+[[bin]]
+name = "um-console-candidate"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+getrandom = "0.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+sha2 = "0.10"
+um-gateway = { path = "../gateway" }
+um-store = { path = "../store" }
+
+[dev-dependencies]
+um-test-harness = { path = "../test-harness" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

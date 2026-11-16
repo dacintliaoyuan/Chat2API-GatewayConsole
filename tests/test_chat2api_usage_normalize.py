@@ -233,8 +233,6 @@ class UsageNormalizeTestBase(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
         StubUpstreamHandler.posts = 0
 
     def records(self):

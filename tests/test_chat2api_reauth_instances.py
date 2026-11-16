@@ -367,7 +367,7 @@ class TwoInstanceReauthenticationTests(_TwoInstanceHarness, unittest.TestCase):
         cls.model_status[0] = 401
         status, payload = self._request("b", "GET", "/v1/models")
         self.assertEqual(status, 503, payload)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required",
+        self.assertEqual(payload["error"]["code"], "reauthentication_required",
                           payload)
         self.assertEqual(payload["error"]["detail"], "auth_wait_timeout",
                           payload)

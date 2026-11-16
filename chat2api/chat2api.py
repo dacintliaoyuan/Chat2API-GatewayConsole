@@ -70,7 +70,7 @@ import sys
 import threading
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -450,15 +450,23 @@ def _share_max_request_bytes():
 
 
 SHARE_MAX_REQUEST_BYTES = _share_max_request_bytes()
+# One request body must arrive within this budget. A client that opens a
+# connection, declares a Content-Length and then stalls mid-body would otherwise
+# pin a handler thread indefinitely (slowloris). This is the BODY read budget,
+# distinct from the upstream/request wall-clock budgets below.
+REQUEST_BODY_TIMEOUT_S = 60.0
 # Total wall-clock budget for ONE chat request's transparent retry loop
 # (reasoning-only phase). Attempt counts alone would let a silent gateway
 # (~120s first-byte budget x 6 attempts) pin an unattended client for ~12
 # minutes; after this deadline every attempt surfaces its last failure.
+# ADR 0003 / spec #58 raised the previous 360s bound to 540s so the full
+# retry matrix (5 fast + 2 slow + probes) still fits one request without
+# letting a browser-driven reauthentication occupy the client for 30 minutes.
 try:
     MAX_REQUEST_SECONDS = int(
-        os.environ.get("CHAT2API_MAX_REQUEST_SECONDS", "360"))
+        os.environ.get("CHAT2API_MAX_REQUEST_SECONDS", "540"))
 except ValueError:
-    MAX_REQUEST_SECONDS = 360
+    MAX_REQUEST_SECONDS = 540
 MAX_REQUEST_SECONDS = max(10, min(MAX_REQUEST_SECONDS, 3600))
 
 # UM / GLM-5.3-Flash currently rejects a single prompt containing more than
@@ -563,18 +571,44 @@ try:
         os.environ.get("CHAT2API_MAX_TOTAL_ATTEMPTS", "12"))))
 except ValueError:
     MAX_TOTAL_ATTEMPTS = 12
-_UPSTREAM_RETRYABLE_STATUS = frozenset((408, 429, 500, 502, 503, 504))
+# Retry policy (ADR 0003 / spec #58 / ticket #61). The gateway has ONE
+# upstream candidate, so only the same request is ever re-sent: the status sets
+# below decide whether a re-send can plausibly succeed.
+#   * full transient budget: 408, 429, 5xx, 529, Cloudflare 520-524, transport
+#     exceptions and the gateway's own first-byte/header/socket/deadline waits.
+#   * one probe each for 402/403 (quota/permission), counted separately and
+#     not consuming the 5 fast retries.
+#   * one conditional probe for 400/422, only when the upstream text names a
+#     transient condition (Cloudflare challenges included).
+#   * 401 is a credential contract (reauthentication), never this loop.
+#   * 404/405/409/413/415 are definitive request errors: no retry.
+_UPSTREAM_RETRYABLE_STATUS = frozenset(
+    (408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529))
+_UPSTREAM_PROBE_STATUS = frozenset((402, 403))
+_UPSTREAM_CONDITIONAL_PROBE_STATUS = frozenset((400, 422))
+_UPSTREAM_NON_RETRYABLE_STATUS = frozenset(
+    (401, 404, 405, 409, 413, 415))
+_UPSTREAM_TRANSIENT_TEXT_HINTS = (
+    "rate limit", "too many requests", "overloaded", "try again",
+    "temporarily", "unavailable", "cloudflare", "challenge")
+# 403 authentication text triggers the per-request reauthentication contract
+# (ticket #63). A Cloudflare challenge is never a UM credential rejection.
+_UPSTREAM_AUTH_REJECTION_TEXT_HINTS = (
+    "not authenticated", "sign in", "session expired",
+    "authentication required", "please log in")
+_UPSTREAM_CHALLENGE_TEXT_HINTS = ("cloudflare", "challenge")
+# Magpie's longestPause=8s semantics: Retry-After at or below this bound is
+# waited locally; a longer value is handed to the client with the original
+# status instead of being slept off inside the gateway.
+_UPSTREAM_RETRY_AFTER_MAX_S = 8.0
+# Statuses whose error body must be inspected to classify the retry tier.
+_UPSTREAM_TEXT_CLASSIFICATION_STATUS = frozenset(
+    (400, 403, 422))
 _UPSTREAM_TRANSIENT_EXCEPTIONS = (
     requests.ConnectionError, requests.Timeout,
     requests.exceptions.ChunkedEncodingError,
 )
 _REPETITION_PREFLIGHT_MAX_BYTES = 2 * 1024 * 1024
-
-# Hard cap on concurrent upstream reader threads/connections. Cancelled
-# readers can outlive their handler (bounded by the silence window above), so
-# a flurry of cancels must not push the thread/connection count without limit.
-STREAM_MAX_CONCURRENT_READERS = 128
-_reader_slots = threading.BoundedSemaphore(STREAM_MAX_CONCURRENT_READERS)
 
 # N1: opt-in upstream transport for the NON-streaming Chat endpoint. When it is
 # enabled, a client that sent ``stream=false`` is still answered with ONE complete
@@ -588,13 +622,13 @@ NONSTREAM_UPSTREAM_AGGREGATE = False
 
 # Per-HTTP-request cumulative authentication wait budget (A3). It is created
 # at the Handler message boundary and passed down to every internal 401 re-send,
-# compatibility retry and hidden retry of THAT request. It is independent of the
-# stream-reader slots below: a request waiting for authentication must never
-# consume a streaming slot before it actually opens a stream. The generic
+# compatibility retry and hidden retry of THAT request. It is independent of
+# stream-reader capacity: a request waiting for authentication opens no upstream
+# reader until authentication actually succeeds. The generic
 # in-process default is 30 seconds; main() resolves the 8000/8100 default (180,
 # D18-5) and an explicit CLI/env value (clamped to 1..180).
 try:
-    AUTH_WAIT_BUDGET_S = max(0.01, min(180.0, float(
+    AUTH_WAIT_BUDGET_S = max(1.0, min(180.0, float(
         os.environ.get("CHAT2API_AUTH_WAIT_BUDGET_S", "30"))))
 except ValueError:
     AUTH_WAIT_BUDGET_S = 30.0
@@ -637,6 +671,255 @@ STREAM_ERROR_MESSAGES = {
         "Upstream reported an explicit stream error; the completion is "
         "incomplete.",
 }
+
+# Responses events that count as the first substantive UM output (ticket #64):
+# only actual text or tool-argument deltas may commit the downstream 200. Every
+# other event (response.created, output_item.added, content_part.added, ...) is a
+# protocol control event and stays buffered until one of these arrives.
+_RESPONSES_SUBSTANTIVE_EVENTS = frozenset({
+    "response.output_text.delta",
+    "response.function_call_arguments.delta",
+})
+
+# A Responses stream that ends without its success terminal is retryable while no
+# substantive event has reached the client: the upstream delivered no output, so a
+# hidden reopen cannot concatenate two answers.
+_RESPONSES_RETRYABLE_TERMINAL_CODES = frozenset({
+    "upstream_eof_without_done",
+    "upstream_eof_without_message_stop",
+})
+
+# Error envelope contract (ADR 0003 / spec #58). ``type`` is the client-facing
+# category, ``code`` is the stable machine-readable contract and must keep every
+# spelling an earlier release emitted. ``param`` names the offending field (or is
+# null), and ``detail`` stays a structured diagnostic extension. The status ->
+# category map is only a fallback: a code-specific category wins, because e.g.
+# a 503 reauthentication error is an upstream failure, not a generic API error.
+_ERROR_CATEGORIES = frozenset({
+    "invalid_request_error",
+    "authentication_error",
+    "permission_error",
+    "not_found_error",
+    "rate_limit_error",
+    "api_error",
+    "overloaded_error",
+    "upstream_error",
+})
+
+_ERROR_TYPE_BY_STATUS = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    402: "permission_error",
+    403: "permission_error",
+    404: "not_found_error",
+    405: "invalid_request_error",
+    408: "invalid_request_error",
+    409: "invalid_request_error",
+    413: "invalid_request_error",
+    415: "invalid_request_error",
+    422: "invalid_request_error",
+    429: "rate_limit_error",
+    500: "api_error",
+    502: "upstream_error",
+    503: "api_error",
+    504: "upstream_error",
+    529: "overloaded_error",
+}
+
+# Stable machine codes and their categories. Codes not listed here use the
+# status fallback above; every code emitted by the gateway must stay in this map
+# so a client can switch on ``code`` without parsing messages.
+_ERROR_TYPE_BY_CODE = {
+    # Local request shape.
+    "invalid_json": "invalid_request_error",
+    "invalid_body": "invalid_request_error",
+    "invalid_request": "invalid_request_error",
+    "unsupported_chat_request": "invalid_request_error",
+    "unsupported_messages_request": "invalid_request_error",
+    "unsupported_responses_request": "invalid_request_error",
+    "too_many_images_current_turn": "invalid_request_error",
+    "too_many_images_history": "invalid_request_error",
+    "image_budget_normalization_failed": "invalid_request_error",
+    "method_not_allowed": "invalid_request_error",
+    "unsupported_content_encoding": "invalid_request_error",
+    "request_timeout": "invalid_request_error",
+    # Authentication / authorization.
+    "invalid_api_key": "authentication_error",
+    "local_auth_error": "authentication_error",
+    "origin_denied": "permission_error",
+    "local_management_denied": "permission_error",
+    "invalid_control_token": "authentication_error",
+    "upstream_forbidden": "permission_error",
+    "reauthentication_failed": "authentication_error",
+    # Routing.
+    "route_not_shared": "not_found_error",
+    "not_found": "not_found_error",
+    # Admission / quota.
+    "sharing_limit_reached": "rate_limit_error",
+    "upstream_quota_exhausted": "rate_limit_error",
+    # Upstream / gateway.
+    "reauthentication_required": "upstream_error",
+    "upstream_unavailable": "upstream_error",
+    "upstream_unreachable": "upstream_error",
+    "upstream_timeout": "upstream_error",
+    "upstream_request_rejected": "invalid_request_error",
+    "upstream_request_failed": "upstream_error",
+    "upstream_explicit_error": "upstream_error",
+    "upstream_stream_error": "upstream_error",
+    "unexpected_upstream_response": "upstream_error",
+    "invalid_upstream_response": "upstream_error",
+    "request_deadline_exceeded": "upstream_error",
+    "upstream_attempt_budget_exhausted": "upstream_error",
+    "degenerate_repetition": "upstream_error",
+    "share_revoke_unassembled": "api_error",
+    "api_error": "api_error",
+}
+
+
+def _error_category(status: int, error_code: str | None) -> str:
+    """Return the client-facing category for one stable machine code."""
+    category = _ERROR_TYPE_BY_CODE.get(error_code or "")
+    if category is None:
+        category = _ERROR_TYPE_BY_STATUS.get(status, "api_error")
+    if category not in _ERROR_CATEGORIES:
+        # A typo in the tables must never leak an unknown category to clients.
+        return "api_error"
+    return category
+
+
+def _is_anthropic_error_path(path: str | None) -> bool:
+    """True when the local error must use the Anthropic Messages shape."""
+    try:
+        route = urllib.parse.urlparse(path or "").path
+    except (TypeError, ValueError):
+        return False
+    return route in ("/v1/messages", "/api/v1/messages")
+
+
+# Methods implemented by each exact gateway route. Unknown ``/api/`` paths are the
+# control-token passthrough and accept both; every other unknown path is a 404,
+# exactly like the GET/POST dispatch. The table drives the 405 + ``Allow`` reply
+# for every method the gateway does not implement, replacing the historical 501 HTML.
+_API_ROUTE_METHODS = {
+    "/": ("GET",),
+    "/health": ("GET",),
+    "/ready": ("GET",),
+    "/v1/version": ("GET",),
+    "/v1/models": ("GET",),
+    "/api/models": ("GET",),
+    "/api/v1/models": ("GET",),
+    "/admin/auth/status": ("GET",),
+    "/admin/auth/verify": ("GET",),
+    "/v1/chat/completions": ("POST",),
+    "/api/chat/completions": ("POST",),
+    "/api/v1/chat/completions": ("POST",),
+    "/v1/embeddings": ("POST",),
+    "/api/v1/embeddings": ("POST",),
+    "/v1/messages": ("POST",),
+    "/api/v1/messages": ("POST",),
+    "/v1/responses": ("POST",),
+    "/api/v1/responses": ("POST",),
+    "/admin/share/revoke": ("POST",),
+    "/admin/auth/login": ("POST",),
+    "/admin/auth/cancel": ("POST",),
+    "/admin/shutdown": ("POST",),
+}
+
+
+def _allowed_methods_for_path(path: str | None):
+    """Return the implemented methods for one route, or None when unknown."""
+    try:
+        route = urllib.parse.urlparse(path or "").path
+    except (TypeError, ValueError):
+        return None
+    methods = _API_ROUTE_METHODS.get(route)
+    if methods is not None:
+        return methods
+    if route.startswith("/api/"):
+        return ("GET", "POST")
+    return None
+
+
+# Upstream status preservation (ADR 0003 / spec #58 / ticket #60). The status
+# code is the primary contract; ``code`` stays a stable machine code and never
+# replaces the status. 400/422 keep the existing request-rejected code, 402/429
+# are quota/rate-limit failures, 403 is a permission failure, and the remaining
+# upstream 4xx/5xx statuses reuse the established generic codes.
+_UPSTREAM_ERROR_CODE_BY_STATUS = {
+    400: "upstream_request_rejected",
+    402: "upstream_quota_exhausted",
+    403: "upstream_forbidden",
+    404: "not_found",
+    405: "upstream_request_rejected",
+    408: "upstream_timeout",
+    409: "upstream_request_rejected",
+    413: "upstream_request_rejected",
+    415: "upstream_request_rejected",
+    422: "upstream_request_rejected",
+    429: "upstream_quota_exhausted",
+    500: "upstream_request_failed",
+    502: "upstream_unavailable",
+    503: "upstream_unavailable",
+    504: "upstream_timeout",
+    529: "upstream_request_failed",
+}
+_UPSTREAM_ERROR_MESSAGE_BY_STATUS = {
+    402: "Upstream quota is exhausted",
+    403: "Upstream denied the request",
+    404: "Upstream resource was not found",
+    408: "Upstream request timed out",
+    429: "Upstream rate limit exceeded",
+    500: "Upstream request failed",
+    502: "Upstream is unavailable",
+    503: "Upstream is unavailable",
+    504: "Upstream timed out",
+}
+# Bounded upstream diagnostic carried in error detail. The raw body is never
+# relayed; only the upstream's own message text (or a bounded slice when the
+# body is not JSON) travels.
+_UPSTREAM_ERROR_MESSAGE_MAX_CHARS = 500
+_UPSTREAM_ERROR_BODY_CAPTURE_MAX_CHARS = 2048
+
+
+def _upstream_error_code(status: int) -> str:
+    return _UPSTREAM_ERROR_CODE_BY_STATUS.get(
+        status, "upstream_request_failed")
+
+
+def _upstream_status_message(status: int) -> str:
+    return _UPSTREAM_ERROR_MESSAGE_BY_STATUS.get(
+        status, "Upstream request failed")
+
+
+def _hidden_retry_failure(reason: str):
+    """Map one failed pre-commit retry reason to (status, error_code).
+
+    A first-byte/header/read timeout is the gateway's own wait expiring and
+    becomes a 504; every other transport failure keeps the existing 502.
+    """
+    text = reason or ""
+    if (text == "FirstByteTimeout" or "Timeout" in text
+            or "timeout" in text):
+        return 504, "upstream_timeout"
+    return 502, "upstream_stream_error"
+
+
+def _is_upstream_timeout(exc):
+    """True when a transport failure is the gateway's own wait expiring.
+
+    ``requests`` raises ``Timeout`` for a connect/header wait, but a read timeout
+    inside ``iter_content`` is wrapped as ``ConnectionError(ReadTimeoutError)``.
+    The wrapper's cause is the only place that distinction survives, so a plain
+    ``ConnectionError`` (refused/DNS/TLS/proxy) stays a 502.
+    """
+    if isinstance(exc, requests.Timeout):
+        return True
+    if not isinstance(exc, requests.RequestException) or not exc.args:
+        return False
+    cause = exc.args[0]
+    return cause.__class__.__name__ in (
+        "ReadTimeoutError", "ConnectTimeoutError", "TimeoutError",
+        "ReadTimeout", "ConnectTimeout")
 
 # Base models that get thinking-level virtual variants (see docstring).
 # You can also add them on the command line with --effort-model.
@@ -717,27 +1000,141 @@ def _attempt_is_slow(elapsed_s):
     return elapsed_s >= UPSTREAM_SLOW_RETRY_THRESHOLD_S
 
 
+def _retry_after_seconds(response):
+    """Parse an upstream Retry-After header into seconds, or None.
+
+    Both forms HTTP allows are accepted: delta-seconds and an HTTP-date. A
+    malformed value is ignored (the caller falls back to its own backoff);
+    a negative delta is clamped to zero.
+    """
+    if response is None:
+        return None
+    try:
+        raw = response.headers.get("Retry-After")
+    except AttributeError:
+        return None
+    if not raw:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        pass
+    try:
+        target = email.utils.parsedate_to_datetime(value)
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        return max(0.0, target.timestamp() - time.time())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _upstream_should_retry_veto(response):
+    """Return the machine reason a retryable response must not be retried.
+
+    ``X-Should-Retry: false`` is an explicit upstream stop signal. A
+    ``Retry-After`` longer than the 8s local wait budget is handed to the
+    client with the original status instead of being slept off here.
+    """
+    if response is None:
+        return None
+    try:
+        should_retry = response.headers.get("X-Should-Retry")
+    except AttributeError:
+        should_retry = None
+    if should_retry is not None and should_retry.strip().lower() == "false":
+        return "x_should_retry_false"
+    retry_after = _retry_after_seconds(response)
+    if (retry_after is not None
+            and retry_after > _UPSTREAM_RETRY_AFTER_MAX_S):
+        return "retry_after_exceeds_budget"
+    return None
+
+
+def _upstream_text_matches(text, hints):
+    lowered = (text or "").lower()
+    return bool(lowered) and any(hint in lowered for hint in hints)
+
+
+def _upstream_retry_kind(status, response_text):
+    """Classify one upstream status into a retry tier, or None.
+
+    This is the single Python source of the ADR 0003 retry matrix; every
+    protocol entry point (Chat, Messages, Responses) uses it.
+    """
+    if status in _UPSTREAM_NON_RETRYABLE_STATUS:
+        return None
+    if status in _UPSTREAM_RETRYABLE_STATUS:
+        return "transient"
+    if status in _UPSTREAM_PROBE_STATUS:
+        return "probe"
+    if status in _UPSTREAM_CONDITIONAL_PROBE_STATUS \
+            and _upstream_text_matches(
+                response_text, _UPSTREAM_TRANSIENT_TEXT_HINTS):
+        return "conditional_probe"
+    return None
+
+
+def _upstream_retry_plan(status, response_text, response):
+    """Return ``(kind, retry_after_s, veto_reason)`` for one response.
+
+    ``kind`` is ``transient``/``probe``/``conditional_probe`` or None when
+    the status is definitive or the upstream vetoed the retry. ``retry_after_s``
+    is the parsed header even for a final response, so the caller can forward
+    it unchanged.
+    """
+    kind = _upstream_retry_kind(status, response_text)
+    if kind is None:
+        return None, _retry_after_seconds(response), None
+    veto = _upstream_should_retry_veto(response)
+    if veto is not None:
+        return None, _retry_after_seconds(response), veto
+    return kind, _retry_after_seconds(response), None
+
+
+def _upstream_403_is_auth_rejection(response_text):
+    """Whether a 403 body carries UM authentication text (ticket #63).
+
+    Cloudflare challenge text is explicitly excluded: it is an edge challenge,
+    not a UM credential rejection, so it never opens a login window.
+    """
+    if _upstream_text_matches(
+            response_text, _UPSTREAM_CHALLENGE_TEXT_HINTS):
+        return False
+    return _upstream_text_matches(
+        response_text, _UPSTREAM_AUTH_REJECTION_TEXT_HINTS)
+
+
+def _upstream_retry_after_headers(response):
+    """Forward the upstream Retry-After value on a final error, if present."""
+    if response is None:
+        return None
+    try:
+        raw = response.headers.get("Retry-After")
+    except AttributeError:
+        return None
+    if raw is None:
+        return None
+    raw = raw.strip()
+    return {"Retry-After": raw} if raw else None
+
+
 def _retry_delay_seconds(retry_number, attempt_elapsed_s, response=None,
                          slow=False):
     """Retry delay shared by chat and compat paths.
 
-    Fast failures use short exponential jitter. Slow failures deliberately
-    keep 1-3 seconds of jitter instead of immediately re-hitting UM in a
-    synchronized wave after ~50-second 504/chunked failures.
+    An upstream Retry-After overrides the default backoff. Values above the
+    local 8s wait budget never reach this function: the caller returns the
+    original status and header to the client instead. Fast failures use short
+    exponential jitter; slow failures deliberately keep 1-3 seconds of jitter
+    instead of immediately re-hitting UM in a synchronized wave after
+    ~50-second 504/chunked failures.
     """
-    if response is not None and response.status_code == 429:
-        raw = response.headers.get("Retry-After")
-        if raw:
-            try:
-                return min(10.0, max(0.0, float(raw)))
-            except ValueError:
-                pass
-            try:
-                target = email.utils.parsedate_to_datetime(raw)
-                delta = target.timestamp() - time.time()
-                return min(10.0, max(0.0, delta))
-            except (TypeError, ValueError, OverflowError):
-                pass
+    retry_after = _retry_after_seconds(response)
+    if retry_after is not None:
+        return retry_after
     if slow:
         return random.uniform(1.0, 3.0)
     # Fast transport failures use a deterministic, bounded backoff.  Do not
@@ -2493,9 +2890,17 @@ def _umpass_credential_rejected(page) -> bool:
     return page.field_filled(UMPASS_PASSWORD_SELECTORS)
 
 
-def _check_login_window(page, closed_check):
-    """Raise the transient window-closed signal when the page is gone (A2)."""
+def _check_login_window(page, closed_check, visible=False):
+    """Raise the window-closed signal when the page is gone (A2).
+
+    A forced visible round is an explicit operator interaction: closing its
+    window ends THIS round as an operator cancel (D18-6) instead of a reopenable
+    transient failure. The automatic/on-demand display path keeps the transient
+    signal so its recovery semantics stay unchanged.
+    """
     if closed_check():
+        if visible:
+            raise LoginCancelled("window_closed")
         raise LoginWindowClosed(
             "window_closed", "last page %s" % (page.url() or "unknown"))
 
@@ -2596,7 +3001,8 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                   on_context=None, cancel_event=None,
                   context_factory=None, credential_probe=None,
                   on_progress=None, cancel_login_event=None,
-                  process_lister=None, process_signal=None) -> str:
+                  process_lister=None, process_signal=None,
+                  visible=False) -> str:
     """Open a Chromium-family browser and drive the two-step UM SSO.
 
     The SAME on-disk profile passed by the caller is reused (cookie, autofill
@@ -2604,7 +3010,12 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     no visible window; it requires neither DISPLAY nor WAYLAND_DISPLAY. When the
     operator has explicitly started the on-demand manual display, this round opens
     a visible window on that display instead, so the human can finish the step
-    there. Windows drives Microsoft Edge from its installation paths; Linux drives
+    there. ``visible=True`` is the explicit forced re-login presentation choice
+    (ADR 0005): Windows shows Edge on the local desktop directly, while Linux
+    shows a window only when DISPLAY is available and otherwise raises
+    ``LoginUnavailable("visible_login_unavailable")`` instead of silently
+    downgrading to headless. Automatic re-login always passes ``visible=False``.
+    Windows drives Microsoft Edge from its installation paths; Linux drives
     the first Chromium-family binary found in PATH (or the explicit
     ``CHAT2API_BROWSER_PATH`` override). Controlled flow (A13-1/A13-3): the Open
     WebUI login page's "使用 UMPASS 继续" entry, then the UMPASS form whose
@@ -2619,6 +3030,8 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     ``cancel_login_event`` cancels it when the operator explicitly cancels THIS
     round (D18-6): the latter raises ``LoginCancelled`` so the recovery loop
     ends the round instead of treating a closed window as a reopenable failure.
+    For a forced visible round, closing the window itself is also an operator
+    cancel (``LoginCancelled``), never a transient failure.
 
     Ticket #11: the whole session is guarded by the profile's OS single-instance
     lock (released automatically when this process dies) and, while the lock is
@@ -2645,6 +3058,13 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
     persistent context, ``classify_credential``, the OS process table and
     ``os.kill``.
     """
+    display_env = _login_display()
+    if (visible and display_env is None
+            and sys.platform.startswith("linux")
+            and not (os.environ.get("DISPLAY") or "").strip()):
+        raise LoginUnavailable(
+            "visible_login_unavailable",
+            "a visible login window requires DISPLAY on this platform")
     try:
         edge = find_edge()
     except BrowserConfigError as exc:
@@ -2653,11 +3073,11 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
             "%s: %s" % (exc.reason, exc.detail)) from exc
     if not edge:
         raise LoginUnavailable(*_missing_browser_error(sys.platform))
-    display_env = _login_display()
-    headful = display_env is not None
+    headful = visible or display_env is not None
     print("=" * 60)
     if headful:
-        print(f"Opening visible browser on {display_env['DISPLAY']} "
+        where = display_env["DISPLAY"] if display_env else "the local desktop"
+        print(f"Opening visible browser on {where} "
               f"({edge}): {base_url}")
         print("Finish the manual step in the login window.")
     else:
@@ -2716,23 +3136,31 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
         if context_factory is not None:
             ctx = context_factory(edge, profile_dir)
         else:
-            playwright = manager.start()
             launch_options = {
                 "headless": not headful,
                 "executable_path": edge,
             }
             if headful:
-                browser_env = {**os.environ, **display_env}
-                # The on-demand display is X11; a stale Wayland hint must not
-                # make Chromium pick a different backend.
-                browser_env.pop("WAYLAND_DISPLAY", None)
                 launch_options.update(
                     args=["--start-maximized"],
                     no_viewport=True,
-                    env=browser_env,
                 )
-            ctx = playwright.chromium.launch_persistent_context(
-                profile_dir, **launch_options)
+                if display_env is not None:
+                    browser_env = {**os.environ, **display_env}
+                    # The on-demand display is X11; a stale Wayland hint must
+                    # not make Chromium pick a different backend.
+                    browser_env.pop("WAYLAND_DISPLAY", None)
+                    launch_options["env"] = browser_env
+            try:
+                playwright = manager.start()
+                ctx = playwright.chromium.launch_persistent_context(
+                    profile_dir, **launch_options)
+            except LoginUnavailable:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 浏览器启动失败属于不可用
+                raise LoginUnavailable(
+                    "browser_launch_failed",
+                    "%s: %s" % (type(exc).__name__, exc)) from exc
         try:
             if on_context:
                 on_context(ctx)
@@ -2768,7 +3196,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
 
             while time.time() < deadline:
                 raise_if_cancelled()
-                _check_login_window(page, page.is_closed)
+                _check_login_window(page, page.is_closed, visible)
                 if time.monotonic() >= idle_deadline:
                     raise LoginStalled(
                         "idle_timeout",
@@ -2888,7 +3316,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                             if outcome == "advanced":
                                 mark_progress()
                             note("umpass_submitted", origin=url)
-                            _check_login_window(page, page.is_closed)
+                            _check_login_window(page, page.is_closed, visible)
                             if _umpass_credential_rejected(page):
                                 # Structural evidence only: the visible form
                                 # reported an error and the autofilled
@@ -2901,7 +3329,7 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                 except Exception:
                     # A vanished window is a transient (reopenable) signal,
                     # never a password rejection or a silent timeout.
-                    _check_login_window(page, page.is_closed)
+                    _check_login_window(page, page.is_closed, visible)
                     raise
 
             if manual_reason is None and stage == "duo":
@@ -3572,6 +4000,24 @@ class ReauthenticationThrottled(ReauthenticationRequired):
         self.reason = reason
 
 
+class ReauthenticationFailed(ReauthenticationRequired):
+    """A reauthenticated credential was rejected again by upstream.
+
+    A 403 authentication-text response AFTER this logical request already
+    attempted a reauthentication is final (ticket #63): the gateway must not
+    open a second login window. Handlers rebuild it as 403
+    ``reauthentication_failed`` with ``detail.reauthentication_attempted``
+    set to true.
+    """
+
+    def __init__(self, upstream_message=None, attempted=True):
+        super().__init__("reauthentication_failed")
+        self.reason = "reauthentication_failed"
+        self.upstream_status = 403
+        self.upstream_message = upstream_message
+        self.reauthentication_attempted = bool(attempted)
+
+
 def is_local_control_request(client_ip: str, host: str, origin: str | None) -> bool:
     """Allow CLI management calls while rejecting remote and browser requests."""
     try:
@@ -3732,6 +4178,9 @@ class Proxy:
             "last_failure_epoch": None,
             "last_failure_reason": None,
             "pause_reason": None,
+            # ADR 0005: the explicit forced login's presentation choice for
+            # THIS recovery round. Automatic triggers always leave it False.
+            "visible": False,
         }
         self._recovery_thread = None
         # Serial boundary between the FINAL credential commit (save +
@@ -4403,7 +4852,7 @@ class Proxy:
         self._auth_condition.notify_all()
         return True
 
-    def _begin_recovery_cycle_locked(self, force=False):
+    def _begin_recovery_cycle_locked(self, force=False, visible=False):
         """Start the ONE recovery cycle of this instance; lock held (A1/A3).
 
         A running cycle is joined, never duplicated, so the startup check, a
@@ -4414,6 +4863,11 @@ class Proxy:
         evidence the management entry reports; every later retry is owned by the
         single scheduler thread. The rolling global cap is still enforced by the
         shared slot, so a manual retry cannot bypass it.
+
+        ADR 0005: ``visible`` is stored on the round and read by the scheduler
+        right before it opens a session. An explicit visible request joining a
+        waiting automatic round upgrades that round, so its next session is
+        visible; automatic triggers pass ``False`` and never downgrade a round.
         """
         thread = self._recovery_thread
         if thread is not None and thread.is_alive():
@@ -4422,7 +4876,11 @@ class Proxy:
                 # Ticket #41 (spec #8 story 12): a repeated explicit login
                 # joins the CURRENT round, including a round that is only
                 # waiting for a refused gate. It must not open a second
-                # cycle or reset the 6-session budget.
+                # cycle or reset the 6-session budget. A visible request
+                # only upgrades the round; a running session keeps the
+                # presentation it was launched with.
+                if visible:
+                    self._recovery["visible"] = True
                 return True
             # A thread that already published valid/idle (or a terminal pause)
             # is still finishing its finally block. It is NOT the cycle to
@@ -4441,6 +4899,7 @@ class Proxy:
             "last_failure_epoch": None,
             "last_failure_reason": None,
             "pause_reason": None,
+            "visible": bool(visible),
         })
         self._auth_failure_primary = None
         _logger.info("reauthentication cycle started round=%s force=%s thread=%s",
@@ -4518,8 +4977,13 @@ class Proxy:
         thread.start()
         return True
 
-    def _perform_recovery_session(self, generation, login_cancel):
+    def _perform_recovery_session(self, generation, login_cancel,
+                                  visible=False):
         """Open ONE login interaction (visible or headless) and classify it (A2).
+
+        ``visible`` is the presentation choice stored on THIS recovery round
+        (ADR 0005): only an explicit forced login may set it, so automatic
+        re-login stays headless. It is passed straight to ``browser_login``.
 
         Returns ``(outcome, reason, primary)`` where outcome is ``valid``
         (credentials committed), ``manual`` (the window needs a human),
@@ -4543,6 +5007,7 @@ class Proxy:
                 cancel_event=self._shutdown_event,
                 cancel_login_event=login_cancel,
                 on_progress=self._note_login_progress,
+                visible=visible,
             )
         except LoginCancelled as exc:
             return "cancelled", exc.reason, None
@@ -4780,8 +5245,10 @@ class Proxy:
                             self._auth_state = "logging_in"
                             self._auth_error = None
                             self._auth_condition.notify_all()
+                with self._auth_condition:
+                    visible = bool(self._recovery.get("visible"))
                 outcome, detail, primary = self._perform_recovery_session(
-                    generation, login_cancel)
+                    generation, login_cancel, visible=visible)
                 # Release the lease as soon as the session ends and BEFORE
                 # publishing its outcome: a waiter that observes the terminal
                 # state must never see this instance still owning the lease.
@@ -5063,7 +5530,7 @@ class Proxy:
             return None
         return min(delay, AUTH_WAIT_RETRY_AFTER_MAX_S)
 
-    def refresh(self, force=False, wait=True, deadline=None,
+    def refresh(self, force=False, wait=True, visible=False, deadline=None,
                 auth_wait_budget=None, cancel_check=None) -> bool:
         """Join or start the ONE automatic recovery cycle (A1/A3).
 
@@ -5074,6 +5541,11 @@ class Proxy:
         bypass it. ``wait`` joins the cycle's terminal result bounded by the
         caller's own deadline and the request-scoped auth-wait budget;
         ``wait=False`` returns as soon as a cycle exists.
+
+        ADR 0005: ``visible`` is the explicit forced login's presentation
+        choice and is stored on the recovery round; the round's scheduler passes
+        it to ``browser_login``. Automatic 401/watch triggers never pass it, so
+        they stay headless.
         """
         if self.args.no_browser:
             with self._auth_condition:
@@ -5096,7 +5568,8 @@ class Proxy:
                     # start the 30-minute window; an ordinary 401/watch
                     # refresh never does.
                     self._begin_login_window_locked()
-                started = self._begin_recovery_cycle_locked(force=force)
+                started = self._begin_recovery_cycle_locked(
+                    force=force, visible=visible)
                 if not started:
                     return False
         finally:
@@ -5383,21 +5856,33 @@ class Proxy:
 
     def call(self, method: str, path: str, stream: bool = False,
              physical_budget=None, request_deadline=None,
-             auth_wait_budget=None, cancel_check=None, reader_lease=None,
+             auth_wait_budget=None, cancel_check=None,
              **kwargs):
-        """Request with a single 401 -> re-auth retry. For streaming endpoints
-        you MUST pass stream=True, otherwise requests buffers the whole SSE
-        body until the upstream closes the connection.
+        """Request with the ONE per-request reauthentication contract.
+
+        A 401 or a 403 whose bounded body carries UM authentication text
+        (ticket #63) triggers at most ONE reauthentication for the whole
+        logical request. The first auth rejection claims the attempt and resends
+        once with the new credential; every later auth rejection in the same
+        logical request is final: 401 becomes the gateway's 503
+        reauthentication state, and 403 authentication text becomes 403
+        ``reauthentication_failed`` with ``reauthentication_attempted`` true.
+        A 403 permission response, 402 and 404 never open a login window; the
+        403 body is read with an 8 KiB bound and put back for the normal error
+        path. A 403 body that cannot be classified is treated as a permission
+        response, never as a credential rejection.
 
         ``physical_budget`` may be a shared ``_PhysicalRequestBudget`` (new
         callers) or a legacy integer meaning how many real requests THIS call
-        may still make. Every requests.request(), including a post-401 hidden
-        re-send, consumes one unit before it is issued.
+        may still make. Every requests.request(), including a post-401/403
+        hidden re-send, consumes one unit before it is issued.
 
         ``auth_wait_budget`` is the ONE cumulative budget of the downstream
-        HTTP request; this call never resets it across its internal re-sends.
-        ``cancel_check`` is the request-scoped cancellation probe. Both are
-        checked again after an auth wait and before every real upstream call.
+        HTTP request and also carries the single reauthentication claim shared
+        by every retry of that logical request; this call never resets either
+        across its internal re-sends. ``cancel_check`` is the request-scoped
+        cancellation probe. Both are checked again after an auth wait and before
+        every real upstream call.
         """
         extra_headers = kwargs.pop("headers", {})
         timeout = kwargs.pop("timeout", 600)
@@ -5471,12 +5956,8 @@ class Proxy:
             return timeout
 
         def refresh_before_retry():
-            # Authentication waiting has no upstream reader running. Release
-            # the streaming-reader slot for the wait and re-acquire it before
-            # the real upstream send; a full limit must fail here instead of
-            # leaving an unbounded upstream connection or reader behind.
-            if reader_lease is not None:
-                reader_lease.release()
+            # Authentication waiting has no upstream reader running, so the
+            # streaming-reader capacity is not held during the wait.
             try:
                 ok = self.refresh(
                     deadline=request_deadline,
@@ -5486,18 +5967,34 @@ class Proxy:
                 raise ReauthenticationThrottled("auth_wait_timeout")
             except _AuthWaitCapacityExceeded:
                 raise ReauthenticationThrottled("auth_wait_capacity")
-            if ok and reader_lease is not None:
-                if not reader_lease.acquire(blocking=False):
-                    raise _ReaderSlotUnavailable(
-                        "stream reader capacity exhausted after auth wait")
             return ok
 
-        for attempt in (0, 1):
+        reauth_state = (auth_wait_budget
+                        if isinstance(auth_wait_budget, _ReauthAttemptState)
+                        else _ReauthAttemptState())
+        resend_used = False
+
+        def check_not_cancelled():
+            """Cancellation/stop check used before a FINAL auth rejection.
+
+            The request budget and wall deadline are deliberately not rechecked
+            here: a second 401/403 authentication-text response is final, so an
+            expired wait budget must not relabel it as a throttle.
+            """
+            if cancel_check is not None and cancel_check():
+                raise _RequestCancelled("client disconnected")
+            if self._shutdown_event.is_set():
+                raise _RequestCancelled("instance stopping")
+
+        while True:
             check_before_upstream()
             bearer = self.bearer()
             with self._auth_condition:
                 credential_generation = self._credential_generation
             if not bearer:
+                if not reauth_state.claim_reauth_attempt():
+                    check_before_upstream()
+                    self._raise_auth_required()
                 if not refresh_before_retry():
                     check_before_upstream()
                     self._raise_auth_required()
@@ -5513,8 +6010,19 @@ class Proxy:
                 timeout=clipped_timeout(),
                 stream=stream,
                 **kwargs)
-            if r.status_code != 401:
+            if r.status_code not in (401, 403):
                 return r
+
+            response_text = ""
+            if r.status_code == 403:
+                response_text = _bounded_403_response_text(r)
+                if not _upstream_403_is_auth_rejection(response_text):
+                    # A permission/edge-challenge 403 is not a credential
+                    # rejection: the bounded body was put back, so the normal
+                    # 403 error path (and its one probe) still sees it, and no
+                    # login window opens.
+                    return r
+
             # A4/A7: an explicit credential rejection never leaks to a
             # handler as a raw upstream response - every entry would
             # otherwise translate it differently (502, a pass-through 401,
@@ -5522,35 +6030,69 @@ class Proxy:
             # the credential that was actually rejected, then fail with
             # the ONE shared error type and its specific reason.
             with self._auth_condition:
-                stale_401 = (self.bearer() != bearer
-                             or self._credential_generation
-                             != credential_generation)
-                if not stale_401:
-                    # A13-2: an upstream 401 is explicit evidence
-                    # that the CURRENT credential was rejected, so
-                    # record it before trying to recover - the state
-                    # must never keep claiming "valid" while the
-                    # business path is answering 401.
+                stale_auth = (self.bearer() != bearer
+                              or self._credential_generation
+                              != credential_generation)
+                if not stale_auth:
+                    # A13-2: an upstream 401/403 authentication-text
+                    # response is explicit evidence that the CURRENT
+                    # credential was rejected, so record it before trying to
+                    # recover - the state must never keep claiming "valid"
+                    # while the business path is answering 401.
                     self._record_auth_evidence(
-                        "rejected", "upstream_rejected", 401, "business")
+                        "rejected", "upstream_rejected",
+                        r.status_code, "business")
                     if self._auth_state not in ("logging_in", "failed",
                                                  "cancelled"):
                         self._auth_state = "needs_login"
             r.close()
-            if attempt == 0 and budget_remaining() != 0:
-                if stale_401:
-                    # A newer credential was published while this
-                    # request was in flight: retry once with it instead
-                    # of judging the current credential by a stale 401
-                    # (A1).
-                    continue
-                if refresh_before_retry():
-                    continue
+            _logger.warning(
+                "upstream auth rejection status=%d method=%s path=%s "
+                "trigger=%s attempted=%s detail=%r",
+                r.status_code, method,
+                urllib.parse.urlsplit(path).path,
+                "reauthenticate" if not reauth_state.reauth_attempted
+                else "final",
+                reauth_state.reauth_attempted,
+                _bounded_upstream_error_message(response_text))
+
+            if resend_used:
+                # Ticket #63: the second auth rejection of one logical request
+                # is final and never opens another login window.
+                check_not_cancelled()
+                if r.status_code == 403:
+                    raise ReauthenticationFailed(
+                        response_text,
+                        attempted=reauth_state.reauth_attempted)
+                raise ReauthenticationRequired("upstream_rejected")
+            if stale_auth:
+                # A newer credential was published while this request was
+                # in flight: retry once with it instead of judging the
+                # current credential by a stale rejection (A1).
+                resend_used = True
+                continue
+            if budget_remaining() == 0:
+                if r.status_code == 403:
+                    check_not_cancelled()
+                    raise ReauthenticationFailed(
+                        response_text,
+                        attempted=reauth_state.reauth_attempted)
                 check_before_upstream()
-                self._raise_auth_required()
+                raise ReauthenticationRequired("upstream_rejected")
+            if not reauth_state.claim_reauth_attempt():
+                # Another retry of this same logical request already spent
+                # its one reauthentication attempt.
+                check_not_cancelled()
+                if r.status_code == 403:
+                    raise ReauthenticationFailed(
+                        response_text,
+                        attempted=reauth_state.reauth_attempted)
+                raise ReauthenticationRequired("upstream_rejected")
+            if refresh_before_retry():
+                resend_used = True
+                continue
             check_before_upstream()
-            raise ReauthenticationRequired("upstream_rejected")
-        return r
+            self._raise_auth_required()
 
     def list_models(self, force=False, raw_only=False, fresh_required=False,
                     auth_wait_budget=None, request_deadline=None,
@@ -5726,6 +6268,10 @@ class _RequestDeadlineExceeded(RuntimeError):
     """No new upstream work may start after the per-request wall deadline."""
 
 
+class _RequestBodyTimeout(RuntimeError):
+    """The client did not finish sending its request body in time."""
+
+
 
 
 
@@ -5749,11 +6295,38 @@ class _AuthWaitCapacityExceeded(RuntimeError):
     """The per-instance authentication-wait slot cap is exhausted."""
 
 
-class _ReaderSlotUnavailable(RuntimeError):
-    """The streaming-reader slot could not be re-acquired after auth wait."""
+class _ReauthAttemptState:
+    """One reauthentication claim shared by every retry of a logical request.
+
+    Ticket #63: a 401 or 403 authentication-text response may open at most ONE
+    login window per logical downstream request. The claim is taken BEFORE the
+    shared recovery cycle is joined, so a failed, throttled or timed-out login
+    still counts as the one attempt and a later retry of the same request goes
+    straight to its final status. The state is local to one ``Proxy.call`` when
+    no per-request budget object was supplied; handlers pass their
+    ``_AuthWaitBudget`` (one per downstream HTTP request) so all protocol
+    retry loops share it.
+    """
+
+    def __init__(self):
+        self._reauth_lock = threading.Lock()
+        self._reauth_attempted = False
+
+    def claim_reauth_attempt(self):
+        """Claim this logical request's single reauthentication attempt."""
+        with self._reauth_lock:
+            if self._reauth_attempted:
+                return False
+            self._reauth_attempted = True
+            return True
+
+    @property
+    def reauth_attempted(self):
+        with self._reauth_lock:
+            return self._reauth_attempted
 
 
-class _AuthWaitBudget:
+class _AuthWaitBudget(_ReauthAttemptState):
     """Cumulative authentication-wait budget for ONE downstream request.
 
     Only time actually spent inside the authentication-wait path is charged.
@@ -5765,6 +6338,7 @@ class _AuthWaitBudget:
     """
 
     def __init__(self, seconds=None, now=None):
+        super().__init__()
         self.limit = max(0.0, min(180.0, float(
             AUTH_WAIT_BUDGET_S if seconds is None else seconds)))
         self.used = 0.0
@@ -5827,39 +6401,6 @@ class _AuthWaitBudget:
             if self._segments == 0 and self._segment_started is not None:
                 self.used += max(0.0, self._now() - self._segment_started)
                 self._segment_started = None
-
-
-class _ReaderSlotLease:
-    """One streaming-reader slot with idempotent release.
-
-    A streaming request takes the slot before opening upstream (so a full limit
-    refuses without an upstream connection), releases it while waiting for
-    authentication, and re-acquires it before the real upstream read. The
-    handler and the producer may both release it; only the first release returns
-    the semaphore unit.
-    """
-
-    def __init__(self, semaphore):
-        self._semaphore = semaphore
-        self._held = False
-        self._lock = threading.Lock()
-
-    def acquire(self, blocking=True, timeout=None):
-        with self._lock:
-            if self._held:
-                return True
-            if not self._semaphore.acquire(blocking=blocking, timeout=timeout):
-                return False
-            self._held = True
-            return True
-
-    def release(self):
-        with self._lock:
-            if not self._held:
-                return False
-            self._held = False
-            self._semaphore.release()
-            return True
 
 
 class _PhysicalBudgetExceeded(RuntimeError):
@@ -6288,6 +6829,82 @@ def _extract_upstream_reject_error(response_text):
     )
 
 
+def _bounded_upstream_error_message(response_text):
+    """Return the bounded upstream message carried in one error detail.
+
+    The same extractor used by the 400/422 reject diagnostics supplies the
+    upstream's own message text; a body that is not a JSON object falls back to
+    a bounded single-line slice. The raw body is never relayed.
+    """
+    if not response_text:
+        return None
+    message, _, _ = _extract_upstream_reject_error(response_text)
+    if message:
+        return _sanitize_upstream_error_value(
+            message, _UPSTREAM_ERROR_MESSAGE_MAX_CHARS) or None
+    return _sanitize_upstream_error_value(
+        response_text, _UPSTREAM_ERROR_MESSAGE_MAX_CHARS) or None
+
+
+def _bounded_upstream_error_text(response):
+    """Best-effort bounded text of one upstream error response.
+
+    Reading a failed upstream body must never mask the status it came with: a
+    decode/read failure yields an empty diagnostic instead of raising.
+    """
+    try:
+        return response.text[:_UPSTREAM_ERROR_BODY_CAPTURE_MAX_CHARS]
+    except Exception:  # noqa: BLE001 — 上游错误体读取失败按空文本处理
+        return ""
+
+
+# Ticket #63: a 403 must be classified before it can be returned, but the body
+# is read with a HARD byte bound (8 KiB) so an edge challenge page or a broken
+# upstream cannot make the gateway buffer an unbounded error body. A non-auth 403
+# puts the read bytes back into the response so the handler's normal error
+# rebuild (and the 403 probe retry) still sees the upstream message.
+_UPSTREAM_403_BODY_LIMIT = 8 * 1024
+
+
+def _bounded_403_response_text(response):
+    """Read at most ``_UPSTREAM_403_BODY_LIMIT`` bytes and restore the body.
+
+    ``requests`` with ``stream=False`` already holds the complete body in
+    ``_content``; that body is sliced to the same bound without re-reading.
+    With ``stream=True`` the raw stream is read once, bounded, and the read
+    bytes are published as the response's content so a non-auth 403 keeps its
+    body for the normal error path. A response shape that cannot be inspected
+    yields an empty text and is treated as a non-auth 403.
+    """
+    content = getattr(response, "_content", None)
+    if isinstance(content, bytes):
+        return content[:_UPSTREAM_403_BODY_LIMIT].decode("utf-8", "replace")
+    if isinstance(content, str):
+        return content[:_UPSTREAM_403_BODY_LIMIT]
+    raw = getattr(response, "raw", None)
+    read = getattr(raw, "read", None)
+    if not callable(read):
+        return ""
+    try:
+        data = read(_UPSTREAM_403_BODY_LIMIT, decode_content=True)
+    except TypeError:
+        # A simple test double may accept only the byte count.
+        try:
+            data = read(_UPSTREAM_403_BODY_LIMIT)
+        except Exception:  # noqa: BLE001 — 403 读取失败按空文本分类
+            return ""
+    except Exception:  # noqa: BLE001 — 403 读取失败按空文本分类
+        return ""
+    if not isinstance(data, bytes):
+        return ""
+    try:
+        response._content = data
+        response._content_consumed = True
+    except Exception:  # noqa: BLE001 — 测试替身可能不可写，body 已读出
+        pass
+    return data.decode("utf-8", "replace")
+
+
 # Length bound for the reason carried out of an explicit upstream error SSE
 # event. The bound keeps any client-visible error payload and log record
 # small no matter what the upstream put in its error object.
@@ -6571,7 +7188,9 @@ def _format_output_budget(diag):
 
 
 def _log_upstream_reject(request_id, status_code, model, requested_model,
-                         stream, body, response_text, output_budget):
+                         stream, body, response_text, output_budget,
+                         tries=0, physical_attempts=0,
+                         max_physical_attempts=MAX_TOTAL_ATTEMPTS):
     """One shared upstream 400/422 reject line for chat and Messages.
 
     Emits the structure-only diagnostics, the sanitized upstream error
@@ -6597,10 +7216,12 @@ def _log_upstream_reject(request_id, status_code, model, requested_model,
     diag = _upstream_reject_diagnostics(body)
     err_msg, err_type, err_code = _extract_upstream_reject_error(response_text)
     _logger.warning(
-        "upstream_reject request=%s status=%d forwarded_model=%s "
+        "upstream_reject request=%s status=%d tries=%d "
+        "physical_attempts=%d/%d forwarded_model=%s "
         "requested_model=%s stream=%s error_type=%s error_code=%s "
         "error_message=%r %s output_budget %s",
-        request_id, status_code,
+        request_id, status_code, tries, physical_attempts,
+        max_physical_attempts,
         _sanitize_upstream_error_value(model, _OUTPUT_BUDGET_STR_CAP),
         _sanitize_upstream_error_value(requested_model,
                                        _OUTPUT_BUDGET_STR_CAP),
@@ -6760,7 +7381,10 @@ def _reasoning_retry_preflight(upstream, first_data_deadline,
         except Exception as exc:  # noqa: BLE001 — 上游流读取错误按 upstream_retry/read_error 分类
             if (transient_retry_available and
                     isinstance(exc, _UPSTREAM_TRANSIENT_EXCEPTIONS)):
-                return result("upstream_retry", type(exc).__name__)
+                return result(
+                    "upstream_retry",
+                    "ReadTimeout" if _is_upstream_timeout(exc)
+                    else type(exc).__name__)
             prefix.append(_ReplayException(exc))
             return result("pass")
 
@@ -6812,16 +7436,14 @@ class _UpstreamStream:
     so a full queue can never hide the end of the stream from the consumer.
 
     The producer owns response.close() in its own finally, so the handler
-    never touches the upstream socket. Each producer holds one slot of the
-    module-level reader semaphore, which caps the total number of concurrent
-    reader threads and upstream connections.
+    never touches the upstream socket. There is no local cap on the number of
+    concurrent producer threads; the operating system and UM bound them.
     """
 
-    def __init__(self, response, reader_slot=None):
+    def __init__(self, response):
         self.response = response
         self._queue = queue.Queue(maxsize=_UPSTREAM_QUEUE_MAX)
         self._thread = None
-        self._slot = reader_slot
         self._finished = False
         self._error = None
 
@@ -6887,10 +7509,6 @@ class _UpstreamStream:
                 self.response.close()
             except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                 pass
-            if self._slot is not None:
-                # Close the connection first, then return the slot to the
-                # reader cap exactly once (only the producer releases here).
-                self._slot.release()
 
     def next_item(self, timeout_s):
         """Return the next SSE line, _UPSTREAM_END, or raise the stored error.
@@ -6926,6 +7544,21 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     # ---------- helpers ----------
+    def _ensure_request_id(self):
+        """Return this downstream request's stable correlation id.
+
+        The id is generated lazily so an error answered before the body is read
+        (405/408/413/415, local auth) still carries one, and the SAME id is
+        reused by the error header, the streamed error event and the final
+        failure log of one request. ``handle_one_request`` resets it per request
+        so a keep-alive connection never reuses the previous id.
+        """
+        request_id = getattr(self, "_request_id", None)
+        if not request_id:
+            request_id = secrets.token_hex(6)
+            self._request_id = request_id
+        return request_id
+
     def _json(self, code: int, obj: dict, extra_headers=None):
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
@@ -6938,23 +7571,77 @@ class Handler(BaseHTTPRequestHandler):
             # Closing after this response: HTTP/1.1 clients assume keep-alive
             # unless the header says otherwise, so announce it explicitly.
             self.send_header("Connection", "close")
-        for key, value in (extra_headers or {}).items():
+        headers = {}
+        if code >= 400:
+            # A gateway-generated error must never be cached by an
+            # intermediary and must carry the request id; successful bodies
+            # keep their existing headers.
+            headers["X-Request-Id"] = self._ensure_request_id()
+            headers["Cache-Control"] = "no-store"
+        if extra_headers:
+            headers.update(extra_headers)
+        for key, value in headers.items():
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
-    def _error(self, code: int, message: str, detail=None,
-               error_type="chat2api_error", extra_headers=None, extra=None):
+    def _error(self, status: int, message: str, detail=None,
+               error_code: str | None = None, param: str | None = None,
+               extra_headers=None, extra=None):
+        """Send one local error in the client protocol's envelope.
+
+        OpenAI-shaped routes carry ``message``/``type``/``code``/``param``/
+        ``detail``. Anthropic Messages carries the top-level ``type: error`` and
+        an ``error`` object with ``type``/``message``/``code`` (plus ``detail``
+        when diagnostics exist). The HTTP status is never changed here: status
+        mapping is a separate contract ticket. ``_json`` adds ``no-store`` and
+        ``X-Request-Id`` to every self-produced error.
+        """
         # Errors may fire before the request body is read (unknown path,
         # rejected control token, invalid local key). Reusing the connection
         # would let those unread bytes be parsed as the next request line
         # ("501 Unsupported method ({json}POST)"), so every error closes it.
         self.close_connection = True
+        error_code = error_code or "api_error"
+        error_type = _error_category(status, error_code)
+        if _is_anthropic_error_path(getattr(self, "path", None)):
+            error = {"type": error_type, "message": message,
+                     "code": error_code}
+            if detail is not None:
+                error["detail"] = detail
+            if extra:
+                error.update(extra)
+            self._json(status, {"type": "error", "error": error},
+                       extra_headers)
+            return
         error = {"message": message, "type": error_type,
-                 "detail": detail}
+                 "code": error_code, "param": param, "detail": detail}
         if extra:
             error.update(extra)
-        self._json(code, {"error": error}, extra_headers)
+        self._json(status, {"error": error}, extra_headers)
+
+    def __getattr__(self, name):
+        """Answer unimplemented HTTP methods with JSON 405, never 501 HTML.
+
+        BaseHTTPRequestHandler only looks up ``do_<METHOD>`` and, when absent,
+        emits its built-in 501 HTML page. Returning this dispatcher for any
+        unknown ``do_*`` method keeps every API route inside the JSON error
+        contract; the dispatcher itself decides 405 + ``Allow`` for a known route
+        and 404 for an unknown path.
+        """
+        if name.startswith("do_") and len(name) > 3:
+            return self._handle_unsupported_method
+        raise AttributeError(name)
+
+    def _handle_unsupported_method(self):
+        path = urllib.parse.urlparse(self.path).path
+        allowed = _allowed_methods_for_path(path)
+        if allowed is None:
+            self._error(404, f"Unknown path: {path}", error_code="not_found")
+            return
+        self._error(405, "Method not allowed",
+                     error_code="method_not_allowed",
+                     extra_headers={"Allow": ", ".join(allowed)})
 
     def _reauthentication_error(self, detail=None):
         proxy = getattr(self.server, "proxy", None)
@@ -6966,12 +7653,69 @@ class Handler(BaseHTTPRequestHandler):
             "Open WebUI authentication requires an interactive sign-in",
             detail,
             "reauthentication_required",
-            extra_headers,
+            extra_headers=extra_headers,
+        )
+
+    def _reauthentication_exception(self, exc):
+        """Finish one ReauthenticationRequired-derived failure honestly.
+
+        Ticket #63: a 403 authentication-text response AFTER the logical
+        request already spent its one reauthentication attempt is final and
+        becomes 403 ``reauthentication_failed`` with
+        ``detail.reauthentication_attempted`` true. Every other
+        reauthentication failure keeps the existing 503
+        ``reauthentication_required`` shape and its reason (including
+        ``auth_wait_timeout``, ``auth_wait_capacity``,
+        ``global_attempt_cap`` and ``BrowserDisabled``).
+        """
+        if isinstance(exc, ReauthenticationFailed):
+            detail = {
+                "upstream_status": getattr(exc, "upstream_status", 403),
+                "reauthentication_attempted": bool(
+                    getattr(exc, "reauthentication_attempted", True)),
+                "reason": "reauthentication_failed",
+            }
+            upstream_message = getattr(exc, "upstream_message", None)
+            if upstream_message:
+                detail["upstream_message"] = _bounded_upstream_error_message(
+                    upstream_message)
+            self._error(
+                403,
+                "Open WebUI rejected the reauthenticated credential",
+                detail,
+                "reauthentication_failed",
+            )
+            return
+        self._reauthentication_error(
+            getattr(exc, "reason", None) or str(exc) or None)
+
+    def _upstream_status_error(self, status, response_text=None, *,
+                               detail=None, error_code=None,
+                               extra_headers=None):
+        """Rebuild one upstream 4xx/5xx error in the client's protocol shape.
+
+        The upstream status is preserved; only 401 is translated by callers into
+        the gateway's own 503 reauthentication state. ``detail`` always carries
+        ``upstream_status`` and a bounded ``upstream_message`` so a client can
+        correlate the rebuilt body with the upstream response without receiving
+        the raw body itself.
+        """
+        upstream_message = _bounded_upstream_error_message(response_text)
+        payload = {"upstream_status": status,
+                   "upstream_message": upstream_message}
+        if detail:
+            payload.update(detail)
+        self._error(
+            status,
+            _upstream_status_message(status),
+            payload,
+            error_code=error_code or _upstream_error_code(status),
+            extra_headers=extra_headers,
         )
 
     @staticmethod
     def _aggregate_failure_error(status, exc):
-        """Map one failed SSE aggregate onto a 502 (message, detail, type).
+        """Map one failed SSE aggregate onto a 502 (message, detail, code).
 
         The reason is the aggregator's own terminal classification, never a
         guess: an explicit upstream error keeps its sanitized message, a bad frame
@@ -6998,22 +7742,21 @@ class Handler(BaseHTTPRequestHandler):
                                else None)},
                 "upstream_stream_error")
 
-    def _consume_aggregate_stream(self, response, aggregator, reader_lease):
+    def _consume_aggregate_stream(self, response, aggregator):
         """Read one upstream SSE stream into a complete aggregated body.
 
-        The producer owns the response and the reader slot from ``start()``: it
-        closes the socket and releases the slot in its own finally, so this method
-        never closes either after a successful start. Returns
-        ``(data, status, exc)``: ``data`` is the aggregated body only after the
-        protocol's success terminal (Chat: BOTH ``[DONE]`` and a non-empty
-        ``finish_reason``; Messages: ``message_stop``); otherwise ``status`` is
-        ``client_disconnected``, an aggregator failure reason, or
+        The producer owns the response from ``start()``: it closes the socket in
+        its own finally, so this method never closes it after a successful start.
+        Returns ``(data, status, exc)``: ``data`` is the aggregated body only
+        after the protocol's success terminal (Chat: BOTH ``[DONE]`` and a
+        non-empty ``finish_reason``; Messages: ``message_stop``); otherwise
+        ``status`` is ``client_disconnected``, an aggregator failure reason, or
         ``upstream_read_error`` for a transport failure. A partial completion is
         never returned as a success.
         """
         upstream = None
         try:
-            upstream = _UpstreamStream(response, reader_slot=reader_lease)
+            upstream = _UpstreamStream(response)
             upstream.start()
         except Exception as exc:  # noqa: BLE001 — 启动失败要分类为 upstream_read_error
             if upstream is not None:
@@ -7022,7 +7765,6 @@ class Handler(BaseHTTPRequestHandler):
                 response.close()
             except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
                 pass
-            reader_lease.release()
             return None, "upstream_read_error", exc
         try:
             while True:
@@ -7054,12 +7796,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.client_address[0],
                 self.headers.get("Host", ""),
                 self.headers.get("Origin")):
-            self._error(403, "Local management endpoint denied")
+            self._error(403, "Local management endpoint denied",
+                        error_code="local_management_denied")
             return False
         expected = ensure_control_token(CONTROL_TOKEN_FILE)
         supplied = self.headers.get(CONTROL_HEADER, "")
         if not expected or not hmac.compare_digest(supplied, expected):
-            self._error(403, "Local management token missing or invalid")
+            self._error(403, "Local management token missing or invalid",
+                        error_code="invalid_control_token")
             return False
         return True
 
@@ -7078,7 +7822,8 @@ class Handler(BaseHTTPRequestHandler):
             supplied = self.headers.get("x-api-key", "").strip()
         if not expected or not hmac.compare_digest(supplied, expected):
             self._error(401, "Local API key missing or invalid",
-                        error_type="local_auth_error")
+                        error_code="local_auth_error",
+                        param="Authorization")
             return False
         return True
 
@@ -7099,7 +7844,7 @@ class Handler(BaseHTTPRequestHandler):
         self._error(
             403, "Browser origins are not allowed by default; list the "
             "origin in CHAT2API_ALLOWED_ORIGINS to permit it",
-            error_type="origin_denied")
+            error_code="origin_denied", param="Origin")
         return False
 
     def _cors_allow_origin(self):
@@ -7112,32 +7857,127 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin if origin in ALLOWED_ORIGINS else None
 
-    def _read_body(self):
-        """Parse one JSON object body; every error is answered inline (None)."""
+    def _unsupported_content_encoding(self):
+        """Return the unsupported Content-Encoding tokens, or None.
+
+        ``identity`` (and an absent header) means the body is already the JSON
+        bytes this gateway parses. This batch does not decompress request
+        bodies: gzip/br/zstd are all answered with 415, so the declared size
+        limit keeps applying to the bytes actually received and a compressed
+        payload can never expand past it.
+        """
+        raw = self.headers.get("Content-Encoding")
+        if raw is None:
+            return None
+        codings = [part.strip().lower() for part in raw.split(",")
+                   if part.strip()]
+        if not codings or all(coding == "identity" for coding in codings):
+            return None
+        return ", ".join(codings)
+
+    def _read_body_bytes(self, length):
+        """Read exactly ``length`` body bytes within one total time budget.
+
+        A client that declares a body and then stalls must not pin this handler
+        forever. The socket timeout is set from the remaining body budget on
+        every read, and the deadline is checked between reads, so a slow trickle
+        cannot extend the 60-second budget indefinitely. The previous socket
+        timeout is restored afterwards (the connection is normally closed after
+        the 408 anyway, but a non-error caller must not inherit it).
+        """
+        connection = getattr(self, "connection", None)
+        previous_timeout = None
+        if connection is not None:
+            try:
+                previous_timeout = connection.gettimeout()
+            except (AttributeError, OSError):
+                connection = None
+        deadline = time.monotonic() + REQUEST_BODY_TIMEOUT_S
+        chunks = []
+        remaining = length
+        try:
+            while remaining > 0:
+                remaining_budget = deadline - time.monotonic()
+                if remaining_budget <= 0:
+                    raise _RequestBodyTimeout(
+                        f"request body read exceeded "
+                        f"{REQUEST_BODY_TIMEOUT_S:g}s")
+                if connection is not None:
+                    try:
+                        connection.settimeout(max(0.001, remaining_budget))
+                    except (AttributeError, OSError):
+                        connection = None
+                chunk = self.rfile.read1(min(remaining, 65536))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            return b"".join(chunks)
+        except TimeoutError as exc:
+            raise _RequestBodyTimeout(
+                f"request body read exceeded {REQUEST_BODY_TIMEOUT_S:g}s"
+            ) from exc
+        finally:
+            if connection is not None:
+                try:
+                    connection.settimeout(previous_timeout)
+                except (AttributeError, OSError) as exc:
+                    # The connection is already gone; restoring its timeout
+                    # cannot change this response and must not mask it.
+                    _logger.debug(
+                        "request body timeout restore skipped: %s",
+                        type(exc).__name__)
+
+    def _read_body(self, error_code=None):
+        """Parse one JSON object body; every error is answered inline (None).
+
+        ``error_code`` lets an endpoint that defines its own body contract report
+        a malformed JSON/body with that code instead of the generic
+        ``invalid_json``/``invalid_body``.
+        """
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):
             self._error(400, "Invalid Content-Length header",
-                        error_type="invalid_request")
+                        error_code="invalid_request",
+                        param="Content-Length")
+            return None
+        unsupported_encoding = self._unsupported_content_encoding()
+        if unsupported_encoding is not None:
+            self._error(
+                415,
+                f"Unsupported Content-Encoding: {unsupported_encoding}",
+                error_code="unsupported_content_encoding",
+                param="Content-Encoding")
             return None
         limit = (SHARE_MAX_REQUEST_BYTES
                  if getattr(self.server, "share_gate", None) is not None
                  else MAX_REQUEST_BYTES)
         if length < 0 or length > limit:
             self._error(413, "Request body too large",
-                        error_type="payload_too_large")
+                        error_code="payload_too_large")
             return None
         if length == 0:
             return {}
         try:
-            body = json.loads(self.rfile.read(length))
+            raw_body = self._read_body_bytes(length)
+        except _RequestBodyTimeout:
+            self._error(408, "Request body read timed out",
+                        error_code="request_timeout")
+            return None
         except (OSError, ValueError, RecursionError):
             self._error(400, "Request body is not valid JSON",
-                        error_type="invalid_json")
+                        error_code=error_code or "invalid_json")
+            return None
+        try:
+            body = json.loads(raw_body)
+        except (ValueError, RecursionError):
+            self._error(400, "Request body is not valid JSON",
+                        error_code=error_code or "invalid_json")
             return None
         if not isinstance(body, dict):
             self._error(400, "Request body must be a JSON object",
-                        error_type="invalid_body")
+                        error_code=error_code or "invalid_body")
             return None
         return body
 
@@ -7153,6 +7993,9 @@ class Handler(BaseHTTPRequestHandler):
         """
         self._share_key_id = None
         self._share_ctx = None
+        # One id per downstream request; a keep-alive connection must never
+        # reuse the previous request's id in an error header or stream event.
+        self._request_id = None
         try:
             super().handle_one_request()
         finally:
@@ -7193,35 +8036,50 @@ class Handler(BaseHTTPRequestHandler):
                 share.model_catalog_limit(raw_path)
             except ValueError:
                 self._error(404, "route_not_shared",
-                            error_type="route_not_shared")
+                            error_code="route_not_shared")
                 return False
         elif path.startswith("/v1/messages"):
             try:
                 share.messages_query(raw_path)
             except ValueError:
                 self._error(404, "route_not_shared",
-                            error_type="route_not_shared")
+                            error_code="route_not_shared")
                 return False
         elif path not in ("/v1/chat/completions", "/v1/responses"):
             self._error(404, "route_not_shared",
-                        error_type="route_not_shared")
+                        error_code="route_not_shared")
             return False
         auth = gate.authenticate(self.headers, allow_api_key)
         if auth is None:
             self._error(401, "invalid_api_key",
-                        error_type="share_gateway_error",
-                        extra={"code": "invalid_api_key"})
+                        error_code="invalid_api_key")
             return False
         entry, cfg = auth
         reason = {}
         if not gate.acquire(entry["key_id"], cfg["config_generation"],
                             entry["secret_version"], reason_out=reason):
+            reason_name = reason.get("reason")
+            extra_headers = {}
+            if reason_name == "key_rate_limit":
+                retry_after = reason.get("retry_after")
+                if retry_after is not None:
+                    extra_headers["Retry-After"] = str(retry_after)
+            elif reason_name in ("per_key_concurrency",
+                                "share_concurrency"):
+                # A concurrency slot is released as soon as an in-flight
+                # request finishes, so the client's retry should be short.
+                extra_headers["Retry-After"] = "1"
+            elif reason_name == "state_not_accepting":
+                # Draining/stopped is an operator state: retrying this request
+                # cannot restore it.
+                extra_headers["X-Should-Retry"] = "false"
             self._error(
                 429, "sharing_limit_reached",
-                error_type="share_gateway_error",
-                extra={"code": "sharing_limit_reached",
-                       "reason": reason.get("reason"),
-                       "detail": reason.get("detail")})
+                detail={"reason": reason_name,
+                         "detail": reason.get("detail")},
+                error_code="sharing_limit_reached",
+                extra={"reason": reason_name},
+                extra_headers=extra_headers or None)
             return False
         ctx = share._InflightCtx(self.connection)
         gate.register_inflight(entry["key_id"], ctx)
@@ -7280,14 +8138,21 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 r = requests.get(f"{proxy.base_url}/api/version", timeout=15)
             except requests.RequestException as exc:
-                self._error(502, "Failed to fetch upstream version",
-                            type(exc).__name__)
+                timeout = _is_upstream_timeout(exc)
+                self._error(
+                    504 if timeout else 502,
+                    ("Upstream version request timed out" if timeout else
+                     "Failed to fetch upstream version"),
+                    {"reason": type(exc).__name__},
+                    error_code=("upstream_timeout" if timeout else
+                                "upstream_unreachable"))
                 return
             try:
                 upstream_version = r.json() if r.status_code == 200 else None
             except ValueError as exc:
                 self._error(502, "Upstream version response was not valid JSON",
-                            type(exc).__name__)
+                            type(exc).__name__,
+                            error_code="invalid_upstream_response")
                 return
             finally:
                 r.close()
@@ -7325,19 +8190,20 @@ class Handler(BaseHTTPRequestHandler):
                     request_deadline=request_deadline,
                     cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(
-                    getattr(exc, "reason", None) or str(exc) or None)
+                self._reauthentication_exception(exc)
                 return
             except _RequestCancelled:
                 self.close_connection = True
                 return
             except _RequestDeadlineExceeded:
                 self._error(
-                    502, "Upstream request could not start another attempt",
-                    error_type="request_deadline_exceeded")
+                    504, "Upstream request exceeded the request deadline",
+                    {"reason": "request_deadline_exceeded"},
+                    error_code="request_deadline_exceeded")
                 return
             if models is None:
-                self._error(502, "Failed to fetch model list (auth may have expired)")
+                self._error(502, "Failed to fetch model list (auth may have expired)",
+                            error_code="upstream_unavailable")
                 return
             extra = {X_MODELS_MARKER: "1"} if want_raw_fresh else None
             self._json(200, models, extra)
@@ -7354,20 +8220,31 @@ class Handler(BaseHTTPRequestHandler):
                     request_deadline=request_deadline,
                     cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(
-                    getattr(exc, "reason", None) or str(exc) or None)
+                self._reauthentication_exception(exc)
                 return
             except _RequestCancelled:
                 self.close_connection = True
                 return
             except _RequestDeadlineExceeded:
                 self._error(
-                    502, "Upstream request could not start another attempt",
-                    error_type="request_deadline_exceeded")
+                    504, "Upstream request exceeded the request deadline",
+                    {"reason": "request_deadline_exceeded"},
+                    error_code="request_deadline_exceeded")
+                return
+            except requests.RequestException as exc:
+                timeout = _is_upstream_timeout(exc)
+                self._error(
+                    504 if timeout else 502,
+                    ("Upstream request timed out" if timeout else
+                     "Upstream request failed"),
+                    {"reason": type(exc).__name__},
+                    error_code=("upstream_timeout" if timeout else
+                                "upstream_unreachable"))
                 return
             self._passthrough(r)
         else:
-            self._error(404, f"Unknown path: {path}")
+            self._error(404, f"Unknown path: {path}",
+                        error_code="not_found")
 
     # ---------- POST ----------
     def do_POST(self):
@@ -7411,7 +8288,7 @@ class Handler(BaseHTTPRequestHandler):
                     "Share revoke endpoint is not assembled in this role",
                     detail={"released": 0,
                              "reason": "share_backend_unassembled"},
-                    error_type="share_revoke_unassembled")
+                    error_code="share_revoke_unassembled")
                 return
             if not self._control_allowed():
                 return
@@ -7421,17 +8298,25 @@ class Handler(BaseHTTPRequestHandler):
             key_id = body.get("key_id")
             if not isinstance(key_id, str) or not key_id:
                 self._error(400, "key_id is required",
-                            error_type="invalid_request")
+                            error_code="invalid_request", param="key_id")
                 return
             self._json(200, {"released": gate.terminate_key(key_id)})
         elif path == "/admin/auth/login":
             if self._control_allowed():
-                # These admin handlers never read the request body; the 202
-                # must close the connection so leftover bytes cannot desync a
-                # reused socket (same failure class as _error). Closing is
-                # preferred over draining the unneeded body.
+                # ADR 0005: the optional body is {"visible": bool}; an empty
+                # body keeps the historical headless default. The 202 closes
+                # the connection because the login round runs in the background
+                # and the response is only a fire-and-forget acknowledgement.
+                body = self._read_body(error_code="invalid_request")
+                if body is None:
+                    return
+                visible = body.get("visible", False)
+                if not isinstance(visible, bool):
+                    self._error(400, "visible must be a boolean",
+                                error_code="invalid_request")
+                    return
                 self.close_connection = True
-                proxy.refresh(force=True, wait=False)
+                proxy.refresh(force=True, wait=False, visible=visible)
                 self._json(202, proxy.auth_status())
         elif path == "/admin/auth/cancel":
             # D18-6: end THIS login round without stopping the service. The
@@ -7491,20 +8376,31 @@ class Handler(BaseHTTPRequestHandler):
                     request_deadline=request_deadline,
                     cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(
-                    getattr(exc, "reason", None) or str(exc) or None)
+                self._reauthentication_exception(exc)
                 return
             except _RequestCancelled:
                 self.close_connection = True
                 return
             except _RequestDeadlineExceeded:
                 self._error(
-                    502, "Upstream request could not start another attempt",
-                    error_type="request_deadline_exceeded")
+                    504, "Upstream request exceeded the request deadline",
+                    {"reason": "request_deadline_exceeded"},
+                    error_code="request_deadline_exceeded")
+                return
+            except requests.RequestException as exc:
+                timeout = _is_upstream_timeout(exc)
+                self._error(
+                    504 if timeout else 502,
+                    ("Upstream request timed out" if timeout else
+                     "Upstream request failed"),
+                    {"reason": type(exc).__name__},
+                    error_code=("upstream_timeout" if timeout else
+                                "upstream_unreachable"))
                 return
             self._passthrough(r)
         else:
-            self._error(404, f"Unknown path: {path}")
+            self._error(404, f"Unknown path: {path}",
+                        error_code="not_found")
 
     def _responses(self, auth_wait_budget=None, request_deadline=None,
                    cancel_check=None):
@@ -7526,7 +8422,8 @@ class Handler(BaseHTTPRequestHandler):
                                   responses_stream_events,
                                   responses_requires_messages)
         if not valid_responses_request(body):
-            self._error(400, "unsupported_responses_request")
+            self._error(400, "unsupported_responses_request",
+                        error_code="unsupported_responses_request")
             return
         if responses_requires_messages(body):
             # Tool results carrying images need the one upstream protocol that
@@ -7554,47 +8451,113 @@ class Handler(BaseHTTPRequestHandler):
         started_at = time.time()
         input_est = _message_tokens(chat_body.get("messages"))
         upstream_owned = False
-        try:
-            r = proxy.call("POST", "/api/chat/completions",
-                           stream=upstream_stream,
-                           json=chat_body,
-                           auth_wait_budget=auth_wait_budget,
-                           request_deadline=request_deadline,
-                           cancel_check=cancel_check)
-        except ReauthenticationRequired as exc:
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="reauthentication_required")
-            self._reauthentication_error(
-                getattr(exc, "reason", None) or str(exc) or None)
-            return
-        except _RequestCancelled:
-            self.close_connection = True
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="client_disconnected")
-            return
-        except _RequestDeadlineExceeded:
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="request_deadline_exceeded")
-            self._error(
-                502, "Upstream request could not start another attempt",
-                error_type="request_deadline_exceeded")
-            return
-        try:
-            if r.status_code != 200:
-                if r.status_code == 401:
-                    status = "reauthentication_required"
-                    self._reauthentication_error("upstream_rejected")
-                elif r.status_code in (400, 422):
-                    status = f"HTTP{r.status_code}"
-                    self._error(r.status_code, "upstream_request_rejected",
-                                 detail={"upstream_status": r.status_code})
-                else:
-                    status = "upstream_unavailable"
-                    self._error(502, "upstream_unavailable",
-                                detail={"upstream_status": r.status_code})
+        request_id = self._ensure_request_id()
+
+        def responses_call_timeout():
+            """Per-attempt socket timeout capped by the request deadline."""
+            remaining = request_deadline - time.monotonic()
+            if remaining <= 0:
+                raise _RequestDeadlineExceeded(
+                    "responses request wall-clock deadline exhausted")
+            # Match the chat path: the socket read cap follows the CLIENT's
+            # response mode, so an aggregate stream=false request keeps the
+            # 600s non-stream cap and never inherits the stream boundary.
+            read_cap = STREAM_SOCKET_TIMEOUT_S if client_stream else 600
+            return (max(0.001, min(15.0, remaining)),
+                    max(0.001, min(read_cap, remaining)))
+
+        def open_upstream_attempt():
+            return _open_upstream_response_with_retries(
+                proxy, "POST", "/api/chat/completions",
+                stream=upstream_stream, json_body=chat_body, headers={},
+                timeout=responses_call_timeout,
+                auth_wait_budget=auth_wait_budget,
+                request_deadline=request_deadline,
+                cancel_check=cancel_check, request_id=request_id,
+                endpoint="/v1/responses")
+
+        def handle_open_failure(exc):
+            """Answer one failed upstream open; return None after answering."""
+            if isinstance(exc, ReauthenticationRequired):
+                status = ("reauthentication_failed"
+                          if isinstance(exc, ReauthenticationFailed)
+                          else "reauthentication_required")
                 record_usage(body["model"], client_stream, started_at, None,
                               input_est, 0, status=status)
-                return
+                self._reauthentication_exception(exc)
+                return None
+            if isinstance(exc, _RequestCancelled):
+                self.close_connection = True
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status="client_disconnected")
+                return None
+            if isinstance(exc, (_RequestDeadlineExceeded,
+                               _PhysicalBudgetExceeded)):
+                deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
+                status = ("request_deadline_exceeded" if deadline_exceeded
+                           else "upstream_attempt_budget_exhausted")
+                detail = {"reason": status}
+                last_status = getattr(exc, "last_upstream_status", None)
+                if last_status is not None:
+                    detail["last_upstream_status"] = last_status
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status=status)
+                self._error(
+                    504 if deadline_exceeded else 502,
+                    ("Upstream request exceeded the request deadline"
+                     if deadline_exceeded else
+                     "Upstream request could not start another attempt"),
+                    detail, error_code=status)
+                return None
+            timeout = _is_upstream_timeout(exc)
+            status = "upstream_timeout" if timeout else "upstream_unreachable"
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status=status)
+            detail = {"reason": type(exc).__name__}
+            last_status = getattr(exc, "last_upstream_status", None)
+            if last_status is not None:
+                detail["last_upstream_status"] = last_status
+            self._error(
+                504 if timeout else 502,
+                ("Upstream request timed out" if timeout else
+                 "Upstream request failed"),
+                detail,
+                error_code=status)
+            return None
+
+        def open_checked_attempt():
+            """Open one upstream response; None means the failure was answered."""
+            try:
+                r, response_text = open_upstream_attempt()
+            except (ReauthenticationRequired, _RequestCancelled,
+                    _RequestDeadlineExceeded, _PhysicalBudgetExceeded,
+                    requests.RequestException) as exc:
+                return handle_open_failure(exc)
+            if r.status_code != 200:
+                try:
+                    if not response_text:
+                        response_text = _bounded_upstream_error_text(r)
+                    if r.status_code == 401:
+                        status = "reauthentication_required"
+                        self._reauthentication_error("upstream_rejected")
+                    else:
+                        status = f"HTTP{r.status_code}"
+                        self._upstream_status_error(
+                            r.status_code, response_text,
+                            extra_headers=_upstream_retry_after_headers(r))
+                    record_usage(body["model"], client_stream, started_at, None,
+                                  input_est, 0, status=status)
+                finally:
+                    r.close()
+                return None
+            return r, response_text
+
+        opened = open_checked_attempt()
+        if opened is None:
+            return
+        r, response_text = opened
+        response_holder = [r]
+        try:
             if not client_stream and not upstream_stream:
                 try:
                     payload = r.json()
@@ -7604,7 +8567,8 @@ class Handler(BaseHTTPRequestHandler):
                     record_usage(body["model"], False, started_at, None,
                                   input_est, 0,
                                   status="unexpected_upstream_response")
-                    self._error(502, "unexpected_upstream_response")
+                    self._error(502, "unexpected_upstream_response",
+                                error_code="unexpected_upstream_response")
                     return
                 self._json(200, translated)
                 out_chars = 0
@@ -7627,22 +8591,9 @@ class Handler(BaseHTTPRequestHandler):
                 # completion as a success.
                 aggregate = _NonStreamChatAggregator(
                     default_model=chat_body.get("model") or body["model"])
-                aggregate_lease = _ReaderSlotLease(_reader_slots)
-                if not aggregate_lease.acquire(blocking=False):
-                    try:
-                        r.close()
-                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
-                        pass
-                    record_usage(body["model"], False, started_at, None,
-                                  input_est, 0,
-                                  status="concurrency_limit")
-                    self._error(503, "Too many concurrent streaming requests",
-                                error_type="too_many_concurrent_streams")
-                    return
                 upstream_owned = True
                 aggregate_data, aggregate_status, aggregate_exc = (
-                    self._consume_aggregate_stream(
-                        r, aggregate, aggregate_lease))
+                    self._consume_aggregate_stream(r, aggregate))
                 translated = None
                 if aggregate_data is not None:
                     try:
@@ -7653,7 +8604,8 @@ class Handler(BaseHTTPRequestHandler):
                                       aggregate.usage(), input_est,
                                       aggregate.output_estimate(),
                                       status="unexpected_upstream_response")
-                        self._error(502, "unexpected_upstream_response")
+                        self._error(502, "unexpected_upstream_response",
+                                    error_code="unexpected_upstream_response")
                         return
                     try:
                         self._json(200, translated)
@@ -7663,11 +8615,11 @@ class Handler(BaseHTTPRequestHandler):
                 if aggregate_status == "client_disconnected":
                     self.close_connection = True
                 elif aggregate_status != "ok":
-                    message, detail, error_type = (
+                    message, detail, error_code = (
                         self._aggregate_failure_error(
                             aggregate_status, aggregate_exc))
                     try:
-                        self._error(502, message, detail, error_type)
+                        self._error(502, message, detail, error_code)
                     except (ConnectionError, OSError, ValueError):
                         aggregate_status = "client_disconnected"
                         self.close_connection = True
@@ -7693,67 +8645,33 @@ class Handler(BaseHTTPRequestHandler):
                                   aggregate.output_estimate(),
                                   status=f"aggregate_{aggregate_status}")
                 return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Connection", "close")
-            self.end_headers()
             response_id = "resp_" + secrets.token_hex(12)
             created_at = int(time.time())
-            usage = {}
-            output_chars = 0
-            status = "ok"
-
-            def send_event(name, payload):
-                self.wfile.write(("event: " + name + "\ndata: "
-                                  + json.dumps(payload) + "\n\n").encode())
-                self.wfile.flush()
-
-            try:
-                for name, payload in responses_stream_events(
-                        r, body["model"], response_id, created_at):
-                    send_event(name, payload)
-                    if name == "response.output_text.delta":
-                        output_chars += len(payload.get("delta") or "")
-                    elif name == "response.function_call_arguments.delta":
-                        output_chars += len(payload.get("delta") or "")
-                    elif name in ("response.completed",
-                                  "response.incomplete"):
-                        response = payload.get("response") or {}
-                        usage = response.get("usage") or {}
-                        status = ("ok" if name == "response.completed"
-                                  else "incomplete")
-                    elif name == "response.failed":
-                        error = ((payload.get("response") or {})
-                                 .get("error") or {})
-                        status = error.get("code") or "upstream_error"
-            except (requests.RequestException, OSError) as exc:
-                if isinstance(exc, requests.RequestException):
-                    status = "upstream_stream_error"
-                    try:
-                        send_event("response.failed", {
-                            "type": "response.failed",
-                            "response": {"id": response_id,
-                                         "object": "response",
-                                         "created_at": created_at,
-                                         "status": "failed",
-                                         "model": body["model"], "output": [],
-                                         "error": {
-                                             "code": status,
-                                             "message": "upstream stream "
-                                                        "failed"}}})
-                    except (OSError, ConnectionError):
-                        status = "client_disconnected"
-                else:
-                    status = "client_disconnected"
-            finally:
-                out_est = (max(1, output_chars // 4)
-                           if status == "ok" else output_chars // 4)
-                record_usage(body["model"], client_stream, started_at, usage,
-                              input_est, out_est, status=status)
+            result = self._relay_responses_stream(
+                response_holder,
+                lambda resp: responses_stream_events(
+                    resp, body["model"], response_id, created_at),
+                open_attempt=open_checked_attempt,
+                request_id=request_id,
+                request_deadline=request_deadline,
+                model=body["model"],
+                response_id=response_id,
+                created_at=created_at,
+                started_at=started_at,
+                input_est=input_est,
+                client_stream=client_stream)
+            if result is None:
+                return
+            status, usage, output_chars = result
+            out_est = (max(1, output_chars // 4)
+                       if status == "ok" else output_chars // 4)
+            record_usage(body["model"], client_stream, started_at, usage,
+                          input_est, out_est, status=status)
         finally:
             if not upstream_owned:
-                r.close()
+                current = response_holder[0]
+                if current is not None:
+                    current.close()
 
     def _responses_via_messages(self, body, auth_wait_budget=None,
                                  request_deadline=None, cancel_check=None):
@@ -7782,47 +8700,111 @@ class Handler(BaseHTTPRequestHandler):
         upstream_owned = False
         if request_deadline is None:
             request_deadline = time.monotonic() + MAX_REQUEST_SECONDS
-        try:
-            r = proxy.call("POST", "/api/v1/messages", stream=upstream_stream,
-                           json=messages_body,
-                           headers={"Anthropic-Version": "2023-06-01"},
-                           auth_wait_budget=auth_wait_budget,
-                           request_deadline=request_deadline,
-                           cancel_check=cancel_check)
-        except ReauthenticationRequired as exc:
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="reauthentication_required")
-            self._reauthentication_error(
-                getattr(exc, "reason", None) or str(exc) or None)
-            return
-        except _RequestCancelled:
-            self.close_connection = True
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="client_disconnected")
-            return
-        except _RequestDeadlineExceeded:
-            record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="request_deadline_exceeded")
-            self._error(
-                502, "Upstream request could not start another attempt",
-                error_type="request_deadline_exceeded")
-            return
-        try:
-            if r.status_code != 200:
-                if r.status_code == 401:
-                    status = "reauthentication_required"
-                    self._reauthentication_error("upstream_rejected")
-                elif r.status_code in (400, 422):
-                    status = f"HTTP{r.status_code}"
-                    self._error(r.status_code, "upstream_request_rejected",
-                                 detail={"upstream_status": r.status_code})
-                else:
-                    status = "upstream_unavailable"
-                    self._error(502, "upstream_unavailable",
-                                detail={"upstream_status": r.status_code})
+        request_id = self._ensure_request_id()
+
+        def messages_call_timeout():
+            """Per-attempt socket timeout capped by the request deadline."""
+            remaining = request_deadline - time.monotonic()
+            if remaining <= 0:
+                raise _RequestDeadlineExceeded(
+                    "responses request wall-clock deadline exhausted")
+            read_cap = STREAM_SOCKET_TIMEOUT_S if client_stream else 600
+            return (max(0.001, min(15.0, remaining)),
+                    max(0.001, min(read_cap, remaining)))
+
+        def open_upstream_attempt():
+            return _open_upstream_response_with_retries(
+                proxy, "POST", "/api/v1/messages",
+                stream=upstream_stream, json_body=messages_body,
+                headers={"Anthropic-Version": "2023-06-01"},
+                timeout=messages_call_timeout,
+                auth_wait_budget=auth_wait_budget,
+                request_deadline=request_deadline,
+                cancel_check=cancel_check, request_id=request_id,
+                endpoint="/v1/responses (messages)")
+
+        def handle_open_failure(exc):
+            """Answer one failed upstream open; return None after answering."""
+            if isinstance(exc, ReauthenticationRequired):
+                status = ("reauthentication_failed"
+                          if isinstance(exc, ReauthenticationFailed)
+                          else "reauthentication_required")
                 record_usage(body["model"], client_stream, started_at, None,
                               input_est, 0, status=status)
-                return
+                self._reauthentication_exception(exc)
+                return None
+            if isinstance(exc, _RequestCancelled):
+                self.close_connection = True
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status="client_disconnected")
+                return None
+            if isinstance(exc, (_RequestDeadlineExceeded,
+                               _PhysicalBudgetExceeded)):
+                deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
+                status = ("request_deadline_exceeded" if deadline_exceeded
+                           else "upstream_attempt_budget_exhausted")
+                detail = {"reason": status}
+                last_status = getattr(exc, "last_upstream_status", None)
+                if last_status is not None:
+                    detail["last_upstream_status"] = last_status
+                record_usage(body["model"], client_stream, started_at, None,
+                              input_est, 0, status=status)
+                self._error(
+                    504 if deadline_exceeded else 502,
+                    ("Upstream request exceeded the request deadline"
+                     if deadline_exceeded else
+                     "Upstream request could not start another attempt"),
+                    detail, error_code=status)
+                return None
+            timeout = _is_upstream_timeout(exc)
+            status = "upstream_timeout" if timeout else "upstream_unreachable"
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status=status)
+            detail = {"reason": type(exc).__name__}
+            last_status = getattr(exc, "last_upstream_status", None)
+            if last_status is not None:
+                detail["last_upstream_status"] = last_status
+            self._error(
+                504 if timeout else 502,
+                ("Upstream request timed out" if timeout else
+                 "Upstream request failed"),
+                detail,
+                error_code=status)
+            return None
+
+        def open_checked_attempt():
+            """Open one upstream response; None means the failure was answered."""
+            try:
+                r, response_text = open_upstream_attempt()
+            except (ReauthenticationRequired, _RequestCancelled,
+                    _RequestDeadlineExceeded, _PhysicalBudgetExceeded,
+                    requests.RequestException) as exc:
+                return handle_open_failure(exc)
+            if r.status_code != 200:
+                try:
+                    if not response_text:
+                        response_text = _bounded_upstream_error_text(r)
+                    if r.status_code == 401:
+                        status = "reauthentication_required"
+                        self._reauthentication_error("upstream_rejected")
+                    else:
+                        status = f"HTTP{r.status_code}"
+                        self._upstream_status_error(
+                            r.status_code, response_text,
+                            extra_headers=_upstream_retry_after_headers(r))
+                    record_usage(body["model"], client_stream, started_at, None,
+                                  input_est, 0, status=status)
+                finally:
+                    r.close()
+                return None
+            return r, response_text
+
+        opened = open_checked_attempt()
+        if opened is None:
+            return
+        r, response_text = opened
+        response_holder = [r]
+        try:
             if not client_stream and not upstream_stream:
                 try:
                     payload = r.json()
@@ -7853,22 +8835,9 @@ class Handler(BaseHTTPRequestHandler):
                 # return a partial message as a success.
                 aggregate = _NonStreamAnthropicAggregator(
                     default_model=messages_body.get("model") or body["model"])
-                aggregate_lease = _ReaderSlotLease(_reader_slots)
-                if not aggregate_lease.acquire(blocking=False):
-                    try:
-                        r.close()
-                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
-                        pass
-                    record_usage(body["model"], False, started_at, None,
-                                  input_est, 0,
-                                  status="concurrency_limit")
-                    self._error(503, "Too many concurrent streaming requests",
-                                error_type="too_many_concurrent_streams")
-                    return
                 upstream_owned = True
                 aggregate_data, aggregate_status, aggregate_exc = (
-                    self._consume_aggregate_stream(
-                        r, aggregate, aggregate_lease))
+                    self._consume_aggregate_stream(r, aggregate))
                 translated = None
                 if aggregate_data is not None:
                     try:
@@ -7880,7 +8849,8 @@ class Handler(BaseHTTPRequestHandler):
                                           aggregate.usage()) or None,
                                       input_est, aggregate.output_estimate(),
                                       status="unexpected_upstream_response")
-                        self._error(502, "unexpected_upstream_response")
+                        self._error(502, "unexpected_upstream_response",
+                                    error_code="unexpected_upstream_response")
                         return
                     try:
                         self._json(200, translated)
@@ -7890,11 +8860,11 @@ class Handler(BaseHTTPRequestHandler):
                 if aggregate_status == "client_disconnected":
                     self.close_connection = True
                 elif aggregate_status != "ok":
-                    message, detail, error_type = (
+                    message, detail, error_code = (
                         self._aggregate_failure_error(
                             aggregate_status, aggregate_exc))
                     try:
-                        self._error(502, message, detail, error_type)
+                        self._error(502, message, detail, error_code)
                     except (ConnectionError, OSError, ValueError):
                         aggregate_status = "client_disconnected"
                         self.close_connection = True
@@ -7922,67 +8892,252 @@ class Handler(BaseHTTPRequestHandler):
                                   input_est, aggregate.output_estimate(),
                                   status=f"aggregate_{aggregate_status}")
                 return
+            response_id = "resp_" + secrets.token_hex(12)
+            created_at = int(time.time())
+            result = self._relay_responses_stream(
+                response_holder,
+                lambda resp: messages_stream_events(
+                    resp, body["model"], response_id, created_at),
+                open_attempt=open_checked_attempt,
+                request_id=request_id,
+                request_deadline=request_deadline,
+                model=body["model"],
+                response_id=response_id,
+                created_at=created_at,
+                started_at=started_at,
+                input_est=input_est,
+                client_stream=client_stream)
+            if result is None:
+                return
+            status, usage, output_chars = result
+            out_est = (max(1, output_chars // 4)
+                       if status == "ok" else output_chars // 4)
+            record_usage(body["model"], client_stream, started_at, usage,
+                          input_est, out_est, status=status)
+        finally:
+            if not upstream_owned:
+                current = response_holder[0]
+                if current is not None:
+                    current.close()
+
+    def _send_responses_event(self, name, payload):
+        """Send one translated Responses SSE event.
+
+        ``response.failed`` is the Responses protocol's in-band failure event. Its
+        error object keeps the unified envelope fields: ``type`` is the category,
+        ``code`` is the stable machine code, ``param`` is null, ``detail.reason``
+        keeps the stream reason and ``request_id`` is the SAME value as the
+        ``X-Request-Id`` response header (or the one a pre-commit error would
+        have carried).
+        """
+        if name == "response.failed":
+            response = payload.get("response") or {}
+            error = response.get("error")
+            if isinstance(error, dict):
+                code = error.get("code") or "upstream_error"
+                error.setdefault("type", _error_category(502, code))
+                error.setdefault("code", code)
+                error.setdefault("param", None)
+                error.setdefault("request_id", self._ensure_request_id())
+                error.setdefault("detail", {"reason": code})
+        self.wfile.write(("event: " + name + "\ndata: "
+                          + json.dumps(payload) + "\n\n").encode())
+        self.wfile.flush()
+
+    def _relay_responses_stream(self, response_holder, events_factory, *,
+                                 open_attempt, request_id,
+                                 request_deadline, model, response_id,
+                                 created_at, started_at, input_est,
+                                 client_stream):
+        """Relay one Responses stream with pre-commit staging (ticket #64).
+
+        ``response.created`` and every other non-substantive event stay buffered
+        until the first output-text or function-argument delta (or a success
+        terminal) arrives; only then is the downstream 200 committed. A transport
+        failure or a truncated upstream before that point is retried with the same
+        transient budgets, and after the commit it becomes one in-band
+        ``response.failed`` with the same machine code and ``X-Request-Id``. No
+        terminal event is written after a failure, so a partial completion is
+        never reported as success.
+
+        Returns ``(status, usage, output_chars)``. ``None`` means the retry's
+        ``open_attempt`` already answered the request (and recorded its ledger
+        row).
+        """
+        response = response_holder[0]
+        prelude = []
+        committed = False
+        status = "ok"
+        usage = {}
+        output_chars = 0
+        retries_done = 0
+        slow_retries_done = 0
+
+        def close_response():
+            nonlocal response
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:  # noqa: BLE001 — 关闭上游响应是尽力而为
+                    pass
+                response = None
+                response_holder[0] = None
+
+        def commit_headers():
+            nonlocal committed
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Request-Id", self._ensure_request_id())
             self.send_header("Connection", "close")
             self.end_headers()
-            response_id = "resp_" + secrets.token_hex(12)
-            created_at = int(time.time())
-            usage = {}
-            output_chars = 0
-            status = "ok"
+            self.close_connection = True
+            committed = True
+            for held_name, held_payload in prelude:
+                self._send_responses_event(held_name, held_payload)
+            prelude.clear()
 
-            def send_event(name, payload):
-                self.wfile.write(("event: " + name + "\ndata: "
-                                  + json.dumps(payload) + "\n\n").encode())
-                self.wfile.flush()
+        def retry_available(slow):
+            return (UPSTREAM_AUTO_RETRY and
+                    retries_done < UPSTREAM_AUTO_RETRIES and
+                    (not slow or
+                     slow_retries_done < UPSTREAM_SLOW_AUTO_RETRIES) and
+                    time.monotonic() < request_deadline)
 
+        def fail_precommit(code, exc_name=None):
+            """Answer a pre-commit failure as a normal HTTP error."""
+            detail = {"reason": code, "events": 0,
+                      "duration_s": round(time.time() - started_at, 1)}
+            if exc_name:
+                detail["exception"] = exc_name
+            timeout = (code == "upstream_timeout" or
+                       (exc_name is not None and "Timeout" in exc_name))
+            error_code = "upstream_timeout" if timeout else code
             try:
-                for name, payload in messages_stream_events(
-                        r, body["model"], response_id, created_at):
-                    send_event(name, payload)
-                    if name == "response.output_text.delta":
+                self._error(
+                    504 if timeout else 502,
+                    STREAM_ERROR_MESSAGES.get(
+                        code, "Upstream stream failed before any output."),
+                    detail, error_code=error_code)
+            except (ConnectionError, OSError, ValueError):
+                pass  # the client left before the pre-commit error landed
+            record_usage(model, client_stream, started_at, None, input_est, 0,
+                         status=error_code)
+            return None
+
+        def fail_postcommit(code):
+            """Write the one in-band failure; never a terminal event."""
+            try:
+                self._send_responses_event("response.failed", {
+                    "type": "response.failed",
+                    "response": {"id": response_id,
+                                 "object": "response",
+                                 "created_at": created_at,
+                                 "status": "failed",
+                                 "model": model, "output": [],
+                                 "error": {
+                                     "code": code,
+                                     "message": STREAM_ERROR_MESSAGES.get(
+                                         code, "Upstream stream failed.")}}})
+            except (OSError, ConnectionError):
+                return "client_disconnected"
+            return code
+
+        while True:
+            attempt_started = time.monotonic()
+            retry_requested = False
+            retry_reason = None
+            try:
+                for name, payload in events_factory(response):
+                    if name in _RESPONSES_SUBSTANTIVE_EVENTS:
+                        if not committed:
+                            commit_headers()
+                        self._send_responses_event(name, payload)
                         output_chars += len(payload.get("delta") or "")
-                    elif name == "response.function_call_arguments.delta":
-                        output_chars += len(payload.get("delta") or "")
-                    elif name in ("response.completed",
-                                  "response.incomplete"):
-                        response = payload.get("response") or {}
-                        usage = response.get("usage") or {}
+                        continue
+                    if name in ("response.completed", "response.incomplete"):
+                        if not committed:
+                            commit_headers()
+                        self._send_responses_event(name, payload)
+                        response_payload = payload.get("response") or {}
+                        usage = response_payload.get("usage") or {}
                         status = ("ok" if name == "response.completed"
                                   else "incomplete")
-                    elif name == "response.failed":
-                        error = ((payload.get("response") or {})
-                                 .get("error") or {})
-                        status = error.get("code") or "upstream_error"
-            except (requests.RequestException, OSError) as exc:
-                if isinstance(exc, requests.RequestException):
-                    status = "upstream_stream_error"
-                    try:
-                        send_event("response.failed", {
-                            "type": "response.failed",
-                            "response": {"id": response_id,
-                                         "object": "response",
-                                         "created_at": created_at,
-                                         "status": "failed",
-                                         "model": body["model"], "output": [],
-                                         "error": {
-                                             "code": status,
-                                             "message": "upstream stream "
-                                                        "failed"}}})
-                    except (OSError, ConnectionError):
-                        status = "client_disconnected"
+                        return status, usage, output_chars
+                    if name == "response.failed":
+                        error = (payload.get("response") or {}).get(
+                            "error") or {}
+                        code = error.get("code") or "upstream_error"
+                        if (not committed and
+                                code in _RESPONSES_RETRYABLE_TERMINAL_CODES):
+                            retry_requested = True
+                            retry_reason = code
+                            break
+                        if not committed:
+                            return fail_precommit(code)
+                        return (fail_postcommit(code), {}, output_chars)
+                    if not committed:
+                        prelude.append((name, payload))
+                    else:
+                        self._send_responses_event(name, payload)
                 else:
-                    status = "client_disconnected"
-            finally:
-                out_est = (max(1, output_chars // 4)
-                           if status == "ok" else output_chars // 4)
-                record_usage(body["model"], client_stream, started_at, usage,
-                              input_est, out_est, status=status)
-        finally:
-            if not upstream_owned:
-                r.close()
+                    # The generator ended without a terminal event.
+                    code = "upstream_eof_without_done"
+                    if not committed:
+                        retry_requested = True
+                        retry_reason = code
+                    else:
+                        return (fail_postcommit(code), {}, output_chars)
+            except requests.RequestException as exc:
+                if not committed:
+                    retry_requested = True
+                    retry_reason = type(exc).__name__
+                else:
+                    return (fail_postcommit("upstream_read_error"), {},
+                            output_chars)
+            except OSError:
+                return "client_disconnected", {}, output_chars
+
+            if not retry_requested:
+                return status, usage, output_chars
+
+            elapsed = time.monotonic() - attempt_started
+            slow = _attempt_is_slow(elapsed)
+            if not retry_available(slow):
+                if committed:
+                    return (fail_postcommit("upstream_read_error"), {},
+                            output_chars)
+                timeout = ("Timeout" in (retry_reason or "") or
+                           "timeout" in (retry_reason or ""))
+                return fail_precommit(
+                    "upstream_timeout" if timeout else
+                    ("upstream_read_error"
+                     if retry_reason not in
+                     _RESPONSES_RETRYABLE_TERMINAL_CODES else
+                     retry_reason),
+                    exc_name=retry_reason)
+            retries_done += 1
+            if slow:
+                slow_retries_done += 1
+            delay_s = _retry_delay_seconds(retries_done, elapsed, slow=slow)
+            _logger.warning(
+                "responses stream-retry request=%s model=%s retry=%d/%d "
+                "slow_retry=%d/%d reason=%s delay_s=%.2f",
+                request_id, model, retries_done, UPSTREAM_AUTO_RETRIES,
+                slow_retries_done, UPSTREAM_SLOW_AUTO_RETRIES,
+                retry_reason, delay_s)
+            if not _sleep_with_deadline(delay_s, request_deadline):
+                if committed:
+                    return (fail_postcommit("upstream_read_error"), {},
+                            output_chars)
+                return fail_precommit("upstream_timeout",
+                                      exc_name="RequestDeadlineExceeded")
+            close_response()
+            opened = open_attempt()
+            if opened is None:
+                return None
+            response, _response_text = opened
+            response_holder[0] = response
 
     def _compat_proxy(self, upstream_path, allow_stream=False,
                       forward_anthropic_headers=False,
@@ -8008,7 +9163,7 @@ class Handler(BaseHTTPRequestHandler):
                 and upstream_path == "/api/v1/messages" \
                 and not _load_share_auth().valid_messages_request(body):
             self._error(400, "unsupported_messages_request",
-                        error_type="unsupported_messages_request")
+                        error_code="unsupported_messages_request")
             return
         client_stream = allow_stream and bool(body.get("stream"))
         # N2b: stream=false Messages may aggregate only for the selected triple.
@@ -8036,7 +9191,7 @@ class Handler(BaseHTTPRequestHandler):
 
         deadline = (time.monotonic() + MAX_REQUEST_SECONDS
                     if request_deadline is None else request_deadline)
-        compat_request_id = secrets.token_hex(6)
+        compat_request_id = self._ensure_request_id()
         started_compat = time.monotonic()
         # record_usage derives duration_ms from the wall clock, while the log
         # lines below measure against the monotonic start; the ledger therefore
@@ -8045,8 +9200,14 @@ class Handler(BaseHTTPRequestHandler):
         logical_attempts = 0
         transient_retries_done = 0
         slow_retries_done = 0
+        probe_retries_done = {}
+        conditional_probe_retries_done = 0
         repetition_retries_done = 0
         physical_budget = _PhysicalRequestBudget(MAX_TOTAL_ATTEMPTS)
+        # Last upstream HTTP status seen by this logical request, including an
+        # attempt that is later retried. A deadline reached while waiting for a
+        # retry reports it in ``detail.last_upstream_status``.
+        last_upstream_status = None
         if record_messages:
             # B7-7: Anthropic Messages carries a REQUIRED max_tokens; state
             # once which value this request forwards, controlled values only
@@ -8107,6 +9268,18 @@ class Handler(BaseHTTPRequestHandler):
                     physical_budget.remaining > 0 and
                     time.monotonic() < deadline)
 
+        def probe_retry_available(status):
+            return (UPSTREAM_AUTO_RETRY and
+                    probe_retries_done.get(status, 0) < 1 and
+                    physical_budget.remaining > 0 and
+                    time.monotonic() < deadline)
+
+        def conditional_probe_retry_available():
+            return (UPSTREAM_AUTO_RETRY and
+                    conditional_probe_retries_done < 1 and
+                    physical_budget.remaining > 0 and
+                    time.monotonic() < deadline)
+
         def schedule_retry(reason, attempt_elapsed_s, response=None,
                            stream_retry=False):
             nonlocal transient_retries_done, slow_retries_done
@@ -8129,14 +9302,36 @@ class Handler(BaseHTTPRequestHandler):
                 "slow" if slow else "fast", reason, delay)
             return _sleep_with_deadline(delay, deadline)
 
+        def schedule_probe_retry(kind, status, attempt_elapsed_s, response):
+            nonlocal conditional_probe_retries_done
+            slow = _attempt_is_slow(attempt_elapsed_s)
+            if kind == "probe":
+                probe_retries_done[status] = (
+                    probe_retries_done.get(status, 0) + 1)
+                counter_text = "probe_retry=%d/1" % probe_retries_done[status]
+            else:
+                conditional_probe_retries_done += 1
+                counter_text = ("conditional_probe_retry=%d/1"
+                                % conditional_probe_retries_done)
+            # Probes use the first fast backoff unless Retry-After overrides it.
+            delay = _retry_delay_seconds(
+                1, attempt_elapsed_s, response=response, slow=slow)
+            _logger.warning(
+                "compat probe-retry path=%s kind=%s status=%d %s "
+                "physical_attempt=%d/%d class=%s delay_s=%.2f",
+                upstream_path, kind, status, counter_text,
+                physical_budget.used, MAX_TOTAL_ATTEMPTS,
+                "slow" if slow else "fast", delay)
+            return _sleep_with_deadline(delay, deadline)
+
         def log_summary(final):
             _logger.info(
                 "request summary request=%s endpoint=%s final=%s "
-                "physical_attempts=%d/%d logical_attempts=%d "
+                "tries=%d physical_attempts=%d/%d "
                 "upstream_retries=%d slow_retries=%d "
                 "repetition_retries=%d duration_ms=%d",
                 compat_request_id, upstream_path, final,
-                physical_budget.used, MAX_TOTAL_ATTEMPTS, logical_attempts,
+                logical_attempts, physical_budget.used, MAX_TOTAL_ATTEMPTS,
                 transient_retries_done, slow_retries_done,
                 repetition_retries_done,
                 int((time.monotonic() - started_compat) * 1000))
@@ -8144,16 +9339,19 @@ class Handler(BaseHTTPRequestHandler):
         while True:
             remaining_s = deadline - time.monotonic()
             if remaining_s <= 0:
+                detail = {"reason": "request_deadline_exceeded"}
+                if last_upstream_status is not None:
+                    detail["last_upstream_status"] = last_upstream_status
                 self._error(
-                    502, "Upstream compatibility endpoint exceeded the request deadline",
-                    error_type="request_deadline_exceeded")
+                    504, "Upstream compatibility endpoint exceeded the request deadline",
+                    detail, error_code="request_deadline_exceeded")
                 log_summary("request_deadline_exceeded")
                 record_messages_usage("request_deadline_exceeded")
                 return
             if physical_budget.remaining <= 0:
                 self._error(
                     502, "Upstream compatibility endpoint exhausted the physical request budget",
-                    error_type="upstream_attempt_budget_exhausted")
+                    error_code="upstream_attempt_budget_exhausted")
                 log_summary("physical_budget_exhausted")
                 record_messages_usage("physical_budget_exhausted")
                 return
@@ -8172,10 +9370,12 @@ class Handler(BaseHTTPRequestHandler):
                     auth_wait_budget=auth_wait_budget,
                     cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(
-                    getattr(exc, "reason", None) or str(exc) or None)
-                log_summary("reauthentication_required")
-                record_messages_usage("reauthentication_required")
+                status = ("reauthentication_failed"
+                          if isinstance(exc, ReauthenticationFailed)
+                          else "reauthentication_required")
+                self._reauthentication_exception(exc)
+                log_summary(status)
+                record_messages_usage(status)
                 return
             except _RequestCancelled:
                 self.close_connection = True
@@ -8183,11 +9383,19 @@ class Handler(BaseHTTPRequestHandler):
                 record_messages_usage("client_disconnected")
                 return
             except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
-                error_type = ("request_deadline_exceeded"
-                              if isinstance(exc, _RequestDeadlineExceeded)
+                deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
+                error_type = ("request_deadline_exceeded" if deadline_exceeded
                               else "upstream_attempt_budget_exhausted")
-                self._error(502, "Upstream compatibility endpoint could not start another attempt",
-                            type(exc).__name__, error_type=error_type)
+                detail = {"reason": type(exc).__name__}
+                if last_upstream_status is not None:
+                    detail["last_upstream_status"] = last_upstream_status
+                self._error(
+                    504 if deadline_exceeded else 502,
+                    ("Upstream compatibility endpoint exceeded the request "
+                     "deadline" if deadline_exceeded else
+                     "Upstream compatibility endpoint could not start another "
+                     "attempt"),
+                    detail, error_code=error_type)
                 log_summary(error_type)
                 record_messages_usage(error_type)
                 return
@@ -8202,33 +9410,65 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "retry" and schedule_retry(
                         type(exc).__name__, elapsed):
                     continue
-                self._error(502, "Failed to reach upstream compatibility endpoint",
-                            type(exc).__name__)
-                log_summary(type(exc).__name__)
-                record_messages_usage(type(exc).__name__)
+                timeout = _is_upstream_timeout(exc)
+                detail = {"reason": type(exc).__name__}
+                if last_upstream_status is not None:
+                    detail["last_upstream_status"] = last_upstream_status
+                self._error(
+                    504 if timeout else 502,
+                    ("Upstream compatibility endpoint timed out" if timeout
+                     else "Failed to reach upstream compatibility endpoint"),
+                    detail,
+                    error_code=("upstream_timeout" if timeout else
+                                "upstream_unreachable"))
+                log_summary(("upstream_timeout" if timeout else
+                             type(exc).__name__))
+                record_messages_usage(("upstream_timeout" if timeout else
+                                      type(exc).__name__))
                 return
 
             elapsed = time.monotonic() - attempt_started
-            if response.status_code in _UPSTREAM_RETRYABLE_STATUS:
+            # ADR 0003 retry matrix: transient statuses use the fast/slow
+            # budgets, 402/403 get one probe each, and 400/422 get one
+            # conditional probe only when the upstream text is transient.
+            response_text = ""
+            if response.status_code in _UPSTREAM_TEXT_CLASSIFICATION_STATUS:
+                response_text = _bounded_upstream_error_text(response)
+            kind, _retry_after_s, _veto_reason = _upstream_retry_plan(
+                response.status_code, response_text, response)
+            if kind is not None:
                 status_code = response.status_code
-                if retry_available(_attempt_is_slow(elapsed)):
-                    delay_response = response
-                    should_retry = schedule_retry(
-                        f"HTTP{status_code}", elapsed, response=delay_response)
+                last_upstream_status = status_code
+                if kind == "transient":
+                    available = retry_available(_attempt_is_slow(elapsed))
+                elif kind == "probe":
+                    available = probe_retry_available(status_code)
+                else:
+                    available = conditional_probe_retry_available()
+                if available:
+                    if kind == "transient":
+                        should_retry = schedule_retry(
+                            f"HTTP{status_code}", elapsed, response=response)
+                    else:
+                        should_retry = schedule_probe_retry(
+                            kind, status_code, elapsed, response)
                     if should_retry:
                         response.close()
                         continue
                     response.close()
+                    detail = {"reason": "request_deadline_exceeded",
+                              "last_upstream_status": status_code}
                     self._error(
-                        502, "Upstream compatibility endpoint reached the request deadline",
-                        f"HTTP {status_code}",
-                        error_type="request_deadline_exceeded")
+                        504, "Upstream compatibility endpoint reached the "
+                        "request deadline", detail,
+                        error_code="request_deadline_exceeded")
                     log_summary("request_deadline_exceeded")
                     record_messages_usage("request_deadline_exceeded")
                     return
-                # Retry budget exhausted: preserve the compatibility endpoint's
-                # historical behavior and pass the last upstream status/body
-                # through instead of rewriting it to a synthetic 502.
+                # Retry budget exhausted or vetoed: the final upstream status
+                # is preserved and rebuilt in the client protocol's envelope by
+                # _passthrough, never folded into a synthetic 502. The
+                # _passthrough call below forwards Retry-After when present.
 
             if client_stream and response.status_code == 200:
                 try:
@@ -8266,7 +9506,7 @@ class Handler(BaseHTTPRequestHandler):
                         self._error(
                             502, "Upstream model fell into a repetition loop",
                             detail=reason,
-                            error_type="degenerate_repetition")
+                            error_code="degenerate_repetition")
                         log_summary("degenerate_repetition")
                         record_messages_usage("degenerate_repetition")
                         return
@@ -8279,11 +9519,18 @@ class Handler(BaseHTTPRequestHandler):
                     if action == "retry" and schedule_retry(
                             str(exc), elapsed, stream_retry=True):
                         continue
+                    status, error_code = _hidden_retry_failure(reason)
                     self._error(
-                        502, "Upstream compatibility stream failed before any event",
-                        detail=str(exc), error_type="upstream_stream_error")
+                        status,
+                        ("Upstream compatibility stream timed out"
+                         if status == 504 else
+                         "Upstream compatibility stream failed before any "
+                         "event"),
+                        {"reason": reason}, error_code=error_code)
                     log_summary(f"stream:{exc}")
-                    record_messages_usage("upstream_stream_error")
+                    record_messages_usage(
+                        "upstream_timeout" if status == 504 else
+                        "upstream_stream_error")
                     return
                 if stream_status == "degenerate_repetition":
                     _logger.warning(
@@ -8309,20 +9556,8 @@ class Handler(BaseHTTPRequestHandler):
                 # field stays the client's own (False).
                 aggregate = _NonStreamAnthropicAggregator(
                     default_model=messages_model)
-                aggregate_lease = _ReaderSlotLease(_reader_slots)
-                if not aggregate_lease.acquire(blocking=False):
-                    try:
-                        response.close()
-                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
-                        pass
-                    self._error(503, "Too many concurrent streaming requests",
-                                error_type="too_many_concurrent_streams")
-                    log_summary("concurrency_limit")
-                    record_messages_usage("concurrency_limit")
-                    return
                 aggregate_data, aggregate_status, aggregate_exc = (
-                    self._consume_aggregate_stream(
-                        response, aggregate, aggregate_lease))
+                    self._consume_aggregate_stream(response, aggregate))
                 if aggregate_data is not None:
                     try:
                         self._json(200, aggregate_data)
@@ -8338,11 +9573,11 @@ class Handler(BaseHTTPRequestHandler):
                             "endpoint=%s message=%r", compat_request_id,
                             upstream_path,
                             getattr(aggregate_exc, "message", None))
-                    message, detail, error_type = (
+                    message, detail, error_code = (
                         self._aggregate_failure_error(
                             aggregate_status, aggregate_exc))
                     try:
-                        self._error(502, message, detail, error_type)
+                        self._error(502, message, detail, error_code)
                     except (ConnectionError, OSError, ValueError):
                         aggregate_status = "client_disconnected"
                         self.close_connection = True
@@ -8390,8 +9625,11 @@ class Handler(BaseHTTPRequestHandler):
                     compat_request_id, status_code, model=messages_model,
                     requested_model=messages_model, stream=client_stream,
                     body=body, response_text=response_text,
-                    output_budget=messages_output_budget)
-            self._passthrough(response)
+                    output_budget=messages_output_budget,
+                    tries=logical_attempts,
+                    physical_attempts=physical_budget.used)
+            self._passthrough(
+                response, extra_headers=_upstream_retry_after_headers(response))
             log_summary(f"HTTP{status_code}")
             record_messages_usage(f"HTTP{status_code}", payload=payload)
             return
@@ -8405,18 +9643,19 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self.server, "share_gate", None) is not None \
                 and not _load_share_auth().valid_chat_request(body):
             self._error(400, "unsupported_chat_request",
-                        error_type="unsupported_chat_request")
+                        error_code="unsupported_chat_request")
             return
         if not body.get("messages"):
-            self._error(400, "Request body is missing the messages field")
+            self._error(400, "Request body is missing the messages field",
+                        error_code="invalid_request", param="messages")
             return
 
         req_model = body.get("model") or ""
         started_at = time.time()
         # Per-request id so every failure log line of one downstream request
-        # can be tied together in chat2api.log; it is written only to the log
-        # and never added to any response body.
-        request_id = secrets.token_hex(6)
+        # can be tied together in chat2api.log. The SAME value is returned in
+        # the X-Request-Id error header and in any in-band stream error event.
+        request_id = self._ensure_request_id()
         # The client's response mode and the upstream transport mode are
         # separate (N1): R13 aggregates only a fully selected (verified key,
         # model, protocol) triple, while every existing caller keeps the native
@@ -8441,9 +9680,10 @@ class Handler(BaseHTTPRequestHandler):
                 image_stats["images_before"], image_stats["historical_images"],
                 image_stats["current_turn_images"], MAX_IMAGES)
             self._error(400, image_error["message"],
-                        error_type=image_error["type"])
+                        error_code=image_error["type"], param="messages")
             _logger.info(
-                "request summary request=%s final=%s physical_attempts=0/%d "
+                "request summary request=%s final=%s tries=0 "
+                "physical_attempts=0/%d "
                 "upstream_retries=0 slow_retries=0 repetition_retries=0 "
                 "images_before=%d images_after=%d images_trimmed=%d duration_ms=%d",
                 request_id, image_error["type"], MAX_TOTAL_ATTEMPTS,
@@ -8506,18 +9746,27 @@ class Handler(BaseHTTPRequestHandler):
             # exception class name - never the upstream response body, the
             # request messages, or credentials.
             _logger.warning(
-                "chat failure request=%s stage=%s upstream_status=%s "
+                "chat failure request=%s stage=%s tries=%d "
+                "physical_attempts=%d/%d upstream_status=%s "
                 "exception=%s downstream=%d stream=%s model=%s duration_ms=%d",
-                request_id, stage,
+                request_id, stage, logical_attempts, physical_budget.used,
+                MAX_TOTAL_ATTEMPTS,
                 "-" if upstream_status is None else upstream_status,
                 exc_name or "-", downstream_code, client_stream, req_model,
                 int((time.time() - started_at) * 1000))
 
         physical_budget = _PhysicalRequestBudget(MAX_TOTAL_ATTEMPTS)
+        logical_attempts = 0
         transient_retries_done = 0
         slow_retries_done = 0
+        probe_retries_done = {}
+        conditional_probe_retries_done = 0
         repetition_retries_done = 0
         compat_retry_seen = False
+        # Last upstream HTTP status seen by this logical request, including an
+        # attempt that is later retried. A deadline reached while waiting for a
+        # retry reports it in ``detail.last_upstream_status``.
+        last_upstream_status = None
 
         # Hard wall-clock bound: attempt counts alone allow a silent gateway
         # (e.g. 120s first-byte budget x 6 attempts ≈ 12 minutes) to pin an
@@ -8550,6 +9799,18 @@ class Handler(BaseHTTPRequestHandler):
                     physical_budget.remaining > 0 and
                     time.monotonic() < request_deadline)
 
+        def probe_retry_available(status):
+            return (UPSTREAM_AUTO_RETRY and
+                    probe_retries_done.get(status, 0) < 1 and
+                    physical_budget.remaining > 0 and
+                    time.monotonic() < request_deadline)
+
+        def conditional_probe_retry_available():
+            return (UPSTREAM_AUTO_RETRY and
+                    conditional_probe_retries_done < 1 and
+                    physical_budget.remaining > 0 and
+                    time.monotonic() < request_deadline)
+
         def log_upstream_retry(reason, delay_s, slow):
             _logger.warning(
                 "upstream auto-retry request=%s model=%s retry=%d/%d "
@@ -8561,7 +9822,35 @@ class Handler(BaseHTTPRequestHandler):
                 MAX_TOTAL_ATTEMPTS, "slow" if slow else "fast",
                 reason, delay_s)
 
-        def open_chat_response(reader_lease=None):
+        def log_probe_retry(kind, status, delay_s, slow):
+            if kind == "probe":
+                probe_count = probe_retries_done.get(status, 0)
+                limit_text = "probe_retry=%d/1" % probe_count
+            else:
+                limit_text = ("conditional_probe_retry=%d/1"
+                              % conditional_probe_retries_done)
+            _logger.warning(
+                "upstream probe-retry request=%s model=%s kind=%s status=%d "
+                "%s physical_attempt=%d/%d class=%s delay_s=%.2f",
+                request_id, req_model, kind, status, limit_text,
+                physical_budget.used, MAX_TOTAL_ATTEMPTS,
+                "slow" if slow else "fast", delay_s)
+
+        def schedule_probe_retry(kind, status, attempt_elapsed_s, response):
+            nonlocal conditional_probe_retries_done
+            slow = _attempt_is_slow(attempt_elapsed_s)
+            if kind == "probe":
+                probe_retries_done[status] = (
+                    probe_retries_done.get(status, 0) + 1)
+            else:
+                conditional_probe_retries_done += 1
+            # Probes use the first fast backoff unless Retry-After overrides it.
+            delay_s = _retry_delay_seconds(
+                1, attempt_elapsed_s, response=response, slow=slow)
+            log_probe_retry(kind, status, delay_s, slow)
+            return delay_s
+
+        def open_chat_response():
             """Open one chat response, transparently retrying transient setup failures.
 
             Every real HTTP request consumes the shared physical budget,
@@ -8570,6 +9859,8 @@ class Handler(BaseHTTPRequestHandler):
             failure budget, but it still consumes one physical request.
             """
             nonlocal transient_retries_done, slow_retries_done, compat_retry_seen
+            nonlocal last_upstream_status, logical_attempts
+            nonlocal conditional_probe_retries_done
             compat_retry_used = False
             while True:
                 if time.monotonic() >= request_deadline:
@@ -8578,6 +9869,7 @@ class Handler(BaseHTTPRequestHandler):
                 if physical_budget.remaining <= 0:
                     raise _PhysicalBudgetExceeded(
                         "chat physical request budget exhausted")
+                logical_attempts += 1
                 attempt_started = time.monotonic()
                 try:
                     rr = proxy.call(
@@ -8586,8 +9878,7 @@ class Handler(BaseHTTPRequestHandler):
                         physical_budget=physical_budget,
                         request_deadline=request_deadline,
                         auth_wait_budget=auth_wait_budget,
-                        cancel_check=cancel_check,
-                        reader_lease=reader_lease)
+                        cancel_check=cancel_check)
                 except ReauthenticationRequired:
                     raise
                 except _RequestCancelled:
@@ -8597,22 +9888,12 @@ class Handler(BaseHTTPRequestHandler):
                     slow = _attempt_is_slow(elapsed)
                     if transient_retry_available(slow):
                         # The pre-output credential check can wait up to the
-                        # full authentication budget. Release the streaming
-                        # reader slot for that wait and take it back before the
-                        # retry send, exactly like the post-401 re-send path
-                        # (refresh_before_retry); otherwise a 180-second wait
-                        # would hold one of the reader slots and concurrent
-                        # clients would see a spurious 503.
-                        if reader_lease is not None:
-                            reader_lease.release()
+                        # full authentication budget. No upstream reader is
+                        # running during that wait, so no streaming-reader
+                        # capacity is held while concurrent clients wait.
                         outcome = _pre_output_verify(
                             proxy, auth_wait_budget, request_deadline,
                             cancel_check, "chat_setup", request_id)
-                        if outcome == "retry" and reader_lease is not None:
-                            if not reader_lease.acquire(blocking=False):
-                                raise _ReaderSlotUnavailable(
-                                    "stream reader capacity exhausted after "
-                                    "pre-output auth wait")
                         if outcome == "original":
                             raise
                         if outcome in ("cancelled", "stopped"):
@@ -8633,6 +9914,7 @@ class Handler(BaseHTTPRequestHandler):
                 except requests.RequestException:
                     raise
 
+                last_upstream_status = rr.status_code
                 if (rr.status_code == 400 and upstream_stream and
                         "stream_options" in body):
                     # Compatibility retry is pre-existing behavior, not an
@@ -8645,85 +9927,110 @@ class Handler(BaseHTTPRequestHandler):
                     compat_retry_seen = True
                     continue
 
-                if rr.status_code in _UPSTREAM_RETRYABLE_STATUS:
+                # ADR 0003 retry matrix: transient statuses use the fast/slow
+                # budgets, 402/403 get one probe each, and 400/422 get one
+                # conditional probe only when the upstream text is transient.
+                # Retry-After > 8s and X-Should-Retry: false veto a retry so
+                # the final response can keep the original status/header.
+                response_text = ""
+                if rr.status_code in _UPSTREAM_TEXT_CLASSIFICATION_STATUS:
+                    response_text = _bounded_upstream_error_text(rr)
+                kind, retry_after_s, veto_reason = _upstream_retry_plan(
+                    rr.status_code, response_text, rr)
+                if kind is not None:
                     elapsed = time.monotonic() - attempt_started
                     slow = _attempt_is_slow(elapsed)
-                    if not transient_retry_available(slow):
-                        return rr, compat_retry_used
-                    transient_retries_done += 1
-                    if slow:
-                        slow_retries_done += 1
-                    delay_s = _retry_delay_seconds(
-                        transient_retries_done, elapsed,
-                        response=rr, slow=slow)
-                    status_code = rr.status_code
-                    rr.close()
-                    log_upstream_retry(f"HTTP{status_code}", delay_s, slow)
-                    if _sleep_with_deadline(delay_s, request_deadline):
-                        continue
-                    raise _RequestDeadlineExceeded(
-                        "chat retry delay reached request deadline")
+                    if kind == "transient":
+                        available = transient_retry_available(slow)
+                    elif kind == "probe":
+                        available = probe_retry_available(rr.status_code)
+                    else:
+                        available = conditional_probe_retry_available()
+                    if available:
+                        status_code = rr.status_code
+                        if kind == "transient":
+                            transient_retries_done += 1
+                            if slow:
+                                slow_retries_done += 1
+                            delay_s = _retry_delay_seconds(
+                                transient_retries_done, elapsed,
+                                response=rr, slow=slow)
+                            rr.close()
+                            log_upstream_retry(f"HTTP{status_code}", delay_s,
+                                                slow)
+                        else:
+                            delay_s = schedule_probe_retry(
+                                kind, status_code, elapsed, rr)
+                            rr.close()
+                        if _sleep_with_deadline(delay_s, request_deadline):
+                            continue
+                        raise _RequestDeadlineExceeded(
+                            "chat retry delay reached request deadline")
+                    # The retry tier applies but its own budget, the physical
+                    # cap or the wall clock is exhausted: keep the original
+                    # upstream status and Retry-After for the client.
                 return rr, compat_retry_used
 
-        # Concurrency cap for streaming readers: acquire BEFORE any upstream
-        # access, so a full limit refuses with a clean 503 without ever
-        # touching the upstream. From here on the streaming slot is owned by
-        # this handler inside ONE finally: before the reader producer takes
-        # over, every path closes the current response and returns the slot;
-        # once start() succeeds the producer owns both and releases the slot.
-        reader_lease = (_ReaderSlotLease(_reader_slots)
-                        if upstream_stream else None)
-        if reader_lease is not None and not reader_lease.acquire(blocking=False):
-            log_failure("concurrency_limit_rejected", 503)
-            self._error(
-                503, "Too many concurrent streaming requests",
-                f"concurrent reader limit {STREAM_MAX_CONCURRENT_READERS} "
-                "reached; retry later", "too_many_concurrent_streams")
-            return
         # Streaming reads are bounded per socket read by chat_call_timeout()
         # above (STREAM_SOCKET_TIMEOUT_S cap, also clipped to the request
         # deadline); the NATIVE non-stream path and the non-stream client of
-        # the aggregate path use the existing flat 600s read cap.
+        # the aggregate path use the existing flat 600s read cap. There is no
+        # local cap on concurrent streaming readers: the operating system and
+        # UM bound threads and upstream connections.
         response = None
         compat_retry_used = False
+        producer_started = False
         try:
             try:
-                r, compat_retry_used = open_chat_response(reader_lease)
-            except _ReaderSlotUnavailable:
-                log_failure("concurrency_limit_reacquire_failed", 503)
-                self._error(
-                    503, "Too many concurrent streaming requests",
-                    f"concurrent reader limit {STREAM_MAX_CONCURRENT_READERS} "
-                    "reached; retry later", "too_many_concurrent_streams")
-                return
+                r, compat_retry_used = open_chat_response()
             except ReauthenticationRequired as exc:
-                log_failure("reauthentication_required", 503,
+                reauth_failed = isinstance(exc, ReauthenticationFailed)
+                log_failure("reauthentication_failed" if reauth_failed
+                            else "reauthentication_required",
+                            403 if reauth_failed else 503,
                             exc_name=type(exc).__name__)
-                self._reauthentication_error(
-                    getattr(exc, "reason", None) or str(exc) or None)
+                self._reauthentication_exception(exc)
                 return
             except _RequestCancelled:
                 self.close_connection = True
                 log_failure("client_disconnected", 0)
                 return
             except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
-                stage = ("request_deadline_exceeded"
-                         if isinstance(exc, _RequestDeadlineExceeded)
+                deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
+                stage = ("request_deadline_exceeded" if deadline_exceeded
                          else "physical_budget_exhausted")
-                log_failure(stage, 502, exc_name=type(exc).__name__)
+                log_failure(stage, 504 if deadline_exceeded else 502,
+                            exc_name=type(exc).__name__)
+                detail = {"reason": type(exc).__name__}
+                if last_upstream_status is not None:
+                    detail["last_upstream_status"] = last_upstream_status
                 self._error(
-                    502, "Upstream request could not start another attempt",
-                    type(exc).__name__,
-                    "request_deadline_exceeded" if
-                    isinstance(exc, _RequestDeadlineExceeded) else
-                    "upstream_attempt_budget_exhausted")
+                    504 if deadline_exceeded else 502,
+                    ("Upstream request exceeded the request deadline"
+                     if deadline_exceeded else
+                     "Upstream request could not start another attempt"),
+                    detail,
+                    error_code=("request_deadline_exceeded" if
+                                deadline_exceeded else
+                                "upstream_attempt_budget_exhausted"))
                 return
             except requests.RequestException as exc:
+                timeout = _is_upstream_timeout(exc)
                 log_failure("compat_retry_request_exception"
                             if compat_retry_seen else
-                            "upstream_request_exception", 502,
+                            "upstream_request_exception",
+                            504 if timeout else 502,
                             exc_name=type(exc).__name__)
-                self._error(502, "Upstream request failed", type(exc).__name__)
+                detail = {"reason": type(exc).__name__}
+                if last_upstream_status is not None:
+                    detail["last_upstream_status"] = last_upstream_status
+                self._error(
+                    504 if timeout else 502,
+                    ("Upstream request timed out" if timeout else
+                     "Upstream request failed"),
+                    detail,
+                    error_code=("upstream_timeout" if timeout else
+                                "upstream_unreachable"))
                 return
             response = r
             if r.status_code != 200:
@@ -8735,11 +10042,12 @@ class Handler(BaseHTTPRequestHandler):
                 # ("maximum context length ... your prompt has N tokens")
                 # inside the extractable window; longer bodies are still
                 # re-closed by _repair_truncated_json_prefix.
-                try:
-                    response_text = r.text[:2048]
-                except Exception:  # noqa: BLE001 — 上游错误体读取失败按空文本处理
-                    response_text = ""
+                response_text = _bounded_upstream_error_text(r)
+                # Preserve the upstream Retry-After on the final error (e.g. a
+                # 429 whose value is above the 8s local wait budget).
+                retry_headers = _upstream_retry_after_headers(r)
                 r.close()
+                response = None
                 if status_code == 401:
                     # The retry used a credential that was just published;
                     # its explicit rejection is a reauthentication failure,
@@ -8762,18 +10070,17 @@ class Handler(BaseHTTPRequestHandler):
                         model=body.get("model") or "",
                         requested_model=req_model, stream=client_stream, body=body,
                         response_text=response_text,
-                        output_budget=output_budget)
-                    self._error(
-                        status_code,
-                        "Upstream rejected the request; the server log has "
-                        "structured diagnostics",
-                        error_type="upstream_request_rejected")
+                        output_budget=output_budget,
+                        tries=logical_attempts,
+                        physical_attempts=physical_budget.used)
+                    self._upstream_status_error(status_code, response_text,
+                                                extra_headers=retry_headers)
                     return
                 log_failure("compat_retry_non_200" if compat_retry_used
-                            else "upstream_non_200", 502,
+                            else "upstream_non_200", status_code,
                             upstream_status=status_code)
-                self._error(502, "Upstream request failed",
-                            f"HTTP {status_code}: {response_text}")
+                self._upstream_status_error(status_code, response_text,
+                                            extra_headers=retry_headers)
                 return
 
             if not upstream_stream:
@@ -8787,15 +10094,18 @@ class Handler(BaseHTTPRequestHandler):
                                 upstream_status=r.status_code,
                                 exc_name=type(exc).__name__)
                     self._error(502, "Upstream returned invalid JSON",
-                                type(exc).__name__)
+                                type(exc).__name__,
+                                error_code="invalid_upstream_response")
                     return
                 r.close()
+                response = None
                 if not isinstance(data, dict):
                     log_failure("upstream_invalid_json_shape", 502,
                                 upstream_status=r.status_code,
                                 exc_name="InvalidResponseShape")
                     self._error(502, "Upstream returned an invalid JSON shape",
-                                type(data).__name__)
+                                type(data).__name__,
+                                error_code="invalid_upstream_response")
                     return
                 error_reason = _explicit_upstream_error_reason(data)
                 if error_reason is not None:
@@ -8817,7 +10127,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._error(502, "Upstream request failed",
                                 {"reason": "upstream_explicit_error",
                                  "upstream_message": error_reason},
-                                "upstream_explicit_error")
+                                error_code="upstream_explicit_error")
                     return
                 self._json(200, data)
                 usage = data.get("usage")
@@ -8832,10 +10142,12 @@ class Handler(BaseHTTPRequestHandler):
                 record_usage(req_model, False, started_at, usage,
                              _message_tokens(body.get("messages")), out_est)
                 _logger.info(
-                    "request summary request=%s final=ok physical_attempts=%d/%d "
+                    "request summary request=%s final=ok tries=%d "
+                    "physical_attempts=%d/%d "
                     "upstream_retries=%d slow_retries=%d "
                     "images_before=%d images_after=%d images_trimmed=%d duration_ms=%d",
-                    request_id, physical_budget.used, MAX_TOTAL_ATTEMPTS,
+                    request_id, logical_attempts, physical_budget.used,
+                    MAX_TOTAL_ATTEMPTS,
                     transient_retries_done, slow_retries_done,
                     image_stats["images_before"], image_stats["images_after"],
                     image_stats["images_trimmed"],
@@ -8855,7 +10167,7 @@ class Handler(BaseHTTPRequestHandler):
             # gateway/network failures may be retried transparently; after
             # visible output, errors stay in-band because replaying a second
             # completion would concatenate two answers.
-            upstream = _UpstreamStream(r, reader_slot=reader_lease)
+            upstream = _UpstreamStream(r)
             # Trace headers of the response that feeds the visible stream: the
             # stream-end log line reports these so a production stall carries
             # the upstream request id it can be claimed by.
@@ -8867,17 +10179,15 @@ class Handler(BaseHTTPRequestHandler):
                             exc_name=type(exc).__name__)
                 self._error(502, "Upstream stream failed to start",
                             "producer thread could not start",
-                            "upstream_stream_error")
+                            error_code="upstream_stream_error")
                 return
-            reader_lease = None  # ownership transferred to the producer
+            producer_started = True  # the producer owns the response now
         finally:
-            if reader_lease is not None:
-                if response is not None:
-                    try:
-                        response.close()
-                    except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
-                        pass
-                reader_lease.release()
+            if not producer_started and response is not None:
+                try:
+                    response.close()
+                except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
+                    pass
 
         if not client_stream:
             # N1: the upstream transport is SSE but the client asked for ONE
@@ -8885,8 +10195,8 @@ class Handler(BaseHTTPRequestHandler):
             # malformed frame, an explicit upstream error, an incomplete
             # terminal (a bare [DONE] or a bare finish_reason) or a broken
             # connection is a 502, never a partial 200.
-            # The reader slot stays owned by the producer (released in its
-            # finally); a client disconnect cancels the read and records the
+            # The producer owns the response (closed in its finally); a client
+            # disconnect cancels the read and records the
             # cancelled turn exactly like the stream path, while the ledger's
             # stream field stays the client's own (False). A failed aggregate
             # records ONE ``aggregate_<reason>`` row (usage/estimate from the
@@ -8940,7 +10250,7 @@ class Handler(BaseHTTPRequestHandler):
                         502, "Upstream request failed",
                         {"reason": "upstream_explicit_error",
                          "upstream_message": aggregate_reason},
-                        "upstream_explicit_error")
+                        error_code="upstream_explicit_error")
                 except (ConnectionError, OSError, ValueError):
                     pass
             elif aggregate_status == "upstream_bad_frame":
@@ -8949,7 +10259,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._error(
                         502, "Upstream returned an invalid SSE frame",
                         {"reason": "upstream_bad_frame"},
-                        "upstream_stream_error")
+                        error_code="upstream_stream_error")
                 except (ConnectionError, OSError, ValueError):
                     pass
             elif aggregate_status == "upstream_missing_terminal":
@@ -8960,7 +10270,7 @@ class Handler(BaseHTTPRequestHandler):
                         502,
                         "Upstream stream ended without a complete terminal",
                         {"reason": "upstream_missing_terminal"},
-                        "upstream_stream_error")
+                        error_code="upstream_stream_error")
                 except (ConnectionError, OSError, ValueError):
                     pass
             elif aggregate_status == "upstream_read_error":
@@ -8975,13 +10285,13 @@ class Handler(BaseHTTPRequestHandler):
                          "exception": (type(aggregate_exc).__name__
                                        if aggregate_exc is not None
                                        else None)},
-                        "upstream_stream_error")
+                        error_code="upstream_stream_error")
                 except (ConnectionError, OSError, ValueError):
                     pass
             if aggregate_status == "client_disconnected":
                 # The downstream is gone (or the 200 body could not be
-                # written): close it, and keep the reader slot owned by the
-                # producer until it releases in its own finally.
+                # written): close it, and keep the upstream response owned
+                # by the producer until it closes in its own finally.
                 self.close_connection = True
             if aggregate_status == "ok":
                 out_est = 0
@@ -9015,11 +10325,13 @@ class Handler(BaseHTTPRequestHandler):
                     aggregator.output_estimate(),
                     status=f"aggregate_{aggregate_status}")
             _logger.info(
-                "request summary request=%s final=%s physical_attempts=%d/%d "
+                "request summary request=%s final=%s tries=%d "
+                "physical_attempts=%d/%d "
                 "upstream_retries=%d slow_retries=%d "
                 "images_before=%d images_after=%d images_trimmed=%d "
                 "duration_ms=%d",
-                request_id, aggregate_status, physical_budget.used,
+                request_id, aggregate_status, logical_attempts,
+                physical_budget.used,
                 MAX_TOTAL_ATTEMPTS, transient_retries_done,
                 slow_retries_done, image_stats["images_before"],
                 image_stats["images_after"], image_stats["images_trimmed"],
@@ -9036,90 +10348,134 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type",
                              "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Request-Id", self._ensure_request_id())
             self.send_header("Connection", "close")
             origin = self._cors_allow_origin()
             if origin:
                 self.send_header("Access-Control-Allow-Origin", origin)
             self.end_headers()
 
-        def fail_hidden_retry(exc_name):
+        def fail_hidden_retry(exc_name, *, status=502,
+                              error_code="upstream_stream_error",
+                              extra_detail=None,
+                              response_text=None, usage_status=None):
             """Surface a failed hidden retry according to header state."""
             self.close_connection = True
             detail = self._stream_error_detail(
-                "upstream_read_error", started_at, 0, exc_name)
+                "upstream_read_error", started_at, 0, exc_name,
+                extra=extra_detail)
             try:
                 if preflight_headers_sent:
                     self._stream_error_event("upstream_read_error", detail)
+                elif response_text is not None:
+                    self._upstream_status_error(
+                        status, response_text,
+                        detail=extra_detail, error_code=error_code)
                 else:
                     self._error(
-                        502, STREAM_ERROR_MESSAGES["upstream_read_error"],
-                        detail, "upstream_stream_error")
+                        status,
+                        STREAM_ERROR_MESSAGES["upstream_read_error"],
+                        detail, error_code=error_code)
             except (ConnectionError, OSError, ValueError):
                 pass
             record_usage(
                 req_model, True, started_at, None,
                 _message_tokens(body.get("messages")), 0,
-                status="upstream_read_error")
+                status=usage_status or "upstream_read_error")
 
         def start_hidden_retry_attempt(stage):
             """Open a fresh streaming attempt while no visible body was sent."""
             nonlocal upstream_trace
-            retry_lease = _ReaderSlotLease(_reader_slots)
-            remaining = request_deadline - time.monotonic()
-            if remaining <= 0:
-                log_failure(f"{stage}_retry_deadline", 502,
+            if time.monotonic() >= request_deadline:
+                log_failure(f"{stage}_retry_deadline", 504,
                             exc_name="RequestDeadlineExceeded")
-                fail_hidden_retry("RequestDeadlineExceeded")
-                return None
-            if not retry_lease.acquire(timeout=min(2.0, remaining)):
-                log_failure(f"{stage}_retry_concurrency_limit", 502,
-                            exc_name="RetrySlotUnavailable")
-                fail_hidden_retry("RetrySlotUnavailable")
+                fail_hidden_retry(
+                    "RequestDeadlineExceeded", status=504,
+                    error_code="request_deadline_exceeded",
+                    extra_detail=(
+                        {"last_upstream_status": last_upstream_status}
+                        if last_upstream_status is not None else None),
+                    usage_status="request_deadline_exceeded")
                 return None
 
             retry_response = None
-            slot_owned = True
+            retry_owned = True
             try:
                 try:
-                    rr, _compat = open_chat_response(retry_lease)
-                except _ReaderSlotUnavailable as exc:
-                    # Authentication succeeded, but another request took the
-                    # freed reader slot before the real re-send. Fail before
-                    # opening any upstream connection; the retry lease was
-                    # already released by Proxy.call's re-acquire failure.
-                    log_failure(f"{stage}_retry_concurrency_limit", 502,
-                                exc_name=type(exc).__name__)
-                    fail_hidden_retry("RetrySlotUnavailable")
-                    return None
+                    rr, _compat = open_chat_response()
                 except ReauthenticationRequired as exc:
+                    reauth_failed = isinstance(exc, ReauthenticationFailed)
+                    status = 403 if reauth_failed else 503
+                    error_code = ("reauthentication_failed" if reauth_failed
+                                  else "reauthentication_required")
                     log_failure(f"{stage}_retry_reauthentication_required",
-                                502, exc_name=type(exc).__name__)
-                    fail_hidden_retry(type(exc).__name__)
+                                 status, exc_name=type(exc).__name__)
+                    if preflight_headers_sent:
+                        fail_hidden_retry(
+                            type(exc).__name__, status=status,
+                            error_code=error_code,
+                            usage_status=error_code)
+                    else:
+                        self.close_connection = True
+                        self._reauthentication_exception(exc)
+                        record_usage(
+                            req_model, True, started_at, None,
+                            _message_tokens(body.get("messages")), 0,
+                            status=error_code)
                     return None
                 except (_RequestDeadlineExceeded,
                         _PhysicalBudgetExceeded) as exc:
-                    log_failure(f"{stage}_retry_budget_exhausted", 502,
-                                exc_name=type(exc).__name__)
-                    fail_hidden_retry(type(exc).__name__)
+                    deadline_exceeded = isinstance(
+                        exc, _RequestDeadlineExceeded)
+                    log_failure(f"{stage}_retry_budget_exhausted",
+                                 504 if deadline_exceeded else 502,
+                                 exc_name=type(exc).__name__)
+                    fail_hidden_retry(
+                        type(exc).__name__,
+                        status=504 if deadline_exceeded else 502,
+                        error_code=("request_deadline_exceeded"
+                                    if deadline_exceeded else
+                                    "upstream_attempt_budget_exhausted"),
+                        extra_detail=(
+                            {"last_upstream_status": last_upstream_status}
+                            if last_upstream_status is not None else None),
+                        usage_status=("request_deadline_exceeded"
+                                      if deadline_exceeded else
+                                      "upstream_attempt_budget_exhausted"))
                     return None
                 except requests.RequestException as exc:
-                    log_failure(f"{stage}_retry_request_exception", 502,
-                                exc_name=type(exc).__name__)
-                    fail_hidden_retry(type(exc).__name__)
+                    timeout = _is_upstream_timeout(exc)
+                    log_failure(f"{stage}_retry_request_exception",
+                                 504 if timeout else 502,
+                                 exc_name=type(exc).__name__)
+                    fail_hidden_retry(
+                        type(exc).__name__,
+                        status=504 if timeout else 502,
+                        error_code=("upstream_timeout" if timeout else
+                                    "upstream_unreachable"),
+                        extra_detail=(
+                            {"last_upstream_status": last_upstream_status}
+                            if last_upstream_status is not None else None),
+                        usage_status=("upstream_timeout" if timeout else
+                                      "upstream_unreachable"))
                     return None
                 retry_response = rr
 
                 if rr.status_code != 200:
                     status_code = rr.status_code
+                    response_text = _bounded_upstream_error_text(rr)
                     rr.close()
                     retry_response = None
-                    log_failure(f"{stage}_retry_non_200", 502,
+                    log_failure(f"{stage}_retry_non_200", status_code,
                                 upstream_status=status_code)
-                    fail_hidden_retry(f"HTTP{status_code}")
+                    fail_hidden_retry(
+                        f"HTTP{status_code}", status=status_code,
+                        error_code=_upstream_error_code(status_code),
+                        response_text=response_text,
+                        usage_status=f"HTTP{status_code}")
                     return None
 
-                retry_upstream = _UpstreamStream(
-                    rr, reader_slot=retry_lease)
+                retry_upstream = _UpstreamStream(rr)
                 try:
                     retry_upstream.start()
                 except Exception as exc:  # noqa: BLE001 — 重试生产者启动失败要转成重试失败
@@ -9131,16 +10487,15 @@ class Handler(BaseHTTPRequestHandler):
                 # stream-end log line must report ITS trace headers, not the
                 # discarded attempt's.
                 upstream_trace = _upstream_trace_headers(rr)
-                slot_owned = False
+                retry_owned = False
                 return retry_upstream
             finally:
-                if slot_owned:
+                if retry_owned:
                     if retry_response is not None:
                         try:
                             retry_response.close()
                         except Exception:  # noqa: BLE001 — 关闭重试响应是尽力而为
                             pass
-                    retry_lease.release()
 
         repetition_final_origin = None
         preflight_enabled = (
@@ -9181,7 +10536,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
 
                 if action == "upstream_retry":
-                    _release_upstream_reader(upstream)
+                    upstream.cancel()
                     outcome = _pre_output_verify(
                         proxy, auth_wait_budget, request_deadline, cancel_check,
                         "chat_preflight", request_id)
@@ -9209,13 +10564,20 @@ class Handler(BaseHTTPRequestHandler):
                     elapsed = time.monotonic() - stream_attempt_started
                     slow = _attempt_is_slow(elapsed)
                     if not transient_retry_available(slow):
-                        _release_upstream_reader(upstream)
-                        fail_hidden_retry(retry_reason or "StreamFailure")
+                        upstream.cancel()
+                        retry_status, retry_code = _hidden_retry_failure(
+                            retry_reason)
+                        fail_hidden_retry(
+                            retry_reason or "StreamFailure",
+                            status=retry_status, error_code=retry_code,
+                            usage_status=("upstream_timeout"
+                                          if retry_status == 504 else
+                                          "upstream_read_error"))
                         return
                     transient_retries_done += 1
                     if slow:
                         slow_retries_done += 1
-                    _release_upstream_reader(upstream)
+                    upstream.cancel()
                     delay_s = _retry_delay_seconds(
                         transient_retries_done, elapsed, slow=slow)
                     log_upstream_retry(
@@ -9231,7 +10593,14 @@ class Handler(BaseHTTPRequestHandler):
                             discarded_reasoning_chars // 4,
                             status="upstream_transient_retried")
                     if not _sleep_with_deadline(delay_s, request_deadline):
-                        fail_hidden_retry("RequestDeadlineExceeded")
+                        fail_hidden_retry(
+                            "RequestDeadlineExceeded", status=504,
+                            error_code="request_deadline_exceeded",
+                            extra_detail=(
+                                {"last_upstream_status": last_upstream_status}
+                                if last_upstream_status is not None
+                                else None),
+                            usage_status="request_deadline_exceeded")
                         return
                     upstream = start_hidden_retry_attempt("upstream")
                     if upstream is None:
@@ -9331,6 +10700,7 @@ class Handler(BaseHTTPRequestHandler):
         got_first_data = preflight_saw_substantive
         status = "ok"
         exc_name = None
+        exc_obj = None
         # Sanitized reason of an explicit upstream error event, when one was
         # recognized (see the error branch in process_event below); travels
         # in the failure detail, never the raw upstream object.
@@ -9352,6 +10722,7 @@ class Handler(BaseHTTPRequestHandler):
             nonlocal tool_action_seen
             nonlocal got_first_data, status, exc_name
             nonlocal explicit_error_reason
+            nonlocal exc_obj
 
             # Preserve the previous downstream bytes for every one-line event:
             # old code wrote ``line + \"\n\n\"`` and then wrote the separator
@@ -9412,6 +10783,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header(
                         "Content-Type", "text/event-stream; charset=utf-8")
                     self.send_header("Cache-Control", "no-cache")
+                    self.send_header("X-Request-Id",
+                                     self._ensure_request_id())
                     self.send_header("Connection", "close")
                     origin = self._cors_allow_origin()
                     if origin:
@@ -9569,6 +10942,7 @@ class Handler(BaseHTTPRequestHandler):
             status = "degenerate_repetition"
         except Exception as exc:  # noqa: BLE001 — 上游读失败按 upstream_read_error 分类
             exc_name = type(exc).__name__
+            exc_obj = exc
             status = "upstream_read_error"
         finally:
             upstream.cancel()
@@ -9608,12 +10982,14 @@ class Handler(BaseHTTPRequestHandler):
             # from evidence (are 5 retries too few/too many?) after a week.
             try:
                 _logger.info(
-                    "request summary request=%s final=%s physical_attempts=%d/%d "
+                    "request summary request=%s final=%s tries=%d "
+                    "physical_attempts=%d/%d "
                     "upstream_retries=%d slow_retries=%d "
                     "repetition_retries=%d line_loop_hits=%d "
                     "images_before=%d images_after=%d "
                     "images_trimmed=%d duration_ms=%d",
-                    request_id, status, physical_budget.used, MAX_TOTAL_ATTEMPTS,
+                    request_id, status, logical_attempts,
+                    physical_budget.used, MAX_TOTAL_ATTEMPTS,
                     transient_retries_done, slow_retries_done,
                     repetition_retries_done, line_loop_observer.hits,
                     image_stats["images_before"],
@@ -9650,13 +11026,21 @@ class Handler(BaseHTTPRequestHandler):
                         pass  # client left before the error event landed
                 else:
                     # Nothing was streamed: the 200 never went out, so a
-                    # non-2xx is still honest and lets retry-capable clients
-                    # (a retry-capable client treats HTTP 502 as retryable) recover a
-                    # transient upstream failure themselves.
+                    # non-2xx is still honest. A first-byte/read timeout is
+                    # the gateway's own wait expiring (504); every other
+                    # transport failure keeps the existing 502.
+                    timeout = (status == "upstream_first_byte_timeout" or
+                               (status == "upstream_read_error" and
+                                _is_upstream_timeout(exc_obj)))
                     try:
-                        self._error(502, STREAM_ERROR_MESSAGES.get(
-                            status, "Upstream stream failed."), detail,
-                            "upstream_stream_error")
+                        self._error(
+                            504 if timeout else 502,
+                            ("Upstream stream timed out" if timeout else
+                             STREAM_ERROR_MESSAGES.get(
+                                 status, "Upstream stream failed.")),
+                            detail,
+                            error_code=("upstream_timeout" if timeout else
+                                         "upstream_stream_error"))
                     except (ConnectionError, OSError, ValueError):
                         pass  # client left before the failure was written
             output_chars = completion_chars + reasoning_chars
@@ -9678,19 +11062,39 @@ class Handler(BaseHTTPRequestHandler):
         return detail
 
     def _stream_error_event(self, status, detail):
-        """Send one in-band SSE error event; never a second HTTP status."""
+        """Send one in-band SSE error event; never a second HTTP status.
+
+        The 200 headers were already sent, so this event carries the SAME
+        ``X-Request-Id`` value the response header announced (or the one a
+        pre-commit error would have carried) to keep the failure correlatable.
+        The OpenAI-shaped envelope is the same one ``_error`` uses for a normal
+        error: ``type`` is the category, ``code`` is the stable machine code,
+        ``param`` is null and ``detail.reason`` keeps the stream failure reason.
+        """
+        error_code = status
         payload = {"error": {"message": STREAM_ERROR_MESSAGES.get(
                                  status, "Upstream stream failed."),
-                             "type": "upstream_stream_error",
-                             "code": status,
+                             "type": _error_category(502, error_code),
+                             "code": error_code,
+                             "param": None,
+                             "request_id": self._ensure_request_id(),
                              "detail": detail}}
         self.wfile.write(
             b"data: " + json.dumps(payload, ensure_ascii=False).encode("utf-8")
             + b"\n\n")
         self.wfile.flush()
 
-    def _passthrough(self, r: requests.Response):
+    def _passthrough(self, r: requests.Response, extra_headers=None):
         try:
+            if r.status_code >= 400:
+                # Every exposed upstream path keeps the upstream status but
+                # rebuilds the body in the client protocol's envelope; the raw
+                # upstream body is never relayed. Retry-After (when the final
+                # upstream status carries one) is forwarded unchanged.
+                self._upstream_status_error(
+                    r.status_code, _bounded_upstream_error_text(r),
+                    extra_headers=extra_headers)
+                return
             self.send_response(r.status_code)
             for k, v in r.headers.items():
                 if k.lower() in ("content-type", "content-length", "cache-control"):
@@ -9722,35 +11126,21 @@ class Handler(BaseHTTPRequestHandler):
         touching the relayed bytes: the wire form below is still the upstream's
         exact bytes, so the Anthropic byte-fidelity contract is unchanged.
         """
-        slot = _reader_slots
-        if not slot.acquire(blocking=False):
-            # The compat response has already been opened before we can decide
-            # whether a local reader slot exists. Release it immediately when
-            # the cap is full; otherwise a rejected request would still leave
-            # an idle upstream connection behind.
-            try:
-                r.close()
-            except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
-                pass
-            self._error(503, "Too many concurrent streaming requests",
-                        error_type="too_many_concurrent_streams")
-            return "concurrency_limit"
-
         upstream = None
-        slot_owned = True
+        producer_started = False
         deadline = (request_deadline if request_deadline is not None
                     else time.monotonic() + STREAM_FIRST_BYTE_TIMEOUT_S)
         first_data_deadline = min(
             deadline, time.monotonic() + STREAM_FIRST_BYTE_TIMEOUT_S)
 
         try:
-            upstream = _UpstreamStream(r, reader_slot=slot)
+            upstream = _UpstreamStream(r)
             try:
                 upstream.start()
             except Exception as exc:
                 raise _CompatStreamRetryable(
                     f"producer_start_failed:{type(exc).__name__}") from exc
-            slot_owned = False  # producer now owns response.close() + slot.release()
+            producer_started = True  # the producer owns response.close() now
 
             event_lines = []
             prelude = []
@@ -9772,6 +11162,7 @@ class Handler(BaseHTTPRequestHandler):
                 for k, v in r.headers.items():
                     if k.lower() in ("content-type", "cache-control"):
                         self.send_header(k, v)
+                self.send_header("X-Request-Id", self._ensure_request_id())
                 origin = self._cors_allow_origin()
                 if origin:
                     self.send_header("Access-Control-Allow-Origin", origin)
@@ -9780,11 +11171,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 committed = True
 
-            def emit_in_band_error(message):
+            def emit_in_band_error(message, code="upstream_read_error"):
+                payload = {"type": "error", "error": {
+                    "type": "api_error", "message": message,
+                    "code": code,
+                    "request_id": self._ensure_request_id(),
+                    "detail": {"reason": code}}}
                 self.wfile.write(
-                    b'event: error\ndata: {"type":"error","error":'
-                    b'{"type":"api_error","message":'
-                    + json.dumps(message).encode("utf-8") + b"}}\n\n")
+                    b"event: error\ndata: "
+                    + json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                    + b"\n\n")
                 self.wfile.flush()
 
             def feed_guard(piece):
@@ -9881,7 +11277,8 @@ class Handler(BaseHTTPRequestHandler):
                         emit_in_band_error(
                             "[chat2api:degenerate_repetition] Upstream model "
                             "fell into a repetition loop; the proxy cut the stream. "
-                            "This completion is incomplete.")
+                            "This completion is incomplete.",
+                            code="degenerate_repetition")
                         status = "degenerate_repetition"
                         return False
                     self.wfile.write(wire)
@@ -9937,10 +11334,13 @@ class Handler(BaseHTTPRequestHandler):
                         if not committed:
                             status = "upstream_read_error"
                             raise _CompatStreamRetryable(
-                                type(exc).__name__) from exc
+                                "upstream_read_timeout"
+                                if _is_upstream_timeout(exc)
+                                else type(exc).__name__) from exc
                         emit_in_band_error(
                             f"Upstream connection failed mid-stream "
-                            f"({type(exc).__name__}); the completion is incomplete.")
+                            f"({type(exc).__name__}); the completion is incomplete.",
+                            code="upstream_read_error")
                         status = "upstream_read_error"
                         return status
                     except Exception as exc:  # noqa: BLE001 — 未提交的兼容流失败要转成 502
@@ -9948,12 +11348,13 @@ class Handler(BaseHTTPRequestHandler):
                             self._error(
                                 502, "Upstream compatibility stream was invalid",
                                 type(exc).__name__,
-                                error_type="upstream_stream_error")
+                                error_code="upstream_stream_error")
                             status = "upstream_read_error"
                             return status
                         emit_in_band_error(
                             f"Upstream stream failed ({type(exc).__name__}); "
-                            "the completion is incomplete.")
+                            "the completion is incomplete.",
+                            code="upstream_read_error")
                         status = "upstream_read_error"
                         return status
 
@@ -9970,8 +11371,15 @@ class Handler(BaseHTTPRequestHandler):
                             # A clean EOF without a terminal event is a
                             # TRUNCATED completion: the client saw the
                             # upstream's bytes, so this is not retryable,
-                            # but it must never be recorded as "ok".
+                            # but it must never be recorded as "ok". The
+                            # local in-band error uses the Anthropic shape
+                            # and carries the machine code, without a
+                            # synthetic message_stop.
                             status = "upstream_eof_without_event"
+                            emit_in_band_error(
+                                "Upstream stream ended without message_stop; "
+                                "the completion is incomplete.",
+                                code=status)
                         return status
 
                     if item:
@@ -9998,11 +11406,11 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             if upstream is not None:
                 upstream.cancel()
-            if slot_owned:
+            if not producer_started:
                 try:
                     r.close()
-                finally:
-                    slot.release()
+                except Exception:  # noqa: BLE001 — 关闭响应是尽力而为
+                    pass
 
 
 
@@ -10095,6 +11503,18 @@ class _ShareInstanceControl:
                     "result": {"detail": "unknown instance action"}}
         return {"v": 2, "request_id": request_id, "ok": True,
                 "error_code": "ok", "result": result}
+
+
+class GatewayHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTP server with a listen backlog for connection bursts.
+
+    ``request_queue_size`` is a class attribute read by
+    ``socketserver.TCPServer.server_bind()`` before ``listen()``, so it takes
+    effect at bind time. The stdlib default of 5 drops bursts of new
+    share-gateway connections before the accept loop can pick them up.
+    """
+
+    request_queue_size = 128
 
 
 def main():
@@ -10247,7 +11667,7 @@ def main():
             "binding chat2api to a non-loopback address requires "
             "CHAT2API_LOCAL_API_KEY")
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = GatewayHTTPServer((args.host, args.port), Handler)
     server.proxy = proxy
     server.share_gate = (_load_share_auth().ShareGate(args.share_config,
                                     auth_mode=args.auth_mode)
@@ -10573,22 +11993,6 @@ def _missing_browser_error(platform=None):
             "was found in PATH")
 
 
-def _release_upstream_reader(upstream):
-    """Stop a failed pre-output stream and return its reader slot BEFORE wait.
-
-    The producer still owns the socket and releases the same slot in its own
-    finally; the lease release is idempotent, so the authentication wait never
-    holds the streaming-reader capacity while it waits for recovery.
-    """
-    slot = getattr(upstream, "_slot", None)
-    if slot is not None:
-        try:
-            slot.release()
-        except Exception:  # noqa: BLE001 — 释放读槽是幂等清理
-            pass
-    upstream.cancel()
-
-
 def _clamp_auth_wait_budget(raw, fallback):
     """Parse one operator-supplied budget; an invalid value is explicit.
 
@@ -10730,6 +12134,12 @@ def _pre_output_verify(proxy, auth_wait_budget, request_deadline, cancel_check,
     if stale:
         # A late result for the old credential never overrides the new one.
         return "retry"
+    if (auth_wait_budget is not None
+            and not auth_wait_budget.claim_reauth_attempt()):
+        # Ticket #63: this logical request already spent its one
+        # reauthentication attempt; keep the original transient failure
+        # instead of opening a second login window.
+        return "original"
     try:
         recovered = proxy.refresh(
             deadline=request_deadline,
@@ -10744,6 +12154,162 @@ def _pre_output_verify(proxy, auth_wait_budget, request_deadline, cancel_check,
     if recovered:
         return "retry"
     return "original"
+
+
+def _open_upstream_response_with_retries(
+        proxy, method, path, *, stream, json_body, headers, timeout,
+        auth_wait_budget, request_deadline, cancel_check, request_id,
+        endpoint):
+    """Open one upstream response with the ADR 0003 pre-commit retry policy.
+
+    Returns ``(response, response_text)``. ``response_text`` is the bounded
+    upstream error body for statuses whose retry tier needs it (400/403/422),
+    empty otherwise. A 200 is returned immediately: stream/pre-commit handling
+    stays with each protocol (ticket #64). ReauthenticationRequired and
+    _RequestCancelled propagate unchanged. A final transport failure keeps its
+    requests exception with ``last_upstream_status`` attached; a deadline
+    reached while waiting to retry raises ``_RequestDeadlineExceeded`` with the
+    same attribute.
+    """
+    physical_budget = _PhysicalRequestBudget(MAX_TOTAL_ATTEMPTS)
+    transient_retries = 0
+    slow_retries = 0
+    probe_retries = {}
+    conditional_probe_retries = 0
+    last_upstream_status = None
+    request_headers = headers or {}
+
+    def timeout_value():
+        return timeout() if callable(timeout) else timeout
+
+    def transient_available(slow):
+        return (UPSTREAM_AUTO_RETRY and
+                transient_retries < UPSTREAM_AUTO_RETRIES and
+                (not slow or slow_retries < UPSTREAM_SLOW_AUTO_RETRIES) and
+                physical_budget.remaining > 0 and
+                time.monotonic() < request_deadline)
+
+    def probe_available(status):
+        return (UPSTREAM_AUTO_RETRY and
+                probe_retries.get(status, 0) < 1 and
+                physical_budget.remaining > 0 and
+                time.monotonic() < request_deadline)
+
+    def conditional_available():
+        return (UPSTREAM_AUTO_RETRY and
+                conditional_probe_retries < 1 and
+                physical_budget.remaining > 0 and
+                time.monotonic() < request_deadline)
+
+    def deadline_error(reason):
+        exc = _RequestDeadlineExceeded(reason)
+        exc.last_upstream_status = last_upstream_status
+        return exc
+
+    while True:
+        if time.monotonic() >= request_deadline:
+            raise deadline_error("upstream request wall-clock deadline exhausted")
+        if physical_budget.remaining <= 0:
+            exc = _PhysicalBudgetExceeded(
+                "upstream physical request budget exhausted")
+            exc.last_upstream_status = last_upstream_status
+            raise exc
+        attempt_started = time.monotonic()
+        try:
+            r = proxy.call(
+                method, path, json=json_body, stream=stream,
+                headers=request_headers, timeout=timeout_value(),
+                physical_budget=physical_budget,
+                request_deadline=request_deadline,
+                auth_wait_budget=auth_wait_budget,
+                cancel_check=cancel_check)
+        except (ReauthenticationRequired, _RequestCancelled):
+            raise
+        except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
+            exc.last_upstream_status = last_upstream_status
+            raise
+        except requests.RequestException as exc:
+            elapsed = time.monotonic() - attempt_started
+            slow = _attempt_is_slow(elapsed)
+            if (isinstance(exc, _UPSTREAM_TRANSIENT_EXCEPTIONS)
+                    and transient_available(slow)):
+                delay = _retry_delay_seconds(
+                    transient_retries + 1, elapsed, slow=slow)
+                if _sleep_with_deadline(delay, request_deadline):
+                    transient_retries += 1
+                    if slow:
+                        slow_retries += 1
+                    _logger.warning(
+                        "upstream auto-retry request=%s endpoint=%s "
+                        "retry=%d/%d slow_retry=%d/%d physical_attempt=%d/%d "
+                        "class=%s reason=%s delay_s=%.2f",
+                        request_id, endpoint, transient_retries,
+                        UPSTREAM_AUTO_RETRIES, slow_retries,
+                        UPSTREAM_SLOW_AUTO_RETRIES, physical_budget.used,
+                        MAX_TOTAL_ATTEMPTS, "slow" if slow else "fast",
+                        type(exc).__name__, delay)
+                    continue
+                raise deadline_error(
+                    "upstream retry delay reached request deadline") from exc
+            exc.last_upstream_status = last_upstream_status
+            raise
+
+        last_upstream_status = r.status_code
+        response_text = ""
+        if r.status_code in _UPSTREAM_TEXT_CLASSIFICATION_STATUS:
+            response_text = _bounded_upstream_error_text(r)
+        kind, _retry_after_s, _veto_reason = _upstream_retry_plan(
+            r.status_code, response_text, r)
+        if kind is None:
+            return r, response_text
+        elapsed = time.monotonic() - attempt_started
+        slow = _attempt_is_slow(elapsed)
+        if kind == "transient":
+            available = transient_available(slow)
+        elif kind == "probe":
+            available = probe_available(r.status_code)
+        else:
+            available = conditional_available()
+        if not available:
+            return r, response_text
+        status_code = r.status_code
+        retry_number = (transient_retries + 1 if kind == "transient" else 1)
+        delay = _retry_delay_seconds(
+            retry_number, elapsed, response=r, slow=slow)
+        r.close()
+        if kind == "transient":
+            transient_retries += 1
+            if slow:
+                slow_retries += 1
+            _logger.warning(
+                "upstream auto-retry request=%s endpoint=%s retry=%d/%d "
+                "slow_retry=%d/%d physical_attempt=%d/%d class=%s "
+                "reason=HTTP%d delay_s=%.2f",
+                request_id, endpoint, transient_retries,
+                UPSTREAM_AUTO_RETRIES, slow_retries,
+                UPSTREAM_SLOW_AUTO_RETRIES, physical_budget.used,
+                MAX_TOTAL_ATTEMPTS, "slow" if slow else "fast",
+                status_code, delay)
+        else:
+            if kind == "probe":
+                probe_retries[status_code] = (
+                    probe_retries.get(status_code, 0) + 1)
+                counter_text = ("probe_retry=%d/1"
+                                % probe_retries[status_code])
+            else:
+                conditional_probe_retries += 1
+                counter_text = ("conditional_probe_retry=%d/1"
+                                % conditional_probe_retries)
+            _logger.warning(
+                "upstream probe-retry request=%s endpoint=%s kind=%s "
+                "status=%d %s physical_attempt=%d/%d class=%s "
+                "delay_s=%.2f",
+                request_id, endpoint, kind, status_code, counter_text,
+                physical_budget.used, MAX_TOTAL_ATTEMPTS,
+                "slow" if slow else "fast", delay)
+        if _sleep_with_deadline(delay, request_deadline):
+            continue
+        raise deadline_error("upstream retry delay reached request deadline")
 
 
 def _compat_pre_output_retry(handler, exc, elapsed, retry_available, proxy,

@@ -1,0 +1,945 @@
+{
+ "actions": {
+  "body": {
+   "actions": [
+    {
+     "action": "service.restart",
+     "cancelable": true,
+     "description": "\u91cd\u542f UM \u5206\u4eab\u5165\u53e3\uff08\u505c\u6b62\u540e\u663e\u5f0f\u542f\u52a8\uff1b\u4e2d\u65ad\u5728\u9014\u5de5\u4f5c\uff09",
+     "disabled_reason": null,
+     "enabled": true,
+     "param_schema": {}
+    },
+    {
+     "action": "service.start",
+     "cancelable": true,
+     "description": "\u542f\u52a8 UM \u5206\u4eab\u5165\u53e3\uff08Linux pid \u6587\u4ef6\u4e0e\u771f\u5b9e\u8fdb\u7a0b\u8eab\u4efd\uff09",
+     "disabled_reason": null,
+     "enabled": true,
+     "param_schema": {}
+    },
+    {
+     "action": "service.stop",
+     "cancelable": true,
+     "description": "\u505c\u6b62 UM \u5206\u4eab\u5165\u53e3\uff08\u5148\u6301\u4e45\u5316\u505c\u7528\u610f\u56fe\uff0c\u518d\u53d1\u4fe1\u53f7\uff09",
+     "disabled_reason": null,
+     "enabled": true,
+     "param_schema": {}
+    },
+    {
+     "action": "share.diagnostics",
+     "cancelable": true,
+     "description": "UM \u5206\u4eab\u5206\u5c42\u8bca\u65ad\uff08\u53ea\u8bfb\uff1b\u542b\u7ef4\u62a4\u89c6\u56fe\u4e0e\u6545\u969c\u7559\u8bc1\uff09",
+     "disabled_reason": null,
+     "enabled": true,
+     "param_schema": {}
+    },
+    {
+     "action": "share.gateway_restart",
+     "cancelable": true,
+     "description": "\u91cd\u542f\u5206\u4eab\u5165\u53e3 8100\uff08\u5355\u5c42\uff1a\u7ecf\u53d7\u9650 broker \u5bbf\u4e3b\u534f\u8bae\uff09",
+     "disabled_reason": null,
+     "enabled": true,
+     "param_schema": {
+      "restart_budget_s": {
+       "max": 180,
+       "min": 10,
+       "type": "int"
+      }
+     }
+    },
+    {
+     "action": "share.status",
+     "cancelable": true,
+     "description": "UM \u5206\u4eab\u5206\u5c42\u72b6\u6001\u89c2\u5bdf\uff08\u53ea\u8bfb\uff09",
+     "disabled_reason": null,
+     "enabled": true,
+     "param_schema": {}
+    }
+   ]
+  },
+  "status": 200
+ },
+ "boundary": {
+  "alias": {
+   "service": {
+    "detail": "pid file absent",
+    "display_name": "UM \u5206\u4eab\u5165\u53e3 8100",
+    "healthy": false,
+    "key": "share-gateway",
+    "port": 8003,
+    "process_ids": [],
+    "state": "Stopped"
+   },
+   "shape": {
+    "object": {
+     "meta": {
+      "object": {
+       "cached": "bool",
+       "generated_epoch": "number",
+       "source": "string"
+      }
+     },
+     "ok": "bool",
+     "services": {
+      "array": [
+       {
+        "object": {
+         "detail": "string",
+         "display_name": "string",
+         "healthy": "bool",
+         "key": "string",
+         "port": "number",
+         "process_ids": {
+          "array": []
+         },
+         "state": "string"
+        }
+       }
+      ]
+     }
+    }
+   },
+   "status": 200
+  },
+  "contentEncoding": {
+   "body": {
+    "error": "unsupported_body_encoding"
+   },
+   "status": 400
+  },
+  "duplicateContentLength": {
+   "body": {
+    "error": "duplicate header: Content-Length"
+   },
+   "status": 400
+  },
+  "duplicateContentType": {
+   "body": {
+    "error": "duplicate header: Content-Type"
+   },
+   "status": 400
+  },
+  "duplicateHeader": {
+   "body": {
+    "error": "duplicate header: X-Admin-Control"
+   },
+   "status": 400
+  },
+  "emptyPost": {
+   "body": {
+    "error": "unknown path"
+   },
+   "status": 404
+  },
+  "foreignHost": {
+   "body": {
+    "error": "local-only service"
+   },
+   "status": 403
+  },
+  "foreignOrigin": {
+   "body": {
+    "error": "local-only service"
+   },
+   "status": 403
+  },
+  "invalidContentLength": {
+   "body": {
+    "error": "invalid_content_length"
+   },
+   "status": 400
+  },
+  "invalidJson": {
+   "body": {
+    "error": "invalid_json"
+   },
+   "status": 400
+  },
+  "missingContentType": {
+   "body": {
+    "error": "content_type_required"
+   },
+   "status": 400
+  },
+  "nonObject": {
+   "body": {
+    "error": "invalid_json"
+   },
+   "status": 400
+  },
+  "nullBody": {
+   "body": {
+    "error": "unknown path"
+   },
+   "status": 404
+  },
+  "tooLarge": {
+   "body": {
+    "error": "request_too_large"
+   },
+   "status": 413
+  },
+  "transferEncoding": {
+   "body": {
+    "error": "unsupported_body_encoding"
+   },
+   "status": 400
+  },
+  "unknownFields": {
+   "body": {
+    "error": "unknown field(s): ['unknown']"
+   },
+   "status": 400
+  },
+  "wrongContentType": {
+   "body": {
+    "error": "content_type_required"
+   },
+   "status": 400
+  }
+ },
+ "capability": {
+  "gateway-connection": {
+   "body": {
+    "capability": "gateway-connection",
+    "detail": "\u4e91\u7aef\u89d2\u8272\u53ea\u88c5\u914d UM \u5206\u4eab\uff1a\u8be5\u8bfb\u9762\u672a\u88c5\u914d\uff0c\u4e0d\u63a2\u6d4b/\u4e0d\u8bfb\u53d6\u975e UM \u8d44\u6e90",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "status": 503
+  },
+  "log-entries": {
+   "body": {
+    "capability": "log-entries",
+    "detail": "\u4e91\u7aef\u89d2\u8272\u53ea\u88c5\u914d UM \u5206\u4eab\uff1a\u8be5\u8bfb\u9762\u672a\u88c5\u914d\uff0c\u4e0d\u63a2\u6d4b/\u4e0d\u8bfb\u53d6\u975e UM \u8d44\u6e90",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "status": 503
+  },
+  "log-overview": {
+   "body": {
+    "capability": "log-overview",
+    "detail": "\u4e91\u7aef\u89d2\u8272\u53ea\u88c5\u914d UM \u5206\u4eab\uff1a\u8be5\u8bfb\u9762\u672a\u88c5\u914d\uff0c\u4e0d\u63a2\u6d4b/\u4e0d\u8bfb\u53d6\u975e UM \u8d44\u6e90",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "status": 503
+  },
+  "log-sources": {
+   "body": {
+    "capability": "log-sources",
+    "detail": "\u4e91\u7aef\u89d2\u8272\u53ea\u88c5\u914d UM \u5206\u4eab\uff1a\u8be5\u8bfb\u9762\u672a\u88c5\u914d\uff0c\u4e0d\u63a2\u6d4b/\u4e0d\u8bfb\u53d6\u975e UM \u8d44\u6e90",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "status": 503
+  },
+  "logs": {
+   "body": {
+    "capability": "logs",
+    "detail": "\u4e91\u7aef\u89d2\u8272\u53ea\u88c5\u914d UM \u5206\u4eab\uff1a\u8be5\u8bfb\u9762\u672a\u88c5\u914d\uff0c\u4e0d\u63a2\u6d4b/\u4e0d\u8bfb\u53d6\u975e UM \u8d44\u6e90",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "status": 503
+  },
+  "stats": {
+   "body": {
+    "capability": "stats",
+    "detail": "\u4e91\u7aef\u89d2\u8272\u53ea\u88c5\u914d UM \u5206\u4eab\uff1a\u8be5\u8bfb\u9762\u672a\u88c5\u914d\uff0c\u4e0d\u63a2\u6d4b/\u4e0d\u8bfb\u53d6\u975e UM \u8d44\u6e90",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "status": 503
+  },
+  "um": {
+   "body": {
+    "capability": "um",
+    "detail": "\u4e91\u7aef\u89d2\u8272\u53ea\u88c5\u914d UM \u5206\u4eab\uff1a\u8be5\u8bfb\u9762\u672a\u88c5\u914d\uff0c\u4e0d\u63a2\u6d4b/\u4e0d\u8bfb\u53d6\u975e UM \u8d44\u6e90",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "status": 503
+  },
+  "usage-rates": {
+   "body": {
+    "capability": "usage-rates",
+    "detail": "\u4e91\u7aef\u89d2\u8272\u53ea\u88c5\u914d UM \u5206\u4eab\uff1a\u8be5\u8bfb\u9762\u672a\u88c5\u914d\uff0c\u4e0d\u63a2\u6d4b/\u4e0d\u8bfb\u53d6\u975e UM \u8d44\u6e90",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "status": 503
+  },
+  "usage-tokens": {
+   "body": {
+    "capability": "usage-tokens",
+    "detail": "\u4e91\u7aef\u89d2\u8272\u53ea\u88c5\u914d UM \u5206\u4eab\uff1a\u8be5\u8bfb\u9762\u672a\u88c5\u914d\uff0c\u4e0d\u63a2\u6d4b/\u4e0d\u8bfb\u53d6\u975e UM \u8d44\u6e90",
+    "error": "capability_not_assembled",
+    "role": "cloud"
+   },
+   "status": 503
+  }
+ },
+ "consoleHealth": {
+  "cached": false,
+  "checkedAtType": "number",
+  "host": {
+   "id": "usagesrv",
+   "note": "console host itself",
+   "port": 8002,
+   "state": "listening"
+  },
+  "service": {
+   "detail": "pid file absent",
+   "display_name": "UM \u5206\u4eab\u5165\u53e3 8100",
+   "healthy": false,
+   "key": "share-gateway",
+   "port": 8003,
+   "process_ids": [],
+   "state": "Stopped"
+  },
+  "shape": {
+   "object": {
+    "cached": "bool",
+    "checked_at": "number",
+    "services": {
+     "array": [
+      {
+       "object": {
+        "detail": "string",
+        "display_name": "string",
+        "healthy": "bool",
+        "key": "string",
+        "port": "number",
+        "process_ids": {
+         "array": []
+        },
+        "state": "string"
+       }
+      }
+     ]
+    }
+   }
+  },
+  "status": 200
+ },
+ "health": {
+  "body": {
+   "port": 8002,
+   "service": "usagesrv",
+   "status": "ok"
+  },
+  "cache_control": "no-store",
+  "status": 200
+ },
+ "metadata": {
+  "fixture": true,
+  "generatedFrom": "usagesrv.py + console/adapters.py + console/operations.py",
+  "role": "cloud",
+  "source": "tests/generate_rust_console_fixture.py"
+ },
+ "operations": {
+  "detail": {
+   "body": {
+    "operation": {
+     "action": "service.start",
+     "cancel_requested": true,
+     "created_at": 1000.0,
+     "error": {
+      "code": "runtime_error"
+     },
+     "finished_at": 1002.0,
+     "generation": 1,
+     "id": "op-a",
+     "idempotency_key": "idem-a",
+     "resource": "share:orchestration",
+     "result": null,
+     "started_at": 1001.0,
+     "state": "failed",
+     "steps": [],
+     "target": "share-gateway"
+    }
+   },
+   "status": 200
+  },
+  "empty": {
+   "body": {
+    "operations": []
+   },
+   "status": 200
+  },
+  "limitCases": {
+   "limit0": {
+    "body": {
+     "operations": [
+      {
+       "action": "share.status",
+       "cancel_requested": false,
+       "created_at": 3000.0,
+       "error": null,
+       "finished_at": 3002.0,
+       "generation": 2,
+       "id": "op-c",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": {
+        "ok": true
+       },
+       "started_at": 3001.0,
+       "state": "succeeded",
+       "steps": [
+        {
+         "note": "third"
+        }
+       ],
+       "target": "share-gateway"
+      }
+     ]
+    },
+    "status": 200
+   },
+   "limit2": {
+    "body": {
+     "operations": [
+      {
+       "action": "share.status",
+       "cancel_requested": false,
+       "created_at": 3000.0,
+       "error": null,
+       "finished_at": 3002.0,
+       "generation": 2,
+       "id": "op-c",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": {
+        "ok": true
+       },
+       "started_at": 3001.0,
+       "state": "succeeded",
+       "steps": [
+        {
+         "note": "third"
+        }
+       ],
+       "target": "share-gateway"
+      },
+      {
+       "action": "share.diagnostics",
+       "cancel_requested": false,
+       "created_at": 2000.0,
+       "error": null,
+       "finished_at": null,
+       "generation": 0,
+       "id": "op-b",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": null,
+       "started_at": null,
+       "state": "queued",
+       "steps": [],
+       "target": "share-gateway"
+      }
+     ]
+    },
+    "status": 200
+   },
+   "limitBlank": {
+    "body": {
+     "operations": [
+      {
+       "action": "share.status",
+       "cancel_requested": false,
+       "created_at": 3000.0,
+       "error": null,
+       "finished_at": 3002.0,
+       "generation": 2,
+       "id": "op-c",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": {
+        "ok": true
+       },
+       "started_at": 3001.0,
+       "state": "succeeded",
+       "steps": [
+        {
+         "note": "third"
+        }
+       ],
+       "target": "share-gateway"
+      },
+      {
+       "action": "share.diagnostics",
+       "cancel_requested": false,
+       "created_at": 2000.0,
+       "error": null,
+       "finished_at": null,
+       "generation": 0,
+       "id": "op-b",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": null,
+       "started_at": null,
+       "state": "queued",
+       "steps": [],
+       "target": "share-gateway"
+      },
+      {
+       "action": "service.start",
+       "cancel_requested": true,
+       "created_at": 1000.0,
+       "error": {
+        "code": "runtime_error"
+       },
+       "finished_at": 1002.0,
+       "generation": 1,
+       "id": "op-a",
+       "idempotency_key": "idem-a",
+       "resource": "share:orchestration",
+       "result": null,
+       "started_at": 1001.0,
+       "state": "failed",
+       "steps": [],
+       "target": "share-gateway"
+      }
+     ]
+    },
+    "status": 200
+   },
+   "limitNegative": {
+    "body": {
+     "operations": [
+      {
+       "action": "share.status",
+       "cancel_requested": false,
+       "created_at": 3000.0,
+       "error": null,
+       "finished_at": 3002.0,
+       "generation": 2,
+       "id": "op-c",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": {
+        "ok": true
+       },
+       "started_at": 3001.0,
+       "state": "succeeded",
+       "steps": [
+        {
+         "note": "third"
+        }
+       ],
+       "target": "share-gateway"
+      }
+     ]
+    },
+    "status": 200
+   },
+   "limitNonNumeric": {
+    "body": {
+     "operations": [
+      {
+       "action": "share.status",
+       "cancel_requested": false,
+       "created_at": 3000.0,
+       "error": null,
+       "finished_at": 3002.0,
+       "generation": 2,
+       "id": "op-c",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": {
+        "ok": true
+       },
+       "started_at": 3001.0,
+       "state": "succeeded",
+       "steps": [
+        {
+         "note": "third"
+        }
+       ],
+       "target": "share-gateway"
+      },
+      {
+       "action": "share.diagnostics",
+       "cancel_requested": false,
+       "created_at": 2000.0,
+       "error": null,
+       "finished_at": null,
+       "generation": 0,
+       "id": "op-b",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": null,
+       "started_at": null,
+       "state": "queued",
+       "steps": [],
+       "target": "share-gateway"
+      },
+      {
+       "action": "service.start",
+       "cancel_requested": true,
+       "created_at": 1000.0,
+       "error": {
+        "code": "runtime_error"
+       },
+       "finished_at": 1002.0,
+       "generation": 1,
+       "id": "op-a",
+       "idempotency_key": "idem-a",
+       "resource": "share:orchestration",
+       "result": null,
+       "started_at": 1001.0,
+       "state": "failed",
+       "steps": [],
+       "target": "share-gateway"
+      }
+     ]
+    },
+    "status": 200
+   },
+   "limitPlus": {
+    "body": {
+     "operations": [
+      {
+       "action": "share.status",
+       "cancel_requested": false,
+       "created_at": 3000.0,
+       "error": null,
+       "finished_at": 3002.0,
+       "generation": 2,
+       "id": "op-c",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": {
+        "ok": true
+       },
+       "started_at": 3001.0,
+       "state": "succeeded",
+       "steps": [
+        {
+         "note": "third"
+        }
+       ],
+       "target": "share-gateway"
+      },
+      {
+       "action": "share.diagnostics",
+       "cancel_requested": false,
+       "created_at": 2000.0,
+       "error": null,
+       "finished_at": null,
+       "generation": 0,
+       "id": "op-b",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": null,
+       "started_at": null,
+       "state": "queued",
+       "steps": [],
+       "target": "share-gateway"
+      }
+     ]
+    },
+    "status": 200
+   },
+   "limitTooLarge": {
+    "body": {
+     "operations": [
+      {
+       "action": "share.status",
+       "cancel_requested": false,
+       "created_at": 3000.0,
+       "error": null,
+       "finished_at": 3002.0,
+       "generation": 2,
+       "id": "op-c",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": {
+        "ok": true
+       },
+       "started_at": 3001.0,
+       "state": "succeeded",
+       "steps": [
+        {
+         "note": "third"
+        }
+       ],
+       "target": "share-gateway"
+      },
+      {
+       "action": "share.diagnostics",
+       "cancel_requested": false,
+       "created_at": 2000.0,
+       "error": null,
+       "finished_at": null,
+       "generation": 0,
+       "id": "op-b",
+       "idempotency_key": null,
+       "resource": "share:orchestration",
+       "result": null,
+       "started_at": null,
+       "state": "queued",
+       "steps": [],
+       "target": "share-gateway"
+      },
+      {
+       "action": "service.start",
+       "cancel_requested": true,
+       "created_at": 1000.0,
+       "error": {
+        "code": "runtime_error"
+       },
+       "finished_at": 1002.0,
+       "generation": 1,
+       "id": "op-a",
+       "idempotency_key": "idem-a",
+       "resource": "share:orchestration",
+       "result": null,
+       "started_at": 1001.0,
+       "state": "failed",
+       "steps": [],
+       "target": "share-gateway"
+      }
+     ]
+    },
+    "status": 200
+   }
+  },
+  "seeded": {
+   "body": {
+    "operations": [
+     {
+      "action": "share.status",
+      "cancel_requested": false,
+      "created_at": 3000.0,
+      "error": null,
+      "finished_at": 3002.0,
+      "generation": 2,
+      "id": "op-c",
+      "idempotency_key": null,
+      "resource": "share:orchestration",
+      "result": {
+       "ok": true
+      },
+      "started_at": 3001.0,
+      "state": "succeeded",
+      "steps": [
+       {
+        "note": "third"
+       }
+      ],
+      "target": "share-gateway"
+     },
+     {
+      "action": "share.diagnostics",
+      "cancel_requested": false,
+      "created_at": 2000.0,
+      "error": null,
+      "finished_at": null,
+      "generation": 0,
+      "id": "op-b",
+      "idempotency_key": null,
+      "resource": "share:orchestration",
+      "result": null,
+      "started_at": null,
+      "state": "queued",
+      "steps": [],
+      "target": "share-gateway"
+     },
+     {
+      "action": "service.start",
+      "cancel_requested": true,
+      "created_at": 1000.0,
+      "error": {
+       "code": "runtime_error"
+      },
+      "finished_at": 1002.0,
+      "generation": 1,
+      "id": "op-a",
+      "idempotency_key": "idem-a",
+      "resource": "share:orchestration",
+      "result": null,
+      "started_at": 1001.0,
+      "state": "failed",
+      "steps": [],
+      "target": "share-gateway"
+     }
+    ]
+   },
+   "insertSql": "INSERT INTO operations (id, action, target, params_json, state, idempotency_key, resource, generation, created_at, started_at, finished_at, result_json, error_json, steps_json, cancel_requested) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+   "metaVersion": "1",
+   "rows": [
+    [
+     "op-c",
+     "share.status",
+     "share-gateway",
+     "{}",
+     "succeeded",
+     null,
+     "share:orchestration",
+     2,
+     3000.0,
+     3001.0,
+     3002.0,
+     "{\"ok\":true}",
+     null,
+     "[{\"note\":\"third\"}]",
+     0
+    ],
+    [
+     "op-a",
+     "service.start",
+     "share-gateway",
+     "{}",
+     "failed",
+     "idem-a",
+     "share:orchestration",
+     1,
+     1000.0,
+     1001.0,
+     1002.0,
+     null,
+     "{\"code\":\"runtime_error\"}",
+     "[]",
+     1
+    ],
+    [
+     "op-b",
+     "share.diagnostics",
+     "share-gateway",
+     "{\"restart_budget_s\":30}",
+     "queued",
+     null,
+     "share:orchestration",
+     0,
+     2000.0,
+     null,
+     null,
+     null,
+     null,
+     "[]",
+     0
+    ]
+   ],
+   "schema": [
+    "CREATE TABLE console_meta( key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    "CREATE TABLE operations( id TEXT PRIMARY KEY, action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', params_json TEXT NOT NULL DEFAULT '{}', state TEXT NOT NULL, idempotency_key TEXT UNIQUE, resource TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL, started_at REAL, finished_at REAL, result_json TEXT, error_json TEXT, steps_json TEXT NOT NULL DEFAULT '[]', cancel_requested INTEGER NOT NULL DEFAULT 0)"
+   ],
+   "status": 200
+  },
+  "unknown": {
+   "body": {
+    "error": "unknown operation"
+   },
+   "status": 404
+  }
+ },
+ "services": {
+  "meta": {
+   "firstCached": false,
+   "secondCacheAgeType": "number",
+   "secondCached": true,
+   "source": "linux-pid-file"
+  },
+  "service": {
+   "detail": "pid file absent",
+   "display_name": "UM \u5206\u4eab\u5165\u53e3 8100",
+   "healthy": false,
+   "key": "share-gateway",
+   "port": 8003,
+   "process_ids": [],
+   "state": "Stopped"
+  },
+  "shape": {
+   "object": {
+    "meta": {
+     "object": {
+      "cached": "bool",
+      "generated_epoch": "number",
+      "source": "string"
+     }
+    },
+    "ok": "bool",
+    "services": {
+     "array": [
+      {
+       "object": {
+        "detail": "string",
+        "display_name": "string",
+        "healthy": "bool",
+        "key": "string",
+        "port": "number",
+        "process_ids": {
+         "array": []
+        },
+        "state": "string"
+       }
+      }
+     ]
+    }
+   }
+  },
+  "status": 200
+ },
+ "summary": {
+  "assembly": {
+   "note": "\u4e91\u7aef\u89d2\u8272\u53ea\u88c5\u914d UM \u5206\u4eab\uff1a\u4e0d\u8bfb\u53d6\u672c\u5730\u79c1\u4eba\u8d26\u672c\uff1b\u5206\u4eab\u7528\u91cf\u89c1 GET /api/console/share-usage",
+   "role": "cloud",
+   "services": [
+    "share"
+   ]
+  },
+  "cachedAgeType": "number",
+  "dsh": {
+   "note": "\u4e91\u7aef\u89d2\u8272\u672a\u88c5\u914d DSH \u5feb\u7167\u8bfb\u53d6",
+   "url": null
+  },
+  "dshMergedIntoTotal": {
+   "day": null,
+   "note": "\u4e91\u7aef\u89d2\u8272\u4e0d\u5e76\u5165\u4efb\u4f55\u672c\u5730 DSH \u8d26\u672c"
+  },
+  "generatedEpochType": "number",
+  "hasSources": false,
+  "role": "cloud",
+  "services": {},
+  "shape": {
+   "object": {
+    "_cached_age_seconds": "number",
+    "_generated_epoch": "number",
+    "assembly": {
+     "object": {
+      "note": "string",
+      "role": "string",
+      "services": {
+       "array": [
+        "string"
+       ]
+      }
+     }
+    },
+    "dsh": {
+     "object": {
+      "note": "string",
+      "url": "null"
+     }
+    },
+    "dshMergedIntoTotal": {
+     "object": {
+      "day": "null",
+      "note": "string"
+     }
+    },
+    "generatedAt": "string",
+    "role": "string",
+    "services": {
+     "object": {}
+    }
+   }
+  },
+  "status": 200
+ }
+}

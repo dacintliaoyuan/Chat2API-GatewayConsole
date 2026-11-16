@@ -1291,6 +1291,20 @@ class RegistryHonestyTests(ConsoleApiTestBase):
             self.assertIn(kept, by_name)
             self.assertTrue(by_name[kept]["enabled"], kept)
 
+    def test_login_schema_exposes_forced_visible_params(self):
+        # ADR 0005: the local console publishes the additive force/visible
+        # parameters; both are bools and visible is validated by the handler
+        # against force (the schema itself stays flat).
+        infos = usagesrv.get_console_manager().action_info()
+        schema = {i["action"]: i for i in infos}[
+            "account.login"]["param_schema"]
+        self.assertEqual(
+            set(schema),
+            {"start_wait_s", "login_budget_s", "poll_interval_s",
+             "force", "visible"})
+        self.assertEqual(schema["force"], {"type": "bool"})
+        self.assertEqual(schema["visible"], {"type": "bool"})
+
     def test_um_verify_enabled_after_endpoint_live(self):
         # B-2 (2026-09-20): the RUNNING production chat2api instance ships
         # GET /admin/auth/verify (live probe answered 200 with a valid

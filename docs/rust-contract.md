@@ -162,17 +162,17 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 - 分享模式的 Chat 请求只接受白名单字段；`store` 必须为 `false`；`messages` 必须为非空列表（`chat2api/share_auth.py:75-78,1145-1158`）。
 - 分享模式的 Messages 请求只接受 `MESSAGES_FIELDS`；`max_tokens` 必须是正整数，`stream` 必须是 bool；未知字段拒绝，绝不补默认值（`chat2api/share_auth.py:1159-1190`）。
 - 成功响应：Chat 非流式为 JSON；Chat 流式、Messages 流式为上游 SSE 字节透传；Responses 为翻译后的 JSON 或 Responses 事件流。
-- 错误体统一为 `{"error": {"message": ..., "type": ..., "detail": ...}}`，可附加 `code`、`reason`、`upstream_status`（`chat2api/chat2api.py:5962-5973`）。
+- 错误体统一使用协议感知的信封（`docs/adr/0003-protocol-aware-error-contract.md`）：Chat/Responses/models/version 与本地 `/api/*` 使用 OpenAI 形 `{"error": {"message", "type", "code", "param", "detail"}}`；`/v1/messages` 的本地错误使用 Anthropic 形 `{"type": "error", "error": {"type", "message", "code", "param", "detail"}}`。`type` 是错误类别（`invalid_request_error`、`authentication_error`、`permission_error`、`not_found_error`、`rate_limit_error`、`api_error`、`overloaded_error`、`upstream_error`），`code` 是稳定机器码，`param` 是出错字段名或 `null`，`detail` 是结构化诊断扩展；`reason` 与 `upstream_status` 继续作为附加诊断保留。8001 控制台的 `{"error": "机器码"}` 形状不变。
 - 所有响应不发 CORS 头，除非 Origin 在 `CHAT2API_ALLOWED_ORIGINS` 白名单内；错误响应主动关闭连接（`chat2api/chat2api.py:5945-5960`）。
 
 ### 5.3 流式、超时、取消与重试
 
-- 首字节预算 120 秒；上游单次 socket 静默预算 180 秒；请求总预算默认 360 秒，环境变量可调但夹在 10..3600 秒（`chat2api/chat2api.py:377-385,440-444`）。
+- 首字节预算 120 秒；上游单次 socket 静默预算 180 秒；请求总预算默认 540 秒（认证等待计入 540 秒总预算），环境变量可调但夹在 10..3600 秒（`chat2api/chat2api.py:377-385,440-444`）。
 - 200 头只在首个“实质数据”事件出现后提交；提交前的元数据/思考事件可短暂暂存，以便早期重复循环或零数据断流仍可隐藏重试（`chat2api/chat2api.py:8043-8080,8417-8431`）。
-- 提交前失败返回 502；提交后失败写 in-band `error` 事件并结束流，绝不把部分完成当成功（`chat2api/chat2api.py:599-613,8060-8077`）。
-- 预提交暂存上限 64 KiB；未成行字节缓冲上限 1 MiB；生产者/消费者队列上限 256；并发流 reader 上限 128（`chat2api/chat2api.py:388-403,558-559`）。
-- 重试：快速失败最多 5 次，慢失败（耗时达到 30 秒）最多 2 次，物理尝试上限 12；可重试状态为 408/429/500/502/503/504；只在客户端尚未收到任何 SSE 事件前重试（`chat2api/chat2api.py:522-548,7015-7030`）。
-- 客户端断开在每个字节检查；断开后关闭上游、释放 reader 槽，账本记 `client_disconnected`（`chat2api/chat2api.py:6160-6175,8080-8003`）。
+- 提交前失败返回 502；首字节、响应头等待、socket 静默或总预算超时返回 504 `upstream_timeout` / `request_deadline_exceeded`；提交后失败写 in-band `error` 事件并结束流，绝不把部分完成当成功（`chat2api/chat2api.py:599-613,8060-8077`）。
+- 预提交暂存上限 64 KiB；未成行字节缓冲上限 1 MiB；生产者/消费者队列上限 256；并发流 reader 上限已取消（ADR 0004，`too_many_concurrent_streams` retired）（`chat2api/chat2api.py:388-403`）。
+- 重试：快速失败最多 5 次，慢失败（耗时达到 30 秒）最多 2 次，物理尝试上限 12；408/429/500/502/503/504/529/520-524、传输失败与网关等待使用完整预算；402 与 403 权限文字只探测一次；400/422 只在文字表示瞬态时探测一次；404/405/409/413/415 不重试；401 与 403 认证文字触发共享重登录（见 5.4）；只在客户端尚未收到任何 SSE 事件前重试。`Retry-After` 不超过 8 秒时等待后重试，超过 8 秒时保留原状态与响应头返回客户端；`X-Should-Retry: false` 停止重试。可重试状态为 408/429/500/502/503/504/520/521/522/523/524/529（`chat2api/chat2api.py:522-548,7015-7030`）。
+- 客户端断开在每个字节检查；断开后关闭上游、取消 reader 生产线程，账本记 `client_disconnected`（`chat2api/chat2api.py:6160-6175,8080-8003`）。
 - Messages 流要求官方事件序列；`message_stop` 前 EOF 不算成功；`error` 事件立即终止（`tests/test_chat2api_endpoints.py:501-610`）。
 - Responses 流事件为 `response.created`、`response.output_text.delta`、`response.function_call_arguments.delta`、`response.completed`、`response.incomplete`、`response.failed`（`chat2api/chat2api.py:6720-6760,6955-6985`）。
 - 非流式 Chat/Messages 可由 `--nonstream-upstream-aggregate` 选择上游 SSE 聚合，但只对已验证的 (key, model, protocol) 三元组；默认仍走上游非流式（`chat2api/chat2api.py:7490-7535`）。
@@ -180,23 +180,47 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 ### 5.4 错误码
 
+所有 8003 自产错误使用统一信封：Chat/Responses/models/version 与本地 `/api/*` 为 OpenAI 形
+`{"error": {"message", "type", "code", "param", "detail"}}`；`/v1/messages` 为 Anthropic 形
+`{"type": "error", "error": {"type", "message", "code", "param", "detail"}}`。`type` 是类别
+（`invalid_request_error`、`authentication_error`、`permission_error`、`not_found_error`、
+`rate_limit_error`、`api_error`、`overloaded_error`、`upstream_error`），`code` 是稳定机器码，
+`param` 是字段名或 `null`，`detail` 是结构化诊断扩展。8001 控制台的
+`{"error": "机器码"}` 形状不变。
+
 | HTTP | 错误 | 触发 |
 |---|---|---|
 | 400 | `invalid_request` / `invalid_json` / `invalid_body` / `unsupported_chat_request` / `unsupported_messages_request` / `unsupported_responses_request` | 请求形状不合法 |
 | 401 | `invalid_api_key` / `local_auth_error` | 分享 Key 无效；非 loopback 绑定缺少本地 Key |
-| 403 | `origin_denied` / `Local management endpoint denied` / `Local management token missing or invalid` | 浏览器来源、控制令牌、本机管理边界 |
-| 404 | `Unknown path: ...` / `route_not_shared` | 未知路径；分享模式下非白名单路由 |
-| 413 | `payload_too_large` | 请求体超过上限 |
-| 429 | `sharing_limit_reached` | 并发、限速或停止接受 |
-| 502 | `upstream_unavailable` / `upstream_request_rejected` / `upstream_stream_error` / `request_deadline_exceeded` | 上游失败、超时、流错误 |
-| 503 | `reauthentication_required` / `too_many_concurrent_streams` | 需要交互登录；reader 槽满 |
+| 402 | `upstream_quota_exhausted` | 上游额度耗尽 |
+| 403 | `origin_denied` / `upstream_forbidden` / `reauthentication_failed` / `control_denied_endpoint` / `control_denied_token` | 浏览器来源、上游权限、重登录失败、控制令牌、本机管理边界 |
+| 404 | `route_not_shared` / `unknown_path` / `upstream_request_rejected` | 未知路径；分享模式下非白名单路由；上游 404（保留原状态） |
+| 405 | `method_not_allowed` | API 路径的方法未实现 |
+| 408 | `request_timeout` | 请求体读取超时 |
+| 409 | `upstream_request_rejected` | 上游 409（保留原状态） |
+| 413 | `payload_too_large` / `upstream_request_rejected` | 请求体超过上限；上游 413（保留原状态） |
+| 415 | `unsupported_content_encoding` / `upstream_request_rejected` | 请求体压缩编码不支持；上游 415（保留原状态） |
+| 429 | `sharing_limit_reached` / `upstream_rate_limited` | 并发、限速或停止接受；上游 429（保留原状态） |
+| 500 | `upstream_unavailable` | 上游 500（保留原状态） |
+| 501 | `not_implemented` | 尚未装配的本机管理面 |
+| 502 | `upstream_unavailable` / `upstream_request_rejected` / `upstream_stream_error` / `request_deadline_exceeded` / `upstream_request_failed` / `chat2api_error` | 上游失败、超时、流错误；连接/DNS/TLS/代理失败 |
+| 503 | `reauthentication_required` / `share_config_unavailable` / `upstream_unavailable` | 需要交互登录；分享配置不可读；上游 503（保留原状态）；`too_many_concurrent_streams` 已由 ADR 0004 标记 retired |
+| 504 | `upstream_timeout` / `request_deadline_exceeded` | 网关等待上游超时；上游 504 保留原状态 |
+
+上游状态映射（#60）：上游 4xx/5xx 保留原 HTTP 状态码，错误体按客户端协议重建，不透传上游 body。Chat/Responses 使用 OpenAI 形，`/v1/messages` 使用 Anthropic 形；`detail` 带 `upstream_status` 与有界的 `upstream_message`（单行，最多 200 字符），`upstream_status` 也作为顶层附加诊断保留。401 仍转 503 `reauthentication_required`，reason 为 `upstream_rejected`，上游存在 `Retry-After` 时保留该响应头。402 → `upstream_quota_exhausted`，403 → `upstream_forbidden`，429 → `upstream_rate_limited`，504 → `upstream_timeout`；其余 4xx → `upstream_request_rejected`，其余 5xx → `upstream_unavailable`。
+
+连接、DNS、TLS 或代理失败返回 502 `upstream_unavailable`；首字节、响应头等待、socket 静默或总预算超时返回 504 `upstream_timeout` / `request_deadline_exceeded`；上游自己的 504 保留 504。重试耗尽后返回最后一次上游状态；最后一次是传输错误则返回 502；等待重试撞到总预算则返回 504 `request_deadline_exceeded` 并在 `detail.last_upstream_status` 记录最后一次状态。
+
+重登录触发与预算（#63）：上游 401，或 403 且 `upstream_message` 命中 `Not authenticated`/`sign in`/`session expired`/`authentication required`/`please log in`（大小写不敏感）时，每个逻辑请求最多启动一次共享重登录会话；会话恢复后重发一次。重发后仍 401 → 503 `reauthentication_required`；403 认证文字 → 403 `reauthentication_failed`，`detail.reauthentication_attempted` 为 `true`；403 权限、Cloudflare challenge、402、404 不触发重登录。认证等待每个逻辑请求累计 30 秒、最多 128 个并发等待者、每秒复查一次，并计入 540 秒总预算。等待超时 → 503 `reauthentication_required`，`reason` 为 `auth_wait_timeout`；等待槽满 → `reason` 为 `auth_wait_capacity`；滚动 900 秒内 3 次全局启动上限 → `reason` 为 `global_attempt_cap`，有确定下次窗口时带 `Retry-After`；`--no-browser` → `reason` 为 `BrowserDisabled`。认证等待类的 503 仍以 `detail: upstream_rejected` 保留原 401 映射，`reason` 是 #63 的附加诊断字段；403 `reauthentication_failed` 的 `detail` 带 `reauthentication_attempted`、`upstream_status` 与有界 `upstream_message`。
+
+Rust 8003 当前没有浏览器登录实现：默认装配的 provider 立即返回 503 `reauthentication_required`，`reason` 为 `reauth_unavailable`（`--no-browser` 时为 `BrowserDisabled`），不假装会话已运行；`/admin/auth/login` 与 `/admin/auth/cancel` 仍返回 501 `not_implemented`。测试通过 `GatewayServer::start_with_reauth` 注入脚本化 provider 验证触发、重发、最终状态与预算；真实登录接入是后续缺口。
 
 ### 5.5 副作用
 
 - 读投影文件；每次鉴权重新读取，不写投影。
 - 追加用量账本 `usage-share-backend.jsonl`；写失败则本进程禁用记账，但绝不阻断代理（`chat2api/chat2api.py:2502-2512`）。
 - 追加服务日志 `share-backend.log`；日志不含凭据、请求体或响应体。
-- 登录/刷新时写 token/API Key 文件与浏览器 profile；只有显式登录或 401 恢复才打开可见浏览器。
+- 登录/刷新时写 token/API Key 文件与浏览器 profile；只有显式登录或 401 恢复才打开可见浏览器。Rust 8003 当前没有这条浏览器登录实现，默认 provider 如实返回 `reauth_unavailable`，不创建 profile、不打开浏览器。
 - 撤销状态文件 `share-revoke.state` 与投影快照，原子写（`chat2api/share_auth.py:475-526`）。
 - 注册实例控制 AF_UNIX 通道；只应答 `instance-status`、`load`、`drain`、`emergency`、`resume`，绝不调用管理动作（`chat2api/chat2api.py:9023-9100`）。
 - `/admin/shutdown` 只停止本进程；不停止上游 UM。

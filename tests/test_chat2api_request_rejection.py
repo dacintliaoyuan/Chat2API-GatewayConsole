@@ -169,8 +169,6 @@ class TestChat2ApiRequestRejection(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
 
     def chat_post(self, model, stream=True, timeout=20):
         return requests.post(
@@ -186,8 +184,13 @@ class TestChat2ApiRequestRejection(unittest.TestCase):
         with self.assertLogs("chat2api", level="WARNING") as cm:
             response = self.chat_post("reject-400")
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["error"]["type"],
-                         "upstream_request_rejected")
+        error = response.json()["error"]
+        self.assertEqual(error["type"], "invalid_request_error")
+        self.assertEqual(error["code"], "upstream_request_rejected")
+        self.assertIsNone(error["param"])
+        self.assertEqual(error["detail"]["upstream_status"], 400)
+        self.assertEqual(error["detail"]["upstream_message"],
+                         "request validation failed")
         # compatibility fallback ran exactly once (two upstream posts), and
         # the failure was never retried as transient.
         self.assertEqual(sum(1 for s in posts if s[0] == "reject-400"), 2)

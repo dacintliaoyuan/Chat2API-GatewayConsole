@@ -142,7 +142,7 @@ class StubUpstream(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         if StubUpstream.sse:
-            # A real SSE stream so the streaming path (reader lease, producer
+            # A real SSE stream so the streaming path (producer
             # ownership, [DONE] termination) runs end to end.
             payload = (b'data: {"choices":[{"delta":{"content":"hi"},'
                        b'"finish_reason":"stop"}]}\n\n'
@@ -430,17 +430,17 @@ class AuthWaitTestBase(unittest.TestCase):
 
 
 class AuthWaitBudgetTests(AuthWaitTestBase):
-    def test_a3_cumulative_budget_is_shared_by_internal_401_retries(self):
-        # First 401: wait for the live lease to be released, then login.
-        # A hidden 503 retry then gets a second 401 in the SAME logical
-        # request: only the remaining budget may be used, never a fresh 30s.
+    def test_a3_second_401_is_final_without_another_login(self):
+        # Ticket #63: the first 401 spends this logical request's ONE
+        # reauthentication attempt. A later 401 after an intermediate 503 is
+        # final: it must not open a second login window.
         self._hold_lease()
         StubUpstream.statuses = [401, 503, 401]
         calls = []
 
         def fake_login(*args, **kwargs):
             calls.append(time.monotonic())
-            time.sleep(0.03 if len(calls) == 1 else 0.15)
+            time.sleep(0.03)
             return "fresh-token"
 
         self._release_lease_later(0.05)
@@ -460,11 +460,16 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
-        self.assertEqual(error["detail"], AUTH_WAIT_TIMEOUT)
+        self.assertEqual(error["type"], "upstream_error")
+        self.assertEqual(error["code"], "reauthentication_required")
+        self.assertIsNone(error["param"])
+        self.assertEqual(error["detail"], "upstream_rejected")
+        self.assertEqual(response.headers.get("Content-Type"),
+                         "application/json; charset=utf-8")
         self._assert_retry_after(response, expected=None)
-        self.assertEqual(len(calls), 2,
-                         "both auth waits must share one request budget")
+        self.assertEqual(len(calls), 1,
+                         "a second 401 must not open another login")
+        self.assertEqual(StubUpstream.posts, 3)
         self.assertLess(elapsed, 1.0)
 
     def test_a3_overall_deadline_keeps_the_existing_deadline_error(self):
@@ -478,9 +483,13 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
             response = self._chat_request()
             elapsed = time.monotonic() - started
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 504)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "request_deadline_exceeded")
+        self.assertEqual(error["type"], "upstream_error")
+        self.assertEqual(error["code"], "request_deadline_exceeded")
+        self.assertIsNone(error["param"])
+        self.assertEqual(error["detail"]["reason"],
+                         "_RequestDeadlineExceeded")
         self.assertLess(elapsed, 0.5)
         login.assert_not_called()
 
@@ -509,7 +518,7 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], AUTH_WAIT_TIMEOUT)
         self._assert_retry_after(response, expected=None)
         self.assertLess(elapsed, 0.5)
@@ -555,13 +564,12 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
         self.assertEqual(StubUpstream.posts, 2)
         self.assertEqual(len(login_calls), 1)
 
-    def test_a3_upstream_between_two_auth_waits_is_not_charged(self):
-        # R2: the normal inference between two authentication waits (the
-        # hidden retry after the first 401) is not authentication time either.
-        # Only the two login waits share the remaining budget; the non-billed
-        # inference stays well above the budget so a loaded full-repo run cannot
+    def test_a3_upstream_after_auth_wait_is_not_charged(self):
+        # R2: the normal inference after the request's one auth wait is not
+        # authentication time. Only the login wait is charged; the non-billed
+        # inference stays above the budget so a loaded full-repo run cannot
         # blur the contrast: charging it would exhaust the budget by itself.
-        StubUpstream.statuses = [401, 503, 401, 200]
+        StubUpstream.statuses = [401, 503, 200]
         original_status = StubUpstream._next_status
         login_calls = []
 
@@ -591,17 +599,17 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
 
         self.assertEqual(
             response.status_code, 200,
-            "normal upstream inference between two auth waits was charged")
-        self.assertEqual(StubUpstream.posts, 4)
-        self.assertEqual(len(login_calls), 2)
+            "normal upstream inference after the auth wait was charged")
+        self.assertEqual(StubUpstream.posts, 3)
+        self.assertEqual(len(login_calls), 1)
 
-    def test_a3_retry_delay_is_not_charged_to_the_budget(self):
+    def test_a3_retry_delay_after_auth_wait_is_not_charged(self):
         # R2: the bounded retry delay between two upstream attempts is normal
-        # processing, not authentication wait. Only the two login waits share
-        # the remaining budget. The delay stays above the budget so a loaded
-        # full-repo run cannot blur the contrast: charging it would exhaust
-        # the budget by itself.
-        StubUpstream.statuses = [401, 503, 401, 200]
+        # processing, not authentication wait. One auth wait spends the
+        # request's single reauthentication attempt; the delay stays above the
+        # budget so a loaded full-repo run cannot blur the contrast: charging
+        # it would exhaust the budget by itself.
+        StubUpstream.statuses = [401, 503, 200]
         login_calls = []
 
         def fake_login(*args, **kwargs):
@@ -624,8 +632,8 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
         self.assertEqual(
             response.status_code, 200,
             "the retry delay was charged as authentication wait")
-        self.assertEqual(StubUpstream.posts, 4)
-        self.assertEqual(len(login_calls), 2)
+        self.assertEqual(StubUpstream.posts, 3)
+        self.assertEqual(len(login_calls), 1)
 
     def test_a3_request_body_processing_is_not_charged_to_the_budget(self):
         # R2: reading and validating the request body happens before any
@@ -953,7 +961,7 @@ class AuthWaitExpiryOrderTests(AuthWaitTestBase):
                 error = response.json().get("error") or {}
                 observed.update(
                     http=response.status_code,
-                    error_type=error.get("type"),
+                    error_code=error.get("code"),
                     detail=error.get("detail"),
                     upstream_posts=StubUpstream.posts,
                 )
@@ -972,7 +980,7 @@ class AuthWaitExpiryOrderTests(AuthWaitTestBase):
             observed["http"], 503,
             "an auth budget that expired before the request deadline was "
             "reported as the request deadline: %r" % (observed,))
-        self.assertEqual(observed["error_type"], "reauthentication_required")
+        self.assertEqual(observed["error_code"], "reauthentication_required")
         self.assertEqual(observed["detail"], AUTH_WAIT_TIMEOUT)
         self.assertAlmostEqual(
             observed["deadline_after_join"], observed["first_deadline"],
@@ -987,20 +995,22 @@ class AuthWaitExpiryOrderTests(AuthWaitTestBase):
                                  sync_charge_s=0.7)
         self.assertGreater(observed["charged_s"], 0.2)
         self.assertEqual(observed["http"], 503, observed)
-        self.assertEqual(observed["error_type"], "reauthentication_required")
+        self.assertEqual(observed["error_code"], "reauthentication_required")
         self.assertEqual(observed["detail"], AUTH_WAIT_TIMEOUT)
         self.assertAlmostEqual(
             observed["deadline_after_join"], observed["first_deadline"],
             places=3)
         self.assertEqual(observed["upstream_posts"], 1)
 
-    def test_a3_earlier_request_deadline_stays_a_502(self):
+    def test_a3_earlier_request_deadline_is_a_504(self):
         observed = self._exercise(budget=0.5, deadline=0.2,
                                  sync_charge_s=0.7)
         self.assertGreater(observed["charged_s"], 0.5)
-        self.assertEqual(observed["http"], 502, observed)
-        self.assertEqual(observed["error_type"],
+        self.assertEqual(observed["http"], 504, observed)
+        self.assertEqual(observed["error_code"],
                          "request_deadline_exceeded")
+        self.assertEqual(observed["detail"]["reason"],
+                         "_RequestDeadlineExceeded")
         self.assertAlmostEqual(
             observed["deadline_after_join"], observed["first_deadline"],
             places=3)
@@ -1036,7 +1046,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], "global_attempt_cap")
         self._assert_retry_after(response, expected=True)
         self.assertLess(elapsed, 0.5)
@@ -1055,7 +1065,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], AUTH_WAIT_TIMEOUT)
         self._assert_retry_after(response, expected=None)
         self.assertGreaterEqual(elapsed, 0.15)
@@ -1079,7 +1089,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], "slot_corrupt")
         self._assert_retry_after(response, expected=None)
         self.assertLess(elapsed, 0.5)
@@ -1102,7 +1112,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], "attempts_exhausted")
         self._assert_retry_after(response, expected=None)
         self.assertLess(elapsed, 0.5)
@@ -1123,7 +1133,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], "upstream_credential_rejected")
         self._assert_retry_after(response, expected=None)
         self.assertLess(elapsed, 0.5)
@@ -1143,7 +1153,7 @@ class AuthWaitEarlyFailureTests(AuthWaitTestBase):
 
         self.assertEqual(response.status_code, 503)
         error = response.json()["error"]
-        self.assertEqual(error["type"], "reauthentication_required")
+        self.assertEqual(error["code"], "reauthentication_required")
         self.assertEqual(error["detail"], "edge_missing")
         self._assert_retry_after(response, expected=None)
         self.assertLess(elapsed, 0.5)
@@ -1240,7 +1250,7 @@ class AuthWaitCapacityTests(AuthWaitTestBase):
                 self.proxy.creds = saved_creds
             self.assertEqual(response.status_code, 503)
             error = response.json()["error"]
-            self.assertEqual(error["type"], "reauthentication_required")
+            self.assertEqual(error["code"], "reauthentication_required")
             self.assertEqual(error["detail"], AUTH_WAIT_CAPACITY)
             self._assert_retry_after(response, expected=None)
             self.assertLess(elapsed, 0.3)
@@ -1321,8 +1331,8 @@ class AuthWaitCapacityTests(AuthWaitTestBase):
             login.assert_not_called()
 
 
-class AuthWaitReaderSlotTests(AuthWaitTestBase):
-    """R3: a streaming auth wait releases the reader slot it will re-acquire."""
+class AuthWaitStreamingTests(AuthWaitTestBase):
+    """R3: streaming requests wait for authentication without a reader cap."""
 
     def _run_stream_worker(self, result):
         try:
@@ -1330,52 +1340,19 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
         except Exception as exc:  # noqa: BLE001 — 客户端可能看到已关闭 socket
             result["error"] = exc
 
-    def test_a6_stream_auth_wait_releases_the_reader_slot(self):
-        self._hold_lease()
-        auth_slots = self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
-        StubUpstream.statuses = [401]
-        result = {}
-        worker = threading.Thread(target=self._run_stream_worker,
-                                  args=(result,), daemon=True)
-        with (
-            self._wait_patches(budget=1.0, recheck=0.02, deadline=2.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
-            mock.patch.object(chat2api, "browser_login",
-                              side_effect=AssertionError("unexpected browser")),
-        ):
-            try:
-                worker.start()
-                self.assertTrue(
-                    self._wait_until(lambda: auth_slots._value == 1,
-                                     timeout=1.0),
-                    "the request never entered the auth wait")
-                self.assertEqual(
-                    reader_slots._value, 1,
-                    "an authentication waiter reserved a stream-reader slot")
-            finally:
-                self.proxy.shutdown()
-                worker.join(2)
-                self.assertFalse(worker.is_alive())
-                response = result.get("response")
-                if response is not None:
-                    response.close()
-
     def test_a6_second_stream_is_not_rejected_for_concurrency(self):
-        # R3: with ONE reader slot and TWO auth-wait slots, the second
+        # R3: with ONE auth-wait slot and TWO streaming requests, the second
         # streaming request must be admitted while the first waits for auth. It
-        # may wait for auth and time out, but it must NOT be rejected as
-        # too_many_concurrent_streams: no reader is running at that moment.
+        # may wait for auth and time out; the point is that it is admitted
+        # rather than rejected before reaching the authentication wait.
         self._hold_lease()
         auth_slots = self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
         StubUpstream.statuses = [401]
         result = {}
         worker = threading.Thread(target=self._run_stream_worker,
                                   args=(result,), daemon=True)
         with (
             self._wait_patches(budget=0.3, recheck=0.02, deadline=1.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
             mock.patch.object(chat2api, "browser_login",
                               side_effect=AssertionError("unexpected browser")),
         ):
@@ -1390,10 +1367,10 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                     self.assertEqual(second.status_code, 503)
                     error = second.json()["error"]
                     self.assertNotEqual(
-                        error["type"], "too_many_concurrent_streams",
+                        error["code"], "too_many_concurrent_streams",
                         "the second stream was rejected for concurrency while "
                         "no reader was running")
-                    self.assertEqual(error["type"],
+                    self.assertEqual(error["code"],
                                      "reauthentication_required")
                     self.assertEqual(error["detail"], AUTH_WAIT_TIMEOUT)
                     self.assertGreaterEqual(
@@ -1408,17 +1385,15 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                 if response is not None:
                     response.close()
 
-    def test_a6_stream_auth_wait_timeout_releases_the_reader_slot(self):
+    def test_a6_stream_auth_wait_timeout_is_reported(self):
         self._hold_lease()
         auth_slots = self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
         StubUpstream.statuses = [401]
         result = {}
         worker = threading.Thread(target=self._run_stream_worker,
                                   args=(result,), daemon=True)
         with (
             self._wait_patches(budget=0.2, recheck=0.02, deadline=1.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
             mock.patch.object(chat2api, "browser_login",
                               side_effect=AssertionError("unexpected browser")),
         ):
@@ -1428,9 +1403,6 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                     self._wait_until(lambda: auth_slots._value == 1,
                                      timeout=1.0),
                     "the request never entered the auth wait")
-                self.assertEqual(
-                    reader_slots._value, 1,
-                    "an authentication waiter reserved a stream-reader slot")
                 worker.join(2)
                 self.assertFalse(worker.is_alive())
                 response = result.get("response")
@@ -1438,9 +1410,6 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                 self.assertEqual(response.status_code, 503)
                 self.assertEqual(response.json()["error"]["detail"],
                                  AUTH_WAIT_TIMEOUT)
-                self.assertEqual(reader_slots._value, 1,
-                                 "the reader slot was not returned after "
-                                 "the auth-wait timeout")
             finally:
                 self.proxy.shutdown()
                 worker.join(2)
@@ -1448,15 +1417,13 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                 if response is not None:
                     response.close()
 
-    def test_a6_stream_auth_wait_cancel_releases_the_reader_slot(self):
+    def test_a6_stream_auth_wait_cancel_ends_the_request(self):
         self._hold_lease()
         auth_slots = self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
         StubUpstream.statuses = [401]
         sock = self._raw_stream_chat_request()
         with (
             self._wait_patches(budget=1.0, recheck=0.02, deadline=2.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
             mock.patch.object(chat2api, "browser_login",
                               side_effect=AssertionError("unexpected browser")),
         ):
@@ -1465,32 +1432,24 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                     self._wait_until(lambda: auth_slots._value == 1,
                                      timeout=1.0),
                     "the request never entered the auth wait")
-                self.assertEqual(
-                    reader_slots._value, 1,
-                    "an authentication waiter reserved a stream-reader slot")
                 sock.close()
                 self.assertTrue(
                     self._wait_until(
                         lambda: self.server.active_requests() == 0,
                         timeout=2.0),
                     "the disconnected request did not end its auth wait")
-                self.assertEqual(
-                    reader_slots._value, 1,
-                    "the reader slot was not returned after cancellation")
             finally:
                 sock.close()
                 self.proxy.shutdown()
 
-    def test_a6_stream_auth_recovery_reacquires_and_returns_the_slot(self):
+    def test_a6_stream_auth_recovery_completes(self):
         self._hold_lease()
         self._release_lease_later(0.05)
         self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
         StubUpstream.statuses = [401, 200]
         StubUpstream.sse = True
         with (
             self._wait_patches(budget=1.0, recheck=0.02, deadline=2.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
             mock.patch.object(chat2api, "browser_login",
                               return_value="fresh-token"),
             mock.patch.object(chat2api.TokenStore, "save"),
@@ -1503,106 +1462,33 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
             finally:
                 response.close()
         self.assertEqual(StubUpstream.posts, 2)
-        self.assertTrue(
-            self._wait_until(lambda: reader_slots._value == 1, timeout=1.0),
-            "the reader slot was not returned after the recovered stream")
 
-    def test_a6_stream_auth_reacquire_failure_is_a_clean_503(self):
-        self._hold_lease()
-        self._release_lease_later(0.2)
-        auth_slots = self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
-        holder_acquired = threading.Event()
-        holder_release = threading.Event()
-        StubUpstream.statuses = [401, 200]
-        StubUpstream.sse = True
-
-        def hold_slot():
-            reader_slots.acquire()
-            holder_acquired.set()
-            holder_release.wait(5)
-            reader_slots.release()
-
-        holder = threading.Thread(target=hold_slot, daemon=True)
-
-        def fake_login(*args, **kwargs):
-            # Give the competing streaming request time to take the slot
-            # this request released before authentication.
-            time.sleep(0.2)
-            return "fresh-token"
-
-        result = {}
-        worker = threading.Thread(target=self._run_stream_worker,
-                                  args=(result,), daemon=True)
-        with (
-            self._wait_patches(budget=1.0, recheck=0.02, deadline=3.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
-            mock.patch.object(chat2api, "browser_login",
-                              side_effect=fake_login),
-            mock.patch.object(chat2api.TokenStore, "save"),
-        ):
-            try:
-                worker.start()
-                self.assertTrue(
-                    self._wait_until(lambda: auth_slots._value == 1,
-                                     timeout=1.0),
-                    "the request never entered the auth wait")
-                holder.start()
-                self.assertTrue(holder_acquired.wait(1.0),
-                                "the competing stream never took the "
-                                "freed reader slot")
-                worker.join(3)
-                self.assertFalse(worker.is_alive())
-                response = result.get("response")
-                self.assertIsNotNone(response)
-                try:
-                    self.assertEqual(response.status_code, 503)
-                    self.assertEqual(
-                        response.json()["error"]["type"],
-                        "too_many_concurrent_streams")
-                    self.assertEqual(
-                        StubUpstream.posts, 1,
-                        "the failed re-acquire must not open another upstream "
-                        "connection")
-                finally:
-                    response.close()
-            finally:
-                holder_release.set()
-                if holder.ident is not None:
-                    holder.join(2)
-                self.proxy.shutdown()
-                worker.join(2)
-        self.assertFalse(holder.is_alive())
-        self.assertEqual(reader_slots._value, 1)
-
-    def test_a6_stream_hidden_retry_auth_wait_releases_the_slot(self):
+    def test_a6_stream_hidden_retry_auth_wait_completes(self):
         self._hold_lease()
         self._release_lease_later(0.05)
         self._install_wait_slots(2)
-        reader_slots = threading.BoundedSemaphore(1)
-        StubUpstream.statuses = [401, 200, 401, 200]
+        # First attempt: 200 with no data -> the pre-output check retries.
+        # Hidden retry: 401 -> the request's ONE auth wait runs. Re-send:
+        # 200 SSE.
+        StubUpstream.statuses = [200, 401, 200]
         StubUpstream.sse = True
-        StubUpstream.empty_post_indices = frozenset({1})
-        second_login_entered = threading.Event()
-        let_second_login_finish = threading.Event()
+        StubUpstream.empty_post_indices = frozenset({0})
+        login_entered = threading.Event()
+        let_login_finish = threading.Event()
         login_calls = []
         result = {}
 
         def fake_login(*args, **kwargs):
             login_calls.append(time.monotonic())
-            if len(login_calls) == 2:
-                second_login_entered.set()
-                if not let_second_login_finish.wait(3):
-                    raise AssertionError("second login gate timed out")
-            else:
-                time.sleep(0.03)
+            login_entered.set()
+            if not let_login_finish.wait(3):
+                raise AssertionError("login gate timed out")
             return "fresh-token"
 
         worker = threading.Thread(target=self._run_stream_worker,
                                   args=(result,), daemon=True)
         with (
             self._wait_patches(budget=1.0, recheck=0.02, deadline=3.0),
-            mock.patch.object(chat2api, "_reader_slots", reader_slots),
             mock.patch.object(chat2api, "browser_login",
                               side_effect=fake_login),
             mock.patch.object(chat2api.TokenStore, "save"),
@@ -1614,13 +1500,9 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
             try:
                 worker.start()
                 self.assertTrue(
-                    second_login_entered.wait(2),
+                    login_entered.wait(2),
                     "the hidden retry never reached its auth wait")
-                self.assertEqual(
-                    reader_slots._value, 1,
-                    "the hidden retry reserved a stream-reader slot while "
-                    "waiting for authentication")
-                let_second_login_finish.set()
+                let_login_finish.set()
                 worker.join(3)
                 self.assertFalse(worker.is_alive())
                 response = result.get("response")
@@ -1632,18 +1514,14 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                 finally:
                     response.close()
             finally:
-                let_second_login_finish.set()
+                let_login_finish.set()
                 self.proxy.shutdown()
                 worker.join(2)
                 response = result.get("response")
                 if response is not None:
                     response.close()
-        self.assertEqual(StubUpstream.posts, 4)
-        self.assertTrue(
-            self._wait_until(lambda: reader_slots._value == 1, timeout=1.0),
-            "the reader slot was not returned after the hidden retry")
-
-
+        self.assertEqual(StubUpstream.posts, 3)
+        self.assertEqual(len(login_calls), 1)
 class AuthWaitLeaseRoundTests(AuthWaitTestBase):
     """R4: a finished round's cleanup never releases the next round's lease."""
 
@@ -1754,7 +1632,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
             status, payload = self._request("GET", "/v1/models")
             elapsed = time.monotonic() - started
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertLess(elapsed, 1.0)
         self.assertEqual(StubUpstream.gets, 1)
@@ -1765,7 +1643,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
         with self._wait_patches(budget=0.2, recheck=0.02, deadline=0.5):
             status, payload = self._request("GET", "/api/config", control=True)
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertEqual(StubUpstream.gets, 1)
 
@@ -1776,7 +1654,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
             status, payload = self._request(
                 "POST", "/api/config", body={}, control=True)
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertEqual(StubUpstream.posts, 1)
 
@@ -1789,7 +1667,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
         with self._wait_patches(budget=0.2, recheck=0.02, deadline=0.5):
             status, payload = self._request("POST", "/v1/messages", body=body)
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertEqual(StubUpstream.posts, 1)
 
@@ -1801,7 +1679,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
                 "POST", "/v1/embeddings",
                 body={"model": "stub-model", "input": "hi"})
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertEqual(StubUpstream.posts, 1)
 
@@ -1813,7 +1691,7 @@ class AuthWaitWiringTests(AuthWaitTestBase):
                 "POST", "/v1/responses",
                 body={"model": "stub-model", "input": "hi"})
         self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["type"], "reauthentication_required")
+        self.assertEqual(payload["error"]["code"], "reauthentication_required")
         self.assertEqual(payload["error"]["detail"], AUTH_WAIT_TIMEOUT)
         self.assertEqual(StubUpstream.posts, 1)
 
@@ -1903,7 +1781,7 @@ class AuthWaitSecondRejectionTests(AuthWaitTestBase):
         ):
             status, payload = self._request(method, path, body=body)
         self.assertEqual(status, 503, payload)
-        self.assertEqual(payload["error"]["type"],
+        self.assertEqual(payload["error"]["code"],
                          "reauthentication_required", payload)
         self.assertEqual(payload["error"]["detail"],
                          "upstream_rejected", payload)

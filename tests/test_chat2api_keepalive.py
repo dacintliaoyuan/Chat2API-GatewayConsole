@@ -40,8 +40,8 @@ class StubProxy:
     def health_snapshot(self):
         return {"status": "ok"}
 
-    def refresh(self, force=False, wait=False):
-        self.refresh_calls.append((force, wait))
+    def refresh(self, force=False, wait=False, visible=False):
+        self.refresh_calls.append((force, wait, visible))
 
     def shutdown(self):
         pass
@@ -72,7 +72,8 @@ def _recv_response(sock):
 class KeepAliveCloseTests(unittest.TestCase):
     def setUp(self):
         self.proxy = StubProxy()
-        self.server = chat2api.ThreadingHTTPServer(("127.0.0.1", 0), chat2api.Handler)
+        self.server = chat2api.GatewayHTTPServer(("127.0.0.1", 0),
+                                                chat2api.Handler)
         self.server.proxy = self.proxy
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -133,6 +134,12 @@ class KeepAliveCloseTests(unittest.TestCase):
 
     # ---------- the contract ----------
 
+    def test_listen_backlog_is_128(self):
+        # A burst of new connections must fit the listen queue instead of the
+        # stdlib default of 5. The class attribute is read at bind time.
+        self.assertEqual(chat2api.GatewayHTTPServer.request_queue_size, 128)
+        self.assertEqual(self.server.request_queue_size, 128)
+
     def test_error_responses_close_connection(self):
         cases = [
             # (path, token, expected status): POST with an unread body must
@@ -168,7 +175,7 @@ class KeepAliveCloseTests(unittest.TestCase):
             head, _ = _recv_response(sock)
             self.assertIn(b" 202", head.split(b"\r\n")[0])
             self.assertIn(b"connection: close", head.lower())
-            self.assertEqual([(True, False)], self.proxy.refresh_calls)
+            self.assertEqual([(True, False, False)], self.proxy.refresh_calls)
             self.assert_reuse_is_closed(sock)
         finally:
             sock.close()

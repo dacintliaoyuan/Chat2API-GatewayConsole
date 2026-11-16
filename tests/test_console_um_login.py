@@ -57,9 +57,12 @@ class _StubAdminServer:
     def __init__(self, status_value="valid", login_code=202, on_status=None,
                  verify_value="needs_login", verify_code=200,
                  verify_payload=None, on_verify=None, status_payload=None,
-                 status_code=200, status_raw=None):
+                 status_code=200, status_raw=None, login_payload=None):
         self.requests = []  # (method, path, headers-dict)
+        self.login_bodies = []
         self.login_code = login_code
+        self.login_payload = ({"state": "logging_in", "label": "", "error": None}
+                              if login_payload is None else login_payload)
         self.on_status = on_status
         self.verify_code = verify_code
         self.verify_payload = ({"verify": verify_value, "reason": None,
@@ -88,8 +91,10 @@ class _StubAdminServer:
 
             def do_POST(self):
                 self._record()
-                self._json(outer.login_code,
-                           {"state": "logging_in", "label": "", "error": None})
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b""
+                outer.login_bodies.append(raw)
+                self._json(outer.login_code, outer.login_payload)
 
             def do_GET(self):
                 self._record()
@@ -175,13 +180,14 @@ class ConsoleUmLoginTests(unittest.TestCase):
                     verify_value="needs_login", verify_code=200,
                     verify_payload=None, on_verify=None,
                     status_payload=None, status_code=200,
-                    status_raw=None):
+                    status_raw=None, login_payload=None):
         stub = _StubAdminServer(
             status_value=status_value, login_code=login_code,
             on_status=on_status, verify_value=verify_value,
             verify_code=verify_code, verify_payload=verify_payload,
             on_verify=on_verify, status_payload=status_payload,
-            status_code=status_code, status_raw=status_raw)
+            status_code=status_code, status_raw=status_raw,
+            login_payload=login_payload)
         self.addCleanup(stub.stop)
         token_patcher = mock.patch.object(
             console_um_login.console_um_adapter, "read_control_token",
@@ -228,7 +234,10 @@ class ConsoleUmLoginTests(unittest.TestCase):
         self.assertIn("X-Admin-Control", posts[0][2])
         self.assertEqual(posts[0][2]["X-Admin-Control"],
                          "isolated-test-control-token")
+        self.assertEqual(posts[0][2]["Content-Type"], "application/json")
         self.assertNotIn("Origin", posts[0][2])
+        self.assertEqual(json.loads(case.stub.login_bodies[0]),
+                         {"visible": False})
 
     # ------------------------------------------------------------- case 2
 
@@ -333,6 +342,90 @@ class ConsoleUmLoginTests(unittest.TestCase):
         stop_calls = [c for c in case.wrapper.call_args_list
                       if c.args and c.args[0] == "stop"]
         self.assertEqual(stop_calls[0].kwargs.get("caller_holds_lock"), False)
+
+    def test_27_force_login_skips_verify_and_sends_visible_body(self):
+        case = self._start_case(
+            "Running", verify_value="valid",
+            params={"force": True, "visible": True})
+        result = console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertFalse(result["login_skipped"])
+        self.assertEqual(result["final_state"], "valid")
+        self.assertEqual([(r[0], r[1]) for r in case.requests], [
+            ("POST", "/admin/auth/login"),
+            ("GET", "/admin/auth/status")])
+        posts = [r for r in case.requests if r[0] == "POST"]
+        self.assertEqual(posts[0][2]["Content-Type"], "application/json")
+        self.assertEqual(json.loads(case.stub.login_bodies[0]),
+                         {"visible": True})
+        self.assertIn("强制重新登录", " ".join(case.ctx.steps))
+
+    def test_28_force_login_without_visible_sends_headless_body(self):
+        case = self._start_case(
+            "Running", verify_value="valid", params={"force": True})
+        result = console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertFalse(result["login_skipped"])
+        self.assertEqual(json.loads(case.stub.login_bodies[0]),
+                         {"visible": False})
+
+    def test_29_visible_without_force_rejected_before_any_io(self):
+        case = self._start_case("Running", params={"visible": True})
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertEqual(caught.exception.code, "invalid_params")
+        self.assertIn("force", caught.exception.message)
+        self.assertEqual(case.requests, [])
+        self.assertEqual(case.wrapper.call_count, 0)
+        self.assertEqual(console_adapters.service_status.call_count, 0)
+
+    def test_30_force_login_busy_maps_login_busy(self):
+        case = self._start_case(
+            "Running", login_code=409,
+            login_payload={"error": {"type": "login_busy",
+                                      "message": "profile busy"}},
+            params={"force": True})
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertEqual(caught.exception.code, "login_busy")
+        self.assertIn("login_busy", caught.exception.message)
+        self.assertEqual([(r[0], r[1]) for r in case.requests], [
+            ("POST", "/admin/auth/login")])
+
+    def test_31_force_visible_unavailable_maps_login_unavailable(self):
+        case = self._start_case(
+            "Running", login_code=503,
+            login_payload={"error": {"type": "visible_login_unavailable",
+                                      "message": "no DISPLAY"}},
+            params={"force": True, "visible": True})
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertEqual(caught.exception.code, "login_unavailable")
+        self.assertIn("visible_login_unavailable",
+                      caught.exception.message)
+        self.assertEqual([(r[0], r[1]) for r in case.requests], [
+            ("POST", "/admin/auth/login")])
+
+    def test_32_status_login_busy_maps_login_busy_without_waiting(self):
+        case = self._start_case("Running", status_payload={
+            "state": "failed", "error": "login_busy",
+            "recovery": {"state": "exhausted", "pause_reason": "login_busy"},
+        }, params={"force": True, "login_budget_s": 5.0})
+        started = time.monotonic()
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(caught.exception.code, "login_busy")
+
+    def test_33_status_visible_login_unavailable_maps_unavailable(self):
+        case = self._start_case("Running", status_payload={
+            "state": "failed", "error": "visible_login_unavailable",
+            "recovery": {"state": "exhausted",
+                          "pause_reason": "visible_login_unavailable"},
+        }, params={"force": True, "visible": True, "login_budget_s": 5.0})
+        started = time.monotonic()
+        with self.assertRaises(OperationError) as caught:
+            console_um_login.relogin_um("um", case.params, case.ctx)
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(caught.exception.code, "login_unavailable")
 
     def test_08_verified_valid_skips_login_and_keeps_running(self):
         case = self._start_case("Running", verify_value="valid")

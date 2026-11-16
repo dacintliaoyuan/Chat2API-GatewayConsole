@@ -20,7 +20,8 @@ Contract pinned here:
   * an explicit error is a definitive failure: no transparent retry hides it;
   * one ledger row per request with a non-"ok" status and the observed lower
     bound of the output already streamed;
-  * reader slot / producer thread are released through the single owner.
+  * producer thread and upstream response are released through the single
+    owner.
 
 The Anthropic Messages branch already treats an upstream error event as
 terminal (its byte-fidelity contract relays the frame in-band); the
@@ -274,25 +275,13 @@ class WebUiCompatTestBase(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
         StubUpstreamHandler.posts = 0
-        self.slot_before = chat2api._reader_slots._value
         self.reader_baseline = self.reader_thread_count()
 
     @staticmethod
     def reader_thread_count():
         return sum(1 for t in threading.enumerate()
                    if t.name == "chat2api-upstream-reader")
-
-    def wait_reader_slots_restored(self, timeout=6):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if chat2api._reader_slots._value >= self.slot_before:
-                return
-            time.sleep(0.05)
-        self.fail(f"reader slots not restored within {timeout}s "
-                  f"({chat2api._reader_slots._value} != {self.slot_before})")
 
     def wait_reader_threads_reclaimed(self, timeout=6):
         deadline = time.monotonic() + timeout
@@ -364,7 +353,8 @@ class TestChatNonStreamExplicitError(WebUiCompatTestBase):
             self.assertEqual(response.status_code, 502)
             body = response.json()
         error = body["error"]
-        self.assertEqual(error["type"], "upstream_explicit_error")
+        self.assertEqual(error["type"], "upstream_error")
+        self.assertEqual(error["code"], "upstream_explicit_error")
         self.assertEqual(error["detail"]["reason"], "upstream_explicit_error")
         # 只有净化、限长的原因外发；原始对象（可能携带凭据材料）不透传。
         self.assertEqual(error["detail"]["upstream_message"],
@@ -392,7 +382,8 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
             self.assertEqual(response.status_code, 502)
             body = response.json()
         error = body["error"]
-        self.assertEqual(error["type"], "upstream_stream_error")
+        self.assertEqual(error["type"], "upstream_error")
+        self.assertEqual(error["code"], "upstream_stream_error")
         self.assertEqual(error["detail"]["reason"], "upstream_stream_error")
         self.assertEqual(error["detail"]["upstream_message"],
                          WEBUI_ERROR_MESSAGE)
@@ -401,7 +392,6 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
         self.assertEqual(record["status"], "upstream_stream_error")
         # No output was ever streamed: the failure record carries no output.
         self.assertEqual(record["output_tokens"], 0)
-        self.wait_reader_slots_restored()
         self.wait_reader_threads_reclaimed()
 
     def test_error_after_content_fails_in_band_without_done(self):
@@ -417,7 +407,7 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
         self.assertEqual(payloads[0]["choices"][0]["delta"]["content"],
                          "hello world")
         last = payloads[-1]["error"]
-        self.assertEqual(last["type"], "upstream_stream_error")
+        self.assertEqual(last["type"], "upstream_error")
         self.assertEqual(last["code"], "upstream_stream_error")
         self.assertEqual(last["detail"]["reason"], "upstream_stream_error")
         self.assertEqual(last["detail"]["upstream_message"],
@@ -432,7 +422,6 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
         # keeps the observed lower bound instead of fabricating a full
         # success.
         self.assertEqual(record["output_tokens"], 2)
-        self.wait_reader_slots_restored()
         self.wait_reader_threads_reclaimed()
 
     def test_error_after_finish_reason_is_not_recorded_ok(self):
@@ -448,7 +437,7 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
             for p in payloads))
         self.assertNotIn("data: [DONE]", events)
         self.assertEqual(payloads[-1]["error"]["type"],
-                         "upstream_stream_error")
+                         "upstream_error")
 
         (record,) = self.wait_usage_records()
         self.assertEqual(record["status"], "upstream_stream_error")
@@ -468,7 +457,7 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
             with self.stream_request("error-then-eof") as response:
                 self.assertEqual(response.status_code, 502)
                 body = response.json()
-        self.assertEqual(body["error"]["type"], "upstream_stream_error")
+        self.assertEqual(body["error"]["code"], "upstream_stream_error")
         self.assertEqual(StubUpstreamHandler.posts, 1)
         (record,) = self.wait_usage_records()
         self.assertEqual(record["status"], "upstream_stream_error")
@@ -506,7 +495,7 @@ class TestChatSseExplicitError(WebUiCompatTestBase):
         with self.stream_request("comments-then-error") as response:
             self.assertEqual(response.status_code, 502)
             body = response.json()
-        self.assertEqual(body["error"]["type"], "upstream_stream_error")
+        self.assertEqual(body["error"]["code"], "upstream_stream_error")
         self.assertNotIn("keepalive ping", json.dumps(body))
         (record,) = self.wait_usage_records()
         self.assertEqual(record["status"], "upstream_stream_error")
@@ -543,7 +532,6 @@ class TestAnthropicMessagesErrorPin(WebUiCompatTestBase):
         (record,) = self.wait_usage_records()
         self.assertEqual(record["status"], "upstream_stream_error")
         self.assertTrue(record["stream"])
-        self.wait_reader_slots_restored()
 
 
 if __name__ == "__main__":

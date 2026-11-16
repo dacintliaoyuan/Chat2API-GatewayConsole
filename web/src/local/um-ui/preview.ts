@@ -1369,8 +1369,14 @@ export function startPreview(
           }
         });
         return;
-      case "um.login":
-        begin("login", "先核验，需要时才打开登录窗口");
+      case "um.login": {
+        const forced = event.force === true;
+        begin(
+          "login",
+          forced
+            ? "显式强制重新登录（可见窗口）"
+            : "先核验，需要时才打开登录窗口"
+        );
         later(2_400, () => {
           const was =
             state.overview.login.state === "ready"
@@ -1380,8 +1386,9 @@ export function startPreview(
             {
               state: "valid",
               word: "有效",
-              detail:
-                was === "valid"
+              detail: forced
+                ? "已显式强制重新登录（预览只模拟，没有打开任何窗口）"
+                : was === "valid"
                   ? "认证有效，没有打开登录窗口"
                   : "已重新登录（预览只模拟，没有打开任何窗口）",
               checkedAt: Date.now(),
@@ -1407,17 +1414,28 @@ export function startPreview(
           finishAction(
             "login",
             "succeeded",
-            was === "valid" ? "认证有效，无需登录" : "已重新登录",
-            was === "valid"
-              ? ["核验：有效", "无需登录"]
-              : [
-                  "核验：凭据被拒（401）",
-                  "打开专用登录窗口（预览中只模拟）",
-                  "核验：有效",
+            forced
+              ? "已强制重新登录（可见窗口）"
+              : was === "valid"
+                ? "认证有效，无需登录"
+                : "已重新登录",
+            forced
+              ? [
+                  "跳过按需核验",
+                  "打开可见登录窗口（预览中只模拟）",
+                  "登录：有效",
                 ]
+              : was === "valid"
+                ? ["核验：有效", "无需登录"]
+                : [
+                    "核验：凭据被拒（401）",
+                    "打开专用登录窗口（预览中只模拟）",
+                    "核验：有效",
+                  ]
           );
         });
         return;
+      }
       case "um.service":
         begin(
           event.action,

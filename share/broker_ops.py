@@ -127,6 +127,27 @@ def linux_entry_script(argv):
     return None
 
 
+LINUX_HOST_ENTRY_KINDS = ("python", "native")
+
+
+def linux_entry_identity(argv, entry_kind="python"):
+    """The share 8003 entry operand for the configured host entry kind.
+
+    ``python`` keeps the historical contract: the entry is the interpreter's
+    SCRIPT operand, never the interpreter itself and never an option value.
+    ``native`` is the Rust gateway binary: argv[0] IS the entry, so the
+    identity marker is its basename. Unknown kinds raise instead of guessing;
+    an empty argv returns None and the caller fails closed.
+    """
+    if entry_kind not in LINUX_HOST_ENTRY_KINDS:
+        raise ValueError(f"unknown host entry kind {entry_kind!r}")
+    if not argv:
+        return None
+    if entry_kind == "native":
+        return str(argv[0]) or None
+    return linux_entry_script(argv)
+
+
 class PosixProjectionAclChecker:
     """POSIX ACL/permission validator for the protected projection writer.
 
@@ -289,7 +310,7 @@ class LinuxHostOps:
     """
 
     def __init__(self, pid_file, command, *, state_dir=None,
-                 expected_uid=None, expected_port=None,
+                 expected_uid=None, expected_port=None, entry_kind="python",
                  proc_root="/proc", kill_fn=None, spawner=None,
                  clock=time.monotonic, sleeper=time.sleep,
                  start_wait_s=6.0, stop_wait_s=10.0, poll_interval_s=0.05):
@@ -297,12 +318,15 @@ class LinuxHostOps:
             raise ValueError("pid_file must be a non-empty path")
         if not isinstance(command, (list, tuple)) or not command:
             raise ValueError("command must be a non-empty argv list")
+        if entry_kind not in LINUX_HOST_ENTRY_KINDS:
+            raise ValueError(f"unknown host entry kind {entry_kind!r}")
         self.pid_file = os.path.abspath(pid_file)
         self.command = [str(part) for part in command]
         self.state_dir = os.path.abspath(
             state_dir or os.path.dirname(self.pid_file) or ".")
         self.expected_uid = expected_uid
         self.expected_port = expected_port
+        self.entry_kind = entry_kind
         self.proc_root = str(proc_root)
         self._kill = kill_fn or os.kill
         self._spawner = spawner
@@ -407,12 +431,23 @@ class LinuxHostOps:
             cmdline = self._cmdline(pid)
         if not cmdline:
             return False
-        marker = linux_entry_script(self.command)
+        if os.path.basename(cmdline[0]) != os.path.basename(self.command[0]):
+            self.last_error = "process command line lacks the configured entry"
+            return False
+        interpreter = os.path.basename(self.command[0]).startswith("python")
+        if self.entry_kind == "python" and not interpreter:
+            self.last_error = "configured command is not a python entry"
+            return False
+        if self.entry_kind == "native" and interpreter:
+            self.last_error = (
+                "configured command is an interpreter, not a native entry")
+            return False
+        marker = linux_entry_identity(self.command, self.entry_kind)
         if marker:
             # The marker is the configured ENTRY SCRIPT; the process's own
             # entry operand must be that SAME script. The name appearing as an
             # argument (or the trailing --upstream-port value) never matches.
-            entry = linux_entry_script(cmdline)
+            entry = linux_entry_identity(cmdline, self.entry_kind)
             if entry is None or os.path.basename(entry) != \
                     os.path.basename(marker):
                 self.last_error = "process command line lacks the share entry"
@@ -1003,6 +1038,9 @@ def linux_server_plan(args):
     pid_file = getattr(args, "host_pid_file", None)
     if not isinstance(pid_file, str) or not os.path.isabs(pid_file):
         raise ValueError("linux broker requires an absolute --host-pid-file")
+    entry_kind = getattr(args, "host_entry_kind", "python")
+    if entry_kind not in LINUX_HOST_ENTRY_KINDS:
+        raise ValueError("linux broker requires a known --host-entry-kind")
     for name in ("key_file", "instance_key_file", "registration_file",
                  "projection_path", "broker_dir"):
         value = getattr(args, name, None)
@@ -1014,6 +1052,7 @@ def linux_server_plan(args):
             "instance_socket_prefix": instance_prefix,
             "server_class": UnixSocketBrokerServer,
             "host_pid_file": pid_file,
+            "host_entry_kind": entry_kind,
             "host_command": [str(part) for part in command]}
 
 
@@ -1096,6 +1135,7 @@ def build_linux_server(args, *, verifier=None, host_ops=None,
         state_dir=getattr(args, "state_dir", None),
         expected_uid=getattr(args, "expected_uid", None),
         expected_port=getattr(args, "expect_instance_port", None),
+        entry_kind=plan["host_entry_kind"],
         clock=clock)
     maintenance_cell = {}
 
@@ -1166,6 +1206,11 @@ def linux_main(argv=None):
                         help="desired-stop intent directory")
     parser.add_argument("--expected-uid", type=int, default=None,
                         help="expected service uid (identity evidence)")
+    parser.add_argument("--host-entry-kind",
+                        choices=LINUX_HOST_ENTRY_KINDS, default="python",
+                        help="8003 entry kind: python keeps the old "
+                             "interpreter+script identity, native is the "
+                             "Rust gateway binary (rollback keeps python)")
     parser.add_argument("--expect-instance-image", default=None)
     parser.add_argument("--expect-instance-cmdline-marker", default=None)
     parser.add_argument("--expect-instance-port", type=int, default=None)

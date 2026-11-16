@@ -167,8 +167,6 @@ class TestChat2ApiOutputBudgetForwarding(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        chat2api._reader_slots = threading.BoundedSemaphore(
-            chat2api.STREAM_MAX_CONCURRENT_READERS)
 
     def chat_post(self, extra, stream=False):
         payload = {"model": "Budget-Model-A",
@@ -342,6 +340,8 @@ class TestChat2ApiOutputBudgetForwarding(unittest.TestCase):
                                      timeout=15)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"]["type"],
+                         "invalid_request_error")
+        self.assertEqual(response.json()["error"]["code"],
                          "upstream_request_rejected")
         reject_lines = [line for line in cm.output
                         if "upstream_reject" in line]

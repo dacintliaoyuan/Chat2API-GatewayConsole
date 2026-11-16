@@ -123,6 +123,10 @@ _LOGIN_SCHEMA = {
     "start_wait_s": {"type": "int", "min": 1, "max": 120},
     "login_budget_s": {"type": "int", "min": 1, "max": 3600},
     "poll_interval_s": {"type": "int", "min": 1, "max": 10},
+    # ADR 0005: explicit forced re-login; `visible` is accepted only with
+    # `force` (the handler rejects the visible-only combination).
+    "force": {"type": "bool"},
+    "visible": {"type": "bool"},
 }
 
 
@@ -763,9 +767,9 @@ def build_registry(cloud=False):
             resource_fn=_um_account_resource,
             param_schema=_LOGIN_SCHEMA,
             # 节5 批准记录（2026-09-16）+ 用户指令 A3：登录编排恢复启用。
-            # 登录=一次登录交互（可见或 headless）；默认 headless，只有
-            # 操作员显式人工接管才按需拉起可见 Edge 窗口。编排自身的临时
-            # 启停恢复/超时复验/协作取消已隔离验证。
+            # 登录=一次登录交互（可见或 headless）；默认按需核验，
+            # force=true 显式强制重新登录，visible 仅随 force 生效（ADR 0005）。
+            # 编排自身的临时启停恢复/超时复验/协作取消已隔离验证。
             enabled=True),
         ActionSpec(
             "model.context_probe_preview",
