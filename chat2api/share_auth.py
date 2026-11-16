@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import itertools
 import json
+import math
 import os
 import socket
 import sys
@@ -1360,6 +1361,11 @@ class ShareGate:
                     reason_out["detail"] = (
                         "per-key rate limit reached "
                         "(max 20 requests per minute)")
+                    # The precise wait is until the oldest request leaves the
+                    # 60-second window; the HTTP header cannot express a
+                    # fraction, so round up to the next whole second.
+                    reason_out["retry_after"] = max(
+                        1, int(math.ceil(60.0 - (now - recent[0]))))
                 return False
             recent.append(now)
             self.active[key_id] = self.active.get(key_id, 0) + 1

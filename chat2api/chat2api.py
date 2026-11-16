@@ -70,7 +70,7 @@ import sys
 import threading
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -459,11 +459,14 @@ REQUEST_BODY_TIMEOUT_S = 60.0
 # (reasoning-only phase). Attempt counts alone would let a silent gateway
 # (~120s first-byte budget x 6 attempts) pin an unattended client for ~12
 # minutes; after this deadline every attempt surfaces its last failure.
+# ADR 0003 / spec #58 raised the previous 360s bound to 540s so the full
+# retry matrix (5 fast + 2 slow + probes) still fits one request without
+# letting a browser-driven reauthentication occupy the client for 30 minutes.
 try:
     MAX_REQUEST_SECONDS = int(
-        os.environ.get("CHAT2API_MAX_REQUEST_SECONDS", "360"))
+        os.environ.get("CHAT2API_MAX_REQUEST_SECONDS", "540"))
 except ValueError:
-    MAX_REQUEST_SECONDS = 360
+    MAX_REQUEST_SECONDS = 540
 MAX_REQUEST_SECONDS = max(10, min(MAX_REQUEST_SECONDS, 3600))
 
 # UM / GLM-5.3-Flash currently rejects a single prompt containing more than
@@ -568,7 +571,39 @@ try:
         os.environ.get("CHAT2API_MAX_TOTAL_ATTEMPTS", "12"))))
 except ValueError:
     MAX_TOTAL_ATTEMPTS = 12
-_UPSTREAM_RETRYABLE_STATUS = frozenset((408, 429, 500, 502, 503, 504))
+# Retry policy (ADR 0003 / spec #58 / ticket #61). The gateway has ONE
+# upstream candidate, so only the same request is ever re-sent: the status sets
+# below decide whether a re-send can plausibly succeed.
+#   * full transient budget: 408, 429, 5xx, 529, Cloudflare 520-524, transport
+#     exceptions and the gateway's own first-byte/header/socket/deadline waits.
+#   * one probe each for 402/403 (quota/permission), counted separately and
+#     not consuming the 5 fast retries.
+#   * one conditional probe for 400/422, only when the upstream text names a
+#     transient condition (Cloudflare challenges included).
+#   * 401 is a credential contract (reauthentication), never this loop.
+#   * 404/405/409/413/415 are definitive request errors: no retry.
+_UPSTREAM_RETRYABLE_STATUS = frozenset(
+    (408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529))
+_UPSTREAM_PROBE_STATUS = frozenset((402, 403))
+_UPSTREAM_CONDITIONAL_PROBE_STATUS = frozenset((400, 422))
+_UPSTREAM_NON_RETRYABLE_STATUS = frozenset(
+    (401, 404, 405, 409, 413, 415))
+_UPSTREAM_TRANSIENT_TEXT_HINTS = (
+    "rate limit", "too many requests", "overloaded", "try again",
+    "temporarily", "unavailable", "cloudflare", "challenge")
+# 403 authentication text triggers the per-request reauthentication contract
+# (ticket #63). A Cloudflare challenge is never a UM credential rejection.
+_UPSTREAM_AUTH_REJECTION_TEXT_HINTS = (
+    "not authenticated", "sign in", "session expired",
+    "authentication required", "please log in")
+_UPSTREAM_CHALLENGE_TEXT_HINTS = ("cloudflare", "challenge")
+# Magpie's longestPause=8s semantics: Retry-After at or below this bound is
+# waited locally; a longer value is handed to the client with the original
+# status instead of being slept off inside the gateway.
+_UPSTREAM_RETRY_AFTER_MAX_S = 8.0
+# Statuses whose error body must be inspected to classify the retry tier.
+_UPSTREAM_TEXT_CLASSIFICATION_STATUS = frozenset(
+    (400, 403, 422))
 _UPSTREAM_TRANSIENT_EXCEPTIONS = (
     requests.ConnectionError, requests.Timeout,
     requests.exceptions.ChunkedEncodingError,
@@ -955,27 +990,155 @@ def _attempt_is_slow(elapsed_s):
     return elapsed_s >= UPSTREAM_SLOW_RETRY_THRESHOLD_S
 
 
+def _retry_after_seconds(response):
+    """Parse an upstream Retry-After header into seconds, or None.
+
+    Both forms HTTP allows are accepted: delta-seconds and an HTTP-date. A
+    malformed value is ignored (the caller falls back to its own backoff);
+    a negative delta is clamped to zero.
+    """
+    if response is None:
+        return None
+    try:
+        raw = response.headers.get("Retry-After")
+    except AttributeError:
+        return None
+    if not raw:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        pass
+    try:
+        target = email.utils.parsedate_to_datetime(value)
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        return max(0.0, target.timestamp() - time.time())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _upstream_should_retry_veto(response):
+    """Return the machine reason a retryable response must not be retried.
+
+    ``X-Should-Retry: false`` is an explicit upstream stop signal. A
+    ``Retry-After`` longer than the 8s local wait budget is handed to the
+    client with the original status instead of being slept off here.
+    """
+    if response is None:
+        return None
+    try:
+        should_retry = response.headers.get("X-Should-Retry")
+    except AttributeError:
+        should_retry = None
+    if should_retry is not None and should_retry.strip().lower() == "false":
+        return "x_should_retry_false"
+    retry_after = _retry_after_seconds(response)
+    if (retry_after is not None
+            and retry_after > _UPSTREAM_RETRY_AFTER_MAX_S):
+        return "retry_after_exceeds_budget"
+    return None
+
+
+def _upstream_text_matches(text, hints):
+    lowered = (text or "").lower()
+    return bool(lowered) and any(hint in lowered for hint in hints)
+
+
+def _upstream_retry_kind(status, response_text):
+    """Classify one upstream status into a retry tier, or None.
+
+    This is the single Python source of the ADR 0003 retry matrix; every
+    protocol entry point (Chat, Messages, Responses) uses it.
+    """
+    if status in _UPSTREAM_NON_RETRYABLE_STATUS:
+        return None
+    if status in _UPSTREAM_RETRYABLE_STATUS:
+        return "transient"
+    if status in _UPSTREAM_PROBE_STATUS:
+        return "probe"
+    if status in _UPSTREAM_CONDITIONAL_PROBE_STATUS \
+            and _upstream_text_matches(
+                response_text, _UPSTREAM_TRANSIENT_TEXT_HINTS):
+        return "conditional_probe"
+    return None
+
+
+def _upstream_retry_plan(status, response_text, response):
+    """Return ``(kind, retry_after_s, veto_reason)`` for one response.
+
+    ``kind`` is ``transient``/``probe``/``conditional_probe`` or None when
+    the status is definitive or the upstream vetoed the retry. ``retry_after_s``
+    is the parsed header even for a final response, so the caller can forward
+    it unchanged.
+    """
+    kind = _upstream_retry_kind(status, response_text)
+    if kind is None:
+        return None, _retry_after_seconds(response), None
+    veto = _upstream_should_retry_veto(response)
+    if veto is not None:
+        return None, _retry_after_seconds(response), veto
+    return kind, _retry_after_seconds(response), None
+
+
+def _upstream_403_is_auth_rejection(response_text):
+    """Whether a 403 body carries UM authentication text (ticket #63).
+
+    Cloudflare challenge text is explicitly excluded: it is an edge challenge,
+    not a UM credential rejection, so it never opens a login window.
+    """
+    if _upstream_text_matches(
+            response_text, _UPSTREAM_CHALLENGE_TEXT_HINTS):
+        return False
+    return _upstream_text_matches(
+        response_text, _UPSTREAM_AUTH_REJECTION_TEXT_HINTS)
+
+
+def _note_upstream_403_auth_rejection(request_id, response_text):
+    """Record the 403 authentication-text trigger for ticket #63.
+
+    #63 replaces this marker with the actual per-request reauthentication
+    attempt. This ticket only leaves the trigger point and never opens a login
+    window from here.
+    """
+    _logger.warning(
+        "upstream auth rejection request=%s status=403 "
+        "trigger=reauthenticate detail=%r reauth=deferred",
+        request_id or "-",
+        _bounded_upstream_error_message(response_text))
+
+
+def _upstream_retry_after_headers(response):
+    """Forward the upstream Retry-After value on a final error, if present."""
+    if response is None:
+        return None
+    try:
+        raw = response.headers.get("Retry-After")
+    except AttributeError:
+        return None
+    if raw is None:
+        return None
+    raw = raw.strip()
+    return {"Retry-After": raw} if raw else None
+
+
 def _retry_delay_seconds(retry_number, attempt_elapsed_s, response=None,
                          slow=False):
     """Retry delay shared by chat and compat paths.
 
-    Fast failures use short exponential jitter. Slow failures deliberately
-    keep 1-3 seconds of jitter instead of immediately re-hitting UM in a
-    synchronized wave after ~50-second 504/chunked failures.
+    An upstream Retry-After overrides the default backoff. Values above the
+    local 8s wait budget never reach this function: the caller returns the
+    original status and header to the client instead. Fast failures use short
+    exponential jitter; slow failures deliberately keep 1-3 seconds of jitter
+    instead of immediately re-hitting UM in a synchronized wave after
+    ~50-second 504/chunked failures.
     """
-    if response is not None and response.status_code == 429:
-        raw = response.headers.get("Retry-After")
-        if raw:
-            try:
-                return min(10.0, max(0.0, float(raw)))
-            except ValueError:
-                pass
-            try:
-                target = email.utils.parsedate_to_datetime(raw)
-                delta = target.timestamp() - time.time()
-                return min(10.0, max(0.0, delta))
-            except (TypeError, ValueError, OverflowError):
-                pass
+    retry_after = _retry_after_seconds(response)
+    if retry_after is not None:
+        return retry_after
     if slow:
         return random.uniform(1.0, 3.0)
     # Fast transport failures use a deterministic, bounded backoff.  Do not
@@ -7682,12 +7845,28 @@ class Handler(BaseHTTPRequestHandler):
         reason = {}
         if not gate.acquire(entry["key_id"], cfg["config_generation"],
                             entry["secret_version"], reason_out=reason):
+            reason_name = reason.get("reason")
+            extra_headers = {}
+            if reason_name == "key_rate_limit":
+                retry_after = reason.get("retry_after")
+                if retry_after is not None:
+                    extra_headers["Retry-After"] = str(retry_after)
+            elif reason_name in ("per_key_concurrency",
+                                "share_concurrency"):
+                # A concurrency slot is released as soon as an in-flight
+                # request finishes, so the client's retry should be short.
+                extra_headers["Retry-After"] = "1"
+            elif reason_name == "state_not_accepting":
+                # Draining/stopped is an operator state: retrying this request
+                # cannot restore it.
+                extra_headers["X-Should-Retry"] = "false"
             self._error(
                 429, "sharing_limit_reached",
-                detail={"reason": reason.get("reason"),
+                detail={"reason": reason_name,
                          "detail": reason.get("detail")},
                 error_code="sharing_limit_reached",
-                extra={"reason": reason.get("reason")})
+                extra={"reason": reason_name},
+                extra_headers=extra_headers or None)
             return False
         ctx = share._InflightCtx(self.connection)
         gate.register_inflight(entry["key_id"], ctx)
@@ -8054,13 +8233,30 @@ class Handler(BaseHTTPRequestHandler):
         started_at = time.time()
         input_est = _message_tokens(chat_body.get("messages"))
         upstream_owned = False
+        request_id = self._ensure_request_id()
+
+        def responses_call_timeout():
+            """Per-attempt socket timeout capped by the request deadline."""
+            remaining = request_deadline - time.monotonic()
+            if remaining <= 0:
+                raise _RequestDeadlineExceeded(
+                    "responses request wall-clock deadline exhausted")
+            # Match the chat path: the socket read cap follows the CLIENT's
+            # response mode, so an aggregate stream=false request keeps the
+            # 600s non-stream cap and never inherits the stream boundary.
+            read_cap = STREAM_SOCKET_TIMEOUT_S if client_stream else 600
+            return (max(0.001, min(15.0, remaining)),
+                    max(0.001, min(read_cap, remaining)))
+
         try:
-            r = proxy.call("POST", "/api/chat/completions",
-                           stream=upstream_stream,
-                           json=chat_body,
-                           auth_wait_budget=auth_wait_budget,
-                           request_deadline=request_deadline,
-                           cancel_check=cancel_check)
+            r, response_text = _open_upstream_response_with_retries(
+                proxy, "POST", "/api/chat/completions",
+                stream=upstream_stream, json_body=chat_body, headers={},
+                timeout=responses_call_timeout,
+                auth_wait_budget=auth_wait_budget,
+                request_deadline=request_deadline,
+                cancel_check=cancel_check, request_id=request_id,
+                endpoint="/v1/responses")
         except ReauthenticationRequired as exc:
             record_usage(body["model"], client_stream, started_at, None,
                           input_est, 0, status="reauthentication_required")
@@ -8072,35 +8268,51 @@ class Handler(BaseHTTPRequestHandler):
             record_usage(body["model"], client_stream, started_at, None,
                           input_est, 0, status="client_disconnected")
             return
-        except _RequestDeadlineExceeded:
+        except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
+            deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
+            status = ("request_deadline_exceeded" if deadline_exceeded
+                       else "upstream_attempt_budget_exhausted")
+            detail = {"reason": status}
+            last_status = getattr(exc, "last_upstream_status", None)
+            if last_status is not None:
+                detail["last_upstream_status"] = last_status
             record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="request_deadline_exceeded")
+                          input_est, 0, status=status)
             self._error(
-                504, "Upstream request exceeded the request deadline",
-                {"reason": "request_deadline_exceeded"},
-                error_code="request_deadline_exceeded")
+                504 if deadline_exceeded else 502,
+                ("Upstream request exceeded the request deadline"
+                 if deadline_exceeded else
+                 "Upstream request could not start another attempt"),
+                detail, error_code=status)
             return
         except requests.RequestException as exc:
             timeout = _is_upstream_timeout(exc)
             status = "upstream_timeout" if timeout else "upstream_unreachable"
             record_usage(body["model"], client_stream, started_at, None,
                           input_est, 0, status=status)
+            detail = {"reason": type(exc).__name__}
+            last_status = getattr(exc, "last_upstream_status", None)
+            if last_status is not None:
+                detail["last_upstream_status"] = last_status
             self._error(
                 504 if timeout else 502,
                 ("Upstream request timed out" if timeout else
                  "Upstream request failed"),
-                {"reason": type(exc).__name__},
+                detail,
                 error_code=status)
             return
         try:
             if r.status_code != 200:
-                response_text = _bounded_upstream_error_text(r)
+                if not response_text:
+                    response_text = _bounded_upstream_error_text(r)
                 if r.status_code == 401:
                     status = "reauthentication_required"
                     self._reauthentication_error("upstream_rejected")
                 else:
                     status = f"HTTP{r.status_code}"
-                    self._upstream_status_error(r.status_code, response_text)
+                    self._upstream_status_error(
+                        r.status_code, response_text,
+                        extra_headers=_upstream_retry_after_headers(r))
                 record_usage(body["model"], client_stream, started_at, None,
                               input_est, 0, status=status)
                 return
@@ -8299,13 +8511,28 @@ class Handler(BaseHTTPRequestHandler):
         upstream_owned = False
         if request_deadline is None:
             request_deadline = time.monotonic() + MAX_REQUEST_SECONDS
+        request_id = self._ensure_request_id()
+
+        def messages_call_timeout():
+            """Per-attempt socket timeout capped by the request deadline."""
+            remaining = request_deadline - time.monotonic()
+            if remaining <= 0:
+                raise _RequestDeadlineExceeded(
+                    "responses request wall-clock deadline exhausted")
+            read_cap = STREAM_SOCKET_TIMEOUT_S if client_stream else 600
+            return (max(0.001, min(15.0, remaining)),
+                    max(0.001, min(read_cap, remaining)))
+
         try:
-            r = proxy.call("POST", "/api/v1/messages", stream=upstream_stream,
-                           json=messages_body,
-                           headers={"Anthropic-Version": "2023-06-01"},
-                           auth_wait_budget=auth_wait_budget,
-                           request_deadline=request_deadline,
-                           cancel_check=cancel_check)
+            r, response_text = _open_upstream_response_with_retries(
+                proxy, "POST", "/api/v1/messages",
+                stream=upstream_stream, json_body=messages_body,
+                headers={"Anthropic-Version": "2023-06-01"},
+                timeout=messages_call_timeout,
+                auth_wait_budget=auth_wait_budget,
+                request_deadline=request_deadline,
+                cancel_check=cancel_check, request_id=request_id,
+                endpoint="/v1/responses (messages)")
         except ReauthenticationRequired as exc:
             record_usage(body["model"], client_stream, started_at, None,
                           input_est, 0, status="reauthentication_required")
@@ -8317,35 +8544,51 @@ class Handler(BaseHTTPRequestHandler):
             record_usage(body["model"], client_stream, started_at, None,
                           input_est, 0, status="client_disconnected")
             return
-        except _RequestDeadlineExceeded:
+        except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
+            deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
+            status = ("request_deadline_exceeded" if deadline_exceeded
+                       else "upstream_attempt_budget_exhausted")
+            detail = {"reason": status}
+            last_status = getattr(exc, "last_upstream_status", None)
+            if last_status is not None:
+                detail["last_upstream_status"] = last_status
             record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="request_deadline_exceeded")
+                          input_est, 0, status=status)
             self._error(
-                504, "Upstream request exceeded the request deadline",
-                {"reason": "request_deadline_exceeded"},
-                error_code="request_deadline_exceeded")
+                504 if deadline_exceeded else 502,
+                ("Upstream request exceeded the request deadline"
+                 if deadline_exceeded else
+                 "Upstream request could not start another attempt"),
+                detail, error_code=status)
             return
         except requests.RequestException as exc:
             timeout = _is_upstream_timeout(exc)
             status = "upstream_timeout" if timeout else "upstream_unreachable"
             record_usage(body["model"], client_stream, started_at, None,
                           input_est, 0, status=status)
+            detail = {"reason": type(exc).__name__}
+            last_status = getattr(exc, "last_upstream_status", None)
+            if last_status is not None:
+                detail["last_upstream_status"] = last_status
             self._error(
                 504 if timeout else 502,
                 ("Upstream request timed out" if timeout else
                  "Upstream request failed"),
-                {"reason": type(exc).__name__},
+                detail,
                 error_code=status)
             return
         try:
             if r.status_code != 200:
-                response_text = _bounded_upstream_error_text(r)
+                if not response_text:
+                    response_text = _bounded_upstream_error_text(r)
                 if r.status_code == 401:
                     status = "reauthentication_required"
                     self._reauthentication_error("upstream_rejected")
                 else:
                     status = f"HTTP{r.status_code}"
-                    self._upstream_status_error(r.status_code, response_text)
+                    self._upstream_status_error(
+                        r.status_code, response_text,
+                        extra_headers=_upstream_retry_after_headers(r))
                 record_usage(body["model"], client_stream, started_at, None,
                               input_est, 0, status=status)
                 return
@@ -8578,6 +8821,8 @@ class Handler(BaseHTTPRequestHandler):
         logical_attempts = 0
         transient_retries_done = 0
         slow_retries_done = 0
+        probe_retries_done = {}
+        conditional_probe_retries_done = 0
         repetition_retries_done = 0
         physical_budget = _PhysicalRequestBudget(MAX_TOTAL_ATTEMPTS)
         # Last upstream HTTP status seen by this logical request, including an
@@ -8644,6 +8889,18 @@ class Handler(BaseHTTPRequestHandler):
                     physical_budget.remaining > 0 and
                     time.monotonic() < deadline)
 
+        def probe_retry_available(status):
+            return (UPSTREAM_AUTO_RETRY and
+                    probe_retries_done.get(status, 0) < 1 and
+                    physical_budget.remaining > 0 and
+                    time.monotonic() < deadline)
+
+        def conditional_probe_retry_available():
+            return (UPSTREAM_AUTO_RETRY and
+                    conditional_probe_retries_done < 1 and
+                    physical_budget.remaining > 0 and
+                    time.monotonic() < deadline)
+
         def schedule_retry(reason, attempt_elapsed_s, response=None,
                            stream_retry=False):
             nonlocal transient_retries_done, slow_retries_done
@@ -8664,6 +8921,28 @@ class Handler(BaseHTTPRequestHandler):
                 slow_retries_done, UPSTREAM_SLOW_AUTO_RETRIES,
                 physical_budget.used, MAX_TOTAL_ATTEMPTS,
                 "slow" if slow else "fast", reason, delay)
+            return _sleep_with_deadline(delay, deadline)
+
+        def schedule_probe_retry(kind, status, attempt_elapsed_s, response):
+            nonlocal conditional_probe_retries_done
+            slow = _attempt_is_slow(attempt_elapsed_s)
+            if kind == "probe":
+                probe_retries_done[status] = (
+                    probe_retries_done.get(status, 0) + 1)
+                counter_text = "probe_retry=%d/1" % probe_retries_done[status]
+            else:
+                conditional_probe_retries_done += 1
+                counter_text = ("conditional_probe_retry=%d/1"
+                                % conditional_probe_retries_done)
+            # Probes use the first fast backoff unless Retry-After overrides it.
+            delay = _retry_delay_seconds(
+                1, attempt_elapsed_s, response=response, slow=slow)
+            _logger.warning(
+                "compat probe-retry path=%s kind=%s status=%d %s "
+                "physical_attempt=%d/%d class=%s delay_s=%.2f",
+                upstream_path, kind, status, counter_text,
+                physical_budget.used, MAX_TOTAL_ATTEMPTS,
+                "slow" if slow else "fast", delay)
             return _sleep_with_deadline(delay, deadline)
 
         def log_summary(final):
@@ -8768,13 +9047,34 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             elapsed = time.monotonic() - attempt_started
-            if response.status_code in _UPSTREAM_RETRYABLE_STATUS:
+            # ADR 0003 retry matrix: transient statuses use the fast/slow
+            # budgets, 402/403 get one probe each, and 400/422 get one
+            # conditional probe only when the upstream text is transient.
+            response_text = ""
+            if response.status_code in _UPSTREAM_TEXT_CLASSIFICATION_STATUS:
+                response_text = _bounded_upstream_error_text(response)
+            if (response.status_code == 403
+                    and _upstream_403_is_auth_rejection(response_text)):
+                _note_upstream_403_auth_rejection(
+                    compat_request_id, response_text)
+            kind, _retry_after_s, _veto_reason = _upstream_retry_plan(
+                response.status_code, response_text, response)
+            if kind is not None:
                 status_code = response.status_code
                 last_upstream_status = status_code
-                if retry_available(_attempt_is_slow(elapsed)):
-                    delay_response = response
-                    should_retry = schedule_retry(
-                        f"HTTP{status_code}", elapsed, response=delay_response)
+                if kind == "transient":
+                    available = retry_available(_attempt_is_slow(elapsed))
+                elif kind == "probe":
+                    available = probe_retry_available(status_code)
+                else:
+                    available = conditional_probe_retry_available()
+                if available:
+                    if kind == "transient":
+                        should_retry = schedule_retry(
+                            f"HTTP{status_code}", elapsed, response=response)
+                    else:
+                        should_retry = schedule_probe_retry(
+                            kind, status_code, elapsed, response)
                     if should_retry:
                         response.close()
                         continue
@@ -8788,9 +9088,10 @@ class Handler(BaseHTTPRequestHandler):
                     log_summary("request_deadline_exceeded")
                     record_messages_usage("request_deadline_exceeded")
                     return
-                # Retry budget exhausted: the final upstream status is
-                # preserved and rebuilt in the client protocol's envelope by
-                # _passthrough, never folded into a synthetic 502.
+                # Retry budget exhausted or vetoed: the final upstream status
+                # is preserved and rebuilt in the client protocol's envelope by
+                # _passthrough, never folded into a synthetic 502. The
+                # _passthrough call below forwards Retry-After when present.
 
             if client_stream and response.status_code == 200:
                 try:
@@ -8962,7 +9263,8 @@ class Handler(BaseHTTPRequestHandler):
                     output_budget=messages_output_budget,
                     tries=logical_attempts,
                     physical_attempts=physical_budget.used)
-            self._passthrough(response)
+            self._passthrough(
+                response, extra_headers=_upstream_retry_after_headers(response))
             log_summary(f"HTTP{status_code}")
             record_messages_usage(f"HTTP{status_code}", payload=payload)
             return
@@ -9092,6 +9394,8 @@ class Handler(BaseHTTPRequestHandler):
         logical_attempts = 0
         transient_retries_done = 0
         slow_retries_done = 0
+        probe_retries_done = {}
+        conditional_probe_retries_done = 0
         repetition_retries_done = 0
         compat_retry_seen = False
         # Last upstream HTTP status seen by this logical request, including an
@@ -9130,6 +9434,18 @@ class Handler(BaseHTTPRequestHandler):
                     physical_budget.remaining > 0 and
                     time.monotonic() < request_deadline)
 
+        def probe_retry_available(status):
+            return (UPSTREAM_AUTO_RETRY and
+                    probe_retries_done.get(status, 0) < 1 and
+                    physical_budget.remaining > 0 and
+                    time.monotonic() < request_deadline)
+
+        def conditional_probe_retry_available():
+            return (UPSTREAM_AUTO_RETRY and
+                    conditional_probe_retries_done < 1 and
+                    physical_budget.remaining > 0 and
+                    time.monotonic() < request_deadline)
+
         def log_upstream_retry(reason, delay_s, slow):
             _logger.warning(
                 "upstream auto-retry request=%s model=%s retry=%d/%d "
@@ -9141,6 +9457,34 @@ class Handler(BaseHTTPRequestHandler):
                 MAX_TOTAL_ATTEMPTS, "slow" if slow else "fast",
                 reason, delay_s)
 
+        def log_probe_retry(kind, status, delay_s, slow):
+            if kind == "probe":
+                probe_count = probe_retries_done.get(status, 0)
+                limit_text = "probe_retry=%d/1" % probe_count
+            else:
+                limit_text = ("conditional_probe_retry=%d/1"
+                              % conditional_probe_retries_done)
+            _logger.warning(
+                "upstream probe-retry request=%s model=%s kind=%s status=%d "
+                "%s physical_attempt=%d/%d class=%s delay_s=%.2f",
+                request_id, req_model, kind, status, limit_text,
+                physical_budget.used, MAX_TOTAL_ATTEMPTS,
+                "slow" if slow else "fast", delay_s)
+
+        def schedule_probe_retry(kind, status, attempt_elapsed_s, response):
+            nonlocal conditional_probe_retries_done
+            slow = _attempt_is_slow(attempt_elapsed_s)
+            if kind == "probe":
+                probe_retries_done[status] = (
+                    probe_retries_done.get(status, 0) + 1)
+            else:
+                conditional_probe_retries_done += 1
+            # Probes use the first fast backoff unless Retry-After overrides it.
+            delay_s = _retry_delay_seconds(
+                1, attempt_elapsed_s, response=response, slow=slow)
+            log_probe_retry(kind, status, delay_s, slow)
+            return delay_s
+
         def open_chat_response(reader_lease=None):
             """Open one chat response, transparently retrying transient setup failures.
 
@@ -9151,6 +9495,7 @@ class Handler(BaseHTTPRequestHandler):
             """
             nonlocal transient_retries_done, slow_retries_done, compat_retry_seen
             nonlocal last_upstream_status, logical_attempts
+            nonlocal conditional_probe_retries_done
             compat_retry_used = False
             while True:
                 if time.monotonic() >= request_deadline:
@@ -9228,24 +9573,51 @@ class Handler(BaseHTTPRequestHandler):
                     compat_retry_seen = True
                     continue
 
-                if rr.status_code in _UPSTREAM_RETRYABLE_STATUS:
+                # ADR 0003 retry matrix: transient statuses use the fast/slow
+                # budgets, 402/403 get one probe each, and 400/422 get one
+                # conditional probe only when the upstream text is transient.
+                # Retry-After > 8s and X-Should-Retry: false veto a retry so
+                # the final response can keep the original status/header.
+                response_text = ""
+                if rr.status_code in _UPSTREAM_TEXT_CLASSIFICATION_STATUS:
+                    response_text = _bounded_upstream_error_text(rr)
+                if (rr.status_code == 403
+                        and _upstream_403_is_auth_rejection(response_text)):
+                    _note_upstream_403_auth_rejection(request_id, response_text)
+                kind, retry_after_s, veto_reason = _upstream_retry_plan(
+                    rr.status_code, response_text, rr)
+                if kind is not None:
                     elapsed = time.monotonic() - attempt_started
                     slow = _attempt_is_slow(elapsed)
-                    if not transient_retry_available(slow):
-                        return rr, compat_retry_used
-                    transient_retries_done += 1
-                    if slow:
-                        slow_retries_done += 1
-                    delay_s = _retry_delay_seconds(
-                        transient_retries_done, elapsed,
-                        response=rr, slow=slow)
-                    status_code = rr.status_code
-                    rr.close()
-                    log_upstream_retry(f"HTTP{status_code}", delay_s, slow)
-                    if _sleep_with_deadline(delay_s, request_deadline):
-                        continue
-                    raise _RequestDeadlineExceeded(
-                        "chat retry delay reached request deadline")
+                    if kind == "transient":
+                        available = transient_retry_available(slow)
+                    elif kind == "probe":
+                        available = probe_retry_available(rr.status_code)
+                    else:
+                        available = conditional_probe_retry_available()
+                    if available:
+                        status_code = rr.status_code
+                        if kind == "transient":
+                            transient_retries_done += 1
+                            if slow:
+                                slow_retries_done += 1
+                            delay_s = _retry_delay_seconds(
+                                transient_retries_done, elapsed,
+                                response=rr, slow=slow)
+                            rr.close()
+                            log_upstream_retry(f"HTTP{status_code}", delay_s,
+                                                slow)
+                        else:
+                            delay_s = schedule_probe_retry(
+                                kind, status_code, elapsed, rr)
+                            rr.close()
+                        if _sleep_with_deadline(delay_s, request_deadline):
+                            continue
+                        raise _RequestDeadlineExceeded(
+                            "chat retry delay reached request deadline")
+                    # The retry tier applies but its own budget, the physical
+                    # cap or the wall clock is exhausted: keep the original
+                    # upstream status and Retry-After for the client.
                 return rr, compat_retry_used
 
         # Concurrency cap for streaming readers: acquire BEFORE any upstream
@@ -9337,6 +9709,9 @@ class Handler(BaseHTTPRequestHandler):
                 # inside the extractable window; longer bodies are still
                 # re-closed by _repair_truncated_json_prefix.
                 response_text = _bounded_upstream_error_text(r)
+                # Preserve the upstream Retry-After on the final error (e.g. a
+                # 429 whose value is above the 8s local wait budget).
+                retry_headers = _upstream_retry_after_headers(r)
                 r.close()
                 if status_code == 401:
                     # The retry used a credential that was just published;
@@ -9363,12 +9738,14 @@ class Handler(BaseHTTPRequestHandler):
                         output_budget=output_budget,
                         tries=logical_attempts,
                         physical_attempts=physical_budget.used)
-                    self._upstream_status_error(status_code, response_text)
+                    self._upstream_status_error(status_code, response_text,
+                                                extra_headers=retry_headers)
                     return
                 log_failure("compat_retry_non_200" if compat_retry_used
                             else "upstream_non_200", status_code,
                             upstream_status=status_code)
-                self._upstream_status_error(status_code, response_text)
+                self._upstream_status_error(status_code, response_text,
+                                            extra_headers=retry_headers)
                 return
 
             if not upstream_stream:
@@ -10383,14 +10760,16 @@ class Handler(BaseHTTPRequestHandler):
             + b"\n\n")
         self.wfile.flush()
 
-    def _passthrough(self, r: requests.Response):
+    def _passthrough(self, r: requests.Response, extra_headers=None):
         try:
             if r.status_code >= 400:
                 # Every exposed upstream path keeps the upstream status but
                 # rebuilds the body in the client protocol's envelope; the raw
-                # upstream body is never relayed.
+                # upstream body is never relayed. Retry-After (when the final
+                # upstream status carries one) is forwarded unchanged.
                 self._upstream_status_error(
-                    r.status_code, _bounded_upstream_error_text(r))
+                    r.status_code, _bounded_upstream_error_text(r),
+                    extra_headers=extra_headers)
                 return
             self.send_response(r.status_code)
             for k, v in r.headers.items():
@@ -11451,6 +11830,165 @@ def _pre_output_verify(proxy, auth_wait_budget, request_deadline, cancel_check,
     if recovered:
         return "retry"
     return "original"
+
+
+def _open_upstream_response_with_retries(
+        proxy, method, path, *, stream, json_body, headers, timeout,
+        auth_wait_budget, request_deadline, cancel_check, request_id,
+        endpoint):
+    """Open one upstream response with the ADR 0003 pre-commit retry policy.
+
+    Returns ``(response, response_text)``. ``response_text`` is the bounded
+    upstream error body for statuses whose retry tier needs it (400/403/422),
+    empty otherwise. A 200 is returned immediately: stream/pre-commit handling
+    stays with each protocol (ticket #64). ReauthenticationRequired and
+    _RequestCancelled propagate unchanged. A final transport failure keeps its
+    requests exception with ``last_upstream_status`` attached; a deadline
+    reached while waiting to retry raises ``_RequestDeadlineExceeded`` with the
+    same attribute.
+    """
+    physical_budget = _PhysicalRequestBudget(MAX_TOTAL_ATTEMPTS)
+    transient_retries = 0
+    slow_retries = 0
+    probe_retries = {}
+    conditional_probe_retries = 0
+    last_upstream_status = None
+    request_headers = headers or {}
+
+    def timeout_value():
+        return timeout() if callable(timeout) else timeout
+
+    def transient_available(slow):
+        return (UPSTREAM_AUTO_RETRY and
+                transient_retries < UPSTREAM_AUTO_RETRIES and
+                (not slow or slow_retries < UPSTREAM_SLOW_AUTO_RETRIES) and
+                physical_budget.remaining > 0 and
+                time.monotonic() < request_deadline)
+
+    def probe_available(status):
+        return (UPSTREAM_AUTO_RETRY and
+                probe_retries.get(status, 0) < 1 and
+                physical_budget.remaining > 0 and
+                time.monotonic() < request_deadline)
+
+    def conditional_available():
+        return (UPSTREAM_AUTO_RETRY and
+                conditional_probe_retries < 1 and
+                physical_budget.remaining > 0 and
+                time.monotonic() < request_deadline)
+
+    def deadline_error(reason):
+        exc = _RequestDeadlineExceeded(reason)
+        exc.last_upstream_status = last_upstream_status
+        return exc
+
+    while True:
+        if time.monotonic() >= request_deadline:
+            raise deadline_error("upstream request wall-clock deadline exhausted")
+        if physical_budget.remaining <= 0:
+            exc = _PhysicalBudgetExceeded(
+                "upstream physical request budget exhausted")
+            exc.last_upstream_status = last_upstream_status
+            raise exc
+        attempt_started = time.monotonic()
+        try:
+            r = proxy.call(
+                method, path, json=json_body, stream=stream,
+                headers=request_headers, timeout=timeout_value(),
+                physical_budget=physical_budget,
+                request_deadline=request_deadline,
+                auth_wait_budget=auth_wait_budget,
+                cancel_check=cancel_check)
+        except (ReauthenticationRequired, _RequestCancelled):
+            raise
+        except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
+            exc.last_upstream_status = last_upstream_status
+            raise
+        except requests.RequestException as exc:
+            elapsed = time.monotonic() - attempt_started
+            slow = _attempt_is_slow(elapsed)
+            if (isinstance(exc, _UPSTREAM_TRANSIENT_EXCEPTIONS)
+                    and transient_available(slow)):
+                delay = _retry_delay_seconds(
+                    transient_retries + 1, elapsed, slow=slow)
+                if _sleep_with_deadline(delay, request_deadline):
+                    transient_retries += 1
+                    if slow:
+                        slow_retries += 1
+                    _logger.warning(
+                        "upstream auto-retry request=%s endpoint=%s "
+                        "retry=%d/%d slow_retry=%d/%d physical_attempt=%d/%d "
+                        "class=%s reason=%s delay_s=%.2f",
+                        request_id, endpoint, transient_retries,
+                        UPSTREAM_AUTO_RETRIES, slow_retries,
+                        UPSTREAM_SLOW_AUTO_RETRIES, physical_budget.used,
+                        MAX_TOTAL_ATTEMPTS, "slow" if slow else "fast",
+                        type(exc).__name__, delay)
+                    continue
+                raise deadline_error(
+                    "upstream retry delay reached request deadline") from exc
+            exc.last_upstream_status = last_upstream_status
+            raise
+
+        last_upstream_status = r.status_code
+        response_text = ""
+        if r.status_code in _UPSTREAM_TEXT_CLASSIFICATION_STATUS:
+            response_text = _bounded_upstream_error_text(r)
+        if (r.status_code == 403
+                and _upstream_403_is_auth_rejection(response_text)):
+            _note_upstream_403_auth_rejection(request_id, response_text)
+        kind, _retry_after_s, _veto_reason = _upstream_retry_plan(
+            r.status_code, response_text, r)
+        if kind is None:
+            return r, response_text
+        elapsed = time.monotonic() - attempt_started
+        slow = _attempt_is_slow(elapsed)
+        if kind == "transient":
+            available = transient_available(slow)
+        elif kind == "probe":
+            available = probe_available(r.status_code)
+        else:
+            available = conditional_available()
+        if not available:
+            return r, response_text
+        status_code = r.status_code
+        retry_number = (transient_retries + 1 if kind == "transient" else 1)
+        delay = _retry_delay_seconds(
+            retry_number, elapsed, response=r, slow=slow)
+        r.close()
+        if kind == "transient":
+            transient_retries += 1
+            if slow:
+                slow_retries += 1
+            _logger.warning(
+                "upstream auto-retry request=%s endpoint=%s retry=%d/%d "
+                "slow_retry=%d/%d physical_attempt=%d/%d class=%s "
+                "reason=HTTP%d delay_s=%.2f",
+                request_id, endpoint, transient_retries,
+                UPSTREAM_AUTO_RETRIES, slow_retries,
+                UPSTREAM_SLOW_AUTO_RETRIES, physical_budget.used,
+                MAX_TOTAL_ATTEMPTS, "slow" if slow else "fast",
+                status_code, delay)
+        else:
+            if kind == "probe":
+                probe_retries[status_code] = (
+                    probe_retries.get(status_code, 0) + 1)
+                counter_text = ("probe_retry=%d/1"
+                                % probe_retries[status_code])
+            else:
+                conditional_probe_retries += 1
+                counter_text = ("conditional_probe_retry=%d/1"
+                                % conditional_probe_retries)
+            _logger.warning(
+                "upstream probe-retry request=%s endpoint=%s kind=%s "
+                "status=%d %s physical_attempt=%d/%d class=%s "
+                "delay_s=%.2f",
+                request_id, endpoint, kind, status_code, counter_text,
+                physical_budget.used, MAX_TOTAL_ATTEMPTS,
+                "slow" if slow else "fast", delay)
+        if _sleep_with_deadline(delay, request_deadline):
+            continue
+        raise deadline_error("upstream retry delay reached request deadline")
 
 
 def _compat_pre_output_retry(handler, exc, elapsed, retry_available, proxy,

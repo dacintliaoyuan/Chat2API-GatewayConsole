@@ -135,6 +135,36 @@ def _is_loopback_client(address: str) -> bool:
         return False
 
 
+def _validate_script_behavior(behavior):
+    """Validate one scripted entry: a mode name or a response mapping.
+
+    A mapping keeps the mode name optional (``normal`` by default) and may add
+    an explicit ``status``, ``headers`` and JSON/text ``body``. This lets the
+    gateway's retry contract be exercised without inventing a new mode for every
+    upstream status/header combination.
+    """
+    if isinstance(behavior, str):
+        if behavior not in MODES:
+            raise FakeUMError("unknown scripted behavior: %r" % (behavior,))
+        return
+    if not isinstance(behavior, dict):
+        raise FakeUMError("unknown scripted behavior: %r" % (behavior,))
+    mode = behavior.get("mode", MODE_NORMAL)
+    if mode not in MODES:
+        raise FakeUMError("unknown scripted behavior: %r" % (behavior,))
+    status = behavior.get("status")
+    if status is not None and (
+            not isinstance(status, int) or isinstance(status, bool)
+            or not 100 <= status <= 599):
+        raise FakeUMError("invalid scripted status: %r" % (status,))
+    headers = behavior.get("headers")
+    if headers is not None and not isinstance(headers, dict):
+        raise FakeUMError("scripted headers must be a mapping")
+    body = behavior.get("body")
+    if body is not None and not isinstance(body, (dict, list, str)):
+        raise FakeUMError("invalid scripted body: %r" % (body,))
+
+
 @dataclass
 class FakeUMConfig:
     """Static configuration of one fake upstream instance."""
@@ -156,7 +186,7 @@ class FakeUMConfig:
     nonstream_hang_s: float = 2.0
     slow_5xx_s: float = 1.0
     reasoning_loop_chunk_chars: int = 700
-    script: tuple[str, ...] | None = None
+    script: tuple[str | dict, ...] | None = None
     # Arrival-barrier verification knob. The barrier is off by default; when the
     # test arms it, up to BARRIER_MAX_ARRIVALS conversation requests are held
     # (each with a bounded wait) so several can be in flight at once.
@@ -186,9 +216,7 @@ class FakeUMConfig:
             raise FakeUMError("barrier_max_arrivals must be >= 1")
         if self.script is not None:
             for behavior in self.script:
-                if behavior not in MODES:
-                    raise FakeUMError("unknown scripted behavior: %r"
-                                      % (behavior,))
+                _validate_script_behavior(behavior)
 
 
 class _FakeState:
@@ -232,9 +260,7 @@ class _FakeState:
         """Replace the per-chat-request script used by MODE_SCRIPTED."""
         entries = tuple(script or ())
         for behavior in entries:
-            if behavior not in MODES:
-                raise FakeUMError("unknown scripted behavior: %r"
-                                  % (behavior,))
+            _validate_script_behavior(behavior)
         with self._lock:
             self._script = deque(entries)
             return list(entries)
@@ -470,6 +496,7 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def _dispatch(self, method):
+        self._scripted_behavior = None
         path = urllib.parse.urlparse(self.path).path
         mode = self._requested_mode()
         if mode is None:
@@ -540,6 +567,8 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
                 return
             self._barrier_hold("chat", path, payload)
             mode = self._effective_mode(mode)
+            if self._scripted_status_response():
+                return
             if mode in (MODE_EXPLICIT_5XX, MODE_SLOW_5XX):
                 if mode == MODE_SLOW_5XX:
                     self._sleep(self.fake.config.slow_5xx_s)
@@ -562,6 +591,8 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
                 return
             self._barrier_hold("messages", path, payload)
             mode = self._effective_mode(mode)
+            if self._scripted_status_response():
+                return
             if mode in (MODE_EXPLICIT_5XX, MODE_SLOW_5XX):
                 if mode == MODE_SLOW_5XX:
                     self._sleep(self.fake.config.slow_5xx_s)
@@ -577,16 +608,33 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
         self._discard_body()
         self._send_json(404, {"detail": "Not Found"})
 
+    def _scripted_status_response(self):
+        """Answer a scripted status/header entry, if the current one has one."""
+        behavior = getattr(self, "_scripted_behavior", None)
+        if not isinstance(behavior, dict) or behavior.get("status") is None:
+            return False
+        status = int(behavior["status"])
+        body = behavior.get("body")
+        if body is None:
+            body = {"detail": "scripted upstream status %d" % status}
+        self._send_json(status, body, headers=behavior.get("headers"))
+        return True
+
     def _effective_mode(self, mode):
         """Consume one scripted behavior for a chat/messages request.
 
         MODE_SCRIPTED is a meta mode: every conversation request pops the next
-        behavior, while an exhausted script answers normally.  Non-conversation
-        routes (catalog, auth) never consume a script entry.
+        behavior, while an exhausted script answers normally. A behavior may be a
+        mode name or a mapping with ``mode``/``status``/``headers``/``body``.
+        Non-conversation routes (catalog, auth) never consume a script entry.
         """
         if mode != MODE_SCRIPTED:
             return mode
-        return self.fake.next_scripted()
+        behavior = self.fake.next_scripted()
+        self._scripted_behavior = behavior
+        if isinstance(behavior, dict):
+            return behavior.get("mode", MODE_NORMAL)
+        return behavior
 
     def _handle_control(self, method, path):
         if not _is_loopback_client(self.client_address[0]):
@@ -763,12 +811,14 @@ class _FakeUMHandler(BaseHTTPRequestHandler):
 
     # ---------- response writers ----------
 
-    def _send_json(self, code, obj):
+    def _send_json(self, code, obj, headers=None):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Connection", "close")
+        for name, value in (headers or {}).items():
+            self.send_header(str(name), str(value))
         self.end_headers()
         self.close_connection = True
         try:
