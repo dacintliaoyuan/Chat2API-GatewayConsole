@@ -1,5 +1,5 @@
 //! S1b acceptance 4: first-byte 120 s, one upstream socket silence 180 s and
-//! the total request budget 360 s (environment override clamped to 10..3600).
+//! the total request budget 540 s (environment override clamped to 10..3600).
 //! A first-byte timeout answers 504 `upstream_timeout`; a retry wait that
 //! crosses the total budget answers 504 `request_deadline_exceeded` with
 //! `detail.last_upstream_status`.
@@ -59,11 +59,14 @@ fn the_timeout_defaults_match_the_contract_fixture() {
         config.socket_silence_timeout.as_secs_f64(),
         timeout("socket_silence")
     );
-    assert_eq!(config.request_total.as_secs_f64(), timeout("request_total"));
+    // #61 raised the total budget to 540 seconds. The frozen fixture still
+    // records the pre-#61 Python baseline until the Python slice updates it.
+    assert_eq!(config.request_total, Duration::from_secs(540));
+    assert_eq!(um_gateway::readonly::MAX_REQUEST_SECONDS, 540);
 
     assert_eq!(
         um_gateway::config::parse_request_total_seconds(None),
-        Duration::from_secs(360)
+        Duration::from_secs(540)
     );
     assert_eq!(
         um_gateway::config::parse_request_total_seconds(Some("9")),
@@ -87,7 +90,7 @@ fn the_timeout_defaults_match_the_contract_fixture() {
     );
     assert_eq!(
         um_gateway::config::parse_request_total_seconds(Some("nope")),
-        Duration::from_secs(360)
+        Duration::from_secs(540)
     );
 }
 

@@ -6,16 +6,16 @@
 //! written. Embeddings are not a conversation protocol.
 
 use std::net::TcpStream;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::ChatResult;
-use crate::error::GatewayError;
+use crate::error::ErrorProtocol;
 use crate::event_log::{AttemptStats, FinalFailure};
 use crate::http::{Request, Response};
+use crate::retry::{self, LastAttempt, RetryLimits, RetryOutcome, RetryState};
 use crate::server::AppState;
-use crate::upstream::{post_compat, UpstreamFailure};
+use crate::upstream::post_compat;
 
 /// Serve one embeddings request.
 pub fn handle_embeddings(
@@ -57,24 +57,17 @@ fn handle_embeddings_inner(
     };
     let raw = serde_json::to_vec(&serde_json::Value::Object(body)).unwrap_or_default();
     let deadline = Instant::now() + state.config.request_total;
-    let mut fast_retries = 0u32;
-    let mut slow_retries = 0u32;
-    let mut physical_attempts = 0u32;
+    let mut retry_state = RetryState::default();
+    let mut last = LastAttempt::default();
+    let limits = RetryLimits::from_config(&state.config);
     loop {
         if Instant::now() >= deadline {
-            return ChatResult::Response(GatewayError::request_deadline_exceeded(None).response());
+            return ChatResult::Response(last.deadline_error().response());
         }
-        if physical_attempts >= state.config.max_physical_attempts {
-            return ChatResult::Response(
-                GatewayError::new(
-                    502,
-                    "Upstream compatibility endpoint exhausted the physical request budget",
-                    "upstream_attempt_budget_exhausted",
-                )
-                .response(),
-            );
+        if retry_state.physical_attempts >= state.config.max_physical_attempts {
+            return ChatResult::Response(last.error().response());
         }
-        physical_attempts += 1;
+        retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
         let mut response = match post_compat(
@@ -87,70 +80,59 @@ fn handle_embeddings_inner(
         ) {
             Ok(response) => response,
             Err(failure) => {
-                let elapsed = attempt_started.elapsed();
-                let slow = elapsed >= state.config.slow_retry_threshold;
-                if retry_available(
-                    state,
-                    fast_retries,
-                    slow_retries,
-                    physical_attempts,
-                    slow,
+                last.record_transport(failure);
+                if let Some(plan) = retry_state.plan(
+                    RetryOutcome::Transport,
+                    &limits,
                     deadline,
+                    attempt_started.elapsed(),
                 ) {
-                    fast_retries += 1;
-                    if slow {
-                        slow_retries += 1;
-                    }
-                    if sleep_with_deadline(retry_delay(state, fast_retries, slow), deadline) {
+                    if retry::sleep_with_deadline(plan.delay, deadline) {
                         continue;
                     }
+                    return ChatResult::Response(last.deadline_error().response());
                 }
-                return ChatResult::Response(upstream_failure_error(failure).response());
+                return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
-        if retryable_status(response.status) {
+        let status = response.status;
+        if status != 200 {
             let elapsed = attempt_started.elapsed();
-            let slow = elapsed >= state.config.slow_retry_threshold;
-            if retry_available(
-                state,
-                fast_retries,
-                slow_retries,
-                physical_attempts,
-                slow,
+            let retry_after = response.headers.get("retry-after").cloned();
+            let mut text =
+                retry::needs_body_for_classification(status).then(|| response.read_error_text());
+            last.record_status(status, text.clone(), retry_after.clone());
+            let plan = retry_state.plan(
+                RetryOutcome::Status {
+                    status,
+                    headers: &response.headers,
+                    body_text: text.as_deref(),
+                },
+                &limits,
                 deadline,
-            ) {
-                fast_retries += 1;
-                if slow {
-                    slow_retries += 1;
-                }
-                let status = response.status;
-                let delay = retry_delay(state, fast_retries, slow);
+                elapsed,
+            );
+            if let Some(plan) = plan {
+                // #63 trigger point: `plan.reauthentication` starts the
+                // shared re-authentication session instead of this probe.
+                let _reauthentication = plan.reauthentication;
                 drop(response);
-                if !sleep_with_deadline(delay, deadline) {
-                    return ChatResult::Response(
-                        GatewayError::request_deadline_exceeded(Some(status)).response(),
-                    );
+                if !retry::sleep_with_deadline(plan.delay, deadline) {
+                    return ChatResult::Response(last.deadline_error().response());
                 }
                 continue;
             }
-        }
-        let status = response.status;
-        if status != 200 {
-            let retry_after = response.headers.get("retry-after").cloned();
-            let text = response
-                .body
-                .read_prefix(2048)
-                .ok()
-                .map(|raw| String::from_utf8_lossy(&raw).to_string())
-                .unwrap_or_default();
-            return ChatResult::Response(
-                compat_upstream_error(status, &text, retry_after.as_deref()).response(),
-            );
+            if text.is_none() && status != 401 {
+                text = Some(response.read_error_text());
+                last.record_status(status, text, retry_after);
+            }
+            return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
         }
         let raw = match response.body.read_all() {
             Ok(raw) => raw,
             Err(failure) => {
-                return ChatResult::Response(upstream_failure_error(failure).response())
+                last.record_transport(failure);
+                return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
         let mut translated = Response::new(status, raw);
@@ -161,57 +143,4 @@ fn handle_embeddings_inner(
         }
         return ChatResult::Response(translated);
     }
-}
-
-/// Python `_compat_proxy`: the upstream status is preserved except for 401,
-/// which stays the gateway's reauthentication state.
-fn compat_upstream_error(status: u16, text: &str, retry_after: Option<&str>) -> GatewayError {
-    GatewayError::upstream_status_error(status, Some(text), retry_after)
-}
-
-fn upstream_failure_error(failure: UpstreamFailure) -> GatewayError {
-    match failure {
-        UpstreamFailure::Timeout => GatewayError::upstream_timeout_with_reason(failure.name()),
-        UpstreamFailure::ConnectionError | UpstreamFailure::Protocol => {
-            GatewayError::upstream_transport_failure(failure.name())
-        }
-    }
-}
-
-fn retry_available(
-    state: &AppState,
-    fast_retries: u32,
-    slow_retries: u32,
-    physical_attempts: u32,
-    slow: bool,
-    deadline: Instant,
-) -> bool {
-    fast_retries < state.config.max_fast_retries
-        && (!slow || slow_retries < state.config.max_slow_retries)
-        && physical_attempts < state.config.max_physical_attempts
-        && Instant::now() < deadline
-}
-
-fn retry_delay(state: &AppState, retry_number: u32, slow: bool) -> Duration {
-    if slow {
-        return state.config.retry_delay_base * 2;
-    }
-    let exponent = retry_number.saturating_sub(1).min(4);
-    (state.config.retry_delay_base * (1u32 << exponent)).min(Duration::from_secs(2))
-}
-
-fn sleep_with_deadline(delay: Duration, deadline: Instant) -> bool {
-    if delay.is_zero() {
-        return Instant::now() < deadline;
-    }
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        return false;
-    }
-    thread::sleep(delay.min(remaining));
-    Instant::now() < deadline
-}
-
-fn retryable_status(status: u16) -> bool {
-    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
 }

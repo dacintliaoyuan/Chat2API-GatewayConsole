@@ -15,6 +15,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::http::Response;
+use crate::upstream::UpstreamFailure;
 
 /// The protocol shape used to serialize one local gateway error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -46,6 +47,9 @@ pub struct GatewayError {
     /// An upstream `Retry-After` value that stays attached to the response
     /// headers, never to the JSON body.
     pub retry_after: Option<Box<String>>,
+    /// An explicit `X-Should-Retry` response header. Only the local share
+    /// admission gate sets it today (`state_not_accepting`).
+    pub should_retry: Option<bool>,
 }
 
 impl GatewayError {
@@ -62,6 +66,7 @@ impl GatewayError {
             reason: None,
             upstream_status: None,
             retry_after: None,
+            should_retry: None,
         }
     }
 
@@ -96,9 +101,20 @@ impl GatewayError {
         self
     }
 
-    fn with_retry_after_header(&self, response: Response) -> Response {
-        match &self.retry_after {
+    pub fn with_should_retry(mut self, value: bool) -> Self {
+        self.should_retry = Some(value);
+        self
+    }
+
+    fn with_retry_headers(&self, response: Response) -> Response {
+        let response = match &self.retry_after {
             Some(value) => response.with_header("Retry-After", value.as_ref().clone()),
+            None => response,
+        };
+        match self.should_retry {
+            Some(value) => {
+                response.with_header("X-Should-Retry", if value { "true" } else { "false" })
+            }
             None => response,
         }
     }
@@ -147,13 +163,13 @@ impl GatewayError {
     }
 
     pub fn response(&self) -> Response {
-        self.with_retry_after_header(Response::json(self.status, &self.body()))
+        self.with_retry_headers(Response::json(self.status, &self.body()))
             .with_header("Cache-Control", "no-store")
             .closing()
     }
 
     pub fn anthropic_response(&self) -> Response {
-        self.with_retry_after_header(Response::json(self.status, &self.anthropic_body()))
+        self.with_retry_headers(Response::json(self.status, &self.anthropic_body()))
             .with_header("Cache-Control", "no-store")
             .closing()
     }
@@ -430,9 +446,24 @@ impl GatewayError {
         {
             detail.insert("upstream_message".to_string(), json!(message));
         }
-        Self::new(status, message, code)
+        let mut error = Self::new(status, message, code)
             .with_upstream_status(status)
-            .with_detail(Value::Object(detail))
+            .with_detail(Value::Object(detail));
+        if let Some(retry_after) = retry_after.filter(|value| !value.is_empty()) {
+            error = error.with_retry_after(retry_after);
+        }
+        error
+    }
+
+    /// A connection, DNS, TLS or proxy failure: the upstream never produced an
+    /// HTTP response.
+    pub fn upstream_failure(failure: UpstreamFailure) -> Self {
+        match failure {
+            UpstreamFailure::Timeout => Self::upstream_timeout_with_reason(failure.name()),
+            UpstreamFailure::ConnectionError | UpstreamFailure::Protocol => {
+                Self::upstream_transport_failure(failure.name())
+            }
+        }
     }
 
     // ----- console (8002) request-boundary codes (usagesrv.py) -----

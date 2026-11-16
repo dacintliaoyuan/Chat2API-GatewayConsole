@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
@@ -17,7 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::{line_text, ChatResult, ClientWatcher, PRELUDE_MAX_BYTES, SSE_CONTENT_TYPE};
-use crate::error::GatewayError;
+use crate::error::{ErrorProtocol, GatewayError};
 use crate::event_log::{AttemptStats, FinalFailure};
 use crate::gate::Admission;
 use crate::http::{write_chunk, write_response_head, Request, Response};
@@ -25,10 +24,9 @@ use crate::ledger::{
     anthropic_message_usage, anthropic_output_estimate, anthropic_usage_fields, merge_usage_max,
     message_tokens, usage_fields_to_json, NormalizedUsage, UsageRecord,
 };
+use crate::retry::{self, LastAttempt, RetryLimits, RetryOutcome, RetryState};
 use crate::server::AppState;
-use crate::upstream::{
-    post_compat, NextItem, StreamReader, UpstreamBody, UpstreamFailure, UpstreamResponse,
-};
+use crate::upstream::{post_compat, NextItem, StreamReader, UpstreamBody, UpstreamResponse};
 
 /// The frozen Anthropic Messages field whitelist.
 ///
@@ -183,21 +181,6 @@ pub fn handle_messages(
     }
 }
 
-/// Python `_compat_proxy`: the upstream status is preserved except for 401,
-/// which stays the gateway's reauthentication state.
-fn compat_upstream_error(status: u16, text: &str, retry_after: Option<&str>) -> GatewayError {
-    GatewayError::upstream_status_error(status, Some(text), retry_after)
-}
-
-fn upstream_failure_error(failure: UpstreamFailure) -> GatewayError {
-    match failure {
-        UpstreamFailure::Timeout => GatewayError::upstream_timeout_with_reason(failure.name()),
-        UpstreamFailure::ConnectionError | UpstreamFailure::Protocol => {
-            GatewayError::upstream_transport_failure(failure.name())
-        }
-    }
-}
-
 fn compat_ledger_status(status: u16) -> String {
     match status {
         401 => "reauthentication_required".to_string(),
@@ -248,28 +231,19 @@ fn forward_json(context: &MessagesContext<'_>) -> ChatResult {
 }
 
 fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -> ChatResult {
-    let mut fast_retries = 0u32;
-    let mut slow_retries = 0u32;
-    let mut physical_attempts = 0u32;
+    let mut retry_state = RetryState::default();
+    let mut last = LastAttempt::default();
+    let limits = RetryLimits::from_config(&context.state.config);
     loop {
         if Instant::now() >= context.deadline {
             record_usage(context, "request_deadline_exceeded", None, 0);
-            return ChatResult::Response(
-                GatewayError::request_deadline_exceeded(None).anthropic_response(),
-            );
+            return ChatResult::Response(last.deadline_error().anthropic_response());
         }
-        if physical_attempts >= context.state.config.max_physical_attempts {
+        if retry_state.physical_attempts >= context.state.config.max_physical_attempts {
             record_usage(context, "upstream_attempt_budget_exhausted", None, 0);
-            return ChatResult::Response(
-                GatewayError::new(
-                    502,
-                    "Upstream compatibility endpoint exhausted the physical request budget",
-                    "upstream_attempt_budget_exhausted",
-                )
-                .anthropic_response(),
-            );
+            return ChatResult::Response(last.error().anthropic_response());
         }
-        physical_attempts += 1;
+        retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
         let mut response = match post_compat(
@@ -282,66 +256,65 @@ fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -
         ) {
             Ok(response) => response,
             Err(failure) => {
-                let elapsed = attempt_started.elapsed();
-                let slow = elapsed >= context.state.config.slow_retry_threshold;
-                if retry_available(context, fast_retries, slow_retries, physical_attempts, slow) {
-                    fast_retries += 1;
-                    if slow {
-                        slow_retries += 1;
-                    }
-                    if sleep_with_deadline(
-                        retry_delay(context, fast_retries, slow),
-                        context.deadline,
-                    ) {
+                last.record_transport(failure);
+                if let Some(plan) = retry_state.plan(
+                    RetryOutcome::Transport,
+                    &limits,
+                    context.deadline,
+                    attempt_started.elapsed(),
+                ) {
+                    if retry::sleep_with_deadline(plan.delay, context.deadline) {
                         continue;
                     }
+                    record_usage(context, "request_deadline_exceeded", None, 0);
+                    return ChatResult::Response(last.deadline_error().anthropic_response());
                 }
                 record_usage(context, failure.name(), None, 0);
-                return ChatResult::Response(upstream_failure_error(failure).anthropic_response());
+                return ChatResult::Response(last.response(ErrorProtocol::Anthropic));
             }
         };
-        if response.status != 200 {
+        let status = response.status;
+        if status != 200 {
             let elapsed = attempt_started.elapsed();
-            let slow = elapsed >= context.state.config.slow_retry_threshold;
-            if retryable_status(response.status)
-                && retry_available(context, fast_retries, slow_retries, physical_attempts, slow)
-            {
-                fast_retries += 1;
-                if slow {
-                    slow_retries += 1;
-                }
-                let status = response.status;
-                let delay = retry_delay(context, fast_retries, slow);
+            let retry_after = response.headers.get("retry-after").cloned();
+            let mut text =
+                retry::needs_body_for_classification(status).then(|| response.read_error_text());
+            last.record_status(status, text.clone(), retry_after.clone());
+            let plan = retry_state.plan(
+                RetryOutcome::Status {
+                    status,
+                    headers: &response.headers,
+                    body_text: text.as_deref(),
+                },
+                &limits,
+                context.deadline,
+                elapsed,
+            );
+            if let Some(plan) = plan {
+                // #63 trigger point: `plan.reauthentication` starts the
+                // shared re-authentication session instead of this probe.
+                let _reauthentication = plan.reauthentication;
                 drop(response);
-                if !sleep_with_deadline(delay, context.deadline) {
+                if !retry::sleep_with_deadline(plan.delay, context.deadline) {
                     record_usage(context, "request_deadline_exceeded", None, 0);
-                    return ChatResult::Response(
-                        GatewayError::request_deadline_exceeded(Some(status)).anthropic_response(),
-                    );
+                    return ChatResult::Response(last.deadline_error().anthropic_response());
                 }
                 continue;
             }
-        }
-        let status = response.status;
-        if status != 200 {
-            let retry_after = response.headers.get("retry-after").cloned();
-            let text = response
-                .body
-                .read_prefix(2048)
-                .ok()
-                .map(|raw| String::from_utf8_lossy(&raw).to_string())
-                .unwrap_or_default();
+            if text.is_none() && status != 401 {
+                text = Some(response.read_error_text());
+                last.record_status(status, text, retry_after);
+            }
             let ledger_status = compat_ledger_status(status);
             record_usage(context, &ledger_status, None, 0);
-            return ChatResult::Response(
-                compat_upstream_error(status, &text, retry_after.as_deref()).anthropic_response(),
-            );
+            return ChatResult::Response(last.response(ErrorProtocol::Anthropic));
         }
         let raw = match response.body.read_all() {
             Ok(raw) => raw,
             Err(failure) => {
+                last.record_transport(failure);
                 record_usage(context, failure.name(), None, 0);
-                return ChatResult::Response(upstream_failure_error(failure).anthropic_response());
+                return ChatResult::Response(last.response(ErrorProtocol::Anthropic));
             }
         };
         let payload = serde_json::from_slice::<Value>(&raw).ok();
@@ -365,26 +338,19 @@ fn forward_stream_inner(
     stream: &mut TcpStream,
     stats: &mut AttemptStats,
 ) -> ChatResult {
-    let mut fast_retries = 0u32;
-    let mut slow_retries = 0u32;
-    let mut physical_attempts = 0u32;
+    let mut retry_state = RetryState::default();
+    let mut last = LastAttempt::default();
+    let limits = RetryLimits::from_config(&context.state.config);
     loop {
         if Instant::now() >= context.deadline {
             record_usage(context, "request_deadline_exceeded", None, 0);
-            return ChatResult::Response(deadline_response());
+            return ChatResult::Response(last.deadline_error().anthropic_response());
         }
-        if physical_attempts >= context.state.config.max_physical_attempts {
+        if retry_state.physical_attempts >= context.state.config.max_physical_attempts {
             record_usage(context, "upstream_attempt_budget_exhausted", None, 0);
-            return ChatResult::Response(
-                GatewayError::new(
-                    502,
-                    "Upstream compatibility endpoint exhausted the physical request budget",
-                    "upstream_attempt_budget_exhausted",
-                )
-                .anthropic_response(),
-            );
+            return ChatResult::Response(last.error().anthropic_response());
         }
-        physical_attempts += 1;
+        retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
         let mut response = match post_compat(
@@ -397,58 +363,58 @@ fn forward_stream_inner(
         ) {
             Ok(response) => response,
             Err(failure) => {
-                let elapsed = attempt_started.elapsed();
-                let slow = elapsed >= context.state.config.slow_retry_threshold;
-                if retry_available(context, fast_retries, slow_retries, physical_attempts, slow) {
-                    fast_retries += 1;
-                    if slow {
-                        slow_retries += 1;
-                    }
-                    if sleep_with_deadline(
-                        retry_delay(context, fast_retries, slow),
-                        context.deadline,
-                    ) {
+                last.record_transport(failure);
+                if let Some(plan) = retry_state.plan(
+                    RetryOutcome::Transport,
+                    &limits,
+                    context.deadline,
+                    attempt_started.elapsed(),
+                ) {
+                    if retry::sleep_with_deadline(plan.delay, context.deadline) {
                         continue;
                     }
+                    record_usage(context, "request_deadline_exceeded", None, 0);
+                    return ChatResult::Response(last.deadline_error().anthropic_response());
                 }
                 record_usage(context, failure.name(), None, 0);
-                return ChatResult::Response(upstream_failure_error(failure).anthropic_response());
+                return ChatResult::Response(last.response(ErrorProtocol::Anthropic));
             }
         };
-        if response.status != 200 {
+        let status = response.status;
+        if status != 200 {
             let elapsed = attempt_started.elapsed();
-            let slow = elapsed >= context.state.config.slow_retry_threshold;
-            if retryable_status(response.status)
-                && retry_available(context, fast_retries, slow_retries, physical_attempts, slow)
-            {
-                fast_retries += 1;
-                if slow {
-                    slow_retries += 1;
-                }
-                let status = response.status;
-                let delay = retry_delay(context, fast_retries, slow);
+            let retry_after = response.headers.get("retry-after").cloned();
+            let mut text =
+                retry::needs_body_for_classification(status).then(|| response.read_error_text());
+            last.record_status(status, text.clone(), retry_after.clone());
+            let plan = retry_state.plan(
+                RetryOutcome::Status {
+                    status,
+                    headers: &response.headers,
+                    body_text: text.as_deref(),
+                },
+                &limits,
+                context.deadline,
+                elapsed,
+            );
+            if let Some(plan) = plan {
+                // #63 trigger point: `plan.reauthentication` starts the
+                // shared re-authentication session instead of this probe.
+                let _reauthentication = plan.reauthentication;
                 drop(response);
-                if !sleep_with_deadline(delay, context.deadline) {
+                if !retry::sleep_with_deadline(plan.delay, context.deadline) {
                     record_usage(context, "request_deadline_exceeded", None, 0);
-                    return ChatResult::Response(
-                        GatewayError::request_deadline_exceeded(Some(status)).anthropic_response(),
-                    );
+                    return ChatResult::Response(last.deadline_error().anthropic_response());
                 }
                 continue;
             }
-            let status = response.status;
-            let retry_after = response.headers.get("retry-after").cloned();
-            let text = response
-                .body
-                .read_prefix(2048)
-                .ok()
-                .map(|raw| String::from_utf8_lossy(&raw).to_string())
-                .unwrap_or_default();
+            if text.is_none() && status != 401 {
+                text = Some(response.read_error_text());
+                last.record_status(status, text, retry_after);
+            }
             let ledger_status = compat_ledger_status(status);
             record_usage(context, &ledger_status, None, 0);
-            return ChatResult::Response(
-                compat_upstream_error(status, &text, retry_after.as_deref()).anthropic_response(),
-            );
+            return ChatResult::Response(last.response(ErrorProtocol::Anthropic));
         }
         let upstream_headers = response.headers.clone();
         let outcome = consume_stream(
@@ -466,16 +432,15 @@ fn forward_stream_inner(
             };
         }
         if !outcome.committed && outcome.status.is_retryable_precommit() {
-            let slow = outcome.elapsed >= context.state.config.slow_retry_threshold;
-            if retry_available(context, fast_retries, slow_retries, physical_attempts, slow) {
-                fast_retries += 1;
-                if slow {
-                    slow_retries += 1;
-                }
-                if !sleep_with_deadline(retry_delay(context, fast_retries, slow), context.deadline)
-                {
-                    record_usage(context, "upstream_stream_error", None, 0);
-                    return ChatResult::Response(stream_error_response(&outcome));
+            if let Some(plan) = retry_state.plan(
+                RetryOutcome::Stream,
+                &limits,
+                context.deadline,
+                outcome.elapsed,
+            ) {
+                if !retry::sleep_with_deadline(plan.delay, context.deadline) {
+                    record_usage(context, "request_deadline_exceeded", None, 0);
+                    return ChatResult::Response(last.deadline_error().anthropic_response());
                 }
                 continue;
             }
@@ -906,47 +871,6 @@ fn anthropic_headers(request: &Request) -> Vec<(String, String)> {
         }
     }
     headers
-}
-
-fn retry_available(
-    context: &MessagesContext<'_>,
-    fast_retries: u32,
-    slow_retries: u32,
-    physical_attempts: u32,
-    slow: bool,
-) -> bool {
-    fast_retries < context.state.config.max_fast_retries
-        && (!slow || slow_retries < context.state.config.max_slow_retries)
-        && physical_attempts < context.state.config.max_physical_attempts
-        && Instant::now() < context.deadline
-}
-
-fn retry_delay(context: &MessagesContext<'_>, retry_number: u32, slow: bool) -> Duration {
-    if slow {
-        return context.state.config.retry_delay_base * 2;
-    }
-    let exponent = retry_number.saturating_sub(1).min(4);
-    (context.state.config.retry_delay_base * (1u32 << exponent)).min(Duration::from_secs(2))
-}
-
-fn sleep_with_deadline(delay: Duration, deadline: Instant) -> bool {
-    if delay.is_zero() {
-        return Instant::now() < deadline;
-    }
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        return false;
-    }
-    thread::sleep(delay.min(remaining));
-    Instant::now() < deadline
-}
-
-fn retryable_status(status: u16) -> bool {
-    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
-}
-
-fn deadline_response() -> Response {
-    GatewayError::request_deadline_exceeded(None).anthropic_response()
 }
 
 fn truthy(value: &Value) -> bool {
