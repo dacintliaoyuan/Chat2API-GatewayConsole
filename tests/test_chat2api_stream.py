@@ -1128,8 +1128,9 @@ class TestChat2ApiStreaming(unittest.TestCase):
         with mock.patch.object(chat2api, "STREAM_FIRST_BYTE_TIMEOUT_S", 1):
             with self.stream_request("heartbeat-then-stall",
                                      timeout=10) as response:
-                self.assertEqual(response.status_code, 502)
+                self.assertEqual(response.status_code, 504)
                 error = response.json()["error"]
+                self.assertEqual(error["code"], "upstream_timeout")
                 self.assertEqual(error["detail"]["reason"],
                                  "upstream_first_byte_timeout")
         self.assertLess(time.monotonic() - started, 5)
@@ -1328,8 +1329,9 @@ class TestChat2ApiStreaming(unittest.TestCase):
         started = time.monotonic()
         with mock.patch.object(chat2api, "STREAM_FIRST_BYTE_TIMEOUT_S", 1):
             with self.stream_request("silent-stall", timeout=10) as response:
-                self.assertEqual(response.status_code, 502)
+                self.assertEqual(response.status_code, 504)
                 error = response.json()["error"]
+                self.assertEqual(error["code"], "upstream_timeout")
                 self.assertEqual(error["detail"]["reason"],
                                  "upstream_first_byte_timeout")
         # Budget 1s + producer handoff; far below the 8s the stall would run.
@@ -1421,10 +1423,11 @@ class TestChat2ApiStreaming(unittest.TestCase):
                                side_effect=times_out_first):
             response = self.stream_request("ok")
             try:
-                self.assertEqual(response.status_code, 502)
+                self.assertEqual(response.status_code, 504)
                 error = response.json()["error"]
                 self.assertEqual(error["type"], "upstream_error")
-                self.assertEqual(error["code"], "upstream_unreachable")
+                self.assertEqual(error["code"], "upstream_timeout")
+                self.assertEqual(error["detail"]["reason"], "ReadTimeout")
             finally:
                 response.close()
         self.wait_reader_slots_restored(before)

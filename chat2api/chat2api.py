@@ -745,6 +745,88 @@ def _is_anthropic_error_path(path: str | None) -> bool:
         return False
     return route in ("/v1/messages", "/api/v1/messages")
 
+
+# Upstream status preservation (ADR 0003 / spec #58 / ticket #60). The status
+# code is the primary contract; ``code`` stays a stable machine code and never
+# replaces the status. 400/422 keep the existing request-rejected code, 402/429
+# are quota/rate-limit failures, 403 is a permission failure, and the remaining
+# upstream 4xx/5xx statuses reuse the established generic codes.
+_UPSTREAM_ERROR_CODE_BY_STATUS = {
+    400: "upstream_request_rejected",
+    402: "upstream_quota_exhausted",
+    403: "upstream_forbidden",
+    404: "not_found",
+    405: "upstream_request_rejected",
+    408: "upstream_timeout",
+    409: "upstream_request_rejected",
+    413: "upstream_request_rejected",
+    415: "upstream_request_rejected",
+    422: "upstream_request_rejected",
+    429: "upstream_quota_exhausted",
+    500: "upstream_request_failed",
+    502: "upstream_unavailable",
+    503: "upstream_unavailable",
+    504: "upstream_timeout",
+    529: "upstream_request_failed",
+}
+_UPSTREAM_ERROR_MESSAGE_BY_STATUS = {
+    402: "Upstream quota is exhausted",
+    403: "Upstream denied the request",
+    404: "Upstream resource was not found",
+    408: "Upstream request timed out",
+    429: "Upstream rate limit exceeded",
+    500: "Upstream request failed",
+    502: "Upstream is unavailable",
+    503: "Upstream is unavailable",
+    504: "Upstream timed out",
+}
+# Bounded upstream diagnostic carried in error detail. The raw body is never
+# relayed; only the upstream's own message text (or a bounded slice when the
+# body is not JSON) travels.
+_UPSTREAM_ERROR_MESSAGE_MAX_CHARS = 500
+_UPSTREAM_ERROR_BODY_CAPTURE_MAX_CHARS = 2048
+
+
+def _upstream_error_code(status: int) -> str:
+    return _UPSTREAM_ERROR_CODE_BY_STATUS.get(
+        status, "upstream_request_failed")
+
+
+def _upstream_status_message(status: int) -> str:
+    return _UPSTREAM_ERROR_MESSAGE_BY_STATUS.get(
+        status, "Upstream request failed")
+
+
+def _hidden_retry_failure(reason: str):
+    """Map one failed pre-commit retry reason to (status, error_code).
+
+    A first-byte/header/read timeout is the gateway's own wait expiring and
+    becomes a 504; every other transport failure keeps the existing 502.
+    """
+    text = reason or ""
+    if (text == "FirstByteTimeout" or "Timeout" in text
+            or "timeout" in text):
+        return 504, "upstream_timeout"
+    return 502, "upstream_stream_error"
+
+
+def _is_upstream_timeout(exc):
+    """True when a transport failure is the gateway's own wait expiring.
+
+    ``requests`` raises ``Timeout`` for a connect/header wait, but a read timeout
+    inside ``iter_content`` is wrapped as ``ConnectionError(ReadTimeoutError)``.
+    The wrapper's cause is the only place that distinction survives, so a plain
+    ``ConnectionError`` (refused/DNS/TLS/proxy) stays a 502.
+    """
+    if isinstance(exc, requests.Timeout):
+        return True
+    if not isinstance(exc, requests.RequestException) or not exc.args:
+        return False
+    cause = exc.args[0]
+    return cause.__class__.__name__ in (
+        "ReadTimeoutError", "ConnectTimeoutError", "TimeoutError",
+        "ReadTimeout", "ConnectTimeout")
+
 # Base models that get thinking-level virtual variants (see docstring).
 # You can also add them on the command line with --effort-model.
 EFFORT_MODELS: list[str] = []
@@ -6395,6 +6477,35 @@ def _extract_upstream_reject_error(response_text):
     )
 
 
+def _bounded_upstream_error_message(response_text):
+    """Return the bounded upstream message carried in one error detail.
+
+    The same extractor used by the 400/422 reject diagnostics supplies the
+    upstream's own message text; a body that is not a JSON object falls back to
+    a bounded single-line slice. The raw body is never relayed.
+    """
+    if not response_text:
+        return None
+    message, _, _ = _extract_upstream_reject_error(response_text)
+    if message:
+        return _sanitize_upstream_error_value(
+            message, _UPSTREAM_ERROR_MESSAGE_MAX_CHARS) or None
+    return _sanitize_upstream_error_value(
+        response_text, _UPSTREAM_ERROR_MESSAGE_MAX_CHARS) or None
+
+
+def _bounded_upstream_error_text(response):
+    """Best-effort bounded text of one upstream error response.
+
+    Reading a failed upstream body must never mask the status it came with: a
+    decode/read failure yields an empty diagnostic instead of raising.
+    """
+    try:
+        return response.text[:_UPSTREAM_ERROR_BODY_CAPTURE_MAX_CHARS]
+    except Exception:  # noqa: BLE001 — 上游错误体读取失败按空文本处理
+        return ""
+
+
 # Length bound for the reason carried out of an explicit upstream error SSE
 # event. The bound keeps any client-visible error payload and log record
 # small no matter what the upstream put in its error object.
@@ -6867,7 +6978,10 @@ def _reasoning_retry_preflight(upstream, first_data_deadline,
         except Exception as exc:  # noqa: BLE001 — 上游流读取错误按 upstream_retry/read_error 分类
             if (transient_retry_available and
                     isinstance(exc, _UPSTREAM_TRANSIENT_EXCEPTIONS)):
-                return result("upstream_retry", type(exc).__name__)
+                return result(
+                    "upstream_retry",
+                    "ReadTimeout" if _is_upstream_timeout(exc)
+                    else type(exc).__name__)
             prefix.append(_ReplayException(exc))
             return result("pass")
 
@@ -7094,6 +7208,30 @@ class Handler(BaseHTTPRequestHandler):
             "Open WebUI authentication requires an interactive sign-in",
             detail,
             "reauthentication_required",
+            extra_headers=extra_headers,
+        )
+
+    def _upstream_status_error(self, status, response_text=None, *,
+                               detail=None, error_code=None,
+                               extra_headers=None):
+        """Rebuild one upstream 4xx/5xx error in the client's protocol shape.
+
+        The upstream status is preserved; only 401 is translated by callers into
+        the gateway's own 503 reauthentication state. ``detail`` always carries
+        ``upstream_status`` and a bounded ``upstream_message`` so a client can
+        correlate the rebuilt body with the upstream response without receiving
+        the raw body itself.
+        """
+        upstream_message = _bounded_upstream_error_message(response_text)
+        payload = {"upstream_status": status,
+                   "upstream_message": upstream_message}
+        if detail:
+            payload.update(detail)
+        self._error(
+            status,
+            _upstream_status_message(status),
+            payload,
+            error_code=error_code or _upstream_error_code(status),
             extra_headers=extra_headers,
         )
 
@@ -7411,9 +7549,14 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 r = requests.get(f"{proxy.base_url}/api/version", timeout=15)
             except requests.RequestException as exc:
-                self._error(502, "Failed to fetch upstream version",
-                            type(exc).__name__,
-                            error_code="upstream_unreachable")
+                timeout = _is_upstream_timeout(exc)
+                self._error(
+                    504 if timeout else 502,
+                    ("Upstream version request timed out" if timeout else
+                     "Failed to fetch upstream version"),
+                    {"reason": type(exc).__name__},
+                    error_code=("upstream_timeout" if timeout else
+                                "upstream_unreachable"))
                 return
             try:
                 upstream_version = r.json() if r.status_code == 200 else None
@@ -7466,7 +7609,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             except _RequestDeadlineExceeded:
                 self._error(
-                    502, "Upstream request could not start another attempt",
+                    504, "Upstream request exceeded the request deadline",
+                    {"reason": "request_deadline_exceeded"},
                     error_code="request_deadline_exceeded")
                 return
             if models is None:
@@ -7496,8 +7640,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             except _RequestDeadlineExceeded:
                 self._error(
-                    502, "Upstream request could not start another attempt",
+                    504, "Upstream request exceeded the request deadline",
+                    {"reason": "request_deadline_exceeded"},
                     error_code="request_deadline_exceeded")
+                return
+            except requests.RequestException as exc:
+                timeout = _is_upstream_timeout(exc)
+                self._error(
+                    504 if timeout else 502,
+                    ("Upstream request timed out" if timeout else
+                     "Upstream request failed"),
+                    {"reason": type(exc).__name__},
+                    error_code=("upstream_timeout" if timeout else
+                                "upstream_unreachable"))
                 return
             self._passthrough(r)
         else:
@@ -7634,8 +7789,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             except _RequestDeadlineExceeded:
                 self._error(
-                    502, "Upstream request could not start another attempt",
+                    504, "Upstream request exceeded the request deadline",
+                    {"reason": "request_deadline_exceeded"},
                     error_code="request_deadline_exceeded")
+                return
+            except requests.RequestException as exc:
+                timeout = _is_upstream_timeout(exc)
+                self._error(
+                    504 if timeout else 502,
+                    ("Upstream request timed out" if timeout else
+                     "Upstream request failed"),
+                    {"reason": type(exc).__name__},
+                    error_code=("upstream_timeout" if timeout else
+                                "upstream_unreachable"))
                 return
             self._passthrough(r)
         else:
@@ -7713,24 +7879,31 @@ class Handler(BaseHTTPRequestHandler):
             record_usage(body["model"], client_stream, started_at, None,
                           input_est, 0, status="request_deadline_exceeded")
             self._error(
-                502, "Upstream request could not start another attempt",
+                504, "Upstream request exceeded the request deadline",
+                {"reason": "request_deadline_exceeded"},
                 error_code="request_deadline_exceeded")
+            return
+        except requests.RequestException as exc:
+            timeout = _is_upstream_timeout(exc)
+            status = "upstream_timeout" if timeout else "upstream_unreachable"
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status=status)
+            self._error(
+                504 if timeout else 502,
+                ("Upstream request timed out" if timeout else
+                 "Upstream request failed"),
+                {"reason": type(exc).__name__},
+                error_code=status)
             return
         try:
             if r.status_code != 200:
+                response_text = _bounded_upstream_error_text(r)
                 if r.status_code == 401:
                     status = "reauthentication_required"
                     self._reauthentication_error("upstream_rejected")
-                elif r.status_code in (400, 422):
-                    status = f"HTTP{r.status_code}"
-                    self._error(r.status_code, "upstream_request_rejected",
-                                 detail={"upstream_status": r.status_code},
-                                 error_code="upstream_request_rejected")
                 else:
-                    status = "upstream_unavailable"
-                    self._error(502, "upstream_unavailable",
-                                detail={"upstream_status": r.status_code},
-                                error_code="upstream_unavailable")
+                    status = f"HTTP{r.status_code}"
+                    self._upstream_status_error(r.status_code, response_text)
                 record_usage(body["model"], client_stream, started_at, None,
                               input_est, 0, status=status)
                 return
@@ -7945,24 +8118,31 @@ class Handler(BaseHTTPRequestHandler):
             record_usage(body["model"], client_stream, started_at, None,
                           input_est, 0, status="request_deadline_exceeded")
             self._error(
-                502, "Upstream request could not start another attempt",
+                504, "Upstream request exceeded the request deadline",
+                {"reason": "request_deadline_exceeded"},
                 error_code="request_deadline_exceeded")
+            return
+        except requests.RequestException as exc:
+            timeout = _is_upstream_timeout(exc)
+            status = "upstream_timeout" if timeout else "upstream_unreachable"
+            record_usage(body["model"], client_stream, started_at, None,
+                          input_est, 0, status=status)
+            self._error(
+                504 if timeout else 502,
+                ("Upstream request timed out" if timeout else
+                 "Upstream request failed"),
+                {"reason": type(exc).__name__},
+                error_code=status)
             return
         try:
             if r.status_code != 200:
+                response_text = _bounded_upstream_error_text(r)
                 if r.status_code == 401:
                     status = "reauthentication_required"
                     self._reauthentication_error("upstream_rejected")
-                elif r.status_code in (400, 422):
-                    status = f"HTTP{r.status_code}"
-                    self._error(r.status_code, "upstream_request_rejected",
-                                 detail={"upstream_status": r.status_code},
-                                 error_code="upstream_request_rejected")
                 else:
-                    status = "upstream_unavailable"
-                    self._error(502, "upstream_unavailable",
-                                detail={"upstream_status": r.status_code},
-                                error_code="upstream_unavailable")
+                    status = f"HTTP{r.status_code}"
+                    self._upstream_status_error(r.status_code, response_text)
                 record_usage(body["model"], client_stream, started_at, None,
                               input_est, 0, status=status)
                 return
@@ -8191,6 +8371,10 @@ class Handler(BaseHTTPRequestHandler):
         slow_retries_done = 0
         repetition_retries_done = 0
         physical_budget = _PhysicalRequestBudget(MAX_TOTAL_ATTEMPTS)
+        # Last upstream HTTP status seen by this logical request, including an
+        # attempt that is later retried. A deadline reached while waiting for a
+        # retry reports it in ``detail.last_upstream_status``.
+        last_upstream_status = None
         if record_messages:
             # B7-7: Anthropic Messages carries a REQUIRED max_tokens; state
             # once which value this request forwards, controlled values only
@@ -8288,9 +8472,12 @@ class Handler(BaseHTTPRequestHandler):
         while True:
             remaining_s = deadline - time.monotonic()
             if remaining_s <= 0:
+                detail = {"reason": "request_deadline_exceeded"}
+                if last_upstream_status is not None:
+                    detail["last_upstream_status"] = last_upstream_status
                 self._error(
-                    502, "Upstream compatibility endpoint exceeded the request deadline",
-                    error_code="request_deadline_exceeded")
+                    504, "Upstream compatibility endpoint exceeded the request deadline",
+                    detail, error_code="request_deadline_exceeded")
                 log_summary("request_deadline_exceeded")
                 record_messages_usage("request_deadline_exceeded")
                 return
@@ -8327,11 +8514,19 @@ class Handler(BaseHTTPRequestHandler):
                 record_messages_usage("client_disconnected")
                 return
             except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
-                error_type = ("request_deadline_exceeded"
-                              if isinstance(exc, _RequestDeadlineExceeded)
+                deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
+                error_type = ("request_deadline_exceeded" if deadline_exceeded
                               else "upstream_attempt_budget_exhausted")
-                self._error(502, "Upstream compatibility endpoint could not start another attempt",
-                            type(exc).__name__, error_code=error_type)
+                detail = {"reason": type(exc).__name__}
+                if last_upstream_status is not None:
+                    detail["last_upstream_status"] = last_upstream_status
+                self._error(
+                    504 if deadline_exceeded else 502,
+                    ("Upstream compatibility endpoint exceeded the request "
+                     "deadline" if deadline_exceeded else
+                     "Upstream compatibility endpoint could not start another "
+                     "attempt"),
+                    detail, error_code=error_type)
                 log_summary(error_type)
                 record_messages_usage(error_type)
                 return
@@ -8346,16 +8541,27 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "retry" and schedule_retry(
                         type(exc).__name__, elapsed):
                     continue
-                self._error(502, "Failed to reach upstream compatibility endpoint",
-                            type(exc).__name__,
-                            error_code="upstream_unreachable")
-                log_summary(type(exc).__name__)
-                record_messages_usage(type(exc).__name__)
+                timeout = _is_upstream_timeout(exc)
+                detail = {"reason": type(exc).__name__}
+                if last_upstream_status is not None:
+                    detail["last_upstream_status"] = last_upstream_status
+                self._error(
+                    504 if timeout else 502,
+                    ("Upstream compatibility endpoint timed out" if timeout
+                     else "Failed to reach upstream compatibility endpoint"),
+                    detail,
+                    error_code=("upstream_timeout" if timeout else
+                                "upstream_unreachable"))
+                log_summary(("upstream_timeout" if timeout else
+                             type(exc).__name__))
+                record_messages_usage(("upstream_timeout" if timeout else
+                                      type(exc).__name__))
                 return
 
             elapsed = time.monotonic() - attempt_started
             if response.status_code in _UPSTREAM_RETRYABLE_STATUS:
                 status_code = response.status_code
+                last_upstream_status = status_code
                 if retry_available(_attempt_is_slow(elapsed)):
                     delay_response = response
                     should_retry = schedule_retry(
@@ -8364,16 +8570,18 @@ class Handler(BaseHTTPRequestHandler):
                         response.close()
                         continue
                     response.close()
+                    detail = {"reason": "request_deadline_exceeded",
+                              "last_upstream_status": status_code}
                     self._error(
-                        502, "Upstream compatibility endpoint reached the request deadline",
-                        f"HTTP {status_code}",
+                        504, "Upstream compatibility endpoint reached the "
+                        "request deadline", detail,
                         error_code="request_deadline_exceeded")
                     log_summary("request_deadline_exceeded")
                     record_messages_usage("request_deadline_exceeded")
                     return
-                # Retry budget exhausted: preserve the compatibility endpoint's
-                # historical behavior and pass the last upstream status/body
-                # through instead of rewriting it to a synthetic 502.
+                # Retry budget exhausted: the final upstream status is
+                # preserved and rebuilt in the client protocol's envelope by
+                # _passthrough, never folded into a synthetic 502.
 
             if client_stream and response.status_code == 200:
                 try:
@@ -8424,11 +8632,18 @@ class Handler(BaseHTTPRequestHandler):
                     if action == "retry" and schedule_retry(
                             str(exc), elapsed, stream_retry=True):
                         continue
+                    status, error_code = _hidden_retry_failure(reason)
                     self._error(
-                        502, "Upstream compatibility stream failed before any event",
-                        detail=str(exc), error_code="upstream_stream_error")
+                        status,
+                        ("Upstream compatibility stream timed out"
+                         if status == 504 else
+                         "Upstream compatibility stream failed before any "
+                         "event"),
+                        {"reason": reason}, error_code=error_code)
                     log_summary(f"stream:{exc}")
-                    record_messages_usage("upstream_stream_error")
+                    record_messages_usage(
+                        "upstream_timeout" if status == 504 else
+                        "upstream_stream_error")
                     return
                 if stream_status == "degenerate_repetition":
                     _logger.warning(
@@ -8664,6 +8879,10 @@ class Handler(BaseHTTPRequestHandler):
         slow_retries_done = 0
         repetition_retries_done = 0
         compat_retry_seen = False
+        # Last upstream HTTP status seen by this logical request, including an
+        # attempt that is later retried. A deadline reached while waiting for a
+        # retry reports it in ``detail.last_upstream_status``.
+        last_upstream_status = None
 
         # Hard wall-clock bound: attempt counts alone allow a silent gateway
         # (e.g. 120s first-byte budget x 6 attempts ≈ 12 minutes) to pin an
@@ -8716,6 +8935,7 @@ class Handler(BaseHTTPRequestHandler):
             failure budget, but it still consumes one physical request.
             """
             nonlocal transient_retries_done, slow_retries_done, compat_retry_seen
+            nonlocal last_upstream_status
             compat_retry_used = False
             while True:
                 if time.monotonic() >= request_deadline:
@@ -8779,6 +8999,7 @@ class Handler(BaseHTTPRequestHandler):
                 except requests.RequestException:
                     raise
 
+                last_upstream_status = rr.status_code
                 if (rr.status_code == 400 and upstream_stream and
                         "stream_options" in body):
                     # Compatibility retry is pre-existing behavior, not an
@@ -8853,24 +9074,41 @@ class Handler(BaseHTTPRequestHandler):
                 log_failure("client_disconnected", 0)
                 return
             except (_RequestDeadlineExceeded, _PhysicalBudgetExceeded) as exc:
-                stage = ("request_deadline_exceeded"
-                         if isinstance(exc, _RequestDeadlineExceeded)
+                deadline_exceeded = isinstance(exc, _RequestDeadlineExceeded)
+                stage = ("request_deadline_exceeded" if deadline_exceeded
                          else "physical_budget_exhausted")
-                log_failure(stage, 502, exc_name=type(exc).__name__)
+                log_failure(stage, 504 if deadline_exceeded else 502,
+                            exc_name=type(exc).__name__)
+                detail = {"reason": type(exc).__name__}
+                if last_upstream_status is not None:
+                    detail["last_upstream_status"] = last_upstream_status
                 self._error(
-                    502, "Upstream request could not start another attempt",
-                    type(exc).__name__,
+                    504 if deadline_exceeded else 502,
+                    ("Upstream request exceeded the request deadline"
+                     if deadline_exceeded else
+                     "Upstream request could not start another attempt"),
+                    detail,
                     error_code=("request_deadline_exceeded" if
-                                isinstance(exc, _RequestDeadlineExceeded) else
+                                deadline_exceeded else
                                 "upstream_attempt_budget_exhausted"))
                 return
             except requests.RequestException as exc:
+                timeout = _is_upstream_timeout(exc)
                 log_failure("compat_retry_request_exception"
                             if compat_retry_seen else
-                            "upstream_request_exception", 502,
+                            "upstream_request_exception",
+                            504 if timeout else 502,
                             exc_name=type(exc).__name__)
-                self._error(502, "Upstream request failed", type(exc).__name__,
-                            error_code="upstream_unreachable")
+                detail = {"reason": type(exc).__name__}
+                if last_upstream_status is not None:
+                    detail["last_upstream_status"] = last_upstream_status
+                self._error(
+                    504 if timeout else 502,
+                    ("Upstream request timed out" if timeout else
+                     "Upstream request failed"),
+                    detail,
+                    error_code=("upstream_timeout" if timeout else
+                                "upstream_unreachable"))
                 return
             response = r
             if r.status_code != 200:
@@ -8882,10 +9120,7 @@ class Handler(BaseHTTPRequestHandler):
                 # ("maximum context length ... your prompt has N tokens")
                 # inside the extractable window; longer bodies are still
                 # re-closed by _repair_truncated_json_prefix.
-                try:
-                    response_text = r.text[:2048]
-                except Exception:  # noqa: BLE001 — 上游错误体读取失败按空文本处理
-                    response_text = ""
+                response_text = _bounded_upstream_error_text(r)
                 r.close()
                 if status_code == 401:
                     # The retry used a credential that was just published;
@@ -8910,18 +9145,12 @@ class Handler(BaseHTTPRequestHandler):
                         requested_model=req_model, stream=client_stream, body=body,
                         response_text=response_text,
                         output_budget=output_budget)
-                    self._error(
-                        status_code,
-                        "Upstream rejected the request; the server log has "
-                        "structured diagnostics",
-                        error_code="upstream_request_rejected")
+                    self._upstream_status_error(status_code, response_text)
                     return
                 log_failure("compat_retry_non_200" if compat_retry_used
-                            else "upstream_non_200", 502,
+                            else "upstream_non_200", status_code,
                             upstream_status=status_code)
-                self._error(502, "Upstream request failed",
-                            f"HTTP {status_code}: {response_text}",
-                            error_code="upstream_request_failed")
+                self._upstream_status_error(status_code, response_text)
                 return
 
             if not upstream_stream:
@@ -9192,24 +9421,33 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Access-Control-Allow-Origin", origin)
             self.end_headers()
 
-        def fail_hidden_retry(exc_name):
+        def fail_hidden_retry(exc_name, *, status=502,
+                              error_code="upstream_stream_error",
+                              extra_detail=None,
+                              response_text=None, usage_status=None):
             """Surface a failed hidden retry according to header state."""
             self.close_connection = True
             detail = self._stream_error_detail(
-                "upstream_read_error", started_at, 0, exc_name)
+                "upstream_read_error", started_at, 0, exc_name,
+                extra=extra_detail)
             try:
                 if preflight_headers_sent:
                     self._stream_error_event("upstream_read_error", detail)
+                elif response_text is not None:
+                    self._upstream_status_error(
+                        status, response_text,
+                        detail=extra_detail, error_code=error_code)
                 else:
                     self._error(
-                        502, STREAM_ERROR_MESSAGES["upstream_read_error"],
-                        detail, error_code="upstream_stream_error")
+                        status,
+                        STREAM_ERROR_MESSAGES["upstream_read_error"],
+                        detail, error_code=error_code)
             except (ConnectionError, OSError, ValueError):
                 pass
             record_usage(
                 req_model, True, started_at, None,
                 _message_tokens(body.get("messages")), 0,
-                status="upstream_read_error")
+                status=usage_status or "upstream_read_error")
 
         def start_hidden_retry_attempt(stage):
             """Open a fresh streaming attempt while no visible body was sent."""
@@ -9217,9 +9455,15 @@ class Handler(BaseHTTPRequestHandler):
             retry_lease = _ReaderSlotLease(_reader_slots)
             remaining = request_deadline - time.monotonic()
             if remaining <= 0:
-                log_failure(f"{stage}_retry_deadline", 502,
+                log_failure(f"{stage}_retry_deadline", 504,
                             exc_name="RequestDeadlineExceeded")
-                fail_hidden_retry("RequestDeadlineExceeded")
+                fail_hidden_retry(
+                    "RequestDeadlineExceeded", status=504,
+                    error_code="request_deadline_exceeded",
+                    extra_detail=(
+                        {"last_upstream_status": last_upstream_status}
+                        if last_upstream_status is not None else None),
+                    usage_status="request_deadline_exceeded")
                 return None
             if not retry_lease.acquire(timeout=min(2.0, remaining)):
                 log_failure(f"{stage}_retry_concurrency_limit", 502,
@@ -9243,29 +9487,71 @@ class Handler(BaseHTTPRequestHandler):
                     return None
                 except ReauthenticationRequired as exc:
                     log_failure(f"{stage}_retry_reauthentication_required",
-                                502, exc_name=type(exc).__name__)
-                    fail_hidden_retry(type(exc).__name__)
+                                 503, exc_name=type(exc).__name__)
+                    reason = getattr(exc, "reason", None) or str(exc) or None
+                    if preflight_headers_sent:
+                        fail_hidden_retry(
+                            type(exc).__name__, status=503,
+                            error_code="reauthentication_required",
+                            usage_status="reauthentication_required")
+                    else:
+                        self.close_connection = True
+                        self._reauthentication_error(reason)
+                        record_usage(
+                            req_model, True, started_at, None,
+                            _message_tokens(body.get("messages")), 0,
+                            status="reauthentication_required")
                     return None
                 except (_RequestDeadlineExceeded,
                         _PhysicalBudgetExceeded) as exc:
-                    log_failure(f"{stage}_retry_budget_exhausted", 502,
-                                exc_name=type(exc).__name__)
-                    fail_hidden_retry(type(exc).__name__)
+                    deadline_exceeded = isinstance(
+                        exc, _RequestDeadlineExceeded)
+                    log_failure(f"{stage}_retry_budget_exhausted",
+                                 504 if deadline_exceeded else 502,
+                                 exc_name=type(exc).__name__)
+                    fail_hidden_retry(
+                        type(exc).__name__,
+                        status=504 if deadline_exceeded else 502,
+                        error_code=("request_deadline_exceeded"
+                                    if deadline_exceeded else
+                                    "upstream_attempt_budget_exhausted"),
+                        extra_detail=(
+                            {"last_upstream_status": last_upstream_status}
+                            if last_upstream_status is not None else None),
+                        usage_status=("request_deadline_exceeded"
+                                      if deadline_exceeded else
+                                      "upstream_attempt_budget_exhausted"))
                     return None
                 except requests.RequestException as exc:
-                    log_failure(f"{stage}_retry_request_exception", 502,
-                                exc_name=type(exc).__name__)
-                    fail_hidden_retry(type(exc).__name__)
+                    timeout = _is_upstream_timeout(exc)
+                    log_failure(f"{stage}_retry_request_exception",
+                                 504 if timeout else 502,
+                                 exc_name=type(exc).__name__)
+                    fail_hidden_retry(
+                        type(exc).__name__,
+                        status=504 if timeout else 502,
+                        error_code=("upstream_timeout" if timeout else
+                                    "upstream_unreachable"),
+                        extra_detail=(
+                            {"last_upstream_status": last_upstream_status}
+                            if last_upstream_status is not None else None),
+                        usage_status=("upstream_timeout" if timeout else
+                                      "upstream_unreachable"))
                     return None
                 retry_response = rr
 
                 if rr.status_code != 200:
                     status_code = rr.status_code
+                    response_text = _bounded_upstream_error_text(rr)
                     rr.close()
                     retry_response = None
-                    log_failure(f"{stage}_retry_non_200", 502,
+                    log_failure(f"{stage}_retry_non_200", status_code,
                                 upstream_status=status_code)
-                    fail_hidden_retry(f"HTTP{status_code}")
+                    fail_hidden_retry(
+                        f"HTTP{status_code}", status=status_code,
+                        error_code=_upstream_error_code(status_code),
+                        response_text=response_text,
+                        usage_status=f"HTTP{status_code}")
                     return None
 
                 retry_upstream = _UpstreamStream(
@@ -9360,7 +9646,14 @@ class Handler(BaseHTTPRequestHandler):
                     slow = _attempt_is_slow(elapsed)
                     if not transient_retry_available(slow):
                         _release_upstream_reader(upstream)
-                        fail_hidden_retry(retry_reason or "StreamFailure")
+                        retry_status, retry_code = _hidden_retry_failure(
+                            retry_reason)
+                        fail_hidden_retry(
+                            retry_reason or "StreamFailure",
+                            status=retry_status, error_code=retry_code,
+                            usage_status=("upstream_timeout"
+                                          if retry_status == 504 else
+                                          "upstream_read_error"))
                         return
                     transient_retries_done += 1
                     if slow:
@@ -9381,7 +9674,14 @@ class Handler(BaseHTTPRequestHandler):
                             discarded_reasoning_chars // 4,
                             status="upstream_transient_retried")
                     if not _sleep_with_deadline(delay_s, request_deadline):
-                        fail_hidden_retry("RequestDeadlineExceeded")
+                        fail_hidden_retry(
+                            "RequestDeadlineExceeded", status=504,
+                            error_code="request_deadline_exceeded",
+                            extra_detail=(
+                                {"last_upstream_status": last_upstream_status}
+                                if last_upstream_status is not None
+                                else None),
+                            usage_status="request_deadline_exceeded")
                         return
                     upstream = start_hidden_retry_attempt("upstream")
                     if upstream is None:
@@ -9481,6 +9781,7 @@ class Handler(BaseHTTPRequestHandler):
         got_first_data = preflight_saw_substantive
         status = "ok"
         exc_name = None
+        exc_obj = None
         # Sanitized reason of an explicit upstream error event, when one was
         # recognized (see the error branch in process_event below); travels
         # in the failure detail, never the raw upstream object.
@@ -9502,6 +9803,7 @@ class Handler(BaseHTTPRequestHandler):
             nonlocal tool_action_seen
             nonlocal got_first_data, status, exc_name
             nonlocal explicit_error_reason
+            nonlocal exc_obj
 
             # Preserve the previous downstream bytes for every one-line event:
             # old code wrote ``line + \"\n\n\"`` and then wrote the separator
@@ -9719,6 +10021,7 @@ class Handler(BaseHTTPRequestHandler):
             status = "degenerate_repetition"
         except Exception as exc:  # noqa: BLE001 — 上游读失败按 upstream_read_error 分类
             exc_name = type(exc).__name__
+            exc_obj = exc
             status = "upstream_read_error"
         finally:
             upstream.cancel()
@@ -9800,13 +10103,21 @@ class Handler(BaseHTTPRequestHandler):
                         pass  # client left before the error event landed
                 else:
                     # Nothing was streamed: the 200 never went out, so a
-                    # non-2xx is still honest and lets retry-capable clients
-                    # (a retry-capable client treats HTTP 502 as retryable) recover a
-                    # transient upstream failure themselves.
+                    # non-2xx is still honest. A first-byte/read timeout is
+                    # the gateway's own wait expiring (504); every other
+                    # transport failure keeps the existing 502.
+                    timeout = (status == "upstream_first_byte_timeout" or
+                               (status == "upstream_read_error" and
+                                _is_upstream_timeout(exc_obj)))
                     try:
-                        self._error(502, STREAM_ERROR_MESSAGES.get(
-                            status, "Upstream stream failed."), detail,
-                            error_code="upstream_stream_error")
+                        self._error(
+                            504 if timeout else 502,
+                            ("Upstream stream timed out" if timeout else
+                             STREAM_ERROR_MESSAGES.get(
+                                 status, "Upstream stream failed.")),
+                            detail,
+                            error_code=("upstream_timeout" if timeout else
+                                         "upstream_stream_error"))
                     except (ConnectionError, OSError, ValueError):
                         pass  # client left before the failure was written
             output_chars = completion_chars + reasoning_chars
@@ -9841,6 +10152,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _passthrough(self, r: requests.Response):
         try:
+            if r.status_code >= 400:
+                # Every exposed upstream path keeps the upstream status but
+                # rebuilds the body in the client protocol's envelope; the raw
+                # upstream body is never relayed.
+                self._upstream_status_error(
+                    r.status_code, _bounded_upstream_error_text(r))
+                return
             self.send_response(r.status_code)
             for k, v in r.headers.items():
                 if k.lower() in ("content-type", "content-length", "cache-control"):
@@ -10087,7 +10405,9 @@ class Handler(BaseHTTPRequestHandler):
                         if not committed:
                             status = "upstream_read_error"
                             raise _CompatStreamRetryable(
-                                type(exc).__name__) from exc
+                                "upstream_read_timeout"
+                                if _is_upstream_timeout(exc)
+                                else type(exc).__name__) from exc
                         emit_in_band_error(
                             f"Upstream connection failed mid-stream "
                             f"({type(exc).__name__}); the completion is incomplete.")
