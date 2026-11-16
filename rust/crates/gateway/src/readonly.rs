@@ -12,9 +12,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::config::{parse_upstream_base_url, ConfigError, GatewayConfig};
+use crate::config::{parse_upstream_base_url, upstream_uses_tls, ConfigError, GatewayConfig};
 use crate::error::GatewayError;
 use crate::login::CredentialSink;
+use crate::tls::{self, UpstreamStream};
 
 pub const CHAT2API_VERSION: &str = "1.0.0";
 pub const CHAT2API_SOURCE_REV: &str = "e2d60349";
@@ -60,6 +61,7 @@ pub struct UpstreamClient {
     host: String,
     port: u16,
     timeout: Duration,
+    tls: bool,
 }
 
 impl UpstreamClient {
@@ -69,6 +71,7 @@ impl UpstreamClient {
             host,
             port,
             timeout: config.upstream_timeout,
+            tls: upstream_uses_tls(&config.upstream_base_url),
         })
     }
 
@@ -82,14 +85,20 @@ impl UpstreamClient {
             .map_err(|_| UpstreamFailure::ConnectionError)?
             .next()
             .ok_or(UpstreamFailure::ConnectionError)?;
-        let mut stream = TcpStream::connect_timeout(&address, self.timeout).map_err(|error| {
-            match error.kind() {
-                std::io::ErrorKind::TimedOut => UpstreamFailure::Timeout,
-                _ => UpstreamFailure::ConnectionError,
-            }
-        })?;
+        let stream =
+            TcpStream::connect_timeout(&address, self.timeout).map_err(|error| {
+                match error.kind() {
+                    std::io::ErrorKind::TimedOut => UpstreamFailure::Timeout,
+                    _ => UpstreamFailure::ConnectionError,
+                }
+            })?;
         let _ = stream.set_read_timeout(Some(self.timeout));
         let _ = stream.set_write_timeout(Some(self.timeout));
+        let mut stream: UpstreamStream = if self.tls {
+            Box::new(tls::wrap(stream, &self.host).map_err(|_| UpstreamFailure::ConnectionError)?)
+        } else {
+            Box::new(stream)
+        };
         let mut request = format!(
             "GET {path} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\n\
              Connection: close\r\n",
@@ -119,7 +128,7 @@ impl UpstreamClient {
     }
 }
 
-fn read_upstream_response(stream: &mut TcpStream) -> Result<UpstreamResponse, UpstreamFailure> {
+fn read_upstream_response(stream: &mut dyn Read) -> Result<UpstreamResponse, UpstreamFailure> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {

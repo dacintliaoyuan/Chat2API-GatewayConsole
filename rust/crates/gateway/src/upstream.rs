@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::config::{parse_upstream_base_url, GatewayConfig};
+use crate::config::{parse_upstream_base_url, upstream_uses_tls, GatewayConfig};
+use crate::tls::{self, UpstreamStream};
 
 /// Largest response head accepted from the upstream.
 pub const MAX_UPSTREAM_HEADER_BYTES: usize = 64 * 1024;
@@ -75,7 +76,7 @@ impl UpstreamResponse {
 
 /// The decoded body of one upstream response.
 pub struct UpstreamBody {
-    stream: TcpStream,
+    stream: UpstreamStream,
     buffered: Vec<u8>,
     buffered_index: usize,
     framing: Framing,
@@ -298,7 +299,7 @@ pub fn post_compat(
         return Err(UpstreamFailure::Timeout);
     }
     let setup_timeout = remaining.min(UPSTREAM_SETUP_TIMEOUT);
-    let mut upstream = TcpStream::connect_timeout(&address, setup_timeout).map_err(|error| {
+    let upstream = TcpStream::connect_timeout(&address, setup_timeout).map_err(|error| {
         if error.kind() == io::ErrorKind::TimedOut {
             UpstreamFailure::Timeout
         } else {
@@ -312,6 +313,11 @@ pub fn post_compat(
     };
     let _ = upstream.set_read_timeout(Some(read_timeout.max(Duration::from_millis(1))));
     let _ = upstream.set_write_timeout(Some(setup_timeout.max(Duration::from_millis(1))));
+    let mut upstream: UpstreamStream = if upstream_uses_tls(&config.upstream_base_url) {
+        Box::new(tls::wrap(upstream, &host).map_err(|_| UpstreamFailure::ConnectionError)?)
+    } else {
+        Box::new(upstream)
+    };
     let mut request = format!(
         "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\n\
              Authorization: Bearer {}\r\nContent-Type: application/json\r\n\
@@ -363,7 +369,7 @@ fn framing_from_headers(headers: &HashMap<String, String>) -> Framing {
 
 type ResponseHead = (u16, HashMap<String, String>, Vec<u8>);
 
-fn read_head(stream: &mut TcpStream) -> Result<ResponseHead, UpstreamFailure> {
+fn read_head(stream: &mut dyn Read) -> Result<ResponseHead, UpstreamFailure> {
     let mut raw = Vec::new();
     let mut byte = [0u8; 1];
     let header_end = loop {

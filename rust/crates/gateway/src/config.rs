@@ -647,14 +647,18 @@ pub fn parse_auth_wait_recheck(value: Option<&str>) -> Duration {
     )
 }
 
-/// Parse and validate the upstream base URL. Only plain HTTP is supported by the
-/// S1a candidate; TLS termination is a later deployment slice.
+/// Parse and validate the upstream base URL. Both plain HTTP and HTTPS are
+/// supported: the production upstream is HTTPS and the gateway terminates TLS
+/// itself. The returned host/port are the TCP destination.
 pub fn parse_upstream_base_url(value: &str) -> Result<(String, u16), ConfigError> {
-    let rest = value.strip_prefix("http://").ok_or_else(|| {
-        ConfigError(format!(
-            "upstream base URL must be http:// for the S1a candidate: {value}"
-        ))
-    })?;
+    let rest = value
+        .strip_prefix("http://")
+        .or_else(|| value.strip_prefix("https://"))
+        .ok_or_else(|| {
+            ConfigError(format!(
+                "upstream base URL must be http:// or https://: {value}"
+            ))
+        })?;
     let rest = rest.strip_suffix('/').unwrap_or(rest);
     if rest.is_empty() || rest.contains('/') {
         return Err(ConfigError(format!(
@@ -668,7 +672,14 @@ pub fn parse_upstream_base_url(value: &str) -> Result<(String, u16), ConfigError
                 .map_err(|_| ConfigError(format!("invalid upstream port in {value}")))?;
             (host, port)
         }
-        None => (rest, 80),
+        None => {
+            let default_port = if value.starts_with("https://") {
+                443
+            } else {
+                80
+            };
+            (rest, default_port)
+        }
     };
     if host.is_empty() || host.contains('@') {
         return Err(ConfigError(format!(
@@ -676,6 +687,11 @@ pub fn parse_upstream_base_url(value: &str) -> Result<(String, u16), ConfigError
         )));
     }
     Ok((host.to_string(), port))
+}
+
+/// Whether the configured upstream requires TLS.
+pub fn upstream_uses_tls(value: &str) -> bool {
+    value.starts_with("https://")
 }
 
 /// Parse one share configuration document.

@@ -25,6 +25,7 @@ pub mod reauth;
 pub mod responses;
 pub mod retry;
 pub mod server;
+pub mod tls;
 pub mod upstream;
 
 pub use body::{read_json_body, BodyPolicy};
