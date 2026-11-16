@@ -430,17 +430,17 @@ class AuthWaitTestBase(unittest.TestCase):
 
 
 class AuthWaitBudgetTests(AuthWaitTestBase):
-    def test_a3_cumulative_budget_is_shared_by_internal_401_retries(self):
-        # First 401: wait for the live lease to be released, then login.
-        # A hidden 503 retry then gets a second 401 in the SAME logical
-        # request: only the remaining budget may be used, never a fresh 30s.
+    def test_a3_second_401_is_final_without_another_login(self):
+        # Ticket #63: the first 401 spends this logical request's ONE
+        # reauthentication attempt. A later 401 after an intermediate 503 is
+        # final: it must not open a second login window.
         self._hold_lease()
         StubUpstream.statuses = [401, 503, 401]
         calls = []
 
         def fake_login(*args, **kwargs):
             calls.append(time.monotonic())
-            time.sleep(0.03 if len(calls) == 1 else 0.15)
+            time.sleep(0.03)
             return "fresh-token"
 
         self._release_lease_later(0.05)
@@ -463,12 +463,13 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
         self.assertEqual(error["type"], "upstream_error")
         self.assertEqual(error["code"], "reauthentication_required")
         self.assertIsNone(error["param"])
-        self.assertEqual(error["detail"], AUTH_WAIT_TIMEOUT)
+        self.assertEqual(error["detail"], "upstream_rejected")
         self.assertEqual(response.headers.get("Content-Type"),
                          "application/json; charset=utf-8")
         self._assert_retry_after(response, expected=None)
-        self.assertEqual(len(calls), 2,
-                         "both auth waits must share one request budget")
+        self.assertEqual(len(calls), 1,
+                         "a second 401 must not open another login")
+        self.assertEqual(StubUpstream.posts, 3)
         self.assertLess(elapsed, 1.0)
 
     def test_a3_overall_deadline_keeps_the_existing_deadline_error(self):
@@ -563,13 +564,12 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
         self.assertEqual(StubUpstream.posts, 2)
         self.assertEqual(len(login_calls), 1)
 
-    def test_a3_upstream_between_two_auth_waits_is_not_charged(self):
-        # R2: the normal inference between two authentication waits (the
-        # hidden retry after the first 401) is not authentication time either.
-        # Only the two login waits share the remaining budget; the non-billed
-        # inference stays well above the budget so a loaded full-repo run cannot
+    def test_a3_upstream_after_auth_wait_is_not_charged(self):
+        # R2: the normal inference after the request's one auth wait is not
+        # authentication time. Only the login wait is charged; the non-billed
+        # inference stays above the budget so a loaded full-repo run cannot
         # blur the contrast: charging it would exhaust the budget by itself.
-        StubUpstream.statuses = [401, 503, 401, 200]
+        StubUpstream.statuses = [401, 503, 200]
         original_status = StubUpstream._next_status
         login_calls = []
 
@@ -599,17 +599,17 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
 
         self.assertEqual(
             response.status_code, 200,
-            "normal upstream inference between two auth waits was charged")
-        self.assertEqual(StubUpstream.posts, 4)
-        self.assertEqual(len(login_calls), 2)
+            "normal upstream inference after the auth wait was charged")
+        self.assertEqual(StubUpstream.posts, 3)
+        self.assertEqual(len(login_calls), 1)
 
-    def test_a3_retry_delay_is_not_charged_to_the_budget(self):
+    def test_a3_retry_delay_after_auth_wait_is_not_charged(self):
         # R2: the bounded retry delay between two upstream attempts is normal
-        # processing, not authentication wait. Only the two login waits share
-        # the remaining budget. The delay stays above the budget so a loaded
-        # full-repo run cannot blur the contrast: charging it would exhaust
-        # the budget by itself.
-        StubUpstream.statuses = [401, 503, 401, 200]
+        # processing, not authentication wait. One auth wait spends the
+        # request's single reauthentication attempt; the delay stays above the
+        # budget so a loaded full-repo run cannot blur the contrast: charging
+        # it would exhaust the budget by itself.
+        StubUpstream.statuses = [401, 503, 200]
         login_calls = []
 
         def fake_login(*args, **kwargs):
@@ -632,8 +632,8 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
         self.assertEqual(
             response.status_code, 200,
             "the retry delay was charged as authentication wait")
-        self.assertEqual(StubUpstream.posts, 4)
-        self.assertEqual(len(login_calls), 2)
+        self.assertEqual(StubUpstream.posts, 3)
+        self.assertEqual(len(login_calls), 1)
 
     def test_a3_request_body_processing_is_not_charged_to_the_budget(self):
         # R2: reading and validating the request body happens before any
@@ -1593,22 +1593,22 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
         self._release_lease_later(0.05)
         self._install_wait_slots(2)
         reader_slots = threading.BoundedSemaphore(1)
-        StubUpstream.statuses = [401, 200, 401, 200]
+        # First attempt: 200 with no data -> the pre-output check retries.
+        # Hidden retry: 401 -> the request's ONE auth wait runs while the
+        # reader slot must be released. Re-send: 200 SSE.
+        StubUpstream.statuses = [200, 401, 200]
         StubUpstream.sse = True
-        StubUpstream.empty_post_indices = frozenset({1})
-        second_login_entered = threading.Event()
-        let_second_login_finish = threading.Event()
+        StubUpstream.empty_post_indices = frozenset({0})
+        login_entered = threading.Event()
+        let_login_finish = threading.Event()
         login_calls = []
         result = {}
 
         def fake_login(*args, **kwargs):
             login_calls.append(time.monotonic())
-            if len(login_calls) == 2:
-                second_login_entered.set()
-                if not let_second_login_finish.wait(3):
-                    raise AssertionError("second login gate timed out")
-            else:
-                time.sleep(0.03)
+            login_entered.set()
+            if not let_login_finish.wait(3):
+                raise AssertionError("login gate timed out")
             return "fresh-token"
 
         worker = threading.Thread(target=self._run_stream_worker,
@@ -1627,13 +1627,13 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
             try:
                 worker.start()
                 self.assertTrue(
-                    second_login_entered.wait(2),
+                    login_entered.wait(2),
                     "the hidden retry never reached its auth wait")
                 self.assertEqual(
                     reader_slots._value, 1,
                     "the hidden retry reserved a stream-reader slot while "
                     "waiting for authentication")
-                let_second_login_finish.set()
+                let_login_finish.set()
                 worker.join(3)
                 self.assertFalse(worker.is_alive())
                 response = result.get("response")
@@ -1645,13 +1645,14 @@ class AuthWaitReaderSlotTests(AuthWaitTestBase):
                 finally:
                     response.close()
             finally:
-                let_second_login_finish.set()
+                let_login_finish.set()
                 self.proxy.shutdown()
                 worker.join(2)
                 response = result.get("response")
                 if response is not None:
                     response.close()
-        self.assertEqual(StubUpstream.posts, 4)
+        self.assertEqual(StubUpstream.posts, 3)
+        self.assertEqual(len(login_calls), 1)
         self.assertTrue(
             self._wait_until(lambda: reader_slots._value == 1, timeout=1.0),
             "the reader slot was not returned after the hidden retry")

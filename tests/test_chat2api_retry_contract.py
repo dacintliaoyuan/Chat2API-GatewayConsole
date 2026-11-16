@@ -173,17 +173,21 @@ class RetryMatrixTests(RetryContractTestBase):
                     response.close()
                     self.fake.reset()
 
-    def test_403_auth_text_leaves_reauth_trigger(self):
+    def test_403_auth_text_without_browser_is_503_browser_disabled(self):
+        # Ticket #63: 403 authentication text triggers the ONE reauthentication
+        # attempt even before the probe retry. With --no-browser that attempt
+        # cannot open a window, so the gateway answers 503
+        # reauthentication_required with the honest BrowserDisabled reason.
         self.script([{"status": 403,
                       "body": {"detail": "Not authenticated"}}, "normal"])
-        with self.no_delay(), \
-                self.assertLogs("chat2api", level="WARNING") as cm:
+        with self.no_delay():
             response = self.post_chat()
         try:
-            self.assertEqual(response.status_code, 200)
-            self.assert_posts(2)
-            self.assertIn("trigger=reauthenticate",
-                          "\n".join(cm.output))
+            self.assertEqual(response.status_code, 503)
+            error = response.json()["error"]
+            self.assertEqual(error["code"], "reauthentication_required")
+            self.assertEqual(error["detail"], "BrowserDisabled")
+            self.assert_posts(1)
         finally:
             response.close()
 

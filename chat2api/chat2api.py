@@ -634,7 +634,7 @@ NONSTREAM_UPSTREAM_AGGREGATE = False
 # in-process default is 30 seconds; main() resolves the 8000/8100 default (180,
 # D18-5) and an explicit CLI/env value (clamped to 1..180).
 try:
-    AUTH_WAIT_BUDGET_S = max(0.01, min(180.0, float(
+    AUTH_WAIT_BUDGET_S = max(1.0, min(180.0, float(
         os.environ.get("CHAT2API_AUTH_WAIT_BUDGET_S", "30"))))
 except ValueError:
     AUTH_WAIT_BUDGET_S = 30.0
@@ -1095,20 +1095,6 @@ def _upstream_403_is_auth_rejection(response_text):
         return False
     return _upstream_text_matches(
         response_text, _UPSTREAM_AUTH_REJECTION_TEXT_HINTS)
-
-
-def _note_upstream_403_auth_rejection(request_id, response_text):
-    """Record the 403 authentication-text trigger for ticket #63.
-
-    #63 replaces this marker with the actual per-request reauthentication
-    attempt. This ticket only leaves the trigger point and never opens a login
-    window from here.
-    """
-    _logger.warning(
-        "upstream auth rejection request=%s status=403 "
-        "trigger=reauthenticate detail=%r reauth=deferred",
-        request_id or "-",
-        _bounded_upstream_error_message(response_text))
 
 
 def _upstream_retry_after_headers(response):
@@ -3973,6 +3959,24 @@ class ReauthenticationThrottled(ReauthenticationRequired):
         self.reason = reason
 
 
+class ReauthenticationFailed(ReauthenticationRequired):
+    """A reauthenticated credential was rejected again by upstream.
+
+    A 403 authentication-text response AFTER this logical request already
+    attempted a reauthentication is final (ticket #63): the gateway must not
+    open a second login window. Handlers rebuild it as 403
+    ``reauthentication_failed`` with ``detail.reauthentication_attempted``
+    set to true.
+    """
+
+    def __init__(self, upstream_message=None, attempted=True):
+        super().__init__("reauthentication_failed")
+        self.reason = "reauthentication_failed"
+        self.upstream_status = 403
+        self.upstream_message = upstream_message
+        self.reauthentication_attempted = bool(attempted)
+
+
 def is_local_control_request(client_ip: str, host: str, origin: str | None) -> bool:
     """Allow CLI management calls while rejecting remote and browser requests."""
     try:
@@ -5786,19 +5790,31 @@ class Proxy:
              physical_budget=None, request_deadline=None,
              auth_wait_budget=None, cancel_check=None, reader_lease=None,
              **kwargs):
-        """Request with a single 401 -> re-auth retry. For streaming endpoints
-        you MUST pass stream=True, otherwise requests buffers the whole SSE
-        body until the upstream closes the connection.
+        """Request with the ONE per-request reauthentication contract.
+
+        A 401 or a 403 whose bounded body carries UM authentication text
+        (ticket #63) triggers at most ONE reauthentication for the whole
+        logical request. The first auth rejection claims the attempt and resends
+        once with the new credential; every later auth rejection in the same
+        logical request is final: 401 becomes the gateway's 503
+        reauthentication state, and 403 authentication text becomes 403
+        ``reauthentication_failed`` with ``reauthentication_attempted`` true.
+        A 403 permission response, 402 and 404 never open a login window; the
+        403 body is read with an 8 KiB bound and put back for the normal error
+        path. A 403 body that cannot be classified is treated as a permission
+        response, never as a credential rejection.
 
         ``physical_budget`` may be a shared ``_PhysicalRequestBudget`` (new
         callers) or a legacy integer meaning how many real requests THIS call
-        may still make. Every requests.request(), including a post-401 hidden
-        re-send, consumes one unit before it is issued.
+        may still make. Every requests.request(), including a post-401/403
+        hidden re-send, consumes one unit before it is issued.
 
         ``auth_wait_budget`` is the ONE cumulative budget of the downstream
-        HTTP request; this call never resets it across its internal re-sends.
-        ``cancel_check`` is the request-scoped cancellation probe. Both are
-        checked again after an auth wait and before every real upstream call.
+        HTTP request and also carries the single reauthentication claim shared
+        by every retry of that logical request; this call never resets either
+        across its internal re-sends. ``cancel_check`` is the request-scoped
+        cancellation probe. Both are checked again after an auth wait and before
+        every real upstream call.
         """
         extra_headers = kwargs.pop("headers", {})
         timeout = kwargs.pop("timeout", 600)
@@ -5893,12 +5909,32 @@ class Proxy:
                         "stream reader capacity exhausted after auth wait")
             return ok
 
-        for attempt in (0, 1):
+        reauth_state = (auth_wait_budget
+                        if isinstance(auth_wait_budget, _ReauthAttemptState)
+                        else _ReauthAttemptState())
+        resend_used = False
+
+        def check_not_cancelled():
+            """Cancellation/stop check used before a FINAL auth rejection.
+
+            The request budget and wall deadline are deliberately not rechecked
+            here: a second 401/403 authentication-text response is final, so an
+            expired wait budget must not relabel it as a throttle.
+            """
+            if cancel_check is not None and cancel_check():
+                raise _RequestCancelled("client disconnected")
+            if self._shutdown_event.is_set():
+                raise _RequestCancelled("instance stopping")
+
+        while True:
             check_before_upstream()
             bearer = self.bearer()
             with self._auth_condition:
                 credential_generation = self._credential_generation
             if not bearer:
+                if not reauth_state.claim_reauth_attempt():
+                    check_before_upstream()
+                    self._raise_auth_required()
                 if not refresh_before_retry():
                     check_before_upstream()
                     self._raise_auth_required()
@@ -5914,8 +5950,19 @@ class Proxy:
                 timeout=clipped_timeout(),
                 stream=stream,
                 **kwargs)
-            if r.status_code != 401:
+            if r.status_code not in (401, 403):
                 return r
+
+            response_text = ""
+            if r.status_code == 403:
+                response_text = _bounded_403_response_text(r)
+                if not _upstream_403_is_auth_rejection(response_text):
+                    # A permission/edge-challenge 403 is not a credential
+                    # rejection: the bounded body was put back, so the normal
+                    # 403 error path (and its one probe) still sees it, and no
+                    # login window opens.
+                    return r
+
             # A4/A7: an explicit credential rejection never leaks to a
             # handler as a raw upstream response - every entry would
             # otherwise translate it differently (502, a pass-through 401,
@@ -5923,35 +5970,69 @@ class Proxy:
             # the credential that was actually rejected, then fail with
             # the ONE shared error type and its specific reason.
             with self._auth_condition:
-                stale_401 = (self.bearer() != bearer
-                             or self._credential_generation
-                             != credential_generation)
-                if not stale_401:
-                    # A13-2: an upstream 401 is explicit evidence
-                    # that the CURRENT credential was rejected, so
-                    # record it before trying to recover - the state
-                    # must never keep claiming "valid" while the
-                    # business path is answering 401.
+                stale_auth = (self.bearer() != bearer
+                              or self._credential_generation
+                              != credential_generation)
+                if not stale_auth:
+                    # A13-2: an upstream 401/403 authentication-text
+                    # response is explicit evidence that the CURRENT
+                    # credential was rejected, so record it before trying to
+                    # recover - the state must never keep claiming "valid"
+                    # while the business path is answering 401.
                     self._record_auth_evidence(
-                        "rejected", "upstream_rejected", 401, "business")
+                        "rejected", "upstream_rejected",
+                        r.status_code, "business")
                     if self._auth_state not in ("logging_in", "failed",
                                                  "cancelled"):
                         self._auth_state = "needs_login"
             r.close()
-            if attempt == 0 and budget_remaining() != 0:
-                if stale_401:
-                    # A newer credential was published while this
-                    # request was in flight: retry once with it instead
-                    # of judging the current credential by a stale 401
-                    # (A1).
-                    continue
-                if refresh_before_retry():
-                    continue
+            _logger.warning(
+                "upstream auth rejection status=%d method=%s path=%s "
+                "trigger=%s attempted=%s detail=%r",
+                r.status_code, method,
+                urllib.parse.urlsplit(path).path,
+                "reauthenticate" if not reauth_state.reauth_attempted
+                else "final",
+                reauth_state.reauth_attempted,
+                _bounded_upstream_error_message(response_text))
+
+            if resend_used:
+                # Ticket #63: the second auth rejection of one logical request
+                # is final and never opens another login window.
+                check_not_cancelled()
+                if r.status_code == 403:
+                    raise ReauthenticationFailed(
+                        response_text,
+                        attempted=reauth_state.reauth_attempted)
+                raise ReauthenticationRequired("upstream_rejected")
+            if stale_auth:
+                # A newer credential was published while this request was
+                # in flight: retry once with it instead of judging the
+                # current credential by a stale rejection (A1).
+                resend_used = True
+                continue
+            if budget_remaining() == 0:
+                if r.status_code == 403:
+                    check_not_cancelled()
+                    raise ReauthenticationFailed(
+                        response_text,
+                        attempted=reauth_state.reauth_attempted)
                 check_before_upstream()
-                self._raise_auth_required()
+                raise ReauthenticationRequired("upstream_rejected")
+            if not reauth_state.claim_reauth_attempt():
+                # Another retry of this same logical request already spent
+                # its one reauthentication attempt.
+                check_not_cancelled()
+                if r.status_code == 403:
+                    raise ReauthenticationFailed(
+                        response_text,
+                        attempted=reauth_state.reauth_attempted)
+                raise ReauthenticationRequired("upstream_rejected")
+            if refresh_before_retry():
+                resend_used = True
+                continue
             check_before_upstream()
-            raise ReauthenticationRequired("upstream_rejected")
-        return r
+            self._raise_auth_required()
 
     def list_models(self, force=False, raw_only=False, fresh_required=False,
                     auth_wait_budget=None, request_deadline=None,
@@ -6158,7 +6239,38 @@ class _ReaderSlotUnavailable(RuntimeError):
     """The streaming-reader slot could not be re-acquired after auth wait."""
 
 
-class _AuthWaitBudget:
+class _ReauthAttemptState:
+    """One reauthentication claim shared by every retry of a logical request.
+
+    Ticket #63: a 401 or 403 authentication-text response may open at most ONE
+    login window per logical downstream request. The claim is taken BEFORE the
+    shared recovery cycle is joined, so a failed, throttled or timed-out login
+    still counts as the one attempt and a later retry of the same request goes
+    straight to its final status. The state is local to one ``Proxy.call`` when
+    no per-request budget object was supplied; handlers pass their
+    ``_AuthWaitBudget`` (one per downstream HTTP request) so all protocol
+    retry loops share it.
+    """
+
+    def __init__(self):
+        self._reauth_lock = threading.Lock()
+        self._reauth_attempted = False
+
+    def claim_reauth_attempt(self):
+        """Claim this logical request's single reauthentication attempt."""
+        with self._reauth_lock:
+            if self._reauth_attempted:
+                return False
+            self._reauth_attempted = True
+            return True
+
+    @property
+    def reauth_attempted(self):
+        with self._reauth_lock:
+            return self._reauth_attempted
+
+
+class _AuthWaitBudget(_ReauthAttemptState):
     """Cumulative authentication-wait budget for ONE downstream request.
 
     Only time actually spent inside the authentication-wait path is charged.
@@ -6170,6 +6282,7 @@ class _AuthWaitBudget:
     """
 
     def __init__(self, seconds=None, now=None):
+        super().__init__()
         self.limit = max(0.0, min(180.0, float(
             AUTH_WAIT_BUDGET_S if seconds is None else seconds)))
         self.used = 0.0
@@ -6720,6 +6833,53 @@ def _bounded_upstream_error_text(response):
         return response.text[:_UPSTREAM_ERROR_BODY_CAPTURE_MAX_CHARS]
     except Exception:  # noqa: BLE001 — 上游错误体读取失败按空文本处理
         return ""
+
+
+# Ticket #63: a 403 must be classified before it can be returned, but the body
+# is read with a HARD byte bound (8 KiB) so an edge challenge page or a broken
+# upstream cannot make the gateway buffer an unbounded error body. A non-auth 403
+# puts the read bytes back into the response so the handler's normal error
+# rebuild (and the 403 probe retry) still sees the upstream message.
+_UPSTREAM_403_BODY_LIMIT = 8 * 1024
+
+
+def _bounded_403_response_text(response):
+    """Read at most ``_UPSTREAM_403_BODY_LIMIT`` bytes and restore the body.
+
+    ``requests`` with ``stream=False`` already holds the complete body in
+    ``_content``; that body is sliced to the same bound without re-reading.
+    With ``stream=True`` the raw stream is read once, bounded, and the read
+    bytes are published as the response's content so a non-auth 403 keeps its
+    body for the normal error path. A response shape that cannot be inspected
+    yields an empty text and is treated as a non-auth 403.
+    """
+    content = getattr(response, "_content", None)
+    if isinstance(content, bytes):
+        return content[:_UPSTREAM_403_BODY_LIMIT].decode("utf-8", "replace")
+    if isinstance(content, str):
+        return content[:_UPSTREAM_403_BODY_LIMIT]
+    raw = getattr(response, "raw", None)
+    read = getattr(raw, "read", None)
+    if not callable(read):
+        return ""
+    try:
+        data = read(_UPSTREAM_403_BODY_LIMIT, decode_content=True)
+    except TypeError:
+        # A simple test double may accept only the byte count.
+        try:
+            data = read(_UPSTREAM_403_BODY_LIMIT)
+        except Exception:  # noqa: BLE001 — 403 读取失败按空文本分类
+            return ""
+    except Exception:  # noqa: BLE001 — 403 读取失败按空文本分类
+        return ""
+    if not isinstance(data, bytes):
+        return ""
+    try:
+        response._content = data
+        response._content_consumed = True
+    except Exception:  # noqa: BLE001 — 测试替身可能不可写，body 已读出
+        pass
+    return data.decode("utf-8", "replace")
 
 
 # Length bound for the reason carried out of an explicit upstream error SSE
@@ -7479,6 +7639,39 @@ class Handler(BaseHTTPRequestHandler):
             extra_headers=extra_headers,
         )
 
+    def _reauthentication_exception(self, exc):
+        """Finish one ReauthenticationRequired-derived failure honestly.
+
+        Ticket #63: a 403 authentication-text response AFTER the logical
+        request already spent its one reauthentication attempt is final and
+        becomes 403 ``reauthentication_failed`` with
+        ``detail.reauthentication_attempted`` true. Every other
+        reauthentication failure keeps the existing 503
+        ``reauthentication_required`` shape and its reason (including
+        ``auth_wait_timeout``, ``auth_wait_capacity``,
+        ``global_attempt_cap`` and ``BrowserDisabled``).
+        """
+        if isinstance(exc, ReauthenticationFailed):
+            detail = {
+                "upstream_status": getattr(exc, "upstream_status", 403),
+                "reauthentication_attempted": bool(
+                    getattr(exc, "reauthentication_attempted", True)),
+                "reason": "reauthentication_failed",
+            }
+            upstream_message = getattr(exc, "upstream_message", None)
+            if upstream_message:
+                detail["upstream_message"] = _bounded_upstream_error_message(
+                    upstream_message)
+            self._error(
+                403,
+                "Open WebUI rejected the reauthenticated credential",
+                detail,
+                "reauthentication_failed",
+            )
+            return
+        self._reauthentication_error(
+            getattr(exc, "reason", None) or str(exc) or None)
+
     def _upstream_status_error(self, status, response_text=None, *,
                                detail=None, error_code=None,
                                extra_headers=None):
@@ -7977,8 +8170,7 @@ class Handler(BaseHTTPRequestHandler):
                     request_deadline=request_deadline,
                     cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(
-                    getattr(exc, "reason", None) or str(exc) or None)
+                self._reauthentication_exception(exc)
                 return
             except _RequestCancelled:
                 self.close_connection = True
@@ -8008,8 +8200,7 @@ class Handler(BaseHTTPRequestHandler):
                     request_deadline=request_deadline,
                     cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(
-                    getattr(exc, "reason", None) or str(exc) or None)
+                self._reauthentication_exception(exc)
                 return
             except _RequestCancelled:
                 self.close_connection = True
@@ -8157,8 +8348,7 @@ class Handler(BaseHTTPRequestHandler):
                     request_deadline=request_deadline,
                     cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(
-                    getattr(exc, "reason", None) or str(exc) or None)
+                self._reauthentication_exception(exc)
                 return
             except _RequestCancelled:
                 self.close_connection = True
@@ -8258,10 +8448,12 @@ class Handler(BaseHTTPRequestHandler):
                 cancel_check=cancel_check, request_id=request_id,
                 endpoint="/v1/responses")
         except ReauthenticationRequired as exc:
+            status = ("reauthentication_failed"
+                      if isinstance(exc, ReauthenticationFailed)
+                      else "reauthentication_required")
             record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="reauthentication_required")
-            self._reauthentication_error(
-                getattr(exc, "reason", None) or str(exc) or None)
+                          input_est, 0, status=status)
+            self._reauthentication_exception(exc)
             return
         except _RequestCancelled:
             self.close_connection = True
@@ -8534,10 +8726,12 @@ class Handler(BaseHTTPRequestHandler):
                 cancel_check=cancel_check, request_id=request_id,
                 endpoint="/v1/responses (messages)")
         except ReauthenticationRequired as exc:
+            status = ("reauthentication_failed"
+                      if isinstance(exc, ReauthenticationFailed)
+                      else "reauthentication_required")
             record_usage(body["model"], client_stream, started_at, None,
-                          input_est, 0, status="reauthentication_required")
-            self._reauthentication_error(
-                getattr(exc, "reason", None) or str(exc) or None)
+                          input_est, 0, status=status)
+            self._reauthentication_exception(exc)
             return
         except _RequestCancelled:
             self.close_connection = True
@@ -8991,10 +9185,12 @@ class Handler(BaseHTTPRequestHandler):
                     auth_wait_budget=auth_wait_budget,
                     cancel_check=cancel_check)
             except ReauthenticationRequired as exc:
-                self._reauthentication_error(
-                    getattr(exc, "reason", None) or str(exc) or None)
-                log_summary("reauthentication_required")
-                record_messages_usage("reauthentication_required")
+                status = ("reauthentication_failed"
+                          if isinstance(exc, ReauthenticationFailed)
+                          else "reauthentication_required")
+                self._reauthentication_exception(exc)
+                log_summary(status)
+                record_messages_usage(status)
                 return
             except _RequestCancelled:
                 self.close_connection = True
@@ -9053,10 +9249,6 @@ class Handler(BaseHTTPRequestHandler):
             response_text = ""
             if response.status_code in _UPSTREAM_TEXT_CLASSIFICATION_STATUS:
                 response_text = _bounded_upstream_error_text(response)
-            if (response.status_code == 403
-                    and _upstream_403_is_auth_rejection(response_text)):
-                _note_upstream_403_auth_rejection(
-                    compat_request_id, response_text)
             kind, _retry_after_s, _veto_reason = _upstream_retry_plan(
                 response.status_code, response_text, response)
             if kind is not None:
@@ -9581,9 +9773,6 @@ class Handler(BaseHTTPRequestHandler):
                 response_text = ""
                 if rr.status_code in _UPSTREAM_TEXT_CLASSIFICATION_STATUS:
                     response_text = _bounded_upstream_error_text(rr)
-                if (rr.status_code == 403
-                        and _upstream_403_is_auth_rejection(response_text)):
-                    _note_upstream_403_auth_rejection(request_id, response_text)
                 kind, retry_after_s, veto_reason = _upstream_retry_plan(
                     rr.status_code, response_text, rr)
                 if kind is not None:
@@ -9652,10 +9841,12 @@ class Handler(BaseHTTPRequestHandler):
                     "reached; retry later", error_code="too_many_concurrent_streams")
                 return
             except ReauthenticationRequired as exc:
-                log_failure("reauthentication_required", 503,
+                reauth_failed = isinstance(exc, ReauthenticationFailed)
+                log_failure("reauthentication_failed" if reauth_failed
+                            else "reauthentication_required",
+                            403 if reauth_failed else 503,
                             exc_name=type(exc).__name__)
-                self._reauthentication_error(
-                    getattr(exc, "reason", None) or str(exc) or None)
+                self._reauthentication_exception(exc)
                 return
             except _RequestCancelled:
                 self.close_connection = True
@@ -10086,21 +10277,24 @@ class Handler(BaseHTTPRequestHandler):
                     fail_hidden_retry("RetrySlotUnavailable")
                     return None
                 except ReauthenticationRequired as exc:
+                    reauth_failed = isinstance(exc, ReauthenticationFailed)
+                    status = 403 if reauth_failed else 503
+                    error_code = ("reauthentication_failed" if reauth_failed
+                                  else "reauthentication_required")
                     log_failure(f"{stage}_retry_reauthentication_required",
-                                 503, exc_name=type(exc).__name__)
-                    reason = getattr(exc, "reason", None) or str(exc) or None
+                                 status, exc_name=type(exc).__name__)
                     if preflight_headers_sent:
                         fail_hidden_retry(
-                            type(exc).__name__, status=503,
-                            error_code="reauthentication_required",
-                            usage_status="reauthentication_required")
+                            type(exc).__name__, status=status,
+                            error_code=error_code,
+                            usage_status=error_code)
                     else:
                         self.close_connection = True
-                        self._reauthentication_error(reason)
+                        self._reauthentication_exception(exc)
                         record_usage(
                             req_model, True, started_at, None,
                             _message_tokens(body.get("messages")), 0,
-                            status="reauthentication_required")
+                            status=error_code)
                     return None
                 except (_RequestDeadlineExceeded,
                         _PhysicalBudgetExceeded) as exc:
@@ -11816,6 +12010,12 @@ def _pre_output_verify(proxy, auth_wait_budget, request_deadline, cancel_check,
     if stale:
         # A late result for the old credential never overrides the new one.
         return "retry"
+    if (auth_wait_budget is not None
+            and not auth_wait_budget.claim_reauth_attempt()):
+        # Ticket #63: this logical request already spent its one
+        # reauthentication attempt; keep the original transient failure
+        # instead of opening a second login window.
+        return "original"
     try:
         recovered = proxy.refresh(
             deadline=request_deadline,
@@ -11934,9 +12134,6 @@ def _open_upstream_response_with_retries(
         response_text = ""
         if r.status_code in _UPSTREAM_TEXT_CLASSIFICATION_STATUS:
             response_text = _bounded_upstream_error_text(r)
-        if (r.status_code == 403
-                and _upstream_403_is_auth_rejection(response_text)):
-            _note_upstream_403_auth_rejection(request_id, response_text)
         kind, _retry_after_s, _veto_reason = _upstream_retry_plan(
             r.status_code, response_text, r)
         if kind is None:
