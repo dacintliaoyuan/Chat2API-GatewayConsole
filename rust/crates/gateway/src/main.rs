@@ -67,6 +67,18 @@ fn main() -> ExitCode {
                 Some(value) => config.login_timeout = std::time::Duration::from_secs(value.max(1)),
                 None => return usage("--login-timeout requires an integer"),
             },
+            "--instance-key-file" => match args.next() {
+                Some(value) => config.instance_key_file = Some(value.into()),
+                None => return usage("--instance-key-file requires a path"),
+            },
+            "--instance-pipe-prefix" => match args.next() {
+                Some(value) => config.instance_pipe_prefix = Some(value),
+                None => return usage("--instance-pipe-prefix requires a prefix"),
+            },
+            "--registration-file" => match args.next() {
+                Some(value) => config.registration_file = Some(value.into()),
+                None => return usage("--registration-file requires a path"),
+            },
             "--no-browser" => config.browser_disabled = true,
             "--help" | "-h" => {
                 println!(

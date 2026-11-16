@@ -16,6 +16,7 @@ pub mod error;
 pub mod event_log;
 pub mod gate;
 pub mod http;
+pub mod instance;
 pub mod ledger;
 pub mod login;
 pub mod messages;

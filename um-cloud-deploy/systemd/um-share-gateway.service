@@ -62,7 +62,10 @@ ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share/broker_ops.p
     --profile-dir /var/lib/um-share-console/share-backend/edge-profile \
     --login-display-file /run/um-share/login-display.env \
     --control-token-file /etc/um-share/admin-control-token \
-    --login-timeout 1800
+    --login-timeout 1800 \
+    --instance-key-file /etc/um-share/instance.key \
+    --instance-pipe-prefix /run/um-share/instance- \
+    --registration-file /var/lib/um-share/run/instance-registration.json
 # The broker host owns the ONLY Popen that starts the Rust gateway.  The console
 # unit is fenced with NoExecPaths for the same binary, so a console
 # "service.start" can never become a second launcher.

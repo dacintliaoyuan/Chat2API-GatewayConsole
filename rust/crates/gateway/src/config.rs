@@ -289,6 +289,12 @@ pub struct GatewayConfig {
     /// Candidate mode (the default); `false` selects the explicit production
     /// binding policy.
     pub candidate: bool,
+    /// The broker instance key file; `None` disables the instance channel.
+    pub instance_key_file: Option<PathBuf>,
+    /// The instance-channel AF_UNIX socket path prefix.
+    pub instance_pipe_prefix: Option<String>,
+    /// The broker-readable instance registration file.
+    pub registration_file: Option<PathBuf>,
 }
 
 impl Default for GatewayConfig {
@@ -342,6 +348,9 @@ impl Default for GatewayConfig {
             retry_delay_base: DEFAULT_RETRY_DELAY_BASE,
             slow_retry_threshold: DEFAULT_SLOW_RETRY_THRESHOLD,
             candidate: true,
+            instance_key_file: None,
+            instance_pipe_prefix: None,
+            registration_file: None,
         }
     }
 }

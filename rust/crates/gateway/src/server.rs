@@ -64,6 +64,8 @@ pub struct ServerHandle {
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
     state: Arc<AppState>,
+    #[cfg(unix)]
+    instance: Option<crate::instance::InstanceChannel>,
 }
 
 impl GatewayServer {
@@ -159,6 +161,34 @@ impl GatewayServer {
             )),
             None => None,
         };
+        // The broker's publish/drain/emergency verbs address this process over
+        // the instance channel; without it every key change would fall back to an
+        // emergency host stop.
+        #[cfg(unix)]
+        let instance = match (&gate, &config.instance_key_file) {
+            (Some(gate), Some(key_file)) => {
+                let secret =
+                    crate::instance::read_instance_secret(key_file).map_err(ServerError::Io)?;
+                let handler = Arc::new(crate::instance::InstanceHandler::new(
+                    Arc::clone(gate),
+                    secret,
+                ));
+                let prefix = config
+                    .instance_pipe_prefix
+                    .clone()
+                    .unwrap_or_else(|| "/run/um-share/instance-".to_string());
+                let path = std::path::PathBuf::from(format!("{prefix}{}", handler.instance_id()));
+                Some(
+                    crate::instance::InstanceChannel::start(
+                        path,
+                        handler,
+                        config.registration_file.clone(),
+                    )
+                    .map_err(ServerError::Io)?,
+                )
+            }
+            _ => None,
+        };
         let control_token = config
             .control_token_file
             .as_ref()
@@ -207,6 +237,8 @@ impl GatewayServer {
             shutdown,
             handle: Some(handle),
             state,
+            #[cfg(unix)]
+            instance,
         })
     }
 }
@@ -231,6 +263,10 @@ impl ServerHandle {
 
     pub fn shutdown(&mut self) {
         if let Some(handle) = self.handle.take() {
+            #[cfg(unix)]
+            if let Some(instance) = &mut self.instance {
+                instance.stop();
+            }
             if let Some(login) = &self.state.login {
                 login.shutdown();
             }
