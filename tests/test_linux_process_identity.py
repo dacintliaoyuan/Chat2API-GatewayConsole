@@ -243,6 +243,27 @@ class LinuxHostOpsIdentityTests(_RealChildCase):
         self.assertFalse(ops.verify_running())
         self.assertEqual(ops.status()["state"], "conflict")
 
+    def test_a_zombie_child_is_not_a_running_host(self):
+        # The broker never reaps the child it spawned, so after a graceful
+        # stop the pid stays a zombie. A zombie answers kill(pid, 0) but is not
+        # a running host; stop_host must report closure instead of failing
+        # forever (which would abort every version switch).
+        script = _sleep_script(self.root, "chat2api.py")
+        argv = self._production_command(script)
+        pid = 4242
+        directory = self.proc / str(pid)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "cmdline").write_bytes(b"")
+        (directory / "stat").write_text(
+            "%d (chat2api.py) Z 1 1 1 0 -1 0 0 0 0 0 0\n" % pid,
+            encoding="ascii")
+        self._write_pid(pid)
+        spy = _KillSpy()
+        ops = self._ops(argv, kill_fn=spy)
+        self.assertFalse(ops.verify_running())
+        self.assertTrue(ops.stop_host())
+        self.assertEqual(spy.signals, [])
+
     def test_missing_cmdline_is_rejected_and_never_signalled(self):
         script = _sleep_script(self.root, "chat2api.py")
         argv = self._production_command(script)

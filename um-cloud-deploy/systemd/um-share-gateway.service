@@ -5,7 +5,7 @@ After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/opt/um-share/current/share/broker_ops.py
 ConditionPathExists=/opt/um-share/current/bin/um-gateway
-ConditionPathExists=/etc/um-share/gateway-control.key
+ConditionPathExists=/etc/um-share/broker-control.key
 
 [Service]
 Type=simple

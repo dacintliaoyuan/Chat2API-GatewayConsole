@@ -397,8 +397,30 @@ class LinuxHostOps:
         except OSError:
             pass
 
+    def _proc_state(self, pid):
+        """The ``/proc/<pid>/stat`` state letter, or None when unreadable.
+
+        The comm field may contain spaces and parentheses, so the state is the
+        first field after the LAST ``)``.
+        """
+        text = _linux_proc_text(self.proc_root, pid, "stat")
+        if not text:
+            return None
+        try:
+            return text[text.rindex(")") + 2:].split()[0]
+        except (ValueError, IndexError):
+            return None
+
     def _proc_alive(self, pid):
-        """Kernel liveness: True/False, None when undecidable."""
+        """Kernel liveness: True/False, None when undecidable.
+
+        A zombie still answers ``kill(pid, 0)`` but is NOT a running host: the
+        broker never reaps the child it spawned, so after a graceful stop the
+        pid stays a zombie until the broker restarts. Treating it as alive would
+        make ``stop_host`` fail forever and every version switch would abort.
+        """
+        if self._proc_state(pid) == "Z":
+            return False
         try:
             self._kill(int(pid), 0)
             return True
