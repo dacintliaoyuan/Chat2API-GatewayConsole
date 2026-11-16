@@ -304,6 +304,7 @@ const DISPLAY_STATE_WORD: Readonly<Record<string, string>> = {
   not_started: "未开始",
   logging_in: "登录中",
   waiting_mfa: "等待 MFA",
+  waiting_duo: "等待 Duo 推送",
   valid: "已登录",
   cancelled: "认证已失效",
   failed: "认证已失效",

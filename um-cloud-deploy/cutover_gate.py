@@ -437,7 +437,12 @@ def main(argv: list[str] | None = None) -> int:
     }
     _summary(document, args.json)
     _write_evidence(evidence, document)
-    return 0 if document["candidate_parity"]["status"] == "passed" else 1
+    # `all` fails when ANY executed gate failed: a planned smoke/drill is not a
+    # pass, but it is also not a failure - it stays visibly unexecuted.
+    failed = document["candidate_parity"]["status"] != "passed"
+    failed = failed or document["cloud_smoke"]["status"] == "failed"
+    failed = failed or document["rollback_drill"]["status"] == "failed"
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

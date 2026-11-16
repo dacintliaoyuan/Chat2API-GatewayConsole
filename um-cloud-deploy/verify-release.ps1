@@ -155,7 +155,7 @@ $requiredFiles = @(
     'um-cloud-deploy/cutover_gate.py',
     'um-cloud-deploy/cutover-gate.sh',
     'um-cloud-deploy/package-release.sh',
-    'um-cloud-deploy/bin/um-share-brokerctl.py',
+    'um-cloud-deploy/bin/um-share-gatewayctl.py',
     'um-cloud-deploy/systemd/um-share-console.service',
     'um-cloud-deploy/Caddyfile.example',
     'um-cloud-deploy/requirements.lock'

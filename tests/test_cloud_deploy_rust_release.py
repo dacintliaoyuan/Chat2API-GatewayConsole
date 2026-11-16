@@ -41,7 +41,7 @@ class RustReleaseMaterialTests(unittest.TestCase):
         for value in ("--mode production", "--port 8003",
                       "--host-entry-kind native",
                       "--expect-instance-port 8003",
-                      "/opt/um-share/current/bin/um-gateway",
+                      "/opt/um-share/bin/um-gateway",
                       "--expect-instance-cmdline-marker um-gateway"):
             self.assertIn(value, unit)
         for old in ("8100", "8096", "18096"):
@@ -53,13 +53,13 @@ class RustReleaseMaterialTests(unittest.TestCase):
             "ReadWritePaths=/var/lib/um-share /run/um-share "
             "/var/log/um-share /var/lib/um-share-console", unit)
         self.assertIn("--check-deployment-assembly broker", unit)
-        self.assertIn("um-share-brokerctl.py", unit)
+        self.assertIn("um-share-gatewayctl.py", unit)
 
     def test_console_unit_targets_8002_and_8003(self):
         unit = _read("systemd/um-share-console.service")
         self.assertIn("Environment=USAGESRV_PORT=8002", unit)
         self.assertIn("Environment=UM_SHARE_GATEWAY_PORT=8003", unit)
-        self.assertIn("NoExecPaths=-/opt/um-share/current/bin/um-gateway", unit)
+        self.assertIn("NoExecPaths=-/opt/um-share/bin/um-gateway", unit)
         for old in ("8096", "18096"):
             self.assertNotIn(old, unit, f"the console unit names {old}")
 

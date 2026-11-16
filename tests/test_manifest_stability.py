@@ -39,7 +39,7 @@ REAL_MATERIALS = [
     "update.sh",
     "rollback.sh",
     "lib/common.sh",
-    "bin/um-share-brokerctl.py",
+    "bin/um-share-gatewayctl.py",
     "systemd/um-share-broker.service",
     "systemd/um-share-console.service",
     "systemd/um-share-display.service",

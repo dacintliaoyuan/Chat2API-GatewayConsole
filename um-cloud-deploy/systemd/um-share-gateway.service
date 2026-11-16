@@ -84,13 +84,13 @@ ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/share/broker_ops.p
 # `brokerctl start-explicit`.
 ExecStartPost=-/bin/sh -c 'i=0; while [ $$i -lt 50 ]; do \
   if [ -S /run/um-share/broker.sock ] && \
-     /opt/um-share/bin/um-share-brokerctl.py start; then exit 0; fi; \
+     /opt/um-share/bin/um-share-gatewayctl.py start; then exit 0; fi; \
   i=$$((i+1)); sleep 0.2; done; exit 1'
 # A 15-minute total drain is enforced by the helper: wait for ESTABLISHED
 # connections to 8003 to reach zero, then send the broker drain verb (its own
 # bounded in-flight wait + final stop + closure verification).  A timed-out
 # update never switches the current symlink.
-ExecStop=/opt/um-share/bin/um-share-brokerctl.py --drain-budget ${UM_DRAIN_BUDGET_S} --poll-interval 5 stop
+ExecStop=/opt/um-share/bin/um-share-gatewayctl.py --drain-budget ${UM_DRAIN_BUDGET_S} --poll-interval 5 stop
 TimeoutStartSec=120
 TimeoutStopSec=960
 Restart=on-failure

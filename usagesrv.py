@@ -48,6 +48,7 @@ from share.store import (Disabled, StoreError, SecretUnavailable,  # noqa: E402
 from console import public_url as console_public_url  # noqa: E402
 from console import stats as console_stats  # noqa: E402
 from login_contract import (  # noqa: E402
+    DUO_PROMPT_WAITING_REASON,
     LOGIN_MANUAL_REASONS,
     MANUAL_TAKEOVER_PREFIXES,
     terminal_manual_reason,
@@ -2624,6 +2625,8 @@ class Handler(BaseHTTPRequestHandler):
             # wait (ticket #15), not a finished round.
             if manual_reason is not None and not prefixed_manual:
                 return "failed", "需要人工接管", error
+            if reason == DUO_PROMPT_WAITING_REASON:
+                return "waiting_duo", "等待本人确认 Duo 推送", error
             if reason in LOGIN_MANUAL_REASONS:
                 return "waiting_mfa", "等待 MFA（本人操作）", error
             return "logging_in", "正在登录", error

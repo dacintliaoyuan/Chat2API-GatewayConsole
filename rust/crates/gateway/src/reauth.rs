@@ -202,6 +202,12 @@ pub trait ReauthenticationProvider: Send + Sync {
         "BrowserDisabled"
     }
 
+    /// The live manual wait a request-side auth wait may report instead of a
+    /// timeout (ADR 0008: a Duo push wait is not a request timeout).
+    fn manual_wait_reason(&self) -> Option<String> {
+        None
+    }
+
     /// Run one re-authentication session, bounded by `deadline`.
     fn reauthenticate(&self, deadline: Instant) -> ReauthProviderResult;
 }
@@ -418,6 +424,12 @@ impl ReauthenticationService {
             let now = Instant::now();
             if now >= wait_deadline {
                 if budget_deadline <= request_deadline {
+                    if let Some(reason) = self.inner.provider.manual_wait_reason() {
+                        return ReauthResult::Unavailable {
+                            reason,
+                            retry_after: Some(30),
+                        };
+                    }
                     return ReauthResult::Unavailable {
                         reason: "auth_wait_timeout".to_string(),
                         retry_after: None,

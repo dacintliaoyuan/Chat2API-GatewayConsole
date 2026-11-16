@@ -36,7 +36,7 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parents[1]      # ai-gateway/
 DEPLOY = HERE / "um-cloud-deploy"
-BROKERCTL = DEPLOY / "bin" / "um-share-brokerctl.py"
+BROKERCTL = DEPLOY / "bin" / "um-share-gatewayctl.py"
 # subprocess resolves bare "bash" to the WSL launcher on Windows; the shell
 # helpers must run under the Git Bash that this checkout's tests use.
 BASH = shutil.which("bash") or "bash"
@@ -241,8 +241,9 @@ class BrokerctlCallOrderTests(unittest.TestCase):
             encoding="utf-8")
         exec_stop = next(line for line in unit.splitlines()
                          if line.startswith("ExecStop="))
-        argv = shlex.split(
-            exec_stop.split("um-share-brokerctl.py", 1)[1], posix=True)
+        # The Rust release renamed the CLI; the Python rollback unit keeps the
+        # old file name. Split after the .py token so both names parse.
+        argv = shlex.split(exec_stop.split(".py", 1)[1], posix=True)
         self.assertIn("stop", argv)
         self.assertEqual("stop", argv[-1])
         self._check_call(argv)

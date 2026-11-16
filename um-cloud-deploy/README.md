@@ -61,17 +61,17 @@ Python 回滚 release                      Rust 目标 release
 └── um-share-display.service :8097（可选）  └── um-share-display.service :8097（可选）
 ```
 
-Rust release 的 `um-share-gateway.service` 仍由 Python broker 持有唯一 Popen：`ExecStart` 是 `share/broker_ops.py`，`--host-entry-kind native` 让 broker 以 `--mode production --port 8003` 启动 `/opt/um-share/current/bin/um-gateway`；`ExecStartPost` 调用 `um-share-brokerctl.py start`。Rust release 的 `um-share-console.service` 指向 8002，display 仍为 8097 并加入 `um-share-gateway.service` 的 namespace。
+Rust release 的 `um-share-gateway.service` 仍由 Python broker 持有唯一 Popen：`ExecStart` 是 `share/broker_ops.py`，`--host-entry-kind native` 让 broker 以 `--mode production --port 8003` 启动 `/opt/um-share/current/bin/um-gateway`；`ExecStartPost` 调用 `um-share-gatewayctl.py start`。Rust release 的 `um-share-console.service` 指向 8002，display 仍为 8097 并加入 `um-share-gateway.service` 的 namespace。
 
-1. **网关只由 broker 拉起**：Python release 的 `um-share-broker.service` 和 Rust release 的 `um-share-gateway.service` 的 `ExecStartPost` 调用 `um-share-brokerctl.py start`，这是唯一允许的网关 Popen 路径。
+1. **网关只由 broker 拉起**：Python release 的 `um-share-broker.service` 和 Rust release 的 `um-share-gateway.service` 的 `ExecStartPost` 调用 `um-share-gatewayctl.py start`，这是唯一允许的网关 Popen 路径。
 2. **控制台不直接执行网关入口**：`NoExecPaths` 阻止直接执行 `chat2api.py` 和 `bin/um-gateway`，`ReadOnlyPaths` 阻止写停止意图；旧 Windows 本机分享动作已退役、不再注册。
 3. **云端不安装第二套 watchdog**：网关进程由 broker 唯一拉起；`share.gateway_restart` 走 broker restart。
 4. **systemd 是最终 cgroup 围栏**：两个 unit 都是 `KillMode=control-group`；`systemctl stop` 不会留下孤儿进程。
-5. **停止意图持久化**：`LinuxHostOps.stop_host()` 在发信号前写 `/run/um-share/share-host-desired.json`；只有 `um-share-brokerctl.py start-explicit` 能清停止意图。
+5. **停止意图持久化**：`LinuxHostOps.stop_host()` 在发信号前写 `/run/um-share/share-host-desired.json`；只有 `um-share-gatewayctl.py start-explicit` 能清停止意图。
 6. **broker 管理通道**是 `/run/um-share/broker.sock`（目录 0700、socket 0600，HMAC 密钥 `/etc/um-share/broker-control.key`）；网关入口由 `SO_PEERCRED` 与 `/proc/<pid>/cmdline` 验证。
 7. **8002 是控制台唯一监听**（`127.0.0.1`）；分享 API 与 UM 会话都在 8003 进程内。目标契约不再保留 8100/8096/18096/5901 兼容别名；Python 回滚 release 仍使用 8100/8096。
 
-**内存边界**：云机只有约 1.7 GB 内存，正常运行时已占用 Xvfb + x11vnc + 8003 的 Chromium + 8002。不要在云机上再起第二个浏览器做页面验证；必须在云机验时，先 `um-share-brokerctl.py stop` 排空停链再起。
+**内存边界**：云机只有约 1.7 GB 内存，正常运行时已占用 Xvfb + x11vnc + 8003 的 Chromium + 8002。不要在云机上再起第二个浏览器做页面验证；必须在云机验时，先 `um-share-gatewayctl.py stop` 排空停链再起。
 
 ## 排障读面（只读）
 
@@ -80,7 +80,7 @@ Rust release 的 `um-share-gateway.service` 仍由 Python broker 持有唯一 Po
 | 读什么 | 命令 | 判据 |
 | --- | --- | --- |
 | 控制台状态 | `curl -s http://127.0.0.1:8002/api/console/share-management/status` | `gateway_running` 缺失 = 未确认（不是 `false`）；`share_url_source=configured` 才说明公网地址已配 |
-| broker 状态 | `sudo -u um-share /opt/um-share/bin/um-share-brokerctl.py status` | 必须以 `um-share` 跑；root 读 0600 的 `broker-control.key` 会报 `control_key_unusable` |
+| broker 状态 | `sudo -u um-share /opt/um-share/bin/um-share-gatewayctl.py status` | 必须以 `um-share` 跑；root 读 0600 的 `broker-control.key` 会报 `control_key_unusable` |
 | 8003 进程 | `cat /run/um-share/share-gateway.pid` 与 `journalctl -u um-share-gateway --since "-30 min"` | pid 文件与 broker 日志是 8003 的唯一实例证据 |
 | 停止意图 | `cat /run/um-share/share-host-desired.json` | `state=stopped, reason=manual` 时普通 start 被拒；只有 `start-explicit` 能清意图 |
 | 端口 | `ss -ltn \| grep -E ':(8097\|8003\|8002)'` | 8097 是 VNC，不是 HTTP；Python 回滚 release 为 8100/8096 |
@@ -142,7 +142,7 @@ tar -xzf /root/um-share-<version>.tar.gz -C /opt/um-share/.incoming
 rm -rf /opt/um-share/.incoming/um-share-<version>
 ```
 
-更新顺序：停 cloudflared → `um-share-brokerctl.py --drain-budget 900 --poll-interval 5 stop`（未排空返回 75，不切换版本）→ `host-stop` → 停控制台 unit → 原子切换 `current` 符号链接。健康门失败自动切回 `previous`；回滚到原版本成功返回 68，回滚/补偿未完成返回 69。锁是 `/run/um-share/deploy.lock` 的非阻塞 `flock`，另一个部署操作返回 75。
+更新顺序：停 cloudflared → `um-share-gatewayctl.py --drain-budget 900 --poll-interval 5 stop`（未排空返回 75，不切换版本）→ `host-stop` → 停控制台 unit → 原子切换 `current` 符号链接。健康门失败自动切回 `previous`；回滚到原版本成功返回 68，回滚/补偿未完成返回 69。锁是 `/run/um-share/deploy.lock` 的非阻塞 `flock`，另一个部署操作返回 75。
 
 健康门按目标 release 的网关端口探测，不再硬编码 8100：`--health-port` 指定目标端口（默认按目标 manifest 的 `runtime` 取 8003 或 8100），`--current-health-port` 指定失败补偿时恢复的当前 release 端口（默认按当前 manifest 的 `runtime` 取 8003 或 8100）。切 Rust 8003 时 update 会停 `um-share-broker.service`、装 `um-share-gateway.service` 并启动 8003；回滚 Python 时反向切回。控制台端口仍从 `console.env` 的 `USAGESRV_PORT` 读取。
 
@@ -236,7 +236,7 @@ gate 本身不执行这些命令。
 | 75 | 排空超时/锁忙/临时失败（不切换） |
 | 77 | 权限错误 |
 
-`um-share-brokerctl.py`：0 成功；1 拒绝；2 未确认；64 用法；69 broker 不可达；75 排空超时；77 控制密钥/权限。
+`um-share-gatewayctl.py`：0 成功；1 拒绝；2 未确认；64 用法；69 broker 不可达；75 排空超时；77 控制密钥/权限。
 
 ## 私有运维边界
 

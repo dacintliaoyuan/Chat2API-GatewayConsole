@@ -572,7 +572,7 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 ### 12.1 安装、更新、回滚
 
 - `um-cloud-deploy/install.sh`：只安装冻结发布包，不构建产品代码；已存在的 release 若 manifest 相同则复用；配置、密钥、数据不覆盖；`--apt-locked` 安装锁定版本。
-- `um-cloud-deploy/update.sh`：先停 cloudflared，再 `um-share-brokerctl.py --drain-budget 900 --poll-interval 5 stop` 排空；未排空返回 75，不切换版本；然后 host-stop、停控制台 unit、原子切换 `current`；健康门失败自动切回 `previous`。
+- `um-cloud-deploy/update.sh`：先停 cloudflared，再 `um-share-gatewayctl.py --drain-budget 900 --poll-interval 5 stop` 排空；未排空返回 75，不切换版本；然后 host-stop、停控制台 unit、原子切换 `current`；健康门失败自动切回 `previous`。
 - 健康门：`wait_port_open` 等待云端控制台与 8003；部署默认等待 8002/8003；再 `health_gate`；失败返回 68 并回滚，回滚失败 69。
 - `um-cloud-deploy/rollback.sh`：只切符号链接并重启 unit；不删除 release、数据、密钥或备份。
 - 部署锁：`/run/um-share/deploy.lock` 的非阻塞 `flock`；另一个部署操作返回 75。

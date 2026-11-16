@@ -239,7 +239,7 @@ set_env_value() {
     rm -f -- "$tmp"
     die "cannot rewrite environment file: $file" "$EX_IOERR"
   }
-  cat "$tmp" > "$file" || {
+  mv -f -- "$tmp" "$file" || {
     rm -f -- "$tmp"
     die "cannot update environment file: $file" "$EX_IOERR"
   }
@@ -650,7 +650,11 @@ _brokerctl_run() {
 # The operator/systemd entry: install.sh (and a version switch) points it at
 # the CURRENT release's bin.
 brokerctl() {
-  _brokerctl_run "$UM_PREFIX/bin/um-share-brokerctl.py" "$@"
+  # The Rust release renamed the CLI; the Python rollback release keeps the
+  # old file name, so prefer the new one and fall back for a rollback drain.
+  local cli="$UM_PREFIX/bin/um-share-gatewayctl.py"
+  [ -f "$cli" ] || cli="$UM_PREFIX/bin/um-share-brokerctl.py"
+  _brokerctl_run "$cli" "$@"
 }
 
 # An explicit release CLI.  update.sh/rollback.sh use this for the drain that
@@ -659,7 +663,9 @@ brokerctl() {
 brokerctl_release() {
   local release="$1"
   shift
-  _brokerctl_run "$release/um-cloud-deploy/bin/um-share-brokerctl.py" "$@"
+  local cli="$release/um-cloud-deploy/bin/um-share-gatewayctl.py"
+  [ -f "$cli" ] || cli="$release/um-cloud-deploy/bin/um-share-brokerctl.py"
+  _brokerctl_run "$cli" "$@"
 }
 
 # The r16 CLI reserves its default 90-second broker drain deadline even when the

@@ -346,7 +346,20 @@ fn hex(bytes: &[u8]) -> String {
 
 fn random_instance_id() -> String {
     let mut bytes = [0u8; 16];
-    let _ = getrandom::getrandom(&mut bytes);
+    if getrandom::getrandom(&mut bytes).is_err() {
+        // A failed entropy source must never yield an all-zero instance id:
+        // mix the clock and pid through SHA-256 instead.
+        let mut hasher = Sha256::new();
+        hasher.update(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_nanos())
+                .unwrap_or_default()
+                .to_le_bytes(),
+        );
+        hasher.update(std::process::id().to_le_bytes());
+        bytes.copy_from_slice(&hasher.finalize()[..16]);
+    }
     hex(&bytes)
 }
 

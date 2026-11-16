@@ -3262,7 +3262,10 @@ def browser_login(base_url: str, profile_dir: str, timeout_s: int,
                     stage_seen.setdefault(stage, time.time())
                     mark_progress()
                     if visible:
-                        note("awaiting_duo", origin=url)
+                        # Ticket #74: a request waiting on this visible round
+                        # reports the live Duo wait, never a request timeout.
+                        note("awaiting_duo", origin=url,
+                             manual_reason=DUO_PROMPT_WAITING_REASON)
                     else:
                         # Ticket #74: an automatic headless round cannot show
                         # the Duo prompt. Report the wait so the recovery

@@ -42,14 +42,6 @@ pub const LOGIN_TERMINAL_MANUAL_REASONS: [&str; 3] = [
     "umpass_prefill_missing",
     "unrecognized_page",
 ];
-pub const DEFAULT_LOGIN_TIMEOUT: Duration = Duration::from_secs(1800);
-pub const DEFAULT_LOGIN_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-pub const DEFAULT_LOGIN_POLL_INTERVAL: Duration = Duration::from_secs(1);
-pub const DEFAULT_CLICK_OBSERVE_TIMEOUT: Duration = Duration::from_secs(8);
-pub const DEFAULT_STAGE_SETTLE_TIMEOUT: Duration = Duration::from_secs(20);
-pub const DEFAULT_MAX_CLICKS_PER_STAGE: usize = 2;
-pub const DEFAULT_NAVIGATION_ATTEMPTS: usize = 2;
-pub const DEFAULT_MAX_SESSIONS_PER_ROUND: usize = 6;
 pub const REAUTH_RECOVERY_BACKOFF: [Duration; 5] = [
     Duration::ZERO,
     Duration::from_secs(30),
@@ -591,6 +583,15 @@ impl ReauthenticationProvider for LoginService {
         "BrowserDisabled"
     }
 
+    fn manual_wait_reason(&self) -> Option<String> {
+        let state = self.inner.state.lock().expect("login state poisoned");
+        state
+            .login
+            .as_ref()
+            .and_then(|login| login.manual_reason.clone())
+            .filter(|reason| reason == "duo_prompt_waiting")
+    }
+
     fn reauthenticate(&self, deadline: Instant) -> ReauthProviderResult {
         let session = {
             let mut state = self.inner.state.lock().expect("login state poisoned");
@@ -977,6 +978,38 @@ fn run_round(inner: Arc<LoginInner>, round: u64, session: Arc<LoginSession>) {
                     return;
                 }
             }
+            LoginOutcome::Manual { reason, .. } if reason == "duo_prompt_waiting" && !visible => {
+                // ADR 0008: the headless round reached the Duo prompt; reopen
+                // the SAME cycle with a visible window instead of treating the
+                // wait as a failure.
+                let mut state = inner.state.lock().expect("login state poisoned");
+                if state.round != round {
+                    return;
+                }
+                state.recovery.visible = true;
+                state.recovery.state = "waiting".to_string();
+                state.recovery.next_attempt_epoch = Some(profile::epoch_now());
+                state.recovery.last_failure_epoch = None;
+                state.recovery.last_failure_reason = None;
+                state.recovery.pause_reason = None;
+                state.auth_state = AuthState::LoggingIn;
+                state.error = None;
+                session_starts = session_starts.saturating_sub(1);
+                state.recovery.session_starts = session_starts;
+                inner.condvar.notify_all();
+                drop(state);
+                if !wait_for_retry(&inner, &session, Duration::from_secs(1)) {
+                    finish(
+                        &inner,
+                        round,
+                        &session,
+                        LoginOutcome::Cancelled {
+                            reason: "cancelled".to_string(),
+                        },
+                    );
+                    return;
+                }
+            }
             outcome => {
                 finish(&inner, round, &session, outcome);
                 return;
@@ -1166,7 +1199,17 @@ fn drive_login(
             Err(error) => navigation_error = Some(error),
         }
     }
-    let _ = navigation_error;
+    if navigation_error.is_some() {
+        // The page did not load on any attempt: keep polling (it may still
+        // arrive) but record the failure as visible evidence.
+        note_progress(
+            inner,
+            round,
+            "navigation_failed",
+            Some(&inner.config.base_url),
+            None,
+        );
+    }
 
     let deadline = Instant::now() + inner.config.login_timeout;
     let mut idle_deadline = Instant::now() + inner.config.idle_timeout;
@@ -1250,7 +1293,15 @@ fn drive_login(
         if stage == "duo" {
             stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
             idle_deadline = Instant::now() + inner.config.idle_timeout;
-            note_progress(inner, round, "awaiting_duo", Some(&url), None);
+            // ADR 0008: the wait is visible to a request-side auth wait as
+            // the soft `duo_prompt_waiting` reason, never a timeout.
+            note_progress(
+                inner,
+                round,
+                "awaiting_duo",
+                Some(&url),
+                Some("duo_prompt_waiting"),
+            );
         } else if stage == "unknown" {
             stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
             return stop_for_manual(inner, round, page, "unrecognized_page");
