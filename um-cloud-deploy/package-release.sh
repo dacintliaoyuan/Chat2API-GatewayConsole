@@ -307,7 +307,9 @@ if command -v pwsh >/dev/null 2>&1 && [ -f "$PAYLOAD/um-cloud-deploy/verify-rele
 fi
 
 ARCHIVE="$OUTPUT_DIR/um-share-$VERSION.tar.gz"
-tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
+# --force-local keeps GNU tar from reading the drive colon in a Windows
+# absolute path as a remote host; Linux accepts the flag unchanged.
+tar --force-local --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
   --numeric-owner -C "$STAGE" -czf "$ARCHIVE" "um-share-$VERSION" || \
   die "tar failed" "$EX_IOERR"
 # The sidecar must stay machine-independent: install.sh reads the first field,
