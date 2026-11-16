@@ -372,15 +372,57 @@ fn http_get_json(port: u16, path: &str) -> io::Result<Value> {
     );
     stream.write_all(request.as_bytes())?;
     stream.flush()?;
+    // Read the head, then EXACTLY the declared Content-Length body. The
+    // DevTools HTTP server keeps the connection open after the response, so
+    // read_to_end would block until the timeout and the page target would never
+    // be discovered.
     let mut raw = Vec::new();
-    stream.take(1024 * 1024).read_to_end(&mut raw)?;
-    let header_end = raw
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|position| position + 4)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "devtools response head"))?;
-    let body = &raw[header_end..];
-    serde_json::from_slice(body).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    let mut buffer = [0u8; 4096];
+    let header_end = loop {
+        let read = stream.read(&mut buffer)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "devtools response head",
+            ));
+        }
+        raw.extend_from_slice(&buffer[..read]);
+        if let Some(position) = raw.windows(4).position(|window| window == b"\r\n\r\n") {
+            break position + 4;
+        }
+        if raw.len() > 64 * 1024 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "devtools response head",
+            ));
+        }
+    };
+    let head = String::from_utf8_lossy(&raw[..header_end]).to_string();
+    let content_length = head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case("content-length") {
+            value.trim().parse::<usize>().ok()
+        } else {
+            None
+        }
+    });
+    let mut body = raw[header_end..].to_vec();
+    if let Some(content_length) = content_length {
+        while body.len() < content_length {
+            let read = stream.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            body.extend_from_slice(&buffer[..read]);
+            if body.len() > 1024 * 1024 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "devtools response body",
+                ));
+            }
+        }
+    }
+    serde_json::from_slice(&body).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 struct RealBrowser {
