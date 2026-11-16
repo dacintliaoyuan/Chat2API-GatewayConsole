@@ -44,13 +44,31 @@ fn main() -> ExitCode {
                 Some(value) => config.control_token_file = Some(value.into()),
                 None => return usage("--control-token-file requires a path"),
             },
+            "--token-file" => match args.next() {
+                Some(value) => config.token_file = Some(value.into()),
+                None => return usage("--token-file requires a path"),
+            },
+            "--profile-dir" => match args.next() {
+                Some(value) => config.profile_dir = Some(value.into()),
+                None => return usage("--profile-dir requires a path"),
+            },
+            "--login-display-file" => match args.next() {
+                Some(value) => config.login_display_file = Some(value.into()),
+                None => return usage("--login-display-file requires a path"),
+            },
+            "--login-timeout" => match args.next().and_then(|value| value.parse::<u64>().ok()) {
+                Some(value) => config.login_timeout = std::time::Duration::from_secs(value.max(1)),
+                None => return usage("--login-timeout requires an integer"),
+            },
             "--no-browser" => config.browser_disabled = true,
             "--help" | "-h" => {
                 println!(
                     "usage: um-gateway-candidate --upstream-base-url URL \
                      [--host 127.0.0.1] [--port 0] [--token TOKEN] \
                      [--share-config PATH] [--auth-mode projection|legacy] \
-                     [--control-token-file PATH] [--no-browser]"
+                     [--control-token-file PATH] [--token-file PATH] \
+                     [--profile-dir PATH] [--login-display-file PATH] \
+                     [--login-timeout SECONDS] [--no-browser]"
                 );
                 return ExitCode::SUCCESS;
             }

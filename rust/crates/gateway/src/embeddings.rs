@@ -72,8 +72,10 @@ fn handle_embeddings_inner(
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
+        let bearer = state.proxy.bearer();
         let mut response = match post_compat(
             &state.config,
+            &bearer,
             "/api/v1/embeddings",
             &raw,
             false,

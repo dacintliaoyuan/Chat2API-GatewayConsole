@@ -7,11 +7,13 @@
 //! with a one second recheck interval. The wait also counts toward the request's
 //! 540 second total budget because the caller's absolute deadline bounds it.
 //!
-//! Rust 8003 has no browser login implementation yet. The default provider is
-//! [`MissingLoginProvider`]: it reports `reauth_unavailable` instead of pretending
-//! a browser session ran, and an explicit `--no-browser` selects
-//! [`BrowserDisabledProvider`] with the contract reason `BrowserDisabled`. Tests
-//! inject a scripted provider through [`crate::GatewayServer::start_with_reauth`].
+//! Rust 8003 assembles the real [`crate::login::LoginService`] as the default
+//! provider. [`MissingLoginProvider`] remains the explicit unassembled fallback
+//! for a gateway started with a scripted provider; it reports
+//! `reauth_unavailable` instead of pretending a browser session ran, and
+//! [`BrowserDisabledProvider`] keeps the contract reason `BrowserDisabled`.
+//! Tests inject a scripted provider through
+//! [`crate::GatewayServer::start_with_reauth`].
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
@@ -204,7 +206,7 @@ pub trait ReauthenticationProvider: Send + Sync {
     fn reauthenticate(&self, deadline: Instant) -> ReauthProviderResult;
 }
 
-/// The assembled Rust gateway has no browser login yet.
+/// An explicit provider for a gateway assembled without a login executor.
 #[derive(Debug, Default)]
 pub struct MissingLoginProvider;
 

@@ -4,7 +4,7 @@
 - 基线：`integration/rust-contract` @ `d131333`（2026-11-14 11:26:56 +0800）。
 - 测量时点：2026-11-14 19:48（UTC+08:00）。
 - 范围：8003 分享网关、云端控制台（默认 8002）、broker、Key 管理、用量账本、display、Cloudflare 检查、部署与备份。
-- 不包含：headless 登录行为（spec #8）、端口重排（已由 #40 完成，本契约只记录配置事实）、前端重写、真实云端 systemd/UM 登录验收。
+- 不包含：端口重排（已由 #40 完成，本契约只记录配置事实）、前端重写、真实云端 systemd/UM 登录验收；UM 登录执行器的 HTTP/状态边界见 §5.4（#69），真实浏览器与 MFA 仍由维护者验收。
 
 本文件把“保留的最终功能集”写成可测试的 HTTP/API 契约。Rust 只 port 这里列出的行为；任何未列出的端点、字段、错误码都不进入 Rust 轨道。
 
@@ -108,7 +108,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | 8003 | `/api/chat/completions`、`/api/v1/chat/completions`、`/api/v1/messages`、`/api/v1/responses` | 非分享模式本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | JSON/SSE | 400/401/413/502/503 | 同对应 `/v1` 路由 | 同上 | 同上 | 追加账本、UM 上游 |
 | 8003 | `/v1/embeddings` | 非分享模式 Bearer；分享模式 404 `route_not_shared` | JSON 透传 | 400/401/413/404/502/503 | 无 | 请求总预算 | 无账本行 | UM 上游 |
 | 8003 | `/api/v1/embeddings` | 非分享模式 Bearer；分享模式不经分享 Key 门，公网不反代 | JSON 透传 | 400/401/413/502/503 | 无 | 请求总预算 | 无账本行 | UM 上游 |
-| 8003 | `/admin/auth/*`、`/admin/share/revoke`、`/admin/shutdown` | 控制令牌 | JSON | 403 | 无 | 无 | 登录/撤销有界 | 浏览器、撤销在途、停止服务 |
+| 8003 | `/admin/auth/*`、`/admin/share/revoke`、`/admin/shutdown` | 控制令牌 | JSON | 403 | 无 | 登录/撤销有界 | 浏览器、token/profile、撤销在途、停止服务 |
 | 8002 | `/health`、`/api/summary`、`/api/console/*` 只读 | loopback Host/Origin；写面按路由：facade 需同源标记/控制令牌，operations 只受同源门 | JSON no-store | 400/401/403/404/409/410/413/502/503 | 无 SSE | display/操作/TTL | 读无；写按 Key/操作 | SQLite、账本、日志、broker |
 | 8002 | `/api/console/share-management/*` 写面 | 同源标记或控制令牌 | JSON no-store | 400/403/404/409/410/413/503 | 无 | 写请求前端 20s 预算 | idempotency_key + row_version | SQLite、投影发布、安全日志 |
 | 8002 | `/display`、`/display/` | 同源 + display 授权（display session、控制令牌或 Tailscale Serve 身份） | HTML/JS | 400/403/404/409/413/415/426/502/503 | 无 | grant 60s、session 300s、idle 900s | 单次 grant | operator 状态 |
@@ -140,7 +140,8 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | GET | `/api/models`、`/api/v1/models` | 非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | 本机模型目录别名 |
 | POST | `/api/chat/completions`、`/api/v1/chat/completions`、`/api/v1/messages`、`/api/v1/responses`、`/api/v1/embeddings` | 非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | 本机兼容别名 |
 | GET/POST | 未列入别名的 `/api/*` | 本地控制令牌 | 上游 `api/*` 透传 |
-| GET/POST | `/admin/auth/status`、`/admin/auth/verify`、`/admin/auth/login`、`/admin/auth/cancel` | 本地控制令牌 | 认证观察、主动核验、登录、取消登录 |
+| GET | `/admin/auth/status`、`/admin/auth/verify` | 本地控制令牌 | 认证状态观察；单次只读凭据核验 |
+| POST | `/admin/auth/login`、`/admin/auth/cancel` | 本地控制令牌 | 启动/加入一轮登录；取消本轮登录（服务继续运行） |
 | POST | `/admin/share/revoke` | 本地控制令牌 | 关闭某分享 Key 的在途请求 |
 | POST | `/admin/shutdown` | 本地控制令牌 | 异步停止进程 |
 | OPTIONS | 任意路径 | 无 | 204，CORS 允许方法与头 |
@@ -213,14 +214,16 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 
 重登录触发与预算（#63）：上游 401，或 403 且 `upstream_message` 命中 `Not authenticated`/`sign in`/`session expired`/`authentication required`/`please log in`（大小写不敏感）时，每个逻辑请求最多启动一次共享重登录会话；会话恢复后重发一次。重发后仍 401 → 503 `reauthentication_required`；403 认证文字 → 403 `reauthentication_failed`，`detail.reauthentication_attempted` 为 `true`；403 权限、Cloudflare challenge、402、404 不触发重登录。认证等待每个逻辑请求累计 30 秒、最多 128 个并发等待者、每秒复查一次，并计入 540 秒总预算。等待超时 → 503 `reauthentication_required`，`reason` 为 `auth_wait_timeout`；等待槽满 → `reason` 为 `auth_wait_capacity`；滚动 900 秒内 3 次全局启动上限 → `reason` 为 `global_attempt_cap`，有确定下次窗口时带 `Retry-After`；`--no-browser` → `reason` 为 `BrowserDisabled`。认证等待类的 503 仍以 `detail: upstream_rejected` 保留原 401 映射，`reason` 是 #63 的附加诊断字段；403 `reauthentication_failed` 的 `detail` 带 `reauthentication_attempted`、`upstream_status` 与有界 `upstream_message`。
 
-Rust 8003 当前没有浏览器登录实现：默认装配的 provider 立即返回 503 `reauthentication_required`，`reason` 为 `reauth_unavailable`（`--no-browser` 时为 `BrowserDisabled`），不假装会话已运行；`/admin/auth/login` 与 `/admin/auth/cancel` 仍返回 501 `not_implemented`。测试通过 `GatewayServer::start_with_reauth` 注入脚本化 provider 验证触发、重发、最终状态与预算；真实登录接入是后续缺口。
+Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPLAY`/`WAYLAND_DISPLAY`；只有显式 `/admin/auth/login` 的 `{"visible": true}`，或按需 manual display 标记文件 `CHAT2API_LOGIN_DISPLAY_FILE`（默认 `/run/um-share/login-display.env`）完整有效时，才打开可见窗口。没有可用显示时的显式 visible 返回 `visible_login_unavailable`，不静默降级。同一 profile 目录由 `login-browser.lock` 的 OS 锁（POSIX `flock`/Windows `LockFileEx`）保证单实例；锁被占用时本轮以 `login_already_running` 结束且不打开第二个浏览器。登录成功按 Python 相同格式原子写 `CHAT2API_TOKEN_FILE`（默认 `/var/lib/um-share-console/share-backend/token.json`），并更新进程内 bearer、清空模型缓存。
+
+`/admin/auth/status` 返回 `state`（`valid`/`needs_login`/`logging_in`/`failed`/`cancelled`）、`label`（认证有效/需要登录/登录中/登录失败/已取消登录）、`error`、`primary`、`evidence`、`login`、`gate`、`watch`、`recovery`、`login_window_deadline_epoch` 与 `login_window_s`。`/admin/auth/verify` 是 GET-only 单次 `/api/models` 核验，不改认证状态与模型缓存，返回 `verify`/`reason`/`upstream_status`/`checked_epoch`。`/admin/auth/login` 接受可选 `{"visible": bool}` 并返回 202 状态快照；`/admin/auth/cancel` 返回 200 最终状态，取消本轮但服务继续运行，普通请求不会自动重开。可见窗口关闭按操作员取消记为 `cancelled`（`error` 为 `window_closed`）；headless 窗口关闭是可重开的 transient。人工接管原因保留 `manual_takeover_required:<reason>`（`umpass_mfa_required`、`umpass_prefill_missing`、`unrecognized_page`），Duo 推送等待不误判为人工接管。`--no-browser` 的显式登录与 401 恢复都返回 `BrowserDisabled`。认证等待仍按 #63 的 30 秒预算、128 并发等待者与每秒复查；滚动 900 秒内 3 次全局登录启动上限由登录执行器统一执行，显式登录同样受限。测试通过 `GatewayServer::start_with_login` 注入 fake browser factory 与 fake credential probe，不打开真实浏览器；真实 UM 登录与 MFA 由维护者验收。
 
 ### 5.5 副作用
 
 - 读投影文件；每次鉴权重新读取，不写投影。
 - 追加用量账本 `usage-share-backend.jsonl`；写失败则本进程禁用记账，但绝不阻断代理（`chat2api/chat2api.py:2502-2512`）。
 - 追加服务日志 `share-backend.log`；日志不含凭据、请求体或响应体。
-- 登录/刷新时写 token/API Key 文件与浏览器 profile；只有显式登录或 401 恢复才打开可见浏览器。Rust 8003 当前没有这条浏览器登录实现，默认 provider 如实返回 `reauth_unavailable`，不创建 profile、不打开浏览器。
+- 登录/刷新时写 token/API Key 文件与浏览器 profile；只有显式登录或 401 恢复才打开浏览器，默认 headless，显式 visible 或有效 manual display 才 headful。Rust 8003 读写与 Python 相同的 `CHAT2API_TOKEN_FILE` 与 profile 路径，不迁移数据；登录浏览器按 profile 单实例，进程退出后 OS 锁自动释放。
 - 撤销状态文件 `share-revoke.state` 与投影快照，原子写（`chat2api/share_auth.py:475-526`）。
 - 注册实例控制 AF_UNIX 通道；只应答 `instance-status`、`load`、`drain`、`emergency`、`resume`，绝不调用管理动作（`chat2api/chat2api.py:9023-9100`）。
 - `/admin/shutdown` 只停止本进程；不停止上游 UM。

@@ -63,7 +63,7 @@ fn gateway_state(stub: &ChatStub) -> Arc<AppState> {
         socket_silence_timeout: Duration::from_secs(5),
         ..GatewayConfig::default()
     };
-    let proxy = ProxyState::new(&config).expect("proxy state");
+    let proxy = Arc::new(ProxyState::new(&config).expect("proxy state"));
     let ledger = Arc::new(Ledger::new(None));
     let event_log = Arc::new(EventLog::new(None));
     let reauth = Arc::new(ReauthenticationService::new(
@@ -80,6 +80,7 @@ fn gateway_state(stub: &ChatStub) -> Arc<AppState> {
         ledger,
         event_log,
         reauth,
+        login: None,
     })
 }
 

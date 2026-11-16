@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use um_gateway::config::{AuthMode, GatewayConfig};
-use um_gateway::reauth::ReauthenticationProvider;
+use um_gateway::reauth::{ReauthProviderResult, ReauthenticationProvider};
 use um_gateway::GatewayServer;
 
 pub const STUB_TOKEN: &str = "fixture-upstream-token";
@@ -22,6 +22,29 @@ pub const THIRD_SECRET: &str = "third-secret";
 pub const CONTROL_TOKEN: &str = "fixture-control-token";
 pub const ALLOWED_ORIGIN: &str = "https://allowed.example";
 pub const DENIED_ORIGIN: &str = "https://denied.example";
+
+/// The default test provider: reauthentication is unassembled, so a 401 never
+/// launches a real browser. Production `GatewayServer::start` assembles the real
+/// login executor; the login tests inject their own fake factory.
+#[derive(Debug, Default)]
+pub struct UnavailableProvider;
+
+impl ReauthenticationProvider for UnavailableProvider {
+    fn browser_available(&self) -> bool {
+        false
+    }
+
+    fn unavailable_reason(&self) -> &'static str {
+        "reauth_unavailable"
+    }
+
+    fn reauthenticate(&self, _deadline: Instant) -> ReauthProviderResult {
+        ReauthProviderResult::Unavailable {
+            reason: self.unavailable_reason().to_string(),
+            retry_after: None,
+        }
+    }
+}
 
 pub fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/rust_gateway_rev1.json")
@@ -1216,7 +1239,13 @@ pub fn start_chat_gateway(
     share: bool,
     configure: impl FnOnce(&mut GatewayConfig),
 ) -> Gateway {
-    start_chat_gateway_with_reauth(stub, temp, share, None, configure)
+    start_chat_gateway_with_reauth(
+        stub,
+        temp,
+        share,
+        Some(Arc::new(UnavailableProvider)),
+        configure,
+    )
 }
 
 pub fn start_chat_gateway_with_reauth(
@@ -1242,6 +1271,11 @@ pub fn start_chat_gateway_with_reauth(
     };
     configure(&mut config);
     config.candidate = true;
+    let provider = if config.browser_disabled {
+        None
+    } else {
+        provider.or_else(|| Some(Arc::new(UnavailableProvider)))
+    };
     let server =
         GatewayServer::start_with_reauth(config, provider).expect("start chat candidate gateway");
     let addr = server.addr();
