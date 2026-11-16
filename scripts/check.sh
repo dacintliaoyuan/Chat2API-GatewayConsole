@@ -31,7 +31,7 @@ if [ ! -d web/node_modules ]; then
   fi
 fi
 
-run python -m compileall -q chat2api . -x '(^|/)(node_modules|web/node_modules|\.git)/'
+run python -m compileall -q chat2api . -x '(^|[/\\])(node_modules|web/node_modules|\.git|\.worktrees)([/\\]|$)'
 run python -m ruff check .
 run python scripts/check_share_names.py
 run python scripts/check_retired_features.py
