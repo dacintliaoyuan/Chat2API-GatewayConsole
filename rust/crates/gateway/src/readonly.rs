@@ -142,14 +142,19 @@ fn read_upstream_response(stream: &mut dyn Read) -> Result<UpstreamResponse, Ups
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {
-        let read = stream
-            .read(&mut buffer)
-            .map_err(|error| match error.kind() {
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
-                    UpstreamFailure::Timeout
-                }
-                _ => UpstreamFailure::ConnectionError,
-            })?;
+        let read = match stream.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                return Err(UpstreamFailure::Timeout)
+            }
+            // The upstream may close without a TLS close_notify after a complete
+            // response; that is a clean EOF, like Python's requests.
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(_) => return Err(UpstreamFailure::ConnectionError),
+        };
         if read == 0 {
             break;
         }
