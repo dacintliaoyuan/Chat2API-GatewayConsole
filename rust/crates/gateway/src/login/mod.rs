@@ -1313,10 +1313,20 @@ fn drive_login(
                 if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
                     return stop_for_manual(inner, round, page, "umpass_prefill_missing");
                 }
-                let filled = page
-                    .fill(&UMPASS_ACCOUNT_SELECTORS, &inner.config.um_account)
-                    .and_then(|_| page.fill(&UMPASS_PASSWORD_SELECTORS, &inner.config.um_password));
-                if filled.is_err() {
+                // Fill ONLY the empty fields: ADFS may have prefilled the
+                // account from the WS-Fed token while the password stays empty.
+                if !page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
+                    && page
+                        .fill(&UMPASS_ACCOUNT_SELECTORS, &inner.config.um_account)
+                        .is_err()
+                {
+                    return stop_for_manual(inner, round, page, "umpass_prefill_missing");
+                }
+                if !page.field_filled(&UMPASS_PASSWORD_SELECTORS)
+                    && page
+                        .fill(&UMPASS_PASSWORD_SELECTORS, &inner.config.um_password)
+                        .is_err()
+                {
                     return stop_for_manual(inner, round, page, "umpass_prefill_missing");
                 }
             } else if let Some(target) = page.one_visible(&UMPASS_SUBMIT_SELECTORS) {
