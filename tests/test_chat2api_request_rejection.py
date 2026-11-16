@@ -190,7 +190,9 @@ class TestChat2ApiRequestRejection(unittest.TestCase):
         self.assertEqual(error["type"], "invalid_request_error")
         self.assertEqual(error["code"], "upstream_request_rejected")
         self.assertIsNone(error["param"])
-        self.assertIsNone(error["detail"])
+        self.assertEqual(error["detail"]["upstream_status"], 400)
+        self.assertEqual(error["detail"]["upstream_message"],
+                         "request validation failed")
         # compatibility fallback ran exactly once (two upstream posts), and
         # the failure was never retried as transient.
         self.assertEqual(sum(1 for s in posts if s[0] == "reject-400"), 2)

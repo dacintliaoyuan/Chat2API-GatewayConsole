@@ -482,12 +482,13 @@ class AuthWaitBudgetTests(AuthWaitTestBase):
             response = self._chat_request()
             elapsed = time.monotonic() - started
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 504)
         error = response.json()["error"]
         self.assertEqual(error["type"], "upstream_error")
         self.assertEqual(error["code"], "request_deadline_exceeded")
         self.assertIsNone(error["param"])
-        self.assertEqual(error["detail"], "_RequestDeadlineExceeded")
+        self.assertEqual(error["detail"]["reason"],
+                         "_RequestDeadlineExceeded")
         self.assertLess(elapsed, 0.5)
         login.assert_not_called()
 
@@ -1001,13 +1002,15 @@ class AuthWaitExpiryOrderTests(AuthWaitTestBase):
             places=3)
         self.assertEqual(observed["upstream_posts"], 1)
 
-    def test_a3_earlier_request_deadline_stays_a_502(self):
+    def test_a3_earlier_request_deadline_is_a_504(self):
         observed = self._exercise(budget=0.5, deadline=0.2,
                                  sync_charge_s=0.7)
         self.assertGreater(observed["charged_s"], 0.5)
-        self.assertEqual(observed["http"], 502, observed)
+        self.assertEqual(observed["http"], 504, observed)
         self.assertEqual(observed["error_code"],
                          "request_deadline_exceeded")
+        self.assertEqual(observed["detail"]["reason"],
+                         "_RequestDeadlineExceeded")
         self.assertAlmostEqual(
             observed["deadline_after_join"], observed["first_deadline"],
             places=3)
