@@ -49,6 +49,22 @@ _Avoid_: 自动重登录、按需登录、重启服务
 一次显式强制重新登录选择在本机桌面显示浏览器窗口，供本人完成 UM SSO；自动重登录与按需登录默认 headless。没有可用显示时明确返回不可用，不静默降级成 headless。
 _Avoid_: 自动弹窗、云端专用实例窗口、把 headless 伪装成可见
 
+**candidate 模式 (Candidate mode)**:
+Rust 二进制只绑定临时 loopback 端口、供 parity 测试使用的运行模式；它不能绑定生产端口，也不作为生产服务被 systemd 拉起。
+_Avoid_: 生产模式、临时端口即生产、candidate 即回滚点
+
+**Rust 生产入口 (Rust production entry)**:
+Rust 二进制在 systemd 下绑定 8003/8002 loopback 的生产运行模式；它与 candidate 模式共用同一套代码，但允许生产端口，并由部署脚本安装和切换。
+_Avoid_: candidate 模式、临时端口、端口映射
+
+**切流 (Cutover)**:
+停掉 Python 服务、启动 Rust 服务、验证并保留回滚点的动作；先 8003 后 8002，每一步独立验收，失败立即回滚。
+_Avoid_: 重启服务、灰度发布、一次性全量切换
+
+**回滚 release (Rollback release)**:
+切流失败时恢复的 Python 发布包；它必须能启动原 Python 服务并保留运行数据，不能是期望旧入口脚本的上一 release。
+_Avoid_: 上一 release、备份目录、Rust 二进制回退
+
 **登录浏览器单实例 (Single login-browser instance per profile)**:
 同一 profile 目录在同一时刻最多只有一个登录浏览器；按 profile 目录持有 OS 级文件锁（POSIX `flock` / Windows `msvcrt.locking`），锁文件放在 profile 目录并附带 pid 与进程启动时间用于诊断，进程退出后锁自动释放。打开前只清理同 profile 的旧 Chromium（先 SIGTERM，等待，再 SIGKILL），不碰其他浏览器。
 _Avoid_: 全局单浏览器、同 profile 多开
