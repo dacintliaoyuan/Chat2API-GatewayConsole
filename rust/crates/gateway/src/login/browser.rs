@@ -22,7 +22,7 @@ pub const BROWSER_PATH_ENV: &str = "CHAT2API_BROWSER_PATH";
 pub const LOGIN_DISPLAY_FILE_ENV: &str = "CHAT2API_LOGIN_DISPLAY_FILE";
 pub const LOGIN_DISPLAY_FILE: &str = "/run/um-share/login-display.env";
 pub const BROWSER_STARTUP_BUDGET: Duration = Duration::from_secs(30);
-pub const BROWSER_DISCOVERY_BUDGET: Duration = Duration::from_secs(5);
+pub const BROWSER_DISCOVERY_BUDGET: Duration = Duration::from_secs(30);
 pub const CDP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const LINUX_BROWSER_NAMES: [&str; 4] = [
     "chromium",
@@ -245,6 +245,10 @@ fn launch_real_browser(request: &LaunchRequest) -> Result<Box<dyn LoginBrowser>,
     let port = match wait_devtools_port(&mut child, &request.profile_dir) {
         Ok(port) => port,
         Err(error) => {
+            eprintln!(
+                "um-gateway: login browser failed: {}: {}",
+                error.reason, error.detail
+            );
             let _ = child.kill();
             let _ = child.wait();
             return Err(error);
@@ -253,12 +257,17 @@ fn launch_real_browser(request: &LaunchRequest) -> Result<Box<dyn LoginBrowser>,
     let page_url = match discover_page_target(port, &request.initial_url) {
         Ok(url) => url,
         Err(error) => {
+            eprintln!(
+                "um-gateway: login page target failed: {}: {}",
+                error.reason, error.detail
+            );
             let _ = child.kill();
             let _ = child.wait();
             return Err(error);
         }
     };
     let connection = CdpConnection::connect(&page_url).map_err(|error| {
+        eprintln!("um-gateway: login devtools websocket failed: {error}");
         LoginFailure::unavailable(
             "browser_launch_failed",
             format!("devtools websocket: {error}"),
