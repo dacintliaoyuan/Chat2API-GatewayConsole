@@ -1787,7 +1787,7 @@
       "chat2api/chat2api.py": "59f2a1f0e0227cb5d98b88c9397cceefc88de20cbf5e990729bbf583745f9ef7",
       "chat2api/share_auth.py": "160d94cbfb1167557a0ecae97a8501a9dfbe01ca8416bb51c526c429d830a01d",
       "console/display_proxy.py": "5aada84d79e18c9d6899fd31bfce05098ebc23a990d00cfd81a11f50e326b01c",
-      "docs/rust-contract.md": "fe4d79356dde4421f72a276234d1bf8c7bd197a2f4e679a18fbbc1dab2ba9714",
+      "docs/rust-contract.md": "9b5423f7139a36c4be0ce71357ff9b9d2cbc54da208ce11eda9070028c434cf4",
       "share/broker_protocol.py": "dbf7507c125b03bd915a190b052d7e5dac47a4dda80f7ef1fe6a15bbdf7554c2",
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
       "share/store.py": "7bb5b3f1e302de5579043d482a3172548c716b8a619366a0373727d88e714b33",

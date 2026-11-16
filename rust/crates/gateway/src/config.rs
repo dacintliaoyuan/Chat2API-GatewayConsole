@@ -1,4 +1,4 @@
-//! Candidate gateway configuration and share-projection parsing.
+//! Gateway configuration and share-projection parsing.
 //!
 //! The projection parser is a Rust port of
 //! `share/broker_protocol.py::parse_projection_payload` plus
@@ -171,7 +171,37 @@ pub struct ShareConfig {
     pub entries: Vec<ShareEntry>,
 }
 
-/// One candidate gateway configuration.
+/// How the gateway chooses its listening socket.
+///
+/// Candidate is the default and only binds an ephemeral loopback port for parity
+/// tests. Production must be selected explicitly and only binds 8003/8002 on
+/// loopback; both modes share the same routes, authentication, ledger and error
+/// contracts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BindMode {
+    #[default]
+    Candidate,
+    Production,
+}
+
+impl BindMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "candidate" => Some(Self::Candidate),
+            "production" => Some(Self::Production),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Candidate => "candidate",
+            Self::Production => "production",
+        }
+    }
+}
+
+/// One gateway configuration.
 #[derive(Debug, Clone)]
 pub struct GatewayConfig {
     pub bind_host: String,
@@ -221,7 +251,8 @@ pub struct GatewayConfig {
     pub max_physical_attempts: u32,
     pub retry_delay_base: Duration,
     pub slow_retry_threshold: Duration,
-    /// A candidate never binds a governed production port.
+    /// Candidate mode (the default); `false` selects the explicit production
+    /// binding policy.
     pub candidate: bool,
 }
 
@@ -291,6 +322,11 @@ pub fn governed_ports() -> BTreeSet<u16> {
     [5173, 8000, 8001, 8002, 8003, 8097, 8099]
         .into_iter()
         .collect()
+}
+
+/// The only ports production mode may bind.
+pub fn production_ports() -> BTreeSet<u16> {
+    [8002, 8003].into_iter().collect()
 }
 
 impl GatewayConfig {
@@ -367,23 +403,40 @@ impl GatewayConfig {
         config
     }
 
+    /// The selected binding policy. Candidate is the default.
+    pub fn bind_mode(&self) -> BindMode {
+        if self.candidate {
+            BindMode::Candidate
+        } else {
+            BindMode::Production
+        }
+    }
+
     /// Fail closed before binding a socket.
-    pub fn validate_candidate(&self) -> Result<(), ConfigError> {
+    pub fn validate_bind_policy(&self) -> Result<(), ConfigError> {
         if !is_loopback_host(&self.bind_host) {
             return Err(ConfigError(format!(
-                "candidate bind host is not loopback: {}",
+                "{} bind host is not loopback: {}",
+                self.bind_mode().label(),
                 self.bind_host
             )));
         }
-        if self.candidate && self.bind_port != 0 {
+        if self.candidate {
+            if self.bind_port != 0 {
+                return Err(ConfigError(format!(
+                    "candidate must bind an ephemeral loopback port, got {}",
+                    self.bind_port
+                )));
+            }
+            if governed_ports().contains(&self.bind_port) {
+                return Err(ConfigError(format!(
+                    "refusing to bind governed production port {}",
+                    self.bind_port
+                )));
+            }
+        } else if !production_ports().contains(&self.bind_port) {
             return Err(ConfigError(format!(
-                "candidate must bind an ephemeral loopback port, got {}",
-                self.bind_port
-            )));
-        }
-        if governed_ports().contains(&self.bind_port) {
-            return Err(ConfigError(format!(
-                "refusing to bind governed production port {}",
+                "production must bind one of 8002 or 8003 on loopback, got {}",
                 self.bind_port
             )));
         }
