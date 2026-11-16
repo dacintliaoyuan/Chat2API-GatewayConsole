@@ -535,6 +535,11 @@ impl LoginService {
             session.cancel.store(true, Ordering::SeqCst);
             session.condvar.notify_all();
         }
+        // Invalidate the round so a worker that is still unwinding cannot
+        // overwrite the cancelled state with its own outcome.
+        state.round += 1;
+        state.recovery.round = state.round;
+        state.session = None;
         state.auth_state = AuthState::Cancelled;
         state.error = Some("cancelled".to_string());
         state.primary = None;
