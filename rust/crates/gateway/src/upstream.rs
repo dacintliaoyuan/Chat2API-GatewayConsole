@@ -224,6 +224,11 @@ impl UpstreamBody {
                 Ok(0) => return Ok(None),
                 Ok(_) => return Ok(Some(byte[0])),
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                // The upstream closes without a TLS close_notify after a
+                // complete response (envoy does); rustls reports that as
+                // UnexpectedEof. Python's requests treats it as a clean EOF,
+                // so the body is complete, never a connection failure.
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
                 Err(error)
                     if error.kind() == io::ErrorKind::TimedOut
                         || error.kind() == io::ErrorKind::WouldBlock =>
@@ -253,6 +258,28 @@ impl UpstreamBody {
             }
         }
     }
+}
+
+/// Connect to the first reachable resolved address.
+///
+/// A dual-stack name may list an IPv6 address first while this host has no
+/// IPv6 route; like Python's requests, every resolved address is tried instead
+/// of failing on the first one.
+fn connect_first(
+    addresses: Vec<std::net::SocketAddr>,
+    timeout: Duration,
+) -> Result<TcpStream, UpstreamFailure> {
+    let mut last = UpstreamFailure::ConnectionError;
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                last = UpstreamFailure::Timeout
+            }
+            Err(_) => {}
+        }
+    }
+    Err(last)
 }
 
 /// Open one `POST /api/chat/completions` request.
@@ -289,23 +316,19 @@ pub fn post_compat(
 ) -> Result<UpstreamResponse, UpstreamFailure> {
     let (host, port) = parse_upstream_base_url(&config.upstream_base_url)
         .map_err(|_| UpstreamFailure::ConnectionError)?;
-    let address = format!("{host}:{port}")
+    let addresses: Vec<std::net::SocketAddr> = format!("{host}:{port}")
         .to_socket_addrs()
         .map_err(|_| UpstreamFailure::ConnectionError)?
-        .next()
-        .ok_or(UpstreamFailure::ConnectionError)?;
+        .collect();
+    if addresses.is_empty() {
+        return Err(UpstreamFailure::ConnectionError);
+    }
     let remaining = remaining(deadline);
     if remaining.is_zero() {
         return Err(UpstreamFailure::Timeout);
     }
     let setup_timeout = remaining.min(UPSTREAM_SETUP_TIMEOUT);
-    let upstream = TcpStream::connect_timeout(&address, setup_timeout).map_err(|error| {
-        if error.kind() == io::ErrorKind::TimedOut {
-            UpstreamFailure::Timeout
-        } else {
-            UpstreamFailure::ConnectionError
-        }
-    })?;
+    let upstream = connect_first(addresses, setup_timeout)?;
     let read_timeout = if streaming {
         remaining.min(config.socket_silence_timeout)
     } else {

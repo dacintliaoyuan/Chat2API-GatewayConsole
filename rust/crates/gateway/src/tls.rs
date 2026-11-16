@@ -51,3 +51,42 @@ impl<T: Read + Write + Send> UpstreamIo for T {}
 
 /// One upstream byte stream behind the transport seam.
 pub type UpstreamStream = Box<dyn UpstreamIo>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_compiled_root_store_is_not_empty() {
+        let mut roots = RootCertStore::empty();
+        let (added, ignored) = roots
+            .add_parsable_certificates(webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().cloned());
+        assert!(added > 100, "added={added} ignored={ignored}");
+    }
+
+    #[test]
+    #[ignore = "reaches the real production upstream"]
+    fn the_real_upstream_completes_a_tls_handshake() {
+        let stream = TcpStream::connect("chat.genai.um.edu.mo:443").expect("tcp");
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
+        let mut tls = wrap(stream, "chat.genai.um.edu.mo").expect("tls wrap");
+        tls.write_all(
+            b"GET /api/models HTTP/1.1\r\nHost: chat.genai.um.edu.mo\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        )
+        .expect("write");
+        tls.flush().expect("flush");
+        println!(
+            "after flush handshaking={} peer_certs={}",
+            tls.conn.is_handshaking(),
+            tls.conn
+                .peer_certificates()
+                .map(|certs| certs.len())
+                .unwrap_or(0)
+        );
+        let mut buf = [0u8; 128];
+        let read = tls.read(&mut buf).expect("read");
+        let head = String::from_utf8_lossy(&buf[..read]).to_string();
+        assert!(head.starts_with("HTTP/1.1"), "{head}");
+    }
+}

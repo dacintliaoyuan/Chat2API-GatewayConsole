@@ -80,18 +80,28 @@ impl UpstreamClient {
         path: &str,
         bearer: Option<&str>,
     ) -> Result<UpstreamResponse, UpstreamFailure> {
-        let address = format!("{}:{}", self.host, self.port)
+        let addresses: Vec<std::net::SocketAddr> = format!("{}:{}", self.host, self.port)
             .to_socket_addrs()
             .map_err(|_| UpstreamFailure::ConnectionError)?
-            .next()
-            .ok_or(UpstreamFailure::ConnectionError)?;
-        let stream =
-            TcpStream::connect_timeout(&address, self.timeout).map_err(|error| {
-                match error.kind() {
-                    std::io::ErrorKind::TimedOut => UpstreamFailure::Timeout,
-                    _ => UpstreamFailure::ConnectionError,
+            .collect();
+        if addresses.is_empty() {
+            return Err(UpstreamFailure::ConnectionError);
+        }
+        let mut last = UpstreamFailure::ConnectionError;
+        let mut connected = None;
+        for address in addresses {
+            match TcpStream::connect_timeout(&address, self.timeout) {
+                Ok(stream) => {
+                    connected = Some(stream);
+                    break;
                 }
-            })?;
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                    last = UpstreamFailure::Timeout
+                }
+                Err(_) => {}
+            }
+        }
+        let stream = connected.ok_or(last)?;
         let _ = stream.set_read_timeout(Some(self.timeout));
         let _ = stream.set_write_timeout(Some(self.timeout));
         let mut stream: UpstreamStream = if self.tls {
