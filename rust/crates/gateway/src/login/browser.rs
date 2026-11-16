@@ -211,6 +211,12 @@ fn launch_real_browser(request: &LaunchRequest) -> Result<Box<dyn LoginBrowser>,
         .arg("--disable-sync")
         .arg("--disable-extensions")
         .arg("--disable-features=Translate")
+        // Ubuntu 23.10+ disables unprivileged user namespaces, so the bundled
+        // Chromium refuses to start without --no-sandbox. Playwright's own default
+        // (chromiumSandbox=false) passes the same flag; the login browser is a
+        // short-lived, single-purpose process with an isolated profile.
+        .arg("--no-sandbox")
+        .arg("--disable-dev-shm-usage")
         .arg("--window-size=1280,900");
     if request.headful {
         command.arg("--start-maximized");
