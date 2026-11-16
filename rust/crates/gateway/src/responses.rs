@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::{line_text, ChatResult, ClientWatcher};
 use crate::error::GatewayError;
+use crate::event_log::{AttemptStats, FinalFailure};
 use crate::gate::Admission;
 use crate::http::{write_chunk, write_response_head, Request, Response};
 use crate::ledger::{message_tokens, UsageRecord};
@@ -1054,6 +1055,7 @@ struct ResponsesContext<'a> {
     input_estimate: u64,
     key_id: Option<&'a str>,
     request_id: Option<&'a str>,
+    http_request_id: &'a str,
     attribution: &'a str,
     origin: Option<String>,
 }
@@ -1095,12 +1097,8 @@ pub fn handle_responses(
             stream,
             key_id.as_deref(),
             request_id.as_deref(),
+            request,
             attribution,
-            request
-                .headers
-                .get("Origin")
-                .filter(|origin| state.config.allowed_origins.contains(*origin))
-                .map(str::to_string),
         );
     }
     let chat_body = responses_to_chat_request(&body);
@@ -1140,6 +1138,7 @@ pub fn handle_responses(
         input_estimate: message_tokens(chat_body.get("messages")),
         key_id: key_id.as_deref(),
         request_id: request_id.as_deref(),
+        http_request_id: &request.request_id,
         attribution,
         origin,
     };
@@ -1158,9 +1157,15 @@ fn handle_via_messages(
     stream: &mut TcpStream,
     key_id: Option<&str>,
     request_id: Option<&str>,
+    request: &Request,
     attribution: &str,
-    origin: Option<String>,
 ) -> ChatResult {
+    let http_request_id = &request.request_id;
+    let origin = request
+        .headers
+        .get("Origin")
+        .filter(|origin| state.config.allowed_origins.contains(*origin))
+        .map(str::to_string);
     let messages_body = responses_to_messages_request(body);
     let client_stream = messages_body.get("stream") == Some(&Value::Bool(true));
     let model = body
@@ -1185,6 +1190,7 @@ fn handle_via_messages(
         input_estimate: message_tokens(messages_body.get("messages")),
         key_id,
         request_id,
+        http_request_id,
         attribution,
         origin,
     };
@@ -1249,10 +1255,35 @@ fn output_text_chars(translated: &Value) -> u64 {
     chars
 }
 
+fn log_final_failure(context: &ResponsesContext<'_>, stats: &AttemptStats, result: &ChatResult) {
+    let Some(final_status) = result.final_failure_status() else {
+        return;
+    };
+    context.state.event_log.final_failure(FinalFailure {
+        request_id: context.http_request_id,
+        protocol: "responses",
+        final_status,
+        stats: *stats,
+        started_at: context.started_at,
+    });
+}
+
 fn forward_json(
     context: &ResponsesContext<'_>,
     request_body: Map<String, Value>,
     via_messages: bool,
+) -> ChatResult {
+    let mut stats = AttemptStats::default();
+    let result = forward_json_inner(context, request_body, via_messages, &mut stats);
+    log_final_failure(context, &stats, &result);
+    result
+}
+
+fn forward_json_inner(
+    context: &ResponsesContext<'_>,
+    request_body: Map<String, Value>,
+    via_messages: bool,
+    stats: &mut AttemptStats,
 ) -> ChatResult {
     let mut fast_retries = 0u32;
     let mut slow_retries = 0u32;
@@ -1277,6 +1308,7 @@ fn forward_json(
             return ChatResult::Response(physical_budget_response());
         }
         physical_attempts += 1;
+        stats.record_attempt();
         let attempt_started = Instant::now();
         let mut response = match post_compat(
             &context.state.config,
@@ -1382,6 +1414,19 @@ fn forward_aggregate(
     request_body: Map<String, Value>,
     via_messages: bool,
 ) -> ChatResult {
+    let mut stats = AttemptStats::default();
+    let result = forward_aggregate_inner(context, stream, request_body, via_messages, &mut stats);
+    log_final_failure(context, &stats, &result);
+    result
+}
+
+fn forward_aggregate_inner(
+    context: &ResponsesContext<'_>,
+    stream: &mut TcpStream,
+    request_body: Map<String, Value>,
+    via_messages: bool,
+    stats: &mut AttemptStats,
+) -> ChatResult {
     let mut fast_retries = 0u32;
     let mut slow_retries = 0u32;
     let mut physical_attempts = 0u32;
@@ -1405,6 +1450,7 @@ fn forward_aggregate(
             return ChatResult::Response(physical_budget_response());
         }
         physical_attempts += 1;
+        stats.record_attempt();
         let attempt_started = Instant::now();
         let response = match post_compat(
             &context.state.config,
@@ -1548,7 +1594,10 @@ fn forward_aggregate(
                 aggregator.usage(),
                 aggregator.output_estimate(),
             );
-            return ChatResult::Written { close: true };
+            return ChatResult::Written {
+                close: true,
+                failed: false,
+            };
         }
         record_usage(
             context,
@@ -1642,6 +1691,29 @@ fn forward_stream_with(
     extra_headers: Vec<(String, String)>,
     via_messages: bool,
 ) -> ChatResult {
+    let mut stats = AttemptStats::default();
+    let result = forward_stream_with_inner(
+        context,
+        stream,
+        request_body,
+        upstream_path,
+        extra_headers,
+        via_messages,
+        &mut stats,
+    );
+    log_final_failure(context, &stats, &result);
+    result
+}
+
+fn forward_stream_with_inner(
+    context: &ResponsesContext<'_>,
+    stream: &mut TcpStream,
+    request_body: Map<String, Value>,
+    upstream_path: &str,
+    extra_headers: Vec<(String, String)>,
+    via_messages: bool,
+    stats: &mut AttemptStats,
+) -> ChatResult {
     let mut fast_retries = 0u32;
     let mut slow_retries = 0u32;
     let mut physical_attempts = 0u32;
@@ -1655,6 +1727,7 @@ fn forward_stream_with(
             return ChatResult::Response(physical_budget_response());
         }
         physical_attempts += 1;
+        stats.record_attempt();
         let attempt_started = Instant::now();
         let response = match post_compat(
             &context.state.config,
@@ -1709,13 +1782,20 @@ fn forward_stream_with(
         let mut headers = vec![
             ("Content-Type".to_string(), "text/event-stream".to_string()),
             ("Cache-Control".to_string(), "no-store".to_string()),
+            (
+                "X-Request-Id".to_string(),
+                context.http_request_id.to_string(),
+            ),
             ("Connection".to_string(), "close".to_string()),
         ];
         if let Some(origin) = &context.origin {
             headers.push(("Access-Control-Allow-Origin".to_string(), origin.clone()));
         }
         if write_response_head(stream, 200, &headers).is_err() {
-            return ChatResult::Written { close: true };
+            return ChatResult::Written {
+                close: true,
+                failed: false,
+            };
         }
         let created_at = unix_seconds();
         let response_id = format!("resp_{}", random_hex(12));
@@ -1732,13 +1812,17 @@ fn forward_stream_with(
         });
         if write_sse_event(stream, "response.created", &created).is_err() {
             record_usage(context, "client_disconnected", None, 0);
-            return ChatResult::Written { close: true };
+            return ChatResult::Written {
+                close: true,
+                failed: false,
+            };
         }
         let mut translator = ResponsesStreamTranslator::new(
             context.model.to_string(),
             response_id.clone(),
             created_at,
             via_messages,
+            context.http_request_id.to_string(),
         );
         let watcher = ClientWatcher::start(stream);
         let reader = StreamReader::start(response.body);
@@ -1784,6 +1868,7 @@ fn forward_stream_with(
                             "error": {
                                 "code": "upstream_stream_error",
                                 "message": "upstream stream failed",
+                                "request_id": context.http_request_id,
                             },
                         },
                     });
@@ -1817,10 +1902,16 @@ fn forward_stream_with(
         drop(reader);
         if client_disconnected {
             record_stream_usage(context, &status, &usage, output_chars);
-            return ChatResult::Written { close: true };
+            return ChatResult::Written {
+                close: true,
+                failed: false,
+            };
         }
         record_stream_usage(context, &status, &usage, output_chars);
-        return ChatResult::Written { close: true };
+        return ChatResult::Written {
+            close: true,
+            failed: status != "ok",
+        };
     }
 }
 
@@ -2025,6 +2116,7 @@ pub struct ResponsesStreamTranslator {
     model: String,
     response_id: String,
     created_at: i64,
+    request_id: String,
     mode: StreamMode,
     message_id: String,
     text: String,
@@ -2044,11 +2136,18 @@ pub struct ResponsesStreamTranslator {
 }
 
 impl ResponsesStreamTranslator {
-    pub fn new(model: String, response_id: String, created_at: i64, via_messages: bool) -> Self {
+    pub fn new(
+        model: String,
+        response_id: String,
+        created_at: i64,
+        via_messages: bool,
+        request_id: String,
+    ) -> Self {
         Self {
             model,
             response_id,
             created_at,
+            request_id,
             mode: if via_messages {
                 StreamMode::Messages
             } else {
@@ -2111,7 +2210,11 @@ impl ResponsesStreamTranslator {
                     "status": "failed",
                     "model": self.model,
                     "output": [],
-                    "error": {"code": code, "message": message},
+                    "error": {
+                        "code": code,
+                        "message": message,
+                        "request_id": self.request_id,
+                    },
                 },
             }),
         )]

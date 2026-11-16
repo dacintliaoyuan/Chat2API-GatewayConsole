@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::body::{read_json_body, BodyPolicy};
 use crate::error::GatewayError;
+use crate::event_log::{AttemptStats, FinalFailure};
 use crate::gate::{Admission, ShareGate};
 use crate::http::{write_chunk, write_response_head, Request, Response};
 use crate::ledger::{estimate_tokens, merge_usage_snapshots, message_tokens, UsageRecord};
@@ -46,8 +47,22 @@ pub const REQUEST_DEADLINE_EXCEEDED: &str = "Upstream request could not start an
 pub enum ChatResult {
     /// A normal response, written by the connection loop.
     Response(Response),
-    /// The route wrote the response itself; `close` ends the connection.
-    Written { close: bool },
+    /// The route wrote the response itself; `close` ends the connection and
+    /// `failed` marks an in-band error as a final failure for the event log.
+    Written { close: bool, failed: bool },
+}
+
+impl ChatResult {
+    /// The final failure label used by the runtime event log.
+    pub fn final_failure_status(&self) -> Option<String> {
+        match self {
+            Self::Response(response) if response.status >= 400 => {
+                Some(format!("HTTP{}", response.status))
+            }
+            Self::Written { failed: true, .. } => Some("stream_error".to_string()),
+            _ => None,
+        }
+    }
 }
 
 struct AdmissionGuard<'a> {
@@ -138,6 +153,7 @@ pub fn handle_chat(
         input_estimate: message_tokens(upstream_body.get("messages")),
         key_id: key_id.as_deref(),
         request_id: request_id.as_deref(),
+        http_request_id: &request.request_id,
         attribution,
         upstream_body,
         origin,
@@ -157,12 +173,20 @@ struct ChatContext<'a> {
     input_estimate: u64,
     key_id: Option<&'a str>,
     request_id: Option<&'a str>,
+    http_request_id: &'a str,
     attribution: &'a str,
     upstream_body: Map<String, Value>,
     origin: Option<String>,
 }
 
 fn forward_json(context: &ChatContext<'_>) -> ChatResult {
+    let mut stats = AttemptStats::default();
+    let result = forward_json_inner(context, &mut stats);
+    log_final_failure(context, &stats, &result);
+    result
+}
+
+fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> ChatResult {
     let mut body = context.upstream_body.clone();
     let mut compat_retry_used = false;
     let mut fast_retries = 0u32;
@@ -176,6 +200,7 @@ fn forward_json(context: &ChatContext<'_>) -> ChatResult {
             return ChatResult::Response(physical_budget_response());
         }
         physical_attempts += 1;
+        stats.record_attempt();
         let attempt_started = Instant::now();
         let mut response = match crate::upstream::post_chat(
             &context.state.config,
@@ -293,7 +318,31 @@ fn forward_json(context: &ChatContext<'_>) -> ChatResult {
     }
 }
 
+fn log_final_failure(context: &ChatContext<'_>, stats: &AttemptStats, result: &ChatResult) {
+    let Some(final_status) = result.final_failure_status() else {
+        return;
+    };
+    context.state.event_log.final_failure(FinalFailure {
+        request_id: context.http_request_id,
+        protocol: "chat",
+        final_status,
+        stats: *stats,
+        started_at: context.started_at,
+    });
+}
+
 fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResult {
+    let mut stats = AttemptStats::default();
+    let result = forward_stream_inner(context, stream, &mut stats);
+    log_final_failure(context, &stats, &result);
+    result
+}
+
+fn forward_stream_inner(
+    context: &ChatContext<'_>,
+    stream: &mut TcpStream,
+    stats: &mut AttemptStats,
+) -> ChatResult {
     let mut fast_retries = 0u32;
     let mut slow_retries = 0u32;
     let mut physical_attempts = 0u32;
@@ -307,6 +356,7 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
             return ChatResult::Response(physical_budget_response());
         }
         physical_attempts += 1;
+        stats.record_attempt();
         let attempt_started = Instant::now();
         let response = match crate::upstream::post_chat(
             &context.state.config,
@@ -364,7 +414,10 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
         let outcome = consume_stream(context, stream, response.body);
         if outcome.status == StreamStatus::ClientDisconnected {
             record_stream_usage(context, &outcome);
-            return ChatResult::Written { close: true };
+            return ChatResult::Written {
+                close: true,
+                failed: false,
+            };
         }
         if !outcome.committed
             && matches!(
@@ -404,14 +457,17 @@ fn forward_stream(context: &ChatContext<'_>, stream: &mut TcpStream) -> ChatResu
         }
         if outcome.committed {
             if !outcome.status.is_success() {
-                write_stream_error(stream, outcome.status, &outcome);
+                write_stream_error(stream, outcome.status, &outcome, context.http_request_id);
             }
         } else if !outcome.status.is_success() {
             record_stream_usage(context, &outcome);
-            return ChatResult::Response(stream_error_response(&outcome));
+            return ChatResult::Response(stream_error_response(&outcome, context.http_request_id));
         }
         record_stream_usage(context, &outcome);
-        return ChatResult::Written { close: true };
+        return ChatResult::Written {
+            close: true,
+            failed: outcome.committed && !outcome.status.is_success(),
+        };
     }
 }
 
@@ -708,6 +764,10 @@ fn commit(stream: &mut TcpStream, context: &ChatContext<'_>, state: &mut SseStat
     let mut headers = vec![
         ("Content-Type".to_string(), SSE_CONTENT_TYPE.to_string()),
         ("Cache-Control".to_string(), "no-cache".to_string()),
+        (
+            "X-Request-Id".to_string(),
+            context.http_request_id.to_string(),
+        ),
         ("Connection".to_string(), "close".to_string()),
     ];
     if let Some(origin) = &context.origin {
@@ -742,22 +802,29 @@ fn record_stream_usage(context: &ChatContext<'_>, outcome: &StreamOutcome) {
     });
 }
 
-fn stream_error_response(outcome: &StreamOutcome) -> Response {
+fn stream_error_response(outcome: &StreamOutcome, request_id: &str) -> Response {
     let error = match outcome.status {
         StreamStatus::UpstreamFirstByteTimeout => GatewayError::upstream_timeout(),
         StreamStatus::RequestDeadlineExceeded => GatewayError::request_deadline_exceeded(None),
         _ => GatewayError::new(502, outcome.status.message(), "upstream_stream_error"),
     };
-    error.with_detail(stream_error_detail(outcome)).response()
+    error
+        .with_detail(stream_error_detail(outcome, request_id))
+        .response()
 }
 
-fn write_stream_error(stream: &mut TcpStream, status: StreamStatus, outcome: &StreamOutcome) {
+fn write_stream_error(
+    stream: &mut TcpStream,
+    status: StreamStatus,
+    outcome: &StreamOutcome,
+    request_id: &str,
+) {
     let payload = json!({"error": {
         "message": status.message(),
         "type": "upstream_error",
         "code": status.reason(),
         "param": null,
-        "detail": stream_error_detail(outcome),
+        "detail": stream_error_detail(outcome, request_id),
     }});
     let raw = serde_json::to_vec(&payload).unwrap_or_default();
     let mut event = Vec::new();
@@ -767,11 +834,12 @@ fn write_stream_error(stream: &mut TcpStream, status: StreamStatus, outcome: &St
     let _ = write_chunk(stream, &event);
 }
 
-fn stream_error_detail(outcome: &StreamOutcome) -> Value {
+fn stream_error_detail(outcome: &StreamOutcome, request_id: &str) -> Value {
     let mut detail = json!({
         "reason": outcome.status.reason(),
         "events": outcome.data_lines,
         "duration_s": (outcome.elapsed.as_secs_f64() * 10.0).round() / 10.0,
+        "request_id": request_id,
     });
     if let Some(exception) = outcome.exception {
         detail["exception"] = json!(exception);

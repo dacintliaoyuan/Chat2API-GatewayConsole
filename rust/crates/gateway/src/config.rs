@@ -29,6 +29,8 @@ pub const DEFAULT_SHARE_MAX_REQUEST_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_SHARE_REQUEST_BYTES: u64 = 1024 * 1024 * 1024;
 pub const CONSOLE_MAX_REQUEST_BYTES: u64 = 65536;
 pub const DEFAULT_UPSTREAM_TIMEOUT: Duration = Duration::from_secs(15);
+/// A request body must finish within this budget; a stalled body gets 408.
+pub const DEFAULT_BODY_READ_TIMEOUT_SECONDS: u64 = 60;
 pub const DEFAULT_REQUEST_TOTAL_SECONDS: u64 = 360;
 pub const MIN_REQUEST_TOTAL_SECONDS: u64 = 10;
 pub const MAX_REQUEST_TOTAL_SECONDS: u64 = 3600;
@@ -174,6 +176,11 @@ pub struct GatewayConfig {
     pub nonstream_aggregate_scope: Option<AggregateScope>,
     /// Share ledger path; `None` keeps the candidate from writing any ledger.
     pub usage_log: Option<PathBuf>,
+    /// Runtime event log path (`CHAT2API_SERVICE_LOG`); `None` keeps the
+    /// candidate from writing a production log file.
+    pub service_log: Option<PathBuf>,
+    /// Request-body read budget; a stalled body gets 408 after this.
+    pub body_read_timeout: Duration,
     /// Total wall-clock budget of one Chat request.
     pub request_total: Duration,
     /// First substantive SSE event budget.
@@ -208,6 +215,8 @@ impl Default for GatewayConfig {
             nonstream_upstream_aggregate: false,
             nonstream_aggregate_scope: None,
             usage_log: None,
+            service_log: None,
+            body_read_timeout: Duration::from_secs(DEFAULT_BODY_READ_TIMEOUT_SECONDS),
             request_total: Duration::from_secs(DEFAULT_REQUEST_TOTAL_SECONDS),
             first_byte_timeout: DEFAULT_FIRST_BYTE_TIMEOUT,
             socket_silence_timeout: DEFAULT_SOCKET_SILENCE_TIMEOUT,
@@ -284,6 +293,11 @@ impl GatewayConfig {
         if let Ok(value) = std::env::var("CHAT2API_USAGE_LOG") {
             if !value.trim().is_empty() {
                 config.usage_log = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var("CHAT2API_SERVICE_LOG") {
+            if !value.trim().is_empty() {
+                config.service_log = Some(PathBuf::from(value));
             }
         }
         config.request_total = parse_request_total_seconds(

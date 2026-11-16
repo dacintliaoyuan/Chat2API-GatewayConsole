@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::ChatResult;
 use crate::error::GatewayError;
+use crate::event_log::{AttemptStats, FinalFailure};
 use crate::http::{Request, Response};
 use crate::server::AppState;
 use crate::upstream::{post_compat, UpstreamFailure};
@@ -20,7 +21,29 @@ use crate::upstream::{post_compat, UpstreamFailure};
 pub fn handle_embeddings(
     state: &AppState,
     request: &Request,
+    stream: &mut TcpStream,
+) -> ChatResult {
+    let mut stats = AttemptStats::default();
+    let started_at = Instant::now();
+    let result = handle_embeddings_inner(state, request, stream, &mut stats);
+    let Some(final_status) = result.final_failure_status() else {
+        return result;
+    };
+    state.event_log.final_failure(FinalFailure {
+        request_id: &request.request_id,
+        protocol: "embeddings",
+        final_status,
+        stats,
+        started_at,
+    });
+    result
+}
+
+fn handle_embeddings_inner(
+    state: &AppState,
+    request: &Request,
     _stream: &mut TcpStream,
+    stats: &mut AttemptStats,
 ) -> ChatResult {
     let body = match read_json_body(
         request,
@@ -52,6 +75,7 @@ pub fn handle_embeddings(
             );
         }
         physical_attempts += 1;
+        stats.record_attempt();
         let attempt_started = Instant::now();
         let mut response = match post_compat(
             &state.config,

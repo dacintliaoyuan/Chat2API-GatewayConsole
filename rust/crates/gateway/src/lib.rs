@@ -12,6 +12,7 @@ pub mod chat;
 pub mod config;
 pub mod embeddings;
 pub mod error;
+pub mod event_log;
 pub mod gate;
 pub mod http;
 pub mod ledger;
