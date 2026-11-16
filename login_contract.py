@@ -29,10 +29,11 @@ LOGIN_TERMINAL_MANUAL_REASONS = frozenset((
     "umpass_mfa_required", "umpass_prefill_missing", "unrecognized_page"))
 
 # The Duo push wait is a manual step that keeps the round alive: the console
-# shows "等待 MFA（本人操作）" but the token poll keeps running. Keeping the
+# shows "等待本人确认 Duo 推送" but the token poll keeps running. Keeping the
 # union here stops the display read face from re-listing the reasons and missing a
 # reason added to the terminal set.
-LOGIN_SOFT_MANUAL_REASONS = frozenset(("duo_prompt_waiting",))
+DUO_PROMPT_WAITING_REASON = "duo_prompt_waiting"
+LOGIN_SOFT_MANUAL_REASONS = frozenset((DUO_PROMPT_WAITING_REASON,))
 LOGIN_MANUAL_REASONS = (
     LOGIN_TERMINAL_MANUAL_REASONS | LOGIN_SOFT_MANUAL_REASONS)
 

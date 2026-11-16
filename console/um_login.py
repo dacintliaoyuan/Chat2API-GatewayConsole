@@ -55,10 +55,13 @@ no usable browser). A cancelled login round maps to OperationCancelled.
 
 Ticket #15: a terminal manual-takeover round and an exhausted recovery fail
 immediately with the reason instead of waiting for the console budget; a bare
-``failed`` that chat2api may still retry keeps waiting. An operator cancel of
-THIS round propagates as OperationCancelled (the task layer's cancelled state)
-after restoring the service. Cancellation propagates as OperationCancelled and is
-mapped by the task layer. The token is never included in messages or results.
+``failed`` that chat2api may still retry keeps waiting. Ticket #74: a Duo push
+wait returns ``login_manual_takeover_required`` at once because the gateway is
+still waiting for the account holder; the round is not a failure and the visible
+window action can be used. An operator cancel of THIS round propagates as
+OperationCancelled (the task layer's cancelled state) after restoring the service.
+Cancellation propagates as OperationCancelled and is mapped by the task layer. The
+token is never included in messages or results.
 
 Decision recorded here: a definitive-looking intermediate state (e.g.
 ``failed``) is NOT fast-failed; chat2api may retry internally, so the
@@ -72,6 +75,7 @@ import urllib.error
 import urllib.request
 
 from login_contract import (
+    DUO_PROMPT_WAITING_REASON,
     MANUAL_TAKEOVER_REQUIRED_PREFIX,
     terminal_manual_reason,
 )
@@ -365,20 +369,24 @@ def _read_auth_status(base_url, token):
     whitelisted terminal fields (state/error/recovery state and pause
     reason) so a manual takeover or an operator cancel can end the wait
     immediately. Ticket #42 keeps ``primary`` (the outcome a cleanup failure
-    masked) and bounds each poll request to the historical 5s.
+    masked) and bounds each poll request to the historical 5s. Ticket #74 keeps
+    the current login progress so a Duo push wait ends the wait at once.
     """
     try:
         status = console_um_adapter.read_auth_status(
             base_url, token, timeout=_STATUS_POLL_TIMEOUT_S)
     except OperationError as exc:
         return {"state": None, "error": None, "recovery": None,
-                "primary": None,
+                "primary": None, "login": None,
                 "read_error": {"code": exc.code, "message": exc.message}}
     return {
         "state": status["state"],
         "error": status["error"],
         "recovery": status["recovery"],
         "primary": status.get("primary"),
+        # Ticket #74: the current login progress carries the Duo push wait
+        # (phase/origin/manual_reason) without any page content.
+        "login": status.get("login"),
         "read_error": None,
     }
 
@@ -468,6 +476,15 @@ def _classify_auth_status(status):
         raise read_failure
     if _login_cancelled(status):
         raise OperationCancelled()
+    login = status.get("login")
+    if (isinstance(login, dict)
+            and login.get("manual_reason") == DUO_PROMPT_WAITING_REASON):
+        # Ticket #74: the gateway is still waiting for the account holder's
+        # Duo approval. Report the takeover at once instead of polling until
+        # the console budget expires; the round itself keeps waiting.
+        raise OperationError(
+            "login_manual_takeover_required",
+            "登录需要本人确认 Duo 推送；本轮仍在等待，可打开可见窗口")
     round_code = _login_round_code(status)
     if round_code is not None:
         # A busy profile or an unavailable visible window is a definitive
@@ -488,10 +505,12 @@ def _wait_login_valid(base_url, token, ctx, budget_s, interval_s):
     where state is the single recheck result (None when even the recheck was
     unreachable). A terminal manual-takeover or exhausted-recovery failure
     raises the mapped OperationError immediately; an operator cancel raises
-    OperationCancelled. A configuration/schema status-read failure also ends
-    the wait immediately, while a transient read failure keeps polling and is
-    carried in ``read_error`` for the timeout message. Both restore the
-    service first instead of waiting for the budget.
+    OperationCancelled. Ticket #74: a Duo push wait also ends the wait at once
+    with ``login_manual_takeover_required`` while the backend round keeps
+    waiting. A configuration/schema status-read failure also ends the wait
+    immediately, while a transient read failure keeps polling and is carried in
+    ``read_error`` for the timeout message. Both restore the service first
+    instead of waiting for the budget.
     Cooperative cancel: the event is checked before every poll and before
     the recheck, so a cancelled run stops polling and restores as usual.
     """
@@ -554,6 +573,12 @@ def _reraise_after_restore(exc, kind, fact):
                 "stop_failed", "已响应取消，但" + fact)
         raise exc
     if isinstance(exc, OperationError):
+        if (exc.code == "login_manual_takeover_required"
+                and kind == _RESTORE_KEPT):
+            # Ticket #74: the Duo-wait takeover message is the stable
+            # operator instruction. When nothing was started or stopped,
+            # appending the (empty) restore fact would only obscure it.
+            raise exc
         combined = " ".join((exc.message + "；" + fact).split())
         raise OperationError(exc.code, combined)
     raise exc

@@ -28,7 +28,10 @@ decides whether a browser login is needed.
 Ticket #15: ``um_auth_status`` also passes the ONE login window
 (``login_window_deadline_epoch`` / ``login_window_s``) through, so the
 console can show how long the current explicit round may still take. A
-malformed/missing window stays unknown (None), never 0.
+malformed/missing window stays unknown (None), never 0. Ticket #74 also passes
+the current login progress (``login.phase`` / ``login.origin`` /
+``login.manual_reason``) through, so the console can show a Duo push wait and
+offer the visible-window takeover.
 
 Handler contract matches the task layer: ``handler(target, params, ctx)``.
 Pure stdlib plus the shared console error type; import has no side effects.
@@ -177,6 +180,25 @@ def _coerce_number(value):
 _RECOVERY_STATES = ("idle", "waiting", "running", "exhausted", "stopped")
 
 
+def _login_summary(value):
+    """Whitelist the current login session's progress (ticket #74).
+
+    Only the progress fields the console may display are copied: the phase, the
+    sanitized origin and the soft manual reason. A missing or malformed value is
+    ``None`` rather than a fabricated session.
+    """
+    if not isinstance(value, dict):
+        return None
+    summary = {
+        "phase": _coerce_text(value.get("phase")),
+        "origin": _coerce_text(value.get("origin")),
+        "manual_reason": _coerce_text(value.get("manual_reason")),
+    }
+    if all(field is None for field in summary.values()):
+        return None
+    return summary
+
+
 def _recovery_summary(value):
     """Whitelist the additive recovery summary from chat2api (A7).
 
@@ -297,6 +319,10 @@ def _read_auth_status(base_url, token, timeout=_TIMEOUT_S):
         # Ticket #42 item 16: the console read face keeps the primary session
         # outcome a terminal cleanup failure masked.
         "primary": _coerce_text(payload.get("primary")),
+        # Ticket #74: the current login session's phase, sanitized origin and
+        # soft manual reason let the console show a Duo push wait and offer the
+        # visible-window takeover without reading any page content.
+        "login": _login_summary(payload.get("login")),
         "checked_epoch": int(time.time()),
     }
 

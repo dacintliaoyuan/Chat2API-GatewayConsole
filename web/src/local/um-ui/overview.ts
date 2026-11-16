@@ -96,11 +96,15 @@ export function actionButton(
 
 /** The secondary explicit forced re-login entry (ADR 0005). It shares the
  *  login capability and progress with the on-demand entry; the click asks for a
- *  visible window and skips the on-demand verification. */
-export function forceLoginButton(o: UmOverview): string {
+ *  visible window and skips the on-demand verification. Ticket #74 relabels it
+ *  「打开可见窗口」 while the gateway waits for the Duo push. */
+export function forceLoginButton(
+  o: UmOverview,
+  label = "强制重新登录（可见窗口）"
+): string {
   const busy = o.progress.login?.state === "pending";
   const reason = blockReason(o.actions.login, busy);
-  return `${capButton(o.actions.login, "data-um-force-login", "btn btn-sm btn-outline", "强制重新登录（可见窗口）", busy)}${reason && !busy ? `<span class="um-block-reason">${esc(reason)}</span>` : ""}`;
+  return `${capButton(o.actions.login, "data-um-force-login", "btn btn-sm btn-outline", label, busy)}${reason && !busy ? `<span class="um-block-reason">${esc(reason)}</span>` : ""}`;
 }
 
 function progressHtml(
@@ -189,8 +193,11 @@ function statusRow(o: UmOverview): string {
     login &&
       (() => {
         const l = login.data;
+        const takeover = l.takeover === true;
         return {
-          tone: wordOf(LOGIN_TONE, l.state, "neutral"),
+          tone: takeover
+            ? "warn"
+            : wordOf(LOGIN_TONE, l.state, "neutral"),
           word: l.word,
           detail: l.detail,
           time: checked(l.checkedAt),
@@ -198,7 +205,10 @@ function statusRow(o: UmOverview): string {
             ["needs_login", "invalid", "unknown"].includes(l.state)
               ? actionButton(o, "login")
               : "",
-            forceLoginButton(o),
+            forceLoginButton(
+              o,
+              takeover ? "打开可见窗口" : undefined
+            ),
           ]
             .filter(Boolean)
             .join(""),

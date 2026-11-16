@@ -53,6 +53,10 @@ _Avoid_: 自动弹窗、云端专用实例窗口、把 headless 伪装成可见
 自动登录在 UMPASS 之后等待本人批准 Duo 推送的阶段；它不是失败，也不是终端人工接管，自动轮次会在此期间打开可见窗口。控制台显示“等待本人确认 Duo 推送”。
 _Avoid_: 自动重登录失败、登录超时、人工接管已结束
 
+**人工接管 (Manual takeover)**:
+自动流程遇到只能由本人完成的步骤时立即结束当前轮并释放浏览器，默认返回 `manual_takeover_required:<reason>`；操作员显式选择才按需拉起可见 display 并开新轮，不复用旧轮。`umpass_mfa_required`、`umpass_prefill_missing`、`unrecognized_page` 属于人工接管；`duo_prompt_waiting` 继续等待，不误判为人工接管。
+_Avoid_: 自动重试人工步骤、把 Duo 推送等待当人工接管
+
 **人工接管等待 (Manual takeover wait)**:
 自动流程遇到只能本人完成的步骤时，等待操作员在可见窗口完成的阶段；控制台返回 `login_manual_takeover_required` 并提供「打开可见窗口」，不把等待当成失败。
 _Avoid_: 登录失败、自动重试、后台线程已结束
