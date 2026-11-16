@@ -624,7 +624,7 @@ ensure_env_line "$UM_ETC/console.env" CONSOLE_DISPLAY_VNC_AUTH_SOCKET "/run/um-s
 if [ -n "$BROWSER_PATH" ]; then
   set_env_value "$UM_ETC/console.env" CHAT2API_BROWSER_PATH "$BROWSER_PATH"
 fi
-chown root:"$UM_BROKER_GROUP" "$UM_ETC/broker.env" "$UM_ETC/console.env" 2>/dev/null || true
+chown root:"$UM_BROKER_GROUP" "$UM_ETC/broker.env" "$UM_ETC/console.env" "$UM_ETC/gateway.env" 2>/dev/null || true
 chmod 0640 "$UM_ETC/broker.env" "$UM_ETC/console.env"
 
 if [ ! -e "$UM_ETC/vnc.passwd" ]; then
