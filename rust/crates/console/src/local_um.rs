@@ -1770,7 +1770,7 @@ pub fn um_requests(
     }))
 }
 
-fn base64_encode(data: &[u8]) -> String {
+pub(crate) fn base64_encode(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = String::new();
@@ -1795,7 +1795,7 @@ fn base64_encode(data: &[u8]) -> String {
     output
 }
 
-fn base64_decode(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn base64_decode(text: &str) -> Option<Vec<u8>> {
     let bytes = text.as_bytes();
     if bytes.len() % 4 != 0 {
         return None;

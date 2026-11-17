@@ -809,3 +809,108 @@ fn log_sources_matches_python_registry_shape_without_paths() {
         }
     }
 }
+
+fn write_service_log(temp: &um_test_harness::TempDataDir) -> std::path::PathBuf {
+    let path = temp.path().join("chat2api/chat2api.log");
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("log dir");
+    let text = [
+        "2026-11-17 10:00:00 INFO hello",
+        "2026-11-17T10:01:00+08:00 WARN warn line",
+        "[launcher] 2026/11/17 周三 10:02:03.65 tagged line",
+        "{\"time\": \"2026-11-17T10:03:00+08:00\", \"model\": \"m1\", \"status\": \"ok\", \"input_tokens\": 5, \"output_tokens\": 2, \"duration_ms\": 100}",
+        "  Traceback continuation",
+        "plain unparsable line",
+        "2026-11-17 10:04:00 ERROR token=secret boom",
+    ]
+    .join("
+")
+        + "
+";
+    std::fs::write(&path, text.as_bytes()).expect("write service log");
+    path
+}
+
+#[test]
+fn log_entries_matches_python_rows_redaction_and_missing_data_semantics() {
+    let temp = temp();
+    let path = write_service_log(&temp);
+    let console = local_console(&temp);
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/log-entries?source=chat2api&category=service"),
+    )
+    .expect("log-entries");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.header("cache-control"), Some("no-store"));
+    let payload = response.json();
+    assert_eq!(payload["ok"], json!(true));
+    assert_eq!(payload["status"], json!("ok"));
+    assert_eq!(payload["reset_hint"], json!(false));
+    assert_eq!(payload["truncated"], json!(false));
+    assert_eq!(payload["window_start_offset"], json!(0));
+    assert_eq!(payload["next_cursor"], Value::Null);
+    assert_eq!(
+        payload["scanned_bytes"],
+        json!(std::fs::metadata(&path).expect("metadata").len())
+    );
+    assert!(payload["file_key"].is_string());
+    let rows = payload["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[0]["ts"], json!("2026-11-17 10:00:00"));
+    assert_eq!(rows[0]["level"], json!("INFO"));
+    assert_eq!(rows[0]["message"], json!("hello"));
+    assert_eq!(rows[0]["parse_ok"], json!(true));
+    assert_eq!(rows[1]["level"], json!("WARNING"));
+    assert_eq!(rows[1]["message"], json!("warn line"));
+    assert_eq!(rows[2]["ts"], json!("2026/11/17 周三 10:02:03.65"));
+    assert_eq!(rows[2]["level"], Value::Null);
+    assert_eq!(rows[2]["message"], json!("[launcher] tagged line"));
+    assert_eq!(rows[2]["parse_ok"], json!(false));
+    assert_eq!(rows[3]["ts"], json!("2026-11-17T10:03:00+08:00"));
+    assert_eq!(rows[3]["level"], Value::Null);
+    assert_eq!(
+        rows[3]["message"],
+        json!("model=m1 status=ok in=5 out=2 duration_ms=100
+  Traceback continuation
+plain unparsable line")
+    );
+    assert_eq!(rows[3]["parse_ok"], json!(false));
+    assert_eq!(rows[3]["event"]["model"], json!("m1"));
+    assert_eq!(rows[3]["event"]["outcome"], json!("ok"));
+    assert_eq!(rows[3]["event"]["duration_ms"], json!(100));
+    assert_eq!(rows[3]["event"]["token_rate"], json!(20.0));
+    assert_eq!(rows[3]["event"]["token_rate_kind"], json!("mean_overall"));
+    assert_eq!(rows[4]["level"], json!("ERROR"));
+    assert_eq!(rows[4]["message"], json!("token=<redacted> boom"));
+    assert_eq!(rows[4]["parse_ok"], json!(true));
+}
+
+#[test]
+fn log_entries_unknown_source_and_missing_file_are_distinct_outcomes() {
+    let temp = temp();
+    let console = local_console(&temp);
+    let unknown = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/log-entries?source=nope&category=service"),
+    )
+    .expect("log-entries");
+    assert_eq!(unknown.status, 200);
+    let payload = unknown.json();
+    assert_eq!(payload["ok"], json!(true));
+    assert_eq!(payload["status"], json!("error"));
+    assert_eq!(payload["error"], json!("unknown_log_source"));
+    assert_eq!(payload["rows"], json!([]));
+
+    let missing = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/log-entries?source=chat2api&category=console"),
+    )
+    .expect("log-entries");
+    assert_eq!(missing.status, 200);
+    let payload = missing.json();
+    assert_eq!(payload["ok"], json!(true));
+    assert_eq!(payload["status"], json!("missing"));
+    assert_eq!(payload["error"], json!("file_missing"));
+    assert_eq!(payload["rows"], json!([]));
+    assert_eq!(payload["truncated"], json!(false));
+}

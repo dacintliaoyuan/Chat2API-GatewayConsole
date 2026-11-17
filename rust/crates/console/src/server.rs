@@ -837,6 +837,35 @@ fn handle_local_usage_read(
                 &local_stats::usage_tokens(&paths(), days, epoch_seconds() as f64 * 1000.0),
             ))
         }
+        ["log-entries"] => {
+            let source = query_value(raw_target, "source").unwrap_or_default();
+            let category = query_value(raw_target, "category").unwrap_or_default();
+            let cursor = query_value(raw_target, "cursor");
+            let q = query_value(raw_target, "q");
+            let level = query_value(raw_target, "level");
+            let since = query_value(raw_target, "since");
+            let until = query_value(raw_target, "until");
+            let rotation = query_value(raw_target, "rotation").map(|raw| {
+                raw.trim().parse::<i64>().unwrap_or(-1)
+            });
+            let request_id = query_value(raw_target, "request_id");
+            let registry = local_logs::build_registry(&LogPaths::from_config(&state.config));
+            Some(send_json(
+                200,
+                &local_logs::log_entries_payload(
+                    &registry,
+                    &source,
+                    &category,
+                    cursor.as_deref(),
+                    q.as_deref(),
+                    level.as_deref(),
+                    since.as_deref(),
+                    until.as_deref(),
+                    rotation,
+                    request_id.as_deref(),
+                ),
+            ))
+        }
         ["log-sources"] => Some(send_json(
             200,
             &local_logs::registry_payload(&LogPaths::from_config(&state.config)),
