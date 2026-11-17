@@ -7,7 +7,7 @@
 
 mod support;
 
-use chrono::{DateTime, Duration, SecondsFormat};
+use chrono::{DateTime, Duration, FixedOffset, SecondsFormat, TimeZone, Utc};
 use serde_json::{json, Value};
 use um_console::local_um::{
     um_logs, um_maintenance, um_request_logs, um_requests, um_today, um_trend,
@@ -26,11 +26,26 @@ fn now() -> f64 {
     beijing_ms("2026-11-17T12:00:00+08:00")
 }
 
+fn beijing_day(offset_days: i64) -> String {
+    let offset = FixedOffset::east_opt(8 * 3600).expect("+08:00");
+    (Utc::now().with_timezone(&offset).date_naive() + Duration::days(offset_days))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
 fn ledger(temp: &um_test_harness::TempDataDir) -> std::path::PathBuf {
+    ledger_on(temp, "2026-11-17", "2026-11-16")
+}
+
+fn ledger_on(
+    temp: &um_test_harness::TempDataDir,
+    today: &str,
+    yesterday: &str,
+) -> std::path::PathBuf {
     let path = temp.path().join("usage-chat2api.jsonl");
     let rows = [
         json!({
-            "time": "2026-11-17T10:00:00+08:00",
+            "time": format!("{today}T10:00:00+08:00"),
             "model": "m1",
             "input_tokens": 100,
             "output_tokens": 20,
@@ -43,7 +58,7 @@ fn ledger(temp: &um_test_harness::TempDataDir) -> std::path::PathBuf {
             "status": "ok",
         }),
         json!({
-            "time": "2026-11-17T10:00:05+08:00",
+            "time": format!("{today}T10:00:05+08:00"),
             "model": "m1",
             "input_tokens": 5,
             "output_tokens": 0,
@@ -52,7 +67,7 @@ fn ledger(temp: &um_test_harness::TempDataDir) -> std::path::PathBuf {
             "usage_source": "upstream",
         }),
         json!({
-            "time": "2026-11-17T11:00:00+08:00",
+            "time": format!("{today}T11:00:00+08:00"),
             "model": "m2",
             "input_tokens": 30,
             "status": "upstream_unavailable",
@@ -60,7 +75,7 @@ fn ledger(temp: &um_test_harness::TempDataDir) -> std::path::PathBuf {
             "request_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         }),
         json!({
-            "time": "2026-11-16T10:00:00+08:00",
+            "time": format!("{yesterday}T10:00:00+08:00"),
             "model": "m1",
             "input_tokens": 7,
             "output_tokens": 3,
@@ -736,7 +751,9 @@ fn maintenance_reads_only_um_operations_from_the_original_records() {
 #[test]
 fn routes_serve_um_faces_and_keep_invalid_queries_distinct() {
     let temp = temp();
-    let ledger = ledger(&temp);
+    // The HTTP server reads the real clock, so this fixture's "today" rows must
+    // follow the current Beijing day instead of the pinned unit-test date.
+    let ledger = ledger_on(&temp, &beijing_day(0), &beijing_day(-1));
     let console = start_console_with(&temp, stopped_runtime(), |config| {
         config.role = um_console::Role::Local;
         config.port = 8001;
