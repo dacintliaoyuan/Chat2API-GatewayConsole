@@ -219,3 +219,70 @@ fn usage_tokens_missing_ledger_keeps_null_coverage_instead_of_zero_rows() {
         );
     }
 }
+
+#[test]
+fn usage_rates_matches_python_shape_and_counts_uncomputable_records_as_skipped() {
+    let temp = temp();
+    let (today, _stamp) = seed_usage(&temp);
+    let console = local_console(&temp);
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/usage-rates?hours=24"),
+    )
+    .expect("usage-rates");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.header("cache-control"), Some("no-store"));
+    let payload = response.json();
+    assert_eq!(payload["timezone"], json!("Asia/Shanghai"));
+    assert_eq!(payload["coverage"]["hours"], json!(24));
+    assert_eq!(payload["coverage"]["rows"], json!(1));
+    assert_eq!(payload["coverage"]["truncated"], json!(false));
+    assert_eq!(payload["skipped"]["missing_output_tokens"], json!(1));
+    assert_eq!(payload["skipped"]["missing_duration"], json!(0));
+    assert_eq!(payload["skipped"]["invalid_duration"], json!(1));
+    assert_eq!(payload["skipped"]["invalid_time"], json!(1));
+    assert_eq!(payload["recorded_requests"]["chat2api"], json!(3));
+    assert_eq!(payload["recorded_requests"]["dsh"], json!(0));
+    let hours = payload["hours"].as_array().expect("hours");
+    assert_eq!(hours.len(), 1);
+    let row = &hours[0];
+    assert_eq!(row["hour"], json!(format!("{today}T00:00:00+08:00")));
+    assert_eq!(row["source"], json!("chat2api"));
+    assert_eq!(row["model"], json!("m1"));
+    assert_eq!(row["output_tokens"], json!(20));
+    assert_eq!(row["duration_ms"], json!(1000));
+    assert_eq!(row["requests"], json!(1));
+    assert_eq!(row["rate"], json!(20.0));
+}
+
+#[test]
+fn usage_rates_missing_ledger_keeps_empty_hours_and_null_recorded_counts() {
+    let temp = temp();
+    let console = local_console(&temp);
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/usage-rates?hours=24"),
+    )
+    .expect("usage-rates");
+    assert_eq!(response.status, 200);
+    let payload = response.json();
+    assert_eq!(payload["hours"], json!([]));
+    assert_eq!(
+        payload["skipped"],
+        json!({
+            "missing_output_tokens": 0,
+            "missing_duration": 0,
+            "invalid_duration": 0,
+            "invalid_time": 0,
+        })
+    );
+    assert_eq!(payload["recorded_requests"]["chat2api"], Value::Null);
+    assert_eq!(payload["recorded_requests"]["dsh"], Value::Null);
+    for source in ["chat2api", "dsh"] {
+        assert_eq!(
+            payload["coverage"]["sources"][source]["ledger_present"],
+            json!(false),
+            "{source}"
+        );
+    }
+}

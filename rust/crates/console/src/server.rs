@@ -836,6 +836,28 @@ fn handle_local_usage_read(
                 &local_stats::usage_tokens(&paths(), days, epoch_seconds() as f64 * 1000.0),
             ))
         }
+        ["usage-rates"] => {
+            let hours = match query_value(raw_target, "hours") {
+                None => 24,
+                Some(raw) => match raw.trim().parse::<i64>() {
+                    Ok(hours) => hours,
+                    Err(_) => {
+                        return Some(
+                            ConsoleError::new(
+                                400,
+                                json!({"error": "invalid_usage_query",
+                                        "detail": "hours 必须是整数"}),
+                            )
+                            .response(),
+                        );
+                    }
+                },
+            };
+            Some(send_json(
+                200,
+                &local_stats::usage_rates(&paths(), hours, epoch_seconds() as f64 * 1000.0),
+            ))
+        }
         _ => None,
     }
 }

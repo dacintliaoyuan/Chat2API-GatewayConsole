@@ -647,6 +647,139 @@ fn missing_row(
     })
 }
 
+fn hour_label(ms: i64) -> String {
+    let seconds = ms.div_euclid(1000);
+    let Some(stamp) = beijing().timestamp_opt(seconds, 0).single() else {
+        return String::new();
+    };
+    stamp.format("%Y-%m-%dT%H:00:00+08:00").to_string()
+}
+
+fn round_digits(value: f64, digits: usize) -> f64 {
+    format!("{value:.digits$}")
+        .parse::<f64>()
+        .unwrap_or(value)
+}
+
+#[derive(Default)]
+struct RateBucket {
+    output_tokens: i64,
+    duration_ms: i64,
+    requests: i64,
+}
+
+pub fn usage_rates(paths: &StatsPaths, hours: i64, now_ms: f64) -> Value {
+    let (window_hours, clamped) = clamp_int(hours, 24, 1, MAX_RATE_RANGE_HOURS);
+    let hour_starts = {
+        let current = (now_ms / 3_600_000.0).floor() as i64 * 3_600_000;
+        (0..window_hours)
+            .rev()
+            .map(|offset| current - offset * 3_600_000)
+            .collect::<Vec<i64>>()
+    };
+    let window_start = hour_starts.first().copied().unwrap_or(0);
+    let window_end = window_start + window_hours * 3_600_000;
+    let mut buckets: BTreeMap<(i64, String, String), RateBucket> = BTreeMap::new();
+    let mut skipped = json!({
+        "missing_output_tokens": 0,
+        "missing_duration": 0,
+        "invalid_duration": 0,
+        "invalid_time": 0,
+    });
+    let scans = scan_sources(paths);
+    let mut coverage_sources = Map::new();
+    let mut recorded_requests = Map::new();
+    for scan in &scans {
+        coverage_sources.insert(scan.source.clone(), scan.coverage.clone());
+        if !scan.trusted
+            || scan.coverage["ledger_present"].as_bool() != Some(true)
+        {
+            recorded_requests.insert(scan.source.clone(), Value::Null);
+            continue;
+        }
+        let mut recorded = 0i64;
+        for event in &scan.events {
+            let Some(ms) = event.ms else {
+                skipped["invalid_time"] = json!(skipped["invalid_time"].as_i64().unwrap_or(0) + 1);
+                continue;
+            };
+            if !(window_start as f64 <= ms && ms < window_end as f64) {
+                continue;
+            }
+            recorded += 1;
+            if event.output_tokens.is_none() {
+                skipped["missing_output_tokens"] =
+                    json!(skipped["missing_output_tokens"].as_i64().unwrap_or(0) + 1);
+            }
+            match event.duration_state {
+                DurationState::Missing => {
+                    skipped["missing_duration"] =
+                        json!(skipped["missing_duration"].as_i64().unwrap_or(0) + 1);
+                }
+                DurationState::Invalid => {
+                    skipped["invalid_duration"] =
+                        json!(skipped["invalid_duration"].as_i64().unwrap_or(0) + 1);
+                }
+                DurationState::Ok => {}
+            }
+            let (Some(output_tokens), DurationState::Ok, Some(duration_ms)) =
+                (event.output_tokens, event.duration_state, event.duration_ms)
+            else {
+                continue;
+            };
+            let hour = (ms / 3_600_000.0).floor() as i64 * 3_600_000;
+            let bucket = buckets
+                .entry((hour, scan.source.clone(), event.model.clone()))
+                .or_default();
+            bucket.output_tokens += output_tokens;
+            bucket.duration_ms += duration_ms;
+            bucket.requests += 1;
+        }
+        recorded_requests.insert(scan.source.clone(), json!(recorded));
+    }
+    let mut rows = Vec::new();
+    for ((hour, source, model), bucket) in &buckets {
+        rows.push(json!({
+            "hour": hour_label(*hour),
+            "source": source,
+            "model": model,
+            "output_tokens": bucket.output_tokens,
+            "duration_ms": bucket.duration_ms,
+            "requests": bucket.requests,
+            "rate": if bucket.duration_ms > 0 {
+                Some(round_digits(
+                    bucket.output_tokens as f64 / (bucket.duration_ms as f64 / 1000.0),
+                    6,
+                ))
+            } else {
+                None
+            },
+        }));
+    }
+    let mut truncated = clamped;
+    let mut dropped_rows = 0usize;
+    if rows.len() > MAX_ROWS_PER_ENDPOINT {
+        dropped_rows = rows.len() - MAX_ROWS_PER_ENDPOINT;
+        rows.drain(..dropped_rows);
+        truncated = true;
+    }
+    json!({
+        "hours": rows,
+        "skipped": skipped,
+        "coverage": {
+            "hours": window_hours,
+            "rows": rows.len(),
+            "truncated": truncated,
+            "clamped": clamped,
+            "dropped_rows": dropped_rows,
+            "sources": coverage_sources,
+        },
+        "recorded_requests": recorded_requests,
+        "timezone": TIMEZONE_NAME,
+        "checked_epoch": (now_ms / 1000.0).floor() as i64,
+    })
+}
+
 pub fn usage_tokens(paths: &StatsPaths, days: i64, now_ms: f64) -> Value {
     let (window_days, clamped) = clamp_int(days, 14, 1, MAX_TOKEN_RANGE_DAYS);
     let day_keys = window_day_keys(window_days, now_ms);
