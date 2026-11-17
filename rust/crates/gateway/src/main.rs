@@ -9,6 +9,7 @@
 
 use std::io::Write;
 use std::process::ExitCode;
+use std::sync::atomic::Ordering;
 
 use um_gateway::config::{resolve_auth_wait_budget, AuthMode, BindMode, GatewayConfig, Role};
 use um_gateway::GatewayServer;
@@ -125,7 +126,7 @@ fn main() -> ExitCode {
     if let Some(value) = auth_wait_budget_cli {
         config.auth_wait_budget = Some(resolve_auth_wait_budget(Some(value), None, config.role));
     }
-    let server = match GatewayServer::start(config) {
+    let mut server = match GatewayServer::start(config) {
         Ok(server) => server,
         Err(error) => {
             eprintln!("um-gateway-candidate: {error}");
@@ -135,9 +136,14 @@ fn main() -> ExitCode {
     let addr = server.addr();
     println!("um-gateway listening on http://{addr}");
     let _ = std::io::stdout().flush();
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(3600));
+    // `POST /admin/shutdown` asks for the same graceful stop a signal would:
+    // the listener closes, the login browser and the instance channel stop.
+    let shutdown_request = std::sync::Arc::clone(&server.state().shutdown_request);
+    while !shutdown_request.load(Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
+    server.shutdown();
+    ExitCode::SUCCESS
 }
 
 fn usage(message: &str) -> ExitCode {

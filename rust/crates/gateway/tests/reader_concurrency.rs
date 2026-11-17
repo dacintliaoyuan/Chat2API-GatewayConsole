@@ -81,6 +81,7 @@ fn gateway_state(stub: &ChatStub) -> Arc<AppState> {
         event_log,
         reauth,
         login: None,
+        shutdown_request: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
 }
 

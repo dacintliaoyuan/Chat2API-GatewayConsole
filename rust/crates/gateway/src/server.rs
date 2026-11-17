@@ -56,6 +56,9 @@ pub struct AppState {
     pub event_log: Arc<EventLog>,
     pub reauth: Arc<ReauthenticationService>,
     pub login: Option<Arc<LoginService>>,
+    /// Set by `POST /admin/shutdown`; the process entry waits on it and then
+    /// performs the graceful stop (listener, login browser, instance channel).
+    pub shutdown_request: Arc<AtomicBool>,
 }
 
 /// A started gateway server.
@@ -208,6 +211,7 @@ impl GatewayServer {
             event_log,
             reauth,
             login,
+            shutdown_request: Arc::new(AtomicBool::new(false)),
         });
         let listener = TcpListener::bind((config.bind_host.as_str(), config.bind_port))
             .map_err(ServerError::Io)?;
@@ -932,7 +936,8 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
             }
-            GatewayError::not_implemented("admin_surface_s1a").response()
+            state.shutdown_request.store(true, Ordering::SeqCst);
+            Response::json(202, &serde_json::json!({"status": "stopping"})).closing()
         }
         path if path.starts_with("/api/") => {
             if let Err(error) = control_allowed(state, request) {
