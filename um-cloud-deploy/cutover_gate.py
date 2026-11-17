@@ -398,6 +398,10 @@ def console_parity(python_url: str, rust_url: str | None,
                 for path in paths
             ]
             differences = []
+            # Status equality is the contract, not 200: the cloud role answers
+            # 503 capability_not_assembled for local-only faces (for example the
+            # logs surface), so an identical 503-vs-503 pair with the same body
+            # is a pass. A real regression changes one side's status or body.
             for path, python_view, rust_view in zip(
                     paths, python_views, rust_views):
                 python_body = _normalize_console(python_view.get("body"))
