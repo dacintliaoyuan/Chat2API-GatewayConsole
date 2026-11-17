@@ -1551,6 +1551,254 @@ pub fn log_entries_payload(
     result
 }
 
+fn overview_sort_key(
+    left: &(Value, usize),
+    right: &(Value, usize),
+) -> std::cmp::Ordering {
+    match (left.0["ts_norm"].as_f64(), right.0["ts_norm"].as_f64()) {
+        (Some(left_ts), Some(right_ts)) => right_ts
+            .partial_cmp(&left_ts)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.1.cmp(&right.1)),
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, None) => left.1.cmp(&right.1),
+    }
+}
+
+pub fn read_overview(
+    registry: &[LogSource],
+    cursors: &[String],
+    q: Option<&str>,
+    level: Option<&str>,
+    since: Option<&str>,
+    until: Option<&str>,
+) -> Value {
+    let mut cursor_map: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    for raw in cursors {
+        if let Some(decoded) = decode_cursor(raw) {
+            cursor_map.insert(format!("{}|{}", decoded.source, decoded.category), raw.clone());
+        }
+    }
+    let budget = MAX_OVERVIEW_ROWS;
+    let mut merged: Vec<(Value, usize)> = Vec::new();
+    let mut targets: Vec<Value> = Vec::new();
+    let mut next_cursors = Map::new();
+    let mut seq = 0usize;
+    for source in registry {
+        for category in &source.categories {
+            let key = format!("{}|{}", source.source, category.category);
+            let result = read_entries(
+                registry,
+                source.source,
+                category.category,
+                cursor_map.get(&key).map(String::as_str),
+                q,
+                level,
+                since,
+                until,
+                None,
+                None,
+            );
+            let ok = result["status"].as_str() == Some("ok");
+            let row_count = result["rows"].as_array().map(Vec::len);
+            targets.push(json!({
+                "source": source.source,
+                "category": category.category,
+                "display": category.display,
+                "source_display": source.display,
+                "status": result["status"],
+                "error": result["error"],
+                "truncated": result["truncated"].as_bool().unwrap_or(false),
+                "reset_hint": result["reset_hint"].as_bool().unwrap_or(false),
+                "scanned_bytes": result["scanned_bytes"],
+                "window_start_offset": result["window_start_offset"],
+                "rows": if ok { json!(row_count.unwrap_or(0)) } else { Value::Null },
+                "rows_returned": 0,
+                "rows_dropped": 0,
+                "next_cursor": result["next_cursor"],
+            }));
+            next_cursors.insert(key, result["next_cursor"].clone());
+            if !ok {
+                continue;
+            }
+            if let Some(rows) = result["rows"].as_array() {
+                for (index, row) in rows.iter().enumerate() {
+                    let mut row = row.clone();
+                    let Some(object) = row.as_object_mut() else {
+                        continue;
+                    };
+                    object.insert("source".to_string(), json!(source.source));
+                    object.insert("category".to_string(), json!(category.category));
+                    object.insert("source_display".to_string(), json!(source.display));
+                    object.insert("category_display".to_string(), json!(category.display));
+                    object.insert(
+                        "ts_norm".to_string(),
+                        object
+                            .get("ts")
+                            .and_then(Value::as_str)
+                            .and_then(normalize_ts)
+                            .map_or(Value::Null, |value| json!(value)),
+                    );
+                    object.insert(
+                        "identity".to_string(),
+                        json!(format!(
+                            "{}|{}|{}",
+                            source.source, category.category, index
+                        )),
+                    );
+                    merged.push((row, seq));
+                    seq += 1;
+                }
+            }
+        }
+    }
+    merged.sort_by(overview_sort_key);
+    let mut dropped = 0usize;
+    if budget < merged.len() {
+        dropped = merged.len() - budget;
+        merged.truncate(budget);
+    }
+    let mut counts: std::collections::BTreeMap<(String, String), usize> =
+        std::collections::BTreeMap::new();
+    for (row, _) in &merged {
+        let source = row["source"].as_str().unwrap_or_default().to_string();
+        let category = row["category"].as_str().unwrap_or_default().to_string();
+        *counts.entry((source, category)).or_insert(0) += 1;
+    }
+    for target in &mut targets {
+        let source = target["source"].as_str().unwrap_or_default().to_string();
+        let category = target["category"].as_str().unwrap_or_default().to_string();
+        let returned = counts
+            .get(&(source.clone(), category.clone()))
+            .copied()
+            .unwrap_or(0);
+        target["rows_returned"] = json!(returned);
+        if let Some(rows) = target["rows"].as_u64() {
+            target["rows_dropped"] = json!(rows.saturating_sub(returned as u64));
+        }
+    }
+    let mut source_reports = Vec::new();
+    for source in registry {
+        let rows_of: Vec<&Value> = targets
+            .iter()
+            .filter(|target| target["source"].as_str() == Some(source.source))
+            .collect();
+        let read_n = rows_of
+            .iter()
+            .filter(|target| target["status"].as_str() == Some("ok"))
+            .count();
+        let rows_read: u64 = rows_of
+            .iter()
+            .filter_map(|target| target["rows"].as_u64())
+            .sum();
+        let rows_returned: u64 = rows_of
+            .iter()
+            .filter_map(|target| target["rows_returned"].as_u64())
+            .sum();
+        let (status, note) = if rows_of.is_empty() {
+            (
+                "no_targets",
+                source.note.unwrap_or("该来源没有注册可读日志目标"),
+            )
+        } else if read_n == rows_of.len() {
+            ("ok", "")
+        } else if read_n > 0 {
+            ("partial", "部分目标未读（见目标状态）")
+        } else {
+            ("unavailable", "全部目标未读（见目标状态）")
+        };
+        source_reports.push(json!({
+            "source": source.source,
+            "display": source.display,
+            "targets_total": rows_of.len(),
+            "targets_read": read_n,
+            "targets_unread": rows_of.len() - read_n,
+            "rows_read": rows_read,
+            "rows_returned": rows_returned,
+            "status": status,
+            "note": if note.is_empty() { Value::Null } else { json!(note) },
+        }));
+    }
+    let read_targets: Vec<&Value> = targets
+        .iter()
+        .filter(|target| target["status"].as_str() == Some("ok"))
+        .collect();
+    let count_status = |status: &str| {
+        targets
+            .iter()
+            .filter(|target| target["status"].as_str() == Some(status))
+            .count()
+    };
+    let rows_read: u64 = read_targets
+        .iter()
+        .filter_map(|target| target["rows"].as_u64())
+        .sum();
+    let sources_read = source_reports
+        .iter()
+        .filter(|source| source["targets_read"].as_u64().unwrap_or(0) > 0)
+        .count();
+    let sources_without_targets: Vec<&str> = source_reports
+        .iter()
+        .filter(|source| source["targets_total"].as_u64() == Some(0))
+        .filter_map(|source| source["source"].as_str())
+        .collect();
+    let coverage = json!({
+        "targets_total": targets.len(),
+        "targets_read": read_targets.len(),
+        "targets_unread": targets.len() - read_targets.len(),
+        "targets_unconfigured": count_status("unconfigured"),
+        "targets_missing": count_status("missing"),
+        "targets_denied": count_status("denied"),
+        "targets_error": count_status("error"),
+        "targets_truncated": targets
+            .iter()
+            .filter(|target| target["truncated"].as_bool() == Some(true))
+            .count(),
+        "rows_read": rows_read,
+        "rows_returned": merged.len(),
+        "rows_dropped_by_budget": dropped,
+        "sources_total": registry.len(),
+        "sources_read": sources_read,
+        "sources_without_targets": sources_without_targets,
+        "scope": "bounded_tail_window",
+        "full_history": false,
+        "note": "有界尾读/窗口合并：不是完整历史，也不代表全部日志已读完；读取失败 / 未配置 / 缺失的目标行数不计为 0（见目标 rows=None）；被合并行预算截断而未返回的行不再出现在本次响应（rows_dropped_by_budget），各目标自身的更早页仍按其 next_cursor 继续读取",
+        "sources": source_reports.clone(),
+    });
+    let status = if read_targets.is_empty() {
+        "unavailable"
+    } else if read_targets.len() == targets.len() {
+        "ok"
+    } else {
+        "partial"
+    };
+    json!({
+        "status": status,
+        "rows": merged.into_iter().map(|(row, _)| row).collect::<Vec<_>>(),
+        "targets": targets,
+        "next_cursors": next_cursors,
+        "sources": source_reports,
+        "coverage": coverage,
+    })
+}
+
+pub fn log_overview_payload(
+    registry: &[LogSource],
+    cursors: &[String],
+    q: Option<&str>,
+    level: Option<&str>,
+    since: Option<&str>,
+    until: Option<&str>,
+) -> Value {
+    let mut result = read_overview(registry, cursors, q, level, since, until);
+    if let Some(object) = result.as_object_mut() {
+        object.insert("ok".to_string(), json!(true));
+    }
+    result
+}
+
 fn io_error_name(error: &std::io::Error) -> &'static str {
     match error.kind() {
         std::io::ErrorKind::PermissionDenied => "PermissionError",

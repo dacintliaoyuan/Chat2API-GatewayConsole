@@ -837,6 +837,31 @@ fn handle_local_usage_read(
                 &local_stats::usage_tokens(&paths(), days, epoch_seconds() as f64 * 1000.0),
             ))
         }
+        ["log-overview"] => {
+            let cursors: Vec<String> = query_values(raw_target)
+                .get("cursor")
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .map(|cursor| cursor.chars().take(512).collect())
+                .collect();
+            let q = query_value(raw_target, "q");
+            let level = query_value(raw_target, "level");
+            let since = query_value(raw_target, "since");
+            let until = query_value(raw_target, "until");
+            let registry = local_logs::build_registry(&LogPaths::from_config(&state.config));
+            Some(send_json(
+                200,
+                &local_logs::log_overview_payload(
+                    &registry,
+                    &cursors,
+                    q.as_deref(),
+                    level.as_deref(),
+                    since.as_deref(),
+                    until.as_deref(),
+                ),
+            ))
+        }
         ["log-entries"] => {
             let source = query_value(raw_target, "source").unwrap_or_default();
             let category = query_value(raw_target, "category").unwrap_or_default();

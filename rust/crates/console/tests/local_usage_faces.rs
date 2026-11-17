@@ -914,3 +914,126 @@ fn log_entries_unknown_source_and_missing_file_are_distinct_outcomes() {
     assert_eq!(payload["rows"], json!([]));
     assert_eq!(payload["truncated"], json!(false));
 }
+
+fn seed_overview_logs(temp: &um_test_harness::TempDataDir) {
+    write_service_log(temp);
+    std::fs::write(
+        temp.path().join("chat2api/chat2api.console.log"),
+        b"2026-11-17 09:00:00 INFO console line
+",
+    )
+    .expect("console log");
+    std::fs::write(
+        temp.path().join("usage-chat2api.jsonl"),
+        b"{\"time\": \"2026-11-17T10:03:00+08:00\", \"model\": \"m1\", \"status\": \"ok\", \"input_tokens\": 5, \"output_tokens\": 2, \"duration_ms\": 100}
+",
+    )
+    .expect("usage ledger");
+    std::fs::create_dir_all(temp.path().join("watch")).expect("watch dir");
+    std::fs::write(
+        temp.path().join("watch/chat2api-watch.log"),
+        b"2026-11-17T08:00:00+08:00 INFO watch line
+",
+    )
+    .expect("watch log");
+    std::fs::create_dir_all(temp.path().join("share-backend")).expect("share dir");
+    std::fs::write(
+        temp.path().join("share-backend/share-backend.log"),
+        b"{\"time\": \"2026-11-17T07:00:00+08:00\", \"model\": \"sm\", \"status\": \"ok\"}
+",
+    )
+    .expect("share service log");
+    std::fs::write(
+        temp.path().join("share-backend/usage-share-backend.jsonl"),
+        b"{\"time\": \"2026-11-17T06:00:00+08:00\", \"model\": \"sm2\"}
+",
+    )
+    .expect("share ledger");
+}
+
+#[test]
+fn log_overview_merges_registered_targets_and_states_coverage() {
+    let temp = temp();
+    seed_overview_logs(&temp);
+    let console = local_console(&temp);
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/log-overview?since=2026-11-17"),
+    )
+    .expect("log-overview");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.header("cache-control"), Some("no-store"));
+    let payload = response.json();
+    assert_eq!(payload["ok"], json!(true));
+    assert_eq!(payload["coverage"]["scope"], json!("bounded_tail_window"));
+    assert_eq!(payload["coverage"]["full_history"], json!(false));
+    assert!(payload["coverage"]["note"]
+        .as_str()
+        .expect("note")
+        .contains("不是完整历史"));
+    assert_eq!(payload["coverage"]["targets_total"], json!(10));
+    assert!(payload["coverage"]["targets_unread"].as_u64().unwrap_or(0) >= 1);
+    assert_eq!(payload["coverage"]["rows_dropped_by_budget"], json!(0));
+    assert_eq!(payload["coverage"]["sources_without_targets"], json!(["console"]));
+    let targets = payload["targets"].as_array().expect("targets");
+    let target = |source: &str, category: &str| {
+        targets
+            .iter()
+            .find(|target| target["source"] == json!(source) && target["category"] == json!(category))
+            .unwrap_or_else(|| panic!("target {source}|{category}"))
+    };
+    assert_eq!(target("chat2api", "service")["status"], json!("ok"));
+    assert_eq!(target("chat2api", "service")["rows"], json!(5));
+    assert_eq!(target("chat2api", "service")["rows_returned"], json!(5));
+    assert_eq!(target("chat2api", "ledger")["status"], json!("ok"));
+    assert_eq!(target("chat2api", "ledger")["rows"], json!(1));
+    assert_eq!(target("chat2api", "console")["status"], json!("ok"));
+    assert_eq!(target("chat2api", "console")["rows"], json!(1));
+    assert_eq!(target("chat2api", "console_prev")["status"], json!("missing"));
+    assert_eq!(target("chat2api", "console_prev")["rows"], Value::Null);
+    assert_eq!(target("chat2api", "watch")["status"], json!("ok"));
+    assert_eq!(target("share", "service")["status"], json!("ok"));
+    assert_eq!(target("share", "ledger")["status"], json!("ok"));
+    let next_cursors = payload["next_cursors"].as_object().expect("next cursors");
+    for key in [
+        "chat2api|service",
+        "chat2api|ledger",
+        "chat2api|console",
+        "chat2api|console_prev",
+        "chat2api|watch",
+        "share|service",
+        "share|ledger",
+        "share|gateway",
+        "share|faults",
+        "share|broker",
+    ] {
+        assert!(next_cursors.contains_key(key), "{key}");
+    }
+    let rows = payload["rows"].as_array().expect("rows");
+    let messages: Vec<&str> = rows
+        .iter()
+        .filter_map(|row| row["message"].as_str())
+        .collect();
+    assert!(messages.iter().any(|message| message.contains("hello")));
+    assert!(messages.iter().any(|message| message.contains("console line")));
+    assert!(messages.iter().any(|message| message.contains("watch line")));
+    assert!(messages.iter().any(|message| message.contains("model=sm status=ok")));
+    assert!(messages.iter().any(|message| message.contains("model=sm2")));
+    let ledger_row = rows
+        .iter()
+        .find(|row| row["source"] == json!("chat2api") && row["category"] == json!("ledger"))
+        .expect("chat2api ledger row");
+    assert_eq!(ledger_row["event"]["model"], json!("m1"));
+    assert_eq!(ledger_row["event"]["token_rate"], json!(20.0));
+    assert!(ledger_row["ts_norm"].is_number());
+    assert!(ledger_row["identity"].is_string());
+    let chat2api = payload["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find(|source| source["source"] == json!("chat2api"))
+        .expect("chat2api source");
+    assert_eq!(chat2api["status"], json!("partial"));
+    assert_eq!(chat2api["targets_total"], json!(5));
+    assert_eq!(chat2api["targets_unread"], json!(1));
+}
