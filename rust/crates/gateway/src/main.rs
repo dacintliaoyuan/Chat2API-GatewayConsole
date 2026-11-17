@@ -10,12 +10,13 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use um_gateway::config::{AuthMode, BindMode, GatewayConfig, Role};
+use um_gateway::config::{resolve_auth_wait_budget, AuthMode, BindMode, GatewayConfig, Role};
 use um_gateway::GatewayServer;
 
 fn main() -> ExitCode {
     let mut config = GatewayConfig::from_env();
     let mut role = None;
+    let mut auth_wait_budget_cli = None;
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
@@ -27,6 +28,14 @@ fn main() -> ExitCode {
             "--role" => match args.next().as_deref().and_then(Role::parse) {
                 Some(value) => role = Some(value),
                 None => return usage("--role must be local or cloud"),
+            },
+            "--auth-wait-budget-seconds" => match args
+                .next()
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite())
+            {
+                Some(value) => auth_wait_budget_cli = Some(value),
+                None => return usage("--auth-wait-budget-seconds requires a finite number"),
             },
             "--host" => match args.next() {
                 Some(value) => config.bind_host = value,
@@ -93,7 +102,8 @@ fn main() -> ExitCode {
                      [--share-config PATH] [--auth-mode projection|legacy] \
                      [--control-token-file PATH] [--token-file PATH] \
                      [--profile-dir PATH] [--login-display-file PATH] \
-                     [--login-timeout SECONDS] [--no-browser]\n\
+                     [--login-timeout SECONDS] [--no-browser] \
+                     [--auth-wait-budget-seconds SECONDS]\n\
                      modes: candidate (default) binds an ephemeral loopback port only; \
                      production must be selected explicitly and binds 8000, 8002 or 8003 \
                      on loopback only; --role defaults to local for 8000 and cloud otherwise"
@@ -107,6 +117,10 @@ fn main() -> ExitCode {
         return usage("--upstream-base-url is required");
     }
     config.role = role.unwrap_or_else(|| Role::for_port(config.bind_port));
+    if let Some(value) = auth_wait_budget_cli {
+        config.auth_wait_budget =
+            Some(resolve_auth_wait_budget(Some(value), None, config.role));
+    }
     let server = match GatewayServer::start(config) {
         Ok(server) => server,
         Err(error) => {

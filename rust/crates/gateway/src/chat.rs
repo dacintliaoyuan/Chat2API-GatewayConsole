@@ -193,7 +193,7 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
     let mut compat_retry_used = false;
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
-    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget);
+    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget());
     let limits = RetryLimits::from_config(&context.state.config);
     loop {
         if Instant::now() >= context.deadline {
@@ -346,7 +346,7 @@ fn forward_stream_inner(
 ) -> ChatResult {
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
-    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget);
+    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget());
     let limits = RetryLimits::from_config(&context.state.config);
     let mut compat_retry_used = false;
     let mut upstream_body = context.upstream_body.clone();

@@ -1295,7 +1295,7 @@ fn forward_json_inner(
 ) -> ChatResult {
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
-    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget);
+    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget());
     let limits = RetryLimits::from_config(&context.state.config);
     let upstream_path = if via_messages {
         "/api/v1/messages"
@@ -1447,7 +1447,7 @@ fn forward_aggregate_inner(
 ) -> ChatResult {
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
-    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget);
+    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget());
     let limits = RetryLimits::from_config(&context.state.config);
     let upstream_path = if via_messages {
         "/api/v1/messages"
@@ -1743,7 +1743,7 @@ fn forward_stream_with_inner(
 ) -> ChatResult {
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
-    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget);
+    let mut auth_wait_budget = AuthWaitBudget::new(context.state.config.auth_wait_budget());
     let limits = RetryLimits::from_config(&context.state.config);
     let created_at = unix_seconds();
     let response_id = format!("resp_{}", random_hex(12));

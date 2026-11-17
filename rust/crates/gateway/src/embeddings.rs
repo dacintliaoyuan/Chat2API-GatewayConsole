@@ -60,7 +60,7 @@ fn handle_embeddings_inner(
     let deadline = Instant::now() + state.config.request_total;
     let mut retry_state = RetryState::default();
     let mut last = LastAttempt::default();
-    let mut auth_wait_budget = AuthWaitBudget::new(state.config.auth_wait_budget);
+    let mut auth_wait_budget = AuthWaitBudget::new(state.config.auth_wait_budget());
     let limits = RetryLimits::from_config(&state.config);
     loop {
         if Instant::now() >= deadline {

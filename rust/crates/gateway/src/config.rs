@@ -38,7 +38,9 @@ pub const MIN_REQUEST_TOTAL_SECONDS: u64 = 10;
 pub const MAX_REQUEST_TOTAL_SECONDS: u64 = 3600;
 /// The cumulative authentication wait of one logical request (#63).
 pub const DEFAULT_AUTH_WAIT_BUDGET_SECONDS: f64 = 30.0;
-pub const MIN_AUTH_WAIT_BUDGET_SECONDS: f64 = 0.01;
+/// The cloud process keeps Python's 180 second default (the share gateway).
+pub const DEFAULT_CLOUD_AUTH_WAIT_BUDGET_SECONDS: f64 = 180.0;
+pub const MIN_AUTH_WAIT_BUDGET_SECONDS: f64 = 1.0;
 pub const MAX_AUTH_WAIT_BUDGET_SECONDS: f64 = 180.0;
 /// Concurrent authentication waiters, not login sessions.
 pub const DEFAULT_AUTH_WAIT_MAX_CONCURRENT: usize = 128;
@@ -251,6 +253,15 @@ impl Role {
             Self::Cloud
         }
     }
+
+    /// Python `resolve_auth_wait_budget`: the local 8000 process defaults to
+    /// 30 seconds and the cloud 8002/8003 process keeps 180 seconds.
+    pub fn default_auth_wait_budget(self) -> Duration {
+        match self {
+            Self::Local => Duration::from_secs_f64(DEFAULT_AUTH_WAIT_BUDGET_SECONDS),
+            Self::Cloud => Duration::from_secs_f64(DEFAULT_CLOUD_AUTH_WAIT_BUDGET_SECONDS),
+        }
+    }
 }
 
 /// One gateway configuration.
@@ -285,8 +296,9 @@ pub struct GatewayConfig {
     pub body_read_timeout: Duration,
     /// Total wall-clock budget of one Chat request.
     pub request_total: Duration,
-    /// Cumulative authentication wait of one logical request (#63).
-    pub auth_wait_budget: Duration,
+    /// Cumulative authentication wait of one logical request (#63). `None`
+    /// selects the role default: 30 seconds local, 180 seconds cloud.
+    pub auth_wait_budget: Option<Duration>,
     /// Concurrent authentication waiters (#63), not login sessions.
     pub auth_wait_max_concurrent: usize,
     /// How often a waiting request rechecks the shared session.
@@ -362,7 +374,7 @@ impl Default for GatewayConfig {
             service_log: None,
             body_read_timeout: Duration::from_secs(DEFAULT_BODY_READ_TIMEOUT_SECONDS),
             request_total: Duration::from_secs(DEFAULT_REQUEST_TOTAL_SECONDS),
-            auth_wait_budget: Duration::from_secs_f64(DEFAULT_AUTH_WAIT_BUDGET_SECONDS),
+            auth_wait_budget: None,
             auth_wait_max_concurrent: DEFAULT_AUTH_WAIT_MAX_CONCURRENT,
             auth_wait_recheck: Duration::from_secs_f64(DEFAULT_AUTH_WAIT_RECHECK_SECONDS),
             reauth_attempt_window: Duration::from_secs(DEFAULT_REAUTH_ATTEMPT_WINDOW_SECONDS),
@@ -577,6 +589,12 @@ impl GatewayConfig {
         }
     }
 
+    /// The effective per-request cumulative authentication-wait budget.
+    pub fn auth_wait_budget(&self) -> Duration {
+        self.auth_wait_budget
+            .unwrap_or_else(|| self.role.default_auth_wait_budget())
+    }
+
     /// Fail closed before binding a socket.
     pub fn validate_bind_policy(&self) -> Result<(), ConfigError> {
         if !is_loopback_host(&self.bind_host) {
@@ -669,15 +687,34 @@ pub fn parse_request_total_seconds(value: Option<&str>) -> Duration {
     ) as u64)
 }
 
-/// Parse the per-request cumulative authentication-wait budget.
-pub fn parse_auth_wait_budget(value: Option<&str>) -> Duration {
-    let seconds = value
-        .and_then(|value| value.trim().parse::<f64>().ok())
-        .filter(|value| value.is_finite())
-        .unwrap_or(DEFAULT_AUTH_WAIT_BUDGET_SECONDS);
-    Duration::from_secs_f64(
+/// Parse the per-request cumulative authentication-wait budget. An absent or
+/// invalid value keeps the role default; an explicit value is clamped to 1..180,
+/// exactly like Python's `_clamp_auth_wait_budget`.
+pub fn parse_auth_wait_budget(value: Option<&str>) -> Option<Duration> {
+    let seconds = value?
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())?;
+    Some(Duration::from_secs_f64(
         seconds.clamp(MIN_AUTH_WAIT_BUDGET_SECONDS, MAX_AUTH_WAIT_BUDGET_SECONDS),
-    )
+    ))
+}
+
+/// Resolve the auth-wait budget with Python's precedence: an explicit CLI value
+/// wins, then the environment, then the role default. Explicit values clamp to
+/// 1..180 so no operator value can disable the budget or exceed the ceiling.
+pub fn resolve_auth_wait_budget(
+    cli_seconds: Option<f64>,
+    env_value: Option<&str>,
+    role: Role,
+) -> Duration {
+    if let Some(seconds) = cli_seconds.filter(|value| value.is_finite()) {
+        return Duration::from_secs_f64(
+            seconds.clamp(MIN_AUTH_WAIT_BUDGET_SECONDS, MAX_AUTH_WAIT_BUDGET_SECONDS),
+        );
+    }
+    parse_auth_wait_budget(env_value).unwrap_or_else(|| role.default_auth_wait_budget())
 }
 
 /// Parse the concurrent authentication-wait slot count.
