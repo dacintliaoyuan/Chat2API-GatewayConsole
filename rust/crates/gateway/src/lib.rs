@@ -28,6 +28,7 @@ pub mod retry;
 pub mod server;
 pub mod tls;
 pub mod upstream;
+pub mod watch;
 
 pub use body::{read_json_body, BodyPolicy};
 pub use config::{AuthMode, BindMode, GatewayConfig, Role};
@@ -35,3 +36,4 @@ pub use error::GatewayError;
 pub use gate::{GateState, RefusalReason, ShareGate};
 pub use readonly::ProxyState;
 pub use server::{AppState, GatewayServer, ServerError, ServerHandle};
+pub use watch::WatchStatus;

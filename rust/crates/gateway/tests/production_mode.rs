@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use um_gateway::config::{BindMode, GatewayConfig};
+use um_gateway::config::{BindMode, GatewayConfig, Role};
 
 use support::*;
 
@@ -261,6 +261,7 @@ fn production_allows_only_8000_8002_and_8003_on_loopback() {
     for port in [8000u16, 8002, 8003] {
         let config = GatewayConfig {
             bind_port: port,
+            role: Role::for_port(port),
             candidate: false,
             upstream_base_url: "http://127.0.0.1:8000".to_string(),
             ..GatewayConfig::default()
@@ -296,6 +297,59 @@ fn production_allows_only_8000_8002_and_8003_on_loopback() {
             .validate_bind_policy()
             .expect_err("production must reject a non-loopback host");
         assert!(error.to_string().contains("loopback"), "{host}: {error}");
+    }
+}
+
+#[test]
+fn production_rejects_a_role_port_mismatch() {
+    for (role, port) in [
+        (Role::Cloud, 8000u16),
+        (Role::Local, 8002u16),
+        (Role::Local, 8003u16),
+    ] {
+        let config = GatewayConfig {
+            bind_port: port,
+            role,
+            candidate: false,
+            upstream_base_url: "http://127.0.0.1:8000".to_string(),
+            ..GatewayConfig::default()
+        };
+        let error = config
+            .validate_bind_policy()
+            .expect_err("a role/port mismatch must fail before bind");
+        assert!(
+            error.to_string().contains("role"),
+            "{role:?} on {port}: {error}"
+        );
+        assert!(
+            error.to_string().contains(role.as_str()),
+            "{role:?} on {port}: {error}"
+        );
+    }
+}
+
+#[test]
+fn production_binary_checks_the_final_role_and_port_pair() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let stub = StubUpstream::start();
+    for args in [
+        ["--role", "local", "--port", "8003"],
+        ["--port", "8003", "--role", "local"],
+        ["--role", "cloud", "--port", "8000"],
+        ["--role", "local", "--port", "8002"],
+    ] {
+        let output = gateway_command(&temp, &stub)
+            .arg("--mode")
+            .arg("production")
+            .args(args)
+            .output()
+            .expect("run rejected production gateway");
+        assert!(
+            !output.status.success(),
+            "production must reject {args:?} before bind"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("role"), "{args:?} stderr: {stderr}");
     }
 }
 

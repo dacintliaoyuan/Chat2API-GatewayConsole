@@ -122,6 +122,8 @@ fn main() -> ExitCode {
     if config.upstream_base_url.is_empty() {
         return usage("--upstream-base-url is required");
     }
+    // Apply `--role` and `--port` only after the whole argv is parsed, so
+    // `validate_bind_policy` sees the final pair regardless of flag order.
     config.role = role.unwrap_or_else(|| Role::for_port(config.bind_port));
     if let Some(value) = auth_wait_budget_cli {
         config.auth_wait_budget = Some(resolve_auth_wait_budget(Some(value), None, config.role));

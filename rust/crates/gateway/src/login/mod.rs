@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 
 use crate::config::GatewayConfig;
 use crate::reauth::{ReauthProviderResult, ReauthenticationProvider};
+use crate::watch::WatchStatus;
 
 use self::profile::{acquire_profile_lock, manual_display, visible_login_supported};
 use self::token::TokenStore;
@@ -399,6 +400,7 @@ struct LoginInner {
     state: Mutex<LoginState>,
     condvar: Condvar,
     attempts: Mutex<VecDeque<Instant>>,
+    watch: Arc<WatchStatus>,
 }
 
 /// One shared UM login executor.
@@ -413,6 +415,23 @@ impl LoginService {
         factory: Arc<dyn LoginBrowserFactory>,
         probe: Arc<dyn CredentialProbe>,
         credentials: Arc<dyn CredentialSink>,
+    ) -> Self {
+        Self::new_with_watch(
+            config,
+            factory,
+            probe,
+            credentials,
+            Arc::new(WatchStatus::new()),
+        )
+    }
+
+    /// Construct with the auth-watch state shared with the HTTP surface.
+    pub fn new_with_watch(
+        config: LoginConfig,
+        factory: Arc<dyn LoginBrowserFactory>,
+        probe: Arc<dyn CredentialProbe>,
+        credentials: Arc<dyn CredentialSink>,
+        watch: Arc<WatchStatus>,
     ) -> Self {
         let token_store = TokenStore::new(config.token_file.clone(), config.base_url.clone());
         let saved = token_store.load();
@@ -451,6 +470,7 @@ impl LoginService {
                 }),
                 condvar: Condvar::new(),
                 attempts: Mutex::new(VecDeque::new()),
+                watch,
             }),
         }
     }
@@ -469,6 +489,23 @@ impl LoginService {
         )
     }
 
+    /// Construct from the gateway config with the shared auth-watch state.
+    pub fn from_gateway_with_watch(
+        config: &GatewayConfig,
+        factory: Arc<dyn LoginBrowserFactory>,
+        probe: Arc<dyn CredentialProbe>,
+        credentials: Arc<dyn CredentialSink>,
+        watch: Arc<WatchStatus>,
+    ) -> Self {
+        Self::new_with_watch(
+            LoginConfig::from_gateway(config),
+            factory,
+            probe,
+            credentials,
+            watch,
+        )
+    }
+
     /// The saved credential this instance starts with, if any.
     pub fn saved_token(&self) -> Option<TokenDocument> {
         self.inner.token_store.load()
@@ -482,10 +519,15 @@ impl LoginService {
         &self.inner.config
     }
 
+    /// The auth-watch state shared with the server's watch thread.
+    pub fn watch(&self) -> Arc<WatchStatus> {
+        Arc::clone(&self.inner.watch)
+    }
+
     /// The console-visible authentication status, with the same keys as Python.
     pub fn status(&self) -> Value {
         let state = self.inner.state.lock().expect("login state poisoned");
-        status_from_locked(&state)
+        status_from_locked(&state, &self.inner.watch)
     }
 
     /// The explicit `/admin/auth/login` entry: start or join the ONE round.
@@ -500,14 +542,14 @@ impl LoginService {
                 state.recovery.pause_reason = Some("BrowserDisabled".to_string());
                 state.recovery.next_attempt_epoch = None;
                 self.inner.condvar.notify_all();
-                return status_from_locked(&state);
+                return status_from_locked(&state, &self.inner.watch);
             }
             if active_round(&state) {
                 if visible {
                     state.recovery.visible = true;
                 }
                 begin_login_window(&mut state, &self.inner.config);
-                return status_from_locked(&state);
+                return status_from_locked(&state, &self.inner.watch);
             }
             if state.auth_state == AuthState::Failed || state.auth_state == AuthState::Cancelled {
                 state.error = None;
@@ -523,7 +565,7 @@ impl LoginService {
                 state.recovery.pause_reason = None;
                 state.gate = Some(self.inner.refused_gate("global_attempt_cap"));
                 self.inner.condvar.notify_all();
-                return status_from_locked(&state);
+                return status_from_locked(&state, &self.inner.watch);
             }
             begin_round_locked(&self.inner, &mut state, visible);
         }
@@ -595,18 +637,23 @@ impl LoginService {
         {
             return;
         }
-        state.auth_state = match verdict {
-            "valid" => AuthState::Valid,
-            "needs_login" | "rejected" => AuthState::NeedsLogin,
-            _ => AuthState::Unknown,
-        };
-        if verdict == "valid" {
-            state.error = None;
-            state.primary = None;
-            state.gate = None;
-            state.recovery.state = "idle".to_string();
-            state.recovery.next_attempt_epoch = None;
-            state.recovery.pause_reason = None;
+        match verdict {
+            "valid" => {
+                state.auth_state = AuthState::Valid;
+                state.error = None;
+                state.primary = None;
+                state.gate = None;
+                state.recovery.state = "idle".to_string();
+                state.recovery.next_attempt_epoch = None;
+                state.recovery.pause_reason = None;
+            }
+            // Python only lets these two verdicts move the state to
+            // `needs_login`; an unknown probe only records evidence.
+            "needs_login" | "rejected" => {
+                state.auth_state = AuthState::NeedsLogin;
+                state.error = None;
+            }
+            _ => {}
         }
     }
 
@@ -867,7 +914,7 @@ fn begin_login_window(state: &mut LoginState, config: &LoginConfig) {
     });
 }
 
-fn status_from_locked(state: &LoginState) -> Value {
+fn status_from_locked(state: &LoginState, watch: &WatchStatus) -> Value {
     let manual_reason = state
         .login
         .as_ref()
@@ -890,13 +937,7 @@ fn status_from_locked(state: &LoginState) -> Value {
         "evidence": state.evidence.as_json(),
         "login": state.login.as_ref().map(LoginProgress::as_json),
         "gate": state.gate,
-        "watch": {
-            "thread_alive": false,
-            "last_round_epoch": Value::Null,
-            "last_round_outcome": Value::Null,
-            "next_round_due": Value::Null,
-            "rounds": 0,
-        },
+        "watch": watch.snapshot(),
         "recovery": state.recovery.as_json(),
         "login_window_deadline_epoch": window.map(|window| window.deadline_epoch),
         "login_window_s": window.map(|window| window.window_s),

@@ -35,10 +35,11 @@ use crate::login::{
 use crate::messages::handle_messages;
 use crate::readonly::ProxyState;
 use crate::reauth::{
-    AuthWaitBudget, MissingLoginProvider, ReauthLimits, ReauthResult, ReauthenticationProvider,
+    AuthWaitBudget, MissingLoginProvider, ReauthLimits, ReauthenticationProvider,
     ReauthenticationService,
 };
 use crate::responses::handle_responses;
+use crate::watch::WatchStatus;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 /// Python `AUTH_WATCH_INTERVAL_S`: the periodic credential probe interval.
@@ -61,6 +62,9 @@ pub struct AppState {
     pub event_log: Arc<EventLog>,
     pub reauth: Arc<ReauthenticationService>,
     pub login: Option<Arc<LoginService>>,
+    /// The auth-watch state shared with `LoginService`; `/health` reads it even
+    /// when the admin login surface is unassembled.
+    pub watch: Arc<WatchStatus>,
     /// Set by `POST /admin/shutdown`; the process entry waits on it and then
     /// performs the graceful stop (listener, login browser, instance channel).
     pub shutdown_request: Arc<AtomicBool>,
@@ -121,6 +125,7 @@ impl GatewayServer {
                 .map_err(ServerError::Config)?,
         );
         proxy.probe_config();
+        let watch = Arc::new(WatchStatus::new());
         let login = if provider.is_some() {
             None
         } else {
@@ -136,11 +141,12 @@ impl GatewayServer {
                         )
                     }
                 };
-            Some(Arc::new(LoginService::from_gateway(
+            Some(Arc::new(LoginService::from_gateway_with_watch(
                 &config,
                 factory,
                 probe,
                 Arc::clone(&proxy) as Arc<dyn crate::login::CredentialSink>,
+                Arc::clone(&watch),
             )))
         };
         if let Some(login) = &login {
@@ -217,6 +223,7 @@ impl GatewayServer {
             event_log,
             reauth,
             login,
+            watch,
             shutdown_request: Arc::new(AtomicBool::new(false)),
         });
         let listener = TcpListener::bind((config.bind_host.as_str(), config.bind_port))
@@ -301,15 +308,23 @@ impl Drop for ServerHandle {
 /// The Python `run_auth_watch_round` loop: every five minutes probe the
 /// credential and start the ONE login round when it is no longer valid.
 ///
-/// A rejected credential backs the interval off to 30 minutes; a valid one resets
-/// it. Without this loop a token that expires server-side leaves `/ready` at 503
-/// until a client request happens to trigger the round.
+/// The first round waits one full base interval, like Python's
+/// `begin_auth_watch()`: the startup probe already covers process start. A valid
+/// round resets the interval to the base; any non-valid round (including
+/// `unknown` and `browser_disabled`) doubles it up to 30 minutes. The interval
+/// gating the next round is published to the shared `watch` view so
+/// `next_round_due` follows the real backoff. Without this loop a token that
+/// expires server-side leaves `/ready` at 503 until a client request happens to
+/// trigger the round.
 fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
+    let watch = Arc::clone(&state.watch);
     thread::spawn(move || {
-        // The first probe runs shortly after start so `/admin/auth/status` has
-        // evidence without waiting a full interval; later probes use the watch
-        // interval (or the rejected-credential backoff).
-        let mut interval = Duration::from_secs(2);
+        watch.mark_started();
+        let base_interval = state
+            .config
+            .auth_watch_interval
+            .unwrap_or(AUTH_WATCH_INTERVAL);
+        let mut interval = base_interval;
         while !shutdown.load(Ordering::SeqCst) {
             let mut slept = Duration::ZERO;
             while slept < interval && !shutdown.load(Ordering::SeqCst) {
@@ -319,7 +334,7 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
             if shutdown.load(Ordering::SeqCst) {
                 break;
             }
-            let (ready, snapshot) = state.proxy.readiness_snapshot();
+            let (_ready, snapshot) = state.proxy.readiness_snapshot();
             let verdict = snapshot
                 .get("authentication")
                 .and_then(Value::as_str)
@@ -332,13 +347,19 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
             if let Some(login) = &state.login {
                 login.note_probe(verdict, reason, upstream_status);
             }
-            if ready {
-                interval = AUTH_WATCH_INTERVAL;
+            let next_interval = if verdict == "valid" {
+                base_interval
+            } else {
+                (interval * 2).min(AUTH_WATCH_MAX_INTERVAL)
+            };
+            watch.record_round(verdict, next_interval);
+            interval = next_interval;
+            if verdict == "valid" {
                 continue;
             }
             if verdict != "rejected" && verdict != "needs_login" {
                 // 补偿上游目录响应慢或临时不可达：稍后重新核验，不能重开登录。
-                interval = Duration::from_secs(30);
+                // `browser_disabled` 同样走退避，不能每轮都以基准间隔重试。
                 continue;
             }
             if state.config.browser_disabled {
@@ -350,11 +371,9 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
                 .unwrap_or_else(|| state.config.role.default_auth_wait_budget());
             let mut budget = AuthWaitBudget::new(budget_limit);
             let deadline = Instant::now() + state.config.login_timeout;
-            match state.reauth.trigger(&mut budget, deadline) {
-                ReauthResult::Restored => interval = AUTH_WATCH_INTERVAL,
-                _ => interval = (interval * 2).min(AUTH_WATCH_MAX_INTERVAL),
-            }
+            let _ = state.reauth.trigger(&mut budget, deadline);
         }
+        watch.mark_stopped();
     })
 }
 
@@ -784,6 +803,12 @@ fn admit_share(
 
 fn health_snapshot(state: &AppState) -> Value {
     let mut snapshot = state.proxy.health_snapshot();
+    // `ProxyState::health_snapshot()` keeps the honest pre-watch defaults;
+    // the server owns the real watch state, shared with `LoginService`.
+    let watch = state.watch.snapshot();
+    if let Some(object) = snapshot.as_object_mut() {
+        object.insert("watch".to_string(), watch);
+    }
     let Some(login) = &state.login else {
         return snapshot;
     };
@@ -806,10 +831,6 @@ fn health_snapshot(state: &AppState) -> Value {
             "error": manual_error,
             "primary": health_primary(&primary),
         }),
-    );
-    object.insert(
-        "watch".to_string(),
-        status.get("watch").cloned().unwrap_or(Value::Null),
     );
     let recovery = status.get("recovery").cloned().unwrap_or(Value::Null);
     object.insert(

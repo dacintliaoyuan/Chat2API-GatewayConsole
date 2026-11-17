@@ -23,6 +23,7 @@ use um_gateway::readonly::ProxyState;
 use um_gateway::reauth::{MissingLoginProvider, ReauthLimits, ReauthenticationService};
 use um_gateway::responses::handle_responses;
 use um_gateway::server::AppState;
+use um_gateway::watch::WatchStatus;
 
 use support::{ChatAttempt, ChatChunk, ChatStub, TempDir};
 
@@ -81,6 +82,7 @@ fn gateway_state(stub: &ChatStub) -> Arc<AppState> {
         event_log,
         reauth,
         login: None,
+        watch: Arc::new(WatchStatus::new()),
         shutdown_request: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
 }

@@ -312,6 +312,10 @@ pub struct GatewayConfig {
     pub reauth_max_attempts_per_window: usize,
     /// The explicit `--no-browser` mode; a real login provider may ignore it.
     pub browser_disabled: bool,
+    /// Test seam: the base auth-watch interval (the first wait and the valid
+    /// reset). `None` uses the production `AUTH_WATCH_INTERVAL`
+    /// (Python `AUTH_WATCH_INTERVAL_S`).
+    pub auth_watch_interval: Option<Duration>,
     /// Python-compatible credential file; `None` uses the role default.
     pub token_file: Option<PathBuf>,
     /// The browser profile directory; `None` uses the role default.
@@ -384,6 +388,7 @@ impl Default for GatewayConfig {
             reauth_attempt_window: Duration::from_secs(DEFAULT_REAUTH_ATTEMPT_WINDOW_SECONDS),
             reauth_max_attempts_per_window: DEFAULT_REAUTH_MAX_ATTEMPTS_PER_WINDOW,
             browser_disabled: false,
+            auth_watch_interval: None,
             token_file: None,
             profile_dir: None,
             login_display_file: None,
@@ -621,11 +626,32 @@ impl GatewayConfig {
                     self.bind_port
                 )));
             }
-        } else if !production_ports().contains(&self.bind_port) {
-            return Err(ConfigError(format!(
-                "production must bind one of 8000, 8002 or 8003 on loopback, got {}",
-                self.bind_port
-            )));
+        } else {
+            if !production_ports().contains(&self.bind_port) {
+                return Err(ConfigError(format!(
+                    "production must bind one of 8000, 8002 or 8003 on loopback, got {}",
+                    self.bind_port
+                )));
+            }
+            // #75 user story 17: the local role assembles the general `/api/*`
+            // surface, so it may never run on the cloud 8002/8003 pair; the
+            // cloud role keeps that surface unassembled on 8002/8003 only.
+            let role_allowed = match self.role {
+                Role::Local => self.bind_port == 8000,
+                Role::Cloud => matches!(self.bind_port, 8002 | 8003),
+            };
+            if !role_allowed {
+                let allowed = match self.role {
+                    Role::Local => "8000",
+                    Role::Cloud => "8002 or 8003",
+                };
+                return Err(ConfigError(format!(
+                    "production role {} must bind {}, got {}",
+                    self.role.as_str(),
+                    allowed,
+                    self.bind_port
+                )));
+            }
         }
         if !(1..=MAX_SHARE_REQUEST_BYTES).contains(&self.share_max_request_bytes) {
             return Err(ConfigError(

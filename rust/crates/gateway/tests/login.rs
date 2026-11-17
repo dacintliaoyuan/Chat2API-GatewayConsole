@@ -440,7 +440,7 @@ fn a_browser_credential_probe_timeout_is_not_manual_takeover() {
 }
 
 #[test]
-fn a_watch_timeout_recovers_to_valid_without_another_browser() {
+fn an_unknown_watch_probe_keeps_the_last_known_valid_state() {
     let temp = TempDir::new("um-rust-login-probe-recover-");
     let page = FakePage::new("http://127.0.0.1:9", Some("valid-token"));
     let (service, factory) = login_service(
@@ -453,16 +453,99 @@ fn a_watch_timeout_recovers_to_valid_without_another_browser() {
     wait_for(&service, |status| status["state"] == json!("valid"));
     let last_valid = service.status()["evidence"]["last_valid_epoch"].clone();
     service.note_probe("unknown", Some("timeout"), None);
+    let status = service.status();
     assert_eq!(
-        service.status()["state"],
-        json!("unknown"),
-        "超时必须与已确认有效区分"
+        status["state"],
+        json!("valid"),
+        "未知核验只能记录证据，不能降级已确认有效的凭据"
     );
-    assert_eq!(service.status()["evidence"]["last_valid_epoch"], last_valid);
-    assert!(!service.status()["label"].as_str().unwrap().contains("需人工"));
+    assert_eq!(status["evidence"]["verdict"], json!("unknown"));
+    assert_eq!(status["evidence"]["last_valid_epoch"], last_valid);
+    assert!(!status["label"].as_str().unwrap().contains("需人工"));
     service.note_probe("valid", None, Some(200));
     assert_eq!(service.status()["state"], json!("valid"));
     assert_eq!(factory.requests().len(), 1);
+}
+
+#[test]
+fn an_unknown_watch_probe_keeps_needs_login_and_opens_no_browser() {
+    let temp = TempDir::new("um-rust-login-probe-needs-login-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    let (service, factory) = login_service(
+        &temp,
+        page,
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+    );
+    assert_eq!(service.status()["state"], json!("needs_login"));
+    service.note_probe("unknown", Some("timeout"), None);
+    let status = service.status();
+    assert_eq!(
+        status["state"],
+        json!("needs_login"),
+        "未知核验不能把已知的需登录状态降级为 unknown"
+    );
+    assert_eq!(status["evidence"]["verdict"], json!("unknown"));
+    assert_eq!(
+        factory.requests().len(),
+        0,
+        "未知核验绝不能打开登录窗口"
+    );
+}
+
+#[test]
+fn a_rejected_watch_probe_marks_needs_login_without_opening_a_browser() {
+    let temp = TempDir::new("um-rust-login-probe-rejected-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("valid-token"));
+    let (service, factory) = login_service(
+        &temp,
+        page,
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+    );
+    service.start_explicit(false);
+    wait_for(&service, |status| status["state"] == json!("valid"));
+    service.note_probe("rejected", Some("upstream_rejected"), Some(401));
+    let status = service.status();
+    assert_eq!(status["state"], json!("needs_login"));
+    assert_eq!(status["evidence"]["verdict"], json!("rejected"));
+    assert_eq!(
+        factory.requests().len(),
+        1,
+        "拒绝只记录证据并改状态，巡检本身不得打开第二个登录窗口"
+    );
+}
+
+#[test]
+fn status_carries_the_real_watch_rounds() {
+    let temp = TempDir::new("um-rust-login-watch-status-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("valid-token"));
+    let (service, _) = login_service(
+        &temp,
+        page,
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+    );
+    assert_eq!(service.status()["watch"]["thread_alive"], json!(false));
+    let watch = service.watch();
+    watch.mark_started();
+    watch.record_round("valid", Duration::from_secs(300));
+    let status = service.status();
+    assert_eq!(status["watch"]["thread_alive"], json!(true));
+    assert_eq!(status["watch"]["rounds"], json!(1));
+    assert_eq!(status["watch"]["last_round_outcome"], json!("valid"));
+    let due = status["watch"]["next_round_due"]
+        .as_f64()
+        .expect("next round due");
+    let epoch = status["watch"]["last_round_epoch"]
+        .as_f64()
+        .expect("last round epoch");
+    assert!(
+        (due - epoch - 300.0).abs() < 1e-9,
+        "next_round_due 必须等于 last_round_epoch 加门控间隔: {status}"
+    );
+    watch.mark_stopped();
+    assert_eq!(service.status()["watch"]["thread_alive"], json!(false));
 }
 
 #[test]
@@ -473,6 +556,8 @@ fn a_watch_probe_does_not_erase_an_operator_cancellation() {
     service.start_explicit(false);
     service.cancel();
     wait_for(&service, |status| status["state"] == json!("cancelled"));
+    service.note_probe("unknown", Some("timeout"), None);
+    assert_eq!(service.status()["state"], json!("cancelled"));
     service.note_probe("valid", None, Some(200));
     assert_eq!(service.status()["state"], json!("cancelled"));
     assert_eq!(service.status()["error"], json!("cancelled"));
