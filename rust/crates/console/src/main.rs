@@ -1,15 +1,18 @@
-//! Candidate console entry point.
+//! Console entry point.
 //!
-//! The binary only binds an ephemeral loopback port. It prints the actual
-//! address so a test (or an operator) can address the candidate, then serves
-//! until the process is stopped. No production port is bound, no SQLite/ledger
-//! is written and the role is the cloud console role only.
+//! Candidate mode is the default: the binary only binds an ephemeral loopback
+//! port. Production mode must be selected explicitly with `--mode production` and
+//! only binds `127.0.0.1:8002`. The binary prints the actual address so a test
+//! (or an operator) can address the console, then serves until the process is
+//! stopped. No SQLite/ledger is written by a read face and the role is the cloud
+//! console role only.
 
 use std::io::Write;
 use std::process::ExitCode;
 
 use um_console::config::{ConsoleConfig, EntryKind, Role};
 use um_console::ConsoleServer;
+use um_gateway::config::BindMode;
 
 fn main() -> ExitCode {
     let mut config = match ConsoleConfig::from_env() {
@@ -22,6 +25,11 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
+            "--mode" => match args.next().as_deref().and_then(BindMode::parse) {
+                Some(BindMode::Candidate) => config.candidate = true,
+                Some(BindMode::Production) => config.candidate = false,
+                None => return usage("--mode must be candidate or production"),
+            },
             "--host" => match args.next() {
                 Some(value) => config.bind_host = value,
                 None => return usage("--host requires a value"),
@@ -72,12 +80,15 @@ fn main() -> ExitCode {
             },
             "--help" | "-h" => {
                 println!(
-                    "usage: um-console-candidate [--host 127.0.0.1] [--bind-port 0] \
+                    "usage: um-console-candidate [--mode candidate|production] \
+                     [--host 127.0.0.1] [--bind-port 0|8002] \
                      [--report-port 8002] [--role cloud] [--state-file PATH] \
                      [--gateway-pid-file PATH] [--gateway-state-dir PATH] \
                      [--gateway-port 8003] [--gateway-entry NAME] \
                      [--gateway-entry-kind python|native] [--proc-root PATH] \
-                     [--expected-uid N]"
+                     [--expected-uid N]\n\
+                     modes: candidate (default) binds an ephemeral loopback port only; \
+                     production must be selected explicitly and binds 8002 on loopback only"
                 );
                 return ExitCode::SUCCESS;
             }

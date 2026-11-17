@@ -1,6 +1,7 @@
-//! Candidate 8002 console HTTP server.
+//! Console 8002 HTTP server.
 //!
-//! The candidate binds only an ephemeral loopback port. It serves the S5a
+//! Candidate mode (the default) binds only an ephemeral loopback port;
+//! production mode binds only `127.0.0.1:8002`. It serves the S5a
 //! read-only core from `usagesrv.py`: `/health`, `/api/summary`,
 //! `/api/console/services`, `/api/console/health`, `/api/console/actions`
 //! and `/api/console/operations`. The cloud role refuses the non-UM read
@@ -82,7 +83,7 @@ pub struct ServerHandle {
 
 impl ConsoleServer {
     pub fn start(config: ConsoleConfig) -> Result<ServerHandle, ServerError> {
-        config.validate_candidate().map_err(ServerError::Config)?;
+        config.validate_bind_policy().map_err(ServerError::Config)?;
         let runtime = Arc::new(LinuxPidFileFacts::from_config(&config));
         Self::start_with_runtime(config, runtime)
     }
@@ -116,7 +117,7 @@ impl ConsoleServer {
         executor: Arc<dyn crate::operation_manager::ActionExecutor>,
         write_seams: Arc<dyn ShareWriteSeams>,
     ) -> Result<ServerHandle, ServerError> {
-        config.validate_candidate().map_err(ServerError::Config)?;
+        config.validate_bind_policy().map_err(ServerError::Config)?;
         let operation_manager = OperationManagerSlot::new(
             config.console_state_file.clone(),
             config.console_lock_dir.clone(),

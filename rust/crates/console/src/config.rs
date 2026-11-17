@@ -1,12 +1,15 @@
-//! Candidate console (8002) configuration.
+//! Console (8002) configuration.
 //!
 //! The Rust console only assembles the cloud role (S5a). Role, reported port,
-//! gateway facts and pid-file paths come from the deployment environment; the
-//! candidate process itself binds only an ephemeral loopback port and never
-//! switches 8002. Invalid values fail closed before the bind.
+//! gateway facts and pid-file paths come from the deployment environment.
+//! Candidate mode is the default and binds only an ephemeral loopback port;
+//! production must be selected explicitly and binds only `127.0.0.1:8002`.
+//! Invalid values fail closed before the bind.
 
-use std::net::IpAddr;
 use std::path::PathBuf;
+
+use um_gateway::config::is_loopback_host;
+pub use um_gateway::config::BindMode;
 
 use crate::display_relay::DisplayConfig;
 
@@ -84,6 +87,8 @@ pub struct ConsoleConfig {
     /// by the candidate.
     pub port: u16,
     pub role: Role,
+    /// Candidate mode (the default); `false` selects the explicit production
+    /// binding policy.
     pub candidate: bool,
     pub console_state_file: Option<PathBuf>,
     pub console_lock_dir: Option<PathBuf>,
@@ -143,16 +148,6 @@ impl std::fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
-
-pub fn is_loopback_host(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    if host == "localhost" {
-        return true;
-    }
-    host.parse::<IpAddr>()
-        .map(|address| address.is_loopback())
-        .unwrap_or(false)
-}
 
 /// Ports the candidate must never bind while it is a candidate.
 pub fn governed_ports() -> [u16; 7] {
@@ -301,28 +296,45 @@ impl ConsoleConfig {
         Ok(config)
     }
 
+    /// The selected binding policy. Candidate is the default.
+    pub fn bind_mode(&self) -> BindMode {
+        if self.candidate {
+            BindMode::Candidate
+        } else {
+            BindMode::Production
+        }
+    }
+
     /// Fail closed before binding a socket.
-    pub fn validate_candidate(&self) -> Result<(), ConfigError> {
+    pub fn validate_bind_policy(&self) -> Result<(), ConfigError> {
         if self.role != Role::Cloud {
             return Err(ConfigError(
-                "the S5a console candidate assembles only the cloud role".to_string(),
+                "the S5a console assembles only the cloud role".to_string(),
             ));
         }
         if !is_loopback_host(&self.bind_host) {
             return Err(ConfigError(format!(
-                "candidate bind host is not loopback: {}",
+                "{} bind host is not loopback: {}",
+                self.bind_mode().label(),
                 self.bind_host
             )));
         }
-        if self.candidate && self.bind_port != 0 {
+        if self.candidate {
+            if self.bind_port != 0 {
+                return Err(ConfigError(format!(
+                    "candidate must bind an ephemeral loopback port, got {}",
+                    self.bind_port
+                )));
+            }
+            if governed_ports().contains(&self.bind_port) {
+                return Err(ConfigError(format!(
+                    "refusing to bind governed production port {}",
+                    self.bind_port
+                )));
+            }
+        } else if self.bind_port != CLOUD_DEFAULT_PORT {
             return Err(ConfigError(format!(
-                "candidate must bind an ephemeral loopback port, got {}",
-                self.bind_port
-            )));
-        }
-        if governed_ports().contains(&self.bind_port) {
-            return Err(ConfigError(format!(
-                "refusing to bind governed production port {}",
+                "production must bind 8002 on loopback, got {}",
                 self.bind_port
             )));
         }
