@@ -14,6 +14,7 @@ pub mod display;
 pub mod display_grant;
 pub mod display_relay;
 pub mod error;
+pub mod gateway_connection;
 pub mod lock;
 pub mod local_summary;
 pub mod local_um;

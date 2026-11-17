@@ -31,6 +31,7 @@ use crate::display::{display_session, display_state};
 use crate::display_grant::{DisplayGrants, DISPLAY_SESSION_COOKIE};
 use crate::display_relay::{DisplayRelay, WEBSOCKET_PATH};
 use crate::error::ConsoleError;
+use crate::gateway_connection;
 use crate::local_um::{self, UmQueryError};
 use crate::metering::{self, UsageFilters};
 use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActionExecutor};
@@ -909,7 +910,14 @@ fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Resp
     match rest {
         ["services"] => services_response(state),
         ["health"] => health_response(state),
-        ["actions"] => send_json(200, &action_catalogue()),
+        ["actions"] => send_json(
+            200,
+            &if state.config.role == Role::Local {
+                crate::actions::action_catalogue_local()
+            } else {
+                action_catalogue()
+            },
+        ),
         ["share-management", "status"] => match state.share.status(&*state.share_seams) {
             Ok(payload) => send_json(200, &with_last_publication_failure(state, payload)),
             Err(error) => error.response(),
@@ -934,6 +942,7 @@ fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Resp
             200,
             &cloud_ops_status(state.config.security_state_file.as_deref()),
         ),
+        ["gateway-connection"] => gateway_connection_response(state, raw_target),
         ["share-management", "display-session"] => send_json(
             200,
             &display_session(state.share_seams.display_availability()),
@@ -1549,6 +1558,43 @@ fn safe_detail(message: &str) -> Option<String> {
         }
     }
     Some(text.chars().take(200).collect())
+}
+
+fn gateway_connection_response(state: &AppState, raw_target: &str) -> Response {
+    let service = query_value(raw_target, "service").unwrap_or_default();
+    if service != gateway_connection::SERVICE {
+        return ConsoleError::new(
+            400,
+            json!({
+                "error": "invalid_service",
+                "detail": "service 必须是 chat2api",
+            }),
+        )
+        .response();
+    }
+    let row = match state.runtime.snapshot() {
+        Ok(snapshot) => Some(json!({
+            "key": "chat2api",
+            "display_name": "chat2api",
+            "port": state.config.gateway_port,
+            "state": snapshot.display_state(),
+            "healthy": snapshot.healthy,
+            "detail": snapshot.detail,
+            "process_ids": snapshot.process_ids,
+        })),
+        Err(_) => None,
+    };
+    match gateway_connection::connection_info(&service, row.as_ref(), epoch_seconds()) {
+        Ok(payload) => send_json(200, &payload),
+        Err(_) => ConsoleError::new(
+            503,
+            json!({
+                "error": "connection_info_unavailable",
+                "detail": "连接信息读取失败：GatewayConnectionError；按未知处理，不返回猜测值",
+            }),
+        )
+        .response(),
+    }
 }
 
 fn services_response(state: &AppState) -> Response {
