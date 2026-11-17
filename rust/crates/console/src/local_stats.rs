@@ -868,9 +868,12 @@ fn python_int_or_zero(value: Option<&Value>) -> Result<i64, String> {
             }
         }
         Some(Value::String(text)) => {
+            if text.is_empty() {
+                return Ok(0);
+            }
             let trimmed = text.trim();
             if trimmed.is_empty() {
-                return Ok(0);
+                return Err(format!("invalid literal for int() with base 10: '{text}'"));
             }
             let cleaned = trimmed.replace('_', "");
             cleaned
