@@ -32,6 +32,13 @@ pub const MAX_IMAGES: u32 = 16;
 pub const AUTO_TRIM_HISTORICAL_IMAGES: bool = true;
 pub const AUTO_TRIM_CURRENT_TURN_IMAGES: bool = false;
 pub const REAUTH_MAX_SESSIONS_PER_CYCLE: u32 = 6;
+/// Python `EFFORT_LEVELS`: suffix -> OpenAI `reasoning_effort`.
+pub const EFFORT_LEVELS: [(&str, &str); 4] = [
+    ("Fast", "none"),
+    ("Low", "low"),
+    ("Medium", "medium"),
+    ("High", "high"),
+];
 /// Python `Proxy.call`'s non-stream socket budget for a local `/api/*`
 /// passthrough.
 pub const PASSTHROUGH_TIMEOUT: Duration = Duration::from_secs(600);
@@ -280,6 +287,7 @@ pub struct ProxyState {
     config_freshness: Mutex<ConfigFreshness>,
     upstream_state: Mutex<UpstreamState>,
     models_cache: Mutex<Option<(Instant, Value)>>,
+    effort_models: Vec<String>,
     upstream: UpstreamClient,
 }
 
@@ -312,6 +320,7 @@ impl ProxyState {
                 last_ok_epoch: None,
             }),
             models_cache: Mutex::new(None),
+            effort_models: config.effort_models.clone(),
             upstream: UpstreamClient::from_config(config)?,
         })
     }
@@ -599,7 +608,10 @@ impl ProxyState {
         if let Some(payload) = fetched {
             *self.models_cache.lock().expect("models cache poisoned") =
                 Some((Instant::now(), payload.clone()));
-            return Ok((payload, raw_fresh));
+            if raw_fresh {
+                return Ok((payload, true));
+            }
+            return Ok((append_effort_models(&payload, &self.effort_models), false));
         }
         if raw_fresh {
             return Err(GatewayError::models_unavailable());
@@ -610,7 +622,10 @@ impl ProxyState {
             .expect("models cache poisoned")
             .clone();
         match cached {
-            Some((_, payload)) => Ok((payload, false)),
+            Some((_, payload)) => Ok((
+                append_effort_models(&payload, &self.effort_models),
+                false,
+            )),
             None => Err(GatewayError::models_unavailable()),
         }
     }
@@ -686,6 +701,46 @@ impl CredentialSink for ProxyState {
         self.set_bearer(token);
         self.invalidate_models();
     }
+}
+
+/// Python `Proxy.list_models` default catalog: append one virtual variant per
+/// configured base model that is actually present in the upstream snapshot. A base
+/// that disappeared never exposes selectable variants, and an existing variant id
+/// is never duplicated.
+fn append_effort_models(payload: &Value, bases: &[String]) -> Value {
+    let mut payload = payload.clone();
+    let Some(items) = payload
+        .as_object_mut()
+        .and_then(|object| object.get_mut("data"))
+        .and_then(Value::as_array_mut)
+    else {
+        return payload;
+    };
+    let sources = items.clone();
+    for base in bases {
+        let Some(source) = sources
+            .iter()
+            .find(|model| model.get("id").and_then(Value::as_str) == Some(base.as_str()))
+        else {
+            continue;
+        };
+        for (suffix, _effort) in EFFORT_LEVELS {
+            let variant_id = format!("{base}-{suffix}");
+            if items
+                .iter()
+                .any(|model| model.get("id").and_then(Value::as_str) == Some(variant_id.as_str()))
+            {
+                continue;
+            }
+            let mut variant = source.clone();
+            if let Some(object) = variant.as_object_mut() {
+                object.insert("id".to_string(), Value::String(variant_id.clone()));
+                object.insert("name".to_string(), Value::String(variant_id));
+            }
+            items.push(variant);
+        }
+    }
+    payload
 }
 
 fn passthrough_failure(failure: UpstreamFailure) -> GatewayError {

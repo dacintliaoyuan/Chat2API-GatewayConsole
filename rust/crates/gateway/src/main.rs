@@ -81,6 +81,10 @@ fn main() -> ExitCode {
                 Some(value) => config.login_timeout = std::time::Duration::from_secs(value.max(1)),
                 None => return usage("--login-timeout requires an integer"),
             },
+            "--effort-model" => match args.next() {
+                Some(value) => config.effort_models.push(value),
+                None => return usage("--effort-model requires a model id"),
+            },
             "--instance-key-file" => match args.next() {
                 Some(value) => config.instance_key_file = Some(value.into()),
                 None => return usage("--instance-key-file requires a path"),
@@ -103,7 +107,8 @@ fn main() -> ExitCode {
                      [--control-token-file PATH] [--token-file PATH] \
                      [--profile-dir PATH] [--login-display-file PATH] \
                      [--login-timeout SECONDS] [--no-browser] \
-                     [--auth-wait-budget-seconds SECONDS]\n\
+                     [--auth-wait-budget-seconds SECONDS] \
+                     [--effort-model MODEL]\n\
                      modes: candidate (default) binds an ephemeral loopback port only; \
                      production must be selected explicitly and binds 8000, 8002 or 8003 \
                      on loopback only; --role defaults to local for 8000 and cloud otherwise"

@@ -279,6 +279,9 @@ pub struct GatewayConfig {
     pub allowed_origins: BTreeSet<String>,
     pub control_token_file: Option<PathBuf>,
     pub local_api_key: String,
+    /// Base models that get `-Fast/-Low/-Medium/-High` virtual variants in the
+    /// model catalog. Python `--effort-model` is repeatable and empty by default.
+    pub effort_models: Vec<String>,
     pub share_max_request_bytes: u64,
     pub max_request_bytes: u64,
     pub local_max_request_bytes: u64,
@@ -364,6 +367,7 @@ impl Default for GatewayConfig {
             allowed_origins: BTreeSet::new(),
             control_token_file: None,
             local_api_key: String::new(),
+            effort_models: Vec::new(),
             share_max_request_bytes: DEFAULT_SHARE_MAX_REQUEST_BYTES,
             max_request_bytes: DEFAULT_SHARE_MAX_REQUEST_BYTES,
             local_max_request_bytes: CONSOLE_MAX_REQUEST_BYTES,
