@@ -1,8 +1,8 @@
-//! S5a: the candidate 8002 console read-only core.
+//! S5a: the 8002 console read-only core.
 //!
-//! The candidate binds only an ephemeral loopback port and never switches
-//! 8002. It serves the six frozen read faces from `usagesrv.py` and refuses
-//! the non-UM read faces in the cloud role with
+//! Candidate mode (the default) binds only an ephemeral loopback port; production
+//! mode binds only `127.0.0.1:8002`. Both serve the six frozen read faces from
+//! `usagesrv.py` and refuse the non-UM read faces in the cloud role with
 //! `503 capability_not_assembled`. No SQLite, ledger or log is written by a
 //! read face.
 

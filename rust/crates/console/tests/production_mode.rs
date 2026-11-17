@@ -10,8 +10,11 @@
 mod support;
 
 use std::io::{BufRead, BufReader};
+use std::net::SocketAddr;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
+
+use serde_json::json;
 
 use support::*;
 
@@ -61,6 +64,30 @@ fn read_listen_addr(child: &mut Child) -> std::net::SocketAddr {
         }
     }
     panic!("console did not print its listen address");
+}
+
+#[test]
+fn production_mode_binds_8002_on_loopback() {
+    let temp = temp();
+    let mut child = console_command(&temp)
+        .arg("--mode")
+        .arg("production")
+        .arg("--bind-port")
+        .arg("8002")
+        .spawn()
+        .expect("spawn production console");
+    let addr = read_listen_addr(&mut child);
+    let _guard = ChildGuard { child };
+    assert_eq!(
+        addr,
+        SocketAddr::from(([127, 0, 0, 1], 8002)),
+        "production must bind loopback 8002"
+    );
+
+    let health = client_request(addr, &ClientRequest::get("/health")).expect("production health");
+    assert_eq!(health.status, 200);
+    assert_eq!(health.json()["status"], json!("ok"));
+    assert_eq!(health.json()["port"], json!(8002));
 }
 
 #[test]

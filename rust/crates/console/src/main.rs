@@ -1,9 +1,11 @@
-//! Candidate console entry point.
+//! Console entry point.
 //!
-//! The binary only binds an ephemeral loopback port. It prints the actual
-//! address so a test (or an operator) can address the candidate, then serves
-//! until the process is stopped. No production port is bound, no SQLite/ledger
-//! is written and the role is the cloud console role only.
+//! Candidate mode is the default: the binary only binds an ephemeral loopback
+//! port. Production mode must be selected explicitly with `--mode production` and
+//! only binds `127.0.0.1:8002`. The binary prints the actual address so a test
+//! (or an operator) can address the console, then serves until the process is
+//! stopped. No SQLite/ledger is written by a read face and the role is the cloud
+//! console role only.
 
 use std::io::Write;
 use std::process::ExitCode;
