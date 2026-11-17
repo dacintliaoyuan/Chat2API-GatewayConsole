@@ -43,6 +43,8 @@ use crate::share_read::{control_status, DisplaySeams, ShareReadSeams, ShareReadS
 use crate::share_write::{
     console_public_row, ShareWriteError, ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams,
 };
+use crate::local_logs::{self, LogPaths};
+use crate::local_stats::{self, StatsPaths};
 use crate::summary::SummaryCache;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -395,11 +397,16 @@ fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response 
             return ConsoleError::capability_not_assembled(blocked).response();
         }
     }
-    if state.config.role == Role::Local && rest.first() == Some(&"um") {
-        if method != "GET" {
-            return ConsoleError::unknown_path().response();
+    if state.config.role == Role::Local {
+        if let Some(response) = handle_local_usage_read(state, method, &rest, &target) {
+            return response;
         }
-        return handle_local_um(state, &rest, &target);
+        if rest.first() == Some(&"um") {
+            if method != "GET" {
+                return ConsoleError::unknown_path().response();
+            }
+            return handle_local_um(state, &rest, &target);
+        }
     }
     match method {
         "GET" => handle_console_get(state, &rest, &target),
@@ -802,6 +809,164 @@ fn required_positive_expected_version(
             _ => Err(ConsoleError::body_open(400, message).response()),
         },
         _ => Err(ConsoleError::body_open(400, message).response()),
+    }
+}
+
+/// `usagesrv.py` local usage faces: usage-tokens/usage-rates/stats read the
+/// private chat2api ledger and the frozen DSH snapshot. Only exact GET paths
+/// are assembled; anything else keeps falling through to the unknown-path answer.
+fn handle_local_usage_read(
+    state: &AppState,
+    method: &str,
+    rest: &[&str],
+    raw_target: &str,
+) -> Option<Response> {
+    if method != "GET" {
+        return None;
+    }
+    let paths = || StatsPaths {
+        usage_log: state.config.usage_log.clone(),
+        dsh_snapshot: state.config.dsh_snapshot.clone(),
+    };
+    match rest {
+        ["usage-tokens"] => {
+            let days = match query_value(raw_target, "days") {
+                None => 14,
+                Some(raw) => match raw.trim().parse::<i64>() {
+                    Ok(days) => days,
+                    Err(_) => {
+                        return Some(
+                            ConsoleError::new(
+                                400,
+                                json!({"error": "invalid_usage_query",
+                                        "detail": "days 必须是整数"}),
+                            )
+                            .response(),
+                        );
+                    }
+                },
+            };
+            Some(send_json(
+                200,
+                &local_stats::usage_tokens(&paths(), days, epoch_seconds() as f64 * 1000.0),
+            ))
+        }
+        ["log-overview"] => {
+            let cursors: Vec<String> = query_values(raw_target)
+                .get("cursor")
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .map(|cursor| cursor.chars().take(512).collect())
+                .collect();
+            let q = query_value(raw_target, "q");
+            let level = query_value(raw_target, "level");
+            let since = query_value(raw_target, "since");
+            let until = query_value(raw_target, "until");
+            let registry = local_logs::build_registry(&LogPaths::from_config(&state.config));
+            Some(send_json(
+                200,
+                &local_logs::log_overview_payload(
+                    &registry,
+                    &cursors,
+                    q.as_deref(),
+                    level.as_deref(),
+                    since.as_deref(),
+                    until.as_deref(),
+                ),
+            ))
+        }
+        ["log-entries"] => {
+            let source = query_value(raw_target, "source").unwrap_or_default();
+            let category = query_value(raw_target, "category").unwrap_or_default();
+            let cursor = query_value(raw_target, "cursor");
+            let q = query_value(raw_target, "q");
+            let level = query_value(raw_target, "level");
+            let since = query_value(raw_target, "since");
+            let until = query_value(raw_target, "until");
+            let rotation = query_value(raw_target, "rotation").map(|raw| {
+                raw.trim().parse::<i64>().unwrap_or(-1)
+            });
+            let request_id = query_value(raw_target, "request_id");
+            let registry = local_logs::build_registry(&LogPaths::from_config(&state.config));
+            Some(send_json(
+                200,
+                &local_logs::log_entries_payload(
+                    &registry,
+                    &source,
+                    &category,
+                    cursor.as_deref(),
+                    q.as_deref(),
+                    level.as_deref(),
+                    since.as_deref(),
+                    until.as_deref(),
+                    rotation,
+                    request_id.as_deref(),
+                ),
+            ))
+        }
+        ["log-sources"] => Some(send_json(
+            200,
+            &local_logs::registry_payload(&LogPaths::from_config(&state.config)),
+        )),
+        ["stats"] => {
+            let date_from = query_value(raw_target, "from").unwrap_or_default();
+            let date_to = query_value(raw_target, "to").unwrap_or_default();
+            let csv_list = |name: &str| {
+                let raw = query_value(raw_target, name).unwrap_or_default();
+                let values: Vec<String> = raw
+                    .split(',')
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect();
+                if values.is_empty() {
+                    None
+                } else {
+                    Some(values)
+                }
+            };
+            let sources = csv_list("sources");
+            let models = csv_list("models");
+            match local_stats::bounded_stats(
+                &paths(),
+                &date_from,
+                &date_to,
+                sources.as_deref(),
+                models.as_deref(),
+            ) {
+                Ok(payload) => Some(send_json(200, &payload)),
+                Err(error) => Some(
+                    ConsoleError::new(
+                        400,
+                        json!({"error": "invalid_stats_query", "detail": error.0}),
+                    )
+                    .response(),
+                ),
+            }
+        }
+        ["usage-rates"] => {
+            let hours = match query_value(raw_target, "hours") {
+                None => 24,
+                Some(raw) => match raw.trim().parse::<i64>() {
+                    Ok(hours) => hours,
+                    Err(_) => {
+                        return Some(
+                            ConsoleError::new(
+                                400,
+                                json!({"error": "invalid_usage_query",
+                                        "detail": "hours 必须是整数"}),
+                            )
+                            .response(),
+                        );
+                    }
+                },
+            };
+            Some(send_json(
+                200,
+                &local_stats::usage_rates(&paths(), hours, epoch_seconds() as f64 * 1000.0),
+            ))
+        }
+        _ => None,
     }
 }
 
