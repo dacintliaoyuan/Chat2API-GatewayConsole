@@ -135,6 +135,36 @@ systemd
   切流命令为 `pwsh -NoProfile -File invoke-console-runtime-json.ps1 -Action restart
   -Key usage`；切流后 `/health`、`/`、`/api/summary`、`/api/console/services`、
   `/api/console/um/*`、#86 六个只读面、`/api/session` 与 `model.catalog` 均通过。
+- 切流前 parity（#85 AC2）：Python 8001 保持生产页面，Rust candidate 以
+  `--mode candidate --role local --bind-port 0 --report-port 8001 --gateway-port 8000
+  --dist-dir web/dist` 绑定临时 loopback 端口。两边读同一份 `web/dist`、同一份
+  `chat2api/chat2api.log` 与 `data/dsh-ledger-20260902.json`；账本使用最后
+  200000 行（Python 8001 `_read_jsonl` 的上限），因此 summary 的
+  requests/tokens/models/days 可直接比较。结果 `parity=passed`：
+  - 静态页：`/` 1221 字节、`/assets/index-qAUdSyPV.js` 826 字节，SHA-256 一致
+    （`6f4188f5…b68ac`、`adc66615…55af6`）。
+  - `/api/summary`：`services.chat2api.requests=200000`、models=7、days=14，
+    tokens 与 DSH 快照一致。
+  - #86 六个只读面：`usage-tokens`、`usage-rates`、`stats`、`log-sources`、
+    `log-entries`、`log-overview` 均 200；`log-overview` 803 行，
+    `ts`/`level`/`message`/`event` 一致。
+  - 其余 local 读面：`services`、`health`、`um/today`、`um/trend`、`um/requests`、
+    `um/maintenance`、`gateway-connection?service=chat2api` 与 `operations` 列表
+    均 200 且归一化后一致。
+  - `/api/session`：无效码两边均 403 `{"error":"invalid bootstrap code"}`。
+  - `model.catalog`：两边 201 queued → succeeded，7 个模型目录一致。
+  - 归一化：移除时钟字段（`checked_epoch`、`generatedAt`、`_generated_epoch`、
+    `_cached_age_seconds`、`collected_at`）、不透明游标/行键（`key`、
+    `next_cursor`、`next_cursors`、`earlier`、`file_key`）与实现诊断字段
+    （`scanned_bytes`、`window_start_offset`、`rows_read`、`ms`、`ts_norm`、`at`）；
+    无法解析的行 `event=None` 与全 null 事件对象等价。
+  - 已记录但不纳入六面门槛的差异：`actions` 目录（Python 12 个启用动作，
+    Rust 本机只启用 `model.catalog`，共享 7 个）、`services.process_ids`/`detail`、
+    `health.services[].ms`、`gateway-connection.evidence/reason/key_in_use`、
+    `um/logs` 的时区与游标编码、旧 `/api/console/logs`（Rust 本机未装配）。
+  - 证据：`tmp/local-8001-parity-evidence.json`；临时探针命令为
+    `python -I tmp/local_8001_parity.py --python-port 8001 --rust-port <候选端口>
+    --root . --evidence tmp/local-8001-parity-evidence.json`。
 - 回滚（已演练）：只改 `StartPath` 回 `start_usage_service.bat`，重启后 Python 8001
   `/health` 200、`/` 200；再改回 Rust 并重启，`/health` 200、`/` 200。
   回滚不需要重装，也不需要改端口；`start_usage_service.bat` 保留 Python
