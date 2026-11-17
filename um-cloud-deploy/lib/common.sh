@@ -72,6 +72,8 @@ RELEASE_RUNTIME_PYTHON=python
 RELEASE_RUNTIME_RUST=rust
 PYTHON_GATEWAY_UNIT=um-share-broker.service
 RUST_GATEWAY_UNIT=um-share-gateway.service
+PYTHON_CONSOLE_UNIT=um-share-console-python.service
+RUST_CONSOLE_UNIT=um-share-console.service
 CONSOLE_UNIT=um-share-console.service
 DISPLAY_UNIT=um-share-display.service
 PYTHON_GATEWAY_PORT=8100
@@ -176,7 +178,12 @@ release_gateway_unit() {
 }
 
 release_console_unit() {
-  printf '%s\n' "$CONSOLE_UNIT"
+  local runtime="${1:-$RELEASE_RUNTIME_PYTHON}"
+  if [ "$runtime" = "$RELEASE_RUNTIME_RUST" ]; then
+    printf '%s\n' "$RUST_CONSOLE_UNIT"
+  else
+    printf '%s\n' "$PYTHON_CONSOLE_UNIT"
+  fi
 }
 
 release_display_unit() {
@@ -207,7 +214,7 @@ release_console_port() {
 release_units() {
   local runtime="${1:-$RELEASE_RUNTIME_PYTHON}"
   release_gateway_unit "$runtime"
-  release_console_unit
+  release_console_unit "$runtime"
   release_display_unit
 }
 
@@ -554,8 +561,13 @@ validate_port() {
 # Rust, 8100 when rolling back to Python); the default stays the Python port.
 health_gate() {
   local gateway_port="${1:-$GATEWAY_PORT_DEFAULT}"
+  local console_port="${2:-}"
   local console_code gateway_code port
-  port="$(console_port)" || return 1
+  if [ -n "$console_port" ]; then
+    port="$console_port"
+  else
+    port="$(console_port)" || return 1
+  fi
   console_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
     "http://127.0.0.1:$port/" 2>/dev/null || true)"
   case "$console_code" in
@@ -630,6 +642,18 @@ require_release_gateway_write_path() {
   local release="$1" runtime="$2" unit
   unit="$(release_gateway_unit "$runtime")"
   require_share_backend_write_path "$release/um-cloud-deploy/systemd/$unit"
+}
+
+# A Rust release starts the console from /opt/um-share/bin/um-console.  Refuse a
+# payload that lacks the binary before `current` moves: the installed unit would
+# otherwise fail its ConditionPathExists on every start.
+require_rust_console_binary() {
+  local target="$1"
+  local binary="$target/um-cloud-deploy/bin/um-console"
+  [ -f "$binary" ] || \
+    die "rust release is missing the console binary: $binary" "$EX_NOINPUT"
+  [ -x "$binary" ] || \
+    die "rust console binary is not executable: $binary" "$EX_NOINPUT"
 }
 
 _brokerctl_run() {
