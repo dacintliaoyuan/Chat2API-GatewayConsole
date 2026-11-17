@@ -231,6 +231,33 @@ fn a_nonzero_sidecar_exit_never_counts_as_success() {
 }
 
 #[test]
+fn every_model_catalog_call_runs_and_reaps_its_own_python_process() {
+    let temp = temp();
+    let repo = fake_repo(&temp, SUCCESS_MODULE);
+    let console = start_local_console(&temp, &repo);
+
+    submit_catalog(&console);
+    submit_catalog(&console);
+
+    let runs = read_pids(&repo.join("runs.txt"));
+    let exits = read_pids(&repo.join("exits.txt"));
+    assert_eq!(runs.len(), 2, "each call must spawn its own process");
+    assert_ne!(runs[0], runs[1], "calls must not reuse a resident process");
+    assert_eq!(exits.len(), 2, "each child must exit before the operation finishes");
+    for pid in runs {
+        assert!(exits.contains(&pid), "sidecar {pid} never exited");
+    }
+}
+
+fn read_pids(path: &Path) -> Vec<u32> {
+    std::fs::read_to_string(path)
+        .expect("pid record")
+        .lines()
+        .map(|line| line.trim().parse::<u32>().expect("pid"))
+        .collect()
+}
+
+#[test]
 fn the_local_console_config_defaults_to_the_python_on_path() {
     let config = ConsoleConfig::default();
     assert_eq!(config.python_exe, PathBuf::from("python"));
