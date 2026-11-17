@@ -15,7 +15,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
-use um_console::config::{BindMode, ConsoleConfig};
+use um_console::config::{BindMode, ConsoleConfig, Role};
 
 use support::*;
 
@@ -109,6 +109,35 @@ fn production_mode_binds_8002_on_loopback() {
     assert_eq!(health.status, 200);
     assert_eq!(health.json()["status"], json!("ok"));
     assert_eq!(health.json()["port"], json!(8002));
+}
+
+#[test]
+fn production_still_refuses_the_local_role() {
+    let temp = temp();
+    let mut config = base_config(&temp);
+    config.candidate = false;
+    config.bind_port = 8002;
+    config.role = Role::Local;
+    let error = config
+        .validate_bind_policy()
+        .expect_err("production must refuse the local role");
+    assert!(error.to_string().contains("cloud"), "{error}");
+
+    let mut command = console_command(&temp);
+    command
+        .arg("--mode")
+        .arg("production")
+        .arg("--bind-port")
+        .arg("8002")
+        .arg("--role")
+        .arg("local");
+    let output = run_rejected(command);
+    assert!(
+        !output.status.success(),
+        "production must refuse the local role"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cloud"), "stderr: {stderr}");
 }
 
 #[test]
