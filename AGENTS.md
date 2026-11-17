@@ -19,6 +19,7 @@
 | 领域词汇 | [GLOSSARY.md](GLOSSARY.md) |
 | UM 登录 / headless / 人工接管 | [ADR 0002](docs/adr/0002-headless-first-um-login.md)；[验收记录](docs/headless-login-acceptance.md) |
 | 云端部署与运维 | [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
+| 云端 onboarding（仅受信任的同事；agent 读取后逐步教学） | [docs/agents/cloud-onboarding.md](docs/agents/cloud-onboarding.md) |
 | 旧 Windows 分享链（已退役） | Git 历史；当前云端见 [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
 | 分享链旧/新名字与边界 | [docs/share-chain-map.md](docs/share-chain-map.md) |
 | 提交前检查 | [scripts/check.sh](scripts/check.sh)；首次运行 `bash scripts/install-hooks.sh` |

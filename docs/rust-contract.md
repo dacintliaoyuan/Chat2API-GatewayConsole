@@ -169,7 +169,7 @@ systemd
   - 证据：`tmp/local-8001-parity-evidence.json`；探针命令为
     `python -I tests/local_8001_parity.py --python-port 8001 --rust-port <候选端口>
     --root . --evidence tmp/local-8001-parity-evidence.json`。
-- 会话交换（#85 AC3）：`Open-GatewayConsole.bat` 仍调用 `Open-GatewayConsole.ps1`：
+- 会话交换（#85 AC3）：根目录 `一键部署本机网关.bat` 部署后调用 `scripts/Open-GatewayConsole.ps1`：
   宿主未运行则先启动，随后用 `data/admin-control-token` 的 `X-Admin-Control`
   请求 `POST /api/session/reissue`，把一次性引导码放进页面 URL 的 `#s=` fragment，
   浏览器再 `POST /api/session` 换成 HttpOnly `usage_session` Cookie。切流后在 Rust

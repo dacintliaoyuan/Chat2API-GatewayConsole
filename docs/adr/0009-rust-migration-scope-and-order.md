@@ -9,7 +9,7 @@
 - **按语言纯度迁全部自研程序（含编排脚本、display 辅助、broker）**：编排脚本迁 Rust 后仍要 shell 包装，失去可读性与即改即生效；broker 要先收敛三份协议实现，是独立的一大块；放弃。
 - **只迁云端 8002，不迁本机**：本机 8000/8001 仍两套实现并存，判据未达成；放弃。
 - **另开 `um-local-console` 二进制承载本机 8001**：`Role` 枚举与 `body`/`error`/`lock`/`operations`/`display*` 已角色无关，另开二进制会复制整个 server 层；放弃。
-- **本机 8001 按 `local/backend/app.py` 的候选设计迁移**：生产 8001 是 `usagesrv.py` 的 local 角色，候选组合根的 `um_session` cookie 与控制令牌未上线，按它迁会打断 `Open-GatewayConsole.bat`；放弃。
+- **本机 8001 按 `local/backend/app.py` 的候选设计迁移**：生产 8001 是 `usagesrv.py` 的 local 角色，候选组合根的 `um_session` cookie 与控制令牌未上线，按它迁会打断 `scripts/Open-GatewayConsole.bat`；放弃。
 - **本次范围：8002 + 本机 8000/8001；broker 与 `model_sync` 另开 spec**：采用。
 
 ## Consequences

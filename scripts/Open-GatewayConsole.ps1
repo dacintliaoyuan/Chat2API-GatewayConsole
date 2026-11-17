@@ -16,7 +16,9 @@
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+# This entry lives in scripts/; the repository root still owns lib/, data/ and
+# the web console.
+$here = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 . (Join-Path $here 'lib\gateway-runtime.ps1')
 . (Join-Path $here 'lib\console-runtime-bridge.ps1')
 

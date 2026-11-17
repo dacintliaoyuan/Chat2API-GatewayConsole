@@ -11,7 +11,8 @@ import unittest
                      "requires Windows and PowerShell 7")
 class ConsoleLauncherExitTests(unittest.TestCase):
     def _run_entry(self, source):
-        launcher = pathlib.Path(__file__).resolve().parents[1] / "Open-GatewayConsole.bat"
+        launcher = (pathlib.Path(__file__).resolve().parents[1]
+                    / "scripts" / "Open-GatewayConsole.bat")
         with tempfile.TemporaryDirectory(prefix="console launcher ") as directory:
             root = pathlib.Path(directory)
             bat = root / launcher.name

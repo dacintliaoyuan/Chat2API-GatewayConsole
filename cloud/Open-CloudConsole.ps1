@@ -7,13 +7,12 @@
 # be preflighted or started. Both routes keep the same strict host verification
 # and a dedicated key/known_hosts file. The browser exchanges the bootstrap for
 # the existing HttpOnly console session before redirecting to
-# http://localhost:8096/#overview. The distinct browser host preserves the
+# http://localhost:8002/#overview. The distinct browser host preserves the
 # default local console's 127.0.0.1 session cookie.
 #
-# Expand-contract (2026-11-14): the cloud console moved 18096 -> 8096.  The
-# default is 8096; -CloudConsolePort 18096 keeps the legacy port usable for one
-# release cycle (set the cloud's USAGESRV_PORT to the same value).  Only the
-# configured port is ever forwarded and probed.
+# Expand-contract: the Rust cloud console listens on 8002; the Python rollback
+# unit keeps 8096, and -CloudConsolePort 18096 keeps the legacy port usable for
+# one release cycle.  Only the configured port is ever forwarded and probed.
 #
 # Security boundaries:
 #   * Each dedicated SSH config is passed explicitly with -F; the default
@@ -48,15 +47,15 @@ param(
     [switch]$Check,
     [switch]$InstallShortcut,
     [switch]$Library,
-    # Expand-contract (2026-11-14): default 8096; the legacy 18096 stays an
-    # explicit value for one release cycle and must match the cloud console.
-    [ValidateRange(1, 65535)][int]$CloudConsolePort = 8096,
+    # The Rust cloud console listens on 8002; the Python rollback unit keeps
+    # 8096. The old 18096 stays an explicit override for one release cycle.
+    [ValidateRange(1, 65535)][int]$CloudConsolePort = 8002,
     [string]$SshConfig = (Join-Path $HOME '.ssh\aliyun-um-ecs.conf'),
     [ValidatePattern('^[A-Za-z0-9._-]+$')][string]$SshHostAlias = 'um-share-ecs',
     [string]$PublicSshConfig = (Join-Path $HOME '.ssh\aliyun-um-ecs-public.conf'),
     [ValidatePattern('^[A-Za-z0-9._-]+$')][string]$PublicSshHostAlias = 'um-share-ecs-public',
-    [string]$StatePath = (Join-Path $PSScriptRoot 'data\cloud-console-tunnel.json'),
-    [string]$LogPath = (Join-Path $PSScriptRoot 'data\cloud-console-entry.log'),
+    [string]$StatePath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'data\cloud-console-tunnel.json'),
+    [string]$LogPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'data\cloud-console-entry.log'),
     [string]$DesktopPath = '',
     [string]$ShortcutName = 'UM云端控制台',
     [ValidateRange(1, 300)][int]$HealthTimeoutSeconds = 25,
@@ -69,7 +68,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-$script:CloudConsoleRoot = $PSScriptRoot
+$script:CloudConsoleRoot = Split-Path -Parent $PSScriptRoot
 $script:CloudConsoleBatPath = Join-Path $PSScriptRoot 'Open-CloudConsole.bat'
 $script:CloudConsoleBind = '127.0.0.1'
 $script:CloudConsolePort = $CloudConsolePort
@@ -81,8 +80,8 @@ $script:CloudConsolePublicConfigPath = (Join-Path $HOME '.ssh\aliyun-um-ecs-publ
 $script:CloudConsolePublicHostAlias = 'um-share-ecs-public'
 $script:CloudConsolePublicDomain = 'dacintapi.de5.net'
 $script:CloudConsoleShortcutName = 'UM云端控制台'
-$script:CloudConsoleStatePath = (Join-Path $PSScriptRoot 'data\cloud-console-tunnel.json')
-$script:CloudConsoleLogPath = (Join-Path $PSScriptRoot 'data\cloud-console-entry.log')
+$script:CloudConsoleStatePath = (Join-Path $script:CloudConsoleRoot 'data\cloud-console-tunnel.json')
+$script:CloudConsoleLogPath = (Join-Path $script:CloudConsoleRoot 'data\cloud-console-entry.log')
 $script:CloudConsoleLockName = 'Local\UMCloudConsoleEntry'
 
 function Get-CloudObjectProperty {
@@ -1613,7 +1612,7 @@ function Invoke-CloudConsoleInstallShortcut {
         $shortcut = $shell.CreateShortcut($shortcutPath)
         if ($null -eq $shortcut) { throw '无法创建快捷方式对象' }
         $shortcut.TargetPath = $script:CloudConsoleBatPath
-        $shortcut.IconLocation = (Join-Path $script:CloudConsoleRoot 'assets\UM云端控制台-transparent.ico') + ',0'
+        # Cloud is invite-only: the shortcut carries no custom icon.
         $shortcut.Arguments = ''
         $shortcut.WorkingDirectory = $script:CloudConsoleRoot
         $shortcut.Description = '通过 SSH 隧道打开 UM 云端控制台（私网优先，公网回退）'
