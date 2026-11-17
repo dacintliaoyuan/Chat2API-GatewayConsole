@@ -55,6 +55,20 @@ class RustReleaseMaterialTests(unittest.TestCase):
         self.assertIn("--check-deployment-assembly broker", unit)
         self.assertIn("um-share-gatewayctl.py", unit)
 
+    def test_console_unit_runs_the_rust_production_entry(self):
+        unit = _read("systemd/um-share-console.service")
+        self.assertIn(
+            "ExecStart=/opt/um-share/bin/um-console "
+            "--mode production --bind-port 8002", unit)
+        self.assertIn("ConditionPathExists=/opt/um-share/bin/um-console", unit)
+        self.assertNotIn(
+            "ConditionPathExists=/opt/um-share/current/usagesrv.py", unit)
+        exec_starts = [line for line in unit.splitlines()
+                       if line.startswith("ExecStart=")]
+        self.assertEqual(
+            ["ExecStart=/opt/um-share/bin/um-console "
+             "--mode production --bind-port 8002"], exec_starts)
+
     def test_console_unit_targets_8002_and_8003(self):
         unit = _read("systemd/um-share-console.service")
         self.assertIn("Environment=USAGESRV_PORT=8002", unit)
