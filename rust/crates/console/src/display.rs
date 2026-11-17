@@ -169,6 +169,15 @@ fn display_state_of(
                     error.map(str::to_string),
                 );
             }
+            if reason.as_deref() == Some("duo_prompt_waiting") {
+                // Python `usagesrv.py`: the Duo push wait is its own state, not
+                // the generic MFA takeover state.
+                return (
+                    "waiting_duo".to_string(),
+                    "等待本人确认 Duo 推送".to_string(),
+                    error.map(str::to_string),
+                );
+            }
             if reason
                 .as_deref()
                 .map(|reason| MANUAL_REASONS.contains(&reason))
