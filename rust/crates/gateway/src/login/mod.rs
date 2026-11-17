@@ -1426,12 +1426,14 @@ fn drive_login(
                 || !page.field_filled(&UMPASS_PASSWORD_SELECTORS)
             {
                 if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
-                    return stop_for_manual(inner, round, page, "umpass_prefill_missing");
-                }
-                // The Keycloak/ADFS form is rendered after the redirect; a
-                // poll that lands mid-navigation sees no fields yet.  Give the
-                // stage its settle window before calling the form missing.
-                if seen.elapsed() < inner.config.stage_settle_timeout {
+                    if visible {
+                        // 显式可见登录由本人填写；缺少自动填充不应关闭其窗口。
+                        note_progress(inner, round, "waiting_for_credentials", Some(&url), Some("umpass_prefill_missing"));
+                    } else {
+                        return stop_for_manual(inner, round, page, "umpass_prefill_missing");
+                    }
+                } else if seen.elapsed() < inner.config.stage_settle_timeout {
+                    // 表单重定向后可能尚未渲染，先等待既有的页面稳定预算。
                     // keep polling
                 } else if !page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
                     && page

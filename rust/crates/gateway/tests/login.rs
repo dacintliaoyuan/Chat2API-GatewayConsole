@@ -440,6 +440,32 @@ fn a_watch_probe_does_not_erase_an_operator_cancellation() {
     assert_eq!(service.status()["error"], json!("cancelled"));
 }
 
+#[test]
+fn a_visible_login_keeps_the_empty_umpass_form_open_for_the_operator() {
+    let temp = TempDir::new("um-rust-visible-prefill-wait-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().unwrap() = vec![
+        ("https://websso.um.edu.mo/adfs/ls/".to_string(), None),
+        ("http://127.0.0.1:9".to_string(), Some("operator-token".to_string())),
+    ];
+    let sink = Arc::new(FakeSink::default());
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(&temp, page.clone(), ScriptedProbe::valid(), sink.clone(), |config| {
+        config.display_file = marker;
+    });
+    service.start_explicit(true);
+    let status = wait_for(&service, |s| s["login"]["manual_reason"] == json!("umpass_prefill_missing"));
+    assert_eq!(status["state"], json!("logging_in"), "显式可见登录必须留出人工填写表单的机会：{status}");
+    assert_eq!(factory.closes(), 0);
+    // 模拟本人完成表单输入，随后沿正常提交路径继续认证。
+    page.fill_calls.store(2, Ordering::SeqCst);
+    wait_for(&service, |s| s["state"] == json!("valid"));
+    assert_eq!(factory.requests().len(), 1);
+    assert_eq!(factory.closes(), 1);
+    assert_eq!(sink.published()[0].0, "operator-token");
+}
+
 fn write_display_marker(temp: &TempDir) -> std::path::PathBuf {
     let auth = temp.path().join("Xauthority");
     fs::write(&auth, "cookie").expect("auth file");
