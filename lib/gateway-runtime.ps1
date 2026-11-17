@@ -22,7 +22,17 @@ $script:GatewayServiceDescriptors = [ordered]@{
         OpenUrl      = $null
         StartAction  = 'HiddenBatch'
         StopAction   = 'CommandLine'
-        StartPath    = 'start_chat2api.bat'
+        # #80: the local 8000 launcher is the Rust gateway binary. The Python
+        # entrypoint stays in start_chat2api.bat as the rollback target: reverting
+        # this one field (StartPath) restores Python without a reinstall or a
+        # port change. StartArguments/StartWorkingDirectory are harmless for a
+        # batch launcher (the batch ignores them) so the rollback stays a
+        # one-line change.
+        StartPath    = 'rust\target\release\um-gateway-candidate.exe'
+        StartArguments = '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token'
+        # Repository root keeps the Rust role defaults identical to Python:
+        # current_dir()/chat2api/token.json and current_dir()/chat2api/.edge-profile.
+        StartWorkingDirectory = '.'
         StartTimeoutSeconds = 20
         StopStrategy = 'GracefulHttp'
         StopWhenUnhealthy = $true
@@ -38,8 +48,39 @@ $script:GatewayServiceDescriptors = [ordered]@{
         # Get-GatewayStopScopeClass for the full rule.
         StopInstanceScript = 'chat2api\chat2api.py'
         StopForeignArgumentPatterns = @('--profile')
+        # #80: the private 8000 instance can be either runtime. The Rust
+        # identity is deliberately narrower than the Python one: it requires the
+        # production port (declared --port must equal 8000) and excludes the
+        # candidate and cloud shapes. The Python identity remains for rollback.
+        StopIdentities = @(
+            [pscustomobject]@{
+                ProcessName = 'python.exe'
+                CommandLinePattern = '(^|\s)chat2api\.py(\s|$)'
+                InstanceScript = 'chat2api\chat2api.py'
+                ForeignArgumentPatterns = @('--profile')
+            },
+            [pscustomobject]@{
+                ProcessName = 'um-gateway-candidate.exe'
+                CommandLinePattern = '(^|\s)um-gateway-candidate(\.exe)?(\s|$)'
+                InstanceScript = 'rust\target\release\um-gateway-candidate.exe'
+                ForeignArgumentPatterns = @('--profile', '--mode candidate', '--role cloud', '--share-config')
+            }
+        )
         OwnerProcessName = 'python.exe'
         OwnerCommandLinePattern = '(^|\s)chat2api\.py(\s|$)'
+        OwnerIdentities = @(
+            [pscustomobject]@{
+                ProcessName = 'python.exe'
+                CommandLinePattern = '(^|\s)chat2api\.py(\s|$)'
+            },
+            [pscustomobject]@{
+                ProcessName = 'um-gateway-candidate.exe'
+                # Owner matching is broad (the inspection path only asks whether
+                # this is the managed program); a quoted or path-qualified
+                # command line must match here.
+                CommandLinePattern = 'um-gateway-candidate(\.exe)?\b'
+            }
+        )
         AuthStatusUrl = 'http://127.0.0.1:8000/admin/auth/status'
         ReauthenticationUrl = 'http://127.0.0.1:8000/admin/auth/login'
         ShutdownUrl = 'http://127.0.0.1:8000/admin/shutdown'
@@ -195,14 +236,68 @@ function Get-GatewayServiceStatus {
     return 'Stopped'
 }
 
+function Get-GatewayStopIdentities {
+    # #80: a descriptor may carry several private stop identities. The local
+    # 8000 launcher switched from Python to the Rust binary, but the rollback is
+    # only a StartPath change back to start_chat2api.bat: the Python identity
+    # must stay recognized after that rollback. Descriptors without the array
+    # keep their historical scalar identity.
+    param([Parameter(Mandatory = $true)]$Descriptor)
+    $identitiesProp = $Descriptor.PSObject.Properties['StopIdentities']
+    if ($null -ne $identitiesProp -and $null -ne $identitiesProp.Value) {
+        return @($identitiesProp.Value)
+    }
+    $instanceScript = ''
+    $instanceProp = $Descriptor.PSObject.Properties['StopInstanceScript']
+    if ($null -ne $instanceProp) { $instanceScript = [string]$instanceProp.Value }
+    $foreignPatterns = @()
+    $foreignProp = $Descriptor.PSObject.Properties['StopForeignArgumentPatterns']
+    if ($null -ne $foreignProp -and $null -ne $foreignProp.Value) {
+        $foreignPatterns = @($foreignProp.Value)
+    }
+    $commandLinePattern = ''
+    $patternProp = $Descriptor.PSObject.Properties['StopCommandLinePattern']
+    if ($null -ne $patternProp) { $commandLinePattern = [string]$patternProp.Value }
+    return @([pscustomobject]@{
+        ProcessName = [string]$Descriptor.StopProcessName
+        CommandLinePattern = $commandLinePattern
+        InstanceScript = $instanceScript
+        ForeignArgumentPatterns = $foreignPatterns
+    })
+}
+
+function Get-GatewayOwnerIdentities {
+    # Same shape as the stop identities, without the stop-only fields. The
+    # inspection path must recognize both runtimes for the same reason.
+    param([Parameter(Mandatory = $true)]$Descriptor)
+    $identitiesProp = $Descriptor.PSObject.Properties['OwnerIdentities']
+    if ($null -ne $identitiesProp -and $null -ne $identitiesProp.Value) {
+        return @($identitiesProp.Value)
+    }
+    $commandLinePattern = ''
+    $patternProp = $Descriptor.PSObject.Properties['OwnerCommandLinePattern']
+    if ($null -ne $patternProp) { $commandLinePattern = [string]$patternProp.Value }
+    return @([pscustomobject]@{
+        ProcessName = [string]$Descriptor.OwnerProcessName
+        CommandLinePattern = $commandLinePattern
+    })
+}
+
 function Test-GatewayProcessOwnership {
     param(
         [Parameter(Mandatory = $true)]$Descriptor,
         [Parameter(Mandatory = $true)]$Process
     )
     try {
-        return ($Process.Name -eq $Descriptor.OwnerProcessName -and
-            $Process.CommandLine -match $Descriptor.OwnerCommandLinePattern)
+        foreach ($identity in @(Get-GatewayOwnerIdentities -Descriptor $Descriptor)) {
+            $pattern = [string]$identity.CommandLinePattern
+            if (-not $pattern) { continue }
+            if ($Process.Name -eq [string]$identity.ProcessName -and
+                    $Process.CommandLine -match $pattern) {
+                return $true
+            }
+        }
+        return $false
     } catch {
         return $false
     }
@@ -309,19 +404,26 @@ function Get-GatewayStopScopeClass {
     param(
         [Parameter(Mandatory = $true)]$Descriptor,
         [Parameter(Mandatory = $true)]$Process,
-        [Parameter(Mandatory = $true)][string]$GatewayRoot
+        [Parameter(Mandatory = $true)][string]$GatewayRoot,
+        $Identity
     )
     if ([string]::IsNullOrWhiteSpace([string]$Process.CommandLine)) { return 'Unconfirmed' }
     $commandLine = [string]$Process.CommandLine
 
-    if (-not $Descriptor.PSObject.Properties['StopInstanceScript'] -or
-            -not $Descriptor.StopInstanceScript) {
-        return 'Unconfirmed'
+    if ($null -eq $Identity) {
+        $Identity = @(Get-GatewayStopIdentities -Descriptor $Descriptor) |
+            Select-Object -First 1
     }
+    if ($null -eq $Identity) { return 'Unconfirmed' }
+
+    $instanceScript = ''
+    $instanceProp = $Identity.PSObject.Properties['InstanceScript']
+    if ($null -ne $instanceProp) { $instanceScript = [string]$instanceProp.Value }
+    if (-not $instanceScript) { return 'Unconfirmed' }
     $expected = $null
     try {
         $expected = [IO.Path]::GetFullPath(
-            (Join-Path $GatewayRoot ([string]$Descriptor.StopInstanceScript)))
+            (Join-Path $GatewayRoot $instanceScript))
     } catch {
         return 'Unconfirmed'
     }
@@ -329,9 +431,12 @@ function Get-GatewayStopScopeClass {
 
     # The entrypoint may be given bare (the private launcher's shape) or
     # path-qualified; either way it must reference THIS entrypoint.
-    $bareToken = $commandLine -match $Descriptor.StopCommandLinePattern
+    $commandLinePattern = [string]$Identity.CommandLinePattern
+    if (-not $commandLinePattern) { return 'Unconfirmed' }
+    $bareToken = $commandLine -match $commandLinePattern
     $references = @()
-    foreach ($match in [regex]::Matches($commandLine, "(?<ref>\S*[\\/]$leaf)(?=\s|$)")) {
+    $referencePattern = "(?<ref>\S*[\\/]$leaf)(?=[`"']?(?:\s|$))"
+    foreach ($match in [regex]::Matches($commandLine, $referencePattern)) {
         $references += $match.Groups['ref'].Value.Trim('"', "'")
     }
     if (-not $bareToken -and $references.Count -eq 0) { return 'Foreign' }
@@ -342,8 +447,9 @@ function Get-GatewayStopScopeClass {
     }
 
     $foreignPatterns = @()
-    if ($Descriptor.PSObject.Properties['StopForeignArgumentPatterns']) {
-        $foreignPatterns = @($Descriptor.StopForeignArgumentPatterns)
+    $foreignProp = $Identity.PSObject.Properties['ForeignArgumentPatterns']
+    if ($null -ne $foreignProp -and $null -ne $foreignProp.Value) {
+        $foreignPatterns = @($foreignProp.Value)
     }
     foreach ($pattern in $foreignPatterns) {
         if ($pattern -and $commandLine -match $pattern) { return 'Foreign' }
@@ -375,16 +481,24 @@ function Select-GatewayStopScope {
     $private = @()
     $foreign = @()
     $unconfirmed = @()
+    $identities = @(Get-GatewayStopIdentities -Descriptor $Descriptor)
     foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
-        if ([string]$process.Name -ne [string]$Descriptor.StopProcessName) { continue }
+        $identity = $null
+        foreach ($candidate in $identities) {
+            if ([string]$process.Name -eq [string]$candidate.ProcessName) {
+                $identity = $candidate
+                break
+            }
+        }
+        if ($null -eq $identity) { continue }
         if ([string]::IsNullOrWhiteSpace([string]$process.CommandLine)) {
             # A name match with no readable command line could be the private
             # instance; classify it (Unconfirmed) instead of skipping it.
             $unconfirmed += $process
             continue
         }
-        switch (Get-GatewayStopScopeClass -Descriptor $Descriptor -Process $process `
-                -GatewayRoot $GatewayRoot) {
+        switch (Get-GatewayStopScopeClass -Descriptor $Descriptor -Identity $identity `
+                -Process $process -GatewayRoot $GatewayRoot) {
             'Private' { $private += $process }
             'Unconfirmed' { $unconfirmed += $process }
             default { $foreign += $process }
@@ -1152,16 +1266,42 @@ function Start-GatewayService {
                 if ($null -ne $sourceProp -and $sourceProp.Value) {
                     $childEnv[[string]$sourceProp.Value] = Get-GatewayActionSource
                 }
+                # #80: the chat2api descriptor points StartPath at the Rust
+                # executable and carries its arguments + working directory.
+                # A batch StartPath (the Python rollback) ignores the arguments
+                # and keeps the historical cmd.exe launch.
+                $startArguments = @()
+                $argumentsProp = $desc.PSObject.Properties['StartArguments']
+                if ($null -ne $argumentsProp -and $argumentsProp.Value) {
+                    $startArguments = @([string]$argumentsProp.Value)
+                }
+                $workingDirectory = Split-Path -Parent $startPath
+                $workingDirectoryProp = $desc.PSObject.Properties['StartWorkingDirectory']
+                if ($null -ne $workingDirectoryProp -and $workingDirectoryProp.Value) {
+                    $workingDirectory = [IO.Path]::GetFullPath(
+                        (Join-Path (Get-GatewayRoot) ([string]$workingDirectoryProp.Value)))
+                }
                 $saved = @{}
                 foreach ($name in $childEnv.Keys) {
                     $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
                     [Environment]::SetEnvironmentVariable($name, $childEnv[$name], 'Process')
                 }
                 try {
-                    Start-Process -FilePath 'cmd.exe' `
-                        -ArgumentList @('/d', '/c', "`"$startPath`"") `
-                        -WorkingDirectory (Split-Path -Parent $startPath) `
-                        -WindowStyle Hidden
+                    if ($startPath -match '\.(exe|com)$') {
+                        Start-Process -FilePath $startPath `
+                            -ArgumentList $startArguments `
+                            -WorkingDirectory $workingDirectory `
+                            -WindowStyle Hidden
+                    } else {
+                        $command = "`"$startPath`""
+                        if ($startArguments.Count -gt 0) {
+                            $command += ' ' + ($startArguments -join ' ')
+                        }
+                        Start-Process -FilePath 'cmd.exe' `
+                            -ArgumentList @('/d', '/c', $command) `
+                            -WorkingDirectory $workingDirectory `
+                            -WindowStyle Hidden
+                    }
                 } finally {
                     foreach ($name in $saved.Keys) {
                         [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process')

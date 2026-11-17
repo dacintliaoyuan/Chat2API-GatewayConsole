@@ -1,4 +1,7 @@
 @echo off
+rem Rollback (#80): set the chat2api StartPath back to start_chat2api.bat in
+rem lib\gateway-runtime.ps1. This file keeps the Python 8000 command; no
+rem reinstall and no port change are needed.
 rem Direct connection: clear proxy env vars and set NO_PROXY=* (no VPN/system proxy).
 set "HTTP_PROXY="
 set "HTTPS_PROXY="
