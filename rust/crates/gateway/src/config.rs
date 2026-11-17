@@ -187,7 +187,7 @@ pub struct ShareConfig {
 /// How the gateway chooses its listening socket.
 ///
 /// Candidate is the default and only binds an ephemeral loopback port for parity
-/// tests. Production must be selected explicitly and only binds 8003/8002 on
+/// tests. Production must be selected explicitly and only binds 8000/8002/8003 on
 /// loopback; both modes share the same routes, authentication, ledger and error
 /// contracts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -385,7 +385,7 @@ pub fn governed_ports() -> BTreeSet<u16> {
 
 /// The only ports production mode may bind.
 pub fn production_ports() -> BTreeSet<u16> {
-    [8002, 8003].into_iter().collect()
+    [8000, 8002, 8003].into_iter().collect()
 }
 
 impl GatewayConfig {
@@ -558,7 +558,7 @@ impl GatewayConfig {
             }
         } else if !production_ports().contains(&self.bind_port) {
             return Err(ConfigError(format!(
-                "production must bind one of 8002 or 8003 on loopback, got {}",
+                "production must bind one of 8000, 8002 or 8003 on loopback, got {}",
                 self.bind_port
             )));
         }

@@ -2,7 +2,7 @@
 //!
 //! Candidate mode is the default: the binary only binds an ephemeral loopback
 //! port. Production mode must be selected explicitly with
-//! `--mode production` and only binds 8003/8002 on loopback. It prints the
+//! `--mode production` and only binds 8000/8002/8003 on loopback. It prints the
 //! actual address so a test (or an operator) can address the gateway, then serves
 //! until the process is stopped. No `chat2api.py`, broker or display relay is
 //! started.
@@ -84,13 +84,13 @@ fn main() -> ExitCode {
                 println!(
                     "usage: um-gateway-candidate [--mode candidate|production] \
                      --upstream-base-url URL [--host 127.0.0.1] \
-                     [--port 0|8003|8002] [--token TOKEN] \
+                     [--port 0|8000|8003|8002] [--token TOKEN] \
                      [--share-config PATH] [--auth-mode projection|legacy] \
                      [--control-token-file PATH] [--token-file PATH] \
                      [--profile-dir PATH] [--login-display-file PATH] \
                      [--login-timeout SECONDS] [--no-browser]\n\
                      modes: candidate (default) binds an ephemeral loopback port only; \
-                     production must be selected explicitly and binds 8003 or 8002 \
+                     production must be selected explicitly and binds 8000, 8002 or 8003 \
                      on loopback only"
                 );
                 return ExitCode::SUCCESS;
