@@ -111,6 +111,19 @@ class UmAuthStatusTestBase(unittest.TestCase):
 
 
 class UmAuthStatusPassthroughTests(UmAuthStatusTestBase):
+    def test_probe_unknown_is_a_known_neutral_authentication_state(self):
+        self.server.respond = (200, json.dumps({
+            "state": "unknown", "label": "认证暂时无法核验",
+            "error": None, "login": None,
+            "evidence": {"verdict": "unknown", "reason": "timeout"},
+        }).encode("utf-8"))
+        result = console_um_adapter.um_auth_status("chat2api", {}, None)
+        self.assertEqual(result["state"], "unknown")
+        self.assertTrue(result["state_known"])
+        self.assertEqual(result["label"], "认证暂时无法核验")
+        self.assertIsNone(result["error"])
+        self.assertIsNone(result["login"])
+
     def test_four_states_pass_through(self):
         for state, label, error in _FOUR_STATES:
             with self.subTest(state=state):

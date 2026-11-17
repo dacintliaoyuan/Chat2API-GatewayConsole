@@ -336,6 +336,11 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
                 interval = AUTH_WATCH_INTERVAL;
                 continue;
             }
+            if verdict != "rejected" && verdict != "needs_login" {
+                // 补偿上游目录响应慢或临时不可达：稍后重新核验，不能重开登录。
+                interval = Duration::from_secs(30);
+                continue;
+            }
             if state.config.browser_disabled {
                 continue;
             }

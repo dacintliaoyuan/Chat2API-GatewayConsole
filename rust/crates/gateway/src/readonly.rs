@@ -23,6 +23,8 @@ use crate::tls::{self, UpstreamStream};
 pub const CHAT2API_VERSION: &str = "1.0.0";
 pub const CHAT2API_SOURCE_REV: &str = "e2d60349";
 pub const DEFAULT_BUILD_ID: &str = "e2d60349+rust-s1a";
+/// Python `AUTH_WATCH_PROBE_TIMEOUT_S`: the readiness/auth probe budget.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 pub const MODELS_CACHE_TTL: Duration = Duration::from_secs(60);
 pub const REPETITION_GUARD_AUTO_RETRIES: u32 = 5;
 pub const UPSTREAM_AUTO_RETRIES: u32 = 5;
@@ -173,6 +175,21 @@ impl UpstreamClient {
         bearer: Option<&str>,
     ) -> Result<(u16, Option<Value>), UpstreamFailure> {
         let response = self.get(path, bearer)?;
+        let payload = serde_json::from_slice(&response.body).ok();
+        Ok((response.status, payload))
+    }
+
+    /// The readiness/auth probe budget: Python `AUTH_WATCH_PROBE_TIMEOUT_S`.
+    ///
+    /// A probe is a single `/api/models` read; the 15 s request default is too
+    /// tight for a slow UM catalog and turned a transient timeout into a 503
+    /// readiness flip even when the credential was still valid.
+    pub fn get_json_probe(
+        &self,
+        path: &str,
+        bearer: Option<&str>,
+    ) -> Result<(u16, Option<Value>), UpstreamFailure> {
+        let response = self.request("GET", path, bearer, None, PROBE_TIMEOUT)?;
         let payload = serde_json::from_slice(&response.body).ok();
         Ok((response.status, payload))
     }
@@ -534,7 +551,7 @@ impl ProxyState {
         if bearer.is_empty() {
             return ("needs_login", Some("no_local_credential"), None);
         }
-        match self.upstream.get_json("/api/models", Some(&bearer)) {
+        match self.upstream.get_json_probe("/api/models", Some(&bearer)) {
             Err(UpstreamFailure::Timeout) => ("unknown", Some("timeout"), None),
             Err(UpstreamFailure::ConnectionError) => ("unknown", Some("network_error"), None),
             Ok((status, payload)) => {

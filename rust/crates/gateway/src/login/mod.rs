@@ -101,8 +101,9 @@ pub const UMPASS_ERROR_SELECTORS: [&str; 8] = [
 ];
 pub const DUO_WAIT_HOSTS: [&str; 1] = ["duosecurity.com"];
 
-const AUTH_LABELS: [(&str, &str); 5] = [
+const AUTH_LABELS: [(&str, &str); 6] = [
     ("valid", "认证有效"),
+    ("unknown", "认证暂时无法核验"),
     ("needs_login", "需要登录"),
     ("logging_in", "登录中"),
     ("failed", "登录失败"),
@@ -113,6 +114,7 @@ const AUTH_LABELS: [(&str, &str); 5] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthState {
     Valid,
+    Unknown,
     NeedsLogin,
     LoggingIn,
     Failed,
@@ -123,6 +125,7 @@ impl AuthState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Valid => "valid",
+            Self::Unknown => "unknown",
             Self::NeedsLogin => "needs_login",
             Self::LoggingIn => "logging_in",
             Self::Failed => "failed",
@@ -143,6 +146,7 @@ impl AuthState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoginOutcome {
     Valid,
+    VerificationUnknown { reason: String },
     Token { token: String },
     Manual { reason: String },
     Rejected { reason: String },
@@ -159,6 +163,7 @@ impl LoginOutcome {
             Self::Valid => None,
             Self::Token { .. } => None,
             Self::Manual { reason, .. }
+            | Self::VerificationUnknown { reason }
             | Self::Rejected { reason }
             | Self::Unavailable { reason }
             | Self::Busy { reason }
@@ -563,9 +568,6 @@ impl LoginService {
     /// without a login round. Python records the same fields from its watch.
     pub fn note_probe(&self, verdict: &str, reason: Option<&str>, upstream_status: Option<u16>) {
         let mut state = self.inner.state.lock().expect("login state poisoned");
-        if state.auth_state == AuthState::LoggingIn || state.auth_state == AuthState::Failed {
-            return;
-        }
         let now = profile::epoch_now();
         let last_valid_epoch = if verdict == "valid" {
             Some(now)
@@ -580,6 +582,24 @@ impl LoginService {
             last_valid_epoch,
             source: Some("auth_watch".to_string()),
         };
+        if active_round(&state)
+            || matches!(state.auth_state, AuthState::Failed | AuthState::Cancelled)
+        {
+            return;
+        }
+        state.auth_state = match verdict {
+            "valid" => AuthState::Valid,
+            "needs_login" | "rejected" => AuthState::NeedsLogin,
+            _ => AuthState::Unknown,
+        };
+        if verdict == "valid" {
+            state.error = None;
+            state.primary = None;
+            state.gate = None;
+            state.recovery.state = "idle".to_string();
+            state.recovery.next_attempt_epoch = None;
+            state.recovery.pause_reason = None;
+        }
     }
 
     /// Stop the executor for shutdown: the current round is cancelled.
@@ -710,12 +730,12 @@ fn outcome_to_provider(outcome: LoginOutcome) -> ReauthProviderResult {
             reason,
             retry_after: None,
         },
-        LoginOutcome::Transient { reason } | LoginOutcome::Unavailable { reason } => {
-            ReauthProviderResult::Unavailable {
-                reason,
-                retry_after: None,
-            }
-        }
+        LoginOutcome::Transient { reason }
+        | LoginOutcome::VerificationUnknown { reason }
+        | LoginOutcome::Unavailable { reason } => ReauthProviderResult::Unavailable {
+            reason,
+            retry_after: None,
+        },
         other => ReauthProviderResult::Failed {
             reason: other.reason().unwrap_or("login_failed").to_string(),
         },
@@ -1075,6 +1095,26 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
         return;
     }
     match outcome {
+        LoginOutcome::VerificationUnknown { reason } => {
+            state.auth_state = AuthState::Unknown;
+            state.error = None;
+            state.primary = None;
+            state.login = None;
+            state.login_window = None;
+            state.gate = None;
+            state.recovery.state = "idle".to_string();
+            state.recovery.next_attempt_epoch = None;
+            state.recovery.pause_reason = None;
+            let now = profile::epoch_now();
+            state.evidence = Evidence {
+                verdict: Some("unknown".to_string()),
+                reason: Some(reason),
+                upstream_status: None,
+                checked_epoch: Some(now),
+                last_valid_epoch: state.evidence.last_valid_epoch,
+                source: Some("login".to_string()),
+            };
+        }
         LoginOutcome::Valid => {
             state.auth_state = AuthState::Valid;
             state.error = None;
@@ -1277,14 +1317,14 @@ fn drive_login(
                     let _ = page.reload();
                     continue;
                 }
-                manual_reason = Some("credential_probe_inconclusive".to_string());
-                note_progress(
-                    inner,
-                    round,
-                    "manual_takeover",
-                    Some(&page.url()),
-                    Some("credential_probe_inconclusive"),
-                );
+                // 超时不要求用户完成浏览器交互，也不能发布尚未核验的凭据。
+                // 结束本次浏览器会话，后续认证巡检负责重新核验。
+                return LoginOutcome::VerificationUnknown {
+                    reason: verdict
+                        .reason
+                        .unwrap_or("credential_probe_inconclusive")
+                        .to_string(),
+                };
             }
         }
 

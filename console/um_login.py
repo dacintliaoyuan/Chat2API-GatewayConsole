@@ -476,6 +476,12 @@ def _classify_auth_status(status):
         raise read_failure
     if _login_cancelled(status):
         raise OperationCancelled()
+    if (status["state"] == "unknown" and not status.get("read_error")
+            and not status.get("login")
+            and (status.get("recovery") or {}).get("state") == "idle"):
+        raise OperationError(
+            "login_verification_unknown",
+            "上游认证暂时无法核验；本轮登录等待已结束，后台将自动重新核验")
     login = status.get("login")
     if (isinstance(login, dict)
             and login.get("manual_reason") == DUO_PROMPT_WAITING_REASON):

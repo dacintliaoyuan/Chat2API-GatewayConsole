@@ -375,6 +375,71 @@ fn wait_for(service: &LoginService, predicate: impl Fn(&Value) -> bool) -> Value
     }
 }
 
+#[test]
+fn a_browser_credential_probe_timeout_is_not_manual_takeover() {
+    let temp = TempDir::new("um-rust-login-probe-unknown-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("pending-token"));
+    let probe = ScriptedProbe::new(vec![CredentialVerdict::unknown("Timeout", None); 1000]);
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service(&temp, page, probe, sink.clone());
+    service.start_explicit(false);
+    let status = wait_for(&service, |status| {
+        status["state"] == json!("unknown")
+            || status["login"]["manual_reason"] == json!("credential_probe_inconclusive")
+    });
+    assert_eq!(
+        status["state"],
+        json!("unknown"),
+        "网络核验失败不能一直显示登录中或需人工：{status}"
+    );
+    assert_eq!(status["login"], Value::Null);
+    assert_eq!(status["error"], Value::Null);
+    assert_eq!(status["evidence"]["verdict"], json!("unknown"));
+    assert_eq!(status["recovery"]["state"], json!("idle"));
+    assert_eq!(factory.requests().len(), 1);
+    assert_eq!(factory.closes(), 1);
+    assert!(sink.published().is_empty(), "未核验成功的凭据不得发布");
+}
+
+#[test]
+fn a_watch_timeout_recovers_to_valid_without_another_browser() {
+    let temp = TempDir::new("um-rust-login-probe-recover-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("valid-token"));
+    let (service, factory) = login_service(
+        &temp,
+        page,
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+    );
+    service.start_explicit(false);
+    wait_for(&service, |status| status["state"] == json!("valid"));
+    let last_valid = service.status()["evidence"]["last_valid_epoch"].clone();
+    service.note_probe("unknown", Some("timeout"), None);
+    assert_eq!(
+        service.status()["state"],
+        json!("unknown"),
+        "超时必须与已确认有效区分"
+    );
+    assert_eq!(service.status()["evidence"]["last_valid_epoch"], last_valid);
+    assert!(!service.status()["label"].as_str().unwrap().contains("需人工"));
+    service.note_probe("valid", None, Some(200));
+    assert_eq!(service.status()["state"], json!("valid"));
+    assert_eq!(factory.requests().len(), 1);
+}
+
+#[test]
+fn a_watch_probe_does_not_erase_an_operator_cancellation() {
+    let temp = TempDir::new("um-rust-login-cancel-probe-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    let (service, _) = login_service(&temp, page, ScriptedProbe::valid(), Arc::new(FakeSink::default()));
+    service.start_explicit(false);
+    service.cancel();
+    wait_for(&service, |status| status["state"] == json!("cancelled"));
+    service.note_probe("valid", None, Some(200));
+    assert_eq!(service.status()["state"], json!("cancelled"));
+    assert_eq!(service.status()["error"], json!("cancelled"));
+}
+
 fn write_display_marker(temp: &TempDir) -> std::path::PathBuf {
     let auth = temp.path().join("Xauthority");
     fs::write(&auth, "cookie").expect("auth file");

@@ -57,7 +57,7 @@ CONTROL_TOKEN_FILE = (
 
 # States chat2api itself reports; anything else still passes through with
 # state_known=False instead of being turned into an error.
-_KNOWN_STATES = ("valid", "needs_login", "logging_in", "failed")
+_KNOWN_STATES = ("valid", "needs_login", "logging_in", "failed", "unknown")
 
 _TIMEOUT_S = 10.0
 
