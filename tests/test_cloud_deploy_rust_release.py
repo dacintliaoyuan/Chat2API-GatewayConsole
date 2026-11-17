@@ -55,6 +55,20 @@ class RustReleaseMaterialTests(unittest.TestCase):
         self.assertIn("--check-deployment-assembly broker", unit)
         self.assertIn("um-share-gatewayctl.py", unit)
 
+    def test_console_unit_runs_the_rust_production_entry(self):
+        unit = _read("systemd/um-share-console.service")
+        self.assertIn(
+            "ExecStart=/opt/um-share/bin/um-console "
+            "--mode production --bind-port 8002", unit)
+        self.assertIn("ConditionPathExists=/opt/um-share/bin/um-console", unit)
+        self.assertNotIn(
+            "ConditionPathExists=/opt/um-share/current/usagesrv.py", unit)
+        exec_starts = [line for line in unit.splitlines()
+                       if line.startswith("ExecStart=")]
+        self.assertEqual(
+            ["ExecStart=/opt/um-share/bin/um-console "
+             "--mode production --bind-port 8002"], exec_starts)
+
     def test_console_unit_targets_8002_and_8003(self):
         unit = _read("systemd/um-share-console.service")
         self.assertIn("Environment=USAGESRV_PORT=8002", unit)
@@ -62,6 +76,162 @@ class RustReleaseMaterialTests(unittest.TestCase):
         self.assertIn("NoExecPaths=-/opt/um-share/bin/um-gateway", unit)
         for old in ("8096", "18096"):
             self.assertNotIn(old, unit, f"the console unit names {old}")
+
+    def test_python_console_unit_keeps_8096_and_the_rust_unit(self):
+        unit = _read("systemd/um-share-console-python.service")
+        self.assertIn("Environment=USAGESRV_PORT=8096", unit)
+        self.assertIn("Environment=UM_SHARE_GATEWAY_PORT=8100", unit)
+        self.assertIn(
+            "ExecStart=/opt/um-share/venv/bin/python "
+            "/opt/um-share/current/usagesrv.py", unit)
+        self.assertIn(
+            "--check-deployment-assembly console "
+            "/etc/systemd/system/um-share-console-python.service", unit)
+        self.assertIn("NoExecPaths=-/opt/um-share/bin/um-gateway", unit)
+        self.assertIn(
+            "ReadWritePaths=/var/lib/um-share-console "
+            "/var/log/um-share-console", unit)
+        self.assertIn("After=network-online.target "
+                      "um-share-broker.service", unit)
+
+    def test_python_release_ships_both_console_units(self):
+        package = _read("package-release.sh")
+        python_branch = package[package.index(
+            "# The Python rollback release ships"):]
+        self.assertNotIn(
+            'install -m 0644 "$PAYLOAD/um-cloud-deploy/systemd/'
+            'um-share-console-python.service" \\\n'
+            '    "$PAYLOAD/um-cloud-deploy/systemd/'
+            'um-share-console.service"', python_branch)
+        self.assertNotIn(
+            'rm -f -- "$PAYLOAD/um-cloud-deploy/systemd/'
+            'um-share-console-python.service"', python_branch)
+        self.assertNotIn(
+            'rm -f -- "$PAYLOAD/um-cloud-deploy/systemd/'
+            'um-share-console.service"', python_branch)
+        self.assertIn(
+            'rm -f -- "$PAYLOAD/um-cloud-deploy/bin/um-console"',
+            python_branch)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "um_cloud_make_manifest_for_console",
+            DEPLOY / "make-manifest.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        import sys
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        paths = {entry["path"] for entry in
+                 module._deployment_files(HERE, DEPLOY)}
+        for unit in ("um-share-console.service",
+                     "um-share-console-python.service"):
+            self.assertIn("um-cloud-deploy/systemd/" + unit, paths)
+
+    def test_install_selects_the_runtime_console_unit_and_health_port(self):
+        install = _read("install.sh")
+        self.assertIn(
+            'TARGET_CONSOLE_UNIT="$(release_console_unit "$TARGET_RUNTIME")"',
+            install)
+        self.assertIn(
+            'TARGET_CONSOLE_PORT="$(release_console_port "$TARGET_RUNTIME")"',
+            install)
+        self.assertIn(
+            'systemctl enable "$TARGET_GATEWAY_UNIT" "$TARGET_CONSOLE_UNIT"',
+            install)
+        self.assertIn('systemctl restart "$TARGET_CONSOLE_UNIT"', install)
+        self.assertIn(
+            'wait_port_open 127.0.0.1 "$TARGET_CONSOLE_PORT"', install)
+        self.assertIn(
+            'health_gate "$HEALTH_PORT" "$TARGET_CONSOLE_PORT"', install)
+        self.assertIn('"$UM_SYSTEMD_DIR/$TARGET_CONSOLE_UNIT"', install)
+        self.assertNotIn("systemctl restart um-share-console.service", install)
+        self.assertNotIn("wait_port_open 127.0.0.1 8100", install)
+
+    def test_update_and_rollback_select_current_and_target_console_units(self):
+        for name in ("update.sh", "rollback.sh"):
+            text = _read(name)
+            with self.subTest(script=name):
+                self.assertIn(
+                    'CURRENT_CONSOLE_UNIT="$(installed_console_unit "$CURRENT_RUNTIME")"',
+                    text)
+                self.assertIn(
+                    'TARGET_CONSOLE_UNIT="$(release_console_unit "$TARGET_RUNTIME")"',
+                    text)
+                self.assertIn(
+                    'CURRENT_CONSOLE_PORT="$(installed_console_port "$CURRENT_CONSOLE_UNIT")"',
+                    text)
+                self.assertIn(
+                    'TARGET_CONSOLE_PORT="$(release_console_port "$TARGET_RUNTIME")"',
+                    text)
+                self.assertIn('systemctl start "$TARGET_CONSOLE_UNIT"', text)
+                self.assertIn('systemctl start "$CURRENT_CONSOLE_UNIT"', text)
+                self.assertIn('systemctl stop "$CURRENT_CONSOLE_UNIT"', text)
+                self.assertIn('systemctl stop "$TARGET_CONSOLE_UNIT"', text)
+                self.assertIn(
+                    'wait_port_open 127.0.0.1 "$TARGET_CONSOLE_PORT"', text)
+                self.assertIn(
+                    'wait_port_open 127.0.0.1 "$CURRENT_CONSOLE_PORT"', text)
+                self.assertIn(
+                    'health_gate "$HEALTH_PORT" "$TARGET_CONSOLE_PORT"', text)
+                self.assertIn(
+                    'health_gate "$CURRENT_HEALTH_PORT" '
+                    '"$CURRENT_CONSOLE_PORT"', text)
+                self.assertNotIn('systemctl start "$CONSOLE_UNIT"', text)
+                self.assertNotIn('systemctl stop "$CONSOLE_UNIT"', text)
+
+    def test_health_gate_uses_the_explicit_console_port(self):
+        with tempfile.TemporaryDirectory(prefix="health-console-") as tmp:
+            root = Path(tmp)
+            etc = root / "etc"
+            etc.mkdir()
+            (etc / "console.env").write_text(
+                "USAGESRV_PORT=8096\n", encoding="utf-8")
+            trace = root / "trace"
+            trace.write_text("", encoding="utf-8")
+            script = root / "probe.sh"
+            script.write_text(
+                'set -euo pipefail\n'
+                '. "$DEPLOY_LIB/common.sh"\n'
+                'curl() {\n'
+                '  local url="" arg\n'
+                '  for arg in "$@"; do\n'
+                '    case "$arg" in http*) url="$arg" ;; esac\n'
+                '  done\n'
+                '  printf "%s\\n" "$url" >> "$TRACE"\n'
+                '  printf "200"\n'
+                '}\n'
+                'health_gate 8003 8002\n',
+                encoding="utf-8", newline="\n")
+            env = dict(os.environ,
+                        DEPLOY_LIB=_posix(DEPLOY / "lib"),
+                        UM_ETC=_posix(etc),
+                        TRACE=_posix(trace))
+            proc = subprocess.run([BASH, _posix(script)],
+                                  capture_output=True, text=True,
+                                  env=env, timeout=30)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            urls = trace.read_text(encoding="utf-8")
+            self.assertIn(":8002/", urls)
+            self.assertIn(":8003/v1/models", urls)
+            self.assertNotIn(":8096/", urls)
+
+    def test_console_unit_keeps_the_8002_fences(self):
+        unit = _read("systemd/um-share-console.service")
+        self.assertIn("EnvironmentFile=/etc/um-share/console.env", unit)
+        self.assertIn(
+            "ExecStartPre=/opt/um-share/venv/bin/python "
+            "/opt/um-share/current/um-cloud-deploy/backup_restore.py "
+            "--check-deployment-assembly console "
+            "/etc/systemd/system/um-share-console.service "
+            "/etc/um-share/console.env", unit)
+        self.assertIn("ReadOnlyPaths=-/run/um-share", unit)
+        self.assertIn(
+            "ReadWritePaths=/var/lib/um-share-console "
+            "/var/log/um-share-console", unit)
+        self.assertIn(
+            "NoExecPaths=-/opt/um-share/current/chat2api/chat2api.py", unit)
+        self.assertIn("NoExecPaths=-/opt/um-share/bin/um-gateway", unit)
+        self.assertNotIn("NoExecPaths=-/opt/um-share/bin/um-console", unit)
 
     def test_display_unit_targets_8097_and_the_gateway_namespace(self):
         unit = _read("systemd/um-share-display-rust.service")
@@ -127,6 +297,24 @@ class RustReleaseScriptTests(unittest.TestCase):
             package.index('"$PAYLOAD/um-cloud-deploy/systemd/um-share-gateway.service"'),
             package.index('"$PYTHON" "$PAYLOAD/um-cloud-deploy/make-manifest.py"'))
 
+    def test_package_release_requires_the_rust_console_binary(self):
+        package = _read("package-release.sh")
+        self.assertIn("--rust-console-bin PATH", package)
+        self.assertIn(
+            'die "--runtime rust requires --rust-console-bin '
+            '(built um-console)"', package)
+        self.assertIn('install -m 0755 "$RUST_CONSOLE_BIN"', package)
+        self.assertIn(
+            '"$PAYLOAD/um-cloud-deploy/bin/um-console"', package)
+
+    def test_install_wires_bin_um_console_from_the_release(self):
+        install = _read("install.sh")
+        self.assertIn('require_rust_console_binary "$TARGET"', install)
+        self.assertIn("-o -path '*/bin/um-console'", install)
+        self.assertIn(
+            'ln -sfn "$TARGET/um-cloud-deploy/bin" "$UM_PREFIX/bin.tmp.$$"',
+            install)
+
     def test_make_manifest_records_the_runtime(self):
         manifest = _read("make-manifest.py")
         self.assertIn('RUNTIMES = ("python", "rust")', manifest)
@@ -166,12 +354,15 @@ class RustReleaseScriptTests(unittest.TestCase):
         verify = _read("verify-release.ps1")
         self.assertIn("$manifest.runtime", verify)
         self.assertIn("'um-cloud-deploy/bin/um-gateway'", verify)
+        self.assertIn("'um-cloud-deploy/bin/um-console'", verify)
         self.assertIn("'um-cloud-deploy/systemd/um-share-gateway.service'", verify)
         self.assertIn("'um-cloud-deploy/systemd/um-share-broker.service'", verify)
+        self.assertIn(
+            "'um-cloud-deploy/systemd/um-share-console-python.service'", verify)
 
 
 class RuntimeHelperTests(unittest.TestCase):
-    def _run_helper(self, body, releases, etc=None):
+    def _run_helper(self, body, releases, etc=None, systemd=None):
         with tempfile.TemporaryDirectory(prefix="rust-release-helper-") as tmp:
             root = Path(tmp)
             etc_path = etc or (root / "etc")
@@ -185,11 +376,14 @@ class RuntimeHelperTests(unittest.TestCase):
                         DEPLOY_LIB=_posix(DEPLOY / "lib"),
                         RELEASES=_posix(releases),
                         UM_ETC=_posix(etc_path))
+            if systemd is not None:
+                env["UM_SYSTEMD_DIR"] = _posix(systemd)
             proc = subprocess.run([BASH, _posix(script)], capture_output=True,
                                   text=True, env=env, timeout=30)
             return proc
 
-    def _release(self, root, runtime=None, gateway=False, broker=False):
+    def _release(self, root, runtime=None, gateway=False, broker=False,
+                 console=False, console_python=False):
         release = root / "release"
         units = release / "um-cloud-deploy" / "systemd"
         units.mkdir(parents=True)
@@ -200,6 +394,14 @@ class RuntimeHelperTests(unittest.TestCase):
         if broker:
             (units / "um-share-broker.service").write_text(
                 _read("systemd/um-share-broker.service"),
+                encoding="utf-8", newline="\n")
+        if console:
+            (units / "um-share-console.service").write_text(
+                _read("systemd/um-share-console.service"),
+                encoding="utf-8", newline="\n")
+        if console_python:
+            (units / "um-share-console-python.service").write_text(
+                _read("systemd/um-share-console-python.service"),
                 encoding="utf-8", newline="\n")
         if runtime is not None:
             (release / "RELEASE-MANIFEST.json").write_text(
@@ -243,6 +445,89 @@ class RuntimeHelperTests(unittest.TestCase):
                 '"$(release_console_port python)"', releases)
             self.assertEqual(0, proc.returncode, proc.stderr)
             self.assertEqual("8100 8096", proc.stdout.strip())
+
+    def test_runtime_selects_the_console_unit_and_unit_set(self):
+        with tempfile.TemporaryDirectory(prefix="rust-release-helper-") as tmp:
+            root = Path(tmp)
+            releases = root / "releases"
+            releases.mkdir()
+            self._release(releases, runtime="rust", gateway=True,
+                           console=True, console_python=True)
+            proc = self._run_helper(
+                'printf "%s\\n" "$(release_console_unit rust)" '
+                '"$(release_console_unit python)" '
+                '"$(release_console_port rust)" '
+                '"$(release_console_port python)"\n'
+                'release_units rust\n'
+                'printf "%s\\n" ---\n'
+                'release_units python', releases)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            lines = proc.stdout.strip().splitlines()
+            self.assertEqual(
+                ["um-share-console.service",
+                 "um-share-console-python.service",
+                 "8002", "8096"], lines[:4])
+            self.assertEqual(
+                ["um-share-gateway.service",
+                 "um-share-console.service",
+                 "um-share-display.service"], lines[4:7])
+            self.assertEqual(
+                ["um-share-broker.service",
+                 "um-share-console-python.service",
+                 "um-share-display.service"], lines[8:11])
+
+    def test_rust_release_requires_an_executable_console_binary(self):
+        with tempfile.TemporaryDirectory(prefix="rust-console-binary-") as tmp:
+            root = Path(tmp)
+            releases = root / "releases"
+            release = self._release(releases, runtime="rust", gateway=True,
+                                    console=True)
+            proc = self._run_helper(
+                'require_rust_console_binary "$RELEASE"\nprintf "ok\\n"',
+                releases)
+            self.assertEqual(66, proc.returncode, proc.stderr)
+            binary = release / "um-cloud-deploy" / "bin" / "um-console"
+            binary.parent.mkdir(parents=True)
+            binary.write_text("#!/bin/sh\n", encoding="utf-8", newline="\n")
+            os.chmod(binary, 0o755)
+            proc = self._run_helper(
+                'require_rust_console_binary "$RELEASE"\nprintf "ok\\n"',
+                releases)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertEqual("ok", proc.stdout.strip())
+
+    def test_installed_console_unit_keeps_the_legacy_python_console(self):
+        with tempfile.TemporaryDirectory(prefix="rust-console-installed-") as tmp:
+            root = Path(tmp)
+            releases = root / "releases"
+            releases.mkdir()
+            self._release(releases, runtime="python", broker=True,
+                           console=True, console_python=True)
+            systemd = root / "systemd"
+            systemd.mkdir()
+            legacy = systemd / "um-share-console.service"
+            legacy.write_text(
+                "[Service]\nEnvironment=USAGESRV_PORT=8002\n",
+                encoding="utf-8", newline="\n")
+            proc = self._run_helper(
+                'unit="$(installed_console_unit python)"\n'
+                'printf "%s %s\\n" "$unit" '
+                '"$(installed_console_port "$unit")"',
+                releases, systemd=systemd)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertEqual("um-share-console.service 8002",
+                             proc.stdout.strip())
+            (systemd / "um-share-console-python.service").write_text(
+                "[Service]\nEnvironment=USAGESRV_PORT=8096\n",
+                encoding="utf-8", newline="\n")
+            proc = self._run_helper(
+                'unit="$(installed_console_unit python)"\n'
+                'printf "%s %s\\n" "$unit" '
+                '"$(installed_console_port "$unit")"',
+                releases, systemd=systemd)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertEqual("um-share-console-python.service 8096",
+                             proc.stdout.strip())
 
     def test_sync_runtime_env_rewrites_only_the_port_keys(self):
         with tempfile.TemporaryDirectory(prefix="rust-release-env-") as tmp:

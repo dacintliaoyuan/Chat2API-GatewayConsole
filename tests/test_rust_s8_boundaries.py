@@ -22,10 +22,13 @@ def read(path):
 class RustS8BoundaryTests(unittest.TestCase):
     def test_production_units_still_run_the_python_tools(self):
         console = read(DEPLOY / "systemd" / "um-share-console.service")
+        python_console = read(
+            DEPLOY / "systemd" / "um-share-console-python.service")
         broker = read(DEPLOY / "systemd" / "um-share-broker.service")
-        self.assertIn("usagesrv.py", console)
+        self.assertIn("um-console", console)
+        self.assertIn("usagesrv.py", python_console)
         self.assertIn("broker_ops.py", broker)
-        for text in (console, broker):
+        for text in (console, python_console, broker):
             self.assertNotIn("um-ops", text)
             self.assertNotIn("um-gateway-candidate", text)
 

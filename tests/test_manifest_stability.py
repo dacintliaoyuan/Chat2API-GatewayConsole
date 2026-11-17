@@ -42,6 +42,7 @@ REAL_MATERIALS = [
     "bin/um-share-gatewayctl.py",
     "systemd/um-share-broker.service",
     "systemd/um-share-console.service",
+    "systemd/um-share-console-python.service",
     "systemd/um-share-display.service",
     "config/broker.env.example",
     "config/um-share.json.example",

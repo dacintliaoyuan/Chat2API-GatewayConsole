@@ -13,8 +13,17 @@
 # 77 permission/root-only auth, 78 missing input (auth file or console.env).
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
 UNIT="${UM_DISPLAY_UNIT:-um-share-display.service}"
-CONSOLE_UNIT="${UM_CONSOLE_UNIT:-um-share-console.service}"
+if [ -n "${UM_CONSOLE_UNIT:-}" ]; then
+  CONSOLE_UNIT="$UM_CONSOLE_UNIT"
+else
+  CONSOLE_UNIT="$(release_console_unit \
+    "$(release_runtime "${UM_CURRENT:-/opt/um-share/current}")")"
+fi
 VNC_PASSWD="${UM_VNC_PASSWD_FILE:-/etc/um-share/vnc.passwd}"
 CONSOLE_ENV="${UM_CONSOLE_ENV_FILE:-/etc/um-share/console.env}"
 DISPLAY_STATE="${UM_LOGIN_DISPLAY_FILE:-/run/um-share/login-display.env}"

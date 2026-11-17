@@ -309,6 +309,8 @@ find "$TARGET/um-cloud-deploy" -type f \
 # runtime instead of a hardcoded 8100.
 TARGET_RUNTIME="$(release_runtime "$TARGET")"
 TARGET_GATEWAY_UNIT="$(release_gateway_unit "$TARGET_RUNTIME")"
+TARGET_CONSOLE_UNIT="$(release_console_unit "$TARGET_RUNTIME")"
+TARGET_CONSOLE_PORT="$(release_console_port "$TARGET_RUNTIME")"
 mapfile -t TARGET_UNITS < <(release_units "$TARGET_RUNTIME")
 if [ -z "$HEALTH_PORT" ]; then
   HEALTH_PORT="$(release_gateway_port "$TARGET_RUNTIME")"
@@ -320,6 +322,7 @@ validate_port "--health-port" "$HEALTH_PORT"
 # state.  Refuse a template that would start the gateway read-only before
 # `current` moves.
 if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+  require_rust_console_binary "$TARGET"
   require_share_backend_write_path \
     "$TARGET/um-cloud-deploy/systemd/um-share-gateway.service"
 else
@@ -497,7 +500,7 @@ check_deployment_assembly() {
   fi
   run_as_share "$py" "$release/um-cloud-deploy/backup_restore.py" \
     --check-deployment-assembly console \
-    "$UM_SYSTEMD_DIR/um-share-console.service" "$UM_ETC/console.env" \
+    "$UM_SYSTEMD_DIR/$TARGET_CONSOLE_UNIT" "$UM_ETC/console.env" \
     >/dev/null || die "console deployment assembly check failed" "$EX_SOFTWARE"
 }
 
@@ -679,7 +682,7 @@ if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
     die "cannot install cloudflared.service" "$EX_OSFILE"
 fi
 systemctl daemon-reload
-systemctl enable "$TARGET_GATEWAY_UNIT" "$CONSOLE_UNIT"
+systemctl enable "$TARGET_GATEWAY_UNIT" "$TARGET_CONSOLE_UNIT"
 # Disable the other runtime's gateway unit so a reboot cannot start two
 # gateway hosts.  A missing unit is not an error.
 if [ "$TARGET_GATEWAY_UNIT" = "$RUST_GATEWAY_UNIT" ]; then
@@ -696,7 +699,8 @@ check_deployment_assembly "$TARGET"
 RELEASE_RUNTIME_RUST="${RELEASE_RUNTIME_RUST:-rust}"
 TARGET_RUNTIME="${TARGET_RUNTIME:-python}"
 TARGET_GATEWAY_UNIT="${TARGET_GATEWAY_UNIT:-um-share-broker.service}"
-CONSOLE_UNIT="${CONSOLE_UNIT:-um-share-console.service}"
+TARGET_CONSOLE_UNIT="${TARGET_CONSOLE_UNIT:-$(release_console_unit "$TARGET_RUNTIME")}"
+TARGET_CONSOLE_PORT="${TARGET_CONSOLE_PORT:-$(release_console_port "$TARGET_RUNTIME")}"
 DISPLAY_UNIT="${DISPLAY_UNIT:-um-share-display.service}"
 
 # Explicit recovery is a requested data operation, not a service start:
@@ -708,42 +712,22 @@ if [ -n "$RECOVER_BACKUP" ]; then
 fi
 
 if [ "$NO_START" -eq 0 ]; then
-  if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
-    systemctl restart "$TARGET_GATEWAY_UNIT"
-    brokerctl start-explicit || \
-      die "gateway start did not confirm $HEALTH_PORT" "$EX_UNAVAILABLE"
-    systemctl restart "$CONSOLE_UNIT"
-    if [ "$WITH_DISPLAY" -eq 1 ]; then
-      systemctl enable --now "$DISPLAY_UNIT"
-    fi
-    if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
-      systemctl restart cloudflared.service
-    fi
-    console_listen_port="$(console_port)" || exit "$EX_DATAERR"
-    wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || \
-      die "console $console_listen_port did not open" "$EX_UNAVAILABLE"
-    wait_port_open 127.0.0.1 "$HEALTH_PORT" "$UM_HEALTH_TIMEOUT_S" || \
-      die "share gateway $HEALTH_PORT did not open (check gateway start)" "$EX_UNAVAILABLE"
-    health_gate "$HEALTH_PORT" || \
-      die "health gate failed ($console_listen_port/$HEALTH_PORT HTTP)" "$EX_UNAVAILABLE"
-  else
-    systemctl restart um-share-broker.service
-    brokerctl start-explicit || \
-      die "broker start did not confirm 8100" "$EX_UNAVAILABLE"
-    systemctl restart um-share-console.service
-    if [ "$WITH_DISPLAY" -eq 1 ]; then
-      systemctl enable --now um-share-display.service
-    fi
-    if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
-      systemctl restart cloudflared.service
-    fi
-    console_listen_port="$(console_port)" || exit "$EX_DATAERR"
-    wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || \
-      die "console $console_listen_port did not open" "$EX_UNAVAILABLE"
-    wait_port_open 127.0.0.1 8100 "$UM_HEALTH_TIMEOUT_S" || \
-      die "share gateway 8100 did not open (check broker start)" "$EX_UNAVAILABLE"
-    health_gate || die "health gate failed ($console_listen_port/8100 HTTP)" "$EX_UNAVAILABLE"
+  systemctl restart "$TARGET_GATEWAY_UNIT"
+  brokerctl start-explicit || \
+    die "gateway start did not confirm $HEALTH_PORT" "$EX_UNAVAILABLE"
+  systemctl restart "$TARGET_CONSOLE_UNIT"
+  if [ "$WITH_DISPLAY" -eq 1 ]; then
+    systemctl enable --now "$DISPLAY_UNIT"
   fi
+  if [ "$WITH_CLOUDFLARED" -eq 1 ]; then
+    systemctl restart cloudflared.service
+  fi
+  wait_port_open 127.0.0.1 "$TARGET_CONSOLE_PORT" "$UM_HEALTH_TIMEOUT_S" || \
+    die "console $TARGET_CONSOLE_PORT did not open" "$EX_UNAVAILABLE"
+  wait_port_open 127.0.0.1 "$HEALTH_PORT" "$UM_HEALTH_TIMEOUT_S" || \
+    die "share gateway $HEALTH_PORT did not open (check gateway start)" "$EX_UNAVAILABLE"
+  health_gate "$HEALTH_PORT" "$TARGET_CONSOLE_PORT" || \
+    die "health gate failed ($TARGET_CONSOLE_PORT/$HEALTH_PORT HTTP)" "$EX_UNAVAILABLE"
 else
   log "services were not started (--no-start)"
 fi

@@ -55,7 +55,7 @@ Options:
                          rust carries the um-gateway production entry
   --rust-bin PATH        built um-gateway binary (required with --runtime rust)
   --rust-console-bin PATH
-                         optional built um-console binary for the same payload
+                         built um-console binary (required with --runtime rust)
   -h, --help              show this help
 
 Exit codes: 0 success; 64 usage; 65 manifest/data; 66 missing input;
@@ -96,9 +96,10 @@ if [ "$RUNTIME" = "rust" ]; then
   [ -n "$RUST_BIN" ] || \
     die "--runtime rust requires --rust-bin (built um-gateway)" "$EX_USAGE"
   [ -f "$RUST_BIN" ] || die "rust gateway binary not found: $RUST_BIN" "$EX_NOINPUT"
-  if [ -n "$RUST_CONSOLE_BIN" ] && [ ! -f "$RUST_CONSOLE_BIN" ]; then
+  [ -n "$RUST_CONSOLE_BIN" ] || \
+    die "--runtime rust requires --rust-console-bin (built um-console)" "$EX_USAGE"
+  [ -f "$RUST_CONSOLE_BIN" ] || \
     die "rust console binary not found: $RUST_CONSOLE_BIN" "$EX_NOINPUT"
-  fi
 fi
 [ -f "$SOURCE/usagesrv.py" ] || die "source root lacks usagesrv.py: $SOURCE" "$EX_NOINPUT"
 [ -f "$SOURCE/chat2api/share_auth.py" ] || \
@@ -210,11 +211,9 @@ fi
 if [ "$RUNTIME" = "rust" ]; then
   install -m 0755 "$RUST_BIN" "$PAYLOAD/um-cloud-deploy/bin/um-gateway" || \
     die "cannot copy the rust gateway binary" "$EX_IOERR"
-  if [ -n "$RUST_CONSOLE_BIN" ]; then
-    install -m 0755 "$RUST_CONSOLE_BIN" \
-      "$PAYLOAD/um-cloud-deploy/bin/um-console" || \
-      die "cannot copy the rust console binary" "$EX_IOERR"
-  fi
+  install -m 0755 "$RUST_CONSOLE_BIN" \
+    "$PAYLOAD/um-cloud-deploy/bin/um-console" || \
+    die "cannot copy the rust console binary" "$EX_IOERR"
   # The generic console/display units in the payload are the Rust variants.
   install -m 0644 "$PAYLOAD/um-cloud-deploy/systemd/um-share-display-rust.service" \
     "$PAYLOAD/um-cloud-deploy/systemd/um-share-display.service" || \
@@ -227,16 +226,13 @@ if [ "$RUNTIME" = "rust" ]; then
   rm -f -- "$PAYLOAD/um-cloud-deploy/config/broker-python.env.example"
   rm -f -- "$PAYLOAD/um-cloud-deploy/config/console-python.env.example"
 else
-  # The Python rollback release ships the 8096 console unit and never the Rust
-  # gateway binary/unit.
-  install -m 0644 "$PAYLOAD/um-cloud-deploy/systemd/um-share-console-python.service" \
-    "$PAYLOAD/um-cloud-deploy/systemd/um-share-console.service" || \
-    die "cannot install the python console unit" "$EX_IOERR"
+  # The Python rollback release ships the 8096 console unit and keeps the Rust
+  # 8002 console unit template in the payload: the manifest runtime selects the
+  # Python unit, and the Rust unit stays available for a later roll-forward.
   rm -f -- "$PAYLOAD/um-cloud-deploy/bin/um-gateway"
   rm -f -- "$PAYLOAD/um-cloud-deploy/bin/um-console"
   rm -f -- "$PAYLOAD/um-cloud-deploy/systemd/um-share-gateway.service"
   rm -f -- "$PAYLOAD/um-cloud-deploy/systemd/um-share-display-rust.service"
-  rm -f -- "$PAYLOAD/um-cloud-deploy/systemd/um-share-console-python.service"
   rm -f -- "$PAYLOAD/um-cloud-deploy/config/gateway.env.example"
 fi
 

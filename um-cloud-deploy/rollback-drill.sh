@@ -126,7 +126,7 @@ drill_plan() {
     "$ROLLBACK_SCRIPT" "$TARGET_VERSION" "$HEALTH_PORT" "$CURRENT_HEALTH_PORT"
   for unit in "${RUST_UNITS[@]}"; do
     if [ "$unit" = "um-share-broker.service" ] || \
-       [ "$unit" = "um-share-console.service" ]; then
+       [ "$unit" = "um-share-console-python.service" ]; then
       printf 'PLAN: %s is a Python target unit; rollback.sh already replaced it\n' "$unit"
     else
       printf 'PLAN: if active, systemctl stop %s\n' "$unit"
@@ -165,7 +165,7 @@ drill_execute() {
 
   for unit in "${RUST_UNITS[@]}"; do
     if [ "$unit" = "um-share-broker.service" ] || \
-       [ "$unit" = "um-share-console.service" ]; then
+       [ "$unit" = "um-share-console-python.service" ]; then
       log "$unit is a Python target unit; rollback.sh already replaced it"
       continue
     fi

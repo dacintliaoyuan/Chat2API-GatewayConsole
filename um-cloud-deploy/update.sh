@@ -35,6 +35,13 @@ CURRENT_HEALTH_PORT="${CURRENT_TARGET_PORT:-$GATEWAY_PORT_DEFAULT}"
 # runtime decides the default after the manifests are read.
 HEALTH_PORT_SET=0
 CURRENT_HEALTH_PORT_SET=0
+# The console unit and listener follow the same release runtime as the gateway:
+# the Rust console is um-share-console.service on 8002, the Python rollback
+# console is um-share-console-python.service on 8096.
+TARGET_CONSOLE_UNIT=""
+TARGET_CONSOLE_PORT=""
+CURRENT_CONSOLE_UNIT=""
+CURRENT_CONSOLE_PORT=""
 RECOVER_BACKUP=""
 RECOVER_SECURITY_STATE=""
 
@@ -177,6 +184,8 @@ CURRENT_VERSION="$(basename "$CURRENT_TARGET")"
 [ -d "$CURRENT_TARGET" ] || die "current release target missing: $CURRENT_TARGET" "$EX_NOINPUT"
 CURRENT_RUNTIME="$(release_runtime "$CURRENT_TARGET")"
 CURRENT_GATEWAY_UNIT="$(release_gateway_unit "$CURRENT_RUNTIME")"
+CURRENT_CONSOLE_UNIT="$(installed_console_unit "$CURRENT_RUNTIME")"
+CURRENT_CONSOLE_PORT="$(installed_console_port "$CURRENT_CONSOLE_UNIT")"
 if [ "$CURRENT_HEALTH_PORT_SET" -eq 0 ]; then
   CURRENT_HEALTH_PORT="$(release_gateway_port "$CURRENT_RUNTIME")"
 fi
@@ -270,8 +279,13 @@ if [ -n "$RECOVER_BACKUP" ]; then
   TARGET_RUNTIME="$CURRENT_RUNTIME"
 else
   TARGET_RUNTIME="$(release_runtime "$TARGET")"
+  TARGET_CONSOLE_UNIT="$(release_console_unit "$TARGET_RUNTIME")"
+  TARGET_CONSOLE_PORT="$(release_console_port "$TARGET_RUNTIME")"
   if [ "$HEALTH_PORT_SET" -eq 0 ]; then
     HEALTH_PORT="$(release_gateway_port "$TARGET_RUNTIME")"
+  fi
+  if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+    require_rust_console_binary "$TARGET"
   fi
   ensure_runtime_env "$TARGET" "$TARGET_RUNTIME" || \
     die "cannot prepare the target runtime environment" "$EX_SOFTWARE"
@@ -288,6 +302,10 @@ TARGET_RUNTIME="${TARGET_RUNTIME:-$RELEASE_RUNTIME_PYTHON}"
 CURRENT_RUNTIME="${CURRENT_RUNTIME:-$RELEASE_RUNTIME_PYTHON}"
 TARGET_GATEWAY_UNIT="${TARGET_GATEWAY_UNIT:-$(release_gateway_unit "$TARGET_RUNTIME")}"
 CURRENT_GATEWAY_UNIT="${CURRENT_GATEWAY_UNIT:-$(release_gateway_unit "$CURRENT_RUNTIME")}"
+TARGET_CONSOLE_UNIT="${TARGET_CONSOLE_UNIT:-$(release_console_unit "$TARGET_RUNTIME")}"
+CURRENT_CONSOLE_UNIT="${CURRENT_CONSOLE_UNIT:-$(installed_console_unit "$CURRENT_RUNTIME")}"
+TARGET_CONSOLE_PORT="${TARGET_CONSOLE_PORT:-$(release_console_port "$TARGET_RUNTIME")}"
+CURRENT_CONSOLE_PORT="${CURRENT_CONSOLE_PORT:-$(installed_console_port "$CURRENT_CONSOLE_UNIT")}"
 if [ "${TARGET_UNITS+x}" != "x" ]; then
   mapfile -t TARGET_UNITS < <(release_units "$TARGET_RUNTIME")
 fi
@@ -297,7 +315,7 @@ if [ -f "$UM_SYSTEMD_DIR/cloudflared.service" ]; then
   CLOUDFLARED_MANAGED=1
   if unit_active cloudflared.service; then CLOUDFLARED_WAS_ACTIVE=1; fi
 fi
-if unit_active "$CONSOLE_UNIT"; then CONSOLE_WAS_ACTIVE=1; fi
+if unit_active "$CURRENT_CONSOLE_UNIT"; then CONSOLE_WAS_ACTIVE=1; fi
 if unit_active "${CURRENT_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}"; then BROKER_WAS_ACTIVE=1; fi
 
 # Start the cloudflared edge only when this deployment manages it AND it was
@@ -336,24 +354,23 @@ restore_edge() {
 # only when both units were active.
 # Return 0 only when every originally-active object is serving again.
 restore_units() {
-  local failed=0 console_listen_port
+  local failed=0
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ]; then
     systemctl start "${CURRENT_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" || failed=1
     brokerctl start-explicit || failed=1
   fi
   if [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
-    systemctl start "$CONSOLE_UNIT" || failed=1
+    systemctl start "$CURRENT_CONSOLE_UNIT" || failed=1
   fi
   [ "$failed" -eq 0 ] || return 1
   if [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
-    console_listen_port="$(console_port)" || return 1
-    wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
+    wait_port_open 127.0.0.1 "$CURRENT_CONSOLE_PORT" "$UM_HEALTH_TIMEOUT_S" || return 1
   fi
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ]; then
     wait_port_open 127.0.0.1 "$CURRENT_HEALTH_PORT" "$UM_HEALTH_TIMEOUT_S" || return 1
   fi
   if [ "$BROKER_WAS_ACTIVE" -eq 1 ] && [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
-    health_gate "$CURRENT_HEALTH_PORT" || return 1
+    health_gate "$CURRENT_HEALTH_PORT" "$CURRENT_CONSOLE_PORT" || return 1
   fi
   return 0
 }
@@ -516,14 +533,12 @@ abort_before_switch() {
 }
 
 start_switch() {
-  local console_listen_port
   systemctl start "${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" || return 1
   brokerctl start-explicit || return 1
-  systemctl start "$CONSOLE_UNIT" || return 1
-  console_listen_port="$(console_port)" || return 1
-  wait_port_open 127.0.0.1 "$console_listen_port" "$UM_HEALTH_TIMEOUT_S" || return 1
+  systemctl start "$TARGET_CONSOLE_UNIT" || return 1
+  wait_port_open 127.0.0.1 "$TARGET_CONSOLE_PORT" "$UM_HEALTH_TIMEOUT_S" || return 1
   wait_port_open 127.0.0.1 "$HEALTH_PORT" "$UM_HEALTH_TIMEOUT_S" || return 1
-  health_gate "$HEALTH_PORT" || return 1
+  health_gate "$HEALTH_PORT" "$TARGET_CONSOLE_PORT" || return 1
   return 0
 }
 
@@ -593,7 +608,7 @@ fi
 
 if [ "$CONSOLE_WAS_ACTIVE" -eq 1 ]; then
   log "stopping the console unit"
-  if ! systemctl stop "$CONSOLE_UNIT"; then
+  if ! systemctl stop "$CURRENT_CONSOLE_UNIT"; then
     log "console stop failed; restoring the units and the public edge"
     rc=0
     compensate_switch || rc=$?
@@ -693,22 +708,13 @@ fi
 # old unit would still name the removed budget arguments or pull the broker up
 # through Wants=.  Install after the link move and before daemon-reload; a failure
 # restores the previous release's units and links.
-if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
-  install_units "$TARGET" "${TARGET_UNITS[@]}" || \
-    install_failed=1
-else
-  install_units "$TARGET" || install_failed=1
-fi
+install_units "$TARGET" "${TARGET_UNITS[@]}" || \
+  install_failed=1
 if [ "${install_failed:-0}" -eq 1 ]; then
   log "systemd unit installation failed; restoring $CURRENT_TARGET"
-  if [ "$CURRENT_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
-    install_units "$CURRENT_TARGET" \
-      "$RUST_GATEWAY_UNIT" "$CONSOLE_UNIT" "$DISPLAY_UNIT" || \
-      log "ERROR: cannot reinstall the previous release's units"
-  else
-    install_units "$CURRENT_TARGET" || \
-      log "ERROR: cannot reinstall the previous release's units"
-  fi
+  mapfile -t CURRENT_UNITS < <(installed_units "$CURRENT_RUNTIME")
+  install_units "$CURRENT_TARGET" "${CURRENT_UNITS[@]}" || \
+    log "ERROR: cannot reinstall the previous release's units"
   systemctl daemon-reload || \
     log "ERROR: cannot reload systemd after the failed unit installation"
   rc=0
@@ -720,14 +726,9 @@ if [ "${install_failed:-0}" -eq 1 ]; then
 fi
 if ! systemctl daemon-reload; then
   log "systemd daemon-reload failed; restoring $CURRENT_TARGET units and links"
-  if [ "$CURRENT_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
-    install_units "$CURRENT_TARGET" \
-      "$RUST_GATEWAY_UNIT" "$CONSOLE_UNIT" "$DISPLAY_UNIT" || \
-      log "ERROR: cannot reinstall the previous release's units"
-  else
-    install_units "$CURRENT_TARGET" || \
-      log "ERROR: cannot reinstall the previous release's units"
-  fi
+  mapfile -t CURRENT_UNITS < <(installed_units "$CURRENT_RUNTIME")
+  install_units "$CURRENT_TARGET" "${CURRENT_UNITS[@]}" || \
+    log "ERROR: cannot reinstall the previous release's units"
   systemctl daemon-reload || \
     log "ERROR: cannot reload systemd after restoring the previous units"
   rc=0
@@ -738,13 +739,16 @@ if ! systemctl daemon-reload; then
   die_compensation_failed "$rc"
 fi
 # The enabled unit must match "current": disable the previous runtime's gateway
-# so a reboot cannot start two hosts, then enable the target pair.  A missing old
-# unit is not an error.
+# and console units so a reboot cannot start two hosts, then enable the target pair.
+# A missing old unit is not an error.
 if [ "${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" != "${CURRENT_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" ]; then
   systemctl disable "${CURRENT_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" 2>/dev/null || true
 fi
-systemctl enable "${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" "$CONSOLE_UNIT" || \
-  log "WARNING: cannot enable ${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}/$CONSOLE_UNIT"
+if [ "$TARGET_CONSOLE_UNIT" != "$CURRENT_CONSOLE_UNIT" ]; then
+  systemctl disable "$CURRENT_CONSOLE_UNIT" 2>/dev/null || true
+fi
+systemctl enable "${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" "$TARGET_CONSOLE_UNIT" || \
+  log "WARNING: cannot enable ${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}/$TARGET_CONSOLE_UNIT"
 
 # Stop what the forward switch started before restoring the previous release.
 # start_switch starts both units regardless of their prior state, so both are
@@ -755,7 +759,7 @@ systemctl enable "${TARGET_GATEWAY_UNIT:-$PYTHON_GATEWAY_UNIT}" "$CONSOLE_UNIT" 
 # stops are confirmed.
 stop_switch_units() {
   local failed=0
-  if ! systemctl stop "$CONSOLE_UNIT"; then
+  if ! systemctl stop "$TARGET_CONSOLE_UNIT"; then
     log "ERROR: the console unit did not stop"
     failed=1
   fi
