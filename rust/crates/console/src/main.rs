@@ -10,6 +10,7 @@ use std::process::ExitCode;
 
 use um_console::config::{ConsoleConfig, EntryKind, Role};
 use um_console::ConsoleServer;
+use um_gateway::config::BindMode;
 
 fn main() -> ExitCode {
     let mut config = match ConsoleConfig::from_env() {
@@ -22,6 +23,11 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
+            "--mode" => match args.next().as_deref().and_then(BindMode::parse) {
+                Some(BindMode::Candidate) => config.candidate = true,
+                Some(BindMode::Production) => config.candidate = false,
+                None => return usage("--mode must be candidate or production"),
+            },
             "--host" => match args.next() {
                 Some(value) => config.bind_host = value,
                 None => return usage("--host requires a value"),
