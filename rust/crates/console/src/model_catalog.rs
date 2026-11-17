@@ -34,9 +34,11 @@ try:
     result = model_catalog(payload.get("target", ""), payload.get("params") or {})
 except Exception as exc:
     code = getattr(exc, "code", None)
-    if not isinstance(code, str) or not code:
+    if isinstance(code, str) and code:
+        message = " ".join(str(exc).split())[:200]
+    else:
         code = "catalog_failed"
-    message = " ".join(("%s: %s" % (type(exc).__name__, exc)).split())[:200]
+        message = " ".join(("模型目录查询失败：%s: %s" % (type(exc).__name__, exc)).split())[:200]
     sys.stdout.write(json.dumps(
         {"ok": False, "error": {"code": code, "message": message}},
         ensure_ascii=False))
@@ -216,7 +218,7 @@ fn sidecar_failure(code: &str, message: &str) -> ActionFailure {
     } else {
         "catalog_failed"
     };
-    ActionFailure::new(code, format!("模型目录 sidecar 失败：{message}"))
+    ActionFailure::new(code, message.to_string())
 }
 
 fn sidecar_failure_message(prefix: &str, status: &ExitStatus, stderr: &str) -> String {

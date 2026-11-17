@@ -48,6 +48,29 @@ def model_catalog(target, params, ctx=None):
     }
 "#;
 
+const FAILING_MODULE: &str = r#"
+def model_catalog(target, params, ctx=None):
+    raise RuntimeError("upstream unavailable")
+"#;
+
+const INVALID_JSON_MODULE: &str = r#"
+def model_catalog(target, params, ctx=None):
+    print("not-json")
+    return {"catalogs": {}, "warnings": [], "sources": [], "checked_epoch": 1}
+"#;
+
+const NONZERO_SUCCESS_MODULE: &str = r#"
+import json
+import os
+import sys
+
+
+def model_catalog(target, params, ctx=None):
+    sys.stdout.write(json.dumps({"ok": True, "result": {"catalogs": {}}}))
+    sys.stdout.flush()
+    os._exit(7)
+"#;
+
 fn python() -> PathBuf {
     let candidates: &[&str] = if cfg!(windows) {
         &["python", "python3"]
@@ -120,14 +143,9 @@ fn wait_terminal(console: &Console, operation: &Value) -> Value {
     }
 }
 
-#[test]
-fn submitting_model_catalog_runs_the_python_sidecar_and_returns_the_catalog() {
-    let temp = temp();
-    let repo = fake_repo(&temp, SUCCESS_MODULE);
-    let console = start_local_console(&temp, &repo);
-
+fn submit_catalog(console: &Console) -> Value {
     let created = request(
-        &console,
+        console,
         "POST",
         "/api/console/operations",
         Some(json!({
@@ -137,7 +155,16 @@ fn submitting_model_catalog_runs_the_python_sidecar_and_returns_the_catalog() {
         })),
     );
     assert_eq!(created.status, 201);
-    let operation = wait_terminal(&console, &created.json()["operation"]);
+    wait_terminal(console, &created.json()["operation"])
+}
+
+#[test]
+fn submitting_model_catalog_runs_the_python_sidecar_and_returns_the_catalog() {
+    let temp = temp();
+    let repo = fake_repo(&temp, SUCCESS_MODULE);
+    let console = start_local_console(&temp, &repo);
+
+    let operation = submit_catalog(&console);
 
     assert_eq!(operation["state"], json!("succeeded"));
     assert_eq!(operation["result"]["sources"], json!(["um"]));
@@ -150,6 +177,57 @@ fn submitting_model_catalog_runs_the_python_sidecar_and_returns_the_catalog() {
     let call: Value = serde_json::from_str(calls.trim()).expect("call json");
     assert_eq!(call["target"], json!("model"));
     assert_eq!(call["params"], json!({}));
+}
+
+#[test]
+fn a_failing_sidecar_is_an_explicit_operation_error() {
+    let temp = temp();
+    let repo = fake_repo(&temp, FAILING_MODULE);
+    let console = start_local_console(&temp, &repo);
+
+    let operation = submit_catalog(&console);
+
+    assert_eq!(operation["state"], json!("failed"));
+    assert_eq!(operation["result"], Value::Null);
+    assert_eq!(operation["error"]["code"], json!("catalog_failed"));
+    assert_eq!(
+        operation["error"]["message"],
+        json!("模型目录查询失败：RuntimeError: upstream unavailable")
+    );
+}
+
+#[test]
+fn invalid_sidecar_json_is_an_explicit_operation_error() {
+    let temp = temp();
+    let repo = fake_repo(&temp, INVALID_JSON_MODULE);
+    let console = start_local_console(&temp, &repo);
+
+    let operation = submit_catalog(&console);
+
+    assert_eq!(operation["state"], json!("failed"));
+    assert_eq!(operation["result"], Value::Null);
+    assert_eq!(operation["error"]["code"], json!("catalog_failed"));
+    let message = operation["error"]["message"]
+        .as_str()
+        .expect("error message");
+    assert!(message.contains("未返回合法 JSON"), "{message}");
+}
+
+#[test]
+fn a_nonzero_sidecar_exit_never_counts_as_success() {
+    let temp = temp();
+    let repo = fake_repo(&temp, NONZERO_SUCCESS_MODULE);
+    let console = start_local_console(&temp, &repo);
+
+    let operation = submit_catalog(&console);
+
+    assert_eq!(operation["state"], json!("failed"));
+    assert_eq!(operation["result"], Value::Null);
+    assert_eq!(operation["error"]["code"], json!("catalog_failed"));
+    let message = operation["error"]["message"]
+        .as_str()
+        .expect("error message");
+    assert!(message.contains("退出码非零"), "{message}");
 }
 
 #[test]
