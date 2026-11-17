@@ -43,6 +43,7 @@ use crate::share_read::{control_status, DisplaySeams, ShareReadSeams, ShareReadS
 use crate::share_write::{
     console_public_row, ShareWriteError, ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams,
 };
+use crate::local_stats::{self, StatsPaths};
 use crate::summary::SummaryCache;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -381,11 +382,16 @@ fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response 
             return ConsoleError::capability_not_assembled(blocked).response();
         }
     }
-    if state.config.role == Role::Local && rest.first() == Some(&"um") {
-        if method != "GET" {
-            return ConsoleError::unknown_path().response();
+    if state.config.role == Role::Local {
+        if let Some(response) = handle_local_usage_read(state, method, &rest, &target) {
+            return response;
         }
-        return handle_local_um(state, &rest, &target);
+        if rest.first() == Some(&"um") {
+            if method != "GET" {
+                return ConsoleError::unknown_path().response();
+            }
+            return handle_local_um(state, &rest, &target);
+        }
     }
     match method {
         "GET" => handle_console_get(state, &rest, &target),
@@ -788,6 +794,49 @@ fn required_positive_expected_version(
             _ => Err(ConsoleError::body_open(400, message).response()),
         },
         _ => Err(ConsoleError::body_open(400, message).response()),
+    }
+}
+
+/// `usagesrv.py` local usage faces: usage-tokens/usage-rates/stats read the
+/// private chat2api ledger and the frozen DSH snapshot. Only exact GET paths
+/// are assembled; anything else keeps falling through to the unknown-path answer.
+fn handle_local_usage_read(
+    state: &AppState,
+    method: &str,
+    rest: &[&str],
+    raw_target: &str,
+) -> Option<Response> {
+    if method != "GET" {
+        return None;
+    }
+    let paths = || StatsPaths {
+        usage_log: state.config.usage_log.clone(),
+        dsh_snapshot: state.config.dsh_snapshot.clone(),
+    };
+    match rest {
+        ["usage-tokens"] => {
+            let days = match query_value(raw_target, "days") {
+                None => 14,
+                Some(raw) => match raw.trim().parse::<i64>() {
+                    Ok(days) => days,
+                    Err(_) => {
+                        return Some(
+                            ConsoleError::new(
+                                400,
+                                json!({"error": "invalid_usage_query",
+                                        "detail": "days 必须是整数"}),
+                            )
+                            .response(),
+                        );
+                    }
+                },
+            };
+            Some(send_json(
+                200,
+                &local_stats::usage_tokens(&paths(), days, epoch_seconds() as f64 * 1000.0),
+            ))
+        }
+        _ => None,
     }
 }
 
