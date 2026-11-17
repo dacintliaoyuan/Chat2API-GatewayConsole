@@ -91,7 +91,7 @@ fn expected_status_shape(status: u16) -> (&'static str, &'static str) {
         403 => ("permission_error", "upstream_forbidden"),
         429 => ("rate_limit_error", "upstream_rate_limited"),
         504 => ("upstream_error", "upstream_timeout"),
-        400..=499 => ("upstream_error", "upstream_request_rejected"),
+        400..=499 => ("invalid_request_error", "upstream_request_rejected"),
         _ => ("upstream_error", "upstream_unavailable"),
     }
 }

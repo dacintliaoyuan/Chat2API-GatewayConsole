@@ -144,7 +144,7 @@ fn a_400_upstream_response_keeps_the_status_without_passthrough() {
         response.json(),
         json!({"type": "error", "error": {
             "message": "Upstream rejected the request",
-            "type": "upstream_error",
+            "type": "invalid_request_error",
             "code": "upstream_request_rejected",
             "param": null,
             "detail": {

@@ -102,7 +102,7 @@ fn a_400_embedding_response_keeps_the_status_without_a_ledger_row() {
         response.json(),
         json!({"error": {
             "message": "Upstream rejected the request",
-            "type": "upstream_error",
+            "type": "invalid_request_error",
             "code": "upstream_request_rejected",
             "param": null,
             "detail": {

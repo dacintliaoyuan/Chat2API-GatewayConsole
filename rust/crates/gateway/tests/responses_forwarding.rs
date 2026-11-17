@@ -214,7 +214,7 @@ fn a_non_200_upstream_response_preserves_the_status_and_rebuilds_the_body() {
         response.json(),
         json!({"error": {
             "message": "Upstream rejected the request",
-            "type": "upstream_error",
+            "type": "invalid_request_error",
             "code": "upstream_request_rejected",
             "param": null,
             "detail": {
