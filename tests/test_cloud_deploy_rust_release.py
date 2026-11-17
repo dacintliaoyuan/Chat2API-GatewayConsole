@@ -297,6 +297,24 @@ class RustReleaseScriptTests(unittest.TestCase):
             package.index('"$PAYLOAD/um-cloud-deploy/systemd/um-share-gateway.service"'),
             package.index('"$PYTHON" "$PAYLOAD/um-cloud-deploy/make-manifest.py"'))
 
+    def test_package_release_requires_the_rust_console_binary(self):
+        package = _read("package-release.sh")
+        self.assertIn("--rust-console-bin PATH", package)
+        self.assertIn(
+            'die "--runtime rust requires --rust-console-bin '
+            '(built um-console)"', package)
+        self.assertIn('install -m 0755 "$RUST_CONSOLE_BIN"', package)
+        self.assertIn(
+            '"$PAYLOAD/um-cloud-deploy/bin/um-console"', package)
+
+    def test_install_wires_bin_um_console_from_the_release(self):
+        install = _read("install.sh")
+        self.assertIn('require_rust_console_binary "$TARGET"', install)
+        self.assertIn("-o -path '*/bin/um-console'", install)
+        self.assertIn(
+            'ln -sfn "$TARGET/um-cloud-deploy/bin" "$UM_PREFIX/bin.tmp.$$"',
+            install)
+
     def test_make_manifest_records_the_runtime(self):
         manifest = _read("make-manifest.py")
         self.assertIn('RUNTIMES = ("python", "rust")', manifest)
@@ -455,6 +473,26 @@ class RuntimeHelperTests(unittest.TestCase):
                 ["um-share-broker.service",
                  "um-share-console-python.service",
                  "um-share-display.service"], lines[8:11])
+
+    def test_rust_release_requires_an_executable_console_binary(self):
+        with tempfile.TemporaryDirectory(prefix="rust-console-binary-") as tmp:
+            root = Path(tmp)
+            releases = root / "releases"
+            release = self._release(releases, runtime="rust", gateway=True,
+                                    console=True)
+            proc = self._run_helper(
+                'require_rust_console_binary "$RELEASE"\nprintf "ok\\n"',
+                releases)
+            self.assertEqual(66, proc.returncode, proc.stderr)
+            binary = release / "um-cloud-deploy" / "bin" / "um-console"
+            binary.parent.mkdir(parents=True)
+            binary.write_text("#!/bin/sh\n", encoding="utf-8", newline="\n")
+            os.chmod(binary, 0o755)
+            proc = self._run_helper(
+                'require_rust_console_binary "$RELEASE"\nprintf "ok\\n"',
+                releases)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertEqual("ok", proc.stdout.strip())
 
     def test_sync_runtime_env_rewrites_only_the_port_keys(self):
         with tempfile.TemporaryDirectory(prefix="rust-release-env-") as tmp:

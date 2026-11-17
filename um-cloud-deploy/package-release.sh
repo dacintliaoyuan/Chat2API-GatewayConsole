@@ -55,7 +55,7 @@ Options:
                          rust carries the um-gateway production entry
   --rust-bin PATH        built um-gateway binary (required with --runtime rust)
   --rust-console-bin PATH
-                         optional built um-console binary for the same payload
+                         built um-console binary (required with --runtime rust)
   -h, --help              show this help
 
 Exit codes: 0 success; 64 usage; 65 manifest/data; 66 missing input;
@@ -96,9 +96,10 @@ if [ "$RUNTIME" = "rust" ]; then
   [ -n "$RUST_BIN" ] || \
     die "--runtime rust requires --rust-bin (built um-gateway)" "$EX_USAGE"
   [ -f "$RUST_BIN" ] || die "rust gateway binary not found: $RUST_BIN" "$EX_NOINPUT"
-  if [ -n "$RUST_CONSOLE_BIN" ] && [ ! -f "$RUST_CONSOLE_BIN" ]; then
+  [ -n "$RUST_CONSOLE_BIN" ] || \
+    die "--runtime rust requires --rust-console-bin (built um-console)" "$EX_USAGE"
+  [ -f "$RUST_CONSOLE_BIN" ] || \
     die "rust console binary not found: $RUST_CONSOLE_BIN" "$EX_NOINPUT"
-  fi
 fi
 [ -f "$SOURCE/usagesrv.py" ] || die "source root lacks usagesrv.py: $SOURCE" "$EX_NOINPUT"
 [ -f "$SOURCE/chat2api/share_auth.py" ] || \
@@ -210,11 +211,9 @@ fi
 if [ "$RUNTIME" = "rust" ]; then
   install -m 0755 "$RUST_BIN" "$PAYLOAD/um-cloud-deploy/bin/um-gateway" || \
     die "cannot copy the rust gateway binary" "$EX_IOERR"
-  if [ -n "$RUST_CONSOLE_BIN" ]; then
-    install -m 0755 "$RUST_CONSOLE_BIN" \
-      "$PAYLOAD/um-cloud-deploy/bin/um-console" || \
-      die "cannot copy the rust console binary" "$EX_IOERR"
-  fi
+  install -m 0755 "$RUST_CONSOLE_BIN" \
+    "$PAYLOAD/um-cloud-deploy/bin/um-console" || \
+    die "cannot copy the rust console binary" "$EX_IOERR"
   # The generic console/display units in the payload are the Rust variants.
   install -m 0644 "$PAYLOAD/um-cloud-deploy/systemd/um-share-display-rust.service" \
     "$PAYLOAD/um-cloud-deploy/systemd/um-share-display.service" || \
