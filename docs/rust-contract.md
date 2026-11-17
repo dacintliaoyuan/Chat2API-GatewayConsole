@@ -165,6 +165,15 @@ systemd
   - 证据：`tmp/local-8001-parity-evidence.json`；临时探针命令为
     `python -I tmp/local_8001_parity.py --python-port 8001 --rust-port <候选端口>
     --root . --evidence tmp/local-8001-parity-evidence.json`。
+- 会话交换（#85 AC3）：`Open-GatewayConsole.bat` 仍调用 `Open-GatewayConsole.ps1`：
+  宿主未运行则先启动，随后用 `data/admin-control-token` 的 `X-Admin-Control`
+  请求 `POST /api/session/reissue`，把一次性引导码放进页面 URL 的 `#s=` fragment，
+  浏览器再 `POST /api/session` 换成 HttpOnly `usage_session` Cookie。切流后在 Rust
+  8001 上实测：`POST /api/session/reissue` 200（返回 `ok=true` 与一次性 code，
+  值不写入证据）、`POST /api/session` 200 `{"ok":true}` 并 `Set-Cookie:
+  usage_session=…; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`；带该 Cookie
+  请求 `GET /api/share/status` 200，页面 `/` 200。引导码与 Cookie 值只留在原存储，
+  不进入日志、提交或本文件。
 - 回滚（已演练）：只改 `StartPath` 回 `start_usage_service.bat`，重启后 Python 8001
   `/health` 200、`/` 200；再改回 Rust 并重启，`/health` 200、`/` 200。
   回滚不需要重装，也不需要改端口；`start_usage_service.bat` 保留 Python
