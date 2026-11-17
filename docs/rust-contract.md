@@ -24,16 +24,17 @@
 |---|---|---|---|---|---|
 | 8000 | 本机 chat2api / UM 主链 | 不适用（云端不装配） | 8000（`chat2api/chat2api.py` 默认） | 8000 | 不变 |
 | 8001 | 本机控制台宿主 | 不适用（云端不装配） | 8001（`usagesrv.py:101`） | 8001 | 不变 |
-| 8002 | 云端控制台宿主 | 旧部署 18096，仅 loopback | 18096（旧） | **8002** | 无兼容窗口 |
-| 8003 | 云端网关（合并进程） | 旧部署 8100，仅 loopback | 8100（旧） | **8003** | 无兼容窗口 |
+| 8002 | 云端控制台宿主 | Rust 8002（2026-11-17 切流）；Python 回滚 8096 | 18096（旧） | **8002** | 无兼容窗口 |
+| 8003 | 云端网关（合并进程） | Rust 8003（2026-11-17 前已切流） | 8100（旧） | **8003** | 无兼容窗口 |
 | 8097 | display x11vnc | 旧部署 5901，仅 loopback | 5901（旧） | 8097 | 无兼容窗口 |
 | 5173 | vite 开发服务 | 不适用 | 5173（`check_port_bindings.py` 的 `PORT_ALLOCATIONS`） | 5173 | 不变 |
 | 8099 | 候选预览 | 不适用 | 8099（AGENTS.md） | 8099 | 不变 |
 
 说明：
 
-- 目标契约：云端控制台 8002、云端网关 8003、display 8097；旧 8100/8096/18096/5901 不保留兼容别名，Rust 切换时一次性生效。
-- 没有兼容窗口：同一时刻只监听目标端口；旧端口监听按未登记处理。
+- 目标契约：云端控制台 8002、云端网关 8003、display 8097；旧 8100/8096/18096/5901 不作为 Rust 目标，Rust 切换时一次性生效。
+- 没有兼容窗口：同一时刻只监听目标端口；旧端口监听按未登记处理。Python 回滚 release 仍使用 8100/8096，只作回滚目标，不暴露公网。
+- 2026-11-17 云端 8002 已切 Rust（release `s2-20261117a`）；回滚目标是 `s2-20261116t`（Rust 8003 + Python 8002）与 `um-share-console-python.service`（8096）。
 - 非法端口值继续 fail closed；Rust 不得把旧端口写死，也不得同时监听新旧两个端口。
 - 8003 分享段在 Rust production 模式下只允许 loopback 绑定；非 loopback 例外尚未实现，需要时另行登记。
 
@@ -41,13 +42,15 @@
 
 ```text
 systemd
-├── um-share-gateway.service  → share/broker_ops.py → chat2api.py :8003
-├── um-share-console.service  → usagesrv.py :8002
+├── um-share-gateway.service  → share/broker_ops.py → um-gateway :8003
+├── um-share-console.service  → um-console :8002
+├── um-share-console-python.service → usagesrv.py :8096（回滚）
 └── um-share-display.service  → Xvfb :99 + x11vnc :8097
 ```
 
 - 8003 只由 broker 拉起：`um-share-gateway.service` 的 `ExecStartPost` 调用 `um-share-gatewayctl.py start`（目标契约；当前 Python unit 仍叫 `um-share-broker.service`）。
 - 云端控制台默认只监听 loopback 8002（旧 18096 不保留兼容别名）；公网入口只反代 8003 分享白名单，不反代控制台或 display（`um-cloud-deploy/README.md`）。
+- Python 回滚控制台由 `um-share-console-python.service` 在 loopback 8096 提供；它不删除 Rust unit，回滚只切 unit 与 `console.env` 的 `USAGESRV_PORT`。
 - 控制台 unit 对 `/run/um-share` 只读、`NoExecPaths` 禁止直接执行 `chat2api.py`，因此控制台不能成为第二个 8003 启动者（`um-cloud-deploy/systemd/um-share-console.service`）。
 - 部署 unit 的 `KillMode=control-group` 是最终 cgroup 围栏；`systemctl stop` 不留下孤儿进程。
 
