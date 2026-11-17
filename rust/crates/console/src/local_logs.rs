@@ -392,6 +392,12 @@ fn normalize_level(raw: &str) -> String {
     }
 }
 
+fn truncate_chars(value: &mut String, count: usize) {
+    if let Some((index, _)) = value.char_indices().nth(count) {
+        value.truncate(index);
+    }
+}
+
 fn event_null() -> Value {
     json!({
         "timestamp": Value::Null,
@@ -441,7 +447,7 @@ fn event_view(body: &Map<String, Value>, ts: Option<&str>) -> Value {
         .filter(|value| !value.is_null())
         .map(|value| {
             let mut text = redact(&python_str(value));
-            text.truncate(64);
+            truncate_chars(&mut text, 64);
             text
         });
     json!({
@@ -453,7 +459,7 @@ fn event_view(body: &Map<String, Value>, ts: Option<&str>) -> Value {
         "error_code": if outcome == json!("error") {
             status.map(|value| {
                 let mut text = python_str(value);
-                text.truncate(32);
+                truncate_chars(&mut text, 32);
                 text
             })
         } else {
@@ -939,10 +945,13 @@ fn match_level(text: &str) -> Option<(&'static str, usize)> {
         ("FATAL", "FATAL"),
     ];
     for (raw, canonical) in LEVELS {
-        if text.len() < raw.len() || !text[..raw.len()].eq_ignore_ascii_case(raw) {
+        let bytes = text.as_bytes();
+        if bytes.len() < raw.len()
+            || !bytes[..raw.len()].eq_ignore_ascii_case(raw.as_bytes())
+        {
             continue;
         }
-        let after = text.as_bytes().get(raw.len());
+        let after = bytes.get(raw.len());
         let boundary = after.map_or(true, |byte| !word_byte(*byte));
         if boundary {
             return Some((canonical, raw.len()));
@@ -1075,6 +1084,7 @@ fn find_assignment<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     let bytes = text.as_bytes();
     let key_bytes = key.as_bytes();
     let mut search = 0usize;
+    let mut found = None;
     while let Some(index) = find_ci(bytes, key_bytes, search) {
         let after = index + key_bytes.len();
         if index == 0 || !word_byte(bytes[index - 1]) {
@@ -1084,19 +1094,24 @@ fn find_assignment<'a>(text: &'a str, key: &str) -> Option<&'a str> {
                     .find(|ch: char| ch.is_whitespace())
                     .map_or(text.len(), |offset| value_start + offset);
                 if value_end > value_start {
-                    return Some(&text[value_start..value_end]);
+                    found = Some(&text[value_start..value_end]);
                 }
             }
         }
         search = after;
     }
-    None
+    found
 }
 
-fn find_digits_assignment<'a>(text: &'a str, key: &str, exact: usize) -> Option<&'a str> {
+fn find_digits_assignment<'a>(
+    text: &'a str,
+    key: &str,
+    exact: Option<usize>,
+) -> Option<&'a str> {
     let bytes = text.as_bytes();
     let key_bytes = key.as_bytes();
     let mut search = 0usize;
+    let mut found = None;
     while let Some(index) = find_ci(bytes, key_bytes, search) {
         let after = index + key_bytes.len();
         if index == 0 || !word_byte(bytes[index - 1]) {
@@ -1106,32 +1121,34 @@ fn find_digits_assignment<'a>(text: &'a str, key: &str, exact: usize) -> Option<
                 while value_end < bytes.len() && bytes[value_end].is_ascii_digit() {
                     value_end += 1;
                 }
-                if value_end - value_start >= exact {
-                    return Some(&text[value_start..value_start + exact]);
+                let count = value_end - value_start;
+                if count > 0 {
+                    let end = exact.map_or(value_end, |exact| value_start + exact.min(count));
+                    found = Some(&text[value_start..end]);
                 }
             }
         }
         search = after;
     }
-    None
+    found
 }
 
 fn ts_line_event(ts: &str, message: &str) -> Value {
     let request_id = find_assignment(message, "request").map(|value| {
         let mut value = redact(value);
-        value.truncate(64);
+        truncate_chars(&mut value, 64);
         value
     });
     let model = find_assignment(message, "model").map(|value| {
         let mut value = redact(value);
-        value.truncate(64);
+        truncate_chars(&mut value, 64);
         value
     });
-    let duration = find_digits_assignment(message, "duration_ms", 1)
+    let duration = find_digits_assignment(message, "duration_ms", None)
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|value| *value > 0);
     let final_outcome = find_assignment(message, "final");
-    let status = find_digits_assignment(message, "status", 3);
+    let status = find_digits_assignment(message, "status", Some(3));
     let mut outcome = None;
     let mut error_code = None;
     if let Some(value) = final_outcome {
