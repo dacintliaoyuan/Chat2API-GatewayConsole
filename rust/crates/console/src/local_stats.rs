@@ -357,19 +357,17 @@ fn read_jsonl_events(path: &Path) -> EventRead {
 }
 
 fn read_snapshot_events(path: &Path) -> EventRead {
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+    // The metadata call only classifies the path: NotFound is a missing snapshot,
+    // any other error is an explicit read error (never folded into missing).
+    if let Err(error) = std::fs::metadata(path) {
+        if error.kind() == std::io::ErrorKind::NotFound {
             return EventRead::missing();
         }
-        Err(error) => {
-            return EventRead {
-                read_error: Some(error.to_string()),
-                ..EventRead::missing()
-            };
-        }
-    };
-    let _ = metadata;
+        return EventRead {
+            read_error: Some(error.to_string()),
+            ..EventRead::missing()
+        };
+    }
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) => {
