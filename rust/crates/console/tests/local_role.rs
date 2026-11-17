@@ -50,6 +50,109 @@ fn console_command(temp: &um_test_harness::TempDataDir) -> Command {
     command
 }
 
+/// Start from a temp working directory without `--state-file`/`--dist-dir` so the
+/// CLI's own role defaults are the only source of those paths.
+fn console_command_without_paths(temp: &um_test_harness::TempDataDir) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_um-console-candidate"));
+    command
+        .current_dir(temp.path())
+        .arg("--gateway-pid-file")
+        .arg(temp.path().join("share-gateway.pid"))
+        .arg("--gateway-state-dir")
+        .arg(temp.path().join("run"))
+        .arg("--proc-root")
+        .arg(temp.path().join("proc"))
+        .env_remove("UM_SHARE_ROLE")
+        .env_remove("UM_SHARE_DEPLOYMENT")
+        .env_remove("USAGESRV_PORT")
+        .env_remove("CONSOLE_STATE_FILE")
+        .env_remove("CONSOLE_LOCK_DIR")
+        .env_remove("SHARE_STORE_FILE")
+        .env_remove("CHAT2API_SHARE_SECRET_KEY_FILE")
+        .env_remove("USAGE_CONTROL_TOKEN_FILE")
+        .env_remove("CONSOLE_SHARE_BACKEND_DIR")
+        .env_remove("USAGE_SESSION_CODE_FILE")
+        .env_remove("SELFUSEAI_GATEWAY_WATCH_DIR")
+        .env_remove("CONSOLE_DIST_DIR")
+        .env_remove("CONSOLE_PYTHON_EXE")
+        .env_remove("CONSOLE_REPO_ROOT")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+fn seed_operations(path: &std::path::Path, operation_id: &str) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create state dir");
+    }
+    let connection = rusqlite::Connection::open(path).expect("open operations db");
+    connection
+        .execute_batch(
+            "CREATE TABLE console_meta(key TEXT PRIMARY KEY, value TEXT);
+             CREATE TABLE operations(
+                id TEXT PRIMARY KEY, action TEXT, target TEXT, state TEXT,
+                resource TEXT, generation INTEGER, created_at REAL,
+                started_at REAL, finished_at REAL, cancel_requested INTEGER,
+                steps_json TEXT, result_json TEXT, error_json TEXT,
+                idempotency_key TEXT);
+             INSERT INTO console_meta(key, value) VALUES('schema_version', '1');",
+        )
+        .expect("create operations schema");
+    connection
+        .execute(
+            "INSERT INTO operations(id, action, target, state, resource, generation,
+                created_at, started_at, finished_at, cancel_requested, steps_json,
+                result_json, error_json, idempotency_key)
+             VALUES(?1, 'account.um_status', 'chat2api', 'succeeded',
+                'chat2api', 0, 1700000000, 1700000000, NULL, 0, '[]',
+                '{\"status\":\"valid\"}', NULL, NULL)",
+            [operation_id],
+        )
+        .expect("insert operation");
+}
+
+fn seed_local_dist(temp: &um_test_harness::TempDataDir) {
+    let dist = temp.path().join("web").join("dist");
+    std::fs::create_dir_all(&dist).expect("create dist dir");
+    std::fs::write(
+        dist.join("candidate-build.json"),
+        r#"{"role":"local","line":"production","sourceHash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}"#,
+    )
+    .expect("write build identity");
+    std::fs::write(dist.join("index.html"), "<html>local console</html>").expect("write index");
+}
+
+fn operations_rows(addr: SocketAddr) -> Vec<serde_json::Value> {
+    let response = client_request(
+        addr,
+        &ClientRequest::get("/api/console/operations").header("Host", "127.0.0.1:8001"),
+    )
+    .expect("operations request");
+    assert_eq!(response.status, 200);
+    response.json()["operations"]
+        .as_array()
+        .cloned()
+        .expect("operations array")
+}
+
+fn assert_local_defaults_observable(addr: SocketAddr, operation_id: &str) {
+    let rows = operations_rows(addr);
+    assert_eq!(rows.len(), 1, "default state file rows: {rows:?}");
+    assert_eq!(rows[0]["id"], json!(operation_id));
+
+    let index = client_request(
+        addr,
+        &ClientRequest::get("/").header("Host", "127.0.0.1:8001"),
+    )
+    .expect("index request");
+    assert_eq!(index.status, 200);
+    assert_eq!(
+        String::from_utf8_lossy(&index.body),
+        "<html>local console</html>"
+    );
+}
+
 fn run_rejected(mut command: Command) -> std::process::Output {
     let mut child = command.spawn().expect("spawn rejected console");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -208,6 +311,106 @@ fn local_role_defaults_match_pythons_paths() {
     assert_eq!(config.usage_log, std::path::PathBuf::from("data/usage-chat2api.jsonl"));
     assert_eq!(config.dsh_snapshot, std::path::PathBuf::from("data/dsh-ledger-20260902.json"));
     assert_eq!(config.service_log, std::path::PathBuf::from("chat2api/chat2api.log"));
+}
+
+#[test]
+fn cli_role_local_applies_the_same_defaults_as_the_role_environment() {
+    let temp = temp();
+    seed_operations(
+        &temp.path().join("data").join("console-state.sqlite3"),
+        "op-local-default",
+    );
+    seed_local_dist(&temp);
+
+    let mut cli = console_command_without_paths(&temp);
+    cli.arg("--mode")
+        .arg("production")
+        .arg("--role")
+        .arg("local")
+        .arg("--host")
+        .arg("127.0.0.4")
+        .arg("--bind-port")
+        .arg("8001");
+    let mut cli_child = cli.spawn().expect("spawn cli local console");
+    let cli_addr = read_listen_addr(&mut cli_child);
+    let _cli_guard = ChildGuard { child: cli_child };
+    assert_local_defaults_observable(cli_addr, "op-local-default");
+
+    let mut environment = console_command_without_paths(&temp);
+    environment
+        .env("UM_SHARE_ROLE", "local")
+        .arg("--mode")
+        .arg("production")
+        .arg("--host")
+        .arg("127.0.0.5")
+        .arg("--bind-port")
+        .arg("8001");
+    let mut environment_child = environment.spawn().expect("spawn env local console");
+    let environment_addr = read_listen_addr(&mut environment_child);
+    let _environment_guard = ChildGuard {
+        child: environment_child,
+    };
+    assert_local_defaults_observable(environment_addr, "op-local-default");
+}
+
+#[test]
+fn explicit_state_file_overrides_the_local_default() {
+    let temp = temp();
+    seed_operations(
+        &temp.path().join("data").join("console-state.sqlite3"),
+        "op-local-default",
+    );
+    let explicit = temp.path().join("custom").join("console-state.sqlite3");
+    seed_operations(&explicit, "op-explicit");
+
+    let mut command = console_command_without_paths(&temp);
+    command
+        .arg("--mode")
+        .arg("production")
+        .arg("--role")
+        .arg("local")
+        .arg("--host")
+        .arg("127.0.0.6")
+        .arg("--bind-port")
+        .arg("8001")
+        .arg("--state-file")
+        .arg(&explicit);
+    let mut child = command.spawn().expect("spawn explicit state console");
+    let addr = read_listen_addr(&mut child);
+    let _guard = ChildGuard { child };
+
+    let rows = operations_rows(addr);
+    assert_eq!(rows.len(), 1, "explicit state file rows: {rows:?}");
+    assert_eq!(rows[0]["id"], json!("op-explicit"));
+}
+
+#[test]
+fn cloud_role_does_not_apply_the_local_defaults() {
+    let temp = temp();
+    seed_operations(
+        &temp.path().join("data").join("console-state.sqlite3"),
+        "op-local-default",
+    );
+
+    let mut command = console_command_without_paths(&temp);
+    command
+        .arg("--mode")
+        .arg("production")
+        .arg("--role")
+        .arg("cloud")
+        .arg("--host")
+        .arg("127.0.0.7")
+        .arg("--bind-port")
+        .arg("8002");
+    let mut child = command.spawn().expect("spawn cloud console");
+    let addr = read_listen_addr(&mut child);
+    let _guard = ChildGuard { child };
+
+    let rows = operations_rows(addr);
+    assert!(
+        rows.is_empty(),
+        "cloud role must not read the local default state file: {rows:?}"
+    );
 }
 
 #[test]

@@ -118,14 +118,10 @@ $script:GatewayServiceDescriptors = [ordered]@{
         # Python: data/console-state.sqlite3, data/usage-chat2api.jsonl,
         # data/usage-session-code, data/admin-control-token, web/dist.
         StartWorkingDirectory = '.'
-        # The Rust CLI applies its local path defaults only when the role is
-        # resolved from the environment; an explicit --role local selects the
-        # role but not those defaults. UM_SHARE_ROLE=local makes the control
-        # token, session code and share store resolve exactly like Python.
-        # A batch rollback ignores this environment entry.
-        StartEnvironment = @(
-            [pscustomobject]@{ Name = 'UM_SHARE_ROLE'; Value = 'local' }
-        )
+        # `--role local` now applies the Rust local path defaults (state file,
+        # lock dir, share store, control token, session code, share backend and
+        # watch dir), so no UM_SHARE_ROLE environment override is needed. A
+        # batch rollback ignores StartArguments/StartWorkingDirectory.
         StartTimeoutSeconds = 10
         StopStrategy = 'Port'
         # #85: the private 8001 instance can be either runtime. The Rust

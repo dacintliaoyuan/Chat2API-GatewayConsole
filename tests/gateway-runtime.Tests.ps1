@@ -801,6 +801,7 @@ foreach ($scriptName in @(
     Assert-Equal ([string]$desc.StartAction) 'HiddenBatch' 'usage keeps the hidden launcher action'
     Assert-Equal ([string]$desc.StartArguments) '--mode production --bind-port 8001 --report-port 8001 --role local --gateway-port 8000 --state-file data/console-state.sqlite3 --dist-dir web/dist --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log' 'usage starts production local 8001 with the console paths'
     Assert-Equal ([string]$desc.StartWorkingDirectory) '.' 'usage launches from the repository root (Python default data paths)'
+    Assert-Equal ($null -eq $desc.PSObject.Properties['StartEnvironment']) $true 'usage descriptor needs no environment override; --role local applies the Rust local defaults'
     Assert-Equal ([IO.Path]::GetFileName((Resolve-GatewayStartPath -Key 'usage'))) 'um-console-candidate.exe' 'resolved usage StartPath is the Rust binary'
     Assert-Equal $desc.Port 8001 'Rust usage launcher keeps port 8001'
     Assert-Equal $desc.HealthPath '/health' 'Rust usage launcher keeps the /health path'
@@ -816,6 +817,10 @@ foreach ($scriptName in @(
 
     # Launch shape: the Rust binary directly, production/local 8001 arguments
     # and the repository root as cwd so data/* and web/dist resolve like Python.
+    # `--role local` applies the Rust local defaults, so the launcher must not
+    # need an environment override; clear any ambient value to observe that.
+    $savedShareRole = [Environment]::GetEnvironmentVariable('UM_SHARE_ROLE', 'Process')
+    [Environment]::SetEnvironmentVariable('UM_SHARE_ROLE', $null, 'Process')
     $script:ticket85Launches = New-Object System.Collections.ArrayList
     function Get-CimInstance {
         [CmdletBinding()]
@@ -849,7 +854,7 @@ foreach ($scriptName in @(
             FilePath = [string]$FilePath
             ArgumentList = @($ArgumentList)
             WorkingDirectory = [string]$WorkingDirectory
-            ShareRole = [string]$env:UM_SHARE_ROLE
+            ShareRole = [string][Environment]::GetEnvironmentVariable('UM_SHARE_ROLE', 'Process')
         })
     }
     try {
@@ -860,8 +865,9 @@ foreach ($scriptName in @(
         Assert-Equal $launch.FilePath (Join-Path $root 'rust\target\release\um-console-candidate.exe') 'usage launcher runs the Rust binary directly'
         Assert-Equal ($launch.ArgumentList -join ' ') '--mode production --bind-port 8001 --report-port 8001 --role local --gateway-port 8000 --state-file data/console-state.sqlite3 --dist-dir web/dist --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log' 'usage launcher passes the production/local/8001 arguments'
         Assert-Equal ([IO.Path]::GetFullPath($launch.WorkingDirectory)) $root 'usage launcher runs from the repository root'
-        Assert-Equal $launch.ShareRole 'local' 'usage launcher sets UM_SHARE_ROLE=local so the Rust local defaults match Python data paths'
+        Assert-Equal ([string]::IsNullOrEmpty($launch.ShareRole)) $true 'usage launcher does not set UM_SHARE_ROLE; --role local applies the Rust local defaults'
     } finally {
+        [Environment]::SetEnvironmentVariable('UM_SHARE_ROLE', $savedShareRole, 'Process')
         Remove-Item function:\Get-CimInstance -ErrorAction SilentlyContinue
         Remove-Item function:\Get-NetTCPConnection -ErrorAction SilentlyContinue
         Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue

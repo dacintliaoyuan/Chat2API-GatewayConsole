@@ -10,7 +10,7 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use um_console::config::{ConsoleConfig, EntryKind, Role};
+use um_console::config::{apply_local_defaults, ConsoleConfig, EntryKind, Role};
 use um_console::ConsoleServer;
 use um_gateway::config::BindMode;
 
@@ -124,6 +124,12 @@ fn main() -> ExitCode {
             }
             other => return usage(&format!("unknown argument: {other}")),
         }
+    }
+    // The role defaults must follow the final resolved role, whether it came
+    // from `UM_SHARE_ROLE` or `--role`. `apply_local_defaults` only fills
+    // absent values, so explicit arguments and environment values still win.
+    if config.role == Role::Local {
+        apply_local_defaults(&mut config);
     }
     let server = match ConsoleServer::start(config) {
         Ok(server) => server,
