@@ -411,7 +411,7 @@
     },
     {
       "kind": "deployment",
-      "path": "um-cloud-deploy/bin/um-share-brokerctl.py",
+      "path": "um-cloud-deploy/bin/um-share-gatewayctl.py",
       "sha256": "a355b18e6b10e7a736e14085cee1a12de79ff1db93d0c8698890e2faae4f7fca",
       "size": 13239
     },
@@ -436,14 +436,14 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/config/broker-python.env.example",
-      "sha256": "b50a48c57355d23b4add295f1da6a24daf1c94ae7dcc478e843f7090701deb22",
-      "size": 992
+      "sha256": "55eb59e8b4f4e8ece12ac0b5aab3d66f97c12467d40504187a318879b47d7089",
+      "size": 1010
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/config/broker.env.example",
-      "sha256": "81e9c1693783c12570fde59f39e44bf6f5a6c8080bf3e6aaedc9d14a17449f7a",
-      "size": 1135
+      "sha256": "1e509bb85c4430108d9e863a96f38b097affb0215c860c8f5f4bc85a5dec6f89",
+      "size": 1127
     },
     {
       "kind": "deployment",
@@ -454,8 +454,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/config/console-python.env.example",
-      "sha256": "a0a3ec73d709a454a6caf13b49a83f74b6e68fa870632225dae8862780dae124",
-      "size": 3982
+      "sha256": "875315aa31637b1bb641be35517c9668e80925e5eb90682258884a5fea4d9bbd",
+      "size": 4049
     },
     {
       "kind": "deployment",
@@ -466,8 +466,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/config/gateway.env.example",
-      "sha256": "822756f6b18cd6883c0cb8eb546cd3e90f451885e07264f08d2de46c93b809f0",
-      "size": 1095
+      "sha256": "a0aa8155c37ec58895ebfe1f95deb3e31c4d4100118586632888d86c3545a81f",
+      "size": 1342
     },
     {
       "kind": "deployment",
@@ -480,6 +480,18 @@
       "path": "um-cloud-deploy/config/um-share.json.example",
       "sha256": "c41bf5de33b6f143660ed005d0d47d344954c5ff5d4a619fa99b3f9ed6ba0fd2",
       "size": 103
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/cutover-gate.sh",
+      "sha256": "b0dc09b20ed6bc4097f0194d16bb90b205aad7fb5d194f9de54855ab9d331504",
+      "size": 516
+    },
+    {
+      "kind": "deployment",
+      "path": "um-cloud-deploy/cutover_gate.py",
+      "sha256": "0edb8804ae105ddcf5f7a69b97ce170954ebe0c1458785fdc8f36182885d0b5f",
+      "size": 17186
     },
     {
       "kind": "deployment",
@@ -508,8 +520,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/display/manual-takeover.sh",
-      "sha256": "43cd76e1b21a2e97f81a2a7d11cd551df743500b1593bc091925c43b60d409ce",
-      "size": 5803
+      "sha256": "aa99b85aa1447fd62b0587c21febf53a3333d702501a92017d8055c465751ac9",
+      "size": 6061
     },
     {
       "kind": "deployment",
@@ -556,14 +568,14 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/install.sh",
-      "sha256": "09cfe17e0c263bb92f2b439b49e741ab469a0f909a9d1baa443c125bec99b6d7",
-      "size": 32162
+      "sha256": "7a3f096aed4101f75e3342782ca3e017636904cf78fbeccdbd50b92baa11edb9",
+      "size": 31496
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/lib/common.sh",
-      "sha256": "b3a07865aa7333a7e7f96f60dc03595f4206ac8e4ff226906ce2e27946fb641e",
-      "size": 32600
+      "sha256": "2fe4bc87936b487de01f616a84b7be05ad4a3ca53031335987ce856c1bc2c889",
+      "size": 34241
     },
     {
       "kind": "deployment",
@@ -574,26 +586,26 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/package-release.sh",
-      "sha256": "02317eef8e38c451b4d795451a88369049be19fb5ad2c3e4bea23f22389ab10b",
-      "size": 14012
+      "sha256": "c275799ae454d7e5336f17f5a2f377be099a4aabbde5507c2c36084afe5dc9e9",
+      "size": 14396
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/README.md",
-      "sha256": "289d2dc7827886b444ad8458b5042740265a81602c2cf9b71b4da39154bc6568",
-      "size": 15724
+      "sha256": "540ff0b5b53bd912b426fd8ae3c8d32ff12bd19104715981e05f253b8968e6b3",
+      "size": 17701
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/rollback-drill.sh",
-      "sha256": "287fef399fa2d30b68ad439ddf54895b0e94c1053dad6f94ab4d8bc7c446e0dc",
-      "size": 9433
+      "sha256": "f50d7170deb44e40f74ea5b701836325fcb1235c74cbd4471c6e664cd777ff12",
+      "size": 9473
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/rollback.sh",
-      "sha256": "d699b3699a37dddf9499b33fab9e9161f36ffa0a4806b60ba05b0d85ba9ca25b",
-      "size": 29873
+      "sha256": "5bc4e0ad10da1cc0c64eb338032cd97a5e07043801b82811dd1a8926062f9c5d",
+      "size": 30599
     },
     {
       "kind": "deployment",
@@ -616,20 +628,20 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/systemd/um-share-console-python.service",
-      "sha256": "b07cc2f68c09f73025034fd5e1de7c086c320fe9fdf5f2af03a4186926fd6151",
-      "size": 2347
+      "sha256": "473311663b8244d7d6757b26b34ec0eeafa90ff80a9e79df44c1613f890bab33",
+      "size": 2457
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/systemd/um-share-console.service",
-      "sha256": "d3091fa48be8de8e1693f73a2c736ec88c83518dba3ae00dd91c3585fb2b4249",
-      "size": 2444
+      "sha256": "b6ec5bb749c8ce203a6f51be13bf9c06af1caf06513acbc212c3232ff84f1675",
+      "size": 2376
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/systemd/um-share-display-rust.service",
-      "sha256": "71ccab9fff608fe8ee70bbdb56122d0554f0630a4ed7bc1538ea31dea038a195",
-      "size": 2746
+      "sha256": "2eb85e3fb78a68694f97d90b1878cea07fc4ee0f8584867304c56e8bdbc652c4",
+      "size": 2810
     },
     {
       "kind": "deployment",
@@ -640,20 +652,20 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/systemd/um-share-gateway.service",
-      "sha256": "a2ef47ec80b5ec241f4039a1eac0195f3857ce68d2faf6e46d4b3d0674bfda97",
-      "size": 6174
+      "sha256": "853df61fbdfa862bb6e7999a63ec30b658456057cde78894add736c4c44253fb",
+      "size": 6901
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/update.sh",
-      "sha256": "4fc1e1fcd4709db5200a029fe7eb261eaeb36bde43e5493c1cd4a794c185005f",
-      "size": 33927
+      "sha256": "a80b7d40364048d49c35cb2767ad2b17f5302045a0d5a76150f49253452b5cca",
+      "size": 34649
     },
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/verify-release.ps1",
-      "sha256": "fd911b545588c4d62773db4f0c9a312142937b953890422bbc5890c203bcb5e5",
-      "size": 7933
+      "sha256": "44103f703b59fb19d6303ca4bdca9d4f08cfa433024343b196add21a19922c42",
+      "size": 8151
     }
   ],
   "files": [
@@ -663,8 +675,8 @@
         "cloud_runtime"
       ],
       "path": "chat2api/chat2api.py",
-      "sha256": "a4f4d11a4471df200c92e95de5dfd6302f9cc69f920a03df8e335ffec2d1994f",
-      "size": 600857
+      "sha256": "8c6710d0fcacb34ef83b8f49067c0476ff674cf835646e1d476881e1ee416167",
+      "size": 601086
     },
     {
       "closures": [
@@ -886,8 +898,8 @@
         "cloud_runtime"
       ],
       "path": "share/broker_ops.py",
-      "sha256": "3d0dc577cdb51fba8df30dca86fc57c1be5985c8875dc43b37c870c4882463e7",
-      "size": 56231
+      "sha256": "c387185d30dc969459db23aa9ccb60b69de56a9545068c44da40c004bc0f9447",
+      "size": 57129
     },
     {
       "closures": [
@@ -991,11 +1003,11 @@
         "cloud_runtime"
       ],
       "path": "usagesrv.py",
-      "sha256": "0a90c01e2eeed078be9f4e0ae9c3999b80a4faa4f546fd2808c6fbf7716205b2",
-      "size": 186396
+      "sha256": "21e7e846290f359020ce5e6d946998fc409ede66af5170d0f1d27c3987ee0524",
+      "size": 190435
     }
   ],
-  "generated_at": "2026-11-16T12:19:42.428815+00:00",
+  "generated_at": "2026-11-17T02:02:22.042370+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",
