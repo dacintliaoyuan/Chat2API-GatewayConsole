@@ -93,7 +93,10 @@ fn local_root_refuses_a_cloud_build_identity() {
         .to_string();
     assert!(error.contains("cloud"), "{error}");
     assert!(error.contains("local"), "{error}");
-    assert!(!response.body.windows(STUB_INDEX.len()).any(|window| window == STUB_INDEX));
+    assert!(!response
+        .body
+        .windows(STUB_INDEX.len())
+        .any(|window| window == STUB_INDEX));
 }
 
 #[test]
@@ -253,7 +256,10 @@ fn local_static_assets_use_the_python_paths_and_mime_map() {
         ("asset.js", "text/javascript; charset=utf-8"),
         ("asset.css", "text/css; charset=utf-8"),
         ("asset.json", "application/json; charset=utf-8"),
-        ("asset.webmanifest", "application/manifest+json; charset=utf-8"),
+        (
+            "asset.webmanifest",
+            "application/manifest+json; charset=utf-8",
+        ),
         ("asset.svg", "image/svg+xml"),
         ("asset.png", "image/png"),
         ("asset.ico", "image/x-icon"),
@@ -313,11 +319,7 @@ fn local_static_rejects_traversal_missing_and_directories() {
     for target in ["/assets/../../secret.txt", "/assets/nope.js", "/assets"] {
         let response = client_request(console.addr, &ClientRequest::get(target)).expect(target);
         assert_eq!(response.status, 404, "{target}");
-        assert_eq!(
-            response.json()["error"],
-            json!("unknown path"),
-            "{target}"
-        );
+        assert_eq!(response.json()["error"], json!("unknown path"), "{target}");
         assert!(
             !response
                 .body
