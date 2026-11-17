@@ -4,7 +4,7 @@
 //! the credential probe terminate TLS themselves. A plain-HTTP upstream stays
 //! plain (the loopback test/candidate path), and a foreign scheme is rejected.
 
-use um_gateway::config::{parse_upstream_base_url, upstream_uses_tls};
+use um_gateway::config::{parse_upstream_base_url, upstream_host_header, upstream_uses_tls};
 
 #[test]
 fn https_names_the_tls_upstream() {
@@ -28,4 +28,30 @@ fn plain_http_stays_plain() {
 fn a_foreign_scheme_is_rejected() {
     assert!(parse_upstream_base_url("ftp://example.invalid").is_err());
     assert!(parse_upstream_base_url("chat.genai.um.edu.mo").is_err());
+}
+
+#[test]
+fn default_ports_are_omitted_from_the_host_header() {
+    // The production CDN answers `Host: chat.genai.um.edu.mo:443` with 503;
+    // browsers and requests send `Host: chat.genai.um.edu.mo` instead.
+    assert_eq!(
+        upstream_host_header("https://chat.genai.um.edu.mo").unwrap(),
+        "chat.genai.um.edu.mo"
+    );
+    assert_eq!(
+        upstream_host_header("http://127.0.0.1").unwrap(),
+        "127.0.0.1"
+    );
+}
+
+#[test]
+fn explicit_nondefault_ports_are_kept_in_the_host_header() {
+    assert_eq!(
+        upstream_host_header("https://chat.genai.um.edu.mo:8443").unwrap(),
+        "chat.genai.um.edu.mo:8443"
+    );
+    assert_eq!(
+        upstream_host_header("http://127.0.0.1:8100").unwrap(),
+        "127.0.0.1:8100"
+    );
 }

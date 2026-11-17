@@ -788,6 +788,22 @@ pub fn upstream_uses_tls(value: &str) -> bool {
     value.starts_with("https://")
 }
 
+/// Build the HTTP `Host` header for the configured upstream.
+///
+/// The default scheme port must be omitted: the production upstream answers
+/// `Host: chat.genai.um.edu.mo:443` with 503 while `Host: chat.genai.um.edu.mo`
+/// succeeds. A non-default port still has to be sent so the upstream can route
+/// the request to the right virtual host.
+pub fn upstream_host_header(value: &str) -> Result<String, ConfigError> {
+    let (host, port) = parse_upstream_base_url(value)?;
+    let default_port = if upstream_uses_tls(value) { 443 } else { 80 };
+    if port == default_port {
+        Ok(host)
+    } else {
+        Ok(format!("{host}:{port}"))
+    }
+}
+
 /// Parse one share configuration document.
 pub fn parse_share_config(document: &str, auth_mode: AuthMode) -> Result<ShareConfig, ConfigError> {
     let value: Value = serde_json::from_str(document)

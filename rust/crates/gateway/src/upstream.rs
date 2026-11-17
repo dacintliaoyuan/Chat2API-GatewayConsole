@@ -18,7 +18,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::config::{parse_upstream_base_url, upstream_uses_tls, GatewayConfig};
+use crate::config::{
+    parse_upstream_base_url, upstream_host_header, upstream_uses_tls, GatewayConfig,
+};
 use crate::tls::{self, UpstreamStream};
 
 /// Largest response head accepted from the upstream.
@@ -316,6 +318,8 @@ pub fn post_compat(
 ) -> Result<UpstreamResponse, UpstreamFailure> {
     let (host, port) = parse_upstream_base_url(&config.upstream_base_url)
         .map_err(|_| UpstreamFailure::ConnectionError)?;
+    let host_header = upstream_host_header(&config.upstream_base_url)
+        .map_err(|_| UpstreamFailure::ConnectionError)?;
     let addresses: Vec<std::net::SocketAddr> = format!("{host}:{port}")
         .to_socket_addrs()
         .map_err(|_| UpstreamFailure::ConnectionError)?
@@ -342,7 +346,7 @@ pub fn post_compat(
         Box::new(upstream)
     };
     let mut request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\n\
+        "POST {path} HTTP/1.1\r\nHost: {host_header}\r\n\
              Authorization: Bearer {}\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n",
         bearer,

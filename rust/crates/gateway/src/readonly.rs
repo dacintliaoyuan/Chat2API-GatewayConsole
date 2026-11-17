@@ -12,7 +12,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::config::{parse_upstream_base_url, upstream_uses_tls, ConfigError, GatewayConfig};
+use crate::config::{
+    parse_upstream_base_url, upstream_host_header, upstream_uses_tls, ConfigError, GatewayConfig,
+};
 use crate::error::GatewayError;
 use crate::http::Response;
 use crate::login::CredentialSink;
@@ -70,6 +72,7 @@ impl UpstreamFailure {
 /// A minimal HTTP/1.1 client for the loopback upstream.
 pub struct UpstreamClient {
     host: String,
+    host_header: String,
     port: u16,
     timeout: Duration,
     tls: bool,
@@ -79,6 +82,7 @@ impl UpstreamClient {
     pub fn from_config(config: &GatewayConfig) -> Result<Self, ConfigError> {
         let (host, port) = parse_upstream_base_url(&config.upstream_base_url)?;
         Ok(Self {
+            host_header: upstream_host_header(&config.upstream_base_url)?,
             host,
             port,
             timeout: config.upstream_timeout,
@@ -137,9 +141,9 @@ impl UpstreamClient {
             Box::new(stream)
         };
         let mut request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\n\
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\n\
              Connection: close\r\n",
-            self.host, self.port
+            self.host_header
         );
         if let Some(bearer) = bearer {
             request.push_str(&format!("Authorization: Bearer {bearer}\r\n"));
