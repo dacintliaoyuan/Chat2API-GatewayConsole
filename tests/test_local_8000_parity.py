@@ -233,6 +233,30 @@ class Local8000ParityTests(unittest.TestCase):
             names,
         )
 
+    def test_matching_expired_token_503_is_parity(self):
+        responses = copy.deepcopy(MATCHING_RESPONSES)
+        expired = _json({
+            "error": {
+                "message": "需要交互登录",
+                "type": "authentication_error",
+                "code": "reauthentication_required",
+                "param": None,
+                "detail": {"reason": "upstream_rejected"},
+            },
+        })
+        for key in (("GET", "/v1/models"), ("GET", "/api/config"),
+                    ("GET", "/api/v1/auths/"), ("POST", "/api/echo"),
+                    ("GET", "/admin/auth/status"),
+                    ("GET", "/admin/auth/verify")):
+            responses[key] = (503, "application/json", expired)
+        python = self._service(responses)
+        rust = self._service(responses)
+
+        document = self._evidence(python, rust)
+
+        self.assertEqual("passed", document["parity"])
+        self.assertEqual([], document["differences"])
+
     def test_status_mismatch_is_reported(self):
         python = self._service()
         responses = copy.deepcopy(MATCHING_RESPONSES)
