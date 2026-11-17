@@ -186,6 +186,41 @@ release_console_unit() {
   fi
 }
 
+# The console unit the CURRENT host actually installed.  A Python release built
+# before the split installed its console as um-share-console.service and has no
+# um-share-console-python.service; the new Python release installs the Python
+# unit and keeps the Rust-named unit.  Prefer the runtime's manifest unit when it
+# is installed, otherwise fall back to the legacy Rust-named unit.
+installed_console_unit() {
+  local runtime="${1:-$RELEASE_RUNTIME_PYTHON}"
+  local unit
+  unit="$(release_console_unit "$runtime")"
+  if [ -f "$UM_SYSTEMD_DIR/$unit" ]; then
+    printf '%s\n' "$unit"
+  elif [ "$runtime" = "$RELEASE_RUNTIME_PYTHON" ] && \
+       [ -f "$UM_SYSTEMD_DIR/$RUST_CONSOLE_UNIT" ]; then
+    printf '%s\n' "$RUST_CONSOLE_UNIT"
+  else
+    printf '%s\n' "$unit"
+  fi
+}
+
+# The installed console's listener.  The unit's explicit
+# Environment=USAGESRV_PORT is authoritative: the legacy Python console binds
+# 8002, the new Python console 8096, and the Rust console 8002.
+installed_console_port() {
+  local unit="$1" port=""
+  if [ -f "$UM_SYSTEMD_DIR/$unit" ]; then
+    port="$(sed -n 's/^Environment=USAGESRV_PORT=//p' \
+      "$UM_SYSTEMD_DIR/$unit" | tail -n 1 | tr -d '\r')"
+  fi
+  if [ -n "$port" ]; then
+    printf '%s\n' "$port"
+  else
+    printf '%s\n' "$CONSOLE_PORT_DEFAULT"
+  fi
+}
+
 release_display_unit() {
   printf '%s\n' "$DISPLAY_UNIT"
 }
@@ -215,6 +250,16 @@ release_units() {
   local runtime="${1:-$RELEASE_RUNTIME_PYTHON}"
   release_gateway_unit "$runtime"
   release_console_unit "$runtime"
+  release_display_unit
+}
+
+# The units the CURRENT host installed.  The console follows the installed
+# evidence (a legacy Python release used the Rust-named unit), not only the
+# manifest runtime.
+installed_units() {
+  local runtime="${1:-$RELEASE_RUNTIME_PYTHON}"
+  release_gateway_unit "$runtime"
+  installed_console_unit "$runtime"
   release_display_unit
 }
 

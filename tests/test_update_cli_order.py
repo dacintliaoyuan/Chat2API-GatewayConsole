@@ -886,6 +886,9 @@ readlink() {
             systemd_dir.mkdir()
             (systemd_dir / "cloudflared.service").write_text(
                 "[Unit]\nDescription=cloudflared\n", encoding="utf-8")
+            (systemd_dir / "um-share-console-python.service").write_text(
+                (DEPLOY / "systemd" / "um-share-console-python.service")
+                .read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
             store = root / "links"
             store.mkdir()
             if bin_is_directory:

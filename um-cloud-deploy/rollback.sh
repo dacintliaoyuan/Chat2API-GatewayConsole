@@ -158,8 +158,8 @@ CURRENT_TARGET="$(readlink -f "$CURRENT_LINK")"
 CURRENT_VERSION="$(basename "$CURRENT_TARGET")"
 CURRENT_RUNTIME="$(release_runtime "$CURRENT_TARGET")"
 CURRENT_GATEWAY_UNIT="$(release_gateway_unit "$CURRENT_RUNTIME")"
-CURRENT_CONSOLE_UNIT="$(release_console_unit "$CURRENT_RUNTIME")"
-CURRENT_CONSOLE_PORT="$(release_console_port "$CURRENT_RUNTIME")"
+CURRENT_CONSOLE_UNIT="$(installed_console_unit "$CURRENT_RUNTIME")"
+CURRENT_CONSOLE_PORT="$(installed_console_port "$CURRENT_CONSOLE_UNIT")"
 if [ "$CURRENT_HEALTH_PORT_SET" -eq 0 ]; then
   CURRENT_HEALTH_PORT="$(release_gateway_port "$CURRENT_RUNTIME")"
 fi
@@ -232,9 +232,9 @@ CURRENT_RUNTIME="${CURRENT_RUNTIME:-$RELEASE_RUNTIME_PYTHON}"
 TARGET_GATEWAY_UNIT="${TARGET_GATEWAY_UNIT:-$(release_gateway_unit "$TARGET_RUNTIME")}"
 CURRENT_GATEWAY_UNIT="${CURRENT_GATEWAY_UNIT:-$(release_gateway_unit "$CURRENT_RUNTIME")}"
 TARGET_CONSOLE_UNIT="${TARGET_CONSOLE_UNIT:-$(release_console_unit "$TARGET_RUNTIME")}"
-CURRENT_CONSOLE_UNIT="${CURRENT_CONSOLE_UNIT:-$(release_console_unit "$CURRENT_RUNTIME")}"
+CURRENT_CONSOLE_UNIT="${CURRENT_CONSOLE_UNIT:-$(installed_console_unit "$CURRENT_RUNTIME")}"
 TARGET_CONSOLE_PORT="${TARGET_CONSOLE_PORT:-$(release_console_port "$TARGET_RUNTIME")}"
-CURRENT_CONSOLE_PORT="${CURRENT_CONSOLE_PORT:-$(release_console_port "$CURRENT_RUNTIME")}"
+CURRENT_CONSOLE_PORT="${CURRENT_CONSOLE_PORT:-$(installed_console_port "$CURRENT_CONSOLE_UNIT")}"
 if [ "${TARGET_UNITS+x}" != "x" ]; then
   mapfile -t TARGET_UNITS < <(release_units "$TARGET_RUNTIME")
 fi
@@ -614,7 +614,7 @@ fi
 install_units "$TARGET" "${TARGET_UNITS[@]}" || install_failed=1
 if [ "${install_failed:-0}" -eq 1 ]; then
   log "systemd unit installation failed; restoring $CURRENT_TARGET"
-  mapfile -t CURRENT_UNITS < <(release_units "$CURRENT_RUNTIME")
+  mapfile -t CURRENT_UNITS < <(installed_units "$CURRENT_RUNTIME")
   install_units "$CURRENT_TARGET" "${CURRENT_UNITS[@]}" || \
     log "ERROR: cannot reinstall the current release's units"
   systemctl daemon-reload || \
@@ -628,7 +628,7 @@ if [ "${install_failed:-0}" -eq 1 ]; then
 fi
 if ! systemctl daemon-reload; then
   log "systemd daemon-reload failed; restoring $CURRENT_TARGET units and links"
-  mapfile -t CURRENT_UNITS < <(release_units "$CURRENT_RUNTIME")
+  mapfile -t CURRENT_UNITS < <(installed_units "$CURRENT_RUNTIME")
   install_units "$CURRENT_TARGET" "${CURRENT_UNITS[@]}" || \
     log "ERROR: cannot reinstall the current release's units"
   systemctl daemon-reload || \

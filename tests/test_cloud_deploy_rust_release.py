@@ -152,13 +152,13 @@ class RustReleaseMaterialTests(unittest.TestCase):
             text = _read(name)
             with self.subTest(script=name):
                 self.assertIn(
-                    'CURRENT_CONSOLE_UNIT="$(release_console_unit "$CURRENT_RUNTIME")"',
+                    'CURRENT_CONSOLE_UNIT="$(installed_console_unit "$CURRENT_RUNTIME")"',
                     text)
                 self.assertIn(
                     'TARGET_CONSOLE_UNIT="$(release_console_unit "$TARGET_RUNTIME")"',
                     text)
                 self.assertIn(
-                    'CURRENT_CONSOLE_PORT="$(release_console_port "$CURRENT_RUNTIME")"',
+                    'CURRENT_CONSOLE_PORT="$(installed_console_port "$CURRENT_CONSOLE_UNIT")"',
                     text)
                 self.assertIn(
                     'TARGET_CONSOLE_PORT="$(release_console_port "$TARGET_RUNTIME")"',
@@ -362,7 +362,7 @@ class RustReleaseScriptTests(unittest.TestCase):
 
 
 class RuntimeHelperTests(unittest.TestCase):
-    def _run_helper(self, body, releases, etc=None):
+    def _run_helper(self, body, releases, etc=None, systemd=None):
         with tempfile.TemporaryDirectory(prefix="rust-release-helper-") as tmp:
             root = Path(tmp)
             etc_path = etc or (root / "etc")
@@ -376,6 +376,8 @@ class RuntimeHelperTests(unittest.TestCase):
                         DEPLOY_LIB=_posix(DEPLOY / "lib"),
                         RELEASES=_posix(releases),
                         UM_ETC=_posix(etc_path))
+            if systemd is not None:
+                env["UM_SYSTEMD_DIR"] = _posix(systemd)
             proc = subprocess.run([BASH, _posix(script)], capture_output=True,
                                   text=True, env=env, timeout=30)
             return proc
@@ -493,6 +495,39 @@ class RuntimeHelperTests(unittest.TestCase):
                 releases)
             self.assertEqual(0, proc.returncode, proc.stderr)
             self.assertEqual("ok", proc.stdout.strip())
+
+    def test_installed_console_unit_keeps_the_legacy_python_console(self):
+        with tempfile.TemporaryDirectory(prefix="rust-console-installed-") as tmp:
+            root = Path(tmp)
+            releases = root / "releases"
+            releases.mkdir()
+            self._release(releases, runtime="python", broker=True,
+                           console=True, console_python=True)
+            systemd = root / "systemd"
+            systemd.mkdir()
+            legacy = systemd / "um-share-console.service"
+            legacy.write_text(
+                "[Service]\nEnvironment=USAGESRV_PORT=8002\n",
+                encoding="utf-8", newline="\n")
+            proc = self._run_helper(
+                'unit="$(installed_console_unit python)"\n'
+                'printf "%s %s\\n" "$unit" '
+                '"$(installed_console_port "$unit")"',
+                releases, systemd=systemd)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertEqual("um-share-console.service 8002",
+                             proc.stdout.strip())
+            (systemd / "um-share-console-python.service").write_text(
+                "[Service]\nEnvironment=USAGESRV_PORT=8096\n",
+                encoding="utf-8", newline="\n")
+            proc = self._run_helper(
+                'unit="$(installed_console_unit python)"\n'
+                'printf "%s %s\\n" "$unit" '
+                '"$(installed_console_port "$unit")"',
+                releases, systemd=systemd)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertEqual("um-share-console-python.service 8096",
+                             proc.stdout.strip())
 
     def test_sync_runtime_env_rewrites_only_the_port_keys(self):
         with tempfile.TemporaryDirectory(prefix="rust-release-env-") as tmp:
