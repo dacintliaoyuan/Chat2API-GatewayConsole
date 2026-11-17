@@ -103,6 +103,10 @@ fn main() -> ExitCode {
                 Some(value) => config.watch_dir = Some(value.into()),
                 None => return usage("--watch-dir requires a path"),
             },
+            "--dist-dir" => match args.next() {
+                Some(value) => config.console_dist_dir = value.into(),
+                None => return usage("--dist-dir requires a path"),
+            },
             "--help" | "-h" => {
                 println!(
                     "usage: um-console-candidate [--mode candidate|production] \
