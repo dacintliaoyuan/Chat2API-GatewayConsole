@@ -106,14 +106,69 @@ $script:GatewayServiceDescriptors = [ordered]@{
         OpenUrl      = 'http://127.0.0.1:8001/'
         StartAction  = 'HiddenBatch'
         StopAction   = 'Port'
-        StartPath    = 'start_usage_service.bat'
+        # #85: the local 8001 launcher is the Rust console binary. The Python
+        # entrypoint stays in start_usage_service.bat as the rollback target:
+        # reverting this one field (StartPath) restores Python without a
+        # reinstall or a port change. StartArguments/StartWorkingDirectory are
+        # harmless for a batch launcher (the batch ignores them) so the rollback
+        # stays a one-line change.
+        StartPath    = 'rust\target\release\um-console-candidate.exe'
+        StartArguments = '--mode production --bind-port 8001 --report-port 8001 --role local --gateway-port 8000 --state-file data/console-state.sqlite3 --dist-dir web/dist --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log'
+        # Repository root keeps the Rust local role defaults identical to
+        # Python: data/console-state.sqlite3, data/usage-chat2api.jsonl,
+        # data/usage-session-code, data/admin-control-token, web/dist.
+        StartWorkingDirectory = '.'
+        # The Rust CLI applies its local path defaults only when the role is
+        # resolved from the environment; an explicit --role local selects the
+        # role but not those defaults. UM_SHARE_ROLE=local makes the control
+        # token, session code and share store resolve exactly like Python.
+        # A batch rollback ignores this environment entry.
+        StartEnvironment = @(
+            [pscustomobject]@{ Name = 'UM_SHARE_ROLE'; Value = 'local' }
+        )
         StartTimeoutSeconds = 10
         StopStrategy = 'Port'
+        # #85: the private 8001 instance can be either runtime. The Rust
+        # identity is deliberately narrower than the Python one: it requires the
+        # production local shape and excludes the candidate/cloud shapes used for
+        # parity, so only the launcher's own instance is ever stopped.
         StopProcessName = 'python.exe'
         StopCommandLinePattern = '(^|\s)usagesrv\.py(\s|$)'
         StopInstanceScript = 'usagesrv.py'
+        StopIdentities = @(
+            [pscustomobject]@{
+                ProcessName = 'python.exe'
+                CommandLinePattern = '(^|\s)usagesrv\.py(\s|$)'
+                InstanceScript = 'usagesrv.py'
+                ForeignArgumentPatterns = @('--profile')
+            },
+            [pscustomobject]@{
+                ProcessName = 'um-console-candidate.exe'
+                CommandLinePattern = '(^|\s)um-console-candidate(\.exe)?(\s|$)'
+                InstanceScript = 'rust\target\release\um-console-candidate.exe'
+                ForeignArgumentPatterns = @(
+                    '--mode candidate(\s|$)',
+                    '--role cloud(\s|$)',
+                    '--bind-port 8002(\s|$)',
+                    '--report-port 8002(\s|$)'
+                )
+            }
+        )
         OwnerProcessName = 'python.exe'
         OwnerCommandLinePattern = '(^|\s)usagesrv\.py(\s|$)'
+        OwnerIdentities = @(
+            [pscustomobject]@{
+                ProcessName = 'python.exe'
+                CommandLinePattern = '(^|\s)usagesrv\.py(\s|$)'
+            },
+            [pscustomobject]@{
+                ProcessName = 'um-console-candidate.exe'
+                # Owner matching is broad (the inspection path only asks
+                # whether this is the managed program); a quoted or
+                # path-qualified command line must match here.
+                CommandLinePattern = 'um-console-candidate(\.exe)?\b'
+            }
+        )
     }
 }
 
@@ -1265,6 +1320,20 @@ function Start-GatewayService {
                 $sourceProp = $desc.PSObject.Properties['LaunchSourceEnv']
                 if ($null -ne $sourceProp -and $sourceProp.Value) {
                     $childEnv[[string]$sourceProp.Value] = Get-GatewayActionSource
+                }
+                # #85: the Rust console resolves its local defaults from the
+                # role environment. A batch StartPath (the Python rollback)
+                # ignores these entries.
+                $environmentProp = $desc.PSObject.Properties['StartEnvironment']
+                if ($null -ne $environmentProp -and $null -ne $environmentProp.Value) {
+                    foreach ($entry in @($environmentProp.Value)) {
+                        $nameProp = $entry.PSObject.Properties['Name']
+                        $valueProp = $entry.PSObject.Properties['Value']
+                        if ($null -ne $nameProp -and $null -ne $valueProp -and
+                                $nameProp.Value) {
+                            $childEnv[[string]$nameProp.Value] = [string]$valueProp.Value
+                        }
+                    }
                 }
                 # #80: the chat2api descriptor points StartPath at the Rust
                 # executable and carries its arguments + working directory.

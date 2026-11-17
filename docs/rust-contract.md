@@ -113,6 +113,36 @@ systemd
 - 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 验证
   描述符、健康边界与回滚；真实 8000 的 parity、切流与回滚演练由 #81 执行并记录在本节。
 
+### 2.5 本机 8001 启动器与回滚
+
+- 构建：在 `rust/` 下运行 `cargo build --release -p um-console`，产物为
+  `rust/target/release/um-console-candidate.exe`。
+- 启动器：`lib/gateway-runtime.ps1` 的 `usage` 描述符 `StartPath` 指向该二进制，
+  `StartArguments` 为
+  `--mode production --bind-port 8001 --report-port 8001 --role local --gateway-port 8000 --state-file data/console-state.sqlite3 --dist-dir web/dist --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log`，
+  `StartWorkingDirectory` 固定为仓库根。`StartEnvironment` 设置 `UM_SHARE_ROLE=local`：
+  Rust CLI 的本地路径默认值（`data/admin-control-token`、`data/usage-session-code`、
+  `data/share-store.db`、`data/console-locks`、`web/dist`）因此与 Python 8001 一致；
+  显式 `--role local` 只选择角色，不会自动应用这些默认值。`StartAction` 仍是
+  `HiddenBatch`，健康检查仍是 `http://127.0.0.1:8001/health`，停止仍是
+  `StopStrategy=Port`。
+- 停止边界：`StopIdentities` 同时覆盖 Python `usagesrv.py` 与 Rust
+  `um-console-candidate.exe`；候选（`--mode candidate`）与云端（`--role cloud` /
+  8002）形状保持 foreign，8001 的 loopback 监听是唯一权威。`Port` 停止只终止
+  8001 loopback 上的已确认私有实例，不触碰 Tailscale Serve 的独立监听。
+- 切流状态（#85，2026-11-17）：本机 8001 **已切到 Rust**
+  （`um-console-candidate.exe --mode production --bind-port 8001 --role local`）。
+  切流命令为 `pwsh -NoProfile -File invoke-console-runtime-json.ps1 -Action restart
+  -Key usage`；切流后 `/health`、`/`、`/api/summary`、`/api/console/services`、
+  `/api/console/um/*`、#86 六个只读面、`/api/session` 与 `model.catalog` 均通过。
+- 回滚（已演练）：只改 `StartPath` 回 `start_usage_service.bat`，重启后 Python 8001
+  `/health` 200、`/` 200；再改回 Rust 并重启，`/health` 200、`/` 200。
+  回滚不需要重装，也不需要改端口；`start_usage_service.bat` 保留 Python
+  `python usagesrv.py` 命令。
+- 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 验证
+  描述符、健康边界、停止身份与回滚；真实 8001 的 parity、切流与回滚演练由 #85
+  执行并记录在本节。
+
 ## 3. 云端 idle RSS 基线
 
 ### 3.1 测量方法
