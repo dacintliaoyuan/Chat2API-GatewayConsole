@@ -79,11 +79,14 @@ class RustReleaseMaterialTests(unittest.TestCase):
 
     def test_python_console_unit_keeps_8096_and_the_rust_unit(self):
         unit = _read("systemd/um-share-console-python.service")
-        self.assertIn("Environment=USAGESRV_PORT=8096", unit)
-        self.assertIn("Environment=UM_SHARE_GATEWAY_PORT=8100", unit)
+        # EnvironmentFile= wins over Environment= in systemd, so the rollback port
+        # must be pinned on the command line instead of an Environment= line.
         self.assertIn(
-            "ExecStart=/opt/um-share/venv/bin/python "
+            "ExecStart=/usr/bin/env USAGESRV_PORT=8096 "
+            "/opt/um-share/venv/bin/python "
             "/opt/um-share/current/usagesrv.py", unit)
+        self.assertNotIn("Environment=USAGESRV_PORT=", unit)
+        self.assertIn("Environment=UM_SHARE_GATEWAY_PORT=8100", unit)
         self.assertIn(
             "--check-deployment-assembly console "
             "/etc/systemd/system/um-share-console-python.service", unit)

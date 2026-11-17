@@ -12,16 +12,17 @@ User=um-share
 Group=um-share
 WorkingDirectory=/opt/um-share/current
 EnvironmentFile=/etc/um-share/console.env
-# The Python rollback release keeps 8096/8100.  The installed console.env is
-# authoritative for the listener; the explicit values keep the unit correct when an
-# old environment file predates the rollback ports.
-Environment=USAGESRV_PORT=8096
+# The Python rollback release keeps 8096/8100.  systemd lets an EnvironmentFile=
+# assignment win over Environment=, so the installed console.env (which names the
+# Rust 8002 listener) would otherwise drag this unit back onto 8002 and collide
+# with the live Rust console.  The rollback port is therefore pinned in
+# ExecStart, after the environment file has been applied.
 Environment=UM_SHARE_GATEWAY_PORT=8100
 UMask=0077
 # Fail the START when console.env no longer wires the security read face: an
 # unconfigured console must not look like a healthy one.
 ExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly console /etc/systemd/system/um-share-console-python.service /etc/um-share/console.env
-ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/usagesrv.py
+ExecStart=/usr/bin/env USAGESRV_PORT=8096 /opt/um-share/venv/bin/python /opt/um-share/current/usagesrv.py
 # Single-authority fence: the console may READ the broker pid/intent for
 # status, but it may not write /run/um-share (ReadOnlyPaths) and it may not
 # execute chat2api.py directly (NoExecPaths).  A console service.start
