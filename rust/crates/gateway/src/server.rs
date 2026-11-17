@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 
 use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::{handle_chat, ChatResult};
-use crate::config::{AuthMode, ConfigError, GatewayConfig};
+use crate::config::{AuthMode, ConfigError, GatewayConfig, Role};
 use crate::embeddings::handle_embeddings;
 use crate::error::{ErrorProtocol, GatewayError};
 use crate::event_log::EventLog;
@@ -843,6 +843,12 @@ fn handle_get(state: &AppState, request: &Request) -> Response {
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
             }
+            if state.config.role == Role::Local {
+                return match state.proxy.passthrough("GET", path, None) {
+                    Ok(response) => response,
+                    Err(error) => error.response(),
+                };
+            }
             GatewayError::not_implemented("local_api_surface_s1a").response()
         }
         _ => GatewayError::unknown_path(path).response(),
@@ -932,7 +938,23 @@ fn handle_post(state: &AppState, request: &Request) -> Response {
             if let Err(error) = control_allowed(state, request) {
                 return error.response();
             }
-            GatewayError::not_implemented("local_api_surface_s1a").response()
+            if state.config.role != Role::Local {
+                return GatewayError::not_implemented("local_api_surface_s1a").response();
+            }
+            let body = match read_json_body(
+                request,
+                BodyPolicy::Share {
+                    max_request_bytes: state.config.max_request_bytes,
+                },
+            ) {
+                Ok(Some(body)) => serde_json::to_vec(&Value::Object(body)).unwrap_or_default(),
+                Ok(None) => b"{}".to_vec(),
+                Err(error) => return error.response(),
+            };
+            match state.proxy.passthrough("POST", path, Some(&body)) {
+                Ok(response) => response,
+                Err(error) => error.response(),
+            }
         }
         _ => GatewayError::unknown_path(path).response(),
     }

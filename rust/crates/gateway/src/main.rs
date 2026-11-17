@@ -10,11 +10,12 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use um_gateway::config::{AuthMode, BindMode, GatewayConfig};
+use um_gateway::config::{AuthMode, BindMode, GatewayConfig, Role};
 use um_gateway::GatewayServer;
 
 fn main() -> ExitCode {
     let mut config = GatewayConfig::from_env();
+    let mut role = None;
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
@@ -22,6 +23,10 @@ fn main() -> ExitCode {
                 Some(BindMode::Candidate) => config.candidate = true,
                 Some(BindMode::Production) => config.candidate = false,
                 None => return usage("--mode must be candidate or production"),
+            },
+            "--role" => match args.next().as_deref().and_then(Role::parse) {
+                Some(value) => role = Some(value),
+                None => return usage("--role must be local or cloud"),
             },
             "--host" => match args.next() {
                 Some(value) => config.bind_host = value,
@@ -83,7 +88,7 @@ fn main() -> ExitCode {
             "--help" | "-h" => {
                 println!(
                     "usage: um-gateway-candidate [--mode candidate|production] \
-                     --upstream-base-url URL [--host 127.0.0.1] \
+                     [--role local|cloud] --upstream-base-url URL [--host 127.0.0.1] \
                      [--port 0|8000|8003|8002] [--token TOKEN] \
                      [--share-config PATH] [--auth-mode projection|legacy] \
                      [--control-token-file PATH] [--token-file PATH] \
@@ -91,7 +96,7 @@ fn main() -> ExitCode {
                      [--login-timeout SECONDS] [--no-browser]\n\
                      modes: candidate (default) binds an ephemeral loopback port only; \
                      production must be selected explicitly and binds 8000, 8002 or 8003 \
-                     on loopback only"
+                     on loopback only; --role defaults to local for 8000 and cloud otherwise"
                 );
                 return ExitCode::SUCCESS;
             }
@@ -101,6 +106,7 @@ fn main() -> ExitCode {
     if config.upstream_base_url.is_empty() {
         return usage("--upstream-base-url is required");
     }
+    config.role = role.unwrap_or_else(|| Role::for_port(config.bind_port));
     let server = match GatewayServer::start(config) {
         Ok(server) => server,
         Err(error) => {

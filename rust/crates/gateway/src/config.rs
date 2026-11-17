@@ -214,11 +214,53 @@ impl BindMode {
     }
 }
 
+/// One gateway role.
+///
+/// The local role assembles the general `/api/*` passthrough for the local 8000
+/// process; the cloud role keeps that surface unassembled on 8002/8003.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Role {
+    Local,
+    #[default]
+    Cloud,
+}
+
+impl Role {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "local" => Some(Self::Local),
+            "cloud" => Some(Self::Cloud),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Cloud => "cloud",
+        }
+    }
+
+    /// Derive the role from the production port when the CLI does not name it:
+    /// 8000 is the local process, 8002/8003 are the cloud pair, and the
+    /// candidate's ephemeral port stays cloud.
+    pub fn for_port(port: u16) -> Self {
+        if port == 8000 {
+            Self::Local
+        } else {
+            Self::Cloud
+        }
+    }
+}
+
 /// One gateway configuration.
 #[derive(Debug, Clone)]
 pub struct GatewayConfig {
     pub bind_host: String,
     pub bind_port: u16,
+    /// The role selects the local-only API surface; it is derived from the
+    /// production port when the CLI does not name it.
+    pub role: Role,
     pub upstream_base_url: String,
     pub upstream_token: String,
     pub share_config: Option<PathBuf>,
@@ -302,6 +344,7 @@ impl Default for GatewayConfig {
         Self {
             bind_host: "127.0.0.1".to_string(),
             bind_port: 0,
+            role: Role::Cloud,
             upstream_base_url: String::new(),
             upstream_token: String::new(),
             share_config: None,

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use um_gateway::config::{AuthMode, GatewayConfig};
+use um_gateway::config::{AuthMode, GatewayConfig, Role};
 use um_gateway::reauth::{ReauthProviderResult, ReauthenticationProvider};
 use um_gateway::GatewayServer;
 
@@ -173,9 +173,12 @@ impl Default for StubBehaviour {
 
 #[derive(Debug, Clone)]
 pub struct SeenRequest {
+    pub method: String,
     pub path: String,
+    pub raw_target: String,
     pub authorization: Option<String>,
     pub models_header: Option<String>,
+    pub body: Vec<u8>,
 }
 
 pub struct StubUpstream {
@@ -284,9 +287,12 @@ fn serve_stub(
     let authorization = request.header("authorization");
     let models_header = request.header("x-chat2api-models");
     seen.lock().expect("stub seen").push(SeenRequest {
+        method: request.method.clone(),
         path: path.clone(),
+        raw_target: request.path.clone(),
         authorization: authorization.clone(),
         models_header,
+        body: request.body.clone(),
     });
     let behaviour = behaviour.lock().expect("stub behaviour").clone();
     let (status, payload) = if path == "/api/config" {
@@ -306,6 +312,20 @@ fn serve_stub(
                 .version_body
                 .clone()
                 .unwrap_or_else(|| json!({"version": "0.7.0-fixture"})),
+        )
+    } else if path == "/api/echo" {
+        let body = if request.body.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&request.body).unwrap_or(Value::Null)
+        };
+        (
+            200,
+            json!({
+                "method": request.method,
+                "path": path,
+                "body": body,
+            }),
         )
     } else if path == "/api/models" {
         let body = match authorization.as_deref() {
@@ -609,6 +629,34 @@ impl GatewayServerHandle {
 impl Drop for GatewayServerHandle {
     fn drop(&mut self) {
         self.inner.shutdown();
+    }
+}
+
+pub fn start_local_gateway(stub: &StubUpstream, temp: &TempDir) -> Gateway {
+    start_local_gateway_with(stub, temp, |_| {})
+}
+
+pub fn start_local_gateway_with(
+    stub: &StubUpstream,
+    temp: &TempDir,
+    configure: impl FnOnce(&mut GatewayConfig),
+) -> Gateway {
+    let control = temp.write("control.token", CONTROL_TOKEN);
+    let mut config = GatewayConfig {
+        upstream_base_url: stub.url(),
+        upstream_token: STUB_TOKEN.to_string(),
+        control_token_file: Some(control),
+        allowed_origins: [ALLOWED_ORIGIN.to_string()].into_iter().collect(),
+        role: Role::Local,
+        ..GatewayConfig::default()
+    };
+    configure(&mut config);
+    config.candidate = true;
+    let server = GatewayServer::start(config).expect("start local candidate gateway");
+    let addr = server.addr();
+    Gateway {
+        server: GatewayServerHandle { inner: server },
+        addr,
     }
 }
 

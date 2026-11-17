@@ -30,7 +30,7 @@ pub mod tls;
 pub mod upstream;
 
 pub use body::{read_json_body, BodyPolicy};
-pub use config::{AuthMode, BindMode, GatewayConfig};
+pub use config::{AuthMode, BindMode, GatewayConfig, Role};
 pub use error::GatewayError;
 pub use gate::{GateState, RefusalReason, ShareGate};
 pub use readonly::ProxyState;
