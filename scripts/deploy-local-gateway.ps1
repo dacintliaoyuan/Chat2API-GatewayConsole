@@ -51,10 +51,27 @@ if (-not $SkipRustBuild) {
     }
     Push-Location $rustRoot
     try {
+        $global:LASTEXITCODE = 0
         & cargo build --release -p um-gateway -p um-console
-        if ($LASTEXITCODE -ne 0) { Stop-Deploy 'Rust release 构建失败。' }
+        $buildFailed = $LASTEXITCODE -ne 0
     } finally {
         Pop-Location
+    }
+    if ($buildFailed) {
+        # Windows locks a running .exe, so a rebuild while 8000/8001 run fails
+        # with access denied. Stop the managed services once, rebuild, and let
+        # the start step below bring them back.
+        Write-Host '[部署] 构建被运行中的服务锁定，先停止 8000/8001 后重试…'
+        & $serviceCli -Key usage -Action Stop 2>$null
+        & $serviceCli -Key chat2api -Action Stop 2>$null
+        Push-Location $rustRoot
+        try {
+            $global:LASTEXITCODE = 0
+            & cargo build --release -p um-gateway -p um-console
+            if ($LASTEXITCODE -ne 0) { Stop-Deploy 'Rust release 构建失败。' }
+        } finally {
+            Pop-Location
+        }
     }
 }
 
