@@ -207,6 +207,43 @@ fn local_root_rechecks_the_build_identity_on_every_request() {
 }
 
 #[test]
+fn local_root_missing_index_is_an_explicit_error() {
+    let temp = temp();
+    let dist = temp.path().join("dist");
+    write_identity(&dist, local_identity());
+    let console = local_console(&temp, &dist);
+
+    let response = client_request(console.addr, &ClientRequest::get("/")).expect("root");
+    assert_eq!(response.status, 500);
+    assert!(
+        response.json()["error"]
+            .as_str()
+            .expect("missing index error")
+            .contains("web/dist"),
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+}
+
+#[test]
+fn local_root_missing_dist_tree_is_an_explicit_error() {
+    let temp = temp();
+    let dist = temp.path().join("no-such-dist");
+    let console = local_console(&temp, &dist);
+
+    let response = client_request(console.addr, &ClientRequest::get("/")).expect("root");
+    assert_eq!(response.status, 500);
+    assert!(
+        response.json()["error"]
+            .as_str()
+            .expect("missing dist error")
+            .contains("web/dist"),
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+}
+
+#[test]
 fn local_static_assets_use_the_python_paths_and_mime_map() {
     let temp = temp();
     let dist = temp.path().join("dist");

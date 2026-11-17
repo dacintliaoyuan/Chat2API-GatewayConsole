@@ -115,7 +115,11 @@ pub fn serve_index(dist_dir: &Path, role: Role, port: u16) -> Response {
         Ok(body) => Response::new(200, body)
             .with_header("Content-Type", "text/html; charset=utf-8")
             .with_header("Cache-Control", "no-store"),
-        Err(_) => ConsoleError::unknown_path().response(),
+        Err(_) => ConsoleError::new(
+            500,
+            json!({"error": "web/dist/index.html 缺失（控制台前端构建产物未就绪）"}),
+        )
+        .response(),
     }
 }
 
