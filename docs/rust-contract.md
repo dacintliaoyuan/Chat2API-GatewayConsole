@@ -77,48 +77,41 @@ systemd
 - 停止边界：Rust 的 `/admin/shutdown` 返回 202 `{"status":"stopping"}`，与 Python 的
   202 一致；`StopStrategy=GracefulHttp` 先发送该请求，再由既有的 scoped stop 兜底，
   Rust 私有实例可优雅退出。
-- 切流状态（#81，2026-11-17）：本机 8000 仍由 Python `chat2api.py` 承担，**尚未切到
-  Rust**。切流前 parity 用同一份 `chat2api/token.json` 与 `chat2api/.edge-profile`
-  启动 Rust candidate（`--mode candidate --role local`，临时 loopback 端口），再与 Python 8000
-  对比：
-  - `/health` 的稳定字段一致；`/admin/auth/status` 的 `state`、`label`、`evidence`
-    稳定字段一致；
-  - `/v1/models`、通用 `/api/*` GET/POST 与 `/admin/auth/verify` 不一致：Rust candidate
-    对上游发送 `Host: chat.genai.um.edu.mo:443`，UM 返回 503
-    `Http/1.1 Service Unavailable`；Python 8000 发送 `Host: chat.genai.um.edu.mo`，返回 200。
-    同一请求只把 Host 头从 `chat.genai.um.edu.mo:443` 改为 `chat.genai.um.edu.mo`
-    即从 503 变为 200，确认是 Rust 客户端默认端口 Host 头形状问题。
-  - parity 门禁因此未通过，按 ADR 0009 不切流；`/v1/chat/completions` 非流式/流式、
-    `/admin/shutdown` 与回滚演练都未在本机 8000 上执行，避免把已知 503 带到本机。
+- 切流状态（#81，2026-11-17）：本机 8000 **已切到 Rust**（`um-gateway-candidate.exe
+  --mode production --port 8000 --role local`）。切流前 parity 用同一份
+  `chat2api/token.json` 与 `chat2api/.edge-profile` 启动 Python 8005 与 Rust 8000 对比，
+  结果为 `parity=passed`：
+  - `/health`、`/v1/models`、通用 `/api/*` GET/POST、`/admin/auth/status` 与
+    `/admin/auth/verify` 的状态码、响应体形状与稳定语义一致。
+  - 修复项：`f01550c` 让上游 `Host` 头在默认端口省略 `:443`（此前 Rust 对 UM 发送
+    `Host: chat.genai.um.edu.mo:443` 被 503）；`45d8808` 把思考内容计入业务输出，
+    长思考不再触发 `upstream_prelude_overflow`；`category_for` 把
+    `upstream_request_rejected` 归为 `invalid_request_error`。
   - 复现命令：
 
     ```powershell
     python tests/local_8000_parity.py `
-      --python-url http://127.0.0.1:8000 `
-      --rust-url http://127.0.0.1:<candidate-port> `
+      --python-url http://127.0.0.1:8005 `
+      --rust-url http://127.0.0.1:8000 `
       --control-token-file data/admin-control-token `
       --evidence tmp/local-8000-parity-evidence.json
     ```
 
-    探针只读；输出每个面的状态码、响应体形状和稳定语义；控制令牌只发给本机
-    8000 的 `/api/*` 与 `/admin/*`，不进入证据文件。
-  - 最小解除条件：Rust upstream 客户端在默认端口（443/80）省略 `Host` 的端口后缀，
-    或上游接受 `host:port` 形式；重新构建
-    `rust/target/release/um-gateway-candidate.exe` 后重跑 parity，通过后再按下面的
-    切流步骤执行。
-- 切流步骤（parity 通过后）：`pwsh -NoProfile -File invoke-console-runtime-json.ps1
-  -Action restart -Key chat2api`，让 8000 跑 Rust；然后验证 `/health`、`/v1/models`、
-  `/v1/chat/completions` 非流式/流式、通用 `/api/*`、`/admin/auth/status|verify`
-  与 `/admin/shutdown`。任何一项失败都按回滚步骤恢复 Python。
-- 回滚：只改 `StartPath` 回 `start_chat2api.bat`（`chat2api` 描述符）。不需要重装，
-  不需要改端口，也不需要改 `StartArguments`/`StartWorkingDirectory`（批处理忽略这些参数，
-  并保留 `python chat2api.py --base-url https://chat.genai.um.edu.mo`）。`StopIdentities`
-  已同时覆盖 Rust 与 Python，回滚后 stop/restart 仍按 Python 私有实例工作。回滚后
-  `pwsh -NoProfile -File invoke-console-runtime-json.ps1 -Action restart -Key chat2api`
-  应通过 `/health` 与 `/v1/models`。本次 #81 因 parity 未通过而未切流，真实 8000 的
-  回滚演练未执行；启动器级回滚仍由 `gateway-runtime.Tests.ps1 -LauncherOnly` 覆盖。
-- 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 只验证
-  描述符、健康边界与回滚；真实 8000 的重启与切流由 #81 执行。
+    探针只读；错误体按 `type`/`code`/`param`/`detail.upstream_status` 归一化，
+    顶层附加诊断不计入形状；两侧先请求 `/ready` 让 `admin/auth/status` 的
+    `evidence` 有值。
+- 切流步骤（已执行）：`pwsh -NoProfile -File invoke-console-runtime-json.ps1
+  -Action restart -Key chat2api`，8000 跑 Rust；验证 `/health`、`/v1/models`、
+  通用 `/api/*`、`/admin/auth/status|verify` 与 `/admin/shutdown` 均通过。
+- 回滚（已演练）：只改 `StartPath` 回 `start_chat2api.bat`，重启后 Python 8000
+  `/health` 200、`/v1/models` 200；再改回 Rust 并重启，`/health` 200、
+  `/v1/models` 200。`StopIdentities` 同时覆盖 Rust 与 Python，回滚后 stop/restart
+  仍按 Python 私有实例工作。
+- 认证巡检：Rust 网关新增每 5 分钟 `auth_watch`（拒绝后 2 倍退避到 30 分钟），
+  `/admin/auth/status` 的 `evidence` 由巡检写入 `source=auth_watch`；凭据有效时
+  不再等请求触发重登。
+- 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 验证
+  描述符、健康边界与回滚；真实 8000 的 parity、切流与回滚演练由 #81 执行并记录在本节。
 
 ## 3. 云端 idle RSS 基线
 

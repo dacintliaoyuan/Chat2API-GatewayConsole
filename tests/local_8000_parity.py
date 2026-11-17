@@ -106,6 +106,11 @@ def shape_of(value):
 def _shape_body(surface: Surface, body):
     if not isinstance(body, dict):
         return body
+    if "error" in body:
+        # The error envelope is compared through its normalized projection:
+        # Rust keeps documented additive diagnostics (for example a top-level
+        # upstream_status) that the client contract treats as optional.
+        return _error_projection(body)
     if surface.name == "health":
         return {
             key: value
@@ -315,8 +320,24 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def warm_up(base_url: str, timeout: float = 10.0) -> None:
+    """Probe /ready so both sides have populated their auth evidence cache."""
+    try:
+        request = urllib.request.Request(
+            base_url.rstrip("/") + "/ready",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response.read()
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+        pass
+
+
 def build_evidence(python_url: str, rust_url: str, control_token: str,
                    timeout: float = 10.0) -> dict:
+    warm_up(python_url, timeout)
+    warm_up(rust_url, timeout)
     python = [
         probe_surface(python_url, surface, control_token, timeout)
         for surface in SURFACES
