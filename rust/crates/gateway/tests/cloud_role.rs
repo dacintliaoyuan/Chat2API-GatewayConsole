@@ -62,3 +62,31 @@ fn the_role_is_derived_from_the_production_port() {
     assert_eq!(Role::parse("cloud"), Some(Role::Cloud));
     assert_eq!(Role::parse("production"), None);
 }
+
+#[test]
+fn the_role_switch_fails_closed_on_an_unknown_value() {
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_um-gateway-candidate"))
+        .arg("--help")
+        .output()
+        .expect("run help");
+    assert!(help.status.success());
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        stdout.contains("--role local|cloud"),
+        "help must document --role: {stdout}"
+    );
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_um-gateway-candidate"))
+        .arg("--role")
+        .arg("production")
+        .arg("--upstream-base-url")
+        .arg("http://127.0.0.1:9")
+        .output()
+        .expect("run invalid role");
+    assert!(!output.status.success(), "an unknown role must fail closed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--role must be local or cloud"),
+        "stderr: {stderr}"
+    );
+}
