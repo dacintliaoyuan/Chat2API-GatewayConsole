@@ -281,6 +281,34 @@ class RustReleaseMaterialTests(unittest.TestCase):
         self.assertTrue(audit.is_governed(8003))
 
 
+class CutoverGateConsoleTests(unittest.TestCase):
+    def _gate(self):
+        import importlib.util
+        import sys
+        spec = importlib.util.spec_from_file_location(
+            "um_cutover_gate_console", DEPLOY / "cutover_gate.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_console_rollback_drill_health_gate_uses_8096_and_8002(self):
+        plan = self._gate().console_rollback_drill_plan(
+            "um-share-console-python.service",
+            "um-share-console.service", "8096", "8002",
+            "http://127.0.0.1:8003")
+        commands = [" ".join(step["command"]) for step in plan]
+        self.assertIn("systemctl start um-share-console-python.service",
+                      commands)
+        self.assertIn("systemctl start um-share-console.service", commands)
+        self.assertIn("wait_port_open 127.0.0.1 8096", commands)
+        self.assertIn("wait_port_open 127.0.0.1 8002", commands)
+        self.assertIn("curl http://127.0.0.1:8096/health", commands)
+        self.assertIn("curl http://127.0.0.1:8002/health", commands)
+        self.assertIn("curl http://127.0.0.1:8003/ready", commands)
+
+
 class RustReleaseScriptTests(unittest.TestCase):
     def test_package_release_carries_the_rust_binary_and_runtime(self):
         package = _read("package-release.sh")
