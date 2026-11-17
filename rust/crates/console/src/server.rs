@@ -31,6 +31,7 @@ use crate::display::{display_session, display_state};
 use crate::display_grant::{DisplayGrants, DISPLAY_SESSION_COOKIE};
 use crate::display_relay::{DisplayRelay, WEBSOCKET_PATH};
 use crate::error::ConsoleError;
+use crate::local_um::{self, UmQueryError};
 use crate::metering::{self, UsageFilters};
 use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActionExecutor};
 use crate::operations::OperationsReader;
@@ -71,6 +72,9 @@ pub struct AppState {
     pub session: SessionState,
     pub display_grants: DisplayGrants,
     pub display: DisplayRelay,
+    local_ledger: std::path::PathBuf,
+    local_service_log: std::path::PathBuf,
+    local_watch_dir: Option<std::path::PathBuf>,
     services_cache: Mutex<Option<(Value, Instant)>>,
 }
 
@@ -140,6 +144,9 @@ impl ConsoleServer {
             session: SessionState::with_code_file(config.usage_session_code_file.clone()),
             display_grants: DisplayGrants::new(),
             display: DisplayRelay::new(config.display.clone()),
+            local_ledger: config.usage_log.clone(),
+            local_service_log: config.service_log.clone(),
+            local_watch_dir: config.watch_dir.clone(),
             config: config.clone(),
             runtime,
             summary: SummaryCache::for_config(&config),
@@ -277,6 +284,7 @@ fn handle_connection(state: Arc<AppState>, mut stream: TcpStream) {
 fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response {
     if !host_allowed(request.headers.get("Host").unwrap_or_default())
         || !origin_allowed(request.headers.get("Origin"), console_port)
+        || (state.config.role == Role::Local && has_proxy_metadata(&request.headers))
     {
         return ConsoleError::local_only().response();
     }
@@ -354,6 +362,12 @@ fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response 
         {
             return ConsoleError::capability_not_assembled(blocked).response();
         }
+    }
+    if state.config.role == Role::Local && rest.first() == Some(&"um") {
+        if method != "GET" {
+            return ConsoleError::unknown_path().response();
+        }
+        return handle_local_um(state, &rest, &target);
     }
     match method {
         "GET" => handle_console_get(state, &rest, &target),
@@ -757,6 +771,138 @@ fn required_positive_expected_version(
         },
         _ => Err(ConsoleError::body_open(400, message).response()),
     }
+}
+
+fn handle_local_um(state: &AppState, rest: &[&str], raw_target: &str) -> Response {
+    if rest.len() != 2 {
+        return ConsoleError::unknown_path().response();
+    }
+    let query = query_values(raw_target);
+    let value = |name: &str| query.get(name).and_then(|values| values.first()).cloned();
+    let now_ms = epoch_seconds() as f64 * 1000.0;
+    let result = match rest[1] {
+        "today" => Ok(local_um::um_today(&state.local_ledger, now_ms)),
+        "trend" => local_um::um_trend(
+            &state.local_ledger,
+            value("range").as_deref().unwrap_or("7d"),
+            now_ms,
+        ),
+        "requests" => {
+            let limit = match value("limit") {
+                None => 50,
+                Some(raw) => match raw.trim().parse::<i64>() {
+                    Ok(limit) => limit,
+                    Err(_) => {
+                        return ConsoleError::new(
+                            400,
+                            json!({"error": "invalid_um_query", "detail": "limit 必须是整数"}),
+                        )
+                        .response();
+                    }
+                },
+            };
+            local_um::um_requests(
+                &state.local_ledger,
+                value("window").as_deref().unwrap_or("today"),
+                value("model").as_deref(),
+                value("result").as_deref().unwrap_or("all"),
+                value("search").as_deref().unwrap_or(""),
+                value("cursor").as_deref(),
+                limit,
+                now_ms,
+            )
+        }
+        "logs" => {
+            let limit = match value("limit") {
+                None => 80,
+                Some(raw) => match raw.trim().parse::<i64>() {
+                    Ok(limit) => limit,
+                    Err(_) => {
+                        return ConsoleError::new(
+                            400,
+                            json!({"error": "invalid_um_query", "detail": "limit 必须是整数"}),
+                        )
+                        .response();
+                    }
+                },
+            };
+            let levels: Vec<String> = value("levels")
+                .unwrap_or_default()
+                .split(',')
+                .map(|level| level.trim().to_string())
+                .filter(|level| !level.is_empty())
+                .collect();
+            let payload = local_um::um_logs(
+                &state.local_service_log,
+                state.local_watch_dir.as_deref(),
+                value("window").as_deref().unwrap_or("today"),
+                &levels,
+                value("source").as_deref().unwrap_or("service"),
+                value("cursor").as_deref(),
+                limit,
+                now_ms,
+            );
+            if payload["status"] == json!("error") {
+                return ConsoleError::new(
+                    400,
+                    json!({"error": "invalid_um_query", "detail": payload["error"]}),
+                )
+                .response();
+            }
+            return send_json(200, &payload);
+        }
+        "request-logs" => {
+            let limit = match value("limit") {
+                None => 100,
+                Some(raw) => match raw.trim().parse::<i64>() {
+                    Ok(limit) => limit,
+                    Err(_) => {
+                        return ConsoleError::new(
+                            400,
+                            json!({"error": "invalid_um_query", "detail": "limit 必须是整数"}),
+                        )
+                        .response();
+                    }
+                },
+            };
+            local_um::um_request_logs(
+                &state.local_service_log,
+                state.local_watch_dir.as_deref(),
+                value("request_id").as_deref().unwrap_or(""),
+                limit,
+                now_ms,
+            )
+        }
+        "maintenance" => {
+            let limit = match value("limit") {
+                None => 50,
+                Some(raw) => match raw.trim().parse::<i64>() {
+                    Ok(limit) => limit,
+                    Err(_) => {
+                        return ConsoleError::new(
+                            400,
+                            json!({"error": "invalid_um_query", "detail": "limit 必须是整数"}),
+                        )
+                        .response();
+                    }
+                },
+            };
+            Ok(local_um::um_maintenance(&state.operations, limit))
+        }
+        _ => return ConsoleError::unknown_path().response(),
+    };
+    match result {
+        Ok(payload) => send_json(200, &payload),
+        Err(error) => invalid_um_query(&error),
+    }
+}
+
+fn invalid_um_query(error: &UmQueryError) -> Response {
+    ConsoleError::new(
+        400,
+        json!({"error": "invalid_um_query", "detail": error.0}),
+    )
+    .response()
 }
 
 fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Response {
@@ -1442,7 +1588,7 @@ fn health_response(state: &AppState) -> Response {
         Ok(snapshot) => snapshot,
         Err(_) => return ConsoleError::runtime_unavailable().response(),
     };
-    let mut services = vec![service_row(&snapshot, state.config.gateway_port)];
+    let mut services = vec![service_row(state, &snapshot)];
     services.push(json!({
         "id": "usagesrv",
         "port": state.config.port,
@@ -1462,19 +1608,34 @@ fn health_response(state: &AppState) -> Response {
 fn services_payload(state: &AppState, snapshot: &RuntimeSnapshot) -> Value {
     json!({
         "ok": true,
-        "services": [service_row(snapshot, state.config.gateway_port)],
+        "services": [service_row(state, snapshot)],
         "meta": {
-            "source": "linux-pid-file",
+            "source": if state.config.role == Role::Local {
+                "local-runtime"
+            } else {
+                "linux-pid-file"
+            },
             "generated_epoch": epoch_seconds(),
         },
     })
 }
 
-fn service_row(snapshot: &RuntimeSnapshot, gateway_port: u16) -> Value {
+fn service_row(state: &AppState, snapshot: &RuntimeSnapshot) -> Value {
+    if state.config.role == Role::Local {
+        return json!({
+            "key": "chat2api",
+            "display_name": "chat2api",
+            "port": state.config.gateway_port,
+            "state": snapshot.display_state(),
+            "healthy": snapshot.healthy,
+            "detail": snapshot.detail,
+            "process_ids": snapshot.process_ids,
+        });
+    }
     json!({
         "key": "share-gateway",
         "display_name": "UM 分享入口 8100",
-        "port": gateway_port,
+        "port": state.config.gateway_port,
         "state": snapshot.display_state(),
         "healthy": snapshot.healthy,
         "detail": snapshot.detail,

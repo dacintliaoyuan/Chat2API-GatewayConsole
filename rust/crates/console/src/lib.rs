@@ -16,6 +16,7 @@ pub mod display_relay;
 pub mod error;
 pub mod lock;
 pub mod local_summary;
+pub mod local_um;
 pub mod metering;
 pub mod operation_manager;
 pub mod operations;

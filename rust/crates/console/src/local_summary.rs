@@ -135,7 +135,7 @@ fn read_jsonl(path: &Path) -> Vec<Map<String, Value>> {
         let ms = record
             .get("time")
             .and_then(Value::as_str)
-            .and_then(parse_ts);
+            .and_then(parse_ts_ms);
         record.insert("_ms".to_string(), ms.map_or(Value::Null, |value| json!(value)));
         records.push(record);
     }
@@ -147,7 +147,7 @@ fn read_jsonl(path: &Path) -> Vec<Map<String, Value>> {
     records
 }
 
-fn parse_ts(text: &str) -> Option<f64> {
+pub(crate) fn parse_ts_ms(text: &str) -> Option<f64> {
     let text = text.trim();
     if text.is_empty() {
         return None;
@@ -183,7 +183,7 @@ fn beijing_day(ms: Option<f64>) -> Option<String> {
     Some(stamp.format("%Y-%m-%d").to_string())
 }
 
-fn day_start_ms(day: &str) -> Option<f64> {
+pub(crate) fn day_start_ms(day: &str) -> Option<f64> {
     let offset = FixedOffset::east_opt(8 * 3600).expect("+08:00");
     let naive = NaiveDateTime::parse_from_str(&format!("{day}T00:00:00"), "%Y-%m-%dT%H:%M:%S")
         .ok()?;
