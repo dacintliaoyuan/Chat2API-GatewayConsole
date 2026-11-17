@@ -62,6 +62,28 @@ systemd
 - 两种模式共用同一套路由、鉴权、账本和错误契约；模式只改变绑定策略与启动入口，不改变 parity 行为；角色只改变本机专属面是否装配。
 - 部署 unit 用 `--mode production --port 8003` 或 `--mode production --port 8002` 启动，并用 `/health`、`/ready` 验收；unit 文件由部署轨道维护，不在本契约的 Rust 代码范围内。
 
+### 2.4 本机 8000 启动器与回滚
+
+- 构建：在 `rust/` 下运行 `cargo build --release -p um-gateway`，产物为
+  `rust/target/release/um-gateway-candidate.exe`。
+- 启动器：`lib/gateway-runtime.ps1` 的 `chat2api` 描述符 `StartPath` 指向该二进制，
+  `StartArguments` 为
+  `--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token`，
+  `StartWorkingDirectory` 固定为仓库根，使 Rust 的默认 token/profile 路径与 Python 8000
+  一致（`chat2api/token.json`、`chat2api/.edge-profile`）。`StartAction` 仍是
+  `HiddenBatch`，健康检查仍是 `http://127.0.0.1:8000/health`，停止仍是
+  `StopStrategy=GracefulHttp` + `http://127.0.0.1:8000/admin/shutdown`，启动超时与
+  start/stop/restart 语义不变。
+- 停止边界：Rust 的 `/admin/shutdown` 目前返回 501 `admin_surface_s1a`；`StopStrategy`
+  仍先发送该请求，再由既有的 scoped stop 终止 Rust 私有实例。Rust admin 面落地后，
+  同一请求即为优雅退出，启动器无需再改。
+- 回滚：只改 `StartPath` 回 `start_chat2api.bat`（`chat2api` 描述符）。不需要重装，
+  不需要改端口，也不需要改 `StartArguments`/`StartWorkingDirectory`（批处理忽略这些参数，
+  并保留 `python chat2api.py --base-url https://chat.genai.um.edu.mo`）。`StopIdentities`
+  已同时覆盖 Rust 与 Python，回滚后 stop/restart 仍按 Python 私有实例工作。
+- 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 只验证
+  描述符、健康边界与回滚；真实 8000 的重启与切流由 #81 执行。
+
 ## 3. 云端 idle RSS 基线
 
 ### 3.1 测量方法

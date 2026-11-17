@@ -754,6 +754,40 @@ foreach ($scriptName in @(
     }
 }
 
+# ---------------------------------------------------------------------------
+# #80 AC4: rollback is one StartPath change back to start_chat2api.bat; the
+# Python command, port and stop identity stay in place, and the rollback steps
+# are written down for the operator.
+# ---------------------------------------------------------------------------
+
+& {
+    $launcher = Get-Content -LiteralPath (Join-Path $root 'start_chat2api.bat') -Raw -Encoding ascii
+    Assert-Equal ($launcher -match 'python chat2api\.py --base-url https://chat\.genai\.um\.edu\.mo') $true 'start_chat2api.bat keeps the Python 8000 rollback command'
+    Assert-Equal ($launcher -match 'rollback') $true 'start_chat2api.bat names its rollback role'
+
+    $contract = Get-Content -LiteralPath (Join-Path $root 'docs\rust-contract.md') -Raw -Encoding utf8
+    Assert-Equal ($contract -match '本机 8000 启动器与回滚') $true 'rust-contract documents the local 8000 launcher and rollback'
+    Assert-Equal ($contract -match '只改 `StartPath`') $true 'rollback is documented as a single StartPath change'
+    Assert-Equal ($contract -match 'start_chat2api\.bat') $true 'rollback names the Python launcher'
+    Assert-Equal ($contract -match '不需要重装') $true 'rollback documents that no reinstall is needed'
+    Assert-Equal ($contract -match '不需要改端口|无需改端口') $true 'rollback documents that no port change is needed'
+
+    # Simulate the rollback: only StartPath changes back; port and stop
+    # identities stay valid for the Python runtime.
+    $desc = (Get-GatewayServiceDescriptors)['chat2api']
+    $savedStartPath = [string]$desc.StartPath
+    try {
+        $desc.StartPath = 'start_chat2api.bat'
+        Assert-Equal ([IO.Path]::GetFileName((Resolve-GatewayStartPath -Key 'chat2api'))) 'start_chat2api.bat' 'changing only StartPath resolves the Python launcher'
+        Assert-Equal $desc.Port 8000 'rollback keeps port 8000'
+        Assert-Equal $desc.StopStrategy 'GracefulHttp' 'rollback keeps the graceful stop strategy'
+        $identities = @(Get-GatewayStopIdentities -Descriptor $desc)
+        Assert-Equal (($identities | ForEach-Object { [string]$_.ProcessName }) -join ',') 'python.exe,um-gateway-candidate.exe' 'rollback still recognizes the Python private instance'
+    } finally {
+        $desc.StartPath = $savedStartPath
+    }
+}
+
 if ($LauncherOnly) {
     if ($script:failures -gt 0) {
         Write-Host "`n$($script:failures) local 8000 launcher test(s) FAILED." -ForegroundColor Red
