@@ -204,75 +204,157 @@ pub fn cloud_registry() -> Vec<ActionSpec> {
     ]
 }
 
-/// The honest reason carried by every local catalogue card whose executor is not
-/// wired yet.
-pub const LOCAL_DISABLED_ACTION_REASON: &str = "本机 Rust 控制台尚未接线该动作执行器（后续票）";
+/// The only runtime-managed local target (Python `SERVICE_*_ENABLED_TARGETS`).
+pub const LOCAL_SERVICE_TARGET: &str = "chat2api";
 
-/// The local role registry: `model.catalog` is executable; the other catalogue
-/// cards are registered but disabled, so Python's 403 `action_disabled` refusal is
-/// preserved instead of degrading to 404 `invalid_action`. A disabled action never
-/// executes and never creates an operation row.
+/// Python `RUNTIME_ACTIONS_DISABLED_REASON`: an unauthorized target is refused
+/// at submit time, before any operation row is created.
+pub const LOCAL_SERVICE_DISABLED_REASON: &str = "目标不在部署授权包批准的授权集合内（按动作+目标启用）；usage 为网页宿主自身，既有契约：停止全部排除宿主";
+
+/// The local role registry: exactly Python `build_registry(cloud=False)`.
+///
+/// All twelve actions are enabled and execute through the retained Python
+/// handlers. `service.*` accepts only the `chat2api` target; every other target is
+/// refused at submit time with the same `action_disabled` reason Python records.
 pub fn local_registry() -> Vec<ActionSpec> {
     vec![
         ActionSpec {
             name: "service.start",
-            description: "启动本机 UM runtime（经 runtime 权威）",
+            description: "启动一个网关服务（经 runtime 权威）",
             param_schema: json!({}),
             bump_generation_on_success: false,
             cancelable: true,
-            enabled: false,
-            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
-            resource: disabled_resource,
+            enabled: true,
+            disabled_reason: None,
+            resource: service_start_resource,
         },
         ActionSpec {
             name: "service.stop",
-            description: "停止本机 UM runtime（经 runtime 权威）",
+            description: "停止一个网关服务（经 runtime 权威）",
             param_schema: json!({}),
             bump_generation_on_success: false,
             cancelable: true,
-            enabled: false,
-            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
-            resource: disabled_resource,
+            enabled: true,
+            disabled_reason: None,
+            resource: service_stop_resource,
         },
         ActionSpec {
             name: "service.restart",
-            description: "重启本机 UM runtime",
+            description: "重启一个网关服务（停止后立即重新启动；中断该服务在途工作）",
             param_schema: json!({}),
-            bump_generation_on_success: false,
+            bump_generation_on_success: true,
             cancelable: true,
-            enabled: false,
-            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
-            resource: disabled_resource,
+            enabled: true,
+            disabled_reason: None,
+            resource: service_restart_resource,
         },
         ActionSpec {
             name: "account.um_status",
-            description: "UM 认证状态查询（内存态只读）",
+            description: "UM 认证状态查询（内存态只读，未主动核验）",
             param_schema: json!({}),
             bump_generation_on_success: false,
             cancelable: true,
-            enabled: false,
-            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
-            resource: disabled_resource,
+            enabled: true,
+            disabled_reason: None,
+            resource: um_account_resource,
         },
         ActionSpec {
             name: "account.um_verify",
-            description: "UM 账号主动核验",
+            description: "UM 账号主动核验（向上游探测凭据有效性）",
             param_schema: json!({}),
             bump_generation_on_success: false,
             cancelable: true,
-            enabled: false,
-            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
-            resource: disabled_resource,
+            enabled: true,
+            disabled_reason: None,
+            resource: um_account_resource,
         },
         ActionSpec {
             name: "account.login",
             description: "账号登录/重新授权（UM 编排）",
-            param_schema: json!({}),
+            param_schema: json!({
+                "start_wait_s": {"type": "int", "min": 1, "max": 120},
+                "login_budget_s": {"type": "int", "min": 1, "max": 3600},
+                "poll_interval_s": {"type": "int", "min": 1, "max": 10},
+                "force": {"type": "bool"},
+                "visible": {"type": "bool"},
+            }),
             bump_generation_on_success: false,
             cancelable: true,
-            enabled: false,
-            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
-            resource: disabled_resource,
+            enabled: true,
+            disabled_reason: None,
+            resource: um_account_resource,
+        },
+        ActionSpec {
+            name: "model.context_probe_preview",
+            description: "上下文探测队列预览（只读：队列+计划+估算，零请求零写入）",
+            param_schema: json!({
+                "sources": {"type": "str", "max_len": 512},
+                "models": {"type": "object"},
+                "retest": {"type": "bool"},
+            }),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: true,
+            disabled_reason: None,
+            resource: model_context_resource,
+        },
+        ActionSpec {
+            name: "model.context_probe_run",
+            description: "执行上下文探测队列（真实长输入计费请求，集中批准后启用；支持 sources/models 显式选择与 retest 重测）",
+            param_schema: json!({
+                "max_requests": {"type": "int", "min": 1, "max": 20},
+                "max_tokens": {"type": "int", "min": 1, "max": 64},
+                "sources": {"type": "str", "max_len": 512},
+                "models": {"type": "object"},
+                "retest": {"type": "bool"},
+            }),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: true,
+            disabled_reason: None,
+            resource: model_context_resource,
+        },
+        ActionSpec {
+            name: "model.context_overrides",
+            description: "人工 context 覆盖读面（声明/覆盖/有效值/来源；只读）",
+            param_schema: json!({
+                "local_only": {"type": "bool"},
+                "models": {"type": "object"},
+            }),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: true,
+            disabled_reason: None,
+            resource: model_context_resource,
+        },
+        ActionSpec {
+            name: "model.context_override_set",
+            description: "设置人工 context 覆盖（仅写 model-sync 状态文件；覆盖保存≠客户端已应用）",
+            param_schema: json!({
+                "source": {"type": "str", "max_len": 128},
+                "model_id": {"type": "str", "max_len": 128},
+                "context": {"type": "int", "min": 1, "max": 10_000_000},
+                "expected_set_at": {"type": "str", "max_len": 64},
+            }),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: true,
+            disabled_reason: None,
+            resource: model_context_resource,
+        },
+        ActionSpec {
+            name: "model.context_override_clear",
+            description: "恢复默认＝删除人工 context 覆盖（探测历史证据保留）",
+            param_schema: json!({
+                "source": {"type": "str", "max_len": 128},
+                "model_id": {"type": "str", "max_len": 128},
+                "expected_set_at": {"type": "str", "max_len": 64},
+            }),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: true,
+            disabled_reason: None,
+            resource: model_context_resource,
         },
         ActionSpec {
             name: "model.catalog",
@@ -290,14 +372,46 @@ pub fn local_registry() -> Vec<ActionSpec> {
     ]
 }
 
-fn disabled_resource(
+fn local_service_resource(action: &str, target: &str) -> Result<String, OperationError> {
+    if target != LOCAL_SERVICE_TARGET {
+        return Err(action_disabled(action, LOCAL_SERVICE_DISABLED_REASON));
+    }
+    Ok(format!("service:{target}"))
+}
+
+fn service_start_resource(
+    target: &str,
+    _params: &Map<String, Value>,
+) -> Result<String, OperationError> {
+    local_service_resource("service.start", target)
+}
+
+fn service_stop_resource(
+    target: &str,
+    _params: &Map<String, Value>,
+) -> Result<String, OperationError> {
+    local_service_resource("service.stop", target)
+}
+
+fn service_restart_resource(
+    target: &str,
+    _params: &Map<String, Value>,
+) -> Result<String, OperationError> {
+    local_service_resource("service.restart", target)
+}
+
+fn um_account_resource(
     _target: &str,
     _params: &Map<String, Value>,
 ) -> Result<String, OperationError> {
-    Err(OperationError::new(
-        "action_disabled",
-        "action is disabled and cannot execute",
-    ))
+    Ok("account:um".to_string())
+}
+
+fn model_context_resource(
+    _target: &str,
+    _params: &Map<String, Value>,
+) -> Result<String, OperationError> {
+    Ok("model:context".to_string())
 }
 
 fn model_catalog_resource(
@@ -747,7 +861,7 @@ impl OperationManager {
         op_id: &str,
         cancel: &Arc<AtomicBool>,
     ) -> Result<(), ActionFailure> {
-        let (row, spec) = {
+        let (row, spec, params) = {
             let inner = self
                 .inner
                 .lock()
@@ -765,13 +879,13 @@ impl OperationManager {
                 .find(|spec| spec.name == action)
                 .cloned()
                 .ok_or_else(|| ActionFailure::new("invalid_action", "unknown action"))?;
-            (row, spec)
+            // The public operation view deliberately omits `params_json` (the
+            // Python `_view` contract), so the worker reads it separately.
+            let params = load_params_json(&inner.connection, op_id)
+                .map_err(|_| ActionFailure::new("internal_error", "console state read failed"))?;
+            (row, spec, params)
         };
         let target = row["target"].as_str().unwrap_or_default().to_string();
-        let params: Map<String, Value> = row["params_json"]
-            .as_str()
-            .and_then(|text| serde_json::from_str(text).ok())
-            .unwrap_or_default();
         let lock = match ResourceLock::acquire(
             &self.lock_dir,
             row["resource"].as_str().unwrap_or_default(),
@@ -1186,6 +1300,23 @@ fn load_row(connection: &Connection, op_id: &str) -> Result<Option<Value>, Opera
         )?)),
         None => Ok(None),
     }
+}
+
+/// The worker needs the submitted params, which the public operation view
+/// omits to keep Python's `_view` field contract.
+fn load_params_json(
+    connection: &Connection,
+    op_id: &str,
+) -> Result<Map<String, Value>, OperationError> {
+    let raw: String = connection
+        .query_row(
+            "SELECT params_json FROM operations WHERE id=?",
+            [op_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| OperationError::new("internal_error", "console state read failed"))?;
+    serde_json::from_str(&raw)
+        .map_err(|_| OperationError::new("internal_error", "console state read failed"))
 }
 
 fn finish_locked(

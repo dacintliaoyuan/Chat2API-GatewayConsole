@@ -7,16 +7,14 @@
 //! or malformed child is an explicit error, never a fabricated empty catalogue.
 //! No long-lived Python process is started or reused.
 
-use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
 use crate::config::ConsoleConfig;
 use crate::operation_manager::{ActionExecutor, ActionFailure, OperationContext};
+use crate::sidecar::{run_sidecar, SidecarLabels};
 
 pub const DEFAULT_SIDECAR_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -46,6 +44,15 @@ except Exception as exc:
 sys.stdout.write(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
 "#;
 
+const LABELS: SidecarLabels = SidecarLabels {
+    failure_code: "catalog_failed",
+    timeout_code: "catalog_timeout",
+    label: "模型目录 sidecar",
+    default_message: "模型目录 sidecar 执行失败",
+    require_object_result: true,
+    collapse_error_codes: true,
+};
+
 /// Runs the Python `model.catalog` handler once per operation.
 pub struct PythonCatalogExecutor {
     interpreter: PathBuf,
@@ -70,26 +77,6 @@ impl PythonCatalogExecutor {
         self.timeout = timeout;
         self
     }
-
-    fn command(&self, payload: &str) -> Command {
-        let mut command = Command::new(&self.interpreter);
-        command
-            .arg("-c")
-            .arg(SIDECAR_SCRIPT)
-            .arg(payload)
-            .current_dir(&self.working_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            // Keep the one-shot child console-less on the Windows local host.
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-        command
-    }
 }
 
 impl ActionExecutor for PythonCatalogExecutor {
@@ -106,149 +93,18 @@ impl ActionExecutor for PythonCatalogExecutor {
                 format!("unknown action {action:?}"),
             ));
         }
-        ctx.raise_if_cancelled()?;
-        let payload = serde_json::to_string(&json!({
+        let payload = json!({
             "target": target,
             "params": params,
-        }))
-        .map_err(|_| ActionFailure::new("internal_error", "模型目录 sidecar 参数无法序列化"))?;
-        let mut child = self.command(&payload).spawn().map_err(|error| {
-            ActionFailure::new(
-                "catalog_failed",
-                format!("模型目录 sidecar 启动失败：{error}"),
-            )
-        })?;
-        let out_reader = child
-            .stdout
-            .take()
-            .map(|stream| thread::spawn(move || read_all(stream)));
-        let err_reader = child
-            .stderr
-            .take()
-            .map(|stream| thread::spawn(move || read_all(stream)));
-        let deadline = Instant::now() + self.timeout;
-        let status = loop {
-            if ctx.is_cancelled() {
-                reap(&mut child);
-                join_reader(out_reader);
-                join_reader(err_reader);
-                return Err(ActionFailure::cancelled());
-            }
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if Instant::now() < deadline => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Ok(None) => {
-                    reap(&mut child);
-                    join_reader(out_reader);
-                    join_reader(err_reader);
-                    return Err(ActionFailure::new(
-                        "catalog_timeout",
-                        format!("模型目录 sidecar 超时（{} 秒）", self.timeout.as_secs()),
-                    ));
-                }
-                Err(error) => {
-                    reap(&mut child);
-                    join_reader(out_reader);
-                    join_reader(err_reader);
-                    return Err(ActionFailure::new(
-                        "catalog_failed",
-                        format!("模型目录 sidecar 状态读取失败：{error}"),
-                    ));
-                }
-            }
-        };
-        let stdout = join_reader(out_reader).unwrap_or_default();
-        let stderr = join_reader(err_reader).unwrap_or_default();
-        parse_sidecar_output(&status, &stdout, &stderr)
+        });
+        run_sidecar(
+            &self.interpreter,
+            &self.working_dir,
+            SIDECAR_SCRIPT,
+            &payload,
+            self.timeout,
+            ctx,
+            LABELS,
+        )
     }
-}
-
-fn parse_sidecar_output(
-    status: &ExitStatus,
-    stdout: &str,
-    stderr: &str,
-) -> Result<Value, ActionFailure> {
-    let envelope = match serde_json::from_str::<Value>(stdout.trim()) {
-        Ok(Value::Object(envelope)) => envelope,
-        _ => {
-            return Err(ActionFailure::new(
-                "catalog_failed",
-                sidecar_failure_message("模型目录 sidecar 未返回合法 JSON", status, stderr),
-            ))
-        }
-    };
-    if envelope.get("ok") == Some(&Value::Bool(true)) {
-        if !status.success() {
-            return Err(ActionFailure::new(
-                "catalog_failed",
-                format!(
-                    "模型目录 sidecar 退出码非零（{}）但声明成功",
-                    exit_code(status)
-                ),
-            ));
-        }
-        return match envelope.get("result") {
-            Some(result @ Value::Object(_)) => Ok(result.clone()),
-            _ => Err(ActionFailure::new(
-                "catalog_failed",
-                "模型目录 sidecar 结果不是 JSON 对象",
-            )),
-        };
-    }
-    let error = envelope.get("error").and_then(Value::as_object);
-    let code = error
-        .and_then(|error| error.get("code"))
-        .and_then(Value::as_str)
-        .unwrap_or("catalog_failed");
-    let message = error
-        .and_then(|error| error.get("message"))
-        .and_then(Value::as_str)
-        .unwrap_or("模型目录 sidecar 执行失败");
-    Err(sidecar_failure(code, message))
-}
-
-fn sidecar_failure(code: &str, message: &str) -> ActionFailure {
-    if code == "cancelled" {
-        return ActionFailure::cancelled();
-    }
-    let code = if code == "invalid_params" {
-        "invalid_params"
-    } else {
-        "catalog_failed"
-    };
-    ActionFailure::new(code, message.to_string())
-}
-
-fn sidecar_failure_message(prefix: &str, status: &ExitStatus, stderr: &str) -> String {
-    let detail = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
-    let detail: String = detail.chars().take(200).collect();
-    if detail.is_empty() {
-        format!("{prefix}（退出码 {}）", exit_code(status))
-    } else {
-        format!("{prefix}（退出码 {}）：{detail}", exit_code(status))
-    }
-}
-
-fn exit_code(status: &ExitStatus) -> String {
-    status
-        .code()
-        .map(|code| code.to_string())
-        .unwrap_or_else(|| "signal".to_string())
-}
-
-fn read_all(mut stream: impl Read) -> String {
-    let mut bytes = Vec::new();
-    let _ = stream.read_to_end(&mut bytes);
-    String::from_utf8_lossy(&bytes).into_owned()
-}
-
-fn reap(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn join_reader(reader: Option<thread::JoinHandle<String>>) -> Option<String> {
-    reader.and_then(|reader| reader.join().ok())
 }

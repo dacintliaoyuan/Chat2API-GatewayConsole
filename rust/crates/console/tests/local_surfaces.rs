@@ -96,7 +96,11 @@ fn local_actions_list_the_um_catalogue_without_share_actions() {
     let response =
         client_request(console.addr, &ClientRequest::get("/api/console/actions")).expect("actions");
     assert_eq!(response.status, 200);
-    let actions = response.json()["actions"].as_array().expect("actions").clone();
+    let actions = response.json()["actions"]
+        .as_array()
+        .expect("actions")
+        .clone();
+    assert_eq!(actions.len(), 12);
     let names: Vec<&str> = actions
         .iter()
         .filter_map(|row| row["action"].as_str())
@@ -119,8 +123,33 @@ fn local_actions_list_the_um_catalogue_without_share_actions() {
     );
     assert!(actions
         .iter()
-        .filter(|row| row["action"] != json!("model.catalog"))
-        .all(|row| row["enabled"] == json!(false)));
+        .all(|row| row["enabled"] == json!(true) && row["disabled_reason"] == json!(null)));
+}
+
+#[test]
+fn local_unauthorized_service_target_is_refused_before_queueing() {
+    let temp = temp();
+    let console = local_console(&temp, Some(temp.path().join("console-state.sqlite3")));
+    let body = json!({"action": "service.start", "target": "other"})
+        .to_string()
+        .into_bytes();
+    let request = ClientRequest::post("/api/console/operations", body)
+        .header("Content-Type", "application/json");
+    let response = client_request(console.addr, &request).expect("submit unauthorized target");
+    assert_eq!(response.status, 403);
+    let payload = response.json();
+    assert_eq!(payload["error"], json!("action_disabled"));
+    assert!(payload["reason"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("目标不在部署授权包批准的授权集合内"));
+    let list = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/operations?limit=50"),
+    )
+    .expect("operations");
+    assert_eq!(list.status, 200);
+    assert_eq!(list.json()["operations"], json!([]));
 }
 
 #[test]
@@ -202,46 +231,4 @@ fn local_cloud_ops_and_share_usage_reuse_the_existing_readers() {
     .expect("share usage");
     assert_eq!(share_usage.status, 503);
     assert_eq!(share_usage.json()["error"], json!("share_ledger_path_unresolved"));
-}
-
-#[test]
-fn local_disabled_actions_are_listed_but_submit_returns_403_action_disabled() {
-    let temp = temp();
-    let console = local_console(
-        &temp,
-        Some(temp.path().join("console-state.sqlite3")),
-    );
-    for action in [
-        "service.start",
-        "service.stop",
-        "service.restart",
-        "account.um_status",
-        "account.um_verify",
-        "account.login",
-    ] {
-        let body = json!({"action": action, "target": "chat2api"})
-            .to_string()
-            .into_bytes();
-        let request = ClientRequest::post("/api/console/operations", body)
-            .header("Content-Type", "application/json");
-        let response =
-            client_request(console.addr, &request).expect("submit disabled action");
-        assert_eq!(response.status, 403, "{action}");
-        let payload = response.json();
-        assert_eq!(payload["error"], json!("action_disabled"), "{action}");
-        assert!(
-            payload["reason"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("尚未接线"),
-            "{action}: {payload}"
-        );
-    }
-    let list = client_request(
-        console.addr,
-        &ClientRequest::get("/api/console/operations?limit=50"),
-    )
-    .expect("operations");
-    assert_eq!(list.status, 200);
-    assert_eq!(list.json()["operations"], json!([]));
 }

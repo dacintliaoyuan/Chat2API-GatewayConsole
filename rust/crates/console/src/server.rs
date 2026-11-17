@@ -111,13 +111,13 @@ impl ConsoleServer {
         runtime: Arc<dyn RuntimeFacts>,
         share_seams: Arc<dyn ShareReadSeams>,
     ) -> Result<ServerHandle, ServerError> {
-        // The local role's only enabled action, `model.catalog`, runs the
-        // Python `model_sync` handler in a one-shot sidecar; the cloud role
-        // keeps its honest unwired default.
+        // The local role executes all twelve retained actions through the
+        // one-shot Python sidecar (`model.catalog` keeps its #84 executor); the
+        // cloud role keeps its honest unwired default.
         let executor: Arc<dyn crate::operation_manager::ActionExecutor> = match config.role {
-            Role::Local => Arc::new(crate::model_catalog::PythonCatalogExecutor::from_config(
-                &config,
-            )),
+            Role::Local => {
+                Arc::new(crate::retained_actions::RetainedActionExecutor::from_config(&config))
+            }
             Role::Cloud => Arc::new(UnwiredActionExecutor),
         };
         Self::start_with_wiring(
