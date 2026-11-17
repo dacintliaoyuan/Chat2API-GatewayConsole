@@ -322,7 +322,6 @@ pub struct LedgerRead {
     pub errors: Vec<Value>,
     pub truncated: bool,
     pub trusted: bool,
-    pub read_error: bool,
 }
 
 fn int_or_none(value: Option<&Value>) -> Option<i64> {
@@ -414,45 +413,43 @@ fn stringify(value: &Value) -> String {
     }
 }
 
+fn ledger_read_error(detail: String) -> LedgerRead {
+    LedgerRead {
+        ledger_present: true,
+        trusted: false,
+        errors: vec![json!({"type": "read_error", "detail": detail})],
+        ..LedgerRead::default()
+    }
+}
+
 pub fn read_ledger(path: &Path) -> LedgerRead {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return LedgerRead::default();
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return LedgerRead::default()
+        }
+        Err(error) => return ledger_read_error(error.to_string()),
     };
     let size = metadata.len();
     let mut truncated = false;
     let data = if size > UM_MAX_READ_BYTES {
         truncated = true;
         let Ok(mut file) = std::fs::File::open(path) else {
-            return LedgerRead {
-                ledger_present: true,
-                ..LedgerRead::default()
-            };
+            return ledger_read_error("ledger unreadable".to_string());
         };
         use std::io::{Read as _, Seek as _, SeekFrom};
         if file.seek(SeekFrom::End(-(UM_MAX_READ_BYTES as i64))).is_err() {
-            return LedgerRead {
-                ledger_present: true,
-                ..LedgerRead::default()
-            };
+            return ledger_read_error("ledger unreadable".to_string());
         }
         let mut data = Vec::new();
         if file.read_to_end(&mut data).is_err() {
-            return LedgerRead {
-                ledger_present: true,
-                ..LedgerRead::default()
-            };
+            return ledger_read_error("ledger unreadable".to_string());
         }
         data
     } else {
         match std::fs::read(path) {
             Ok(data) => data,
-            Err(_) => {
-                return LedgerRead {
-                    ledger_present: true,
-                    errors: vec![json!({"type": "read_error", "detail": "ledger unreadable"})],
-                    ..LedgerRead::default()
-                }
-            }
+            Err(error) => return ledger_read_error(error.to_string()),
         }
     };
     let text = String::from_utf8_lossy(&data);
@@ -494,7 +491,6 @@ pub fn read_ledger(path: &Path) -> LedgerRead {
         errors,
         truncated,
         trusted: true,
-        read_error: false,
     }
 }
 
@@ -840,7 +836,7 @@ fn requests_reading(logical: &[&Event]) -> (Reading, Reading, Map<String, Value>
     )
 }
 
-fn speed_payload(_events: &[&Event], logical: &[&Event], empty_note: &str) -> Value {
+fn speed_payload(logical: &[&Event], empty_note: &str) -> Value {
     let samples: Vec<&&Event> = logical
         .iter()
         .filter(|event| {
@@ -1076,7 +1072,7 @@ pub fn um_today(ledger: &Path, now_ms: f64) -> Value {
             .collect::<Vec<_>>(),
     );
     let (recorded, failed, result_counts) = requests_reading(&logical);
-    let speed = speed_payload(&events, &logical, "今天没有请求");
+    let speed = speed_payload(&logical, "今天没有请求");
     let boundaries = json!({
         "timezone": "Asia/Shanghai",
         "start": iso(start),
@@ -1124,7 +1120,7 @@ fn trend_bucket(events: &[&Event], logical: &[&Event]) -> Value {
             &events.iter().map(|event| total_reading(event)).collect::<Vec<_>>()
         ).to_json(),
         "requests": Reading::exact_int(logical.len() as i64).to_json(),
-        "speed": speed_payload(events, logical, "该时段没有请求")
+        "speed": speed_payload(logical, "该时段没有请求")
             .get("value").cloned().unwrap_or(Value::Null),
     })
 }
@@ -1303,7 +1299,6 @@ pub fn um_trend(ledger: &Path, range: &str, now_ms: f64) -> Result<Value, UmQuer
     let mut model_rows: Vec<(String, Value, f64)> = Vec::new();
     for model in model_names {
         let mut daily = Vec::new();
-        let mut model_events = Vec::new();
         let mut model_logical = Vec::new();
         let mut failed_total = 0i64;
         for day in &days {
@@ -1322,7 +1317,6 @@ pub fn um_trend(ledger: &Path, range: &str, now_ms: f64) -> Result<Value, UmQuer
                 .copied()
                 .filter(|event| !is_retry(event))
                 .collect();
-            model_events.extend(day_events.iter().copied());
             model_logical.extend(day_logical.iter().copied());
             for event in &day_logical {
                 if matches!(result_of(event).0, "failed" | "truncated") {
@@ -1332,7 +1326,7 @@ pub fn um_trend(ledger: &Path, range: &str, now_ms: f64) -> Result<Value, UmQuer
             daily.push(trend_bucket(&day_events, &day_logical));
         }
         let mut total = merge_buckets(&daily);
-        if let Some(speed) = speed_payload(&model_events, &model_logical, "该时段没有请求")
+        if let Some(speed) = speed_payload(&model_logical, "该时段没有请求")
             .get("value")
             .cloned()
         {
@@ -1361,7 +1355,7 @@ pub fn um_trend(ledger: &Path, range: &str, now_ms: f64) -> Result<Value, UmQuer
     });
     let all_total = {
         let mut total = merge_buckets(&day_buckets);
-        if let Some(speed) = speed_payload(&events, &logical, "该时段没有请求")
+        if let Some(speed) = speed_payload(&logical, "该时段没有请求")
             .get("value")
             .cloned()
         {
@@ -1410,11 +1404,39 @@ fn reading_value(reading: &Value) -> Option<f64> {
     object.get("value").and_then(Value::as_f64)
 }
 
-fn request_id(value: Option<&Value>) -> Option<String> {
+fn valid_request_id(value: Option<&str>) -> Option<String> {
     value
-        .and_then(Value::as_str)
-        .filter(|text| text.len() == 32 && text.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+        .filter(|text| {
+            text.len() == 32
+                && text
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
         .map(str::to_string)
+}
+
+fn um_log_row(category: &str, parsed: &ParsedLogLine, occurrence: usize) -> Value {
+    let digest = {
+        let mut hasher = Sha256::new();
+        hasher.update(
+            python_json(&json!({
+                "source": "chat2api", "category": category, "ts": parsed.ts,
+                "level": parsed.level, "message": parsed.message,
+                "request_id": parsed.request_id,
+            }))
+            .as_bytes(),
+        );
+        format!("{:x}", hasher.finalize())[..16].to_string()
+    };
+    json!({
+        "key": format!("chat2api:{category}:{digest}:{occurrence}"),
+        "at": parsed.ts.map(|ts| (ts * 1000.0) as i64),
+        "level": parsed.level,
+        "source": if category == "service" { "chat2api".to_string() }
+                  else { format!("chat2api/{category}") },
+        "text": parsed.message.chars().take(4096).collect::<String>(),
+        "requestId": valid_request_id(parsed.request_id.as_deref()),
+    })
 }
 
 fn row_digest(event: &Event) -> String {
@@ -1483,7 +1505,7 @@ fn retry_map(events: &[Event]) -> HashMap<String, Vec<&Event>> {
         if !is_retry(event) {
             continue;
         }
-        if let Some(id) = event.request_id.clone() {
+        if let Some(id) = valid_request_id(event.request_id.as_deref()) {
             map.entry(id).or_default().push(event);
         }
     }
@@ -1537,7 +1559,7 @@ fn request_row(event: &Event, key: String, retries: &[&Event]) -> Value {
         }
         _ => Reading::missing("缺输出 Token 或正耗时，无法计算"),
     };
-    let request_id = event.request_id.clone();
+    let request_id = valid_request_id(event.request_id.as_deref());
     let retry_rows = request_id.as_ref().map(|_| {
         retries
             .iter()
@@ -1611,6 +1633,68 @@ fn encode_cursor(at: i64, key: &str) -> String {
     base64_encode(python_json(&payload).as_bytes())
 }
 
+struct UmLogCursor {
+    mode: String,
+    at: Option<i64>,
+    key: Option<String>,
+    reader: Option<String>,
+}
+
+fn decode_um_log_cursor(cursor: &str) -> Option<UmLogCursor> {
+    if cursor.is_empty() {
+        return None;
+    }
+    let raw = base64_decode(cursor)?;
+    let value: Value = serde_json::from_slice(&raw).ok()?;
+    let object = value.as_object()?;
+    if object.get("v").and_then(Value::as_i64) != Some(1) {
+        return None;
+    }
+    let mode = object.get("mode")?.as_str()?.to_string();
+    if mode != "same" && mode != "older" {
+        return None;
+    }
+    let at = match object.get("at") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_i64()?),
+    };
+    let key = match object.get("key") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+        _ => return None,
+    };
+    let reader = match object.get("reader") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+        _ => return None,
+    };
+    if mode == "same" && at.is_none() {
+        return None;
+    }
+    Some(UmLogCursor {
+        mode,
+        at,
+        key,
+        reader,
+    })
+}
+
+fn encode_um_log_cursor(
+    mode: &str,
+    at: Option<i64>,
+    key: Option<&str>,
+    reader: Option<&str>,
+) -> String {
+    let payload = json!({
+        "v": 1,
+        "mode": mode,
+        "at": at,
+        "key": key,
+        "reader": reader,
+    });
+    base64_encode(python_json(&payload).as_bytes())
+}
+
 pub fn um_requests(
     ledger: &Path,
     window: &str,
@@ -1670,15 +1754,13 @@ pub fn um_requests(
     let keys = occurrence_keys(&logical);
     let logical_ids: BTreeSet<String> = logical
         .iter()
-        .filter_map(|event| event.request_id.clone())
+        .filter_map(|event| valid_request_id(event.request_id.as_deref()))
         .collect();
     let unattached = retries
         .iter()
         .filter(|event| {
-            event
-                .request_id
-                .as_ref()
-                .is_none_or(|id| !logical_ids.contains(id))
+            valid_request_id(event.request_id.as_deref())
+                .is_none_or(|id| !logical_ids.contains(&id))
         })
         .count();
     let mut rows = Vec::new();
@@ -1690,8 +1772,8 @@ pub fn um_requests(
         if result != "all" && row_result != result {
             continue;
         }
-        let attached = event
-            .request_id
+        let event_request_id = valid_request_id(event.request_id.as_deref());
+        let attached = event_request_id
             .as_ref()
             .and_then(|id| retry_map.get(id))
             .cloned()
@@ -1701,7 +1783,7 @@ pub fn um_requests(
                 "{} {} {} {}",
                 event.model,
                 event.status.as_ref().and_then(Value::as_str).unwrap_or(""),
-                event.request_id.as_deref().unwrap_or(""),
+                event_request_id.as_deref().unwrap_or(""),
                 row_note
             );
             if !haystack.to_lowercase().contains(&search.to_lowercase()) {
@@ -1841,185 +1923,679 @@ fn log_category_path(
     }
 }
 
-fn normalize_level(raw: &str) -> &'static str {
-    let upper = raw.trim().to_ascii_uppercase();
-    match upper.as_str() {
-        "ERROR" | "ERR" | "CRITICAL" | "CRIT" | "FATAL" => "error",
-        "WARNING" | "WARN" => "warn",
-        "INFO" | "NOTICE" => "info",
-        "DEBUG" | "TRACE" => "debug",
-        _ => "unknown",
-    }
-}
-
+#[derive(Debug)]
 struct ParsedLogLine {
     ts: Option<f64>,
     level: &'static str,
     message: String,
     request_id: Option<String>,
+    start: u64,
 }
 
-fn parse_log_line(line: &str) -> ParsedLogLine {
-    let mut rest = line.trim();
-    if rest.starts_with('[') {
-        if let Some(end) = rest.find(']') {
-            rest = rest[end + 1..].trim_start();
-        }
-    }
-    let mut ts = None;
-    let mut level = "unknown";
-    let mut message = rest.to_string();
-    let bytes = rest.as_bytes();
-    if bytes.len() >= 19
-        && (bytes[4] == b'-' || bytes[4] == b'/')
-        && bytes[7] == bytes[4]
-    {
-        let mut stamp = rest[..19].to_string();
-        let mut tail = rest[19..].to_string();
-        if let Some(fraction) = tail.strip_prefix('.') {
-            if let Some(index) = fraction.find(|ch: char| !ch.is_ascii_digit()) {
-                stamp.push('.');
-                stamp.push_str(&fraction[..index]);
-                tail = fraction[index..].to_string();
-            } else {
-                stamp.push('.');
-                stamp.push_str(fraction);
-                tail.clear();
-            }
-        } else if let Some(fraction) = tail.strip_prefix(',') {
-            if let Some(index) = fraction.find(|ch: char| !ch.is_ascii_digit()) {
-                stamp.push('.');
-                stamp.push_str(&fraction[..index]);
-                tail = fraction[index..].to_string();
-            } else {
-                stamp.push('.');
-                stamp.push_str(fraction);
-                tail.clear();
-            }
-        }
-        let mut tail = tail.trim_start().to_string();
-        if let Some(zone) = tail.strip_prefix('Z') {
-            stamp.push_str("+00:00");
-            tail = zone.to_string();
-        } else if tail.starts_with('+') || tail.starts_with('-') {
-            let sign = if tail.starts_with('+') { '+' } else { '-' };
-            let zone = &tail[1..];
-            if zone.len() >= 5 && zone.as_bytes().get(2) == Some(&b':') {
-                stamp.push(sign);
-                stamp.push_str(&zone[..5]);
-                tail = zone[5..].to_string();
-            } else if zone.len() >= 4 {
-                stamp.push(sign);
-                stamp.push_str(&zone[..2]);
-                stamp.push(':');
-                stamp.push_str(&zone[2..4]);
-                tail = zone[4..].to_string();
-            }
-        }
-        ts = parse_ts_ms(&stamp);
-        let tail = tail.trim_start();
-        let mut parts = tail.splitn(2, char::is_whitespace);
-        if let Some(word) = parts.next() {
-            if normalize_level(word) != "unknown" {
-                level = normalize_level(word);
-                message = parts.next().unwrap_or("").trim_start().to_string();
-            } else {
-                message = tail.to_string();
-            }
-        }
-    }
-    let mut parsed_request_id = None;
-    if let Some(object) = message
-        .trim()
-        .strip_prefix('{')
-        .and_then(|text| serde_json::from_str::<Value>(&format!("{{{text}")).ok())
-        .as_ref()
-        .and_then(Value::as_object)
-    {
-        parsed_request_id = request_id(
-            object
-                .get("event")
-                .and_then(Value::as_object)
-                .and_then(|event| event.get("request_id"))
-                .or_else(|| object.get("request_id")),
-        );
-    }
-    if parsed_request_id.is_none() {
-        parsed_request_id = find_request_id(&message);
-    }
-    ParsedLogLine {
-        ts,
-        level,
-        message: redact(&message),
-        request_id: parsed_request_id,
-    }
+struct LogPrefix {
+    tag: Option<String>,
+    ts: String,
+    level: &'static str,
+    message: String,
 }
 
-fn find_request_id(text: &str) -> Option<String> {
-    for token in text.split(|ch: char| !ch.is_ascii_hexdigit()) {
-        if token.len() == 32 && token.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) {
-            return Some(token.to_string());
+fn word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
+
+fn scan_fixed_digits(
+    bytes: &[u8],
+    mut index: usize,
+    min: usize,
+    max: usize,
+) -> Option<usize> {
+    let start = index;
+    while index < bytes.len()
+        && index - start < max
+        && bytes[index].is_ascii_digit()
+    {
+        index += 1;
+    }
+    if index - start < min {
+        return None;
+    }
+    Some(index)
+}
+
+fn scan_log_timestamp(text: &str, start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut index = start;
+    index = scan_fixed_digits(bytes, index, 4, 4)?;
+    if !matches!(bytes.get(index), Some(b'-') | Some(b'/')) {
+        return None;
+    }
+    index += 1;
+    index = scan_fixed_digits(bytes, index, 2, 2)?;
+    if !matches!(bytes.get(index), Some(b'-') | Some(b'/')) {
+        return None;
+    }
+    index += 1;
+    index = scan_fixed_digits(bytes, index, 2, 2)?;
+    let after_day = index;
+    let weekday_start = skip_ascii_whitespace(bytes, index);
+    if text[weekday_start..].starts_with('周') {
+        let mut chars = text[weekday_start + '周'.len_utf8()..].chars();
+        if let Some(weekday) = chars.next() {
+            if "一二三四五六日".contains(weekday) {
+                index = weekday_start + '周'.len_utf8() + weekday.len_utf8();
+            }
+        }
+    }
+    if index == after_day {
+        // No weekday marker: the separator is read from the original position.
+    }
+    if !matches!(bytes.get(index), Some(b' ') | Some(b'T')) {
+        return None;
+    }
+    index += 1;
+    index = scan_fixed_digits(bytes, index, 1, 2)?;
+    if bytes.get(index) != Some(&b':') {
+        return None;
+    }
+    index += 1;
+    index = scan_fixed_digits(bytes, index, 2, 2)?;
+    if bytes.get(index) != Some(&b':') {
+        return None;
+    }
+    index += 1;
+    index = scan_fixed_digits(bytes, index, 2, 2)?;
+    if matches!(bytes.get(index), Some(b'.') | Some(b',')) {
+        index += 1;
+        let fraction_start = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        if index == fraction_start {
+            return None;
+        }
+    }
+    let zone_whitespace_start = index;
+    let zone_start = skip_ascii_whitespace(bytes, index);
+    if bytes.get(zone_start) == Some(&b'Z') {
+        index = zone_start + 1;
+    } else if matches!(bytes.get(zone_start), Some(b'+') | Some(b'-')) {
+        let mut zone_index = zone_start + 1;
+        zone_index = scan_fixed_digits(bytes, zone_index, 2, 2)?;
+        if bytes.get(zone_index) == Some(&b':') {
+            zone_index += 1;
+        }
+        zone_index = scan_fixed_digits(bytes, zone_index, 2, 2)?;
+        index = zone_index;
+    } else {
+        index = zone_whitespace_start;
+    }
+    Some(index)
+}
+
+fn match_log_level(text: &str) -> Option<(&'static str, usize)> {
+    const LEVELS: [(&str, &str); 11] = [
+        ("TRACE", "debug"),
+        ("DEBUG", "debug"),
+        ("INFO", "info"),
+        ("NOTICE", "info"),
+        ("WARNING", "warn"),
+        ("WARN", "warn"),
+        ("ERROR", "error"),
+        ("ERR", "error"),
+        ("CRITICAL", "error"),
+        ("CRIT", "error"),
+        ("FATAL", "error"),
+    ];
+    let bytes = text.as_bytes();
+    for (raw, canonical) in LEVELS {
+        if bytes.len() < raw.len()
+            || !bytes[..raw.len()].eq_ignore_ascii_case(raw.as_bytes())
+        {
+            continue;
+        }
+        if bytes
+            .get(raw.len())
+            .map_or(true, |byte| !word_byte(*byte))
+        {
+            return Some((canonical, raw.len()));
         }
     }
     None
 }
 
-fn redact(text: &str) -> String {
-    let mut output = text.to_string();
-    for key in [
-        "token",
-        "secret",
-        "api_key",
-        "apikey",
-        "password",
-        "passwd",
-        "pwd",
-        "credential",
-        "authorization",
-    ] {
-        let mut search = output.to_ascii_lowercase();
-        let mut position = 0;
-        while let Some(index) = search[position..].find(key) {
-            let start = position + index;
-            let after_key = start + key.len();
-            let rest = &output[after_key..];
-            let trimmed = rest.trim_start();
-            if !(trimmed.starts_with('=') || trimmed.starts_with(':')) {
-                position = after_key;
-                continue;
-            };
-            let mut value_start = after_key + (rest.len() - trimmed.len()) + 1;
-            while output[value_start..].starts_with(' ') {
-                value_start += 1;
+fn parse_log_prefix(text: &str) -> Option<LogPrefix> {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    let mut tag = None;
+    if bytes.first() == Some(&b'[') {
+        if let Some(close) = text[1..].find(']').map(|offset| offset + 1) {
+            let content = &text[1..close];
+            if !content.is_empty()
+                && content.chars().count() <= 24
+                && !content.chars().any(char::is_whitespace)
+            {
+                let after = close + 1;
+                if text[after..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_whitespace)
+                {
+                    tag = Some(format!("[{content}]"));
+                    index = skip_ascii_whitespace(bytes, after);
+                }
             }
-            let value_end = output[value_start..]
-                .find(|ch: char| ch.is_whitespace() || ch == ',' || ch == ';' || ch == '"')
-                .map_or(output.len(), |index| value_start + index);
-            output.replace_range(value_start..value_end, "<redacted>");
-            search = output.to_ascii_lowercase();
-            position = value_start + "<redacted>".len();
         }
     }
+    if bytes.get(index) == Some(&b'[') {
+        index += 1;
+    }
+    let timestamp_start = index;
+    let timestamp_end = scan_log_timestamp(text, index)?;
+    index = timestamp_end;
+    if bytes.get(index) == Some(&b']') {
+        index += 1;
+    }
+    let after_timestamp = index;
+    index = skip_ascii_whitespace(bytes, index);
+    if index == after_timestamp {
+        return None;
+    }
+    let mut level = "unknown";
+    let mut message = text[index..].to_string();
+    if let Some((canonical, consumed)) = match_log_level(&text[index..]) {
+        level = canonical;
+        index += consumed;
+        if matches!(bytes.get(index), Some(b',') | Some(b':')) {
+            index += 1;
+        }
+        index = skip_ascii_whitespace(bytes, index);
+        message = text[index..].to_string();
+    }
+    Some(LogPrefix {
+        tag,
+        ts: text[timestamp_start..timestamp_end].to_string(),
+        level,
+        message,
+    })
+}
+
+fn python_value_text(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_string(),
+        Value::Bool(value) => {
+            if *value {
+                "True".to_string()
+            } else {
+                "False".to_string()
+            }
+        }
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => text.clone(),
+        Value::Array(_) | Value::Object(_) => value.to_string(),
+    }
+}
+
+fn parse_json_log_line(text: &str) -> Option<(String, String, Option<String>)> {
+    let stripped = text.trim();
+    if !(stripped.starts_with('{') && stripped.ends_with('}')) {
+        return None;
+    }
+    let body = serde_json::from_str::<Value>(stripped).ok()?;
+    let body = body.as_object()?;
+    let mut ts = None;
+    for key in ["time", "ts", "at_utc", "at"] {
+        match body.get(key) {
+            Some(Value::String(value)) if !value.trim().is_empty() => {
+                ts = Some(value.trim().to_string());
+                break;
+            }
+            Some(Value::Number(number)) => {
+                if let Some(value) = number.as_i64() {
+                    ts = Some(value.to_string());
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let ts = ts?;
+    let mut bits = Vec::new();
+    for (key, label) in [
+        ("model", "model"),
+        ("status", "status"),
+        ("input_tokens", "in"),
+        ("output_tokens", "out"),
+        ("cached_input_tokens", "cached"),
+        ("reasoning_tokens", "reasoning"),
+        ("duration_ms", "duration_ms"),
+        ("credits", "credits"),
+    ] {
+        let Some(value) = body.get(key) else {
+            continue;
+        };
+        if value.is_null() || value.as_str() == Some("") {
+            continue;
+        }
+        bits.push(format!("{label}={}", python_value_text(value)));
+    }
+    let message = if bits.is_empty() {
+        stripped.to_string()
+    } else {
+        bits.join(" ")
+    };
+    let request_id = body.get("request_id").map(|value| {
+        let mut text = redact(&python_value_text(value));
+        text.truncate(
+            text.char_indices()
+                .nth(64)
+                .map_or(text.len(), |(index, _)| index),
+        );
+        text
+    });
+    Some((ts, message, request_id))
+}
+
+fn find_request_assignment(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut search = 0usize;
+    let mut found = None;
+    while let Some(index) = text[search..].find("request=").map(|offset| search + offset) {
+        if index == 0 || !word_byte(bytes[index - 1]) {
+            let value_start = index + b"request=".len();
+            let value_end = text[value_start..]
+                .find(char::is_whitespace)
+                .map_or(text.len(), |offset| value_start + offset);
+            if value_end > value_start {
+                found = Some(
+                    redact(&text[value_start..value_end])
+                        .chars()
+                        .take(64)
+                        .collect::<String>(),
+                );
+            }
+        }
+        search = index + b"request=".len();
+    }
+    found
+}
+
+fn parse_log_line(line: &str) -> ParsedLogLine {
+    let text = line.trim();
+    if let Some(prefix) = parse_log_prefix(text) {
+        let mut message = prefix.message;
+        if let Some(tag) = prefix.tag {
+            message = format!("{tag} {message}");
+        }
+        let safe = redact(&message);
+        let request_id = find_request_assignment(&safe);
+        return ParsedLogLine {
+            ts: crate::local_logs::normalize_ts(&prefix.ts),
+            level: prefix.level,
+            message: safe,
+            request_id,
+            start: 0,
+        };
+    }
+    if let Some((ts, message, request_id)) = parse_json_log_line(text) {
+        return ParsedLogLine {
+            ts: crate::local_logs::normalize_ts(&ts),
+            level: "unknown",
+            message: redact(&message),
+            request_id,
+            start: 0,
+        };
+    }
+    ParsedLogLine {
+        ts: None,
+        level: "unknown",
+        message: redact(text),
+        request_id: None,
+        start: 0,
+    }
+}
+
+fn redact_quoted_json_keys(output: &mut String, keys: &[&str]) {
+    let mut search = 0usize;
+    loop {
+        let lower = output.as_bytes().to_ascii_lowercase();
+        let mut found = None;
+        for key in keys {
+            let quoted = format!("\"{key}\"");
+            let needle = quoted.as_bytes();
+            if let Some(index) = lower[search..]
+                .windows(needle.len())
+                .position(|window| window == needle)
+            {
+                found = Some((search + index, needle.len()));
+                break;
+            }
+        }
+        let Some((index, key_len)) = found else {
+            break;
+        };
+        let mut cursor = index + key_len;
+        while cursor < lower.len() && lower[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if lower.get(cursor) != Some(&b':') {
+            search = cursor;
+            continue;
+        }
+        cursor += 1;
+        while cursor < lower.len() && lower[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if lower.get(cursor) != Some(&b'"') {
+            search = cursor;
+            continue;
+        }
+        cursor += 1;
+        let Some(end_offset) = output[cursor..].find('"') else {
+            break;
+        };
+        let value_end = cursor + end_offset;
+        if output.is_char_boundary(cursor) && output.is_char_boundary(value_end) {
+            output.replace_range(cursor..value_end, "<redacted>");
+        }
+        search = cursor + "<redacted>".len();
+    }
+}
+
+fn redact(text: &str) -> String {
+    // Reuse the full Python `_SECRET_RE` port in `local_logs`, then cover the
+    // quoted JSON carriers that port does not list (sign/signature/code).
+    let mut output = crate::local_logs::redact(text);
+    redact_quoted_json_keys(&mut output, &["sign", "signature", "code"]);
     output
 }
 
-fn read_log_tail(path: &Path) -> Option<(String, u64, bool)> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let size = metadata.len();
-    let truncated = size > UM_LOG_MAX_TAIL_BYTES;
-    use std::io::{Read as _, Seek as _, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
-    if truncated {
-        file.seek(SeekFrom::End(-(UM_LOG_MAX_TAIL_BYTES as i64))).ok()?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogReadError {
+    Missing,
+    Denied,
+    Io,
+}
+
+#[derive(Debug, Default)]
+struct LogTail {
+    rows: Vec<ParsedLogLine>,
+    scanned_bytes: u64,
+    window_start_offset: u64,
+    truncated: bool,
+    next_cursor: Option<String>,
+    reset_hint: bool,
+}
+
+struct ReaderCursor {
+    source: String,
+    category: String,
+    offset: u64,
+    key: Option<String>,
+}
+
+fn log_read_error(error: &std::io::Error) -> LogReadError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => LogReadError::Missing,
+        std::io::ErrorKind::PermissionDenied => LogReadError::Denied,
+        _ => LogReadError::Io,
     }
+}
+
+fn log_read_error_status(error: LogReadError) -> (&'static str, String) {
+    match error {
+        LogReadError::Missing => ("missing", "file_missing".to_string()),
+        LogReadError::Denied => ("denied", "permission_denied".to_string()),
+        LogReadError::Io => ("error", "io_error:OSError".to_string()),
+    }
+}
+
+fn empty_log_coverage(
+    status: &str,
+    error: Option<&str>,
+    source: &str,
+    note: Option<&str>,
+) -> Value {
+    json!({
+        "status": status,
+        "error": error,
+        "source": source,
+        "rows_read": 0,
+        "rows_returned": 0,
+        "undated_rows": 0,
+        "truncated": false,
+        "bounded": true,
+        "note": note.unwrap_or("读取失败/未配置不是合法空列表"),
+    })
+}
+
+fn empty_logs_payload(
+    status: &str,
+    error: Option<&str>,
+    source: &str,
+    label: &str,
+    note: Option<&str>,
+) -> Value {
+    json!({
+        "status": status,
+        "error": error,
+        "lines": [],
+        "sources": UM_LOG_CATEGORIES,
+        "scope": format!(
+            "chat2api 运行日志有界尾读（最多 256 KiB / 400 行）· 北京时间{label} · 不是完整历史"
+        ),
+        "earlier": null,
+        "coverage": empty_log_coverage(status, error, source, note),
+    })
+}
+
+fn log_file_identity(metadata: &std::fs::Metadata) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        format!(
+            "{}:{}:{}",
+            metadata.ino(),
+            metadata.dev(),
+            metadata.len()
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let created = metadata
+            .created()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos() as i64)
+            .unwrap_or(0);
+        format!("0:{created}:{}", metadata.len())
+    }
+}
+
+fn cursor_meta(key: Option<&str>) -> Option<(i64, i64, i64)> {
+    let key = key?;
+    let mut parts: Vec<&str> = key.rsplitn(3, ':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    parts.reverse();
+    Some((
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+    ))
+}
+
+fn decode_reader_cursor(cursor: &str) -> Option<ReaderCursor> {
+    let raw = base64_decode(cursor)?;
+    let value: Value = serde_json::from_slice(&raw).ok()?;
+    let object = value.as_object()?;
+    let source = object.get("src")?.as_str()?.to_string();
+    let category = object.get("cat")?.as_str()?.to_string();
+    let offset = object.get("off")?.as_i64()?;
+    if offset < 0 {
+        return None;
+    }
+    let key = match object.get("key") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        _ => return None,
+    };
+    Some(ReaderCursor {
+        source,
+        category,
+        offset: offset as u64,
+        key,
+    })
+}
+
+fn encode_reader_cursor(
+    source: &str,
+    category: &str,
+    offset: u64,
+    key: Option<&str>,
+) -> String {
+    let payload = json!({
+        "src": source,
+        "cat": category,
+        "off": offset,
+        "key": key,
+    });
+    base64_encode(python_json(&payload).as_bytes())
+}
+
+fn reader_cursor_stale(
+    cursor: &ReaderCursor,
+    category: &str,
+    size: u64,
+    file_key: &str,
+) -> bool {
+    if cursor.source != "chat2api" || cursor.category != category || cursor.offset > size {
+        return true;
+    }
+    if cursor.key.as_deref() != Some(file_key) {
+        let minted = cursor_meta(cursor.key.as_deref());
+        let current = cursor_meta(Some(file_key));
+        return match (minted, current) {
+            (Some(minted), Some(current)) => {
+                minted.0 != current.0
+                    || minted.1 != current.1
+                    || current.2 < minted.2
+            }
+            _ => true,
+        };
+    }
+    false
+}
+
+fn read_log_tail(
+    path: &Path,
+    category: &str,
+    reader_cursor: Option<&str>,
+) -> Result<LogTail, LogReadError> {
+    let metadata = std::fs::metadata(path).map_err(|error| log_read_error(&error))?;
+    let size = metadata.len();
+    let file_key = log_file_identity(&metadata);
+    let (off, older_mode) = match reader_cursor {
+        None => (size, false),
+        Some(cursor) => match decode_reader_cursor(cursor) {
+            Some(decoded) if !reader_cursor_stale(&decoded, category, size, &file_key) => {
+                (decoded.offset, true)
+            }
+            _ => {
+                return Ok(LogTail {
+                    reset_hint: true,
+                    ..LogTail::default()
+                })
+            }
+        },
+    };
+    let window_start = off.saturating_sub(UM_LOG_MAX_TAIL_BYTES);
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let mut file = std::fs::File::open(path).map_err(|error| log_read_error(&error))?;
+    file.seek(SeekFrom::Start(window_start))
+        .map_err(|error| log_read_error(&error))?;
     let mut data = Vec::new();
-    file.read_to_end(&mut data).ok()?;
-    Some((String::from_utf8_lossy(&data).into_owned(), size, truncated))
+    (&mut file)
+        .take(off - window_start)
+        .read_to_end(&mut data)
+        .map_err(|error| log_read_error(&error))?;
+    let scanned_bytes = data.len() as u64;
+    let mut window_start_offset = window_start;
+    if window_start_offset > 0 {
+        let mut previous = [0u8; 1];
+        file.seek(SeekFrom::Start(window_start_offset - 1))
+            .map_err(|error| log_read_error(&error))?;
+        file.read_exact(&mut previous)
+            .map_err(|error| log_read_error(&error))?;
+        if previous[0] != b'\n' {
+            let Some(newline) = data.iter().position(|byte| *byte == b'\n') else {
+                return Ok(LogTail {
+                    scanned_bytes,
+                    window_start_offset,
+                    truncated: true,
+                    ..LogTail::default()
+                });
+            };
+            window_start_offset += newline as u64 + 1;
+            data.drain(..=newline);
+        }
+    }
+    let mut parts: Vec<&[u8]> = data.split(|byte| *byte == b'\n').collect();
+    let trailing = parts.pop().unwrap_or(&[]);
+    let trailing_live = !trailing.is_empty() && (!older_mode || off >= size);
+    let mut rows = Vec::new();
+    let mut position = window_start_offset;
+    for part in parts {
+        let text = String::from_utf8_lossy(&part[..part.len().min(8192)]).to_string();
+        let mut parsed = parse_log_line(&text);
+        parsed.start = position;
+        rows.push(parsed);
+        position += part.len() as u64 + 1;
+    }
+    let mut truncated = trailing_live;
+    let mut trimmed = false;
+    if rows.len() > UM_LOG_MAX_ROWS {
+        let dropped = rows.len() - UM_LOG_MAX_ROWS;
+        rows.drain(..dropped);
+        truncated = true;
+        trimmed = true;
+    }
+    let anchor = if trimmed {
+        rows.first().map_or(window_start_offset, |row| row.start)
+    } else {
+        window_start_offset
+    };
+    let next_cursor = if anchor > 0 {
+        Some(encode_reader_cursor(
+            "chat2api",
+            category,
+            anchor,
+            Some(&file_key),
+        ))
+    } else {
+        None
+    };
+    Ok(LogTail {
+        rows,
+        scanned_bytes,
+        window_start_offset,
+        truncated,
+        next_cursor,
+        reset_hint: false,
+    })
 }
 
 fn um_log_lines(
     service_log: &Path,
     watch_dir: Option<&Path>,
+    window: &str,
     source: &str,
     now_ms: f64,
     levels: &[String],
@@ -2033,7 +2609,7 @@ fn um_log_lines(
             Vec::new(),
             source.to_string(),
             None,
-            json!({}),
+            empty_log_coverage("error", Some("unknown_log_source"), source, None),
         );
     }
     if levels.iter().any(|level| !UM_LOG_LEVELS.contains(&level.as_str())) {
@@ -2043,10 +2619,26 @@ fn um_log_lines(
             Vec::new(),
             source.to_string(),
             None,
-            json!({}),
+            empty_log_coverage("error", Some("invalid_level"), source, None),
         );
     }
     let limit = limit.clamp(1, UM_LOG_MAX_PAGE);
+    let cursor = match cursor {
+        None => None,
+        Some(cursor) => match decode_um_log_cursor(cursor) {
+            Some(decoded) => Some(decoded),
+            None => {
+                return (
+                    "error".to_string(),
+                    Some("invalid_cursor".to_string()),
+                    Vec::new(),
+                    source.to_string(),
+                    None,
+                    empty_log_coverage("error", Some("invalid_cursor"), source, None),
+                )
+            }
+        },
+    };
     let Some(path) = log_category_path(source, service_log, watch_dir) else {
         return (
             "unconfigured".to_string(),
@@ -2054,72 +2646,42 @@ fn um_log_lines(
             Vec::new(),
             source.to_string(),
             None,
-            json!({}),
+            empty_log_coverage("unconfigured", Some("not_configured"), source, None),
         );
     };
-    let Some((text, _size, truncated)) = read_log_tail(&path) else {
-        return (
-            "missing".to_string(),
-            Some("file_missing".to_string()),
-            Vec::new(),
-            source.to_string(),
-            None,
-            json!({}),
-        );
-    };
-    let cursor_at_key = cursor.and_then(|cursor| {
-        let raw = base64_decode(cursor)?;
-        let text = String::from_utf8(raw).ok()?;
-        let value: Value = serde_json::from_str(&text).ok()?;
-        let object = value.as_object()?;
-        if object.get("v").and_then(Value::as_i64) != Some(1) {
-            return None;
+    let reader_cursor = cursor.as_ref().and_then(|cursor| cursor.reader.as_deref());
+    let tail = match read_log_tail(&path, source, reader_cursor) {
+        Ok(tail) => tail,
+        Err(error) => {
+            let (status, error_code) = log_read_error_status(error);
+            let coverage = empty_log_coverage(&status, Some(&error_code), source, None);
+            return (
+                status.to_string(),
+                Some(error_code),
+                Vec::new(),
+                source.to_string(),
+                None,
+                coverage,
+            );
         }
-        let at = object.get("at").and_then(Value::as_i64)?;
-        let key = object.get("key").and_then(Value::as_str)?.to_string();
-        Some((at, key))
-    });
-    let (start, end, _label) = window_bounds("today", now_ms)
+    };
+    let (start, end, _label) = window_bounds(window, now_ms)
         .unwrap_or((now_ms - 86_400_000.0, now_ms + 1.0, "今天".to_string()));
     let mut rows = Vec::new();
     let mut undated = 0;
-    let mut occurrences: HashMap<String, usize> = HashMap::new();
-    for line in text.lines() {
-        let parsed = parse_log_line(line);
+    for parsed in &tail.rows {
         let Some(at) = parsed.ts else {
             undated += 1;
             continue;
         };
-        let at_ms = at.round() as i64;
+        let at_ms = (at * 1000.0) as i64;
         if !(start <= at_ms as f64 && (at_ms as f64) < end) {
             continue;
         }
         if !levels.is_empty() && !levels.iter().any(|level| level == parsed.level) {
             continue;
         }
-        let digest = {
-            let mut hasher = Sha256::new();
-            hasher.update(
-                python_json(&json!({
-                    "source": "chat2api", "category": source, "ts": parsed.ts,
-                    "level": parsed.level, "message": parsed.message,
-                    "request_id": parsed.request_id,
-                }))
-                .as_bytes(),
-            );
-            format!("{:x}", hasher.finalize())[..16].to_string()
-        };
-        let occurrence = *occurrences.get(&digest).unwrap_or(&0);
-        occurrences.insert(digest.clone(), occurrence + 1);
-        rows.push(json!({
-            "key": format!("chat2api:{source}:{digest}:{occurrence}"),
-            "at": at_ms,
-            "level": parsed.level,
-            "source": if source == "service" { "chat2api".to_string() }
-                      else { format!("chat2api/{source}") },
-            "text": parsed.message.chars().take(4096).collect::<String>(),
-            "requestId": parsed.request_id,
-        }));
+        rows.push(um_log_row(source, parsed, rows.len()));
     }
     rows.sort_by(|left, right| {
         let left_at = left.get("at").and_then(Value::as_i64).unwrap_or(0);
@@ -2129,19 +2691,32 @@ fn um_log_lines(
                 .cmp(right.get("key").and_then(Value::as_str).unwrap_or(""))
         })
     });
-    if let Some((cursor_at, cursor_key)) = cursor_at_key {
-        rows.retain(|row| {
-            let at = row.get("at").and_then(Value::as_i64).unwrap_or(0);
-            let key = row.get("key").and_then(Value::as_str).unwrap_or("");
-            (-at, key) > (-cursor_at, cursor_key.as_str())
-        });
+    if let Some(cursor) = &cursor {
+        if cursor.mode == "same" {
+            let cursor_at = cursor.at.unwrap_or(0);
+            let cursor_key = cursor.key.as_deref().unwrap_or("");
+            rows.retain(|row| {
+                let at = row.get("at").and_then(Value::as_i64).unwrap_or(0);
+                let key = row.get("key").and_then(Value::as_str).unwrap_or("");
+                (-at, key) > (-cursor_at, cursor_key)
+            });
+        }
     }
-    let rows_read = rows.len();
+    let rows_read = tail.rows.len();
     let earlier = if rows.len() > limit as usize {
         let last = &rows[limit as usize - 1];
-        Some(encode_cursor(
-            last.get("at").and_then(Value::as_i64).unwrap_or(0),
-            last.get("key").and_then(Value::as_str).unwrap_or(""),
+        Some(encode_um_log_cursor(
+            "same",
+            Some(last.get("at").and_then(Value::as_i64).unwrap_or(0)),
+            last.get("key").and_then(Value::as_str),
+            reader_cursor,
+        ))
+    } else if let Some(next_cursor) = tail.next_cursor.as_deref() {
+        Some(encode_um_log_cursor(
+            "older",
+            None,
+            None,
+            Some(next_cursor),
         ))
     } else {
         None
@@ -2151,13 +2726,13 @@ fn um_log_lines(
         "status": "ok",
         "error": null,
         "source": source,
-        "scanned_bytes": _size,
-        "window_start_offset": 0,
+        "scanned_bytes": tail.scanned_bytes,
+        "window_start_offset": tail.window_start_offset,
         "rows_read": rows_read,
         "rows_returned": rows.len(),
         "undated_rows": undated,
-        "truncated": truncated,
-        "reset_hint": false,
+        "truncated": tail.truncated,
+        "reset_hint": tail.reset_hint,
         "bounded": true,
         "note": "有界尾读/窗口合并：不是完整历史",
     });
@@ -2175,37 +2750,61 @@ pub fn um_logs(
     now_ms: f64,
 ) -> Value {
     let limit = limit.clamp(1, UM_LOG_MAX_PAGE);
-    let (start, end, label) = match window_bounds(window, now_ms) {
+    if !UM_LOG_CATEGORIES.contains(&source) {
+        return empty_logs_payload(
+            "error",
+            Some("unknown_log_source"),
+            source,
+            "今天",
+            None,
+        );
+    }
+    if levels.iter().any(|level| !UM_LOG_LEVELS.contains(&level.as_str())) {
+        return empty_logs_payload(
+            "error",
+            Some("invalid_level"),
+            source,
+            "今天",
+            None,
+        );
+    }
+    let (_start, _end, label) = match window_bounds(window, now_ms) {
         Ok(bounds) => bounds,
         Err(error) => {
-            return json!({
-                "status": "error", "error": error.0.clone(), "lines": [],
-                "sources": UM_LOG_CATEGORIES,
-                "scope": "chat2api 运行日志有界尾读 · 北京时间 · 不是完整历史",
-                "earlier": null,
-                "coverage": {"status": "error", "error": error.0,
-                              "source": source, "rows_read": 0, "rows_returned": 0,
-                              "undated_rows": 0, "truncated": false,
-                              "bounded": true, "note": "读取失败/未配置不是合法空列表"},
-            });
+            return empty_logs_payload(
+                "error",
+                Some(&error.0),
+                source,
+                "今天",
+                None,
+            );
         }
     };
-    let _ = (start, end, label);
     let (status, error, rows, _source, earlier, coverage) = um_log_lines(
         service_log,
         watch_dir,
+        window,
         source,
         now_ms,
         levels,
         cursor,
         limit,
     );
+    if status != "ok" {
+        return empty_logs_payload(
+            &status,
+            error.as_deref(),
+            source,
+            "今天",
+            Some("读取失败/未配置/缺失/拒绝不是合法空列表"),
+        );
+    }
     json!({
         "status": status,
         "error": error,
         "lines": rows,
         "sources": UM_LOG_CATEGORIES,
-        "scope": format!("chat2api {source} 日志有界尾读（最多 256 KiB / 400 行）· 北京时间今天 · 不是完整历史"),
+        "scope": format!("chat2api {source} 日志有界尾读（最多 256 KiB / 400 行）· 北京时间{label} · 不是完整历史"),
         "earlier": earlier,
         "coverage": coverage,
     })
@@ -2237,34 +2836,27 @@ pub fn um_request_logs(
             );
             continue;
         };
-        let Some((text, _size, _truncated)) = read_log_tail(&path) else {
-            categories.insert(
-                category.to_string(),
-                json!({"status": "missing", "error": "file_missing", "rows": null}),
-            );
-            continue;
+        let tail = match read_log_tail(&path, category, None) {
+            Ok(tail) => tail,
+            Err(error) => {
+                let (status, error_code) = log_read_error_status(error);
+                categories.insert(
+                    category.to_string(),
+                    json!({"status": status, "error": error_code, "rows": null}),
+                );
+                continue;
+            }
         };
-        let mut matched = 0usize;
-        for line in text.lines() {
-            let parsed = parse_log_line(line);
-            if parsed.request_id.as_deref() != Some(request_id) {
+        for parsed in &tail.rows {
+            if valid_request_id(parsed.request_id.as_deref()).as_deref() != Some(request_id) {
                 continue;
             }
             rows_read += 1;
-            matched += 1;
-            lines.push(json!({
-                "key": format!("chat2api:{category}:{}:{matched}", parsed.ts.map_or(0, |ts| ts as i64)),
-                "at": parsed.ts.map(|ts| ts.round() as i64),
-                "level": parsed.level,
-                "source": if category == "service" { "chat2api".to_string() }
-                          else { format!("chat2api/{category}") },
-                "text": parsed.message.chars().take(4096).collect::<String>(),
-                "requestId": parsed.request_id,
-            }));
+            lines.push(um_log_row(category, parsed, lines.len()));
         }
         categories.insert(
             category.to_string(),
-            json!({"status": "ok", "error": null, "rows": matched}),
+            json!({"status": "ok", "error": null, "rows": tail.rows.len()}),
         );
     }
     lines.sort_by(|left, right| {
