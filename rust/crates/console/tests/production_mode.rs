@@ -15,6 +15,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
+use um_console::config::{BindMode, ConsoleConfig};
 
 use support::*;
 
@@ -108,6 +109,29 @@ fn production_mode_binds_8002_on_loopback() {
     assert_eq!(health.status, 200);
     assert_eq!(health.json()["status"], json!("ok"));
     assert_eq!(health.json()["port"], json!(8002));
+}
+
+#[test]
+fn candidate_remains_the_default_and_rejects_8002() {
+    assert_eq!(ConsoleConfig::default().bind_mode(), BindMode::Candidate);
+
+    let temp = temp();
+    let mut config = base_config(&temp);
+    config.bind_port = 8002;
+    let error = config
+        .validate_bind_policy()
+        .expect_err("candidate must reject 8002");
+    assert!(error.to_string().contains("8002"), "{error}");
+
+    let mut command = console_command(&temp);
+    command.arg("--bind-port").arg("8002");
+    let output = run_rejected(command);
+    assert!(
+        !output.status.success(),
+        "the default candidate must reject 8002"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("8002"), "stderr: {stderr}");
 }
 
 #[test]
