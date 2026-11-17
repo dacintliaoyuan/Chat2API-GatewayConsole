@@ -34,7 +34,7 @@ pub use display_grant::{DisplayGrantError, DisplayGrants, DisplaySession};
 pub use error::ConsoleError;
 pub use local_summary::{build_local_summary, LocalSummaryCache, LocalSummaryPaths};
 pub use runtime::{
-    LinuxPidFileConfig, LinuxPidFileFacts, ProcessProbe, RuntimeError, RuntimeFacts,
+    LinuxPidFileConfig, LinuxPidFileFacts, LocalTcpFacts, ProcessProbe, RuntimeError, RuntimeFacts,
     RuntimeSnapshot,
 };
 pub use server::{AppState, ConsoleServer, ServerError, ServerHandle};

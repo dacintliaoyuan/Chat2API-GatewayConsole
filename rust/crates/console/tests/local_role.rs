@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use um_console::config::{ConsoleConfig, Role};
+use um_console::RuntimeFacts;
 
 use support::*;
 
@@ -207,6 +208,28 @@ fn local_role_defaults_match_pythons_paths() {
     assert_eq!(config.usage_log, std::path::PathBuf::from("data/usage-chat2api.jsonl"));
     assert_eq!(config.dsh_snapshot, std::path::PathBuf::from("data/dsh-ledger-20260902.json"));
     assert_eq!(config.service_log, std::path::PathBuf::from("chat2api/chat2api.log"));
+}
+
+#[test]
+fn local_runtime_facts_probe_the_chat2api_loopback_port() {
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let port = listener.local_addr().expect("listener addr").port();
+    let facts = um_console::LocalTcpFacts::new(port);
+    let snapshot = facts.snapshot().expect("running snapshot");
+    assert_eq!(snapshot.state, "running");
+    assert!(snapshot.healthy);
+    assert_eq!(snapshot.display_state(), "Running");
+
+    drop(listener);
+    let snapshot = um_console::LocalTcpFacts::new(port)
+        .snapshot()
+        .expect("closed snapshot");
+    // A just-closed loopback port answers refused on Linux and a connect
+    // timeout on Windows; both are non-running and the timeout stays unknown.
+    assert!(matches!(snapshot.state.as_str(), "stopped" | "unknown"));
+    assert!(!snapshot.healthy);
 }
 
 #[test]

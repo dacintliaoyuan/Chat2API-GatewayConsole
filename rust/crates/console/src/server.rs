@@ -36,7 +36,7 @@ use crate::local_um::{self, UmQueryError};
 use crate::metering::{self, UsageFilters};
 use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActionExecutor};
 use crate::operations::OperationsReader;
-use crate::runtime::{LinuxPidFileFacts, RuntimeFacts, RuntimeSnapshot};
+use crate::runtime::{LinuxPidFileFacts, LocalTcpFacts, RuntimeFacts, RuntimeSnapshot};
 use crate::session::{SessionState, SESSION_COOKIE, SESSION_TTL_SECONDS};
 use crate::share_auth::{control_token_ok, management_write_auth, ManagementAuth};
 use crate::share_read::{control_status, DisplaySeams, ShareReadSeams, ShareReadStore};
@@ -89,7 +89,10 @@ pub struct ServerHandle {
 impl ConsoleServer {
     pub fn start(config: ConsoleConfig) -> Result<ServerHandle, ServerError> {
         config.validate_bind_policy().map_err(ServerError::Config)?;
-        let runtime = Arc::new(LinuxPidFileFacts::from_config(&config));
+        let runtime: Arc<dyn RuntimeFacts> = match config.role {
+            Role::Local => Arc::new(LocalTcpFacts::new(config.gateway_port)),
+            Role::Cloud => Arc::new(LinuxPidFileFacts::from_config(&config)),
+        };
         Self::start_with_runtime(config, runtime)
     }
 
