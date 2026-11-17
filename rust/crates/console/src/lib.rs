@@ -19,6 +19,7 @@ pub mod lock;
 pub mod local_summary;
 pub mod local_um;
 pub mod metering;
+pub mod model_catalog;
 pub mod operation_manager;
 pub mod operations;
 pub mod runtime;
@@ -34,6 +35,7 @@ pub use config::{ConsoleConfig, EntryKind, Role};
 pub use display_grant::{DisplayGrantError, DisplayGrants, DisplaySession};
 pub use error::ConsoleError;
 pub use local_summary::{build_local_summary, LocalSummaryCache, LocalSummaryPaths};
+pub use model_catalog::PythonCatalogExecutor;
 pub use runtime::{
     LinuxPidFileConfig, LinuxPidFileFacts, LocalTcpFacts, ProcessProbe, RuntimeError, RuntimeFacts,
     RuntimeSnapshot,

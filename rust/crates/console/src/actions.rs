@@ -64,8 +64,10 @@ pub fn action_catalogue() -> Value {
 }
 
 /// The local role catalogue: the UM actions only. Share actions are not
-/// assembled locally. The executor is not wired in this ticket, so every action
-/// is listed as disabled with its honest reason instead of claiming capability.
+/// assembled locally. `model.catalog` is enabled: #84 executes it through a
+/// one-shot Python `model_sync` sidecar. The remaining actions are not wired in
+/// this ticket, so they are listed as disabled with their honest reason instead of
+/// claiming capability.
 pub fn action_catalogue_local() -> Value {
     let reason = "本机 Rust 控制台尚未接线该动作执行器（后续票）";
     let actions: Vec<Value> = [
@@ -77,18 +79,26 @@ pub fn action_catalogue_local() -> Value {
         ("account.login", "账号登录/重新授权（UM 编排）"),
         (
             "model.catalog",
-            "UM 模型目录同步（按需调用 model_sync；后续票接线）",
+            "模型目录只读查询（各来源 /v1/models；无探测、无计费、无启停）",
         ),
     ]
     .into_iter()
     .map(|(action, description)| {
+        let enabled = action == "model.catalog";
         json!({
             "action": action,
-            "enabled": false,
-            "disabled_reason": reason,
+            "enabled": enabled,
+            "disabled_reason": if enabled { Value::Null } else { json!(reason) },
             "cancelable": true,
             "description": description,
-            "param_schema": {},
+            "param_schema": if enabled {
+                json!({
+                    "sources": {"type": "str", "max_len": 512},
+                    "fresh": {"type": "bool"},
+                })
+            } else {
+                json!({})
+            },
         })
     })
     .collect();
