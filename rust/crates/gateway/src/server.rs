@@ -11,7 +11,7 @@ use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -35,11 +35,16 @@ use crate::login::{
 use crate::messages::handle_messages;
 use crate::readonly::ProxyState;
 use crate::reauth::{
-    MissingLoginProvider, ReauthLimits, ReauthenticationProvider, ReauthenticationService,
+    AuthWaitBudget, MissingLoginProvider, ReauthLimits, ReauthResult, ReauthenticationProvider,
+    ReauthenticationService,
 };
 use crate::responses::handle_responses;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+/// Python `AUTH_WATCH_INTERVAL_S`: the periodic credential probe interval.
+const AUTH_WATCH_INTERVAL: Duration = Duration::from_secs(300);
+/// Python `AUTH_WATCH_MAX_INTERVAL_S`: the rejected-credential backoff ceiling.
+const AUTH_WATCH_MAX_INTERVAL: Duration = Duration::from_secs(1800);
 
 /// A running gateway.
 pub struct GatewayServer;
@@ -66,6 +71,7 @@ pub struct ServerHandle {
     addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    watcher: Option<JoinHandle<()>>,
     state: Arc<AppState>,
     #[cfg(unix)]
     instance: Option<crate::instance::InstanceChannel>,
@@ -236,10 +242,12 @@ impl GatewayServer {
                 }
             }
         });
+        let watcher = spawn_auth_watch(Arc::clone(&state), Arc::clone(&shutdown));
         Ok(ServerHandle {
             addr,
             shutdown,
             handle: Some(handle),
+            watcher: Some(watcher),
             state,
             #[cfg(unix)]
             instance,
@@ -278,6 +286,9 @@ impl ServerHandle {
             let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(200));
             let _ = handle.join();
         }
+        if let Some(watcher) = self.watcher.take() {
+            let _ = watcher.join();
+        }
     }
 }
 
@@ -285,6 +296,46 @@ impl Drop for ServerHandle {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+/// The Python `run_auth_watch_round` loop: every five minutes probe the
+/// credential and start the ONE login round when it is no longer valid.
+///
+/// A rejected credential backs the interval off to 30 minutes; a valid one resets
+/// it. Without this loop a token that expires server-side leaves `/ready` at 503
+/// until a client request happens to trigger the round.
+fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let mut interval = AUTH_WATCH_INTERVAL;
+        while !shutdown.load(Ordering::SeqCst) {
+            let mut slept = Duration::ZERO;
+            while slept < interval && !shutdown.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_secs(1));
+                slept += Duration::from_secs(1);
+            }
+            if shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            let (ready, _) = state.proxy.readiness_snapshot();
+            if ready {
+                interval = AUTH_WATCH_INTERVAL;
+                continue;
+            }
+            if state.config.browser_disabled {
+                continue;
+            }
+            let budget_limit = state
+                .config
+                .auth_wait_budget
+                .unwrap_or_else(|| state.config.role.default_auth_wait_budget());
+            let mut budget = AuthWaitBudget::new(budget_limit);
+            let deadline = Instant::now() + state.config.login_timeout;
+            match state.reauth.trigger(&mut budget, deadline) {
+                ReauthResult::Restored => interval = AUTH_WATCH_INTERVAL,
+                _ => interval = (interval * 2).min(AUTH_WATCH_MAX_INTERVAL),
+            }
+        }
+    })
 }
 
 #[derive(Debug)]
