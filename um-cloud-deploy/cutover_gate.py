@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Cutover acceptance gate (#72): candidate parity, cloud smoke and rollback.
+"""Cutover acceptance gate (#72/#78): parity, cloud smoke and rollback.
 
 The gate is deliberately split by what it may execute:
 
 * ``candidate-parity`` runs the local Python/Rust parity tests.  It never binds a
   production port or touches a production data path.
+* ``console-parity`` starts the Rust candidate console on an ephemeral loopback
+  port with the same data-directory environment as the Python console and diffs
+  the summary, keys, usage, logs and display read-only surfaces.
 * ``cloud-smoke`` only PRINTS the exact cloud commands and their expected
   results.  It never executes ``curl``, never reads a share Key and never contacts
   a real cloud host; the operator runs the plan and records the evidence.
 * ``rollback-drill`` runs ``rollback-drill.sh`` in its plan mode by default.
   ``--execute`` is required before the drill stops or starts anything.
-
 The evidence document is the record #73 consumes.  It names every command, whether
 it was executed and the observed exit code, so a planned smoke check is never
 reported as passed.
@@ -25,11 +27,16 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA = "um-cutover-gate-v1"
 DEFAULT_BASE_URL = "http://127.0.0.1:8003"
+DEFAULT_CONSOLE_URL = "http://127.0.0.1:8002"
 DEFAULT_SHARE_KEY_ENV = "UM_SHARE_KEY"
 DEFAULT_MODEL = "um-share-model"
 DEFAULT_HEALTH_PORT = "8100"
@@ -39,6 +46,35 @@ DATA_DIRS = [
     "/var/lib/um-share-console",
     "/etc/um-share",
 ]
+# The read-only console surfaces the 8002 cutover compares.  Every entry is a
+# surface name plus the exact GET paths Python and Rust must answer identically.
+CONSOLE_SURFACES = (
+    ("summary", ("/api/summary",)),
+    ("keys", ("/api/console/share-management/keys",)),
+    ("usage", ("/api/console/share-usage",
+               "/api/console/share-usage/requests")),
+    ("logs", ("/api/console/logs",)),
+    # display-session is the data-directory availability face: it reports the
+    # relay state without folding in the external chat2api auth observation.
+    ("display", ("/api/console/share-management/display-session",)),
+)
+# Values that legitimately differ between two reads of the same data: the read
+# time, the cache age and display lease deadlines.  They are normalized away so
+# the diff still catches a real payload change.
+VOLATILE_CONSOLE_KEYS = frozenset({
+    "generatedAt",
+    "generated_epoch",
+    "_generated_epoch",
+    "_cached_age_seconds",
+    "cached_age_seconds",
+    "cache_age_seconds",
+    "checkedAt",
+    "checked_at",
+    "observed_at",
+    "expires_at",
+    "login_window_deadline_epoch",
+    "cached",
+})
 
 
 def _now() -> str:
@@ -121,6 +157,222 @@ def candidate_parity(repo_root: Path, python: str, cargo: str,
         "rust": rust_result,
         "commands": commands,
     }
+
+
+def _normalize_console(value):
+    if isinstance(value, dict):
+        return {
+            key: _normalize_console(item)
+            for key, item in value.items()
+            if key not in VOLATILE_CONSOLE_KEYS
+        }
+    if isinstance(value, list):
+        return [_normalize_console(item) for item in value]
+    return value
+
+
+def _probe_http(url: str, timeout: float) -> int | None:
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def _fetch_console_surface(base_url: str, path: str, timeout: float) -> dict:
+    url = base_url.rstrip("/") + path
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = response.status
+            data = response.read()
+    except urllib.error.HTTPError as error:
+        status = error.code
+        try:
+            data = error.read()
+        finally:
+            error.close()
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        return {"path": path, "status": None,
+                "error": "%s: %s" % (type(error).__name__, error)}
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        body = data.decode("utf-8", "replace")
+    return {"path": path, "status": status, "body": body}
+
+
+def _read_env_file(path: str) -> dict:
+    values = {}
+    text = Path(path).expanduser().read_text(encoding="utf-8")
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        if key:
+            values[key] = value
+    return values
+
+
+def _stop_process(process) -> None:
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    for stream in (process.stdout, process.stderr):
+        if stream is not None:
+            stream.close()
+
+
+def _start_rust_console(repo_root: Path, command: list[str] | None,
+                         env_file: str | None,
+                         timeout: float) -> tuple[str, subprocess.Popen]:
+    if command is None:
+        binary = repo_root / "rust" / "target" / "release" / \
+            "um-console-candidate"
+        if not binary.is_file():
+            raise RuntimeError(
+                "rust candidate console is missing: %s" % binary)
+        command = [str(binary)]
+    command = list(command)
+    if "--mode" not in command:
+        command.extend(["--mode", "candidate"])
+    env = os.environ.copy()
+    if env_file:
+        env.update(_read_env_file(env_file))
+    process = subprocess.Popen(
+        command, cwd=str(repo_root), env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=1)
+    lines: list[str] = []
+    ready = threading.Event()
+
+    def reader() -> None:
+        if process.stdout is None:
+            return
+        for line in process.stdout:
+            lines.append(line)
+            if "um-console listening on http://" in line:
+                ready.set()
+                break
+
+    threading.Thread(target=reader, name="um-console-startup",
+                     daemon=True).start()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for line in list(lines):
+            marker = "um-console listening on http://"
+            if marker in line:
+                address = line.split(marker, 1)[1].strip()
+                if not address.startswith("http"):
+                    address = "http://" + address
+                return address.rstrip("/"), process
+        if process.poll() is not None:
+            stderr = ""
+            if process.stderr is not None:
+                stderr = process.stderr.read()[-2000:]
+            _stop_process(process)
+            raise RuntimeError(
+                "rust candidate console exited before it listened: %s"
+                % (stderr or "exit %s" % process.returncode))
+        time.sleep(0.05)
+    _stop_process(process)
+    raise RuntimeError(
+        "rust candidate console did not print its listen address within %ss"
+        % timeout)
+
+
+def console_parity(python_url: str, rust_url: str | None,
+                   timeout: float = 10.0,
+                   surfaces: tuple[str, ...] | None = None,
+                   rust_console_command: list[str] | None = None,
+                   env_file: str | None = None,
+                   repo_root: Path | None = None) -> dict:
+    repo_root = repo_root or Path(__file__).resolve().parents[1]
+    wanted = set(surfaces or [name for name, _ in CONSOLE_SURFACES])
+    process = None
+    started_error = None
+    if rust_url is None:
+        try:
+            rust_url, process = _start_rust_console(
+                repo_root, rust_console_command, env_file, timeout)
+        except (OSError, RuntimeError, ValueError) as error:
+            started_error = "%s: %s" % (type(error).__name__, error)
+    document = {
+        "status": "failed",
+        "executed": True,
+        "python_url": python_url,
+        "rust_url": rust_url,
+        "timeout_seconds": timeout,
+        "surfaces": [],
+        "differences": [],
+    }
+    try:
+        if started_error is not None:
+            document["error"] = started_error
+            document["differences"].append({
+                "surface": "candidate",
+                "detail": started_error,
+            })
+            return document
+        for name, paths in CONSOLE_SURFACES:
+            if name not in wanted:
+                continue
+            python_views = [
+                _fetch_console_surface(python_url, path, timeout)
+                for path in paths
+            ]
+            rust_views = [
+                _fetch_console_surface(rust_url, path, timeout)
+                for path in paths
+            ]
+            differences = []
+            for path, python_view, rust_view in zip(
+                    paths, python_views, rust_views):
+                python_body = _normalize_console(python_view.get("body"))
+                rust_body = _normalize_console(rust_view.get("body"))
+                if (python_view.get("status") != rust_view.get("status")
+                        or python_body != rust_body
+                        or python_view.get("error") != rust_view.get("error")):
+                    differences.append({
+                        "path": path,
+                        "python_status": python_view.get("status"),
+                        "rust_status": rust_view.get("status"),
+                        "python_body": python_body,
+                        "rust_body": rust_body,
+                        "python_error": python_view.get("error"),
+                        "rust_error": rust_view.get("error"),
+                    })
+            document["surfaces"].append({
+                "name": name,
+                "paths": list(paths),
+                "status": "passed" if not differences else "failed",
+                "python": python_views,
+                "rust": rust_views,
+                "differences": differences,
+            })
+            document["differences"].extend(
+                dict(item, surface=name) for item in differences)
+        document["status"] = (
+            "passed" if not document["differences"] else "failed")
+        return document
+    finally:
+        if process is not None:
+            _stop_process(process)
 
 
 def cloud_smoke_checks(base_url: str, share_key_env: str, model: str,
@@ -294,13 +546,9 @@ def _summary(document: dict, as_json: bool) -> None:
         print(json.dumps(document, ensure_ascii=False, indent=2))
         return
     parity = document.get("candidate_parity")
+    console = document.get("console_parity")
     smoke = document.get("cloud_smoke")
     drill = document.get("rollback_drill")
-    print("cutover gate: candidate-parity=%s cloud-smoke=%s "
-          "rollback-drill=%s" % (
-              parity["status"] if parity else "not-run",
-              smoke["status"] if smoke else "not-run",
-              drill["status"] if drill else "not-run"))
     if smoke:
         print("cloud smoke is a PLAN only; run its commands on the cloud host")
         for check in smoke["checks"]:
@@ -310,6 +558,16 @@ def _summary(document: dict, as_json: bool) -> None:
         for item in parity["commands"]:
             print("  %s -> %s" % (" ".join(item["command"]),
                                   item["exit_code"]))
+    if console:
+        for surface in console.get("surfaces", []):
+            print("  console parity %s: %s" % (surface["name"],
+                                               surface["status"]))
+            for difference in surface["differences"]:
+                print("    %s: python=%s rust=%s" % (
+                    difference["path"], difference["python_status"],
+                    difference["rust_status"]))
+        if console.get("error"):
+            print("  console parity error: %s" % console["error"])
     if drill:
         if drill["executed"]:
             print("  rollback drill: %s" % drill["status"])
@@ -339,6 +597,24 @@ def build_parser() -> argparse.ArgumentParser:
     parity.add_argument("--skip-rust", action="store_true")
     parity.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     parity.add_argument("--evidence", default=argparse.SUPPRESS)
+
+    console = subparsers.add_parser("console-parity")
+    console.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    console.add_argument("--evidence", default=argparse.SUPPRESS)
+    console.add_argument("--python-url", default=DEFAULT_CONSOLE_URL)
+    console.add_argument("--rust-url", default=None)
+    console.add_argument("--rust-console", default=None,
+                         help="Rust candidate console binary (default: "
+                              "rust/target/release/um-console-candidate)")
+    console.add_argument("--rust-console-command", nargs="+", default=None,
+                         help="explicit Rust candidate command (testing/WSL)")
+    console.add_argument("--env-file", default=None,
+                         help="KEY=VALUE data-directory environment shared "
+                              "with the Python console; values are never "
+                              "printed")
+    console.add_argument("--timeout", type=float, default=10.0)
+    console.add_argument("--surface", action="append", default=None,
+                         choices=[name for name, _ in CONSOLE_SURFACES])
 
     smoke = subparsers.add_parser("cloud-smoke")
     smoke.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
@@ -372,6 +648,15 @@ def build_parser() -> argparse.ArgumentParser:
     all_parser.add_argument("--share-key-env", default=DEFAULT_SHARE_KEY_ENV)
     all_parser.add_argument("--model", default=DEFAULT_MODEL)
     all_parser.add_argument("--execute-rollback", action="store_true")
+    all_parser.add_argument("--python-url", default=DEFAULT_CONSOLE_URL)
+    all_parser.add_argument("--rust-url", default=None)
+    all_parser.add_argument("--rust-console", default=None)
+    all_parser.add_argument("--rust-console-command", nargs="+",
+                            default=None)
+    all_parser.add_argument("--env-file", default=None)
+    all_parser.add_argument("--console-timeout", type=float, default=10.0)
+    all_parser.add_argument("--surface", action="append", default=None,
+                            choices=[name for name, _ in CONSOLE_SURFACES])
     return parser
 
 
@@ -394,6 +679,20 @@ def main(argv: list[str] | None = None) -> int:
         _summary(document, args.json)
         _write_evidence(evidence, document)
         return 0 if document["candidate_parity"]["status"] == "passed" else 1
+
+    if args.command == "console-parity":
+        document = {
+            "schema": SCHEMA,
+            "generated_at": _now(),
+            "console_parity": console_parity(
+                args.python_url, args.rust_url, timeout=args.timeout,
+                surfaces=tuple(args.surface) if args.surface else None,
+                rust_console_command=args.rust_console_command,
+                env_file=args.env_file, repo_root=repo_root),
+        }
+        _summary(document, args.json)
+        _write_evidence(evidence, document)
+        return 0 if document["console_parity"]["status"] == "passed" else 1
 
     if args.command == "cloud-smoke":
         document = {
@@ -421,13 +720,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if document["rollback_drill"]["status"] in (
             "planned", "passed") else 1
 
-    # all: run local parity, then plan the operator-only gates.
+    # all: run local parity and console parity, then plan the operator-only
+    # gates.  Console parity is executed because it is the 8002 cutover evidence;
+    # a candidate that cannot start or answer is a failure, not a plan.
     data_dirs = args.data_dir or DATA_DIRS
     document = {
         "schema": SCHEMA,
         "generated_at": _now(),
         "candidate_parity": candidate_parity(
             repo_root, python, cargo, args.skip_rust),
+        "console_parity": console_parity(
+            args.python_url, args.rust_url, timeout=args.console_timeout,
+            surfaces=tuple(args.surface) if args.surface else None,
+            rust_console_command=args.rust_console_command,
+            env_file=args.env_file, repo_root=repo_root),
         "cloud_smoke": cloud_smoke_plan(
             args.base_url, args.share_key_env, args.model,
             args.public_url),
@@ -440,6 +746,7 @@ def main(argv: list[str] | None = None) -> int:
     # `all` fails when ANY executed gate failed: a planned smoke/drill is not a
     # pass, but it is also not a failure - it stays visibly unexecuted.
     failed = document["candidate_parity"]["status"] != "passed"
+    failed = failed or document["console_parity"]["status"] != "passed"
     failed = failed or document["cloud_smoke"]["status"] == "failed"
     failed = failed or document["rollback_drill"]["status"] == "failed"
     return 1 if failed else 0
