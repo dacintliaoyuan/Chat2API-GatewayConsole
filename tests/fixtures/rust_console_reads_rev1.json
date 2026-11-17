@@ -177,7 +177,7 @@
      "available": false,
      "reason": "display_disabled"
     },
-    "label": "等待 MFA（本人操作）",
+    "label": "等待本人确认 Duo 推送",
     "login_window_deadline_epoch": 1700000600,
     "observed_at": 1700000000,
     "operator": {
@@ -186,7 +186,7 @@
      "owner_present": false,
      "stale": false
     },
-    "state": "waiting_mfa"
+    "state": "waiting_duo"
    }
   }
  },
