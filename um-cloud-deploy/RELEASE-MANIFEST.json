@@ -574,8 +574,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/lib/common.sh",
-      "sha256": "2fe4bc87936b487de01f616a84b7be05ad4a3ca53031335987ce856c1bc2c889",
-      "size": 34241
+      "sha256": "9d86f9834efa29685b6c8f7412b768bd0bfa2b9dab83b3bc303c89353f1fe9f2",
+      "size": 35876
     },
     {
       "kind": "deployment",
@@ -604,8 +604,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/rollback.sh",
-      "sha256": "5bc4e0ad10da1cc0c64eb338032cd97a5e07043801b82811dd1a8926062f9c5d",
-      "size": 30599
+      "sha256": "6025d951f90eeda5310d4a222d49b897f6294b23ad62581e10a18dd8d0781827",
+      "size": 30621
     },
     {
       "kind": "deployment",
@@ -658,8 +658,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/update.sh",
-      "sha256": "a80b7d40364048d49c35cb2767ad2b17f5302045a0d5a76150f49253452b5cca",
-      "size": 34649
+      "sha256": "851f78bded040f22ac75ffc6c92e3e5788942cc3c7d74a6a8599c50f3ec5e8aa",
+      "size": 34671
     },
     {
       "kind": "deployment",
@@ -1007,7 +1007,7 @@
       "size": 190435
     }
   ],
-  "generated_at": "2026-11-17T02:08:30.219834+00:00",
+  "generated_at": "2026-11-17T02:13:21.258640+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",
