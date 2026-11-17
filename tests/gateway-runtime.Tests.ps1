@@ -654,6 +654,106 @@ foreach ($scriptName in @(
     }
 }
 
+# ---------------------------------------------------------------------------
+# #80 AC3: graceful stop still goes through /admin/shutdown, and the Rust
+# process exits through the descriptor's GracefulHttp StopStrategy when the
+# endpoint accepts OR refuses the request (Rust currently answers 501 for the
+# admin surface; the scoped stop is the strategy's fallback).
+# ---------------------------------------------------------------------------
+
+& {
+    $script:ticket80Events = New-Object System.Collections.ArrayList
+    $script:ticket80Terminated = New-Object System.Collections.ArrayList
+    $script:ticket80Table = @()
+    $script:ticket80Listeners = @()
+    $script:ticket80Healthy = $false
+    $script:ticket80GracefulFails = $false
+
+    function Get-CimInstance {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$ClassName, [string]$Filter)
+        if ($ClassName -and $ClassName -ne 'Win32_Process') {
+            return @(CimCmdlets\Get-CimInstance @PSBoundParameters)
+        }
+        if ($Filter -match 'ProcessId\s*=\s*(\d+)') {
+            $wanted = [int]$Matches[1]
+            return @($script:ticket80Table | Where-Object { [int]$_.ProcessId -eq $wanted })
+        }
+        return @($script:ticket80Table)
+    }
+    function Get-NetTCPConnection {
+        [CmdletBinding()]
+        param([int]$LocalPort, [object]$State)
+        return @($script:ticket80Listeners)
+    }
+    function Invoke-WebRequest {
+        [CmdletBinding()]
+        param([string]$Uri, [string]$Method, [object]$Headers,
+              [int]$TimeoutSec, [switch]$UseBasicParsing)
+        if ($Method -eq 'Post') {
+            [void]$script:ticket80Events.Add('request')
+            if ($script:ticket80GracefulFails) {
+                throw 'offline substitute: Rust /admin/shutdown refused'
+            }
+            $script:ticket80Healthy = $false
+            return [pscustomobject]@{ StatusCode = 200; Content = '{}' }
+        }
+        if (-not $script:ticket80Healthy) { throw 'offline substitute: health probe refused' }
+        return [pscustomobject]@{ StatusCode = 200; Content = '{"status":"ok"}' }
+    }
+    function Stop-Process {
+        [CmdletBinding()]
+        param([Parameter(Mandatory = $true)][int]$Id, [switch]$Force)
+        [void]$script:ticket80Events.Add('stop')
+        [void]$script:ticket80Terminated.Add([int]$Id)
+        # The terminated process no longer answers /health.
+        $script:ticket80Healthy = $false
+    }
+    function Start-Process {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$FilePath, [object]$ArgumentList,
+              [string]$WorkingDirectory, [object]$WindowStyle)
+    }
+
+    function New-Ticket80Rust {
+        return [pscustomobject]@{
+            ProcessId = 990201; Name = 'um-gateway-candidate.exe'
+            CommandLine = ('"' + (Join-Path (Get-GatewayRoot) 'rust\target\release\um-gateway-candidate.exe') + '" --mode production --port 8000 --role local')
+            CreationDate = [datetime]'2026-11-17T10:00:00'
+        }
+    }
+
+    try {
+        $script:ticket80Table = @(New-Ticket80Rust)
+        $script:ticket80Listeners = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990201 })
+        $script:ticket80Healthy = $true
+        $script:ticket80Events.Clear()
+        $script:ticket80Terminated.Clear()
+        $accepted = Stop-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        Assert-Equal $accepted.Status 'Stopped' 'graceful stop reports Stopped after the Rust process exits'
+        Assert-Equal ($script:ticket80Events -join ',') 'request,stop' 'the /admin/shutdown request is sent before the scoped stop'
+        Assert-Equal ($script:ticket80Terminated -join ',') '990201' 'the scoped stop terminates the Rust private instance'
+
+        # A refused/501 graceful request still exits through the same strategy.
+        $script:ticket80Table = @(New-Ticket80Rust)
+        $script:ticket80Listeners = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990201 })
+        $script:ticket80Healthy = $true
+        $script:ticket80GracefulFails = $true
+        $script:ticket80Events.Clear()
+        $script:ticket80Terminated.Clear()
+        $refused = Stop-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        Assert-Equal $refused.Status 'Stopped' 'a refused graceful request still reports Stopped through the scoped stop'
+        Assert-Equal ($script:ticket80Events -join ',') 'request,stop' 'a refused graceful request still tries /admin/shutdown before the scoped stop'
+        Assert-Equal ($script:ticket80Terminated -join ',') '990201' 'a refused graceful request still terminates only the Rust private instance'
+    } finally {
+        Remove-Item function:\Get-CimInstance -ErrorAction SilentlyContinue
+        Remove-Item function:\Get-NetTCPConnection -ErrorAction SilentlyContinue
+        Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+        Remove-Item function:\Stop-Process -ErrorAction SilentlyContinue
+        Remove-Item function:\Start-Process -ErrorAction SilentlyContinue
+    }
+}
+
 if ($LauncherOnly) {
     if ($script:failures -gt 0) {
         Write-Host "`n$($script:failures) local 8000 launcher test(s) FAILED." -ForegroundColor Red
