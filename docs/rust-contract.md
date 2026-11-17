@@ -23,7 +23,7 @@
 | 端口 | 服务 | 当前云端部署（旧 release，2026-11-14 实测） | 仓库默认值 @ `d131333` | 当前仓库默认值（目标契约） | 兼容窗口 |
 |---|---|---|---|---|---|
 | 8000 | 本机 chat2api / UM 主链 | 不适用（云端不装配） | 8000（`chat2api/chat2api.py` 默认） | 8000 | 不变 |
-| 8001 | 本机控制台宿主 | 不适用（云端不装配） | 8001（`usagesrv.py:101`） | 8001 | 不变 |
+| 8001 | 本机控制台宿主（Rust；Python 回滚） | 不适用（云端不装配） | 8001（Python 回滚） | **8001** | 无兼容窗口 |
 | 8002 | 云端控制台宿主 | Rust 8002（2026-11-17 切流）；Python 回滚 8096 | 18096（旧） | **8002** | 无兼容窗口 |
 | 8003 | 云端网关（合并进程） | Rust 8003（2026-11-17 前已切流） | 8100（旧） | **8003** | 无兼容窗口 |
 | 8097 | display x11vnc | 旧部署 5901，仅 loopback | 5901（旧） | 8097 | 无兼容窗口 |
@@ -61,6 +61,7 @@ systemd
 - 角色由显式 `--role local|cloud` 选择；未指定时按端口推导：8000 → local，8002/8003 → cloud，candidate 的临时端口保持 cloud。非法角色值 fail closed。
 - 两种模式共用同一套路由、鉴权、账本和错误契约；模式只改变绑定策略与启动入口，不改变 parity 行为；角色只改变本机专属面是否装配。
 - 部署 unit 用 `--mode production --port 8003` 或 `--mode production --port 8002` 启动，并用 `/health`、`/ready` 验收；unit 文件由部署轨道维护，不在本契约的 Rust 代码范围内。
+- `um-console` 的 production 模式按角色绑定：cloud 8002、local 8001；candidate 仍只绑临时 loopback 端口。本机 8001 的启动与回滚见 §2.5。
 
 ### 2.4 本机 8000 启动器与回滚
 
@@ -112,6 +113,77 @@ systemd
   不再等请求触发重登。
 - 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 验证
   描述符、健康边界与回滚；真实 8000 的 parity、切流与回滚演练由 #81 执行并记录在本节。
+
+### 2.5 本机 8001 启动器与回滚
+
+- 构建：在 `rust/` 下运行 `cargo build --release -p um-console`，产物为
+  `rust/target/release/um-console-candidate.exe`。
+- 启动器：`lib/gateway-runtime.ps1` 的 `usage` 描述符 `StartPath` 指向该二进制，
+  `StartArguments` 为
+  `--mode production --bind-port 8001 --report-port 8001 --role local --gateway-port 8000 --state-file data/console-state.sqlite3 --dist-dir web/dist --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log`，
+  `StartWorkingDirectory` 固定为仓库根。`StartEnvironment` 设置 `UM_SHARE_ROLE=local`：
+  Rust CLI 的本地路径默认值（`data/admin-control-token`、`data/usage-session-code`、
+  `data/share-store.db`、`data/console-locks`、`web/dist`）因此与 Python 8001 一致；
+  显式 `--role local` 只选择角色，不会自动应用这些默认值。`StartAction` 仍是
+  `HiddenBatch`，健康检查仍是 `http://127.0.0.1:8001/health`，停止仍是
+  `StopStrategy=Port`。
+- 停止边界：`StopIdentities` 同时覆盖 Python `usagesrv.py` 与 Rust
+  `um-console-candidate.exe`；候选（`--mode candidate`）与云端（`--role cloud` /
+  8002）形状保持 foreign，8001 的 loopback 监听是唯一权威。`Port` 停止只终止
+  8001 loopback 上的已确认私有实例，不触碰 Tailscale Serve 的独立监听。
+- 切流状态（#85，2026-11-17）：本机 8001 **已切到 Rust**
+  （`um-console-candidate.exe --mode production --bind-port 8001 --role local`）。
+  切流命令为 `pwsh -NoProfile -File invoke-console-runtime-json.ps1 -Action restart
+  -Key usage`；切流后 `/health`、`/`、`/api/summary`、`/api/console/services`、
+  `/api/console/um/*`、#86 六个只读面、`/api/session` 与 `model.catalog` 均通过。
+- 切流前 parity（#85 AC2）：Python 8001 保持生产页面，Rust candidate 以
+  `--mode candidate --role local --bind-port 0 --report-port 8001 --gateway-port 8000
+  --dist-dir web/dist` 绑定临时 loopback 端口。两边读同一份 `web/dist`、同一份
+  `chat2api/chat2api.log` 与 `data/dsh-ledger-20260902.json`；账本使用最后
+  200000 行（Python 8001 `_read_jsonl` 的上限），因此 summary 的
+  requests/tokens/models/days 可直接比较。结果 `parity=passed`：
+  - 静态页：`/` 1221 字节、`/assets/index-qAUdSyPV.js` 826 字节，SHA-256 一致
+    （`6f4188f5…b68ac`、`adc66615…55af6`）。
+  - `/api/summary`：`services.chat2api.requests=200000`、models=7、days=14，
+    tokens 与 DSH 快照一致。
+  - #86 六个只读面：`usage-tokens`、`usage-rates`、`stats`、`log-sources`、
+    `log-entries`、`log-overview` 均 200；`log-overview` 803 行，
+    `ts`/`level`/`message`/`event` 一致。
+  - 其余 local 读面：`services`、`health`、`um/today`、`um/trend`、`um/requests`、
+    `um/maintenance`、`gateway-connection?service=chat2api` 与 `operations` 列表
+    均 200 且归一化后一致。
+  - `/api/session`：无效码两边均 403 `{"error":"invalid bootstrap code"}`。
+  - `model.catalog`：两边 201 queued → succeeded，7 个模型目录一致。
+  - 归一化：移除时钟字段（`checked_epoch`、`generatedAt`、`_generated_epoch`、
+    `_cached_age_seconds`、`collected_at`）、不透明游标/行键（`key`、
+    `next_cursor`、`next_cursors`、`earlier`、`file_key`）与实现诊断字段
+    （`scanned_bytes`、`window_start_offset`、`rows_read`、`ms`、`ts_norm`、`at`）；
+    无法解析的行 `event=None` 与全 null 事件对象等价。
+  - 已记录但不纳入六面门槛的差异：`actions` 目录（Python 12 个启用动作，
+    Rust 本机只启用 `model.catalog`，共享 7 个）、`services.process_ids`/`detail`、
+    `health.services[].ms`、`gateway-connection.evidence/reason/key_in_use`、
+    `um/logs` 的时区与游标编码、旧 `/api/console/logs`（Rust 本机未装配）。
+  - 证据：`tmp/local-8001-parity-evidence.json`；临时探针命令为
+    `python -I tmp/local_8001_parity.py --python-port 8001 --rust-port <候选端口>
+    --root . --evidence tmp/local-8001-parity-evidence.json`。
+- 会话交换（#85 AC3）：`Open-GatewayConsole.bat` 仍调用 `Open-GatewayConsole.ps1`：
+  宿主未运行则先启动，随后用 `data/admin-control-token` 的 `X-Admin-Control`
+  请求 `POST /api/session/reissue`，把一次性引导码放进页面 URL 的 `#s=` fragment，
+  浏览器再 `POST /api/session` 换成 HttpOnly `usage_session` Cookie。切流后在 Rust
+  8001 上实测：`POST /api/session/reissue` 200（返回 `ok=true` 与一次性 code，
+  值不写入证据）、`POST /api/session` 200 `{"ok":true}` 并 `Set-Cookie:
+  usage_session=…; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`；带该 Cookie
+  请求 `GET /api/share/status` 200，页面 `/` 200。引导码与 Cookie 值只留在原存储，
+  不进入日志、提交或本文件。
+- 回滚演练（#85 AC4，2026-11-17）：只改 `StartPath` 回
+  `start_usage_service.bat`；`invoke-console-runtime-json.ps1 -Action restart -Key usage`
+  返回 `Restarted`，只终止 Rust 私有实例。重启后 Python `usagesrv.py` 监听
+  `127.0.0.1:8001`，`/health` 200、`/` 200。再把 `StartPath` 改回 Rust 二进制
+  并重启，`/health` 200、`/` 200。回滚不需要重装，也不需要改端口；
+  `StartEnvironment` 对 batch 回滚无影响，`StopIdentities` 仍同时识别 Python 与 Rust。
+- 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 验证
+  描述符、健康边界、停止身份与回滚；真实 8001 的 parity、切流与回滚演练由 #85
+  执行并记录在本节。
 
 ## 3. 云端 idle RSS 基线
 

@@ -788,12 +788,267 @@ foreach ($scriptName in @(
     }
 }
 
+# ---------------------------------------------------------------------------
+# #85: 本机 8001 启动器切换到 Rust 控制台。
+#
+# 只验证启动描述符、健康边界、停止身份与回滚入口，不启动、不查询真实 8001：
+# CIM/HTTP/Start-Process 边界都在本块内替换，离开作用域即恢复。
+# ---------------------------------------------------------------------------
+
+& {
+    $desc = (Get-GatewayServiceDescriptors)['usage']
+    Assert-Equal ([IO.Path]::GetFileName([string]$desc.StartPath)) 'um-console-candidate.exe' 'usage StartPath points at the Rust console binary'
+    Assert-Equal ([string]$desc.StartAction) 'HiddenBatch' 'usage keeps the hidden launcher action'
+    Assert-Equal ([string]$desc.StartArguments) '--mode production --bind-port 8001 --report-port 8001 --role local --gateway-port 8000 --state-file data/console-state.sqlite3 --dist-dir web/dist --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log' 'usage starts production local 8001 with the console paths'
+    Assert-Equal ([string]$desc.StartWorkingDirectory) '.' 'usage launches from the repository root (Python default data paths)'
+    Assert-Equal ([IO.Path]::GetFileName((Resolve-GatewayStartPath -Key 'usage'))) 'um-console-candidate.exe' 'resolved usage StartPath is the Rust binary'
+    Assert-Equal $desc.Port 8001 'Rust usage launcher keeps port 8001'
+    Assert-Equal $desc.HealthPath '/health' 'Rust usage launcher keeps the /health path'
+    Assert-Equal $desc.StopStrategy 'Port' 'Rust usage launcher keeps the port stop strategy'
+
+    $healthCalls = New-Object System.Collections.ArrayList
+    Test-GatewayServiceHealth -Key 'usage' -HttpChecker {
+        param($url, $timeout)
+        [void]$healthCalls.Add($url)
+        return $true
+    } | Out-Null
+    Assert-Equal $healthCalls[0] 'http://127.0.0.1:8001/health' 'Rust 8001 health check keeps the 8001/health URL'
+
+    # Launch shape: the Rust binary directly, production/local 8001 arguments
+    # and the repository root as cwd so data/* and web/dist resolve like Python.
+    $script:ticket85Launches = New-Object System.Collections.ArrayList
+    function Get-CimInstance {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$ClassName, [string]$Filter)
+        if ($ClassName -and $ClassName -ne 'Win32_Process') {
+            return @(CimCmdlets\Get-CimInstance @PSBoundParameters)
+        }
+        return @()
+    }
+    function Get-NetTCPConnection {
+        [CmdletBinding()]
+        param([int]$LocalPort, [object]$State)
+        return @()
+    }
+    function Invoke-WebRequest {
+        [CmdletBinding()]
+        param([string]$Uri, [string]$Method, [object]$Headers,
+              [int]$TimeoutSec, [switch]$UseBasicParsing)
+        throw 'offline substitute: health probe refused'
+    }
+    function Stop-Process {
+        [CmdletBinding()]
+        param([Parameter(Mandatory = $true)][int]$Id, [switch]$Force)
+        throw 'offline substitute: no process may be stopped'
+    }
+    function Start-Process {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$FilePath, [object]$ArgumentList,
+              [string]$WorkingDirectory, [object]$WindowStyle)
+        [void]$script:ticket85Launches.Add([pscustomobject]@{
+            FilePath = [string]$FilePath
+            ArgumentList = @($ArgumentList)
+            WorkingDirectory = [string]$WorkingDirectory
+            ShareRole = [string]$env:UM_SHARE_ROLE
+        })
+    }
+    try {
+        $started = Start-GatewayService -Key 'usage' -Sleeper { param($seconds) }
+        Assert-Equal $started.Status 'StartPending' 'Rust usage launch without a listener reports StartPending'
+        Assert-Equal $script:ticket85Launches.Count 1 'Rust usage launcher starts exactly once'
+        $launch = $script:ticket85Launches[0]
+        Assert-Equal $launch.FilePath (Join-Path $root 'rust\target\release\um-console-candidate.exe') 'usage launcher runs the Rust binary directly'
+        Assert-Equal ($launch.ArgumentList -join ' ') '--mode production --bind-port 8001 --report-port 8001 --role local --gateway-port 8000 --state-file data/console-state.sqlite3 --dist-dir web/dist --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log' 'usage launcher passes the production/local/8001 arguments'
+        Assert-Equal ([IO.Path]::GetFullPath($launch.WorkingDirectory)) $root 'usage launcher runs from the repository root'
+        Assert-Equal $launch.ShareRole 'local' 'usage launcher sets UM_SHARE_ROLE=local so the Rust local defaults match Python data paths'
+    } finally {
+        Remove-Item function:\Get-CimInstance -ErrorAction SilentlyContinue
+        Remove-Item function:\Get-NetTCPConnection -ErrorAction SilentlyContinue
+        Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+        Remove-Item function:\Stop-Process -ErrorAction SilentlyContinue
+        Remove-Item function:\Start-Process -ErrorAction SilentlyContinue
+    }
+}
+
+# ---------------------------------------------------------------------------
+# #85 AC2: the port stop scope recognizes BOTH the Rust console (current
+# launcher) and the Python usagesrv.py entrypoint (rollback). A Rust candidate
+# on an ephemeral port stays foreign; the 8001 loopback listener is the authority.
+# ---------------------------------------------------------------------------
+
+& {
+    $desc = (Get-GatewayServiceDescriptors)['usage']
+    $stopIdentities = @(Get-GatewayStopIdentities -Descriptor $desc)
+    Assert-Equal (($stopIdentities | ForEach-Object { [string]$_.ProcessName }) -join ',') 'python.exe,um-console-candidate.exe' 'usage stop identities cover the Rust runtime and the Python rollback'
+    $ownerIdentities = @(Get-GatewayOwnerIdentities -Descriptor $desc)
+    Assert-Equal (($ownerIdentities | ForEach-Object { [string]$_.ProcessName }) -join ',') 'python.exe,um-console-candidate.exe' 'usage owner identities cover the Rust runtime and the Python rollback'
+
+    $script:ticket85Terminated = New-Object System.Collections.ArrayList
+    $script:ticket85Table = @()
+    $script:ticket85Listeners = @()
+    $script:ticket85Healthy = $false
+
+    function Get-CimInstance {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$ClassName, [string]$Filter)
+        if ($ClassName -and $ClassName -ne 'Win32_Process') {
+            return @(CimCmdlets\Get-CimInstance @PSBoundParameters)
+        }
+        if ($Filter -match 'ProcessId\s*=\s*(\d+)') {
+            $wanted = [int]$Matches[1]
+            return @($script:ticket85Table | Where-Object { [int]$_.ProcessId -eq $wanted })
+        }
+        return @($script:ticket85Table)
+    }
+    function Get-NetTCPConnection {
+        [CmdletBinding()]
+        param([int]$LocalPort, [object]$State)
+        return @($script:ticket85Listeners)
+    }
+    function Invoke-WebRequest {
+        [CmdletBinding()]
+        param([string]$Uri, [string]$Method, [object]$Headers,
+              [int]$TimeoutSec, [switch]$UseBasicParsing)
+        if (-not $script:ticket85Healthy) {
+            throw 'offline substitute: health probe refused'
+        }
+        return [pscustomobject]@{ StatusCode = 200; Content = '{}' }
+    }
+    function Stop-Process {
+        [CmdletBinding()]
+        param([Parameter(Mandatory = $true)][int]$Id, [switch]$Force)
+        [void]$script:ticket85Terminated.Add([int]$Id)
+        # The terminated process no longer answers /health.
+        $script:ticket85Healthy = $false
+    }
+
+    function New-Ticket85Process {
+        param([int]$ProcessId, [string]$CommandLine, [string]$Name = 'python.exe',
+              [datetime]$CreationDate = [datetime]'2026-11-17T18:00:00')
+        return [pscustomobject]@{
+            ProcessId = $ProcessId; Name = $Name
+            CommandLine = $CommandLine; CreationDate = $CreationDate
+        }
+    }
+
+    $rustPrivate = New-Ticket85Process -ProcessId 990301 -Name 'um-console-candidate.exe' `
+        -CommandLine ('"' + (Join-Path (Get-GatewayRoot) 'rust\target\release\um-console-candidate.exe') + '" --mode production --bind-port 8001 --report-port 8001 --role local --gateway-port 8000 --state-file data/console-state.sqlite3 --dist-dir web/dist --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log')
+    $rustCandidate = New-Ticket85Process -ProcessId 990302 -Name 'um-console-candidate.exe' `
+        -CommandLine 'um-console-candidate.exe --mode candidate --role local --bind-port 0 --report-port 8001'
+    $pythonPrivate = New-Ticket85Process -ProcessId 990303 `
+        -CommandLine 'python usagesrv.py'
+
+    try {
+        # Owner identity: the Rust process listening on 8001 is the private instance.
+        $script:ticket85Table = @($rustPrivate)
+        $script:ticket85Listeners = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990301 })
+        $script:ticket85Healthy = $true
+        $inspection = Get-GatewayServiceInspection -Key 'usage'
+        Assert-Equal $inspection.State 'Running' 'Rust 8001 listener is recognized as the private instance'
+        Assert-Equal ($inspection.ProcessIds -join ',') '990301' 'Rust 8001 inspection names the Rust PID'
+
+        # Stop scope: Rust private and the Python rollback are private; the
+        # ephemeral candidate stays foreign and is never stopped.
+        $script:ticket85Table = @($rustPrivate, $rustCandidate, $pythonPrivate)
+        $script:ticket85Listeners = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990301 })
+        $script:ticket85Healthy = $true
+        $script:ticket85Terminated.Clear()
+        $stopped = Stop-GatewayService -Key 'usage' -Sleeper { param($seconds) }
+        Assert-Equal $stopped.Status 'Stopped' 'Rust 8001 stop reports Stopped'
+        Assert-Equal ($script:ticket85Terminated -join ',') '990301,990303' 'Rust 8001 stop terminates the Rust private instance and the Python rollback instance'
+        Assert-Equal ($script:ticket85Terminated -contains 990302) $false 'Rust candidate instance is never stopped'
+
+        # Rollback path: after StartPath reverts, the Python identity alone remains selectable.
+        $script:ticket85Table = @($pythonPrivate)
+        $script:ticket85Listeners = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990303 })
+        $script:ticket85Healthy = $true
+        $script:ticket85Terminated.Clear()
+        $pythonStopped = Stop-GatewayService -Key 'usage' -Sleeper { param($seconds) }
+        Assert-Equal $pythonStopped.Status 'Stopped' 'Python rollback stop reports Stopped'
+        Assert-Equal ($script:ticket85Terminated -join ',') '990303' 'Python rollback stop still selects the Python private instance'
+    } finally {
+        Remove-Item function:\Get-CimInstance -ErrorAction SilentlyContinue
+        Remove-Item function:\Get-NetTCPConnection -ErrorAction SilentlyContinue
+        Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+        Remove-Item function:\Stop-Process -ErrorAction SilentlyContinue
+    }
+
+    # Bridge start/stop/restart wiring: the JSON entry calls the same runtime
+    # functions; the start result carries the Rust StartPath in its detail.
+    & {
+        . (Join-Path $root 'lib\console-runtime-bridge.ps1')
+        function Start-GatewayService {
+            param($Key)
+            return [pscustomobject]@{ Key = $Key; Status = 'Started'; Action = 'Start'
+                                      Detail = (Resolve-GatewayStartPath -Key $Key) }
+        }
+        function Stop-GatewayService {
+            param($Key)
+            return [pscustomobject]@{ Key = $Key; Status = 'Stopped'; Action = 'Stop' }
+        }
+        function Restart-GatewayService {
+            param($Key)
+            return [pscustomobject]@{ Key = $Key; Status = 'Restarted'; Action = 'Restart' }
+        }
+        $lockDir = Join-Path ([IO.Path]::GetTempPath()) ('ticket85-locks-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            $start = Invoke-ConsoleRuntimeStart -Key 'usage' -LockDir $lockDir
+            Assert-Equal $start.ok $true 'bridge start on Rust 8001 reports ok'
+            Assert-Equal $start.result.status 'Started' 'bridge start on Rust 8001 reports Started'
+            Assert-Equal ([IO.Path]::GetFileName([string]$start.result.detail)) 'um-console-candidate.exe' 'bridge start on Rust 8001 resolves the Rust StartPath'
+            $stop = Invoke-ConsoleRuntimeStop -Key 'usage' -LockDir $lockDir
+            Assert-Equal $stop.ok $true 'bridge stop on Rust 8001 reports ok'
+            Assert-Equal $stop.result.status 'Stopped' 'bridge stop on Rust 8001 reports Stopped'
+            $restart = Invoke-ConsoleRuntimeRestart -Key 'usage' -LockDir $lockDir
+            Assert-Equal $restart.ok $true 'bridge restart on Rust 8001 reports ok'
+            Assert-Equal $restart.result.status 'Restarted' 'bridge restart on Rust 8001 reports Restarted'
+        } finally {
+            Remove-Item -LiteralPath $lockDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# #85 AC3: rollback is one StartPath change back to start_usage_service.bat; the
+# Python command, port and stop identity stay in place, and the rollback steps are
+# written down for the operator.
+# ---------------------------------------------------------------------------
+
+& {
+    $launcher = Get-Content -LiteralPath (Join-Path $root 'start_usage_service.bat') -Raw -Encoding ascii
+    Assert-Equal ($launcher -match 'python usagesrv\.py') $true 'start_usage_service.bat keeps the Python 8001 rollback command'
+    Assert-Equal ($launcher -match 'rollback') $true 'start_usage_service.bat names its rollback role'
+
+    $contract = Get-Content -LiteralPath (Join-Path $root 'docs\rust-contract.md') -Raw -Encoding utf8
+    Assert-Equal ($contract -match '本机 8001 启动器与回滚') $true 'rust-contract documents the local 8001 launcher and rollback'
+    Assert-Equal ($contract -match '只改 `StartPath`') $true 'rollback is documented as a single StartPath change'
+    Assert-Equal ($contract -match 'start_usage_service\.bat') $true 'rollback names the Python launcher'
+    Assert-Equal ($contract -match '不需要重装') $true 'rollback documents that no reinstall is needed'
+    Assert-Equal ($contract -match '不需要改端口|无需改端口') $true 'rollback documents that no port change is needed'
+
+    # Simulate the rollback: only StartPath changes back; port, health path
+    # and stop identities stay valid for the Python runtime.
+    $desc = (Get-GatewayServiceDescriptors)['usage']
+    $savedStartPath = [string]$desc.StartPath
+    try {
+        $desc.StartPath = 'start_usage_service.bat'
+        Assert-Equal ([IO.Path]::GetFileName((Resolve-GatewayStartPath -Key 'usage'))) 'start_usage_service.bat' 'changing only StartPath resolves the Python launcher'
+        Assert-Equal $desc.Port 8001 'rollback keeps port 8001'
+        Assert-Equal $desc.HealthPath '/health' 'rollback keeps the /health path'
+        Assert-Equal $desc.StopStrategy 'Port' 'rollback keeps the port stop strategy'
+        $identities = @(Get-GatewayStopIdentities -Descriptor $desc)
+        Assert-Equal (($identities | ForEach-Object { [string]$_.ProcessName }) -join ',') 'python.exe,um-console-candidate.exe' 'rollback still recognizes both private instances'
+    } finally {
+        $desc.StartPath = $savedStartPath
+    }
+}
+
 if ($LauncherOnly) {
     if ($script:failures -gt 0) {
-        Write-Host "`n$($script:failures) local 8000 launcher test(s) FAILED." -ForegroundColor Red
+        Write-Host "`n$($script:failures) local 8000/8001 launcher test(s) FAILED." -ForegroundColor Red
         exit 1
     }
-    Write-Host "`nAll local 8000 launcher tests passed." -ForegroundColor Green
+    Write-Host "`nAll local 8000/8001 launcher tests passed." -ForegroundColor Green
     exit 0
 }
 

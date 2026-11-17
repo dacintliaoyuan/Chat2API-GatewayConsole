@@ -1,4 +1,6 @@
 @echo off
-rem 用量统计聚合服务启动器（usagesrv.py, 127.0.0.1:8001），由 start_usage_service.vbs 隐藏调用
+rem Rollback (#85): set the usage StartPath back to start_usage_service.bat in
+rem lib\gateway-runtime.ps1. This file keeps the Python 8001 command; no
+rem reinstall and no port change are needed.
 cd /d "%~dp0"
 python usagesrv.py
