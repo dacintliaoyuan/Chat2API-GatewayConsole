@@ -54,8 +54,8 @@ param(
     [ValidatePattern('^[A-Za-z0-9._-]+$')][string]$SshHostAlias = 'um-share-ecs',
     [string]$PublicSshConfig = (Join-Path $HOME '.ssh\aliyun-um-ecs-public.conf'),
     [ValidatePattern('^[A-Za-z0-9._-]+$')][string]$PublicSshHostAlias = 'um-share-ecs-public',
-    [string]$StatePath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'data\cloud-console-tunnel.json'),
-    [string]$LogPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'data\cloud-console-entry.log'),
+    [string]$StatePath = '',
+    [string]$LogPath = '',
     [string]$DesktopPath = '',
     [string]$ShortcutName = 'UM云端控制台',
     [ValidateRange(1, 300)][int]$HealthTimeoutSeconds = 25,
@@ -83,6 +83,10 @@ $script:CloudConsoleShortcutName = 'UM云端控制台'
 $script:CloudConsoleStatePath = (Join-Path $script:CloudConsoleRoot 'data\cloud-console-tunnel.json')
 $script:CloudConsoleLogPath = (Join-Path $script:CloudConsoleRoot 'data\cloud-console-entry.log')
 $script:CloudConsoleLockName = 'Local\UMCloudConsoleEntry'
+# Windows PowerShell 5.1 leaves $PSScriptRoot empty inside param defaults, so the
+# paths resolve here, after the root is known.
+if ([string]::IsNullOrWhiteSpace($StatePath)) { $StatePath = $script:CloudConsoleStatePath }
+if ([string]::IsNullOrWhiteSpace($LogPath)) { $LogPath = $script:CloudConsoleLogPath }
 
 function Get-CloudObjectProperty {
     param($Object, [string]$Name)
