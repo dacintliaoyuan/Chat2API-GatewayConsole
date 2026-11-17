@@ -14,6 +14,7 @@ pub use um_gateway::config::BindMode;
 use crate::display_relay::DisplayConfig;
 
 pub const CLOUD_DEFAULT_PORT: u16 = 8002;
+pub const LOCAL_DEFAULT_PORT: u16 = 8001;
 pub const DEFAULT_GATEWAY_PORT: u16 = 8003;
 pub const DEFAULT_GATEWAY_PID_FILE: &str = "/run/um-share/share-gateway.pid";
 pub const DEFAULT_GATEWAY_STATE_DIR: &str = "/run/um-share";
@@ -39,6 +40,19 @@ pub const SECURITY_STATE_FILE_ENV: &str = "UM_CLOUD_SECURITY_STATE";
 pub const CONTROL_TOKEN_FILE_ENV: &str = "USAGE_CONTROL_TOKEN_FILE";
 pub const SHARE_BACKEND_DIR_ENV: &str = "CONSOLE_SHARE_BACKEND_DIR";
 pub const USAGE_SESSION_CODE_FILE_ENV: &str = "USAGE_SESSION_CODE_FILE";
+pub const USAGE_LOG_ENV: &str = "CHAT2API_USAGE_LOG";
+pub const DSH_SNAPSHOT_ENV: &str = "DSH_LEDGER_SNAPSHOT_FILE";
+pub const SERVICE_LOG_ENV: &str = "CHAT2API_SERVICE_LOG";
+pub const WATCH_DIR_ENV: &str = "SELFUSEAI_GATEWAY_WATCH_DIR";
+
+pub const DEFAULT_USAGE_LOG: &str = "data/usage-chat2api.jsonl";
+pub const DEFAULT_DSH_SNAPSHOT: &str = "data/dsh-ledger-20260902.json";
+pub const DEFAULT_SERVICE_LOG: &str = "chat2api/chat2api.log";
+pub const DEFAULT_CONSOLE_STATE_FILE: &str = "data/console-state.sqlite3";
+pub const DEFAULT_CONSOLE_LOCK_DIR: &str = "data/console-locks";
+pub const DEFAULT_SHARE_STORE_FILE: &str = "data/share-store.db";
+pub const DEFAULT_CONTROL_TOKEN_FILE: &str = "data/admin-control-token";
+pub const DEFAULT_USAGE_SESSION_CODE_FILE: &str = "data/usage-session-code";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -60,6 +74,19 @@ impl Role {
             Self::Local => "local",
             Self::Cloud => "cloud",
         }
+    }
+
+    /// The report port this role owns: 8001 local, 8002 cloud.
+    pub fn default_port(self) -> u16 {
+        match self {
+            Self::Local => LOCAL_DEFAULT_PORT,
+            Self::Cloud => CLOUD_DEFAULT_PORT,
+        }
+    }
+
+    /// The production bind port this role owns: 8001 local, 8002 cloud.
+    pub fn default_bind_port(self) -> u16 {
+        self.default_port()
     }
 }
 
@@ -106,6 +133,12 @@ pub struct ConsoleConfig {
     pub control_token_file: Option<PathBuf>,
     pub share_backend_dir: Option<PathBuf>,
     pub usage_session_code_file: Option<PathBuf>,
+    /// Local role inputs: the private chat2api usage ledger, the frozen DSH
+    /// day snapshot and the chat2api run log. Cloud role ignores them.
+    pub usage_log: PathBuf,
+    pub dsh_snapshot: PathBuf,
+    pub service_log: PathBuf,
+    pub watch_dir: Option<PathBuf>,
     pub display: DisplayConfig,
 }
 
@@ -133,6 +166,10 @@ impl Default for ConsoleConfig {
             control_token_file: None,
             share_backend_dir: None,
             usage_session_code_file: None,
+            usage_log: PathBuf::from(DEFAULT_USAGE_LOG),
+            dsh_snapshot: PathBuf::from(DEFAULT_DSH_SNAPSHOT),
+            service_log: PathBuf::from(DEFAULT_SERVICE_LOG),
+            watch_dir: None,
             display: DisplayConfig::default(),
         }
     }
@@ -204,6 +241,46 @@ pub fn resolve_role(role: Option<&str>, deployment: Option<&str>) -> Result<Role
     Ok(seen[0])
 }
 
+/// Python's local composition root defaults (`usagesrv.py` + `share/management.py`):
+/// the local role owns these paths unless an explicit environment value wins.
+pub fn apply_local_defaults(config: &mut ConsoleConfig) {
+    if config.console_state_file.is_none() {
+        config.console_state_file = Some(PathBuf::from(DEFAULT_CONSOLE_STATE_FILE));
+    }
+    if config.console_lock_dir.is_none() {
+        config.console_lock_dir = Some(PathBuf::from(DEFAULT_CONSOLE_LOCK_DIR));
+    }
+    if config.share_store_file.is_none() {
+        config.share_store_file = Some(PathBuf::from(DEFAULT_SHARE_STORE_FILE));
+    }
+    if config.control_token_file.is_none() {
+        config.control_token_file = Some(PathBuf::from(DEFAULT_CONTROL_TOKEN_FILE));
+    }
+    if config.usage_session_code_file.is_none() {
+        config.usage_session_code_file = Some(PathBuf::from(DEFAULT_USAGE_SESSION_CODE_FILE));
+    }
+    if config.share_backend_dir.is_none() {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+            config.share_backend_dir = Some(
+                PathBuf::from(local)
+                    .join("SelfUseAI")
+                    .join("ai-gateway")
+                    .join("share-backend"),
+            );
+        }
+    }
+    if config.watch_dir.is_none() {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+            config.watch_dir = Some(
+                PathBuf::from(local)
+                    .join("SelfUseAI")
+                    .join("ai-gateway")
+                    .join("watch"),
+            );
+        }
+    }
+}
+
 impl ConsoleConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         let mut config = Self::default();
@@ -212,6 +289,10 @@ impl ConsoleConfig {
                 resolve_role(Some(&value), std::env::var(DEPLOYMENT_ENV).ok().as_deref())?;
         } else if let Ok(value) = std::env::var(DEPLOYMENT_ENV) {
             config.role = resolve_role(None, Some(&value))?;
+        }
+        config.port = config.role.default_port();
+        if config.role == Role::Local {
+            apply_local_defaults(&mut config);
         }
         if let Ok(value) = std::env::var(PORT_ENV) {
             config.port = strict_port(PORT_ENV, &value)?;
@@ -292,6 +373,26 @@ impl ConsoleConfig {
                 config.usage_session_code_file = Some(PathBuf::from(value));
             }
         }
+        if let Ok(value) = std::env::var(USAGE_LOG_ENV) {
+            if !value.trim().is_empty() {
+                config.usage_log = PathBuf::from(value);
+            }
+        }
+        if let Ok(value) = std::env::var(DSH_SNAPSHOT_ENV) {
+            if !value.trim().is_empty() {
+                config.dsh_snapshot = PathBuf::from(value);
+            }
+        }
+        if let Ok(value) = std::env::var(SERVICE_LOG_ENV) {
+            if !value.trim().is_empty() {
+                config.service_log = PathBuf::from(value);
+            }
+        }
+        if let Ok(value) = std::env::var(WATCH_DIR_ENV) {
+            if !value.trim().is_empty() {
+                config.watch_dir = Some(PathBuf::from(value));
+            }
+        }
         config.display = DisplayConfig::from_env();
         Ok(config)
     }
@@ -305,13 +406,10 @@ impl ConsoleConfig {
         }
     }
 
-    /// Fail closed before binding a socket.
+    /// Fail closed before binding a socket. The role selects the production
+    /// port: cloud 8002, local 8001. Candidate binds only an ephemeral
+    /// loopback port.
     pub fn validate_bind_policy(&self) -> Result<(), ConfigError> {
-        if self.role != Role::Cloud {
-            return Err(ConfigError(
-                "the S5a console assembles only the cloud role".to_string(),
-            ));
-        }
         if !is_loopback_host(&self.bind_host) {
             return Err(ConfigError(format!(
                 "{} bind host is not loopback: {}",
@@ -332,11 +430,15 @@ impl ConsoleConfig {
                     self.bind_port
                 )));
             }
-        } else if self.bind_port != CLOUD_DEFAULT_PORT {
-            return Err(ConfigError(format!(
-                "production must bind 8002 on loopback, got {}",
-                self.bind_port
-            )));
+        } else {
+            let expected = self.role.default_bind_port();
+            if self.bind_port != expected {
+                return Err(ConfigError(format!(
+                    "production {} role must bind {expected} on loopback, got {}",
+                    self.role.as_str(),
+                    self.bind_port
+                )));
+            }
         }
         if self.port == 0 {
             return Err(ConfigError(

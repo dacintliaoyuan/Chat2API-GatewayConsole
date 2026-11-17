@@ -12,10 +12,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use chrono::{FixedOffset, TimeZone};
 use serde_json::{json, Value};
 
+use crate::config::{ConsoleConfig, Role};
+use crate::local_summary::{LocalSummaryCache, LocalSummaryPaths};
+
 pub const SUMMARY_CACHE_SECONDS: f64 = 300.0;
 
 pub struct SummaryCache {
     value: Mutex<Option<(Value, f64, Instant)>>,
+    local: Option<LocalSummaryCache>,
 }
 
 impl Default for SummaryCache {
@@ -28,10 +32,33 @@ impl SummaryCache {
     pub fn new() -> Self {
         Self {
             value: Mutex::new(None),
+            local: None,
+        }
+    }
+
+    /// The role's own summary: local reads the private ledgers, cloud reports
+    /// only the assembled UM share capability.
+    pub fn for_config(config: &ConsoleConfig) -> Self {
+        match config.role {
+            Role::Local => Self::local(LocalSummaryPaths {
+                usage_log: config.usage_log.clone(),
+                dsh_snapshot: config.dsh_snapshot.clone(),
+            }),
+            Role::Cloud => Self::new(),
+        }
+    }
+
+    pub fn local(paths: LocalSummaryPaths) -> Self {
+        Self {
+            value: Mutex::new(None),
+            local: Some(LocalSummaryCache::new(paths)),
         }
     }
 
     pub fn payload(&self) -> Value {
+        if let Some(local) = &self.local {
+            return local.payload();
+        }
         let now = Instant::now();
         let now_epoch = epoch_seconds();
         if let Ok(cache) = self.value.lock() {

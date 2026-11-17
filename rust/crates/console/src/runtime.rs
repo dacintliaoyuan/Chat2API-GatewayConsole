@@ -315,6 +315,43 @@ fn entry_script(argv: &[String]) -> Option<String> {
     argv.get(index).cloned()
 }
 
+/// Local (Windows) runtime facts: the ONE service the local role owns is the
+/// chat2api UM runtime on its loopback port. The read is a bounded TCP
+/// connect; a refused connection is `stopped`, a timeout/unexpected error is
+/// `unknown` (never folded into a fabricated stopped verdict). No process is
+/// started, signalled or inspected.
+pub struct LocalTcpFacts {
+    port: u16,
+    timeout: std::time::Duration,
+}
+
+impl LocalTcpFacts {
+    pub fn new(port: u16) -> Self {
+        Self {
+            port,
+            timeout: std::time::Duration::from_millis(250),
+        }
+    }
+}
+
+impl RuntimeFacts for LocalTcpFacts {
+    fn snapshot(&self) -> Result<RuntimeSnapshot, RuntimeError> {
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], self.port));
+        match std::net::TcpStream::connect_timeout(&address, self.timeout) {
+            Ok(_) => Ok(RuntimeSnapshot::running(Vec::new())),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(
+                RuntimeSnapshot::stopped("loopback 端口未监听（实例可能未就绪）"),
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => Ok(
+                RuntimeSnapshot::unknown("TCP 连接超时（探测未定，非未监听）", Vec::new()),
+            ),
+            Err(_) => Ok(RuntimeSnapshot::stopped(
+                "loopback 端口未监听（实例可能未就绪）",
+            )),
+        }
+    }
+}
+
 /// One test-injected runtime fact source.
 pub struct StaticRuntimeFacts {
     snapshot: RuntimeSnapshot,

@@ -351,8 +351,7 @@ fn candidate_refuses_production_ports_before_bind() {
 
     let mut config = base_config(&temp);
     config.role = um_console::Role::Local;
-    let error = ConsoleServer::start(config).expect_err("local role must fail");
-    assert!(error.to_string().contains("cloud"));
+    ConsoleServer::start(config).expect("local role must start");
 }
 
 #[test]

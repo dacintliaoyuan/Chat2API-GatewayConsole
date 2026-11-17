@@ -23,6 +23,7 @@ fn main() -> ExitCode {
         }
     };
     let mut args = std::env::args().skip(1);
+    let mut report_port_set = false;
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--mode" => match args.next().as_deref().and_then(BindMode::parse) {
@@ -39,11 +40,19 @@ fn main() -> ExitCode {
                 None => return usage("--bind-port requires an integer"),
             },
             "--report-port" => match args.next().and_then(|value| value.parse::<u16>().ok()) {
-                Some(value) => config.port = value,
+                Some(value) => {
+                    config.port = value;
+                    report_port_set = true;
+                }
                 None => return usage("--report-port requires an integer"),
             },
             "--role" => match args.next().as_deref().and_then(Role::parse) {
-                Some(value) => config.role = value,
+                Some(value) => {
+                    config.role = value;
+                    if !report_port_set {
+                        config.port = value.default_port();
+                    }
+                }
                 None => return usage("--role must be local or cloud"),
             },
             "--state-file" => match args.next() {
@@ -78,17 +87,34 @@ fn main() -> ExitCode {
                 Some(value) => config.expected_uid = Some(value),
                 None => return usage("--expected-uid requires an integer"),
             },
+            "--usage-log" => match args.next() {
+                Some(value) => config.usage_log = value.into(),
+                None => return usage("--usage-log requires a path"),
+            },
+            "--dsh-snapshot" => match args.next() {
+                Some(value) => config.dsh_snapshot = value.into(),
+                None => return usage("--dsh-snapshot requires a path"),
+            },
+            "--service-log" => match args.next() {
+                Some(value) => config.service_log = value.into(),
+                None => return usage("--service-log requires a path"),
+            },
+            "--watch-dir" => match args.next() {
+                Some(value) => config.watch_dir = Some(value.into()),
+                None => return usage("--watch-dir requires a path"),
+            },
             "--help" | "-h" => {
                 println!(
                     "usage: um-console-candidate [--mode candidate|production] \
-                     [--host 127.0.0.1] [--bind-port 0|8002] \
-                     [--report-port 8002] [--role cloud] [--state-file PATH] \
+                     [--host 127.0.0.1] [--bind-port 0|8001|8002] \
+                     [--report-port 8001|8002] [--role local|cloud] [--state-file PATH] \
                      [--gateway-pid-file PATH] [--gateway-state-dir PATH] \
                      [--gateway-port 8003] [--gateway-entry NAME] \
                      [--gateway-entry-kind python|native] [--proc-root PATH] \
                      [--expected-uid N]\n\
                      modes: candidate (default) binds an ephemeral loopback port only; \
-                     production must be selected explicitly and binds 8002 on loopback only"
+                     production must be selected explicitly and binds 8001 for the local \
+                     role or 8002 for the cloud role on loopback only"
                 );
                 return ExitCode::SUCCESS;
             }
