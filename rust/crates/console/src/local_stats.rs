@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use chrono::{FixedOffset, TimeZone};
+use chrono::{FixedOffset, NaiveDate, TimeZone};
 use serde_json::{json, Map, Value};
 
 use crate::local_summary::parse_ts_ms;
@@ -778,6 +778,907 @@ pub fn usage_rates(paths: &StatsPaths, hours: i64, now_ms: f64) -> Value {
         "timezone": TIMEZONE_NAME,
         "checked_epoch": (now_ms / 1000.0).floor() as i64,
     })
+}
+
+#[derive(Debug, Clone)]
+pub struct StatsError(pub String);
+
+impl std::fmt::Display for StatsError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl std::error::Error for StatsError {}
+
+#[derive(Default, Clone)]
+struct TokenEvidence {
+    records: i64,
+    complete_records: i64,
+    partial_records: i64,
+    estimated_records: i64,
+    unknown_records: i64,
+    complete_input: i64,
+    complete_output: i64,
+    partial_input: i64,
+    partial_output: i64,
+    estimated_input: i64,
+    estimated_output: i64,
+    partial_input_known: i64,
+    partial_output_known: i64,
+    estimated_input_known: i64,
+    estimated_output_known: i64,
+}
+
+#[derive(Default, Clone)]
+struct StatEntry {
+    requests: i64,
+    input: i64,
+    output: i64,
+    cache: i64,
+    reasoning: i64,
+    token_evidence: TokenEvidence,
+}
+
+#[derive(Default)]
+struct StatAgg {
+    days: BTreeMap<String, BTreeMap<String, StatEntry>>,
+    undated: usize,
+    error: Option<Value>,
+}
+
+#[derive(Debug)]
+struct RecordRead {
+    records: Vec<Map<String, Value>>,
+    missing: bool,
+    read_error: Option<String>,
+    bad_lines: usize,
+}
+
+#[derive(Debug)]
+struct SnapshotRead {
+    snapshot: Option<Value>,
+    missing: bool,
+    read_error: Option<String>,
+    corrupt: Option<String>,
+}
+
+#[derive(Default, Clone)]
+struct Totals {
+    requests: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_tokens: i64,
+    reasoning_tokens: i64,
+}
+
+impl Totals {
+    fn to_json(&self) -> Value {
+        json!({
+            "requests": self.requests,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_tokens": self.cache_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+        })
+    }
+
+    fn add_json(&mut self, other: &Value) {
+        self.requests += other["requests"].as_i64().unwrap_or(0);
+        self.input_tokens += other["input_tokens"].as_i64().unwrap_or(0);
+        self.output_tokens += other["output_tokens"].as_i64().unwrap_or(0);
+        self.cache_tokens += other["cache_tokens"].as_i64().unwrap_or(0);
+        self.reasoning_tokens += other["reasoning_tokens"].as_i64().unwrap_or(0);
+    }
+}
+
+fn python_int_or_zero(value: Option<&Value>) -> Result<i64, String> {
+    match value {
+        None | Some(Value::Null) => Ok(0),
+        Some(Value::Bool(value)) => Ok(i64::from(*value)),
+        Some(Value::Number(number)) => {
+            if let Some(value) = number.as_i64() {
+                return Ok(value);
+            }
+            match number.as_f64() {
+                Some(value) if value.is_finite() => Ok(value.trunc() as i64),
+                _ => Err(format!("invalid literal for int() with base 10: {number}")),
+            }
+        }
+        Some(Value::String(text)) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return Ok(0);
+            }
+            let cleaned = trimmed.replace('_', "");
+            cleaned
+                .parse::<i64>()
+                .map_err(|_| format!("invalid literal for int() with base 10: '{text}'"))
+        }
+        Some(other) => Err(format!(
+            "int() argument must be a string, a bytes-like object or a real number, not '{}'",
+            python_type_name(other)
+        )),
+    }
+}
+
+fn python_str_or_unknown(value: Option<&Value>) -> String {
+    match value {
+        Some(value) if !falsy(value) => python_str(value),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn accumulate_token_evidence(
+    evidence: &mut TokenEvidence,
+    record: &Map<String, Value>,
+    snapshot: bool,
+) {
+    evidence.records += 1;
+    let input = trusted_token_count(record.get(if snapshot {
+        "input"
+    } else {
+        "input_tokens"
+    }));
+    let output = trusted_token_count(record.get(if snapshot {
+        "output"
+    } else {
+        "output_tokens"
+    }));
+    let source = record.get("usage_source").and_then(Value::as_str);
+    if source == Some("none") || (input.is_none() && output.is_none()) {
+        evidence.unknown_records += 1;
+        return;
+    }
+    let complete = input.is_some() && output.is_some();
+    let estimated = source == Some("estimated")
+        || (source.is_none() && record.get("estimated") == Some(&Value::Bool(true)));
+    if estimated {
+        evidence.estimated_records += 1;
+    } else if complete
+        && source != Some("partial")
+        && !non_ok_status(record.get("status"))
+    {
+        evidence.complete_records += 1;
+        evidence.complete_input += input.unwrap_or_default();
+        evidence.complete_output += output.unwrap_or_default();
+        return;
+    } else {
+        evidence.partial_records += 1;
+    }
+    let prefix = if estimated { "estimated" } else { "partial" };
+    for (side, value) in [("input", input), ("output", output)] {
+        if let Some(value) = value {
+            match (prefix, side) {
+                ("partial", "input") => evidence.partial_input += value,
+                ("partial", "output") => evidence.partial_output += value,
+                ("estimated", "input") => evidence.estimated_input += value,
+                ("estimated", "output") => evidence.estimated_output += value,
+                _ => {}
+            }
+            match (prefix, side) {
+                ("partial", "input") => evidence.partial_input_known += 1,
+                ("partial", "output") => evidence.partial_output_known += 1,
+                ("estimated", "input") => evidence.estimated_input_known += 1,
+                ("estimated", "output") => evidence.estimated_output_known += 1,
+                _ => {}
+            }
+        }
+    }
+}
+
+fn emit_token_evidence(evidence: &TokenEvidence, kind: &str) -> Map<String, Value> {
+    let mut output = Map::new();
+    let complete = evidence.records > 0
+        && evidence.complete_records == evidence.records;
+    output.insert(
+        "token_coverage".to_string(),
+        json!({
+            "records": evidence.records,
+            "complete_records": evidence.complete_records,
+            "partial_records": evidence.partial_records,
+            "estimated_records": evidence.estimated_records,
+            "unknown_records": evidence.unknown_records,
+            "complete": complete,
+            "unit": if kind == "dsh-ledger" { "model_day_aggregate" } else { "request" },
+        }),
+    );
+    output.insert(
+        "complete_input_tokens".to_string(),
+        if evidence.complete_records > 0 {
+            json!(evidence.complete_input)
+        } else {
+            Value::Null
+        },
+    );
+    output.insert(
+        "complete_output_tokens".to_string(),
+        if evidence.complete_records > 0 {
+            json!(evidence.complete_output)
+        } else {
+            Value::Null
+        },
+    );
+    output.insert(
+        "token_total".to_string(),
+        if evidence.complete_records > 0 {
+            json!(evidence.complete_input + evidence.complete_output)
+        } else {
+            Value::Null
+        },
+    );
+    for prefix in ["partial", "estimated"] {
+        let (input_value, output_value, input_known, output_known) = match prefix {
+            "partial" => (
+                evidence.partial_input,
+                evidence.partial_output,
+                evidence.partial_input_known,
+                evidence.partial_output_known,
+            ),
+            _ => (
+                evidence.estimated_input,
+                evidence.estimated_output,
+                evidence.estimated_input_known,
+                evidence.estimated_output_known,
+            ),
+        };
+        output.insert(
+            format!("{prefix}_input_tokens"),
+            if input_known > 0 { json!(input_value) } else { Value::Null },
+        );
+        output.insert(
+            format!("{prefix}_output_tokens"),
+            if output_known > 0 { json!(output_value) } else { Value::Null },
+        );
+        output.insert(
+            format!("{prefix}_token_total"),
+            if input_known > 0 || output_known > 0 {
+                json!(input_value + output_value)
+            } else {
+                Value::Null
+            },
+        );
+    }
+    output
+}
+
+fn read_ledger_jsonl(path: &Path) -> RecordRead {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return RecordRead {
+                records: Vec::new(),
+                missing: true,
+                read_error: None,
+                bad_lines: 0,
+            };
+        }
+        Err(error) => {
+            return RecordRead {
+                records: Vec::new(),
+                missing: false,
+                read_error: Some(error.to_string()),
+                bad_lines: 0,
+            };
+        }
+    };
+    let mut records = Vec::new();
+    let mut bad_lines = 0;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let record = match serde_json::from_str::<Value>(line) {
+            Ok(Value::Object(record)) => record,
+            Ok(_) => continue,
+            Err(_) => {
+                bad_lines += 1;
+                continue;
+            }
+        };
+        let mut record = record;
+        let ms = record
+            .get("time")
+            .and_then(Value::as_str)
+            .and_then(parse_ts_ms);
+        record.insert(
+            "_ms".to_string(),
+            ms.map_or(Value::Null, |value| json!(value)),
+        );
+        records.push(record);
+    }
+    records.sort_by(|left, right| {
+        let left = left.get("_ms").and_then(Value::as_f64).unwrap_or(0.0);
+        let right = right.get("_ms").and_then(Value::as_f64).unwrap_or(0.0);
+        left.partial_cmp(&right).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if records.len() > LEDGER_RECORD_LIMIT {
+        records.drain(..records.len() - LEDGER_RECORD_LIMIT);
+    }
+    RecordRead {
+        records,
+        missing: false,
+        read_error: None,
+        bad_lines,
+    }
+}
+
+fn read_dsh_snapshot(path: &Path) -> SnapshotRead {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return SnapshotRead {
+                snapshot: None,
+                missing: true,
+                read_error: None,
+                corrupt: None,
+            };
+        }
+        Err(error) => {
+            return SnapshotRead {
+                snapshot: None,
+                missing: false,
+                read_error: Some(error.to_string()),
+                corrupt: None,
+            };
+        }
+    };
+    let snapshot = match serde_json::from_str::<Value>(&text) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return SnapshotRead {
+                snapshot: None,
+                missing: false,
+                read_error: None,
+                corrupt: Some(format!("JSONDecodeError: {error}")),
+            };
+        }
+    };
+    if !snapshot.is_object() {
+        return SnapshotRead {
+            snapshot: None,
+            missing: false,
+            read_error: None,
+            corrupt: Some("snapshot root is not a JSON object".to_string()),
+        };
+    }
+    SnapshotRead {
+        snapshot: Some(snapshot),
+        missing: false,
+        read_error: None,
+        corrupt: None,
+    }
+}
+
+fn collect_jsonl_records(
+    records: &[Map<String, Value>],
+    models_filter: Option<&BTreeSet<String>>,
+    lo_iso: &str,
+    hi_iso: &str,
+) -> StatAgg {
+    let mut days: BTreeMap<String, BTreeMap<String, StatEntry>> = BTreeMap::new();
+    let mut undated = 0usize;
+    let mut failed = 0usize;
+    let mut last_error = None;
+    for record in records {
+        let mut token_seen = false;
+        let mut token_group: Option<(String, String)> = None;
+        let result = (|| -> Result<(), String> {
+            let ms = record
+                .get("_ms")
+                .and_then(Value::as_f64)
+                .or_else(|| {
+                    record
+                        .get("time")
+                        .and_then(Value::as_str)
+                        .and_then(parse_ts_ms)
+                });
+            let Some(day) = beijing_day(ms) else {
+                undated += 1;
+                return Ok(());
+            };
+            if day.as_str() < lo_iso || day.as_str() > hi_iso {
+                return Ok(());
+            }
+            let model = python_str_or_unknown(record.get("model"));
+            if models_filter.is_some_and(|filter| !filter.contains(&model)) {
+                return Ok(());
+            }
+            token_group = Some((day.clone(), model.clone()));
+            let input = python_int_or_zero(record.get("input_tokens"))?;
+            let output = python_int_or_zero(record.get("output_tokens"))?;
+            let cache = python_int_or_zero(
+                record
+                    .get("cached_input_tokens")
+                    .or_else(|| record.get("cache_tokens")),
+            )?;
+            let reasoning = python_int_or_zero(record.get("reasoning_tokens"))?;
+            let entry = days
+                .entry(day)
+                .or_default()
+                .entry(model)
+                .or_default();
+            accumulate_token_evidence(&mut entry.token_evidence, record, false);
+            token_seen = true;
+            entry.requests += 1;
+            entry.input += input;
+            entry.output += output;
+            entry.cache += cache;
+            entry.reasoning += reasoning;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            if let Some((day, model)) = &token_group {
+                if !token_seen {
+                    let entry = days
+                        .entry(day.clone())
+                        .or_default()
+                        .entry(model.clone())
+                        .or_default();
+                    accumulate_token_evidence(&mut entry.token_evidence, record, false);
+                }
+            }
+            failed += 1;
+            last_error = Some(format!("ValueError: {error}"));
+        }
+    }
+    StatAgg {
+        days,
+        undated,
+        error: (failed > 0).then(|| {
+            json!({
+                "type": "record_error",
+                "failed_records": failed,
+                "detail": last_error,
+            })
+        }),
+    }
+}
+
+fn collect_dsh_records(
+    snapshot: &Map<String, Value>,
+    models_filter: Option<&BTreeSet<String>>,
+    lo_iso: &str,
+    hi_iso: &str,
+) -> StatAgg {
+    let mut days: BTreeMap<String, BTreeMap<String, StatEntry>> = BTreeMap::new();
+    let days_root = match snapshot.get("days") {
+        None => Map::new(),
+        Some(Value::Object(days)) => days.clone(),
+        Some(other) => {
+            return StatAgg {
+                days,
+                undated: 0,
+                error: Some(json!({
+                    "type": "corrupt_snapshot",
+                    "detail": format!(
+                        "snapshot days is not a JSON object: {}",
+                        python_type_name(other)
+                    ),
+                })),
+            };
+        }
+    };
+    let merge_day = "2026-09-02";
+    if merge_day < lo_iso || merge_day > hi_iso {
+        return StatAgg::default();
+    }
+    let Some(day_entry) = days_root.get(merge_day).and_then(Value::as_object) else {
+        return StatAgg::default();
+    };
+    let by_provider_model = match day_entry.get("byProviderModel") {
+        None => Map::new(),
+        Some(Value::Object(rows)) => rows.clone(),
+        Some(other) => {
+            return StatAgg {
+                days,
+                undated: 0,
+                error: Some(json!({
+                    "type": "corrupt_snapshot",
+                    "detail": format!(
+                        "byProviderModel is not a JSON object: {}",
+                        python_type_name(other)
+                    ),
+                })),
+            };
+        }
+    };
+    let mut failed = 0usize;
+    let mut last_error = None;
+    for (model, row) in by_provider_model {
+        let Some(row) = row.as_object() else {
+            continue;
+        };
+        if models_filter.is_some_and(|filter| !filter.contains(&model)) {
+            continue;
+        }
+        let entry = days
+            .entry(merge_day.to_string())
+            .or_default()
+            .entry(model)
+            .or_default();
+        accumulate_token_evidence(&mut entry.token_evidence, row, true);
+        let result = (|| -> Result<(i64, i64, i64, i64, i64), String> {
+            Ok((
+                python_int_or_zero(row.get("calls"))?,
+                python_int_or_zero(row.get("input"))?,
+                python_int_or_zero(row.get("output"))?,
+                python_int_or_zero(row.get("cacheRead"))?,
+                python_int_or_zero(row.get("reasoning"))?,
+            ))
+        })();
+        match result {
+            Ok((calls, input, output, cache, reasoning)) => {
+                entry.requests += calls;
+                entry.input += input;
+                entry.output += output;
+                entry.cache += cache;
+                entry.reasoning += reasoning;
+            }
+            Err(error) => {
+                failed += 1;
+                last_error = Some(format!("ValueError: {error}"));
+            }
+        }
+    }
+    StatAgg {
+        days,
+        undated: 0,
+        error: (failed > 0).then(|| {
+            json!({
+                "type": "record_error",
+                "failed_rows": failed,
+                "detail": last_error,
+            })
+        }),
+    }
+}
+
+fn emit_models(kind: &str, entries: &BTreeMap<String, StatEntry>) -> Vec<Value> {
+    let mut rows: Vec<(String, Value)> = entries
+        .iter()
+        .map(|(model, entry)| {
+            let tokens = emit_token_evidence(&entry.token_evidence, kind);
+            let mut row = json!({
+                "model": model,
+                "requests": entry.requests,
+                "input_tokens": entry.input,
+                "output_tokens": entry.output,
+            });
+            let object = row.as_object_mut().expect("model row");
+            for (key, value) in tokens {
+                object.insert(key, value);
+            }
+            object.insert("cache_tokens".to_string(), json!(entry.cache));
+            object.insert("reasoning_tokens".to_string(), json!(entry.reasoning));
+            (model.clone(), row)
+        })
+        .collect();
+    rows.sort_by(|(left_name, left), (right_name, right)| {
+        right["requests"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&left["requests"].as_i64().unwrap_or(0))
+            .then_with(|| left_name.cmp(right_name))
+    });
+    rows.into_iter().map(|(_, row)| row).collect()
+}
+
+fn emit_source_totals(models_out: &[Value]) -> Value {
+    let mut totals = Totals::default();
+    for model in models_out {
+        totals.add_json(model);
+    }
+    totals.to_json()
+}
+
+fn load_source(
+    source: &str,
+    path: &Path,
+    models_filter: Option<&BTreeSet<String>>,
+    lo_iso: &str,
+    hi_iso: &str,
+) -> (StatAgg, Value) {
+    let kind = if source == "dsh" {
+        "dsh-ledger"
+    } else {
+        "estimate"
+    };
+    let mut coverage = json!({
+        "ledger_present": false,
+        "days_with_records": 0,
+        "kind": kind,
+        "ledger_files": [display_path(path)],
+    });
+    let agg = if source == "dsh" {
+        let read = read_dsh_snapshot(path);
+        if read.missing {
+            StatAgg::default()
+        } else {
+            coverage["ledger_present"] = json!(true);
+            if let Some(error) = &read.read_error {
+                coverage["errors"] = json!([{"type": "read_error", "detail": error}]);
+            }
+            if let Some(corrupt) = &read.corrupt {
+                let mut errors = coverage["errors"].as_array().cloned().unwrap_or_default();
+                errors.push(json!({"type": "corrupt_snapshot", "detail": corrupt}));
+                coverage["errors"] = json!(errors);
+            }
+            collect_dsh_records(
+                read.snapshot
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .unwrap_or(&Map::new()),
+                models_filter,
+                lo_iso,
+                hi_iso,
+            )
+        }
+    } else {
+        let read = read_ledger_jsonl(path);
+        if read.missing {
+            StatAgg::default()
+        } else {
+            coverage["ledger_present"] = json!(true);
+            let mut errors = Vec::new();
+            if let Some(error) = &read.read_error {
+                errors.push(json!({"type": "read_error", "detail": error}));
+            }
+            if read.bad_lines > 0 {
+                errors.push(json!({"type": "malformed_lines", "bad_lines": read.bad_lines}));
+            }
+            if !errors.is_empty() {
+                coverage["errors"] = json!(errors);
+            }
+            collect_jsonl_records(&read.records, models_filter, lo_iso, hi_iso)
+        }
+    };
+    if let Some(error) = &agg.error {
+        let mut errors = coverage["errors"].as_array().cloned().unwrap_or_default();
+        errors.push(error.clone());
+        coverage["errors"] = json!(errors);
+    }
+    if agg.undated > 0 {
+        coverage["undated_records"] = json!(agg.undated);
+    }
+    coverage["days_with_records"] = json!(agg.days.len());
+    (agg, coverage)
+}
+
+fn parse_date(value: &str) -> Result<NaiveDate, StatsError> {
+    let text = value.trim();
+    let bytes = text.as_bytes();
+    let shaped = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit());
+    if shaped {
+        if let Ok(date) = NaiveDate::parse_from_str(text, "%Y-%m-%d") {
+            return Ok(date);
+        }
+    }
+    Err(StatsError(format!(
+        "invalid date '{value}': expected YYYY-MM-DD (Asia/Shanghai calendar day)"
+    )))
+}
+
+fn parse_range(date_from: &str, date_to: &str) -> Result<(NaiveDate, NaiveDate, i64), StatsError> {
+    let lo = parse_date(date_from)?;
+    let hi = parse_date(date_to)?;
+    if lo > hi {
+        return Err(StatsError(format!(
+            "invalid date range: date_from {} > date_to {}",
+            lo.format("%Y-%m-%d"),
+            hi.format("%Y-%m-%d")
+        )));
+    }
+    let range_days = (hi - lo).num_days() + 1;
+    if range_days > MAX_RANGE_DAYS {
+        return Err(StatsError(format!(
+            "date range too large: {} days exceeds the {}day query limit",
+            range_days, MAX_RANGE_DAYS
+        )));
+    }
+    Ok((lo, hi, range_days))
+}
+
+fn day_token_rows(blocks: &[Value]) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for block in blocks {
+        let Some(models) = block["models"].as_array() else {
+            continue;
+        };
+        for row in models {
+            if row["token_total"].is_null() {
+                continue;
+            }
+            rows.push(json!({
+                "source": block["source"],
+                "model": row["model"],
+                "input_tokens": row["complete_input_tokens"],
+                "output_tokens": row["complete_output_tokens"],
+                "token_total": row["token_total"],
+                "partial_token_total": row["partial_token_total"],
+                "estimated_token_total": row["estimated_token_total"],
+                "token_coverage": row["token_coverage"],
+            }));
+        }
+    }
+    rows.sort_by(|left, right| {
+        right["token_total"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .partial_cmp(&left["token_total"].as_f64().unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                left["source"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .cmp(right["source"].as_str().unwrap_or_default())
+            })
+            .then_with(|| {
+                left["model"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .cmp(right["model"].as_str().unwrap_or_default())
+            })
+    });
+    rows
+}
+
+pub fn bounded_stats(
+    paths: &StatsPaths,
+    date_from: &str,
+    date_to: &str,
+    sources: Option<&[String]>,
+    models: Option<&[String]>,
+) -> Result<Value, StatsError> {
+    let (lo, hi, range_days) = parse_range(date_from, date_to)?;
+    let models_filter = models.map(|models| {
+        models
+            .iter()
+            .map(|model| model.to_string())
+            .collect::<BTreeSet<String>>()
+    });
+    let selected: BTreeSet<String> = match sources {
+        Some(sources) => sources.iter().cloned().collect(),
+        None => ["chat2api".to_string(), "dsh".to_string()]
+            .into_iter()
+            .collect(),
+    };
+    let lo_iso = lo.format("%Y-%m-%d").to_string();
+    let hi_iso = hi.format("%Y-%m-%d").to_string();
+    let mut per_source: BTreeMap<String, StatAgg> = BTreeMap::new();
+    let mut coverage_sources = Map::new();
+    for source in &selected {
+        if source != "chat2api" && source != "dsh" {
+            coverage_sources.insert(
+                source.clone(),
+                json!({
+                    "ledger_present": false,
+                    "days_with_records": 0,
+                    "kind": Value::Null,
+                    "ledger_files": [],
+                    "errors": [{
+                        "type": "unknown_source",
+                        "detail": "requested source has no usable ledger",
+                    }],
+                }),
+            );
+            per_source.insert(source.clone(), StatAgg::default());
+            continue;
+        }
+        let path = if source == "dsh" {
+            &paths.dsh_snapshot
+        } else {
+            &paths.usage_log
+        };
+        let (agg, coverage) =
+            load_source(source, path, models_filter.as_ref(), &lo_iso, &hi_iso);
+        per_source.insert(source.clone(), agg);
+        coverage_sources.insert(source.clone(), coverage);
+    }
+    let mut day_keys = BTreeSet::new();
+    for agg in per_source.values() {
+        for day in agg.days.keys() {
+            day_keys.insert(day.clone());
+        }
+    }
+    let mut totals = Totals::default();
+    let mut days_out = Vec::new();
+    for day in &day_keys {
+        let mut blocks = Vec::new();
+        let mut day_total = Totals::default();
+        for source in &selected {
+            let Some(agg) = per_source.get(source) else {
+                continue;
+            };
+            let Some(entries) = agg.days.get(day) else {
+                continue;
+            };
+            let kind = if source == "dsh" {
+                "dsh-ledger"
+            } else {
+                "estimate"
+            };
+            let models_out = emit_models(kind, entries);
+            let source_totals = emit_source_totals(&models_out);
+            day_total.add_json(&source_totals);
+            blocks.push(json!({
+                "source": source,
+                "kind": kind,
+                "models": models_out,
+                "source_totals": source_totals,
+            }));
+        }
+        let mut token_coverage = json!({
+            "records": 0,
+            "complete_records": 0,
+            "partial_records": 0,
+            "estimated_records": 0,
+            "unknown_records": 0,
+        });
+        for block in &blocks {
+            let Some(models) = block["models"].as_array() else {
+                continue;
+            };
+            for row in models {
+                for key in [
+                    "records",
+                    "complete_records",
+                    "partial_records",
+                    "estimated_records",
+                    "unknown_records",
+                ] {
+                    token_coverage[key] = json!(
+                        token_coverage[key].as_i64().unwrap_or(0)
+                            + row["token_coverage"][key].as_i64().unwrap_or(0)
+                    );
+                }
+            }
+        }
+        token_coverage["complete"] = json!(
+            token_coverage["records"].as_i64().unwrap_or(0) > 0
+                && token_coverage["complete_records"].as_i64().unwrap_or(0)
+                    == token_coverage["records"].as_i64().unwrap_or(0)
+        );
+        days_out.push(json!({
+            "date": day,
+            "sources": blocks,
+            "model_token_ranking": day_token_rows(&blocks),
+            "token_coverage": token_coverage,
+            "day_total": day_total.to_json(),
+        }));
+        totals.add_json(&day_total.to_json());
+    }
+    let mut missing_days = Vec::new();
+    let mut cursor = lo;
+    while cursor <= hi {
+        let key = cursor.format("%Y-%m-%d").to_string();
+        if !day_keys.contains(&key) {
+            missing_days.push(key);
+        }
+        let Some(next) = cursor.succ_opt() else {
+            break;
+        };
+        cursor = next;
+    }
+    Ok(json!({
+        "days": days_out,
+        "totals": totals.to_json(),
+        "coverage": {
+            "sources": coverage_sources,
+            "missing_days": missing_days,
+        },
+        "meta": {
+            "timezone": TIMEZONE_NAME,
+            "range_days": range_days,
+        },
+    }))
 }
 
 pub fn usage_tokens(paths: &StatsPaths, days: i64, now_ms: f64) -> Value {

@@ -836,6 +836,41 @@ fn handle_local_usage_read(
                 &local_stats::usage_tokens(&paths(), days, epoch_seconds() as f64 * 1000.0),
             ))
         }
+        ["stats"] => {
+            let date_from = query_value(raw_target, "from").unwrap_or_default();
+            let date_to = query_value(raw_target, "to").unwrap_or_default();
+            let csv_list = |name: &str| {
+                let raw = query_value(raw_target, name).unwrap_or_default();
+                let values: Vec<String> = raw
+                    .split(',')
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect();
+                if values.is_empty() {
+                    None
+                } else {
+                    Some(values)
+                }
+            };
+            let sources = csv_list("sources");
+            let models = csv_list("models");
+            match local_stats::bounded_stats(
+                &paths(),
+                &date_from,
+                &date_to,
+                sources.as_deref(),
+                models.as_deref(),
+            ) {
+                Ok(payload) => Some(send_json(200, &payload)),
+                Err(error) => Some(
+                    ConsoleError::new(
+                        400,
+                        json!({"error": "invalid_stats_query", "detail": error.0}),
+                    )
+                    .response(),
+                ),
+            }
+        }
         ["usage-rates"] => {
             let hours = match query_value(raw_target, "hours") {
                 None => 24,
