@@ -66,16 +66,24 @@ Rust 二进制只绑定临时 loopback 端口、供 parity 测试使用的运行
 _Avoid_: 生产模式、临时端口即生产、candidate 即回滚点
 
 **Rust 生产入口 (Rust production entry)**:
-Rust 二进制在 systemd 下绑定 8003/8002 loopback 的生产运行模式；它与 candidate 模式共用同一套代码，但允许生产端口，并由部署脚本安装和切换。
+Rust 二进制绑定 8000/8002/8003 loopback 的生产运行模式；它与 candidate 模式共用同一套代码，但允许生产端口。云端由 systemd 与部署脚本安装和切换，本机 8000 由现有 Windows 启动器拉起、回滚只改启动命令。
 _Avoid_: candidate 模式、临时端口、端口映射
 
 **切流 (Cutover)**:
-停掉 Python 服务、启动 Rust 服务、验证并保留回滚点的动作；先 8003 后 8002，每一步独立验收，失败立即回滚。
+停掉 Python 服务、启动 Rust 服务、验证并保留回滚点的动作；顺序是 8002 → 本机 8000 → 本机 8001，每一步独立验收，失败立即回滚。
 _Avoid_: 重启服务、灰度发布、一次性全量切换
 
 **回滚 release (Rollback release)**:
 切流失败时恢复的 Python 发布包；它必须能启动原 Python 服务并保留运行数据，不能是期望旧入口脚本的上一 release。
 _Avoid_: 上一 release、备份目录、Rust 二进制回退
+
+**本机回滚 (Local rollback)**:
+本机切流失败时恢复 Python 实现的动作；本机没有发布包，回滚点是未删除的 `chat2api.py`／`usagesrv.py` 与原启动命令，不是目录级 release。
+_Avoid_: 回滚 release（云端发布包）、重新安装
+
+**常驻服务 (Resident service)**:
+由 systemd、Windows 启动器或登录项拉起、持续监听端口的进程；Rust 迁移范围只包含常驻服务，编排脚本、display 辅助与按需调用的库不在范围。
+_Avoid_: 自研程序、全部 Python 文件、后台脚本
 
 **登录浏览器单实例 (Single login-browser instance per profile)**:
 同一 profile 目录在同一时刻最多只有一个登录浏览器；按 profile 目录持有 OS 级文件锁（POSIX `flock` / Windows `msvcrt.locking`），锁文件放在 profile 目录并附带 pid 与进程启动时间用于诊断，进程退出后锁自动释放。打开前只清理同 profile 的旧 Chromium（先 SIGTERM，等待，再 SIGKILL），不碰其他浏览器。
