@@ -14,6 +14,10 @@ The gate is deliberately split by what it may execute:
   a real cloud host; the operator runs the plan and records the evidence.
 * ``rollback-drill`` runs ``rollback-drill.sh`` in its plan mode by default.
   ``--execute`` is required before the drill stops or starts anything.
+* ``console-rollback-drill`` switches the 8002 console to the Python 8096
+  rollback unit, proves the console and the 8003 gateway, then switches back.
+  It also plans by default and never deletes a unit.
+
 The evidence document is the record #73 consumes.  It names every command, whether
 it was executed and the observed exit code, so a planned smoke check is never
 reported as passed.
@@ -25,6 +29,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -41,6 +46,10 @@ DEFAULT_SHARE_KEY_ENV = "UM_SHARE_KEY"
 DEFAULT_MODEL = "um-share-model"
 DEFAULT_HEALTH_PORT = "8100"
 DEFAULT_CURRENT_HEALTH_PORT = "8003"
+DEFAULT_PYTHON_CONSOLE_UNIT = "um-share-console-python.service"
+DEFAULT_RUST_CONSOLE_UNIT = "um-share-console.service"
+DEFAULT_PYTHON_CONSOLE_PORT = "8096"
+DEFAULT_RUST_CONSOLE_PORT = "8002"
 DATA_DIRS = [
     "/var/lib/um-share",
     "/var/lib/um-share-console",
@@ -541,6 +550,156 @@ def rollback_drill(repo_root: Path, target: str, health_port: str,
     }
 
 
+def _wait_port(port: str, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", int(port)),
+                                          timeout=1):
+                return True
+        except OSError:
+            time.sleep(0.2)
+    return False
+
+
+def console_rollback_drill_plan(python_console_unit: str,
+                               rust_console_unit: str,
+                               python_console_port: str,
+                               rust_console_port: str,
+                               gateway_url: str) -> list[dict]:
+    def systemctl(name: str, unit: str) -> dict:
+        return {"name": name, "kind": "systemctl",
+                "command": ["systemctl", "stop" if name.startswith("stop")
+                            else "start", unit]}
+
+    def probe(name: str, url: str) -> dict:
+        return {"name": name, "kind": "http",
+                "command": ["curl", url], "url": url,
+                "expected_status": 200}
+
+    return [
+        systemctl("stop-rust-console", rust_console_unit),
+        systemctl("start-python-console", python_console_unit),
+        {"name": "wait-python-console", "kind": "port",
+         "command": ["wait_port_open", "127.0.0.1", python_console_port],
+         "port": python_console_port},
+        probe("python-console-health",
+              "http://127.0.0.1:%s/health" % python_console_port),
+        probe("gateway-ready-after-python",
+              gateway_url.rstrip("/") + "/ready"),
+        systemctl("stop-python-console", python_console_unit),
+        systemctl("start-rust-console", rust_console_unit),
+        {"name": "wait-rust-console", "kind": "port",
+         "command": ["wait_port_open", "127.0.0.1", rust_console_port],
+         "port": rust_console_port},
+        probe("rust-console-health",
+              "http://127.0.0.1:%s/health" % rust_console_port),
+        probe("gateway-ready-after-rust",
+              gateway_url.rstrip("/") + "/ready"),
+    ]
+
+
+def _run_console_drill_step(step: dict, repo_root: Path,
+                            timeout: float) -> dict:
+    if step["kind"] == "systemctl":
+        result = _run(step["command"], repo_root)
+        return {"name": step["name"], "command": step["command"],
+                "exit_code": result["exit_code"],
+                "status": "passed" if result["exit_code"] == 0 else "failed"}
+    if step["kind"] == "port":
+        passed = _wait_port(step["port"], timeout)
+        return {"name": step["name"], "command": step["command"],
+                "exit_code": 0 if passed else 1,
+                "status": "passed" if passed else "failed"}
+    status = _probe_http(step["url"], timeout)
+    passed = status == step["expected_status"]
+    return {"name": step["name"], "command": step["command"],
+            "exit_code": 0 if passed else 1,
+            "observed_status": status,
+            "expected_status": step["expected_status"],
+            "status": "passed" if passed else "failed"}
+
+
+def console_rollback_drill(
+        python_console_unit: str = DEFAULT_PYTHON_CONSOLE_UNIT,
+        rust_console_unit: str = DEFAULT_RUST_CONSOLE_UNIT,
+        python_console_port: str = DEFAULT_PYTHON_CONSOLE_PORT,
+        rust_console_port: str = DEFAULT_RUST_CONSOLE_PORT,
+        gateway_url: str = DEFAULT_BASE_URL,
+        timeout: float = 60.0,
+        execute: bool = False,
+        repo_root: Path | None = None) -> dict:
+    repo_root = repo_root or Path(__file__).resolve().parents[1]
+    plan = console_rollback_drill_plan(
+        python_console_unit, rust_console_unit, python_console_port,
+        rust_console_port, gateway_url)
+    document = {
+        "status": "planned",
+        "executed": False,
+        "python_console_unit": python_console_unit,
+        "rust_console_unit": rust_console_unit,
+        "python_console_port": python_console_port,
+        "rust_console_port": rust_console_port,
+        "gateway_url": gateway_url,
+        "steps": plan,
+        "restored": False,
+    }
+    if not execute:
+        return document
+    document["executed"] = True
+    results = []
+    python_failed = False
+    # Forward leg: stop Rust 8002, start Python 8096, then prove the console and
+    # the untouched 8003 gateway still answer.  A failed Python leg restores the
+    # Rust console immediately; the release links are never moved.
+    for step in plan[:5]:
+        result = _run_console_drill_step(step, repo_root, timeout)
+        results.append(result)
+        if result["status"] != "passed":
+            python_failed = True
+            break
+    if python_failed:
+        for step in plan[5:]:
+            if step["name"] == "stop-python-console" and \
+                    not any(item["name"] == "start-python-console"
+                            and item["status"] == "passed"
+                            for item in results):
+                continue
+            result = _run_console_drill_step(step, repo_root, timeout)
+            results.append(result)
+            if result["status"] != "passed":
+                document["status"] = "failed"
+                document["steps"] = results
+                document["restored"] = False
+                document["error"] = (
+                    "python console rollback drill failed and the Rust console "
+                    "did not come back")
+                return document
+        document["status"] = "failed"
+        document["steps"] = results
+        document["restored"] = True
+        document["error"] = (
+            "python console rollback drill failed; the Rust console was "
+            "restored")
+        return document
+    # Return leg: stop Python 8096 and start Rust 8002 again.
+    for step in plan[5:]:
+        result = _run_console_drill_step(step, repo_root, timeout)
+        results.append(result)
+        if result["status"] != "passed":
+            document["status"] = "failed"
+            document["steps"] = results
+            document["restored"] = False
+            document["error"] = (
+                "the Rust console did not come back; manual intervention "
+                "required")
+            return document
+    document["status"] = "passed"
+    document["steps"] = results
+    document["restored"] = True
+    return document
+
+
 def _summary(document: dict, as_json: bool) -> None:
     if as_json:
         print(json.dumps(document, ensure_ascii=False, indent=2))
@@ -549,6 +708,14 @@ def _summary(document: dict, as_json: bool) -> None:
     console = document.get("console_parity")
     smoke = document.get("cloud_smoke")
     drill = document.get("rollback_drill")
+    console_drill = document.get("console_rollback_drill")
+    print("cutover gate: candidate-parity=%s console-parity=%s "
+          "cloud-smoke=%s rollback-drill=%s console-rollback-drill=%s" % (
+              parity["status"] if parity else "not-run",
+              console["status"] if console else "not-run",
+              smoke["status"] if smoke else "not-run",
+              drill["status"] if drill else "not-run",
+              console_drill["status"] if console_drill else "not-run"))
     if smoke:
         print("cloud smoke is a PLAN only; run its commands on the cloud host")
         for check in smoke["checks"]:
@@ -574,6 +741,15 @@ def _summary(document: dict, as_json: bool) -> None:
         else:
             print("  rollback drill plan: %s"
                   % " ".join(drill["command"]))
+    if console_drill:
+        if console_drill["executed"]:
+            print("  console rollback drill: %s (restored=%s)" % (
+                console_drill["status"], console_drill["restored"]))
+        else:
+            print("  console rollback drill plan:")
+            for step in console_drill["steps"]:
+                print("    %s: %s" % (step["name"],
+                                     " ".join(step["command"])))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -634,6 +810,22 @@ def build_parser() -> argparse.ArgumentParser:
     drill.add_argument("--data-dir", action="append", default=None)
     drill.add_argument("--execute", action="store_true")
 
+    console_drill = subparsers.add_parser("console-rollback-drill")
+    console_drill.add_argument("--json", action="store_true",
+                              default=argparse.SUPPRESS)
+    console_drill.add_argument("--evidence", default=argparse.SUPPRESS)
+    console_drill.add_argument("--python-console-unit",
+                               default=DEFAULT_PYTHON_CONSOLE_UNIT)
+    console_drill.add_argument("--rust-console-unit",
+                               default=DEFAULT_RUST_CONSOLE_UNIT)
+    console_drill.add_argument("--python-console-port",
+                               default=DEFAULT_PYTHON_CONSOLE_PORT)
+    console_drill.add_argument("--rust-console-port",
+                               default=DEFAULT_RUST_CONSOLE_PORT)
+    console_drill.add_argument("--gateway-url", default=DEFAULT_BASE_URL)
+    console_drill.add_argument("--timeout", type=float, default=60.0)
+    console_drill.add_argument("--execute", action="store_true")
+
     all_parser = subparsers.add_parser("all")
     all_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     all_parser.add_argument("--evidence", default=argparse.SUPPRESS)
@@ -657,6 +849,19 @@ def build_parser() -> argparse.ArgumentParser:
     all_parser.add_argument("--console-timeout", type=float, default=10.0)
     all_parser.add_argument("--surface", action="append", default=None,
                             choices=[name for name, _ in CONSOLE_SURFACES])
+    all_parser.add_argument("--python-console-unit",
+                            default=DEFAULT_PYTHON_CONSOLE_UNIT)
+    all_parser.add_argument("--rust-console-unit",
+                            default=DEFAULT_RUST_CONSOLE_UNIT)
+    all_parser.add_argument("--python-console-port",
+                            default=DEFAULT_PYTHON_CONSOLE_PORT)
+    all_parser.add_argument("--rust-console-port",
+                            default=DEFAULT_RUST_CONSOLE_PORT)
+    all_parser.add_argument("--gateway-url", default=DEFAULT_BASE_URL)
+    all_parser.add_argument("--console-drill-timeout", type=float,
+                            default=60.0)
+    all_parser.add_argument("--execute-console-rollback",
+                            action="store_true")
     return parser
 
 
@@ -693,6 +898,21 @@ def main(argv: list[str] | None = None) -> int:
         _summary(document, args.json)
         _write_evidence(evidence, document)
         return 0 if document["console_parity"]["status"] == "passed" else 1
+
+    if args.command == "console-rollback-drill":
+        document = {
+            "schema": SCHEMA,
+            "generated_at": _now(),
+            "console_rollback_drill": console_rollback_drill(
+                args.python_console_unit, args.rust_console_unit,
+                args.python_console_port, args.rust_console_port,
+                args.gateway_url, timeout=args.timeout,
+                execute=args.execute, repo_root=repo_root),
+        }
+        _summary(document, args.json)
+        _write_evidence(evidence, document)
+        return 0 if document["console_rollback_drill"]["status"] in (
+            "planned", "passed") else 1
 
     if args.command == "cloud-smoke":
         document = {
@@ -740,6 +960,11 @@ def main(argv: list[str] | None = None) -> int:
         "rollback_drill": rollback_drill(
             repo_root, args.to, args.health_port,
             args.current_health_port, data_dirs, args.execute_rollback),
+        "console_rollback_drill": console_rollback_drill(
+            args.python_console_unit, args.rust_console_unit,
+            args.python_console_port, args.rust_console_port,
+            args.gateway_url, timeout=args.console_drill_timeout,
+            execute=args.execute_console_rollback, repo_root=repo_root),
     }
     _summary(document, args.json)
     _write_evidence(evidence, document)
@@ -749,6 +974,7 @@ def main(argv: list[str] | None = None) -> int:
     failed = failed or document["console_parity"]["status"] != "passed"
     failed = failed or document["cloud_smoke"]["status"] == "failed"
     failed = failed or document["rollback_drill"]["status"] == "failed"
+    failed = failed or document["console_rollback_drill"]["status"] == "failed"
     return 1 if failed else 0
 
 

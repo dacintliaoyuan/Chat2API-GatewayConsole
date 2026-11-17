@@ -54,7 +54,7 @@ class CutoverGateTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 0)
         text = output.getvalue()
         for name in ("candidate-parity", "console-parity", "cloud-smoke",
-                      "rollback-drill"):
+                      "rollback-drill", "console-rollback-drill"):
             self.assertIn(name, text)
 
     def test_cloud_smoke_is_planned_and_never_executes_a_command(self):
@@ -200,6 +200,9 @@ class CutoverGateTests(unittest.TestCase):
         self.assertFalse(committed["cloud_smoke"]["executed"])
         self.assertEqual(committed["rollback_drill"]["status"], "planned")
         self.assertFalse(committed["rollback_drill"]["executed"])
+        self.assertEqual(committed["console_rollback_drill"]["status"],
+                         "planned")
+        self.assertFalse(committed["console_rollback_drill"]["executed"])
 
     def test_the_gate_is_part_of_the_release_payload(self):
         verify = (DEPLOY / "verify-release.ps1").read_text(encoding="utf-8")
@@ -434,6 +437,52 @@ class ConsoleParityTests(unittest.TestCase):
         self.assertEqual(code, 0, document)
         self.assertEqual(document["console_parity"]["status"], "passed")
 
+    def test_console_rollback_drill_plans_the_8096_and_8002_health_gates(self):
+        gate = _load_gate()
+        code, document = _run_json(gate, [
+            "--json", "console-rollback-drill",
+        ])
+        self.assertEqual(code, 0)
+        drill = document["console_rollback_drill"]
+        self.assertEqual(drill["status"], "planned")
+        self.assertFalse(drill["executed"])
+        steps = "\n".join(" ".join(step["command"])
+                          for step in drill["steps"])
+        self.assertIn("um-share-console-python.service", steps)
+        self.assertIn("um-share-console.service", steps)
+        self.assertIn("8096", steps)
+        self.assertIn("8002", steps)
+        self.assertIn("http://127.0.0.1:8003/ready", steps)
+        self.assertIn("http://127.0.0.1:8096/health", steps)
+        self.assertIn("http://127.0.0.1:8002/health", steps)
+
+    def test_console_rollback_drill_restores_rust_when_python_fails(self):
+        gate = _load_gate()
+        calls = []
+
+        def fake_systemctl(command, cwd):
+            calls.append(command)
+            return {"command": command, "exit_code": 0,
+                    "stdout": "", "stderr": ""}
+
+        def fake_probe(url, timeout):
+            if url.endswith(":8096/health"):
+                return 500
+            return 200
+
+        with mock.patch.object(gate, "_run", fake_systemctl), \
+                mock.patch.object(gate, "_probe_http", fake_probe), \
+                mock.patch.object(gate, "_wait_port",
+                                  lambda port, timeout: True):
+            document = gate.console_rollback_drill(execute=True)
+        self.assertEqual(document["status"], "failed")
+        self.assertTrue(document["restored"])
+        commands = [" ".join(step["command"]) for step in document["steps"]]
+        self.assertIn("systemctl start um-share-console.service", commands)
+        self.assertEqual(commands[-2],
+                         "curl http://127.0.0.1:8002/health")
+        self.assertEqual(commands[-1],
+                         "curl http://127.0.0.1:8003/ready")
 
 
 if __name__ == "__main__":
