@@ -755,6 +755,20 @@ class ConsoleUmLoginTests(unittest.TestCase):
 
 
 class ConsoleAuthStatusReadTests(unittest.TestCase):
+    def test_a_finished_round_with_unknown_verification_ends_console_wait(self):
+        status = {
+            "state": "unknown", "error": None, "login": None,
+            "recovery": {"state": "idle"}, "read_error": None,
+        }
+        with mock.patch.object(console_um_login, "_read_auth_status", side_effect=[
+            status, AssertionError("已结束的核验不应继续作为登录中轮询"),
+        ]) as read:
+            with self.assertRaises(OperationError) as caught:
+                console_um_login._wait_login_valid("http://fixture", "fixture", None, 30, 0)
+        self.assertEqual(caught.exception.code, "login_verification_unknown")
+        self.assertNotIn("需人工", caught.exception.message)
+        self.assertEqual(read.call_count, 1)
+
     """Ticket #41：控制台状态读取复用 um_adapter 的同一错误分类。
 
     ``console/um_login`` 以前把 401/403、URLError、非 200、JSON 损坏

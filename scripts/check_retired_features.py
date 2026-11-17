@@ -183,7 +183,7 @@ SCAN_ROOT_FILES = (
 ROOT_SUFFIXES = (".ps1", ".bat", ".vbs")
 IGNORED_DIR_NAMES = frozenset({
     "node_modules", "__pycache__", ".git", "output", "release",
-    ".worktrees", "data", "profile", "tmp",
+    ".worktrees", "data", "profile", ".edge-profile", "tmp",
 })
 IGNORED_RELATIVE_DIRS = frozenset({
     "web/dist",

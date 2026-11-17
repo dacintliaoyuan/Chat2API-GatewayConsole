@@ -57,7 +57,7 @@ CONTROL_TOKEN_FILE = (
 
 # States chat2api itself reports; anything else still passes through with
 # state_known=False instead of being turned into an error.
-_KNOWN_STATES = ("valid", "needs_login", "logging_in", "failed")
+_KNOWN_STATES = ("valid", "needs_login", "logging_in", "failed", "unknown")
 
 _TIMEOUT_S = 10.0
 
@@ -68,9 +68,8 @@ _STATE_NOTE = ("内存态（未主动核验）：仅读取 chat2api 自身认证
 # the endpoint must report; anything else is a response-schema error.
 _VERIFY_STATES = ("valid", "rejected", "needs_login", "unknown")
 
-# The endpoint probes the upstream itself (its own budget is 15s), so the
-# client keeps a margin above that.
-_VERIFY_TIMEOUT_S = 20.0
+# Rust 的受限核验预算为 20 秒；调用方再留 5 秒传输余量，避免先于网关超时。
+_VERIFY_TIMEOUT_S = 25.0
 
 _VERIFY_NOTE = ("受限核验：经 chat2api 受限端点单次探测上游目录，"
                 "未调用 refresh、未改认证状态；rejected 表示凭据/访问被拒，"
