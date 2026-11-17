@@ -46,11 +46,11 @@ class InstallDefaultTests(unittest.TestCase):
         self.assertIn("WITH_DISPLAY=0", install)
         gate = install.index('if [ "$WITH_DISPLAY" -eq 1 ]; then')
         enable = install.index(
-            "systemctl enable --now um-share-display.service")
+            'systemctl enable --now "$DISPLAY_UNIT"')
         self.assertGreater(enable, gate)
         self.assertEqual(
             1,
-            install.count("systemctl enable --now um-share-display.service"),
+            install.count('systemctl enable --now "$DISPLAY_UNIT"'),
             "display must only be enabled by the explicit --with-display opt-in")
         self.assertLess(
             enable - gate,
@@ -204,7 +204,7 @@ class ManualTakeoverScriptTests(unittest.TestCase):
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
         trace = self._trace_text()
         self.assertIn("systemctl start um-share-display.service", trace)
-        self.assertIn("systemctl restart um-share-console.service", trace)
+        self.assertIn("systemctl restart um-share-console-python.service", trace)
         self.assertNotIn("enable", trace)
         self.assertNotIn("disable", trace)
         env = _read(self.env_file)
@@ -223,7 +223,7 @@ class ManualTakeoverScriptTests(unittest.TestCase):
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
         trace = self._trace_text()
         self.assertIn("systemctl start um-share-display.service", trace)
-        self.assertNotIn("systemctl restart um-share-console.service", trace)
+        self.assertNotIn("systemctl restart um-share-console-python.service", trace)
 
     def test_stop_stops_display_without_disabling_it(self):
         self.env_file.write_text(
@@ -232,7 +232,7 @@ class ManualTakeoverScriptTests(unittest.TestCase):
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
         trace = self._trace_text()
         self.assertIn("systemctl stop um-share-display.service", trace)
-        self.assertIn("systemctl restart um-share-console.service", trace)
+        self.assertIn("systemctl restart um-share-console-python.service", trace)
         self.assertNotIn("enable", trace)
         self.assertNotIn("disable", trace)
         env = _read(self.env_file)

@@ -57,11 +57,11 @@ cd ..
 Python 回滚 release                      Rust 目标 release
 ├── um-share-broker.service               ├── um-share-gateway.service
 │   → broker_ops.py → chat2api.py :8100     │   → broker_ops.py → um-gateway :8003
-├── um-share-console.service :8096          ├── um-share-console.service :8002
+├── um-share-console-python.service :8096   ├── um-share-console.service :8002
 └── um-share-display.service :8097（可选）  └── um-share-display.service :8097（可选）
 ```
 
-Rust release 的 `um-share-gateway.service` 仍由 Python broker 持有唯一 Popen：`ExecStart` 是 `share/broker_ops.py`，`--host-entry-kind native` 让 broker 以 `--mode production --port 8003` 启动 `/opt/um-share/current/bin/um-gateway`；`ExecStartPost` 调用 `um-share-gatewayctl.py start`。Rust release 的 `um-share-console.service` 指向 8002，display 仍为 8097 并加入 `um-share-gateway.service` 的 namespace。
+Rust release 的 `um-share-gateway.service` 仍由 Python broker 持有唯一 Popen：`ExecStart` 是 `share/broker_ops.py`，`--host-entry-kind native` 让 broker 以 `--mode production --port 8003` 启动 `/opt/um-share/current/bin/um-gateway`；`ExecStartPost` 调用 `um-share-gatewayctl.py start`。Rust release 的 `um-share-console.service` 以 `--mode production --bind-port 8002` 启动 `/opt/um-share/bin/um-console`，display 仍为 8097 并加入 `um-share-gateway.service` 的 namespace；Python rollback release 使用 `um-share-console-python.service` 跑 `usagesrv.py` 8096。
 
 1. **网关只由 broker 拉起**：Python release 的 `um-share-broker.service` 和 Rust release 的 `um-share-gateway.service` 的 `ExecStartPost` 调用 `um-share-gatewayctl.py start`，这是唯一允许的网关 Popen 路径。
 2. **控制台不直接执行网关入口**：`NoExecPaths` 阻止直接执行 `chat2api.py` 和 `bin/um-gateway`，`ReadOnlyPaths` 阻止写停止意图；旧 Windows 本机分享动作已退役、不再注册。
@@ -144,7 +144,7 @@ rm -rf /opt/um-share/.incoming/um-share-<version>
 
 更新顺序：停 cloudflared → `um-share-gatewayctl.py --drain-budget 900 --poll-interval 5 stop`（未排空返回 75，不切换版本）→ `host-stop` → 停控制台 unit → 原子切换 `current` 符号链接。健康门失败自动切回 `previous`；回滚到原版本成功返回 68，回滚/补偿未完成返回 69。锁是 `/run/um-share/deploy.lock` 的非阻塞 `flock`，另一个部署操作返回 75。
 
-健康门按目标 release 的网关端口探测，不再硬编码 8100：`--health-port` 指定目标端口（默认按目标 manifest 的 `runtime` 取 8003 或 8100），`--current-health-port` 指定失败补偿时恢复的当前 release 端口（默认按当前 manifest 的 `runtime` 取 8003 或 8100）。切 Rust 8003 时 update 会停 `um-share-broker.service`、装 `um-share-gateway.service` 并启动 8003；回滚 Python 时反向切回。控制台端口仍从 `console.env` 的 `USAGESRV_PORT` 读取。
+健康门按目标 release 的网关端口探测，不再硬编码 8100：`--health-port` 指定目标端口（默认按目标 manifest 的 `runtime` 取 8003 或 8100），`--current-health-port` 指定失败补偿时恢复的当前 release 端口（默认按当前 manifest 的 `runtime` 取 8003 或 8100）。切 Rust 8003 时 update 会停 `um-share-broker.service`、装 `um-share-gateway.service` 并启动 8003；回滚 Python 时反向切回。控制台 unit 与端口同样按 manifest 的 `runtime` 选择：Rust 用 `um-share-console.service` 8002，Python 用 `um-share-console-python.service` 8096；`console.env` 的 `USAGESRV_PORT` 随目标 runtime 同步。
 
 回滚运行当前 release 自己的 `rollback.sh`；目标版本必须已安装且 manifest 校验通过。回滚不删除 release、数据、密钥或备份，只切符号链接并重启 unit：
 
@@ -156,7 +156,7 @@ rm -rf /opt/um-share/.incoming/um-share-<version>
   --current-health-port 8003
 ```
 
-回滚目标是带 `/var/lib/um-share-console` `ReadWritePaths` 的 Python release。`rollback.sh` 会停 Rust `um-share-gateway.service`、切 `current`/`bin`、装 Python `um-share-broker.service`/`um-share-console.service` 并验证 8100/8096；数据目录不迁移、不删除。
+回滚目标是带 `/var/lib/um-share-console` `ReadWritePaths` 的 Python release。`rollback.sh` 会停 Rust `um-share-gateway.service`、切 `current`/`bin`、装 Python `um-share-broker.service`/`um-share-console-python.service` 并验证 8100/8096；数据目录不迁移、不删除。
 
 回滚 release 的 broker unit 模板必须包含 `/var/lib/um-share-console` 的 `ReadWritePaths`：合并的 8100 子进程在该目录写 token、浏览器 profile 和服务日志，缺少时以 `Read-only file system` 退出，回滚就无法启动 Python。`install.sh`、`package-release.sh` 和 `rollback.sh` 都会在安装/打包/切换前校验模板，缺少该路径时失败关闭。
 

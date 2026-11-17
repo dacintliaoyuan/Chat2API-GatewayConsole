@@ -233,7 +233,7 @@ class BrokerReplaceOrderTests(unittest.TestCase):
         text = _read(name).replace("\r\n", "\n")
         tail = text[text.index(MARKER):]
         if active is None:
-            active = ("um-share-console.service",
+            active = ("um-share-console-python.service",
                       "um-share-broker.service")
         if edge_active:
             active = tuple(active) + ("cloudflared.service",)
@@ -250,6 +250,7 @@ class BrokerReplaceOrderTests(unittest.TestCase):
                 # release" instead of exercising the switch order.
                 for unit in ("um-share-broker.service",
                              "um-share-console.service",
+                             "um-share-console-python.service",
                              "um-share-display.service"):
                     (units / unit).write_text(
                         (DEPLOY / "systemd" / unit).read_text(
@@ -261,6 +262,7 @@ class BrokerReplaceOrderTests(unittest.TestCase):
             systemd_dir.mkdir()
             for unit in ("um-share-broker.service",
                          "um-share-console.service",
+                         "um-share-console-python.service",
                          "um-share-display.service"):
                 (systemd_dir / unit).write_text(
                     (DEPLOY / "systemd" / unit).read_text(encoding="utf-8"),
@@ -394,7 +396,7 @@ class BrokerReplaceOrderTests(unittest.TestCase):
                 reloads = self._indexes(result.trace, "systemctl daemon-reload")
                 self.assertTrue(reloads, result.trace)
                 for unit in ("um-share-broker.service",
-                             "um-share-console.service"):
+                             "um-share-console-python.service"):
                     installs = [
                         i for i, line in enumerate(result.trace)
                         if line.startswith("install ") and
@@ -434,7 +436,7 @@ class BrokerReplaceOrderTests(unittest.TestCase):
                 self.assertGreaterEqual(len(reloads), 2,
                                         "the recovery reload did not run")
                 for unit in ("um-share-broker.service",
-                             "um-share-console.service"):
+                             "um-share-console-python.service"):
                     installs = [
                         i for i, line in enumerate(result.trace)
                         if line.startswith("install ") and
@@ -453,7 +455,8 @@ class BrokerReplaceOrderTests(unittest.TestCase):
             systemd_dir = root / "systemd"
             systemd_dir.mkdir()
             for unit in ("um-share-broker.service",
-                         "um-share-console.service"):
+                         "um-share-console.service",
+                         "um-share-console-python.service"):
                 (systemd_dir / unit).write_text(
                     (DEPLOY / "systemd" / unit).read_text(encoding="utf-8"),
                     encoding="utf-8", newline="\n")
@@ -461,7 +464,7 @@ class BrokerReplaceOrderTests(unittest.TestCase):
             trace.write_text("", encoding="utf-8")
             script = root / "console.sh"
             script.write_text(PRELUDE + "\n"
-                               "systemctl start um-share-console.service\n",
+                               "systemctl start um-share-console-python.service\n",
                                encoding="utf-8", newline="\n")
             env = dict(os.environ,
                         DEPLOY_LIB=_posix(DEPLOY / "lib"),
@@ -474,7 +477,7 @@ class BrokerReplaceOrderTests(unittest.TestCase):
                                   text=True, env=env, timeout=60)
             self.assertEqual(0, proc.returncode, proc.stderr)
             lines = trace.read_text(encoding="utf-8").splitlines()
-            self.assertIn("systemctl start um-share-console.service", lines)
+            self.assertIn("systemctl start um-share-console-python.service", lines)
             self.assertNotIn("systemctl start um-share-broker.service", lines,
                              "starting the console pulled the broker up")
 

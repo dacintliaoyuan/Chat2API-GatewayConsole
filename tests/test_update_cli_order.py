@@ -420,10 +420,11 @@ class BrokerctlCallOrderTests(unittest.TestCase):
         self.assertNotIn('run_recovery "$TARGET" &&', install)
         # The no-start branch still skips every service start and health gate.
         no_start = install[gate:]
-        self.assertIn("systemctl restart um-share-broker.service", no_start)
-        self.assertIn("systemctl restart um-share-console.service", no_start)
+        self.assertIn('systemctl restart "$TARGET_GATEWAY_UNIT"', no_start)
+        self.assertIn('systemctl restart "$TARGET_CONSOLE_UNIT"', no_start)
         self.assertIn("brokerctl start-explicit", no_start)
-        self.assertIn("wait_port_open 127.0.0.1 8100", no_start)
+        self.assertIn('wait_port_open 127.0.0.1 "$TARGET_CONSOLE_PORT"', no_start)
+        self.assertIn('wait_port_open 127.0.0.1 "$HEALTH_PORT"', no_start)
         self.assertIn("services were not started (--no-start)", no_start)
 
     def test_no_start_still_runs_the_explicit_recovery(self):
@@ -449,7 +450,8 @@ class BrokerctlCallOrderTests(unittest.TestCase):
                     VERSION="test", UM_PREFIX="/opt/um-share",
                     UM_HEALTH_TIMEOUT_S="1", NO_START=no_start,
                     RECOVER_BACKUP=recover, WITH_DISPLAY="0",
-                    WITH_CLOUDFLARED="0",
+                    WITH_CLOUDFLARED="0", TARGET_RUNTIME="python",
+                    HEALTH_PORT="8100",
                     EX_OK="0", EX_SOFTWARE="70", EX_UNAVAILABLE="69")
                 recovery_tail = f"{recovery_body};" if recovery_body else ""
                 script = f"""
@@ -459,6 +461,8 @@ die() {{ printf 'DIE:%s\\n' "$2" >&2; exit "$1"; }}
 systemctl() {{ printf 'systemctl %s\\n' "$*" >> "$TRACE"; }}
 brokerctl() {{ printf 'brokerctl %s\\n' "$*" >> "$TRACE"; }}
 console_port() {{ printf '8096\\n'; }}
+release_console_unit() {{ case "$1" in rust) printf 'um-share-console.service\\n' ;; *) printf 'um-share-console-python.service\\n' ;; esac; }}
+release_console_port() {{ case "$1" in rust) printf '8002\\n' ;; *) printf '8096\\n' ;; esac; }}
 wait_port_open() {{ printf 'wait_port_open %s\\n' "$*" >> "$TRACE"; }}
 health_gate() {{ printf 'health_gate\\n' >> "$TRACE"; }}
 run_recovery() {{ printf 'recovery %s\\n' "$1" >> "$TRACE"; {recovery_tail} }}
@@ -760,7 +764,7 @@ wait_port_closed() {
   printf 'wait-closed %s %s\n' "$1" "$2" >> "$TRACE"
   if [ "${FAIL_CLOSE_AFTER_START:-}" = "$2" ]; then
     case " $STARTED_UNITS " in
-      *" um-share-console.service "*) return 1 ;;
+      *" um-share-console-python.service "*) return 1 ;;
     esac
   fi
   return 0
@@ -856,7 +860,7 @@ readlink() {
         text = _read(name).replace("\r\n", "\n")
         tail = text[text.index(self.MARKER):]
         if active is None:
-            active = ("cloudflared.service", "um-share-console.service",
+            active = ("cloudflared.service", "um-share-console-python.service",
                       "um-share-broker.service")
         with tempfile.TemporaryDirectory(prefix="switch-failure-") as tmp:
             root = Path(tmp)
@@ -870,7 +874,7 @@ readlink() {
                 # release that omits it fails with "systemd unit missing from
                 # release" instead of exercising the switch order.
                 for unit in ("um-share-broker.service",
-                             "um-share-console.service",
+                             "um-share-console-python.service",
                              "um-share-display.service"):
                     (units / unit).write_text(
                         (DEPLOY / "systemd" / unit).read_text(
@@ -993,7 +997,7 @@ readlink() {
                 self.assertIn("systemctl start um-share-broker.service",
                               result.trace)
                 self.assertIn("brokerctl start-explicit", result.trace)
-                self.assertIn("systemctl start um-share-console.service",
+                self.assertIn("systemctl start um-share-console-python.service",
                               result.trace)
                 self.assertIn("systemctl start cloudflared.service", result.trace)
                 self.assertFalse(
@@ -1074,7 +1078,7 @@ readlink() {
                 self.assertNotIn("systemctl start um-share-broker.service",
                                  result.trace)
                 self.assertNotIn("brokerctl start-explicit", result.trace)
-                self.assertNotIn("systemctl start um-share-console.service",
+                self.assertNotIn("systemctl start um-share-console-python.service",
                                  result.trace)
                 self.assertEqual([], self._indexes(result.trace, "wait-open "))
                 self.assertIn("systemctl start cloudflared.service", result.trace)
@@ -1091,7 +1095,7 @@ readlink() {
                                       "systemctl start um-share-")
                 stops = self._indexes(
                     result.trace,
-                    "systemctl stop um-share-console.service")
+                    "systemctl stop um-share-console-python.service")
                 waits = self._indexes(result.trace, "wait-open ")
                 self.assertTrue(starts)
                 self.assertTrue(stops)
@@ -1140,7 +1144,7 @@ readlink() {
             with self.subTest(script=name, path="unit"):
                 result = self._run(name, env_extra={
                     "FAIL_CONSOLE_PROBES": "1",
-                    "FAIL_UNIT_START": "um-share-console.service"})
+                    "FAIL_UNIT_START": "um-share-console-python.service"})
                 self.assertEqual(69, result.returncode, result.stderr)
                 self.assertTrue(
                     any("health gate" in line for line in result.trace))
@@ -1173,7 +1177,7 @@ readlink() {
             for label, extra in (
                     ("console-stop", {
                         "FAIL_UNIT_STOP_AFTER_START":
-                            "um-share-console.service"}),
+                            "um-share-console-python.service"}),
                     ("broker-stop", {
                         "FAIL_BROKER_STOP": "1",
                         "FAIL_UNIT_STOP_AFTER_START":
@@ -1218,7 +1222,7 @@ readlink() {
         for name in SHELL_SCRIPTS:
             with self.subTest(script=name):
                 result = self._run(
-                    name, active=("cloudflared.service", "um-share-console.service"),
+                    name, active=("cloudflared.service", "um-share-console-python.service"),
                     env_extra={"FAIL_CONSOLE_PROBES": "1"})
                 self.assertEqual(68, result.returncode, result.stderr)
                 self.assertEqual(result.old_target, result.current)
@@ -1323,7 +1327,7 @@ readlink() {
                     ("rollback-switch", {
                         "FAIL_CONSOLE_PROBES": "1",
                         "FAIL_UNIT_STOP_AFTER_START":
-                            "um-share-console.service"})):
+                            "um-share-console-python.service"})):
                 with self.subTest(script=name, case=label):
                     env_extra = {"NO_EDGE": "1"}
                     env_extra.update(extra)
