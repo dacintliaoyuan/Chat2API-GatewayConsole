@@ -44,6 +44,11 @@ struct FakePage {
     click_steps: Mutex<Vec<(String, Option<String>)>>,
     fill_calls: AtomicUsize,
     filled_values: Mutex<Vec<String>>,
+    account_prefilled: AtomicBool,
+    password_cleared: AtomicBool,
+    reject_submit: AtomicBool,
+    credential_error: AtomicBool,
+    submit_calls: AtomicUsize,
 }
 
 impl FakePage {
@@ -61,6 +66,11 @@ impl FakePage {
             click_steps: Mutex::new(Vec::new()),
             fill_calls: AtomicUsize::new(0),
             filled_values: Mutex::new(Vec::new()),
+            account_prefilled: AtomicBool::new(false),
+            password_cleared: AtomicBool::new(false),
+            reject_submit: AtomicBool::new(false),
+            credential_error: AtomicBool::new(false),
+            submit_calls: AtomicUsize::new(0),
         })
     }
 
@@ -126,11 +136,25 @@ impl LoginPage for FakePage {
         Ok(())
     }
 
-    fn any_visible(&self, _selectors: &[&str]) -> bool {
-        false
+    fn any_visible(&self, selectors: &[&str]) -> bool {
+        selectors.contains(&"#errorText") && self.credential_error.load(Ordering::SeqCst)
     }
 
-    fn field_filled(&self, _selectors: &[&str]) -> bool {
+    fn any_visible_text(&self, selectors: &[&str]) -> bool {
+        self.any_visible(selectors)
+    }
+
+    fn field_filled(&self, selectors: &[&str]) -> bool {
+        if selectors.contains(&"input[name=\"UserName\"]")
+            && self.account_prefilled.load(Ordering::SeqCst)
+        {
+            return true;
+        }
+        if selectors.contains(&"input[name=\"Password\"]")
+            && self.password_cleared.load(Ordering::SeqCst)
+        {
+            return false;
+        }
         if self.unfilled_polls.load(Ordering::SeqCst) > 0 {
             self.unfilled_polls.fetch_sub(1, Ordering::SeqCst);
             return false;
@@ -149,6 +173,14 @@ impl LoginPage for FakePage {
     }
 
     fn click(&self, _target: &VisibleTarget) -> Result<(), String> {
+        if self.reject_submit.load(Ordering::SeqCst)
+            && self.url().starts_with("https://websso.um.edu.mo/")
+        {
+            self.submit_calls.fetch_add(1, Ordering::SeqCst);
+            self.credential_error.store(true, Ordering::SeqCst);
+            self.password_cleared.store(true, Ordering::SeqCst);
+            return Ok(());
+        }
         let step = {
             let mut steps = self.click_steps.lock().expect("click steps");
             if steps.is_empty() {
@@ -164,7 +196,10 @@ impl LoginPage for FakePage {
         Ok(())
     }
 
-    fn fill(&self, _selectors: &[&str], value: &str) -> Result<(), String> {
+    fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String> {
+        if selectors.contains(&"input[name=\"Password\"]") {
+            self.password_cleared.store(false, Ordering::SeqCst);
+        }
         self.fill_calls.fetch_add(1, Ordering::SeqCst);
         self.filled_values.lock().unwrap().push(value.to_string());
         Ok(())
@@ -335,7 +370,6 @@ fn login_config(temp: &TempDir) -> LoginConfig {
         browser_disabled: false,
         um_account: String::new(),
         um_password: String::new(),
-        um_credential_source: Arc::new(um_gateway::login::credentials::NoStoredCredentials),
     }
 }
 
@@ -591,45 +625,6 @@ fn a_slow_umpass_form_is_not_reported_as_prefill_missing() {
     assert_eq!(page.fill_calls(), 2);
 }
 
-struct StoredFormCredentials {
-    reads: AtomicUsize,
-    available: AtomicBool,
-    error: Mutex<Option<um_gateway::login::credentials::CredentialSourceError>>,
-}
-
-impl StoredFormCredentials {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            reads: AtomicUsize::new(0),
-            available: AtomicBool::new(false),
-            error: Mutex::new(None),
-        })
-    }
-}
-
-impl um_gateway::login::credentials::UmpassCredentialSource for StoredFormCredentials {
-    fn load(
-        &self,
-    ) -> Result<
-        Option<um_gateway::login::credentials::UmpassCredentials>,
-        um_gateway::login::credentials::CredentialSourceError,
-    > {
-        self.reads.fetch_add(1, Ordering::SeqCst);
-        if let Some(error) = *self.error.lock().unwrap() {
-            return Err(error);
-        }
-        if self.available.load(Ordering::SeqCst) {
-            um_gateway::login::credentials::UmpassCredentials::new(
-                "fixture-account".into(),
-                " fixture-password ".into(),
-            )
-            .map(Some)
-        } else {
-            Ok(None)
-        }
-    }
-}
-
 fn empty_form_page() -> Arc<FakePage> {
     let page = FakePage::new("http://127.0.0.1:9", None);
     page.submit_visible.store(true, Ordering::SeqCst);
@@ -640,73 +635,53 @@ fn empty_form_page() -> Arc<FakePage> {
     page
 }
 
+fn configure_form_pair(config: &mut LoginConfig) {
+    config.um_account = "fixture-account".into();
+    config.um_password = " fixture-password ".into();
+}
+
 #[test]
-fn headless_login_reads_newly_saved_credentials_when_browser_does_not_autofill() {
-    let temp = TempDir::new("um-rust-login-stored-form-");
+fn configured_pair_replaces_a_preexisting_browser_account_instead_of_mixing_sources() {
+    let temp = TempDir::new("um-rust-login-configured-pair-");
     let page = empty_form_page();
-    let source = StoredFormCredentials::new();
-    let (service, factory) = login_service_with(
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    let (service, _) = login_service_with(
         &temp,
         page.clone(),
         ScriptedProbe::valid(),
         Arc::new(FakeSink::default()),
-        |config| {
-            config.um_credential_source = source.clone();
-        },
-    );
-    // Setup after service creation must work without a process restart.
-    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
-    source.available.store(true, Ordering::SeqCst);
-    service.start_explicit(false);
-    let status = wait_for(&service, |s| s["state"] != json!("logging_in"));
-    assert_eq!(status["state"], json!("valid"), "{status}");
-    assert_eq!(page.fill_calls(), 2);
-    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        *page.filled_values.lock().unwrap(),
-        vec!["fixture-account", " fixture-password "]
-    );
-    assert!(!factory.requests()[0].headful);
-    assert!(!format!("{:?}", service.config()).contains("fixture-password"));
-    // Every round re-reads the source; errors stop rather than retrying a password.
-    *source.error.lock().unwrap() =
-        Some(um_gateway::login::credentials::CredentialSourceError::Windows(5));
-    *page.token.lock().unwrap() = None;
-    page.closed.store(false, Ordering::SeqCst);
-    page.fill_calls.store(0, Ordering::SeqCst);
-    *page.click_steps.lock().unwrap() = empty_form_page().click_steps.lock().unwrap().clone();
-    service.start_explicit(false);
-    let status = wait_for(&service, |s| s["state"] == json!("failed"));
-    assert_eq!(status["error"], json!("umpass_credentials_windows_error:5"));
-    assert_eq!(source.reads.load(Ordering::SeqCst), 2);
-    assert_eq!(page.fill_calls(), 0);
-}
-
-#[test]
-fn working_browser_sso_does_not_read_stored_form_credentials() {
-    let temp = TempDir::new("um-rust-login-sso-source-");
-    let source = StoredFormCredentials::new();
-    *source.error.lock().unwrap() =
-        Some(um_gateway::login::credentials::CredentialSourceError::Windows(5));
-    let page = empty_form_page();
-    page.fill_calls.store(2, Ordering::SeqCst);
-    let (service, _) = login_service_with(
-        &temp,
-        page,
-        ScriptedProbe::valid(),
-        Arc::new(FakeSink::default()),
-        |config| {
-            config.um_credential_source = source.clone();
-        },
+        configure_form_pair,
     );
     service.start_explicit(false);
     let status = wait_for(&service, |s| s["state"] != json!("logging_in"));
     assert_eq!(status["state"], json!("valid"));
-    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        *page.filled_values.lock().unwrap(),
+        vec!["fixture-account", " fixture-password "]
+    );
 }
 
 #[test]
-fn stored_credentials_are_never_read_or_typed_on_untrusted_sso_origins() {
+fn umpass_rejection_that_clears_password_stops_after_one_submission() {
+    let temp = TempDir::new("um-rust-login-cleared-password-");
+    let page = empty_form_page();
+    page.reject_submit.store(true, Ordering::SeqCst);
+    let (service, _) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        configure_form_pair,
+    );
+    service.start_explicit(false);
+    let status = wait_for(&service, |s| s["state"] == json!("failed"));
+    assert_eq!(status["error"], json!("upstream_credential_rejected"));
+    assert_eq!(page.submit_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(page.fill_calls(), 2);
+}
+
+#[test]
+fn configured_credentials_are_not_typed_on_untrusted_sso_origins() {
     for url in [
         "http://websso.um.edu.mo/adfs/",
         "https://other.websso.um.edu.mo/adfs/",
@@ -715,16 +690,12 @@ fn stored_credentials_are_never_read_or_typed_on_untrusted_sso_origins() {
         let temp = TempDir::new("um-rust-login-untrusted-form-");
         let page = empty_form_page();
         page.click_steps.lock().unwrap()[0].0 = url.to_string();
-        let source = StoredFormCredentials::new();
-        source.available.store(true, Ordering::SeqCst);
         let (service, _) = login_service_with(
             &temp,
             page.clone(),
             ScriptedProbe::valid(),
             Arc::new(FakeSink::default()),
-            |config| {
-                config.um_credential_source = source.clone();
-            },
+            configure_form_pair,
         );
         service.start_explicit(false);
         let status = wait_for(&service, |s| s["state"] == json!("failed"));
@@ -732,7 +703,6 @@ fn stored_credentials_are_never_read_or_typed_on_untrusted_sso_origins() {
             status["error"],
             json!("umpass_credentials_untrusted_origin")
         );
-        assert_eq!(source.reads.load(Ordering::SeqCst), 0);
         assert_eq!(page.fill_calls(), 0);
     }
 }

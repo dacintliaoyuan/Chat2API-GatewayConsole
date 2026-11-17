@@ -33,6 +33,10 @@
 
 ## 相关实现
 
+### 2026-11-17 本机持久化补充
+
+首次登录后继续复用既有 token 与 Edge profile；密码只由 Edge 原有保存功能管理，不另建应用密码库。Python 的 persistent context 正常关闭会保存 profile，Rust 的登录浏览器也必须先请求正常关闭并等待退出。强制结束只补偿正常关闭失败，且必须报告失败，不能把可能未落盘的 profile 当成登录成功。独立 profile 的真实 Edge 回归覆盖 Cookie 在关闭、重开之间的保留；真实 UM 会话仍需分别验收。操作与验证见 [UM 首次登录后的保存与复用](../um-login-session-persistence.md)。
+
 - `chat2api/chat2api.py`：`browser_login`、重新认证轮次与 profile 启动
 - `um-cloud-deploy/systemd/um-share-display.service`：按需 display unit，并与 8100 子进程共享私有 `/tmp`
 - `um-cloud-deploy/display/start-loopback-display.sh`：display 就绪后发布 `login-display.env`；`browser_login` 据此在新轮次打开可见浏览器

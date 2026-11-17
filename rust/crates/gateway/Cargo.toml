@@ -21,10 +21,6 @@ getrandom = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-root-certs = "1"
-zeroize = "1"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

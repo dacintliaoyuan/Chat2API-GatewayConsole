@@ -9,7 +9,6 @@
 //! the credential sink are seams: tests use fakes and never open a browser.
 
 pub mod browser;
-pub mod credentials;
 pub mod probe;
 pub mod profile;
 pub mod token;
@@ -199,10 +198,9 @@ pub struct LoginConfig {
     pub max_sessions: usize,
     pub browser_disabled: bool,
     /// UMPASS account and password the login executor may type into an empty
-    /// ADFS form; both empty consults the optional protected credential source.
+    /// ADFS form; both empty keeps the browser-managed prefill path.
     pub um_account: String,
     pub um_password: String,
-    pub um_credential_source: Arc<dyn credentials::UmpassCredentialSource>,
 }
 
 impl std::fmt::Debug for LoginConfig {
@@ -245,11 +243,6 @@ impl LoginConfig {
             um_password: std::env::var("CHAT2API_UM_PASSWORD")
                 .unwrap_or_default()
                 .to_string(),
-            um_credential_source: if config.role == crate::config::Role::Local {
-                credentials::local_source()
-            } else {
-                Arc::new(credentials::NoStoredCredentials)
-            },
         }
     }
 }
@@ -1298,7 +1291,6 @@ fn drive_login(
     let mut stage_seen: HashMap<String, Instant> = HashMap::new();
     let mut manual_reason: Option<String> = None;
     let mut stage = String::new();
-    let mut form_credentials = None;
 
     while Instant::now() < deadline {
         if session.cancel.load(Ordering::SeqCst) {
@@ -1427,6 +1419,13 @@ fn drive_login(
         } else if stage == "umpass" {
             let count = clicks.entry(stage.clone()).or_insert(0);
             let seen = *stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
+            // ADFS clears the password on rejection. Detect the visible error
+            // before refilling or clicking again, including delayed responses.
+            if *count > 0 && umpass_credential_rejected(page) {
+                return LoginOutcome::Rejected {
+                    reason: "upstream_credential_rejected".to_string(),
+                };
+            }
             if *count >= inner.config.max_clicks_per_stage {
                 manual_reason = Some("umpass_click_swallowed".to_string());
                 note_progress(
@@ -1451,56 +1450,29 @@ fn drive_login(
                             reason: "umpass_credentials_untrusted_origin".to_string(),
                         };
                     }
-                    // Read lazily once per browser session: saving/updating the
-                    // dedicated record takes effect without restarting 8000.
-                    let resolved = form_credentials.get_or_insert_with(|| {
-                        credentials::resolve(
-                            &inner.config.um_account,
-                            &inner.config.um_password,
-                            &*inner.config.um_credential_source,
-                        )
-                    });
-                    match resolved {
-                        Err(error) => {
-                            return LoginOutcome::Terminal {
-                                reason: error.reason(),
-                            }
+                    if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
+                        if visible {
+                            note_progress(
+                                inner,
+                                round,
+                                "waiting_for_credentials",
+                                Some(&url),
+                                Some("umpass_prefill_missing"),
+                            );
+                        } else {
+                            return stop_for_manual(inner, round, page, "umpass_prefill_missing");
                         }
-                        Ok(None) => {
-                            if visible {
-                                note_progress(
-                                    inner,
-                                    round,
-                                    "waiting_for_credentials",
-                                    Some(&url),
-                                    Some("umpass_prefill_missing"),
-                                );
-                            } else {
-                                return stop_for_manual(
-                                    inner,
-                                    round,
-                                    page,
-                                    "umpass_prefill_missing",
-                                );
-                            }
-                        }
-                        Ok(Some(value)) => {
-                            if (!page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
-                                && page
-                                    .fill(&UMPASS_ACCOUNT_SELECTORS, &value.account)
-                                    .is_err())
-                                || (!page.field_filled(&UMPASS_PASSWORD_SELECTORS)
-                                    && page
-                                        .fill(&UMPASS_PASSWORD_SELECTORS, &value.password)
-                                        .is_err())
-                            {
-                                return stop_for_manual(
-                                    inner,
-                                    round,
-                                    page,
-                                    "umpass_prefill_missing",
-                                );
-                            }
+                    } else {
+                        // Explicit environment credentials are a pair. Never combine a
+                        // browser-prefilled account with another password.
+                        if page
+                            .fill(&UMPASS_ACCOUNT_SELECTORS, &inner.config.um_account)
+                            .is_err()
+                            || page
+                                .fill(&UMPASS_PASSWORD_SELECTORS, &inner.config.um_password)
+                                .is_err()
+                        {
+                            return stop_for_manual(inner, round, page, "umpass_prefill_missing");
                         }
                     }
                 }
@@ -1659,10 +1631,7 @@ fn umpass_credential_rejected(page: &dyn LoginPage) -> bool {
     {
         return false;
     }
-    if !page.any_visible(&UMPASS_ERROR_SELECTORS) {
-        return false;
-    }
-    page.field_filled(&UMPASS_PASSWORD_SELECTORS)
+    page.any_visible_text(&UMPASS_ERROR_SELECTORS)
 }
 
 enum ClickOutcome {

@@ -1,7 +1,7 @@
 //! The browser seam and the real Chromium-family driver.
 //!
 //! The login state machine only touches [`LoginPage`]. Tests inject a fake
-//! factory and a fake page, so no test opens a real browser. The production
+//! factory and a fake page; an explicit ignored test covers real Edge persistence. The production
 //! factory launches a Chromium-family binary with `--remote-debugging-port=0`,
 //! discovers the page target through the loopback DevTools endpoint, and drives it
 //! over a minimal CDP WebSocket client.
@@ -24,6 +24,7 @@ pub const LOGIN_DISPLAY_FILE: &str = "/run/um-share/login-display.env";
 pub const BROWSER_STARTUP_BUDGET: Duration = Duration::from_secs(30);
 pub const BROWSER_DISCOVERY_BUDGET: Duration = Duration::from_secs(30);
 pub const CDP_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const BROWSER_CLOSE_BUDGET: Duration = Duration::from_secs(5);
 const LINUX_BROWSER_NAMES: [&str; 4] = [
     "chromium",
     "chromium-browser",
@@ -73,6 +74,7 @@ pub trait LoginPage: Send {
     fn bring_to_front(&self) -> Result<(), String>;
     fn goto(&self, url: &str) -> Result<(), String>;
     fn any_visible(&self, selectors: &[&str]) -> bool;
+    fn any_visible_text(&self, selectors: &[&str]) -> bool;
     fn field_filled(&self, selectors: &[&str]) -> bool;
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget>;
     fn click(&self, target: &VisibleTarget) -> Result<(), String>;
@@ -438,14 +440,53 @@ impl LoginBrowser for RealBrowser {
 
     fn close(&mut self) -> Result<(), String> {
         self.page.closed.store(true, Ordering::SeqCst);
-        kill_child_tree(&self.child)
+        if browser_exited(&self.child)? {
+            return Ok(());
+        }
+        // Match Playwright context.close(): let Chromium flush the persistent
+        // profile before exit. taskkill /F loses newly written cookies.
+        // Do not wait for a CDP reply: closing the browser can close its socket
+        // first. The owned process exiting is the completion signal.
+        let requested = self
+            .page
+            .connection
+            .lock()
+            .expect("cdp connection poisoned")
+            .send_command("Browser.close", json!({}));
+        let deadline = Instant::now() + BROWSER_CLOSE_BUDGET;
+        while Instant::now() < deadline {
+            if browser_exited(&self.child)? {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Only compensate for a broken/unresponsive DevTools close. Forced
+        // cleanup cannot certify a flushed profile and must not commit a token.
+        kill_child_tree(&self.child)?;
+        Err(if requested.is_err() {
+            "browser_graceful_close_failed"
+        } else {
+            "browser_graceful_close_timeout"
+        }
+        .to_string())
     }
 }
 
 impl Drop for RealBrowser {
     fn drop(&mut self) {
-        let _ = kill_child_tree(&self.child);
+        if let Err(error) = self.close() {
+            eprintln!("um-gateway: login browser cleanup failed: {error}");
+        }
     }
+}
+
+fn browser_exited(child: &Arc<Mutex<Child>>) -> Result<bool, String> {
+    child
+        .lock()
+        .expect("browser child poisoned")
+        .try_wait()
+        .map(|status| status.is_some())
+        .map_err(|_| "browser_exit_check_failed".to_string())
 }
 
 struct RealPage {
@@ -517,6 +558,11 @@ impl LoginPage for RealPage {
 
     fn any_visible(&self, selectors: &[&str]) -> bool {
         let expression = selector_count_expression(selectors);
+        matches!(self.evaluate(&expression), Ok(Value::Number(value)) if value.as_u64().unwrap_or(0) > 0)
+    }
+
+    fn any_visible_text(&self, selectors: &[&str]) -> bool {
+        let expression = selector_count_expression_with_text(selectors, true);
         matches!(self.evaluate(&expression), Ok(Value::Number(value)) if value.as_u64().unwrap_or(0) > 0)
     }
 
@@ -593,11 +639,16 @@ impl RealPage {
 }
 
 fn selector_count_expression(selectors: &[&str]) -> String {
+    selector_count_expression_with_text(selectors, false)
+}
+
+fn selector_count_expression_with_text(selectors: &[&str], require_text: bool) -> String {
     let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
     format!(
         "(function(selectors){{var visible=function(el){{var r=el.getBoundingClientRect();\
          var s=getComputedStyle(el);return !!(r.width||r.height||el.getClientRects().length)\
-         && s.visibility!=='hidden'&&s.display!=='none';}};\
+         && s.visibility!=='hidden'&&s.display!=='none'\
+         && (!{require_text}||(el.textContent||'').trim().length>0);}};\
          var matches=function(sel){{if(sel.indexOf('text=')===0){{var text=sel.slice(5);\
          if(text[0]==='\"')text=text.slice(1,-1);\
          return Array.prototype.slice.call(document.querySelectorAll('*')).filter(function(el){{\
@@ -750,11 +801,16 @@ impl CdpConnection {
         })
     }
 
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    fn send_command(&mut self, method: &str, params: Value) -> Result<u64, String> {
         let id = self.next_id;
         self.next_id += 1;
         let message = json!({"id": id, "method": method, "params": params});
         self.websocket.send_text(&message.to_string())?;
+        Ok(id)
+    }
+
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.send_command(method, params)?;
         loop {
             let text = self.websocket.read_text()?;
             let value: Value =

@@ -33,6 +33,10 @@ _Avoid_: 服务状态、token 状态
 为恢复 chat2api 上游认证而进行的一次登录交互（可见或 headless）；同一时刻所有触发方共享唯一会话。
 _Avoid_: 登录窗口、刷新 token、可见窗口
 
+**UM 登录态复用 (UM sign-in session reuse)**:
+首次登录后保留上游认可的会话信息，供后续请求及服务重启继续使用；保存成功不代表会话不会被上游撤销或要求本人再次验证。
+_Avoid_: 永久登录、另存账号密码、绕过 Duo
+
 **登录呈现方式 (Login presentation mode)**:
 一次登录交互是否创建可见浏览器窗口的呈现选择；默认 headless-first，正常路径不创建可见窗口，不要求 `DISPLAY` 或 `WAYLAND_DISPLAY`，并复用同一 profile。
 _Avoid_: 默认可见窗口、每次新建专用 profile

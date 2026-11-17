@@ -755,8 +755,6 @@ dependencies = [
  "um-contract",
  "um-test-harness",
  "webpki-root-certs",
- "windows-sys 0.61.2",
- "zeroize",
 ]
 
 [[package]]
