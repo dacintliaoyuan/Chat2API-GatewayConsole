@@ -330,22 +330,84 @@ fn local_static_rejects_traversal_missing_and_directories() {
     }
 }
 
+fn cloud_identity() -> Value {
+    json!({
+        "line": "production",
+        "role": "cloud",
+        "sourceHash": "b".repeat(64),
+    })
+}
+
+fn cloud_console(temp: &um_test_harness::TempDataDir, dist: &Path) -> Console {
+    start_console_with(temp, stopped_runtime(), |config| {
+        config.role = Role::Cloud;
+        config.port = 8002;
+        config.console_dist_dir = dist.to_path_buf();
+    })
+}
+
 #[test]
-fn cloud_role_keeps_the_unknown_path_answer() {
+fn cloud_root_serves_the_cloud_dist_index() {
+    let temp = temp();
+    let dist = temp.path().join("dist");
+    write_index(&dist);
+    write_identity(&dist, cloud_identity());
+    let console = cloud_console(&temp, &dist);
+
+    for target in ["/", "/index.html"] {
+        let response = client_request(console.addr, &ClientRequest::get(target)).expect(target);
+        assert_eq!(response.status, 200, "{target}");
+        assert_eq!(response.body, STUB_INDEX, "{target}");
+        assert_eq!(
+            response.header("content-type"),
+            Some("text/html; charset=utf-8"),
+            "{target}"
+        );
+        assert_eq!(
+            response.header("cache-control"),
+            Some("no-store"),
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn cloud_root_refuses_a_local_build_identity() {
     let temp = temp();
     let dist = temp.path().join("dist");
     write_index(&dist);
     write_identity(&dist, local_identity());
-    fs::create_dir_all(dist.join("assets")).expect("create dist assets");
-    fs::write(dist.join("assets/app.js"), b"cloud-stub").expect("write asset");
-    let console = start_console_with(&temp, stopped_runtime(), |config| {
-        config.role = Role::Cloud;
-        config.console_dist_dir = dist.clone();
-    });
+    let console = cloud_console(&temp, &dist);
 
-    for target in ["/", "/index.html", "/assets/app.js"] {
-        let response = client_request(console.addr, &ClientRequest::get(target)).expect(target);
-        assert_eq!(response.status, 404, "{target}");
-        assert_eq!(response.json()["error"], json!("unknown path"), "{target}");
-    }
+    let response = client_request(console.addr, &ClientRequest::get("/")).expect("root");
+    assert_eq!(response.status, 500);
+    let error = response.json()["error"]
+        .as_str()
+        .expect("identity error")
+        .to_string();
+    assert!(error.contains("local"), "{error}");
+    assert!(error.contains("cloud"), "{error}");
+}
+
+#[test]
+fn cloud_static_assets_use_the_python_paths_and_mime_map() {
+    let temp = temp();
+    let dist = temp.path().join("dist");
+    fs::create_dir_all(dist.join("assets")).expect("create dist assets");
+    fs::write(dist.join("assets").join("app.js"), b"cloud-stub").expect("write asset");
+    write_identity(&dist, cloud_identity());
+    let console = cloud_console(&temp, &dist);
+
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/assets/app.js"),
+    )
+    .expect("cloud asset");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, b"cloud-stub");
+    assert_eq!(
+        response.header("content-type"),
+        Some("text/javascript; charset=utf-8")
+    );
+    assert_eq!(response.header("cache-control"), Some("no-store"));
 }

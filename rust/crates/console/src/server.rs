@@ -334,7 +334,7 @@ fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response 
     }
 
     if path == "/" || path == "/index.html" {
-        if method != "GET" || state.config.role != Role::Local {
+        if method != "GET" {
             return ConsoleError::unknown_path().response();
         }
         return crate::static_files::serve_index(
@@ -379,7 +379,7 @@ fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response 
         return handle_share_api(state, request, &target);
     }
     if !path.starts_with("/api/console/") {
-        if method == "GET" && state.config.role == Role::Local {
+        if method == "GET" {
             return crate::static_files::serve_static(&state.config.console_dist_dir, path);
         }
         return ConsoleError::unknown_path().response();
