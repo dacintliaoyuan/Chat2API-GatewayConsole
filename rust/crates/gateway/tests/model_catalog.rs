@@ -18,8 +18,7 @@ fn the_default_catalog_appends_virtual_effort_models() {
         config.effort_models = vec!["fixture-model-a".to_string()];
     });
 
-    let response =
-        client_request(gateway.addr, &ClientRequest::get("/v1/models")).expect("models");
+    let response = client_request(gateway.addr, &ClientRequest::get("/v1/models")).expect("models");
     assert_eq!(response.status, 200);
     assert_eq!(response.header("x-chat2api-raw-models"), None);
     let body = response.json();
@@ -83,8 +82,7 @@ fn an_absent_base_model_never_exposes_variants() {
         config.effort_models = vec!["retired-base".to_string()];
     });
 
-    let response =
-        client_request(gateway.addr, &ClientRequest::get("/v1/models")).expect("models");
+    let response = client_request(gateway.addr, &ClientRequest::get("/v1/models")).expect("models");
     let body = response.json();
     let ids: Vec<&str> = body["data"]
         .as_array()

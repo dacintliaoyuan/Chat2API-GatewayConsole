@@ -700,9 +700,10 @@ pub fn parse_auth_wait_budget(value: Option<&str>) -> Option<Duration> {
         .parse::<f64>()
         .ok()
         .filter(|value| value.is_finite())?;
-    Some(Duration::from_secs_f64(
-        seconds.clamp(MIN_AUTH_WAIT_BUDGET_SECONDS, MAX_AUTH_WAIT_BUDGET_SECONDS),
-    ))
+    Some(Duration::from_secs_f64(seconds.clamp(
+        MIN_AUTH_WAIT_BUDGET_SECONDS,
+        MAX_AUTH_WAIT_BUDGET_SECONDS,
+    )))
 }
 
 /// Resolve the auth-wait budget with Python's precedence: an explicit CLI value

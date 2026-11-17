@@ -37,17 +37,17 @@ fn local_role_proxies_general_api_get_and_post() {
         .iter()
         .find(|request| request.path == "/api/echo" && request.method == "GET")
         .expect("GET /api/echo reached the upstream");
-    assert_eq!(get_seen.raw_target, "/api/echo", "query must not be forwarded");
+    assert_eq!(
+        get_seen.raw_target, "/api/echo",
+        "query must not be forwarded"
+    );
     assert_eq!(
         get_seen.authorization.as_deref(),
         Some(format!("Bearer {STUB_TOKEN}").as_str())
     );
 
-    let post = client_request(
-        gateway.addr,
-        &local_post("/api/echo", r#"{"ping":true}"#),
-    )
-    .expect("local POST");
+    let post = client_request(gateway.addr, &local_post("/api/echo", r#"{"ping":true}"#))
+        .expect("local POST");
     assert_eq!(post.status, 200, "{:?}", post.body);
     assert_eq!(post.json()["method"], json!("POST"));
     assert_eq!(post.json()["path"], json!("/api/echo"));
@@ -73,7 +73,10 @@ fn local_passthrough_requires_the_control_token_and_local_boundary() {
     let missing = client_request(gateway.addr, &ClientRequest::get("/api/echo"))
         .expect("missing control token");
     assert_eq!(missing.status, 403);
-    assert_eq!(body_field(&missing.json(), "code"), &json!("control_denied_token"));
+    assert_eq!(
+        body_field(&missing.json(), "code"),
+        &json!("control_denied_token")
+    );
 
     let wrong = client_request(
         gateway.addr,
@@ -81,7 +84,10 @@ fn local_passthrough_requires_the_control_token_and_local_boundary() {
     )
     .expect("wrong control token");
     assert_eq!(wrong.status, 403);
-    assert_eq!(body_field(&wrong.json(), "code"), &json!("control_denied_token"));
+    assert_eq!(
+        body_field(&wrong.json(), "code"),
+        &json!("control_denied_token")
+    );
 
     let origin = client_request(
         gateway.addr,
@@ -124,19 +130,16 @@ fn local_passthrough_post_requires_a_json_object_body() {
     let stub = StubUpstream::start();
     let gateway = start_local_gateway(&stub, &temp);
 
-    let invalid_json = client_request(
-        gateway.addr,
-        &local_post("/api/echo", "{"),
-    )
-    .expect("invalid JSON");
+    let invalid_json =
+        client_request(gateway.addr, &local_post("/api/echo", "{")).expect("invalid JSON");
     assert_eq!(invalid_json.status, 400);
     assert_eq!(
         body_field(&invalid_json.json(), "code"),
         &json!("invalid_json")
     );
 
-    let non_object = client_request(gateway.addr, &local_post("/api/echo", "[]"))
-        .expect("non-object body");
+    let non_object =
+        client_request(gateway.addr, &local_post("/api/echo", "[]")).expect("non-object body");
     assert_eq!(non_object.status, 400);
     assert_eq!(
         body_field(&non_object.json(), "code"),

@@ -123,8 +123,7 @@ fn main() -> ExitCode {
     }
     config.role = role.unwrap_or_else(|| Role::for_port(config.bind_port));
     if let Some(value) = auth_wait_budget_cli {
-        config.auth_wait_budget =
-            Some(resolve_auth_wait_budget(Some(value), None, config.role));
+        config.auth_wait_budget = Some(resolve_auth_wait_budget(Some(value), None, config.role));
     }
     let server = match GatewayServer::start(config) {
         Ok(server) => server,

@@ -18,8 +18,8 @@ fn a_configured_local_api_key_protects_the_local_surface() {
         config.local_api_key = "local-secret".to_string();
     });
 
-    let missing = client_request(gateway.addr, &ClientRequest::get("/v1/models"))
-        .expect("missing local key");
+    let missing =
+        client_request(gateway.addr, &ClientRequest::get("/v1/models")).expect("missing local key");
     assert_eq!(missing.status, 401);
     assert_eq!(
         body_field(&missing.json(), "code"),

@@ -622,10 +622,7 @@ impl ProxyState {
             .expect("models cache poisoned")
             .clone();
         match cached {
-            Some((_, payload)) => Ok((
-                append_effort_models(&payload, &self.effort_models),
-                false,
-            )),
+            Some((_, payload)) => Ok((append_effort_models(&payload, &self.effort_models), false)),
             None => Err(GatewayError::models_unavailable()),
         }
     }
