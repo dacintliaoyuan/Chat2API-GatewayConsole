@@ -54,11 +54,11 @@ UM_ATTRIBUTION_KEY="${UM_ATTRIBUTION_KEY:-$UM_ETC/share-attribution.key}"
 UM_DRAIN_BUDGET_S="${UM_DRAIN_BUDGET_S:-900}"
 UM_BROKER_DRAIN_MAX_S="${UM_BROKER_DRAIN_MAX_S:-90}"
 UM_HEALTH_TIMEOUT_S="${UM_HEALTH_TIMEOUT_S:-60}"
-# Expand-contract (2026-11-14): the cloud console defaults to 8096.  The
-# deployed console.env is authoritative (an existing deployment may still carry
-# the legacy 18096 explicitly for one release cycle), so the ops scripts never
-# hardcode a port that could disagree with the running service.
-CONSOLE_PORT_DEFAULT=8096
+# The Rust cloud console defaults to 8002; the Python rollback unit keeps
+# 8096, and the legacy 18096 stays an explicit value for one release cycle.
+# The deployed console.env is authoritative, so the ops scripts never hardcode a
+# port that could disagree with the running service.
+CONSOLE_PORT_DEFAULT=8002
 # The share gateway is 8100 in the Python release.  A version switch names the
 # target release's port explicitly (8003 for Rust); this is only the default the
 # scripts fall back to, never a hardcoded probe.

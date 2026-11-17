@@ -1636,16 +1636,23 @@ class RfbAuthTests(unittest.TestCase):
         upstream.join(3)
 
     def test_missing_auth_socket_is_502_without_upgrade(self):
+        # A fake RFB upstream completes the version/security handshake so the
+        # proxy reaches the auth provider; the missing socket then fails at once.
+        # A real x11vnc on 8097 would make this depend on the environment.
+        upstream = _VncAuthUpstream(b"\x00" * 16)
+        upstream.start()
         with tempfile.TemporaryDirectory() as td:
             missing = str(Path(td) / "missing.sock")
             with proxy_server(
-                    make_config(vnc_auth_socket=missing,
+                    make_config(vnc_port=upstream.port,
+                                 vnc_auth_socket=missing,
                                  relay_join_timeout=0.05)) as (proxy, port):
                 sock, _ = _operator_ws(proxy, port)
                 try:
                     self.assertIn("502", _read_headers(sock))
                 finally:
                     sock.close()
+        upstream.join(3)
 
 
 class DisplayRelayLifecycleTests(unittest.TestCase):
@@ -2284,15 +2291,15 @@ class DisplayGrantScriptTests(unittest.TestCase):
             self.grant.read_control_token(path)
 
 
-    def test_serve_script_is_8096_only(self):
+    def test_serve_script_is_8002_only(self):
         script = (DISPLAY_DIR / "configure-tailscale-serve.sh").read_text(
             encoding="utf-8")
-        self.assertIn('CONSOLE_PORT="${CONSOLE_PORT:-8096}"', script)
+        self.assertIn('CONSOLE_PORT="${CONSOLE_PORT:-8002}"', script)
         self.assertIn(
             'tailscale serve --bg --https=443 "http://127.0.0.1:$CONSOLE_PORT"',
             script)
         self.assertIn("tailscale funnel status --json", script)
-        self.assertIn("8096|8100|8097|18096|5901", script)
+        self.assertIn("8002|8096|8100|8097|18096|5901", script)
 
     def test_console_listener_stays_loopback(self):
         source = (ROOT / "usagesrv.py").read_text(encoding="utf-8")

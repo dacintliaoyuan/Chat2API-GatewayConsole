@@ -53,16 +53,16 @@ class ConsoleBootstrapTests(unittest.TestCase):
         connection = mock.Mock()
         connection.getresponse.return_value = response
         with mock.patch.object(self.issuer.http.client, "HTTPConnection", return_value=connection):
-            self.issuer.request_console_session("http://127.0.0.1:8096", "fixture_admin", 5)
+            self.issuer.request_console_session("http://127.0.0.1:8002", "fixture_admin", 5)
         args, kwargs = connection.request.call_args
         self.assertEqual(args[:2], ("POST", "/api/session/reissue"))
         self.assertEqual(kwargs["headers"]["X-Admin-Control"], "fixture_admin")
-        self.assertEqual(kwargs["headers"]["Origin"], "http://127.0.0.1:8096")
+        self.assertEqual(kwargs["headers"]["Origin"], "http://127.0.0.1:8002")
         connection.close.assert_called_once()
 
     def test_console_request_keeps_the_legacy_port_explicit(self):
-        # Expand-contract (2026-11-14): the console moved 18096 -> 8096; the
-        # legacy port stays an explicit loopback value for one release cycle.
+        # The Rust console is 8002; the Python rollback unit keeps 8096, and the
+        # legacy 18096 stays an explicit loopback value for one release cycle.
         response = mock.Mock(status=200)
         response.read.return_value = b'{}'
         connection = mock.Mock()

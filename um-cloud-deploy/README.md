@@ -43,7 +43,7 @@ cd ..
 
 `--require-web-role cloud` 读取该树的 `candidate-build.json`：角色不是 `cloud`、或 `index.html` 加载的入口脚本不在携带文件里时直接失败。`--require-web-line production` 同时核对 `build.line`，候选树不能打进部署包。`web/dist` 是本机生产页（8001 托管），不能作为云端 `web_dist`。
 
-候选 `release/candidate/cloud` 只用于 8099 只读预览；8096 根路径按产品既有行为返回 500，不伪造页面。
+候选 `release/candidate/cloud` 只用于 8099 只读预览；生产页由 Rust 8002 托管的 `web/dist` 提供，候选树不伪造页面。
 
 ## 依赖锁定
 
@@ -228,9 +228,10 @@ bash um-cloud-deploy/cutover-gate.sh all --to <python-release> \
   --evidence /tmp/cutover-gate.json
 ```
 
-`console-rollback-drill` 只临时把 `/etc/um-share/console.env` 的 `USAGESRV_PORT`
-改成 8096（systemd 的 `EnvironmentFile` 会覆盖 unit 的 `Environment=`），结束前恢复原字节；
-不删除任何 unit，也不移动 release 链接。
+`console-rollback-drill` 切到 Python 回滚单元：`um-share-console-python.service`
+已在 `ExecStart` 用 `/usr/bin/env USAGESRV_PORT=8096` 固定端口，不再临时改写
+`/etc/um-share/console.env`；演练只停/启 unit，结束前恢复 Rust 8002。不删除任何
+unit，也不移动 release 链接。
 
 云端 smoke 的操作员变量：`BASE_URL`、`UM_SHARE_KEY`（分享 Key 值只留在环境变量，
 不进入证据）、`UM_LEDGER`、`UM_CONSOLE_URL`、`UM_CONTROL_TOKEN`、`UM_KEY_ID`、

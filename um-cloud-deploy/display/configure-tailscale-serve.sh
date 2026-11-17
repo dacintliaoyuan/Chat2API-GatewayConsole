@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Configure the tailnet-only Serve entry for the private console.
 #
-# The console listener defaults to 127.0.0.1:8096 (expand-contract 2026-11-14;
-# the legacy 18096 stays an explicit value for one release cycle via
-# CONSOLE_PORT=18096).  Serve terminates HTTPS on the tailnet and proxies only
+# The console listener defaults to 127.0.0.1:8002 (the Rust cloud console;
+# the Python rollback unit keeps 8096, and the legacy 18096 stays an explicit
+# value for one release cycle via CONSOLE_PORT=18096).  Serve terminates HTTPS
+# on the tailnet and proxies only
 # the root path to that loopback address.  Funnel is never enabled, and this
 # script never adds a public 80/443/8100/8097 listener.
 #
@@ -14,7 +15,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python3.14}"
-CONSOLE_PORT="${CONSOLE_PORT:-8096}"
+CONSOLE_PORT="${CONSOLE_PORT:-8002}"
 APPLY=0
 RESET_OTHER=0
 
@@ -164,9 +165,10 @@ if ! ss -H -ltnp | awk '$4 ~ /:(80|443)$/ && /tailscaled/ {print $4}' \
   exit 1
 fi
 
-# The private display and backend never listen off loopback.  The legacy
-# 18096/5901 aliases stay in the check for the expand-contract window.
-if ! ss -H -ltn | awk '$4 ~ /:(8096|8100|8097|18096|5901)$/ {print $4}' \
+# The private display and backend never listen off loopback.  The Python
+# rollback console (8096) and the legacy 18096/5901 aliases stay in the check
+# for the rollback window; 8002 is the Rust cloud console.
+if ! ss -H -ltn | awk '$4 ~ /:(8002|8096|8100|8097|18096|5901)$/ {print $4}' \
   | while read -r address; do
       case "$address" in
         127.0.0.1:*|\[::1\]:*) ;;

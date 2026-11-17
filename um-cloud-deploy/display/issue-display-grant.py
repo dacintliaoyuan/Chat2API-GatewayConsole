@@ -21,15 +21,14 @@ import stat
 import sys
 from urllib.parse import urlsplit
 
-# Expand-contract (2026-11-14): the console moved 18096 -> 8096.  The default
-# follows the new port; the legacy 18096 stays usable as an explicit --console
-# value for one release cycle.  The admin control token only goes to these cloud
-# console origins, never to the local 8001 console.
-DEFAULT_CONSOLE = "http://127.0.0.1:8096"
-# Expand-contract (2026-11-14): 18096 is the legacy cloud console port and
-# stays accepted for one release cycle.  8001 is the LOCAL console and is never
-# a valid destination for the cloud admin token.
-CONSOLE_PORTS = frozenset({8096, 18096})
+# The Rust cloud console listens on 8002; the Python rollback unit keeps 8096,
+# and the legacy 18096 stays usable as an explicit --console value for one
+# release cycle.  The admin control token only goes to these cloud console
+# origins, never to the local 8001 console.
+DEFAULT_CONSOLE = "http://127.0.0.1:8002"
+# 8001 is the LOCAL console and is never a valid destination for the cloud
+# admin token.
+CONSOLE_PORTS = frozenset({8002, 8096, 18096})
 DEFAULT_TOKEN_FILE = "/etc/um-share/admin-control-token"
 MAX_TOKEN_BYTES = 1024
 SERVICE_USER = "um-share"
