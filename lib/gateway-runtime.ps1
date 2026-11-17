@@ -22,7 +22,17 @@ $script:GatewayServiceDescriptors = [ordered]@{
         OpenUrl      = $null
         StartAction  = 'HiddenBatch'
         StopAction   = 'CommandLine'
-        StartPath    = 'start_chat2api.bat'
+        # #80: the local 8000 launcher is the Rust gateway binary. The Python
+        # entrypoint stays in start_chat2api.bat as the rollback target: reverting
+        # this one field (StartPath) restores Python without a reinstall or a
+        # port change. StartArguments/StartWorkingDirectory are harmless for a
+        # batch launcher (the batch ignores them) so the rollback stays a
+        # one-line change.
+        StartPath    = 'rust\target\release\um-gateway-candidate.exe'
+        StartArguments = '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token'
+        # Repository root keeps the Rust role defaults identical to Python:
+        # current_dir()/chat2api/token.json and current_dir()/chat2api/.edge-profile.
+        StartWorkingDirectory = '.'
         StartTimeoutSeconds = 20
         StopStrategy = 'GracefulHttp'
         StopWhenUnhealthy = $true
@@ -1152,16 +1162,42 @@ function Start-GatewayService {
                 if ($null -ne $sourceProp -and $sourceProp.Value) {
                     $childEnv[[string]$sourceProp.Value] = Get-GatewayActionSource
                 }
+                # #80: the chat2api descriptor points StartPath at the Rust
+                # executable and carries its arguments + working directory.
+                # A batch StartPath (the Python rollback) ignores the arguments
+                # and keeps the historical cmd.exe launch.
+                $startArguments = @()
+                $argumentsProp = $desc.PSObject.Properties['StartArguments']
+                if ($null -ne $argumentsProp -and $argumentsProp.Value) {
+                    $startArguments = @([string]$argumentsProp.Value)
+                }
+                $workingDirectory = Split-Path -Parent $startPath
+                $workingDirectoryProp = $desc.PSObject.Properties['StartWorkingDirectory']
+                if ($null -ne $workingDirectoryProp -and $workingDirectoryProp.Value) {
+                    $workingDirectory = [IO.Path]::GetFullPath(
+                        (Join-Path (Get-GatewayRoot) ([string]$workingDirectoryProp.Value)))
+                }
                 $saved = @{}
                 foreach ($name in $childEnv.Keys) {
                     $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
                     [Environment]::SetEnvironmentVariable($name, $childEnv[$name], 'Process')
                 }
                 try {
-                    Start-Process -FilePath 'cmd.exe' `
-                        -ArgumentList @('/d', '/c', "`"$startPath`"") `
-                        -WorkingDirectory (Split-Path -Parent $startPath) `
-                        -WindowStyle Hidden
+                    if ($startPath -match '\.(exe|com)$') {
+                        Start-Process -FilePath $startPath `
+                            -ArgumentList $startArguments `
+                            -WorkingDirectory $workingDirectory `
+                            -WindowStyle Hidden
+                    } else {
+                        $command = "`"$startPath`""
+                        if ($startArguments.Count -gt 0) {
+                            $command += ' ' + ($startArguments -join ' ')
+                        }
+                        Start-Process -FilePath 'cmd.exe' `
+                            -ArgumentList @('/d', '/c', $command) `
+                            -WorkingDirectory $workingDirectory `
+                            -WindowStyle Hidden
+                    }
                 } finally {
                     foreach ($name in $saved.Keys) {
                         [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process')

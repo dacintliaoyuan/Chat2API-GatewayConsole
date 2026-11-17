@@ -2,7 +2,7 @@
 # Uses injected hooks to verify start/stop/status calls without touching
 # real processes or the task scheduler. Health-only cases use isolated
 # ephemeral loopback sockets, never a configured service port.
-param([switch]$HealthOnly)
+param([switch]$HealthOnly, [switch]$LauncherOnly)
 
 $ErrorActionPreference = 'Stop'
 
@@ -412,6 +412,97 @@ foreach ($scriptName in @(
     Assert-Equal $parseErrors.Count 0 "$scriptName parses without errors"
 }
 
+# ---------------------------------------------------------------------------
+# #80: 本机 8000 启动器切换到 Rust 二进制。
+#
+# 只验证启动描述符、健康边界与回滚入口，不启动、不查询真实 8000：
+# CIM/HTTP/Start-Process 边界都在本块内替换，离开作用域即恢复。
+# ---------------------------------------------------------------------------
+
+& {
+    $desc = (Get-GatewayServiceDescriptors)['chat2api']
+    Assert-Equal ([IO.Path]::GetFileName([string]$desc.StartPath)) 'um-gateway-candidate.exe' 'chat2api StartPath points at the Rust binary'
+    Assert-Equal ([string]$desc.StartAction) 'HiddenBatch' 'chat2api keeps the hidden launcher action'
+    Assert-Equal ([string]$desc.StartArguments) '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token' 'chat2api starts production local 8000 with the Python control token file'
+    Assert-Equal ([string]$desc.StartWorkingDirectory) '.' 'chat2api launches from the repository root (Python default token/profile paths)'
+    Assert-Equal ([IO.Path]::GetFileName((Resolve-GatewayStartPath -Key 'chat2api'))) 'um-gateway-candidate.exe' 'resolved StartPath is the Rust binary'
+    Assert-Equal $desc.Port 8000 'Rust launcher keeps port 8000'
+    Assert-Equal $desc.HealthPath '/health' 'Rust launcher keeps the /health path'
+    Assert-Equal $desc.ShutdownUrl 'http://127.0.0.1:8000/admin/shutdown' 'Rust launcher keeps the /admin/shutdown URL'
+    Assert-Equal $desc.StopStrategy 'GracefulHttp' 'Rust launcher keeps the graceful stop strategy'
+
+    $healthCalls = New-Object System.Collections.ArrayList
+    Test-GatewayServiceHealth -Key 'chat2api' -HttpChecker {
+        param($url, $timeout)
+        [void]$healthCalls.Add($url)
+        return $true
+    } | Out-Null
+    Assert-Equal $healthCalls[0] 'http://127.0.0.1:8000/health' 'Rust 8000 health check keeps the 8000/health URL'
+
+    # Launch shape: the Rust binary directly, with production/local arguments
+    # and the repository root as cwd so the Rust defaults resolve to
+    # chat2api/token.json and chat2api/.edge-profile like Python 8000.
+    $script:ticket80Launches = New-Object System.Collections.ArrayList
+    function Get-CimInstance {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$ClassName, [string]$Filter)
+        if ($ClassName -and $ClassName -ne 'Win32_Process') {
+            return @(CimCmdlets\Get-CimInstance @PSBoundParameters)
+        }
+        return @()
+    }
+    function Get-NetTCPConnection {
+        [CmdletBinding()]
+        param([int]$LocalPort, [object]$State)
+        return @()
+    }
+    function Invoke-WebRequest {
+        [CmdletBinding()]
+        param([string]$Uri, [string]$Method, [object]$Headers,
+              [int]$TimeoutSec, [switch]$UseBasicParsing)
+        throw 'offline substitute: health probe refused'
+    }
+    function Stop-Process {
+        [CmdletBinding()]
+        param([Parameter(Mandatory = $true)][int]$Id, [switch]$Force)
+        throw 'offline substitute: no process may be stopped'
+    }
+    function Start-Process {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$FilePath, [object]$ArgumentList,
+              [string]$WorkingDirectory, [object]$WindowStyle)
+        [void]$script:ticket80Launches.Add([pscustomobject]@{
+            FilePath = [string]$FilePath
+            ArgumentList = @($ArgumentList)
+            WorkingDirectory = [string]$WorkingDirectory
+        })
+    }
+    try {
+        $started = Start-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        Assert-Equal $started.Status 'StartPending' 'Rust launch without a listener reports StartPending'
+        Assert-Equal $script:ticket80Launches.Count 1 'Rust launcher starts exactly once'
+        $launch = $script:ticket80Launches[0]
+        Assert-Equal $launch.FilePath (Join-Path $root 'rust\target\release\um-gateway-candidate.exe') 'launcher runs the Rust binary directly'
+        Assert-Equal ($launch.ArgumentList -join ' ') '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token' 'launcher passes the production/local/8000 arguments'
+        Assert-Equal ([IO.Path]::GetFullPath($launch.WorkingDirectory)) $root 'launcher runs from the repository root'
+    } finally {
+        Remove-Item function:\Get-CimInstance -ErrorAction SilentlyContinue
+        Remove-Item function:\Get-NetTCPConnection -ErrorAction SilentlyContinue
+        Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+        Remove-Item function:\Stop-Process -ErrorAction SilentlyContinue
+        Remove-Item function:\Start-Process -ErrorAction SilentlyContinue
+    }
+}
+
+if ($LauncherOnly) {
+    if ($script:failures -gt 0) {
+        Write-Host "`n$($script:failures) local 8000 launcher test(s) FAILED." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "`nAll local 8000 launcher tests passed." -ForegroundColor Green
+    exit 0
+}
+
 $taskSource = Get-Content -LiteralPath (Join-Path $root 'manage-model-sync-task.ps1') -Raw -Encoding utf8
 Assert-Equal ($taskSource -match "New-ScheduledTaskTrigger -Daily -At '06:00'") $true 'model sync is scheduled at 06:00'
 Assert-Equal ($taskSource -match '-StartWhenAvailable:\$false') $true 'model sync never catches up a missed run'
@@ -811,7 +902,7 @@ $startCleanup = Invoke-StartScopeScenario -Processes @(
 )
 Assert-Equal ($startCleanup.Terminated -join ',') '990101' 'start residual cleanup terminates only the verified private instance'
 Assert-Equal ($startCleanup.Terminated -contains 990102) $false 'start residual cleanup never terminates the share backend'
-Assert-Equal ($startCleanup.Launches -join ',') 'cmd.exe' 'start launches once after the scoped residual cleanup'
+Assert-Equal ([IO.Path]::GetFileName([string]$startCleanup.Launches[0])) 'um-gateway-candidate.exe' 'start launches the Rust binary once after the scoped residual cleanup'
 Assert-Equal $startCleanup.Result.Status 'StartPending' 'start reports StartPending when the health check stays false'
 
 # Loopback endpoint scope: a tailnet Serve listener may legally share the port.
