@@ -1461,7 +1461,7 @@ fn parse_range(date_from: &str, date_to: &str) -> Result<(NaiveDate, NaiveDate, 
     let range_days = (hi - lo).num_days() + 1;
     if range_days > MAX_RANGE_DAYS {
         return Err(StatsError(format!(
-            "date range too large: {} days exceeds the {}day query limit",
+            "date range too large: {} days exceeds the {}-day query limit",
             range_days, MAX_RANGE_DAYS
         )));
     }
