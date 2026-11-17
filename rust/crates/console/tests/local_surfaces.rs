@@ -82,7 +82,9 @@ fn local_services_report_only_the_chat2api_runtime() {
         .as_array()
         .expect("health services");
     assert_eq!(services.len(), 2);
-    assert_eq!(services[0]["key"], json!("chat2api"));
+    assert_eq!(services[0]["id"], json!("chat2api"));
+    assert_eq!(services[0]["state"], json!("listening"));
+    assert_eq!(services[0]["note"], json!("TCP 端口可达（未做 HTTP 探测）"));
     assert_eq!(services[1]["id"], json!("usagesrv"));
     assert_eq!(services[1]["port"], json!(8001));
 }

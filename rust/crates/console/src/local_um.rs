@@ -2136,6 +2136,7 @@ fn um_log_lines(
             (-at, key) > (-cursor_at, cursor_key.as_str())
         });
     }
+    let rows_read = rows.len();
     let earlier = if rows.len() > limit as usize {
         let last = &rows[limit as usize - 1];
         Some(encode_cursor(
@@ -2152,7 +2153,7 @@ fn um_log_lines(
         "source": source,
         "scanned_bytes": _size,
         "window_start_offset": 0,
-        "rows_read": rows.len(),
+        "rows_read": rows_read,
         "rows_returned": rows.len(),
         "undated_rows": undated,
         "truncated": truncated,
@@ -2178,14 +2179,14 @@ pub fn um_logs(
         Ok(bounds) => bounds,
         Err(error) => {
             return json!({
-                "status": "error", "error": Some("invalid_window"), "lines": [],
+                "status": "error", "error": error.0.clone(), "lines": [],
                 "sources": UM_LOG_CATEGORIES,
-                "scope": format!("chat2api 运行日志有界尾读 · 北京时间 · 不是完整历史"),
+                "scope": "chat2api 运行日志有界尾读 · 北京时间 · 不是完整历史",
                 "earlier": null,
-                "coverage": {"status": "error", "error": "invalid_window",
+                "coverage": {"status": "error", "error": error.0,
                               "source": source, "rows_read": 0, "rows_returned": 0,
                               "undated_rows": 0, "truncated": false,
-                              "bounded": true, "note": error.0},
+                              "bounded": true, "note": "读取失败/未配置不是合法空列表"},
             });
         }
     };

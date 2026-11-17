@@ -1634,6 +1634,26 @@ fn health_response(state: &AppState) -> Response {
         Ok(snapshot) => snapshot,
         Err(_) => return ConsoleError::runtime_unavailable().response(),
     };
+    if state.config.role == Role::Local {
+        let (service_state, http_status, note) = match snapshot.state.as_str() {
+            "running" => ("listening", Value::Null, "TCP 端口可达（未做 HTTP 探测）"),
+            "unknown" => ("unknown", Value::Null, "TCP 连接超时（探测未定，非未监听）"),
+            _ => ("not_listening", Value::Null, "loopback 端口未监听"),
+        };
+        return send_json(
+            200,
+            &json!({
+                "checked_at": epoch_seconds(),
+                "cached": false,
+                "services": [
+                    {"id": "chat2api", "port": state.config.gateway_port,
+                     "state": service_state, "http_status": http_status, "note": note},
+                    {"id": "usagesrv", "port": state.config.port,
+                     "state": "listening", "note": "console host itself"},
+                ],
+            }),
+        );
+    }
     let mut services = vec![service_row(state, &snapshot)];
     services.push(json!({
         "id": "usagesrv",
