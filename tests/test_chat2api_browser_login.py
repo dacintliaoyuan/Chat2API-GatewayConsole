@@ -374,6 +374,12 @@ class _Harness:
         return [note["manual_reason"] for note in self.notes
                  if note.get("manual_reason")]
 
+    def takeover_reasons(self):
+        # ADR 0008: the Duo push wait is a soft reason (the console shows
+        # "等待本人确认 Duo 推送"), never a manual takeover.
+        return [reason for reason in self.manual_reasons()
+                if reason != "duo_prompt_waiting"]
+
     def human_step(self, reason, action):
         """A human acts only AFTER the session reports it needs one.
 
@@ -417,7 +423,7 @@ class TwoStepFlowTests(unittest.TestCase):
         self.assertIn("openwebui_clicked", harness.phases())
         self.assertIn("umpass_submitted", harness.phases())
         self.assertIn("awaiting_duo", harness.phases())
-        self.assertEqual(harness.manual_reasons(), [])
+        self.assertEqual(harness.takeover_reasons(), [])
         self.assertEqual([c.closed for c in harness.created], [True])
         self.assertNotIn(PASSWORD, harness.output)
         self.assertNotIn(ACCOUNT, harness.output)
@@ -467,7 +473,7 @@ class TwoStepFlowTests(unittest.TestCase):
         self.assertEqual(ctx.exception.reason, "duo_prompt_waiting")
         self.assertGreaterEqual(elapsed, 0.3)
         self.assertIn("awaiting_duo", harness.phases())
-        self.assertEqual(harness.manual_reasons(), [])
+        self.assertEqual(harness.takeover_reasons(), [])
         self.assertEqual(harness.reported, [harness.created[0], None])
         self.assertEqual([c.closed for c in harness.created], [True])
 
@@ -694,7 +700,7 @@ class FallbackSelectorIdentityTests(unittest.TestCase):
 
         self.assertEqual(token, "fresh-token")
         self.assertEqual(harness.click_selectors(), [SSO_BUTTON, SUBMIT_BUTTON])
-        self.assertEqual(harness.manual_reasons(), [])
+        self.assertEqual(harness.takeover_reasons(), [])
 
     def test_fallback_aliases_do_not_weaken_the_mfa_gate(self):
         site = _build_site(mfa=True, fallback_aliases=True)
@@ -1368,7 +1374,7 @@ class SessionLifecycleTests(unittest.TestCase):
 
         self.assertEqual(token, "duo-approved-token")
         self.assertIn("awaiting_duo", harness.phases())
-        self.assertEqual(harness.manual_reasons(), [])
+        self.assertEqual(harness.takeover_reasons(), [])
         self.assertEqual([c.closed for c in harness.created], [True])
 
     def test_navigation_failure_is_retried_once_before_manual(self):
@@ -1389,7 +1395,7 @@ class SessionLifecycleTests(unittest.TestCase):
 
         self.assertEqual(token, "fresh-token")
         self.assertEqual(site.goto_calls, [BASE_URL, BASE_URL])
-        self.assertEqual(harness.manual_reasons(), [])
+        self.assertEqual(harness.takeover_reasons(), [])
 
     def test_navigation_failure_is_bounded_and_then_manual(self):
         site = _build_site()
@@ -1447,7 +1453,7 @@ class SessionLifecycleTests(unittest.TestCase):
             token = harness.run(timeout_s=5, visible=True)
 
         self.assertEqual(token, "progress-token")
-        self.assertEqual(harness.manual_reasons(), [])
+        self.assertEqual(harness.takeover_reasons(), [])
         self.assertEqual([c.closed for c in harness.created], [True])
 
     def test_missing_edge_is_an_explicit_error(self):
