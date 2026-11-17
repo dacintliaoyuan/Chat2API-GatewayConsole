@@ -215,6 +215,24 @@ class RustReleaseMaterialTests(unittest.TestCase):
             self.assertIn(":8003/v1/models", urls)
             self.assertNotIn(":8096/", urls)
 
+    def test_console_unit_keeps_the_8002_fences(self):
+        unit = _read("systemd/um-share-console.service")
+        self.assertIn("EnvironmentFile=/etc/um-share/console.env", unit)
+        self.assertIn(
+            "ExecStartPre=/opt/um-share/venv/bin/python "
+            "/opt/um-share/current/um-cloud-deploy/backup_restore.py "
+            "--check-deployment-assembly console "
+            "/etc/systemd/system/um-share-console.service "
+            "/etc/um-share/console.env", unit)
+        self.assertIn("ReadOnlyPaths=-/run/um-share", unit)
+        self.assertIn(
+            "ReadWritePaths=/var/lib/um-share-console "
+            "/var/log/um-share-console", unit)
+        self.assertIn(
+            "NoExecPaths=-/opt/um-share/current/chat2api/chat2api.py", unit)
+        self.assertIn("NoExecPaths=-/opt/um-share/bin/um-gateway", unit)
+        self.assertNotIn("NoExecPaths=-/opt/um-share/bin/um-console", unit)
+
     def test_display_unit_targets_8097_and_the_gateway_namespace(self):
         unit = _read("systemd/um-share-display-rust.service")
         self.assertIn("UM_VNC_PORT=8097", unit)
