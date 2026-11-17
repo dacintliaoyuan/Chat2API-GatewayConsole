@@ -1425,16 +1425,16 @@ fn drive_login(
             } else if !page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
                 || !page.field_filled(&UMPASS_PASSWORD_SELECTORS)
             {
-                if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
+                if seen.elapsed() < inner.config.stage_settle_timeout {
+                    // 页面渲染和浏览器已保存密码的自动填充都是异步的。
+                    // 使用既有稳定预算等待，不能因没有明文环境配置而提前判缺失。
+                } else if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
                     if visible {
                         // 显式可见登录由本人填写；缺少自动填充不应关闭其窗口。
                         note_progress(inner, round, "waiting_for_credentials", Some(&url), Some("umpass_prefill_missing"));
                     } else {
                         return stop_for_manual(inner, round, page, "umpass_prefill_missing");
                     }
-                } else if seen.elapsed() < inner.config.stage_settle_timeout {
-                    // 表单重定向后可能尚未渲染，先等待既有的页面稳定预算。
-                    // keep polling
                 } else if !page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
                     && page
                         .fill(&UMPASS_ACCOUNT_SELECTORS, &inner.config.um_account)

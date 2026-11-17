@@ -74,10 +74,9 @@ impl CredentialProbe for HttpCredentialProbe {
         if bearer.is_empty() {
             return CredentialVerdict::needs_login();
         }
-        match self.client.get("/api/models", Some(bearer)) {
+        match self.client.get_json_probe("/api/models", Some(bearer)) {
             Err(failure) => CredentialVerdict::unknown(failure.name(), None),
-            Ok(response) => {
-                let status = response.status;
+            Ok((status, payload)) => {
                 if status == 401 || status == 403 {
                     return CredentialVerdict::rejected(status);
                 }
@@ -87,9 +86,9 @@ impl CredentialProbe for HttpCredentialProbe {
                 if status != 200 {
                     return CredentialVerdict::unknown("unexpected_status", Some(status));
                 }
-                let payload: Value = match serde_json::from_slice(&response.body) {
-                    Ok(payload) => payload,
-                    Err(_) => return CredentialVerdict::unknown("non_json_response", Some(status)),
+                let payload: Value = match payload {
+                    Some(payload) => payload,
+                    None => return CredentialVerdict::unknown("non_json_response", Some(status)),
                 };
                 if payload
                     .as_object()
