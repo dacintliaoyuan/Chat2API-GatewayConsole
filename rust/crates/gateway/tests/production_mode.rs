@@ -242,12 +242,60 @@ fn production_config_rejects_non_loopback_and_other_ports() {
         let config = GatewayConfig {
             bind_port: port,
             candidate: false,
+            upstream_base_url: "http://127.0.0.1:8000".to_string(),
             ..GatewayConfig::default()
         };
         let error = config
             .validate_bind_policy()
             .expect_err("production must reject a non-production port");
         assert!(error.to_string().contains("8000, 8002 or 8003"), "{error}");
+    }
+}
+
+#[test]
+fn production_allows_only_8000_8002_and_8003_on_loopback() {
+    assert_eq!(
+        um_gateway::config::production_ports(),
+        [8000u16, 8002, 8003].into_iter().collect()
+    );
+    for port in [8000u16, 8002, 8003] {
+        let config = GatewayConfig {
+            bind_port: port,
+            candidate: false,
+            upstream_base_url: "http://127.0.0.1:8000".to_string(),
+            ..GatewayConfig::default()
+        };
+        config
+            .validate_bind_policy()
+            .unwrap_or_else(|error| panic!("production must allow {port}: {error}"));
+    }
+    for port in [0u16, 8001, 8096, 8100, 5173, 8097, 8099] {
+        let config = GatewayConfig {
+            bind_port: port,
+            candidate: false,
+            upstream_base_url: "http://127.0.0.1:8000".to_string(),
+            ..GatewayConfig::default()
+        };
+        let error = config
+            .validate_bind_policy()
+            .expect_err("production must reject a non-production port");
+        assert!(
+            error.to_string().contains("8000, 8002 or 8003"),
+            "port {port}: {error}"
+        );
+    }
+    for host in ["0.0.0.0", "192.0.2.1", "example.com"] {
+        let config = GatewayConfig {
+            bind_host: host.to_string(),
+            bind_port: 8000,
+            candidate: false,
+            upstream_base_url: "http://127.0.0.1:8000".to_string(),
+            ..GatewayConfig::default()
+        };
+        let error = config
+            .validate_bind_policy()
+            .expect_err("production must reject a non-loopback host");
+        assert!(error.to_string().contains("loopback"), "{host}: {error}");
     }
 }
 
