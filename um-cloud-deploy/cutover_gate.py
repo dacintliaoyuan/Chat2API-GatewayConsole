@@ -186,6 +186,7 @@ def _probe_http(url: str, timeout: float) -> int | None:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status
     except urllib.error.HTTPError as error:
+        error.close()
         return error.code
     except (urllib.error.URLError, OSError, ValueError):
         return None
