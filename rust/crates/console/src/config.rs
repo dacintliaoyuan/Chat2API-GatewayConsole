@@ -44,7 +44,9 @@ pub const USAGE_LOG_ENV: &str = "CHAT2API_USAGE_LOG";
 pub const DSH_SNAPSHOT_ENV: &str = "DSH_LEDGER_SNAPSHOT_FILE";
 pub const SERVICE_LOG_ENV: &str = "CHAT2API_SERVICE_LOG";
 pub const WATCH_DIR_ENV: &str = "SELFUSEAI_GATEWAY_WATCH_DIR";
+pub const DIST_DIR_ENV: &str = "CONSOLE_DIST_DIR";
 
+pub const DEFAULT_DIST_DIR: &str = "web/dist";
 pub const DEFAULT_USAGE_LOG: &str = "data/usage-chat2api.jsonl";
 pub const DEFAULT_DSH_SNAPSHOT: &str = "data/dsh-ledger-20260902.json";
 pub const DEFAULT_SERVICE_LOG: &str = "chat2api/chat2api.log";
@@ -139,6 +141,9 @@ pub struct ConsoleConfig {
     pub dsh_snapshot: PathBuf,
     pub service_log: PathBuf,
     pub watch_dir: Option<PathBuf>,
+    /// The built console page tree hosted by the local role
+    /// (`usagesrv.py::CONSOLE_DIST_DIR`).
+    pub console_dist_dir: PathBuf,
     pub display: DisplayConfig,
 }
 
@@ -170,6 +175,7 @@ impl Default for ConsoleConfig {
             dsh_snapshot: PathBuf::from(DEFAULT_DSH_SNAPSHOT),
             service_log: PathBuf::from(DEFAULT_SERVICE_LOG),
             watch_dir: None,
+            console_dist_dir: PathBuf::from(DEFAULT_DIST_DIR),
             display: DisplayConfig::default(),
         }
     }
@@ -391,6 +397,11 @@ impl ConsoleConfig {
         if let Ok(value) = std::env::var(WATCH_DIR_ENV) {
             if !value.trim().is_empty() {
                 config.watch_dir = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var(DIST_DIR_ENV) {
+            if !value.trim().is_empty() {
+                config.console_dist_dir = PathBuf::from(value);
             }
         }
         config.display = DisplayConfig::from_env();

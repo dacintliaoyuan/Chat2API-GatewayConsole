@@ -27,6 +27,7 @@ pub mod session;
 pub mod share_auth;
 pub mod share_read;
 pub mod share_write;
+pub mod static_files;
 pub mod summary;
 
 pub use config::{ConsoleConfig, EntryKind, Role};

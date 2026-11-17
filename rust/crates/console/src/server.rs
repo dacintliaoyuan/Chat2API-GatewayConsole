@@ -317,6 +317,17 @@ fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response 
         return response.unwrap_or_else(|| ConsoleError::unknown_path().response());
     }
 
+    if path == "/" || path == "/index.html" {
+        if method != "GET" || state.config.role != Role::Local {
+            return ConsoleError::unknown_path().response();
+        }
+        return crate::static_files::serve_index(
+            &state.config.console_dist_dir,
+            state.config.role,
+            state.config.port,
+        );
+    }
+
     if path == "/health" {
         if method == "GET" {
             return send_json(
