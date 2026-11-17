@@ -109,6 +109,39 @@ fn production_mode_binds_8002_on_loopback() {
     assert_eq!(health.status, 200);
     assert_eq!(health.json()["status"], json!("ok"));
     assert_eq!(health.json()["port"], json!(8002));
+
+    // The mode changes only the binding policy: the cloud read faces are the
+    // same ones a candidate serves.
+    let summary =
+        client_request(addr, &ClientRequest::get("/api/summary")).expect("production summary");
+    assert_eq!(summary.status, 200);
+    assert_eq!(summary.json()["role"], json!("cloud"));
+    let services = client_request(addr, &ClientRequest::get("/api/console/services"))
+        .expect("production services");
+    assert_eq!(services.status, 200);
+    assert!(services.json()["services"].is_array());
+}
+
+#[test]
+fn help_documents_candidate_and_production_modes() {
+    let output = Command::new(env!("CARGO_BIN_EXE_um-console-candidate"))
+        .arg("--help")
+        .output()
+        .expect("run help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--mode candidate|production"),
+        "help must document --mode: {stdout}"
+    );
+    assert!(
+        stdout.contains("8002"),
+        "help must document the production port: {stdout}"
+    );
+    assert!(
+        stdout.contains("candidate (default)"),
+        "help must document the default mode: {stdout}"
+    );
 }
 
 #[test]
@@ -180,10 +213,7 @@ fn production_config_rejects_non_loopback_and_ports_other_than_8002() {
         let error = config
             .validate_bind_policy()
             .expect_err("production must reject a port other than 8002");
-        assert!(
-            error.to_string().contains("8002"),
-            "port {port}: {error}"
-        );
+        assert!(error.to_string().contains("8002"), "port {port}: {error}");
     }
 
     let mut config = base_config(&temp);
@@ -246,6 +276,20 @@ fn an_unknown_mode_is_a_usage_error() {
         output.status.code(),
         Some(64),
         "an unknown mode must be a usage error"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("candidate or production"),
+        "stderr: {stderr}"
+    );
+
+    let mut command = console_command(&temp);
+    command.arg("--mode");
+    let output = run_rejected(command);
+    assert_eq!(
+        output.status.code(),
+        Some(64),
+        "a missing mode value must be a usage error"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

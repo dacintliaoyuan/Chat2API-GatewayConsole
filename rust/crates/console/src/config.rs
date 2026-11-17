@@ -8,8 +8,8 @@
 
 use std::path::PathBuf;
 
-pub use um_gateway::config::BindMode;
 use um_gateway::config::is_loopback_host;
+pub use um_gateway::config::BindMode;
 
 use crate::display_relay::DisplayConfig;
 

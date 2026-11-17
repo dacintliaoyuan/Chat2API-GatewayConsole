@@ -80,12 +80,15 @@ fn main() -> ExitCode {
             },
             "--help" | "-h" => {
                 println!(
-                    "usage: um-console-candidate [--host 127.0.0.1] [--bind-port 0] \
+                    "usage: um-console-candidate [--mode candidate|production] \
+                     [--host 127.0.0.1] [--bind-port 0|8002] \
                      [--report-port 8002] [--role cloud] [--state-file PATH] \
                      [--gateway-pid-file PATH] [--gateway-state-dir PATH] \
                      [--gateway-port 8003] [--gateway-entry NAME] \
                      [--gateway-entry-kind python|native] [--proc-root PATH] \
-                     [--expected-uid N]"
+                     [--expected-uid N]\n\
+                     modes: candidate (default) binds an ephemeral loopback port only; \
+                     production must be selected explicitly and binds 8002 on loopback only"
                 );
                 return ExitCode::SUCCESS;
             }
