@@ -71,6 +71,142 @@ fn local_root_serves_the_dist_index() {
 }
 
 #[test]
+fn local_root_refuses_a_cloud_build_identity() {
+    let temp = temp();
+    let dist = temp.path().join("dist");
+    write_index(&dist);
+    write_identity(
+        &dist,
+        json!({
+            "line": "production",
+            "role": "cloud",
+            "sourceHash": "a".repeat(64),
+        }),
+    );
+    let console = local_console(&temp, &dist);
+
+    let response = client_request(console.addr, &ClientRequest::get("/")).expect("root");
+    assert_eq!(response.status, 500);
+    let error = response.json()["error"]
+        .as_str()
+        .expect("identity error")
+        .to_string();
+    assert!(error.contains("cloud"), "{error}");
+    assert!(error.contains("local"), "{error}");
+    assert!(!response.body.windows(STUB_INDEX.len()).any(|window| window == STUB_INDEX));
+}
+
+#[test]
+fn local_root_refuses_a_candidate_line_build() {
+    let temp = temp();
+    let dist = temp.path().join("dist");
+    write_index(&dist);
+    write_identity(
+        &dist,
+        json!({
+            "line": "candidate-local",
+            "role": "local",
+            "sourceHash": "a".repeat(64),
+        }),
+    );
+    let console = local_console(&temp, &dist);
+
+    let response = client_request(console.addr, &ClientRequest::get("/")).expect("root");
+    assert_eq!(response.status, 500);
+    assert!(
+        response.json()["error"]
+            .as_str()
+            .expect("identity error")
+            .contains("line"),
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+}
+
+#[test]
+fn local_root_refuses_a_missing_or_malformed_build_identity() {
+    let temp = temp();
+    let dist = temp.path().join("dist");
+    write_index(&dist);
+    let console = local_console(&temp, &dist);
+
+    let missing = client_request(console.addr, &ClientRequest::get("/")).expect("root");
+    assert_eq!(missing.status, 500);
+    assert!(
+        missing.json()["error"]
+            .as_str()
+            .expect("identity error")
+            .contains("candidate-build.json"),
+        "{}",
+        String::from_utf8_lossy(&missing.body)
+    );
+
+    fs::write(dist.join("candidate-build.json"), b"not json").expect("write malformed identity");
+    let malformed = client_request(console.addr, &ClientRequest::get("/")).expect("root");
+    assert_eq!(malformed.status, 500);
+    assert!(
+        malformed.json()["error"]
+            .as_str()
+            .expect("identity error")
+            .contains("JSON"),
+        "{}",
+        String::from_utf8_lossy(&malformed.body)
+    );
+}
+
+#[test]
+fn local_root_refuses_a_missing_or_malformed_source_hash() {
+    let temp = temp();
+    let dist = temp.path().join("dist");
+    write_index(&dist);
+    let console = local_console(&temp, &dist);
+
+    for source_hash in [json!(null), json!("not-a-sha256"), json!("A".repeat(64))] {
+        write_identity(
+            &dist,
+            json!({
+                "line": "production",
+                "role": "local",
+                "sourceHash": source_hash,
+            }),
+        );
+        let response = client_request(console.addr, &ClientRequest::get("/")).expect("root");
+        assert_eq!(response.status, 500, "{source_hash}");
+        assert!(
+            response.json()["error"]
+                .as_str()
+                .expect("identity error")
+                .contains("sourceHash"),
+            "{source_hash}: {}",
+            String::from_utf8_lossy(&response.body)
+        );
+    }
+}
+
+#[test]
+fn local_root_rechecks_the_build_identity_on_every_request() {
+    let temp = temp();
+    let dist = temp.path().join("dist");
+    write_index(&dist);
+    write_identity(&dist, local_identity());
+    let console = local_console(&temp, &dist);
+
+    let accepted = client_request(console.addr, &ClientRequest::get("/")).expect("root");
+    assert_eq!(accepted.status, 200);
+
+    write_identity(
+        &dist,
+        json!({
+            "line": "production",
+            "role": "cloud",
+            "sourceHash": "a".repeat(64),
+        }),
+    );
+    let refused = client_request(console.addr, &ClientRequest::get("/")).expect("root");
+    assert_eq!(refused.status, 500);
+}
+
+#[test]
 fn cloud_role_keeps_the_unknown_path_answer() {
     let temp = temp();
     let dist = temp.path().join("dist");
