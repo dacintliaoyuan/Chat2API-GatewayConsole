@@ -10,7 +10,7 @@
 - **凭据与运行数据不入库**：`data/`、`profile/`、`tmp/`、`output/`、`chat2api/token.json`、`chat2api/.edge-profile/` 都由根 `.gitignore` 覆盖。
 - **验证**：`web/` 下 `npm run check:cloud-console`、`npm run check:um`；Python 回归 `python -m unittest discover -s tests -p "test_*.py"`。`scripts/check.sh` 在缺 `web/node_modules` 时先 `npm ci`；`web/package.json` 的 `esbuild` 是前端契约门禁的 devDependency。两者只服务门禁环境，不改变产品行为。
 - **契约夹具**：改 `usagesrv.py`/`console/adapters.py`/`console/model_actions.py`/`share/metering.py`/`console/stats.py`/`console/log_reader.py` 后运行 `python tests/generate_frontend_contract_fixture.py`；`check-generated` 会因夹具过期失败。
-- **implement-spec 工作流**：`CreateWorkflow` 用 `saved: { name: "feature-retirement-cleanup" }` 运行本项目的 implement-spec 编排；脚本已保存为 project workflow，不重写。它只覆盖 spec #26 与 tickets #27–#37；新票另写 workflow。
+- **implement-spec 分派**：implement-spec 用 `Agent` 直接分派 subagent，不用 `CreateWorkflow`/`AmendWorkflow`/`ResumeWorkflowRun`。每张票一个独立 worktree/branch，先读 `tdd-mattpocock`；合并、评审、切流也用 subagent。
 
 ## 2. 导航
 
