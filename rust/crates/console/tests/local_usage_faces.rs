@@ -756,3 +756,56 @@ fn stats_invalid_range_is_a_400_invalid_stats_query() {
     assert_eq!(response.status, 400);
     assert_eq!(response.json()["error"], json!("invalid_stats_query"));
 }
+
+#[test]
+fn log_sources_matches_python_registry_shape_without_paths() {
+    let temp = temp();
+    let console = local_console(&temp);
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/log-sources"),
+    )
+    .expect("log-sources");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.header("cache-control"), Some("no-store"));
+    let payload = response.json();
+    assert_eq!(payload["ok"], json!(true));
+    let sources = payload["sources"].as_array().expect("sources");
+    assert_eq!(sources.len(), 3);
+    assert_eq!(sources[0]["source"], json!("chat2api"));
+    assert_eq!(sources[0]["display"], json!("chat2api 主链（8000）"));
+    let categories = sources[0]["categories"].as_array().expect("categories");
+    assert_eq!(categories.len(), 5);
+    assert_eq!(categories[0]["category"], json!("service"));
+    assert_eq!(categories[0]["name"], json!("chat2api.log"));
+    assert_eq!(categories[0]["rotating"], json!(true));
+    assert_eq!(categories[0]["rotation_index"], json!(5));
+    assert_eq!(categories[0]["level_filter"], json!(true));
+    assert!(categories[0].get("path").is_none());
+    assert_eq!(categories[1]["category"], json!("ledger"));
+    assert_eq!(categories[1]["name"], json!("usage-chat2api.jsonl"));
+    assert_eq!(categories[2]["name"], json!("chat2api.console.log"));
+    assert_eq!(categories[3]["name"], json!("chat2api.console.prev.log"));
+    assert_eq!(categories[4]["name"], json!("chat2api-watch.log"));
+    assert_eq!(sources[1]["source"], json!("console"));
+    assert_eq!(sources[1]["categories"], json!([]));
+    assert_eq!(
+        sources[1]["note"],
+        json!("8001 宿主不落盘行日志（start_usage_service.bat 无重定向，usagesrv 的输出只到隐藏窗口）；控制台自身的操作记录在「操作记录」页签（data/console-state.sqlite3），此处不伪造日志文件。")
+    );
+    assert_eq!(sources[2]["source"], json!("share"));
+    assert_eq!(sources[2]["display"], json!("分享链 8100（合并进程，非 8000 主链）"));
+    let share = sources[2]["categories"].as_array().expect("share categories");
+    assert_eq!(share.len(), 5);
+    assert_eq!(share[0]["name"], json!("share-backend.log"));
+    assert_eq!(share[1]["name"], json!("usage-share-backend.jsonl"));
+    assert_eq!(share[2]["name"], json!("raw.txt"));
+    assert_eq!(share[3]["name"], json!("share-faults.jsonl"));
+    assert_eq!(share[4]["name"], json!("lifecycle.json"));
+    assert_eq!(share[4]["whole_document"], json!(true));
+    for source in sources {
+        for category in source["categories"].as_array().expect("categories") {
+            assert!(category.get("path").is_none(), "{category}");
+        }
+    }
+}

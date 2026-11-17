@@ -43,6 +43,7 @@ use crate::share_read::{control_status, DisplaySeams, ShareReadSeams, ShareReadS
 use crate::share_write::{
     console_public_row, ShareWriteError, ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams,
 };
+use crate::local_logs::{self, LogPaths};
 use crate::local_stats::{self, StatsPaths};
 use crate::summary::SummaryCache;
 
@@ -836,6 +837,10 @@ fn handle_local_usage_read(
                 &local_stats::usage_tokens(&paths(), days, epoch_seconds() as f64 * 1000.0),
             ))
         }
+        ["log-sources"] => Some(send_json(
+            200,
+            &local_logs::registry_payload(&LogPaths::from_config(&state.config)),
+        )),
         ["stats"] => {
             let date_from = query_value(raw_target, "from").unwrap_or_default();
             let date_to = query_value(raw_target, "to").unwrap_or_default();
