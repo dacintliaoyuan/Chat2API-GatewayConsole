@@ -29,7 +29,8 @@ fn an_unknown_watch_probe_does_not_start_login() {
                 models_status: 503,
                 ..StubBehaviour::default()
             },
-            Duration::from_secs(1)
+            Duration::from_secs(1),
+            "upstream_5xx"
         ),
         0,
         "核验未知不能被当作凭据失效并启动浏览器登录"
@@ -41,10 +42,12 @@ fn a_slow_watch_probe_does_not_start_login() {
     assert_eq!(
         watch_login_count(
             StubBehaviour {
-                delay: Duration::from_millis(150),
+                // 生产核验现在有独立的 20 秒预算；响应必须更慢才会真实超时。
+                delay: Duration::from_secs(21),
                 ..StubBehaviour::default()
             },
-            Duration::from_millis(50)
+            Duration::from_millis(50),
+            "timeout"
         ),
         0,
         "核验超时只能重新核验，不能重开登录"
@@ -59,14 +62,15 @@ fn a_rejected_watch_probe_still_starts_login() {
                 models_status: 401,
                 ..StubBehaviour::default()
             },
-            Duration::from_secs(1)
+            Duration::from_secs(1),
+            "upstream_rejected"
         ),
         1,
         "明确拒绝仍须启动认证恢复"
     );
 }
 
-fn watch_login_count(behaviour: StubBehaviour, timeout: Duration) -> usize {
+fn watch_login_count(behaviour: StubBehaviour, timeout: Duration, expected_reason: &str) -> usize {
     let stub = StubUpstream::start();
     stub.set(behaviour);
     let provider = Arc::new(CountingLogin::default());
@@ -80,6 +84,11 @@ fn watch_login_count(behaviour: StubBehaviour, timeout: Duration) -> usize {
         GatewayServer::start_with_reauth(config, Some(provider.clone())).expect("gateway");
     thread::sleep(Duration::from_millis(2400));
     server.shutdown();
+    assert_eq!(
+        server.state().proxy.health_snapshot()["upstream_reachability"]["reason"],
+        expected_reason,
+        "必须实际走到目标核验失败分类"
+    );
     assert!(
         stub.seen()
             .iter()
