@@ -39,6 +39,10 @@ struct FakePage {
     wait: Duration,
     drop_calls: AtomicUsize,
     reload_calls: AtomicUsize,
+    unfilled_polls: AtomicUsize,
+    submit_visible: AtomicBool,
+    click_steps: Mutex<Vec<(String, Option<String>)>>,
+    fill_calls: AtomicUsize,
 }
 
 impl FakePage {
@@ -51,6 +55,10 @@ impl FakePage {
             wait: Duration::from_millis(5),
             drop_calls: AtomicUsize::new(0),
             reload_calls: AtomicUsize::new(0),
+            unfilled_polls: AtomicUsize::new(0),
+            submit_visible: AtomicBool::new(false),
+            click_steps: Mutex::new(Vec::new()),
+            fill_calls: AtomicUsize::new(0),
         })
     }
 
@@ -69,6 +77,10 @@ impl FakePage {
 
     fn reload_calls(&self) -> usize {
         self.reload_calls.load(Ordering::SeqCst)
+    }
+
+    fn fill_calls(&self) -> usize {
+        self.fill_calls.load(Ordering::SeqCst)
     }
 }
 
@@ -117,18 +129,41 @@ impl LoginPage for FakePage {
     }
 
     fn field_filled(&self, _selectors: &[&str]) -> bool {
-        true
+        if self.unfilled_polls.load(Ordering::SeqCst) > 0 {
+            self.unfilled_polls.fetch_sub(1, Ordering::SeqCst);
+            return false;
+        }
+        self.fill_calls.load(Ordering::SeqCst) >= 2
     }
 
     fn one_visible(&self, _selectors: &[&str]) -> Option<VisibleTarget> {
-        None
+        if !self.submit_visible.load(Ordering::SeqCst) {
+            return None;
+        }
+        Some(VisibleTarget {
+            selector: "input[type=\"submit\"]".to_string(),
+            index: 0,
+        })
     }
 
     fn click(&self, _target: &VisibleTarget) -> Result<(), String> {
+        let step = {
+            let mut steps = self.click_steps.lock().expect("click steps");
+            if steps.is_empty() {
+                None
+            } else {
+                Some(steps.remove(0))
+            }
+        };
+        if let Some((url, token)) = step {
+            *self.url.lock().expect("fake url") = url;
+            *self.token.lock().expect("fake token") = token;
+        }
         Ok(())
     }
 
     fn fill(&self, _selectors: &[&str], _value: &str) -> Result<(), String> {
+        self.fill_calls.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -390,6 +425,35 @@ fn a_successful_headless_login_writes_the_token_and_publishes_it() {
         .is_some_and(|value| value.len() == 19));
 
     assert_eq!(sink.published(), vec![("fresh-token".to_string(), None)]);
+}
+
+#[test]
+fn a_slow_umpass_form_is_not_reported_as_prefill_missing() {
+    let temp = TempDir::new("um-rust-login-slow-umpass-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.unfilled_polls.store(3, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") = vec![
+        (
+            "https://websso.um.edu.mo/idp/profile/SAML2/Redirect/SSO".to_string(),
+            None,
+        ),
+        ("http://127.0.0.1:9".to_string(), Some("fresh-token".to_string())),
+    ];
+    let probe = ScriptedProbe::valid();
+    let sink = Arc::new(FakeSink::default());
+    let (service, _factory) = login_service_with(&temp, page.clone(), probe, sink, |config| {
+        config.um_account = "acct".to_string();
+        config.um_password = "secret".to_string();
+        config.stage_settle_timeout = Duration::from_millis(200);
+        config.login_timeout = Duration::from_secs(5);
+    });
+
+    let started = service.start_explicit(false);
+    assert_eq!(started["state"], json!("logging_in"));
+    let status = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(status["error"], Value::Null);
+    assert_eq!(page.fill_calls(), 2);
 }
 
 #[test]

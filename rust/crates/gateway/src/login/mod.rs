@@ -1347,6 +1347,7 @@ fn drive_login(
             }
         } else if stage == "umpass" {
             let count = clicks.entry(stage.clone()).or_insert(0);
+            let seen = *stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
             if *count >= inner.config.max_clicks_per_stage {
                 manual_reason = Some("umpass_click_swallowed".to_string());
                 note_progress(
@@ -1364,16 +1365,18 @@ fn drive_login(
                 if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
                     return stop_for_manual(inner, round, page, "umpass_prefill_missing");
                 }
-                // Fill ONLY the empty fields: ADFS may have prefilled the
-                // account from the WS-Fed token while the password stays empty.
-                if !page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
+                // The Keycloak/ADFS form is rendered after the redirect; a
+                // poll that lands mid-navigation sees no fields yet.  Give the
+                // stage its settle window before calling the form missing.
+                if seen.elapsed() < inner.config.stage_settle_timeout {
+                    // keep polling
+                } else if !page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
                     && page
                         .fill(&UMPASS_ACCOUNT_SELECTORS, &inner.config.um_account)
                         .is_err()
                 {
                     return stop_for_manual(inner, round, page, "umpass_prefill_missing");
-                }
-                if !page.field_filled(&UMPASS_PASSWORD_SELECTORS)
+                } else if !page.field_filled(&UMPASS_PASSWORD_SELECTORS)
                     && page
                         .fill(&UMPASS_PASSWORD_SELECTORS, &inner.config.um_password)
                         .is_err()
