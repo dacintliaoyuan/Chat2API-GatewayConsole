@@ -6,6 +6,11 @@ if ($env:OS -ne 'Windows_NT') { throw '本工具仅支持 Windows。' }
 if (-not $ValidateOnly -and $PSVersionTable.PSEdition -ne 'Desktop') {
     throw '请使用 powershell.exe -NoProfile -STA -File scripts\Save-UmLoginCredential.ps1，以显示本地密码输入窗口。'
 }
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    # Start-Process 从 pwsh 继承的模块路径可能先找到 PowerShell 7 的同名模块。
+    # 明确使用 Windows PowerShell 自带模块，保证本地凭据窗口可以打开。
+    Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+}
 
 Add-Type -TypeDefinition @'
 using System;
