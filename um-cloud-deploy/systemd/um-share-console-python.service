@@ -20,7 +20,7 @@ Environment=UM_SHARE_GATEWAY_PORT=8100
 UMask=0077
 # Fail the START when console.env no longer wires the security read face: an
 # unconfigured console must not look like a healthy one.
-ExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly console /etc/systemd/system/um-share-console.service /etc/um-share/console.env
+ExecStartPre=/opt/um-share/venv/bin/python /opt/um-share/current/um-cloud-deploy/backup_restore.py --check-deployment-assembly console /etc/systemd/system/um-share-console-python.service /etc/um-share/console.env
 ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/usagesrv.py
 # Single-authority fence: the console may READ the broker pid/intent for
 # status, but it may not write /run/um-share (ReadOnlyPaths) and it may not
@@ -31,6 +31,7 @@ ExecStart=/opt/um-share/venv/bin/python /opt/um-share/current/usagesrv.py
 ReadOnlyPaths=-/run/um-share
 InaccessiblePaths=
 NoExecPaths=-/opt/um-share/current/chat2api/chat2api.py
+NoExecPaths=-/opt/um-share/bin/um-gateway
 ReadWritePaths=/var/lib/um-share-console /var/log/um-share-console
 TimeoutStartSec=120
 TimeoutStopSec=120

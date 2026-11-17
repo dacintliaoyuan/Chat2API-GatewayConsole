@@ -77,6 +77,56 @@ class RustReleaseMaterialTests(unittest.TestCase):
         for old in ("8096", "18096"):
             self.assertNotIn(old, unit, f"the console unit names {old}")
 
+    def test_python_console_unit_keeps_8096_and_the_rust_unit(self):
+        unit = _read("systemd/um-share-console-python.service")
+        self.assertIn("Environment=USAGESRV_PORT=8096", unit)
+        self.assertIn("Environment=UM_SHARE_GATEWAY_PORT=8100", unit)
+        self.assertIn(
+            "ExecStart=/opt/um-share/venv/bin/python "
+            "/opt/um-share/current/usagesrv.py", unit)
+        self.assertIn(
+            "--check-deployment-assembly console "
+            "/etc/systemd/system/um-share-console-python.service", unit)
+        self.assertIn("NoExecPaths=-/opt/um-share/bin/um-gateway", unit)
+        self.assertIn(
+            "ReadWritePaths=/var/lib/um-share-console "
+            "/var/log/um-share-console", unit)
+        self.assertIn("After=network-online.target "
+                      "um-share-broker.service", unit)
+
+    def test_python_release_ships_both_console_units(self):
+        package = _read("package-release.sh")
+        python_branch = package[package.index(
+            "# The Python rollback release ships"):]
+        self.assertNotIn(
+            'install -m 0644 "$PAYLOAD/um-cloud-deploy/systemd/'
+            'um-share-console-python.service" \\\n'
+            '    "$PAYLOAD/um-cloud-deploy/systemd/'
+            'um-share-console.service"', python_branch)
+        self.assertNotIn(
+            'rm -f -- "$PAYLOAD/um-cloud-deploy/systemd/'
+            'um-share-console-python.service"', python_branch)
+        self.assertNotIn(
+            'rm -f -- "$PAYLOAD/um-cloud-deploy/systemd/'
+            'um-share-console.service"', python_branch)
+        self.assertIn(
+            'rm -f -- "$PAYLOAD/um-cloud-deploy/bin/um-console"',
+            python_branch)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "um_cloud_make_manifest_for_console",
+            DEPLOY / "make-manifest.py")
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        import sys
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        paths = {entry["path"] for entry in
+                 module._deployment_files(HERE, DEPLOY)}
+        for unit in ("um-share-console.service",
+                     "um-share-console-python.service"):
+            self.assertIn("um-cloud-deploy/systemd/" + unit, paths)
+
     def test_display_unit_targets_8097_and_the_gateway_namespace(self):
         unit = _read("systemd/um-share-display-rust.service")
         self.assertIn("UM_VNC_PORT=8097", unit)
@@ -180,8 +230,11 @@ class RustReleaseScriptTests(unittest.TestCase):
         verify = _read("verify-release.ps1")
         self.assertIn("$manifest.runtime", verify)
         self.assertIn("'um-cloud-deploy/bin/um-gateway'", verify)
+        self.assertIn("'um-cloud-deploy/bin/um-console'", verify)
         self.assertIn("'um-cloud-deploy/systemd/um-share-gateway.service'", verify)
         self.assertIn("'um-cloud-deploy/systemd/um-share-broker.service'", verify)
+        self.assertIn(
+            "'um-cloud-deploy/systemd/um-share-console-python.service'", verify)
 
 
 class RuntimeHelperTests(unittest.TestCase):

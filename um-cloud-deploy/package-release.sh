@@ -227,16 +227,13 @@ if [ "$RUNTIME" = "rust" ]; then
   rm -f -- "$PAYLOAD/um-cloud-deploy/config/broker-python.env.example"
   rm -f -- "$PAYLOAD/um-cloud-deploy/config/console-python.env.example"
 else
-  # The Python rollback release ships the 8096 console unit and never the Rust
-  # gateway binary/unit.
-  install -m 0644 "$PAYLOAD/um-cloud-deploy/systemd/um-share-console-python.service" \
-    "$PAYLOAD/um-cloud-deploy/systemd/um-share-console.service" || \
-    die "cannot install the python console unit" "$EX_IOERR"
+  # The Python rollback release ships the 8096 console unit and keeps the Rust
+  # 8002 console unit template in the payload: the manifest runtime selects the
+  # Python unit, and the Rust unit stays available for a later roll-forward.
   rm -f -- "$PAYLOAD/um-cloud-deploy/bin/um-gateway"
   rm -f -- "$PAYLOAD/um-cloud-deploy/bin/um-console"
   rm -f -- "$PAYLOAD/um-cloud-deploy/systemd/um-share-gateway.service"
   rm -f -- "$PAYLOAD/um-cloud-deploy/systemd/um-share-display-rust.service"
-  rm -f -- "$PAYLOAD/um-cloud-deploy/systemd/um-share-console-python.service"
   rm -f -- "$PAYLOAD/um-cloud-deploy/config/gateway.env.example"
 fi
 

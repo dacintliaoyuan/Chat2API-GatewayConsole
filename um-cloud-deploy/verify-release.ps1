@@ -162,10 +162,12 @@ $requiredFiles = @(
 )
 if ($runtime -eq 'rust') {
     $requiredFiles += 'um-cloud-deploy/bin/um-gateway'
+    $requiredFiles += 'um-cloud-deploy/bin/um-console'
     $requiredFiles += 'um-cloud-deploy/systemd/um-share-gateway.service'
 }
 else {
     $requiredFiles += 'um-cloud-deploy/systemd/um-share-broker.service'
+    $requiredFiles += 'um-cloud-deploy/systemd/um-share-console-python.service'
 }
 foreach ($required in $requiredFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $required) -PathType Leaf)) {
