@@ -710,10 +710,13 @@ fn process_event(
                 }
                 let reasoning = delta
                     .get("reasoning_content")
-                    .or_else(|| delta.get("reasoning"))
-                    .and_then(Value::as_str);
+                    .and_then(Value::as_str)
+                    .or_else(|| delta.get("reasoning").and_then(Value::as_str));
                 if let Some(text) = reasoning {
                     state.reasoning_chars += text.chars().count() as u64;
+                    // Python 的 preflight 在首段思考内容到达时提交响应。
+                    // 思考属于业务输出，不能继续计入 64 KiB 无事件前导缓冲。
+                    substantive |= !text.is_empty();
                 }
             }
         }

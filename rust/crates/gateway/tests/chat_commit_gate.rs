@@ -1,5 +1,6 @@
 //! S1b acceptance 2: the 200 headers are committed only after the first
-//! substantive data event; metadata and thinking events may be staged briefly.
+//! substantive data event; metadata events may be staged briefly, but thinking
+//! is business output and must be forwarded before visible text arrives.
 //!
 //! The gate is Python `_reasoning_retry_preflight` + `Handler.process_event`
 //! (`chat2api/chat2api.py:6638-6783,9346-9430`): held bytes are replayed once
@@ -106,7 +107,7 @@ fn metadata_is_staged_until_the_first_substantive_event() {
 }
 
 #[test]
-fn thinking_is_staged_until_the_first_visible_event() {
+fn thinking_is_forwarded_before_the_first_visible_event() {
     let temp = TempDir::new("um-rust-chat-commit-");
     let stub = ChatStub::start();
     let thinking = reasoning_event();
@@ -126,16 +127,19 @@ fn thinking_is_staged_until_the_first_visible_event() {
         config.request_total = Duration::from_secs(5);
     });
     let mut client = StreamingClient::send(gateway.addr, &request()).expect("stream request");
-    assert_eq!(
-        client
-            .read_some(Duration::from_millis(100))
-            .expect("first read"),
-        None,
-        "thinking alone must not commit the 200"
+    let first = client
+        .read_until(&thinking, Duration::from_millis(150))
+        .expect("thinking before visible text");
+    assert!(
+        first.ends_with(&thinking),
+        "首段思考必须在可见回答到达前转发"
     );
-    let raw = client
-        .read_all(Duration::from_secs(5))
-        .expect("read stream");
+    let mut raw = first;
+    raw.extend(
+        client
+            .read_all(Duration::from_secs(5))
+            .expect("read stream"),
+    );
     let (status, _, body) = parse_raw_response(&raw);
     assert_eq!(status, 200);
     assert_eq!(
