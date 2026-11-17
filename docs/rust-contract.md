@@ -74,15 +74,44 @@ systemd
   `HiddenBatch`，健康检查仍是 `http://127.0.0.1:8000/health`，停止仍是
   `StopStrategy=GracefulHttp` + `http://127.0.0.1:8000/admin/shutdown`，启动超时与
   start/stop/restart 语义不变。
-- 停止边界：Rust 的 `/admin/shutdown` 目前返回 501 `admin_surface_s1a`；`StopStrategy`
-  仍先发送该请求，再由既有的 scoped stop 终止 Rust 私有实例。Rust admin 面落地后，
-  同一请求即为优雅退出，启动器无需再改。
-- 回滚：只改 `StartPath` 回 `start_chat2api.bat`（`chat2api` 描述符）。不需要重装，
-  不需要改端口，也不需要改 `StartArguments`/`StartWorkingDirectory`（批处理忽略这些参数，
-  并保留 `python chat2api.py --base-url https://chat.genai.um.edu.mo`）。`StopIdentities`
-  已同时覆盖 Rust 与 Python，回滚后 stop/restart 仍按 Python 私有实例工作。
-- 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 只验证
-  描述符、健康边界与回滚；真实 8000 的重启与切流由 #81 执行。
+- 停止边界：Rust 的 `/admin/shutdown` 返回 202 `{"status":"stopping"}`，与 Python 的
+  202 一致；`StopStrategy=GracefulHttp` 先发送该请求，再由既有的 scoped stop 兜底，
+  Rust 私有实例可优雅退出。
+- 切流状态（#81，2026-11-17）：本机 8000 **已切到 Rust**（`um-gateway-candidate.exe
+  --mode production --port 8000 --role local`）。切流前 parity 用同一份
+  `chat2api/token.json` 与 `chat2api/.edge-profile` 启动 Python 8005 与 Rust 8000 对比，
+  结果为 `parity=passed`：
+  - `/health`、`/v1/models`、通用 `/api/*` GET/POST、`/admin/auth/status` 与
+    `/admin/auth/verify` 的状态码、响应体形状与稳定语义一致。
+  - 修复项：`f01550c` 让上游 `Host` 头在默认端口省略 `:443`（此前 Rust 对 UM 发送
+    `Host: chat.genai.um.edu.mo:443` 被 503）；`45d8808` 把思考内容计入业务输出，
+    长思考不再触发 `upstream_prelude_overflow`；`category_for` 把
+    `upstream_request_rejected` 归为 `invalid_request_error`。
+  - 复现命令：
+
+    ```powershell
+    python tests/local_8000_parity.py `
+      --python-url http://127.0.0.1:8005 `
+      --rust-url http://127.0.0.1:8000 `
+      --control-token-file data/admin-control-token `
+      --evidence tmp/local-8000-parity-evidence.json
+    ```
+
+    探针只读；错误体按 `type`/`code`/`param`/`detail.upstream_status` 归一化，
+    顶层附加诊断不计入形状；两侧先请求 `/ready` 让 `admin/auth/status` 的
+    `evidence` 有值。
+- 切流步骤（已执行）：`pwsh -NoProfile -File invoke-console-runtime-json.ps1
+  -Action restart -Key chat2api`，8000 跑 Rust；验证 `/health`、`/v1/models`、
+  通用 `/api/*`、`/admin/auth/status|verify` 与 `/admin/shutdown` 均通过。
+- 回滚（已演练）：只改 `StartPath` 回 `start_chat2api.bat`，重启后 Python 8000
+  `/health` 200、`/v1/models` 200；再改回 Rust 并重启，`/health` 200、
+  `/v1/models` 200。`StopIdentities` 同时覆盖 Rust 与 Python，回滚后 stop/restart
+  仍按 Python 私有实例工作。
+- 认证巡检：Rust 网关新增每 5 分钟 `auth_watch`（拒绝后 2 倍退避到 30 分钟），
+  `/admin/auth/status` 的 `evidence` 由巡检写入 `source=auth_watch`；凭据有效时
+  不再等请求触发重登。
+- 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 验证
+  描述符、健康边界与回滚；真实 8000 的 parity、切流与回滚演练由 #81 执行并记录在本节。
 
 ## 3. 云端 idle RSS 基线
 
