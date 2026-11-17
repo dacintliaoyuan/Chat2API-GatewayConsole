@@ -331,10 +331,11 @@ impl ConsoleConfig {
                     self.bind_port
                 )));
             }
-        } else if self.bind_port == 0 {
-            return Err(ConfigError(
-                "production must bind a fixed loopback port".to_string(),
-            ));
+        } else if self.bind_port != CLOUD_DEFAULT_PORT {
+            return Err(ConfigError(format!(
+                "production must bind 8002 on loopback, got {}",
+                self.bind_port
+            )));
         }
         if self.port == 0 {
             return Err(ConfigError(

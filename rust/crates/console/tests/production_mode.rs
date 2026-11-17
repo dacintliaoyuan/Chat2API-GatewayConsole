@@ -48,6 +48,26 @@ fn console_command(temp: &um_test_harness::TempDataDir) -> Command {
     command
 }
 
+/// Run a console that must fail before binding. A console that starts serving is
+/// killed and the test fails instead of hanging forever.
+fn run_rejected(mut command: Command) -> std::process::Output {
+    let mut child = command.spawn().expect("spawn rejected console");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if child.try_wait().expect("wait rejected console").is_some() {
+            return child
+                .wait_with_output()
+                .expect("collect rejected console output");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("console accepted a binding it should have rejected");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn read_listen_addr(child: &mut Child) -> std::net::SocketAddr {
     let stdout = child.stdout.take().expect("child stdout");
     let mut reader = BufReader::new(stdout);
@@ -88,6 +108,77 @@ fn production_mode_binds_8002_on_loopback() {
     assert_eq!(health.status, 200);
     assert_eq!(health.json()["status"], json!("ok"));
     assert_eq!(health.json()["port"], json!(8002));
+}
+
+#[test]
+fn production_config_rejects_non_loopback_and_ports_other_than_8002() {
+    let temp = temp();
+    let mut config = base_config(&temp);
+    config.candidate = false;
+    config.bind_port = 8002;
+    config
+        .validate_bind_policy()
+        .expect("production must accept loopback 8002");
+
+    for port in [0u16, 8001, 8003, 8096, 8100] {
+        let mut config = base_config(&temp);
+        config.candidate = false;
+        config.bind_port = port;
+        let error = config
+            .validate_bind_policy()
+            .expect_err("production must reject a port other than 8002");
+        assert!(
+            error.to_string().contains("8002"),
+            "port {port}: {error}"
+        );
+    }
+
+    let mut config = base_config(&temp);
+    config.candidate = false;
+    config.bind_port = 8002;
+    config.bind_host = "0.0.0.0".to_string();
+    let error = config
+        .validate_bind_policy()
+        .expect_err("production must reject a non-loopback host");
+    assert!(error.to_string().contains("loopback"), "{error}");
+}
+
+#[test]
+fn production_mode_rejects_non_8002_ports_and_non_loopback_before_bind() {
+    let temp = temp();
+    for port in ["0", "8001", "8003", "8096", "8100"] {
+        let mut command = console_command(&temp);
+        command
+            .arg("--mode")
+            .arg("production")
+            .arg("--bind-port")
+            .arg(port);
+        let output = run_rejected(command);
+        assert!(
+            !output.status.success(),
+            "production must reject port {port}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("8002"), "port {port} stderr: {stderr}");
+    }
+
+    for host in ["0.0.0.0", "192.0.2.10"] {
+        let mut command = console_command(&temp);
+        command
+            .arg("--mode")
+            .arg("production")
+            .arg("--bind-port")
+            .arg("8002")
+            .arg("--host")
+            .arg(host);
+        let output = run_rejected(command);
+        assert!(
+            !output.status.success(),
+            "production must reject host {host}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("loopback"), "host {host} stderr: {stderr}");
+    }
 }
 
 #[test]
