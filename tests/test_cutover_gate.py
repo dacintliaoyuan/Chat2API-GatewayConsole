@@ -484,6 +484,33 @@ class ConsoleParityTests(unittest.TestCase):
         self.assertEqual(commands[-1],
                          "curl http://127.0.0.1:8003/ready")
 
+    def test_console_rollback_drill_points_env_at_8096_and_restores_it(self):
+        gate = _load_gate()
+        with tempfile.TemporaryDirectory(prefix="console-drill-env-") as tmp:
+            env_file = Path(tmp) / "console.env"
+            original = "USAGESRV_PORT=8002\nSECRET=keep\n"
+            env_file.write_text(original, encoding="utf-8", newline="\n")
+            seen = []
+
+            def fake_run(command, cwd):
+                if command[:2] == ["systemctl", "start"] and \
+                        command[2].endswith("python.service"):
+                    seen.append(env_file.read_text(encoding="utf-8"))
+                return {"command": command, "exit_code": 0,
+                        "stdout": "", "stderr": ""}
+
+            with mock.patch.object(gate, "_run", fake_run), \
+                    mock.patch.object(gate, "_probe_http",
+                                      lambda url, timeout: 200), \
+                    mock.patch.object(gate, "_wait_port",
+                                      lambda port, timeout: True):
+                document = gate.console_rollback_drill(
+                    execute=True, env_file=str(env_file))
+            self.assertEqual(document["status"], "passed", document)
+            self.assertTrue(document["restored"])
+            self.assertEqual(seen, ["USAGESRV_PORT=8096\nSECRET=keep\n"])
+            self.assertEqual(env_file.read_text(encoding="utf-8"), original)
+
 
 if __name__ == "__main__":
     unittest.main()

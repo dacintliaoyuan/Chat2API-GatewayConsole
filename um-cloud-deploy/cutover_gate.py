@@ -235,6 +235,48 @@ def _read_env_file(path: str) -> dict:
     return values
 
 
+def _rewrite_env_port(path: str, key: str, value: str) -> bytes:
+    """Temporarily point one env file at the drill listener.
+
+    systemd's EnvironmentFile overrides the unit's Environment= lines, so the
+    Python rollback unit would otherwise bind the installed 8002.  Only the one
+    port key is rewritten; every other line (including secrets) is preserved and
+    the caller restores the exact original bytes after the drill.
+    """
+    target = Path(path)
+    original = target.read_bytes()
+    text = original.decode("utf-8")
+    lines = text.splitlines(keepends=True)
+    replaced = False
+    output = []
+    for line in lines:
+        ending = "\r\n" if line.endswith("\r\n") else (
+            "\n" if line.endswith("\n") else "")
+        stripped = line.rstrip("\r\n")
+        candidate = stripped[7:].strip() if stripped.startswith("export ") \
+            else stripped
+        if candidate.startswith(key + "="):
+            output.append(key + "=" + value + ending)
+            replaced = True
+        else:
+            output.append(line)
+    if not replaced:
+        if output and not output[-1].endswith(("\n", "\r")):
+            output[-1] += "\n"
+        output.append(key + "=" + value + "\n")
+    tmp = target.with_name(target.name + ".drill.tmp")
+    tmp.write_bytes("".join(output).encode("utf-8"))
+    os.replace(tmp, target)
+    return original
+
+
+def _restore_file(path: str, data: bytes) -> None:
+    target = Path(path)
+    tmp = target.with_name(target.name + ".drill.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, target)
+
+
 def _stop_process(process) -> None:
     if process.poll() is None:
         process.terminate()
@@ -249,8 +291,11 @@ def _stop_process(process) -> None:
 
 
 def _start_rust_console(repo_root: Path, command: list[str] | None,
+                         rust_console: str | None,
                          env_file: str | None,
                          timeout: float) -> tuple[str, subprocess.Popen]:
+    if command is None and rust_console:
+        command = [rust_console]
     if command is None:
         binary = repo_root / "rust" / "target" / "release" / \
             "um-console-candidate"
@@ -309,6 +354,7 @@ def console_parity(python_url: str, rust_url: str | None,
                    timeout: float = 10.0,
                    surfaces: tuple[str, ...] | None = None,
                    rust_console_command: list[str] | None = None,
+                   rust_console: str | None = None,
                    env_file: str | None = None,
                    repo_root: Path | None = None) -> dict:
     repo_root = repo_root or Path(__file__).resolve().parents[1]
@@ -318,7 +364,8 @@ def console_parity(python_url: str, rust_url: str | None,
     if rust_url is None:
         try:
             rust_url, process = _start_rust_console(
-                repo_root, rust_console_command, env_file, timeout)
+                repo_root, rust_console_command, rust_console, env_file,
+                timeout)
         except (OSError, RuntimeError, ValueError) as error:
             started_error = "%s: %s" % (type(error).__name__, error)
     document = {
@@ -628,6 +675,7 @@ def console_rollback_drill(
         gateway_url: str = DEFAULT_BASE_URL,
         timeout: float = 60.0,
         execute: bool = False,
+        env_file: str | None = None,
         repo_root: Path | None = None) -> dict:
     repo_root = repo_root or Path(__file__).resolve().parents[1]
     plan = console_rollback_drill_plan(
@@ -641,6 +689,7 @@ def console_rollback_drill(
         "python_console_port": python_console_port,
         "rust_console_port": rust_console_port,
         "gateway_url": gateway_url,
+        "env_file": env_file,
         "steps": plan,
         "restored": False,
     }
@@ -649,22 +698,54 @@ def console_rollback_drill(
     document["executed"] = True
     results = []
     python_failed = False
-    # Forward leg: stop Rust 8002, start Python 8096, then prove the console and
-    # the untouched 8003 gateway still answer.  A failed Python leg restores the
-    # Rust console immediately; the release links are never moved.
-    for step in plan[:5]:
-        result = _run_console_drill_step(step, repo_root, timeout)
+    original_env = None
+    # Forward leg: stop Rust 8002, point the installed console.env at 8096, start
+    # Python, then prove the console and the untouched 8003 gateway still
+    # answer.  A failed Python leg restores both the env file and the Rust
+    # console immediately; the release links are never moved.
+    try:
+        result = _run_console_drill_step(plan[0], repo_root, timeout)
         results.append(result)
         if result["status"] != "passed":
             python_failed = True
-            break
-    if python_failed:
+        else:
+            if env_file and Path(env_file).is_file():
+                original_env = _rewrite_env_port(
+                    env_file, "USAGESRV_PORT", python_console_port)
+            for step in plan[1:5]:
+                result = _run_console_drill_step(step, repo_root, timeout)
+                results.append(result)
+                if result["status"] != "passed":
+                    python_failed = True
+                    break
+        if original_env is not None:
+            _restore_file(env_file, original_env)
+            original_env = None
+        if python_failed:
+            for step in plan[5:]:
+                if step["name"] == "stop-python-console" and                         not any(item["name"] == "start-python-console"
+                                and item["status"] == "passed"
+                                for item in results):
+                    continue
+                result = _run_console_drill_step(step, repo_root, timeout)
+                results.append(result)
+                if result["status"] != "passed":
+                    document["status"] = "failed"
+                    document["steps"] = results
+                    document["restored"] = False
+                    document["error"] = (
+                        "python console rollback drill failed and the Rust "
+                        "console did not come back")
+                    return document
+            document["status"] = "failed"
+            document["steps"] = results
+            document["restored"] = True
+            document["error"] = (
+                "python console rollback drill failed; the Rust console was "
+                "restored")
+            return document
+        # Return leg: stop Python 8096 and start Rust 8002 again.
         for step in plan[5:]:
-            if step["name"] == "stop-python-console" and \
-                    not any(item["name"] == "start-python-console"
-                            and item["status"] == "passed"
-                            for item in results):
-                continue
             result = _run_console_drill_step(step, repo_root, timeout)
             results.append(result)
             if result["status"] != "passed":
@@ -672,32 +753,16 @@ def console_rollback_drill(
                 document["steps"] = results
                 document["restored"] = False
                 document["error"] = (
-                    "python console rollback drill failed and the Rust console "
-                    "did not come back")
+                    "the Rust console did not come back; manual intervention "
+                    "required")
                 return document
-        document["status"] = "failed"
+        document["status"] = "passed"
         document["steps"] = results
         document["restored"] = True
-        document["error"] = (
-            "python console rollback drill failed; the Rust console was "
-            "restored")
         return document
-    # Return leg: stop Python 8096 and start Rust 8002 again.
-    for step in plan[5:]:
-        result = _run_console_drill_step(step, repo_root, timeout)
-        results.append(result)
-        if result["status"] != "passed":
-            document["status"] = "failed"
-            document["steps"] = results
-            document["restored"] = False
-            document["error"] = (
-                "the Rust console did not come back; manual intervention "
-                "required")
-            return document
-    document["status"] = "passed"
-    document["steps"] = results
-    document["restored"] = True
-    return document
+    finally:
+        if original_env is not None:
+            _restore_file(env_file, original_env)
 
 
 def _summary(document: dict, as_json: bool) -> None:
@@ -823,6 +888,10 @@ def build_parser() -> argparse.ArgumentParser:
     console_drill.add_argument("--rust-console-port",
                                default=DEFAULT_RUST_CONSOLE_PORT)
     console_drill.add_argument("--gateway-url", default=DEFAULT_BASE_URL)
+    console_drill.add_argument("--env-file", default=None,
+                              help="installed console.env the Python unit "
+                                   "reads; only USAGESRV_PORT is rewritten "
+                                   "for the drill and then restored")
     console_drill.add_argument("--timeout", type=float, default=60.0)
     console_drill.add_argument("--execute", action="store_true")
 
@@ -893,6 +962,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.python_url, args.rust_url, timeout=args.timeout,
                 surfaces=tuple(args.surface) if args.surface else None,
                 rust_console_command=args.rust_console_command,
+                rust_console=args.rust_console,
                 env_file=args.env_file, repo_root=repo_root),
         }
         _summary(document, args.json)
@@ -907,7 +977,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.python_console_unit, args.rust_console_unit,
                 args.python_console_port, args.rust_console_port,
                 args.gateway_url, timeout=args.timeout,
-                execute=args.execute, repo_root=repo_root),
+                execute=args.execute, env_file=args.env_file,
+                repo_root=repo_root),
         }
         _summary(document, args.json)
         _write_evidence(evidence, document)
@@ -953,6 +1024,7 @@ def main(argv: list[str] | None = None) -> int:
             args.python_url, args.rust_url, timeout=args.console_timeout,
             surfaces=tuple(args.surface) if args.surface else None,
             rust_console_command=args.rust_console_command,
+            rust_console=args.rust_console,
             env_file=args.env_file, repo_root=repo_root),
         "cloud_smoke": cloud_smoke_plan(
             args.base_url, args.share_key_env, args.model,
@@ -964,7 +1036,8 @@ def main(argv: list[str] | None = None) -> int:
             args.python_console_unit, args.rust_console_unit,
             args.python_console_port, args.rust_console_port,
             args.gateway_url, timeout=args.console_drill_timeout,
-            execute=args.execute_console_rollback, repo_root=repo_root),
+            execute=args.execute_console_rollback, env_file=args.env_file,
+            repo_root=repo_root),
     }
     _summary(document, args.json)
     _write_evidence(evidence, document)
