@@ -58,20 +58,20 @@ class RetiredFeatureAuditTests(unittest.TestCase):
         audit = _load_audit()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "app").mkdir()
-            (root / "app" / "production.py").write_text(
+            (root / "chat2api").mkdir()
+            (root / "chat2api" / "production.py").write_text(
                 "RETIRED = 'workbench'\n", encoding="utf-8")
             violations = audit.find_violations(root, allowlist=())
         self.assertEqual(1, len(violations))
         self.assertIn("workbench", violations[0])
-        self.assertIn("app/production.py", violations[0])
+        self.assertIn("chat2api/production.py", violations[0])
 
     def test_unreadable_file_fails_closed_with_a_reason(self):
         audit = _load_audit()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "app").mkdir()
-            path = root / "app" / "bad.py"
+            (root / "chat2api").mkdir()
+            path = root / "chat2api" / "bad.py"
             path.write_text("clean\n", encoding="utf-8")
             original = Path.read_text
 
@@ -83,7 +83,7 @@ class RetiredFeatureAuditTests(unittest.TestCase):
             with mock.patch.object(Path, "read_text", read_text):
                 violations = audit.find_violations(root, allowlist=())
         self.assertEqual(1, len(violations))
-        self.assertIn("app/bad.py", violations[0])
+        self.assertIn("chat2api/bad.py", violations[0])
         self.assertIn("unreadable", violations[0])
         self.assertIn("permission denied", violations[0])
 
@@ -91,11 +91,11 @@ class RetiredFeatureAuditTests(unittest.TestCase):
         audit = _load_audit()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "app").mkdir()
-            (root / "app" / "bad.py").write_bytes(b"workbench \xff\n")
+            (root / "chat2api").mkdir()
+            (root / "chat2api" / "bad.py").write_bytes(b"workbench \xff\n")
             violations = audit.find_violations(root, allowlist=())
         self.assertEqual(1, len(violations))
-        self.assertIn("app/bad.py", violations[0])
+        self.assertIn("chat2api/bad.py", violations[0])
         self.assertIn("unreadable", violations[0])
         self.assertIn("UnicodeDecodeError", violations[0])
 

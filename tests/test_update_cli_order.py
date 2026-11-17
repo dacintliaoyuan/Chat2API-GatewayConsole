@@ -1437,7 +1437,7 @@ class ConsolePortResolutionTests(unittest.TestCase):
     def test_missing_console_env_uses_the_new_default(self):
         proc = self._console_port(None)
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertEqual("8096", proc.stdout.strip())
+        self.assertEqual("8002", proc.stdout.strip())
 
     def test_the_deployed_new_port_is_used(self):
         proc = self._console_port("USAGESRV_PORT=8096\n")

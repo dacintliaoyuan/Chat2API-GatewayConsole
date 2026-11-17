@@ -50,8 +50,11 @@ class TestRetiredShareDispatch(unittest.TestCase):
         self.assertIsNone(spec)
 
     def test_cloud_composition_root_is_absent(self):
-        self.assertFalse((HERE / "cloud").exists())
-        self.assertIsNone(importlib.util.find_spec("cloud"))
+        # cloud/ now holds only the Windows cloud-console entry; the retired
+        # composition root was cloud/backend and cloud/app.py.
+        self.assertFalse((HERE / "cloud" / "backend").exists())
+        self.assertFalse((HERE / "cloud" / "app.py").exists())
+        self.assertIsNone(importlib.util.find_spec("cloud.backend"))
 
 
 if __name__ == "__main__":

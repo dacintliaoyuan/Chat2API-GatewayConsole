@@ -1,14 +1,11 @@
 # -*- coding: utf-8 -*-
 """Retired shared pricing: assert it is gone, not exercised.
 
-The pure price rules (``shared/pricing_rules.py``), the local price-table loader
-(``local/backend/stats_env.py``) and the share-metering price derivation were
-retired with the cost/price feature set (#30). This suite keeps the regression
-runnable while pinning the retirement:
+The pure price rules (``shared/pricing_rules.py``) and the share-metering price
+derivation were retired with the cost/price feature set (#30). This suite keeps the
+regression runnable while pinning the retirement:
 
 * ``shared.pricing_rules`` does not import;
-* ``local.backend.stats_env`` exposes only the raw statistics environment: no
-  price loader, normalizer or matcher;
 * ``share/metering.py`` has no price function, cost/CNY/version/peak fields;
 * the same raw share usage (requests, tokens, cache evidence, results) is still
   reported without any price.
@@ -27,15 +24,7 @@ if str(AI_GATEWAY_ROOT) not in sys.path:
     sys.path.insert(0, str(AI_GATEWAY_ROOT))
 
 import share.metering as metering  # noqa: E402
-from local.backend import stats_env  # noqa: E402
 
-RETIRED_STATS_ENV_NAMES = (
-    "load_price_table",
-    "normalize_price_table",
-    "match_model_id",
-    "PRICE_CACHE_TTL_S",
-    "PRICE_STALE_DAYS",
-)
 RETIRED_METERING_NAMES = (
     "_price",
     "_valid_rate",
@@ -74,11 +63,6 @@ class RetiredSharedPricingModuleTests(unittest.TestCase):
         self.assertIsNone(importlib.util.find_spec("shared.pricing_rules"))
         with self.assertRaises(ModuleNotFoundError):
             __import__("shared.pricing_rules")
-
-    def test_local_stats_env_has_no_price_surface(self):
-        for name in RETIRED_STATS_ENV_NAMES:
-            with self.subTest(name=name):
-                self.assertFalse(hasattr(stats_env, name), name)
 
     def test_metering_has_no_price_surface(self):
         for name in RETIRED_METERING_NAMES:

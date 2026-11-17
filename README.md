@@ -36,9 +36,10 @@
 - `rust/`：Rust 生产实现：`um-gateway`（8000）、`um-console`（8001）。
 - `scripts/`：入口与部署脚本：`deploy-local-gateway.ps1`、`Open-GatewayConsole.ps1`、`检查端口绑定.bat`。
 - `start_chat2api.bat`、`start_usage_service.bat`：Python 回滚启动器（Rust 切流后的回滚窗口）。
-- `usagesrv.py`、`app/`、`console/`、`share/`、`model_sync/`：Python 回滚实现与 Rust 本机动作的一次性 sidecar。
-- `web/`：TypeScript/Vite 前端；`tests/`：Python 回归与隔离包。
+- `usagesrv.py`、`console/`、`share/`、`model_sync/`：Python 回滚实现与 Rust 本机动作的一次性 sidecar；`usagesrv.py` 不依赖 `app/`。
+- `web/`：TypeScript/Vite 前端；`tests/`：Python 回归。
 - `um-cloud-deploy/`：云端部署/运维材料。
+- 已删除：未上线的 `local/` 组合根与 `app/` 装配（ADR 0009）。
 
 ## 验证
 

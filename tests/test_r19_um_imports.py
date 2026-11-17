@@ -31,6 +31,10 @@ from pathlib import Path
 AI_GATEWAY_ROOT = Path(__file__).resolve().parents[1]
 CHAT2API_PATH = AI_GATEWAY_ROOT / "chat2api" / "chat2api.py"
 
+# Ports the production launchers own. The test allocator below must never hand
+# one of them to a real ``chat2api.main()`` child.
+PRODUCTION_PORTS = frozenset({8000, 8001, 8096, 8097, 8100, 18096, 5901})
+
 sys.path.insert(0, str(AI_GATEWAY_ROOT))
 
 from shared import nonstream_aggregate as shared_aggregate  # noqa: E402
@@ -283,15 +287,9 @@ class _FakeUpstream(BaseHTTPRequestHandler):
 def _free_loopback_port():
     """One free loopback port that is NOT a production listener.
 
-    standards-tests-12: the three other allocators in this suite
-    (``r19.local_fixture.distinct_free_ports``,
-    ``local.tests.test_local_composition._free_port``,
-    ``tests.test_r19_cloud_root._free_port``) all exclude the production
-    ports. This fourth one only bound port 0 and accepted whatever came back,
-    so a real 8000/8001/8096/8097/8100/18096/5901 could be handed to a real
-    ``chat2api.main()`` child.
+    A real 8000/8001/8096/8097/8100/18096/5901 could otherwise be handed to
+    a real ``chat2api.main()`` child.
     """
-    from local.backend.config import FORBIDDEN_PORTS
     for _ in range(100):
         sock = socket.socket()
         try:
@@ -299,43 +297,17 @@ def _free_loopback_port():
             port = sock.getsockname()[1]
         finally:
             sock.close()
-        if port not in FORBIDDEN_PORTS:
+        if port not in PRODUCTION_PORTS:
             return port
     raise RuntimeError("no free loopback port outside the production ports")
 
 
-class PortAllocatorConsistencyTests(unittest.TestCase):
-    """standards-tests-12: the four production-port sets must stay identical.
-
-    The exclusion logic is duplicated in four places. A drift in any one of them
-    would silently let a real listener be allocated, so the sets are compared
-    directly instead of being trusted.
-    """
-
-    def test_every_allocator_excludes_the_same_production_ports(self):
-        sys.path.insert(0, str(AI_GATEWAY_ROOT / "tests"))
-        import r19.local_fixture as local_fixture
-        from local.backend.config import FORBIDDEN_PORTS as LOCAL_PORTS
-        sets = {
-            "local.backend.config": set(LOCAL_PORTS),
-            "r19.local_fixture": set(local_fixture.PRODUCTION_PORTS),
-        }
-        reference = sets["local.backend.config"]
-        for name, ports in sets.items():
-            self.assertEqual(ports, reference,
-                             "%s drifted from the production port set" % name)
-        self.assertIn(8000, reference)
-        self.assertIn(8096, reference)
-        self.assertIn(8097, reference)
-        self.assertIn(18096, reference)
-        self.assertIn(5901, reference)
-
-    def test_the_new_allocator_never_returns_a_production_port(self):
-        from local.backend.config import FORBIDDEN_PORTS
+class FreeLoopbackPortTests(unittest.TestCase):
+    def test_the_allocator_never_returns_a_production_port(self):
         ports = {_free_loopback_port() for _ in range(60)}
-        self.assertFalse(ports & set(FORBIDDEN_PORTS),
+        self.assertFalse(ports & PRODUCTION_PORTS,
                          "the allocator returned a production port: %r"
-                         % sorted(ports & set(FORBIDDEN_PORTS)))
+                         % sorted(ports & PRODUCTION_PORTS))
 
 
 class Chat2apiUpstreamTokenEnvTests(unittest.TestCase):

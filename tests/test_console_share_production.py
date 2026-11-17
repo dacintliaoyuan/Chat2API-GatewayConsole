@@ -1459,7 +1459,9 @@ class RetiredBackendSeamsTests(unittest.TestCase):
         self.assertIn("share.gateway_restart", names)
 
     def test_backend_module_and_cloud_root_are_absent(self):
-        self.assertFalse((Path(__file__).resolve().parents[1]
-                          / "share" / "backend_supervision.py").exists())
-        self.assertFalse((Path(__file__).resolve().parents[1]
-                          / "cloud").exists())
+        root = Path(__file__).resolve().parents[1]
+        self.assertFalse((root / "share" / "backend_supervision.py").exists())
+        # cloud/ now holds only the Windows cloud-console entry; the retired
+        # composition root was cloud/backend and cloud/app.py.
+        self.assertFalse((root / "cloud" / "backend").exists())
+        self.assertFalse((root / "cloud" / "app.py").exists())

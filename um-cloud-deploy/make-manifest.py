@@ -77,14 +77,12 @@ CLOUD_RUNTIME = [
     "share/instance_pipe.py",
     "chat2api/share_auth.py",
     "chat2api/chat2api.py",
-    "chat2api/nonstream_aggregate.py",
 ]
 
 # importlib.util.spec_from_file_location targets: the module name is a literal
 # but the path is assembled at runtime, so AST import edges alone miss these.
 DYNAMIC_MODULES = {
     "chat2api/chat2api": [
-        "chat2api/nonstream_aggregate",
         "chat2api/share_auth",
         "share/secret_protection",
     ],
@@ -122,7 +120,7 @@ def _module_map(root: Path) -> dict[str, Path]:
     # ``ModuleNotFoundError: No module named 'shared'``.  The package
     # initializer is registered under ``shared/__init__`` and resolved through
     # ``_resolve`` (a bare ``shared`` maps there).
-    for package in ("shared", "console", "share", "model_sync", "app"):
+    for package in ("shared", "console", "share", "model_sync"):
         directory = root / package
         if directory.is_dir():
             for path in sorted(directory.glob("*.py")):
@@ -146,7 +144,7 @@ def _resolve(name: str, modules: dict[str, Path]) -> str | None:
     name = name.split(".")[0]
     if name in modules:
         return name
-    if name in ("nonstream_aggregate", "share_auth",
+    if name in ("share_auth",
                  "share/secret_protection", "share/instance_pipe"):
         candidate = "chat2api/" + name
         if candidate in modules:

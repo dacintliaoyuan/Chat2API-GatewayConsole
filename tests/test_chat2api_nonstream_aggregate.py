@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 CHAT2API_PATH = Path(__file__).resolve().parents[1] / "chat2api" / "chat2api.py"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(CHAT2API_PATH.parent))
-import nonstream_aggregate  # noqa: E402
+from shared import nonstream_aggregate  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location(
     "chat2api_nonstream_aggregate", CHAT2API_PATH)

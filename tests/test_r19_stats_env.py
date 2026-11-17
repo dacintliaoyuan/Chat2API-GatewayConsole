@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Local stats environment: raw usage only (price loader retired with #30)."""
+"""Raw stats environment: usage only (price loader retired with #30)."""
 
 import json
 import sys
@@ -13,17 +13,9 @@ if str(AI_GATEWAY_ROOT) not in sys.path:
 
 import usagesrv  # noqa: E402
 from console import stats as console_stats  # noqa: E402
-from local.backend import stats_env  # noqa: E402
 
 
 class RetiredPriceLoaderTests(unittest.TestCase):
-    def test_local_stats_env_has_no_price_loader(self):
-        for name in ("load_price_table", "normalize_price_table",
-                      "match_model_id", "PRICE_CACHE_TTL_S",
-                      "PRICE_STALE_DAYS"):
-            with self.subTest(name=name):
-                self.assertFalse(hasattr(stats_env, name), name)
-
     def test_shared_pricing_rules_module_is_gone(self):
         import importlib.util
         self.assertIsNone(importlib.util.find_spec("shared.pricing_rules"))

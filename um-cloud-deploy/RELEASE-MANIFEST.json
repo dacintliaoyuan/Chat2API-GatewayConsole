@@ -2,10 +2,9 @@
   "closures": {
     "cloud_only": [],
     "cloud_runtime": {
-      "count": 25,
+      "count": 24,
       "files": [
         "chat2api/chat2api.py",
-        "chat2api/nonstream_aggregate.py",
         "chat2api/share_auth.py",
         "console/adapters.py",
         "console/display_proxy.py",
@@ -54,8 +53,7 @@
         "share/secret_protection.py",
         "share/instance_pipe.py",
         "chat2api/share_auth.py",
-        "chat2api/chat2api.py",
-        "chat2api/nonstream_aggregate.py"
+        "chat2api/chat2api.py"
       ]
     },
     "static_only": [
@@ -75,10 +73,9 @@
       "shared/responses_protocol.py"
     ],
     "static_superset": {
-      "count": 39,
+      "count": 38,
       "files": [
         "chat2api/chat2api.py",
-        "chat2api/nonstream_aggregate.py",
         "chat2api/share_auth.py",
         "console/__init__.py",
         "console/adapters.py",
@@ -580,8 +577,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/make-manifest.py",
-      "sha256": "5659f9c22aabf1c5e895fb108cd6fefe1f31e5499767eb87fb8a452c4b64c8f7",
-      "size": 20328
+      "sha256": "d2fa0c532ecc0b339d83026f0287f58105fa004d0ec8c321cfeaf12d94cc1e49",
+      "size": 20217
     },
     {
       "kind": "deployment",
@@ -677,15 +674,6 @@
       "path": "chat2api/chat2api.py",
       "sha256": "8c6710d0fcacb34ef83b8f49067c0476ff674cf835646e1d476881e1ee416167",
       "size": 601086
-    },
-    {
-      "closures": [
-        "static_superset",
-        "cloud_runtime"
-      ],
-      "path": "chat2api/nonstream_aggregate.py",
-      "sha256": "c229ea16da47ce61f44baa6ed6517888a561a8ca8577ea668114a21f610a38cf",
-      "size": 755
     },
     {
       "closures": [

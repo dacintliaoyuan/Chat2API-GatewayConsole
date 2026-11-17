@@ -743,10 +743,9 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 
 | 门禁 | 工作目录 | 命令 | 覆盖 |
 |---|---|---|---|
-| 完整检查 | 仓库根 | `bash scripts/check.sh --full` | compile、ruff、名字/退役检查、契约夹具、diff check、tsc、前端 contracts/logs/um、全部 Python 测试 + local 测试 |
+| 完整检查 | 仓库根 | `bash scripts/check.sh --full` | compile、ruff、名字/退役检查、契约夹具、diff check、tsc、前端 contracts/logs/um、全部 Python 测试 |
 | 快速检查 | 仓库根 | `bash scripts/check.sh` | 不跑全量 Python 测试 |
 | Python 回归 | 仓库根 | `python -m unittest discover -s tests -p "test_*.py"` | 云端分享/控制台契约 |
-| 本机组合回归 | 仓库根 | `python -m unittest discover -s local/tests -p "test_*.py"` | 本机组合根 |
 | 云端控制台前端 | `web/` | `npm run check:cloud-console` | 云端页面/写面 |
 | UM 视图 | `web/` | `npm run check:um` | UM 读面 |
 | 契约夹具新鲜度 | 仓库根 | `python tests/generate_frontend_contract_fixture.py` 后 `node web/scripts/backend-contract/check-generated.mjs` | 改契约代码后必须重生成 |
@@ -776,7 +775,7 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 ## 15. 未验证与待确认
 
 - 运行 `bash scripts/check.sh --quick`（工作目录 `.worktrees/integration-rust-contract`，提交 `cb29da4`）：退出码 0。
-- 运行 `bash scripts/check.sh --full`（同上）：退出码 0；`Ran 2310 tests` / `OK (skipped=63)`，`local/tests` `Ran 54 tests` / `OK`。
+- 运行 `bash scripts/check.sh --full`（同上）：退出码 0；`Ran 2310 tests` / `OK (skipped=63)`，`local/tests` `Ran 54 tests` / `OK`（`local/tests` 已于后续删除）。
 - 运行 `python -m unittest tests.test_chat2api_linux_platform tests.test_cloud_display_on_demand tests.test_console_display_proxy`（同上）：退出码 0。
 - 未运行 Rust 编译/测试：本票只产出测量、契约与切片计划，未创建 Cargo 工程。
 - 登录中/登录后 RSS 未在本契约的新代码上验证；旧 release 的登录中 Chromium 读数见 `docs/headless-login-acceptance.md`。

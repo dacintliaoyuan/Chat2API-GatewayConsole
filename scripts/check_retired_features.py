@@ -52,7 +52,6 @@ ALLOWLIST = frozenset({
     "tests/test_model_sync.py",
     "tests/test_model_sync_core.py",
     "tests/test_model_sync_provider_registration.py",
-    "tests/r19/local_fixture.py",
     "tests/test_model_sync_store_merge.py",
     "tests/test_share_dispatch.py",
     "tests/test_share_metering.py",
@@ -67,7 +66,6 @@ ALLOWLIST = frozenset({
     "tests/test_check_port_bindings.py",
     "tests/test_cloud_role_assembly.py",
     "tests/test_magpie_prices.py",
-    "tests/test_r19_local_isolation.py",
     "tests/test_r19_shared_boundary.py",
     "tests/test_r19_shared_pricing.py",
     "tests/test_r19_stats_env.py",
@@ -76,7 +74,6 @@ ALLOWLIST = frozenset({
     "web/scripts/check-um-views.mjs",
     "web/scripts/console-gate/um.mjs",
     "web/scripts/backend-contract/check-generated.mjs",
-    "local/tests/test_local_composition.py",
 })
 
 # ---------------------------------------------------------------- deny list
@@ -155,10 +152,8 @@ DENY_RULES = (
 )
 
 SCAN_DIRS = (
-    "app",
     "chat2api",
     "console",
-    "local",
     "model_sync",
     "share",
     "shared",

@@ -440,16 +440,15 @@ class ResponsesIdentityInjectionTests(unittest.TestCase):
 
 
 class KnownDeferredBoundaryTests(unittest.TestCase):
-    """G19/T20: two boundary gaps E19-1 deliberately leaves to E19-2.
+    """G19/T20: one boundary gap E19-1 deliberately leaves to E19-2.
 
-    These assertions record the current state so a later item cannot mistake the
+    This assertion records the current state so a later item cannot mistake the
     deferral for an achieved boundary. When E19-2 moves the Windows named-pipe
-    transport out of the cloud package or the credential reader into each end, the
-    matching assertion here is the reminder that must be updated in the same change.
+    transport out of the cloud package, the matching assertion here is the reminder
+    that must be updated in the same change.
     """
 
     BROKER_CLIENT_PATH = AI_GATEWAY_ROOT / "share/broker_client.py"
-    SECRET_PROTECTION_IMPORT = "share.secret_protection"
 
     def test_named_pipe_transport_is_retired(self):
         self.assertTrue(self.BROKER_CLIENT_PATH.is_file())
@@ -486,42 +485,6 @@ class KnownDeferredBoundaryTests(unittest.TestCase):
             "retired transport probe failed: {}".format(completed.stderr))
         self.assertEqual(completed.stdout.strip().splitlines()[-1],
                          "retired")
-
-    def test_secret_protection_is_still_imported_by_both_ends(self):
-        """The credential reader is still reachable from both ends.
-
-        E19-2's known deferral is unchanged; the reader moved from the two role
-        modules into ``console_backend_app`` (the shared backend assembly). The
-        assertion follows it: the shared module imports ``share_secret_protection``,
-        and both role modules import the shared module.
-        """
-        def imported_of(path):
-            tree = ast.parse(path.read_text(encoding="utf-8-sig"),
-                             filename=str(path))
-            names = set()
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    names.update(alias.name for alias in node.names)
-                elif isinstance(node, ast.ImportFrom) and not node.level:
-                    names.add(node.module or "")
-            return names
-
-        shared = AI_GATEWAY_ROOT / "app/console_backend_app.py"
-        self.assertTrue(shared.is_file(), "app/console_backend_app.py must exist")
-        self.assertIn(
-            self.SECRET_PROTECTION_IMPORT, imported_of(shared),
-            "{} no longer imports {}: E19-2 moved the credential reader; "
-            "update this known-deferral assertion".format(
-                shared.name, self.SECRET_PROTECTION_IMPORT))
-        for relative in ("local/backend/app.py",):
-            path = AI_GATEWAY_ROOT / relative
-            with self.subTest(path=relative):
-                self.assertTrue(path.is_file(), "{} must exist".format(path))
-                self.assertIn(
-                    "app.console_backend_app", imported_of(path),
-                    "{} no longer imports console_backend_app: the shared "
-                    "backend module carries the credential reader".format(
-                        relative))
 
 
 class DualEndConsumptionTests(unittest.TestCase):
