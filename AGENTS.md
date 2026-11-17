@@ -5,7 +5,7 @@
 ## 1. 项目特有事实
 
 - **仓库根就是应用根**：`usagesrv.py`、`check_port_bindings.py`、`chat2api/`、`console/`、`share/`、`model_sync/`、`app/`、`web/`、`tests/`、`um-cloud-deploy/` 都在根级，没有上一级目录。根级模块按域收进包：控制台路由在 `console/`，分享链在 `share/`，模型目录在 `model_sync/`，后端装配在 `app/`。
-- **两个角色**：`UM_SHARE_ROLE=local`（本机 8001，Windows）与 `cloud`（云端 8096，Linux；Rust 目标 8002）；前端按构建期角色装入 `web/src/local/local-console.ts` 或 `web/src/cloud/cloud-console.ts`（ADR 0001）。
+- **两个角色**：`UM_SHARE_ROLE=local`（本机 8001，Windows）与 `cloud`（云端 8002，Linux；Python 回滚 8096）；前端按构建期角色装入 `web/src/local/local-console.ts` 或 `web/src/cloud/cloud-console.ts`（ADR 0001）。
 - **生产目录**：`web/dist` 是本机生产页，`web/dist-cloud` 是云端生产页（打包为 `web/dist`）；两者都在 `.gitignore` 里，构建产物不入库。
 - **凭据与运行数据不入库**：`data/`、`profile/`、`tmp/`、`output/`、`chat2api/token.json`、`chat2api/.edge-profile/` 都由根 `.gitignore` 覆盖。
 - **验证**：`web/` 下 `npm run check:cloud-console`、`npm run check:um`；Python 回归 `python -m unittest discover -s tests -p "test_*.py"`。`scripts/check.sh` 在缺 `web/node_modules` 时先 `npm ci`；`web/package.json` 的 `esbuild` 是前端契约门禁的 devDependency。两者只服务门禁环境，不改变产品行为。
@@ -43,9 +43,9 @@
 
 本机 8000 已切到 Rust（`um-gateway-candidate.exe --mode production --port 8000 --role local`）：`lib/gateway-runtime.ps1` 的 `StartPath` 指向 Rust 二进制，`/health` 与 `/admin/shutdown` 契约不变。回滚点仍是 `start_chat2api.bat`；parity、切流与回滚演练记录见 [docs/rust-contract.md](docs/rust-contract.md) §2.4。
 
-本机 8001 已切到 Rust（`um-console-candidate.exe --mode production --bind-port 8001 --role local`）：`lib/gateway-runtime.ps1` 的 `usage` 描述符 `StartPath` 指向 Rust 二进制，`StartEnvironment` 设置 `UM_SHARE_ROLE=local`，`/health` 与 `/` 契约不变。回滚点仍是 `start_usage_service.bat`（Python `usagesrv.py`）；parity、切流与回滚演练记录见 [docs/rust-contract.md](docs/rust-contract.md) §2.5。
+本机 8001 已切到 Rust（`um-console-candidate.exe --mode production --bind-port 8001 --role local`）：`lib/gateway-runtime.ps1` 的 `usage` 描述符 `StartPath` 指向 Rust 二进制，`--role local` 应用本机默认路径（不需要 `UM_SHARE_ROLE` 环境覆盖），`/health` 与 `/` 契约不变。回滚点仍是 `start_usage_service.bat`（Python `usagesrv.py`）；parity、切流与回滚演练记录见 [docs/rust-contract.md](docs/rust-contract.md) §2.5。
 
-`um-cloud-deploy` 的 `RELEASE-MANIFEST.json` 用 `runtime: python|rust` 冻结发布运行时：Rust release 安装 `um-share-gateway.service`（8003）与 8002 console unit，Python release 仍用 `um-share-broker.service`（8100）与 8096 console unit 作为回滚目标。2026-11-17 云端 8002 已切 Rust（`s2-20261117a`）；Python 回滚单元是 `um-share-console-python.service`（8096），回滚目标 release 是 `s2-20261116t`（Rust 8003 + Python 8002）。`package-release.sh --runtime rust --rust-bin <um-gateway>` 打包 Rust 二进制；`install.sh`/`update.sh`/`rollback.sh` 按 manifest 选择 unit 与健康门端口，`rollback-drill.sh` 仍负责 Rust→Python 演练。
+`um-cloud-deploy` 的 `RELEASE-MANIFEST.json` 用 `runtime: python|rust` 冻结发布运行时：Rust release 安装 `um-share-gateway.service`（8003）与 8002 console unit，Python release 仍用 `um-share-broker.service`（8100）与 8096 console unit 作为回滚目标。2026-11-17 云端 8002 已切 Rust（`s2-20261117b`）；Python 回滚单元是 `um-share-console-python.service`（8096），回滚目标 release 是 `s2-20261116t`（Rust 8003 + Python 8002）。`package-release.sh --runtime rust --rust-bin <um-gateway>` 打包 Rust 二进制；`install.sh`/`update.sh`/`rollback.sh` 按 manifest 选择 unit 与健康门端口，`rollback-drill.sh` 仍负责 Rust→Python 演练。
 
 **三态**：表中「代码默认」是当前 Python 进程的默认监听；线上实际监听以 `ss -ltnp` 为准，可能仍是上一个 release 的默认值；「Rust 目标」在 Rust 重写时一次性生效。旧 `18096`/`5901` 是云端控制台与 display 的旧端口，当前 release 仍允许显式配置（`USAGESRV_PORT=18096`、`CONSOLE_DISPLAY_VNC_PORT=5901`），审计记为 `LEGACY-ALIAS`，同一时刻只监听配置指定的一个端口；Rust 切换时旧 `8100`/`8096`/`18096`/`5901` 不保留兼容别名。
 

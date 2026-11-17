@@ -34,7 +34,7 @@
 
 - 目标契约：云端控制台 8002、云端网关 8003、display 8097；旧 8100/8096/18096/5901 不作为 Rust 目标，Rust 切换时一次性生效。
 - 没有兼容窗口：同一时刻只监听目标端口；旧端口监听按未登记处理。Python 回滚 release 仍使用 8100/8096，只作回滚目标，不暴露公网。
-- 2026-11-17 云端 8002 已切 Rust（release `s2-20261117a`）；回滚目标是 `s2-20261116t`（Rust 8003 + Python 8002）与 `um-share-console-python.service`（8096）。
+- 2026-11-17 云端 8002 已切 Rust（release `s2-20261117b`）；回滚目标是 `s2-20261116t`（Rust 8003 + Python 8002）与 `um-share-console-python.service`（8096）。
 - 非法端口值继续 fail closed；Rust 不得把旧端口写死，也不得同时监听新旧两个端口。
 - 8003 分享段在 Rust production 模式下只允许 loopback 绑定；非 loopback 例外尚未实现，需要时另行登记。
 
@@ -121,10 +121,10 @@ systemd
 - 启动器：`lib/gateway-runtime.ps1` 的 `usage` 描述符 `StartPath` 指向该二进制，
   `StartArguments` 为
   `--mode production --bind-port 8001 --report-port 8001 --role local --gateway-port 8000 --state-file data/console-state.sqlite3 --dist-dir web/dist --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log`，
-  `StartWorkingDirectory` 固定为仓库根。`StartEnvironment` 设置 `UM_SHARE_ROLE=local`：
-  Rust CLI 的本地路径默认值（`data/admin-control-token`、`data/usage-session-code`、
-  `data/share-store.db`、`data/console-locks`、`web/dist`）因此与 Python 8001 一致；
-  显式 `--role local` 只选择角色，不会自动应用这些默认值。`StartAction` 仍是
+  `StartWorkingDirectory` 固定为仓库根。显式 `--role local` 会应用 Rust CLI 的本机
+  路径默认值（`data/admin-control-token`、`data/usage-session-code`、
+  `data/share-store.db`、`data/console-locks`、`web/dist`），因此与 Python 8001 一致，
+  启动器不再需要 `UM_SHARE_ROLE` 环境覆盖。`StartAction` 仍是
   `HiddenBatch`，健康检查仍是 `http://127.0.0.1:8001/health`，停止仍是
   `StopStrategy=Port`。
 - 停止边界：`StopIdentities` 同时覆盖 Python `usagesrv.py` 与 Rust
@@ -160,11 +160,14 @@ systemd
     （`scanned_bytes`、`window_start_offset`、`rows_read`、`ms`、`ts_norm`、`at`）；
     无法解析的行 `event=None` 与全 null 事件对象等价。
   - 已记录但不纳入六面门槛的差异：`actions` 目录（Python 12 个启用动作，
-    Rust 本机只启用 `model.catalog`，共享 7 个）、`services.process_ids`/`detail`、
+    Rust 本机只启用 `model.catalog`，共享 7 个；其余动作提交返回 403
+    `action_disabled`）、`services.process_ids`/`detail`、
     `health.services[].ms`、`gateway-connection.evidence/reason/key_in_use`、
-    `um/logs` 的时区与游标编码、旧 `/api/console/logs`（Rust 本机未装配）。
-  - 证据：`tmp/local-8001-parity-evidence.json`；临时探针命令为
-    `python -I tmp/local_8001_parity.py --python-port 8001 --rust-port <候选端口>
+    `summary` 刷新失败时的 `_refresh_error`/`_stale` 附加键、旧 `/api/console/logs`
+    （Rust 本机未装配）。`um/logs` 的时间戳形状、游标与 scope label 已按
+    Python `console/log_reader.py` 对齐。
+  - 证据：`tmp/local-8001-parity-evidence.json`；探针命令为
+    `python -I tests/local_8001_parity.py --python-port 8001 --rust-port <候选端口>
     --root . --evidence tmp/local-8001-parity-evidence.json`。
 - 会话交换（#85 AC3）：`Open-GatewayConsole.bat` 仍调用 `Open-GatewayConsole.ps1`：
   宿主未运行则先启动，随后用 `data/admin-control-token` 的 `X-Admin-Control`
@@ -180,7 +183,7 @@ systemd
   返回 `Restarted`，只终止 Rust 私有实例。重启后 Python `usagesrv.py` 监听
   `127.0.0.1:8001`，`/health` 200、`/` 200。再把 `StartPath` 改回 Rust 二进制
   并重启，`/health` 200、`/` 200。回滚不需要重装，也不需要改端口；
-  `StartEnvironment` 对 batch 回滚无影响，`StopIdentities` 仍同时识别 Python 与 Rust。
+  `StartArguments` 对 batch 回滚无影响，`StopIdentities` 仍同时识别 Python 与 Rust。
 - 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 验证
   描述符、健康边界、停止身份与回滚；真实 8001 的 parity、切流与回滚演练由 #85
   执行并记录在本节。

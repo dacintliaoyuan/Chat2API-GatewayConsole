@@ -300,11 +300,11 @@ _Avoid_: 管理会话、私网可达即可信
 _Avoid_: 主控制台、统一控制台
 
 **云端控制台 (Cloud console)**:
-云机上只管理云端 API 服务的控制台入口；与本地控制台共用前端代码，数据与操作目标各自归属，不经对方转发。目标端口是 8002（Rust 切换后生效；当前 Python 部署仍为 8096），入口为 `Open-CloudConsole.bat`（经专用 SSH 配置建 loopback 隧道），生产页是发布包内的 `web/dist`（cloud 角色，构建自 `web/dist-cloud`）。
+云机上只管理云端 API 服务的控制台入口；与本地控制台共用前端代码，数据与操作目标各自归属，不经对方转发。端口是 8002（2026-11-17 已切 Rust；Python 回滚单元 `um-share-console-python.service` 监听 8096），入口为 `Open-CloudConsole.bat`（经专用 SSH 配置建 loopback 隧道），生产页是发布包内的 `web/dist`（cloud 角色，构建自 `web/dist-cloud`）。
 _Avoid_: 远程管理本地、跨机统一控制台
 
 **云端网关 (Cloud gateway)**:
-云机上唯一的分享 API 合并进程（`chat2api.py`），负责分享 Key 鉴权、每 Key 并发、撤销在途请求、用量账本与 SSE 转发；目标端口是 8003（Rust 切换后生效；当前 Python 部署仍为 8100），由 `um-share-gateway.service` 拉起。
+云机上唯一的分享 API 合并进程（Rust `um-gateway`；Python `chat2api.py` 是回滚实现），负责分享 Key 鉴权、每 Key 并发、撤销在途请求、用量账本与 SSE 转发；端口是 8003（Rust 已切流；Python 回滚 release 仍用 8100），由 `um-share-gateway.service` 拉起。
 _Avoid_: 合并网关（旧称）、云端反代（它不是独立反代层）、broker（broker 是拉起者，不是网关本身）
 
 **网关/控制台配对段 (Gateway/console pair segment)**:
