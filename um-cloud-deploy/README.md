@@ -99,7 +99,8 @@ bash um-cloud-deploy/package-release.sh \
   --web-role cloud
 
 # 构建机：生成 Rust 8003/8002 发布包。先 cargo build --release，
-# 再把 target/release/um-gateway-candidate 作为 --rust-bin 传入。
+# 再把 target/release/um-gateway-candidate 作为 --rust-bin、
+# target/release/um-console-candidate 作为 --rust-console-bin 传入。
 bash um-cloud-deploy/package-release.sh \
   --source . \
   --version <rust-version> \
@@ -107,7 +108,8 @@ bash um-cloud-deploy/package-release.sh \
   --web-dist web/dist-cloud \
   --web-role cloud \
   --runtime rust \
-  --rust-bin rust/target/release/um-gateway-candidate
+  --rust-bin rust/target/release/um-gateway-candidate \
+  --rust-console-bin rust/target/release/um-console-candidate
 
 # 云机：安装（root；先解开 tar 再运行其中的 install.sh）
 /root/um-share-<version>/um-cloud-deploy/install.sh \

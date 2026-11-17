@@ -592,8 +592,8 @@
     {
       "kind": "deployment",
       "path": "um-cloud-deploy/README.md",
-      "sha256": "540ff0b5b53bd912b426fd8ae3c8d32ff12bd19104715981e05f253b8968e6b3",
-      "size": 17701
+      "sha256": "29bc05072d1bb509a86ffe2a319b10dd89863a3887d49605758c6dc1ea941b27",
+      "size": 17834
     },
     {
       "kind": "deployment",
@@ -1007,7 +1007,7 @@
       "size": 190435
     }
   ],
-  "generated_at": "2026-11-17T02:02:22.042370+00:00",
+  "generated_at": "2026-11-17T02:08:30.219834+00:00",
   "generator": "um-cloud-deploy/make-manifest.py",
   "python": {
     "implementation": "CPython",
