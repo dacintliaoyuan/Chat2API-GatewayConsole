@@ -207,17 +207,104 @@ fn local_root_rechecks_the_build_identity_on_every_request() {
 }
 
 #[test]
+fn local_static_assets_use_the_python_paths_and_mime_map() {
+    let temp = temp();
+    let dist = temp.path().join("dist");
+    fs::create_dir_all(dist.join("assets")).expect("create dist assets");
+    let cases = [
+        ("asset.html", "text/html; charset=utf-8"),
+        ("asset.js", "text/javascript; charset=utf-8"),
+        ("asset.css", "text/css; charset=utf-8"),
+        ("asset.json", "application/json; charset=utf-8"),
+        ("asset.webmanifest", "application/manifest+json; charset=utf-8"),
+        ("asset.svg", "image/svg+xml"),
+        ("asset.png", "image/png"),
+        ("asset.ico", "image/x-icon"),
+        ("asset.woff2", "font/woff2"),
+        ("asset.woff", "font/woff"),
+        ("asset.glb", "model/gltf-binary"),
+        ("asset.mp3", "audio/mpeg"),
+        ("asset.wav", "audio/wav"),
+        ("asset.txt", "text/plain; charset=utf-8"),
+        ("asset.md", "text/markdown; charset=utf-8"),
+        ("asset.bin", "application/octet-stream"),
+        ("asset-upper.JS", "text/javascript; charset=utf-8"),
+    ];
+    for (name, _) in cases {
+        fs::write(dist.join("assets").join(name), format!("stub:{name}")).expect("write asset");
+    }
+    let console = local_console(&temp, &dist);
+
+    for (name, content_type) in cases {
+        let target = format!("/assets/{name}");
+        let response = client_request(console.addr, &ClientRequest::get(&target)).expect(&target);
+        assert_eq!(response.status, 200, "{target}");
+        assert_eq!(
+            response.body,
+            format!("stub:{name}").into_bytes(),
+            "{target}"
+        );
+        assert_eq!(
+            response.header("content-type"),
+            Some(content_type),
+            "{target}"
+        );
+        assert_eq!(
+            response.header("cache-control"),
+            Some("no-store"),
+            "{target}"
+        );
+    }
+
+    let alias = client_request(
+        console.addr,
+        &ClientRequest::get("/gw/usagesrv/assets/asset.js"),
+    )
+    .expect("alias asset");
+    assert_eq!(alias.status, 200);
+    assert_eq!(alias.body, b"stub:asset.js");
+}
+
+#[test]
+fn local_static_rejects_traversal_missing_and_directories() {
+    let temp = temp();
+    let dist = temp.path().join("dist");
+    fs::create_dir_all(dist.join("assets")).expect("create dist assets");
+    fs::write(temp.path().join("secret.txt"), b"outside-secret").expect("write secret");
+    let console = local_console(&temp, &dist);
+
+    for target in ["/assets/../../secret.txt", "/assets/nope.js", "/assets"] {
+        let response = client_request(console.addr, &ClientRequest::get(target)).expect(target);
+        assert_eq!(response.status, 404, "{target}");
+        assert_eq!(
+            response.json()["error"],
+            json!("unknown path"),
+            "{target}"
+        );
+        assert!(
+            !response
+                .body
+                .windows(b"outside-secret".len())
+                .any(|window| window == b"outside-secret"),
+            "{target}"
+        );
+    }
+}
+
+#[test]
 fn cloud_role_keeps_the_unknown_path_answer() {
     let temp = temp();
     let dist = temp.path().join("dist");
     write_index(&dist);
     write_identity(&dist, local_identity());
+    fs::create_dir_all(dist.join("assets")).expect("create dist assets");
+    fs::write(dist.join("assets/app.js"), b"cloud-stub").expect("write asset");
     let console = start_console_with(&temp, stopped_runtime(), |config| {
         config.role = Role::Cloud;
         config.console_dist_dir = dist.clone();
     });
 
-    for target in ["/", "/index.html"] {
+    for target in ["/", "/index.html", "/assets/app.js"] {
         let response = client_request(console.addr, &ClientRequest::get(target)).expect(target);
         assert_eq!(response.status, 404, "{target}");
         assert_eq!(response.json()["error"], json!("unknown path"), "{target}");

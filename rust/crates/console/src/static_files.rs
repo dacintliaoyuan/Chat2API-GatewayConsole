@@ -122,6 +122,49 @@ pub fn serve_index(dist_dir: &Path, role: Role, port: u16) -> Response {
 /// `usagesrv.py::_serve_console_static`: serve one regular file under the dist
 /// root with the Python MIME map and `Cache-Control: no-store`.
 pub fn serve_static(dist_dir: &Path, path: &str) -> Response {
-    let _ = (dist_dir, path);
-    ConsoleError::new(404, json!({"error": "unknown path"})).response()
+    let name = path.trim_matches('/');
+    if name.is_empty() {
+        return ConsoleError::unknown_path().response();
+    }
+    let Ok(root) = std::fs::canonicalize(dist_dir) else {
+        return ConsoleError::unknown_path().response();
+    };
+    let Ok(target) = std::fs::canonicalize(root.join(name)) else {
+        return ConsoleError::unknown_path().response();
+    };
+    if !target.starts_with(&root) || !target.is_file() {
+        return ConsoleError::unknown_path().response();
+    }
+    match std::fs::read(&target) {
+        Ok(body) => Response::new(200, body)
+            .with_header("Content-Type", static_content_type(&target))
+            .with_header("Cache-Control", "no-store"),
+        Err(_) => ConsoleError::unknown_path().response(),
+    }
+}
+
+/// `usagesrv.py::CONSOLE_STATIC_TYPES`, keyed by the lowercased extension.
+fn static_content_type(path: &Path) -> &'static str {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase());
+    match extension.as_deref() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("webmanifest") => "application/manifest+json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("glb") => "model/gltf-binary",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("md") => "text/markdown; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }

@@ -363,6 +363,9 @@ fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response 
         return handle_share_api(state, request, &target);
     }
     if !path.starts_with("/api/console/") {
+        if method == "GET" && state.config.role == Role::Local {
+            return crate::static_files::serve_static(&state.config.console_dist_dir, path);
+        }
         return ConsoleError::unknown_path().response();
     }
     if let Err(error) = reject_duplicate_sensitive_header(&request.headers) {
