@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 
 use crate::config::{parse_upstream_base_url, upstream_uses_tls, ConfigError, GatewayConfig};
 use crate::error::GatewayError;
+use crate::http::Response;
 use crate::login::CredentialSink;
 use crate::tls::{self, UpstreamStream};
 
@@ -31,6 +32,16 @@ pub const MAX_IMAGES: u32 = 16;
 pub const AUTO_TRIM_HISTORICAL_IMAGES: bool = true;
 pub const AUTO_TRIM_CURRENT_TURN_IMAGES: bool = false;
 pub const REAUTH_MAX_SESSIONS_PER_CYCLE: u32 = 6;
+/// Python `EFFORT_LEVELS`: suffix -> OpenAI `reasoning_effort`.
+pub const EFFORT_LEVELS: [(&str, &str); 4] = [
+    ("Fast", "none"),
+    ("Low", "low"),
+    ("Medium", "medium"),
+    ("High", "high"),
+];
+/// Python `Proxy.call`'s non-stream socket budget for a local `/api/*`
+/// passthrough.
+pub const PASSTHROUGH_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// One upstream HTTP observation.
 #[derive(Debug)]
@@ -80,6 +91,22 @@ impl UpstreamClient {
         path: &str,
         bearer: Option<&str>,
     ) -> Result<UpstreamResponse, UpstreamFailure> {
+        self.request("GET", path, bearer, None, self.timeout)
+    }
+
+    /// One upstream request for the local `/api/*` passthrough.
+    ///
+    /// Python `Proxy.call` sends the stored bearer, the JSON body and the
+    /// default 600 second non-stream socket budget; the client's own credential
+    /// never leaves this process.
+    pub fn request(
+        &self,
+        method: &str,
+        path: &str,
+        bearer: Option<&str>,
+        body: Option<&[u8]>,
+        timeout: Duration,
+    ) -> Result<UpstreamResponse, UpstreamFailure> {
         let addresses: Vec<std::net::SocketAddr> = format!("{}:{}", self.host, self.port)
             .to_socket_addrs()
             .map_err(|_| UpstreamFailure::ConnectionError)?
@@ -90,7 +117,7 @@ impl UpstreamClient {
         let mut last = UpstreamFailure::ConnectionError;
         let mut connected = None;
         for address in addresses {
-            match TcpStream::connect_timeout(&address, self.timeout) {
+            match TcpStream::connect_timeout(&address, timeout) {
                 Ok(stream) => {
                     connected = Some(stream);
                     break;
@@ -102,25 +129,34 @@ impl UpstreamClient {
             }
         }
         let stream = connected.ok_or(last)?;
-        let _ = stream.set_read_timeout(Some(self.timeout));
-        let _ = stream.set_write_timeout(Some(self.timeout));
+        let _ = stream.set_read_timeout(Some(timeout));
+        let _ = stream.set_write_timeout(Some(timeout));
         let mut stream: UpstreamStream = if self.tls {
             Box::new(tls::wrap(stream, &self.host).map_err(|_| UpstreamFailure::ConnectionError)?)
         } else {
             Box::new(stream)
         };
         let mut request = format!(
-            "GET {path} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\n\
+            "{method} {path} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\n\
              Connection: close\r\n",
             self.host, self.port
         );
         if let Some(bearer) = bearer {
             request.push_str(&format!("Authorization: Bearer {bearer}\r\n"));
         }
+        if let Some(body) = body {
+            request.push_str("Content-Type: application/json\r\n");
+            request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        }
         request.push_str("\r\n");
         stream
             .write_all(request.as_bytes())
             .map_err(|_| UpstreamFailure::ConnectionError)?;
+        if let Some(body) = body {
+            stream
+                .write_all(body)
+                .map_err(|_| UpstreamFailure::ConnectionError)?;
+        }
         stream
             .flush()
             .map_err(|_| UpstreamFailure::ConnectionError)?;
@@ -251,6 +287,7 @@ pub struct ProxyState {
     config_freshness: Mutex<ConfigFreshness>,
     upstream_state: Mutex<UpstreamState>,
     models_cache: Mutex<Option<(Instant, Value)>>,
+    effort_models: Vec<String>,
     upstream: UpstreamClient,
 }
 
@@ -283,6 +320,7 @@ impl ProxyState {
                 last_ok_epoch: None,
             }),
             models_cache: Mutex::new(None),
+            effort_models: config.effort_models.clone(),
             upstream: UpstreamClient::from_config(config)?,
         })
     }
@@ -570,7 +608,10 @@ impl ProxyState {
         if let Some(payload) = fetched {
             *self.models_cache.lock().expect("models cache poisoned") =
                 Some((Instant::now(), payload.clone()));
-            return Ok((payload, raw_fresh));
+            if raw_fresh {
+                return Ok((payload, true));
+            }
+            return Ok((append_effort_models(&payload, &self.effort_models), false));
         }
         if raw_fresh {
             return Err(GatewayError::models_unavailable());
@@ -581,9 +622,42 @@ impl ProxyState {
             .expect("models cache poisoned")
             .clone();
         match cached {
-            Some((_, payload)) => Ok((payload, false)),
+            Some((_, payload)) => Ok((append_effort_models(&payload, &self.effort_models), false)),
             None => Err(GatewayError::models_unavailable()),
         }
+    }
+
+    /// One general `/api/*` passthrough with the stored upstream bearer.
+    ///
+    /// Python `Handler._passthrough` keeps the upstream status, copies only
+    /// `content-type`/`cache-control` on success, and rebuilds an upstream
+    /// 4xx/5xx in the unified error envelope with a bounded message.
+    pub fn passthrough(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&[u8]>,
+    ) -> Result<Response, GatewayError> {
+        let bearer = self.bearer();
+        let response = self
+            .upstream
+            .request(method, path, Some(&bearer), body, PASSTHROUGH_TIMEOUT)
+            .map_err(passthrough_failure)?;
+        if response.status >= 400 {
+            let text = String::from_utf8_lossy(&response.body).to_string();
+            return Err(GatewayError::upstream_status_error(
+                response.status,
+                Some(&text),
+                response.headers.get("retry-after").map(String::as_str),
+            ));
+        }
+        let mut result = Response::new(response.status, response.body);
+        for name in ["content-type", "cache-control"] {
+            if let Some(value) = response.headers.get(name) {
+                result = result.with_header(name, value);
+            }
+        }
+        Ok(result)
     }
 
     /// Whether the current bearer is accepted right now.
@@ -623,6 +697,55 @@ impl CredentialSink for ProxyState {
     fn publish_credential(&self, token: &str, _api_key: Option<&str>) {
         self.set_bearer(token);
         self.invalidate_models();
+    }
+}
+
+/// Python `Proxy.list_models` default catalog: append one virtual variant per
+/// configured base model that is actually present in the upstream snapshot. A base
+/// that disappeared never exposes selectable variants, and an existing variant id
+/// is never duplicated.
+fn append_effort_models(payload: &Value, bases: &[String]) -> Value {
+    let mut payload = payload.clone();
+    let Some(items) = payload
+        .as_object_mut()
+        .and_then(|object| object.get_mut("data"))
+        .and_then(Value::as_array_mut)
+    else {
+        return payload;
+    };
+    let sources = items.clone();
+    for base in bases {
+        let Some(source) = sources
+            .iter()
+            .find(|model| model.get("id").and_then(Value::as_str) == Some(base.as_str()))
+        else {
+            continue;
+        };
+        for (suffix, _effort) in EFFORT_LEVELS {
+            let variant_id = format!("{base}-{suffix}");
+            if items
+                .iter()
+                .any(|model| model.get("id").and_then(Value::as_str) == Some(variant_id.as_str()))
+            {
+                continue;
+            }
+            let mut variant = source.clone();
+            if let Some(object) = variant.as_object_mut() {
+                object.insert("id".to_string(), Value::String(variant_id.clone()));
+                object.insert("name".to_string(), Value::String(variant_id));
+            }
+            items.push(variant);
+        }
+    }
+    payload
+}
+
+fn passthrough_failure(failure: UpstreamFailure) -> GatewayError {
+    match failure {
+        UpstreamFailure::Timeout => GatewayError::upstream_timeout_with_reason(failure.name()),
+        UpstreamFailure::ConnectionError => {
+            GatewayError::upstream_transport_failure(failure.name())
+        }
     }
 }
 

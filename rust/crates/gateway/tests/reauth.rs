@@ -501,7 +501,7 @@ fn auth_wait_timeout_is_a_503_reauthentication_required() {
         Some(Arc::new(provider.clone())),
         |config| {
             retry_budget(config);
-            config.auth_wait_budget = Duration::from_millis(50);
+            config.auth_wait_budget = Some(Duration::from_millis(50));
             config.auth_wait_recheck = Duration::from_millis(10);
         },
     );
@@ -669,7 +669,7 @@ fn authentication_wait_counts_toward_the_total_request_budget() {
         Some(Arc::new(provider.clone())),
         |config| {
             retry_budget(config);
-            config.auth_wait_budget = Duration::from_secs(5);
+            config.auth_wait_budget = Some(Duration::from_secs(5));
             config.auth_wait_recheck = Duration::from_millis(10);
             config.request_total = Duration::from_millis(100);
         },

@@ -63,7 +63,7 @@ impl Default for ReauthLimits {
 impl ReauthLimits {
     pub fn from_config(config: &GatewayConfig) -> Self {
         Self {
-            auth_wait_budget: config.auth_wait_budget,
+            auth_wait_budget: config.auth_wait_budget(),
             auth_wait_max_concurrent: config.auth_wait_max_concurrent,
             auth_wait_recheck: config.auth_wait_recheck,
             attempt_window: config.reauth_attempt_window,

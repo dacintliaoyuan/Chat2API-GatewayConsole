@@ -2,7 +2,7 @@
 //!
 //! Candidate mode is the default: the binary only binds an ephemeral loopback
 //! port. Production mode must be selected explicitly with
-//! `--mode production` and only binds 8003/8002 on loopback. It prints the
+//! `--mode production` and only binds 8000/8002/8003 on loopback. It prints the
 //! actual address so a test (or an operator) can address the gateway, then serves
 //! until the process is stopped. No `chat2api.py`, broker or display relay is
 //! started.
@@ -10,11 +10,13 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use um_gateway::config::{AuthMode, BindMode, GatewayConfig};
+use um_gateway::config::{resolve_auth_wait_budget, AuthMode, BindMode, GatewayConfig, Role};
 use um_gateway::GatewayServer;
 
 fn main() -> ExitCode {
     let mut config = GatewayConfig::from_env();
+    let mut role = None;
+    let mut auth_wait_budget_cli = None;
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
@@ -22,6 +24,18 @@ fn main() -> ExitCode {
                 Some(BindMode::Candidate) => config.candidate = true,
                 Some(BindMode::Production) => config.candidate = false,
                 None => return usage("--mode must be candidate or production"),
+            },
+            "--role" => match args.next().as_deref().and_then(Role::parse) {
+                Some(value) => role = Some(value),
+                None => return usage("--role must be local or cloud"),
+            },
+            "--auth-wait-budget-seconds" => match args
+                .next()
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite())
+            {
+                Some(value) => auth_wait_budget_cli = Some(value),
+                None => return usage("--auth-wait-budget-seconds requires a finite number"),
             },
             "--host" => match args.next() {
                 Some(value) => config.bind_host = value,
@@ -67,6 +81,10 @@ fn main() -> ExitCode {
                 Some(value) => config.login_timeout = std::time::Duration::from_secs(value.max(1)),
                 None => return usage("--login-timeout requires an integer"),
             },
+            "--effort-model" => match args.next() {
+                Some(value) => config.effort_models.push(value),
+                None => return usage("--effort-model requires a model id"),
+            },
             "--instance-key-file" => match args.next() {
                 Some(value) => config.instance_key_file = Some(value.into()),
                 None => return usage("--instance-key-file requires a path"),
@@ -83,15 +101,17 @@ fn main() -> ExitCode {
             "--help" | "-h" => {
                 println!(
                     "usage: um-gateway-candidate [--mode candidate|production] \
-                     --upstream-base-url URL [--host 127.0.0.1] \
-                     [--port 0|8003|8002] [--token TOKEN] \
+                     [--role local|cloud] --upstream-base-url URL [--host 127.0.0.1] \
+                     [--port 0|8000|8003|8002] [--token TOKEN] \
                      [--share-config PATH] [--auth-mode projection|legacy] \
                      [--control-token-file PATH] [--token-file PATH] \
                      [--profile-dir PATH] [--login-display-file PATH] \
-                     [--login-timeout SECONDS] [--no-browser]\n\
+                     [--login-timeout SECONDS] [--no-browser] \
+                     [--auth-wait-budget-seconds SECONDS] \
+                     [--effort-model MODEL]\n\
                      modes: candidate (default) binds an ephemeral loopback port only; \
-                     production must be selected explicitly and binds 8003 or 8002 \
-                     on loopback only"
+                     production must be selected explicitly and binds 8000, 8002 or 8003 \
+                     on loopback only; --role defaults to local for 8000 and cloud otherwise"
                 );
                 return ExitCode::SUCCESS;
             }
@@ -100,6 +120,10 @@ fn main() -> ExitCode {
     }
     if config.upstream_base_url.is_empty() {
         return usage("--upstream-base-url is required");
+    }
+    config.role = role.unwrap_or_else(|| Role::for_port(config.bind_port));
+    if let Some(value) = auth_wait_budget_cli {
+        config.auth_wait_budget = Some(resolve_auth_wait_budget(Some(value), None, config.role));
     }
     let server = match GatewayServer::start(config) {
         Ok(server) => server,

@@ -65,6 +65,34 @@ fn read_listen_addr(child: &mut Child) -> SocketAddr {
 }
 
 #[test]
+fn production_mode_binds_8000_on_loopback() {
+    // The local Python service may already hold 127.0.0.1:8000; any 127/8
+    // address is loopback and exercises the same production binding policy.
+    let temp = TempDir::new(unique_temp_prefix());
+    let stub = StubUpstream::start();
+    let mut child = gateway_command(&temp, &stub)
+        .arg("--mode")
+        .arg("production")
+        .arg("--host")
+        .arg("127.0.0.2")
+        .arg("--port")
+        .arg("8000")
+        .spawn()
+        .expect("spawn production gateway on 8000");
+    let addr = read_listen_addr(&mut child);
+    let _guard = ChildGuard { child };
+    assert_eq!(
+        addr,
+        SocketAddr::from(([127, 0, 0, 2], 8000)),
+        "production must bind loopback 8000"
+    );
+
+    let health = client_request(addr, &ClientRequest::get("/health")).expect("health");
+    assert_eq!(health.status, 200);
+    assert_eq!(health.json()["status"], json!("ok"));
+}
+
+#[test]
 fn production_mode_binds_8003_and_8002_on_loopback() {
     for port in [8003u16, 8002u16] {
         let temp = TempDir::new(unique_temp_prefix());
@@ -137,10 +165,10 @@ fn production_mode_rejects_non_loopback_before_bind() {
 }
 
 #[test]
-fn production_mode_rejects_ports_outside_8003_and_8002() {
+fn production_mode_rejects_ports_outside_8000_8002_and_8003() {
     let temp = TempDir::new(unique_temp_prefix());
     let stub = StubUpstream::start();
-    for port in ["0", "8000", "8001", "8100", "8096"] {
+    for port in ["0", "8001", "8100", "8096"] {
         let output = gateway_command(&temp, &stub)
             .arg("--mode")
             .arg("production")
@@ -153,7 +181,10 @@ fn production_mode_rejects_ports_outside_8003_and_8002() {
             "production must reject port {port}"
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("8002 or 8003"), "{port} stderr: {stderr}");
+        assert!(
+            stderr.contains("8000, 8002 or 8003"),
+            "{port} stderr: {stderr}"
+        );
     }
 }
 
@@ -207,16 +238,64 @@ fn production_config_rejects_non_loopback_and_other_ports() {
         .expect_err("production must reject a non-loopback host");
     assert!(error.to_string().contains("loopback"), "{error}");
 
-    for port in [0u16, 8000, 8001, 8100, 8096] {
+    for port in [0u16, 8001, 8100, 8096] {
         let config = GatewayConfig {
             bind_port: port,
             candidate: false,
+            upstream_base_url: "http://127.0.0.1:8000".to_string(),
             ..GatewayConfig::default()
         };
         let error = config
             .validate_bind_policy()
             .expect_err("production must reject a non-production port");
-        assert!(error.to_string().contains("8002 or 8003"), "{error}");
+        assert!(error.to_string().contains("8000, 8002 or 8003"), "{error}");
+    }
+}
+
+#[test]
+fn production_allows_only_8000_8002_and_8003_on_loopback() {
+    assert_eq!(
+        um_gateway::config::production_ports(),
+        [8000u16, 8002, 8003].into_iter().collect()
+    );
+    for port in [8000u16, 8002, 8003] {
+        let config = GatewayConfig {
+            bind_port: port,
+            candidate: false,
+            upstream_base_url: "http://127.0.0.1:8000".to_string(),
+            ..GatewayConfig::default()
+        };
+        config
+            .validate_bind_policy()
+            .unwrap_or_else(|error| panic!("production must allow {port}: {error}"));
+    }
+    for port in [0u16, 8001, 8096, 8100, 5173, 8097, 8099] {
+        let config = GatewayConfig {
+            bind_port: port,
+            candidate: false,
+            upstream_base_url: "http://127.0.0.1:8000".to_string(),
+            ..GatewayConfig::default()
+        };
+        let error = config
+            .validate_bind_policy()
+            .expect_err("production must reject a non-production port");
+        assert!(
+            error.to_string().contains("8000, 8002 or 8003"),
+            "port {port}: {error}"
+        );
+    }
+    for host in ["0.0.0.0", "192.0.2.1", "example.com"] {
+        let config = GatewayConfig {
+            bind_host: host.to_string(),
+            bind_port: 8000,
+            candidate: false,
+            upstream_base_url: "http://127.0.0.1:8000".to_string(),
+            ..GatewayConfig::default()
+        };
+        let error = config
+            .validate_bind_policy()
+            .expect_err("production must reject a non-loopback host");
+        assert!(error.to_string().contains("loopback"), "{host}: {error}");
     }
 }
 
@@ -233,7 +312,7 @@ fn help_documents_candidate_and_production_modes() {
         "help must document --mode: {stdout}"
     );
     assert!(
-        stdout.contains("8003 or 8002"),
+        stdout.contains("8000, 8002 or 8003"),
         "help must document production ports: {stdout}"
     );
     assert!(
