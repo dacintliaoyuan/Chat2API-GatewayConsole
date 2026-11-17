@@ -190,6 +190,30 @@ pub fn cloud_registry() -> Vec<ActionSpec> {
     ]
 }
 
+/// The local role registry: `model.catalog` only. The handler runs in a one-shot
+/// Python `model_sync` sidecar (#84); the other local catalogue cards stay
+/// disabled until their executors are wired.
+pub fn local_registry() -> Vec<ActionSpec> {
+    vec![ActionSpec {
+        name: "model.catalog",
+        description: "模型目录只读查询（各来源 /v1/models；无探测、无计费、无启停）",
+        param_schema: json!({
+            "sources": {"type": "str", "max_len": 512},
+            "fresh": {"type": "bool"},
+        }),
+        bump_generation_on_success: false,
+        cancelable: true,
+        resource: model_catalog_resource,
+    }]
+}
+
+fn model_catalog_resource(
+    _target: &str,
+    _params: &Map<String, Value>,
+) -> Result<String, OperationError> {
+    Ok("model:catalog".to_string())
+}
+
 fn share_resource(_target: &str, _params: &Map<String, Value>) -> Result<String, OperationError> {
     Ok("share:orchestration".to_string())
 }
@@ -282,6 +306,7 @@ pub struct OperationManagerSlot {
     db_path: Option<PathBuf>,
     lock_dir: Option<PathBuf>,
     executor: Arc<dyn ActionExecutor>,
+    registry: Vec<ActionSpec>,
 }
 
 impl OperationManagerSlot {
@@ -290,11 +315,21 @@ impl OperationManagerSlot {
         lock_dir: Option<PathBuf>,
         executor: Arc<dyn ActionExecutor>,
     ) -> Self {
+        Self::with_registry(db_path, lock_dir, executor, cloud_registry())
+    }
+
+    pub fn with_registry(
+        db_path: Option<PathBuf>,
+        lock_dir: Option<PathBuf>,
+        executor: Arc<dyn ActionExecutor>,
+        registry: Vec<ActionSpec>,
+    ) -> Self {
         Self {
             inner: Mutex::new(None),
             db_path,
             lock_dir,
             executor,
+            registry,
         }
     }
 
@@ -318,7 +353,7 @@ impl OperationManagerSlot {
         let manager = Arc::new(OperationManager::new(
             path.clone(),
             lock_dir,
-            cloud_registry(),
+            self.registry.clone(),
             Arc::clone(&self.executor),
         )?);
         *inner = Some(Arc::clone(&manager));

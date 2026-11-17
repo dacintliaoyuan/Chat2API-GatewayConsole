@@ -104,7 +104,23 @@ fn local_actions_list_the_um_catalogue_without_share_actions() {
     assert!(names.contains(&"account.um_status"));
     assert!(names.contains(&"model.catalog"));
     assert!(!names.iter().any(|name| name.starts_with("share.")));
-    assert!(actions.iter().all(|row| row["enabled"] == json!(false)));
+    let catalog = actions
+        .iter()
+        .find(|row| row["action"] == json!("model.catalog"))
+        .expect("model.catalog listed");
+    assert_eq!(catalog["enabled"], json!(true));
+    assert_eq!(catalog["disabled_reason"], json!(null));
+    assert_eq!(
+        catalog["param_schema"],
+        json!({
+            "sources": {"type": "str", "max_len": 512},
+            "fresh": {"type": "bool"},
+        })
+    );
+    assert!(actions
+        .iter()
+        .filter(|row| row["action"] != json!("model.catalog"))
+        .all(|row| row["enabled"] == json!(false)));
 }
 
 #[test]

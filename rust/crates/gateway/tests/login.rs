@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use um_gateway::config::GatewayConfig;
 use um_gateway::login::{
-    BrowserUnavailable, CredentialProbe, CredentialSink, CredentialVerdict, LaunchRequest,
+    BrowserUnavailable, CredentialProbe, CredentialSink, CredentialVerdict, HttpCredentialProbe, LaunchRequest,
     LoginBrowser, LoginBrowserFactory, LoginConfig, LoginFailure, LoginPage, LoginService,
     VisibleTarget,
 };
@@ -464,6 +464,46 @@ fn a_visible_login_keeps_the_empty_umpass_form_open_for_the_operator() {
     assert_eq!(factory.requests().len(), 1);
     assert_eq!(factory.closes(), 1);
     assert_eq!(sink.published()[0].0, "operator-token");
+}
+
+#[test]
+fn headless_login_waits_for_saved_browser_autofill_without_env_credentials() {
+    let temp = TempDir::new("um-rust-headless-autofill-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().unwrap() = vec![
+        ("https://websso.um.edu.mo/adfs/ls/".to_string(), None),
+        ("http://127.0.0.1:9".to_string(), Some("autofilled-token".to_string())),
+    ];
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(&temp, page.clone(), ScriptedProbe::valid(), sink.clone(), |config| {
+        config.stage_settle_timeout = Duration::from_millis(250);
+    });
+    let autofill = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(80));
+        // 浏览器在首次渲染后才补入已保存的字段；网关没有拿到明文配置。
+        page.fill_calls.store(2, Ordering::SeqCst);
+    });
+    service.start_explicit(false);
+    let status = wait_for(&service, |s| s["state"] == json!("valid") || s["state"] == json!("failed"));
+    autofill.join().unwrap();
+    assert_eq!(status["state"], json!("valid"), "不能在浏览器自动填充到达前终止后台登录：{status}");
+    assert_eq!(factory.requests().len(), 1);
+    assert!(!factory.requests()[0].headful);
+    assert_eq!(sink.published()[0].0, "autofilled-token");
+}
+
+#[test]
+fn login_probe_uses_the_authentication_budget_for_a_slow_catalog() {
+    let stub = StubUpstream::start();
+    stub.set(support::StubBehaviour { delay: Duration::from_millis(150), ..support::StubBehaviour::default() });
+    let config = GatewayConfig {
+        upstream_base_url: stub.url(),
+        upstream_timeout: Duration::from_millis(50),
+        ..GatewayConfig::default()
+    };
+    let probe = HttpCredentialProbe::from_config(&config).expect("credential probe");
+    assert_eq!(probe.classify(STUB_TOKEN).verdict, "valid", "自动登录核验不应使用较短的普通请求预算");
 }
 
 fn write_display_marker(temp: &TempDir) -> std::path::PathBuf {

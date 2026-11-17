@@ -111,11 +111,20 @@ impl ConsoleServer {
         runtime: Arc<dyn RuntimeFacts>,
         share_seams: Arc<dyn ShareReadSeams>,
     ) -> Result<ServerHandle, ServerError> {
+        // The local role's only enabled action, `model.catalog`, runs the
+        // Python `model_sync` handler in a one-shot sidecar; the cloud role
+        // keeps its honest unwired default.
+        let executor: Arc<dyn crate::operation_manager::ActionExecutor> = match config.role {
+            Role::Local => Arc::new(crate::model_catalog::PythonCatalogExecutor::from_config(
+                &config,
+            )),
+            Role::Cloud => Arc::new(UnwiredActionExecutor),
+        };
         Self::start_with_wiring(
             config,
             runtime,
             share_seams,
-            Arc::new(UnwiredActionExecutor),
+            executor,
             Arc::new(UnwiredWriteSeams),
         )
     }
@@ -128,10 +137,15 @@ impl ConsoleServer {
         write_seams: Arc<dyn ShareWriteSeams>,
     ) -> Result<ServerHandle, ServerError> {
         config.validate_bind_policy().map_err(ServerError::Config)?;
-        let operation_manager = OperationManagerSlot::new(
+        let registry = match config.role {
+            Role::Local => crate::operation_manager::local_registry(),
+            Role::Cloud => crate::operation_manager::cloud_registry(),
+        };
+        let operation_manager = OperationManagerSlot::with_registry(
             config.console_state_file.clone(),
             config.console_lock_dir.clone(),
             executor,
+            registry,
         );
         let state = Arc::new(AppState {
             operations: OperationsReader::new(config.console_state_file.clone()),
