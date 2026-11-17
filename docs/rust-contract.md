@@ -56,9 +56,10 @@ systemd
 
 ### 2.3 Rust 二进制启动模式
 
-- Rust 网关二进制默认以 candidate 模式启动：只绑定临时 loopback 端口（`--port 0`），拒绝 8003/8002/8100 及其他任何非零端口；candidate 不作为生产服务由 systemd 拉起。
-- production 模式必须显式选择 `--mode production`：只允许绑定 `127.0.0.1:8003` 或 `127.0.0.1:8002`；非 loopback 主机、端口 0、8000/8001/8100/8096 等其他端口都在 bind 前拒绝。
-- 两种模式共用同一套路由、鉴权、账本和错误契约；模式只改变绑定策略与启动入口，不改变 parity 行为。
+- Rust 网关二进制默认以 candidate 模式启动：只绑定临时 loopback 端口（`--port 0`），拒绝 8000/8003/8002/8100 及其他任何非零端口；candidate 不作为生产服务由 systemd 拉起。
+- production 模式必须显式选择 `--mode production`：只允许绑定 `127.0.0.1:8000`、`127.0.0.1:8003` 或 `127.0.0.1:8002`；非 loopback 主机、端口 0、8001/8100/8096 等其他端口都在 bind 前拒绝。
+- 角色由显式 `--role local|cloud` 选择；未指定时按端口推导：8000 → local，8002/8003 → cloud，candidate 的临时端口保持 cloud。非法角色值 fail closed。
+- 两种模式共用同一套路由、鉴权、账本和错误契约；模式只改变绑定策略与启动入口，不改变 parity 行为；角色只改变本机专属面是否装配。
 - 部署 unit 用 `--mode production --port 8003` 或 `--mode production --port 8002` 启动，并用 `/health`、`/ready` 验收；unit 文件由部署轨道维护，不在本契约的 Rust 代码范围内。
 
 ## 3. 云端 idle RSS 基线
@@ -149,7 +150,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 | GET | `/v1/version` | 非分享模式：本地 Key（非 loopback 绑定时）；分享模式 404 `route_not_shared` | 版本与重试策略 |
 | GET | `/api/models`、`/api/v1/models` | 非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | 本机模型目录别名 |
 | POST | `/api/chat/completions`、`/api/v1/chat/completions`、`/api/v1/messages`、`/api/v1/responses`、`/api/v1/embeddings` | 非分享模式：本地 Key 规则；分享模式不经分享 Key 门，公网不反代 | 本机兼容别名 |
-| GET/POST | 未列入别名的 `/api/*` | 本地控制令牌 | 上游 `api/*` 透传 |
+| GET/POST | 未列入别名的 `/api/*` | 本地控制令牌；仅 local 角色装配，cloud 角色 501 `local_api_surface_s1a` | 上游 `api/*` 透传 |
 | GET | `/admin/auth/status`、`/admin/auth/verify` | 本地控制令牌 | 认证状态观察；单次只读凭据核验 |
 | POST | `/admin/auth/login`、`/admin/auth/cancel` | 本地控制令牌 | 启动/加入一轮登录；取消本轮登录（服务继续运行） |
 | POST | `/admin/share/revoke` | 本地控制令牌 | 关闭某分享 Key 的在途请求 |
@@ -164,7 +165,9 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 - 每 Key 并发、全局并发和每 Key 20 次/60 秒的滑动限速在进程内完成（`chat2api/share_auth.py:80-82,1300-1395`）。拒绝时 429 `sharing_limit_reached`，`reason` 区分 `per_key_concurrency`、`share_concurrency`、`key_rate_limit`、`state_not_accepting`。
 - 非分享白名单的 `/v1/*` 路径在分享模式下返回 404 `route_not_shared`；分享模式只允许 `/v1/models`、`/v1/chat/completions`、`/v1/messages`、`/v1/responses`，因此 `/v1/version` 与 `/v1/embeddings` 只在非分享模式可用（`chat2api/chat2api.py:6196-6236`）。
 - 目录只允许规范 `/v1/models`、`beta=true` 和单个 `limit`（1..1000，规范十进制）查询；其他查询 404 `route_not_shared`（`chat2api/share_auth.py:32-72`）。
+- 目录默认附加 `--effort-model` 注册的 virtual effort 模型（`<base>-Fast/-Low/-Medium/-High`）；base 不在上游快照时不附加，已存在的 variant id 不重复。`X-Chat2Api-Models: raw-fresh` 跳过 virtual 模型、要求 fresh 上游结果并在响应带 `X-Chat2Api-Raw-Models: 1`（`chat2api/chat2api.py:6172-6235,8259-8291`）。
 - `/api/*` 兼容别名是本机/非分享面，不在 Cloudflare 白名单内，也不经分享 Key 门；分享模式只保证四条 `/v1` 路径的公网语义（`chat2api/chat2api.py:6196-6236`、`um-cloud-deploy/cloudflared/check-ingress.py:26-142`）。
+- 未列入别名的 `/api/*` 透传只在 local 角色装配：控制令牌 `X-Admin-Control`、loopback peer/Host、无 Origin；GET/POST 都转发上游 `api/*`，POST body 必须是 JSON object（空 body 视为 `{}`）。cloud 角色保持 501 `local_api_surface_s1a`，不转发（`chat2api/chat2api.py:7892-7930,8292-8326,8447-8482`）。
 
 ### 5.2 请求与响应
 
@@ -179,6 +182,7 @@ ssh -F C:/Users/dacint/.ssh/aliyun-um-ecs.conf um-share-ecs \
 ### 5.3 流式、超时、取消与重试
 
 - 首字节预算 120 秒；上游单次 socket 静默预算 180 秒；请求总预算默认 540 秒（认证等待计入 540 秒总预算），环境变量可调但夹在 10..3600 秒（`chat2api/chat2api.py:377-385,440-444`）。
+- 认证等待预算：本机 8000 默认 30 秒，云端 8002/8003 保持 180 秒；显式 CLI/env 值覆盖默认并 clamp 到 1..180 秒，非法值保持角色默认，不会关闭预算（`chat2api/chat2api.py:12097-12115`）。
 - 200 头只在首个“实质数据”事件出现后提交；提交前的元数据/思考事件可短暂暂存，以便早期重复循环或零数据断流仍可隐藏重试（`chat2api/chat2api.py:8043-8080,8417-8431`）。
 - 提交前失败返回 502；首字节、响应头等待、socket 静默或总预算超时返回 504 `upstream_timeout` / `request_deadline_exceeded`；提交后失败写 in-band `error` 事件并结束流，绝不把部分完成当成功（`chat2api/chat2api.py:599-613,8060-8077`）。
 - 预提交暂存上限 64 KiB；未成行字节缓冲上限 1 MiB；生产者/消费者队列上限 256；并发流 reader 上限已取消（ADR 0004，`too_many_concurrent_streams` retired）（`chat2api/chat2api.py:388-403`）。
