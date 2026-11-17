@@ -58,8 +58,8 @@ fn seed_operations(temp: &um_test_harness::TempDataDir) -> std::path::PathBuf {
 fn local_services_report_only_the_chat2api_runtime() {
     let temp = temp();
     let console = local_console(&temp, None);
-    let response =
-        client_request(console.addr, &ClientRequest::get("/api/console/services")).expect("services");
+    let response = client_request(console.addr, &ClientRequest::get("/api/console/services"))
+        .expect("services");
     assert_eq!(response.status, 200);
     let payload = response.json();
     assert_eq!(payload["ok"], json!(true));
@@ -74,8 +74,8 @@ fn local_services_report_only_the_chat2api_runtime() {
     assert_eq!(payload["meta"]["source"], json!("local-runtime"));
     assert!(payload["meta"]["generated_epoch"].is_number());
 
-    let health = client_request(console.addr, &ClientRequest::get("/api/console/health"))
-        .expect("health");
+    let health =
+        client_request(console.addr, &ClientRequest::get("/api/console/health")).expect("health");
     assert_eq!(health.status, 200);
     let health_payload = health.json();
     let services = health_payload["services"]
@@ -96,7 +96,10 @@ fn local_actions_list_the_um_catalogue_without_share_actions() {
     let response =
         client_request(console.addr, &ClientRequest::get("/api/console/actions")).expect("actions");
     assert_eq!(response.status, 200);
-    let actions = response.json()["actions"].as_array().expect("actions").clone();
+    let actions = response.json()["actions"]
+        .as_array()
+        .expect("actions")
+        .clone();
     let names: Vec<&str> = actions
         .iter()
         .filter_map(|row| row["action"].as_str())
@@ -104,7 +107,23 @@ fn local_actions_list_the_um_catalogue_without_share_actions() {
     assert!(names.contains(&"account.um_status"));
     assert!(names.contains(&"model.catalog"));
     assert!(!names.iter().any(|name| name.starts_with("share.")));
-    assert!(actions.iter().all(|row| row["enabled"] == json!(false)));
+    let catalog = actions
+        .iter()
+        .find(|row| row["action"] == json!("model.catalog"))
+        .expect("model.catalog listed");
+    assert_eq!(catalog["enabled"], json!(true));
+    assert_eq!(catalog["disabled_reason"], json!(null));
+    assert_eq!(
+        catalog["param_schema"],
+        json!({
+            "sources": {"type": "str", "max_len": 512},
+            "fresh": {"type": "bool"},
+        })
+    );
+    assert!(actions
+        .iter()
+        .filter(|row| row["action"] != json!("model.catalog"))
+        .all(|row| row["enabled"] == json!(false)));
 }
 
 #[test]
@@ -126,7 +145,10 @@ fn local_operations_read_the_original_records() {
     )
     .expect("operation detail");
     assert_eq!(detail.status, 200);
-    assert_eq!(detail.json()["operation"]["action"], json!("account.um_status"));
+    assert_eq!(
+        detail.json()["operation"]["action"],
+        json!("account.um_status")
+    );
 
     let missing = client_request(
         console.addr,
@@ -174,8 +196,8 @@ fn local_gateway_connection_uses_the_runtime_snapshot_and_stays_unknown() {
 fn local_cloud_ops_and_share_usage_reuse_the_existing_readers() {
     let temp = temp();
     let console = local_console(&temp, None);
-    let cloud_ops =
-        client_request(console.addr, &ClientRequest::get("/api/console/cloud-ops")).expect("cloud ops");
+    let cloud_ops = client_request(console.addr, &ClientRequest::get("/api/console/cloud-ops"))
+        .expect("cloud ops");
     assert_eq!(cloud_ops.status, 200);
     assert_eq!(cloud_ops.json()["available"], json!(false));
 
@@ -185,5 +207,8 @@ fn local_cloud_ops_and_share_usage_reuse_the_existing_readers() {
     )
     .expect("share usage");
     assert_eq!(share_usage.status, 503);
-    assert_eq!(share_usage.json()["error"], json!("share_ledger_path_unresolved"));
+    assert_eq!(
+        share_usage.json()["error"],
+        json!("share_ledger_path_unresolved")
+    );
 }
