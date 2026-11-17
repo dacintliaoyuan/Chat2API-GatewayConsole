@@ -46,8 +46,6 @@ struct Event {
     duration_ms: Option<i64>,
     duration_state: DurationState,
     status: Option<Value>,
-    cache_tokens: Option<i64>,
-    reasoning_tokens: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,7 +57,6 @@ struct EventRead {
     bad_lines: usize,
     dropped_events: usize,
     bytes_truncated: bool,
-    missing: bool,
 }
 
 impl EventRead {
@@ -72,7 +69,6 @@ impl EventRead {
             bad_lines: 0,
             dropped_events: 0,
             bytes_truncated: false,
-            missing: true,
         }
     }
 }
@@ -234,14 +230,6 @@ fn duration_state(record: &Map<String, Value>, fields: &[&str]) -> (Option<i64>,
     }
 }
 
-fn cache_report_status(record: &Map<String, Value>) -> Option<&'static str> {
-    match record.get("cache_report_status").and_then(Value::as_str) {
-        Some("reported") => Some("reported"),
-        Some("unreported") => Some("unreported"),
-        _ => None,
-    }
-}
-
 fn event_from_record(record: &Map<String, Value>) -> Event {
     let ms = first_value(record, &["time"])
         .and_then(Value::as_str)
@@ -267,8 +255,6 @@ fn event_from_record(record: &Map<String, Value>) -> Event {
         duration_ms: duration_ms.0,
         duration_state: duration_ms.1,
         status: record.get("status").cloned(),
-        cache_tokens: first_int(record, &["cached_input_tokens", "cache_tokens"]),
-        reasoning_tokens: first_int(record, &["reasoning_tokens"]),
     }
 }
 
@@ -367,7 +353,6 @@ fn read_jsonl_events(path: &Path) -> EventRead {
         bad_lines,
         dropped_events,
         bytes_truncated: clamped,
-        missing: false,
     }
 }
 
@@ -453,8 +438,6 @@ fn read_snapshot_events(path: &Path) -> EventRead {
                 duration_ms: None,
                 duration_state: DurationState::Missing,
                 status: None,
-                cache_tokens: int_or_none(row.get("cacheRead")),
-                reasoning_tokens: int_or_none(row.get("reasoning")),
             });
         }
     }
@@ -466,7 +449,6 @@ fn read_snapshot_events(path: &Path) -> EventRead {
         bad_lines,
         dropped_events: 0,
         bytes_truncated: false,
-        missing: false,
     }
 }
 
