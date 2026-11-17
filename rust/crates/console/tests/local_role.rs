@@ -180,6 +180,36 @@ fn production_cloud_still_binds_8002_and_refuses_8001() {
 }
 
 #[test]
+fn local_role_defaults_match_pythons_paths() {
+    let mut config = ConsoleConfig::default();
+    config.role = Role::Local;
+    um_console::config::apply_local_defaults(&mut config);
+    assert_eq!(
+        config.console_state_file.as_deref(),
+        Some(std::path::Path::new("data/console-state.sqlite3"))
+    );
+    assert_eq!(
+        config.console_lock_dir.as_deref(),
+        Some(std::path::Path::new("data/console-locks"))
+    );
+    assert_eq!(
+        config.share_store_file.as_deref(),
+        Some(std::path::Path::new("data/share-store.db"))
+    );
+    assert_eq!(
+        config.control_token_file.as_deref(),
+        Some(std::path::Path::new("data/admin-control-token"))
+    );
+    assert_eq!(
+        config.usage_session_code_file.as_deref(),
+        Some(std::path::Path::new("data/usage-session-code"))
+    );
+    assert_eq!(config.usage_log, std::path::PathBuf::from("data/usage-chat2api.jsonl"));
+    assert_eq!(config.dsh_snapshot, std::path::PathBuf::from("data/dsh-ledger-20260902.json"));
+    assert_eq!(config.service_log, std::path::PathBuf::from("chat2api/chat2api.log"));
+}
+
+#[test]
 fn role_selects_its_default_report_port() {
     assert_eq!(ConsoleConfig::default().port, 8002);
     let mut local = ConsoleConfig::default();

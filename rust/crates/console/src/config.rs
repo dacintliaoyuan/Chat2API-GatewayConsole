@@ -48,6 +48,11 @@ pub const WATCH_DIR_ENV: &str = "SELFUSEAI_GATEWAY_WATCH_DIR";
 pub const DEFAULT_USAGE_LOG: &str = "data/usage-chat2api.jsonl";
 pub const DEFAULT_DSH_SNAPSHOT: &str = "data/dsh-ledger-20260902.json";
 pub const DEFAULT_SERVICE_LOG: &str = "chat2api/chat2api.log";
+pub const DEFAULT_CONSOLE_STATE_FILE: &str = "data/console-state.sqlite3";
+pub const DEFAULT_CONSOLE_LOCK_DIR: &str = "data/console-locks";
+pub const DEFAULT_SHARE_STORE_FILE: &str = "data/share-store.db";
+pub const DEFAULT_CONTROL_TOKEN_FILE: &str = "data/admin-control-token";
+pub const DEFAULT_USAGE_SESSION_CODE_FILE: &str = "data/usage-session-code";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -236,6 +241,46 @@ pub fn resolve_role(role: Option<&str>, deployment: Option<&str>) -> Result<Role
     Ok(seen[0])
 }
 
+/// Python's local composition root defaults (`usagesrv.py` + `share/management.py`):
+/// the local role owns these paths unless an explicit environment value wins.
+pub fn apply_local_defaults(config: &mut ConsoleConfig) {
+    if config.console_state_file.is_none() {
+        config.console_state_file = Some(PathBuf::from(DEFAULT_CONSOLE_STATE_FILE));
+    }
+    if config.console_lock_dir.is_none() {
+        config.console_lock_dir = Some(PathBuf::from(DEFAULT_CONSOLE_LOCK_DIR));
+    }
+    if config.share_store_file.is_none() {
+        config.share_store_file = Some(PathBuf::from(DEFAULT_SHARE_STORE_FILE));
+    }
+    if config.control_token_file.is_none() {
+        config.control_token_file = Some(PathBuf::from(DEFAULT_CONTROL_TOKEN_FILE));
+    }
+    if config.usage_session_code_file.is_none() {
+        config.usage_session_code_file = Some(PathBuf::from(DEFAULT_USAGE_SESSION_CODE_FILE));
+    }
+    if config.share_backend_dir.is_none() {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+            config.share_backend_dir = Some(
+                PathBuf::from(local)
+                    .join("SelfUseAI")
+                    .join("ai-gateway")
+                    .join("share-backend"),
+            );
+        }
+    }
+    if config.watch_dir.is_none() {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+            config.watch_dir = Some(
+                PathBuf::from(local)
+                    .join("SelfUseAI")
+                    .join("ai-gateway")
+                    .join("watch"),
+            );
+        }
+    }
+}
+
 impl ConsoleConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         let mut config = Self::default();
@@ -246,6 +291,9 @@ impl ConsoleConfig {
             config.role = resolve_role(None, Some(&value))?;
         }
         config.port = config.role.default_port();
+        if config.role == Role::Local {
+            apply_local_defaults(&mut config);
+        }
         if let Ok(value) = std::env::var(PORT_ENV) {
             config.port = strict_port(PORT_ENV, &value)?;
         }
