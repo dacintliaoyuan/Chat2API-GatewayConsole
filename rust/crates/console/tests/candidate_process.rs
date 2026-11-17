@@ -110,19 +110,21 @@ fn the_candidate_refuses_8002_and_non_loopback_before_bind() {
 }
 
 #[test]
-fn the_candidate_refuses_the_local_role() {
+fn the_candidate_starts_the_local_role_on_an_ephemeral_port() {
     let temp = temp();
-    let output = candidate_command(&temp)
+    let mut child = candidate_command(&temp)
         .arg("--role")
         .arg("local")
-        .output()
-        .expect("run local-role candidate");
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("cloud"),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+        .spawn()
+        .expect("spawn local-role candidate");
+    let addr = read_listen_addr(&mut child);
+    let _guard = ChildGuard { child };
+    assert!(addr.ip().is_loopback());
+    assert!(addr.port() >= 1024);
+    assert!(!production_ports().contains(&addr.port()));
+    let health = client_request(addr, &ClientRequest::get("/health")).expect("health");
+    assert_eq!(health.status, 200);
+    assert_eq!(health.json()["port"], json!(8001));
 }
 
 #[test]

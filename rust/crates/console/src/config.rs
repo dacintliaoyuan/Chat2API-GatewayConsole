@@ -14,6 +14,7 @@ pub use um_gateway::config::BindMode;
 use crate::display_relay::DisplayConfig;
 
 pub const CLOUD_DEFAULT_PORT: u16 = 8002;
+pub const LOCAL_DEFAULT_PORT: u16 = 8001;
 pub const DEFAULT_GATEWAY_PORT: u16 = 8003;
 pub const DEFAULT_GATEWAY_PID_FILE: &str = "/run/um-share/share-gateway.pid";
 pub const DEFAULT_GATEWAY_STATE_DIR: &str = "/run/um-share";
@@ -60,6 +61,19 @@ impl Role {
             Self::Local => "local",
             Self::Cloud => "cloud",
         }
+    }
+
+    /// The report port this role owns: 8001 local, 8002 cloud.
+    pub fn default_port(self) -> u16 {
+        match self {
+            Self::Local => LOCAL_DEFAULT_PORT,
+            Self::Cloud => CLOUD_DEFAULT_PORT,
+        }
+    }
+
+    /// The production bind port this role owns: 8001 local, 8002 cloud.
+    pub fn default_bind_port(self) -> u16 {
+        self.default_port()
     }
 }
 
@@ -213,6 +227,7 @@ impl ConsoleConfig {
         } else if let Ok(value) = std::env::var(DEPLOYMENT_ENV) {
             config.role = resolve_role(None, Some(&value))?;
         }
+        config.port = config.role.default_port();
         if let Ok(value) = std::env::var(PORT_ENV) {
             config.port = strict_port(PORT_ENV, &value)?;
         }
@@ -305,13 +320,10 @@ impl ConsoleConfig {
         }
     }
 
-    /// Fail closed before binding a socket.
+    /// Fail closed before binding a socket. The role selects the production
+    /// port: cloud 8002, local 8001. Candidate binds only an ephemeral
+    /// loopback port.
     pub fn validate_bind_policy(&self) -> Result<(), ConfigError> {
-        if self.role != Role::Cloud {
-            return Err(ConfigError(
-                "the S5a console assembles only the cloud role".to_string(),
-            ));
-        }
         if !is_loopback_host(&self.bind_host) {
             return Err(ConfigError(format!(
                 "{} bind host is not loopback: {}",
@@ -332,11 +344,15 @@ impl ConsoleConfig {
                     self.bind_port
                 )));
             }
-        } else if self.bind_port != CLOUD_DEFAULT_PORT {
-            return Err(ConfigError(format!(
-                "production must bind 8002 on loopback, got {}",
-                self.bind_port
-            )));
+        } else {
+            let expected = self.role.default_bind_port();
+            if self.bind_port != expected {
+                return Err(ConfigError(format!(
+                    "production {} role must bind {expected} on loopback, got {}",
+                    self.role.as_str(),
+                    self.bind_port
+                )));
+            }
         }
         if self.port == 0 {
             return Err(ConfigError(

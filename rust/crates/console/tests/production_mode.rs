@@ -145,16 +145,15 @@ fn help_documents_candidate_and_production_modes() {
 }
 
 #[test]
-fn production_still_refuses_the_local_role() {
+fn production_accepts_the_local_role_on_8001() {
     let temp = temp();
     let mut config = base_config(&temp);
     config.candidate = false;
-    config.bind_port = 8002;
+    config.bind_port = 8001;
     config.role = Role::Local;
-    let error = config
+    config
         .validate_bind_policy()
-        .expect_err("production must refuse the local role");
-    assert!(error.to_string().contains("cloud"), "{error}");
+        .expect("production must accept local 8001");
 
     let mut command = console_command(&temp);
     command
@@ -167,10 +166,10 @@ fn production_still_refuses_the_local_role() {
     let output = run_rejected(command);
     assert!(
         !output.status.success(),
-        "production must refuse the local role"
+        "production local must refuse 8002"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("cloud"), "stderr: {stderr}");
+    assert!(stderr.contains("8001"), "stderr: {stderr}");
 }
 
 #[test]
