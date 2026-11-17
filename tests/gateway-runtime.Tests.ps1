@@ -494,6 +494,166 @@ foreach ($scriptName in @(
     }
 }
 
+# ---------------------------------------------------------------------------
+# #80 AC2: console start/stop/restart keep working on the Rust 8000 instance.
+#
+# The stop scope must recognize BOTH the Rust binary (current launcher) and the
+# Python entrypoint (rollback). A Rust candidate/cloud instance and another
+# checkout's Python instance stay foreign. The bridge wiring is verified with
+# substituted runtime functions, so no real service is started or stopped.
+# ---------------------------------------------------------------------------
+
+& {
+    $desc = (Get-GatewayServiceDescriptors)['chat2api']
+    $stopIdentities = @(Get-GatewayStopIdentities -Descriptor $desc)
+    Assert-Equal (($stopIdentities | ForEach-Object { [string]$_.ProcessName }) -join ',') 'python.exe,um-gateway-candidate.exe' 'stop identities cover the Rust runtime and the Python rollback'
+    $ownerIdentities = @(Get-GatewayOwnerIdentities -Descriptor $desc)
+    Assert-Equal (($ownerIdentities | ForEach-Object { [string]$_.ProcessName }) -join ',') 'python.exe,um-gateway-candidate.exe' 'owner identities cover the Rust runtime and the Python rollback'
+
+    $script:ticket80Terminated = New-Object System.Collections.ArrayList
+    $script:ticket80Requests = New-Object System.Collections.ArrayList
+    $script:ticket80Launches = New-Object System.Collections.ArrayList
+    $script:ticket80Table = @()
+    $script:ticket80Listeners = @()
+    $script:ticket80Healthy = $false
+
+    function Get-CimInstance {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$ClassName, [string]$Filter)
+        if ($ClassName -and $ClassName -ne 'Win32_Process') {
+            return @(CimCmdlets\Get-CimInstance @PSBoundParameters)
+        }
+        if ($Filter -match 'ProcessId\s*=\s*(\d+)') {
+            $wanted = [int]$Matches[1]
+            return @($script:ticket80Table | Where-Object { [int]$_.ProcessId -eq $wanted })
+        }
+        return @($script:ticket80Table)
+    }
+    function Get-NetTCPConnection {
+        [CmdletBinding()]
+        param([int]$LocalPort, [object]$State)
+        return @($script:ticket80Listeners)
+    }
+    function Invoke-WebRequest {
+        [CmdletBinding()]
+        param([string]$Uri, [string]$Method, [object]$Headers,
+              [int]$TimeoutSec, [switch]$UseBasicParsing)
+        if ($Method -eq 'Post') {
+            [void]$script:ticket80Requests.Add([string]$Uri)
+            $script:ticket80Healthy = $false
+            return [pscustomobject]@{ StatusCode = 200; Content = '{}' }
+        }
+        if (-not $script:ticket80Healthy) {
+            throw 'offline substitute: health probe refused'
+        }
+        return [pscustomobject]@{ StatusCode = 200; Content = '{"status":"ok"}' }
+    }
+    function Stop-Process {
+        [CmdletBinding()]
+        param([Parameter(Mandatory = $true)][int]$Id, [switch]$Force)
+        [void]$script:ticket80Terminated.Add([int]$Id)
+    }
+    function Start-Process {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$FilePath, [object]$ArgumentList,
+              [string]$WorkingDirectory, [object]$WindowStyle)
+        [void]$script:ticket80Launches.Add([string]$FilePath)
+    }
+
+    function New-Ticket80Process {
+        param([int]$ProcessId, [string]$CommandLine, [string]$Name = 'python.exe',
+              [datetime]$CreationDate = [datetime]'2026-11-17T10:00:00')
+        return [pscustomobject]@{
+            ProcessId = $ProcessId; Name = $Name
+            CommandLine = $CommandLine; CreationDate = $CreationDate
+        }
+    }
+
+    $rustPrivate = New-Ticket80Process -ProcessId 990201 -Name 'um-gateway-candidate.exe' `
+        -CommandLine ('"' + (Join-Path (Get-GatewayRoot) 'rust\target\release\um-gateway-candidate.exe') + '" --mode production --port 8000 --role local --upstream-base-url https://chat.example.invalid --control-token-file data/admin-control-token')
+    $rustCandidate = New-Ticket80Process -ProcessId 990202 -Name 'um-gateway-candidate.exe' `
+        -CommandLine 'um-gateway-candidate.exe --mode candidate --port 0 --upstream-base-url https://chat.example.invalid'
+    $rustCloud = New-Ticket80Process -ProcessId 990203 -Name 'um-gateway-candidate.exe' `
+        -CommandLine 'um-gateway-candidate.exe --mode production --port 8003 --role cloud --upstream-base-url https://chat.example.invalid'
+    $pythonPrivate = New-Ticket80Process -ProcessId 990204 `
+        -CommandLine 'python chat2api.py --base-url https://chat.example.invalid'
+    $otherCheckout = New-Ticket80Process -ProcessId 990205 `
+        -CommandLine 'python D:\other-checkout\ai-gateway\chat2api\chat2api.py --base-url https://chat.example.invalid'
+
+    try {
+        # Owner identity: the Rust process listening on 8000 is the private instance.
+        $script:ticket80Table = @($rustPrivate)
+        $script:ticket80Listeners = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990201 })
+        $script:ticket80Healthy = $true
+        $inspection = Get-GatewayServiceInspection -Key 'chat2api'
+        Assert-Equal $inspection.State 'Running' 'Rust 8000 listener is recognized as the private instance'
+        Assert-Equal ($inspection.ProcessIds -join ',') '990201' 'Rust 8000 inspection names the Rust PID'
+
+        # Stop scope: Rust private + Python rollback are private; candidate/cloud/other checkout are foreign.
+        $script:ticket80Table = @($rustPrivate, $rustCandidate, $rustCloud, $pythonPrivate, $otherCheckout)
+        $script:ticket80Listeners = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990201 })
+        $script:ticket80Healthy = $true
+        $script:ticket80Terminated.Clear()
+        $script:ticket80Requests.Clear()
+        $stopped = Stop-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        Assert-Equal $stopped.Status 'Stopped' 'Rust 8000 stop reports Stopped'
+        Assert-Equal ($script:ticket80Terminated -join ',') '990201,990204' 'Rust 8000 stop terminates the Rust private instance and the Python rollback instance'
+        Assert-Equal ($script:ticket80Terminated -contains 990202) $false 'Rust candidate instance is never stopped'
+        Assert-Equal ($script:ticket80Terminated -contains 990203) $false 'Rust cloud instance is never stopped'
+        Assert-Equal ($script:ticket80Terminated -contains 990205) $false 'another checkout''s Python instance is never stopped'
+        Assert-Equal ($script:ticket80Requests -join ',') 'http://127.0.0.1:8000/admin/shutdown' 'Rust 8000 stop still posts the graceful /admin/shutdown request'
+
+        # Rollback path: after StartPath reverts, the Python identity alone remains selectable.
+        $script:ticket80Table = @($pythonPrivate, $otherCheckout)
+        $script:ticket80Listeners = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990204 })
+        $script:ticket80Healthy = $true
+        $script:ticket80Terminated.Clear()
+        $pythonStopped = Stop-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        Assert-Equal $pythonStopped.Status 'Stopped' 'Python rollback stop reports Stopped'
+        Assert-Equal ($script:ticket80Terminated -join ',') '990204' 'Python rollback stop still selects the Python private instance'
+    } finally {
+        Remove-Item function:\Get-CimInstance -ErrorAction SilentlyContinue
+        Remove-Item function:\Get-NetTCPConnection -ErrorAction SilentlyContinue
+        Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+        Remove-Item function:\Stop-Process -ErrorAction SilentlyContinue
+        Remove-Item function:\Start-Process -ErrorAction SilentlyContinue
+    }
+
+    # Bridge start/stop/restart wiring: the JSON entry calls the same runtime
+    # functions; the start result carries the Rust StartPath in its detail.
+    & {
+        . (Join-Path $root 'lib\console-runtime-bridge.ps1')
+        function Start-GatewayService {
+            param($Key)
+            return [pscustomobject]@{ Key = $Key; Status = 'Started'; Action = 'Start'
+                                      Detail = (Resolve-GatewayStartPath -Key $Key) }
+        }
+        function Stop-GatewayService {
+            param($Key)
+            return [pscustomobject]@{ Key = $Key; Status = 'Stopped'; Action = 'Stop' }
+        }
+        function Restart-GatewayService {
+            param($Key)
+            return [pscustomobject]@{ Key = $Key; Status = 'Restarted'; Action = 'Restart' }
+        }
+        $lockDir = Join-Path ([IO.Path]::GetTempPath()) ('ticket80-locks-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        try {
+            $start = Invoke-ConsoleRuntimeStart -Key 'chat2api' -LockDir $lockDir
+            Assert-Equal $start.ok $true 'bridge start on Rust 8000 reports ok'
+            Assert-Equal $start.result.status 'Started' 'bridge start on Rust 8000 reports Started'
+            Assert-Equal ([IO.Path]::GetFileName([string]$start.result.detail)) 'um-gateway-candidate.exe' 'bridge start on Rust 8000 resolves the Rust StartPath'
+            $stop = Invoke-ConsoleRuntimeStop -Key 'chat2api' -LockDir $lockDir
+            Assert-Equal $stop.ok $true 'bridge stop on Rust 8000 reports ok'
+            Assert-Equal $stop.result.status 'Stopped' 'bridge stop on Rust 8000 reports Stopped'
+            $restart = Invoke-ConsoleRuntimeRestart -Key 'chat2api' -LockDir $lockDir
+            Assert-Equal $restart.ok $true 'bridge restart on Rust 8000 reports ok'
+            Assert-Equal $restart.result.status 'Restarted' 'bridge restart on Rust 8000 reports Restarted'
+        } finally {
+            Remove-Item -LiteralPath $lockDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 if ($LauncherOnly) {
     if ($script:failures -gt 0) {
         Write-Host "`n$($script:failures) local 8000 launcher test(s) FAILED." -ForegroundColor Red
