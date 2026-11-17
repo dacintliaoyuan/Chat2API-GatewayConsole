@@ -115,8 +115,8 @@ if (-not (Test-Health -Url 'http://127.0.0.1:8001/health')) {
     Stop-Deploy '用量统计（8001）未在等待上限内就绪。'
 }
 
-# 5) 桌面快捷方式：不存在时用云端图标创建；已存在时只修复指向已移动旧路径的
-#    目标，名字和图标都不改。
+# 5) 桌面快捷方式：不存在时用云端图标创建；已存在时修复指向已移动旧路径的
+#    目标，并把图标换成云端图标；名字不改。
 if (-not $SkipShortcut) {
     $desktop = [Environment]::GetFolderPath('Desktop')
     if ([string]::IsNullOrWhiteSpace($desktop) -or
@@ -130,10 +130,16 @@ if (-not $SkipShortcut) {
     if (Test-Path -LiteralPath $localShortcutPath) {
         $shortcut = $shell.CreateShortcut($localShortcutPath)
         $oldTarget = Join-Path $root 'Open-GatewayConsole.bat'
+        $changed = $false
         if ($shortcut.TargetPath -eq $oldTarget) {
             $shortcut.TargetPath = $localTarget
-            $shortcut.Save()
+            $changed = $true
         }
+        if ($shortcut.IconLocation -notlike "$localIcon,*") {
+            $shortcut.IconLocation = $localIcon + ',0'
+            $changed = $true
+        }
+        if ($changed) { $shortcut.Save() }
     } else {
         $shortcut = $shell.CreateShortcut($localShortcutPath)
         $shortcut.TargetPath = $localTarget
