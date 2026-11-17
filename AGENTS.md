@@ -31,7 +31,7 @@
 
 | 端口 | 角色 | 代码默认 | Rust 目标 | 绑定 |
 |---|---|---|---|---|
-| 8000 | chat2api（UM） | 8000 | 8000 | 127.0.0.1 |
+| 8000 | chat2api（UM；本机仍 Python，Rust parity 未通过） | 8000 | 8000 | 127.0.0.1 |
 | 8001 | usagesrv 本机控制台 | 8001 | 8001 | 127.0.0.1 |
 | 8002 | usagesrv 云端控制台（Rust；Python 回滚 8096） | 8096（Python 回滚） | 8002 | 127.0.0.1 |
 | 8003 | chat2api 合并网关（um-share） | 8100 | 8003 | 127.0.0.1 |
@@ -40,6 +40,8 @@
 | 5173 | vite 开发服务 | 5173 | 5173 | 127.0.0.1 |
 
 `8000-8009` 是网关/控制台配对段：8000/8001 本机对，8002/8003 云端对，8004–8009 预留。`8090-8099` 是控制台/管理段，`8100-8119` 是分享段（唯一允许非 loopback 的段，偏离须登记），`8300-8399` 是协议网关段。
+
+本机 8000 当前仍由 Python `chat2api.py` 承担（#81 parity 未通过）：`lib/gateway-runtime.ps1` 的 `StartPath` 已指向 Rust 二进制，但 Rust candidate 对 UM 上游发送 `Host: chat.genai.um.edu.mo:443` 被 503，`/v1/models` 与通用 `/api/*` 与 Python 8000 不一致；未执行切流与回滚演练。回滚点仍是 `start_chat2api.bat`；parity 复现与最小解除条件见 [docs/rust-contract.md](docs/rust-contract.md) §2.4。
 
 `um-cloud-deploy` 的 `RELEASE-MANIFEST.json` 用 `runtime: python|rust` 冻结发布运行时：Rust release 安装 `um-share-gateway.service`（8003）与 8002 console unit，Python release 仍用 `um-share-broker.service`（8100）与 8096 console unit 作为回滚目标。2026-11-17 云端 8002 已切 Rust（`s2-20261117a`）；Python 回滚单元是 `um-share-console-python.service`（8096），回滚目标 release 是 `s2-20261116t`（Rust 8003 + Python 8002）。`package-release.sh --runtime rust --rust-bin <um-gateway>` 打包 Rust 二进制；`install.sh`/`update.sh`/`rollback.sh` 按 manifest 选择 unit 与健康门端口，`rollback-drill.sh` 仍负责 Rust→Python 演练。
 
