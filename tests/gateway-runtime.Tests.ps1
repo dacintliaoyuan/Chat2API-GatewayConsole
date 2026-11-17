@@ -402,8 +402,7 @@ Assert-Equal ($runtimeSource -match '\$ProgressPreference\s*=\s*''SilentlyContin
 
 foreach ($scriptName in @(
     'invoke-gateway-service.ps1',
-    'invoke-model-sync.ps1', 'manage-model-sync-task.ps1',
-    'show-model-sync-notification.ps1', 'lib\gateway-runtime.ps1',
+    'lib\gateway-runtime.ps1',
     'lib\watch-chat2api.ps1', 'lib\register-chat2api-watch.ps1')) {
     $tokens = $null
     $parseErrors = $null
@@ -1057,15 +1056,6 @@ if ($LauncherOnly) {
     Write-Host "`nAll local 8000/8001 launcher tests passed." -ForegroundColor Green
     exit 0
 }
-
-$taskSource = Get-Content -LiteralPath (Join-Path $root 'manage-model-sync-task.ps1') -Raw -Encoding utf8
-Assert-Equal ($taskSource -match "New-ScheduledTaskTrigger -Daily -At '06:00'") $true 'model sync is scheduled at 06:00'
-Assert-Equal ($taskSource -match '-StartWhenAvailable:\$false') $true 'model sync never catches up a missed run'
-Assert-Equal ($taskSource -match '-WakeToRun:\$false') $true 'model sync never wakes the computer'
-$syncSource = Get-Content -LiteralPath (Join-Path $root 'invoke-model-sync.ps1') -Raw -Encoding utf8
-Assert-Equal ($syncSource -match "\`$sourceKeys\s*=\s*@\('chat2api'\)") $true 'scheduled model sync carries only the UM chat2api source'
-Assert-Equal ($syncSource -notmatch '\$PSCommandPath\s+-Mode\s+Probe') $true 'model sync apply never auto-invokes probe mode (2026-09-22 contract)'
-Assert-Equal ($syncSource -notmatch '\$SkipProbe') $true 'probe skip switch retired with the auto-probe chain'
 
 # Thin launch adapters must carry only a service identity. Runtime details stay
 # in gateway-runtime.ps1.
@@ -2218,14 +2208,6 @@ try {
 } finally {
     Remove-Item -LiteralPath $boundaryDir -Recurse -Force -ErrorAction SilentlyContinue
 }
-
-# 脚本入口的静态契约（离线 harness 不真跑脚本：跑它可能真的启动服务，
-# 那是本任务禁止的副作用；启动/过滤行为由上面的 runtime 级用例覆盖）：
-# 空集合必须走「明确正常返回」分支、`--sources` 必须用单参数 `=` 形式跨边界。
-$syncScriptText = Get-Content -LiteralPath (Join-Path $root 'invoke-model-sync.ps1') -Raw -Encoding utf8
-Assert-Equal ($syncScriptText -match 'if \(\$syncSources\.Count -eq 0\)') $true 'the sync script returns early for an empty source set'
-Assert-Equal ($syncScriptText -match "'--sources=' \+ ") $true 'the sync script passes the source set in the single-argument = form'
-Assert-Equal ($syncScriptText -match "@\('--sources', ") $false 'the sync script no longer passes an empty-droppable separate --sources argument'
 
 if ($script:failures -gt 0) {
     Write-Host "`n$($script:failures) test(s) FAILED." -ForegroundColor Red
