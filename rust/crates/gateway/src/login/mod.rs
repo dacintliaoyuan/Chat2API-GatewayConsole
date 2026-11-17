@@ -9,6 +9,7 @@
 //! the credential sink are seams: tests use fakes and never open a browser.
 
 pub mod browser;
+pub mod credentials;
 pub mod probe;
 pub mod profile;
 pub mod token;
@@ -180,7 +181,7 @@ pub trait CredentialSink: Send + Sync {
 }
 
 /// Resolved login paths and budgets.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LoginConfig {
     pub base_url: String,
     pub token_file: PathBuf,
@@ -198,9 +199,19 @@ pub struct LoginConfig {
     pub max_sessions: usize,
     pub browser_disabled: bool,
     /// UMPASS account and password the login executor may type into an empty
-    /// ADFS form; both empty keeps the historical manual prefill path.
+    /// ADFS form; both empty consults the optional protected credential source.
     pub um_account: String,
     pub um_password: String,
+    pub um_credential_source: Arc<dyn credentials::UmpassCredentialSource>,
+}
+
+impl std::fmt::Debug for LoginConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginConfig")
+            .field("base_url", &self.base_url)
+            .field("profile_dir", &self.profile_dir)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LoginConfig {
@@ -233,8 +244,12 @@ impl LoginConfig {
                 .to_string(),
             um_password: std::env::var("CHAT2API_UM_PASSWORD")
                 .unwrap_or_default()
-                .trim()
                 .to_string(),
+            um_credential_source: if config.role == crate::config::Role::Local {
+                credentials::local_source()
+            } else {
+                Arc::new(credentials::NoStoredCredentials)
+            },
         }
     }
 }
@@ -1283,6 +1298,7 @@ fn drive_login(
     let mut stage_seen: HashMap<String, Instant> = HashMap::new();
     let mut manual_reason: Option<String> = None;
     let mut stage = String::new();
+    let mut form_credentials = None;
 
     while Instant::now() < deadline {
         if session.cancel.load(Ordering::SeqCst) {
@@ -1428,25 +1444,65 @@ fn drive_login(
                 if seen.elapsed() < inner.config.stage_settle_timeout {
                     // 页面渲染和浏览器已保存密码的自动填充都是异步的。
                     // 使用既有稳定预算等待，不能因没有明文环境配置而提前判缺失。
-                } else if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
-                    if visible {
-                        // 显式可见登录由本人填写；缺少自动填充不应关闭其窗口。
-                        note_progress(inner, round, "waiting_for_credentials", Some(&url), Some("umpass_prefill_missing"));
-                    } else {
-                        return stop_for_manual(inner, round, page, "umpass_prefill_missing");
+                } else {
+                    // Only type credentials into the exact HTTPS SSO origins.
+                    if !trusted_umpass_credential_origin(&url) {
+                        return LoginOutcome::Terminal {
+                            reason: "umpass_credentials_untrusted_origin".to_string(),
+                        };
                     }
-                } else if !page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
-                    && page
-                        .fill(&UMPASS_ACCOUNT_SELECTORS, &inner.config.um_account)
-                        .is_err()
-                {
-                    return stop_for_manual(inner, round, page, "umpass_prefill_missing");
-                } else if !page.field_filled(&UMPASS_PASSWORD_SELECTORS)
-                    && page
-                        .fill(&UMPASS_PASSWORD_SELECTORS, &inner.config.um_password)
-                        .is_err()
-                {
-                    return stop_for_manual(inner, round, page, "umpass_prefill_missing");
+                    // Read lazily once per browser session: saving/updating the
+                    // dedicated record takes effect without restarting 8000.
+                    let resolved = form_credentials.get_or_insert_with(|| {
+                        credentials::resolve(
+                            &inner.config.um_account,
+                            &inner.config.um_password,
+                            &*inner.config.um_credential_source,
+                        )
+                    });
+                    match resolved {
+                        Err(error) => {
+                            return LoginOutcome::Terminal {
+                                reason: error.reason(),
+                            }
+                        }
+                        Ok(None) => {
+                            if visible {
+                                note_progress(
+                                    inner,
+                                    round,
+                                    "waiting_for_credentials",
+                                    Some(&url),
+                                    Some("umpass_prefill_missing"),
+                                );
+                            } else {
+                                return stop_for_manual(
+                                    inner,
+                                    round,
+                                    page,
+                                    "umpass_prefill_missing",
+                                );
+                            }
+                        }
+                        Ok(Some(value)) => {
+                            if (!page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
+                                && page
+                                    .fill(&UMPASS_ACCOUNT_SELECTORS, &value.account)
+                                    .is_err())
+                                || (!page.field_filled(&UMPASS_PASSWORD_SELECTORS)
+                                    && page
+                                        .fill(&UMPASS_PASSWORD_SELECTORS, &value.password)
+                                        .is_err())
+                            {
+                                return stop_for_manual(
+                                    inner,
+                                    round,
+                                    page,
+                                    "umpass_prefill_missing",
+                                );
+                            }
+                        }
+                    }
                 }
             } else if let Some(target) = page.one_visible(&UMPASS_SUBMIT_SELECTORS) {
                 *count += 1;
@@ -1667,6 +1723,13 @@ fn url_host(url: &str) -> String {
         .map_or(authority, |(_, host)| host);
     let host = host.split(':').next().unwrap_or(host);
     host.to_ascii_lowercase()
+}
+
+fn trusted_umpass_credential_origin(url: &str) -> bool {
+    let origin = url_origin(url);
+    UMPASS_SSO_HOSTS.iter().any(|host| {
+        origin == format!("https://{host}") || origin == format!("https://{host}:443")
+    })
 }
 
 fn host_matches(host: &str, allowed: &str) -> bool {

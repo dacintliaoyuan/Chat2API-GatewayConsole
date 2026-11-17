@@ -43,6 +43,7 @@ struct FakePage {
     submit_visible: AtomicBool,
     click_steps: Mutex<Vec<(String, Option<String>)>>,
     fill_calls: AtomicUsize,
+    filled_values: Mutex<Vec<String>>,
 }
 
 impl FakePage {
@@ -59,6 +60,7 @@ impl FakePage {
             submit_visible: AtomicBool::new(false),
             click_steps: Mutex::new(Vec::new()),
             fill_calls: AtomicUsize::new(0),
+            filled_values: Mutex::new(Vec::new()),
         })
     }
 
@@ -162,8 +164,9 @@ impl LoginPage for FakePage {
         Ok(())
     }
 
-    fn fill(&self, _selectors: &[&str], _value: &str) -> Result<(), String> {
+    fn fill(&self, _selectors: &[&str], value: &str) -> Result<(), String> {
         self.fill_calls.fetch_add(1, Ordering::SeqCst);
+        self.filled_values.lock().unwrap().push(value.to_string());
         Ok(())
     }
 }
@@ -332,6 +335,7 @@ fn login_config(temp: &TempDir) -> LoginConfig {
         browser_disabled: false,
         um_account: String::new(),
         um_password: String::new(),
+        um_credential_source: Arc::new(um_gateway::login::credentials::NoStoredCredentials),
     }
 }
 
@@ -585,6 +589,162 @@ fn a_slow_umpass_form_is_not_reported_as_prefill_missing() {
     let status = wait_for(&service, |status| status["state"] == json!("valid"));
     assert_eq!(status["error"], Value::Null);
     assert_eq!(page.fill_calls(), 2);
+}
+
+struct StoredFormCredentials {
+    reads: AtomicUsize,
+    available: AtomicBool,
+    error: Mutex<Option<um_gateway::login::credentials::CredentialSourceError>>,
+}
+
+impl StoredFormCredentials {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            reads: AtomicUsize::new(0),
+            available: AtomicBool::new(false),
+            error: Mutex::new(None),
+        })
+    }
+}
+
+impl um_gateway::login::credentials::UmpassCredentialSource for StoredFormCredentials {
+    fn load(
+        &self,
+    ) -> Result<
+        Option<um_gateway::login::credentials::UmpassCredentials>,
+        um_gateway::login::credentials::CredentialSourceError,
+    > {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        if let Some(error) = *self.error.lock().unwrap() {
+            return Err(error);
+        }
+        if self.available.load(Ordering::SeqCst) {
+            um_gateway::login::credentials::UmpassCredentials::new(
+                "fixture-account".into(),
+                " fixture-password ".into(),
+            )
+            .map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+fn empty_form_page() -> Arc<FakePage> {
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().unwrap() = vec![
+        ("https://websso.um.edu.mo/adfs/ls/".into(), None),
+        ("http://127.0.0.1:9".into(), Some("fresh-token".into())),
+    ];
+    page
+}
+
+#[test]
+fn headless_login_reads_newly_saved_credentials_when_browser_does_not_autofill() {
+    let temp = TempDir::new("um-rust-login-stored-form-");
+    let page = empty_form_page();
+    let source = StoredFormCredentials::new();
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            config.um_credential_source = source.clone();
+        },
+    );
+    // Setup after service creation must work without a process restart.
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    source.available.store(true, Ordering::SeqCst);
+    service.start_explicit(false);
+    let status = wait_for(&service, |s| s["state"] != json!("logging_in"));
+    assert_eq!(status["state"], json!("valid"), "{status}");
+    assert_eq!(page.fill_calls(), 2);
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *page.filled_values.lock().unwrap(),
+        vec!["fixture-account", " fixture-password "]
+    );
+    assert!(!factory.requests()[0].headful);
+    assert!(!format!("{:?}", service.config()).contains("fixture-password"));
+    // Every round re-reads the source; errors stop rather than retrying a password.
+    *source.error.lock().unwrap() =
+        Some(um_gateway::login::credentials::CredentialSourceError::Windows(5));
+    *page.token.lock().unwrap() = None;
+    page.closed.store(false, Ordering::SeqCst);
+    page.fill_calls.store(0, Ordering::SeqCst);
+    *page.click_steps.lock().unwrap() = empty_form_page().click_steps.lock().unwrap().clone();
+    service.start_explicit(false);
+    let status = wait_for(&service, |s| s["state"] == json!("failed"));
+    assert_eq!(status["error"], json!("umpass_credentials_windows_error:5"));
+    assert_eq!(source.reads.load(Ordering::SeqCst), 2);
+    assert_eq!(page.fill_calls(), 0);
+}
+
+#[test]
+fn working_browser_sso_does_not_read_stored_form_credentials() {
+    let temp = TempDir::new("um-rust-login-sso-source-");
+    let source = StoredFormCredentials::new();
+    *source.error.lock().unwrap() =
+        Some(um_gateway::login::credentials::CredentialSourceError::Windows(5));
+    let page = empty_form_page();
+    page.fill_calls.store(2, Ordering::SeqCst);
+    let (service, _) = login_service_with(
+        &temp,
+        page,
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            config.um_credential_source = source.clone();
+        },
+    );
+    service.start_explicit(false);
+    let status = wait_for(&service, |s| s["state"] != json!("logging_in"));
+    assert_eq!(status["state"], json!("valid"));
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn stored_credentials_are_never_read_or_typed_on_untrusted_sso_origins() {
+    for url in [
+        "http://websso.um.edu.mo/adfs/",
+        "https://other.websso.um.edu.mo/adfs/",
+        "https://websso.um.edu.mo:8443/adfs/",
+    ] {
+        let temp = TempDir::new("um-rust-login-untrusted-form-");
+        let page = empty_form_page();
+        page.click_steps.lock().unwrap()[0].0 = url.to_string();
+        let source = StoredFormCredentials::new();
+        source.available.store(true, Ordering::SeqCst);
+        let (service, _) = login_service_with(
+            &temp,
+            page.clone(),
+            ScriptedProbe::valid(),
+            Arc::new(FakeSink::default()),
+            |config| {
+                config.um_credential_source = source.clone();
+            },
+        );
+        service.start_explicit(false);
+        let status = wait_for(&service, |s| s["state"] == json!("failed"));
+        assert_eq!(
+            status["error"],
+            json!("umpass_credentials_untrusted_origin")
+        );
+        assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+        assert_eq!(page.fill_calls(), 0);
+    }
+}
+
+#[test]
+fn login_configuration_debug_does_not_reveal_form_credentials() {
+    let temp = TempDir::new("um-rust-login-config-debug-");
+    let mut config = login_config(&temp);
+    config.um_account = "private-fixture-account".into();
+    config.um_password = "private-fixture-password".into();
+    let debug = format!("{config:?}");
+    assert!(!debug.contains("private-fixture"));
 }
 
 #[test]
