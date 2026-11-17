@@ -15,6 +15,7 @@ pub mod display_grant;
 pub mod display_relay;
 pub mod error;
 pub mod lock;
+pub mod local_summary;
 pub mod metering;
 pub mod operation_manager;
 pub mod operations;
@@ -29,6 +30,7 @@ pub mod summary;
 pub use config::{ConsoleConfig, EntryKind, Role};
 pub use display_grant::{DisplayGrantError, DisplayGrants, DisplaySession};
 pub use error::ConsoleError;
+pub use local_summary::{build_local_summary, LocalSummaryCache, LocalSummaryPaths};
 pub use runtime::{
     LinuxPidFileConfig, LinuxPidFileFacts, ProcessProbe, RuntimeError, RuntimeFacts,
     RuntimeSnapshot,

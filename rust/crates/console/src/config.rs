@@ -40,6 +40,14 @@ pub const SECURITY_STATE_FILE_ENV: &str = "UM_CLOUD_SECURITY_STATE";
 pub const CONTROL_TOKEN_FILE_ENV: &str = "USAGE_CONTROL_TOKEN_FILE";
 pub const SHARE_BACKEND_DIR_ENV: &str = "CONSOLE_SHARE_BACKEND_DIR";
 pub const USAGE_SESSION_CODE_FILE_ENV: &str = "USAGE_SESSION_CODE_FILE";
+pub const USAGE_LOG_ENV: &str = "CHAT2API_USAGE_LOG";
+pub const DSH_SNAPSHOT_ENV: &str = "DSH_LEDGER_SNAPSHOT_FILE";
+pub const SERVICE_LOG_ENV: &str = "CHAT2API_SERVICE_LOG";
+pub const WATCH_DIR_ENV: &str = "SELFUSEAI_GATEWAY_WATCH_DIR";
+
+pub const DEFAULT_USAGE_LOG: &str = "data/usage-chat2api.jsonl";
+pub const DEFAULT_DSH_SNAPSHOT: &str = "data/dsh-ledger-20260902.json";
+pub const DEFAULT_SERVICE_LOG: &str = "chat2api/chat2api.log";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -120,6 +128,12 @@ pub struct ConsoleConfig {
     pub control_token_file: Option<PathBuf>,
     pub share_backend_dir: Option<PathBuf>,
     pub usage_session_code_file: Option<PathBuf>,
+    /// Local role inputs: the private chat2api usage ledger, the frozen DSH
+    /// day snapshot and the chat2api run log. Cloud role ignores them.
+    pub usage_log: PathBuf,
+    pub dsh_snapshot: PathBuf,
+    pub service_log: PathBuf,
+    pub watch_dir: Option<PathBuf>,
     pub display: DisplayConfig,
 }
 
@@ -147,6 +161,10 @@ impl Default for ConsoleConfig {
             control_token_file: None,
             share_backend_dir: None,
             usage_session_code_file: None,
+            usage_log: PathBuf::from(DEFAULT_USAGE_LOG),
+            dsh_snapshot: PathBuf::from(DEFAULT_DSH_SNAPSHOT),
+            service_log: PathBuf::from(DEFAULT_SERVICE_LOG),
+            watch_dir: None,
             display: DisplayConfig::default(),
         }
     }
@@ -305,6 +323,26 @@ impl ConsoleConfig {
         if let Ok(value) = std::env::var(USAGE_SESSION_CODE_FILE_ENV) {
             if !value.trim().is_empty() {
                 config.usage_session_code_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var(USAGE_LOG_ENV) {
+            if !value.trim().is_empty() {
+                config.usage_log = PathBuf::from(value);
+            }
+        }
+        if let Ok(value) = std::env::var(DSH_SNAPSHOT_ENV) {
+            if !value.trim().is_empty() {
+                config.dsh_snapshot = PathBuf::from(value);
+            }
+        }
+        if let Ok(value) = std::env::var(SERVICE_LOG_ENV) {
+            if !value.trim().is_empty() {
+                config.service_log = PathBuf::from(value);
+            }
+        }
+        if let Ok(value) = std::env::var(WATCH_DIR_ENV) {
+            if !value.trim().is_empty() {
+                config.watch_dir = Some(PathBuf::from(value));
             }
         }
         config.display = DisplayConfig::from_env();

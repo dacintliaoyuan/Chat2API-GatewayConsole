@@ -142,7 +142,7 @@ impl ConsoleServer {
             display: DisplayRelay::new(config.display.clone()),
             config: config.clone(),
             runtime,
-            summary: SummaryCache::new(),
+            summary: SummaryCache::for_config(&config),
             services_cache: Mutex::new(None),
         });
         let listener = TcpListener::bind((config.bind_host.as_str(), config.bind_port))

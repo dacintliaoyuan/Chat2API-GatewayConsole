@@ -87,6 +87,22 @@ fn main() -> ExitCode {
                 Some(value) => config.expected_uid = Some(value),
                 None => return usage("--expected-uid requires an integer"),
             },
+            "--usage-log" => match args.next() {
+                Some(value) => config.usage_log = value.into(),
+                None => return usage("--usage-log requires a path"),
+            },
+            "--dsh-snapshot" => match args.next() {
+                Some(value) => config.dsh_snapshot = value.into(),
+                None => return usage("--dsh-snapshot requires a path"),
+            },
+            "--service-log" => match args.next() {
+                Some(value) => config.service_log = value.into(),
+                None => return usage("--service-log requires a path"),
+            },
+            "--watch-dir" => match args.next() {
+                Some(value) => config.watch_dir = Some(value.into()),
+                None => return usage("--watch-dir requires a path"),
+            },
             "--help" | "-h" => {
                 println!(
                     "usage: um-console-candidate [--mode candidate|production] \
