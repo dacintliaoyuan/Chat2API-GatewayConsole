@@ -174,10 +174,12 @@ systemd
   usage_session=…; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`；带该 Cookie
   请求 `GET /api/share/status` 200，页面 `/` 200。引导码与 Cookie 值只留在原存储，
   不进入日志、提交或本文件。
-- 回滚（已演练）：只改 `StartPath` 回 `start_usage_service.bat`，重启后 Python 8001
-  `/health` 200、`/` 200；再改回 Rust 并重启，`/health` 200、`/` 200。
-  回滚不需要重装，也不需要改端口；`start_usage_service.bat` 保留 Python
-  `python usagesrv.py` 命令。
+- 回滚演练（#85 AC4，2026-11-17）：只改 `StartPath` 回
+  `start_usage_service.bat`；`invoke-console-runtime-json.ps1 -Action restart -Key usage`
+  返回 `Restarted`，只终止 Rust 私有实例。重启后 Python `usagesrv.py` 监听
+  `127.0.0.1:8001`，`/health` 200、`/` 200。再把 `StartPath` 改回 Rust 二进制
+  并重启，`/health` 200、`/` 200。回滚不需要重装，也不需要改端口；
+  `StartEnvironment` 对 batch 回滚无影响，`StopIdentities` 仍同时识别 Python 与 Rust。
 - 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 验证
   描述符、健康边界、停止身份与回滚；真实 8001 的 parity、切流与回滚演练由 #85
   执行并记录在本节。
