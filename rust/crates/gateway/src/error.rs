@@ -522,6 +522,9 @@ fn category_for(status: u16, code: &str) -> &'static str {
         "reauthentication_required" | "reauthentication_failed" => "authentication_error",
         "upstream_forbidden" => "permission_error",
         "upstream_quota_exhausted" | "upstream_rate_limited" => "rate_limit_error",
+        // Python `_ERROR_TYPE_BY_CODE`: a preserved 4xx upstream status is a
+        // request error, not a gateway-side upstream failure.
+        "upstream_request_rejected" => "invalid_request_error",
         "share_config_unavailable" | "share_revoke_unassembled" | "not_implemented" => "api_error",
         "request_deadline_exceeded" | "upstream_attempt_budget_exhausted" => "upstream_error",
         _ if code.starts_with("upstream_") => "upstream_error",

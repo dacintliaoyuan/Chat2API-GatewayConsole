@@ -306,7 +306,10 @@ impl Drop for ServerHandle {
 /// until a client request happens to trigger the round.
 fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
-        let mut interval = AUTH_WATCH_INTERVAL;
+        // The first probe runs shortly after start so `/admin/auth/status` has
+        // evidence without waiting a full interval; later probes use the watch
+        // interval (or the rejected-credential backoff).
+        let mut interval = Duration::from_secs(2);
         while !shutdown.load(Ordering::SeqCst) {
             let mut slept = Duration::ZERO;
             while slept < interval && !shutdown.load(Ordering::SeqCst) {
@@ -316,7 +319,19 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
             if shutdown.load(Ordering::SeqCst) {
                 break;
             }
-            let (ready, _) = state.proxy.readiness_snapshot();
+            let (ready, snapshot) = state.proxy.readiness_snapshot();
+            let verdict = snapshot
+                .get("authentication")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let reason = snapshot.get("reason").and_then(Value::as_str);
+            let upstream_status = snapshot
+                .get("upstream_status")
+                .and_then(Value::as_u64)
+                .map(|value| value as u16);
+            if let Some(login) = &state.login {
+                login.note_probe(verdict, reason, upstream_status);
+            }
             if ready {
                 interval = AUTH_WATCH_INTERVAL;
                 continue;

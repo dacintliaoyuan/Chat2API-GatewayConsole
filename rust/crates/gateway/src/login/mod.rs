@@ -559,6 +559,29 @@ impl LoginService {
         })
     }
 
+    /// Record one auth-watch probe so `/admin/auth/status` carries evidence
+    /// without a login round. Python records the same fields from its watch.
+    pub fn note_probe(&self, verdict: &str, reason: Option<&str>, upstream_status: Option<u16>) {
+        let mut state = self.inner.state.lock().expect("login state poisoned");
+        if state.auth_state == AuthState::LoggingIn || state.auth_state == AuthState::Failed {
+            return;
+        }
+        let now = profile::epoch_now();
+        let last_valid_epoch = if verdict == "valid" {
+            Some(now)
+        } else {
+            state.evidence.last_valid_epoch
+        };
+        state.evidence = Evidence {
+            verdict: Some(verdict.to_string()),
+            reason: reason.map(str::to_string),
+            upstream_status,
+            checked_epoch: Some(now),
+            last_valid_epoch,
+            source: Some("auth_watch".to_string()),
+        };
+    }
+
     /// Stop the executor for shutdown: the current round is cancelled.
     pub fn shutdown(&self) {
         let mut state = self.inner.state.lock().expect("login state poisoned");
