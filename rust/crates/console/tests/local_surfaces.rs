@@ -203,3 +203,45 @@ fn local_cloud_ops_and_share_usage_reuse_the_existing_readers() {
     assert_eq!(share_usage.status, 503);
     assert_eq!(share_usage.json()["error"], json!("share_ledger_path_unresolved"));
 }
+
+#[test]
+fn local_disabled_actions_are_listed_but_submit_returns_403_action_disabled() {
+    let temp = temp();
+    let console = local_console(
+        &temp,
+        Some(temp.path().join("console-state.sqlite3")),
+    );
+    for action in [
+        "service.start",
+        "service.stop",
+        "service.restart",
+        "account.um_status",
+        "account.um_verify",
+        "account.login",
+    ] {
+        let body = json!({"action": action, "target": "chat2api"})
+            .to_string()
+            .into_bytes();
+        let request = ClientRequest::post("/api/console/operations", body)
+            .header("Content-Type", "application/json");
+        let response =
+            client_request(console.addr, &request).expect("submit disabled action");
+        assert_eq!(response.status, 403, "{action}");
+        let payload = response.json();
+        assert_eq!(payload["error"], json!("action_disabled"), "{action}");
+        assert!(
+            payload["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("尚未接线"),
+            "{action}: {payload}"
+        );
+    }
+    let list = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/operations?limit=50"),
+    )
+    .expect("operations");
+    assert_eq!(list.status, 200);
+    assert_eq!(list.json()["operations"], json!([]));
+}

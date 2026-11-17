@@ -6,6 +6,8 @@
 
 use serde_json::{json, Value};
 
+use crate::operation_manager::local_registry;
+
 pub fn action_catalogue() -> Value {
     json!({
         "actions": [
@@ -69,38 +71,18 @@ pub fn action_catalogue() -> Value {
 /// this ticket, so they are listed as disabled with their honest reason instead of
 /// claiming capability.
 pub fn action_catalogue_local() -> Value {
-    let reason = "本机 Rust 控制台尚未接线该动作执行器（后续票）";
-    let actions: Vec<Value> = [
-        ("service.start", "启动本机 UM runtime（经 runtime 权威）"),
-        ("service.stop", "停止本机 UM runtime（经 runtime 权威）"),
-        ("service.restart", "重启本机 UM runtime"),
-        ("account.um_status", "UM 认证状态查询（内存态只读）"),
-        ("account.um_verify", "UM 账号主动核验"),
-        ("account.login", "账号登录/重新授权（UM 编排）"),
-        (
-            "model.catalog",
-            "模型目录只读查询（各来源 /v1/models；无探测、无计费、无启停）",
-        ),
-    ]
-    .into_iter()
-    .map(|(action, description)| {
-        let enabled = action == "model.catalog";
-        json!({
-            "action": action,
-            "enabled": enabled,
-            "disabled_reason": if enabled { Value::Null } else { json!(reason) },
-            "cancelable": true,
-            "description": description,
-            "param_schema": if enabled {
-                json!({
-                    "sources": {"type": "str", "max_len": 512},
-                    "fresh": {"type": "bool"},
-                })
-            } else {
-                json!({})
-            },
+    let actions: Vec<Value> = local_registry()
+        .iter()
+        .map(|spec| {
+            json!({
+                "action": spec.name,
+                "enabled": spec.enabled,
+                "disabled_reason": spec.disabled_reason,
+                "cancelable": spec.cancelable,
+                "description": spec.description,
+                "param_schema": spec.param_schema,
+            })
         })
-    })
-    .collect();
+        .collect();
     json!({"actions": actions})
 }

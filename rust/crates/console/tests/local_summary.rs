@@ -7,7 +7,7 @@
 mod support;
 
 use serde_json::json;
-use um_console::local_summary::{build_local_summary, LocalSummaryPaths};
+use um_console::local_summary::{build_local_summary, LocalSummaryCache, LocalSummaryPaths};
 
 use support::*;
 
@@ -179,4 +179,206 @@ fn local_summary_route_serves_the_cached_local_payload() {
     assert_eq!(payload["services"]["chat2api"]["tokens"]["input"], json!(7));
     assert!(payload["_generated_epoch"].is_number());
     assert_eq!(payload["_cached_age_seconds"], json!(0.0));
+}
+
+#[test]
+fn local_summary_reads_at_most_the_last_200000_ledger_records() {
+    let temp = temp();
+    let paths = paths(&temp);
+    let mut lines = Vec::with_capacity(200_001);
+    lines.push(
+        json!({
+            "time": "2026-11-17T00:00:00+08:00",
+            "model": "dropped",
+            "input_tokens": 999,
+        })
+        .to_string(),
+    );
+    for _ in 0..200_000 {
+        lines.push(
+            json!({
+                "time": "2026-11-17T00:00:00+08:00",
+                "model": "kept",
+                "input_tokens": 1,
+            })
+            .to_string(),
+        );
+    }
+    std::fs::write(&paths.usage_log, lines.join("\n")).expect("write usage ledger");
+
+    let summary = build_local_summary(&paths);
+    let chat2api = &summary["services"]["chat2api"];
+    assert_eq!(chat2api["requests"], json!(200_000));
+    assert_eq!(chat2api["tokens"]["input"], json!(200_000));
+    assert_eq!(chat2api["models"].as_array().expect("models").len(), 1);
+    assert_eq!(chat2api["models"][0]["model"], json!("kept"));
+    assert_eq!(chat2api["models"][0]["requests"], json!(200_000));
+}
+
+#[test]
+fn local_summary_reports_corrupt_token_values_as_unavailable() {
+    let temp = temp();
+    let paths = paths(&temp);
+    std::fs::write(
+        &paths.usage_log,
+        json!({
+            "time": "2026-11-17T10:00:00+08:00",
+            "model": "m1",
+            "input_tokens": "not-a-number",
+        })
+        .to_string(),
+    )
+    .expect("write usage ledger");
+
+    assert_eq!(
+        build_local_summary(&paths),
+        json!({"error": "summary unavailable"})
+    );
+    let cache = um_console::local_summary::LocalSummaryCache::new(paths);
+    assert_eq!(cache.payload(), json!({"error": "summary unavailable"}));
+}
+
+#[test]
+fn local_summary_treats_non_integer_token_values_as_corruption() {
+    let temp = temp();
+    let paths = paths(&temp);
+    std::fs::write(
+        &paths.usage_log,
+        json!({
+            "time": "2026-11-17T10:00:00+08:00",
+            "model": "m1",
+            "input_tokens": 1.5,
+        })
+        .to_string(),
+    )
+    .expect("write usage ledger");
+
+    assert_eq!(
+        build_local_summary(&paths),
+        json!({"error": "summary unavailable"})
+    );
+}
+
+#[test]
+fn local_summary_reports_corrupt_dsh_snapshot_shapes_as_unavailable() {
+    let temp = temp();
+    let paths = paths(&temp);
+    std::fs::write(
+        &paths.dsh_snapshot,
+        json!({"days": "not-an-object"}).to_string(),
+    )
+    .expect("write dsh snapshot");
+    assert_eq!(
+        build_local_summary(&paths),
+        json!({"error": "summary unavailable"})
+    );
+
+    std::fs::write(
+        &paths.dsh_snapshot,
+        json!({
+            "days": {
+                "2026-09-02": {"byProviderModel": "not-an-object"},
+            },
+        })
+        .to_string(),
+    )
+    .expect("write dsh snapshot");
+    assert_eq!(
+        build_local_summary(&paths),
+        json!({"error": "summary unavailable"})
+    );
+}
+
+fn write_single_usage(path: &std::path::Path, model: &str, input_tokens: i64) {
+    std::fs::write(
+        path,
+        json!({
+            "time": "2026-11-17T10:00:00+08:00",
+            "model": model,
+            "input_tokens": input_tokens,
+        })
+        .to_string(),
+    )
+    .expect("write usage ledger");
+}
+
+#[test]
+fn local_summary_cache_serves_stale_data_while_refreshing_in_the_background() {
+    let temp = temp();
+    let paths = paths(&temp);
+    write_single_usage(&paths.usage_log, "before", 1);
+    let cache = LocalSummaryCache::with_cache_seconds(paths.clone(), 0.0);
+
+    let first = cache.payload();
+    assert_eq!(
+        first["services"]["chat2api"]["models"][0]["model"],
+        json!("before")
+    );
+
+    write_single_usage(&paths.usage_log, "after", 2);
+    let stale = cache.payload();
+    assert_eq!(
+        stale["services"]["chat2api"]["models"][0]["model"],
+        json!("before")
+    );
+    assert!(stale["_cached_age_seconds"].as_f64().unwrap_or_default() >= 0.0);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let payload = cache.payload();
+        if payload["services"]["chat2api"]["models"][0]["model"] == json!("after") {
+            assert_eq!(payload["services"]["chat2api"]["tokens"]["input"], json!(2));
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background refresh never produced the new summary: {payload}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn local_summary_cache_keeps_stale_data_and_marks_a_refresh_failure() {
+    let temp = temp();
+    let paths = paths(&temp);
+    write_single_usage(&paths.usage_log, "before", 1);
+    let cache = LocalSummaryCache::with_cache_seconds(paths.clone(), 0.0);
+
+    let first = cache.payload();
+    assert_eq!(
+        first["services"]["chat2api"]["models"][0]["model"],
+        json!("before")
+    );
+
+    std::fs::write(
+        &paths.usage_log,
+        json!({
+            "time": "2026-11-17T10:00:00+08:00",
+            "model": "corrupt",
+            "input_tokens": "not-a-number",
+        })
+        .to_string(),
+    )
+    .expect("write corrupt ledger");
+    let _ = cache.payload();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let payload = cache.payload();
+        if payload["_refresh_error"] == json!("summary unavailable") {
+            assert_eq!(payload["_stale"], json!(true));
+            assert_eq!(
+                payload["services"]["chat2api"]["models"][0]["model"],
+                json!("before")
+            );
+            assert_eq!(payload["services"]["chat2api"]["requests"], json!(1));
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "refresh failure was never marked: {payload}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }

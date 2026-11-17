@@ -121,6 +121,8 @@ pub struct ActionSpec {
     pub param_schema: Value,
     pub bump_generation_on_success: bool,
     pub cancelable: bool,
+    pub enabled: bool,
+    pub disabled_reason: Option<&'static str>,
     resource: fn(&str, &Map<String, Value>) -> Result<String, OperationError>,
 }
 
@@ -143,6 +145,8 @@ pub fn cloud_registry() -> Vec<ActionSpec> {
             param_schema: json!({}),
             bump_generation_on_success: true,
             cancelable: true,
+            enabled: true,
+            disabled_reason: None,
             resource: service_resource,
         },
         ActionSpec {
@@ -151,6 +155,8 @@ pub fn cloud_registry() -> Vec<ActionSpec> {
             param_schema: json!({}),
             bump_generation_on_success: false,
             cancelable: true,
+            enabled: true,
+            disabled_reason: None,
             resource: service_resource,
         },
         ActionSpec {
@@ -159,6 +165,8 @@ pub fn cloud_registry() -> Vec<ActionSpec> {
             param_schema: json!({}),
             bump_generation_on_success: false,
             cancelable: true,
+            enabled: true,
+            disabled_reason: None,
             resource: service_resource,
         },
         ActionSpec {
@@ -167,6 +175,8 @@ pub fn cloud_registry() -> Vec<ActionSpec> {
             param_schema: json!({}),
             bump_generation_on_success: false,
             cancelable: true,
+            enabled: true,
+            disabled_reason: None,
             resource: share_resource,
         },
         ActionSpec {
@@ -177,6 +187,8 @@ pub fn cloud_registry() -> Vec<ActionSpec> {
             }),
             bump_generation_on_success: true,
             cancelable: true,
+            enabled: true,
+            disabled_reason: None,
             resource: share_resource,
         },
         ActionSpec {
@@ -185,26 +197,107 @@ pub fn cloud_registry() -> Vec<ActionSpec> {
             param_schema: json!({}),
             bump_generation_on_success: false,
             cancelable: true,
+            enabled: true,
+            disabled_reason: None,
             resource: share_resource,
         },
     ]
 }
 
-/// The local role registry: `model.catalog` only. The handler runs in a one-shot
-/// Python `model_sync` sidecar (#84); the other local catalogue cards stay
-/// disabled until their executors are wired.
+/// The honest reason carried by every local catalogue card whose executor is not
+/// wired yet.
+pub const LOCAL_DISABLED_ACTION_REASON: &str = "本机 Rust 控制台尚未接线该动作执行器（后续票）";
+
+/// The local role registry: `model.catalog` is executable; the other catalogue
+/// cards are registered but disabled, so Python's 403 `action_disabled` refusal is
+/// preserved instead of degrading to 404 `invalid_action`. A disabled action never
+/// executes and never creates an operation row.
 pub fn local_registry() -> Vec<ActionSpec> {
-    vec![ActionSpec {
-        name: "model.catalog",
-        description: "模型目录只读查询（各来源 /v1/models；无探测、无计费、无启停）",
-        param_schema: json!({
-            "sources": {"type": "str", "max_len": 512},
-            "fresh": {"type": "bool"},
-        }),
-        bump_generation_on_success: false,
-        cancelable: true,
-        resource: model_catalog_resource,
-    }]
+    vec![
+        ActionSpec {
+            name: "service.start",
+            description: "启动本机 UM runtime（经 runtime 权威）",
+            param_schema: json!({}),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: false,
+            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
+            resource: disabled_resource,
+        },
+        ActionSpec {
+            name: "service.stop",
+            description: "停止本机 UM runtime（经 runtime 权威）",
+            param_schema: json!({}),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: false,
+            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
+            resource: disabled_resource,
+        },
+        ActionSpec {
+            name: "service.restart",
+            description: "重启本机 UM runtime",
+            param_schema: json!({}),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: false,
+            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
+            resource: disabled_resource,
+        },
+        ActionSpec {
+            name: "account.um_status",
+            description: "UM 认证状态查询（内存态只读）",
+            param_schema: json!({}),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: false,
+            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
+            resource: disabled_resource,
+        },
+        ActionSpec {
+            name: "account.um_verify",
+            description: "UM 账号主动核验",
+            param_schema: json!({}),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: false,
+            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
+            resource: disabled_resource,
+        },
+        ActionSpec {
+            name: "account.login",
+            description: "账号登录/重新授权（UM 编排）",
+            param_schema: json!({}),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: false,
+            disabled_reason: Some(LOCAL_DISABLED_ACTION_REASON),
+            resource: disabled_resource,
+        },
+        ActionSpec {
+            name: "model.catalog",
+            description: "模型目录只读查询（各来源 /v1/models；无探测、无计费、无启停）",
+            param_schema: json!({
+                "sources": {"type": "str", "max_len": 512},
+                "fresh": {"type": "bool"},
+            }),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: true,
+            disabled_reason: None,
+            resource: model_catalog_resource,
+        },
+    ]
+}
+
+fn disabled_resource(
+    _target: &str,
+    _params: &Map<String, Value>,
+) -> Result<String, OperationError> {
+    Err(OperationError::new(
+        "action_disabled",
+        "action is disabled and cannot execute",
+    ))
 }
 
 fn model_catalog_resource(
@@ -429,8 +522,8 @@ impl OperationManager {
             .map(|spec| {
                 json!({
                     "action": spec.name,
-                    "enabled": true,
-                    "disabled_reason": null,
+                    "enabled": spec.enabled,
+                    "disabled_reason": spec.disabled_reason,
                     "cancelable": spec.cancelable,
                     "description": spec.description,
                     "param_schema": spec.param_schema,
@@ -506,6 +599,12 @@ impl OperationManager {
                 OperationError::new("invalid_action", format!("unknown action {action:?}"))
             })?
             .clone();
+        if !spec.enabled {
+            return Err(action_disabled(
+                spec.name,
+                spec.disabled_reason.unwrap_or("action is disabled"),
+            ));
+        }
         if let Some(idempotency_key) = idempotency_key {
             if !(1..=128).contains(&idempotency_key.chars().count()) {
                 return Err(OperationError::new(

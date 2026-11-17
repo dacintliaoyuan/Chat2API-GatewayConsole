@@ -361,10 +361,11 @@ fn cursor_meta(key: Option<&str>) -> Option<(i64, i64, i64)> {
     ))
 }
 
-fn file_identity(metadata: &std::fs::Metadata) -> Option<String> {
+fn file_identity(handle: &std::fs::File, metadata: &std::fs::Metadata) -> Option<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let _ = handle;
         return Some(format!(
             "{}:{}:{}",
             metadata.ino(),
@@ -374,13 +375,70 @@ fn file_identity(metadata: &std::fs::Metadata) -> Option<String> {
     }
     #[cfg(windows)]
     {
-        return Some(format!("0:0:{}", metadata.len()));
+        return windows_file_identity(handle, metadata);
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = metadata;
+        let _ = (handle, metadata);
         None
     }
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsFileTime {
+    low: u32,
+    high: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsFileInformation {
+    file_attributes: u32,
+    creation_time: WindowsFileTime,
+    last_access_time: WindowsFileTime,
+    last_write_time: WindowsFileTime,
+    volume_serial_number: u32,
+    file_size_high: u32,
+    file_size_low: u32,
+    number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+
+/// `MetadataExt::file_index`/`volume_serial_number` are still unstable on the
+/// pinned toolchain, so query the same `BY_HANDLE_FILE_INFORMATION` through the
+/// stable raw handle. A missing volume serial falls back to `0`.
+#[cfg(windows)]
+fn windows_file_identity(
+    handle: &std::fs::File,
+    metadata: &std::fs::Metadata,
+) -> Option<String> {
+    use std::os::windows::io::AsRawHandle;
+
+    #[allow(non_snake_case)]
+    extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut std::ffi::c_void,
+            information: *mut WindowsFileInformation,
+        ) -> i32;
+    }
+
+    let mut information: WindowsFileInformation = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        GetFileInformationByHandle(handle.as_raw_handle(), &mut information)
+    };
+    if ok == 0 {
+        return None;
+    }
+    let file_index =
+        ((information.file_index_high as u64) << 32) | information.file_index_low as u64;
+    Some(format!(
+        "{}:{}:{}",
+        file_index,
+        information.volume_serial_number,
+        metadata.len()
+    ))
 }
 
 fn normalize_level(raw: &str) -> String {
@@ -439,7 +497,7 @@ fn event_view(body: &Map<String, Value>, ts: Option<&str>) -> Value {
     };
     let model = body.get("model").filter(|value| !value.is_null()).map(|value| {
         let mut text = redact(&python_str(value));
-        text.truncate(64);
+        truncate_chars(&mut text, 64);
         text
     });
     let request_id = body
@@ -627,7 +685,7 @@ fn redact_key_values(output: &mut String) {
 }
 
 fn redact_quoted_json(output: &mut String) {
-    const KEYS: [&str; 14] = [
+    const KEYS: [&str; 17] = [
         "api_key",
         "api-key",
         "apikey",
@@ -642,6 +700,9 @@ fn redact_quoted_json(output: &mut String) {
         "access_token",
         "refresh_token",
         "session_token",
+        "sign",
+        "signature",
+        "code",
     ];
     let mut search = 0usize;
     loop {
@@ -1282,7 +1343,7 @@ fn read_entries(
         }
     };
     let size = metadata.len();
-    let file_key = file_identity(&metadata);
+    let file_key = file_identity(&handle, &metadata);
     if category_def.whole_document {
         if cursor.is_some() {
             let mut result = outcome("ok", None);

@@ -1037,3 +1037,154 @@ fn log_overview_merges_registered_targets_and_states_coverage() {
     assert_eq!(chat2api["targets_total"], json!(5));
     assert_eq!(chat2api["targets_unread"], json!(1));
 }
+
+#[test]
+fn log_entries_truncates_non_ascii_models_by_characters_without_panicking() {
+    let temp = temp();
+    let model = "模".repeat(70);
+    std::fs::write(
+        temp.path().join("usage-chat2api.jsonl"),
+        format!(
+            "{{\"time\": \"2026-11-17T10:03:00+08:00\", \"model\": \"{model}\", \"status\": \"ok\"}}\n"
+        ),
+    )
+    .expect("write ledger");
+    let console = local_console(&temp);
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/log-entries?source=chat2api&category=ledger"),
+    )
+    .expect("log-entries");
+    assert_eq!(response.status, 200);
+    let payload = response.json();
+    let row = &payload["rows"][0];
+    assert_eq!(row["event"]["model"], json!("模".repeat(64)));
+}
+
+#[test]
+fn log_entries_redacts_sign_signature_and_code_quoted_json_values() {
+    let temp = temp();
+    std::fs::create_dir_all(temp.path().join("chat2api")).expect("log dir");
+    std::fs::write(
+        temp.path().join("chat2api/chat2api.log"),
+        b"2026-11-17 10:00:00 INFO payload {\"sign\": \"sign-value\", \"signature\": \"signature-value\", \"code\": \"code-value\"}\n",
+    )
+    .expect("write service log");
+    let console = local_console(&temp);
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/log-entries?source=chat2api&category=service"),
+    )
+    .expect("log-entries");
+    assert_eq!(response.status, 200);
+    let payload = response.json();
+    let message = payload["rows"][0]["message"].as_str().expect("message");
+    assert_eq!(
+        message,
+        "payload {\"sign\": \"<redacted>\", \"signature\": \"<redacted>\", \"code\": \"<redacted>\"}"
+    );
+    assert!(!message.contains("sign-value"));
+    assert!(!message.contains("signature-value"));
+    assert!(!message.contains("code-value"));
+}
+
+fn fixed_size_log(marker: &str) -> Vec<u8> {
+    (0..500)
+        .map(|index| {
+            format!(
+                "2026-11-17 10:{:02}:00 INFO {marker}-{index:04}\n",
+                index % 60
+            )
+        })
+        .collect::<String>()
+        .into_bytes()
+}
+
+fn encode_query_value(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn log_entries_detects_a_same_size_replacement_through_file_identity() {
+    let temp = temp();
+    std::fs::create_dir_all(temp.path().join("chat2api")).expect("log dir");
+    let path = temp.path().join("chat2api/chat2api.log");
+    let old_bytes = fixed_size_log("A");
+    std::fs::write(&path, &old_bytes).expect("write old log");
+    let console = local_console(&temp);
+    let first = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/log-entries?source=chat2api&category=service"),
+    )
+    .expect("first log-entries")
+    .json();
+    assert_eq!(first["reset_hint"], json!(false));
+    let cursor = first["next_cursor"].as_str().expect("next cursor").to_string();
+    let old_key = first["file_key"].clone();
+    assert!(old_key.is_string());
+
+    std::fs::remove_file(&path).expect("remove old log");
+    let new_bytes = fixed_size_log("B");
+    assert_eq!(new_bytes.len(), old_bytes.len());
+    std::fs::write(&path, &new_bytes).expect("write replacement log");
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get(&format!(
+            "/api/console/log-entries?source=chat2api&category=service&cursor={}",
+            encode_query_value(&cursor)
+        )),
+    )
+    .expect("second log-entries");
+    assert_eq!(response.status, 200);
+    let second = response.json();
+    assert_eq!(second["reset_hint"], json!(true));
+    assert_eq!(second["rows"], json!([]));
+    assert_ne!(second["file_key"], old_key);
+}
+
+#[test]
+fn stats_reports_corrupt_dsh_snapshot_shapes_as_corrupt_snapshot() {
+    let temp = temp();
+    seed_usage(&temp);
+    let console = local_console(&temp);
+
+    let assert_corrupt_snapshot = |snapshot: Value| {
+        std::fs::write(
+            temp.path().join("dsh-ledger-20260902.json"),
+            snapshot.to_string(),
+        )
+        .expect("write dsh snapshot");
+        let response = client_request(
+            console.addr,
+            &ClientRequest::get("/api/console/stats?from=2026-09-02&to=2026-09-02"),
+        )
+        .expect("stats");
+        assert_eq!(response.status, 200);
+        let payload = response.json();
+        let errors = payload["coverage"]["sources"]["dsh"]["errors"]
+            .as_array()
+            .expect("dsh errors");
+        assert!(
+            errors.iter().any(|error| error["type"] == json!("corrupt_snapshot")),
+            "{errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|error| error["type"] == json!("corrupt_ledger")),
+            "{errors:?}"
+        );
+    };
+
+    assert_corrupt_snapshot(json!({"days": "not-an-object"}));
+    assert_corrupt_snapshot(json!({
+        "days": {"2026-09-02": {"byProviderModel": "not-an-object"}},
+    }));
+}
