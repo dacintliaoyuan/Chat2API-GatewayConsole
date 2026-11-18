@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import unittest
 from unittest import mock
@@ -149,6 +150,35 @@ Promise.resolve(context.done).then(() => {
         self.assertEqual(result["events"][0][0], "clear")
         self.assertEqual(result["events"][1][1], "/display/grant")
         self.assertEqual(result["events"][2][1], "/display/session")
+
+
+class EntryHelperPortContractTests(unittest.TestCase):
+    """The PC entry and the cloud helper must agree on the console port.
+
+    #97: the entry forwarded 8002 while the deployed helper still whitelisted
+    8096/18096, so every shortcut open failed before the bootstrap request was
+    sent.  The helper's own port tests cannot see that mismatch: the entry
+    default lives in ``cloud/Open-CloudConsole.ps1``.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "bootstrap_issuer", DISPLAY / "issue-display-grant.py")
+        cls.issuer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.issuer)
+        entry = (Path(__file__).resolve().parents[1]
+                 / "cloud" / "Open-CloudConsole.ps1")
+        cls.entry_text = entry.read_text(encoding="utf-8-sig")
+
+    def test_entry_default_console_port_is_accepted_by_the_helper(self):
+        match = re.search(
+            r"\[int\]\$CloudConsolePort\s*=\s*(\d+)", self.entry_text)
+        self.assertIsNotNone(
+            match, "the entry must declare a default console port")
+        default_port = int(match.group(1))
+        self.assertIn(default_port, self.issuer.CONSOLE_PORTS)
+        self.assertNotEqual(default_port, 8001)
 
 
 if __name__ == "__main__":

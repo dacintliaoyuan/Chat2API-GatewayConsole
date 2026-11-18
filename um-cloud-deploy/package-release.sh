@@ -263,6 +263,32 @@ for path in sorted(payload.rglob("*")):
 print("normalized %d script file(s) to LF" % len(rewritten))
 PY
 
+# #97: the PC entry bootstraps the browser session through this ONE helper.
+# A payload whose helper does not accept the release's console port installs a
+# console the shortcut can never authorize, so fail the packaging instead of
+# shipping a release that cannot be opened from the desktop.
+"$PYTHON" - "$PAYLOAD/um-cloud-deploy/display/issue-display-grant.py" \
+  "$(release_console_port "$RUNTIME")" <<'PY' || \
+  die "display grant helper does not accept the release console port" "$EX_DATAERR"
+import re
+import sys
+from pathlib import Path
+
+helper = Path(sys.argv[1])
+port = int(sys.argv[2])
+text = helper.read_text(encoding="utf-8")
+match = re.search(
+    r"^CONSOLE_PORTS = frozenset\(\{([^}]*)\}\)", text, re.MULTILINE)
+if match is None:
+    raise SystemExit("display grant helper has no CONSOLE_PORTS")
+ports = {int(value) for value in re.findall(r"\d+", match.group(1))}
+if port not in ports:
+    raise SystemExit(
+        "display grant helper rejects the release console port %d: %s"
+        % (port, sorted(ports)))
+print("display grant helper accepts the release console port %d" % port)
+PY
+
 # The packaged gateway host unit must keep /var/lib/um-share-console writable:
 # the Python rollback release writes the merged 8100 child state there, and the
 # Rust release writes the same token/profile/log paths from the 8003 gateway.
