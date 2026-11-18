@@ -65,6 +65,67 @@ test('logging_in keeps the screen and offers cancel_login', () => {
   assert.ok(next.actions.includes('cancel_login'));
 });
 
+test('waiting_duo keeps the screen and reports the Duo push wait', () => {
+  const next = displayLauncherState(payload('waiting_duo'));
+  assert.equal(next.state, 'waiting_duo');
+  assert.equal(next.showScreen, true);
+  assert.equal(next.label, '等待本人确认 Duo 推送');
+  assert.ok(next.actions.includes('cancel_login'));
+  assert.ok(next.actions.includes('reconnect'));
+  assert.ok(next.actions.includes('back_to_console'));
+});
+
+test('manual takeover on failed keeps the screen', () => {
+  const next = displayLauncherState({
+    ...payload('failed'),
+    label: '需要人工接管',
+    detail: 'manual_takeover_required:umpass_mfa_required',
+  });
+  assert.equal(next.state, 'failed');
+  assert.equal(next.showScreen, true);
+  assert.equal(next.label, '需要人工接管');
+  assert.ok(!next.actions.includes('cancel_login'));
+  assert.ok(next.actions.includes('reconnect'));
+  assert.ok(next.actions.includes('back_to_console'));
+});
+
+test('a manual reason in detail keeps the screen without the label', () => {
+  for (const detail of [
+    'manual_takeover_required:umpass_prefill_missing',
+    'manual_takeover:unrecognized_page',
+    'browser_cleanup_failed；原始原因：manual_takeover_required:umpass_autofill_protected',
+    'umpass_mfa_required',
+  ]) {
+    const next = displayLauncherState({
+      ...payload('failed'), label: '登录失败', detail,
+    });
+    assert.equal(next.state, 'failed', detail);
+    assert.equal(next.showScreen, true, detail);
+  }
+});
+
+test('a non-manual failure hides the screen', () => {
+  const next = displayLauncherState({
+    ...payload('failed'), label: '登录失败', detail: 'browser_cleanup_failed',
+  });
+  assert.equal(next.state, 'failed');
+  assert.equal(next.showScreen, false);
+});
+
+test('not_started and valid hide the screen', () => {
+  for (const state of ['not_started', 'valid']) {
+    const next = displayLauncherState(payload(state));
+    assert.equal(next.state, state, state);
+    assert.equal(next.showScreen, false, state);
+  }
+});
+
+test('the shipped launcher keeps a manual takeover screen connected', () => {
+  assert.match(LAUNCHER_JS, /waiting_duo/);
+  assert.match(LAUNCHER_JS, /需要人工接管/);
+  assert.match(LAUNCHER_JS, /next\.state === 'failed' && !next\.showScreen/);
+});
+
 test('terminal states show their own message and hide the screen', () => {
   const cases = {
     timed_out: /超时/,

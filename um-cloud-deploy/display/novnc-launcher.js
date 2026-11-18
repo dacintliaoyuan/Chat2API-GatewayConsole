@@ -31,6 +31,7 @@ const LAUNCHER_STATES = new Set([
   'not_started',
   'logging_in',
   'waiting_mfa',
+  'waiting_duo',
   'valid',
   'timed_out',
   'failed',
@@ -42,6 +43,7 @@ const LAUNCHER_LABELS = {
   not_started: '登录窗口未开始。',
   logging_in: '正在登录…',
   waiting_mfa: '等待 MFA（本人操作）',
+  waiting_duo: '等待本人确认 Duo 推送',
   valid: '登录成功，画面已收起。',
   timed_out: '登录等待已超时。',
   failed: '登录失败。',
@@ -49,7 +51,40 @@ const LAUNCHER_LABELS = {
   display_disconnected: '显示服务已断开。',
   unknown: '正在读取登录状态…',
 };
-const LAUNCHER_SCREEN_STATES = new Set(['logging_in', 'waiting_mfa']);
+// ``failed_manual`` marks ``failed`` + a terminal manual reason; the rendered
+// state stays ``failed``.
+const LAUNCHER_MANUAL_LABEL = '需要人工接管';
+const LAUNCHER_MANUAL_PREFIXES = [
+  'manual_takeover_required:',
+  'manual_takeover:',
+];
+const LAUNCHER_MANUAL_REASONS = [
+  'umpass_mfa_required',
+  'umpass_prefill_missing',
+  'umpass_autofill_protected',
+  'unrecognized_page',
+];
+const LAUNCHER_MANUAL_PATTERN = new RegExp(
+  `(?:^|[；;:\\s])(?:${LAUNCHER_MANUAL_REASONS.join('|')})(?:$|[；;\\s])`);
+const LAUNCHER_SCREEN_STATES = new Set([
+  'logging_in', 'waiting_mfa', 'waiting_duo', 'failed_manual',
+]);
+
+function isLauncherManualTakeover(raw) {
+  if (raw.label === LAUNCHER_MANUAL_LABEL) return true;
+  const detail = typeof raw.detail === 'string' ? raw.detail : '';
+  if (LAUNCHER_MANUAL_PREFIXES.some((prefix) => detail.includes(prefix))) {
+    return true;
+  }
+  return LAUNCHER_MANUAL_PATTERN.test(detail);
+}
+
+function launcherScreenState(state, raw) {
+  if (state === 'failed' && isLauncherManualTakeover(raw)) {
+    return 'failed_manual';
+  }
+  return state;
+}
 
 function displayLauncherState(payload) {
   const raw = payload && typeof payload === 'object' ? payload : {};
@@ -57,18 +92,20 @@ function displayLauncherState(payload) {
   const operator = raw.operator && typeof raw.operator === 'object'
     ? raw.operator : {};
   const actions = ['reconnect'];
-  if (state === 'logging_in' || state === 'waiting_mfa') {
+  if (state === 'logging_in' || state === 'waiting_mfa'
+      || state === 'waiting_duo') {
     actions.push('cancel_login');
   }
   if (operator.owner_present === true && operator.owned_by_me !== true) {
     actions.push('takeover');
   }
   actions.push('back_to_console');
+  const manual = state === 'failed' && isLauncherManualTakeover(raw);
   return {
     state,
-    label: LAUNCHER_LABELS[state],
+    label: manual ? LAUNCHER_MANUAL_LABEL : LAUNCHER_LABELS[state],
     actions,
-    showScreen: LAUNCHER_SCREEN_STATES.has(state),
+    showScreen: LAUNCHER_SCREEN_STATES.has(launcherScreenState(state, raw)),
   };
 }
 
@@ -202,10 +239,12 @@ function applyState(next) {
   current = next;
   render(next);
   if (next.state === 'valid' || next.state === 'display_disconnected'
-      || next.state === 'timed_out' || next.state === 'failed'
+      || next.state === 'timed_out'
+      || (next.state === 'failed' && !next.showScreen)
       || next.state === 'cancelled') {
     // Success收屏: the verified login result replaces the canvas.  A terminal
-    // state or a dead relay has no screen left to watch.
+    // state or a dead relay has no screen left to watch.  A manual takeover
+    // failure keeps the screen because the person still has to complete it.
     shouldConnect = false;
     disconnectViewer();
     return;

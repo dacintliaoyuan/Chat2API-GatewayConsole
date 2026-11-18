@@ -74,6 +74,7 @@ $script:CloudConsoleBind = '127.0.0.1'
 $script:CloudConsolePort = $CloudConsolePort
 $script:CloudConsoleTargetPort = $CloudConsolePort
 $script:CloudConsoleHealthUrl = 'http://127.0.0.1:{0}/health' -f $CloudConsolePort
+$script:CloudConsoleDisplayStateUrl = 'http://127.0.0.1:{0}/api/console/share-management/display-state' -f $CloudConsolePort
 $script:CloudConsoleConfigPath = (Join-Path $HOME '.ssh\aliyun-um-ecs.conf')
 $script:CloudConsoleHostAlias = 'um-share-ecs'
 $script:CloudConsolePublicConfigPath = (Join-Path $HOME '.ssh\aliyun-um-ecs-public.conf')
@@ -83,6 +84,15 @@ $script:CloudConsoleShortcutName = 'UM云端控制台'
 $script:CloudConsoleStatePath = (Join-Path $script:CloudConsoleRoot 'data\cloud-console-tunnel.json')
 $script:CloudConsoleLogPath = (Join-Path $script:CloudConsoleRoot 'data\cloud-console-entry.log')
 $script:CloudConsoleLockName = 'Local\UMCloudConsoleEntry'
+# A failed display-state whose reason is a terminal manual step still needs the
+# private window. The label is the display-state contract's primary marker; the
+# prefixes and bare reasons keep older instances readable (ticket #42 item 3).
+$script:CloudConsoleManualTakeoverLabel = '需要人工接管'
+$script:CloudConsoleManualTakeoverPrefixes = @('manual_takeover_required:', 'manual_takeover:')
+$script:CloudConsoleManualTakeoverReasons = @(
+    'umpass_mfa_required', 'umpass_prefill_missing',
+    'umpass_autofill_protected', 'unrecognized_page'
+)
 # Windows PowerShell 5.1 leaves $PSScriptRoot empty inside param defaults, so the
 # paths resolve here, after the root is known.
 if ([string]::IsNullOrWhiteSpace($StatePath)) { $StatePath = $script:CloudConsoleStatePath }
@@ -682,20 +692,24 @@ function Open-CloudConsoleAuthenticatedPage {
         # second destination. Avoid Trim() accepting arbitrary surrounding input.
         if ($relativeUrl -cnotmatch '\A/display/grant#console=[A-Za-z0-9_-]{16,256}(?:\r?\n)?\z') { return $failure }
         $url = 'http://localhost:' + $script:CloudConsolePort + $relativeUrl.TrimEnd("`r", "`n")
+        $snapshot = Get-CloudConsoleDisplayState -Adapter $Adapter
+        $decision = Get-CloudConsoleLoginDecision -Snapshot $snapshot
         $browser = Open-CloudConsolePage -Adapter $Adapter -Url $url
         if (-not $browser.Ok) {
             return New-CloudResult 1 '错误' 'open.browserfailed' '隧道已就绪，但打开 Edge 失败；请重新运行云端控制台入口。'
         }
-        if ($env:UM_CLOUD_CONSOLE_OPEN_LOGIN -eq '1') {
+        if ($decision.Open) {
             $login = Open-CloudConsoleDisplayGrantPage -Adapter $Adapter -SshPreflight $SshPreflight `
                 -ConfigPath $ConfigPath -HostAlias $HostAlias
             if ($login.ExitCode -ne 0) {
                 return New-CloudResult 1 '授权' 'open.loginfailed' `
-                    ('控制台已打开，但登录窗口未打开：' + $login.Message)
+                    ('控制台已打开（windows=1），但登录窗口未打开：' + $login.Message)
             }
-            return New-CloudResult 0 '入口' 'open.ready' 'SSH 隧道已就绪，已打开 UM 云端控制台和私有登录窗口。'
+            return New-CloudResult 0 '入口' 'open.ready' `
+                ("SSH 隧道已就绪，已打开 UM 云端控制台和私有登录窗口（windows=2；display-state=$($decision.State)）。")
         }
-        return New-CloudResult 0 '入口' 'open.ready' 'SSH 隧道已就绪，已打开 UM 云端控制台授权页面。'
+        return New-CloudResult 0 '入口' 'open.ready' `
+            ("SSH 隧道已就绪，已打开 UM 云端控制台（windows=1）；登录窗口未打开：$($decision.Reason)。")
     } catch {
         return $failure
     }
@@ -750,6 +764,10 @@ $script:CloudConsoleDefaultAdapter = @{
     }
     StopProcess = { param($ProcessId) Stop-CloudTunnelProcess -ProcessId $ProcessId }
     TestHealth = { param($Uri, $TimeoutSeconds) Invoke-CloudHealthRequest -Uri $Uri -TimeoutSeconds $TimeoutSeconds }
+    GetDisplayState = {
+        param($Uri, $TimeoutSeconds)
+        Invoke-CloudDisplayStateRequest -Uri $Uri -TimeoutSeconds $TimeoutSeconds
+    }
     OpenBrowser = { param($Url) Open-CloudBrowser -Url $Url }
     IssueConsoleBootstrap = {
         param($SshExe, $ArgumentLine)
@@ -1075,6 +1093,133 @@ function Wait-CloudConsoleHealthy {
     return @{ Ok = $false; ExitCode = 4; ProcessExited = $false; Event = 'open.timeout'; Pid = 0;
         CommandLine = ''; SshExe = ''; Label = '健康'
         Message = "自建隧道在 $HealthTimeoutSeconds 秒内未通过健康检查（$lastHealthDetail；$hint）；进程保留，可重试或 -Stop。" }
+}
+
+function Invoke-CloudDisplayStateRequest {
+    param([string]$Uri, [int]$TimeoutSeconds)
+    # The display-state read rides the existing SSH tunnel and the loopback
+    # health boundary. A failure is returned, never turned into a fabricated
+    # state, so the caller can keep the console open and explain the skip.
+    try {
+        $parameters = @{ Uri = $Uri; TimeoutSec = $TimeoutSeconds; UseBasicParsing = $true }
+        $command = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
+        if ($null -ne $command -and $command.Parameters.ContainsKey('NoProxy')) {
+            $parameters['NoProxy'] = $true
+        }
+        $response = Invoke-WebRequest @parameters
+        return @{
+            Ok = $true
+            StatusCode = [int]$response.StatusCode
+            Content = [string]$response.Content
+            Detail = ''
+        }
+    } catch {
+        return @{ Ok = $false; StatusCode = 0; Content = ''; Detail = $_.Exception.Message }
+    }
+}
+
+function Test-CloudConsoleManualTakeover {
+    param($Snapshot)
+    $label = [string](Get-CloudObjectProperty -Object $Snapshot -Name 'Label')
+    if ($label -eq $script:CloudConsoleManualTakeoverLabel) { return $true }
+    $details = @(
+        [string](Get-CloudObjectProperty -Object $Snapshot -Name 'Detail'),
+        [string](Get-CloudObjectProperty -Object $Snapshot -Name 'Primary')
+    )
+    foreach ($detail in $details) {
+        if ([string]::IsNullOrWhiteSpace($detail)) { continue }
+        foreach ($prefix in $script:CloudConsoleManualTakeoverPrefixes) {
+            if ($detail.Contains($prefix)) { return $true }
+        }
+        foreach ($reason in $script:CloudConsoleManualTakeoverReasons) {
+            $pattern = '(?:^|[；;:\s])' + [regex]::Escape($reason) + '(?:$|[；;\s])'
+            if ($detail -match $pattern) { return $true }
+        }
+    }
+    return $false
+}
+
+function Get-CloudConsoleDisplayState {
+    param($Adapter)
+    $response = $null
+    try { $response = & $Adapter.GetDisplayState $script:CloudConsoleDisplayStateUrl 5 }
+    catch {
+        return @{ Ok = $false; State = ''; Label = ''; Detail = ''
+            Reason = "display-state 读取失败（$($_.Exception.Message)）" }
+    }
+    if ($null -eq $response) {
+        return @{ Ok = $false; State = ''; Label = ''; Detail = ''
+            Reason = 'display-state 读取失败（无响应）' }
+    }
+    if (-not [bool](Get-CloudObjectProperty -Object $response -Name 'Ok')) {
+        $detail = [string](Get-CloudObjectProperty -Object $response -Name 'Detail')
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = '请求失败' }
+        return @{ Ok = $false; State = ''; Label = ''; Detail = $detail
+            Reason = "display-state 读取失败（$detail）" }
+    }
+    $statusCode = 0
+    try { $statusCode = [int](Get-CloudObjectProperty -Object $response -Name 'StatusCode') }
+    catch { $statusCode = 0 }
+    if ($statusCode -ne 200) {
+        return @{ Ok = $false; State = ''; Label = ''; Detail = ''
+            Reason = "display-state HTTP $statusCode（读取失败）" }
+    }
+    $content = [string](Get-CloudObjectProperty -Object $response -Name 'Content')
+    $payload = $null
+    try { $payload = $content | ConvertFrom-Json }
+    catch {
+        return @{ Ok = $false; State = ''; Label = ''; Detail = ''
+            Reason = 'display-state 响应不是 JSON（读取失败）' }
+    }
+    if ($null -eq $payload) {
+        return @{ Ok = $false; State = ''; Label = ''; Detail = ''
+            Reason = 'display-state 读取失败（响应为空）' }
+    }
+    $state = [string](Get-CloudObjectProperty -Object $payload -Name 'state')
+    $label = [string](Get-CloudObjectProperty -Object $payload -Name 'label')
+    $detail = [string](Get-CloudObjectProperty -Object $payload -Name 'detail')
+    $primary = [string](Get-CloudObjectProperty -Object $payload -Name 'auth_primary')
+    if ([string]::IsNullOrWhiteSpace($state)) {
+        return @{ Ok = $false; State = ''; Label = $label; Detail = $detail
+            Reason = 'display-state 读取失败（缺少 state）' }
+    }
+    if (-not [bool](Get-CloudObjectProperty -Object $payload -Name 'available')) {
+        $display = Get-CloudObjectProperty -Object $payload -Name 'display'
+        $displayReason = [string](Get-CloudObjectProperty -Object $display -Name 'reason')
+        if ([string]::IsNullOrWhiteSpace($displayReason)) { $displayReason = '不可用' }
+        return @{ Ok = $false; State = $state; Label = $label; Detail = $detail; Primary = $primary
+            Reason = "display-state 不可用（$displayReason）" }
+    }
+    return @{ Ok = $true; State = $state; Label = $label; Detail = $detail; Primary = $primary; Reason = '' }
+}
+
+function Get-CloudConsoleLoginDecision {
+    param($Snapshot)
+    if ($null -eq $Snapshot -or -not [bool](Get-CloudObjectProperty -Object $Snapshot -Name 'Ok')) {
+        $reason = [string](Get-CloudObjectProperty -Object $Snapshot -Name 'Reason')
+        if ([string]::IsNullOrWhiteSpace($reason)) { $reason = 'display-state 读取失败' }
+        return @{ Open = $false; State = ''; Reason = $reason }
+    }
+    $state = [string](Get-CloudObjectProperty -Object $Snapshot -Name 'State')
+    switch ($state) {
+        'waiting_mfa' {
+            return @{ Open = $true; State = $state; Reason = '等待 MFA（本人操作）' }
+        }
+        'waiting_duo' {
+            return @{ Open = $true; State = $state; Reason = '等待本人确认 Duo 推送' }
+        }
+        'failed' {
+            if (Test-CloudConsoleManualTakeover -Snapshot $Snapshot) {
+                return @{ Open = $true; State = $state; Reason = '需要人工接管' }
+            }
+        }
+    }
+    $label = [string](Get-CloudObjectProperty -Object $Snapshot -Name 'Label')
+    $reason = "display-state=$state 不需要人工登录"
+    if (-not [string]::IsNullOrWhiteSpace($label)) {
+        $reason = "display-state=$state（$label）不需要人工登录"
+    }
+    return @{ Open = $false; State = $state; Reason = $reason }
 }
 
 function Open-CloudConsolePage {
