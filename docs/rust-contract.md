@@ -599,6 +599,7 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 - gateway restart 三证据门通过才执行；先写 `restarting` 维护记录，再 stop、验证 closed、explicit start、验证 running；未确认则 `unconfirmed` 并带实际 flags，不重试强杀（`share/broker_host.py:1052-1135`）。
 - 持久记录：`lifecycle.json`、`maintenance.json`、`broker-status.json`、`share-host-desired.json`、`share-gateway.pid`。原子写 tmp + replace；写失败时生命周期转换回答 `unconfirmed`，不让内存记录声称已持久化（`share/broker_server.py:586-610,1156-1250`；`share/broker_ops.py:321-380,579-700`）。
 - broker 是 8003 的唯一 Popen 者；控制台 unit 被 `NoExecPaths` 围栏挡住，不能成为第二个启动者（`um-cloud-deploy/systemd/um-share-console.service`、`um-cloud-deploy/systemd/um-share-broker.service`）。
+- 运维重启：`systemctl restart um-share-gateway.service` 的 `ExecStop` 会先写持久停止意图（`/run/um-share/share-host-desired.json`），随后 `ExecStartPost` 的受限 `start` 被该意图拒绝，journal 只看到 `start did not confirm the host task`。重启后必须用 `sudo -u um-share /opt/um-share/bin/um-share-gatewayctl.py start-explicit` 清意图并启动，或直接走 `update.sh`（已自动调用 `start-explicit`）。`Restart=on-failure` 的崩溃重启不经过 `ExecStop`，不受此影响；`systemctl stop` 是操作员的持久停止，普通 start 必须继续拒绝。
 
 ## 8. Key 管理
 

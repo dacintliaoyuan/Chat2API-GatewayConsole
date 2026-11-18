@@ -83,6 +83,7 @@ Rust release 的 `um-share-gateway.service` 仍由 Python broker 持有唯一 Po
 | broker 状态 | `sudo -u um-share /opt/um-share/bin/um-share-gatewayctl.py status` | 必须以 `um-share` 跑；root 读 0600 的 `broker-control.key` 会报 `control_key_unusable` |
 | 8003 进程 | `cat /run/um-share/share-gateway.pid` 与 `journalctl -u um-share-gateway --since "-30 min"` | pid 文件与 broker 日志是 8003 的唯一实例证据 |
 | 停止意图 | `cat /run/um-share/share-host-desired.json` | `state=stopped, reason=manual` 时普通 start 被拒；只有 `start-explicit` 能清意图 |
+| 手动重启 | `systemctl restart um-share-gateway.service` | `ExecStop` 会写停止意图，随后 `ExecStartPost` 的受限 start 被拒，日志只看到 `start did not confirm the host task`；重启后必须 `sudo -u um-share /opt/um-share/bin/um-share-gatewayctl.py start-explicit`，或直接用 `update.sh`（已自动调用 `start-explicit`） |
 | 端口 | `ss -ltn \| grep -E ':(8097\|8003\|8002)'` | 8097 是 VNC，不是 HTTP；Python 回滚 release 为 8100/8096 |
 
 ## 安装、更新、回滚
