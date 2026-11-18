@@ -1460,7 +1460,6 @@ fn drive_login(
     let mut manual_reason: Option<String> = None;
     let mut duo_manual_since: Option<Instant> = None;
     let mut duo_manual_published = false;
-    let mut stage = String::new();
     // #101: the UMPASS form may be submitted automatically at most once per
     // round. The submit count and the observed form state are part of the status.
     let mut auto_submissions = 0usize;
