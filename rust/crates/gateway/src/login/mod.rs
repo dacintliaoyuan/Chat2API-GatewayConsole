@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::config::GatewayConfig;
-use crate::reauth::{ReauthProviderResult, ReauthenticationProvider};
+use crate::reauth::{ReauthProviderResult, ReauthTrigger, ReauthenticationProvider};
 use crate::watch::WatchStatus;
 
 use self::profile::{acquire_profile_lock, manual_display, visible_login_supported};
@@ -342,6 +342,12 @@ impl LoginProgress {
 struct Recovery {
     state: String,
     round: u64,
+    /// Why the current (or last) round started; null when no round started.
+    trigger_source: Option<String>,
+    /// When the current (or last) round started.
+    trigger_epoch: Option<f64>,
+    /// The terminal result of the last round, including the concrete reason.
+    last_outcome: Option<String>,
     session_starts: usize,
     max_sessions: usize,
     next_attempt_epoch: Option<f64>,
@@ -356,6 +362,9 @@ impl Recovery {
         json!({
             "state": self.state,
             "round": self.round,
+            "trigger_source": self.trigger_source,
+            "trigger_epoch": self.trigger_epoch,
+            "last_outcome": self.last_outcome,
             "session_starts": self.session_starts,
             "max_sessions": self.max_sessions,
             "next_attempt_epoch": self.next_attempt_epoch,
@@ -569,7 +578,12 @@ impl LoginService {
                 self.inner.condvar.notify_all();
                 return status_from_locked(&state, &self.inner.watch);
             }
-            begin_round_locked(&self.inner, &mut state, visible);
+            begin_round_locked(
+                &self.inner,
+                &mut state,
+                visible,
+                Some(ReauthTrigger::Explicit),
+            );
         }
         self.status()
     }
@@ -608,6 +622,7 @@ impl LoginService {
         state.recovery.state = "exhausted".to_string();
         state.recovery.next_attempt_epoch = None;
         state.recovery.pause_reason = Some("cancelled".to_string());
+        state.recovery.last_outcome = Some("cancelled".to_string());
         self.inner.condvar.notify_all();
         json!({
             "cancelled": true,
@@ -693,6 +708,24 @@ impl ReauthenticationProvider for LoginService {
     }
 
     fn reauthenticate(&self, deadline: Instant) -> ReauthProviderResult {
+        self.reauthenticate_round(deadline, None)
+    }
+
+    fn reauthenticate_for(
+        &self,
+        deadline: Instant,
+        trigger: ReauthTrigger,
+    ) -> ReauthProviderResult {
+        self.reauthenticate_round(deadline, Some(trigger))
+    }
+}
+
+impl LoginService {
+    fn reauthenticate_round(
+        &self,
+        deadline: Instant,
+        trigger: Option<ReauthTrigger>,
+    ) -> ReauthProviderResult {
         let session = {
             let mut state = self.inner.state.lock().expect("login state poisoned");
             if self.inner.config.browser_disabled {
@@ -751,7 +784,7 @@ impl ReauthenticationProvider for LoginService {
                         retry_after: Some(retry_after),
                     };
                 }
-                begin_round_locked(&self.inner, &mut state, false)
+                begin_round_locked(&self.inner, &mut state, false, trigger)
             }
         };
         let mut result = session.result.lock().expect("login session poisoned");
@@ -857,10 +890,14 @@ fn begin_round_locked(
     inner: &Arc<LoginInner>,
     state: &mut LoginState,
     visible: bool,
+    trigger: Option<ReauthTrigger>,
 ) -> Arc<LoginSession> {
     state.round += 1;
     state.recovery.round = state.round;
     state.recovery.state = "running".to_string();
+    state.recovery.trigger_source = trigger.map(|trigger| trigger.as_str().to_string());
+    state.recovery.trigger_epoch = Some(profile::epoch_now());
+    state.recovery.last_outcome = None;
     state.recovery.session_starts = 1;
     state.recovery.next_attempt_epoch = None;
     state.recovery.last_failure_epoch = None;
@@ -1156,6 +1193,7 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
             state.recovery.state = "idle".to_string();
             state.recovery.next_attempt_epoch = None;
             state.recovery.pause_reason = None;
+            state.recovery.last_outcome = Some(format!("verification_unknown:{reason}"));
             let now = profile::epoch_now();
             state.evidence = Evidence {
                 verdict: Some("unknown".to_string()),
@@ -1172,6 +1210,7 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
             state.primary = None;
             state.login = None;
             state.recovery.state = "idle".to_string();
+            state.recovery.last_outcome = Some("restored".to_string());
             state.recovery.next_attempt_epoch = None;
             state.recovery.last_failure_epoch = None;
             state.recovery.last_failure_reason = None;
@@ -1179,10 +1218,11 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
         }
         LoginOutcome::Cancelled { reason } => {
             state.auth_state = AuthState::Cancelled;
-            state.error = Some(reason);
+            state.error = Some(reason.clone());
             state.primary = None;
             state.login = None;
             state.recovery.state = "exhausted".to_string();
+            state.recovery.last_outcome = Some(format!("cancelled:{reason}"));
             state.recovery.next_attempt_epoch = None;
             state.recovery.pause_reason = Some("cancelled".to_string());
         }
@@ -1197,6 +1237,7 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
             state.error = Some(reason.clone());
             state.primary = None;
             state.recovery.state = "exhausted".to_string();
+            state.recovery.last_outcome = Some(reason.clone());
             state.recovery.next_attempt_epoch = None;
             state.recovery.last_failure_epoch = Some(profile::epoch_now());
             state.recovery.last_failure_reason = Some(reason.clone());
@@ -1210,6 +1251,7 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
             state.primary = None;
             state.login = None;
             state.recovery.state = "exhausted".to_string();
+            state.recovery.last_outcome = Some(format!("failed:{reason}"));
             state.recovery.next_attempt_epoch = None;
             state.recovery.last_failure_epoch = Some(profile::epoch_now());
             state.recovery.last_failure_reason = Some(reason.clone());

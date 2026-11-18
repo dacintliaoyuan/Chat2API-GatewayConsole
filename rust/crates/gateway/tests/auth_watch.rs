@@ -220,3 +220,87 @@ fn watch_login_count(behaviour: StubBehaviour, timeout: Duration, expected_reaso
     );
     provider.0.load(Ordering::SeqCst)
 }
+
+#[test]
+fn a_network_error_only_keeps_verifying_and_recovers_to_valid_without_login() {
+    let stub = StubUpstream::start();
+    stub.set(StubBehaviour {
+        drop_connection: true,
+        ..StubBehaviour::default()
+    });
+    let provider = Arc::new(CountingLogin::default());
+    let config = GatewayConfig {
+        upstream_base_url: stub.url(),
+        upstream_token: STUB_TOKEN.to_string(),
+        auth_watch_interval: Some(Duration::from_millis(100)),
+        ..GatewayConfig::default()
+    };
+    let mut server =
+        GatewayServer::start_with_reauth(config, Some(provider.clone())).expect("gateway");
+    let watch = wait_for_watch_outcome(&server, "unknown", 1);
+    assert_eq!(watch["last_round_outcome"], json!("unknown"));
+    assert_eq!(provider.0.load(Ordering::SeqCst), 0, "网络错误不能启动登录");
+    assert_eq!(
+        server.state().proxy.health_snapshot()["upstream_reachability"]["reason"],
+        json!("network_error"),
+        "必须实际走到网络错误分类"
+    );
+
+    // 恢复网络且上游接受凭据：只重新核验，不重开登录。
+    stub.set(StubBehaviour::default());
+    let watch = wait_for_watch_outcome(&server, "valid", 2);
+    assert_eq!(watch["last_round_outcome"], json!("valid"));
+    assert_eq!(provider.0.load(Ordering::SeqCst), 0);
+    server.shutdown();
+}
+
+#[test]
+fn a_network_error_then_a_rejected_probe_starts_login() {
+    let stub = StubUpstream::start();
+    stub.set(StubBehaviour {
+        drop_connection: true,
+        ..StubBehaviour::default()
+    });
+    let provider = Arc::new(CountingLogin::default());
+    let config = GatewayConfig {
+        upstream_base_url: stub.url(),
+        upstream_token: STUB_TOKEN.to_string(),
+        auth_watch_interval: Some(Duration::from_millis(100)),
+        ..GatewayConfig::default()
+    };
+    let mut server =
+        GatewayServer::start_with_reauth(config, Some(provider.clone())).expect("gateway");
+    wait_for_watch_outcome(&server, "unknown", 1);
+    assert_eq!(provider.0.load(Ordering::SeqCst), 0);
+
+    // 恢复网络后上游明确拒绝凭据：进入后台登录。
+    stub.set(StubBehaviour {
+        models_status: 401,
+        ..StubBehaviour::default()
+    });
+    let watch = wait_for_watch_outcome(&server, "rejected", 2);
+    assert_eq!(watch["last_round_outcome"], json!("rejected"));
+    assert!(provider.0.load(Ordering::SeqCst) >= 1);
+    server.shutdown();
+}
+
+fn wait_for_watch_outcome(
+    server: &ServerHandle,
+    outcome: &str,
+    min_rounds: u64,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let watch = server.state().watch.snapshot();
+        if watch["rounds"].as_u64().unwrap_or(0) >= min_rounds
+            && watch["last_round_outcome"] == json!(outcome)
+        {
+            return watch;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {outcome}: {watch}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}

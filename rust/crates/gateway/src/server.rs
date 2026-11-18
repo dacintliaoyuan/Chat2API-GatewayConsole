@@ -35,7 +35,7 @@ use crate::login::{
 use crate::messages::handle_messages;
 use crate::readonly::ProxyState;
 use crate::reauth::{
-    AuthWaitBudget, MissingLoginProvider, ReauthLimits, ReauthenticationProvider,
+    AuthWaitBudget, MissingLoginProvider, ReauthLimits, ReauthTrigger, ReauthenticationProvider,
     ReauthenticationService,
 };
 use crate::responses::handle_responses;
@@ -371,7 +371,9 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
                 .unwrap_or_else(|| state.config.role.default_auth_wait_budget());
             let mut budget = AuthWaitBudget::new(budget_limit);
             let deadline = Instant::now() + state.config.login_timeout;
-            let _ = state.reauth.trigger(&mut budget, deadline);
+            let _ = state
+                .reauth
+                .trigger(ReauthTrigger::AuthWatch, &mut budget, deadline);
         }
         watch.mark_stopped();
     })
