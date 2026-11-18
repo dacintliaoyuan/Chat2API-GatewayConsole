@@ -470,6 +470,8 @@ export class UmDataActions extends UmDataReads {
           intent: ACTION_INTENT[action],
           timeoutMs: ACTION_TIMEOUT[action],
           pollIntervalMs: 1_200,
+          onProgress: (operation) =>
+            this.applyMaintenanceProgress(action, operation),
         }
       );
       if (this.disposed) return;
@@ -484,6 +486,29 @@ export class UmDataActions extends UmDataReads {
       if (this.disposed) return;
       this.finishProgress(action, "failed", messageOf(error));
     }
+  }
+
+  /** The backend's latest step is the live progress line; the page still
+   *  keeps ONE pending entry per action and never invents a step of its own. */
+  protected applyMaintenanceProgress(
+    action: MaintenanceAction,
+    operation: Operation
+  ): void {
+    const note = operation.steps.at(-1)?.note;
+    const current = this.state.overview.progress[action];
+    if (
+      !note ||
+      !current ||
+      current.state !== "pending" ||
+      current.note === note
+    )
+      return;
+    this.patchOverview({
+      progress: {
+        ...this.state.overview.progress,
+        [action]: { ...current, note },
+      },
+    });
   }
 
   protected applyVerifyResult(result: OperationResult): void {

@@ -22,6 +22,9 @@ export interface Operation {
   cancelRequested: boolean;
   createdAt: string | null;
   finishedAt: string | null;
+  /** The backend's bounded step notes, in order; the latest is the live
+   *  progress line for a running operation. */
+  steps: { at: number; note: string }[];
 }
 
 export interface TransportRequest {

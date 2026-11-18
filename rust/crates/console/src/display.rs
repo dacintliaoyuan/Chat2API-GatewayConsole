@@ -103,6 +103,7 @@ fn display_state_of(
     let state = auth.get("state").and_then(Value::as_str);
     let error = auth.get("error").and_then(Value::as_str);
     let primary = auth.get("primary").and_then(Value::as_str);
+    let auth_label = auth.get("label").and_then(Value::as_str);
     let manual_reason = terminal_manual_reason(error, primary);
     let reason = manual_reason.clone().or_else(|| error.map(str::to_string));
     let prefixed_manual = error
@@ -160,11 +161,23 @@ fn display_state_of(
                 );
             }
             if reason.as_deref() == Some("duo_prompt_waiting") {
-                // Python `usagesrv.py`: the Duo push wait is its own state, not
-                // the generic MFA takeover state.
+                // #102: the gateway publishes `awaiting_duo` while the SAME
+                // round waits for Duo. The state is a live wait, not a
+                // terminal manual takeover; only an explicit manual reason
+                // makes it a takeover.
                 return (
                     "waiting_duo".to_string(),
-                    "等待本人确认 Duo 推送".to_string(),
+                    "正在完成 Duo 验证".to_string(),
+                    error.map(str::to_string),
+                );
+            }
+            if auth_label == Some("正在完成 Duo 验证") {
+                // #102 publishes the human-facing Duo progress as the status
+                // label while the round keeps running; the display state must
+                // show the same wait instead of a generic `logging_in`.
+                return (
+                    "waiting_duo".to_string(),
+                    "正在完成 Duo 验证".to_string(),
                     error.map(str::to_string),
                 );
             }
@@ -183,7 +196,8 @@ fn display_state_of(
             if reason
                 .as_deref()
                 .map(|reason| {
-                    reason == "duo_prompt_waiting" || LOGIN_TERMINAL_MANUAL_REASONS.contains(&reason)
+                    reason == "duo_prompt_waiting"
+                        || LOGIN_TERMINAL_MANUAL_REASONS.contains(&reason)
                 })
                 .unwrap_or(false)
             {

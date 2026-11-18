@@ -171,6 +171,15 @@ fn display_state_maps_every_python_auth_observation() {
                 "login_window_deadline_epoch": 1700000600,
                 "read_error": null,
             }),
+            "duoAuto" => json!({
+                "state": "logging_in",
+                "label": "正在完成 Duo 验证",
+                "error": null,
+                "primary": null,
+                "observed_at": 1700000000,
+                "login_window_deadline_epoch": 1700000600,
+                "read_error": null,
+            }),
             "manual" => json!({
                 "state": "failed",
                 "label": "登录失败",

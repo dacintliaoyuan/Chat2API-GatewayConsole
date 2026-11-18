@@ -2626,7 +2626,9 @@ class Handler(BaseHTTPRequestHandler):
             if manual_reason is not None and not prefixed_manual:
                 return "failed", "需要人工接管", error
             if reason == DUO_PROMPT_WAITING_REASON:
-                return "waiting_duo", "等待本人确认 Duo 推送", error
+                return "waiting_duo", "正在完成 Duo 验证", error
+            if auth.get("label") == "正在完成 Duo 验证":
+                return "waiting_duo", "正在完成 Duo 验证", error
             if reason in LOGIN_MANUAL_REASONS:
                 return "waiting_mfa", "等待 MFA（本人操作）", error
             return "logging_in", "正在登录", error

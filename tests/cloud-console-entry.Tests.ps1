@@ -1893,7 +1893,7 @@ $displayStateCases = @(
     @{ State = 'logging_in'; Label = '正在登录'; ExpectedWindows = 1 },
     @{ State = 'not_started'; Label = '未开始登录'; ExpectedWindows = 1 },
     @{ State = 'waiting_mfa'; Label = '等待 Duo 登录（本人操作）'; ExpectedWindows = 2 },
-    @{ State = 'waiting_duo'; Label = '等待本人确认 Duo 推送'; ExpectedWindows = 2 },
+    @{ State = 'waiting_duo'; Label = '正在完成 Duo 验证'; ExpectedWindows = 2 },
     @{ State = 'failed'; Label = '需要人工接管'; ExpectedWindows = 2 }
 )
 foreach ($case in $displayStateCases) {
@@ -1924,7 +1924,7 @@ foreach ($case in $displayStateCases) {
 # on-demand decision must behave the same as a cold start.
 Reset-Fake
 Add-OwnTunnel -ProcessId 4200
-Set-DisplayStatePayload -State 'waiting_duo' -Label '等待本人确认 Duo 推送'
+Set-DisplayStatePayload -State 'waiting_duo' -Label '正在完成 Duo 验证'
 $code = Invoke-Entry
 Assert-Equal $code 0 'a reusable tunnel with waiting_duo exits 0'
 Assert-Equal $script:fake.StartCalls 0 'a reusable tunnel with waiting_duo starts nothing'

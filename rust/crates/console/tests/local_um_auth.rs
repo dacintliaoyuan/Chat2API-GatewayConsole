@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::TimeZone;
 use serde_json::{json, Value};
 use um_console::config::Role;
 use um_console::ConsoleServer;
@@ -605,7 +606,7 @@ fn login_refuses_an_unknown_verification_without_opening_a_round() {
 }
 
 #[test]
-fn login_maps_duo_and_terminal_manual_rounds() {
+fn login_waits_through_duo_auto_pass_and_settles_on_valid() {
     let temp = temp();
     let gateway = FakeAdmin::start();
     let console = start_local(&temp, &gateway, running_runtime());
@@ -615,26 +616,225 @@ fn login_maps_duo_and_terminal_manual_rounds() {
         json!({"verify": "needs_login", "reason": null,
                "upstream_status": null, "checked_epoch": 1}),
     );
-    gateway.set_status(vec![json!({
-        "state": "logging_in", "error": null,
+    let duo_round = json!({
+        "state": "logging_in",
+        "label": "正在完成 Duo 验证",
+        "error": null,
+        "primary": null,
         "login": {
             "phase": "awaiting_duo",
             "origin": "https://api-1234.duosecurity.com/prompt/xyz",
-            "manual_reason": "duo_prompt_waiting",
+            "manual_reason": null,
+            "detail": "正在完成 Duo 验证",
         },
         "recovery": {"state": "running"},
-    })]);
-    let duo = submit_and_wait(&console, "account.login", json!({}));
-    assert_eq!(duo["state"], json!("failed"));
-    assert_eq!(
-        duo["error"]["code"],
-        json!("login_manual_takeover_required")
+    });
+    gateway.set_status(vec![
+        duo_round.clone(),
+        duo_round,
+        json!({
+            "state": "valid",
+            "label": "认证有效",
+            "error": null,
+            "primary": null,
+            "recovery": {"state": "idle"},
+        }),
+    ]);
+    let operation = submit_and_wait(
+        &console,
+        "account.login",
+        json!({"force": true, "visible": true, "login_budget_s": 10,
+               "poll_interval_s": 1}),
     );
-    assert_eq!(
-        duo["error"]["message"],
-        json!("登录需要本人确认 Duo 推送；本轮仍在等待，可打开可见窗口")
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    assert_eq!(operation["result"]["final_state"], json!("valid"));
+    assert_eq!(operation["result"]["login_skipped"], json!(false));
+    let steps = operation["steps"].as_array().expect("steps");
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["note"] == json!("正在完成 Duo 验证")),
+        "{operation}"
+    );
+}
+
+#[test]
+fn login_waits_for_a_duo_confirmation_and_settles_on_valid() {
+    let temp = temp();
+    let gateway = FakeAdmin::start();
+    let console = start_local(&temp, &gateway, running_runtime());
+
+    gateway.set_verify(
+        200,
+        json!({"verify": "needs_login", "reason": null,
+               "upstream_status": null, "checked_epoch": 1}),
+    );
+    gateway.set_status(vec![
+        json!({
+            "state": "logging_in",
+            "label": "登录中（需人工：duo_prompt_waiting）",
+            "error": null,
+            "primary": null,
+            "login": {
+                "phase": "awaiting_duo",
+                "origin": "https://api-1234.duosecurity.com/prompt/xyz",
+                "manual_reason": "duo_prompt_waiting",
+                "detail": "请在 Duo 页面确认本次登录",
+            },
+            "recovery": {"state": "running"},
+        }),
+        json!({
+            "state": "valid",
+            "label": "认证有效",
+            "error": null,
+            "primary": null,
+            "recovery": {"state": "idle"},
+        }),
+    ]);
+    let operation = submit_and_wait(
+        &console,
+        "account.login",
+        json!({"force": true, "visible": true, "login_budget_s": 10,
+               "poll_interval_s": 1}),
+    );
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    let steps = operation["steps"].as_array().expect("steps");
+    assert!(
+        steps.iter().any(|step| step["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("等待本人确认 Duo 推送")),
+        "{operation}"
+    );
+}
+
+#[test]
+fn login_ends_the_wait_when_the_gateway_refuses_the_start_cap() {
+    let temp = temp();
+    let gateway = FakeAdmin::start();
+    let console = start_local(&temp, &gateway, running_runtime());
+
+    gateway.set_verify(
+        200,
+        json!({"verify": "needs_login", "reason": null,
+               "upstream_status": null, "checked_epoch": 1}),
+    );
+    gateway.set_login(
+        202,
+        json!({
+            "state": "needs_login",
+            "label": "需要登录",
+            "error": "reauth_refused:global_attempt_cap",
+            "primary": null,
+            "recovery": {
+                "state": "waiting", "round": 1, "session_starts": 3,
+                "max_sessions": 3, "next_attempt_epoch": 2_000_000_000.0,
+                "pause_reason": null,
+            },
+            "login": null,
+        }),
     );
 
+    let started = Instant::now();
+    let operation = submit_and_wait(
+        &console,
+        "account.login",
+        json!({"force": true, "visible": true, "login_budget_s": 30,
+               "poll_interval_s": 1}),
+    );
+    assert_eq!(operation["state"], json!("failed"), "{operation}");
+    assert_eq!(
+        operation["error"]["code"],
+        json!("login_rate_limited"),
+        "{operation}"
+    );
+    let message = operation["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("15 分钟内已达到 3 次重登启动上限"),
+        "{message}"
+    );
+    assert!(message.contains("本地可重试时间"), "{message}");
+    let expected = chrono::Local
+        .timestamp_opt(2_000_000_000, 0)
+        .single()
+        .expect("local retry time")
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    assert!(message.contains(&expected), "{message}");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "a start-cap refusal must end the wait instead of polling"
+    );
+    assert_eq!(
+        gateway.request_count(),
+        1,
+        "a start-cap refusal must not start a second login round"
+    );
+}
+
+#[test]
+fn login_ends_the_wait_when_the_gateway_reports_the_start_cap_during_the_round() {
+    let temp = temp();
+    let gateway = FakeAdmin::start();
+    let console = start_local(&temp, &gateway, running_runtime());
+
+    gateway.set_verify(
+        200,
+        json!({"verify": "needs_login", "reason": null,
+               "upstream_status": null, "checked_epoch": 1}),
+    );
+    gateway.set_status(vec![
+        json!({
+            "state": "logging_in",
+            "error": null,
+            "login": null,
+            "recovery": {"state": "running"},
+        }),
+        json!({
+            "state": "needs_login",
+            "label": "需要登录",
+            "error": "reauth_refused:global_attempt_cap",
+            "primary": null,
+            "recovery": {
+                "state": "waiting", "round": 1, "session_starts": 3,
+                "max_sessions": 3, "next_attempt_epoch": 2_000_000_000.0,
+                "pause_reason": null,
+            },
+            "login": null,
+        }),
+    ]);
+
+    let operation = submit_and_wait(
+        &console,
+        "account.login",
+        json!({"force": true, "visible": true, "login_budget_s": 10,
+               "poll_interval_s": 1}),
+    );
+    assert_eq!(operation["state"], json!("failed"), "{operation}");
+    assert_eq!(
+        operation["error"]["code"],
+        json!("login_rate_limited"),
+        "{operation}"
+    );
+    let message = operation["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("15 分钟内已达到 3 次重登启动上限"),
+        "{message}"
+    );
+    assert!(message.contains("本地可重试时间"), "{message}");
+}
+
+#[test]
+fn login_maps_terminal_manual_rounds() {
+    let temp = temp();
+    let gateway = FakeAdmin::start();
+    let console = start_local(&temp, &gateway, running_runtime());
+
+    gateway.set_verify(
+        200,
+        json!({"verify": "needs_login", "reason": null,
+               "upstream_status": null, "checked_epoch": 1}),
+    );
     for reason in [
         "umpass_mfa_required",
         "umpass_prefill_missing",

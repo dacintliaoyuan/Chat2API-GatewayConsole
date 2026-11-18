@@ -82,6 +82,26 @@
     },
     "state": "cancelled"
    },
+   "duoAuto": {
+    "auth_error": null,
+    "auth_primary": null,
+    "available": true,
+    "detail": null,
+    "display": {
+     "available": false,
+     "reason": "display_disabled"
+    },
+    "label": "正在完成 Duo 验证",
+    "login_window_deadline_epoch": 1700000600,
+    "observed_at": 1700000000,
+    "operator": {
+     "generation": 0,
+     "owned_by_me": false,
+     "owner_present": false,
+     "stale": false
+    },
+    "state": "waiting_duo"
+   },
    "manual": {
     "auth_error": null,
     "auth_primary": null,
@@ -177,7 +197,7 @@
      "available": false,
      "reason": "display_disabled"
     },
-    "label": "等待本人确认 Duo 推送",
+    "label": "正在完成 Duo 验证",
     "login_window_deadline_epoch": 1700000600,
     "observed_at": 1700000000,
     "operator": {

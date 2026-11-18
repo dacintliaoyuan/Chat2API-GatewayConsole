@@ -188,6 +188,11 @@ export function normalizeOperation(value: unknown): Operation {
     cancelRequested: row.cancel_requested === true,
     createdAt: text(row.created_at),
     finishedAt: text(row.finished_at),
+    steps: (Array.isArray(row.steps) ? row.steps : []).flatMap((step) => {
+      const line = object(step);
+      const at = epochMs(line?.at);
+      return line && at !== null ? [{ at, note: text(line.note) ?? "" }] : [];
+    }),
   };
 }
 export function normalizeCatalog(value: unknown): Catalog {
