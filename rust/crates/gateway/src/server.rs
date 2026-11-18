@@ -325,6 +325,7 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
             .auth_watch_interval
             .unwrap_or(AUTH_WATCH_INTERVAL);
         let mut interval = base_interval;
+        state.proxy.record_next_check_after(interval);
         while !shutdown.load(Ordering::SeqCst) {
             let mut slept = Duration::ZERO;
             while slept < interval && !shutdown.load(Ordering::SeqCst) {
@@ -334,7 +335,9 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
             if shutdown.load(Ordering::SeqCst) {
                 break;
             }
-            let (_ready, snapshot) = state.proxy.readiness_snapshot();
+            let (_ready, snapshot) = state
+                .proxy
+                .readiness_snapshot_from(crate::upstream_fault::FaultSource::BackgroundProbe);
             let verdict = snapshot
                 .get("authentication")
                 .and_then(Value::as_str)
@@ -353,6 +356,7 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
                 (interval * 2).min(AUTH_WATCH_MAX_INTERVAL)
             };
             watch.record_round(verdict, next_interval);
+            state.proxy.record_next_check_after(next_interval);
             interval = next_interval;
             if verdict == "valid" {
                 continue;

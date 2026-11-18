@@ -11,6 +11,7 @@ import type {
   OperationResult,
   ReadResult,
   UmServicesPayload,
+  UmUpstreamFaultsPayload,
 } from "../../console/backend/types";
 import type {
   HistoryFilter,
@@ -28,6 +29,7 @@ import type {
   UmService,
   UmTestRecord,
   UmTrend,
+  UmUpstreamFaults,
   UmVerify,
 } from "../um-ui/contract";
 import {
@@ -50,6 +52,7 @@ import {
   thinkingSource,
   todayFrom,
   trendFrom,
+  upstreamFaultsFrom,
   verifyFrom,
 } from "./view-model";
 
@@ -142,6 +145,7 @@ export class UmDataReads extends UmDataState {
       service: beginLoad(this.state.overview.service),
       login: beginLoad(this.state.overview.login),
       verify: beginLoad(this.state.overview.verify),
+      upstream: beginLoad(this.state.overview.upstream),
       today: beginLoad(this.state.overview.today),
       trend: beginLoad(this.state.overview.trend),
       issues: { state: "loading" },
@@ -191,6 +195,7 @@ export class UmDataReads extends UmDataState {
       this.state.overview.service,
       this.state.overview.login,
       this.state.overview.verify,
+      this.state.overview.upstream,
       this.state.overview.today,
       this.state.overview.trend,
     ];
@@ -201,6 +206,7 @@ export class UmDataReads extends UmDataState {
     this.overviewLoaded = true;
     void this.roleThen(() => {
       this.readService();
+      this.readUpstreamFaults();
       this.readToday();
       this.readTrend();
       this.readLogin();
@@ -215,6 +221,16 @@ export class UmDataReads extends UmDataState {
       (load) => this.patchOverview({ service: load }),
       (signal) => this.client.readServices(signal),
       (payload) => serviceFrom(payload)
+    );
+  }
+
+  protected readUpstreamFaults(): void {
+    void this.readSection<UmUpstreamFaultsPayload, UmUpstreamFaults>(
+      "um-upstream-faults",
+      () => this.state.overview.upstream,
+      (load) => this.patchOverview({ upstream: load }),
+      (signal) => this.client.readUmUpstreamFaults(signal),
+      upstreamFaultsFrom
     );
   }
 

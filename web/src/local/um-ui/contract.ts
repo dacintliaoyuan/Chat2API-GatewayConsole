@@ -102,6 +102,42 @@ export type UmVerify = {
   at: number;
 } | null;
 
+/** One observed UM upstream failure (#103). */
+export type UmUpstreamFault = {
+  id: string;
+  /** `upstream_5xx`, `timeout`, `network_error` or `stream_error`. */
+  classification: string;
+  upstreamStatus: number | null;
+  /** A bounded, sanitized summary; `no healthy upstream` is kept verbatim. */
+  summary: string | null;
+  failures: number;
+  startedAt: number;
+  lastAt: number;
+  /** `background_probe`, `active_probe` or `business_request`. */
+  source: string;
+};
+/** One closed fault with its recovery evidence. */
+export type UmUpstreamRecovery = UmUpstreamFault & {
+  recoveredAt: number;
+  recoverySource: string;
+  recoveryStatus: number | null;
+  recoveryDetail: string | null;
+};
+/** The latest upstream probe, not a business request. */
+export type UmUpstreamCheck = {
+  at: number;
+  source: string;
+  result: string;
+  upstreamStatus: number | null;
+};
+/** The durable record the local 8000 gateway owns (#103). */
+export type UmUpstreamFaults = {
+  active: UmUpstreamFault | null;
+  history: UmUpstreamRecovery[];
+  lastCheck: UmUpstreamCheck | null;
+  nextCheckAt: number | null;
+};
+
 /** `whole_request`: output ÷ the request's whole duration, waiting included.
  *  `generation`: a measured generation phase. Neither is a first-token time. */
 export type SpeedBasis = "whole_request" | "generation";
@@ -177,6 +213,7 @@ export type UmOverview = {
   service: Load<UmService>;
   login: Load<UmLogin>;
   verify: Load<UmVerify>;
+  upstream: Load<UmUpstreamFaults>;
   today: Load<UmToday>;
   trend: Load<UmTrend>;
   /** Recent problems; the window is named in `window`, e.g. 「近 24 小时」. */
@@ -453,6 +490,7 @@ export function unwiredState(): UmViewState {
       service: { state: "unwired" },
       login: { state: "unwired" },
       verify: { state: "unwired" },
+      upstream: { state: "unwired" },
       today: { state: "unwired" },
       trend: { state: "unwired" },
       issues: { state: "unwired" },

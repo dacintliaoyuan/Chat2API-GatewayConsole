@@ -40,6 +40,10 @@ fn gateway_command(temp: &TempDir, stub: &StubUpstream) -> Command {
         .arg(temp.write("share.json", &legacy_share_config()))
         .arg("--control-token-file")
         .arg(temp.write("control.token", CONTROL_TOKEN))
+        .env(
+            "CHAT2API_UPSTREAM_FAULT_LOG",
+            temp.path().join("upstream-faults.json"),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

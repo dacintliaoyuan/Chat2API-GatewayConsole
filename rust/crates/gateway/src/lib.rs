@@ -28,6 +28,7 @@ pub mod retry;
 pub mod server;
 pub mod tls;
 pub mod upstream;
+pub mod upstream_fault;
 pub mod watch;
 
 pub use body::{read_json_body, BodyPolicy};

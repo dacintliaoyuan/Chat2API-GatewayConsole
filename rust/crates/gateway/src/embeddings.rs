@@ -8,6 +8,8 @@
 use std::net::TcpStream;
 use std::time::Instant;
 
+use serde_json::Value;
+
 use crate::body::{read_json_body, BodyPolicy};
 use crate::chat::ChatResult;
 use crate::error::ErrorProtocol;
@@ -96,6 +98,9 @@ fn handle_embeddings_inner(
                     }
                     return ChatResult::Response(last.deadline_error().response());
                 }
+                state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
@@ -120,9 +125,24 @@ fn handle_embeddings_inner(
             Ok(raw) => raw,
             Err(failure) => {
                 last.record_transport(failure);
+                state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
+        if serde_json::from_slice::<Value>(&raw)
+            .ok()
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("data"))
+            .and_then(Value::as_array)
+            .is_some_and(|data| !data.is_empty())
+        {
+            state
+                .proxy
+                .record_business_success("embeddings_completion", Some(200));
+        }
         let mut translated = Response::new(status, raw);
         for name in ["content-type", "content-length", "cache-control"] {
             if let Some(value) = response.headers.get(name) {

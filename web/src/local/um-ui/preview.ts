@@ -831,6 +831,57 @@ export function startPreview(
                 at: now - 5 * 60 * MIN,
               }
       ),
+      upstream: ready(
+        scenario === "attention"
+          ? {
+              active: {
+                id: "fault-preview",
+                classification: "upstream_5xx",
+                upstreamStatus: 503,
+                summary: "no healthy upstream",
+                failures: 3,
+                startedAt: now - 25 * MIN,
+                lastAt: now - 2 * MIN,
+                source: "background_probe",
+              },
+              history: [
+                {
+                  id: "fault-history",
+                  classification: "timeout",
+                  upstreamStatus: null,
+                  summary: null,
+                  failures: 2,
+                  startedAt: now - 3 * 60 * MIN,
+                  lastAt: now - 70 * MIN,
+                  source: "business_request",
+                  recoveredAt: now - 65 * MIN,
+                  recoverySource: "active_probe",
+                  recoveryStatus: 200,
+                  recoveryDetail: "credential_probe",
+                },
+              ],
+              lastCheck: {
+                at: now - 2 * MIN,
+                source: "background_probe",
+                result: "upstream_5xx",
+                upstreamStatus: 503,
+              },
+              nextCheckAt: now + 3 * MIN,
+            }
+          : {
+              active: null,
+              history: [],
+              lastCheck: down
+                ? null
+                : {
+                    at: now - 5 * MIN,
+                    source: "background_probe",
+                    result: "valid",
+                    upstreamStatus: 200,
+                  },
+              nextCheckAt: down ? null : now + 5 * MIN,
+            }
+      ),
       today: down
         ? {
             state: "stale",

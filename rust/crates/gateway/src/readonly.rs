@@ -19,6 +19,10 @@ use crate::error::GatewayError;
 use crate::http::Response;
 use crate::login::CredentialSink;
 use crate::tls::{self, UpstreamStream};
+use crate::upstream_fault::{
+    fault_class_of_status, summarize_error_text, FaultClass, FaultObservation, FaultSource,
+    UpstreamFaultLog,
+};
 
 pub const CHAT2API_VERSION: &str = "1.0.0";
 pub const CHAT2API_SOURCE_REV: &str = "e2d60349";
@@ -310,6 +314,7 @@ pub struct ProxyState {
     models_cache: Mutex<Option<(Instant, Value)>>,
     effort_models: Vec<String>,
     upstream: UpstreamClient,
+    faults: UpstreamFaultLog,
 }
 
 impl ProxyState {
@@ -343,29 +348,42 @@ impl ProxyState {
             models_cache: Mutex::new(None),
             effort_models: config.effort_models.clone(),
             upstream: UpstreamClient::from_config(config)?,
+            faults: UpstreamFaultLog::open(config.effective_upstream_fault_log()),
         })
     }
 
     /// One public `/api/config` observation, without the user's bearer.
     pub fn probe_config(&self) {
         let observed = self.upstream.get_json("/api/config", None);
-        let (config, failure, status) = match observed {
+        let (config, result, status, summary) = match observed {
             Ok((status, payload)) => {
                 if status == 200 {
                     match payload {
-                        Some(payload) if payload.is_object() => (Some(payload), None, Some(status)),
-                        _ => (None, Some("invalid_config_shape"), Some(status)),
+                        Some(payload) if payload.is_object() => {
+                            (Some(payload), "valid_config", Some(status), None)
+                        }
+                        _ => (None, "invalid_config_shape", Some(status), None),
                     }
                 } else if status == 401 || status == 403 {
-                    (None, Some("upstream_auth_rejected"), Some(status))
+                    (None, "upstream_rejected", Some(status), None)
                 } else if (500..=599).contains(&status) {
-                    (None, Some("upstream_5xx"), Some(status))
+                    (
+                        None,
+                        "upstream_5xx",
+                        Some(status),
+                        summarize_payload(&payload),
+                    )
                 } else {
-                    (None, Some("unexpected_status"), Some(status))
+                    (
+                        None,
+                        "unexpected_status",
+                        Some(status),
+                        summarize_payload(&payload),
+                    )
                 }
             }
-            Err(UpstreamFailure::Timeout) => (None, Some("timeout"), None),
-            Err(UpstreamFailure::ConnectionError) => (None, Some("network_error"), None),
+            Err(UpstreamFailure::Timeout) => (None, "timeout", None, None),
+            Err(UpstreamFailure::ConnectionError) => (None, "network_error", None, None),
         };
         let mut freshness = self.config_freshness.lock().expect("config poisoned");
         freshness.attempt_epoch = Some(epoch_now());
@@ -376,12 +394,20 @@ impl ProxyState {
             self.record_reachability("ok", Some("config_probe_ok"), status);
         } else {
             freshness.last_failure = Some(json!({
-                "reason": failure,
+                "reason": result,
                 "at_epoch": epoch_now(),
                 "upstream_status": status,
             }));
             self.record_reachability("unknown", Some("config_probe_failed"), status);
         }
+        drop(freshness);
+        self.faults.record_probe(
+            FaultSource::BackgroundProbe,
+            result,
+            status,
+            summary,
+            None,
+        );
     }
 
     fn config_summary(&self) -> Value {
@@ -524,7 +550,22 @@ impl ProxyState {
 
     /// Side-effect-free readiness: the current bearer must fetch a catalog.
     pub fn readiness_snapshot(&self) -> (bool, Value) {
-        let (verdict, reason, upstream_status) = self.classify_credential();
+        self.readiness_snapshot_from(FaultSource::ActiveProbe)
+    }
+
+    /// One readiness observation attributed to its real source.
+    ///
+    /// The periodic auth watch uses [`FaultSource::BackgroundProbe`]; `/ready`
+    /// and the explicit verify entry use [`FaultSource::ActiveProbe`]. The
+    /// upstream fault record is updated here, and the response shape stays the
+    /// frozen readiness contract.
+    pub fn readiness_snapshot_from(&self, source: FaultSource) -> (bool, Value) {
+        let observation = self.classify_credential();
+        let (verdict, reason, upstream_status) = (
+            observation.verdict,
+            observation.reason,
+            observation.upstream_status,
+        );
         let reachability = match reason {
             Some("timeout") | Some("network_error") => "unreachable",
             _ if verdict == "needs_login" => "unknown",
@@ -532,6 +573,13 @@ impl ProxyState {
             _ => "unknown",
         };
         self.record_reachability(reachability, reason, upstream_status);
+        self.faults.record_probe(
+            source,
+            observation.result_label(),
+            upstream_status,
+            observation.summary,
+            None,
+        );
         let ready = verdict == "valid";
         (
             ready,
@@ -546,21 +594,51 @@ impl ProxyState {
         )
     }
 
-    fn classify_credential(&self) -> (&'static str, Option<&'static str>, Option<u16>) {
+    fn classify_credential(&self) -> CredentialObservation {
         let bearer = self.bearer();
         if bearer.is_empty() {
-            return ("needs_login", Some("no_local_credential"), None);
+            return CredentialObservation {
+                verdict: "needs_login",
+                reason: Some("no_local_credential"),
+                upstream_status: None,
+                summary: None,
+            };
         }
         match self.upstream.get_json_probe("/api/models", Some(&bearer)) {
-            Err(UpstreamFailure::Timeout) => ("unknown", Some("timeout"), None),
-            Err(UpstreamFailure::ConnectionError) => ("unknown", Some("network_error"), None),
+            Err(UpstreamFailure::Timeout) => CredentialObservation {
+                verdict: "unknown",
+                reason: Some("timeout"),
+                upstream_status: None,
+                summary: None,
+            },
+            Err(UpstreamFailure::ConnectionError) => CredentialObservation {
+                verdict: "unknown",
+                reason: Some("network_error"),
+                upstream_status: None,
+                summary: None,
+            },
             Ok((status, payload)) => {
                 if status == 401 || status == 403 {
-                    ("rejected", Some("upstream_rejected"), Some(status))
+                    CredentialObservation {
+                        verdict: "rejected",
+                        reason: Some("upstream_rejected"),
+                        upstream_status: Some(status),
+                        summary: None,
+                    }
                 } else if (500..=599).contains(&status) {
-                    ("unknown", Some("upstream_5xx"), Some(status))
+                    CredentialObservation {
+                        verdict: "unknown",
+                        reason: Some("upstream_5xx"),
+                        upstream_status: Some(status),
+                        summary: summarize_payload(&payload),
+                    }
                 } else if status != 200 {
-                    ("unknown", Some("unexpected_status"), Some(status))
+                    CredentialObservation {
+                        verdict: "unknown",
+                        reason: Some("unexpected_status"),
+                        upstream_status: Some(status),
+                        summary: summarize_payload(&payload),
+                    }
                 } else if payload
                     .as_ref()
                     .and_then(Value::as_object)
@@ -568,9 +646,19 @@ impl ProxyState {
                     .and_then(Value::as_array)
                     .is_none()
                 {
-                    ("unknown", Some("invalid_catalog_shape"), Some(status))
+                    CredentialObservation {
+                        verdict: "unknown",
+                        reason: Some("invalid_catalog_shape"),
+                        upstream_status: Some(status),
+                        summary: None,
+                    }
                 } else {
-                    ("valid", None, Some(status))
+                    CredentialObservation {
+                        verdict: "valid",
+                        reason: None,
+                        upstream_status: Some(status),
+                        summary: None,
+                    }
                 }
             }
         }
@@ -616,15 +704,51 @@ impl ProxyState {
         let bearer = self.bearer();
         let observed = self.upstream.get_json("/api/models", Some(&bearer));
         let fetched = match observed {
-            Ok((200, payload)) => payload.filter(|payload| {
-                payload.is_object() && payload.get("data").and_then(Value::as_array).is_some()
-            }),
+            Ok((200, payload)) => {
+                let valid = payload.as_ref().is_some_and(|payload| {
+                    payload.is_object()
+                        && payload.get("data").and_then(Value::as_array).is_some()
+                });
+                if valid {
+                    self.faults.record_recovery(
+                        FaultSource::BusinessRequest,
+                        Some(200),
+                        "model_catalog",
+                    );
+                }
+                payload.filter(|payload| {
+                    payload.is_object() && payload.get("data").and_then(Value::as_array).is_some()
+                })
+            }
             Ok((401 | 403, _)) => {
                 return Err(GatewayError::reauthentication_required(Some(
                     "upstream_rejected",
                 )));
             }
-            _ => None,
+            Ok((status, payload)) => {
+                if let Some(class) = fault_class_of_status(status) {
+                    self.faults.record_failure(FaultObservation {
+                        class,
+                        upstream_status: Some(status),
+                        summary: summarize_payload(&payload),
+                        source: FaultSource::BusinessRequest,
+                    });
+                }
+                None
+            }
+            Err(failure) => {
+                let class = match failure {
+                    UpstreamFailure::Timeout => FaultClass::Timeout,
+                    UpstreamFailure::ConnectionError => FaultClass::NetworkError,
+                };
+                self.faults.record_failure(FaultObservation {
+                    class,
+                    upstream_status: None,
+                    summary: None,
+                    source: FaultSource::BusinessRequest,
+                });
+                None
+            }
         };
         if let Some(payload) = fetched {
             *self.models_cache.lock().expect("models cache poisoned") =
@@ -683,7 +807,50 @@ impl ProxyState {
 
     /// Whether the current bearer is accepted right now.
     pub fn credential_valid(&self) -> bool {
-        self.classify_credential().0 == "valid"
+        self.classify_credential().verdict == "valid"
+    }
+
+    /// Publish the next periodic check as an interval from now.
+    pub fn record_next_check_after(&self, interval: Duration) {
+        self.faults
+            .record_next_check(epoch_now() + interval.as_secs_f64());
+    }
+
+    /// Record contract-valid business success as recovery evidence.
+    pub fn record_business_success(&self, detail: &str, upstream_status: Option<u16>) {
+        self.faults.record_recovery(
+            FaultSource::BusinessRequest,
+            upstream_status,
+            detail,
+        );
+    }
+
+    /// Record one final business failure exactly once.
+    pub fn record_business_failure(
+        &self,
+        class: crate::upstream_fault::FaultClass,
+        upstream_status: Option<u16>,
+        summary: Option<String>,
+    ) {
+        self.faults.record_failure(FaultObservation {
+            class,
+            upstream_status,
+            summary,
+            source: FaultSource::BusinessRequest,
+        });
+    }
+
+    /// Record one final transport failure of a business request.
+    pub fn record_business_transport_failure(
+        &self,
+        failure: crate::upstream::UpstreamFailure,
+    ) {
+        let class = match failure {
+            crate::upstream::UpstreamFailure::Timeout => FaultClass::Timeout,
+            crate::upstream::UpstreamFailure::ConnectionError
+            | crate::upstream::UpstreamFailure::Protocol => FaultClass::NetworkError,
+        };
+        self.record_business_failure(class, None, None);
     }
 
     /// The current in-memory bearer.
@@ -703,15 +870,45 @@ impl ProxyState {
 
     /// The `/admin/auth/verify` single-shot observation.
     pub fn verify_snapshot(&self) -> Value {
-        let (verdict, reason, upstream_status) = self.classify_credential();
+        let observation = self.classify_credential();
+        self.faults.record_probe(
+            FaultSource::ActiveProbe,
+            observation.result_label(),
+            observation.upstream_status,
+            observation.summary,
+            None,
+        );
         json!({
-            "verify": verdict,
-            "reason": reason,
-            "upstream_status": upstream_status,
+            "verify": observation.verdict,
+            "reason": observation.reason,
+            "upstream_status": observation.upstream_status,
             "checked_epoch": epoch_now() as u64,
             "note": "single-shot upstream /api/models probe; auth state and model cache untouched",
         })
     }
+}
+
+struct CredentialObservation {
+    verdict: &'static str,
+    reason: Option<&'static str>,
+    upstream_status: Option<u16>,
+    summary: Option<String>,
+}
+
+impl CredentialObservation {
+    fn result_label(&self) -> &'static str {
+        if self.verdict == "valid" {
+            "valid"
+        } else {
+            self.reason.unwrap_or("unknown")
+        }
+    }
+}
+
+fn summarize_payload(payload: &Option<Value>) -> Option<String> {
+    payload
+        .as_ref()
+        .and_then(|payload| summarize_error_text(&payload.to_string()))
 }
 
 impl CredentialSink for ProxyState {

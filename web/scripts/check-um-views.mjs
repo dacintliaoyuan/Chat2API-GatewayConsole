@@ -961,3 +961,50 @@ test("a forced login event reaches account.login with force and visible", async 
   assert.equal(calls[0].params.force, true);
   assert.equal(calls[0].params.visible, true);
 });
+
+test("upstream fault card shows the active record, next check and recovery history", () => {
+  const overview = um.unwiredState().overview;
+  overview.upstream = ready({
+    active: {
+      id: "fault-1",
+      classification: "upstream_5xx",
+      upstreamStatus: 503,
+      summary: "no healthy upstream",
+      failures: 2,
+      startedAt: Date.UTC(2026, 10, 18, 8, 0),
+      lastAt: Date.UTC(2026, 10, 18, 8, 5),
+      source: "background_probe",
+    },
+    history: [
+      {
+        id: "fault-0",
+        classification: "timeout",
+        upstreamStatus: null,
+        summary: HOSTILE,
+        failures: 1,
+        startedAt: Date.UTC(2026, 10, 17, 8, 0),
+        lastAt: Date.UTC(2026, 10, 17, 8, 2),
+        source: "business_request",
+        recoveredAt: Date.UTC(2026, 10, 17, 8, 3),
+        recoverySource: "active_probe",
+        recoveryStatus: 200,
+        recoveryDetail: "credential_probe",
+      },
+    ],
+    lastCheck: {
+      at: Date.UTC(2026, 10, 18, 8, 5),
+      source: "background_probe",
+      result: "upstream_5xx",
+      upstreamStatus: 503,
+    },
+    nextCheckAt: Date.UTC(2026, 10, 18, 8, 10),
+  });
+  const html = um.overviewHtml(overview, { metric: "tokens", line: false }, {});
+  assert.match(html, /上游异常：upstream_5xx/);
+  assert.match(html, /HTTP 503/);
+  assert.match(html, /no healthy upstream/);
+  assert.match(html, /下次后台复查/);
+  assert.match(html, /已恢复 · timeout/);
+  assert.match(html, /恢复证据 active_probe HTTP 200/);
+  assert.doesNotMatch(html, /<img src=x/);
+});

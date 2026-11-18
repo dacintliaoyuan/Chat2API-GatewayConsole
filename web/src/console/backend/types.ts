@@ -859,6 +859,37 @@ export interface UmServiceEntry {
   processIds: number[];
 }
 
+export interface UmUpstreamFaultPayload {
+  id: string;
+  classification: string;
+  upstreamStatus: number | null;
+  summary: string | null;
+  failures: number;
+  startedAt: number;
+  lastAt: number;
+  source: string;
+}
+
+export interface UmUpstreamRecoveryPayload extends UmUpstreamFaultPayload {
+  recoveredAt: number;
+  recoverySource: string;
+  recoveryStatus: number | null;
+  recoveryDetail: string | null;
+}
+
+export interface UmUpstreamFaultsPayload {
+  active: UmUpstreamFaultPayload | null;
+  history: UmUpstreamRecoveryPayload[];
+  lastCheck: {
+    at: number;
+    source: string;
+    result: string;
+    upstreamStatus: number | null;
+  } | null;
+  nextCheckAt: number | null;
+  source: string;
+}
+
 export interface UmServicesPayload {
   services: UmServiceEntry[];
   /** Epoch milliseconds; the backend reports seconds. */

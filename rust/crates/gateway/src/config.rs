@@ -295,6 +295,10 @@ pub struct GatewayConfig {
     /// Runtime event log path (`CHAT2API_SERVICE_LOG`); `None` keeps the
     /// candidate from writing a production log file.
     pub service_log: Option<PathBuf>,
+    /// Durable UM upstream fault record path (#103). `None` keeps a candidate
+    /// in memory only; the local production role defaults to
+    /// `data/upstream-faults.json`.
+    pub upstream_fault_log: Option<PathBuf>,
     /// Request-body read budget; a stalled body gets 408 after this.
     pub body_read_timeout: Duration,
     /// Total wall-clock budget of one Chat request.
@@ -380,6 +384,7 @@ impl Default for GatewayConfig {
             nonstream_aggregate_scope: None,
             usage_log: None,
             service_log: None,
+            upstream_fault_log: None,
             body_read_timeout: Duration::from_secs(DEFAULT_BODY_READ_TIMEOUT_SECONDS),
             request_total: Duration::from_secs(DEFAULT_REQUEST_TOTAL_SECONDS),
             auth_wait_budget: None,
@@ -509,6 +514,11 @@ impl GatewayConfig {
                 config.service_log = Some(PathBuf::from(value));
             }
         }
+        if let Ok(value) = std::env::var("CHAT2API_UPSTREAM_FAULT_LOG") {
+            if !value.trim().is_empty() {
+                config.upstream_fault_log = Some(PathBuf::from(value));
+            }
+        }
         config.request_total = parse_request_total_seconds(
             std::env::var("CHAT2API_MAX_REQUEST_SECONDS")
                 .ok()
@@ -602,6 +612,19 @@ impl GatewayConfig {
     pub fn auth_wait_budget(&self) -> Duration {
         self.auth_wait_budget
             .unwrap_or_else(|| self.role.default_auth_wait_budget())
+    }
+
+    /// The durable upstream fault record path (#103).
+    ///
+    /// The local production process (8000) owns `data/upstream-faults.json` by
+    /// default; a candidate test keeps the record in memory unless it injects an
+    /// explicit path, and the cloud role never reads the local file.
+    pub fn effective_upstream_fault_log(&self) -> Option<PathBuf> {
+        crate::upstream_fault::effective_path(
+            self.upstream_fault_log.clone(),
+            self.role == Role::Local,
+            self.candidate,
+        )
     }
 
     /// Fail closed before binding a socket.
