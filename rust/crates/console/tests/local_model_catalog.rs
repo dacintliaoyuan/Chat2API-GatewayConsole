@@ -25,7 +25,6 @@ fn start_local_console(temp: &TempDataDir, gateway_port: u16) -> Console {
     config.gateway_port = gateway_port;
     config.repo_root = temp.path().to_path_buf();
     // Any Python sidecar attempt must fail loudly.
-    config.python_exe = PathBuf::from("definitely-not-python-94");
     let server =
         ConsoleServer::start_with_runtime(config, stopped_runtime()).expect("start local console");
     Console::from_server(server)
@@ -225,7 +224,6 @@ fn strict_fresh_with_the_marker_returns_the_models() {
 #[test]
 fn the_local_console_config_defaults_to_the_python_on_path() {
     let config = um_console::config::ConsoleConfig::default();
-    assert_eq!(config.python_exe, PathBuf::from("python"));
     assert_eq!(config.repo_root, PathBuf::from("."));
 }
 

@@ -65,8 +65,8 @@ const CLOUD_CAPABILITY_PREFIXES: [&str; 9] = [
 ];
 
 /// The local role's action executor: service actions run through the managed
-/// PowerShell runtime (#92), UM auth actions run in Rust (#93), and the
-/// retained model/context actions still run through the one-shot Python sidecar.
+/// PowerShell runtime (#92), UM auth actions run in Rust (#93), and the model
+/// catalog/context actions run in-process (#94). No action starts a Python child.
 struct LocalActionExecutor {
     service: crate::service_actions::LocalActionExecutor,
     auth: crate::local_um_auth::LocalActionExecutor,

@@ -22,7 +22,6 @@ fn start_local_console(temp: &TempDataDir, gateway_port: u16) -> Console {
     config.port = 8001;
     config.gateway_port = gateway_port;
     config.repo_root = temp.path().to_path_buf();
-    config.python_exe = PathBuf::from("definitely-not-python-94");
     let server =
         ConsoleServer::start_with_runtime(config, stopped_runtime()).expect("start local console");
     Console::from_server(server)

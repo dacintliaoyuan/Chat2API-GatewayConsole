@@ -45,7 +45,6 @@ fn start_local_console(temp: &TempDataDir, repo: &Path) -> Console {
     config.role = Role::Local;
     config.port = 8001;
     config.gateway_port = 8000;
-    config.python_exe = PathBuf::from("definitely-not-python-94");
     config.repo_root = repo.to_path_buf();
     config.console_lock_dir = Some(temp.path().join("console-locks"));
     let server =
@@ -192,7 +191,6 @@ fn model_actions_run_without_a_python_interpreter() {
     config.role = Role::Local;
     config.port = 8001;
     config.gateway_port = gateway.port();
-    config.python_exe = PathBuf::from("definitely-not-python-94");
     config.repo_root = repo.clone();
     let server =
         ConsoleServer::start_with_runtime(config, stopped_runtime()).expect("start local console");

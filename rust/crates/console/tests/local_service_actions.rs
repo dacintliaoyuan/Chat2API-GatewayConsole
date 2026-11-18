@@ -2,8 +2,8 @@
 //!
 //! The service identity, start/stop strategies and the cross-process service lock
 //! stay in `invoke-console-runtime-json.ps1` + `lib/gateway-runtime.ps1`. Rust
-//! invokes that entry directly and parses its one-object JSON envelope; Python is
-//! deliberately absent (`python_exe` points at a path that does not exist).
+//! invokes that entry directly and parses its one-object JSON envelope; the console
+//! no longer owns a Python interpreter at all.
 //!
 //! These tests use a fake repo root whose PowerShell entry records its argv and
 //! prints canned envelopes, so no test touches the real 8000/8001 services.
@@ -186,7 +186,6 @@ fn start_local_console(temp: &TempDataDir, repo: &Path) -> Console {
     config.port = 8001;
     config.gateway_port = 8000;
     // Python must not be involved in the service action path.
-    config.python_exe = temp.path().join("missing-python");
     config.repo_root = repo.to_path_buf();
     let server =
         ConsoleServer::start_with_runtime(config, stopped_runtime()).expect("start local console");

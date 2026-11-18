@@ -214,7 +214,6 @@ fn fake_admin_config(temp: &TempDataDir, gateway: &FakeAdmin) -> um_console::con
     std::fs::write(&control, format!("{CONTROL_TOKEN}\n")).expect("control token");
     config.control_token_file = Some(control);
     // Any accidental sidecar launch must fail: this executable does not exist.
-    config.python_exe = temp.path().join("python-must-not-run");
     config.repo_root = temp.path().to_path_buf();
     config
 }
