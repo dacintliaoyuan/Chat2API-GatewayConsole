@@ -564,6 +564,7 @@ impl LoginService {
                     state.recovery.visible = true;
                 }
                 begin_login_window(&mut state, &self.inner.config);
+                self.inner.condvar.notify_all();
                 return status_from_locked(&state, &self.inner.watch);
             }
             if state.auth_state == AuthState::Failed || state.auth_state == AuthState::Cancelled {
@@ -798,6 +799,15 @@ impl LoginService {
             }
             let now = Instant::now();
             if now >= deadline {
+                // ADR 0011: the request's own wait budget does not end the
+                // round. A live Duo manual wait is reported as such so the
+                // client retries while the account holder is still confirming.
+                if let Some(reason) = self.manual_wait_reason() {
+                    return ReauthProviderResult::Unavailable {
+                        reason,
+                        retry_after: Some(30),
+                    };
+                }
                 return ReauthProviderResult::Unavailable {
                     reason: "auth_wait_timeout".to_string(),
                     retry_after: None,
@@ -962,9 +972,17 @@ fn status_from_locked(state: &LoginState, watch: &WatchStatus) -> Value {
         .login
         .as_ref()
         .and_then(|login| login.manual_reason.clone());
+    let phase = state
+        .login
+        .as_ref()
+        .and_then(|login| login.phase.as_deref());
     let mut label = state.auth_state.label().to_string();
-    if let Some(reason) = &manual_reason {
+    if state.error.as_deref() == Some("timeout") {
+        label = "登录窗口已超时".to_string();
+    } else if let Some(reason) = &manual_reason {
         label = format!("{label}（需人工：{reason}）");
+    } else if phase == Some("awaiting_duo") {
+        label = "正在完成 Duo 验证".to_string();
     } else if state.evidence.verdict.as_deref() == Some("unknown") {
         label = format!(
             "{label}（最近一次检查无法判断：{}）",
@@ -1114,16 +1132,15 @@ fn run_round(inner: Arc<LoginInner>, round: u64, session: Arc<LoginSession>) {
                 }
             }
             LoginOutcome::Manual { reason, .. } if reason == "duo_prompt_waiting" && !visible => {
-                // ADR 0008: the headless round reached the Duo prompt; reopen
-                // the SAME cycle with a visible window instead of treating the
-                // wait as a failure.
+                // ADR 0011: a background round cannot show the Duo prompt and
+                // must not open Edge on its own. Keep this round waiting until
+                // the account holder explicitly chooses the visible continue.
                 let mut state = inner.state.lock().expect("login state poisoned");
                 if state.round != round {
                     return;
                 }
-                state.recovery.visible = true;
                 state.recovery.state = "waiting".to_string();
-                state.recovery.next_attempt_epoch = Some(profile::epoch_now());
+                state.recovery.next_attempt_epoch = None;
                 state.recovery.last_failure_epoch = None;
                 state.recovery.last_failure_reason = None;
                 state.recovery.pause_reason = None;
@@ -1133,7 +1150,7 @@ fn run_round(inner: Arc<LoginInner>, round: u64, session: Arc<LoginSession>) {
                 state.recovery.session_starts = session_starts;
                 inner.condvar.notify_all();
                 drop(state);
-                if !wait_for_retry(&inner, &session, Duration::from_secs(1)) {
+                if !wait_for_visible_continue(&inner, &session) {
                     finish(
                         &inner,
                         round,
@@ -1173,6 +1190,25 @@ fn wait_for_retry(inner: &Arc<LoginInner>, session: &Arc<LoginSession>, wait: Du
             .expect("login session poisoned");
     }
     true
+}
+
+/// Wait until the account holder chooses the visible continue, cancels the
+/// round, or the service shuts down.
+fn wait_for_visible_continue(inner: &Arc<LoginInner>, session: &Arc<LoginSession>) -> bool {
+    loop {
+        if session.cancel.load(Ordering::SeqCst) {
+            return false;
+        }
+        let state = inner.state.lock().expect("login state poisoned");
+        if state.shutdown || state.recovery.visible {
+            return !state.shutdown;
+        }
+        let (state, _) = inner
+            .condvar
+            .wait_timeout(state, Duration::from_millis(250))
+            .expect("login state poisoned");
+        drop(state);
+    }
 }
 
 fn session_finish(session: &Arc<LoginSession>, outcome: LoginOutcome) {
@@ -1368,6 +1404,7 @@ fn drive_login(
             "navigation_failed",
             Some(&inner.config.base_url),
             None,
+            None,
         );
     }
 
@@ -1379,7 +1416,8 @@ fn drive_login(
     let mut clicks = HashMap::new();
     let mut stage_seen: HashMap<String, Instant> = HashMap::new();
     let mut manual_reason: Option<String> = None;
-    let mut stage = String::new();
+    let mut duo_manual_since: Option<Instant> = None;
+    let mut duo_manual_published = false;
 
     while Instant::now() < deadline {
         if session.cancel.load(Ordering::SeqCst) {
@@ -1434,7 +1472,7 @@ fn drive_login(
             return outcome;
         }
         let host = url_host(&url);
-        stage = if !url.is_empty() && url_origin(&url) == url_origin(&inner.config.base_url) {
+        let stage = if !url.is_empty() && url_origin(&url) == url_origin(&inner.config.base_url) {
             "openwebui".to_string()
         } else if UMPASS_SSO_HOSTS
             .iter()
@@ -1453,15 +1491,52 @@ fn drive_login(
         if stage == "duo" {
             stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
             idle_deadline = Instant::now() + inner.config.idle_timeout;
-            // ADR 0008: the wait is visible to a request-side auth wait as
-            // the soft `duo_prompt_waiting` reason, never a timeout.
-            note_progress(
-                inner,
-                round,
-                "awaiting_duo",
-                Some(&url),
-                Some("duo_prompt_waiting"),
-            );
+            // ADR 0011: entering Duo only publishes progress. A trusted
+            // device passes through without any interaction, so a manual reason
+            // requires positive page evidence that persists past the short
+            // transition window; the request-side auth wait must never mistake
+            // the transition for a live manual wait.
+            if page.duo_requires_confirmation() {
+                let since = *duo_manual_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= inner.config.click_observe_timeout {
+                    if !duo_manual_published {
+                        duo_manual_published = true;
+                        note_progress(
+                            inner,
+                            round,
+                            "awaiting_duo",
+                            Some(&url),
+                            Some("duo_prompt_waiting"),
+                            Some("请在 Duo 页面确认本次登录"),
+                        );
+                    }
+                    if !visible {
+                        return LoginOutcome::Manual {
+                            reason: "duo_prompt_waiting".to_string(),
+                        };
+                    }
+                } else {
+                    note_progress(
+                        inner,
+                        round,
+                        "awaiting_duo",
+                        Some(&url),
+                        None,
+                        Some("正在完成 Duo 验证"),
+                    );
+                }
+            } else {
+                duo_manual_since = None;
+                duo_manual_published = false;
+                note_progress(
+                    inner,
+                    round,
+                    "awaiting_duo",
+                    Some(&url),
+                    None,
+                    Some("正在完成 Duo 验证"),
+                );
+            }
         } else if stage == "unknown" {
             stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
             return stop_for_manual(inner, round, page, "unrecognized_page");
@@ -1477,6 +1552,7 @@ fn drive_login(
                     "manual_takeover",
                     Some(&url),
                     manual_reason.as_deref(),
+                    None,
                 );
             } else if let Some(target) = page.one_visible(&OPENWEBUI_SSO_BUTTON_SELECTORS) {
                 *count += 1;
@@ -1491,7 +1567,7 @@ fn drive_login(
                     }
                     ClickOutcome::Swallowed => {}
                 }
-                note_progress(inner, round, "openwebui_clicked", Some(&url), None);
+                note_progress(inner, round, "openwebui_clicked", Some(&url), None, None);
             } else {
                 let settled = stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
                 if settled.elapsed() >= inner.config.stage_settle_timeout {
@@ -1502,6 +1578,7 @@ fn drive_login(
                         "manual_takeover",
                         Some(&url),
                         manual_reason.as_deref(),
+                        None,
                     );
                 }
             }
@@ -1527,6 +1604,7 @@ fn drive_login(
                     "manual_takeover",
                     Some(&url),
                     manual_reason.as_deref(),
+                    None,
                 );
             } else if page.any_visible(&UMPASS_MFA_SELECTORS) {
                 return stop_for_manual(inner, round, page, "umpass_mfa_required");
@@ -1558,6 +1636,7 @@ fn drive_login(
                                 "waiting_for_credentials",
                                 Some(&url),
                                 Some(reason),
+                                None,
                             );
                         } else {
                             return stop_for_manual(inner, round, page, reason);
@@ -1589,7 +1668,7 @@ fn drive_login(
                     }
                     ClickOutcome::Swallowed => {}
                 }
-                note_progress(inner, round, "umpass_submitted", Some(&url), None);
+                note_progress(inner, round, "umpass_submitted", Some(&url), None, None);
                 if let Some(outcome) = check_login_window(page, visible) {
                     return outcome;
                 }
@@ -1608,6 +1687,7 @@ fn drive_login(
                         "manual_takeover",
                         Some(&url),
                         manual_reason.as_deref(),
+                        None,
                     );
                 }
             }
@@ -1621,9 +1701,9 @@ fn drive_login(
         }
     }
 
-    if manual_reason.is_none() && stage == "duo" {
-        manual_reason = Some("duo_prompt_waiting".to_string());
-    }
+    // A round that runs out of its total budget reports the real result. A Duo
+    // prompt that was still waiting is progress evidence, not a guess that the
+    // account holder failed to confirm.
     let reason = manual_reason.unwrap_or_else(|| "timeout".to_string());
     LoginOutcome::Manual {
         reason: reason.clone(),
@@ -1689,7 +1769,14 @@ fn stop_for_manual(
     reason: &str,
 ) -> LoginOutcome {
     let url = page.url();
-    note_progress(inner, round, "manual_takeover", Some(&url), Some(reason));
+    note_progress(
+        inner,
+        round,
+        "manual_takeover",
+        Some(&url),
+        Some(reason),
+        None,
+    );
     LoginOutcome::Manual {
         reason: format!("{MANUAL_TAKEOVER_REQUIRED_PREFIX}{reason}"),
     }
@@ -1701,6 +1788,7 @@ fn note_progress(
     phase: &str,
     origin: Option<&str>,
     manual_reason: Option<&str>,
+    detail: Option<&str>,
 ) {
     let mut state = inner.state.lock().expect("login state poisoned");
     if state.round != round {
@@ -1713,7 +1801,7 @@ fn note_progress(
         phase: Some(phase.to_string()),
         origin,
         manual_reason: manual_reason.map(str::to_string),
-        detail: None,
+        detail: detail.map(str::to_string),
     });
     if let Some(reason) = manual_reason {
         if LOGIN_TERMINAL_MANUAL_REASONS.contains(&reason) {

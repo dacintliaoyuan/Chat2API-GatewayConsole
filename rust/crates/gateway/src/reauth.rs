@@ -227,7 +227,8 @@ pub trait ReauthenticationProvider: Send + Sync {
     }
 
     /// The live manual wait a request-side auth wait may report instead of a
-    /// timeout (ADR 0008: a Duo push wait is not a request timeout).
+    /// timeout (ADR 0011: only positive Duo page evidence is a manual wait; a
+    /// trusted-device auto-pass stays a normal in-flight round).
     fn manual_wait_reason(&self) -> Option<String> {
         None
     }

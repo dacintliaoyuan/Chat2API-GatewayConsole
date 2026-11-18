@@ -33,6 +33,24 @@ const LINUX_BROWSER_NAMES: [&str; 4] = [
 ];
 const WINDOWS_EDGE_ROOTS: [&str; 3] = ["PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"];
 
+/// Visible Duo controls that only the account holder can use.
+///
+/// A trusted device may pass through the Duo page on its own. Only a control that
+/// asks the person to approve a push, choose a method or enter a code is positive
+/// evidence that the round must wait for the account holder.
+pub const DUO_CONFIRMATION_SELECTORS: [&str; 10] = [
+    "button:has-text(\"Send me a Push\")",
+    "button:has-text(\"Call Me\")",
+    "button:has-text(\"Yes, this is my device\")",
+    "a:has-text(\"Enter a Passcode\")",
+    "a:has-text(\"Other options\")",
+    "body :has-text(\"Check for a Duo Push\")",
+    "body :has-text(\"Waiting for you to approve\")",
+    "body :has-text(\"Is this your device?\")",
+    "body :has-text(\"Choose an authentication method\")",
+    "body :has-text(\"Approve with Duo Mobile\")",
+];
+
 /// The browser binary could not be resolved at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserUnavailable {
@@ -86,6 +104,14 @@ pub trait LoginPage: Send {
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget>;
     fn click(&self, target: &VisibleTarget) -> Result<(), String>;
     fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String>;
+    /// Positive page evidence that Duo waits for the account holder.
+    ///
+    /// Absence of evidence is not a manual prompt: a trusted device may pass
+    /// through Duo without any interaction. Implementations must only report
+    /// `true` for controls or text that ask the person to act.
+    fn duo_requires_confirmation(&self) -> bool {
+        false
+    }
 }
 
 /// One launched browser and its page.
@@ -622,6 +648,10 @@ impl LoginPage for RealPage {
             Ok(_) => Err("login field disappeared".to_string()),
             Err(error) => Err(error),
         }
+    }
+
+    fn duo_requires_confirmation(&self) -> bool {
+        self.any_visible(&DUO_CONFIRMATION_SELECTORS)
     }
 }
 
