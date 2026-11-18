@@ -555,7 +555,11 @@ impl LoginService {
                 self.inner.condvar.notify_all();
                 return status_from_locked(&state, &self.inner.watch);
             }
-            if active_round(&state) {
+            // Only a live login task owns the round. A refusal gate also leaves
+            // `recovery.state = waiting`, but without a session; it must fall
+            // through and re-check the budget so a released window accepts the
+            // explicit request directly.
+            if active_round(&state) && state.session.is_some() {
                 if visible {
                     state.recovery.visible = true;
                 }
