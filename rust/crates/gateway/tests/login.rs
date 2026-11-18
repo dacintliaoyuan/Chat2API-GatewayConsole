@@ -14,21 +14,21 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use um_gateway::config::GatewayConfig;
+use um_gateway::config::{GatewayConfig, Role};
 use um_gateway::login::{
     BrowserUnavailable, CredentialField, CredentialProbe, CredentialSink, CredentialVerdict,
-    HttpCredentialProbe, LaunchRequest, LoginBrowser, LoginBrowserFactory, LoginConfig, LoginFailure,
-    LoginPage, LoginService, VisibleTarget,
+    HttpCredentialProbe, LaunchRequest, LoginBrowser, LoginBrowserFactory, LoginConfig,
+    LoginFailure, LoginPage, LoginService, VisibleTarget,
 };
 use um_gateway::reauth::{
-    AuthWaitBudget, ReauthLimits, ReauthProviderResult, ReauthResult, ReauthenticationProvider,
-    ReauthenticationService,
+    AuthWaitBudget, ReauthLimits, ReauthProviderResult, ReauthResult, ReauthTrigger,
+    ReauthenticationProvider, ReauthenticationService,
 };
-use um_gateway::GatewayServer;
+use um_gateway::{GatewayServer, ServerHandle};
 
 use support::{
-    client_request, legacy_share_config, ClientRequest, StubUpstream, TempDir, CONTROL_TOKEN,
-    SHARE_SECRET, STUB_TOKEN,
+    client_request, legacy_share_config, ChatAttempt, ChatStub, ClientRequest, StubUpstream,
+    TempDir, CONTROL_TOKEN, SHARE_SECRET, STUB_TOKEN,
 };
 
 struct FakePage {
@@ -83,6 +83,10 @@ impl FakePage {
 
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+    }
+
+    fn set_token(&self, token: Option<&str>) {
+        *self.token.lock().expect("fake token") = token.map(str::to_string);
     }
 
     fn drop_calls(&self) -> usize {
@@ -983,7 +987,11 @@ fn the_auth_wait_budget_times_out_without_stopping_the_round() {
     };
     let reauth = ReauthenticationService::new(service.clone(), limits);
     let mut budget = AuthWaitBudget::new(Duration::from_millis(50));
-    let result = reauth.trigger(&mut budget, Instant::now() + Duration::from_secs(2));
+    let result = reauth.trigger(
+        ReauthTrigger::BusinessRequest,
+        &mut budget,
+        Instant::now() + Duration::from_secs(2),
+    );
     assert_eq!(
         result,
         ReauthResult::Unavailable {
@@ -1272,4 +1280,415 @@ fn a_saved_token_is_loaded_and_used_by_the_default_assembly() {
         request.path == "/api/models"
             && request.authorization.as_deref() == Some("Bearer saved-token")
     }));
+}
+
+// ---------------------------------------------------------------------------
+// #99: one shared background re-authentication round for business 401s and the
+// periodic auth watch. The trigger source and round id are real observations;
+// nothing here opens a visible Edge window.
+// ---------------------------------------------------------------------------
+
+fn chat_request() -> ClientRequest {
+    ClientRequest::post(
+        "/v1/chat/completions",
+        &json!({
+            "model": "fixture-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 16,
+        })
+        .to_string(),
+    )
+    .header("Content-Type", "application/json")
+}
+
+fn chat_success() -> Value {
+    json!({
+        "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    })
+}
+
+fn reauth_gateway_config(temp: &TempDir, upstream_url: &str) -> GatewayConfig {
+    let mut config = GatewayConfig {
+        role: Role::Local,
+        upstream_base_url: upstream_url.to_string(),
+        upstream_token: STUB_TOKEN.to_string(),
+        control_token_file: Some(temp.write("control.token", CONTROL_TOKEN)),
+        token_file: Some(temp.path().join("token.json")),
+        profile_dir: Some(temp.path().join("profile")),
+        login_display_file: Some(temp.path().join("login-display.env")),
+        login_timeout: Duration::from_secs(5),
+        login_idle_timeout: Duration::from_secs(1),
+        login_poll_interval: Duration::from_millis(5),
+        login_click_observe_timeout: Duration::from_millis(20),
+        login_stage_settle_timeout: Duration::from_millis(20),
+        login_navigation_attempts: 1,
+        // Business-path tests must not be raced by the periodic watch.
+        auth_watch_interval: Some(Duration::from_secs(300)),
+        ..GatewayConfig::default()
+    };
+    config.candidate = true;
+    config
+}
+
+fn auth_status(server: &ServerHandle) -> Value {
+    client_request(
+        server.addr(),
+        &ClientRequest::get("/admin/auth/status").header("X-Admin-Control", CONTROL_TOKEN),
+    )
+    .expect("auth status")
+    .json()
+}
+
+fn wait_for_status(server: &ServerHandle, predicate: impl Fn(&Value) -> bool) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let status = auth_status(server);
+        if predicate(&status) {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for auth status: {status}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_chat_attempts(stub: &ChatStub, count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while stub.seen().len() < count {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {count} chat attempts"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_business_401_starts_one_background_round_and_later_requests_use_the_restored_credential() {
+    let temp = TempDir::new("um-rust-reauth-round-business-");
+    let stub = ChatStub::start();
+    stub.push_all(vec![
+        ChatAttempt::HttpStatus {
+            status: 401,
+            body: "upstream rejected".to_string(),
+            retry_after: None,
+        },
+        ChatAttempt::Json {
+            status: 200,
+            body: chat_success(),
+        },
+        ChatAttempt::Json {
+            status: 200,
+            body: chat_success(),
+        },
+    ]);
+    let page = FakePage::new("http://127.0.0.1:9", Some("fresh-token"));
+    let factory = FakeFactory::new(page);
+    let config = reauth_gateway_config(&temp, &stub.url());
+    let server = GatewayServer::start_with_login(config, factory.clone(), ScriptedProbe::valid())
+        .expect("start reauth gateway");
+
+    let status = auth_status(&server);
+    assert_eq!(status["recovery"]["round"], json!(0), "{status}");
+    assert_eq!(
+        status["recovery"]["trigger_source"],
+        Value::Null,
+        "未触发时不得伪造触发来源: {status}"
+    );
+    assert_eq!(status["recovery"]["last_outcome"], Value::Null, "{status}");
+
+    let first = client_request(server.addr(), &chat_request()).expect("business 401");
+    assert_eq!(
+        first.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&first.body)
+    );
+
+    let status = auth_status(&server);
+    assert_eq!(status["state"], json!("valid"), "{status}");
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["recovery"]["trigger_source"],
+        json!("business_request"),
+        "{status}"
+    );
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("restored"),
+        "{status}"
+    );
+    assert_eq!(status["evidence"]["source"], json!("login"), "{status}");
+    assert_eq!(factory.requests().len(), 1);
+    assert!(!factory.requests()[0].headful, "自动恢复不得打开可见 Edge");
+    let seen = stub.seen();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    let old_bearer = format!("Bearer {STUB_TOKEN}");
+    assert_eq!(seen[0].authorization.as_deref(), Some(old_bearer.as_str()));
+    assert_eq!(seen[1].authorization.as_deref(), Some("Bearer fresh-token"));
+
+    let later = client_request(server.addr(), &chat_request()).expect("later request");
+    assert_eq!(later.status, 200);
+    let seen = stub.seen();
+    assert_eq!(seen.len(), 3);
+    assert_eq!(seen[2].authorization.as_deref(), Some("Bearer fresh-token"));
+    assert_eq!(factory.requests().len(), 1, "后续请求不得再启动浏览器");
+    let status = auth_status(&server);
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["recovery"]["trigger_source"],
+        json!("business_request"),
+        "{status}"
+    );
+}
+
+#[test]
+fn a_watch_round_and_business_401s_share_one_background_round_and_one_browser() {
+    let temp = TempDir::new("um-rust-reauth-round-overlap-");
+    let stub = ChatStub::start();
+    stub.push_all(vec![
+        ChatAttempt::HttpStatus {
+            status: 401,
+            body: "upstream rejected".to_string(),
+            retry_after: None,
+        },
+        ChatAttempt::HttpStatus {
+            status: 401,
+            body: "upstream rejected".to_string(),
+            retry_after: None,
+        },
+        ChatAttempt::Json {
+            status: 200,
+            body: chat_success(),
+        },
+        ChatAttempt::Json {
+            status: 200,
+            body: chat_success(),
+        },
+    ]);
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    let factory = FakeFactory::new(page.clone());
+    let mut config = reauth_gateway_config(&temp, &stub.url());
+    // The watch probe carries the same rejected credential, so the first watch
+    // round starts the background round without a business request.
+    config.upstream_token = "rejected-token".to_string();
+    config.auth_watch_interval = Some(Duration::from_millis(100));
+    let server = GatewayServer::start_with_login(config, factory.clone(), ScriptedProbe::valid())
+        .expect("start reauth gateway");
+
+    let status = wait_for_status(&server, |status| {
+        status["recovery"]["round"] == json!(1) && status["state"] == json!("logging_in")
+    });
+    assert_eq!(
+        status["recovery"]["trigger_source"],
+        json!("auth_watch"),
+        "{status}"
+    );
+    assert_eq!(factory.requests().len(), 1);
+
+    // Repeated status reads and an explicit join must not open another round.
+    for _ in 0..5 {
+        let queried = auth_status(&server);
+        assert_eq!(queried["recovery"]["round"], json!(1), "{queried}");
+    }
+    let joined = client_request(
+        server.addr(),
+        &ClientRequest::post("/admin/auth/login", &json!({"visible": false}).to_string())
+            .header("X-Admin-Control", CONTROL_TOKEN)
+            .json_body(&json!({"visible": false}).to_string()),
+    )
+    .expect("join explicit login");
+    assert_eq!(joined.status, 202);
+    assert_eq!(joined.json()["recovery"]["round"], json!(1));
+    assert_eq!(factory.requests().len(), 1);
+
+    let addr = server.addr();
+    let first = thread::spawn(move || client_request(addr, &chat_request()));
+    let second = thread::spawn(move || client_request(addr, &chat_request()));
+    // Both business 401s must be waiting on the watch round before it restores;
+    // otherwise the first retry could finish and hide a duplicate round.
+    wait_for_chat_attempts(&stub, 2);
+    assert_eq!(factory.requests().len(), 1);
+    page.set_token(Some("fresh-token"));
+
+    let first = first
+        .join()
+        .expect("first request thread")
+        .expect("first request");
+    let second = second
+        .join()
+        .expect("second request thread")
+        .expect("second request");
+    assert_eq!(
+        first.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&first.body)
+    );
+    assert_eq!(
+        second.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&second.body)
+    );
+
+    let status = wait_for_status(&server, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["recovery"]["trigger_source"],
+        json!("auth_watch"),
+        "{status}"
+    );
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("restored"),
+        "{status}"
+    );
+    assert_eq!(
+        factory.requests().len(),
+        1,
+        "并发请求和巡检重叠时只能有一个浏览器实例"
+    );
+    assert!(!factory.requests()[0].headful);
+    let seen = stub.seen();
+    assert_eq!(seen.len(), 4, "{seen:?}");
+    let rejected = "Bearer rejected-token".to_string();
+    let restored = "Bearer fresh-token".to_string();
+    assert_eq!(seen[0].authorization.as_deref(), Some(rejected.as_str()));
+    assert_eq!(seen[1].authorization.as_deref(), Some(rejected.as_str()));
+    assert_eq!(seen[2].authorization.as_deref(), Some(restored.as_str()));
+    assert_eq!(seen[3].authorization.as_deref(), Some(restored.as_str()));
+}
+
+#[test]
+fn a_rejected_watch_probe_starts_one_background_round_with_its_source() {
+    let temp = TempDir::new("um-rust-reauth-round-watch-");
+    let stub = ChatStub::start();
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    let factory = FakeFactory::new(page.clone());
+    let mut config = reauth_gateway_config(&temp, &stub.url());
+    config.upstream_token = "rejected-token".to_string();
+    config.auth_watch_interval = Some(Duration::from_millis(100));
+    let server = GatewayServer::start_with_login(config, factory.clone(), ScriptedProbe::valid())
+        .expect("start reauth gateway");
+
+    let status = wait_for_status(&server, |status| {
+        status["recovery"]["round"] == json!(1) && status["state"] == json!("logging_in")
+    });
+    assert_eq!(
+        status["recovery"]["trigger_source"],
+        json!("auth_watch"),
+        "{status}"
+    );
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        Value::Null,
+        "轮次尚未结束不得预写结果: {status}"
+    );
+    assert_eq!(factory.requests().len(), 1);
+    assert!(
+        !factory.requests()[0].headful,
+        "巡检触发的自动轮次不得打开可见 Edge"
+    );
+
+    page.set_token(Some("fresh-token"));
+    let status = wait_for_status(&server, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["recovery"]["trigger_source"],
+        json!("auth_watch"),
+        "{status}"
+    );
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("restored"),
+        "{status}"
+    );
+    assert_eq!(factory.requests().len(), 1);
+}
+
+#[test]
+fn a_background_manual_takeover_keeps_the_reason_and_opens_no_edge_until_the_visible_action() {
+    let temp = TempDir::new("um-rust-reauth-round-manual-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::HttpStatus {
+        status: 401,
+        body: "upstream rejected".to_string(),
+        retry_after: None,
+    });
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") =
+        vec![("https://unexpected.example/login".to_string(), None)];
+    let factory = FakeFactory::new(page.clone());
+    let config = reauth_gateway_config(&temp, &stub.url());
+    let server = GatewayServer::start_with_login(config, factory.clone(), ScriptedProbe::valid())
+        .expect("start reauth gateway");
+
+    let response = client_request(server.addr(), &chat_request()).expect("business 401");
+    assert_eq!(response.status, 503);
+    assert_eq!(
+        response.json()["error"]["reason"],
+        json!("manual_takeover_required:unrecognized_page")
+    );
+
+    let status = auth_status(&server);
+    assert_eq!(status["state"], json!("failed"), "{status}");
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["recovery"]["trigger_source"],
+        json!("business_request"),
+        "{status}"
+    );
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("manual_takeover_required:unrecognized_page"),
+        "{status}"
+    );
+    assert_eq!(
+        status["recovery"]["pause_reason"],
+        json!("manual_takeover_required:unrecognized_page"),
+        "{status}"
+    );
+    assert_eq!(
+        status["login"]["manual_reason"],
+        json!("unrecognized_page"),
+        "{status}"
+    );
+    assert_eq!(factory.requests().len(), 1);
+    assert!(
+        !factory.requests()[0].headful,
+        "人工接管前不得打开可见 Edge"
+    );
+
+    // The explicit visible action is the only thing that opens Edge, and it
+    // starts a NEW round instead of reusing the finished background one.
+    page.closed.store(false, Ordering::SeqCst);
+    let visible = client_request(
+        server.addr(),
+        &ClientRequest::post("/admin/auth/login", &json!({"visible": true}).to_string())
+            .header("X-Admin-Control", CONTROL_TOKEN)
+            .json_body(&json!({"visible": true}).to_string()),
+    )
+    .expect("visible login");
+    assert_eq!(visible.status, 202);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while factory.requests().len() < 2 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(factory.requests().len(), 2);
+    assert!(
+        factory.requests()[1].headful,
+        "显式可见登录必须打开可见 Edge"
+    );
+    let status = auth_status(&server);
+    assert_eq!(status["recovery"]["round"], json!(2), "{status}");
+    assert_eq!(
+        status["recovery"]["trigger_source"],
+        json!("explicit"),
+        "{status}"
+    );
 }

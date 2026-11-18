@@ -157,6 +157,9 @@ pub struct StubBehaviour {
     pub models_body: Option<Value>,
     pub version_status: u16,
     pub version_body: Option<Value>,
+    /// Accept the request and close without answering: a network error that is
+    /// distinct from a slow response (timeout) and from an HTTP status.
+    pub drop_connection: bool,
 }
 
 impl Default for StubBehaviour {
@@ -167,6 +170,7 @@ impl Default for StubBehaviour {
             models_body: None,
             version_status: 200,
             version_body: None,
+            drop_connection: false,
         }
     }
 }
@@ -207,6 +211,7 @@ impl StubUpstream {
             })),
             version_status: 200,
             version_body: Some(json!({"version": "0.7.0-fixture"})),
+            drop_connection: false,
         }));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let worker_shutdown = Arc::clone(&shutdown);
@@ -295,6 +300,11 @@ fn serve_stub(
         body: request.body.clone(),
     });
     let behaviour = behaviour.lock().expect("stub behaviour").clone();
+    if behaviour.drop_connection {
+        // Close without a response: the client sees a network error, not a
+        // timeout and not an HTTP status.
+        return Ok(());
+    }
     let (status, payload) = if path == "/api/config" {
         (
             200,
@@ -989,20 +999,30 @@ fn serve_chat(
         .unwrap_or_default()
         .to_string();
     if request.method == "GET" {
-        let payload = if path == "/api/config" {
-            json!({
-                "name": "Open WebUI",
-                "version": "0.7.0-fixture",
-                "features": {"enable_api_keys": false},
-                "oauth": {"providers": {"fixture-sso": {}}},
-            })
+        let (status, payload) = if path == "/api/config" {
+            (
+                200,
+                json!({
+                    "name": "Open WebUI",
+                    "version": "0.7.0-fixture",
+                    "features": {"enable_api_keys": false},
+                    "oauth": {"providers": {"fixture-sso": {}}},
+                }),
+            )
+        } else if path == "/api/models"
+            && request
+                .header("authorization")
+                .is_some_and(|value| value.contains("rejected-token"))
+        {
+            (401, json!({"detail": "rejected"}))
         } else {
-            json!({"object": "list", "data": []})
+            (200, json!({"object": "list", "data": []}))
         };
         let raw = serde_json::to_vec(&payload).unwrap_or_default();
         let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+            "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n\r\n",
+            if status == 200 { "OK" } else { "Error" },
             raw.len()
         );
         stream.write_all(head.as_bytes())?;

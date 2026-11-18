@@ -190,6 +190,30 @@ impl From<ReauthProviderResult> for ReauthResult {
     }
 }
 
+/// Why one automatic re-authentication round started.
+///
+/// The source belongs to the round, not to each trigger: a business request that
+/// joins a watch-started round does not rewrite where the round came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReauthTrigger {
+    /// A business request received an explicit upstream authentication rejection.
+    BusinessRequest,
+    /// The periodic auth watch confirmed the credential is missing or rejected.
+    AuthWatch,
+    /// The operator explicitly asked for a login round.
+    Explicit,
+}
+
+impl ReauthTrigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BusinessRequest => "business_request",
+            Self::AuthWatch => "auth_watch",
+            Self::Explicit => "explicit",
+        }
+    }
+}
+
 /// The seam a real browser login plugs into.
 pub trait ReauthenticationProvider: Send + Sync {
     /// Whether a browser login can be attempted at all.
@@ -210,6 +234,19 @@ pub trait ReauthenticationProvider: Send + Sync {
 
     /// Run one re-authentication session, bounded by `deadline`.
     fn reauthenticate(&self, deadline: Instant) -> ReauthProviderResult;
+
+    /// Run one session while recording why the round started.
+    ///
+    /// The default keeps scripted providers source-agnostic; the real login
+    /// executor overrides this to publish the source on its status surface.
+    fn reauthenticate_for(
+        &self,
+        deadline: Instant,
+        trigger: ReauthTrigger,
+    ) -> ReauthProviderResult {
+        let _ = trigger;
+        self.reauthenticate(deadline)
+    }
 }
 
 /// An explicit provider for a gateway assembled without a login executor.
@@ -304,7 +341,12 @@ impl ReauthenticationService {
     /// The caller's `budget` is charged for the whole call, so the wait is
     /// bounded by both this request's cumulative auth budget and the request's
     /// total deadline.
-    pub fn trigger(&self, budget: &mut AuthWaitBudget, request_deadline: Instant) -> ReauthResult {
+    pub fn trigger(
+        &self,
+        trigger: ReauthTrigger,
+        budget: &mut AuthWaitBudget,
+        request_deadline: Instant,
+    ) -> ReauthResult {
         if Instant::now() >= request_deadline {
             return ReauthResult::DeadlineExceeded;
         }
@@ -354,9 +396,10 @@ impl ReauthenticationService {
                 let inner = Arc::clone(&self.inner);
                 let worker_session = Arc::clone(&session);
                 thread::spawn(move || {
-                    let outcome = inner
-                        .provider
-                        .reauthenticate(Instant::now() + inner.limits.auth_wait_budget);
+                    let outcome = inner.provider.reauthenticate_for(
+                        Instant::now() + inner.limits.auth_wait_budget,
+                        trigger,
+                    );
                     {
                         let mut result = worker_session
                             .result
@@ -489,7 +532,10 @@ pub fn handle_non_success(
     if let Some(plan) = plan {
         drop(response);
         if plan.reauthentication.is_some() {
-            return match state.reauth.trigger(budget, deadline) {
+            return match state
+                .reauth
+                .trigger(ReauthTrigger::BusinessRequest, budget, deadline)
+            {
                 ReauthResult::Restored => {
                     retry_state.record_reauth_session();
                     StatusAction::Retry
