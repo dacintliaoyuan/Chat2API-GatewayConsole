@@ -39,6 +39,22 @@ pub use self::token::{TokenDocument, TokenStore as TokenStoreSeam};
 
 pub const MANUAL_TAKEOVER_REQUIRED_PREFIX: &str = "manual_takeover_required:";
 const PROTECTED_AUTOFILL_REASON: &str = "umpass_autofill_protected";
+const PROTECTED_AUTOFILL_HINT: &str = "Edge 已预填，请在 UMPASS 页面点击登录";
+const MISSING_FIELDS_HINT: &str = "UMPASS 表单未就绪，请在 Edge 窗口中完成登录";
+const AMBIGUOUS_SUBMIT_HINT: &str = "UMPASS 页面有多个提交按钮，请在 Edge 窗口中手动登录";
+const UNRECOGNIZED_SUBMIT_HINT: &str =
+    "UMPASS 页面未识别到唯一提交按钮，请在 Edge 窗口中手动登录";
+const SUBMITTED_HINT: &str = "已自动提交 UMPASS 登录，正在等待结果";
+const UNTRUSTED_ORIGIN_HINT: &str = "UMPASS 页面来源不可信，已停止自动提交";
+const REJECTED_HINT: &str = "上游拒绝了当前账号密码，请人工处理";
+const FORM_READY: &str = "ready";
+const FORM_PROTECTED_AUTOFILL: &str = "protected_autofill";
+const FORM_MISSING_FIELDS: &str = "missing_fields";
+const FORM_SUBMIT_AMBIGUOUS: &str = "submit_ambiguous";
+const FORM_SUBMIT_UNRECOGNIZED: &str = "submit_unrecognized";
+const FORM_SUBMITTED: &str = "submitted";
+const FORM_UNTRUSTED_ORIGIN: &str = "untrusted_origin";
+const FORM_REJECTED: &str = "rejected";
 pub const LOGIN_TERMINAL_MANUAL_REASONS: [&str; 4] = [
     "umpass_mfa_required",
     "umpass_prefill_missing",
@@ -325,6 +341,8 @@ struct LoginProgress {
     origin: Option<String>,
     manual_reason: Option<String>,
     detail: Option<String>,
+    form: Option<String>,
+    submit_count: usize,
 }
 
 impl LoginProgress {
@@ -334,6 +352,8 @@ impl LoginProgress {
             "origin": self.origin,
             "manual_reason": self.manual_reason,
             "detail": self.detail,
+            "form": self.form,
+            "submit_count": self.submit_count,
         })
     }
 }
@@ -355,6 +375,10 @@ struct Recovery {
     last_failure_reason: Option<String>,
     pause_reason: Option<String>,
     visible: bool,
+    /// The last UMPASS form state and automatic submission count observed in
+    /// the current (or last) round.
+    last_form: Option<String>,
+    last_submit_count: usize,
 }
 
 impl Recovery {
@@ -372,6 +396,8 @@ impl Recovery {
             "last_failure_reason": self.last_failure_reason,
             "pause_reason": self.pause_reason,
             "visible": self.visible,
+            "last_form": self.last_form,
+            "last_submit_count": self.last_submit_count,
         })
     }
 }
@@ -918,6 +944,8 @@ fn begin_round_locked(
     state.recovery.last_failure_reason = None;
     state.recovery.pause_reason = None;
     state.recovery.visible = visible;
+    state.recovery.last_form = None;
+    state.recovery.last_submit_count = 0;
     state.recovery.max_sessions = inner.config.max_sessions;
     state.auth_state = AuthState::LoggingIn;
     state.error = None;
@@ -1227,6 +1255,14 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
     if state.round != round {
         return;
     }
+    if let Some((last_form, last_submit_count)) = state
+        .login
+        .as_ref()
+        .map(|login| (login.form.clone(), login.submit_count))
+    {
+        state.recovery.last_form = last_form;
+        state.recovery.last_submit_count = last_submit_count;
+    }
     match outcome {
         LoginOutcome::VerificationUnknown { reason } => {
             state.auth_state = AuthState::Unknown;
@@ -1424,6 +1460,11 @@ fn drive_login(
     let mut manual_reason: Option<String> = None;
     let mut duo_manual_since: Option<Instant> = None;
     let mut duo_manual_published = false;
+    // #101: the UMPASS form may be submitted automatically at most once per
+    // round. The submit count and the observed form state are part of the status.
+    let mut auto_submissions = 0usize;
+    let mut last_click_swallowed = false;
+    let mut saw_umpass_form = false;
 
     while Instant::now() < deadline {
         if session.cancel.load(Ordering::SeqCst) {
@@ -1621,31 +1662,60 @@ fn drive_login(
                 }
             }
         } else if stage == "umpass" {
-            let count = clicks.entry(stage.clone()).or_insert(0);
             let seen = *stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
             let fields = [
                 page.credential_field(&UMPASS_ACCOUNT_SELECTORS),
                 page.credential_field(&UMPASS_PASSWORD_SELECTORS),
             ];
-            // ADFS clears the password on rejection. Detect the visible error
-            // before refilling or clicking again, including delayed responses.
-            if *count > 0 && umpass_credential_rejected(page) {
-                return LoginOutcome::Rejected {
-                    reason: "upstream_credential_rejected".to_string(),
-                };
+            if fields != [CredentialField::Missing; 2] {
+                saw_umpass_form = true;
             }
-            if *count >= inner.config.max_clicks_per_stage {
-                manual_reason = Some("umpass_click_swallowed".to_string());
-                note_progress(
+            // A rejection is only acted on once a UMPASS form was recognized in
+            // this round (automatically submitted or completed by the operator).
+            // A page that only prompts for credentials must stay a form wait.
+            let rejection_visible = umpass_credential_rejected(page);
+            let manual_rejection = auto_submissions == 0
+                && saw_umpass_form
+                && rejection_visible
+                && fields[1] != CredentialField::ProtectedAutofill;
+            if (auto_submissions > 0 && rejection_visible) || manual_rejection {
+                note_form(
                     inner,
                     round,
                     "manual_takeover",
                     Some(&url),
-                    manual_reason.as_deref(),
                     None,
+                    FormState {
+                        form: FORM_REJECTED,
+                        detail: Some(REJECTED_HINT),
+                        submit_count: auto_submissions,
+                    },
                 );
-            } else if page.any_visible(&UMPASS_MFA_SELECTORS) {
+                return LoginOutcome::Rejected {
+                    reason: "upstream_credential_rejected".to_string(),
+                };
+            }
+            if page.any_visible(&UMPASS_MFA_SELECTORS) {
                 return stop_for_manual(inner, round, page, "umpass_mfa_required");
+            }
+            if auto_submissions > 0 {
+                // #101: one automatic submission per round. A swallowed submit
+                // must not type and submit the same old credentials again.
+                if manual_reason.is_none() && last_click_swallowed {
+                    manual_reason = Some("umpass_click_swallowed".to_string());
+                    note_form(
+                        inner,
+                        round,
+                        "manual_takeover",
+                        Some(&url),
+                        manual_reason.as_deref(),
+                        FormState {
+                            form: FORM_SUBMITTED,
+                            detail: Some(SUBMITTED_HINT),
+                            submit_count: auto_submissions,
+                        },
+                    );
+                }
             } else if fields != [CredentialField::Filled; 2] {
                 if seen.elapsed() < inner.config.stage_settle_timeout {
                     // 页面渲染和浏览器已保存密码的自动填充都是异步的。
@@ -1653,6 +1723,18 @@ fn drive_login(
                 } else {
                     // Only type credentials into the exact HTTPS SSO origins.
                     if !trusted_umpass_credential_origin(&url) {
+                        note_form(
+                            inner,
+                            round,
+                            "manual_takeover",
+                            Some(&url),
+                            Some("umpass_credentials_untrusted_origin"),
+                            FormState {
+                                form: FORM_UNTRUSTED_ORIGIN,
+                                detail: Some(UNTRUSTED_ORIGIN_HINT),
+                                submit_count: auto_submissions,
+                            },
+                        );
                         return LoginOutcome::Terminal {
                             reason: "umpass_credentials_untrusted_origin".to_string(),
                         };
@@ -1662,21 +1744,32 @@ fn drive_login(
                         || inner.config.um_account.is_empty()
                         || inner.config.um_password.is_empty()
                     {
-                        let reason = if protected_autofill {
-                            PROTECTED_AUTOFILL_REASON
+                        let (reason, form, detail) = if protected_autofill {
+                            (
+                                PROTECTED_AUTOFILL_REASON,
+                                FORM_PROTECTED_AUTOFILL,
+                                PROTECTED_AUTOFILL_HINT,
+                            )
                         } else {
-                            "umpass_prefill_missing"
+                            (
+                                "umpass_prefill_missing",
+                                FORM_MISSING_FIELDS,
+                                MISSING_FIELDS_HINT,
+                            )
                         };
-                        if visible {
-                            note_progress(
-                                inner,
-                                round,
-                                "waiting_for_credentials",
-                                Some(&url),
-                                Some(reason),
-                                None,
-                            );
-                        } else {
+                        note_form(
+                            inner,
+                            round,
+                            "waiting_for_credentials",
+                            Some(&url),
+                            Some(reason),
+                            FormState {
+                                form,
+                                detail: Some(detail),
+                                submit_count: auto_submissions,
+                            },
+                        );
+                        if !visible {
                             return stop_for_manual(inner, round, page, reason);
                         }
                     } else {
@@ -1693,9 +1786,28 @@ fn drive_login(
                         }
                     }
                 }
+            } else if !trusted_umpass_credential_origin(&url) {
+                // A filled form is only submitted on the exact HTTPS SSO origin.
+                note_form(
+                    inner,
+                    round,
+                    "manual_takeover",
+                    Some(&url),
+                    Some("umpass_credentials_untrusted_origin"),
+                    FormState {
+                        form: FORM_UNTRUSTED_ORIGIN,
+                        detail: Some(UNTRUSTED_ORIGIN_HINT),
+                        submit_count: auto_submissions,
+                    },
+                );
+                return LoginOutcome::Terminal {
+                    reason: "umpass_credentials_untrusted_origin".to_string(),
+                };
             } else if let Some(target) = page.one_visible(&UMPASS_SUBMIT_SELECTORS) {
-                *count += 1;
-                match click_and_observe(inner, session, page, &target, &url) {
+                auto_submissions += 1;
+                note_submission(inner, round, Some(&url), auto_submissions);
+                last_click_swallowed = match click_and_observe(inner, session, page, &target, &url)
+                {
                     ClickOutcome::Cancelled => {
                         return LoginOutcome::Cancelled {
                             reason: "cancelled".to_string(),
@@ -1703,10 +1815,10 @@ fn drive_login(
                     }
                     ClickOutcome::Advanced => {
                         idle_deadline = Instant::now() + inner.config.idle_timeout;
+                        false
                     }
-                    ClickOutcome::Swallowed => {}
-                }
-                note_progress(inner, round, "umpass_submitted", Some(&url), None, None);
+                    ClickOutcome::Swallowed => true,
+                };
                 if let Some(outcome) = check_login_window(page, visible) {
                     return outcome;
                 }
@@ -1716,16 +1828,27 @@ fn drive_login(
                     };
                 }
             } else {
+                let (form, detail) = if page.any_visible(&UMPASS_SUBMIT_SELECTORS) {
+                    (FORM_SUBMIT_AMBIGUOUS, AMBIGUOUS_SUBMIT_HINT)
+                } else {
+                    (FORM_SUBMIT_UNRECOGNIZED, UNRECOGNIZED_SUBMIT_HINT)
+                };
                 let settled = stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
-                if settled.elapsed() >= inner.config.stage_settle_timeout {
+                if settled.elapsed() >= inner.config.stage_settle_timeout
+                    && manual_reason.is_none()
+                {
                     manual_reason = Some("umpass_submit_unrecognized".to_string());
-                    note_progress(
+                    note_form(
                         inner,
                         round,
                         "manual_takeover",
                         Some(&url),
                         manual_reason.as_deref(),
-                        None,
+                        FormState {
+                            form,
+                            detail: Some(detail),
+                            submit_count: auto_submissions,
+                        },
                     );
                 }
             }
@@ -1885,6 +2008,7 @@ fn note_progress(
     if state.round != round {
         return;
     }
+    let previous = state.login.take().unwrap_or_default();
     let origin = origin
         .filter(|origin| !origin.is_empty())
         .map(origin_without_query);
@@ -1893,6 +2017,8 @@ fn note_progress(
         origin,
         manual_reason: manual_reason.map(str::to_string),
         detail: detail.map(str::to_string),
+        form: previous.form,
+        submit_count: previous.submit_count,
     });
     if let Some(reason) = manual_reason {
         if LOGIN_TERMINAL_MANUAL_REASONS.contains(&reason) {
@@ -1900,6 +2026,64 @@ fn note_progress(
         }
     }
     inner.condvar.notify_all();
+}
+
+#[derive(Clone, Copy)]
+struct FormState<'a> {
+    form: &'a str,
+    detail: Option<&'a str>,
+    submit_count: usize,
+}
+
+fn note_form(
+    inner: &Arc<LoginInner>,
+    round: u64,
+    phase: &str,
+    origin: Option<&str>,
+    manual_reason: Option<&str>,
+    form: FormState<'_>,
+) {
+    let mut state = inner.state.lock().expect("login state poisoned");
+    if state.round != round {
+        return;
+    }
+    let origin = origin
+        .filter(|origin| !origin.is_empty())
+        .map(origin_without_query);
+    state.login = Some(LoginProgress {
+        phase: Some(phase.to_string()),
+        origin,
+        manual_reason: manual_reason.map(str::to_string),
+        detail: form.detail.map(str::to_string),
+        form: Some(form.form.to_string()),
+        submit_count: form.submit_count,
+    });
+    if let Some(reason) = manual_reason {
+        if LOGIN_TERMINAL_MANUAL_REASONS.contains(&reason) {
+            state.error = Some(format!("{MANUAL_TAKEOVER_REQUIRED_PREFIX}{reason}"));
+        }
+    }
+    inner.condvar.notify_all();
+}
+
+fn note_submission(
+    inner: &Arc<LoginInner>,
+    round: u64,
+    origin: Option<&str>,
+    submit_count: usize,
+) {
+    note_form(
+        inner,
+        round,
+        "umpass_submitted",
+        origin,
+        None,
+        FormState {
+            form: FORM_READY,
+            detail: Some(SUBMITTED_HINT),
+            submit_count,
+        },
+    );
 }
 
 fn umpass_credential_rejected(page: &dyn LoginPage) -> bool {

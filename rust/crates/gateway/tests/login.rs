@@ -42,10 +42,12 @@ struct FakePage {
     reload_calls: AtomicUsize,
     unfilled_polls: AtomicUsize,
     submit_visible: AtomicBool,
+    submit_ambiguous: AtomicBool,
     click_steps: Mutex<Vec<(String, Option<String>)>>,
     fill_calls: AtomicUsize,
     filled_values: Mutex<Vec<String>>,
     account_prefilled: AtomicBool,
+    password_prefilled: AtomicBool,
     autofill_protected: AtomicBool,
     password_cleared: AtomicBool,
     reject_submit: AtomicBool,
@@ -66,10 +68,12 @@ impl FakePage {
             reload_calls: AtomicUsize::new(0),
             unfilled_polls: AtomicUsize::new(0),
             submit_visible: AtomicBool::new(false),
+            submit_ambiguous: AtomicBool::new(false),
             click_steps: Mutex::new(Vec::new()),
             fill_calls: AtomicUsize::new(0),
             filled_values: Mutex::new(Vec::new()),
             account_prefilled: AtomicBool::new(false),
+            password_prefilled: AtomicBool::new(false),
             autofill_protected: AtomicBool::new(false),
             password_cleared: AtomicBool::new(false),
             reject_submit: AtomicBool::new(false),
@@ -110,6 +114,10 @@ impl FakePage {
 
     fn fill_calls(&self) -> usize {
         self.fill_calls.load(Ordering::SeqCst)
+    }
+
+    fn submit_clicks(&self) -> usize {
+        self.submit_calls.load(Ordering::SeqCst)
     }
 }
 
@@ -154,7 +162,13 @@ impl LoginPage for FakePage {
     }
 
     fn any_visible(&self, selectors: &[&str]) -> bool {
-        selectors.contains(&"#errorText") && self.credential_error.load(Ordering::SeqCst)
+        if selectors.contains(&"#errorText") && self.credential_error.load(Ordering::SeqCst) {
+            return true;
+        }
+        selectors.contains(&"input[type=\"submit\"]")
+            && (self.submit_visible.load(Ordering::SeqCst)
+                || (self.submit_ambiguous.load(Ordering::SeqCst)
+                    && self.url().starts_with("https://websso.um.edu.mo/")))
     }
 
     fn any_visible_text(&self, selectors: &[&str]) -> bool {
@@ -171,6 +185,11 @@ impl LoginPage for FakePage {
             && self.password_cleared.load(Ordering::SeqCst)
         {
             return CredentialField::Missing;
+        }
+        if selectors.contains(&"input[name=\"Password\"]")
+            && self.password_prefilled.load(Ordering::SeqCst)
+        {
+            return CredentialField::Filled;
         }
         if self.unfilled_polls.load(Ordering::SeqCst) > 0 {
             self.unfilled_polls.fetch_sub(1, Ordering::SeqCst);
@@ -189,17 +208,29 @@ impl LoginPage for FakePage {
         if !self.submit_visible.load(Ordering::SeqCst) {
             return None;
         }
+        if self.submit_ambiguous.load(Ordering::SeqCst)
+            && self.url().starts_with("https://websso.um.edu.mo/")
+        {
+            return None;
+        }
+        let selector = if self.url().starts_with("https://websso.um.edu.mo/") {
+            "input[type=\"submit\"]"
+        } else {
+            "button:has-text(\"使用 UMPASS 继续\")"
+        };
         Some(VisibleTarget {
-            selector: "input[type=\"submit\"]".to_string(),
+            selector: selector.to_string(),
             index: 0,
         })
     }
 
     fn click(&self, _target: &VisibleTarget) -> Result<(), String> {
+        if self.url().starts_with("https://websso.um.edu.mo/") {
+            self.submit_calls.fetch_add(1, Ordering::SeqCst);
+        }
         if self.reject_submit.load(Ordering::SeqCst)
             && self.url().starts_with("https://websso.um.edu.mo/")
         {
-            self.submit_calls.fetch_add(1, Ordering::SeqCst);
             self.credential_error.store(true, Ordering::SeqCst);
             self.password_cleared.store(true, Ordering::SeqCst);
             return Ok(());
@@ -923,6 +954,375 @@ fn umpass_rejection_that_clears_password_stops_after_one_submission() {
     assert_eq!(status["error"], json!("upstream_credential_rejected"));
     assert_eq!(page.submit_calls.load(Ordering::SeqCst), 1);
     assert_eq!(page.fill_calls(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// #101: 点击「继续登录」后，只有可信 UMPASS 页面上账号、密码栏已就绪且提交
+// 按钮唯一时才自动提交一次；受保护预填保留窗口并给出明确提示；字段未就绪、
+// 提交按钮不唯一、不可信页面和上游明确拒绝分别处理并记录状态。
+// ---------------------------------------------------------------------------
+
+fn trusted_umpass_url() -> &'static str {
+    "https://websso.um.edu.mo/adfs/ls/"
+}
+
+#[test]
+fn a_ready_trusted_umpass_form_is_submitted_once_and_recorded() {
+    let temp = TempDir::new("um-rust-umpass-submit-once-");
+    let url = trusted_umpass_url();
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.password_prefilled.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") =
+        vec![(url.to_string(), None)];
+    let sink = Arc::new(FakeSink::default());
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            config.display_file = marker;
+            config.stage_settle_timeout = Duration::from_millis(500);
+            config.login_timeout = Duration::from_secs(3);
+        },
+    );
+
+    service.start_explicit(true);
+    let status = wait_for(&service, |s| {
+        s["login"]["phase"] == json!("umpass_submitted")
+    });
+    assert_eq!(status["login"]["form"], json!("ready"));
+    assert_eq!(status["login"]["submit_count"], json!(1));
+    assert_eq!(page.submit_clicks(), 1, "已就绪的可信表单只自动提交一次");
+
+    // 模拟本人在同一窗口完成登录；同一轮继续。
+    page.set_token(Some("operator-token"));
+    let status = wait_for(&service, |s| s["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1));
+    assert_eq!(status["recovery"]["last_form"], json!("ready"));
+    assert_eq!(status["recovery"]["last_submit_count"], json!(1));
+    assert_eq!(page.submit_clicks(), 1);
+    assert_eq!(factory.requests().len(), 1);
+    assert_eq!(sink.published()[0].0, "operator-token");
+}
+
+#[test]
+fn a_swallowed_umpass_submit_is_not_retried_with_the_same_credentials() {
+    let temp = TempDir::new("um-rust-umpass-submit-swallowed-");
+    let url = trusted_umpass_url();
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.password_prefilled.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    // 第一次提交被页面吞掉：URL 不变，提交按钮仍在。
+    *page.click_steps.lock().expect("click steps") =
+        vec![(url.to_string(), None)];
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            config.display_file = marker;
+            config.click_observe_timeout = Duration::from_millis(50);
+            config.login_timeout = Duration::from_millis(400);
+        },
+    );
+
+    service.start_explicit(true);
+    let status = wait_for(&service, |s| {
+        s["login"]["manual_reason"] == json!("umpass_click_swallowed")
+    });
+    assert_eq!(status["login"]["form"], json!("submitted"));
+    assert_eq!(status["login"]["submit_count"], json!(1));
+    assert_eq!(page.submit_clicks(), 1, "提交被吞后不得再次自动提交旧凭据");
+    assert_eq!(factory.closes(), 0, "可见窗口保持到本轮结束");
+    let status = wait_for(&service, |s| s["state"] == json!("failed"));
+    assert_eq!(status["recovery"]["last_form"], json!("submitted"));
+    assert_eq!(status["recovery"]["last_submit_count"], json!(1));
+}
+
+#[test]
+fn protected_autofill_keeps_the_window_open_with_the_clear_hint() {
+    let temp = TempDir::new("um-rust-umpass-protected-hint-");
+    let url = trusted_umpass_url();
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.autofill_protected.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") =
+        vec![(url.to_string(), None)];
+    let sink = Arc::new(FakeSink::default());
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            config.display_file = marker;
+            config.stage_settle_timeout = Duration::from_millis(50);
+        },
+    );
+
+    service.start_explicit(true);
+    let status = wait_for(&service, |s| {
+        s["login"]["manual_reason"] == json!("umpass_autofill_protected")
+    });
+    assert_eq!(status["state"], json!("logging_in"));
+    assert_eq!(status["login"]["phase"], json!("waiting_for_credentials"));
+    assert_eq!(status["login"]["form"], json!("protected_autofill"));
+    assert_eq!(
+        status["login"]["detail"],
+        json!("Edge 已预填，请在 UMPASS 页面点击登录")
+    );
+    assert_eq!(status["login"]["submit_count"], json!(0));
+    assert_eq!(page.submit_clicks(), 0, "预填保护时不得自动提交");
+    assert_eq!(factory.closes(), 0, "窗口必须保持打开");
+
+    // 本人点击 UMPASS 登录后，同一轮继续。
+    page.set_token(Some("operator-token"));
+    let status = wait_for(&service, |s| s["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1));
+    assert_eq!(status["recovery"]["last_form"], json!("protected_autofill"));
+    assert_eq!(status["recovery"]["last_submit_count"], json!(0));
+    assert_eq!(page.submit_clicks(), 0);
+    assert_eq!(factory.requests().len(), 1);
+    assert_eq!(sink.published()[0].0, "operator-token");
+}
+
+#[test]
+fn a_filled_form_on_an_untrusted_umpass_origin_is_not_submitted() {
+    let temp = TempDir::new("um-rust-umpass-untrusted-filled-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.password_prefilled.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") = vec![
+        ("http://websso.um.edu.mo/adfs/ls/".to_string(), None),
+        (
+            "http://127.0.0.1:9".to_string(),
+            Some("unexpected-token".to_string()),
+        ),
+    ];
+    let marker = write_display_marker(&temp);
+    let (service, _) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            config.display_file = marker;
+            config.stage_settle_timeout = Duration::from_millis(20);
+            config.login_timeout = Duration::from_millis(300);
+        },
+    );
+
+    service.start_explicit(true);
+    let status = wait_for(&service, |s| s["state"] == json!("failed"));
+    assert_eq!(
+        status["error"],
+        json!("umpass_credentials_untrusted_origin")
+    );
+    assert_eq!(page.submit_clicks(), 0, "不可信页面不得自动提交");
+    assert_eq!(status["recovery"]["last_form"], json!("untrusted_origin"));
+    assert_eq!(status["recovery"]["last_submit_count"], json!(0));
+}
+
+#[test]
+fn a_missing_umpass_form_waits_with_a_clear_state() {
+    let temp = TempDir::new("um-rust-umpass-missing-form-");
+    let url = trusted_umpass_url();
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") =
+        vec![(url.to_string(), None)];
+    let sink = Arc::new(FakeSink::default());
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            config.display_file = marker;
+            config.stage_settle_timeout = Duration::from_millis(20);
+            config.login_timeout = Duration::from_secs(3);
+        },
+    );
+
+    service.start_explicit(true);
+    let status = wait_for(&service, |s| {
+        s["login"]["manual_reason"] == json!("umpass_prefill_missing")
+    });
+    assert_eq!(status["state"], json!("logging_in"));
+    assert_eq!(status["login"]["phase"], json!("waiting_for_credentials"));
+    assert_eq!(status["login"]["form"], json!("missing_fields"));
+    assert_eq!(
+        status["login"]["detail"],
+        json!("UMPASS 表单未就绪，请在 Edge 窗口中完成登录")
+    );
+    assert_eq!(status["login"]["submit_count"], json!(0));
+    assert_eq!(page.submit_clicks(), 0, "字段未就绪时不得自动提交");
+    assert_eq!(factory.closes(), 0, "窗口必须保持打开");
+
+    page.set_token(Some("operator-token"));
+    let status = wait_for(&service, |s| s["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1));
+    assert_eq!(page.submit_clicks(), 0);
+    assert_eq!(sink.published()[0].0, "operator-token");
+}
+
+#[test]
+fn an_ambiguous_umpass_submit_is_not_clicked() {
+    let temp = TempDir::new("um-rust-umpass-ambiguous-submit-");
+    let url = trusted_umpass_url();
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.password_prefilled.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    page.submit_ambiguous.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") =
+        vec![(url.to_string(), None)];
+    let sink = Arc::new(FakeSink::default());
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            config.display_file = marker;
+            config.stage_settle_timeout = Duration::from_millis(20);
+            config.login_timeout = Duration::from_secs(3);
+        },
+    );
+
+    service.start_explicit(true);
+    let status = wait_for(&service, |s| {
+        s["login"]["manual_reason"] == json!("umpass_submit_unrecognized")
+    });
+    assert_eq!(status["login"]["form"], json!("submit_ambiguous"));
+    assert_eq!(
+        status["login"]["detail"],
+        json!("UMPASS 页面有多个提交按钮，请在 Edge 窗口中手动登录")
+    );
+    assert_eq!(status["login"]["submit_count"], json!(0));
+    assert_eq!(page.submit_clicks(), 0, "提交按钮不唯一时不得自动提交");
+    assert_eq!(factory.closes(), 0, "窗口必须保持打开");
+
+    page.set_token(Some("operator-token"));
+    let status = wait_for(&service, |s| s["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1));
+    assert_eq!(page.submit_clicks(), 0);
+}
+
+#[test]
+fn an_upstream_rejection_after_manual_umpass_submit_stops_old_credentials() {
+    let temp = TempDir::new("um-rust-umpass-manual-rejected-");
+    let url = trusted_umpass_url();
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.autofill_protected.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") =
+        vec![(url.to_string(), None)];
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            config.display_file = marker;
+            config.stage_settle_timeout = Duration::from_millis(50);
+            config.login_timeout = Duration::from_secs(3);
+            configure_form_pair(config);
+        },
+    );
+
+    service.start_explicit(true);
+    wait_for(&service, |s| {
+        s["login"]["manual_reason"] == json!("umpass_autofill_protected")
+    });
+    assert_eq!(page.fill_calls(), 0);
+
+    // 本人手动点击 UMPASS 登录，上游明确拒绝并清空密码。
+    page.reject_submit.store(true, Ordering::SeqCst);
+    page.autofill_protected.store(false, Ordering::SeqCst);
+    page.click(&VisibleTarget {
+        selector: "input[type=\"submit\"]".to_string(),
+        index: 0,
+    })
+    .expect("manual submit");
+
+    let status = wait_for(&service, |s| s["state"] == json!("failed"));
+    assert_eq!(status["error"], json!("upstream_credential_rejected"));
+    assert_eq!(
+        status["recovery"]["last_form"],
+        json!("rejected")
+    );
+    assert_eq!(status["recovery"]["last_submit_count"], json!(0));
+    assert_eq!(
+        page.fill_calls(),
+        0,
+        "明确拒绝后不得再用旧凭据自动填写并提交"
+    );
+    assert_eq!(page.submit_clicks(), 1, "只统计本人这次手动提交");
+    assert_eq!(factory.closes(), 1);
+}
+
+#[test]
+fn a_manual_rejection_that_keeps_the_account_stops_old_credentials() {
+    let temp = TempDir::new("um-rust-umpass-manual-rejected-kept-account-");
+    let url = trusted_umpass_url();
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.autofill_protected.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") = vec![(url.to_string(), None)];
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            config.display_file = marker;
+            config.stage_settle_timeout = Duration::from_millis(50);
+            config.login_timeout = Duration::from_secs(3);
+            configure_form_pair(config);
+        },
+    );
+
+    service.start_explicit(true);
+    wait_for(&service, |s| {
+        s["login"]["manual_reason"] == json!("umpass_autofill_protected")
+    });
+    assert_eq!(page.fill_calls(), 0);
+
+    // 本人手动点击 UMPASS 登录，上游明确拒绝：ADFS 保留账号但清空密码。
+    page.reject_submit.store(true, Ordering::SeqCst);
+    page.autofill_protected.store(false, Ordering::SeqCst);
+    page.click(&VisibleTarget {
+        selector: "input[type=\"submit\"]".to_string(),
+        index: 0,
+    })
+    .expect("manual submit");
+
+    let status = wait_for(&service, |s| s["state"] == json!("failed"));
+    assert_eq!(status["error"], json!("upstream_credential_rejected"));
+    assert_eq!(status["recovery"]["last_form"], json!("rejected"));
+    assert_eq!(status["recovery"]["last_submit_count"], json!(0));
+    assert_eq!(
+        page.fill_calls(),
+        0,
+        "明确拒绝后不得再用旧凭据自动填写并提交"
+    );
+    assert_eq!(page.submit_clicks(), 1, "只统计本人这次手动提交");
+    assert_eq!(factory.closes(), 1);
 }
 
 #[test]
@@ -2241,6 +2641,22 @@ fn wait_for_chat_attempts(stub: &ChatStub, count: usize) {
     }
 }
 
+fn wait_for_browser_launches(factory: &FakeFactory, count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while factory.requests().len() < count {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {count} browser launches"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        factory.requests().len(),
+        count,
+        "unexpected extra browser launches"
+    );
+}
+
 #[test]
 fn a_business_401_starts_one_background_round_and_later_requests_use_the_restored_credential() {
     let temp = TempDir::new("um-rust-reauth-round-business-");
@@ -2362,7 +2778,7 @@ fn a_watch_round_and_business_401s_share_one_background_round_and_one_browser() 
         json!("auth_watch"),
         "{status}"
     );
-    assert_eq!(factory.requests().len(), 1);
+    wait_for_browser_launches(&factory, 1);
 
     // Repeated status reads and an explicit join must not open another round.
     for _ in 0..5 {
@@ -2463,7 +2879,7 @@ fn a_rejected_watch_probe_starts_one_background_round_with_its_source() {
         Value::Null,
         "轮次尚未结束不得预写结果: {status}"
     );
-    assert_eq!(factory.requests().len(), 1);
+    wait_for_browser_launches(&factory, 1);
     assert!(
         !factory.requests()[0].headful,
         "巡检触发的自动轮次不得打开可见 Edge"

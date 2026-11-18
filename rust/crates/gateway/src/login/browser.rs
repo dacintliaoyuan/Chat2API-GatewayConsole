@@ -600,11 +600,27 @@ impl LoginPage for RealPage {
     }
 
     fn credential_field(&self, selectors: &[&str]) -> CredentialField {
-        match self.evaluate(&credential_field_expression(selectors)) {
-            Ok(Value::String(state)) if state == "filled" => CredentialField::Filled,
-            Ok(Value::String(state)) if state == "protected" => CredentialField::ProtectedAutofill,
-            _ => CredentialField::Missing,
+        let expression = credential_field_expression(selectors);
+        // #101: Edge's autofill paints the field before the value commits, so the
+        // first read can see the autofill marker with an empty `value` while the
+        // Python `input_value()` read would see the committed text. Re-read briefly
+        // before declaring the field protected; a field that stays empty with the
+        // marker is the real autofill-protected case.
+        for attempt in 0..5 {
+            match self.evaluate(&expression) {
+                Ok(Value::String(state)) if state == "filled" => {
+                    return CredentialField::Filled
+                }
+                Ok(Value::String(state)) if state == "protected" => {
+                    if attempt == 4 {
+                        return CredentialField::ProtectedAutofill;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                _ => return CredentialField::Missing,
+            }
         }
+        CredentialField::ProtectedAutofill
     }
 
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget> {
@@ -618,15 +634,41 @@ impl LoginPage for RealPage {
     fn click(&self, target: &VisibleTarget) -> Result<(), String> {
         let selector =
             serde_json::to_string(&target.selector).map_err(|error| error.to_string())?;
-        let expression = format!(
+        // #101: Playwright's `locator.click()` dispatches the real mouse event
+        // sequence at the element center; a synthetic `element.click()` does not
+        // submit Keycloak's UMPASS form (the site keeps asking to fill in).
+        // Read the target's center and drive `Input.dispatchMouseEvent` instead.
+        let rect_expression = format!(
             "(function(){{var el=document.querySelector({selector});\
-             if(!el)return false;el.click();return true;}})()"
+             if(!el)return null;var r=el.getBoundingClientRect();\
+             return {{x:r.left+r.width/2,y:r.top+r.height/2}};}})()"
         );
-        match self.evaluate(&expression) {
-            Ok(Value::Bool(true)) => Ok(()),
-            Ok(_) => Err("login target disappeared".to_string()),
-            Err(error) => Err(error),
+        let rect = self.evaluate(&rect_expression)?;
+        let x = rect
+            .get("x")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| "login target disappeared".to_string())?;
+        let y = rect
+            .get("y")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| "login target disappeared".to_string())?;
+        for (event_type, button, click_count) in [
+            ("mouseMoved", "none", 0),
+            ("mousePressed", "left", 1),
+            ("mouseReleased", "left", 1),
+        ] {
+            self.call(
+                "Input.dispatchMouseEvent",
+                serde_json::json!({
+                    "type": event_type,
+                    "x": x,
+                    "y": y,
+                    "button": button,
+                    "clickCount": click_count,
+                }),
+            )?;
         }
+        Ok(())
     }
 
     fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String> {
