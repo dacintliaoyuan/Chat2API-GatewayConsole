@@ -89,6 +89,36 @@ impl ActionExecutor for LocalActionExecutor {
 
 pub struct ConsoleServer;
 
+/// #107: the cloud console executes the ONE explicit visible login through the
+/// gateway's `POST /admin/auth/login`; the six share actions keep their honest
+/// unwired default (they are assembled by the deployment package, not here).
+struct CloudActionExecutor {
+    gateway_port: u16,
+    control_token_file: Option<std::path::PathBuf>,
+}
+
+impl ActionExecutor for CloudActionExecutor {
+    fn execute(
+        &self,
+        action: &str,
+        _target: &str,
+        _params: &Map<String, Value>,
+        ctx: &OperationContext,
+    ) -> Result<Value, ActionFailure> {
+        if action == "account.login" {
+            ctx.raise_if_cancelled()?;
+            return crate::local_um_auth::start_login(
+                self.gateway_port,
+                self.control_token_file.as_deref(),
+            );
+        }
+        Err(ActionFailure::new(
+            "share_broker_unwired",
+            "broker 操作门未接线（部署授权包装配后可用）；不冒充可用",
+        ))
+    }
+}
+
 pub struct AppState {
     pub config: ConsoleConfig,
     pub runtime: Arc<dyn RuntimeFacts>,
@@ -162,7 +192,10 @@ impl ConsoleServer {
                     auth: crate::local_um_auth::LocalActionExecutor::new(auth, retained),
                 })
             }
-            Role::Cloud => Arc::new(UnwiredActionExecutor),
+            Role::Cloud => Arc::new(CloudActionExecutor {
+                gateway_port: config.gateway_port,
+                control_token_file: config.control_token_file.clone(),
+            }),
         };
         Self::start_with_wiring(
             config,
@@ -1226,6 +1259,12 @@ fn handle_share_management_write(
     if method == "POST" && rest == ["display-operator"] {
         return handle_display_operator(state, request);
     }
+    if method == "POST" && rest == ["backend-login"] {
+        // D18-8/#107: a no-parameter proxy to the gateway's
+        // `POST /admin/auth/login` with `visible=true`; the body is
+        // deliberately not parsed, matching `usagesrv.py`'s route.
+        return handle_backend_login_start(state);
+    }
     if method == "POST" && rest == ["backend-login-cancel"] {
         // D18-8/#106: a no-parameter proxy to the gateway's
         // `POST /admin/auth/cancel`; the body is deliberately not parsed,
@@ -1513,6 +1552,29 @@ fn handle_share_management_write(
 /// `cancelled=false`, `state=null` and a readable `error`/`detail`; it never
 /// fabricates a cancelled round. The control token is only sent to the gateway and
 /// never copied into the response.
+/// `_console_backend_login_payload`: proxy the control-token-gated gateway
+/// explicit visible login. A classified failure is a 503 with `started=false`,
+/// `state=null` and a readable `error`/`detail`; it never fabricates a started
+/// round. The control token is only sent to the gateway and never copied into the
+/// response.
+fn handle_backend_login_start(state: &AppState) -> Response {
+    match crate::local_um_auth::start_login(
+        state.config.gateway_port,
+        state.config.control_token_file.as_deref(),
+    ) {
+        Ok(payload) => send_json(200, &payload),
+        Err(failure) => send_json(
+            503,
+            &json!({
+                "started": false,
+                "state": Value::Null,
+                "detail": failure.message,
+                "error": failure.code,
+            }),
+        ),
+    }
+}
+
 fn handle_backend_login_cancel(state: &AppState) -> Response {
     match crate::local_um_auth::cancel_login(
         state.config.gateway_port,

@@ -148,24 +148,34 @@ impl AdminClient {
                 ))
             }
         }
-        let payload: Value =
-            serde_json::from_slice(&response.body).map_err(|_| status_schema_error())?;
-        let object = payload.as_object().ok_or_else(status_schema_error)?;
-        let state = object
-            .get("state")
-            .and_then(Value::as_str)
-            .ok_or_else(status_schema_error)?;
-        Ok(json!({
-            "state": state,
-            "label": text_field(object.get("label")),
-            "error": text_field(object.get("error")),
-            "recovery": recovery_summary(object.get("recovery")),
-            "login_window_deadline_epoch": number_field(object.get("login_window_deadline_epoch")),
-            "login_window_s": number_field(object.get("login_window_s")),
-            "primary": text_field(object.get("primary")),
-            "login": login_summary(object.get("login")),
-        }))
+        normalize_status(&response.body, status_schema_error)
     }
+}
+
+/// The round-status shape shared by the status read and the explicit login
+/// start. Both faces carry `state`, `label`, `error`, `recovery` and the login
+/// window; an answer without a non-empty `state` is outside the contract.
+fn normalize_status(
+    body: &[u8],
+    schema_error: fn() -> ActionFailure,
+) -> Result<Value, ActionFailure> {
+    let payload: Value = serde_json::from_slice(body).map_err(|_| schema_error())?;
+    let object = payload.as_object().ok_or_else(schema_error)?;
+    let state = object
+        .get("state")
+        .and_then(Value::as_str)
+        .filter(|state| !state.is_empty())
+        .ok_or_else(schema_error)?;
+    Ok(json!({
+        "state": state,
+        "label": text_field(object.get("label")),
+        "error": text_field(object.get("error")),
+        "recovery": recovery_summary(object.get("recovery")),
+        "login_window_deadline_epoch": number_field(object.get("login_window_deadline_epoch")),
+        "login_window_s": number_field(object.get("login_window_s")),
+        "primary": text_field(object.get("primary")),
+        "login": login_summary(object.get("login")),
+    }))
 }
 
 /// D18-8: end THIS login round through the gateway's control-token-gated
@@ -219,6 +229,71 @@ pub fn cancel_login(
         "state": state,
         "detail": text_field(object.get("detail")),
     }))
+}
+
+/// #107: start (or join) the gateway's one explicit visible login round
+/// through the control-token-gated `POST /admin/auth/login`.
+///
+/// The cloud console's "重新登录" always requests a visible window: the operator
+/// completes UM SSO on the cloud host's private display. The answer is the
+/// gateway's own round status, normalized to the same shape as
+/// `account.um_status`; `started` is true only when the relayed state is
+/// `logging_in`. The gateway's `global_attempt_cap` refusal stays visible in
+/// `error` plus `recovery.next_attempt_epoch` instead of becoming a fake
+/// success, and a repeated click joins the same round (the single-round
+/// constraint lives in the gateway's `start_explicit`).
+pub fn start_login(
+    gateway_port: u16,
+    control_token_file: Option<&Path>,
+) -> Result<Value, ActionFailure> {
+    let client = AdminClient::new(gateway_port, control_token_file);
+    let token = client.control_token()?;
+    let response = client
+        .post_json(
+            "/admin/auth/login",
+            &token,
+            &json!({"visible": true}),
+            LOGIN_TIMEOUT,
+        )
+        .map_err(start_transport_error)?;
+    match response.status {
+        200 | 202 => {}
+        401 | 403 => {
+            return Err(ActionFailure::new(
+                "control_denied",
+                "管理控制头被拒绝（控制令牌不匹配）",
+            ))
+        }
+        status => {
+            return Err(ActionFailure::new(
+                "login_start_failed",
+                format!("登录未开始：chat2api 返回 HTTP {status}；登录状态未知"),
+            ))
+        }
+    }
+    let mut status = normalize_status(&response.body, start_schema_error)?;
+    let started = status.get("state").and_then(Value::as_str) == Some("logging_in");
+    if let Some(object) = status.as_object_mut() {
+        object.insert("started".to_string(), json!(started));
+    }
+    Ok(status)
+}
+
+fn start_transport_error(error: AdminError) -> ActionFailure {
+    match error {
+        AdminError::Unreachable => ActionFailure::new(
+            "login_start_unreachable",
+            "登录未开始：chat2api 服务不可达；登录状态未知",
+        ),
+        AdminError::Protocol => start_schema_error(),
+    }
+}
+
+fn start_schema_error() -> ActionFailure {
+    ActionFailure::new(
+        "login_start_schema",
+        "登录启动响应不符合契约；请刷新登录状态核对",
+    )
 }
 
 fn cancel_transport_error(error: AdminError) -> ActionFailure {
