@@ -265,6 +265,17 @@ fn launch_real_browser(request: &LaunchRequest) -> Result<Box<dyn LoginBrowser>,
         command.env("XAUTHORITY", &display.xauthority);
         command.env_remove("WAYLAND_DISPLAY");
     }
+    // The service user's passwd HOME (/var/lib/um-share) does not exist, so
+    // Chromium's crashpad handler aborts on launch (SIGTRAP) and takes the
+    // gateway down with it. Give the short-lived login browser a writable HOME
+    // under the console state directory instead.
+    let home = request
+        .profile_dir
+        .parent()
+        .and_then(|parent| parent.parent())
+        .filter(|directory| directory.is_dir())
+        .unwrap_or(&request.profile_dir);
+    command.env("HOME", home);
     command.arg(&request.initial_url);
     command.stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(unix)]
