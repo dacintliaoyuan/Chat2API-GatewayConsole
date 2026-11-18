@@ -311,6 +311,9 @@ _Avoid_: 管理会话、私网可达即可信
 维护者个人电脑上管理 UM 自用实例及其他本机自用服务的控制台入口；API Key 与 API 服务归云端控制台管理。入口为根目录的 `一键部署本机网关.bat`（部署并启动 8000/8001 宿主），生产页是 8001 托管的 `web/dist`（local 角色）。
 _Avoid_: 主控制台、统一控制台
 
+**本地控制台桌面版 (Local console desktop app)**:
+本地控制台在 Windows 用户会话中的应用入口，提供主窗口和系统托盘。关闭主窗口后，桌面应用继续在托盘中运行。
+
 **云端控制台 (Cloud console)**:
 云机上只管理云端 API 服务的控制台入口；与本地控制台共用前端代码，数据与操作目标各自归属，不经对方转发。端口是 8002（2026-11-17 已切 Rust；Python 回滚单元 `um-share-console-python.service` 监听 8096），入口为 `cloud/Open-CloudConsole.bat`（经专用 SSH 配置建 loopback 隧道），生产页是发布包内的 `web/dist`（cloud 角色，构建自 `web/dist-cloud`）。
 _Avoid_: 远程管理本地、跨机统一控制台
