@@ -54,7 +54,7 @@ _Avoid_: 自动重登录、按需登录、重启服务
 _Avoid_: 自动弹窗、云端专用实例窗口、把 headless 伪装成可见
 
 **Duo 推送等待 (Duo push wait)**:
-自动登录在 UMPASS 之后等待本人批准 Duo 推送的阶段；它不是失败，也不是终端人工接管，自动轮次会在此期间打开可见窗口。控制台显示“等待本人确认 Duo 推送”。
+UM 重新认证通过 UMPASS 后，Duo 要求本人批准推送时的等待状态。在本机，Duo 自动通过的过渡阶段显示为「正在完成 Duo 验证」，只有需要本人操作时才提示确认。见 [ADR 0011](docs/adr/0011-local-um-reauthentication-lifecycle.md)。
 _Avoid_: 自动重登录失败、登录超时、人工接管已结束
 
 **人工接管 (Manual takeover)**:

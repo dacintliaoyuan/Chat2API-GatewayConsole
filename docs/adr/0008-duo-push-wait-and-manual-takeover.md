@@ -4,6 +4,8 @@
 
 **Status**: accepted
 
+本机 Windows 8000/8001 的 Duo 等待提示与可见窗口规则见 [ADR 0011](0011-local-um-reauthentication-lifecycle.md)。
+
 ## Considered Options
 
 - **保持 `auth_wait_timeout` 只改 UI 文案**：不解决自动轮次没有可见窗口的问题；放弃。
