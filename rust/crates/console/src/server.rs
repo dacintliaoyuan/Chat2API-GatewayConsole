@@ -111,9 +111,9 @@ impl ConsoleServer {
         runtime: Arc<dyn RuntimeFacts>,
         share_seams: Arc<dyn ShareReadSeams>,
     ) -> Result<ServerHandle, ServerError> {
-        // The local role executes all twelve retained actions through the
-        // one-shot Python sidecar (`model.catalog` keeps its #84 executor); the
-        // cloud role keeps its honest unwired default.
+        // The local role executes the model-sync actions in-process and the
+        // retained service/account actions through the one-shot Python sidecar;
+        // the cloud role keeps its honest unwired default.
         let executor: Arc<dyn crate::operation_manager::ActionExecutor> = match config.role {
             Role::Local => {
                 Arc::new(crate::retained_actions::RetainedActionExecutor::from_config(&config))

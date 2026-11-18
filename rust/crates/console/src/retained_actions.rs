@@ -1,10 +1,12 @@
-//! #87: the retained local actions sidecar.
+//! #87/#94: the retained local actions sidecar.
 //!
-//! The local role's service, account and model-context actions are not migrated
-//! to Rust yet. Each one runs its retained Python handler in a ONE-SHOT child
-//! process through [`crate::sidecar`]; the child prints exactly one JSON envelope
-//! and exits. A failed, timed-out or cancelled child is an explicit error, never a
-//! simulated success. `model.catalog` keeps the #84 catalogue executor unchanged.
+//! The local role's service and account actions are not migrated to Rust yet.
+//! Each one runs its retained Python handler in a ONE-SHOT child process through
+//! [`crate::sidecar`]; the child prints exactly one JSON envelope and exits. A
+//! failed, timed-out or cancelled child is an explicit error, never a simulated
+//! success. The model-sync actions (`model.catalog` and the five
+//! `model.context_*` actions) are executed in-process by
+//! [`crate::model_sync::ModelSyncExecutor`] and never start Python.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,7 +14,7 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 
 use crate::config::ConsoleConfig;
-use crate::model_catalog::PythonCatalogExecutor;
+use crate::model_sync::ModelSyncExecutor;
 use crate::operation_manager::{ActionExecutor, ActionFailure, OperationContext};
 use crate::sidecar::{run_sidecar, SidecarLabels};
 
@@ -61,21 +63,6 @@ try:
         elif action == "account.login":
             from console.um_login import relogin_um
             result = relogin_um(target, params)
-        elif action == "model.context_probe_preview":
-            from console.model_actions import model_context_probe_preview
-            result = model_context_probe_preview(target, params)
-        elif action == "model.context_probe_run":
-            from console.model_actions import model_context_probe_run
-            result = model_context_probe_run(target, params)
-        elif action == "model.context_overrides":
-            from console.model_actions import model_context_overrides
-            result = model_context_overrides(target, params)
-        elif action == "model.context_override_set":
-            from console.model_actions import model_context_override_set
-            result = model_context_override_set(target, params)
-        elif action == "model.context_override_clear":
-            from console.model_actions import model_context_override_clear
-            result = model_context_override_clear(target, params)
         else:
             raise RuntimeError("unknown retained action: %s" % action)
 except Exception as exc:
@@ -93,26 +80,21 @@ const LABELS: SidecarLabels = SidecarLabels {
     collapse_error_codes: false,
 };
 
-/// Runs the retained Python handlers for the local service/account/context actions.
+/// Runs the retained Python handlers for the local service/account actions and
+/// delegates every model-sync action to the in-process executor.
 pub struct RetainedActionExecutor {
     interpreter: PathBuf,
     working_dir: PathBuf,
-    catalog: PythonCatalogExecutor,
+    model_sync: ModelSyncExecutor,
 }
 
 impl RetainedActionExecutor {
-    pub fn new(interpreter: impl Into<PathBuf>, working_dir: impl Into<PathBuf>) -> Self {
-        let interpreter = interpreter.into();
-        let working_dir = working_dir.into();
-        Self {
-            catalog: PythonCatalogExecutor::new(interpreter.clone(), working_dir.clone()),
-            interpreter,
-            working_dir,
-        }
-    }
-
     pub fn from_config(config: &ConsoleConfig) -> Self {
-        Self::new(config.python_exe.clone(), config.repo_root.clone())
+        Self {
+            interpreter: config.python_exe.clone(),
+            working_dir: config.repo_root.clone(),
+            model_sync: ModelSyncExecutor::from_config(config),
+        }
     }
 }
 
@@ -124,11 +106,6 @@ fn timeout_for(action: &str) -> Option<Duration> {
         "account.um_status" => Duration::from_secs(30),
         "account.um_verify" => Duration::from_secs(60),
         "account.login" => Duration::from_secs(300),
-        "model.context_probe_preview"
-        | "model.context_overrides"
-        | "model.context_override_set"
-        | "model.context_override_clear" => Duration::from_secs(120),
-        "model.context_probe_run" => Duration::from_secs(1200),
         _ => return None,
     })
 }
@@ -141,8 +118,8 @@ impl ActionExecutor for RetainedActionExecutor {
         params: &Map<String, Value>,
         ctx: &OperationContext,
     ) -> Result<Value, ActionFailure> {
-        if action == "model.catalog" {
-            return self.catalog.execute(action, target, params, ctx);
+        if action.starts_with("model.") {
+            return self.model_sync.execute(action, target, params, ctx);
         }
         let Some(timeout) = timeout_for(action) else {
             return Err(ActionFailure::new(

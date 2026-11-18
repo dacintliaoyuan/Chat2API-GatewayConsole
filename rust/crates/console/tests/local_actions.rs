@@ -1,9 +1,7 @@
-//! #87: the local 8001 action face runs the retained Python handlers.
-//!
-//! The local role lists the same twelve actions as Python's
-//! `console.adapters.build_registry()` and executes each one in a one-shot Python
-//! sidecar. These tests use a fake `console` package under a temp repo root, so no
-//! test touches the real UM runtime, the model-sync state or the network.
+//! #87: the local 8001 service/account actions run the retained Python
+//! handlers; #94 model-sync actions run in Rust. These tests use a fake
+//! `console` package under a temp repo root, so no test touches the real UM
+//! runtime, the model-sync state or the network.
 
 mod support;
 
@@ -14,7 +12,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use um_console::config::Role;
 use um_console::ConsoleServer;
-use um_test_harness::TempDataDir;
+use um_test_harness::{HttpRequest, HttpResponse, TempDataDir, TestServer};
 
 use support::*;
 
@@ -143,53 +141,6 @@ def relogin_um(target, params, ctx=None):
             "visible": bool(params.get("visible"))}
 "#;
 
-const MODEL_ACTIONS_MODULE: &str = r#"
-import json
-import os
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _record(action, target, params):
-    with open(os.path.join(ROOT, "model_calls.txt"), "a",
-              encoding="utf-8") as handle:
-        handle.write(json.dumps({"action": action, "target": target,
-                                 "params": params}, sort_keys=True) + "\n")
-
-
-def model_catalog(target, params, ctx=None):
-    _record("model.catalog", target, params)
-    return {"catalogs": {"um": [{"id": "fake-model"}]},
-            "warnings": [], "sources": ["um"], "checked_epoch": 1}
-
-
-def model_context_probe_preview(target, params, ctx=None):
-    _record("model.context_probe_preview", target, params)
-    return {"queue": [{"source": "um", "model_id": "fake-model"}],
-            "totals": {"records": 1}}
-
-
-def model_context_probe_run(target, params, ctx=None):
-    _record("model.context_probe_run", target, params)
-    return {"requests": 0, "results": []}
-
-
-def model_context_overrides(target, params, ctx=None):
-    _record("model.context_overrides", target, params)
-    return {"overrides": {}, "models": {}}
-
-
-def model_context_override_set(target, params, ctx=None):
-    _record("model.context_override_set", target, params)
-    return {"ok": True, "source": params.get("source"),
-            "model_id": params.get("model_id")}
-
-
-def model_context_override_clear(target, params, ctx=None):
-    _record("model.context_override_clear", target, params)
-    return {"ok": True, "existed": False}
-"#;
-
 fn fake_repo(temp: &TempDataDir) -> PathBuf {
     let root = temp.path().join("repo");
     let console = root.join("console");
@@ -198,8 +149,6 @@ fn fake_repo(temp: &TempDataDir) -> PathBuf {
     std::fs::write(console.join("adapters.py"), ADAPTERS_MODULE).expect("fake adapters");
     std::fs::write(console.join("um_adapter.py"), UM_ADAPTER_MODULE).expect("fake um adapter");
     std::fs::write(console.join("um_login.py"), UM_LOGIN_MODULE).expect("fake um login");
-    std::fs::write(console.join("model_actions.py"), MODEL_ACTIONS_MODULE)
-        .expect("fake model actions");
     root
 }
 
@@ -435,21 +384,104 @@ fn service_start_runs_the_retained_adapter_and_refuses_other_targets() {
     );
 }
 
+fn write_model_state(repo: &Path) {
+    let path = repo.join("data").join("model-sync-state.json");
+    std::fs::create_dir_all(path.parent().expect("data dir")).expect("data dir");
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&json!({
+            "version": 4,
+            "catalogCounts": {},
+            "contextProbes": {
+                "um|fake-model": {
+                    "source": "um", "model_id": "fake-model",
+                    "declared_context": 128000, "status": "pending",
+                    "observed_floor": null, "attempts": 0,
+                    "history": []
+                }
+            },
+            "contextOverrides": {}
+        }))
+        .expect("state json")
+            + "
+",
+    )
+    .expect("write state");
+}
+
+fn fake_gateway() -> TestServer {
+    TestServer::start(|request: HttpRequest| {
+        if request.method != "POST" {
+            return HttpResponse::json(200, &json!({"data": [{"id": "fake-model"}]}).to_string());
+        }
+        let body: Value = serde_json::from_slice(&request.body).expect("request body");
+        let content = body["messages"][0]["content"].as_str().unwrap_or_default();
+        let marker = content
+            .split("[ctxprobe ")
+            .nth(1)
+            .and_then(|rest| rest.split(']').next())
+            .unwrap_or("run001");
+        HttpResponse::json(
+            200,
+            &json!({"choices": [{"message": {
+                "content": format!("[ctxprobe {marker}] FINAL anchor — quote this line verbatim")}}]})
+            .to_string(),
+        )
+    })
+    .expect("fake gateway")
+}
+
 #[test]
-fn model_context_probe_preview_returns_the_retained_queue() {
+fn model_actions_run_without_a_python_interpreter() {
     let temp = temp();
     let repo = fake_repo(&temp);
-    let console = start_local_console(&temp, &repo);
+    write_model_state(&repo);
+    let gateway = fake_gateway();
+    let mut config = base_config(&temp);
+    config.role = Role::Local;
+    config.port = 8001;
+    config.gateway_port = gateway.port();
+    config.python_exe = PathBuf::from("definitely-not-python-94");
+    config.repo_root = repo.clone();
+    let server =
+        ConsoleServer::start_with_runtime(config, stopped_runtime()).expect("start local console");
+    let console = Console::from_server(server);
 
-    let created = submit(&console, "model.context_probe_preview", "model", json!({}));
-    assert_eq!(created.status, 201);
-    let operation = wait_terminal(&console, &created.json()["operation"]);
-    assert_eq!(operation["state"], json!("succeeded"));
-    assert_eq!(operation["result"]["queue"][0]["source"], json!("um"));
-    assert_eq!(
-        operation["result"]["queue"][0]["model_id"],
-        json!("fake-model")
+    let cases: [(&str, Value); 4] = [
+        ("model.catalog", json!({})),
+        ("model.context_probe_preview", json!({})),
+        (
+            "model.context_probe_run",
+            json!({"models": {"um": ["fake-model"]}, "max_requests": 1}),
+        ),
+        ("model.context_overrides", json!({})),
+    ];
+    for (action, params) in cases {
+        let created = submit(&console, action, "model", params);
+        assert_eq!(created.status, 201, "{action}");
+        let operation = wait_terminal(&console, &created.json()["operation"]);
+        assert_eq!(operation["state"], json!("succeeded"), "{action}: {operation}");
+    }
+    let set = submit(
+        &console,
+        "model.context_override_set",
+        "model",
+        json!({"source": "um", "model_id": "fake-model", "context": 200000}),
     );
+    assert_eq!(set.status, 201);
+    let set = wait_terminal(&console, &set.json()["operation"]);
+    assert_eq!(set["state"], json!("succeeded"), "{set}");
+    let set_at = set["result"]["set_at"].as_str().expect("set_at").to_string();
+    let clear = submit(
+        &console,
+        "model.context_override_clear",
+        "model",
+        json!({"source": "um", "model_id": "fake-model", "expected_set_at": set_at}),
+    );
+    assert_eq!(clear.status, 201);
+    let clear = wait_terminal(&console, &clear.json()["operation"]);
+    assert_eq!(clear["state"], json!("succeeded"), "{clear}");
+    assert!(!repo.join("model_calls.txt").exists());
 }
 
 #[test]
@@ -496,32 +528,18 @@ fn cancelling_a_running_login_kills_the_sidecar_and_records_cancelled() {
 }
 
 #[test]
-fn every_retained_local_action_executes_through_the_sidecar() {
+fn service_and_account_actions_still_execute_through_the_sidecar() {
     let temp = temp();
     let repo = fake_repo(&temp);
     let console = start_local_console(&temp, &repo);
 
-    let cases: [(&str, &str, Value); 12] = [
+    let cases: [(&str, &str, Value); 6] = [
         ("service.start", "chat2api", json!({})),
         ("service.stop", "chat2api", json!({})),
         ("service.restart", "chat2api", json!({})),
         ("account.um_status", "chat2api", json!({})),
         ("account.um_verify", "chat2api", json!({})),
         ("account.login", "chat2api", json!({"force": true})),
-        ("model.context_probe_preview", "model", json!({})),
-        ("model.context_probe_run", "model", json!({})),
-        ("model.context_overrides", "model", json!({})),
-        (
-            "model.context_override_set",
-            "model",
-            json!({"source": "um", "model_id": "fake-model", "context": 32000}),
-        ),
-        (
-            "model.context_override_clear",
-            "model",
-            json!({"source": "um", "model_id": "fake-model"}),
-        ),
-        ("model.catalog", "model", json!({})),
     ];
     for (action, target, params) in cases {
         let created = submit(&console, action, target, params);

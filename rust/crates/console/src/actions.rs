@@ -66,10 +66,9 @@ pub fn action_catalogue() -> Value {
 }
 
 /// The local role catalogue: the UM actions only. Share actions are not
-/// assembled locally. `model.catalog` is enabled: #84 executes it through a
-/// one-shot Python `model_sync` sidecar. The remaining actions are not wired in
-/// this ticket, so they are listed as disabled with their honest reason instead of
-/// claiming capability.
+/// assembled locally. All twelve actions are enabled; `model.catalog` and the five
+/// `model.context_*` actions execute in Rust (#94), while the service/account
+/// actions still run their retained Python handlers.
 pub fn action_catalogue_local() -> Value {
     let actions: Vec<Value> = local_registry()
         .iter()
