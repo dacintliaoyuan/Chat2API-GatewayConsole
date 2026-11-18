@@ -1677,8 +1677,7 @@ fn drive_login(
             let manual_rejection = auto_submissions == 0
                 && saw_umpass_form
                 && rejection_visible
-                && (fields[1] == CredentialField::Filled
-                    || fields == [CredentialField::Missing; 2]);
+                && fields[1] != CredentialField::ProtectedAutofill;
             if (auto_submissions > 0 && rejection_visible) || manual_rejection {
                 note_form(
                     inner,

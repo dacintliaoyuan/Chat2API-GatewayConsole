@@ -1275,6 +1275,57 @@ fn an_upstream_rejection_after_manual_umpass_submit_stops_old_credentials() {
 }
 
 #[test]
+fn a_manual_rejection_that_keeps_the_account_stops_old_credentials() {
+    let temp = TempDir::new("um-rust-umpass-manual-rejected-kept-account-");
+    let url = trusted_umpass_url();
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.autofill_protected.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") = vec![(url.to_string(), None)];
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            config.display_file = marker;
+            config.stage_settle_timeout = Duration::from_millis(50);
+            config.login_timeout = Duration::from_secs(3);
+            configure_form_pair(config);
+        },
+    );
+
+    service.start_explicit(true);
+    wait_for(&service, |s| {
+        s["login"]["manual_reason"] == json!("umpass_autofill_protected")
+    });
+    assert_eq!(page.fill_calls(), 0);
+
+    // 本人手动点击 UMPASS 登录，上游明确拒绝：ADFS 保留账号但清空密码。
+    page.reject_submit.store(true, Ordering::SeqCst);
+    page.autofill_protected.store(false, Ordering::SeqCst);
+    page.click(&VisibleTarget {
+        selector: "input[type=\"submit\"]".to_string(),
+        index: 0,
+    })
+    .expect("manual submit");
+
+    let status = wait_for(&service, |s| s["state"] == json!("failed"));
+    assert_eq!(status["error"], json!("upstream_credential_rejected"));
+    assert_eq!(status["recovery"]["last_form"], json!("rejected"));
+    assert_eq!(status["recovery"]["last_submit_count"], json!(0));
+    assert_eq!(
+        page.fill_calls(),
+        0,
+        "明确拒绝后不得再用旧凭据自动填写并提交"
+    );
+    assert_eq!(page.submit_clicks(), 1, "只统计本人这次手动提交");
+    assert_eq!(factory.closes(), 1);
+}
+
+#[test]
 fn configured_credentials_are_not_typed_on_untrusted_sso_origins() {
     for url in [
         "http://websso.um.edu.mo/adfs/",
