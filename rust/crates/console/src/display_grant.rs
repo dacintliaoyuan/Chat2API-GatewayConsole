@@ -166,7 +166,7 @@ impl DisplayGrants {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         prune_locked(&mut inner, now);
         let grant = inner.grants.get(&key)?;
-        if grant.expires_at <= now || grant.origin != origin {
+        if grant.expires_at <= now || !loopback_origin_eq(&grant.origin, origin) {
             return None;
         }
         let grant = inner.grants.remove(&key)?;
@@ -205,7 +205,7 @@ impl DisplayGrants {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         prune_locked(&mut inner, now);
         let session = inner.sessions.get(&digest(token))?;
-        if session.expires_at <= now || session.origin != origin {
+        if session.expires_at <= now || !loopback_origin_eq(&session.origin, origin) {
             return None;
         }
         Some(session.clone())
@@ -405,6 +405,34 @@ fn digest(token: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// The PC entry issues the grant through the cloud host's `127.0.0.1` helper while
+/// the browser redeems it from `localhost`; both are the same loopback console, so
+/// the exact-origin binding treats the three loopback spellings as one origin. A
+/// different port or a non-loopback origin still fails.
+fn loopback_origin_eq(grant_origin: &str, request_origin: &str) -> bool {
+    grant_origin == request_origin
+        || normalize_loopback_origin(grant_origin) == normalize_loopback_origin(request_origin)
+}
+
+fn normalize_loopback_origin(origin: &str) -> String {
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return origin.to_string();
+    };
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((host, port)) => (host, port),
+        None => (rest, ""),
+    };
+    let host = match host {
+        "localhost" | "127.0.0.1" | "[::1]" | "::1" => "127.0.0.1",
+        other => other,
+    };
+    if port.is_empty() {
+        format!("{scheme}://{host}")
+    } else {
+        format!("{scheme}://{host}:{port}")
+    }
+}
+
 fn epoch_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -439,6 +467,46 @@ mod tests {
         assert!(grants
             .validate_session_at(&session.token, "http://127.0.0.1:8002.evil", 10)
             .is_none());
+    }
+
+    #[test]
+    fn a_loopback_grant_redeems_and_validates_from_any_loopback_spelling() {
+        let grants = DisplayGrants::new();
+        let (token, _) = grants
+            .issue_at("control-token", "http://127.0.0.1:8002", 10)
+            .unwrap();
+        let session = grants
+            .redeem_at(&token, "http://localhost:8002", 10)
+            .expect("localhost redeems the 127.0.0.1 grant");
+        assert!(grants
+            .validate_session_at(&session.token, "http://localhost:8002", 10)
+            .is_some());
+        assert!(grants
+            .validate_session_at(&session.token, "http://127.0.0.1:8002", 10)
+            .is_some());
+        assert!(grants
+            .validate_session_at(&session.token, "http://127.0.0.1:8003", 10)
+            .is_none());
+        assert!(grants
+            .validate_session_at(&session.token, "http://evil.test:8002", 10)
+            .is_none());
+    }
+
+    #[test]
+    fn a_loopback_grant_still_refuses_a_different_port_or_foreign_origin() {
+        let grants = DisplayGrants::new();
+        let (token, _) = grants
+            .issue_at("control-token", "http://127.0.0.1:8002", 10)
+            .unwrap();
+        assert!(grants
+            .redeem_at(&token, "http://localhost:8003", 10)
+            .is_none());
+        assert!(grants
+            .redeem_at(&token, "http://evil.test:8002", 10)
+            .is_none());
+        assert!(grants
+            .redeem_at(&token, "http://127.0.0.1:8002", 10)
+            .is_some());
     }
 
     #[test]
