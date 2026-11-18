@@ -109,19 +109,27 @@ pub fn sanitize_resource(resource: &str) -> Result<String, OperationError> {
 #[cfg(windows)]
 fn try_open_exclusive(path: &Path) -> std::io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
+    // A second share_mode(0) open of the same file fails with
+    // `ERROR_SHARING_VIOLATION`. Rust leaves that Win32 code as
+    // `ErrorKind::Uncategorized`, so translate it to `WouldBlock` here; the
+    // acquire loop already knows how to wait for that. Every other open error
+    // stays a hard failure (Python `_acquire_windows` treats only winerror 32 as
+    // the expected contention). `ERROR_LOCK_VIOLATION` is not mapped: share-mode
+    // opens never report it, and byte-range locks are not part of this protocol.
     const ERROR_SHARING_VIOLATION: i32 = 32;
-    let result = OpenOptions::new()
+    match OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .share_mode(0)
-        .open(path);
-    match result {
+        .open(path)
+    {
+        Ok(file) => Ok(file),
         Err(error) if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => Err(
             std::io::Error::new(std::io::ErrorKind::WouldBlock, "resource lock is held"),
         ),
-        other => other,
+        Err(error) => Err(error),
     }
 }
 

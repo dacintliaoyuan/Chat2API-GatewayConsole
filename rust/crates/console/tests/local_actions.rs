@@ -11,10 +11,12 @@ mod support;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use um_console::config::Role;
+use um_console::lock::ResourceLock;
 use um_console::ConsoleServer;
 use um_test_harness::TempDataDir;
 
@@ -83,7 +85,10 @@ def um_auth_status(target, params, ctx=None):
     _record({"action": "account.um_status", "target": target,
              "params": params})
     return {"state": "valid", "source": "memory-state",
-            "verified": False, "state_known": True}
+            "verified": False, "state_known": True,
+            "label": "登录有效（内存态）",
+            "note": "内存态（未主动核验）：仅读取 chat2api 自身认证状态，"
+                    "未向上游发起核验请求"}
 
 
 def um_verify_account(target, params, ctx=None):
@@ -195,6 +200,7 @@ fn start_local_console(temp: &TempDataDir, repo: &Path) -> Console {
     config.gateway_port = 8000;
     config.python_exe = python();
     config.repo_root = repo.to_path_buf();
+    config.console_lock_dir = Some(temp.path().join("console-locks"));
     let server =
         ConsoleServer::start_with_runtime(config, stopped_runtime()).expect("start local console");
     Console::from_server(server)
@@ -242,6 +248,153 @@ fn submit(console: &Console, action: &str, target: &str, params: Value) -> Clien
         "/api/console/operations",
         Some(json!({"action": action, "target": target, "params": params})),
     )
+}
+
+/// Holds the `account:um` resource lock the way another console process (or the
+/// retained Python `ResourceFileLock`) does: an exclusive handle on the same file.
+fn hold_account_lock(temp: &TempDataDir) -> ResourceLock {
+    ResourceLock::acquire(
+        &temp.path().join("console-locks"),
+        "account:um",
+        "test-holder",
+        Duration::from_secs(30),
+        &AtomicBool::new(false),
+    )
+    .expect("hold the account resource lock")
+}
+
+/// Polls for `window` and fails the test if the operation leaves the lock wait
+/// (fails early, or reaches a terminal state) before the holder releases it.
+fn assert_waiting_for_lock(console: &Console, operation: &Value, window: Duration) -> Value {
+    let op_id = operation["id"].as_str().expect("operation id").to_string();
+    let deadline = Instant::now() + window;
+    loop {
+        let fetched = request(
+            console,
+            "GET",
+            &format!("/api/console/operations/{op_id}"),
+            None,
+        );
+        assert_eq!(fetched.status, 200);
+        let current = fetched.json()["operation"].clone();
+        assert_eq!(
+            current["state"],
+            json!("queued"),
+            "operation must keep waiting for the held resource lock: {current}"
+        );
+        assert!(
+            current["error"].is_null(),
+            "operation failed instead of waiting: {current}"
+        );
+        if Instant::now() >= deadline {
+            return current;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn um_verify_waits_for_a_held_account_lock_and_then_succeeds() {
+    let temp = temp();
+    let repo = fake_repo(&temp);
+    let console = start_local_console(&temp, &repo);
+    let holder = hold_account_lock(&temp);
+
+    let created = submit(&console, "account.um_verify", "chat2api", json!({}));
+    assert_eq!(created.status, 201);
+    let operation = created.json()["operation"].clone();
+    let operation = assert_waiting_for_lock(&console, &operation, Duration::from_millis(600));
+
+    drop(holder);
+    let operation = wait_terminal(&console, &operation);
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    assert_eq!(operation["result"]["verify"], json!("valid"));
+    assert_eq!(operation["result"]["source"], json!("memory-state"));
+
+    let calls =
+        std::fs::read_to_string(repo.join("account_calls.txt")).expect("account call record");
+    let call: Value = serde_json::from_str(calls.trim()).expect("call json");
+    assert_eq!(call["action"], json!("account.um_verify"));
+}
+
+#[test]
+fn reverify_and_forced_visible_login_wait_for_the_same_account_lock() {
+    let temp = temp();
+    let repo = fake_repo(&temp);
+    let console = start_local_console(&temp, &repo);
+    let holder = hold_account_lock(&temp);
+
+    let verify = submit(&console, "account.um_verify", "chat2api", json!({}));
+    let login = submit(
+        &console,
+        "account.login",
+        "chat2api",
+        json!({"force": true, "visible": true}),
+    );
+    assert_eq!(verify.status, 201);
+    assert_eq!(login.status, 201);
+    let verify_op = assert_waiting_for_lock(
+        &console,
+        &verify.json()["operation"],
+        Duration::from_millis(400),
+    );
+    let login_op = assert_waiting_for_lock(
+        &console,
+        &login.json()["operation"],
+        Duration::from_millis(400),
+    );
+
+    drop(holder);
+    let verify_op = wait_terminal(&console, &verify_op);
+    let login_op = wait_terminal(&console, &login_op);
+    assert_eq!(verify_op["state"], json!("succeeded"), "{verify_op}");
+    assert_eq!(verify_op["result"]["verify"], json!("valid"));
+    assert_eq!(login_op["state"], json!("succeeded"), "{login_op}");
+    assert_eq!(login_op["result"]["status"], json!("valid"));
+    assert_eq!(login_op["result"]["force"], json!(true));
+    assert_eq!(login_op["result"]["visible"], json!(true));
+
+    let calls = std::fs::read_to_string(repo.join("login_calls.txt")).expect("login call record");
+    let calls: Vec<Value> = calls
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("call json"))
+        .collect();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["action"], json!("account.login"));
+    assert_eq!(calls[0]["params"], json!({"force": true, "visible": true}));
+    assert!(repo.join("account_calls.txt").exists());
+}
+
+#[test]
+fn cancelling_a_verify_while_it_waits_for_the_lock_never_runs_the_sidecar() {
+    let temp = temp();
+    let repo = fake_repo(&temp);
+    let console = start_local_console(&temp, &repo);
+    let holder = hold_account_lock(&temp);
+
+    let created = submit(&console, "account.um_verify", "chat2api", json!({}));
+    assert_eq!(created.status, 201);
+    let operation = created.json()["operation"].clone();
+    let operation = assert_waiting_for_lock(&console, &operation, Duration::from_millis(300));
+    let op_id = operation["id"].as_str().expect("operation id").to_string();
+
+    let cancelled = request(
+        &console,
+        "POST",
+        &format!("/api/console/operations/{op_id}/cancel"),
+        None,
+    );
+    assert_eq!(cancelled.status, 200);
+    let operation = wait_terminal(&console, &operation);
+    assert_eq!(operation["state"], json!("cancelled"), "{operation}");
+    assert_eq!(operation["error"]["code"], json!("cancelled"));
+    assert_eq!(operation["result"], Value::Null);
+    assert!(
+        !repo.join("account_calls.txt").exists(),
+        "a verify cancelled during the lock wait must never run its sidecar"
+    );
+
+    drop(holder);
 }
 
 #[test]
@@ -489,6 +642,87 @@ fn every_retained_account_and_model_action_executes_through_the_sidecar() {
             "{action}: {operation}"
         );
     }
+}
+
+/// #95: Windows Python defaults stdio to the ANSI code page (cp936 on a
+/// Chinese host), but the sidecar envelope is UTF-8 JSON and the Rust parent
+/// always decodes it as UTF-8. Re-exec this test with `PYTHONIOENCODING=cp936`
+/// so the sidecar child would inherit a non-UTF-8 stdout on any host; the
+/// production sidecar must pin UTF-8 stdio and keep the Chinese `label`, `note`
+/// and error text intact instead of U+FFFD.
+#[test]
+fn sidecar_keeps_chinese_text_intact_under_a_cp936_default_stdout() {
+    const CHILD: &str = "UM_SIDECAR_CP936_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "sidecar_keeps_chinese_text_intact_under_a_cp936_default_stdout",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PYTHONIOENCODING", "cp936")
+            .env_remove("PYTHONUTF8")
+            .output()
+            .expect("run the nested sidecar encoding test");
+        assert!(
+            output.status.success(),
+            "nested sidecar encoding test failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let temp = temp();
+    let repo = fake_repo(&temp);
+    let console = start_local_console(&temp, &repo);
+
+    let created = submit(&console, "account.um_status", "chat2api", json!({}));
+    assert_eq!(created.status, 201);
+    let operation = wait_terminal(&console, &created.json()["operation"]);
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    assert_eq!(
+        operation["result"]["label"],
+        json!("登录有效（内存态）"),
+        "{operation}"
+    );
+    assert_eq!(
+        operation["result"]["note"],
+        json!("内存态（未主动核验）：仅读取 chat2api 自身认证状态，未向上游发起核验请求"),
+        "{operation}"
+    );
+    for field in ["label", "note"] {
+        let text = operation["result"][field].as_str().unwrap_or_default();
+        assert!(!text.contains('\u{FFFD}'), "{field}: {operation}");
+    }
+
+    let invalid = submit(
+        &console,
+        "account.login",
+        "chat2api",
+        json!({"visible": true, "force": false}),
+    );
+    assert_eq!(invalid.status, 201);
+    let operation = wait_terminal(&console, &invalid.json()["operation"]);
+    assert_eq!(operation["state"], json!("failed"), "{operation}");
+    assert_eq!(
+        operation["error"]["code"],
+        json!("invalid_params"),
+        "{operation}"
+    );
+    assert_eq!(
+        operation["error"]["message"],
+        json!("visible=true 只能与 force=true 一起使用；可见窗口只用于显式强制重新登录"),
+        "{operation}"
+    );
+    assert!(
+        !operation["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains('\u{FFFD}'),
+        "{operation}"
+    );
 }
 
 fn wait_for_path(path: &Path) {
