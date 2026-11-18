@@ -742,6 +742,151 @@ fn cancelling_a_running_login_records_cancelled() {
     assert_eq!(operation["error"]["code"], json!("cancelled"));
 }
 
+fn hold_account_lock(temp: &TempDataDir) -> um_console::lock::ResourceLock {
+    um_console::lock::ResourceLock::acquire(
+        &temp.path().join("console-locks"),
+        "account:um",
+        "test-holder",
+        Duration::from_secs(30),
+        &AtomicBool::new(false),
+    )
+    .expect("hold the account resource lock")
+}
+
+fn assert_waiting_for_lock(console: &Console, operation: &Value, window: Duration) -> Value {
+    let op_id = operation["id"].as_str().expect("operation id").to_string();
+    let deadline = Instant::now() + window;
+    loop {
+        let fetched = request(
+            console,
+            "GET",
+            &format!("/api/console/operations/{op_id}"),
+            None,
+        );
+        assert_eq!(fetched.status, 200);
+        let current = fetched.json()["operation"].clone();
+        assert_eq!(
+            current["state"],
+            json!("queued"),
+            "operation must keep waiting for the held resource lock: {current}"
+        );
+        assert!(
+            current["error"].is_null(),
+            "operation failed instead of waiting: {current}"
+        );
+        if Instant::now() >= deadline {
+            return current;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn um_verify_waits_for_a_held_account_lock_and_then_succeeds() {
+    let temp = temp();
+    let gateway = FakeAdmin::start();
+    let console = start_local(&temp, &gateway, running_runtime());
+    let holder = hold_account_lock(&temp);
+
+    let created = submit(&console, "account.um_verify", "chat2api", json!({}));
+    assert_eq!(created.status, 201);
+    let operation = created.json()["operation"].clone();
+    let operation = assert_waiting_for_lock(&console, &operation, Duration::from_millis(600));
+
+    drop(holder);
+    let operation = wait_terminal(&console, &operation);
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    assert_eq!(operation["result"]["verify"], json!("valid"));
+    let requests = gateway.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].path, "/admin/auth/verify");
+}
+
+#[test]
+fn reverify_and_forced_visible_login_wait_for_the_same_account_lock() {
+    let temp = temp();
+    let gateway = FakeAdmin::start();
+    gateway.set_verify(
+        200,
+        json!({"verify": "valid", "reason": null,
+               "upstream_status": 200, "checked_epoch": 1}),
+    );
+    gateway.set_status(vec![json!({"state": "valid", "error": null,
+                                  "login": null,
+                                  "recovery": {"state": "idle"}})]);
+    let console = start_local(&temp, &gateway, running_runtime());
+    let holder = hold_account_lock(&temp);
+
+    let verify = submit(&console, "account.um_verify", "chat2api", json!({}));
+    let login = submit(
+        &console,
+        "account.login",
+        "chat2api",
+        json!({"force": true, "visible": true}),
+    );
+    assert_eq!(verify.status, 201);
+    assert_eq!(login.status, 201);
+    let verify_op = assert_waiting_for_lock(
+        &console,
+        &verify.json()["operation"],
+        Duration::from_millis(400),
+    );
+    let login_op = assert_waiting_for_lock(
+        &console,
+        &login.json()["operation"],
+        Duration::from_millis(400),
+    );
+
+    drop(holder);
+    let verify_op = wait_terminal(&console, &verify_op);
+    let login_op = wait_terminal(&console, &login_op);
+    assert_eq!(verify_op["state"], json!("succeeded"), "{verify_op}");
+    assert_eq!(verify_op["result"]["verify"], json!("valid"));
+    assert_eq!(login_op["state"], json!("succeeded"), "{login_op}");
+    assert_eq!(login_op["result"]["final_state"], json!("valid"));
+    assert_eq!(login_op["result"]["login_skipped"], json!(false));
+
+    let requests = gateway.requests();
+    let post = requests
+        .iter()
+        .find(|request| request.method == "POST")
+        .expect("forced login POST");
+    assert_eq!(post.path, "/admin/auth/login");
+    assert_eq!(post.body, br#"{"visible":true}"#.to_vec());
+}
+
+#[test]
+fn cancelling_a_verify_while_it_waits_for_the_lock_never_queries_the_gateway() {
+    let temp = temp();
+    let gateway = FakeAdmin::start();
+    let console = start_local(&temp, &gateway, running_runtime());
+    let holder = hold_account_lock(&temp);
+
+    let created = submit(&console, "account.um_verify", "chat2api", json!({}));
+    assert_eq!(created.status, 201);
+    let operation = created.json()["operation"].clone();
+    let operation = assert_waiting_for_lock(&console, &operation, Duration::from_millis(300));
+    let op_id = operation["id"].as_str().expect("operation id").to_string();
+
+    let cancelled = request(
+        &console,
+        "POST",
+        &format!("/api/console/operations/{op_id}/cancel"),
+        None,
+    );
+    assert_eq!(cancelled.status, 200);
+    let operation = wait_terminal(&console, &operation);
+    assert_eq!(operation["state"], json!("cancelled"), "{operation}");
+    assert_eq!(operation["error"]["code"], json!("cancelled"));
+    assert_eq!(operation["result"], Value::Null);
+    assert!(
+        gateway.requests().is_empty(),
+        "a verify cancelled during the lock wait must never query the gateway"
+    );
+
+    drop(holder);
+}
+
 fn wait_for_requests(gateway: &FakeAdmin, count: usize) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while gateway.request_count() < count {

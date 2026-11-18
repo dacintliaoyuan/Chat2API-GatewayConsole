@@ -105,6 +105,10 @@ fn command(interpreter: &Path, working_dir: &Path, script: &str, payload: &str) 
         .arg(script)
         .arg(payload)
         .current_dir(working_dir)
+        // #95: Windows Python defaults stdio to the ANSI code page (cp936 on a
+        // Chinese host) while this parent always decodes the envelope as UTF-8.
+        // Pin the child's stdio encoding instead of inheriting it.
+        .env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

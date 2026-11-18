@@ -104,7 +104,9 @@ def model_catalog(target, params, ctx=None):
 def model_context_probe_preview(target, params, ctx=None):
     _record("model.context_probe_preview", target, params)
     return {"queue": [{"source": "um", "model_id": "fake-model"}],
-            "totals": {"records": 1}}
+            "totals": {"records": 1},
+            "label": "上下文探测预览（只读）",
+            "note": "队列+计划+估算，零请求零写入"}
 
 
 def model_context_probe_run(target, params, ctx=None):
@@ -117,8 +119,16 @@ def model_context_overrides(target, params, ctx=None):
     return {"overrides": {}, "models": {}}
 
 
+class _Error(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 def model_context_override_set(target, params, ctx=None):
     _record("model.context_override_set", target, params)
+    if params.get("model_id") == "fail":
+        raise _Error("invalid_params", "模型标识无效；请重新选择后再保存")
     return {"ok": True, "source": params.get("source"),
             "model_id": params.get("model_id")}
 
@@ -146,6 +156,7 @@ fn start_local_console(temp: &TempDataDir, repo: &Path) -> Console {
     config.gateway_port = 8000;
     config.python_exe = python();
     config.repo_root = repo.to_path_buf();
+    config.console_lock_dir = Some(temp.path().join("console-locks"));
     let server =
         ConsoleServer::start_with_runtime(config, stopped_runtime()).expect("start local console");
     Console::from_server(server)
@@ -358,4 +369,85 @@ fn every_retained_local_action_executes_through_the_sidecar() {
             "{action}: {operation}"
         );
     }
+}
+
+/// #95: Windows Python defaults stdio to the ANSI code page (cp936 on a
+/// Chinese host), but the sidecar envelope is UTF-8 JSON and the Rust parent
+/// always decodes it as UTF-8. Re-exec this test with `PYTHONIOENCODING=cp936`
+/// so the sidecar child would inherit a non-UTF-8 stdout on any host; the
+/// production sidecar must pin UTF-8 stdio and keep the Chinese `label`, `note`
+/// and error text intact instead of U+FFFD.
+#[test]
+fn sidecar_keeps_chinese_text_intact_under_a_cp936_default_stdout() {
+    const CHILD: &str = "UM_SIDECAR_CP936_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "sidecar_keeps_chinese_text_intact_under_a_cp936_default_stdout",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PYTHONIOENCODING", "cp936")
+            .env_remove("PYTHONUTF8")
+            .output()
+            .expect("run the nested sidecar encoding test");
+        assert!(
+            output.status.success(),
+            "nested sidecar encoding test failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let temp = temp();
+    let repo = fake_repo(&temp);
+    let console = start_local_console(&temp, &repo);
+
+    let created = submit(&console, "model.context_probe_preview", "model", json!({}));
+    assert_eq!(created.status, 201);
+    let operation = wait_terminal(&console, &created.json()["operation"]);
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    assert_eq!(
+        operation["result"]["label"],
+        json!("上下文探测预览（只读）"),
+        "{operation}"
+    );
+    assert_eq!(
+        operation["result"]["note"],
+        json!("队列+计划+估算，零请求零写入"),
+        "{operation}"
+    );
+    for field in ["label", "note"] {
+        let text = operation["result"][field].as_str().unwrap_or_default();
+        assert!(!text.contains('\u{FFFD}'), "{field}: {operation}");
+    }
+
+    let invalid = submit(
+        &console,
+        "model.context_override_set",
+        "model",
+        json!({"source": "um", "model_id": "fail", "context": 32000}),
+    );
+    assert_eq!(invalid.status, 201);
+    let operation = wait_terminal(&console, &invalid.json()["operation"]);
+    assert_eq!(operation["state"], json!("failed"), "{operation}");
+    assert_eq!(
+        operation["error"]["code"],
+        json!("invalid_params"),
+        "{operation}"
+    );
+    assert_eq!(
+        operation["error"]["message"],
+        json!("模型标识无效；请重新选择后再保存"),
+        "{operation}"
+    );
+    assert!(
+        !operation["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains('\u{FFFD}'),
+        "{operation}"
+    );
 }
