@@ -2022,7 +2022,16 @@ fn write_state_transaction(paths: &ModelSyncPaths, state: &Value) -> Result<(), 
     let backup_dir = paths.backup_dir.join(stamp);
     fs::create_dir_all(&backup_dir)
         .map_err(|error| ModelSyncError::new("publish_failed", error.to_string()))?;
-    let original = fs::read(&paths.state_file).ok();
+    let original = match fs::read(&paths.state_file) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(ModelSyncError::new(
+                "publish_failed",
+                format!("读取现有状态失败：{error}"),
+            ))
+        }
+    };
     if let Some(original) = &original {
         fs::write(backup_dir.join("model-sync-state.json.bak"), original)
             .map_err(|error| ModelSyncError::new("publish_failed", error.to_string()))?;
@@ -3083,6 +3092,7 @@ fn http_request(
                 return Err(HttpFailure::ProtocolError);
             }
         }
+        body = decode_chunked(&body)?;
     } else if let Some(length) = response_headers
         .get("content-length")
         .and_then(|value| value.parse::<usize>().ok())
@@ -3177,4 +3187,30 @@ fn find_crlf(raw: &[u8], from: usize) -> Option<usize> {
     raw.get(from..)
         .and_then(|slice| slice.windows(2).position(|window| window == b"\r\n"))
         .map(|position| from + position)
+}
+
+fn decode_chunked(raw: &[u8]) -> Result<Vec<u8>, HttpFailure> {
+    let mut index = 0;
+    let mut output = Vec::new();
+    loop {
+        let Some(line_end) = find_crlf(raw, index) else {
+            return Err(HttpFailure::ProtocolError);
+        };
+        let line = String::from_utf8_lossy(&raw[index..line_end]);
+        let size_text = line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_text, 16).map_err(|_| HttpFailure::ProtocolError)?;
+        index = line_end + 2;
+        if size == 0 {
+            return Ok(output);
+        }
+        if raw.len() < index + size + 2 {
+            return Err(HttpFailure::ProtocolError);
+        }
+        output.extend_from_slice(&raw[index..index + size]);
+        index += size;
+        if raw.get(index..index + 2) != Some(b"\r\n") {
+            return Err(HttpFailure::ProtocolError);
+        }
+        index += 2;
+    }
 }
