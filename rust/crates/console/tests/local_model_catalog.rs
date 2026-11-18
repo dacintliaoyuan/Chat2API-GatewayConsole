@@ -141,7 +141,12 @@ fn model_catalog_rejects_unknown_or_paused_sources_before_reading() {
     let gateway = gateway(json!([{"id": "model-a"}]));
     let console = start_local_console(&temp, gateway.port());
 
-    for sources in [json!("[\"m365\"]"), json!("[\"um\",\"um\"]"), json!("[]"), json!("not-json")] {
+    for sources in [
+        json!("[\"m365\"]"),
+        json!("[\"um\",\"um\"]"),
+        json!("[]"),
+        json!("not-json"),
+    ] {
         let operation = submit_catalog(&console, json!({"sources": sources}));
         assert_eq!(operation["state"], json!("failed"), "{operation}");
         assert_eq!(operation["error"]["code"], json!("invalid_params"));

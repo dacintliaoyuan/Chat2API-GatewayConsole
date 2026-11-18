@@ -135,7 +135,10 @@ fn context_overrides_reports_declared_override_inert_and_malformed_rows() {
     let operation = submit(&console, "model.context_overrides", json!({}));
 
     assert_eq!(operation["state"], json!("succeeded"), "{operation}");
-    assert_eq!(std::fs::read(state_path(&temp)).expect("after bytes"), before);
+    assert_eq!(
+        std::fs::read(state_path(&temp)).expect("after bytes"),
+        before
+    );
     let rows: std::collections::BTreeMap<String, Value> = operation["result"]["overrides"]
         .as_array()
         .expect("overrides")
@@ -283,9 +286,18 @@ fn context_override_set_persists_the_override_and_reports_the_new_version() {
         .contains("覆盖保存≠客户端已应用"));
 
     let state = read_state(&temp);
-    assert_eq!(state["contextOverrides"]["um|model-a"]["context"], json!(200000));
-    assert_eq!(state["contextOverrides"]["um|model-a"]["source"], json!("manual"));
-    assert_eq!(state["contextOverrides"]["um|model-a"]["set_at"], json!(set_at));
+    assert_eq!(
+        state["contextOverrides"]["um|model-a"]["context"],
+        json!(200000)
+    );
+    assert_eq!(
+        state["contextOverrides"]["um|model-a"]["source"],
+        json!("manual")
+    );
+    assert_eq!(
+        state["contextOverrides"]["um|model-a"]["set_at"],
+        json!(set_at)
+    );
 
     let backup_root = temp.path().join("data").join("model-sync-backups");
     let backups: Vec<_> = std::fs::read_dir(&backup_root)
@@ -293,10 +305,7 @@ fn context_override_set_persists_the_override_and_reports_the_new_version() {
         .filter_map(Result::ok)
         .collect();
     assert_eq!(backups.len(), 1, "{backups:?}");
-    assert!(backups[0]
-        .path()
-        .join("model-sync-state.json.bak")
-        .exists());
+    assert!(backups[0].path().join("model-sync-state.json.bak").exists());
 }
 
 #[test]
@@ -454,7 +463,10 @@ fn context_override_clear_is_idempotent_and_keeps_probe_history() {
         .as_str()
         .unwrap_or_default()
         .contains("不存在"));
-    assert_eq!(std::fs::read(state_path(&temp)).expect("bytes"), before_again);
+    assert_eq!(
+        std::fs::read(state_path(&temp)).expect("bytes"),
+        before_again
+    );
 }
 
 fn preview_state() -> Value {
@@ -699,5 +711,8 @@ fn a_legacy_python_state_is_migrated_and_still_writable() {
     let after = read_state(&temp);
     assert_eq!(after["version"], json!(4));
     assert!(after.get("pinned").is_none());
-    assert_eq!(after["contextOverrides"]["um|model-a"]["context"], json!(200000));
+    assert_eq!(
+        after["contextOverrides"]["um|model-a"]["context"],
+        json!(200000)
+    );
 }

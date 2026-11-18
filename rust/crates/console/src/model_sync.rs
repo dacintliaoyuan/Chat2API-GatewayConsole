@@ -267,7 +267,9 @@ impl ModelSyncExecutor {
         if !unknown.is_empty() {
             let mut unknown = unknown;
             unknown.sort();
-            return Err(ModelSyncError::invalid(format!("未知参数：{}", join(&unknown, ","))).into());
+            return Err(
+                ModelSyncError::invalid(format!("未知参数：{}", join(&unknown, ","))).into(),
+            );
         }
         let fresh = match params.get("fresh") {
             None => false,
@@ -359,10 +361,9 @@ impl ModelSyncExecutor {
                 None => Map::new(),
                 Some(Value::Object(models)) => models.clone(),
                 Some(_) => {
-                    return Err(ModelSyncError::invalid(
-                        "models 必须为来源到模型 id 列表的对象",
+                    return Err(
+                        ModelSyncError::invalid("models 必须为来源到模型 id 列表的对象").into(),
                     )
-                    .into())
                 }
             };
             local_only_catalogs(&models)?
@@ -433,20 +434,19 @@ impl ModelSyncExecutor {
             });
             let eligible = matches!(status_name, "pending" | "stale")
                 || (matches!(status_name, "verified" | "failed") && retest);
-            let estimate_floor = if status_name == "pending" { floor } else { None };
+            let estimate_floor = if status_name == "pending" {
+                floor
+            } else {
+                None
+            };
             let ladder: Vec<i64> = steps
                 .iter()
                 .copied()
                 .filter(|step| estimate_floor.map_or(true, |floor| *step > floor))
                 .collect();
-            let will_request =
-                selected && eligible && executable && !ladder.is_empty();
+            let will_request = selected && eligible && executable && !ladder.is_empty();
             let estimated_requests = if will_request { ladder.len() as i64 } else { 0 };
-            let input_chars_estimate: i64 = if will_request {
-                ladder.iter().sum()
-            } else {
-                0
-            };
+            let input_chars_estimate: i64 = if will_request { ladder.iter().sum() } else { 0 };
             let estimate_note = if !selected {
                 idle_records += 1;
                 Some("本轮未选中（不在请求集合），实际零请求")
@@ -661,10 +661,7 @@ impl ModelSyncExecutor {
                 .map(|(source, models)| {
                     (
                         source.clone(),
-                        models
-                            .iter()
-                            .map(|model| model.model_id.clone())
-                            .collect(),
+                        models.iter().map(|model| model.model_id.clone()).collect(),
                     )
                 })
                 .collect();
@@ -700,15 +697,14 @@ impl ModelSyncExecutor {
             object.insert("contextProbes".to_string(), Value::Object(records.clone()));
         }
         if let Err(error) = write_state_transaction(&self.paths, &state) {
-            let recovery = self.preserve_probe_evidence(
-                &records,
-                selection.as_ref(),
-                &outcome,
-                &error,
-            );
+            let recovery =
+                self.preserve_probe_evidence(&records, selection.as_ref(), &outcome, &error);
             return Err(ModelSyncError::new(
                 "probe_failed",
-                format!("上下文探测失败：ConfigPublishError: {}{recovery}", error.message),
+                format!(
+                    "上下文探测失败：ConfigPublishError: {}{recovery}",
+                    error.message
+                ),
             )
             .into());
         }
@@ -969,10 +965,8 @@ impl ModelSyncExecutor {
                     }
                     Err(error) => {
                         record.insert("last_error".to_string(), json!(error.name()));
-                        results[row_index]["note"] = json!(format!(
-                            "transient:{}，不构成容量结论",
-                            error.name()
-                        ));
+                        results[row_index]["note"] =
+                            json!(format!("transient:{}，不构成容量结论", error.name()));
                         completed = false;
                         break;
                     }
@@ -982,9 +976,8 @@ impl ModelSyncExecutor {
                                 record.insert("observed_floor".to_string(), json!(step));
                                 record.insert("last_success".to_string(), json!(now_iso()));
                                 if let Some(tokens) = trusted_prompt_tokens(&response_body) {
-                                    let stored = record
-                                        .get("token_evidence")
-                                        .and_then(Value::as_i64);
+                                    let stored =
+                                        record.get("token_evidence").and_then(Value::as_i64);
                                     if stored.map_or(true, |stored| tokens > stored) {
                                         record.insert("token_evidence".to_string(), json!(tokens));
                                     }
@@ -993,10 +986,7 @@ impl ModelSyncExecutor {
                                 results[row_index]["note"] = json!(format!("floor={step}"));
                                 continue;
                             }
-                            record.insert(
-                                "last_error".to_string(),
-                                json!("InconclusiveResponse"),
-                            );
+                            record.insert("last_error".to_string(), json!("InconclusiveResponse"));
                             results[row_index]["note"] =
                                 json!("回复未引用末段锚点，停止该记录本轮");
                             completed = false;
@@ -1005,10 +995,7 @@ impl ModelSyncExecutor {
                         if explicit_context_limit(http_status, &response_body) {
                             record.insert("status".to_string(), json!("failed"));
                             record.insert("observed_ceiling".to_string(), json!(step));
-                            record.insert(
-                                "last_error".to_string(),
-                                json!("ContextLimitRefused"),
-                            );
+                            record.insert("last_error".to_string(), json!("ContextLimitRefused"));
                             record.insert("stale_reason".to_string(), Value::Null);
                             results[row_index]["status"] = json!("failed");
                             results[row_index]["note"] =
@@ -1017,10 +1004,8 @@ impl ModelSyncExecutor {
                             break;
                         }
                         record.insert("last_error".to_string(), json!("HTTPError"));
-                        results[row_index]["note"] = json!(format!(
-                            "transient:HTTP{}，不构成容量结论",
-                            http_status
-                        ));
+                        results[row_index]["note"] =
+                            json!(format!("transient:HTTP{}，不构成容量结论", http_status));
                         completed = false;
                         break;
                     }
@@ -1155,11 +1140,11 @@ impl ModelSyncExecutor {
             "note": "状态事务保存失败；本文件保留本轮已计费证据，未写入主状态",
         });
         match write_probe_recovery(&self.paths, &payload) {
-            Ok(path) => format!("；已计费证据保留到恢复文件 {}", path.file_name().unwrap_or_default().to_string_lossy()),
-            Err(error) => format!(
-                "；已计费证据恢复文件写入失败：{}",
-                error.message
+            Ok(path) => format!(
+                "；已计费证据保留到恢复文件 {}",
+                path.file_name().unwrap_or_default().to_string_lossy()
             ),
+            Err(error) => format!("；已计费证据恢复文件写入失败：{}", error.message),
         }
     }
 
@@ -1189,10 +1174,9 @@ impl ModelSyncExecutor {
             .into());
         };
         if !models.iter().any(|model| model.model_id == model_id) {
-            return Err(ModelSyncError::invalid(format!(
-                "模型不在当前目录：{source}|{model_id}"
-            ))
-            .into());
+            return Err(
+                ModelSyncError::invalid(format!("模型不在当前目录：{source}|{model_id}")).into(),
+            );
         }
         let _lock = self.acquire_sync_lock("override_failed", "覆盖保存失败")?;
         let mut state = load_state(&self.paths);
@@ -1289,11 +1273,7 @@ impl ModelSyncExecutor {
         }))
     }
 
-    fn acquire_sync_lock(
-        &self,
-        code: &str,
-        prefix: &str,
-    ) -> Result<ModelSyncLock, ActionFailure> {
+    fn acquire_sync_lock(&self, code: &str, prefix: &str) -> Result<ModelSyncLock, ActionFailure> {
         ModelSyncLock::acquire(&self.paths).map_err(|_| {
             ModelSyncError::new(
                 code,
@@ -1303,15 +1283,13 @@ impl ModelSyncExecutor {
         })
     }
 
-    fn apply_state(
-        &self,
-        state: &Value,
-        code: &str,
-        prefix: &str,
-    ) -> Result<(), ActionFailure> {
+    fn apply_state(&self, state: &Value, code: &str, prefix: &str) -> Result<(), ActionFailure> {
         write_state_transaction(&self.paths, state).map_err(|error| {
-            ModelSyncError::new(code, format!("{prefix}：ConfigPublishError: {}", error.message))
-                .into()
+            ModelSyncError::new(
+                code,
+                format!("{prefix}：ConfigPublishError: {}", error.message),
+            )
+            .into()
         })
     }
 
@@ -1358,7 +1336,10 @@ impl ModelSyncExecutor {
                 },
                 Err(error) => {
                     if error == HttpFailure::Cancelled {
-                        return Err(ModelSyncError::new("cancelled", "adapter honoured the cancel request"));
+                        return Err(ModelSyncError::new(
+                            "cancelled",
+                            "adapter honoured the cancel request",
+                        ));
                     }
                     warnings.push(format!("UM目录不可用：{}", error.name()));
                 }
@@ -1432,9 +1413,8 @@ impl ModelSyncExecutor {
         }
         if !marker {
             report.status = "not_fresh";
-            report.error = Some(
-                "UM目录响应缺少 raw-fresh 标记（可能来自旧缓存），不宣告刷新成功".to_string(),
-            );
+            report.error =
+                Some("UM目录响应缺少 raw-fresh 标记（可能来自旧缓存），不宣告刷新成功".to_string());
             return self.with_last_success(report);
         }
         let payload = serde_json::from_slice::<Value>(&response.body).ok();
@@ -1484,7 +1464,11 @@ impl ModelSyncExecutor {
                 report.collected_at = Some(now_iso());
                 report.model_count = models.len();
                 report.models = models;
-                report.status = if report.model_count == 0 { "empty" } else { "fresh" };
+                report.status = if report.model_count == 0 {
+                    "empty"
+                } else {
+                    "fresh"
+                };
                 report.success = true;
                 report.fresh = true;
                 if let Ok(mut cache) = self.last_fresh.lock() {
@@ -1505,11 +1489,7 @@ impl ModelSyncExecutor {
     }
 
     fn with_last_success(&self, mut report: FreshReport) -> FreshReport {
-        let cache = self
-            .last_fresh
-            .lock()
-            .ok()
-            .and_then(|cache| cache.clone());
+        let cache = self.last_fresh.lock().ok().and_then(|cache| cache.clone());
         let Some(cache) = cache else {
             report.models.clear();
             report.model_count = 0;
@@ -1691,9 +1671,7 @@ fn migrate_state(state: &mut Value) {
     }
 }
 
-fn local_only_catalogs(
-    models: &Map<String, Value>,
-) -> Result<Catalogs, ModelSyncError> {
+fn local_only_catalogs(models: &Map<String, Value>) -> Result<Catalogs, ModelSyncError> {
     let mut catalogs = BTreeMap::new();
     let mut total = 0usize;
     for (source, ids) in models {
@@ -1756,10 +1734,7 @@ fn override_applies(entry: &Value, declared: Option<i64>) -> bool {
         .unwrap_or(false)
 }
 
-fn context_override_surface(
-    state: &Value,
-    catalogs: &Catalogs,
-) -> Value {
+fn context_override_surface(state: &Value, catalogs: &Catalogs) -> Value {
     let overrides = context_overrides_of_state(state);
     let probes = state
         .get("contextProbes")
@@ -1860,17 +1835,14 @@ fn override_identity_params(
         Some(model_id) if !model_id.trim().is_empty() => model_id.trim().to_string(),
         _ => return Err(ModelSyncError::invalid("model_id 必须为非空字符串")),
     };
-    let expected = match params.get("expected_set_at") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(expected)) if !expected.trim().is_empty() => {
-            Some(expected.clone())
-        }
-        Some(_) => {
-            return Err(ModelSyncError::invalid(
+    let expected =
+        match params.get("expected_set_at") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(expected)) if !expected.trim().is_empty() => Some(expected.clone()),
+            Some(_) => return Err(ModelSyncError::invalid(
                 "expected_set_at 必须为读面返回的 override_at 字符串或缺省（表示预期无既有覆盖）",
-            ))
-        }
-    };
+            )),
+        };
     Ok((source, model_id, expected))
 }
 
@@ -1992,15 +1964,7 @@ fn unlock_file(file: &File) -> std::io::Result<()> {
         h_event: std::ptr::null_mut(),
     };
     // SAFETY: the handle is owned by `file`; the lock range matches acquire.
-    let result = unsafe {
-        UnlockFileEx(
-            file.as_raw_handle(),
-            0,
-            1,
-            0,
-            &mut overlapped,
-        )
-    };
+    let result = unsafe { UnlockFileEx(file.as_raw_handle(), 0, 1, 0, &mut overlapped) };
     if result == 0 {
         Err(std::io::Error::last_os_error())
     } else {
@@ -2049,9 +2013,7 @@ fn write_state_transaction(paths: &ModelSyncPaths, state: &Value) -> Result<(), 
     let text = serde_json::to_string_pretty(state)
         .map(|text| text + "\n")
         .map_err(|error| ModelSyncError::new("publish_failed", error.to_string()))?;
-    let stamp = chrono::Local::now()
-        .format("%Y%m%d-%H%M%S-%f")
-        .to_string();
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S-%f").to_string();
     let backup_dir = paths.backup_dir.join(stamp);
     fs::create_dir_all(&backup_dir)
         .map_err(|error| ModelSyncError::new("publish_failed", error.to_string()))?;
@@ -2185,9 +2147,7 @@ fn normalize_probe_selection(
             ));
         }
         let unique: BTreeSet<&String> = sources.iter().collect();
-        if unique.len() != sources.len()
-            || sources.iter().any(|source| source.is_empty())
-        {
+        if unique.len() != sources.len() || sources.iter().any(|source| source.is_empty()) {
             return Err(ModelSyncError::invalid(
                 "sources 必须为非空字符串的非空无重复列表",
             ));
@@ -2427,8 +2387,7 @@ fn seed_context_probes(
             let old_declared = record.get("declared_context").and_then(Value::as_i64);
             let declared_changed = old_declared != model.context;
             let record_scheme = record.get("scheme_revision").and_then(Value::as_i64);
-            let scheme_mismatch =
-                record_scheme.unwrap_or(1) != PROBE_SCHEME_REVISION;
+            let scheme_mismatch = record_scheme.unwrap_or(1) != PROBE_SCHEME_REVISION;
             if !declared_changed && !scheme_mismatch {
                 continue;
             }
@@ -2471,11 +2430,7 @@ fn seed_context_probes(
     state_object.insert("contextProbes".to_string(), Value::Object(queue));
 }
 
-fn validate_catalog(
-    source: &str,
-    models: &[CatalogModel],
-    previous_count: Option<i64>,
-) -> bool {
+fn validate_catalog(source: &str, models: &[CatalogModel], previous_count: Option<i64>) -> bool {
     let _ = source;
     if models.is_empty() {
         return false;
@@ -2507,16 +2462,20 @@ fn archive_probe_generation(record: &mut Map<String, Value>, reason: &str) -> bo
         "token_evidence",
     ]
     .iter()
-    .any(|field| record.get(*field).map(|value| !value.is_null()).unwrap_or(false))
-        || record
-            .get("attempts")
-            .map(|value| match value {
-                Value::Number(number) => number.as_i64().map(|value| value != 0).unwrap_or(false),
-                Value::Bool(value) => *value,
-                Value::String(text) => !text.is_empty(),
-                _ => false,
-            })
-            .unwrap_or(false);
+    .any(|field| {
+        record
+            .get(*field)
+            .map(|value| !value.is_null())
+            .unwrap_or(false)
+    }) || record
+        .get("attempts")
+        .map(|value| match value {
+            Value::Number(number) => number.as_i64().map(|value| value != 0).unwrap_or(false),
+            Value::Bool(value) => *value,
+            Value::String(text) => !text.is_empty(),
+            _ => false,
+        })
+        .unwrap_or(false);
     if !has_evidence {
         return false;
     }
@@ -2610,9 +2569,7 @@ fn probe_error_text(body: &Value) -> String {
 fn trusted_prompt_tokens(body: &Value) -> Option<i64> {
     let usage = body.get("usage").and_then(Value::as_object)?;
     let reported = |value: Option<&Value>| -> Option<i64> {
-        value
-            .and_then(Value::as_i64)
-            .filter(|tokens| *tokens >= 0)
+        value.and_then(Value::as_i64).filter(|tokens| *tokens >= 0)
     };
     reported(usage.get("prompt_tokens")).or_else(|| reported(usage.get("input_tokens")))
 }
@@ -2705,9 +2662,7 @@ fn probe_result(
     })
 }
 
-fn selection_payload(
-    selection: Option<&ProbeSelection>,
-) -> Value {
+fn selection_payload(selection: Option<&ProbeSelection>) -> Value {
     let Some(selection) = selection else {
         return Value::Null;
     };
@@ -2721,10 +2676,7 @@ fn selection_payload(
     Value::Object(output)
 }
 
-fn selected_record_keys(
-    selection: Option<&ProbeSelection>,
-    records: &Map<String, Value>,
-) -> Value {
+fn selected_record_keys(selection: Option<&ProbeSelection>, records: &Map<String, Value>) -> Value {
     let mut output = Map::new();
     let mut keys: Vec<&String> = records.keys().collect();
     keys.sort();
@@ -2873,7 +2825,12 @@ fn known_efforts(model_id: &str) -> (Vec<String>, Option<String>) {
 }
 
 fn context_of(raw: &Map<String, Value>) -> Option<i64> {
-    for key in ["max_model_len", "context_length", "contextWindow", "context_window"] {
+    for key in [
+        "max_model_len",
+        "context_length",
+        "contextWindow",
+        "context_window",
+    ] {
         let Some(value) = raw.get(key) else { continue };
         if value.is_null() || value == &Value::Bool(false) || value == &json!(0) {
             continue;
@@ -2893,9 +2850,8 @@ fn is_virtual_model(model_id: &str) -> bool {
 
 fn scope_str_list(value: &Value, name: &str) -> Result<Vec<String>, ModelSyncError> {
     let parsed = match value {
-        Value::String(text) => serde_json::from_str::<Value>(text).map_err(|_| {
-            ModelSyncError::invalid(format!("{name} 必须为字符串数组"))
-        })?,
+        Value::String(text) => serde_json::from_str::<Value>(text)
+            .map_err(|_| ModelSyncError::invalid(format!("{name} 必须为字符串数组")))?,
         other => other.clone(),
     };
     let Some(items) = parsed.as_array() else {
@@ -2937,9 +2893,7 @@ fn value_truthy(value: &Value) -> bool {
 }
 
 fn has_auth_marker(text: &str) -> bool {
-    AUTH_PAGE_MARKERS
-        .iter()
-        .any(|marker| text.contains(marker))
+    AUTH_PAGE_MARKERS.iter().any(|marker| text.contains(marker))
 }
 
 fn looks_like_html(raw: &[u8]) -> bool {
@@ -3114,13 +3068,7 @@ fn http_request(
         .unwrap_or(false)
     {
         while !chunked_complete(&body)? {
-            read_more(
-                &mut stream,
-                &mut body,
-                &mut buffer,
-                deadline,
-                cancel,
-            )?;
+            read_more(&mut stream, &mut body, &mut buffer, deadline, cancel)?;
             if body.len() > HTTP_BODY_MAX {
                 return Err(HttpFailure::ProtocolError);
             }
@@ -3130,13 +3078,7 @@ fn http_request(
         .and_then(|value| value.parse::<usize>().ok())
     {
         while body.len() < length {
-            read_more(
-                &mut stream,
-                &mut body,
-                &mut buffer,
-                deadline,
-                cancel,
-            )?;
+            read_more(&mut stream, &mut body, &mut buffer, deadline, cancel)?;
             if body.len() > HTTP_BODY_MAX {
                 return Err(HttpFailure::ProtocolError);
             }

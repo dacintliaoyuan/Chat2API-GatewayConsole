@@ -324,7 +324,10 @@ fn context_probe_run_bills_the_selected_models_and_persists_evidence() {
     assert_eq!(result["budget"]["max_tokens"], json!(64));
     assert_eq!(result["budget"]["requests_used"], json!(4));
     assert_eq!(result["budget"]["remaining_requests"], json!(16));
-    assert_eq!(result["cost_note"], json!("未定价/无法核算：本地网关无计价依据，不编造金额"));
+    assert_eq!(
+        result["cost_note"],
+        json!("未定价/无法核算：本地网关无计价依据，不编造金额")
+    );
     assert_eq!(result["selection"], json!({"um": ["model-a"]}));
     assert_eq!(calls.lock().expect("calls").len(), 4);
 
@@ -586,7 +589,10 @@ fn context_probe_run_stops_at_the_cumulative_budget_and_reports_the_rest() {
         })
     );
     let state = read_state(&temp);
-    assert_eq!(state["contextProbes"]["um|model-a"]["status"], json!("pending"));
+    assert_eq!(
+        state["contextProbes"]["um|model-a"]["status"],
+        json!("pending")
+    );
     assert_eq!(
         state["contextProbes"]["um|model-a"]["observed_floor"],
         json!(16000)
@@ -653,7 +659,10 @@ fn context_probe_run_auto_retests_a_verified_model_and_archives_its_generation()
 #[test]
 fn context_probe_state_survives_a_console_restart() {
     let temp = temp();
-    write_state(&temp, &probe_state(json!({"um|model-a": pending_record("model-a")})));
+    write_state(
+        &temp,
+        &probe_state(json!({"um|model-a": pending_record("model-a")})),
+    );
     let gateway = TestServer::start(|request: HttpRequest| {
         if request.method != "POST" {
             return HttpResponse::json(200, &json!({"data": [{"id": "model-a"}]}).to_string());
