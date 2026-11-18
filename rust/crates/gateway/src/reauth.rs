@@ -576,6 +576,14 @@ pub fn handle_non_success(
         text = Some(response.read_error_text());
         last.record_status(status, text, retry_after);
     }
+    if let Some(class) = crate::upstream_fault::fault_class_of_status(status) {
+        state.proxy.record_business_failure(
+            class,
+            Some(status),
+            last.text()
+                .and_then(crate::upstream_fault::summarize_error_text),
+        );
+    }
     StatusAction::Final {
         error: final_error(last, retry_state),
         status: Some(status),

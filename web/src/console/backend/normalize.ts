@@ -78,6 +78,9 @@ import type {
   UmTrendPayload,
   UmTrendRange,
   UmTrendResponse,
+  UmUpstreamFaultPayload,
+  UmUpstreamFaultsPayload,
+  UmUpstreamRecoveryPayload,
 } from "./types.ts";
 
 export class ContractError extends Error {
@@ -1774,5 +1777,71 @@ export function normalizeUmSummary(value: unknown): UmSummaryPayload {
   const assembly = object(root.assembly) ?? {};
   return {
     role: text(root.role) ?? text(assembly.role),
+  };
+}
+
+function upstreamFault(value: unknown): UmUpstreamFaultPayload {
+  const row = requiredObject(value, "UM upstream fault");
+  const startedAt = epochMs(row.started_epoch);
+  const lastAt = epochMs(row.last_epoch);
+  if (startedAt === null || lastAt === null)
+    throw new ContractError("UM upstream fault must carry its start and last instants");
+  return {
+    id: requiredText(row.id, "UM upstream fault id"),
+    classification: requiredText(row.classification, "UM upstream fault classification"),
+    upstreamStatus: count(row.upstream_status),
+    summary: text(row.summary),
+    failures: count(row.failures) ?? 0,
+    startedAt,
+    lastAt,
+    source: requiredText(row.source, "UM upstream fault source"),
+  };
+}
+
+function upstreamRecovery(value: unknown): UmUpstreamRecoveryPayload {
+  const row = requiredObject(value, "UM upstream recovery");
+  const recoveredAt = epochMs(row.recovered_epoch);
+  if (recoveredAt === null)
+    throw new ContractError("UM upstream recovery must carry its instant");
+  return {
+    ...upstreamFault(row),
+    recoveredAt,
+    recoverySource: requiredText(row.recovery_source, "UM upstream recovery source"),
+    recoveryStatus: count(row.recovery_status),
+    recoveryDetail: text(row.recovery_detail),
+  };
+}
+
+export function normalizeUmUpstreamFaults(value: unknown): UmUpstreamFaultsPayload {
+  const root = requiredObject(value, "UM upstream faults response");
+  if (root.status !== "ok")
+    throw new ContractError("UM upstream faults response reports failure");
+  const history = Array.isArray(root.history)
+    ? root.history.map(upstreamRecovery)
+    : (() => {
+        throw new ContractError("UM upstream fault history must be an array");
+      })();
+  let lastCheck: UmUpstreamFaultsPayload["lastCheck"] = null;
+  if (root.last_check !== null && root.last_check !== undefined) {
+    const row = requiredObject(root.last_check, "UM upstream last check");
+    const at = epochMs(row.epoch);
+    if (at === null)
+      throw new ContractError("UM upstream last check must carry its instant");
+    lastCheck = {
+      at,
+      source: requiredText(row.source, "UM upstream last check source"),
+      result: requiredText(row.result, "UM upstream last check result"),
+      upstreamStatus: count(row.upstream_status),
+    };
+  }
+  return {
+    active:
+      root.active === null || root.active === undefined
+        ? null
+        : upstreamFault(root.active),
+    history,
+    lastCheck,
+    nextCheckAt: epochMs(root.next_check_epoch),
+    source: requiredText(root.source, "UM upstream fault source"),
   };
 }

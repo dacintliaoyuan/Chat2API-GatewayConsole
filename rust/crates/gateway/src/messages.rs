@@ -276,6 +276,10 @@ fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -
                     return ChatResult::Response(last.deadline_error().anthropic_response());
                 }
                 record_usage(context, failure.name(), None, 0);
+                context
+                    .state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::Anthropic));
             }
         };
@@ -313,6 +317,10 @@ fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -
             Err(failure) => {
                 last.record_transport(failure);
                 record_usage(context, failure.name(), None, 0);
+                context
+                    .state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::Anthropic));
             }
         };
@@ -320,6 +328,18 @@ fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -
         let usage = payload.as_ref().and_then(anthropic_message_usage);
         let output_estimate = payload.as_ref().map(anthropic_output_estimate).unwrap_or(0);
         let usage_value = usage.as_ref().map(usage_fields_to_json);
+        if payload
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("content"))
+            .and_then(Value::as_array)
+            .is_some_and(|content| !content.is_empty())
+        {
+            context
+                .state
+                .proxy
+                .record_business_success("messages_completion", Some(200));
+        }
         record_usage(context, "ok", usage_value.as_ref(), output_estimate);
         return ChatResult::Response(passthrough_response(status, &response, raw));
     }
@@ -381,6 +401,10 @@ fn forward_stream_inner(
                     return ChatResult::Response(last.deadline_error().anthropic_response());
                 }
                 record_usage(context, failure.name(), None, 0);
+                context
+                    .state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::Anthropic));
             }
         };
@@ -465,6 +489,27 @@ fn forward_stream_inner(
 }
 
 fn record_stream_usage(context: &MessagesContext<'_>, outcome: &MessagesStreamOutcome) {
+    if outcome.status.is_success() {
+        context
+            .state
+            .proxy
+            .record_business_success("messages_stream", Some(200));
+    } else if outcome.status != MessagesStreamStatus::ClientDisconnected {
+        let class = match outcome.status {
+            MessagesStreamStatus::UpstreamFirstByteTimeout => {
+                crate::upstream_fault::FaultClass::Timeout
+            }
+            MessagesStreamStatus::UpstreamReadError => {
+                crate::upstream_fault::FaultClass::NetworkError
+            }
+            _ => crate::upstream_fault::FaultClass::StreamError,
+        };
+        context.state.proxy.record_business_failure(
+            class,
+            None,
+            outcome.exception.map(str::to_string),
+        );
+    }
     record_usage(
         context,
         outcome.status.reason(),

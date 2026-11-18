@@ -27,6 +27,7 @@ import type {
   UmServicesPayload,
   UmSummaryPayload,
   UmTodayResponse,
+  UmUpstreamFaultsPayload,
   UmReadWindow,
   UmTrendRange,
   UmTrendResponse,
@@ -54,6 +55,7 @@ import {
   normalizeUmServices,
   normalizeUmSummary,
   normalizeUmTodayResponse,
+  normalizeUmUpstreamFaults,
   normalizeUmTrendResponse,
   object,
   positiveCount,
@@ -936,6 +938,15 @@ export class BackendClient {
   /** The runtime snapshot is the authority for the chat2api service state. */
   async readServices(signal?: AbortSignal): Promise<UmServicesPayload> {
     return normalizeUmServices(await this.readJson("/services", signal));
+  }
+
+  /** #103: the durable UM upstream fault record the local 8000 gateway wrote. */
+  async readUmUpstreamFaults(
+    signal?: AbortSignal
+  ): Promise<UmUpstreamFaultsPayload> {
+    return normalizeUmUpstreamFaults(
+      await this.readJson("/um/upstream-faults", signal)
+    );
   }
 
   /** Original console operation records; the UM maintenance view and the

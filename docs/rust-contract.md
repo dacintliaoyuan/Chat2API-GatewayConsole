@@ -119,6 +119,9 @@ systemd
 - 认证巡检：Rust 网关新增每 5 分钟 `auth_watch`（拒绝后 2 倍退避到 30 分钟），
   `/admin/auth/status` 的 `evidence` 由巡检写入 `source=auth_watch`；凭据有效时
   不再等请求触发重登。
+- 上游故障记录（#103）：本机生产 8000 默认持久写 `data/upstream-faults.json`
+  （`CHAT2API_UPSTREAM_FAULT_LOG` 可覆盖）；8001 默认只读同一路径，不探测、
+  不写记录。
 - 验证：`pwsh -NoProfile -File tests/gateway-runtime.Tests.ps1 -LauncherOnly` 验证
   描述符、健康边界与回滚；真实 8000 的 parity、切流与回滚演练由 #81 执行并记录在本节。
 
@@ -655,6 +658,31 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 - `/api/console/stats` 日期范围 `YYYY-MM-DD`，半开区间 `[from 00:00, to+1d 00:00)`，跨度上限 92 天；来源/模型筛选；每端点最多 5000 行。
 - `/api/console/um/today|trend|requests|logs|request-logs` 读 UM 自己的账本/日志；`today` 是北京自然日；请求数按逻辑请求，物理重试不重复计；Token 总量包含重试行的真实消耗。
 - `/api/console/um/maintenance` 读原始操作记录，不读分享账本。
+- `/api/console/um/upstream-faults` 读 8000 的持久上游故障记录：`active`、
+  `history`、`last_check`、`next_check_epoch`；缺失文件是合法空记录，损坏文件是
+  明确读失败，不产生探测或新条目。
+
+### 9.4 本机 UM 上游故障记录（#103）
+
+- 8000 是本机故障状态的唯一所有者；记录写在 `data/upstream-faults.json`
+  （或 `CHAT2API_UPSTREAM_FAULT_LOG`），每次变化原子替换，重启后保留活动
+  故障与已结束历史。
+- 打开条件：第一次观察到 5xx、连接/DNS/TLS/协议错误或超时。分类固定为
+  `upstream_5xx`、`timeout`、`network_error`、`stream_error`；`upstream_status`
+  只在拿到 HTTP 响应时记录。同一上游没有恢复证据时连续失败更新同一条记录，
+  `failures` 每条最终观察只加 1；一条业务请求的重试不重复计。
+- 来源：`background_probe`（auth watch）、`active_probe`（`/ready`、
+  `/admin/auth/verify`）、`business_request`（业务请求最终结果）。
+- 摘要：可识别的 `no healthy upstream` 原样保留；其他错误文本清理控制字符、
+  标记、Bearer 值并截断到 200 字符，不存账号、凭据、请求正文或整页响应。
+- 恢复条件：后台核验、主动核验或实际业务请求得到契约有效成功（模型目录
+  含 `data` 数组、成功完成的 Chat/Messages/Responses/Embeddings 业务响应）。
+  HTTP 200 空响应、错误形状、未完成流、本机 `/health` 200 都不结束故障。
+  认证拒绝与缺少凭据走 #98/#99 的认证契约，不打开上游故障记录；可用性与
+  认证状态分别展示。
+- 后台复查沿用 auth watch 的基准间隔与 2 倍退避（上限 30 分钟）；记录中的
+  `next_check_epoch` 是下一次复查时间。`GET /health` 与 8001 读面只读，
+  不探测、不写记录。
 
 ## 10. display
 

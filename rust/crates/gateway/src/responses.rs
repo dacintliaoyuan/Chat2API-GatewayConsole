@@ -1345,6 +1345,10 @@ fn forward_json_inner(
                     return ChatResult::Response(last.deadline_error().response());
                 }
                 record_usage(context, failure.name(), None, 0);
+                context
+                    .state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
@@ -1382,6 +1386,10 @@ fn forward_json_inner(
             Err(failure) => {
                 last.record_transport(failure);
                 record_usage(context, failure.name(), None, 0);
+                context
+                    .state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
@@ -1421,6 +1429,23 @@ fn forward_json_inner(
         } else {
             payload.get("usage")
         };
+        let valid_business = if via_messages {
+            payload
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|content| !content.is_empty())
+        } else {
+            payload
+                .get("choices")
+                .and_then(Value::as_array)
+                .is_some_and(|choices| !choices.is_empty())
+        };
+        if valid_business {
+            context
+                .state
+                .proxy
+                .record_business_success("responses_completion", Some(200));
+        }
         record_translated_usage(context, &translated, ledger_usage, "ok");
         return ChatResult::Response(Response::json(200, &translated));
     }
@@ -1497,6 +1522,10 @@ fn forward_aggregate_inner(
                     return ChatResult::Response(last.deadline_error().response());
                 }
                 record_usage(context, failure.name(), None, 0);
+                context
+                    .state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
@@ -1797,6 +1826,10 @@ fn forward_stream_with_inner(
                     return ChatResult::Response(last.deadline_error().response());
                 }
                 record_usage(context, failure.name(), None, 0);
+                context
+                    .state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
@@ -2250,6 +2283,24 @@ fn record_stream_usage(
     usage: &Value,
     output_chars: u64,
 ) {
+    if status == "ok" {
+        context
+            .state
+            .proxy
+            .record_business_success("responses_stream", Some(200));
+    } else if status != "client_disconnected" && status != "incomplete" {
+        let class = match status {
+            "request_deadline_exceeded" | "upstream_first_byte_timeout" => {
+                crate::upstream_fault::FaultClass::Timeout
+            }
+            "upstream_read_error" => crate::upstream_fault::FaultClass::NetworkError,
+            _ => crate::upstream_fault::FaultClass::StreamError,
+        };
+        context
+            .state
+            .proxy
+            .record_business_failure(class, None, None);
+    }
     let output_estimate = if status == "ok" {
         (output_chars / 4).max(1)
     } else {

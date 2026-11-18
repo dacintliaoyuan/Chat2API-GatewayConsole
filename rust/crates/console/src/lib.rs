@@ -34,6 +34,7 @@ pub mod share_write;
 mod sidecar;
 pub mod static_files;
 pub mod summary;
+pub mod upstream_faults;
 
 pub use config::{ConsoleConfig, EntryKind, Role};
 pub use display_grant::{DisplayGrantError, DisplayGrants, DisplaySession};

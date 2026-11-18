@@ -7,7 +7,9 @@
 
 mod support;
 
-use chrono::{DateTime, Duration, FixedOffset, SecondsFormat, TimeZone, Utc};
+use std::fs;
+
+use chrono::{DateTime, Duration, FixedOffset, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use um_console::local_um::{
     um_logs, um_maintenance, um_request_logs, um_requests, um_today, um_trend,
@@ -839,4 +841,108 @@ fn routes_serve_um_faces_and_keep_invalid_queries_distinct() {
     .expect("maintenance");
     assert_eq!(missing.status, 200);
     assert_eq!(missing.json()["rows"], json!([]));
+}
+
+#[test]
+fn upstream_faults_read_face_returns_the_record_without_writing_it() {
+    let temp = temp();
+    let path = temp.path().join("upstream-faults.json");
+    let record = json!({
+        "schema_version": 1,
+        "active": {
+            "id": "fault-1",
+            "started_epoch": 1000.0,
+            "last_epoch": 1002.0,
+            "source": "background_probe",
+            "failures": 2,
+            "classification": "upstream_5xx",
+            "upstream_status": 503,
+            "summary": "no healthy upstream",
+        },
+        "history": [{
+            "id": "fault-0",
+            "started_epoch": 900.0,
+            "last_epoch": 905.0,
+            "source": "business_request",
+            "failures": 1,
+            "classification": "timeout",
+            "upstream_status": null,
+            "summary": null,
+            "recovered_epoch": 910.0,
+            "recovery_source": "business_request",
+            "recovery_status": 200,
+            "recovery_detail": "chat_completion",
+        }],
+        "last_check": {
+            "epoch": 1002.0,
+            "source": "background_probe",
+            "result": "upstream_5xx",
+            "upstream_status": 503,
+        },
+        "next_check_epoch": 1300.0,
+    });
+    fs::write(&path, serde_json::to_vec(&record).expect("record json")).expect("record");
+    let before = fs::read(&path).expect("record bytes");
+    let console = start_console_with(&temp, stopped_runtime(), |config| {
+        config.role = um_console::config::Role::Local;
+        config.upstream_fault_log = path.clone();
+    });
+
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/um/upstream-faults"),
+    )
+    .expect("upstream faults");
+    assert_eq!(response.status, 200, "{:?}", response.body);
+    let payload = response.json();
+    assert_eq!(payload["status"], json!("ok"));
+    assert_eq!(payload["source"], json!("upstream-faults.json"));
+    assert_eq!(payload["active"]["id"], json!("fault-1"));
+    assert_eq!(payload["active"]["classification"], json!("upstream_5xx"));
+    assert_eq!(payload["active"]["summary"], json!("no healthy upstream"));
+    assert_eq!(payload["history"][0]["recovery_source"], json!("business_request"));
+    assert_eq!(payload["last_check"]["result"], json!("upstream_5xx"));
+    assert_eq!(payload["next_check_epoch"], json!(1300.0));
+    assert_eq!(fs::read(&path).expect("record bytes"), before);
+
+    // Repeating the read never appends a probe or a fault entry.
+    let again = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/um/upstream-faults"),
+    )
+    .expect("second read");
+    assert_eq!(again.status, 200);
+    assert_eq!(fs::read(&path).expect("record bytes"), before);
+}
+
+#[test]
+fn a_missing_upstream_fault_record_is_an_empty_read_and_malformed_is_unavailable() {
+    let temp = temp();
+    let missing = temp.path().join("missing-upstream-faults.json");
+    let console = start_console_with(&temp, stopped_runtime(), |config| {
+        config.role = um_console::config::Role::Local;
+        config.upstream_fault_log = missing;
+    });
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/um/upstream-faults"),
+    )
+    .expect("empty read");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json()["active"], Value::Null);
+    assert_eq!(response.json()["history"], json!([]));
+
+    let malformed = temp.path().join("malformed-upstream-faults.json");
+    fs::write(&malformed, b"{not json").expect("malformed record");
+    let console = start_console_with(&temp, stopped_runtime(), |config| {
+        config.role = um_console::config::Role::Local;
+        config.upstream_fault_log = malformed;
+    });
+    let response = client_request(
+        console.addr,
+        &ClientRequest::get("/api/console/um/upstream-faults"),
+    )
+    .expect("malformed read");
+    assert_eq!(response.status, 400);
+    assert_eq!(response.json()["error"], json!("invalid_um_query"));
 }

@@ -227,6 +227,10 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
                     }
                     continue;
                 }
+                context
+                    .state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
@@ -313,6 +317,16 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
             request_id: context.request_id,
             attribution: context.attribution,
         });
+        if data
+            .get("choices")
+            .and_then(Value::as_array)
+            .is_some_and(|choices| !choices.is_empty())
+        {
+            context
+                .state
+                .proxy
+                .record_business_success("chat_completion", Some(200));
+        }
         let mut response = Response::new(200, raw);
         response = response.with_header("Content-Type", "application/json; charset=utf-8");
         return ChatResult::Response(response);
@@ -382,6 +396,10 @@ fn forward_stream_inner(
                     }
                     continue;
                 }
+                context
+                    .state
+                    .proxy
+                    .record_business_transport_failure(failure);
                 return ChatResult::Response(last.response(ErrorProtocol::OpenAi));
             }
         };
@@ -782,6 +800,28 @@ fn commit(stream: &mut TcpStream, context: &ChatContext<'_>, state: &mut SseStat
 }
 
 fn record_stream_usage(context: &ChatContext<'_>, outcome: &StreamOutcome) {
+    if outcome.status.is_success() {
+        context
+            .state
+            .proxy
+            .record_business_success("chat_stream", Some(200));
+    } else if outcome.status != StreamStatus::ClientDisconnected {
+        let class = match outcome.status {
+            StreamStatus::UpstreamFirstByteTimeout
+            | StreamStatus::RequestDeadlineExceeded => {
+                crate::upstream_fault::FaultClass::Timeout
+            }
+            StreamStatus::UpstreamReadError => {
+                crate::upstream_fault::FaultClass::NetworkError
+            }
+            _ => crate::upstream_fault::FaultClass::StreamError,
+        };
+        context.state.proxy.record_business_failure(
+            class,
+            None,
+            outcome.exception.map(str::to_string),
+        );
+    }
     let output_chars = outcome.completion_chars + outcome.reasoning_chars;
     let out_est = if outcome.status.is_success() {
         (output_chars / 4).max(1)

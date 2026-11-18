@@ -7,6 +7,8 @@ import type {
   UmOverview,
   UmService,
   UmToday,
+  UmUpstreamFault,
+  UmUpstreamFaults,
   UmVerify,
 } from "./contract";
 import { METRICS, type Metric, type TrendView } from "./charts";
@@ -249,7 +251,44 @@ function statusRow(o: UmOverview): string {
       }),
     progressHtml("verify", o.progress.verify)
   );
-  return `<section class="um-status-row" aria-label="UM 状态">${serviceCard}${loginCard}${verifyCard}</section>`;
+  const upstream = loaded(o.upstream);
+  const upstreamCard = statusCard(
+    "UM 上游",
+    o.upstream,
+    upstream &&
+      (() => {
+        const u = upstream.data;
+        if (u.active) {
+          const fault = u.active;
+          const status = fault.upstreamStatus === null ? "" : ` HTTP ${fault.upstreamStatus}`;
+          const summary = fault.summary ? ` · ${fault.summary}` : "";
+          return {
+            tone: "err" as Tone,
+            word: `上游异常：${fault.classification}`,
+            detail: `${status}${summary} · 已记录 ${fault.failures} 次失败`,
+            time: u.lastCheck
+              ? `最近核验 ${when(u.lastCheck.at)}`
+              : "尚无上游核验",
+            handle: u.nextCheckAt
+              ? `<span class="um-hint">下次后台复查 ${esc(when(u.nextCheckAt))}</span>`
+              : `<span class="um-hint">下一次复查时间未知</span>`,
+          };
+        }
+        return {
+          tone: "ok" as Tone,
+          word: "上游正常",
+          detail: "没有活动的上游故障记录",
+          time: u.lastCheck
+            ? `最近核验 ${when(u.lastCheck.at)}`
+            : "尚无上游核验",
+          handle: u.nextCheckAt
+            ? `<span class="um-hint">下次后台复查 ${esc(when(u.nextCheckAt))}</span>`
+            : "",
+        };
+      }),
+    ""
+  );
+  return `<section class="um-status-row" aria-label="UM 状态">${serviceCard}${loginCard}${verifyCard}${upstreamCard}</section>`;
 }
 
 const CACHE_REPORT: Readonly<Record<UmToday["cacheRead"]["report"], string>> = {
@@ -376,12 +415,43 @@ function issuesHtml(o: UmOverview): string {
   return `<section class="card um-issues">${head(meta)}<ul class="um-issue-list">${rows}</ul></section>`;
 }
 
+function upstreamHistoryHtml(o: UmOverview): string {
+  const upstream = loaded(o.upstream);
+  const head = `<div class="card-head"><h2>上游故障历史</h2><span class="card-meta">由 8000 持久记录，8001 只读展示</span></div>`;
+  if (!upstream)
+    return `<section class="card um-issues">${head}${placeholderHtml(o.upstream, "上游故障历史")}</section>`;
+  const data: UmUpstreamFaults = upstream.data;
+  const rows: string[] = [];
+  if (data.active) {
+    const fault = data.active;
+    rows.push(
+      `<li class="um-issue" data-tone="err"><span class="status" data-tone="err"><span class="dot" aria-hidden="true"></span>当前异常 · ${esc(fault.classification)}</span><span class="um-issue-count">${full(fault.failures)} 次</span><span class="um-issue-detail">${esc(upstreamReason(fault))} · 开始 ${esc(when(fault.startedAt))} · 最近 ${esc(when(fault.lastAt))} · 尚未恢复</span><span class="um-issue-time">${esc(fault.source)}</span></li>`
+    );
+  }
+  for (const fault of data.history) {
+    rows.push(
+      `<li class="um-issue" data-tone="ok"><span class="status" data-tone="ok"><span class="dot" aria-hidden="true"></span>已恢复 · ${esc(fault.classification)}</span><span class="um-issue-count">${full(fault.failures)} 次</span><span class="um-issue-detail">${esc(upstreamReason(fault))} · ${esc(when(fault.startedAt))} – ${esc(when(fault.recoveredAt))} · 恢复证据 ${esc(fault.recoverySource)}${fault.recoveryStatus === null ? "" : ` HTTP ${fault.recoveryStatus}`}${fault.recoveryDetail ? ` · ${esc(fault.recoveryDetail)}` : ""}</span><span class="um-issue-time">最近 ${esc(when(fault.lastAt))}</span></li>`
+    );
+  }
+  const meta = data.lastCheck
+    ? `最近核验 ${esc(when(data.lastCheck.at))} · ${esc(data.lastCheck.result)}${data.nextCheckAt ? ` · 下次复查 ${esc(when(data.nextCheckAt))}` : ""}`
+    : "尚无上游核验";
+  if (!rows.length)
+    return `<section class="card um-issues">${head}<p class="card-meta">${meta}</p><p class="um-empty"><span class="dot" data-tone="ok" aria-hidden="true"></span>没有上游故障记录。</p></section>`;
+  return `<section class="card um-issues">${head}<p class="card-meta">${meta}</p><ul class="um-issue-list">${rows.join("")}</ul></section>`;
+}
+
+function upstreamReason(fault: UmUpstreamFault): string {
+  const status = fault.upstreamStatus === null ? "" : ` HTTP ${fault.upstreamStatus}`;
+  return `${fault.classification}${status}${fault.summary ? ` · ${fault.summary}` : ""}`;
+}
+
 export function overviewHtml(
   o: UmOverview,
   ui: OverviewUi,
   chart: TrendView
 ): string {
-  return `<div class="um-page um-overview">${statusRow(o)}${usageHtml(o, ui)}${trendHtml(o, ui, chart)}${issuesHtml(o)}</div>`;
+  return `<div class="um-page um-overview">${statusRow(o)}${upstreamHistoryHtml(o)}${usageHtml(o, ui)}${trendHtml(o, ui, chart)}${issuesHtml(o)}</div>`;
 }
 
 /** The maintenance menu items with their impact, in the toolbar capsule. */

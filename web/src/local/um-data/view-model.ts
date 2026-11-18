@@ -24,6 +24,7 @@ import type {
   UmServicesPayload,
   UmTodayPayload,
   UmTrendPayload,
+  UmUpstreamFaultsPayload,
 } from "../../console/backend/types";
 import type {
   ActionProgress,
@@ -41,6 +42,7 @@ import type {
   UmTestDetail,
   UmToday,
   UmTrend,
+  UmUpstreamFaults,
   UmVerify,
 } from "../um-ui/contract";
 
@@ -557,4 +559,15 @@ export function progressResult(
   if (result.state === "interrupted" || result.state === "unconfirmed")
     return "unconfirmed";
   return "failed";
+}
+
+export function upstreamFaultsFrom(
+  payload: UmUpstreamFaultsPayload
+): UmUpstreamFaults {
+  return {
+    active: payload.active,
+    history: payload.history,
+    lastCheck: payload.lastCheck,
+    nextCheckAt: payload.nextCheckAt,
+  };
 }

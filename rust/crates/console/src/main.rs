@@ -99,6 +99,10 @@ fn main() -> ExitCode {
                 Some(value) => config.service_log = value.into(),
                 None => return usage("--service-log requires a path"),
             },
+            "--upstream-fault-log" => match args.next() {
+                Some(value) => config.upstream_fault_log = value.into(),
+                None => return usage("--upstream-fault-log requires a path"),
+            },
             "--watch-dir" => match args.next() {
                 Some(value) => config.watch_dir = Some(value.into()),
                 None => return usage("--watch-dir requires a path"),

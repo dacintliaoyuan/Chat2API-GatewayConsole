@@ -1070,6 +1070,14 @@ fn handle_local_um(state: &AppState, rest: &[&str], raw_target: &str) -> Respons
                 now_ms,
             )
         }
+        "upstream-faults" => {
+            return match crate::upstream_faults::upstream_faults(
+                &state.config.upstream_fault_log,
+            ) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => invalid_um_query(&error),
+            };
+        }
         "maintenance" => {
             let limit = match value("limit") {
                 None => 50,
