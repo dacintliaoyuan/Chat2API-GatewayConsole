@@ -339,6 +339,39 @@ fn um_status_reads_the_gateway_round_and_reports_the_memory_state() {
 }
 
 #[test]
+fn um_status_passes_through_recovery_and_verification_progress() {
+    let temp = temp();
+    let gateway = FakeAdmin::start();
+    gateway.push_status(json!({
+        "state": "logging_in",
+        "label": "正在核验登录结果",
+        "error": null,
+        "primary": null,
+        "recovery": {
+            "state": "waiting", "round": 3, "session_starts": 2,
+            "max_sessions": 6, "next_attempt_epoch": 2800.0,
+            "pause_reason": null, "primary": null,
+        },
+        "login": {
+            "phase": "verifying_token",
+            "origin": "https://chat.genai.um.edu.mo/",
+            "manual_reason": null,
+        },
+    }));
+    let console = start_local(&temp, &gateway, running_runtime());
+
+    let operation = submit_and_wait(&console, "account.um_status", json!({}));
+
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    let result = &operation["result"];
+    assert_eq!(result["state"], json!("logging_in"));
+    assert_eq!(result["label"], json!("正在核验登录结果"));
+    assert_eq!(result["recovery"]["state"], json!("waiting"));
+    assert_eq!(result["recovery"]["next_attempt_epoch"], json!(2800.0));
+    assert_eq!(result["login"]["phase"], json!("verifying_token"));
+}
+
+#[test]
 fn um_verify_reports_the_restricted_gateway_verdicts() {
     let temp = temp();
     let gateway = FakeAdmin::start();
@@ -603,24 +636,34 @@ fn login_maps_duo_and_terminal_manual_rounds() {
         json!("登录需要本人确认 Duo 推送；本轮仍在等待，可打开可见窗口")
     );
 
-    gateway.set_status(vec![json!({
-        "state": "failed",
-        "error": "manual_takeover_required:umpass_mfa_required",
-        "primary": null,
-        "recovery": {
-            "state": "exhausted",
-            "pause_reason": "manual_takeover_required:umpass_mfa_required",
-        },
-    })]);
-    let manual = submit_and_wait(&console, "account.login", json!({}));
-    assert_eq!(manual["state"], json!("failed"));
-    assert_eq!(
-        manual["error"]["code"],
-        json!("login_manual_takeover_required")
-    );
-    let message = manual["error"]["message"].as_str().unwrap_or_default();
-    assert!(message.contains("manual_takeover_required:umpass_mfa_required"));
-    assert!(message.contains("浏览器已关闭"));
+    for reason in [
+        "umpass_mfa_required",
+        "umpass_prefill_missing",
+        "umpass_autofill_protected",
+        "unrecognized_page",
+    ] {
+        gateway.set_status(vec![json!({
+            "state": "failed",
+            "error": format!("manual_takeover_required:{reason}"),
+            "primary": null,
+            "recovery": {
+                "state": "exhausted",
+                "pause_reason": format!("manual_takeover_required:{reason}"),
+            },
+        })]);
+        let manual = submit_and_wait(&console, "account.login", json!({}));
+        assert_eq!(manual["state"], json!("failed"));
+        assert_eq!(
+            manual["error"]["code"],
+            json!("login_manual_takeover_required")
+        );
+        let message = manual["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains(&format!("manual_takeover_required:{reason}")),
+            "{reason}: {message}"
+        );
+        assert!(message.contains("浏览器已关闭"), "{reason}: {message}");
+    }
 }
 
 #[test]
