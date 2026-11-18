@@ -1892,7 +1892,7 @@ $displayStateCases = @(
     @{ State = 'valid'; Label = '登录有效'; ExpectedWindows = 1 },
     @{ State = 'logging_in'; Label = '正在登录'; ExpectedWindows = 1 },
     @{ State = 'not_started'; Label = '未开始登录'; ExpectedWindows = 1 },
-    @{ State = 'waiting_mfa'; Label = '等待 MFA（本人操作）'; ExpectedWindows = 2 },
+    @{ State = 'waiting_mfa'; Label = '等待 Duo 登录（本人操作）'; ExpectedWindows = 2 },
     @{ State = 'waiting_duo'; Label = '等待本人确认 Duo 推送'; ExpectedWindows = 2 },
     @{ State = 'failed'; Label = '需要人工接管'; ExpectedWindows = 2 }
 )
@@ -1994,7 +1994,7 @@ Assert-Match $text 'display-state 不可用' 'an unavailable display-state names
 # The display grant is still authorized only when the decision opens the window;
 # a failed grant keeps the console and keeps the existing error code and event.
 Reset-Fake
-Set-DisplayStatePayload -State 'waiting_mfa' -Label '等待 MFA（本人操作）'
+Set-DisplayStatePayload -State 'waiting_mfa' -Label '等待 Duo 登录（本人操作）'
 $script:fake.DisplayGrantResponse = @{ ExitCode = 1; Output = '' }
 $captured = @(Invoke-Entry 6>&1)
 $code = $captured[-1]

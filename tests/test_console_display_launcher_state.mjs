@@ -50,7 +50,7 @@ test('waiting_mfa asks the person to complete MFA and keeps the screen', () => {
   const next = displayLauncherState(payload('waiting_mfa'));
   assert.equal(next.state, 'waiting_mfa');
   assert.equal(next.showScreen, true);
-  assert.equal(next.label, '等待 MFA（本人操作）');
+  assert.equal(next.label, '等待 Duo 登录（本人操作）');
   assert.ok(next.actions.includes('cancel_login'));
   assert.ok(next.actions.includes('reconnect'));
   assert.ok(next.actions.includes('back_to_console'));

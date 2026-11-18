@@ -249,7 +249,7 @@ fn display_state_shows_the_gateway_manual_takeover_wait() {
     let payload = display_state(&console);
 
     assert_eq!(payload["state"], json!("waiting_mfa"));
-    assert_eq!(payload["label"], json!("等待 MFA（本人操作）"));
+    assert_eq!(payload["label"], json!("等待 Duo 登录（本人操作）"));
     assert_eq!(
         payload["detail"],
         json!("manual_takeover_required:umpass_autofill_protected")

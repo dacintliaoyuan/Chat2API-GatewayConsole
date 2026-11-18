@@ -42,7 +42,7 @@ const LAUNCHER_STATES = new Set([
 const LAUNCHER_LABELS = {
   not_started: '登录窗口未开始。',
   logging_in: '正在登录…',
-  waiting_mfa: '等待 MFA（本人操作）',
+  waiting_mfa: '等待 Duo 登录（本人操作）',
   waiting_duo: '等待本人确认 Duo 推送',
   valid: '登录成功，画面已收起。',
   timed_out: '登录等待已超时。',

@@ -189,7 +189,7 @@ fn display_state_of(
             {
                 return (
                     "waiting_mfa".to_string(),
-                    "等待 MFA（本人操作）".to_string(),
+                    "等待 Duo 登录（本人操作）".to_string(),
                     error.map(str::to_string),
                 );
             }

@@ -303,7 +303,7 @@ export function authHistoryLine(um: UmState): string {
 const DISPLAY_STATE_WORD: Readonly<Record<string, string>> = {
   not_started: "未开始",
   logging_in: "登录中",
-  waiting_mfa: "等待 MFA",
+  waiting_mfa: "等待 Duo 登录",
   waiting_duo: "等待 Duo 推送",
   valid: "已登录",
   cancelled: "认证已失效",
@@ -369,7 +369,7 @@ export function statusRow(model: CloudModel): StatusRow {
   // 状态未知——都给「打开登录窗口」：打开窗口是只读动作，不改变认证，
   // 所以未知状态下给它是安全的，也不会把未知说成已登录。
   const actions =
-    word === "登录中" || word === "等待 MFA"
+    word === "登录中" || word === "等待 Duo 登录"
       ? "open-cancel"
       : word === "认证已失效" || word === "超时" || word === "显示断线"
         ? "relogin-cancel"
@@ -381,7 +381,7 @@ export function statusRow(model: CloudModel): StatusRow {
         ? "err"
         : word === "认证已失效" || word === "超时" || word === "显示断线"
           ? "err"
-          : word === "登录中" || word === "等待 MFA"
+          : word === "登录中" || word === "等待 Duo 登录"
             ? "warn"
             : "neutral";
   return {
