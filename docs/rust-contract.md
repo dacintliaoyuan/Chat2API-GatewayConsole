@@ -423,6 +423,7 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 | GET | `/api/console/share-management/display-session` | 无（只读） | launcher 可用性、operator 状态 |
 | GET | `/api/console/share-management/display-state` | 无（只读） | 认证观察 + display 事实 |
 | POST | `/api/console/share-management/display-operator` | 同源标记或控制令牌 | `acquire`/`takeover` |
+| POST | `/api/console/share-management/backend-login-cancel` | 同源标记或控制令牌 | 代理网关 `POST /admin/auth/cancel`；200/202 归一为 200 |
 | POST | `/api/console/share-management/display-grant` | 管理身份 | 一次性 display grant |
 | GET | `/api/console/share-management/control-status` | 无（只读） | broker 控制通道是否响应 |
 | GET | `/api/console/share-management/status` | 无（只读） | 分享状态、代次、容量、broker |
@@ -458,7 +459,7 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 
 补充：`/api/share/*` 是云端控制台上的旧管理面（默认 8002），走会话/控制令牌鉴权；它不在 Cloudflare 公网白名单内，公网入口仍只有 8003 的四条 `/v1` 路径。
 
-补充：`web/src/cloud/cloud-writes.ts:106-111` 仍会调用 `POST /api/console/share-management/backend-login-cancel`，但当前云端控制台没有该路由，实际返回 404 `unknown path`。这是 #34 已退役的专用后端登录动作；不纳入 Rust 契约，登录/display 的呈现由 spec #8 决定。
+补充：#106 起 `POST /api/console/share-management/backend-login-cancel` 代理网关控制令牌门 `POST /admin/auth/cancel`（复用 `account.um_status` 的同一个控制面客户端），把网关的 200/202 `{cancelled, state, detail}` 归一为 200；网关不可达、控制令牌缺失/不可读、非 2xx 或响应不符合契约时返回 503 `{cancelled:false, state:null, error, detail}`，不伪造成功。控制令牌只在本机发往网关，不进日志或响应。旧 `/api/share/backend-login-cancel` 仍是 404。
 
 ### 6.2 鉴权与请求边界
 
