@@ -1,10 +1,10 @@
-//! Shared one-shot Python sidecar plumbing (#84, #87).
+//! Shared one-shot Python sidecar plumbing (#87).
 //!
-//! Both the retained `model.catalog` executor and the local retained-action
-//! executor run a Python handler in a ONE-SHOT child process: the child prints
-//! exactly one JSON envelope and exits. A failed, timed-out, cancelled or
-//! malformed child is an explicit error, never a fabricated result. No long-lived
-//! Python process is started or reused.
+//! The retained service/account actions run a Python handler in a ONE-SHOT child
+//! process: the child prints exactly one JSON envelope and exits. A failed,
+//! timed-out, cancelled or malformed child is an explicit error, never a
+//! fabricated result. No long-lived Python process is started or reused. The
+//! model-sync actions no longer use this path (#94).
 
 use std::io::Read;
 use std::path::Path;

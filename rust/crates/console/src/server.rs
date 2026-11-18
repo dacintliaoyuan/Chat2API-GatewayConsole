@@ -137,18 +137,17 @@ impl ConsoleServer {
         runtime: Arc<dyn RuntimeFacts>,
         share_seams: Arc<dyn ShareReadSeams>,
     ) -> Result<ServerHandle, ServerError> {
-        // The local role executes the migrated service actions through the
-        // managed PowerShell runtime (#92) and the UM auth actions in Rust
-        // (#93); the remaining model/context actions still run through the
-        // one-shot Python sidecar. The cloud role keeps its honest unwired
-        // default.
+        // The local role executes the service actions through the managed
+        // PowerShell runtime (#92), the UM auth actions in Rust (#93), and the
+        // model-sync actions in-process (#94); the cloud role keeps its honest
+        // unwired default.
         let executor: Arc<dyn crate::operation_manager::ActionExecutor> = match config.role {
             Role::Local => {
                 let retained = Arc::new(
                     crate::retained_actions::RetainedActionExecutor::from_config(&config),
                 );
                 let service_control = Arc::new(
-                    crate::local_um_auth::RetainedServiceControl::new(Arc::clone(&retained)),
+                    crate::service_actions::PowerShellServiceExecutor::from_config(&config),
                 );
                 let auth = crate::local_um_auth::UmAuthExecutor::from_config(
                     &config,

@@ -372,38 +372,12 @@ fn epoch_seconds() -> i64 {
 
 /// The managed Windows runtime's service start/stop seam.
 ///
-/// #92 migrates the local `service.*` actions themselves; until that lands the
-/// production implementation reuses the retained one-shot sidecar action so the
-/// login orchestration keeps its existing start/stop behavior. A login against an
-/// already running gateway never touches this seam.
+/// `PowerShellServiceExecutor` implements this seam, so the login orchestration
+/// starts/stops the local gateway through the same managed runtime as `service.*`.
+/// A login against an already running gateway never touches this seam.
 pub trait ServiceControl: Send + Sync {
     fn start(&self, ctx: &OperationContext) -> Result<(), ActionFailure>;
     fn stop(&self, ctx: &OperationContext) -> Result<(), ActionFailure>;
-}
-
-/// The retained sidecar service control used until #92 assembles the Rust runtime.
-pub struct RetainedServiceControl {
-    retained: Arc<RetainedActionExecutor>,
-}
-
-impl RetainedServiceControl {
-    pub fn new(retained: Arc<RetainedActionExecutor>) -> Self {
-        Self { retained }
-    }
-}
-
-impl ServiceControl for RetainedServiceControl {
-    fn start(&self, ctx: &OperationContext) -> Result<(), ActionFailure> {
-        self.retained
-            .execute("service.start", "chat2api", &Map::new(), ctx)
-            .map(|_| ())
-    }
-
-    fn stop(&self, ctx: &OperationContext) -> Result<(), ActionFailure> {
-        self.retained
-            .execute("service.stop", "chat2api", &Map::new(), ctx)
-            .map(|_| ())
-    }
 }
 
 /// The local UM auth action executor.
@@ -1225,7 +1199,7 @@ impl ActionExecutor for UmAuthExecutor {
 }
 
 /// The local action executor: the migrated UM auth actions run in Rust, and the
-/// retained service/model actions still run through the one-shot Python sidecar.
+/// retained model actions run in-process.
 pub struct LocalActionExecutor {
     auth: UmAuthExecutor,
     retained: Arc<RetainedActionExecutor>,

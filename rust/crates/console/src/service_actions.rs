@@ -29,7 +29,7 @@ pub const START_STOP_TIMEOUT: Duration = Duration::from_secs(60);
 pub const RESTART_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The local role's action executor: service actions go to the managed Windows
-/// runtime, the remaining account/model actions keep their retained Python handlers.
+/// runtime and the remaining model actions keep their retained in-process handlers.
 pub struct LocalActionExecutor {
     service: PowerShellServiceExecutor,
     retained: RetainedActionExecutor,
@@ -304,4 +304,17 @@ fn reap(child: &mut Child) {
 
 fn join_reader(reader: Option<thread::JoinHandle<String>>) -> Option<String> {
     reader.and_then(|reader| reader.join().ok())
+}
+
+
+impl crate::local_um_auth::ServiceControl for PowerShellServiceExecutor {
+    fn start(&self, ctx: &OperationContext) -> Result<(), ActionFailure> {
+        self.execute("service.start", LOCAL_SERVICE_TARGET, &Map::new(), ctx)
+            .map(|_| ())
+    }
+
+    fn stop(&self, ctx: &OperationContext) -> Result<(), ActionFailure> {
+        self.execute("service.stop", LOCAL_SERVICE_TARGET, &Map::new(), ctx)
+            .map(|_| ())
+    }
 }

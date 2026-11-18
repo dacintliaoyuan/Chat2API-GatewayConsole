@@ -66,9 +66,9 @@ pub fn action_catalogue() -> Value {
 }
 
 /// The local role catalogue: the UM actions only. Share actions are not
-/// assembled locally. `service.*` (#92) executes through the managed PowerShell
-/// runtime; `model.catalog` (#84) and the remaining account/model actions run
-/// their retained Python handlers in a one-shot sidecar.
+/// assembled locally. All twelve actions are enabled; `service.*` (#92) executes
+/// through the managed PowerShell runtime, the UM auth actions (#93) run in Rust,
+/// and the model-sync actions (#94) execute in-process.
 pub fn action_catalogue_local() -> Value {
     let actions: Vec<Value> = local_registry()
         .iter()

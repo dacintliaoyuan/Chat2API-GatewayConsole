@@ -148,8 +148,9 @@ pub struct ConsoleConfig {
     /// The built console page tree hosted by the local role
     /// (`usagesrv.py::CONSOLE_DIST_DIR`).
     pub console_dist_dir: PathBuf,
-    /// The local role's one-shot Python `model.catalog` sidecar: the
-    /// interpreter and the repo root that owns `console.model_actions`.
+    /// The local role's retained Python interpreter and repo root. The
+    /// service/account actions still run one-shot handlers from here; the
+    /// model-sync actions run in Rust and never start Python.
     pub python_exe: PathBuf,
     pub repo_root: PathBuf,
     pub display: DisplayConfig,

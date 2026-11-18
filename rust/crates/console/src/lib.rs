@@ -22,7 +22,7 @@ pub mod local_summary;
 pub mod local_um;
 pub mod local_um_auth;
 pub mod metering;
-pub mod model_catalog;
+pub mod model_sync;
 pub mod operation_manager;
 pub mod operations;
 pub mod retained_actions;
@@ -33,7 +33,6 @@ pub mod session;
 pub mod share_auth;
 pub mod share_read;
 pub mod share_write;
-mod sidecar;
 pub mod static_files;
 pub mod summary;
 
@@ -42,7 +41,7 @@ pub use display_grant::{DisplayGrantError, DisplayGrants, DisplaySession};
 pub use error::ConsoleError;
 pub use local_summary::{build_local_summary, LocalSummaryCache, LocalSummaryPaths};
 pub use local_um_auth::{LocalActionExecutor, UmAuthExecutor};
-pub use model_catalog::PythonCatalogExecutor;
+pub use model_sync::ModelSyncExecutor;
 pub use retained_actions::RetainedActionExecutor;
 pub use runtime::{
     LinuxPidFileConfig, LinuxPidFileFacts, LocalTcpFacts, ProcessProbe, RuntimeError, RuntimeFacts,
