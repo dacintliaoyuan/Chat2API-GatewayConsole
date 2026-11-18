@@ -82,8 +82,20 @@ _Avoid_: 重启服务、灰度发布、一次性全量切换
 _Avoid_: 上一 release、备份目录、Rust 二进制回退
 
 **本机回滚 (Local rollback)**:
-本机切流失败时恢复 Python 实现的动作；本机没有发布包，回滚点是未删除的 `chat2api.py`／`usagesrv.py` 与原启动命令，不是目录级 release。
+本机切流失败时恢复 Python 实现的动作；本机没有发布包，回滚点是未删除的 `chat2api.py`／`usagesrv.py` 与原启动命令，不是目录级 release。ADR 0010 计划在满足前置条件后退役这份回滚实现，届时恢复改用回滚包或云端旧 release。
 _Avoid_: 回滚 release（云端发布包）、重新安装
+
+**Python 回滚实现 (Python rollback implementation)**:
+只作为回滚保留的 Python 入口集合：`usagesrv.py`、`chat2api/chat2api.py`、`start_chat2api.bat`、`start_usage_service.bat` 与 `um-share-console-python.service`；它不是常驻服务，也不是 sidecar。ADR 0010 定义它的退役条件。
+_Avoid_: 所有 Python 文件、生产实现
+
+**回滚包 (Rollback bundle)**:
+退役 Python 回滚实现前打出的离线包（`tmp/python-rollback-<date>.tar.gz`，gitignored），包含回滚入口及其闭包；它替代“未删除的 Python 文件”成为本机恢复路径。
+_Avoid_: 回滚 release（云端发布包）、源码备份
+
+**一次性 sidecar (One-shot sidecar)**:
+由 Rust 本机控制台按动作启动、执行一次即退出的 Python 子进程；当前承载 8001 的 12 个本机动作与 `model_sync` 调用，不是常驻服务。退役 Python 回滚前必须先把这些动作迁到 Rust。
+_Avoid_: 常驻 Python、后台服务
 
 **常驻服务 (Resident service)**:
 由 systemd、Windows 启动器或登录项拉起、持续监听端口的进程；Rust 迁移范围只包含常驻服务，编排脚本、display 辅助与按需调用的库不在范围。
