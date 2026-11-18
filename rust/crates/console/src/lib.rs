@@ -28,6 +28,7 @@ pub mod operations;
 pub mod retained_actions;
 pub mod runtime;
 pub mod server;
+pub mod service_actions;
 pub mod session;
 pub mod share_auth;
 pub mod share_read;
@@ -48,6 +49,7 @@ pub use runtime::{
     RuntimeSnapshot,
 };
 pub use server::{AppState, ConsoleServer, ServerError, ServerHandle};
+pub use service_actions::PowerShellServiceExecutor;
 pub use session::SessionState;
 pub use share_read::{ShareReadSeams, ShareReadStore, UnwiredSeams};
 pub use share_write::{ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams};
