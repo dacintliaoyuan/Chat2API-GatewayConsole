@@ -1,22 +1,20 @@
-//! #87: the retained local account/model actions run the retained Python
-//! handlers.
+//! #87: the retained local model actions run the retained Python handlers.
 //!
 //! The local role lists the same twelve actions as Python's
 //! `console.adapters.build_registry()`; the service actions (#92) execute through
-//! the managed PowerShell runtime and the remaining nine through a one-shot Python
-//! sidecar. These tests use a fake `console` package under a temp repo root, so no
-//! test touches the real UM runtime, the model-sync state or the network.
+//! the managed PowerShell runtime, the UM auth actions (#93) run in Rust, and the
+//! remaining model actions through a one-shot Python sidecar. These tests use a fake
+//! `console` package under a temp repo root, so no test touches the real UM
+//! runtime, the model-sync state or the network.
 
 mod support;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use um_console::config::Role;
-use um_console::lock::ResourceLock;
 use um_console::ConsoleServer;
 use um_test_harness::TempDataDir;
 
@@ -68,71 +66,6 @@ def _record(name, payload):
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
 "#;
 
-const UM_ADAPTER_MODULE: &str = r#"
-import json
-import os
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _record(payload):
-    with open(os.path.join(ROOT, "account_calls.txt"), "a",
-              encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, sort_keys=True) + "\n")
-
-
-def um_auth_status(target, params, ctx=None):
-    _record({"action": "account.um_status", "target": target,
-             "params": params})
-    return {"state": "valid", "source": "memory-state",
-            "verified": False, "state_known": True,
-            "label": "登录有效（内存态）",
-            "note": "内存态（未主动核验）：仅读取 chat2api 自身认证状态，"
-                    "未向上游发起核验请求"}
-
-
-def um_verify_account(target, params, ctx=None):
-    _record({"action": "account.um_verify", "target": target,
-             "params": params})
-    return {"verify": "valid", "source": "memory-state"}
-"#;
-
-const UM_LOGIN_MODULE: &str = r#"
-import json
-import os
-import time
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-class _Error(Exception):
-    def __init__(self, code, message):
-        super().__init__(message)
-        self.code = code
-
-
-def _record(payload):
-    with open(os.path.join(ROOT, "login_calls.txt"), "a",
-              encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, sort_keys=True) + "\n")
-
-
-def relogin_um(target, params, ctx=None):
-    _record({"action": "account.login", "target": target,
-             "params": params})
-    if params.get("visible") and not params.get("force"):
-        raise _Error(
-            "invalid_params",
-            "visible=true 只能与 force=true 一起使用；可见窗口只用于显式强制重新登录")
-    if params.get("start_wait_s") == 120:
-        with open(os.path.join(ROOT, "login_started.txt"), "a",
-                  encoding="utf-8") as handle:
-            handle.write("started\n")
-        time.sleep(30)
-    return {"status": "valid", "force": bool(params.get("force")),
-            "visible": bool(params.get("visible"))}
-"#;
-
 const MODEL_ACTIONS_MODULE: &str = r#"
 import json
 import os
@@ -156,7 +89,9 @@ def model_catalog(target, params, ctx=None):
 def model_context_probe_preview(target, params, ctx=None):
     _record("model.context_probe_preview", target, params)
     return {"queue": [{"source": "um", "model_id": "fake-model"}],
-            "totals": {"records": 1}}
+            "totals": {"records": 1},
+            "label": "上下文探测预览（只读）",
+            "note": "队列+计划+估算，零请求零写入"}
 
 
 def model_context_probe_run(target, params, ctx=None):
@@ -169,8 +104,16 @@ def model_context_overrides(target, params, ctx=None):
     return {"overrides": {}, "models": {}}
 
 
+class _Error(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 def model_context_override_set(target, params, ctx=None):
     _record("model.context_override_set", target, params)
+    if params.get("model_id") == "fail":
+        raise _Error("invalid_params", "模型标识无效；请重新选择后再保存")
     return {"ok": True, "source": params.get("source"),
             "model_id": params.get("model_id")}
 
@@ -186,8 +129,6 @@ fn fake_repo(temp: &TempDataDir) -> PathBuf {
     std::fs::create_dir_all(&console).expect("fake console package");
     std::fs::write(console.join("__init__.py"), "").expect("package marker");
     std::fs::write(console.join("adapters.py"), ADAPTERS_MODULE).expect("fake adapters");
-    std::fs::write(console.join("um_adapter.py"), UM_ADAPTER_MODULE).expect("fake um adapter");
-    std::fs::write(console.join("um_login.py"), UM_LOGIN_MODULE).expect("fake um login");
     std::fs::write(console.join("model_actions.py"), MODEL_ACTIONS_MODULE)
         .expect("fake model actions");
     root
@@ -248,153 +189,6 @@ fn submit(console: &Console, action: &str, target: &str, params: Value) -> Clien
         "/api/console/operations",
         Some(json!({"action": action, "target": target, "params": params})),
     )
-}
-
-/// Holds the `account:um` resource lock the way another console process (or the
-/// retained Python `ResourceFileLock`) does: an exclusive handle on the same file.
-fn hold_account_lock(temp: &TempDataDir) -> ResourceLock {
-    ResourceLock::acquire(
-        &temp.path().join("console-locks"),
-        "account:um",
-        "test-holder",
-        Duration::from_secs(30),
-        &AtomicBool::new(false),
-    )
-    .expect("hold the account resource lock")
-}
-
-/// Polls for `window` and fails the test if the operation leaves the lock wait
-/// (fails early, or reaches a terminal state) before the holder releases it.
-fn assert_waiting_for_lock(console: &Console, operation: &Value, window: Duration) -> Value {
-    let op_id = operation["id"].as_str().expect("operation id").to_string();
-    let deadline = Instant::now() + window;
-    loop {
-        let fetched = request(
-            console,
-            "GET",
-            &format!("/api/console/operations/{op_id}"),
-            None,
-        );
-        assert_eq!(fetched.status, 200);
-        let current = fetched.json()["operation"].clone();
-        assert_eq!(
-            current["state"],
-            json!("queued"),
-            "operation must keep waiting for the held resource lock: {current}"
-        );
-        assert!(
-            current["error"].is_null(),
-            "operation failed instead of waiting: {current}"
-        );
-        if Instant::now() >= deadline {
-            return current;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-#[test]
-fn um_verify_waits_for_a_held_account_lock_and_then_succeeds() {
-    let temp = temp();
-    let repo = fake_repo(&temp);
-    let console = start_local_console(&temp, &repo);
-    let holder = hold_account_lock(&temp);
-
-    let created = submit(&console, "account.um_verify", "chat2api", json!({}));
-    assert_eq!(created.status, 201);
-    let operation = created.json()["operation"].clone();
-    let operation = assert_waiting_for_lock(&console, &operation, Duration::from_millis(600));
-
-    drop(holder);
-    let operation = wait_terminal(&console, &operation);
-    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
-    assert_eq!(operation["result"]["verify"], json!("valid"));
-    assert_eq!(operation["result"]["source"], json!("memory-state"));
-
-    let calls =
-        std::fs::read_to_string(repo.join("account_calls.txt")).expect("account call record");
-    let call: Value = serde_json::from_str(calls.trim()).expect("call json");
-    assert_eq!(call["action"], json!("account.um_verify"));
-}
-
-#[test]
-fn reverify_and_forced_visible_login_wait_for_the_same_account_lock() {
-    let temp = temp();
-    let repo = fake_repo(&temp);
-    let console = start_local_console(&temp, &repo);
-    let holder = hold_account_lock(&temp);
-
-    let verify = submit(&console, "account.um_verify", "chat2api", json!({}));
-    let login = submit(
-        &console,
-        "account.login",
-        "chat2api",
-        json!({"force": true, "visible": true}),
-    );
-    assert_eq!(verify.status, 201);
-    assert_eq!(login.status, 201);
-    let verify_op = assert_waiting_for_lock(
-        &console,
-        &verify.json()["operation"],
-        Duration::from_millis(400),
-    );
-    let login_op = assert_waiting_for_lock(
-        &console,
-        &login.json()["operation"],
-        Duration::from_millis(400),
-    );
-
-    drop(holder);
-    let verify_op = wait_terminal(&console, &verify_op);
-    let login_op = wait_terminal(&console, &login_op);
-    assert_eq!(verify_op["state"], json!("succeeded"), "{verify_op}");
-    assert_eq!(verify_op["result"]["verify"], json!("valid"));
-    assert_eq!(login_op["state"], json!("succeeded"), "{login_op}");
-    assert_eq!(login_op["result"]["status"], json!("valid"));
-    assert_eq!(login_op["result"]["force"], json!(true));
-    assert_eq!(login_op["result"]["visible"], json!(true));
-
-    let calls = std::fs::read_to_string(repo.join("login_calls.txt")).expect("login call record");
-    let calls: Vec<Value> = calls
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("call json"))
-        .collect();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0]["action"], json!("account.login"));
-    assert_eq!(calls[0]["params"], json!({"force": true, "visible": true}));
-    assert!(repo.join("account_calls.txt").exists());
-}
-
-#[test]
-fn cancelling_a_verify_while_it_waits_for_the_lock_never_runs_the_sidecar() {
-    let temp = temp();
-    let repo = fake_repo(&temp);
-    let console = start_local_console(&temp, &repo);
-    let holder = hold_account_lock(&temp);
-
-    let created = submit(&console, "account.um_verify", "chat2api", json!({}));
-    assert_eq!(created.status, 201);
-    let operation = created.json()["operation"].clone();
-    let operation = assert_waiting_for_lock(&console, &operation, Duration::from_millis(300));
-    let op_id = operation["id"].as_str().expect("operation id").to_string();
-
-    let cancelled = request(
-        &console,
-        "POST",
-        &format!("/api/console/operations/{op_id}/cancel"),
-        None,
-    );
-    assert_eq!(cancelled.status, 200);
-    let operation = wait_terminal(&console, &operation);
-    assert_eq!(operation["state"], json!("cancelled"), "{operation}");
-    assert_eq!(operation["error"]["code"], json!("cancelled"));
-    assert_eq!(operation["result"], Value::Null);
-    assert!(
-        !repo.join("account_calls.txt").exists(),
-        "a verify cancelled during the lock wait must never run its sidecar"
-    );
-
-    drop(holder);
 }
 
 #[test]
@@ -463,71 +257,6 @@ fn local_action_catalogue_lists_all_twelve_enabled_actions() {
 }
 
 #[test]
-fn submitting_account_um_status_runs_the_retained_handler() {
-    let temp = temp();
-    let repo = fake_repo(&temp);
-    let console = start_local_console(&temp, &repo);
-
-    let created = submit(&console, "account.um_status", "chat2api", json!({}));
-    assert_eq!(created.status, 201);
-    let operation = wait_terminal(&console, &created.json()["operation"]);
-
-    assert_eq!(operation["state"], json!("succeeded"));
-    assert_eq!(operation["result"]["state"], json!("valid"));
-    assert_eq!(operation["result"]["source"], json!("memory-state"));
-    let calls =
-        std::fs::read_to_string(repo.join("account_calls.txt")).expect("account call record");
-    let call: Value = serde_json::from_str(calls.trim()).expect("call json");
-    assert_eq!(call["action"], json!("account.um_status"));
-    assert_eq!(call["target"], json!("chat2api"));
-    assert_eq!(call["params"], json!({}));
-}
-
-#[test]
-fn account_login_rejects_visible_without_force_and_runs_forced_visible_login() {
-    let temp = temp();
-    let repo = fake_repo(&temp);
-    let console = start_local_console(&temp, &repo);
-
-    let invalid = submit(
-        &console,
-        "account.login",
-        "chat2api",
-        json!({"visible": true, "force": false}),
-    );
-    assert_eq!(invalid.status, 201);
-    let operation = wait_terminal(&console, &invalid.json()["operation"]);
-    assert_eq!(operation["state"], json!("failed"), "{operation}");
-    assert_eq!(operation["result"], Value::Null);
-    assert_eq!(operation["error"]["code"], json!("invalid_params"));
-    assert!(operation["error"]["message"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("visible=true"));
-
-    let forced = submit(
-        &console,
-        "account.login",
-        "chat2api",
-        json!({"visible": true, "force": true}),
-    );
-    assert_eq!(forced.status, 201);
-    let operation = wait_terminal(&console, &forced.json()["operation"]);
-    assert_eq!(operation["state"], json!("succeeded"));
-    assert_eq!(operation["result"]["status"], json!("valid"));
-    assert_eq!(operation["result"]["force"], json!(true));
-    assert_eq!(operation["result"]["visible"], json!(true));
-
-    let calls = std::fs::read_to_string(repo.join("login_calls.txt")).expect("login call record");
-    let calls: Vec<Value> = calls
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("call json"))
-        .collect();
-    assert_eq!(calls.len(), 2);
-    assert_eq!(calls[1]["params"], json!({"visible": true, "force": true}));
-}
-
-#[test]
 fn an_unauthorized_service_target_is_refused_before_any_operation_row() {
     let temp = temp();
     let repo = fake_repo(&temp);
@@ -565,58 +294,12 @@ fn model_context_probe_preview_returns_the_retained_queue() {
 }
 
 #[test]
-fn cancelling_a_running_login_kills_the_sidecar_and_records_cancelled() {
+fn every_retained_model_action_executes_through_the_sidecar() {
     let temp = temp();
     let repo = fake_repo(&temp);
     let console = start_local_console(&temp, &repo);
 
-    let created = submit(
-        &console,
-        "account.login",
-        "chat2api",
-        json!({"force": true, "start_wait_s": 120}),
-    );
-    assert_eq!(created.status, 201);
-    let op_id = created.json()["operation"]["id"]
-        .as_str()
-        .expect("operation id")
-        .to_string();
-    wait_for_path(&repo.join("login_started.txt"));
-
-    let cancelled = request(
-        &console,
-        "POST",
-        &format!("/api/console/operations/{op_id}/cancel"),
-        None,
-    );
-    assert_eq!(cancelled.status, 200);
-    let operation = wait_terminal(&console, &created.json()["operation"]);
-    assert_eq!(operation["state"], json!("cancelled"));
-    assert_eq!(operation["result"], Value::Null);
-    assert_eq!(operation["error"]["code"], json!("cancelled"));
-
-    let list = request(&console, "GET", "/api/console/operations?limit=50", None);
-    assert_eq!(list.status, 200);
-    let operations = list.json()["operations"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    assert!(operations
-        .iter()
-        .filter(|row| row["action"] == json!("account.login"))
-        .all(|row| row["state"] != json!("succeeded")));
-}
-
-#[test]
-fn every_retained_account_and_model_action_executes_through_the_sidecar() {
-    let temp = temp();
-    let repo = fake_repo(&temp);
-    let console = start_local_console(&temp, &repo);
-
-    let cases: [(&str, &str, Value); 9] = [
-        ("account.um_status", "chat2api", json!({})),
-        ("account.um_verify", "chat2api", json!({})),
-        ("account.login", "chat2api", json!({"force": true})),
+    let cases: [(&str, &str, Value); 6] = [
         ("model.context_probe_preview", "model", json!({})),
         ("model.context_probe_run", "model", json!({})),
         ("model.context_overrides", "model", json!({})),
@@ -678,18 +361,18 @@ fn sidecar_keeps_chinese_text_intact_under_a_cp936_default_stdout() {
     let repo = fake_repo(&temp);
     let console = start_local_console(&temp, &repo);
 
-    let created = submit(&console, "account.um_status", "chat2api", json!({}));
+    let created = submit(&console, "model.context_probe_preview", "model", json!({}));
     assert_eq!(created.status, 201);
     let operation = wait_terminal(&console, &created.json()["operation"]);
     assert_eq!(operation["state"], json!("succeeded"), "{operation}");
     assert_eq!(
         operation["result"]["label"],
-        json!("登录有效（内存态）"),
+        json!("上下文探测预览（只读）"),
         "{operation}"
     );
     assert_eq!(
         operation["result"]["note"],
-        json!("内存态（未主动核验）：仅读取 chat2api 自身认证状态，未向上游发起核验请求"),
+        json!("队列+计划+估算，零请求零写入"),
         "{operation}"
     );
     for field in ["label", "note"] {
@@ -699,9 +382,9 @@ fn sidecar_keeps_chinese_text_intact_under_a_cp936_default_stdout() {
 
     let invalid = submit(
         &console,
-        "account.login",
-        "chat2api",
-        json!({"visible": true, "force": false}),
+        "model.context_override_set",
+        "model",
+        json!({"source": "um", "model_id": "fail", "context": 32000}),
     );
     assert_eq!(invalid.status, 201);
     let operation = wait_terminal(&console, &invalid.json()["operation"]);
@@ -713,7 +396,7 @@ fn sidecar_keeps_chinese_text_intact_under_a_cp936_default_stdout() {
     );
     assert_eq!(
         operation["error"]["message"],
-        json!("visible=true 只能与 force=true 一起使用；可见窗口只用于显式强制重新登录"),
+        json!("模型标识无效；请重新选择后再保存"),
         "{operation}"
     );
     assert!(
@@ -723,16 +406,4 @@ fn sidecar_keeps_chinese_text_intact_under_a_cp936_default_stdout() {
             .contains('\u{FFFD}'),
         "{operation}"
     );
-}
-
-fn wait_for_path(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "sidecar never started: {}",
-            path.display()
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
 }

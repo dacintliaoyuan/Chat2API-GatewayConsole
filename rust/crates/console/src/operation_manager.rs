@@ -256,7 +256,7 @@ pub fn local_registry() -> Vec<ActionSpec> {
             cancelable: true,
             enabled: true,
             disabled_reason: None,
-            resource: um_account_resource,
+            resource: um_status_resource,
         },
         ActionSpec {
             name: "account.um_verify",
@@ -405,6 +405,15 @@ fn um_account_resource(
     _params: &Map<String, Value>,
 ) -> Result<String, OperationError> {
     Ok("account:um".to_string())
+}
+
+/// The read-only auth-state query never contends with the exclusive verify/login
+/// round lock: a refresh during an active login still reads the same round.
+fn um_status_resource(
+    _target: &str,
+    _params: &Map<String, Value>,
+) -> Result<String, OperationError> {
+    Ok("account:um:status".to_string())
 }
 
 fn model_context_resource(

@@ -160,7 +160,7 @@ fn concurrent_actions_on_the_same_resource_stay_mutually_exclusive() {
     let manager = manager_with_timeout(&temp, executor.clone(), Duration::from_secs(10));
 
     let (_, first) = manager
-        .submit("account.um_status", "chat2api", None, None)
+        .submit("account.um_verify", "chat2api", None, None)
         .expect("first submit");
     let first_id = first["id"].as_str().unwrap().to_string();
     let deadline = Instant::now() + Duration::from_secs(10);
