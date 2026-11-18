@@ -29,7 +29,11 @@ $script:GatewayServiceDescriptors = [ordered]@{
         # batch launcher (the batch ignores them) so the rollback stays a
         # one-line change.
         StartPath    = 'rust\target\release\um-gateway-candidate.exe'
-        StartArguments = '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token'
+        # #108: the ledger and runtime log paths the local 8001 console reads.
+        # Python wrote these two files by default; the Rust gateway keeps them
+        # opt-in through --usage-log/--service-log so a missing flag would leave
+        # today's request and log pages empty.
+        StartArguments = '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log'
         # Repository root keeps the Rust role defaults identical to Python:
         # current_dir()/chat2api/token.json and current_dir()/chat2api/.edge-profile.
         StartWorkingDirectory = '.'

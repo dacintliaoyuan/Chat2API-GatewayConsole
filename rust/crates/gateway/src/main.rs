@@ -82,6 +82,14 @@ fn main() -> ExitCode {
                 Some(value) => config.login_timeout = std::time::Duration::from_secs(value.max(1)),
                 None => return usage("--login-timeout requires an integer"),
             },
+            "--usage-log" => match args.next() {
+                Some(value) => config.usage_log = Some(value.into()),
+                None => return usage("--usage-log requires a path"),
+            },
+            "--service-log" => match args.next() {
+                Some(value) => config.service_log = Some(value.into()),
+                None => return usage("--service-log requires a path"),
+            },
             "--effort-model" => match args.next() {
                 Some(value) => config.effort_models.push(value),
                 None => return usage("--effort-model requires a model id"),
