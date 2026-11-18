@@ -81,68 +81,6 @@ class RuntimeServiceAdapter:
         return {"key": target, "status": "Restarted", "action": "restart"}
 "#;
 
-const UM_ADAPTER_MODULE: &str = r#"
-import json
-import os
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _record(payload):
-    with open(os.path.join(ROOT, "account_calls.txt"), "a",
-              encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, sort_keys=True) + "\n")
-
-
-def um_auth_status(target, params, ctx=None):
-    _record({"action": "account.um_status", "target": target,
-             "params": params})
-    return {"state": "valid", "source": "memory-state",
-            "verified": False, "state_known": True}
-
-
-def um_verify_account(target, params, ctx=None):
-    _record({"action": "account.um_verify", "target": target,
-             "params": params})
-    return {"verify": "valid", "source": "memory-state"}
-"#;
-
-const UM_LOGIN_MODULE: &str = r#"
-import json
-import os
-import time
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-class _Error(Exception):
-    def __init__(self, code, message):
-        super().__init__(message)
-        self.code = code
-
-
-def _record(payload):
-    with open(os.path.join(ROOT, "login_calls.txt"), "a",
-              encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, sort_keys=True) + "\n")
-
-
-def relogin_um(target, params, ctx=None):
-    _record({"action": "account.login", "target": target,
-             "params": params})
-    if params.get("visible") and not params.get("force"):
-        raise _Error(
-            "invalid_params",
-            "visible=true 只能与 force=true 一起使用；可见窗口只用于显式强制重新登录")
-    if params.get("start_wait_s") == 120:
-        with open(os.path.join(ROOT, "login_started.txt"), "a",
-                  encoding="utf-8") as handle:
-            handle.write("started\n")
-        time.sleep(30)
-    return {"status": "valid", "force": bool(params.get("force")),
-            "visible": bool(params.get("visible"))}
-"#;
-
 const MODEL_ACTIONS_MODULE: &str = r#"
 import json
 import os
@@ -196,8 +134,6 @@ fn fake_repo(temp: &TempDataDir) -> PathBuf {
     std::fs::create_dir_all(&console).expect("fake console package");
     std::fs::write(console.join("__init__.py"), "").expect("package marker");
     std::fs::write(console.join("adapters.py"), ADAPTERS_MODULE).expect("fake adapters");
-    std::fs::write(console.join("um_adapter.py"), UM_ADAPTER_MODULE).expect("fake um adapter");
-    std::fs::write(console.join("um_login.py"), UM_LOGIN_MODULE).expect("fake um login");
     std::fs::write(console.join("model_actions.py"), MODEL_ACTIONS_MODULE)
         .expect("fake model actions");
     root
@@ -325,71 +261,6 @@ fn local_action_catalogue_lists_all_twelve_enabled_actions() {
 }
 
 #[test]
-fn submitting_account_um_status_runs_the_retained_handler() {
-    let temp = temp();
-    let repo = fake_repo(&temp);
-    let console = start_local_console(&temp, &repo);
-
-    let created = submit(&console, "account.um_status", "chat2api", json!({}));
-    assert_eq!(created.status, 201);
-    let operation = wait_terminal(&console, &created.json()["operation"]);
-
-    assert_eq!(operation["state"], json!("succeeded"));
-    assert_eq!(operation["result"]["state"], json!("valid"));
-    assert_eq!(operation["result"]["source"], json!("memory-state"));
-    let calls =
-        std::fs::read_to_string(repo.join("account_calls.txt")).expect("account call record");
-    let call: Value = serde_json::from_str(calls.trim()).expect("call json");
-    assert_eq!(call["action"], json!("account.um_status"));
-    assert_eq!(call["target"], json!("chat2api"));
-    assert_eq!(call["params"], json!({}));
-}
-
-#[test]
-fn account_login_rejects_visible_without_force_and_runs_forced_visible_login() {
-    let temp = temp();
-    let repo = fake_repo(&temp);
-    let console = start_local_console(&temp, &repo);
-
-    let invalid = submit(
-        &console,
-        "account.login",
-        "chat2api",
-        json!({"visible": true, "force": false}),
-    );
-    assert_eq!(invalid.status, 201);
-    let operation = wait_terminal(&console, &invalid.json()["operation"]);
-    assert_eq!(operation["state"], json!("failed"), "{operation}");
-    assert_eq!(operation["result"], Value::Null);
-    assert_eq!(operation["error"]["code"], json!("invalid_params"));
-    assert!(operation["error"]["message"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("visible=true"));
-
-    let forced = submit(
-        &console,
-        "account.login",
-        "chat2api",
-        json!({"visible": true, "force": true}),
-    );
-    assert_eq!(forced.status, 201);
-    let operation = wait_terminal(&console, &forced.json()["operation"]);
-    assert_eq!(operation["state"], json!("succeeded"));
-    assert_eq!(operation["result"]["status"], json!("valid"));
-    assert_eq!(operation["result"]["force"], json!(true));
-    assert_eq!(operation["result"]["visible"], json!(true));
-
-    let calls = std::fs::read_to_string(repo.join("login_calls.txt")).expect("login call record");
-    let calls: Vec<Value> = calls
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("call json"))
-        .collect();
-    assert_eq!(calls.len(), 2);
-    assert_eq!(calls[1]["params"], json!({"visible": true, "force": true}));
-}
-
-#[test]
 fn service_start_runs_the_retained_adapter_and_refuses_other_targets() {
     let temp = temp();
     let repo = fake_repo(&temp);
@@ -453,61 +324,15 @@ fn model_context_probe_preview_returns_the_retained_queue() {
 }
 
 #[test]
-fn cancelling_a_running_login_kills_the_sidecar_and_records_cancelled() {
-    let temp = temp();
-    let repo = fake_repo(&temp);
-    let console = start_local_console(&temp, &repo);
-
-    let created = submit(
-        &console,
-        "account.login",
-        "chat2api",
-        json!({"force": true, "start_wait_s": 120}),
-    );
-    assert_eq!(created.status, 201);
-    let op_id = created.json()["operation"]["id"]
-        .as_str()
-        .expect("operation id")
-        .to_string();
-    wait_for_path(&repo.join("login_started.txt"));
-
-    let cancelled = request(
-        &console,
-        "POST",
-        &format!("/api/console/operations/{op_id}/cancel"),
-        None,
-    );
-    assert_eq!(cancelled.status, 200);
-    let operation = wait_terminal(&console, &created.json()["operation"]);
-    assert_eq!(operation["state"], json!("cancelled"));
-    assert_eq!(operation["result"], Value::Null);
-    assert_eq!(operation["error"]["code"], json!("cancelled"));
-
-    let list = request(&console, "GET", "/api/console/operations?limit=50", None);
-    assert_eq!(list.status, 200);
-    let operations = list.json()["operations"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    assert!(operations
-        .iter()
-        .filter(|row| row["action"] == json!("account.login"))
-        .all(|row| row["state"] != json!("succeeded")));
-}
-
-#[test]
 fn every_retained_local_action_executes_through_the_sidecar() {
     let temp = temp();
     let repo = fake_repo(&temp);
     let console = start_local_console(&temp, &repo);
 
-    let cases: [(&str, &str, Value); 12] = [
+    let cases: [(&str, &str, Value); 9] = [
         ("service.start", "chat2api", json!({})),
         ("service.stop", "chat2api", json!({})),
         ("service.restart", "chat2api", json!({})),
-        ("account.um_status", "chat2api", json!({})),
-        ("account.um_verify", "chat2api", json!({})),
-        ("account.login", "chat2api", json!({"force": true})),
         ("model.context_probe_preview", "model", json!({})),
         ("model.context_probe_run", "model", json!({})),
         ("model.context_overrides", "model", json!({})),
@@ -532,17 +357,5 @@ fn every_retained_local_action_executes_through_the_sidecar() {
             json!("succeeded"),
             "{action}: {operation}"
         );
-    }
-}
-
-fn wait_for_path(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "sidecar never started: {}",
-            path.display()
-        );
-        std::thread::sleep(Duration::from_millis(20));
     }
 }

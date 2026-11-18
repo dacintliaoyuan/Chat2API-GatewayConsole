@@ -20,6 +20,7 @@ pub mod local_logs;
 pub mod local_stats;
 pub mod local_summary;
 pub mod local_um;
+pub mod local_um_auth;
 pub mod metering;
 pub mod model_catalog;
 pub mod operation_manager;
@@ -39,6 +40,7 @@ pub use config::{ConsoleConfig, EntryKind, Role};
 pub use display_grant::{DisplayGrantError, DisplayGrants, DisplaySession};
 pub use error::ConsoleError;
 pub use local_summary::{build_local_summary, LocalSummaryCache, LocalSummaryPaths};
+pub use local_um_auth::{LocalActionExecutor, UmAuthExecutor};
 pub use model_catalog::PythonCatalogExecutor;
 pub use retained_actions::RetainedActionExecutor;
 pub use runtime::{

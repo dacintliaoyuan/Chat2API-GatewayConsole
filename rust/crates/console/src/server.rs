@@ -111,12 +111,23 @@ impl ConsoleServer {
         runtime: Arc<dyn RuntimeFacts>,
         share_seams: Arc<dyn ShareReadSeams>,
     ) -> Result<ServerHandle, ServerError> {
-        // The local role executes all twelve retained actions through the
-        // one-shot Python sidecar (`model.catalog` keeps its #84 executor); the
-        // cloud role keeps its honest unwired default.
+        // The local role executes the migrated UM auth actions in Rust; the
+        // retained service/model actions still run through the one-shot Python
+        // sidecar (`model.catalog` keeps its #84 executor). The cloud role keeps
+        // its honest unwired default.
         let executor: Arc<dyn crate::operation_manager::ActionExecutor> = match config.role {
             Role::Local => {
-                Arc::new(crate::retained_actions::RetainedActionExecutor::from_config(&config))
+                let retained =
+                    Arc::new(crate::retained_actions::RetainedActionExecutor::from_config(&config));
+                let service = Arc::new(crate::local_um_auth::RetainedServiceControl::new(
+                    Arc::clone(&retained),
+                ));
+                let auth = crate::local_um_auth::UmAuthExecutor::from_config(
+                    &config,
+                    Arc::clone(&runtime),
+                    service,
+                );
+                Arc::new(crate::local_um_auth::LocalActionExecutor::new(auth, retained))
             }
             Role::Cloud => Arc::new(UnwiredActionExecutor),
         };
