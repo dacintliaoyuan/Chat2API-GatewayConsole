@@ -1502,6 +1502,66 @@ fn handle_share_management_write(
                 Err(error) => share_write_error(&error),
             }
         }
+        ("POST", ["keys", key_id, "test"]) => {
+            if let Err(error) = reject_unknown_fields(&body, &["expected_row_version"]) {
+                return error.response();
+            }
+            let expected = match body.get("expected_row_version") {
+                Some(Value::Number(number)) => number.as_i64().filter(|value| *value >= 1),
+                _ => None,
+            };
+            let Some(expected) = expected else {
+                return ConsoleError::body_open(
+                    400,
+                    "invalid key_id or expected_row_version",
+                )
+                .response();
+            };
+            if key_id.is_empty() || key_id.chars().count() > 128 {
+                return ConsoleError::body_open(
+                    400,
+                    "invalid key_id or expected_row_version",
+                )
+                .response();
+            }
+            let payload = writer.test_key(
+                key_id,
+                expected,
+                false,
+                state.config.public_origin.as_deref(),
+            );
+            send_json(200, &payload)
+        }
+        ("POST", ["keys", key_id, "test-private"]) => {
+            if let Err(error) = reject_unknown_fields(&body, &["expected_row_version"]) {
+                return error.response();
+            }
+            let expected = match body.get("expected_row_version") {
+                Some(Value::Number(number)) => number.as_i64().filter(|value| *value >= 1),
+                _ => None,
+            };
+            let Some(expected) = expected else {
+                return ConsoleError::body_open(
+                    400,
+                    "invalid key_id or expected_row_version",
+                )
+                .response();
+            };
+            if key_id.is_empty() || key_id.chars().count() > 128 {
+                return ConsoleError::body_open(
+                    400,
+                    "invalid key_id or expected_row_version",
+                )
+                .response();
+            }
+            let payload = writer.test_key(
+                key_id,
+                expected,
+                true,
+                state.config.public_origin.as_deref(),
+            );
+            send_json(200, &payload)
+        }
         ("POST", ["keys", key_id, "revoke-and-terminate"]) => {
             if let Err(error) =
                 reject_unknown_fields(&body, &["idempotency_key", "expected_row_version"])
