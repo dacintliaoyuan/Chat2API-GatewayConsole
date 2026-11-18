@@ -51,6 +51,7 @@ struct FakePage {
     reject_submit: AtomicBool,
     credential_error: AtomicBool,
     submit_calls: AtomicUsize,
+    duo_manual: AtomicBool,
 }
 
 impl FakePage {
@@ -74,6 +75,7 @@ impl FakePage {
             reject_submit: AtomicBool::new(false),
             credential_error: AtomicBool::new(false),
             submit_calls: AtomicUsize::new(0),
+            duo_manual: AtomicBool::new(false),
         })
     }
 
@@ -88,6 +90,14 @@ impl FakePage {
 
     fn set_token(&self, token: Option<&str>) {
         *self.token.lock().expect("fake token") = token.map(str::to_string);
+    }
+
+    fn set_url(&self, url: &str) {
+        *self.url.lock().expect("fake url") = url.to_string();
+    }
+
+    fn set_duo_manual(&self, manual: bool) {
+        self.duo_manual.store(manual, Ordering::SeqCst);
     }
 
     fn drop_calls(&self) -> usize {
@@ -216,6 +226,10 @@ impl LoginPage for FakePage {
         self.fill_calls.fetch_add(1, Ordering::SeqCst);
         self.filled_values.lock().unwrap().push(value.to_string());
         Ok(())
+    }
+
+    fn duo_requires_confirmation(&self) -> bool {
+        self.duo_manual.load(Ordering::SeqCst)
     }
 }
 
@@ -1694,6 +1708,444 @@ fn a_saved_token_is_loaded_and_used_by_the_default_assembly() {
 }
 
 // ---------------------------------------------------------------------------
+// #102: Duo auto-pass and a prompt that only the account holder can confirm.
+// ---------------------------------------------------------------------------
+
+const DUO_PROMPT_URL: &str = "https://api-1234.duosecurity.com/frame/v4/auth/prompt";
+
+fn duo_round_page() -> Arc<FakePage> {
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.fill_calls.store(2, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") = vec![
+        ("https://websso.um.edu.mo/adfs/ls/".to_string(), None),
+        (
+            "https://api-1234.duosecurity.com/frame/v4/auth/prompt".to_string(),
+            None,
+        ),
+    ];
+    page
+}
+
+fn duo_timing(config: &mut LoginConfig) {
+    config.login_timeout = Duration::from_secs(10);
+    config.idle_timeout = Duration::from_secs(5);
+    config.stage_settle_timeout = Duration::from_secs(2);
+    config.click_observe_timeout = Duration::from_millis(50);
+    config.poll_interval = Duration::from_millis(5);
+}
+
+#[test]
+fn a_duo_auto_pass_publishes_progress_and_finishes_the_same_round() {
+    let temp = TempDir::new("um-rust-duo-auto-pass-");
+    let page = duo_round_page();
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            duo_timing(config);
+        },
+    );
+
+    service.start_explicit(false);
+    let status = wait_for(&service, |status| {
+        status["login"]["phase"] == json!("awaiting_duo")
+    });
+    assert_eq!(status["state"], json!("logging_in"), "{status}");
+    assert_eq!(status["label"], json!("正在完成 Duo 验证"), "{status}");
+    assert_eq!(
+        status["login"]["manual_reason"],
+        Value::Null,
+        "Duo 自动通过期间不得发布人工确认原因: {status}"
+    );
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(factory.requests().len(), 1);
+    assert!(!factory.requests()[0].headful);
+    assert_eq!(factory.closes(), 0, "Duo 过渡期间必须保留同一个窗口");
+
+    // Duo 自行通过：页面返回应用并带上凭据，同一轮继续核验。
+    page.set_url("http://127.0.0.1:9");
+    page.set_token(Some("duo-auto-token"));
+    let status = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("restored"),
+        "{status}"
+    );
+    assert_eq!(status["login"], Value::Null, "{status}");
+    assert_eq!(
+        factory.requests().len(),
+        1,
+        "Duo 自动通过不得启动新一轮或第二个窗口"
+    );
+    assert_eq!(factory.closes(), 1);
+    assert_eq!(sink.published()[0].0, "duo-auto-token");
+}
+
+#[test]
+fn a_duo_manual_prompt_keeps_the_same_visible_round_until_approval() {
+    let temp = TempDir::new("um-rust-duo-manual-approve-");
+    let page = duo_round_page();
+    page.set_duo_manual(true);
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            duo_timing(config);
+        },
+    );
+
+    service.start_explicit(true);
+    let status = wait_for(&service, |status| {
+        status["login"]["manual_reason"] == json!("duo_prompt_waiting")
+    });
+    assert_eq!(status["state"], json!("logging_in"), "{status}");
+    assert_eq!(
+        status["label"],
+        json!("登录中（需人工：duo_prompt_waiting）"),
+        "{status}"
+    );
+    assert_eq!(status["login"]["phase"], json!("awaiting_duo"), "{status}");
+    assert_eq!(
+        status["login"]["detail"],
+        json!("请在 Duo 页面确认本次登录"),
+        "{status}"
+    );
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(status["recovery"]["visible"], json!(true), "{status}");
+    assert_eq!(factory.requests().len(), 1);
+    assert!(factory.requests()[0].headful);
+    assert_eq!(factory.closes(), 0, "本人确认前必须保留同一个可见窗口");
+
+    // 批准后页面自行返回，同一轮继续核验并转为成功。
+    page.set_duo_manual(false);
+    page.set_url("http://127.0.0.1:9");
+    page.set_token(Some("duo-approved-token"));
+    let status = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("restored"),
+        "{status}"
+    );
+    assert_eq!(factory.requests().len(), 1, "批准后不得重开窗口或新一轮");
+    assert_eq!(factory.closes(), 1);
+    assert_eq!(sink.published()[0].0, "duo-approved-token");
+}
+
+#[test]
+fn a_duo_manual_prompt_can_be_cancelled() {
+    let temp = TempDir::new("um-rust-duo-manual-cancel-");
+    let page = duo_round_page();
+    page.set_duo_manual(true);
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            duo_timing(config);
+        },
+    );
+
+    service.start_explicit(true);
+    wait_for(&service, |status| {
+        status["login"]["manual_reason"] == json!("duo_prompt_waiting")
+    });
+    service.cancel();
+    let status = wait_for(&service, |status| status["state"] == json!("cancelled"));
+    assert_eq!(status["error"], json!("cancelled"), "{status}");
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("cancelled"),
+        "{status}"
+    );
+    assert_eq!(factory.requests().len(), 1);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while factory.closes() < 1 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(factory.closes(), 1);
+    assert!(sink.published().is_empty());
+}
+
+#[test]
+fn a_duo_manual_prompt_ends_with_the_round_timeout() {
+    let temp = TempDir::new("um-rust-duo-manual-timeout-");
+    let page = duo_round_page();
+    page.set_duo_manual(true);
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            duo_timing(config);
+            config.login_timeout = Duration::from_millis(150);
+        },
+    );
+
+    service.start_explicit(true);
+    let status = wait_for(&service, |status| {
+        status["login"]["manual_reason"] == json!("duo_prompt_waiting")
+    });
+    assert_eq!(status["state"], json!("logging_in"), "{status}");
+    let status = wait_for(&service, |status| status["state"] == json!("failed"));
+    assert_eq!(status["error"], json!("timeout"), "{status}");
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("timeout"),
+        "{status}"
+    );
+    assert_eq!(status["label"], json!("登录窗口已超时"), "{status}");
+    assert_eq!(factory.requests().len(), 1);
+    assert_eq!(factory.closes(), 1);
+    assert!(sink.published().is_empty());
+}
+
+#[test]
+fn a_background_duo_manual_prompt_waits_for_the_visible_choice_in_the_same_round() {
+    let temp = TempDir::new("um-rust-duo-background-choice-");
+    let page = duo_round_page();
+    page.set_duo_manual(true);
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            duo_timing(config);
+        },
+    );
+
+    service.start_explicit(false);
+    let status = wait_for(&service, |status| {
+        status["login"]["manual_reason"] == json!("duo_prompt_waiting")
+            && status["recovery"]["state"] == json!("waiting")
+    });
+    assert_eq!(status["state"], json!("logging_in"), "{status}");
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(status["recovery"]["visible"], json!(false), "{status}");
+    assert_eq!(factory.requests().len(), 1);
+    assert!(!factory.requests()[0].headful);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while factory.closes() < 1 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(factory.closes(), 1, "后台 Duo 等待必须释放 headless 浏览器");
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        factory.requests().len(),
+        1,
+        "本人选择可见继续前不得自动打开 Edge"
+    );
+
+    // 本人选择可见继续：沿用同一轮次，才打开可见窗口。
+    page.closed.store(false, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") = vec![
+        ("https://websso.um.edu.mo/adfs/ls/".to_string(), None),
+        (
+            "https://api-1234.duosecurity.com/frame/v4/auth/prompt".to_string(),
+            None,
+        ),
+    ];
+    service.start_explicit(true);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while factory.requests().len() < 2 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(factory.requests().len(), 2);
+    assert!(factory.requests()[1].headful, "可见继续必须打开可见 Edge");
+    let status = service.status();
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(status["recovery"]["visible"], json!(true), "{status}");
+    assert_eq!(status["state"], json!("logging_in"), "{status}");
+
+    // 批准后同一轮继续核验并成功。
+    page.set_duo_manual(false);
+    page.set_url("http://127.0.0.1:9");
+    page.set_token(Some("background-approved-token"));
+    let status = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("restored"),
+        "{status}"
+    );
+    assert_eq!(factory.requests().len(), 2);
+    assert_eq!(factory.closes(), 2);
+    assert_eq!(sink.published()[0].0, "background-approved-token");
+}
+
+#[test]
+fn a_request_auth_wait_budget_keeps_the_duo_round_and_its_later_result() {
+    let temp = TempDir::new("um-rust-duo-wait-budget-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::HttpStatus {
+        status: 401,
+        body: "upstream rejected".to_string(),
+        retry_after: None,
+    });
+    let page = duo_round_page();
+    let factory = FakeFactory::new(page.clone());
+    let mut config = reauth_gateway_config(&temp, &stub.url());
+    config.login_timeout = Duration::from_secs(10);
+    config.login_idle_timeout = Duration::from_secs(5);
+    config.login_stage_settle_timeout = Duration::from_secs(2);
+    config.login_poll_interval = Duration::from_millis(5);
+    config.login_click_observe_timeout = Duration::from_millis(50);
+    config.auth_wait_budget = Some(Duration::from_millis(200));
+    config.auth_wait_recheck = Duration::from_millis(10);
+    let server = GatewayServer::start_with_login(config, factory.clone(), ScriptedProbe::valid())
+        .expect("start reauth gateway");
+
+    start_background_round(&server);
+    let status = wait_for_status(&server, |status| {
+        status["login"]["phase"] == json!("awaiting_duo")
+    });
+    assert_eq!(status["state"], json!("logging_in"), "{status}");
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["login"]["manual_reason"],
+        Value::Null,
+        "Duo 自动通过期间不得发布人工确认原因: {status}"
+    );
+
+    let page_for_auto_pass = page.clone();
+    let auto_pass = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(500));
+        page_for_auto_pass.set_url("http://127.0.0.1:9");
+        page_for_auto_pass.set_token(Some("duo-later-token"));
+    });
+    let addr = server.addr();
+    let request = thread::spawn(move || client_request(addr, &chat_request()));
+
+    let response = request
+        .join()
+        .expect("request thread")
+        .expect("business 401");
+    assert_eq!(response.status, 503);
+    assert_eq!(
+        response.json()["error"]["reason"],
+        json!("auth_wait_timeout")
+    );
+
+    // 请求等待预算耗尽不结束在途轮次，也不发布人工确认。
+    let status = auth_status(&server);
+    assert_eq!(status["state"], json!("logging_in"), "{status}");
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(status["login"]["phase"], json!("awaiting_duo"), "{status}");
+    assert_eq!(
+        status["login"]["manual_reason"],
+        Value::Null,
+        "Duo 自动通过期间不得发布人工确认原因: {status}"
+    );
+    assert_eq!(factory.requests().len(), 1);
+    assert!(!factory.requests()[0].headful);
+
+    // 后续 Duo 自行通过时，同一轮继续核验并发布真实结果。
+    auto_pass.join().expect("auto-pass thread");
+    let status = wait_for_status(&server, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("restored"),
+        "{status}"
+    );
+    assert_eq!(factory.requests().len(), 1);
+}
+
+#[test]
+fn a_request_auth_wait_budget_reports_the_duo_manual_wait() {
+    let temp = TempDir::new("um-rust-duo-wait-budget-manual-");
+    let stub = ChatStub::start();
+    stub.push(ChatAttempt::HttpStatus {
+        status: 401,
+        body: "upstream rejected".to_string(),
+        retry_after: None,
+    });
+    let page = duo_round_page();
+    page.set_duo_manual(true);
+    let factory = FakeFactory::new(page.clone());
+    let mut config = reauth_gateway_config(&temp, &stub.url());
+    config.login_timeout = Duration::from_secs(10);
+    config.login_idle_timeout = Duration::from_secs(5);
+    config.login_stage_settle_timeout = Duration::from_secs(2);
+    config.login_poll_interval = Duration::from_millis(5);
+    config.login_click_observe_timeout = Duration::from_millis(50);
+    config.auth_wait_budget = Some(Duration::from_millis(200));
+    config.auth_wait_recheck = Duration::from_millis(10);
+    let server = GatewayServer::start_with_login(config, factory.clone(), ScriptedProbe::valid())
+        .expect("start reauth gateway");
+
+    start_background_round(&server);
+    let status = wait_for_status(&server, |status| {
+        status["login"]["manual_reason"] == json!("duo_prompt_waiting")
+    });
+    assert_eq!(status["state"], json!("logging_in"), "{status}");
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+
+    let addr = server.addr();
+    let request = thread::spawn(move || client_request(addr, &chat_request()));
+    let response = request
+        .join()
+        .expect("request thread")
+        .expect("business 401");
+    assert_eq!(response.status, 503);
+    assert_eq!(
+        response.json()["error"]["reason"],
+        json!("duo_prompt_waiting")
+    );
+    assert_eq!(response.header("retry-after"), Some("30"));
+
+    // 请求等待结束只影响该请求；本轮仍保留，后续结果继续更新。
+    let status = auth_status(&server);
+    assert_eq!(status["state"], json!("logging_in"), "{status}");
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["login"]["manual_reason"],
+        json!("duo_prompt_waiting"),
+        "{status}"
+    );
+
+    page.set_duo_manual(false);
+    page.closed.store(false, Ordering::SeqCst);
+    page.set_url("http://127.0.0.1:9");
+    page.set_token(Some("manual-later-token"));
+    let visible = client_request(
+        server.addr(),
+        &ClientRequest::post("/admin/auth/login", &json!({"visible": true}).to_string())
+            .header("X-Admin-Control", CONTROL_TOKEN)
+            .json_body(&json!({"visible": true}).to_string()),
+    )
+    .expect("visible continue");
+    assert_eq!(visible.status, 202, "{:?}", visible.json());
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while factory.requests().len() < 2 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(factory.requests().len(), 2);
+    assert!(factory.requests()[1].headful);
+    let status = wait_for_status(&server, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1), "{status}");
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("restored"),
+        "{status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // #99: one shared background re-authentication round for business 401s and the
 // periodic auth watch. The trigger source and round id are real observations;
 // nothing here opens a visible Edge window.
@@ -1749,6 +2201,18 @@ fn auth_status(server: &ServerHandle) -> Value {
     )
     .expect("auth status")
     .json()
+}
+
+fn start_background_round(server: &ServerHandle) -> Value {
+    let started = client_request(
+        server.addr(),
+        &ClientRequest::post("/admin/auth/login", &json!({"visible": false}).to_string())
+            .header("X-Admin-Control", CONTROL_TOKEN)
+            .json_body(&json!({"visible": false}).to_string()),
+    )
+    .expect("start background round");
+    assert_eq!(started.status, 202, "{:?}", started.json());
+    started.json()
 }
 
 fn wait_for_status(server: &ServerHandle, predicate: impl Fn(&Value) -> bool) -> Value {
