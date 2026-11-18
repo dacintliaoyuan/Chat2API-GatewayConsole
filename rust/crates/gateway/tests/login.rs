@@ -1028,6 +1028,100 @@ fn the_global_start_limit_refuses_a_second_explicit_round() {
 }
 
 #[test]
+fn a_released_attempt_window_accepts_the_next_explicit_visible_round_directly() {
+    let temp = TempDir::new("um-rust-login-cap-release-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("valid-token"));
+    let probe = ScriptedProbe::valid();
+    let sink = Arc::new(FakeSink::default());
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with(&temp, page.clone(), probe, sink, |config| {
+        config.attempt_window = Duration::from_millis(250);
+        config.max_attempts_per_window = 1;
+        config.display_file = marker;
+    });
+
+    // One completed round uses the whole rolling start budget.
+    service.start_explicit(false);
+    wait_for(&service, |status| status["state"] == json!("valid"));
+    let first_round = service.status()["recovery"]["round"]
+        .as_u64()
+        .expect("first round");
+    assert_eq!(factory.requests().len(), 1);
+
+    // No login task is running, so the cap refuses the request, publishes the
+    // retry time and opens no browser or round.
+    let refused = service.start_explicit(true);
+    assert_eq!(refused["state"], json!("needs_login"), "{refused}");
+    assert_eq!(
+        refused["error"],
+        json!("reauth_refused:global_attempt_cap"),
+        "{refused}"
+    );
+    assert_eq!(refused["recovery"]["state"], json!("waiting"), "{refused}");
+    assert!(
+        refused["recovery"]["next_attempt_epoch"].is_number(),
+        "拒绝必须带可重试时间: {refused}"
+    );
+    assert_eq!(
+        refused["recovery"]["round"],
+        json!(first_round),
+        "拒绝不得新增登录轮次: {refused}"
+    );
+    assert_eq!(
+        factory.requests().len(),
+        1,
+        "拒绝不得打开浏览器: {refused}"
+    );
+
+    // Once the rolling window releases, the same explicit visible request starts
+    // a new round directly: no cancel, no restart, one visible window.
+    page.closed.store(false, Ordering::SeqCst);
+    page.set_token(None);
+    thread::sleep(Duration::from_millis(350));
+    let started = service.start_explicit(true);
+    assert_eq!(started["state"], json!("logging_in"), "{started}");
+    assert_eq!(started["recovery"]["state"], json!("running"), "{started}");
+    assert_eq!(
+        started["error"],
+        Value::Null,
+        "旧限流原因必须清除: {started}"
+    );
+    assert_eq!(
+        started["recovery"]["next_attempt_epoch"],
+        Value::Null,
+        "旧等待时间必须清除: {started}"
+    );
+    assert_eq!(
+        started["recovery"]["round"],
+        json!(first_round + 1),
+        "额度释放后必须进入新一轮: {started}"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while factory.requests().len() < 2 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        factory.requests().len(),
+        2,
+        "额度释放后只允许一个新的可见窗口: {started}"
+    );
+    assert!(
+        factory.requests()[1].headful,
+        "显式可见登录必须打开可见 Edge"
+    );
+
+    page.set_token(Some("valid-token"));
+    let status = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(
+        status["recovery"]["round"],
+        json!(first_round + 1),
+        "{status}"
+    );
+    assert_eq!(factory.requests().len(), 2, "不得打开额外窗口: {status}");
+}
+
+#[test]
 fn a_busy_profile_is_a_throttle_and_refunds_the_start() {
     let temp = TempDir::new("um-rust-login-profile-busy-");
     let page = FakePage::new("http://127.0.0.1:9", None);
