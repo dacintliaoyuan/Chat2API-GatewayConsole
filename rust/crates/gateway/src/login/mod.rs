@@ -962,10 +962,19 @@ fn status_from_locked(state: &LoginState, watch: &WatchStatus) -> Value {
         .login
         .as_ref()
         .and_then(|login| login.manual_reason.clone());
+    let verifying = state
+        .login
+        .as_ref()
+        .and_then(|login| login.phase.as_deref())
+        == Some("verifying_login");
     let mut label = state.auth_state.label().to_string();
     if let Some(reason) = &manual_reason {
         label = format!("{label}（需人工：{reason}）");
-    } else if state.evidence.verdict.as_deref() == Some("unknown") {
+    } else if verifying {
+        label = format!("{label}（正在核验登录结果）");
+    } else if state.evidence.verdict.as_deref() == Some("unknown")
+        && !matches!(state.auth_state, AuthState::Cancelled | AuthState::Failed)
+    {
         label = format!(
             "{label}（最近一次检查无法判断：{}）",
             state.evidence.reason.as_deref().unwrap_or("unknown")
@@ -1371,11 +1380,12 @@ fn drive_login(
         );
     }
 
-    let deadline = Instant::now() + inner.config.login_timeout;
+    let deadline = login_round_deadline(inner);
     let mut idle_deadline = Instant::now() + inner.config.idle_timeout;
     let mut last_url = page.url();
     let mut last_token: Option<String> = None;
     let mut rejected_tokens: HashSet<String> = HashSet::new();
+    let mut verifying: Option<String> = None;
     let mut clicks = HashMap::new();
     let mut stage_seen: HashMap<String, Instant> = HashMap::new();
     let mut manual_reason: Option<String> = None;
@@ -1403,26 +1413,56 @@ fn drive_login(
             }
             if !rejected_tokens.contains(token) {
                 let verdict = inner.probe.classify(token);
-                if verdict.verdict == "valid" {
-                    return LoginOutcome::Token {
-                        token: token.clone(),
-                    };
+                match verdict.verdict {
+                    "valid" => {
+                        return LoginOutcome::Token {
+                            token: token.clone(),
+                        }
+                    }
+                    "rejected" => {
+                        rejected_tokens.insert(token.clone());
+                        note_login_evidence(
+                            inner,
+                            round,
+                            "rejected",
+                            verdict.reason,
+                            verdict.upstream_status,
+                        );
+                        let _ = page.drop_token();
+                        let _ = page.reload();
+                        verifying = None;
+                        continue;
+                    }
+                    _ if visible => {
+                        // 暂时无法核验不结束本轮，也不关闭窗口：同一 token
+                        // 在原轮次截止时间内串行复查，直到有结论或截止。
+                        verifying = Some(token.clone());
+                        note_login_evidence(
+                            inner,
+                            round,
+                            "unknown",
+                            verdict.reason,
+                            verdict.upstream_status,
+                        );
+                        note_progress(inner, round, "verifying_login", Some(&page.url()), None);
+                        idle_deadline = Instant::now() + inner.config.idle_timeout;
+                    }
+                    _ => {
+                        // 后台会话没有可见窗口可保留；结束本次会话，后续认证
+                        // 巡检负责重新核验。
+                        return LoginOutcome::VerificationUnknown {
+                            reason: verdict
+                                .reason
+                                .unwrap_or("credential_probe_inconclusive")
+                                .to_string(),
+                        };
+                    }
                 }
-                if verdict.verdict == "rejected" {
-                    rejected_tokens.insert(token.clone());
-                    let _ = page.drop_token();
-                    let _ = page.reload();
-                    continue;
-                }
-                // 超时不要求用户完成浏览器交互，也不能发布尚未核验的凭据。
-                // 结束本次浏览器会话，后续认证巡检负责重新核验。
-                return LoginOutcome::VerificationUnknown {
-                    reason: verdict
-                        .reason
-                        .unwrap_or("credential_probe_inconclusive")
-                        .to_string(),
-                };
             }
+        }
+        if verifying.as_ref() != token.as_ref() {
+            // 页面换上了别的 token 或清掉了 token：旧的核验目标已消失。
+            verifying = None;
         }
 
         let url = page.url();
@@ -1462,11 +1502,13 @@ fn drive_login(
                 Some(&url),
                 Some("duo_prompt_waiting"),
             );
-        } else if stage == "unknown" {
+        } else if stage == "unknown" && verifying.is_none() {
             stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
             return stop_for_manual(inner, round, page, "unrecognized_page");
-        } else if manual_reason.is_some() {
-            // The automatic flow already stopped; keep polling for a token.
+        } else if manual_reason.is_some() || verifying.is_some() {
+            // The automatic flow already stopped (an inconclusive probe, a
+            // human-only page, a changed site): never act on a page again,
+            // only keep polling for the token or a decisive verdict.
         } else if stage == "openwebui" {
             let count = clicks.entry(stage.clone()).or_insert(0);
             if *count >= inner.config.max_clicks_per_stage {
@@ -1621,6 +1663,12 @@ fn drive_login(
         }
     }
 
+    if verifying.is_some() {
+        // 本轮截止时仍未核验出结论：凭据保持未发布、未落盘。
+        return LoginOutcome::VerificationUnknown {
+            reason: "verification_timeout".to_string(),
+        };
+    }
     if manual_reason.is_none() && stage == "duo" {
         manual_reason = Some("duo_prompt_waiting".to_string());
     }
@@ -1628,6 +1676,53 @@ fn drive_login(
     LoginOutcome::Manual {
         reason: reason.clone(),
     }
+}
+
+/// The ONE deadline of the current login round. An explicit login fixes the
+/// deadline when the window opens; verification rechecks and status polls never
+/// renew it.
+fn login_round_deadline(inner: &Arc<LoginInner>) -> Instant {
+    let window_deadline = {
+        let state = inner.state.lock().expect("login state poisoned");
+        state
+            .login_window
+            .as_ref()
+            .map(|window| window.deadline_epoch)
+    };
+    match window_deadline {
+        Some(epoch) => {
+            let remaining = (epoch - profile::epoch_now()).max(0.0);
+            Instant::now() + Duration::from_secs_f64(remaining)
+        }
+        None => Instant::now() + inner.config.login_timeout,
+    }
+}
+
+fn note_login_evidence(
+    inner: &Arc<LoginInner>,
+    round: u64,
+    verdict: &str,
+    reason: Option<&str>,
+    upstream_status: Option<u16>,
+) {
+    let mut state = inner.state.lock().expect("login state poisoned");
+    if state.round != round {
+        return;
+    }
+    let now = profile::epoch_now();
+    let last_valid_epoch = if verdict == "valid" {
+        Some(now)
+    } else {
+        state.evidence.last_valid_epoch
+    };
+    state.evidence = Evidence {
+        verdict: Some(verdict.to_string()),
+        reason: reason.map(str::to_string),
+        upstream_status,
+        checked_epoch: Some(now),
+        last_valid_epoch,
+        source: Some("login".to_string()),
+    };
 }
 
 fn commit_token(

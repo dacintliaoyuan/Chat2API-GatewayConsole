@@ -8,13 +8,14 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
 use um_gateway::config::{GatewayConfig, Role};
+use um_gateway::login::profile::acquire_profile_lock;
 use um_gateway::login::{
     BrowserUnavailable, CredentialField, CredentialProbe, CredentialSink, CredentialVerdict,
     HttpCredentialProbe, LaunchRequest, LoginBrowser, LoginBrowserFactory, LoginConfig,
@@ -324,6 +325,68 @@ impl CredentialProbe for ScriptedProbe {
     }
 }
 
+/// A probe the test drives by hand: scripted verdicts first, then every call
+/// blocks until `release`, which answers `valid`. It records the bearer of every
+/// classification so the test can prove the SAME token is rechecked serially.
+struct ManualProbe {
+    calls: AtomicUsize,
+    bearers: Mutex<Vec<String>>,
+    scripted: Mutex<VecDeque<CredentialVerdict>>,
+    released: Mutex<bool>,
+    condvar: Condvar,
+}
+
+impl ManualProbe {
+    fn new(scripted: Vec<CredentialVerdict>) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            bearers: Mutex::new(Vec::new()),
+            scripted: Mutex::new(scripted.into()),
+            released: Mutex::new(false),
+            condvar: Condvar::new(),
+        })
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    fn bearers(&self) -> Vec<String> {
+        self.bearers.lock().expect("probe bearers").clone()
+    }
+
+    fn release(&self) {
+        *self.released.lock().expect("probe release") = true;
+        self.condvar.notify_all();
+    }
+}
+
+impl CredentialProbe for ManualProbe {
+    fn classify(&self, bearer: &str) -> CredentialVerdict {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.bearers
+            .lock()
+            .expect("probe bearers")
+            .push(bearer.to_string());
+        if let Some(verdict) = self
+            .scripted
+            .lock()
+            .expect("probe script")
+            .pop_front()
+        {
+            return verdict;
+        }
+        let mut released = self.released.lock().expect("probe release");
+        while !*released {
+            released = self
+                .condvar
+                .wait(released)
+                .expect("probe release poisoned");
+        }
+        valid_verdict()
+    }
+}
+
 fn valid_verdict() -> CredentialVerdict {
     CredentialVerdict {
         verdict: "valid",
@@ -338,6 +401,10 @@ fn rejected_verdict() -> CredentialVerdict {
         reason: Some("upstream_rejected"),
         upstream_status: Some(401),
     }
+}
+
+fn unknown_verdict() -> CredentialVerdict {
+    CredentialVerdict::unknown("Timeout", None)
 }
 
 #[derive(Default)]
@@ -401,6 +468,16 @@ fn login_service_with(
     sink: Arc<FakeSink>,
     configure: impl FnOnce(&mut LoginConfig),
 ) -> (LoginService, Arc<FakeFactory>) {
+    login_service_with_probe(temp, page, probe, sink, configure)
+}
+
+fn login_service_with_probe(
+    temp: &TempDir,
+    page: Arc<FakePage>,
+    probe: Arc<dyn CredentialProbe>,
+    sink: Arc<FakeSink>,
+    configure: impl FnOnce(&mut LoginConfig),
+) -> (LoginService, Arc<FakeFactory>) {
     let factory = FakeFactory::new(page);
     let mut config = login_config(temp);
     configure(&mut config);
@@ -420,6 +497,17 @@ fn wait_for(service: &LoginService, predicate: impl Fn(&Value) -> bool) -> Value
         assert!(
             Instant::now() < deadline,
             "timed out waiting for status: {status}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_until(mut condition: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !condition() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for condition"
         );
         thread::sleep(Duration::from_millis(10));
     }
@@ -917,6 +1005,235 @@ fn a_closed_visible_window_cancels_the_round() {
     let status = wait_for(&service, |status| status["state"] == json!("cancelled"));
     assert_eq!(status["error"], json!("window_closed"));
     assert_eq!(status["label"], json!("已取消登录"));
+}
+
+#[test]
+fn a_visible_login_rechecks_the_same_pending_token_inside_one_window() {
+    let temp = TempDir::new("um-rust-visible-verification-retry-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("pending-token"));
+    let probe = ManualProbe::new(vec![unknown_verdict(), unknown_verdict()]);
+    let sink = Arc::new(FakeSink::default());
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with_probe(
+        &temp,
+        page.clone(),
+        probe.clone(),
+        sink.clone(),
+        |config| {
+            config.display_file = marker;
+            config.login_timeout = Duration::from_secs(2);
+        },
+    );
+
+    service.start_explicit(true);
+    let status = wait_for(&service, |status| {
+        status["login"]["phase"] == json!("verifying_login")
+    });
+    assert_eq!(status["state"], json!("logging_in"));
+    assert_eq!(status["label"], json!("登录中（正在核验登录结果）"));
+    assert_eq!(status["recovery"]["round"], json!(1));
+    assert_eq!(
+        factory.requests().len(),
+        1,
+        "暂时无法核验不得关闭并重开可见窗口"
+    );
+    assert_eq!(factory.closes(), 0);
+    assert_eq!(status["evidence"]["verdict"], json!("unknown"));
+
+    wait_until(|| probe.calls() >= 2);
+    assert!(
+        probe.bearers().iter().all(|bearer| bearer == "pending-token"),
+        "复查必须针对同一个待核验 token：{:?}",
+        probe.bearers()
+    );
+    let verifying = service.status();
+    assert_eq!(
+        verifying["login_window_deadline_epoch"], status["login_window_deadline_epoch"],
+        "核验复查不得延长本轮截止时间"
+    );
+    assert_eq!(verifying["recovery"]["round"], json!(1));
+    assert_eq!(factory.requests().len(), 1);
+
+    probe.release();
+    let status = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1), "核验成功仍属于同一轮");
+    assert_eq!(factory.requests().len(), 1, "全程只启动一个 Edge 窗口");
+    assert_eq!(factory.closes(), 1, "核验通过后才正常关闭窗口");
+    assert_eq!(sink.published(), vec![("pending-token".to_string(), None)]);
+    let document: Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("token.json")).expect("token file"),
+    )
+    .expect("token json");
+    assert_eq!(document["token"], json!("pending-token"));
+}
+
+#[test]
+fn a_visible_login_ends_at_the_round_deadline_when_verification_stays_unknown() {
+    let temp = TempDir::new("um-rust-visible-verification-deadline-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("pending-token"));
+    let probe = ScriptedProbe::new(vec![unknown_verdict(); 1000]);
+    let sink = Arc::new(FakeSink::default());
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with_probe(
+        &temp,
+        page.clone(),
+        probe,
+        sink.clone(),
+        |config| {
+            config.display_file = marker;
+            config.login_timeout = Duration::from_millis(400);
+            config.idle_timeout = Duration::from_millis(60);
+        },
+    );
+
+    let started = Instant::now();
+    service.start_explicit(true);
+    let status = wait_for(&service, |status| {
+        status["login"]["phase"] == json!("verifying_login")
+    });
+    let deadline = status["login_window_deadline_epoch"]
+        .as_f64()
+        .expect("login window deadline");
+    // 状态轮询与后台巡检的未知证据都不得续期本轮截止时间。
+    for _ in 0..5 {
+        let polled = service.status();
+        assert_eq!(
+            polled["login_window_deadline_epoch"].as_f64(),
+            Some(deadline)
+        );
+        assert_eq!(polled["state"], json!("logging_in"));
+        service.note_probe("unknown", Some("timeout"), None);
+        assert_eq!(
+            service.status()["login_window_deadline_epoch"].as_f64(),
+            Some(deadline)
+        );
+    }
+
+    let status = wait_for(&service, |status| status["state"] == json!("unknown"));
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "核验复查不得延长本轮截止时间：{elapsed:?}"
+    );
+    assert_eq!(
+        status["recovery"]["last_outcome"],
+        json!("verification_unknown:verification_timeout")
+    );
+    assert_eq!(status["error"], Value::Null);
+    assert_eq!(status["login"], Value::Null);
+    assert_eq!(status["evidence"]["verdict"], json!("unknown"));
+    assert_eq!(factory.requests().len(), 1, "截止时由网关关闭同一个窗口");
+    assert_eq!(factory.closes(), 1);
+    assert!(sink.published().is_empty(), "未核验的凭据不得发布");
+    assert!(
+        !temp.path().join("token.json").exists(),
+        "未核验的凭据不得落盘"
+    );
+    let lock = acquire_profile_lock(&temp.path().join("profile"))
+        .expect("本轮截止后必须释放 profile 锁");
+    drop(lock);
+}
+
+#[test]
+fn a_visible_login_cancels_when_the_operator_closes_the_window_while_verifying() {
+    let temp = TempDir::new("um-rust-visible-verification-close-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("pending-token"));
+    let probe = ManualProbe::new(vec![unknown_verdict(); 1000]);
+    let sink = Arc::new(FakeSink::default());
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with_probe(
+        &temp,
+        page.clone(),
+        probe.clone(),
+        sink.clone(),
+        |config| {
+            config.display_file = marker;
+            config.login_timeout = Duration::from_secs(5);
+            config.idle_timeout = Duration::from_millis(60);
+        },
+    );
+
+    service.start_explicit(true);
+    wait_for(&service, |status| {
+        status["login"]["phase"] == json!("verifying_login")
+    });
+    wait_until(|| probe.calls() >= 1);
+    page.close();
+
+    let status = wait_for(&service, |status| status["state"] == json!("cancelled"));
+    assert_eq!(status["error"], json!("window_closed"));
+    assert_eq!(status["label"], json!("已取消登录"));
+    assert_eq!(factory.requests().len(), 1, "本人关闭的是同一个可见窗口");
+    assert_eq!(factory.closes(), 1);
+    assert!(sink.published().is_empty(), "未核验的凭据不得发布");
+    assert!(
+        !temp.path().join("token.json").exists(),
+        "未核验的凭据不得落盘"
+    );
+    let lock = acquire_profile_lock(&temp.path().join("profile"))
+        .expect("本人关闭窗口后必须释放 profile 锁");
+    drop(lock);
+}
+
+#[test]
+fn a_rejected_pending_token_returns_to_the_login_page_in_the_same_window() {
+    let temp = TempDir::new("um-rust-visible-verification-rejected-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("stale-token"));
+    page.submit_visible.store(true, Ordering::SeqCst);
+    page.fill_calls.store(2, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") = vec![
+        (
+            "https://websso.um.edu.mo/adfs/ls/".to_string(),
+            None,
+        ),
+        (
+            "http://127.0.0.1:9".to_string(),
+            Some("fresh-token".to_string()),
+        ),
+    ];
+    let probe = ManualProbe::new(vec![rejected_verdict()]);
+    let sink = Arc::new(FakeSink::default());
+    let marker = write_display_marker(&temp);
+    let (service, factory) = login_service_with_probe(
+        &temp,
+        page.clone(),
+        probe.clone(),
+        sink.clone(),
+        |config| {
+            config.display_file = marker;
+            config.login_timeout = Duration::from_secs(5);
+        },
+    );
+
+    service.start_explicit(true);
+    wait_until(|| probe.calls() >= 2);
+    let status = service.status();
+    assert_eq!(status["state"], json!("logging_in"), "明确拒绝不得结束本轮");
+    assert_eq!(status["error"], Value::Null);
+    assert_eq!(status["evidence"]["verdict"], json!("rejected"));
+    assert_eq!(status["evidence"]["reason"], json!("upstream_rejected"));
+    assert_eq!(status["recovery"]["round"], json!(1));
+    assert_eq!(page.drop_calls(), 1, "被拒的 token 必须从页面丢弃");
+    assert_eq!(page.reload_calls(), 1, "被拒后必须回到可继续登录的页面");
+    assert_eq!(factory.requests().len(), 1, "拒绝后仍在同一个可见窗口继续登录");
+    assert_eq!(factory.closes(), 0);
+    assert!(sink.published().is_empty());
+    assert!(!temp.path().join("token.json").exists());
+
+    probe.release();
+    let status = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(1));
+    assert_eq!(factory.requests().len(), 1);
+    assert_eq!(factory.closes(), 1);
+    assert_eq!(sink.published(), vec![("fresh-token".to_string(), None)]);
+    let document: Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("token.json")).expect("token file"),
+    )
+    .expect("token json");
+    assert_eq!(document["token"], json!("fresh-token"));
+    let lock = acquire_profile_lock(&temp.path().join("profile"))
+        .expect("本轮结束后必须释放 profile 锁");
+    drop(lock);
 }
 
 #[test]
