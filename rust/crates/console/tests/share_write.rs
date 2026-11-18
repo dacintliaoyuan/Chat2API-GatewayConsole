@@ -792,7 +792,7 @@ fn http_revoke_and_terminate_answers_every_count() {
 }
 
 #[test]
-fn http_backend_login_cancel_is_not_ported_and_answers_404() {
+fn http_backend_login_cancel_fails_closed_without_a_control_token() {
     let temp = TempDataDir::new("um-console-share-write-").expect("temp dir");
     let broker = Arc::new(FakeBroker::new(Advance::Always));
     let (console, _store_path, _key_file) = start_write_console(&temp, broker);
@@ -804,8 +804,11 @@ fn http_backend_login_cancel_is_not_ported_and_answers_404() {
         Some(json!({})),
         true,
     );
-    assert_eq!(response.status, 404);
-    assert_eq!(response.json()["error"], "unknown path");
+    assert_eq!(response.status, 503);
+    let body = response.json();
+    assert_eq!(body["cancelled"], false);
+    assert_eq!(body["state"], Value::Null);
+    assert_eq!(body["error"], "control_token_absent");
 }
 
 #[test]

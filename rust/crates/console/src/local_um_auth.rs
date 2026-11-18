@@ -23,6 +23,7 @@ use crate::runtime::RuntimeFacts;
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 pub const VERIFY_TIMEOUT: Duration = Duration::from_secs(25);
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(10);
+pub const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
 pub const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(5);
 
 const STATE_NOTE: &str = "内存态（未主动核验）：仅读取 chat2api 自身认证状态，未向上游发起核验请求";
@@ -77,6 +78,15 @@ impl AdminClient {
         timeout: Duration,
     ) -> Result<AdminResponse, AdminError> {
         self.call("POST", path, Some(token), Some(payload), timeout)
+    }
+
+    fn post(
+        &self,
+        path: &str,
+        token: &str,
+        timeout: Duration,
+    ) -> Result<AdminResponse, AdminError> {
+        self.call("POST", path, Some(token), None, timeout)
     }
 
     fn call(
@@ -156,6 +166,76 @@ impl AdminClient {
             "login": login_summary(object.get("login")),
         }))
     }
+}
+
+/// D18-8: end THIS login round through the gateway's control-token-gated
+/// `POST /admin/auth/cancel`.
+///
+/// The call reuses the same `AdminClient` (control-token read, transport and
+/// error mapping) as `account.um_status`; it does not stop or restart the
+/// gateway. The gateway answers `{cancelled, state, detail}` with `state` either
+/// `cancelled` or `no_login_in_progress`. A 200/202 answer is relayed as-is
+/// (normalized to the three fields), while a missing token, an unreachable
+/// gateway, a non-2xx answer or a payload outside that contract is a classified
+/// `ActionFailure`; none of them fabricates a successful cancel.
+pub fn cancel_login(
+    gateway_port: u16,
+    control_token_file: Option<&Path>,
+) -> Result<Value, ActionFailure> {
+    let client = AdminClient::new(gateway_port, control_token_file);
+    let token = client.control_token()?;
+    let response = client
+        .post("/admin/auth/cancel", &token, CANCEL_TIMEOUT)
+        .map_err(cancel_transport_error)?;
+    match response.status {
+        200 | 202 => {}
+        401 | 403 => {
+            return Err(ActionFailure::new(
+                "control_denied",
+                "管理控制头被拒绝（控制令牌不匹配）",
+            ))
+        }
+        status => {
+            return Err(ActionFailure::new(
+                "login_cancel_failed",
+                format!("登录取消被拒：chat2api 返回 HTTP {status}；服务未停止，登录状态未知"),
+            ))
+        }
+    }
+    let payload: Value =
+        serde_json::from_slice(&response.body).map_err(|_| cancel_schema_error())?;
+    let object = payload.as_object().ok_or_else(cancel_schema_error)?;
+    let cancelled = object
+        .get("cancelled")
+        .and_then(Value::as_bool)
+        .ok_or_else(cancel_schema_error)?;
+    let state = object
+        .get("state")
+        .and_then(Value::as_str)
+        .filter(|state| !state.is_empty())
+        .ok_or_else(cancel_schema_error)?;
+    Ok(json!({
+        "cancelled": cancelled,
+        "state": state,
+        "detail": text_field(object.get("detail")),
+    }))
+}
+
+fn cancel_transport_error(error: AdminError) -> ActionFailure {
+    match error {
+        AdminError::Unreachable => ActionFailure::new(
+            "login_cancel_unreachable",
+            "登录取消失败：chat2api 服务不可达；服务未停止，登录状态未知",
+        ),
+        AdminError::Protocol => cancel_schema_error(),
+    }
+}
+
+fn cancel_schema_error() -> ActionFailure {
+    ActionFailure::new(
+        "login_cancel_schema",
+        "登录取消响应不符合契约；请刷新登录状态核对",
+    )
 }
 
 fn read_admin_response(stream: &mut TcpStream) -> Result<AdminResponse, AdminError> {
