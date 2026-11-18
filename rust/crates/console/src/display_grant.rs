@@ -364,7 +364,7 @@ fn session_locked(
         return None;
     }
     let session = inner.sessions.get(&digest(token))?;
-    if session.expires_at <= now || session.origin != origin {
+    if session.expires_at <= now || !loopback_origin_eq(&session.origin, origin) {
         return None;
     }
     Some(session.clone())
@@ -490,6 +490,44 @@ mod tests {
         assert!(grants
             .validate_session_at(&session.token, "http://evil.test:8002", 10)
             .is_none());
+    }
+
+    #[test]
+    fn a_loopback_session_acquires_the_operator_from_any_loopback_spelling() {
+        let grants = DisplayGrants::new();
+        let (token, _) = grants
+            .issue_at("control-token", "http://127.0.0.1:8002", 10)
+            .unwrap();
+        let session = grants
+            .redeem_at(&token, "http://localhost:8002", 10)
+            .expect("localhost redeems the 127.0.0.1 grant");
+
+        assert_eq!(
+            grants.acquire_operator_at(Some(&session.token), "http://localhost:8002", "acquire", 10),
+            json!({"acquired": true, "generation": 1, "took_over": false})
+        );
+        assert_eq!(
+            grants.operator_state_at(Some(&session.token), "http://localhost:8002", 10),
+            json!({
+                "owned_by_me": true,
+                "owner_present": true,
+                "generation": 1,
+                "stale": false,
+            })
+        );
+        assert_eq!(
+            grants.operator_state_at(Some(&session.token), "http://127.0.0.1:8002", 10),
+            json!({
+                "owned_by_me": true,
+                "owner_present": true,
+                "generation": 1,
+                "stale": false,
+            })
+        );
+        assert_eq!(
+            grants.acquire_operator_at(Some(&session.token), "http://localhost:8003", "acquire", 10),
+            json!({"acquired": false, "error": "display_session_required"})
+        );
     }
 
     #[test]

@@ -83,6 +83,76 @@ fn the_ttls_are_the_frozen_display_budgets() {
 }
 
 #[test]
+fn a_loopback_grant_reaches_the_operator_from_another_loopback_spelling() {
+    let temp = temp();
+    let assets = display_assets(&temp);
+    let console = start_display_console(&temp, &assets);
+    let port = console.addr.port();
+
+    // The entry helper issues the grant for the console's 127.0.0.1 spelling.
+    let grant_origin = format!("http://127.0.0.1:{port}");
+    let (grant, _) = console
+        .state()
+        .display_grants
+        .issue("control-token", &grant_origin)
+        .expect("grant");
+
+    // The browser opens the private window on localhost, so both the grant
+    // exchange and every later request use the localhost spelling.
+    let browser_origin = format!("http://localhost:{port}");
+    let browser_host = format!("localhost:{port}");
+    let redeemed = client_request(
+        console.addr,
+        &ClientRequest::post(
+            "/display/grant",
+            json!({"grant": grant}).to_string().into_bytes(),
+        )
+        .json_body(json!({"grant": grant}).to_string().into_bytes())
+        .header("Host", &browser_host)
+        .header("Origin", &browser_origin),
+    )
+    .expect("request");
+    assert_eq!(redeemed.status, 204, "{:?}", redeemed.body);
+    let cookie = redeemed.header("Set-Cookie").expect("cookie");
+    let session = cookie
+        .split(';')
+        .next()
+        .expect("cookie pair")
+        .trim_start_matches("um_display_session=")
+        .to_string();
+
+    // The same localhost session reads the display session face.
+    let read = client_request(
+        console.addr,
+        &ClientRequest::get("/display/session")
+            .header("Host", &browser_host)
+            .header("Cookie", &format!("um_display_session={session}")),
+    )
+    .expect("request");
+    assert_eq!(read.status, 200);
+    assert_eq!(read.json()["authorized"], json!(true));
+
+    // ... and acquires the single-page operator instead of a 409.
+    let acquired = client_request(
+        console.addr,
+        &ClientRequest::post(
+            "/api/console/share-management/display-operator",
+            json!({"action": "acquire"}).to_string().into_bytes(),
+        )
+        .json_body(json!({"action": "acquire"}).to_string().into_bytes())
+        .header("Host", &browser_host)
+        .header("X-Requested-With", "XMLHttpRequest")
+        .header("Cookie", &format!("um_display_session={session}")),
+    )
+    .expect("request");
+    assert_eq!(acquired.status, 200, "{:?}", acquired.json());
+    assert_eq!(
+        acquired.json(),
+        json!({"acquired": true, "generation": 1, "took_over": false})
+    );
+}
+
+#[test]
 fn a_grant_is_exchanged_once_for_an_httponly_cookie() {
     let temp = temp();
     let assets = display_assets(&temp);
