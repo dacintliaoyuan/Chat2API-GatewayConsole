@@ -63,6 +63,13 @@ pub struct VisibleTarget {
     pub index: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialField {
+    Missing,
+    Filled,
+    ProtectedAutofill,
+}
+
 /// The narrow page facade the login state machine drives.
 pub trait LoginPage: Send {
     fn url(&self) -> String;
@@ -75,7 +82,7 @@ pub trait LoginPage: Send {
     fn goto(&self, url: &str) -> Result<(), String>;
     fn any_visible(&self, selectors: &[&str]) -> bool;
     fn any_visible_text(&self, selectors: &[&str]) -> bool;
-    fn field_filled(&self, selectors: &[&str]) -> bool;
+    fn credential_field(&self, selectors: &[&str]) -> CredentialField;
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget>;
     fn click(&self, target: &VisibleTarget) -> Result<(), String>;
     fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String>;
@@ -566,9 +573,12 @@ impl LoginPage for RealPage {
         matches!(self.evaluate(&expression), Ok(Value::Number(value)) if value.as_u64().unwrap_or(0) > 0)
     }
 
-    fn field_filled(&self, selectors: &[&str]) -> bool {
-        let expression = field_filled_expression(selectors);
-        matches!(self.evaluate(&expression), Ok(Value::Bool(true)))
+    fn credential_field(&self, selectors: &[&str]) -> CredentialField {
+        match self.evaluate(&credential_field_expression(selectors)) {
+            Ok(Value::String(state)) if state == "filled" => CredentialField::Filled,
+            Ok(Value::String(state)) if state == "protected" => CredentialField::ProtectedAutofill,
+            _ => CredentialField::Missing,
+        }
     }
 
     fn one_visible(&self, selectors: &[&str]) -> Option<VisibleTarget> {
@@ -665,7 +675,7 @@ fn selector_count_expression_with_text(selectors: &[&str], require_text: bool) -
     )
 }
 
-fn field_filled_expression(selectors: &[&str]) -> String {
+fn credential_field_expression(selectors: &[&str]) -> String {
     let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
     format!(
         "(function(selectors){{var visible=function(el){{var r=el.getBoundingClientRect();\
@@ -676,8 +686,9 @@ fn field_filled_expression(selectors: &[&str]) -> String {
          try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
          catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
          var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
-         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length!==1)return false;\
-         var value=found[0].value||'';return value.trim().length>0;}})({selectors})"
+         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length!==1)return 'missing';\
+         var field=found[0];if((field.value||'').trim().length>0)return 'filled';\
+         return field.matches(':-webkit-autofill')?'protected':'missing';}})({selectors})"
     )
 }
 
@@ -1127,7 +1138,8 @@ mod tests {
         assert!(expression.contains("data-um-login-target"));
         let expression = selector_count_expression(&["input[name*=\"otp\" i]"]);
         assert!(expression.contains("querySelectorAll"));
-        let expression = field_filled_expression(&["input[name=\"Password\"]"]);
-        assert!(expression.contains("value.trim().length>0"));
+        let expression = credential_field_expression(&["input[name=\"Password\"]"]);
+        assert!(expression.contains("return 'filled'"));
+        assert!(expression.contains(":-webkit-autofill"));
     }
 }

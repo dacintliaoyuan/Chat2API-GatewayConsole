@@ -77,6 +77,12 @@ const DUO_PROMPT_WAITING_REASON = "duo_prompt_waiting";
 const DUO_TAKEOVER_WORD = "等待本人确认 Duo 推送";
 const DUO_TAKEOVER_DETAIL =
   "自动登录已在 UMPASS 之后等待本人批准 Duo 推送；本轮仍在等待，可打开可见窗口完成确认";
+const MANUAL_LOGIN_DETAILS: Readonly<Record<string, string>> = {
+  umpass_autofill_protected: "Edge 已预填，浏览器会在你与页面交互前隐藏预填值，后台登录无法确认。请在 Edge 窗口中点击登录表单继续。",
+  umpass_prefill_missing: "后台登录在 UMPASS 表单中未检测到可用的预填，请打开 Edge 继续登录。",
+  umpass_mfa_required: "UMPASS 要求本人完成多重验证，请打开 Edge 继续登录。",
+  unrecognized_page: "后台登录无法识别当前页面，请打开 Edge 继续登录。",
+};
 
 export type TestEntry = {
   model: string;
@@ -339,7 +345,11 @@ export function loginFrom(result: OperationResult): UmLogin {
   const phase = rowText(progress, "phase");
   const origin = rowText(progress, "origin");
   const manualReason = rowText(progress, "manual_reason");
-  const takeover = manualReason === DUO_PROMPT_WAITING_REASON;
+  const duoWaiting = manualReason === DUO_PROMPT_WAITING_REASON;
+  const takeoverDetail = manualReason && Object.hasOwn(MANUAL_LOGIN_DETAILS, manualReason)
+    ? MANUAL_LOGIN_DETAILS[manualReason]
+    : null;
+  const takeover = duoWaiting || takeoverDetail !== null;
   const mapped: UmLogin["state"] =
     state === "valid"
       ? "valid"
@@ -352,10 +362,10 @@ export function loginFrom(result: OperationResult): UmLogin {
             : "unknown";
   return {
     state: mapped,
-    word: takeover ? DUO_TAKEOVER_WORD : (label ?? LOGIN_WORD[mapped]),
-    detail: takeover
+    word: duoWaiting ? DUO_TAKEOVER_WORD : takeover ? "需要本人继续登录" : (label ?? LOGIN_WORD[mapped]),
+    detail: duoWaiting
       ? DUO_TAKEOVER_DETAIL
-      : (error ??
+      : (takeoverDetail ?? error ??
         note ??
         (state === null ? "认证状态无法确认" : `chat2api 内存态：${state}`)),
     checkedAt: stamp,

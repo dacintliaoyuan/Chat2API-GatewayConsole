@@ -26,7 +26,8 @@ MANUAL_TAKEOVER_PREFIXES = (
 # stopped but the token poll running, so it is a soft manual signal and never a
 # terminal manual-takeover code.
 LOGIN_TERMINAL_MANUAL_REASONS = frozenset((
-    "umpass_mfa_required", "umpass_prefill_missing", "unrecognized_page"))
+    "umpass_mfa_required", "umpass_prefill_missing", "umpass_autofill_protected",
+    "unrecognized_page"))
 
 # The Duo push wait is a manual step that keeps the round alive: the console
 # shows "等待本人确认 Duo 推送" but the token poll keeps running. Keeping the

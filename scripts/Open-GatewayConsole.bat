@@ -13,5 +13,10 @@ set "NO_PROXY=*"
 set "no_proxy=*"
 rem Delegate to the web-console entry; service identity, ports and the
 rem start strategy are owned by lib\gateway-runtime.ps1.
+where pwsh >nul 2>nul
+if errorlevel 1 goto legacy
 pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0Open-GatewayConsole.ps1"
+endlocal & exit /b %ERRORLEVEL%
+:legacy
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Open-GatewayConsole.ps1"
 endlocal & exit /b %ERRORLEVEL%

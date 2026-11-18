@@ -30,17 +30,19 @@ use self::profile::{acquire_profile_lock, manual_display, visible_login_supporte
 use self::token::TokenStore;
 
 pub use self::browser::{
-    BrowserUnavailable, LaunchRequest, LoginBrowser, LoginBrowserFactory, LoginFailure, LoginPage,
-    SystemBrowserFactory, VisibleTarget,
+    BrowserUnavailable, CredentialField, LaunchRequest, LoginBrowser, LoginBrowserFactory,
+    LoginFailure, LoginPage, SystemBrowserFactory, VisibleTarget,
 };
 pub use self::probe::{CredentialProbe, CredentialVerdict, HttpCredentialProbe};
 pub use self::profile::DisplayEnvironment;
 pub use self::token::{TokenDocument, TokenStore as TokenStoreSeam};
 
 pub const MANUAL_TAKEOVER_REQUIRED_PREFIX: &str = "manual_takeover_required:";
-pub const LOGIN_TERMINAL_MANUAL_REASONS: [&str; 3] = [
+const PROTECTED_AUTOFILL_REASON: &str = "umpass_autofill_protected";
+pub const LOGIN_TERMINAL_MANUAL_REASONS: [&str; 4] = [
     "umpass_mfa_required",
     "umpass_prefill_missing",
+    PROTECTED_AUTOFILL_REASON,
     "unrecognized_page",
 ];
 pub const REAUTH_RECOVERY_BACKOFF: [Duration; 5] = [
@@ -1460,6 +1462,10 @@ fn drive_login(
         } else if stage == "umpass" {
             let count = clicks.entry(stage.clone()).or_insert(0);
             let seen = *stage_seen.entry(stage.clone()).or_insert_with(Instant::now);
+            let fields = [
+                page.credential_field(&UMPASS_ACCOUNT_SELECTORS),
+                page.credential_field(&UMPASS_PASSWORD_SELECTORS),
+            ];
             // ADFS clears the password on rejection. Detect the visible error
             // before refilling or clicking again, including delayed responses.
             if *count > 0 && umpass_credential_rejected(page) {
@@ -1478,9 +1484,7 @@ fn drive_login(
                 );
             } else if page.any_visible(&UMPASS_MFA_SELECTORS) {
                 return stop_for_manual(inner, round, page, "umpass_mfa_required");
-            } else if !page.field_filled(&UMPASS_ACCOUNT_SELECTORS)
-                || !page.field_filled(&UMPASS_PASSWORD_SELECTORS)
-            {
+            } else if fields != [CredentialField::Filled; 2] {
                 if seen.elapsed() < inner.config.stage_settle_timeout {
                     // 页面渲染和浏览器已保存密码的自动填充都是异步的。
                     // 使用既有稳定预算等待，不能因没有明文环境配置而提前判缺失。
@@ -1491,17 +1495,26 @@ fn drive_login(
                             reason: "umpass_credentials_untrusted_origin".to_string(),
                         };
                     }
-                    if inner.config.um_account.is_empty() || inner.config.um_password.is_empty() {
+                    let protected_autofill = fields.contains(&CredentialField::ProtectedAutofill);
+                    if protected_autofill
+                        || inner.config.um_account.is_empty()
+                        || inner.config.um_password.is_empty()
+                    {
+                        let reason = if protected_autofill {
+                            PROTECTED_AUTOFILL_REASON
+                        } else {
+                            "umpass_prefill_missing"
+                        };
                         if visible {
                             note_progress(
                                 inner,
                                 round,
                                 "waiting_for_credentials",
                                 Some(&url),
-                                Some("umpass_prefill_missing"),
+                                Some(reason),
                             );
                         } else {
-                            return stop_for_manual(inner, round, page, "umpass_prefill_missing");
+                            return stop_for_manual(inner, round, page, reason);
                         }
                     } else {
                         // Explicit environment credentials are a pair. Never combine a

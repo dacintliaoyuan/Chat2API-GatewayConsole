@@ -7,19 +7,9 @@
 //! `usagesrv.py::_console_display_state_of`.
 
 use serde_json::{json, Map, Value};
+use um_gateway::login::LOGIN_TERMINAL_MANUAL_REASONS;
 
 const MANUAL_TAKEOVER_PREFIXES: [&str; 2] = ["manual_takeover_required:", "manual_takeover:"];
-const TERMINAL_MANUAL_REASONS: [&str; 3] = [
-    "umpass_mfa_required",
-    "umpass_prefill_missing",
-    "unrecognized_page",
-];
-const MANUAL_REASONS: [&str; 4] = [
-    "umpass_mfa_required",
-    "umpass_prefill_missing",
-    "unrecognized_page",
-    "duo_prompt_waiting",
-];
 
 fn default_operator() -> Value {
     json!({
@@ -39,7 +29,7 @@ fn terminal_manual_reason(error: Option<&str>, primary: Option<&str>) -> Option<
                 break;
             }
         }
-        if TERMINAL_MANUAL_REASONS.contains(&reason) {
+        if LOGIN_TERMINAL_MANUAL_REASONS.contains(&reason) {
             return Some(reason.to_string());
         }
     }
@@ -180,7 +170,9 @@ fn display_state_of(
             }
             if reason
                 .as_deref()
-                .map(|reason| MANUAL_REASONS.contains(&reason))
+                .map(|reason| {
+                    reason == "duo_prompt_waiting" || LOGIN_TERMINAL_MANUAL_REASONS.contains(&reason)
+                })
                 .unwrap_or(false)
             {
                 return (

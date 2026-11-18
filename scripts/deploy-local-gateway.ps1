@@ -2,8 +2,7 @@
 #
 # 新克隆的机器上运行一次即可：检查工具链、构建 Rust release 二进制、构建
 # web/dist、准备 data/ 与控制令牌、启动 8000 与 8001、创建/修复桌面快捷方式，
-# 最后打开控制台。重复运行是幂等的：已运行的进程不重启，已有快捷方式不改
-# 名字和图标（只修复指向已移动旧路径的目标）。
+# 最后打开控制台。桌面快捷方式走独立的日常打开入口。
 #
 # 回滚点仍是 start_chat2api.bat / start_usage_service.bat：把
 # lib\gateway-runtime.ps1 的 StartPath 改回批处理即可，不需要重装。
@@ -142,14 +141,19 @@ if (-not $SkipShortcut) {
     }
     $shell = New-Object -ComObject WScript.Shell
     $localShortcutPath = Join-Path $desktop '本地控制台.lnk'
-    $localTarget = Join-Path $root '一键部署本机网关.bat'
+    $localTarget = Join-Path $root 'scripts\Open-GatewayConsole.bat'
     $localIcon = Join-Path $root 'assets\UM云端控制台.ico'
     if (Test-Path -LiteralPath $localShortcutPath) {
         $shortcut = $shell.CreateShortcut($localShortcutPath)
-        $oldTarget = Join-Path $root 'Open-GatewayConsole.bat'
+        $oldTargets = @(
+            (Join-Path $root 'Open-GatewayConsole.bat')
+            (Join-Path $root '一键部署本机网关.bat')
+        )
         $changed = $false
-        if ($shortcut.TargetPath -eq $oldTarget) {
+        if ($shortcut.TargetPath -in $oldTargets) {
             $shortcut.TargetPath = $localTarget
+            $shortcut.WorkingDirectory = $root
+            $shortcut.Description = '打开本机 UM 网关控制台'
             $changed = $true
         }
         if ($shortcut.IconLocation -notlike "$localIcon,*") {
@@ -162,7 +166,7 @@ if (-not $SkipShortcut) {
         $shortcut.TargetPath = $localTarget
         $shortcut.IconLocation = $localIcon + ',0'
         $shortcut.WorkingDirectory = $root
-        $shortcut.Description = '一键部署并打开本机 UM 网关控制台'
+        $shortcut.Description = '打开本机 UM 网关控制台'
         $shortcut.Save()
     }
     # 云端入口已收进 cloud/：只修复指向旧根路径的云端快捷方式，不新建、不改名字和图标。
@@ -180,7 +184,7 @@ if (-not $SkipShortcut) {
     }
 }
 
-# 6) 打开控制台（会复用已启动的 8001，并换取一次性引导码）。
+# 6) 打开控制台（复用已启动的服务，并换取一次性引导码）。
 if (-not $NoOpen) {
     & $localEntry
     exit $LASTEXITCODE

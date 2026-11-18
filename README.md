@@ -14,7 +14,7 @@
 6. 创建或修复桌面快捷方式（新快捷方式使用云端图标）；
 7. 打开控制台。
 
-重复运行是幂等的：已运行的服务不重启，已有快捷方式不改名字、只把图标换成云端图标。回滚点仍是 `start_chat2api.bat` / `start_usage_service.bat`：把 `lib/gateway-runtime.ps1` 的 `StartPath` 改回批处理即可。
+日常双击桌面的「本地控制台」即可打开页面。快捷方式复用已运行的 8000 和 8001，仅启动缺少的服务。需要构建或更新时运行 `一键部署本机网关.bat`。回滚点仍是 `start_chat2api.bat` / `start_usage_service.bat`：把 `lib/gateway-runtime.ps1` 的 `StartPath` 改回批处理即可。
 
 ## 先读
 

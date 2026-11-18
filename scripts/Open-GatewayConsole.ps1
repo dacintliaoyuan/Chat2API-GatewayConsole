@@ -1,17 +1,7 @@
 ﻿# Desktop entry for the unified web console (deployed 2026-09-16).
 #
-# Usage-entry semantics carried over from the retired CLI menu adapter
-# (AI网关控制台.ps1, removed 2026-09-23): ensure the management host is up,
-# exchange a fresh one-time bootstrap code, then open the web console.
-#
-# Single lock-holder rule: this CLI path self-locks and calls
-# gateway-runtime directly (Start-GatewayService); it never goes through
-# the console wrapper, so the same resource lock is acquired exactly once.
-#
-# Failure handling: a bounded ready-wait follows the start attempt; a
-# failure exits non-zero with an actionable message that names the CLI
-# start entry (invoke-gateway-service.ps1) as the recovery path. A running
-# host is never restarted, so repeated double-clicks are idempotent.
+# Reuse the installed services, start missing services under their runtime
+# locks and exchange a fresh one-time bootstrap code before opening the console.
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
@@ -24,37 +14,47 @@ $here = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
 $base = 'http://127.0.0.1:8001'
 
-function Wait-UsageReady {
-    # Bounded recheck after a start attempt: the runtime's own health
-    # poll may still be settling when Start-GatewayService returns.
-    param([int]$Attempts = 5, [int]$IntervalSeconds = 2)
-    for ($i = 0; $i -lt $Attempts; $i++) {
-        $state = Get-GatewayServiceStatus -Key 'usage'
-        if ($state -eq 'Running') { return $true }
-        Start-Sleep -Seconds $IntervalSeconds
-    }
-    return $false
-}
+function Start-MissingConsoleService {
+    param([string]$Key, [string]$Label)
+    if (Test-GatewayServiceHealth -Key $Key) { return }
 
-# 1) Ensure the management host is up. Start only when it is not already
-#    running; a running host is never restarted. This CLI path self-holds
-#    the service:usage resource lock around the direct runtime start (same
-#    single-acquirer rule as invoke-gateway-service.ps1 — never the
-#    wrapper).
-$state = Get-GatewayServiceStatus -Key 'usage'
-if ($state -ne 'Running') {
-    Write-Host '[入口] 管理宿主未运行，正在启动（约需数秒）…'
-    $lock = Enter-ConsoleResourceLock -Resource 'service:usage' -Owner 'cli-console-entry'
+    $lock = Enter-ConsoleResourceLock -Resource ("service:$Key") -Owner 'cli-console-entry'
     try {
-        $null = Start-GatewayService -Key 'usage'
+        # Recheck under the lock in case another entry just started it.
+        $inspection = Get-GatewayServiceInspection -Key $Key
+        if ($inspection.State -eq 'Running') { return }
+        if ($inspection.State -ne 'Stopped') { throw $inspection.Detail }
+
+        Write-Host "[入口] 正在启动 $Label…"
+        $result = Start-GatewayService -Key $Key
+        if ($result.Status -in @('Started', 'AlreadyRunning')) { return }
+        if ($result.Status -ne 'StartPending') {
+            $detail = $result.PSObject.Properties['Detail']
+            if ($detail -and $detail.Value) { throw $detail.Value }
+            throw "启动返回 $($result.Status)"
+        }
+
+        # The runtime start can return before the service finishes starting.
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+            if (Test-GatewayServiceHealth -Key $Key) { return }
+            Start-Sleep -Seconds 2
+        }
+        throw '服务未在等待上限内就绪'
     } finally {
         Exit-ConsoleResourceLock -Lock $lock
     }
-    if (-not (Wait-UsageReady)) {
-        Write-Warning '管理宿主（8001）未能就绪，暂不打开控制台。'
-        Write-Warning '可稍后重试；应急入口：同目录 invoke-gateway-service.ps1 -Key usage -Action Start。'
-        exit 1
-    }
+}
+
+try {
+    Start-MissingConsoleService -Key 'chat2api' -Label 'UM 网关（8000）'
+} catch {
+    Write-Warning "UM 网关（8000）启动失败：$($_.Exception.Message)。仍会尝试打开控制台。"
+}
+try {
+    Start-MissingConsoleService -Key 'usage' -Label '控制台（8001）'
+} catch {
+    Write-Warning "控制台（8001）未就绪：$($_.Exception.Message)"
+    exit 1
 }
 
 # 2) One-time bootstrap code: prefer a fresh reissue under the admin
@@ -89,5 +89,5 @@ if ($code) {
     $url = '{0}#s={1}' -f $url, $code.Trim()
 }
 Start-Process $url
-Write-Host ('已打开统一控制台：{0}' -f $url)
+Write-Host ('已打开统一控制台：{0}' -f $base)
 exit 0

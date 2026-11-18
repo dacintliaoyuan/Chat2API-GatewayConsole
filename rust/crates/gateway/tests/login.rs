@@ -16,9 +16,9 @@ use serde_json::{json, Value};
 
 use um_gateway::config::GatewayConfig;
 use um_gateway::login::{
-    BrowserUnavailable, CredentialProbe, CredentialSink, CredentialVerdict, HttpCredentialProbe, LaunchRequest,
-    LoginBrowser, LoginBrowserFactory, LoginConfig, LoginFailure, LoginPage, LoginService,
-    VisibleTarget,
+    BrowserUnavailable, CredentialField, CredentialProbe, CredentialSink, CredentialVerdict,
+    HttpCredentialProbe, LaunchRequest, LoginBrowser, LoginBrowserFactory, LoginConfig, LoginFailure,
+    LoginPage, LoginService, VisibleTarget,
 };
 use um_gateway::reauth::{
     AuthWaitBudget, ReauthLimits, ReauthProviderResult, ReauthResult, ReauthenticationProvider,
@@ -45,6 +45,7 @@ struct FakePage {
     fill_calls: AtomicUsize,
     filled_values: Mutex<Vec<String>>,
     account_prefilled: AtomicBool,
+    autofill_protected: AtomicBool,
     password_cleared: AtomicBool,
     reject_submit: AtomicBool,
     credential_error: AtomicBool,
@@ -67,6 +68,7 @@ impl FakePage {
             fill_calls: AtomicUsize::new(0),
             filled_values: Mutex::new(Vec::new()),
             account_prefilled: AtomicBool::new(false),
+            autofill_protected: AtomicBool::new(false),
             password_cleared: AtomicBool::new(false),
             reject_submit: AtomicBool::new(false),
             credential_error: AtomicBool::new(false),
@@ -144,22 +146,28 @@ impl LoginPage for FakePage {
         self.any_visible(selectors)
     }
 
-    fn field_filled(&self, selectors: &[&str]) -> bool {
+    fn credential_field(&self, selectors: &[&str]) -> CredentialField {
         if selectors.contains(&"input[name=\"UserName\"]")
             && self.account_prefilled.load(Ordering::SeqCst)
         {
-            return true;
+            return CredentialField::Filled;
         }
         if selectors.contains(&"input[name=\"Password\"]")
             && self.password_cleared.load(Ordering::SeqCst)
         {
-            return false;
+            return CredentialField::Missing;
         }
         if self.unfilled_polls.load(Ordering::SeqCst) > 0 {
             self.unfilled_polls.fetch_sub(1, Ordering::SeqCst);
-            return false;
+            return CredentialField::Missing;
         }
-        self.fill_calls.load(Ordering::SeqCst) >= 2
+        if self.fill_calls.load(Ordering::SeqCst) >= 2 {
+            CredentialField::Filled
+        } else if self.autofill_protected.load(Ordering::SeqCst) {
+            CredentialField::ProtectedAutofill
+        } else {
+            CredentialField::Missing
+        }
     }
 
     fn one_visible(&self, _selectors: &[&str]) -> Option<VisibleTarget> {
@@ -586,6 +594,52 @@ fn a_visible_login_keeps_the_empty_umpass_form_open_for_the_operator() {
     wait_for(&service, |s| s["state"] == json!("valid"));
     assert_eq!(factory.requests().len(), 1);
     assert_eq!(factory.closes(), 1);
+    assert_eq!(sink.published()[0].0, "operator-token");
+}
+
+#[test]
+fn protected_autofill_requires_the_operator_then_visible_login_can_continue() {
+    let temp = TempDir::new("um-rust-protected-autofill-");
+    let url = "https://websso.um.edu.mo/adfs/ls/";
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.autofill_protected.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            config.stage_settle_timeout = Duration::from_millis(50);
+        },
+    );
+
+    *page.click_steps.lock().unwrap() = vec![
+        (url.to_string(), None),
+        ("http://127.0.0.1:9".to_string(), Some("unexpected-token".to_string())),
+    ];
+    service.reauthenticate(Instant::now() + Duration::from_secs(2));
+    let status = service.status();
+    assert_eq!(status["error"], json!("manual_takeover_required:umpass_autofill_protected"));
+    assert_eq!(status["login"]["manual_reason"], json!("umpass_autofill_protected"));
+    assert_eq!(page.fill_calls(), 0);
+    assert_eq!(page.click_steps.lock().unwrap().len(), 1);
+    assert!(!factory.requests()[0].headful);
+    assert_eq!(factory.closes(), 1);
+
+    *page.click_steps.lock().unwrap() = vec![
+        (url.to_string(), None),
+        ("http://127.0.0.1:9".to_string(), Some("operator-token".to_string())),
+    ];
+    write_display_marker(&temp);
+    page.closed.store(false, Ordering::SeqCst);
+    service.start_explicit(true);
+    let status = wait_for(&service, |s| s["login"]["phase"] == json!("waiting_for_credentials"));
+    assert_eq!(status["login"]["manual_reason"], json!("umpass_autofill_protected"));
+    assert!(factory.requests()[1].headful);
+    page.fill_calls.store(2, Ordering::SeqCst);
+    wait_for(&service, |s| s["state"] == json!("valid"));
     assert_eq!(sink.published()[0].0, "operator-token");
 }
 

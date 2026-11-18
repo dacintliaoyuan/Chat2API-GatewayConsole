@@ -665,9 +665,9 @@ class ConsoleUmLoginTests(unittest.TestCase):
                     console_um_login._terminal_login_failure(status),
                     "契约：%s 不是 terminal，控制台必须继续等待" % reason)
 
-    def test_25_only_the_three_manual_reasons_end_the_round(self):
+    def test_25_terminal_manual_reasons_end_the_round(self):
         for reason in ("umpass_mfa_required", "umpass_prefill_missing",
-                       "unrecognized_page"):
+                       "umpass_autofill_protected", "unrecognized_page"):
             with self.subTest(reason=reason):
                 status = {
                     "state": "failed",

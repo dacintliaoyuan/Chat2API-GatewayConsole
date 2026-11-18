@@ -899,6 +899,27 @@ test("a Duo push wait shows the takeover status and opens a visible window", () 
   assert.doesNotMatch(html, /强制重新登录（可见窗口）/);
 });
 
+test("protected Edge autofill explains why an operator must continue in a visible window", () => {
+  const login = um.loginFrom({
+    state: "succeeded",
+    operation: {
+      result: {
+        state: "failed",
+        error: "manual_takeover_required:umpass_autofill_protected",
+        login: { phase: "manual_takeover", manual_reason: "umpass_autofill_protected" },
+      },
+    },
+  });
+  const overview = um.unwiredState().overview;
+  overview.login = ready(login);
+  overview.actions.login = open;
+  const html = um.overviewHtml(overview, { metric: "tokens", line: false }, {});
+  assert.equal(login.takeover, true);
+  assert.match(html, /Edge 已预填/);
+  assert.match(html, /交互前隐藏预填值/);
+  assert.match(html, /data-um-force-login[^>]*>继续登录</);
+});
+
 test("a forced login event reaches account.login with force and visible", async () => {
   const calls = [];
   let controller;
