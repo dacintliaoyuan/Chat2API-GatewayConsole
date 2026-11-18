@@ -117,6 +117,45 @@ impl AdminClient {
         stream.flush().map_err(|_| AdminError::Unreachable)?;
         read_admin_response(&mut stream)
     }
+
+    /// One `/admin/auth/status` read with an already-read control token.
+    fn read_status(&self, token: &str, timeout: Duration) -> Result<Value, ActionFailure> {
+        let response = self
+            .get("/admin/auth/status", token, timeout)
+            .map_err(status_transport_error)?;
+        match response.status {
+            200 => {}
+            401 | 403 => {
+                return Err(ActionFailure::new(
+                    "control_denied",
+                    "管理控制头被拒绝（控制令牌不匹配）",
+                ))
+            }
+            status => {
+                return Err(ActionFailure::new(
+                    "status_query_failed",
+                    format!("查询失败：chat2api 返回 HTTP {status}，凭据状态未知（未知 ≠ 失效）"),
+                ))
+            }
+        }
+        let payload: Value =
+            serde_json::from_slice(&response.body).map_err(|_| status_schema_error())?;
+        let object = payload.as_object().ok_or_else(status_schema_error)?;
+        let state = object
+            .get("state")
+            .and_then(Value::as_str)
+            .ok_or_else(status_schema_error)?;
+        Ok(json!({
+            "state": state,
+            "label": text_field(object.get("label")),
+            "error": text_field(object.get("error")),
+            "recovery": recovery_summary(object.get("recovery")),
+            "login_window_deadline_epoch": number_field(object.get("login_window_deadline_epoch")),
+            "login_window_s": number_field(object.get("login_window_s")),
+            "primary": text_field(object.get("primary")),
+            "login": login_summary(object.get("login")),
+        }))
+    }
 }
 
 fn read_admin_response(stream: &mut TcpStream) -> Result<AdminResponse, AdminError> {
@@ -299,6 +338,46 @@ fn read_control_token(path: Option<&Path>) -> Result<String, ActionFailure> {
     Ok(value.to_string())
 }
 
+/// One read-only `/admin/auth/status` observation for the display-state face.
+///
+/// This uses the same control-token read and status parser as the UM auth actions
+/// (`account.um_status`), so the console does not grow a second gateway client.
+/// The read never changes the gateway auth state. A failed read keeps `state=None`
+/// with a classified `read_error`; the display-state mapper then fails closed
+/// instead of inventing a login state or a deadline.
+pub fn auth_observation(gateway_port: u16, control_token_file: Option<&Path>) -> Value {
+    let client = AdminClient::new(gateway_port, control_token_file);
+    match client
+        .control_token()
+        .and_then(|token| client.read_status(&token, STATUS_TIMEOUT))
+    {
+        Ok(status) => json!({
+            "state": status.get("state").cloned().unwrap_or(Value::Null),
+            "label": status.get("label").cloned().unwrap_or(Value::Null),
+            "error": status.get("error").cloned().unwrap_or(Value::Null),
+            "primary": status.get("primary").cloned().unwrap_or(Value::Null),
+            "observed_at": epoch_seconds(),
+            "login_window_deadline_epoch": status
+                .get("login_window_deadline_epoch")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "read_error": Value::Null,
+        }),
+        Err(failure) => json!({
+            "state": Value::Null,
+            "label": Value::Null,
+            "error": Value::Null,
+            "primary": Value::Null,
+            "observed_at": Value::Null,
+            "login_window_deadline_epoch": Value::Null,
+            "read_error": {
+                "code": failure.code,
+                "message": failure.message,
+            },
+        }),
+    }
+}
+
 fn text_field(value: Option<&Value>) -> Option<String> {
     value.and_then(Value::as_str).map(str::to_string)
 }
@@ -437,42 +516,7 @@ impl UmAuthExecutor {
 
     /// One `/admin/auth/status` read with an already-read control token.
     fn read_status(&self, token: &str, timeout: Duration) -> Result<Value, ActionFailure> {
-        let response = self
-            .client
-            .get("/admin/auth/status", token, timeout)
-            .map_err(status_transport_error)?;
-        match response.status {
-            200 => {}
-            401 | 403 => {
-                return Err(ActionFailure::new(
-                    "control_denied",
-                    "管理控制头被拒绝（控制令牌不匹配）",
-                ))
-            }
-            status => {
-                return Err(ActionFailure::new(
-                    "status_query_failed",
-                    format!("查询失败：chat2api 返回 HTTP {status}，凭据状态未知（未知 ≠ 失效）"),
-                ))
-            }
-        }
-        let payload: Value =
-            serde_json::from_slice(&response.body).map_err(|_| status_schema_error())?;
-        let object = payload.as_object().ok_or_else(status_schema_error)?;
-        let state = object
-            .get("state")
-            .and_then(Value::as_str)
-            .ok_or_else(status_schema_error)?;
-        Ok(json!({
-            "state": state,
-            "label": text_field(object.get("label")),
-            "error": text_field(object.get("error")),
-            "recovery": recovery_summary(object.get("recovery")),
-            "login_window_deadline_epoch": number_field(object.get("login_window_deadline_epoch")),
-            "login_window_s": number_field(object.get("login_window_s")),
-            "primary": text_field(object.get("primary")),
-            "login": login_summary(object.get("login")),
-        }))
+        self.client.read_status(token, timeout)
     }
 
     fn login(

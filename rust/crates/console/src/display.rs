@@ -168,6 +168,18 @@ fn display_state_of(
                     error.map(str::to_string),
                 );
             }
+            if state == Some("needs_login") && manual_reason.is_none() {
+                // The gateway needs a credential but no login round is running
+                // and no manual reason was published: the display has not
+                // started a login window. A read error never reaches this arm
+                // (state is None there), so an unknown observation cannot be
+                // folded into `not_started`.
+                return (
+                    "not_started".to_string(),
+                    "未开始登录".to_string(),
+                    error.map(str::to_string),
+                );
+            }
             if reason
                 .as_deref()
                 .map(|reason| {
