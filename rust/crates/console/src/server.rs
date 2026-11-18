@@ -34,7 +34,10 @@ use crate::error::ConsoleError;
 use crate::gateway_connection;
 use crate::local_um::{self, UmQueryError};
 use crate::metering::{self, UsageFilters};
-use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActionExecutor};
+use crate::operation_manager::{
+    ActionExecutor, ActionFailure, OperationContext, OperationError, OperationManagerSlot,
+    UnwiredActionExecutor,
+};
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, LocalTcpFacts, RuntimeFacts, RuntimeSnapshot};
 use crate::session::{SessionState, SESSION_COOKIE, SESSION_TTL_SECONDS};
@@ -60,6 +63,29 @@ const CLOUD_CAPABILITY_PREFIXES: [&str; 9] = [
     "stats",
     "um",
 ];
+
+/// The local role's action executor: service actions run through the managed
+/// PowerShell runtime (#92), UM auth actions run in Rust (#93), and the
+/// retained model/context actions still run through the one-shot Python sidecar.
+struct LocalActionExecutor {
+    service: crate::service_actions::LocalActionExecutor,
+    auth: crate::local_um_auth::LocalActionExecutor,
+}
+
+impl ActionExecutor for LocalActionExecutor {
+    fn execute(
+        &self,
+        action: &str,
+        target: &str,
+        params: &Map<String, Value>,
+        ctx: &OperationContext,
+    ) -> Result<Value, ActionFailure> {
+        if crate::local_um_auth::UmAuthExecutor::handles(action) {
+            return self.auth.execute(action, target, params, ctx);
+        }
+        self.service.execute(action, target, params, ctx)
+    }
+}
 
 pub struct ConsoleServer;
 
@@ -111,12 +137,27 @@ impl ConsoleServer {
         runtime: Arc<dyn RuntimeFacts>,
         share_seams: Arc<dyn ShareReadSeams>,
     ) -> Result<ServerHandle, ServerError> {
-        // The local role executes the model-sync actions in-process and the
-        // retained service/account actions through the one-shot Python sidecar;
-        // the cloud role keeps its honest unwired default.
+        // The local role executes the service actions through the managed
+        // PowerShell runtime (#92), the UM auth actions in Rust (#93), and the
+        // model-sync actions in-process (#94); the cloud role keeps its honest
+        // unwired default.
         let executor: Arc<dyn crate::operation_manager::ActionExecutor> = match config.role {
             Role::Local => {
-                Arc::new(crate::retained_actions::RetainedActionExecutor::from_config(&config))
+                let retained = Arc::new(
+                    crate::retained_actions::RetainedActionExecutor::from_config(&config),
+                );
+                let service_control = Arc::new(
+                    crate::service_actions::PowerShellServiceExecutor::from_config(&config),
+                );
+                let auth = crate::local_um_auth::UmAuthExecutor::from_config(
+                    &config,
+                    Arc::clone(&runtime),
+                    service_control,
+                );
+                Arc::new(LocalActionExecutor {
+                    service: crate::service_actions::LocalActionExecutor::from_config(&config),
+                    auth: crate::local_um_auth::LocalActionExecutor::new(auth, retained),
+                })
             }
             Role::Cloud => Arc::new(UnwiredActionExecutor),
         };

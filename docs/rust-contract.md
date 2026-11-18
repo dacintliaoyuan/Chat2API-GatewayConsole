@@ -196,6 +196,29 @@ systemd
   描述符、健康边界、停止身份与回滚；真实 8001 的 parity、切流与回滚演练由 #85
   执行并记录在本节。
 
+### 2.6 本机 8001 服务动作（#92）
+
+- `service.start` / `service.stop` / `service.restart` 由 Rust 直接调用
+  `invoke-console-runtime-json.ps1 -Action start|stop|restart -Key chat2api
+  -CallerHoldsLock`；服务身份、启停策略、端口与进程归属校验、停止范围仍在
+  `lib/gateway-runtime.ps1`，不经过 Python sidecar。
+- 服务锁：operation worker 先持有 `service:chat2api` 资源锁，再以
+  `-CallerHoldsLock` 调用入口；第二个动作等待 15 秒后失败
+  `resource_busy_timeout`，且不启动入口。Windows 共享冲突（winerror 32）按忙
+  重试，不误报 `lock_open_failed`。
+- 兼容形状：成功结果透传
+  `{key,status,action,detail?,terminated_process_ids?}`；
+  `Started`/`AlreadyRunning`/`Stopped`/`AlreadyStopped`/`Conflict` 均来自
+  runtime。停止范围无法确认时入口返回 `ok=false`，Rust 记录
+  `runtime_unavailable`（与 Python adapter 的 `_invoke_wrapper` 一致）；非 JSON
+  输出与超时同样为 `runtime_unavailable`，退出码 0 的 `ok=false` 为
+  `runtime_error`。
+- 验证（#92，2026-11-18）：`cargo test -p um-console --test
+  local_service_actions` 10 passed。真实入口集成用例把仓库脚本复制到临时目录并只
+  替换描述符，覆盖 Started → AlreadyRunning → Stopped（含
+  `terminated_process_ids`）→ AlreadyStopped 与端口冲突 `Conflict`；
+  `python_exe` 指向不存在路径时 `service.start` 仍成功。
+
 ## 3. 云端 idle RSS 基线
 
 ### 3.1 测量方法
