@@ -61,6 +61,14 @@ pub fn action_catalogue() -> Value {
                 "description": "UM 分享分层状态观察（只读）",
                 "param_schema": {},
             },
+            {
+                "action": "account.login",
+                "enabled": true,
+                "disabled_reason": null,
+                "cancelable": true,
+                "description": "显式可见登录 UM（经网关轮次；需本人在私有登录窗口完成）",
+                "param_schema": {},
+            },
         ],
     })
 }
