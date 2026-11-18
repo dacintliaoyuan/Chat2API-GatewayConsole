@@ -1,7 +1,9 @@
-//! #87: the local 8001 action face runs the retained Python handlers.
+//! #87: the retained local account/model actions run the retained Python
+//! handlers.
 //!
 //! The local role lists the same twelve actions as Python's
-//! `console.adapters.build_registry()` and executes each one in a one-shot Python
+//! `console.adapters.build_registry()`; the service actions (#92) execute through
+//! the managed PowerShell runtime and the remaining nine through a one-shot Python
 //! sidecar. These tests use a fake `console` package under a temp repo root, so no
 //! test touches the real UM runtime, the model-sync state or the network.
 
@@ -64,23 +66,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _record(name, payload):
     with open(os.path.join(ROOT, name), "a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
-
-
-class RuntimeServiceAdapter:
-    def service_start(self, target, params, ctx=None):
-        _record("service_calls.txt", {"action": "service.start",
-                                     "target": target, "params": params})
-        return {"key": target, "status": "Started", "action": "start"}
-
-    def service_stop(self, target, params, ctx=None):
-        _record("service_calls.txt", {"action": "service.stop",
-                                     "target": target, "params": params})
-        return {"key": target, "status": "Stopped", "action": "stop"}
-
-    def service_restart(self, target, params, ctx=None):
-        _record("service_calls.txt", {"action": "service.restart",
-                                     "target": target, "params": params})
-        return {"key": target, "status": "Restarted", "action": "restart"}
 "#;
 
 const UM_ADAPTER_MODULE: &str = r#"
@@ -543,29 +528,10 @@ fn account_login_rejects_visible_without_force_and_runs_forced_visible_login() {
 }
 
 #[test]
-fn service_start_runs_the_retained_adapter_and_refuses_other_targets() {
+fn an_unauthorized_service_target_is_refused_before_any_operation_row() {
     let temp = temp();
     let repo = fake_repo(&temp);
     let console = start_local_console(&temp, &repo);
-
-    let started = submit(&console, "service.start", "chat2api", json!({}));
-    assert_eq!(started.status, 201);
-    let operation = wait_terminal(&console, &started.json()["operation"]);
-    assert_eq!(operation["state"], json!("succeeded"));
-    assert_eq!(operation["result"]["status"], json!("Started"));
-    assert_eq!(operation["result"]["key"], json!("chat2api"));
-    let calls =
-        std::fs::read_to_string(repo.join("service_calls.txt")).expect("service call record");
-    let call: Value = serde_json::from_str(calls.trim()).expect("call json");
-    assert_eq!(call["action"], json!("service.start"));
-    assert_eq!(call["target"], json!("chat2api"));
-
-    let before = request(&console, "GET", "/api/console/operations?limit=50", None);
-    assert_eq!(before.status, 200);
-    let before_count = before.json()["operations"]
-        .as_array()
-        .map(Vec::len)
-        .unwrap_or_default();
 
     let refused = submit(&console, "service.start", "other", json!({}));
     assert_eq!(refused.status, 403);
@@ -576,16 +542,9 @@ fn service_start_runs_the_retained_adapter_and_refuses_other_targets() {
         .unwrap_or_default()
         .contains("目标不在部署授权包批准的授权集合内"));
 
-    let after = request(&console, "GET", "/api/console/operations?limit=50", None);
-    assert_eq!(after.status, 200);
-    let after_count = after.json()["operations"]
-        .as_array()
-        .map(Vec::len)
-        .unwrap_or_default();
-    assert_eq!(
-        before_count, after_count,
-        "refused target must not queue a row"
-    );
+    let list = request(&console, "GET", "/api/console/operations?limit=50", None);
+    assert_eq!(list.status, 200);
+    assert_eq!(list.json()["operations"], json!([]));
 }
 
 #[test]
@@ -649,15 +608,12 @@ fn cancelling_a_running_login_kills_the_sidecar_and_records_cancelled() {
 }
 
 #[test]
-fn every_retained_local_action_executes_through_the_sidecar() {
+fn every_retained_account_and_model_action_executes_through_the_sidecar() {
     let temp = temp();
     let repo = fake_repo(&temp);
     let console = start_local_console(&temp, &repo);
 
-    let cases: [(&str, &str, Value); 12] = [
-        ("service.start", "chat2api", json!({})),
-        ("service.stop", "chat2api", json!({})),
-        ("service.restart", "chat2api", json!({})),
+    let cases: [(&str, &str, Value); 9] = [
         ("account.um_status", "chat2api", json!({})),
         ("account.um_verify", "chat2api", json!({})),
         ("account.login", "chat2api", json!({"force": true})),

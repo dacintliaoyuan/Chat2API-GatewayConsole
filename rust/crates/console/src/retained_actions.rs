@@ -1,10 +1,12 @@
-//! #87: the retained local actions sidecar.
+//! #87: the retained local account and model actions sidecar.
 //!
-//! The local role's service, account and model-context actions are not migrated
-//! to Rust yet. Each one runs its retained Python handler in a ONE-SHOT child
-//! process through [`crate::sidecar`]; the child prints exactly one JSON envelope
-//! and exits. A failed, timed-out or cancelled child is an explicit error, never a
+//! The local role's account and model-context actions are not migrated to Rust
+//! yet. Each one runs its retained Python handler in a ONE-SHOT child process
+//! through [`crate::sidecar`]; the child prints exactly one JSON envelope and
+//! exits. A failed, timed-out or cancelled child is an explicit error, never a
 //! simulated success. `model.catalog` keeps the #84 catalogue executor unchanged.
+//! The local `service.*` actions are no longer here: #92 executes them through
+//! the managed PowerShell runtime (`crate::service_actions`).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -43,16 +45,7 @@ def fail(exc):
 try:
     # Handler/import chatter must never corrupt the single stdout envelope.
     with contextlib.redirect_stdout(sys.stderr):
-        if action == "service.start":
-            from console.adapters import RuntimeServiceAdapter
-            result = RuntimeServiceAdapter().service_start(target, params)
-        elif action == "service.stop":
-            from console.adapters import RuntimeServiceAdapter
-            result = RuntimeServiceAdapter().service_stop(target, params)
-        elif action == "service.restart":
-            from console.adapters import RuntimeServiceAdapter
-            result = RuntimeServiceAdapter().service_restart(target, params)
-        elif action == "account.um_status":
+        if action == "account.um_status":
             from console.um_adapter import um_auth_status
             result = um_auth_status(target, params)
         elif action == "account.um_verify":
@@ -93,7 +86,7 @@ const LABELS: SidecarLabels = SidecarLabels {
     collapse_error_codes: false,
 };
 
-/// Runs the retained Python handlers for the local service/account/context actions.
+/// Runs the retained Python handlers for the local account/model/context actions.
 pub struct RetainedActionExecutor {
     interpreter: PathBuf,
     working_dir: PathBuf,
@@ -119,8 +112,6 @@ impl RetainedActionExecutor {
 /// Python budgets from the console action contract (front-end `timeoutMs`).
 fn timeout_for(action: &str) -> Option<Duration> {
     Some(match action {
-        "service.start" | "service.stop" => Duration::from_secs(120),
-        "service.restart" => Duration::from_secs(180),
         "account.um_status" => Duration::from_secs(30),
         "account.um_verify" => Duration::from_secs(60),
         "account.login" => Duration::from_secs(300),

@@ -66,10 +66,9 @@ pub fn action_catalogue() -> Value {
 }
 
 /// The local role catalogue: the UM actions only. Share actions are not
-/// assembled locally. `model.catalog` is enabled: #84 executes it through a
-/// one-shot Python `model_sync` sidecar. The remaining actions are not wired in
-/// this ticket, so they are listed as disabled with their honest reason instead of
-/// claiming capability.
+/// assembled locally. `service.*` (#92) executes through the managed PowerShell
+/// runtime; `model.catalog` (#84) and the remaining account/model actions run
+/// their retained Python handlers in a one-shot sidecar.
 pub fn action_catalogue_local() -> Value {
     let actions: Vec<Value> = local_registry()
         .iter()
