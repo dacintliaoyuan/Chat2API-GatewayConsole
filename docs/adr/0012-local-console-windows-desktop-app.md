@@ -1,6 +1,6 @@
 # 本地控制台桌面版优先适配 Windows 并以性能选型
 
-这是本机功能完善后的长期计划，首期实施范围为本机 8000 和 8001。首版优先适配和优化 Windows，在用户登录 Windows 后运行，可选择随登录启动。关闭主窗口后应用留在系统托盘，托盘入口恢复已有窗口。主窗口以现有 TypeScript、Vite 和 CSS 页面为起点，保留本机管理流程，按实测优化前后端性能。
+这是本机功能完善后的长期计划，首期实施范围为本机 8000 和 8001。首版优先适配和优化 Windows，在用户登录 Windows 后运行，可选择随登录启动。关闭主窗口后应用留在系统托盘，托盘入口恢复已有窗口。保留现有本机管理流程，允许为性能重做桌面主窗口。
 
 ## 应用与服务的边界
 
@@ -8,9 +8,15 @@
 
 ## 技术与界面方向
 
-桌面壳的首个候选是 Rust 和 Tauri 2。原型让 WebView2 加载 8001 的回环地址，验证现有同源页面、会话和管理操作。页面继续通过 8001 的管理接口操作服务，托盘和通知由桌面壳处理。正式选型优先看 Windows 上的性能实测与系统适配。 [前端传输](../../web/src/console/backend/transport.ts) · [Tauri 托盘](https://v2.tauri.app/learn/system-tray/) · [WebView2](https://v2.tauri.app/reference/webview-versions/)
+原生桌面原型优先采用 Rust 和 Slint，用 `.slint` 描述布局，用 Rust 处理状态和交互。对照方案由 Tauri 2 的 WebView2 加载 8001 的回环地址，复用现有 TypeScript、Vite 和 CSS 页面以及同源会话。两种原型都通过 8001 读取状态和日志。正式选型以 Windows 上的性能实测与系统适配为准。 [Slint 桌面渲染](https://docs.slint.dev/latest/docs/slint/guide/backends-and-renderers/backend_winit/) · [前端传输](../../web/src/console/backend/transport.ts) · [Tauri 托盘](https://v2.tauri.app/learn/system-tray/)
 
-主窗口沿用现有主题、字体和语义化样式变量，窗口与托盘交互遵循 Windows 习惯。首版界面使用简体中文。首页分别显示服务运行、UM 认证和上游可用性，说明下一步可执行的操作。状态用文字和图标表达，详细错误码以及请求、账本和日志放在诊断页面。 [前端样式变量](../../web/src/shell/tokens.css) · [Windows 无障碍指南](https://learn.microsoft.com/en-us/windows/apps/design/accessibility/accessibility-overview)
+主窗口沿用现有主题、字体和语义化样式，按所选框架实现。窗口与托盘交互遵循 Windows 习惯。首版界面使用简体中文。首页分别显示服务运行、UM 认证和上游可用性，说明下一步可执行的操作。状态用文字和图标表达，详细错误码以及请求、账本和日志放在诊断页面。 [前端样式变量](../../web/src/shell/tokens.css) · [Windows 无障碍指南](https://learn.microsoft.com/en-us/windows/apps/design/accessibility/accessibility-overview)
+
+## 实时日志
+
+两种原型共用 8001 提供的本机日志事件流。日志页打开时加载最近记录，之后按事件 ID 增量接收和去重。断线、睡眠唤醒或重新打开窗口时，从上次位置补读。历史筛选继续使用分页接口。运行日志按事件发生时间展示请求已接收、重试和失败等进度，账本在请求结束后记录最终用量，两边通过请求 ID 关联。 [现有日志读取](../../web/src/local/um-data/read.ts) · [SSE 断线续接](https://html.spec.whatwg.org/multipage/server-sent-events.html)
+
+界面批量追加新记录，长列表只渲染可见行。用户查看历史时保留滚动位置，显示「有新日志」供用户跳回。关闭到托盘后暂停列表刷新，继续显示必要的状态通知。 [Slint ListView](https://docs.slint.dev/latest/docs/slint/reference/std-widgets/views/listview/)
 
 ## 性能基线
 
@@ -19,6 +25,7 @@
 - **后台与桌面。** 记录冷启动到首次可操作、托盘恢复到窗口可操作的耗时，以及主窗口打开、关闭到托盘后的 CPU 和内存。计入 WebView2 子进程，观察窗口关闭后的刷新活动。
 - **网关与控制台。** 记录 8000 的首个流式输出耗时、并发吞吐和 p95 延迟，以及 8001 查询长账本和日志时的延迟、CPU 和内存。比较窗口打开、托盘驻留及桌面应用退出时的请求表现。
 - **页面。** 记录首页可操作时间、账本和日志列表的打开与滚动表现。根据结果评估按需加载、列表渲染、轮询频率和动效的成本，再为实际工作负载定量化目标。
+- **日志及时性。** 用同一台 Windows 机器和相同事件负载测量日志写入到前台列表可见的延迟。原型阶段的待验证目标为 p95 ≤ 500 毫秒。记录连续写入时的滚动表现、断线补读结果，以及启用日志订阅前后 8000 流式请求延迟的变化。
 
 ## 后续跨平台与手机反代
 
@@ -28,6 +35,7 @@
 
 ## 原型验证
 
+- 首轮原型聚焦状态总览和实时日志。Slint 与 TypeScript + Tauri 使用同一份数据和同一条 8001 日志事件流，记录两种界面的 Windows 实测结果。
 - 在 Windows 登录后启动桌面应用，关闭窗口后用托盘恢复。重复打开入口时复用原窗口。在窗口关闭期间向 8000 发起请求，确认服务可继续使用。
-- 验证 WebView2 内能正常打开 8001 的同源页面、读取状态以及执行现有管理动作。验证需要人工接管时打开可见 Edge，同一轮核验通过后同步更新窗口和托盘状态。
+- 验证 WebView2 能正常打开 8001 的同源页面。验证两种界面都能读取状态并沿用现有管理操作。需要人工接管时打开可见 Edge，同一轮核验通过后同步更新窗口和托盘状态。
 - 验证 Windows 浅色和深色主题、键盘焦点、缩放及睡眠唤醒后的主要操作。按性能基线记录结果，作为选型依据。
