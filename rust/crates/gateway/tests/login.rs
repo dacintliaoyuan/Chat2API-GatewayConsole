@@ -1035,7 +1035,7 @@ fn a_released_attempt_window_accepts_the_next_explicit_visible_round_directly() 
     let sink = Arc::new(FakeSink::default());
     let marker = write_display_marker(&temp);
     let (service, factory) = login_service_with(&temp, page.clone(), probe, sink, |config| {
-        config.attempt_window = Duration::from_millis(250);
+        config.attempt_window = Duration::from_secs(1);
         config.max_attempts_per_window = 1;
         config.display_file = marker;
     });
@@ -1077,7 +1077,7 @@ fn a_released_attempt_window_accepts_the_next_explicit_visible_round_directly() 
     // a new round directly: no cancel, no restart, one visible window.
     page.closed.store(false, Ordering::SeqCst);
     page.set_token(None);
-    thread::sleep(Duration::from_millis(350));
+    thread::sleep(Duration::from_millis(1100));
     let started = service.start_explicit(true);
     assert_eq!(started["state"], json!("logging_in"), "{started}");
     assert_eq!(started["recovery"]["state"], json!("running"), "{started}");
