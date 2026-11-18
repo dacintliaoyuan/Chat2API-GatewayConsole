@@ -864,7 +864,7 @@ test("the login card keeps on-demand login and adds the forced visible entry", (
   assert.match(needs, /data-um-force-login/);
 });
 
-test("a Duo push wait shows the takeover status and opens a visible window", () => {
+test("a Duo confirmation wait shows the takeover status and opens a visible window", () => {
   const result = {
     state: "succeeded",
     operation: {
@@ -897,6 +897,117 @@ test("a Duo push wait shows the takeover status and opens a visible window", () 
   assert.match(html, /打开可见窗口/);
   assert.match(html, /data-um-force-login/);
   assert.doesNotMatch(html, /强制重新登录（可见窗口）/);
+});
+
+test("a Duo auto-pass reports progress without a takeover", () => {
+  const login = um.loginFrom({
+    state: "succeeded",
+    operation: {
+      result: {
+        state: "logging_in",
+        label: "正在完成 Duo 验证",
+        error: null,
+        login: {
+          phase: "awaiting_duo",
+          origin: "https://api-1234.duosecurity.com/prompt/xyz",
+          manual_reason: null,
+          detail: "正在完成 Duo 验证",
+        },
+      },
+    },
+  });
+  assert.equal(login.takeover, false);
+  assert.equal(login.word, "正在完成 Duo 验证");
+  assert.match(login.detail, /本轮仍在等待/);
+  assert.match(login.detail, /无需本人操作/);
+});
+
+test("a valid gateway round shows 已登录 after the same login round", () => {
+  const login = um.loginFrom({
+    state: "succeeded",
+    operation: {
+      result: { state: "valid", label: "认证有效", error: null },
+    },
+  });
+  assert.equal(login.word, "已登录");
+  assert.equal(login.takeover, false);
+});
+
+test("a start-cap refusal shows the reason and the local retry time", () => {
+  const login = um.loginFrom({
+    state: "succeeded",
+    operation: {
+      result: {
+        state: "needs_login",
+        label: "需要登录",
+        error: "reauth_refused:global_attempt_cap",
+        recovery: {
+          state: "waiting",
+          next_attempt_epoch: 2_000_000_000,
+        },
+      },
+    },
+  });
+  assert.match(login.word, /限流/);
+  assert.match(login.detail, /15 分钟内已达到 3 次重登启动上限/);
+  assert.match(login.detail, /可重试时间/);
+});
+
+test("a Duo auto-pass keeps the login operation pending and shows its progress", async () => {
+  let release;
+  const gate = {
+    verdict: () => ({ state: "confirmed", reason: "" }),
+    onChange: () => () => {},
+  };
+  const client = {
+    runAction: async (action, target, params, options) => {
+      options.onProgress?.({
+        id: "op-duo-auto",
+        action,
+        target,
+        state: "running",
+        result: null,
+        error: null,
+        cancelRequested: false,
+        createdAt: null,
+        finishedAt: null,
+        steps: [{ at: 1, note: "正在完成 Duo 验证" }],
+      });
+      await new Promise((resolve) => {
+        release = resolve;
+      });
+      return {
+        state: "succeeded",
+        operation: { result: {} },
+        operationId: "op-duo-auto",
+        reason: null,
+      };
+    },
+  };
+  const controller = new um.UmDataController({
+    gate,
+    client,
+    summaryClient: client,
+  });
+  controller.capabilities = new Map([
+    [
+      "account.login",
+      {
+        action: "account.login",
+        enabled: true,
+        cancelable: true,
+        disabledReason: null,
+        description: null,
+      },
+    ],
+  ]);
+  controller.handleEvent({ type: "um.login", force: true, visible: true });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const progress = controller.viewState().overview.progress.login;
+  assert.equal(progress.state, "pending");
+  assert.equal(progress.note, "正在完成 Duo 验证");
+  controller.disposed = true;
+  release();
 });
 
 test("protected Edge autofill explains why an operator must continue in a visible window", () => {

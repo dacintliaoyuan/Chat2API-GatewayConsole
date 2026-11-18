@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::{Local, TimeZone};
 use serde_json::{json, Map, Value};
 
 use crate::config::ConsoleConfig;
@@ -872,10 +873,13 @@ impl UmAuthExecutor {
                     ActionFailure::new("login_unreachable", "登录请求未完成：chat2api 响应不可解析")
                 }
             })?;
+        let payload = serde_json::from_slice::<Value>(&response.body).ok();
         if response.status == 202 {
+            if let Some(failure) = payload.as_ref().and_then(rate_limit_failure) {
+                return Err(failure);
+            }
             return Ok(());
         }
-        let payload = serde_json::from_slice::<Value>(&response.body).ok();
         if let Some(code) = payload.as_ref().and_then(response_code) {
             return Err(login_round_error(code, None));
         }
@@ -897,9 +901,19 @@ impl UmAuthExecutor {
     ) -> Result<LoginOutcome, ActionFailure> {
         let started = Instant::now();
         let deadline = started + Duration::from_secs_f64(budget_s);
+        let mut duo_step: Option<String> = None;
         loop {
             ctx.raise_if_cancelled()?;
             let status = self.read_status_for_poll(token);
+            if let Some(failure) = status.status.as_ref().and_then(rate_limit_failure) {
+                return Err(failure);
+            }
+            if let Some(detail) = status.status.as_ref().and_then(duo_wait_step) {
+                if duo_step.as_deref() != Some(detail) {
+                    let _ = ctx.report_step(detail);
+                    duo_step = Some(detail.to_string());
+                }
+            }
             let state = classify_auth_status(&status)?;
             if state == "valid" {
                 return Ok(LoginOutcome::Valid {
@@ -915,6 +929,14 @@ impl UmAuthExecutor {
         }
         ctx.raise_if_cancelled()?;
         let status = self.read_status_for_poll(token);
+        if let Some(failure) = status.status.as_ref().and_then(rate_limit_failure) {
+            return Err(failure);
+        }
+        if let Some(detail) = status.status.as_ref().and_then(duo_wait_step) {
+            if duo_step.as_deref() != Some(detail) {
+                let _ = ctx.report_step(detail);
+            }
+        }
         let state = classify_auth_status(&status)?;
         if state == "valid" {
             return Ok(LoginOutcome::Valid {
@@ -1036,6 +1058,8 @@ const TERMINAL_MANUAL_REASONS: [&str; 4] = [
 ];
 const MANUAL_TAKEOVER_PREFIXES: [&str; 2] = ["manual_takeover_required:", "manual_takeover:"];
 const DUO_PROMPT_WAITING_REASON: &str = "duo_prompt_waiting";
+const RATE_LIMIT_REASON: &str = "reauth_refused:global_attempt_cap";
+const RATE_LIMIT_MESSAGE: &str = "登录未开始：15 分钟内已达到 3 次重登启动上限";
 
 fn terminal_manual_reason(values: &[Option<&str>]) -> Option<&'static str> {
     for value in values {
@@ -1083,6 +1107,67 @@ fn login_round_code_from_status(status: &Value) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// #93: a gateway start-cap refusal is a terminal answer for THIS console
+/// operation, not a reason to keep polling the same refused round. The gateway's
+/// `recovery.next_attempt_epoch` is an epoch second; the message converts it to
+/// the operator's local time so the retry moment is usable without arithmetic.
+fn rate_limit_failure(status: &Value) -> Option<ActionFailure> {
+    let object = status.as_object()?;
+    if object.get("error").and_then(Value::as_str) != Some(RATE_LIMIT_REASON) {
+        return None;
+    }
+    let mut message = RATE_LIMIT_MESSAGE.to_string();
+    let retry_epoch = object
+        .get("recovery")
+        .and_then(Value::as_object)
+        .and_then(|recovery| recovery.get("next_attempt_epoch"))
+        .and_then(Value::as_f64)
+        .filter(|epoch| epoch.is_finite());
+    match retry_epoch.and_then(local_time) {
+        Some(local) => message.push_str(&format!("；本地可重试时间：{local}")),
+        None => message.push_str("；网关未上报可重试时间"),
+    }
+    Some(ActionFailure::new("login_rate_limited", message))
+}
+
+fn local_time(epoch: f64) -> Option<String> {
+    let seconds = epoch.floor();
+    if seconds < i64::MIN as f64 || seconds > i64::MAX as f64 {
+        return None;
+    }
+    let nanos = ((epoch - seconds) * 1_000_000_000.0).round();
+    let nanos = if nanos.is_finite() && (0.0..1_000_000_000.0).contains(&nanos) {
+        nanos as u32
+    } else {
+        0
+    };
+    Local
+        .timestamp_opt(seconds as i64, nanos)
+        .single()
+        .map(|local| local.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+/// #102: `awaiting_duo` is progress in the SAME round. The gateway publishes
+/// the human-facing detail; the console reports it as a step and keeps waiting.
+/// A published `duo_prompt_waiting` manual reason is the explicit confirmation
+/// wait and must not become a terminal failure either.
+fn duo_wait_step(status: &Value) -> Option<&str> {
+    let login = status.get("login")?.as_object()?;
+    if login.get("phase").and_then(Value::as_str) != Some("awaiting_duo") {
+        return None;
+    }
+    if login.get("manual_reason").and_then(Value::as_str) == Some(DUO_PROMPT_WAITING_REASON) {
+        return Some("等待本人确认 Duo 推送（本轮仍在等待）");
+    }
+    Some(
+        login
+            .get("detail")
+            .and_then(Value::as_str)
+            .filter(|detail| !detail.is_empty())
+            .unwrap_or("正在完成 Duo 验证"),
+    )
 }
 
 fn login_cancelled(status: &Value) -> bool {
@@ -1194,17 +1279,6 @@ fn classify_auth_status(status: &PollStatus) -> Result<String, ActionFailure> {
         return Err(ActionFailure::new(
             "login_verification_unknown",
             "上游认证暂时无法核验；本轮登录等待已结束，后台将自动重新核验",
-        ));
-    }
-    if login
-        .and_then(Value::as_object)
-        .and_then(|login| login.get("manual_reason"))
-        .and_then(Value::as_str)
-        == Some(DUO_PROMPT_WAITING_REASON)
-    {
-        return Err(ActionFailure::new(
-            "login_manual_takeover_required",
-            "登录需要本人确认 Duo 推送；本轮仍在等待，可打开可见窗口",
         ));
     }
     if let Some(code) = login_round_code_from_status(value) {

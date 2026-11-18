@@ -1,4 +1,5 @@
 import type { OperationRow } from "./cloud-reads";
+import { when } from "./cloud-format";
 
 /** A2/A1: one maintenance intent's stable, non-secret identity and the
  *  operation's real terminal outcome.
@@ -219,6 +220,25 @@ export function loginOutcome(
   const accepted = result.accepted === true;
   const error = typeof result.error === "string" ? result.error : "";
   const recovery = recoveryDetail(result.recovery);
+  const retryAt =
+    isRecord(result.recovery) &&
+    typeof result.recovery.next_attempt_epoch === "number" &&
+    Number.isFinite(result.recovery.next_attempt_epoch)
+      ? result.recovery.next_attempt_epoch
+      : null;
+  if (error === "reauth_refused:global_attempt_cap")
+    return {
+      tone: "warn",
+      word: "登录被限流",
+      text: clip(
+        [
+          "15 分钟内已达到 3 次重登启动上限",
+          retryAt !== null
+            ? `本地可重试时间：${when(retryAt * 1000)}`
+            : "网关未上报可重试时间",
+        ].join("；")
+      ),
+    };
   const suffix =
     label && note
       ? `（${label}）${note}`

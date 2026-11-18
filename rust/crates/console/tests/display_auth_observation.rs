@@ -278,8 +278,29 @@ fn display_state_shows_the_gateway_duo_prompt_wait() {
     let payload = display_state(&console);
 
     assert_eq!(payload["state"], json!("waiting_duo"));
-    assert_eq!(payload["label"], json!("等待本人确认 Duo 推送"));
+    assert_eq!(payload["label"], json!("正在完成 Duo 验证"));
     assert_eq!(payload["detail"], json!("duo_prompt_waiting"));
+}
+
+#[test]
+fn display_state_shows_the_gateway_duo_auto_pass_as_a_duo_wait() {
+    let temp = temp();
+    let gateway = FakeGateway::start(Reply::Json(
+        200,
+        auth_status("logging_in", "正在完成 Duo 验证", None),
+    ));
+    let console = start_console(
+        &temp,
+        Role::Cloud,
+        gateway.port(),
+        Some(&control_token_file(&temp)),
+    );
+
+    let payload = display_state(&console);
+
+    assert_eq!(payload["state"], json!("waiting_duo"));
+    assert_eq!(payload["label"], json!("正在完成 Duo 验证"));
+    assert_eq!(payload["detail"], Value::Null);
 }
 
 #[test]

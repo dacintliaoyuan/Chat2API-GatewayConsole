@@ -65,11 +65,11 @@ test('logging_in keeps the screen and offers cancel_login', () => {
   assert.ok(next.actions.includes('cancel_login'));
 });
 
-test('waiting_duo keeps the screen and reports the Duo push wait', () => {
+test('waiting_duo keeps the screen and reports the Duo auto-pass wait', () => {
   const next = displayLauncherState(payload('waiting_duo'));
   assert.equal(next.state, 'waiting_duo');
   assert.equal(next.showScreen, true);
-  assert.equal(next.label, '等待本人确认 Duo 推送');
+  assert.equal(next.label, '正在完成 Duo 验证');
   assert.ok(next.actions.includes('cancel_login'));
   assert.ok(next.actions.includes('reconnect'));
   assert.ok(next.actions.includes('back_to_console'));

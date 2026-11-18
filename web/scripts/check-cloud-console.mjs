@@ -153,6 +153,23 @@ test("A1: non-credential failed states are not an auth failure", () => {
   assert.equal(failed.word, "认证失败");
 });
 
+test("A1: a gateway start-cap refusal shows the reason and the local retry time", () => {
+  const outcome = intent.loginOutcome({
+    state: "needs_login",
+    error: "reauth_refused:global_attempt_cap",
+    note: "需要登录",
+    recovery: {
+      state: "waiting",
+      next_attempt_epoch: 2_000_000_000,
+    },
+  });
+  assert.equal(outcome.tone, "warn");
+  assert.match(outcome.word, /限流/);
+  assert.match(outcome.text, /15 分钟内已达到 3 次重登启动上限/);
+  assert.match(outcome.text, /可重试时间/);
+  assert.doesNotMatch(outcome.text, /已受理 · 未观察到登录会话/);
+});
+
 test("A2: an answer that carries an operation id is accepted even with a non-2xx status", () => {
   for (const status of [500, 408, 429]) {
     const answer = cloud.submitAnswer(
@@ -3671,7 +3688,8 @@ test("status row: seven display states render their own words and unknown stays 
   const cases = [
     ["not_started", "未开始"],
     ["logging_in", "登录中"],
-    ["waiting_mfa", "等待 MFA"],
+    ["waiting_mfa", "等待 Duo 登录"],
+    ["waiting_duo", "正在完成 Duo 验证"],
     ["valid", "已登录"],
     ["cancelled", "认证已失效"],
     ["failed", "认证已失效"],
@@ -3752,7 +3770,7 @@ test("status row: the login-window actions follow the display state", () => {
   };
   assert.deepEqual(actions("valid"), onlyOpen);
   assert.deepEqual(actions("not_started"), onlyOpen);
-  for (const state of ["logging_in", "waiting_mfa"]) {
+  for (const state of ["logging_in", "waiting_mfa", "waiting_duo"]) {
     assert.deepEqual(actions(state), openAndCancel);
   }
   for (const state of [

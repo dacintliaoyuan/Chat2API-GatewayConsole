@@ -740,6 +740,12 @@ def ac4_section(module, server, root):
             "observed_at": 1700000000,
             "login_window_deadline_epoch": 1700000600, "read_error": None,
         },
+        "duoAuto": {
+            "state": "logging_in", "label": "正在完成 Duo 验证",
+            "error": None, "primary": None,
+            "observed_at": 1700000000,
+            "login_window_deadline_epoch": 1700000600, "read_error": None,
+        },
         "manual": {
             "state": "failed", "label": "登录失败",
             "error": "manual_takeover_required:umpass_mfa_required",

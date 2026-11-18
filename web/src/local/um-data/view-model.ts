@@ -45,6 +45,7 @@ import type {
   UmUpstreamFaults,
   UmVerify,
 } from "../um-ui/contract";
+import { when } from "../um-ui/format";
 
 /** chat2api on 8000: the only service the local UM console manages. */
 export const CHAT2API = "chat2api";
@@ -69,16 +70,20 @@ const SERVICE_WORD: Readonly<Record<string, string>> = {
   Conflict: "端口被占用",
 };
 const LOGIN_WORD: Readonly<Record<UmLogin["state"], string>> = {
-  valid: "有效",
+  valid: "已登录",
   needs_login: "需要登录",
   invalid: "登录失败",
   logging_in: "登录中",
   unknown: "状态未知",
 };
 const DUO_PROMPT_WAITING_REASON = "duo_prompt_waiting";
+const DUO_AUTO_WORD = "正在完成 Duo 验证";
+const DUO_AUTO_DETAIL = "Duo 自动验证进行中；本轮仍在等待，无需本人操作";
 const DUO_TAKEOVER_WORD = "等待本人确认 Duo 推送";
 const DUO_TAKEOVER_DETAIL =
-  "自动登录已在 UMPASS 之后等待本人批准 Duo 推送；本轮仍在等待，可打开可见窗口完成确认";
+  "Duo 需要本人确认；本轮仍在等待，可打开可见窗口完成确认";
+const RATE_LIMIT_ERROR = "reauth_refused:global_attempt_cap";
+const RATE_LIMIT_DETAIL = "15 分钟内已达到 3 次重登启动上限";
 const MANUAL_LOGIN_DETAILS: Readonly<Record<string, string>> = {
   umpass_autofill_protected: "Edge 已预填，浏览器会在你与页面交互前隐藏预填值，后台登录无法确认。请在 Edge 窗口中点击登录表单继续。",
   umpass_prefill_missing: "后台登录在 UMPASS 表单中未检测到可用的预填，请打开 Edge 继续登录。",
@@ -348,10 +353,14 @@ export function loginFrom(result: OperationResult): UmLogin {
   const origin = rowText(progress, "origin");
   const manualReason = rowText(progress, "manual_reason");
   const duoWaiting = manualReason === DUO_PROMPT_WAITING_REASON;
+  const duoAuto = phase === "awaiting_duo" && !duoWaiting;
   const takeoverDetail = manualReason && Object.hasOwn(MANUAL_LOGIN_DETAILS, manualReason)
     ? MANUAL_LOGIN_DETAILS[manualReason]
     : null;
   const takeover = duoWaiting || takeoverDetail !== null;
+  const recovery = object(raw.recovery);
+  const retryEpoch = rowNumber(recovery, "next_attempt_epoch");
+  const rateLimited = error === RATE_LIMIT_ERROR;
   const mapped: UmLogin["state"] =
     state === "valid"
       ? "valid"
@@ -364,12 +373,28 @@ export function loginFrom(result: OperationResult): UmLogin {
             : "unknown";
   return {
     state: mapped,
-    word: duoWaiting ? DUO_TAKEOVER_WORD : takeover ? "需要本人继续登录" : (label ?? LOGIN_WORD[mapped]),
-    detail: duoWaiting
-      ? DUO_TAKEOVER_DETAIL
-      : (takeoverDetail ?? error ??
-        note ??
-        (state === null ? "认证状态无法确认" : `chat2api 内存态：${state}`)),
+    word: rateLimited
+      ? "登录被限流"
+      : duoWaiting
+        ? DUO_TAKEOVER_WORD
+        : duoAuto
+          ? DUO_AUTO_WORD
+          : mapped === "valid"
+            ? LOGIN_WORD.valid
+            : takeover
+              ? "需要本人继续登录"
+              : (label ?? LOGIN_WORD[mapped]),
+    detail: rateLimited
+      ? `${RATE_LIMIT_DETAIL}；可重试时间：${
+          retryEpoch === null ? "网关未上报" : when(retryEpoch * 1000)
+        }`
+      : duoWaiting
+        ? DUO_TAKEOVER_DETAIL
+        : duoAuto
+          ? DUO_AUTO_DETAIL
+          : (takeoverDetail ?? error ??
+            note ??
+            (state === null ? "认证状态无法确认" : `chat2api 内存态：${state}`)),
     checkedAt: stamp,
     phase,
     origin,
