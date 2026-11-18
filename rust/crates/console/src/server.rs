@@ -128,7 +128,11 @@ impl ConsoleServer {
         config: ConsoleConfig,
         runtime: Arc<dyn RuntimeFacts>,
     ) -> Result<ServerHandle, ServerError> {
-        let display = DisplaySeams::new(config.display.availability());
+        let display = DisplaySeams::with_auth_observation(
+            config.display.availability(),
+            config.gateway_port,
+            config.control_token_file.clone(),
+        );
         Self::start_with_seams(config, runtime, Arc::new(display))
     }
 
