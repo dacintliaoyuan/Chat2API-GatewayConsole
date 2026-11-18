@@ -1161,7 +1161,12 @@ impl ModelSyncExecutor {
         let context = match params.get("context") {
             Some(Value::Number(number)) => match number.as_i64() {
                 Some(context) if context > 0 && context <= CONTEXT_OVERRIDE_MAX => context,
-                _ => return Err(ModelSyncError::invalid("context 必须为正整数").into()),
+                _ => {
+                    return Err(ModelSyncError::invalid(format!(
+                        "context 必须为 1-{CONTEXT_OVERRIDE_MAX} 的正整数"
+                    ))
+                    .into())
+                }
             },
             _ => return Err(ModelSyncError::invalid("context 必须为正整数").into()),
         };
@@ -2384,10 +2389,17 @@ fn seed_context_probes(
             let Some(record) = existing.as_object_mut() else {
                 continue;
             };
-            let old_declared = record.get("declared_context").and_then(Value::as_i64);
-            let declared_changed = old_declared != model.context;
-            let record_scheme = record.get("scheme_revision").and_then(Value::as_i64);
-            let scheme_mismatch = record_scheme.unwrap_or(1) != PROBE_SCHEME_REVISION;
+            let old_declared = record
+                .get("declared_context")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let declared_changed = old_declared != json!(model.context);
+            let record_scheme = record
+                .get("scheme_revision")
+                .cloned()
+                .filter(|value| !value.is_null());
+            let scheme_value = record_scheme.clone().unwrap_or_else(|| json!(1));
+            let scheme_mismatch = scheme_value != json!(PROBE_SCHEME_REVISION);
             if !declared_changed && !scheme_mismatch {
                 continue;
             }
@@ -2832,12 +2844,10 @@ fn context_of(raw: &Map<String, Value>) -> Option<i64> {
         "context_window",
     ] {
         let Some(value) = raw.get(key) else { continue };
-        if value.is_null() || value == &Value::Bool(false) || value == &json!(0) {
+        if !value_truthy(value) {
             continue;
         }
-        if let Some(context) = int_value(value) {
-            return Some(context);
-        }
+        return int_value(value);
     }
     None
 }
