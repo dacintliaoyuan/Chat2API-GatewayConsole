@@ -12,7 +12,7 @@
 | AC1 `POST /api/session` 兑换 12h HttpOnly 会话 Cookie；reissue 需 `X-Admin-Control` | `session.rs`、`server.rs::handle_session_exchange/handle_session_reissue` | `session_routes.rs`、`session.rs` 单测 |
 | AC2 display-grant 一次性；display-operator acquire/takeover；单次 grant 存储 | `display_grant.rs`、`server.rs::handle_display_grant/handle_display_operator` | `display_grant_operator.rs`、`display_grant.rs` 单测 |
 | AC3 `/api/share/*` 写面走控制令牌或会话+CSRF；与 Python 一致 | `share_auth.rs::management_write_auth`、`share_write.rs`、`server.rs::handle_share_api` | `api_share_write.rs`、`api_share.rs` |
-| AC4 不 port `backend-login-cancel`，8002 返回 404 | 写路由白名单不含该路径 | `backend_login_cancel.rs` |
+| AC4 不 port `backend-login-cancel`，8002 返回 404 | 写路由白名单不含该路径（#106 已补上 console 代理路由；旧 `/api/share/*` 仍 404） | `backend_login_cancel.rs` |
 | AC5 明文/密钥不进日志、操作记录、URL 或错误消息 | 明文只映射 create/rotate 与单 Key 读回；错误只回固定码 | `write_redaction.rs` |
 | AC6 写面失败切回 Python；数据格式不变 | 同一 schema 3 / 投影 schema 2；引导码是明文 0600 文件 | `write_failure_fallback.rs` |
 

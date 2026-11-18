@@ -1,113 +1,32 @@
-//! #84: the local `model.catalog` action runs the Python `model_sync` sidecar.
+//! #94: the local `model.catalog` action runs in Rust, not in a Python sidecar.
 //!
-//! `model_sync` is not migrated yet. The local role submits `model.catalog` and
-//! the Rust console executes it by running `console.model_actions.model_catalog`
-//! in a one-shot child process. These tests use a fake `console.model_actions`
-//! module under a temp repo root, so no test touches the real model sync state,
-//! the UM runtime or the network.
+//! The executor reads the fixed local gateway catalogue endpoint directly. These
+//! tests run a fake gateway HTTP server and point the console at its ephemeral
+//! loopback port; the Python interpreter is deliberately unusable so any sidecar
+//! fallback fails loudly.
 
 mod support;
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use um_console::config::{ConsoleConfig, Role};
+use um_console::config::Role;
 use um_console::ConsoleServer;
-use um_test_harness::TempDataDir;
+use um_test_harness::{HttpRequest, HttpResponse, TempDataDir, TestServer};
 
 use support::*;
 
-const SUCCESS_MODULE: &str = r#"
-import atexit
-import json
-import os
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _record(name):
-    with open(os.path.join(ROOT, name), "a", encoding="utf-8") as handle:
-        handle.write(str(os.getpid()) + "\n")
-
-
-_record("runs.txt")
-atexit.register(_record, "exits.txt")
-
-
-def model_catalog(target, params, ctx=None):
-    with open(os.path.join(ROOT, "params.txt"), "a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"target": target, "params": params},
-                                sort_keys=True) + "\n")
-    return {
-        "catalogs": {"um": [{"id": "fake-model", "display_name": "Fake"}]},
-        "warnings": [],
-        "sources": ["um"],
-        "checked_epoch": 1700000000,
-    }
-"#;
-
-const FAILING_MODULE: &str = r#"
-def model_catalog(target, params, ctx=None):
-    raise RuntimeError("upstream unavailable")
-"#;
-
-const INVALID_JSON_MODULE: &str = r#"
-def model_catalog(target, params, ctx=None):
-    print("not-json")
-    return {"catalogs": {}, "warnings": [], "sources": [], "checked_epoch": 1}
-"#;
-
-const NONZERO_SUCCESS_MODULE: &str = r#"
-import json
-import os
-import sys
-
-
-def model_catalog(target, params, ctx=None):
-    sys.stdout.write(json.dumps({"ok": True, "result": {"catalogs": {}}}))
-    sys.stdout.flush()
-    os._exit(7)
-"#;
-
-fn python() -> PathBuf {
-    let candidates: &[&str] = if cfg!(windows) {
-        &["python", "python3"]
-    } else {
-        &["python3", "python"]
-    };
-    for candidate in candidates {
-        let works = Command::new(candidate)
-            .arg("--version")
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false);
-        if works {
-            return PathBuf::from(candidate);
-        }
-    }
-    panic!("python interpreter is required for the model.catalog sidecar tests");
-}
-
-fn fake_repo(temp: &TempDataDir, module: &str) -> PathBuf {
-    let root = temp.path().join("repo");
-    let console = root.join("console");
-    std::fs::create_dir_all(&console).expect("fake console package");
-    std::fs::write(console.join("__init__.py"), "").expect("package marker");
-    std::fs::write(console.join("model_actions.py"), module).expect("fake model actions");
-    root
-}
-
-fn start_local_console(temp: &TempDataDir, repo: &Path) -> Console {
+fn start_local_console(temp: &TempDataDir, gateway_port: u16) -> Console {
     let mut config = base_config(temp);
     config.role = Role::Local;
     config.port = 8001;
-    config.gateway_port = 8000;
-    config.python_exe = python();
-    config.repo_root = repo.to_path_buf();
-    let server = ConsoleServer::start_with_runtime(config, stopped_runtime())
-        .expect("start local console");
+    config.gateway_port = gateway_port;
+    config.repo_root = temp.path().to_path_buf();
+    // Any Python sidecar attempt must fail loudly.
+    let server =
+        ConsoleServer::start_with_runtime(config, stopped_runtime()).expect("start local console");
     Console::from_server(server)
 }
 
@@ -138,12 +57,15 @@ fn wait_terminal(console: &Console, operation: &Value) -> Value {
         ) {
             return operation;
         }
-        assert!(Instant::now() < deadline, "operation never finished: {operation}");
+        assert!(
+            Instant::now() < deadline,
+            "operation never finished: {operation}"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
 
-fn submit_catalog(console: &Console) -> Value {
+fn submit_catalog(console: &Console, params: Value) -> Value {
     let created = request(
         console,
         "POST",
@@ -151,115 +73,162 @@ fn submit_catalog(console: &Console) -> Value {
         Some(json!({
             "action": "model.catalog",
             "target": "model",
-            "params": {},
+            "params": params,
         })),
     );
     assert_eq!(created.status, 201);
     wait_terminal(console, &created.json()["operation"])
 }
 
+fn gateway(models: Value) -> TestServer {
+    TestServer::start(move |_request: HttpRequest| {
+        HttpResponse::json(200, &json!({"data": models}).to_string())
+    })
+    .expect("fake gateway")
+}
+
 #[test]
-fn submitting_model_catalog_runs_the_python_sidecar_and_returns_the_catalog() {
+fn model_catalog_reads_the_gateway_without_a_python_sidecar() {
     let temp = temp();
-    let repo = fake_repo(&temp, SUCCESS_MODULE);
-    let console = start_local_console(&temp, &repo);
+    let gateway = gateway(json!([
+        {"id": "model-a", "max_model_len": 128000},
+        {"id": "DeepSeek-V4-Flash-0731"},
+        {"id": "model-a-Fast", "max_model_len": 4096},
+        {"id": "", "max_model_len": 1},
+    ]));
+    let console = start_local_console(&temp, gateway.port());
 
-    let operation = submit_catalog(&console);
+    let operation = submit_catalog(&console, json!({}));
 
-    assert_eq!(operation["state"], json!("succeeded"));
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    let result = &operation["result"];
+    assert_eq!(result["sources"], json!(["um"]));
+    assert_eq!(result["warnings"], json!([]));
+    let rows = result["catalogs"]["um"].as_array().expect("um rows");
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0]["id"], json!("model-a"));
+    assert_eq!(rows[0]["context"], json!(128000));
+    assert_eq!(rows[0]["context_state"], json!("declared"));
+    assert_eq!(
+        rows[0]["output_token_cap"],
+        json!({"value": 16384, "source": "compat_default"})
+    );
+    assert_eq!(rows[1]["id"], json!("DeepSeek-V4-Flash-0731"));
+    assert_eq!(rows[1]["context"], Value::Null);
+    assert_eq!(rows[1]["context_state"], json!("unknown"));
+    assert_eq!(rows[1]["efforts"], json!(["low", "medium", "high", "max"]));
+    assert_eq!(rows[1]["default_effort"], json!("high"));
+    assert_eq!(rows[1]["efforts_source"], json!("known"));
+    assert!(result["checked_epoch"].as_i64().unwrap_or_default() > 0);
+}
+
+#[test]
+fn model_catalog_scope_reads_only_the_selected_source() {
+    let temp = temp();
+    let gateway = gateway(json!([{"id": "model-a"}]));
+    let console = start_local_console(&temp, gateway.port());
+
+    let operation = submit_catalog(&console, json!({"sources": "[\"um\"]"}));
+
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
     assert_eq!(operation["result"]["sources"], json!(["um"]));
-    assert_eq!(operation["result"]["warnings"], json!([]));
-    assert_eq!(
-        operation["result"]["catalogs"]["um"][0]["id"],
-        json!("fake-model")
-    );
-    let calls = std::fs::read_to_string(repo.join("params.txt")).expect("sidecar call record");
-    let call: Value = serde_json::from_str(calls.trim()).expect("call json");
-    assert_eq!(call["target"], json!("model"));
-    assert_eq!(call["params"], json!({}));
 }
 
 #[test]
-fn a_failing_sidecar_is_an_explicit_operation_error() {
+fn model_catalog_rejects_unknown_or_paused_sources_before_reading() {
     let temp = temp();
-    let repo = fake_repo(&temp, FAILING_MODULE);
-    let console = start_local_console(&temp, &repo);
+    let gateway = gateway(json!([{"id": "model-a"}]));
+    let console = start_local_console(&temp, gateway.port());
 
-    let operation = submit_catalog(&console);
-
-    assert_eq!(operation["state"], json!("failed"));
-    assert_eq!(operation["result"], Value::Null);
-    assert_eq!(operation["error"]["code"], json!("catalog_failed"));
-    assert_eq!(
-        operation["error"]["message"],
-        json!("模型目录查询失败：RuntimeError: upstream unavailable")
-    );
-}
-
-#[test]
-fn invalid_sidecar_json_is_an_explicit_operation_error() {
-    let temp = temp();
-    let repo = fake_repo(&temp, INVALID_JSON_MODULE);
-    let console = start_local_console(&temp, &repo);
-
-    let operation = submit_catalog(&console);
-
-    assert_eq!(operation["state"], json!("failed"));
-    assert_eq!(operation["result"], Value::Null);
-    assert_eq!(operation["error"]["code"], json!("catalog_failed"));
-    let message = operation["error"]["message"]
-        .as_str()
-        .expect("error message");
-    assert!(message.contains("未返回合法 JSON"), "{message}");
-}
-
-#[test]
-fn a_nonzero_sidecar_exit_never_counts_as_success() {
-    let temp = temp();
-    let repo = fake_repo(&temp, NONZERO_SUCCESS_MODULE);
-    let console = start_local_console(&temp, &repo);
-
-    let operation = submit_catalog(&console);
-
-    assert_eq!(operation["state"], json!("failed"));
-    assert_eq!(operation["result"], Value::Null);
-    assert_eq!(operation["error"]["code"], json!("catalog_failed"));
-    let message = operation["error"]["message"]
-        .as_str()
-        .expect("error message");
-    assert!(message.contains("退出码非零"), "{message}");
-}
-
-#[test]
-fn every_model_catalog_call_runs_and_reaps_its_own_python_process() {
-    let temp = temp();
-    let repo = fake_repo(&temp, SUCCESS_MODULE);
-    let console = start_local_console(&temp, &repo);
-
-    submit_catalog(&console);
-    submit_catalog(&console);
-
-    let runs = read_pids(&repo.join("runs.txt"));
-    let exits = read_pids(&repo.join("exits.txt"));
-    assert_eq!(runs.len(), 2, "each call must spawn its own process");
-    assert_ne!(runs[0], runs[1], "calls must not reuse a resident process");
-    assert_eq!(exits.len(), 2, "each child must exit before the operation finishes");
-    for pid in runs {
-        assert!(exits.contains(&pid), "sidecar {pid} never exited");
+    for sources in [
+        json!("[\"m365\"]"),
+        json!("[\"um\",\"um\"]"),
+        json!("[]"),
+        json!("not-json"),
+    ] {
+        let operation = submit_catalog(&console, json!({"sources": sources}));
+        assert_eq!(operation["state"], json!("failed"), "{operation}");
+        assert_eq!(operation["error"]["code"], json!("invalid_params"));
     }
 }
 
-fn read_pids(path: &Path) -> Vec<u32> {
-    std::fs::read_to_string(path)
-        .expect("pid record")
-        .lines()
-        .map(|line| line.trim().parse::<u32>().expect("pid"))
-        .collect()
+#[test]
+fn model_catalog_reports_an_unreachable_gateway_as_a_warning() {
+    let temp = temp();
+    // Reserve and immediately drop a listener so the port is closed.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    let console = start_local_console(&temp, port);
+
+    let operation = submit_catalog(&console, json!({}));
+
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    assert_eq!(operation["result"]["catalogs"], json!({}));
+    let warnings = operation["result"]["warnings"]
+        .as_array()
+        .expect("warnings");
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0]
+        .as_str()
+        .unwrap_or_default()
+        .starts_with("UM目录不可用："));
+}
+
+#[test]
+fn strict_fresh_requires_the_raw_fresh_marker() {
+    let temp = temp();
+    let gateway = TestServer::start(|_request: HttpRequest| {
+        HttpResponse::json(200, &json!({"data": [{"id": "cached-model"}]}).to_string())
+    })
+    .expect("fake gateway");
+    let console = start_local_console(&temp, gateway.port());
+
+    let operation = submit_catalog(&console, json!({"fresh": true, "sources": "[\"um\"]"}));
+
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    let result = &operation["result"];
+    assert_eq!(result["success"], json!(false));
+    assert_eq!(result["fresh"], json!(false));
+    assert_eq!(result["stale"], json!(false));
+    assert_eq!(result["refresh"]["status"], json!("not_fresh"));
+    assert_eq!(result["catalogs"], json!({}));
+}
+
+#[test]
+fn strict_fresh_with_the_marker_returns_the_models() {
+    let temp = temp();
+    let gateway = TestServer::start(|request: HttpRequest| {
+        assert_eq!(
+            request.header("x-chat2api-models"),
+            Some("raw-fresh"),
+            "{request:?}"
+        );
+        HttpResponse::json(200, &json!({"data": [{"id": "fresh-model"}]}).to_string())
+            .with_header("x-chat2api-raw-models", "1")
+    })
+    .expect("fake gateway");
+    let console = start_local_console(&temp, gateway.port());
+
+    let operation = submit_catalog(&console, json!({"fresh": true, "sources": "[\"um\"]"}));
+
+    assert_eq!(operation["state"], json!("succeeded"), "{operation}");
+    let result = &operation["result"];
+    assert_eq!(result["success"], json!(true));
+    assert_eq!(result["fresh"], json!(true));
+    assert_eq!(result["stale"], json!(false));
+    assert_eq!(result["refresh"]["status"], json!("fresh"));
+    assert_eq!(result["catalogs"]["um"][0]["id"], json!("fresh-model"));
 }
 
 #[test]
 fn the_local_console_config_defaults_to_the_python_on_path() {
-    let config = ConsoleConfig::default();
-    assert_eq!(config.python_exe, PathBuf::from("python"));
+    let config = um_console::config::ConsoleConfig::default();
     assert_eq!(config.repo_root, PathBuf::from("."));
+}
+
+#[test]
+fn shared_stopped_runtime_is_usable() {
+    // Keep the support module linked for the shared helpers.
+    let _: Arc<dyn um_console::runtime::RuntimeFacts> = stopped_runtime();
 }

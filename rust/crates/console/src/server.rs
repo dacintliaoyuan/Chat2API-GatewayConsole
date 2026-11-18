@@ -32,9 +32,13 @@ use crate::display_grant::{DisplayGrants, DISPLAY_SESSION_COOKIE};
 use crate::display_relay::{DisplayRelay, WEBSOCKET_PATH};
 use crate::error::ConsoleError;
 use crate::gateway_connection;
+use crate::local_logs::{self, LogPaths};
+use crate::local_stats::{self, StatsPaths};
 use crate::local_um::{self, UmQueryError};
 use crate::metering::{self, UsageFilters};
-use crate::operation_manager::{OperationError, OperationManagerSlot, UnwiredActionExecutor};
+use crate::operation_manager::{
+    ActionExecutor, ActionFailure, OperationContext, OperationError, OperationManagerSlot,
+};
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, LocalTcpFacts, RuntimeFacts, RuntimeSnapshot};
 use crate::session::{SessionState, SESSION_COOKIE, SESSION_TTL_SECONDS};
@@ -43,8 +47,6 @@ use crate::share_read::{control_status, DisplaySeams, ShareReadSeams, ShareReadS
 use crate::share_write::{
     console_public_row, ShareWriteError, ShareWriteSeams, ShareWriteStore, UnwiredWriteSeams,
 };
-use crate::local_logs::{self, LogPaths};
-use crate::local_stats::{self, StatsPaths};
 use crate::summary::SummaryCache;
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -61,7 +63,60 @@ const CLOUD_CAPABILITY_PREFIXES: [&str; 9] = [
     "um",
 ];
 
+/// The local role's action executor: service actions run through the managed
+/// PowerShell runtime (#92), UM auth actions run in Rust (#93), and the model
+/// catalog/context actions run in-process (#94). No action starts a Python child.
+struct LocalActionExecutor {
+    service: crate::service_actions::LocalActionExecutor,
+    auth: crate::local_um_auth::LocalActionExecutor,
+}
+
+impl ActionExecutor for LocalActionExecutor {
+    fn execute(
+        &self,
+        action: &str,
+        target: &str,
+        params: &Map<String, Value>,
+        ctx: &OperationContext,
+    ) -> Result<Value, ActionFailure> {
+        if crate::local_um_auth::UmAuthExecutor::handles(action) {
+            return self.auth.execute(action, target, params, ctx);
+        }
+        self.service.execute(action, target, params, ctx)
+    }
+}
+
 pub struct ConsoleServer;
+
+/// #107: the cloud console executes the ONE explicit visible login through the
+/// gateway's `POST /admin/auth/login`; the six share actions keep their honest
+/// unwired default (they are assembled by the deployment package, not here).
+struct CloudActionExecutor {
+    gateway_port: u16,
+    control_token_file: Option<std::path::PathBuf>,
+}
+
+impl ActionExecutor for CloudActionExecutor {
+    fn execute(
+        &self,
+        action: &str,
+        _target: &str,
+        _params: &Map<String, Value>,
+        ctx: &OperationContext,
+    ) -> Result<Value, ActionFailure> {
+        if action == "account.login" {
+            ctx.raise_if_cancelled()?;
+            return crate::local_um_auth::start_login(
+                self.gateway_port,
+                self.control_token_file.as_deref(),
+            );
+        }
+        Err(ActionFailure::new(
+            "share_broker_unwired",
+            "broker 操作门未接线（部署授权包装配后可用）；不冒充可用",
+        ))
+    }
+}
 
 pub struct AppState {
     pub config: ConsoleConfig,
@@ -102,7 +157,11 @@ impl ConsoleServer {
         config: ConsoleConfig,
         runtime: Arc<dyn RuntimeFacts>,
     ) -> Result<ServerHandle, ServerError> {
-        let display = DisplaySeams::new(config.display.availability());
+        let display = DisplaySeams::with_auth_observation(
+            config.display.availability(),
+            config.gateway_port,
+            config.control_token_file.clone(),
+        );
         Self::start_with_seams(config, runtime, Arc::new(display))
     }
 
@@ -111,14 +170,31 @@ impl ConsoleServer {
         runtime: Arc<dyn RuntimeFacts>,
         share_seams: Arc<dyn ShareReadSeams>,
     ) -> Result<ServerHandle, ServerError> {
-        // The local role executes all twelve retained actions through the
-        // one-shot Python sidecar (`model.catalog` keeps its #84 executor); the
-        // cloud role keeps its honest unwired default.
+        // The local role executes the service actions through the managed
+        // PowerShell runtime (#92), the UM auth actions in Rust (#93), and the
+        // model-sync actions in-process (#94); the cloud role keeps its honest
+        // unwired default.
         let executor: Arc<dyn crate::operation_manager::ActionExecutor> = match config.role {
             Role::Local => {
-                Arc::new(crate::retained_actions::RetainedActionExecutor::from_config(&config))
+                let retained =
+                    Arc::new(crate::retained_actions::RetainedActionExecutor::from_config(&config));
+                let service_control = Arc::new(
+                    crate::service_actions::PowerShellServiceExecutor::from_config(&config),
+                );
+                let auth = crate::local_um_auth::UmAuthExecutor::from_config(
+                    &config,
+                    Arc::clone(&runtime),
+                    service_control,
+                );
+                Arc::new(LocalActionExecutor {
+                    service: crate::service_actions::LocalActionExecutor::from_config(&config),
+                    auth: crate::local_um_auth::LocalActionExecutor::new(auth, retained),
+                })
             }
-            Role::Cloud => Arc::new(UnwiredActionExecutor),
+            Role::Cloud => Arc::new(CloudActionExecutor {
+                gateway_port: config.gateway_port,
+                control_token_file: config.control_token_file.clone(),
+            }),
         };
         Self::start_with_wiring(
             config,
@@ -884,9 +960,8 @@ fn handle_local_usage_read(
             let level = query_value(raw_target, "level");
             let since = query_value(raw_target, "since");
             let until = query_value(raw_target, "until");
-            let rotation = query_value(raw_target, "rotation").map(|raw| {
-                raw.trim().parse::<i64>().unwrap_or(-1)
-            });
+            let rotation = query_value(raw_target, "rotation")
+                .map(|raw| raw.trim().parse::<i64>().unwrap_or(-1));
             let request_id = query_value(raw_target, "request_id");
             let registry = local_logs::build_registry(&LogPaths::from_config(&state.config));
             Some(send_json(
@@ -1103,11 +1178,7 @@ fn handle_local_um(state: &AppState, rest: &[&str], raw_target: &str) -> Respons
 }
 
 fn invalid_um_query(error: &UmQueryError) -> Response {
-    ConsoleError::new(
-        400,
-        json!({"error": "invalid_um_query", "detail": error.0}),
-    )
-    .response()
+    ConsoleError::new(400, json!({"error": "invalid_um_query", "detail": error.0})).response()
 }
 
 fn handle_console_get(state: &AppState, rest: &[&str], raw_target: &str) -> Response {
@@ -1194,6 +1265,18 @@ fn handle_share_management_write(
     }
     if method == "POST" && rest == ["display-operator"] {
         return handle_display_operator(state, request);
+    }
+    if method == "POST" && rest == ["backend-login"] {
+        // D18-8/#107: a no-parameter proxy to the gateway's
+        // `POST /admin/auth/login` with `visible=true`; the body is
+        // deliberately not parsed, matching `usagesrv.py`'s route.
+        return handle_backend_login_start(state);
+    }
+    if method == "POST" && rest == ["backend-login-cancel"] {
+        // D18-8/#106: a no-parameter proxy to the gateway's
+        // `POST /admin/auth/cancel`; the body is deliberately not parsed,
+        // matching `usagesrv.py`'s route.
+        return handle_backend_login_cancel(state);
     }
     if rest == ["control-status"] {
         let mut response =
@@ -1471,6 +1554,52 @@ fn handle_share_management_write(
 /// `_console_display_grant_payload`: bind a one-time grant to the
 /// management subject that proved itself here. A bare loopback request is not
 /// an administrator, so an SSH `-L` client cannot mint a display grant.
+/// `usagesrv.py::_console_backend_login_cancel_payload`: proxy the
+/// control-token-gated gateway cancel. A classified failure is a 503 with
+/// `cancelled=false`, `state=null` and a readable `error`/`detail`; it never
+/// fabricates a cancelled round. The control token is only sent to the gateway and
+/// never copied into the response.
+/// `_console_backend_login_payload`: proxy the control-token-gated gateway
+/// explicit visible login. A classified failure is a 503 with `started=false`,
+/// `state=null` and a readable `error`/`detail`; it never fabricates a started
+/// round. The control token is only sent to the gateway and never copied into the
+/// response.
+fn handle_backend_login_start(state: &AppState) -> Response {
+    match crate::local_um_auth::start_login(
+        state.config.gateway_port,
+        state.config.control_token_file.as_deref(),
+    ) {
+        Ok(payload) => send_json(200, &payload),
+        Err(failure) => send_json(
+            503,
+            &json!({
+                "started": false,
+                "state": Value::Null,
+                "detail": failure.message,
+                "error": failure.code,
+            }),
+        ),
+    }
+}
+
+fn handle_backend_login_cancel(state: &AppState) -> Response {
+    match crate::local_um_auth::cancel_login(
+        state.config.gateway_port,
+        state.config.control_token_file.as_deref(),
+    ) {
+        Ok(payload) => send_json(200, &payload),
+        Err(failure) => send_json(
+            503,
+            &json!({
+                "cancelled": false,
+                "state": Value::Null,
+                "detail": failure.message,
+                "error": failure.code,
+            }),
+        ),
+    }
+}
+
 fn handle_display_grant(state: &AppState, request: &Request) -> Response {
     if let Some(reason) = display_unavailable_reason(state) {
         return ConsoleError::new(503, json!({"error": reason})).response();

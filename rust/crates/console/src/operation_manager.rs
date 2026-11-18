@@ -201,6 +201,16 @@ pub fn cloud_registry() -> Vec<ActionSpec> {
             disabled_reason: None,
             resource: share_resource,
         },
+        ActionSpec {
+            name: "account.login",
+            description: "显式可见登录 UM（经网关轮次；需本人在私有登录窗口完成）",
+            param_schema: json!({}),
+            bump_generation_on_success: false,
+            cancelable: true,
+            enabled: true,
+            disabled_reason: None,
+            resource: account_login_resource,
+        },
     ]
 }
 
@@ -256,7 +266,7 @@ pub fn local_registry() -> Vec<ActionSpec> {
             cancelable: true,
             enabled: true,
             disabled_reason: None,
-            resource: um_account_resource,
+            resource: um_status_resource,
         },
         ActionSpec {
             name: "account.um_verify",
@@ -407,6 +417,15 @@ fn um_account_resource(
     Ok("account:um".to_string())
 }
 
+/// The read-only auth-state query never contends with the exclusive verify/login
+/// round lock: a refresh during an active login still reads the same round.
+fn um_status_resource(
+    _target: &str,
+    _params: &Map<String, Value>,
+) -> Result<String, OperationError> {
+    Ok("account:um:status".to_string())
+}
+
 fn model_context_resource(
     _target: &str,
     _params: &Map<String, Value>,
@@ -423,6 +442,15 @@ fn model_catalog_resource(
 
 fn share_resource(_target: &str, _params: &Map<String, Value>) -> Result<String, OperationError> {
     Ok("share:orchestration".to_string())
+}
+
+/// #107: the cloud console's explicit visible login shares ONE lock, so a repeated
+/// click serializes here while the gateway keeps the single-round constraint.
+fn account_login_resource(
+    _target: &str,
+    _params: &Map<String, Value>,
+) -> Result<String, OperationError> {
+    Ok("account:login".to_string())
 }
 
 fn service_resource(target: &str, _params: &Map<String, Value>) -> Result<String, OperationError> {

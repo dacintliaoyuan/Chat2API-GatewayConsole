@@ -61,15 +61,22 @@ pub fn action_catalogue() -> Value {
                 "description": "UM 分享分层状态观察（只读）",
                 "param_schema": {},
             },
+            {
+                "action": "account.login",
+                "enabled": true,
+                "disabled_reason": null,
+                "cancelable": true,
+                "description": "显式可见登录 UM（经网关轮次；需本人在私有登录窗口完成）",
+                "param_schema": {},
+            },
         ],
     })
 }
 
 /// The local role catalogue: the UM actions only. Share actions are not
-/// assembled locally. `model.catalog` is enabled: #84 executes it through a
-/// one-shot Python `model_sync` sidecar. The remaining actions are not wired in
-/// this ticket, so they are listed as disabled with their honest reason instead of
-/// claiming capability.
+/// assembled locally. All twelve actions are enabled; `service.*` (#92) executes
+/// through the managed PowerShell runtime, the UM auth actions (#93) run in Rust,
+/// and the model-sync actions (#94) execute in-process.
 pub fn action_catalogue_local() -> Value {
     let actions: Vec<Value> = local_registry()
         .iter()

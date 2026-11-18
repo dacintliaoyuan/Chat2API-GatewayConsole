@@ -247,10 +247,18 @@ function Reset-Fake {
         BootstrapSshExe = ''
         BootstrapThrows = $false
         BootstrapResponse = @{ ExitCode = 0; Output = '/display/grant#console=ConsoleBootstrap_0123456789' }
+        BootstrapArgumentLines = [System.Collections.Generic.List[string]]::new()
+        DisplayGrantResponse = @{ ExitCode = 0; Output = '/display/grant#grant=DisplayGrant_0123456789' }
         BrowserCalls = 0
+        BrowserUrls = [System.Collections.Generic.List[string]]::new()
         BrowserThrows = $false
         BrowserReturnsFalse = $false
         LastUrl = ''
+        DisplayStateCalls = 0
+        DisplayStateThrows = $false
+        DisplayStateUris = [System.Collections.Generic.List[string]]::new()
+        DisplayStateResponse = @{ Ok = $true; StatusCode = 200;
+            Content = '{"available":true,"state":"valid","label":"登录有效","detail":null,"display":{"available":true,"reason":null}}'; Detail = '' }
         LockCalls = 0
         LockAvailable = $true
         LockNames = [System.Collections.Generic.List[string]]::new()
@@ -430,13 +438,25 @@ function New-TestAdapter {
             $script:fake.BootstrapCalls++
             $script:fake.BootstrapSshExe = $SshExe
             $script:fake.BootstrapArgumentLine = $ArgumentLine
+            $script:fake.BootstrapArgumentLines.Add([string]$ArgumentLine)
             if ($script:fake.BootstrapThrows) { throw 'ConsoleBootstrap_0123456789 exception' }
             Assert-True ($script:fake.HealthCalls -gt 0) 'bootstrap is issued after health'
-            return $script:fake.BootstrapResponse
+            if ($ArgumentLine -match '--console-session') {
+                return $script:fake.BootstrapResponse
+            }
+            return $script:fake.DisplayGrantResponse
+        }
+        GetDisplayState = {
+            param($Uri, $TimeoutSeconds)
+            $script:fake.DisplayStateCalls++
+            $script:fake.DisplayStateUris.Add([string]$Uri)
+            if ($script:fake.DisplayStateThrows) { throw 'display-state request failed' }
+            return $script:fake.DisplayStateResponse
         }
         OpenBrowser = {
             param($Url)
             $script:fake.BrowserCalls++
+            $script:fake.BrowserUrls.Add([string]$Url)
             $script:fake.LastUrl = [string]$Url
             if ($script:fake.BrowserThrows) { throw 'browser failed' }
             return (-not $script:fake.BrowserReturnsFalse)
@@ -1838,6 +1858,151 @@ foreach ($action in @('Check', 'Stop', 'InstallShortcut')) {
     $null = Invoke-Entry -Action $action
     Assert-Equal $script:fake.BootstrapCalls 0 "$action never signs authorization"
 }
+
+# ---------------------------------------------------------------------------
+# On-demand login window: display-state decides whether the private window opens.
+# ---------------------------------------------------------------------------
+
+function Set-DisplayStatePayload {
+    param([string]$State, [string]$Label = '', [string]$Detail = '',
+          [bool]$Available = $true)
+    $payload = [ordered]@{
+        available = $Available
+        state = $State
+        label = $Label
+        detail = if ([string]::IsNullOrWhiteSpace($Detail)) { $null } else { $Detail }
+        observed_at = 1700000000
+        login_window_deadline_epoch = $null
+        auth_error = $null
+        auth_primary = $null
+        operator = [ordered]@{
+            owned_by_me = $false
+            owner_present = $false
+            generation = 0
+            stale = $false
+        }
+        display = [ordered]@{ available = $true; reason = $null }
+    } | ConvertTo-Json -Depth 5
+    $script:fake.DisplayStateResponse = @{
+        Ok = $true; StatusCode = 200; Content = $payload; Detail = ''
+    }
+}
+
+$displayStateCases = @(
+    @{ State = 'valid'; Label = '登录有效'; ExpectedWindows = 1 },
+    @{ State = 'logging_in'; Label = '正在登录'; ExpectedWindows = 1 },
+    @{ State = 'not_started'; Label = '未开始登录'; ExpectedWindows = 1 },
+    @{ State = 'waiting_mfa'; Label = '等待 MFA（本人操作）'; ExpectedWindows = 2 },
+    @{ State = 'waiting_duo'; Label = '等待本人确认 Duo 推送'; ExpectedWindows = 2 },
+    @{ State = 'failed'; Label = '需要人工接管'; ExpectedWindows = 2 }
+)
+foreach ($case in $displayStateCases) {
+    Reset-Fake
+    Set-DisplayStatePayload -State $case.State -Label $case.Label
+    $code = Invoke-Entry
+    Assert-Equal $code 0 "$($case.State) exits 0"
+    Assert-Equal $script:fake.DisplayStateCalls 1 "$($case.State) reads display-state once"
+    Assert-Match $script:fake.DisplayStateUris[0] 'http://127\.0\.0\.1:8002/api/console/share-management/display-state$' "$($case.State) reads the loopback display-state face"
+    Assert-Equal $script:fake.BrowserCalls $case.ExpectedWindows "$($case.State) opens $($case.ExpectedWindows) window(s)"
+    Assert-Match $script:fake.BrowserUrls[0] '#console=ConsoleBootstrap_0123456789$' "$($case.State) opens the console window first"
+    Assert-LogContains "display-state=$($case.State)" "$($case.State) logs the display state"
+    if ($case.ExpectedWindows -eq 2) {
+        Assert-Equal $script:fake.BootstrapCalls 2 "$($case.State) issues the display grant after the console bootstrap"
+        Assert-Match $script:fake.BootstrapArgumentLines[0] '--console-session$' "$($case.State) first signs the console bootstrap"
+        Assert-Match $script:fake.BootstrapArgumentLines[1] 'issue-display-grant\.py --console http://127\.0\.0\.1:8002$' "$($case.State) then signs the display grant"
+        Assert-Match $script:fake.BrowserUrls[1] '#grant=DisplayGrant_0123456789$' "$($case.State) opens the private login window second"
+        Assert-LogContains 'windows=2' "$($case.State) logs two windows"
+    } else {
+        Assert-Equal $script:fake.BootstrapCalls 1 "$($case.State) issues only the console bootstrap"
+        Assert-LogContains 'windows=1' "$($case.State) logs one window"
+        Assert-LogContains '登录窗口未打开' "$($case.State) explains the login window is closed"
+    }
+    Assert-NoSecret "$($case.State)"
+}
+
+# A reusable tunnel is the second starting point: the display-state read and the
+# on-demand decision must behave the same as a cold start.
+Reset-Fake
+Add-OwnTunnel -ProcessId 4200
+Set-DisplayStatePayload -State 'waiting_duo' -Label '等待本人确认 Duo 推送'
+$code = Invoke-Entry
+Assert-Equal $code 0 'a reusable tunnel with waiting_duo exits 0'
+Assert-Equal $script:fake.StartCalls 0 'a reusable tunnel with waiting_duo starts nothing'
+Assert-Equal $script:fake.BrowserCalls 2 'a reusable tunnel with waiting_duo opens both windows'
+Assert-Equal $script:fake.BootstrapCalls 2 'a reusable tunnel with waiting_duo signs both grants'
+Assert-LogContains 'open\.reuse' 'a reusable tunnel with waiting_duo logs reuse'
+Assert-LogContains 'windows=2' 'a reusable tunnel with waiting_duo logs two windows'
+
+# A failed state keeps the login window only for a manual reason; the label and
+# the detail are both accepted so an older instance still opens the window.
+Reset-Fake
+Set-DisplayStatePayload -State 'failed' -Label '登录失败' `
+    -Detail 'manual_takeover_required:unrecognized_page'
+$code = Invoke-Entry
+Assert-Equal $code 0 'a manual detail without the label exits 0'
+Assert-Equal $script:fake.BrowserCalls 2 'a manual detail without the label opens the login window'
+
+Reset-Fake
+Set-DisplayStatePayload -State 'failed' -Label '登录失败' `
+    -Detail 'browser_cleanup_failed'
+$code = Invoke-Entry
+Assert-Equal $code 0 'a non-manual failure exits 0'
+Assert-Equal $script:fake.BrowserCalls 1 'a non-manual failure opens only the console'
+Assert-Equal $script:fake.BootstrapCalls 1 'a non-manual failure issues no login grant'
+Assert-LogContains 'display-state=failed' 'a non-manual failure logs the display state'
+
+# A display-state read failure must not fake success: the console still opens and
+# the result explains why the login window stayed closed.
+Reset-Fake
+$script:fake.DisplayStateThrows = $true
+$captured = @(Invoke-Entry 6>&1)
+$code = $captured[-1]
+$text = ($captured[0..($captured.Count - 2)] -join ' ')
+Assert-Equal $code 0 'a display-state request failure still exits 0'
+Assert-Equal $script:fake.BrowserCalls 1 'a display-state request failure opens only the console'
+Assert-Equal $script:fake.BootstrapCalls 1 'a display-state request failure issues no login grant'
+Assert-Match $text '登录窗口未打开' 'a display-state request failure explains the closed login window'
+Assert-Match $text 'display-state 读取失败' 'a display-state request failure names the read failure'
+Assert-LogContains 'display-state 读取失败' 'a display-state request failure is logged'
+Assert-LogContains 'windows=1' 'a display-state request failure logs one window'
+
+foreach ($case in @(
+    @{ Name = 'a non-200 display-state reply'; Response = @{ Ok = $true; StatusCode = 503; Content = ''; Detail = '' }; Expected = 'display-state HTTP 503' },
+    @{ Name = 'a malformed display-state reply'; Response = @{ Ok = $true; StatusCode = 200; Content = 'not-json'; Detail = '' }; Expected = 'display-state 响应不是 JSON' }
+)) {
+    Reset-Fake
+    $script:fake.DisplayStateResponse = $case.Response
+    $captured = @(Invoke-Entry 6>&1)
+    $code = $captured[-1]
+    $text = ($captured[0..($captured.Count - 2)] -join ' ')
+    Assert-Equal $code 0 "$($case.Name) still exits 0"
+    Assert-Equal $script:fake.BrowserCalls 1 "$($case.Name) opens only the console"
+    Assert-Match $text '登录窗口未打开' "$($case.Name) explains the closed login window"
+    Assert-Match $text $case.Expected "$($case.Name) names the read failure"
+}
+
+Reset-Fake
+$script:fake.DisplayStateResponse = @{ Ok = $true; StatusCode = 200;
+    Content = '{"available":false,"state":"display_disconnected","label":"显示连接中断","display":{"available":false,"reason":"display_disabled"}}'; Detail = '' }
+$captured = @(Invoke-Entry 6>&1)
+$code = $captured[-1]
+$text = ($captured[0..($captured.Count - 2)] -join ' ')
+Assert-Equal $code 0 'an unavailable display-state still exits 0'
+Assert-Equal $script:fake.BrowserCalls 1 'an unavailable display-state opens only the console'
+Assert-Match $text 'display-state 不可用' 'an unavailable display-state names the unavailability'
+
+# The display grant is still authorized only when the decision opens the window;
+# a failed grant keeps the console and keeps the existing error code and event.
+Reset-Fake
+Set-DisplayStatePayload -State 'waiting_mfa' -Label '等待 MFA（本人操作）'
+$script:fake.DisplayGrantResponse = @{ ExitCode = 1; Output = '' }
+$captured = @(Invoke-Entry 6>&1)
+$code = $captured[-1]
+$text = ($captured[0..($captured.Count - 2)] -join ' ')
+Assert-Equal $code 1 'a failed login grant exits 1'
+Assert-Equal $script:fake.BrowserCalls 1 'a failed login grant keeps the console window'
+Assert-Match $text '登录窗口未打开' 'a failed login grant reports the closed login window'
+Assert-LogContains 'open\.loginfailed' 'a failed login grant is logged'
 
 # Exercise the real ProcessStartInfo boundary with a harmless local child.
 # The remote SSH boundary stays fake; no credentials or network are accessed.

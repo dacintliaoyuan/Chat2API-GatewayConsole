@@ -205,7 +205,39 @@ fn actions_match_the_python_cloud_catalogue() {
         u64::from(response.status),
         fixture["actions"]["status"].as_u64().unwrap()
     );
-    assert_eq!(response.json(), fixture["actions"]["body"]);
+    // #107: every Python cloud action keeps its exact shape; the Rust catalogue
+    // adds exactly one Rust-only action, the explicit visible relogin. Comparing
+    // the shared subset keeps the parity gate meaningful for the six actions.
+    let expected = fixture["actions"]["body"]["actions"]
+        .as_array()
+        .expect("fixture actions");
+    let actual = response.json();
+    let actions = actual["actions"].as_array().expect("actions");
+    let python_names: Vec<&str> = expected
+        .iter()
+        .filter_map(|action| action["action"].as_str())
+        .collect();
+    let shared: Vec<Value> = actions
+        .iter()
+        .filter(|action| {
+            action["action"]
+                .as_str()
+                .map_or(false, |name| python_names.contains(&name))
+        })
+        .cloned()
+        .collect();
+    assert_eq!(&shared, expected);
+    let extra: Vec<&Value> = actions
+        .iter()
+        .filter(|action| {
+            action["action"]
+                .as_str()
+                .map_or(true, |name| !python_names.contains(&name))
+        })
+        .collect();
+    assert_eq!(extra.len(), 1, "{extra:?}");
+    assert_eq!(extra[0]["action"], json!("account.login"));
+    assert_eq!(extra[0]["enabled"], json!(true));
 }
 
 #[test]

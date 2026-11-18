@@ -46,11 +46,9 @@ pub const SERVICE_LOG_ENV: &str = "CHAT2API_SERVICE_LOG";
 pub const UPSTREAM_FAULT_LOG_ENV: &str = "CHAT2API_UPSTREAM_FAULT_LOG";
 pub const WATCH_DIR_ENV: &str = "SELFUSEAI_GATEWAY_WATCH_DIR";
 pub const DIST_DIR_ENV: &str = "CONSOLE_DIST_DIR";
-pub const PYTHON_EXE_ENV: &str = "CONSOLE_PYTHON_EXE";
 pub const REPO_ROOT_ENV: &str = "CONSOLE_REPO_ROOT";
 
 pub const DEFAULT_DIST_DIR: &str = "web/dist";
-pub const DEFAULT_PYTHON_EXE: &str = "python";
 pub const DEFAULT_REPO_ROOT: &str = ".";
 pub const DEFAULT_USAGE_LOG: &str = "data/usage-chat2api.jsonl";
 pub const DEFAULT_DSH_SNAPSHOT: &str = "data/dsh-ledger-20260902.json";
@@ -153,9 +151,9 @@ pub struct ConsoleConfig {
     /// The built console page tree hosted by the local role
     /// (`usagesrv.py::CONSOLE_DIST_DIR`).
     pub console_dist_dir: PathBuf,
-    /// The local role's one-shot Python `model.catalog` sidecar: the
-    /// interpreter and the repo root that owns `console.model_actions`.
-    pub python_exe: PathBuf,
+    /// The repo root the local role reads its PowerShell runtime entry from. The
+    /// service, account and model-sync actions all run without a Python child
+    /// process (#92/#93/#94).
     pub repo_root: PathBuf,
     pub display: DisplayConfig,
 }
@@ -190,7 +188,6 @@ impl Default for ConsoleConfig {
             upstream_fault_log: PathBuf::from(DEFAULT_UPSTREAM_FAULT_LOG),
             watch_dir: None,
             console_dist_dir: PathBuf::from(DEFAULT_DIST_DIR),
-            python_exe: PathBuf::from(DEFAULT_PYTHON_EXE),
             repo_root: PathBuf::from(DEFAULT_REPO_ROOT),
             display: DisplayConfig::default(),
         }
@@ -423,11 +420,6 @@ impl ConsoleConfig {
         if let Ok(value) = std::env::var(DIST_DIR_ENV) {
             if !value.trim().is_empty() {
                 config.console_dist_dir = PathBuf::from(value);
-            }
-        }
-        if let Ok(value) = std::env::var(PYTHON_EXE_ENV) {
-            if !value.trim().is_empty() {
-                config.python_exe = PathBuf::from(value);
             }
         }
         if let Ok(value) = std::env::var(REPO_ROOT_ENV) {

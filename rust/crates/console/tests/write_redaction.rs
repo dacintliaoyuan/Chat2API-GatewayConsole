@@ -154,11 +154,6 @@ fn plaintext_and_management_secrets_stay_out_of_reads_errors_and_logs() {
         ),
         (
             "POST",
-            "/api/console/share-management/backend-login-cancel".to_string(),
-            json!({}),
-        ),
-        (
-            "POST",
             "/api/session".to_string(),
             json!({"code": "wrong-bootstrap-code"}),
         ),

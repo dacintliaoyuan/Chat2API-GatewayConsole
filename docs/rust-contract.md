@@ -199,6 +199,29 @@ systemd
   描述符、健康边界、停止身份与回滚；真实 8001 的 parity、切流与回滚演练由 #85
   执行并记录在本节。
 
+### 2.6 本机 8001 服务动作（#92）
+
+- `service.start` / `service.stop` / `service.restart` 由 Rust 直接调用
+  `invoke-console-runtime-json.ps1 -Action start|stop|restart -Key chat2api
+  -CallerHoldsLock`；服务身份、启停策略、端口与进程归属校验、停止范围仍在
+  `lib/gateway-runtime.ps1`，不经过 Python sidecar。
+- 服务锁：operation worker 先持有 `service:chat2api` 资源锁，再以
+  `-CallerHoldsLock` 调用入口；第二个动作等待 15 秒后失败
+  `resource_busy_timeout`，且不启动入口。Windows 共享冲突（winerror 32）按忙
+  重试，不误报 `lock_open_failed`。
+- 兼容形状：成功结果透传
+  `{key,status,action,detail?,terminated_process_ids?}`；
+  `Started`/`AlreadyRunning`/`Stopped`/`AlreadyStopped`/`Conflict` 均来自
+  runtime。停止范围无法确认时入口返回 `ok=false`，Rust 记录
+  `runtime_unavailable`（与 Python adapter 的 `_invoke_wrapper` 一致）；非 JSON
+  输出与超时同样为 `runtime_unavailable`，退出码 0 的 `ok=false` 为
+  `runtime_error`。
+- 验证（#92，2026-11-18）：`cargo test -p um-console --test
+  local_service_actions` 10 passed。真实入口集成用例把仓库脚本复制到临时目录并只
+  替换描述符，覆盖 Started → AlreadyRunning → Stopped（含
+  `terminated_process_ids`）→ AlreadyStopped 与端口冲突 `Conflict`；
+  `python_exe` 指向不存在路径时 `service.start` 仍成功。
+
 ## 3. 云端 idle RSS 基线
 
 ### 3.1 测量方法
@@ -403,6 +426,7 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 | GET | `/api/console/share-management/display-session` | 无（只读） | launcher 可用性、operator 状态 |
 | GET | `/api/console/share-management/display-state` | 无（只读） | 认证观察 + display 事实 |
 | POST | `/api/console/share-management/display-operator` | 同源标记或控制令牌 | `acquire`/`takeover` |
+| POST | `/api/console/share-management/backend-login-cancel` | 同源标记或控制令牌 | 代理网关 `POST /admin/auth/cancel`；200/202 归一为 200 |
 | POST | `/api/console/share-management/display-grant` | 管理身份 | 一次性 display grant |
 | GET | `/api/console/share-management/control-status` | 无（只读） | broker 控制通道是否响应 |
 | GET | `/api/console/share-management/status` | 无（只读） | 分享状态、代次、容量、broker |
@@ -438,7 +462,7 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 
 补充：`/api/share/*` 是云端控制台上的旧管理面（默认 8002），走会话/控制令牌鉴权；它不在 Cloudflare 公网白名单内，公网入口仍只有 8003 的四条 `/v1` 路径。
 
-补充：`web/src/cloud/cloud-writes.ts:106-111` 仍会调用 `POST /api/console/share-management/backend-login-cancel`，但当前云端控制台没有该路由，实际返回 404 `unknown path`。这是 #34 已退役的专用后端登录动作；不纳入 Rust 契约，登录/display 的呈现由 spec #8 决定。
+补充：#106 起 `POST /api/console/share-management/backend-login-cancel` 代理网关控制令牌门 `POST /admin/auth/cancel`（复用 `account.um_status` 的同一个控制面客户端），把网关的 200/202 `{cancelled, state, detail}` 归一为 200；网关不可达、控制令牌缺失/不可读、非 2xx 或响应不符合契约时返回 503 `{cancelled:false, state:null, error, detail}`，不伪造成功。控制令牌只在本机发往网关，不进日志或响应。旧 `/api/share/backend-login-cancel` 仍是 404。
 
 ### 6.2 鉴权与请求边界
 

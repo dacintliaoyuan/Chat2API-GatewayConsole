@@ -62,18 +62,47 @@ impl ShareReadSeams for UnwiredSeams {}
 
 /// Production read seam for the S7 display relay: the assembled
 /// `DisplayConfig` fixes the availability fact, while the broker and
-/// attribution seams stay unconfirmed.
+/// attribution seams stay unconfirmed. The display-state face additionally reads
+/// the gateway auth round through the same control-token boundary as the UM auth
+/// actions.
 pub struct DisplaySeams {
     availability: Value,
+    auth: Option<GatewayAuthObservation>,
+}
+
+struct GatewayAuthObservation {
+    gateway_port: u16,
+    control_token_file: Option<PathBuf>,
 }
 
 impl DisplaySeams {
-    pub fn new(availability: Value) -> Self {
-        Self { availability }
+    /// Wire the display-state auth observation to the gateway's
+    /// `/admin/auth/status` control face.
+    pub fn with_auth_observation(
+        availability: Value,
+        gateway_port: u16,
+        control_token_file: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            availability,
+            auth: Some(GatewayAuthObservation {
+                gateway_port,
+                control_token_file,
+            }),
+        }
     }
 }
 
 impl ShareReadSeams for DisplaySeams {
+    fn auth_observation(&self) -> Option<Value> {
+        self.auth.as_ref().map(|auth| {
+            crate::local_um_auth::auth_observation(
+                auth.gateway_port,
+                auth.control_token_file.as_deref(),
+            )
+        })
+    }
+
     fn display_availability(&self) -> Option<Value> {
         Some(self.availability.clone())
     }
