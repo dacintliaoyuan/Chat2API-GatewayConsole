@@ -109,13 +109,20 @@ pub fn sanitize_resource(resource: &str) -> Result<String, OperationError> {
 #[cfg(windows)]
 fn try_open_exclusive(path: &Path) -> std::io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
-    OpenOptions::new()
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    let result = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .share_mode(0)
-        .open(path)
+        .open(path);
+    match result {
+        Err(error) if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => Err(
+            std::io::Error::new(std::io::ErrorKind::WouldBlock, "resource lock is held"),
+        ),
+        other => other,
+    }
 }
 
 #[cfg(unix)]
