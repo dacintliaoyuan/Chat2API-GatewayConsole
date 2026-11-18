@@ -1674,9 +1674,13 @@ fn drive_login(
             // A rejection is only acted on once a UMPASS form was recognized in
             // this round (automatically submitted or completed by the operator).
             // A page that only prompts for credentials must stay a form wait.
-            if umpass_credential_rejected(page)
-                && (auto_submissions > 0 || saw_umpass_form)
-            {
+            let rejection_visible = umpass_credential_rejected(page);
+            let manual_rejection = auto_submissions == 0
+                && saw_umpass_form
+                && rejection_visible
+                && (fields[1] == CredentialField::Filled
+                    || fields == [CredentialField::Missing; 2]);
+            if (auto_submissions > 0 && rejection_visible) || manual_rejection {
                 note_form(
                     inner,
                     round,
