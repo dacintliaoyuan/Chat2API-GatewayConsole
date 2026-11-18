@@ -38,7 +38,6 @@ use crate::local_um::{self, UmQueryError};
 use crate::metering::{self, UsageFilters};
 use crate::operation_manager::{
     ActionExecutor, ActionFailure, OperationContext, OperationError, OperationManagerSlot,
-    UnwiredActionExecutor,
 };
 use crate::operations::OperationsReader;
 use crate::runtime::{LinuxPidFileFacts, LocalTcpFacts, RuntimeFacts, RuntimeSnapshot};
