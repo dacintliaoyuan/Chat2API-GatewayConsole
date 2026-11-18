@@ -2590,6 +2590,22 @@ fn wait_for_chat_attempts(stub: &ChatStub, count: usize) {
     }
 }
 
+fn wait_for_browser_launches(factory: &FakeFactory, count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while factory.requests().len() < count {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {count} browser launches"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        factory.requests().len(),
+        count,
+        "unexpected extra browser launches"
+    );
+}
+
 #[test]
 fn a_business_401_starts_one_background_round_and_later_requests_use_the_restored_credential() {
     let temp = TempDir::new("um-rust-reauth-round-business-");
@@ -2711,7 +2727,7 @@ fn a_watch_round_and_business_401s_share_one_background_round_and_one_browser() 
         json!("auth_watch"),
         "{status}"
     );
-    assert_eq!(factory.requests().len(), 1);
+    wait_for_browser_launches(&factory, 1);
 
     // Repeated status reads and an explicit join must not open another round.
     for _ in 0..5 {
@@ -2812,7 +2828,7 @@ fn a_rejected_watch_probe_starts_one_background_round_with_its_source() {
         Value::Null,
         "轮次尚未结束不得预写结果: {status}"
     );
-    assert_eq!(factory.requests().len(), 1);
+    wait_for_browser_launches(&factory, 1);
     assert!(
         !factory.requests()[0].headful,
         "巡检触发的自动轮次不得打开可见 Edge"
