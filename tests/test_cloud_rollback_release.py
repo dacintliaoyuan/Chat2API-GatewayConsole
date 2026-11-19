@@ -192,15 +192,6 @@ class HealthGatePortTests(unittest.TestCase):
                 self.assertIn("--health-port must be 1..65535", proc.stderr)
 
 
-def _python314_works() -> bool:
-    try:
-        return subprocess.run(
-            ["python3.14", "--version"], capture_output=True, timeout=10
-        ).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
 class RollbackDrillTests(unittest.TestCase):
     def test_plan_stops_rust_starts_python_and_verifies_ready(self):
         proc = subprocess.run(
@@ -224,10 +215,6 @@ class RollbackDrillTests(unittest.TestCase):
         self.assertIn("require broker unit ReadWritePaths "
                       "/var/lib/um-share-console", plan)
 
-    @unittest.skipUnless(
-        _python314_works(),
-        "python3.14 is not installed; the rollback drill is not performed (2026-11-19 decision)",
-    )
     def test_drill_stops_rust_starts_python_and_verifies_ready(self):
         with tempfile.TemporaryDirectory(prefix="rollback-drill-") as tmp:
             root = Path(tmp)
