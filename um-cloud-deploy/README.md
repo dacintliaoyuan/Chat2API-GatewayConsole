@@ -112,6 +112,12 @@ bash um-cloud-deploy/package-release.sh \
   --rust-bin rust/target/release/um-gateway-candidate \
   --rust-console-bin rust/target/release/um-console-candidate
 
+# 构建机（Windows，Docker Desktop）：不要直接在宿主 rust/target 里做容器构建。
+# Cargo 会把 CARGO_MANIFEST_DIR 写进产物；容器里的 /src 路径留在宿主缓存后，
+# Windows 的 cargo test 会复用这些产物并在只存在于容器的文件上失败。
+# 用独立 target 的脚本，产物写到 tmp/linux-rust/：
+bash scripts/build-linux-rust.sh --source . --package um-gateway --package um-console
+
 # 云机：安装（root；先解开 tar 再运行其中的 install.sh）
 /root/um-share-<version>/um-cloud-deploy/install.sh \
   --release-dir /root/um-share-<version> \
