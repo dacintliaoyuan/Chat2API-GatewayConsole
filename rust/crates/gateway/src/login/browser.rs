@@ -25,6 +25,10 @@ pub const BROWSER_STARTUP_BUDGET: Duration = Duration::from_secs(30);
 pub const BROWSER_DISCOVERY_BUDGET: Duration = Duration::from_secs(30);
 pub const CDP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const BROWSER_CLOSE_BUDGET: Duration = Duration::from_secs(5);
+const CLICK_ATTEMPTS: usize = 3;
+const CLICK_BACKOFF: Duration = Duration::from_millis(100);
+const CLICK_ACTIONABILITY_BUDGET: Duration = Duration::from_secs(2);
+const CLICK_ACTIONABILITY_POLL: Duration = Duration::from_millis(50);
 const LINUX_BROWSER_NAMES: [&str; 4] = [
     "chromium",
     "chromium-browser",
@@ -645,24 +649,92 @@ impl LoginPage for RealPage {
     fn click(&self, target: &VisibleTarget) -> Result<(), String> {
         let selector =
             serde_json::to_string(&target.selector).map_err(|error| error.to_string())?;
-        // #101: Playwright's `locator.click()` dispatches the real mouse event
-        // sequence at the element center; a synthetic `element.click()` does not
-        // submit Keycloak's UMPASS form (the site keeps asking to fill in).
-        // Read the target's center and drive `Input.dispatchMouseEvent` instead.
-        let rect_expression = format!(
-            "(function(){{var el=document.querySelector({selector});\
-             if(!el)return null;var r=el.getBoundingClientRect();\
-             return {{x:r.left+r.width/2,y:r.top+r.height/2}};}})()"
-        );
-        let rect = self.evaluate(&rect_expression)?;
-        let x = rect
-            .get("x")
-            .and_then(Value::as_f64)
-            .ok_or_else(|| "login target disappeared".to_string())?;
-        let y = rect
-            .get("y")
-            .and_then(Value::as_f64)
-            .ok_or_else(|| "login target disappeared".to_string())?;
+        // #101: Playwright's `locator.click()` scrolls the target into view and
+        // waits for it to be visible, stable, enabled and hit-testable before it
+        // dispatches the real mouse sequence; a synthetic `element.click()` does
+        // not submit Keycloak's UMPASS form (the site keeps asking to fill in).
+        // Match that behaviour: scroll, re-read the rect, wait for
+        // actionability and drive `Input.dispatchMouseEvent` at the visible
+        // center. A stale or swallowed click is retried within this click.
+        retry_click(|| self.click_once(&selector))
+    }
+
+    fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String> {
+        // Clear the field first, then focus and insert the text through the
+        // DevTools Input domain: ADFS's Knockout binding only observes real
+        // input events, so a plain value assignment would leave its observable
+        // empty and the submit would post an empty password. Re-dispatch `input`
+        // and `change` afterwards and verify the committed value.
+        let prepare = fill_prepare_expression(selectors);
+        match self.evaluate(&prepare) {
+            Ok(Value::Bool(true)) => {}
+            Ok(_) => return Err("login field disappeared".to_string()),
+            Err(error) => return Err(error),
+        }
+        self.call("Input.insertText", serde_json::json!({"text": value}))
+            .map_err(|error| error.to_string())?;
+        let settle = fill_settle_expression(selectors, value);
+        match self.evaluate(&settle) {
+            Ok(state) => {
+                if state.get("ok").and_then(Value::as_bool) == Some(true) {
+                    Ok(())
+                } else {
+                    let reason = state
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    Err(format!("login field value mismatch: {reason}"))
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn duo_requires_confirmation(&self) -> bool {
+        self.any_visible(&DUO_CONFIRMATION_SELECTORS)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ClickFailure {
+    /// The target was not visible, stable, enabled or hit-testable in time.
+    Actionability(String),
+    /// The mouse sequence was dispatched but the page did not receive a click.
+    NotReceived(String),
+    /// A transport or protocol error: retrying cannot help.
+    Fatal(String),
+}
+
+impl ClickFailure {
+    fn message(self) -> String {
+        match self {
+            Self::Actionability(message) | Self::NotReceived(message) | Self::Fatal(message) => {
+                message
+            }
+        }
+    }
+}
+
+impl RealPage {
+    fn click_once(&self, selector: &str) -> Result<(), ClickFailure> {
+        let scrolled = self
+            .evaluate(&click_scroll_expression(selector))
+            .map_err(ClickFailure::Fatal)?;
+        if scrolled != Value::Bool(true) {
+            return Err(ClickFailure::Actionability(
+                "login target disappeared".to_string(),
+            ));
+        }
+        let (x, y) = self.wait_for_click_actionable(selector)?;
+        // Arm a capture listener before dispatching so a click that the page
+        // receives can be distinguished from one lost between the actionability
+        // check and the mouse release (the element moved, re-rendered or became
+        // covered). A page navigation also counts as received: it is the click's
+        // result.
+        let before_href = self
+            .evaluate(&click_arm_expression())
+            .map_err(ClickFailure::Fatal)?;
+        let before_href = before_href.as_str().unwrap_or_default().to_string();
         for (event_type, button, click_count) in [
             ("mouseMoved", "none", 0),
             ("mousePressed", "left", 1),
@@ -677,38 +749,85 @@ impl LoginPage for RealPage {
                     "button": button,
                     "clickCount": click_count,
                 }),
-            )?;
+            )
+            .map_err(ClickFailure::Fatal)?;
         }
-        Ok(())
+        match self.evaluate(&click_receipt_expression()) {
+            Ok(receipt) => {
+                let received = receipt
+                    .get("received")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let href = receipt
+                    .get("href")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if received || href != before_href {
+                    Ok(())
+                } else {
+                    Err(ClickFailure::NotReceived(
+                        "login click not received".to_string(),
+                    ))
+                }
+            }
+            // A destroyed execution context means the click started a navigation.
+            Err(error) if error.contains("context") || error.contains("navigation") => Ok(()),
+            Err(error) => Err(ClickFailure::Fatal(error)),
+        }
     }
 
-    fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String> {
-        // Focus and clear the field first, then insert the text through the
-        // DevTools Input domain: ADFS's Knockout binding only observes real
-        // input events, so a plain value assignment would leave its observable
-        // empty and the submit would post an empty password.
-        let focus = fill_focus_expression(selectors);
-        match self.evaluate(&focus) {
-            Ok(Value::Bool(true)) => {}
-            Ok(_) => return Err("login field disappeared".to_string()),
-            Err(error) => return Err(error),
-        }
-        self.call("Input.insertText", serde_json::json!({"text": value}))
-            .map_err(|error| error.to_string())?;
-        let settle = fill_settle_expression(selectors);
-        match self.evaluate(&settle) {
-            Ok(Value::Bool(true)) => Ok(()),
-            Ok(_) => Err("login field disappeared".to_string()),
-            Err(error) => Err(error),
+    fn wait_for_click_actionable(&self, selector: &str) -> Result<(f64, f64), ClickFailure> {
+        let expression = click_actionability_expression(selector);
+        let deadline = Instant::now() + CLICK_ACTIONABILITY_BUDGET;
+        let mut previous_rect: Option<Vec<f64>> = None;
+        let mut last_error = "login target not actionable".to_string();
+        loop {
+            match self.evaluate(&expression).map_err(ClickFailure::Fatal)? {
+                Value::Object(state) => {
+                    if state.get("ok").and_then(Value::as_bool) == Some(true) {
+                        let rect = state
+                            .get("rect")
+                            .and_then(Value::as_array)
+                            .map(|values| {
+                                values
+                                    .iter()
+                                    .filter_map(Value::as_f64)
+                                    .collect::<Vec<f64>>()
+                            })
+                            .unwrap_or_default();
+                        let x = state.get("x").and_then(Value::as_f64);
+                        let y = state.get("y").and_then(Value::as_f64);
+                        if rect.len() == 4 {
+                            // Stable means two consecutive polls read the same
+                            // rect; the first poll only records the baseline.
+                            if previous_rect.as_deref() == Some(rect.as_slice()) {
+                                if let (Some(x), Some(y)) = (x, y) {
+                                    return Ok((x, y));
+                                }
+                            }
+                            previous_rect = Some(rect);
+                        } else {
+                            previous_rect = None;
+                        }
+                    } else {
+                        previous_rect = None;
+                        if let Some(reason) = state.get("reason").and_then(Value::as_str) {
+                            last_error = format!("login target not actionable: {reason}");
+                        }
+                    }
+                }
+                _ => {
+                    previous_rect = None;
+                    last_error = "login target not actionable".to_string();
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(ClickFailure::Actionability(last_error));
+            }
+            std::thread::sleep(CLICK_ACTIONABILITY_POLL);
         }
     }
 
-    fn duo_requires_confirmation(&self) -> bool {
-        self.any_visible(&DUO_CONFIRMATION_SELECTORS)
-    }
-}
-
-impl RealPage {
     fn call(&self, method: &str, params: Value) -> Result<Value, String> {
         self.connection
             .lock()
@@ -800,27 +919,77 @@ fn one_visible_expression(selectors: &[&str]) -> String {
     )
 }
 
-fn fill_focus_expression(selectors: &[&str]) -> String {
-    let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
+fn click_scroll_expression(selector: &str) -> String {
     format!(
-        "(function(selectors){{var visible=function(el){{var r=el.getBoundingClientRect();\
-         var s=getComputedStyle(el);return !!(r.width||r.height||el.getClientRects().length)\
-         && s.visibility!=='hidden'&&s.display!=='none';}};\
-         var matches=function(sel){{var marker=sel.indexOf(':has-text(\"');\
-         if(marker>=0){{var base=sel.slice(0,marker);\
-         var text=sel.slice(marker+11);if(text[text.length-1]===')')text=text.slice(0,-1);\
-         if(text[text.length-1]==='\"')text=text.slice(0,-1);\
-         try{{return Array.prototype.slice.call(document.querySelectorAll(base)).filter(function(el){{\
-         return visible(el)&&(el.textContent||'').indexOf(text)>=0;}});}}catch(e){{return [];}}}}\
-         try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
-         catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
-         var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
-         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length===0)return false;\
-         var el=found[0];el.focus();el.select&&el.select();return true;}})({selectors})"
+        "(function(selector){{var el=document.querySelector(selector);\
+         if(!el)return false;\
+         el.scrollIntoView({{block:'center',inline:'center',behavior:'instant'}});\
+         return true;}})({selector})"
     )
 }
 
-fn fill_settle_expression(selectors: &[&str]) -> String {
+fn click_actionability_expression(selector: &str) -> String {
+    format!(
+        "(function(selector){{var el=document.querySelector(selector);\
+         if(!el)return {{ok:false,reason:'missing'}};\
+         var r=el.getBoundingClientRect();\
+         var s=getComputedStyle(el);\
+         if(!(r.width>0&&r.height>0)||s.visibility==='hidden'||s.display==='none')\
+         return {{ok:false,reason:'not-visible'}};\
+         if(el.disabled||el.getAttribute('aria-disabled')==='true')\
+         return {{ok:false,reason:'disabled'}};\
+         var vw=window.innerWidth||document.documentElement.clientWidth||0;\
+         var vh=window.innerHeight||document.documentElement.clientHeight||0;\
+         var left=Math.max(r.left,0),top=Math.max(r.top,0);\
+         var right=Math.min(r.right,vw),bottom=Math.min(r.bottom,vh);\
+         if(right<=left||bottom<=top)return {{ok:false,reason:'outside-viewport'}};\
+         var x=(left+right)/2,y=(top+bottom)/2;\
+         var hit=document.elementFromPoint(x,y);\
+         if(!hit||!(hit===el||el.contains(hit)))\
+         return {{ok:false,reason:'obscured'}};\
+         return {{ok:true,x:x,y:y,rect:[r.left,r.top,r.width,r.height]}};\
+         }})({selector})"
+    )
+}
+
+fn click_arm_expression() -> String {
+    "(function(){\
+     if(window.__umLoginClickHandler){\
+     document.removeEventListener('click',window.__umLoginClickHandler,true);}\
+     window.__umLoginClickReceived=false;\
+     window.__umLoginClickHandler=function(){window.__umLoginClickReceived=true;};\
+     document.addEventListener('click',window.__umLoginClickHandler,true);\
+     return location.href;})()"
+        .to_string()
+}
+
+fn click_receipt_expression() -> String {
+    "(function(){\
+     if(window.__umLoginClickHandler){\
+     document.removeEventListener('click',window.__umLoginClickHandler,true);\
+     delete window.__umLoginClickHandler;}\
+     var received=window.__umLoginClickReceived===true;\
+     delete window.__umLoginClickReceived;\
+     return {received:received,href:location.href};})()"
+        .to_string()
+}
+
+fn retry_click(mut attempt: impl FnMut() -> Result<(), ClickFailure>) -> Result<(), String> {
+    let mut last_error = String::new();
+    for attempt_index in 0..CLICK_ATTEMPTS {
+        match attempt() {
+            Ok(()) => return Ok(()),
+            Err(ClickFailure::Fatal(error)) => return Err(error),
+            Err(error) => last_error = error.message(),
+        }
+        if attempt_index + 1 < CLICK_ATTEMPTS {
+            std::thread::sleep(CLICK_BACKOFF);
+        }
+    }
+    Err(last_error)
+}
+
+fn fill_prepare_expression(selectors: &[&str]) -> String {
     let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
     format!(
         "(function(selectors){{var visible=function(el){{var r=el.getBoundingClientRect();\
@@ -836,8 +1005,34 @@ fn fill_settle_expression(selectors: &[&str]) -> String {
          catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
          var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
          if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length===0)return false;\
-         var el=found[0];el.dispatchEvent(new Event('change',{{bubbles:true}}));\
-         return el.value.length>0;}})({selectors})"
+         var el=found[0];el.value='';\
+         el.dispatchEvent(new Event('input',{{bubbles:true}}));\
+         el.focus();el.select&&el.select();return true;}})({selectors})"
+    )
+}
+
+fn fill_settle_expression(selectors: &[&str], value: &str) -> String {
+    let selectors = serde_json::to_string(selectors).unwrap_or_else(|_| "[]".to_string());
+    let value = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+    format!(
+        "(function(selectors,expected){{var visible=function(el){{var r=el.getBoundingClientRect();\
+         var s=getComputedStyle(el);return !!(r.width||r.height||el.getClientRects().length)\
+         && s.visibility!=='hidden'&&s.display!=='none';}};\
+         var matches=function(sel){{var marker=sel.indexOf(':has-text(\"');\
+         if(marker>=0){{var base=sel.slice(0,marker);\
+         var text=sel.slice(marker+11);if(text[text.length-1]===')')text=text.slice(0,-1);\
+         if(text[text.length-1]==='\"')text=text.slice(0,-1);\
+         try{{return Array.prototype.slice.call(document.querySelectorAll(base)).filter(function(el){{\
+         return visible(el)&&(el.textContent||'').indexOf(text)>=0;}});}}catch(e){{return [];}}}}\
+         try{{return Array.prototype.slice.call(document.querySelectorAll(sel)).filter(visible);}}\
+         catch(e){{return [];}}}};var found=[];for(var i=0;i<selectors.length;i++){{\
+         var items=matches(selectors[i]);for(var j=0;j<items.length;j++){{\
+         if(found.indexOf(items[j])<0)found.push(items[j]);}}}}if(found.length===0)\
+         return {{ok:false,reason:'missing'}};var el=found[0];\
+         el.dispatchEvent(new Event('input',{{bubbles:true}}));\
+         el.dispatchEvent(new Event('change',{{bubbles:true}}));\
+         if(el.value!==expected)return {{ok:false,reason:'value-mismatch'}};\
+         return {{ok:true}};}})({selectors},{value})"
     )
 }
 
@@ -1224,5 +1419,78 @@ mod tests {
         let expression = credential_field_expression(&["input[name=\"Password\"]"]);
         assert!(expression.contains("return 'filled'"));
         assert!(expression.contains(":-webkit-autofill"));
+    }
+
+    #[test]
+    fn the_click_expressions_scroll_then_check_actionability() {
+        let selector = "[data-um-login-target=\"abc\"]";
+        let scroll = click_scroll_expression(selector);
+        assert!(scroll.contains("scrollIntoView"));
+        assert!(scroll.contains("behavior:'instant'"));
+        let actionable = click_actionability_expression(selector);
+        assert!(actionable.contains("getBoundingClientRect"));
+        assert!(actionable.contains("elementFromPoint"));
+        assert!(actionable.contains("getComputedStyle"));
+        assert!(actionable.contains("r.width>0&&r.height>0"));
+        assert!(actionable.contains("aria-disabled"));
+        assert!(actionable.contains("not-visible"));
+        assert!(actionable.contains("outside-viewport"));
+        assert!(actionable.contains("obscured"));
+        let arm = click_arm_expression();
+        assert!(arm.contains("addEventListener('click'"));
+        let receipt = click_receipt_expression();
+        assert!(receipt.contains("__umLoginClickReceived"));
+    }
+
+    #[test]
+    fn a_click_retries_three_times_and_returns_the_last_error() {
+        let mut calls = 0usize;
+        let result = retry_click(|| {
+            calls += 1;
+            Err(ClickFailure::Actionability(format!("attempt-{calls}")))
+        });
+        assert_eq!(calls, 3);
+        assert_eq!(result, Err("attempt-3".to_string()));
+    }
+
+    #[test]
+    fn a_click_stops_retrying_after_success() {
+        let mut calls = 0usize;
+        let result = retry_click(|| {
+            calls += 1;
+            if calls == 2 {
+                Ok(())
+            } else {
+                Err(ClickFailure::NotReceived("not yet".to_string()))
+            }
+        });
+        assert_eq!(calls, 2);
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn a_fatal_click_error_is_not_retried() {
+        let mut calls = 0usize;
+        let result = retry_click(|| {
+            calls += 1;
+            Err(ClickFailure::Fatal("connection lost".to_string()))
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(result, Err("connection lost".to_string()));
+    }
+
+    #[test]
+    fn the_fill_expressions_clear_and_dispatch_input_and_change() {
+        let selectors = ["input[name=\"Password\"]"];
+        let prepare = fill_prepare_expression(&selectors);
+        assert!(prepare.contains("el.value=''"));
+        assert!(prepare.contains("new Event('input'"));
+        assert!(prepare.contains("el.focus()"));
+        let settle = fill_settle_expression(&selectors, "s3cret");
+        assert!(settle.contains("new Event('input'"));
+        assert!(settle.contains("new Event('change'"));
+        assert!(settle.contains("el.value!==expected"));
+        assert!(settle.contains("\"s3cret\""));
+        assert!(settle.contains("value-mismatch"));
     }
 }
