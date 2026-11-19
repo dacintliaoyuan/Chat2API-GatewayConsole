@@ -155,6 +155,7 @@ class CutoverGateTests(unittest.TestCase):
         self.assertTrue(document["rollback_drill"]["executed"])
 
     def test_candidate_parity_runs_the_local_parity_test(self):
+        self.skipTest("Python closure retired (#90); the source/generator is frozen")
         gate = _load_gate()
         code, document = _run_json(gate, [
             "--python", sys.executable, "--json",

@@ -113,7 +113,7 @@ class DeploymentFilesStabilityTests(unittest.TestCase):
         lock = self.root / "dependencies.lock.json"
         lock.write_text(json.dumps({"target": {"python": "3.14"}}),
                         encoding="utf-8")
-        for rel in make_manifest.CLOUD_RUNTIME:
+        for rel in make_manifest.RUST_CLOUD_RUNTIME:
             _write(self.root, rel)
         args = SimpleNamespace(
             root=self.root,
@@ -123,12 +123,13 @@ class DeploymentFilesStabilityTests(unittest.TestCase):
             web_dist=None,
             allow_missing_web=True,
             require_web_role=None,
+            runtime="rust",
         )
         # The product closure is orthogonal here: the stub files exist so that
         # ``_files`` can hash them, and the static superset is pinned to the
         # explicit cloud runtime list.
         with mock.patch.object(make_manifest, "_closure",
-                               return_value=sorted(make_manifest.CLOUD_RUNTIME)):
+                               return_value=sorted(make_manifest.RUST_CLOUD_RUNTIME)):
             manifest = make_manifest._build(args)
         paths = [entry["path"] for entry in manifest["deployment_files"]]
         self.assertEqual(self._expected(), sorted(paths))
@@ -165,7 +166,7 @@ class WebDistBindingTests(unittest.TestCase):
         lock = self.root / "dependencies.lock.json"
         lock.write_text(json.dumps({"target": {"python": "3.14"}}),
                         encoding="utf-8")
-        for rel in make_manifest.CLOUD_RUNTIME:
+        for rel in make_manifest.RUST_CLOUD_RUNTIME:
             _write(self.root, rel)
         values = {
             "root": self.root, "deploy_root": self.deploy_root,
@@ -173,13 +174,14 @@ class WebDistBindingTests(unittest.TestCase):
             "web_dist": self.dist, "allow_missing_web": False,
             "require_web_role": None,
             "require_web_line": None,
+            "runtime": "rust",
         }
         values.update(changes)
         return SimpleNamespace(**values)
 
     def _build(self, **changes):
         with mock.patch.object(make_manifest, "_closure",
-                               return_value=sorted(make_manifest.CLOUD_RUNTIME)):
+                               return_value=sorted(make_manifest.RUST_CLOUD_RUNTIME)):
             return make_manifest._build(self._args(**changes))
 
     def test_manifest_records_the_console_role_and_entry(self):

@@ -110,6 +110,7 @@ class TerminologyDriftTests(unittest.TestCase):
         self.assertIn("未验证范围", text)
 
     def test_comments_do_not_bind_login_to_a_visible_session(self):
+        self.skipTest("Python closure retired (#90); the source/generator is frozen")
         # ticket #42 item 6：重新认证会话不再绑定 visible window/session；
         # 注释写成「一次登录交互（可见或 headless）」。
         chat2api_text = CHAT2API.read_text(encoding="utf-8")

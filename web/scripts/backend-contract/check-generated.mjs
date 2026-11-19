@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   BackendClient,
@@ -32,40 +31,10 @@ assert.equal(
   "fixture metadata must explicitly identify simulated data"
 );
 assert.equal(fixture.metadata.sourceHashEncoding, "utf8-lf");
-// Mirrors the generator's `names` (contract §10.2): the newly published action
-// shapes come from console/share_actions.py / console/share_production.py (Rev9).
-const sourceNames = [
-  "model_sync/sync.py",
-  "model_sync/sync_core.py",
-  "console/model_actions.py",
-  "console/adapters.py",
-  "console/operations.py",
-  "share/metering.py",
-  "console/stats.py",
-  "console/log_reader.py",
-  "usagesrv.py",
-  "console/share_actions.py",
-  "console/share_production.py",
-  "console/gateway_connection.py",
-];
-assert.deepEqual(
-  Object.keys(fixture.metadata.sourceHashes).sort(),
-  [...sourceNames].sort()
-);
-for (const name of sourceNames) {
-  const source = await readFile(
-    new URL(`../../../${name}`, import.meta.url),
-    "utf8"
-  );
-  const hash = createHash("sha256")
-    .update(source.replaceAll("\r\n", "\n"), "utf8")
-    .digest("hex");
-  assert.equal(
-    fixture.metadata.sourceHashes[name],
-    hash,
-    `${name}: fixture is stale; regenerate it from the current handlers`
-  );
-}
+// The fixture is frozen: its generator (`tests/generate_frontend_contract_fixture.py`)
+// was removed together with the Python console closure (#90). The source hashes in
+// `metadata.sourceHashes` are historical; the fixture itself is the static frontend
+// contract and is no longer regenerated from Python handlers.
 const capabilities = normalizeCapabilities(fixture.actions);
 const catalog = normalizeCatalog(fixture.catalog);
 assert.deepEqual(

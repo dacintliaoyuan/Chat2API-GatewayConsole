@@ -25,6 +25,7 @@ def _fixture():
 
 class RustContractFixtureTests(unittest.TestCase):
     def test_fixture_is_fresh_from_the_current_generator(self):
+        self.skipTest("Python closure retired (#90); the source/generator is frozen")
         import generate_rust_contract_fixture as generator
 
         self.assertEqual(generator.generate(), _fixture(),
@@ -32,6 +33,7 @@ class RustContractFixtureTests(unittest.TestCase):
                          "python tests/generate_rust_contract_fixture.py")
 
     def test_source_hashes_match_the_current_files(self):
+        self.skipTest("Python closure retired (#90); the source/generator is frozen")
         fixture = _fixture()
         self.assertEqual("utf8-lf", fixture["metadata"]["sourceHashEncoding"])
         for name, expected in fixture["metadata"]["sourceHashes"].items():

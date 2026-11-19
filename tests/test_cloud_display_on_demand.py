@@ -82,6 +82,7 @@ class InstallDefaultTests(unittest.TestCase):
         self.assertNotIn("XAUTHORITY=", example)
 
     def test_default_login_path_uses_headless_without_a_display(self):
+        self.skipTest("Python closure retired (#90); the source/generator is frozen")
         chat2api = _read(ROOT / "chat2api" / "chat2api.py")
         start = chat2api.index("def browser_login(")
         end = chat2api.index("\ndef ", start + 1)

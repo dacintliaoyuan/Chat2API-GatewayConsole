@@ -88,6 +88,28 @@ DYNAMIC_MODULES = {
     ],
 }
 
+# The Rust release keeps the Python broker and the deploy tooling; the Python
+# console/gateway closure is frozen in the pre-built rollback release
+# (`s2-20261117b`) and is no longer part of a clean checkout.
+RUST_STATIC_ROOTS = [
+    "share/broker_ops.py",
+    "share/admin.py",
+    "share/metering.py",
+]
+RUST_CLOUD_RUNTIME = [
+    "share/management.py",
+    "share/store.py",
+    "share/broker_client.py",
+    "share/broker_host.py",
+    "share/broker_ops.py",
+    "share/broker_protocol.py",
+    "share/broker_server.py",
+    "share/runtime.py",
+    "share/metering.py",
+    "share/secret_protection.py",
+    "share/instance_pipe.py",
+]
+
 # Directories that hold local tool/agent state, never deployment material.  Hooks
 # (`.mimosa`) and test caches rewrite them on this machine, so hashing them would
 # change the manifest without any change to the release bytes.
@@ -341,11 +363,17 @@ def _build(args) -> dict:
     current = platform.python_version()
     current_minor = ".".join(current.split(".")[:2])
 
-    static = _closure(root, STATIC_ROOTS)
+    if args.runtime == "python":
+        raise SystemExit(
+            "Python release is frozen; the rollback target is the pre-built "
+            "release s2-20261117b")
+    static_roots = RUST_STATIC_ROOTS if args.runtime == "rust" else STATIC_ROOTS
+    cloud_roots = RUST_CLOUD_RUNTIME if args.runtime == "rust" else CLOUD_RUNTIME
+    static = _closure(root, static_roots)
     # The cloud runtime is the EXPLICIT assembly list, not the transitive AST
     # closure of the static superset: following every lazy import would pull the
     # Windows-only non-UM branches back in.
-    cloud = sorted(CLOUD_RUNTIME)
+    cloud = sorted(cloud_roots)
     if not set(cloud).issubset(set(static)):
         missing = sorted(set(cloud) - set(static))
         raise SystemExit("cloud runtime is not a subset of the static closure: "
@@ -393,7 +421,7 @@ def _build(args) -> dict:
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "release_version": args.version,
-        "runtime": getattr(args, "runtime", "python"),
+        "runtime": args.runtime,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "generator": GENERATOR,
         "source_root": ".",
@@ -408,12 +436,12 @@ def _build(args) -> dict:
         "dependencies_lock_sha256": _sha256(args.dependencies),
         "closures": {
             "static_superset": {
-                "roots": STATIC_ROOTS,
+                "roots": static_roots,
                 "count": len(static),
                 "files": static,
             },
             "cloud_runtime": {
-                "roots": CLOUD_RUNTIME,
+                "roots": cloud_roots,
                 "count": len(cloud),
                 "files": cloud,
             },
@@ -456,10 +484,9 @@ def main(argv=None) -> int:
                         help="um-cloud-deploy directory inside the root")
     parser.add_argument("--version", required=True,
                         help="release version (e.g. s2-20261101)")
-    parser.add_argument("--runtime", choices=RUNTIMES, default="python",
-                        help="release runtime: python keeps the 8100/8096 "
-                             "rollback release; rust installs the 8003/8002 "
-                             "gateway release")
+    parser.add_argument("--runtime", choices=RUNTIMES, default="rust",
+                        help="release runtime: rust installs the 8003/8002 "
+                             "gateway release; python is frozen and refused")
     parser.add_argument("--dependencies", type=Path,
                         default=Path(__file__).resolve().parent / "dependencies.lock.json",
                         help="dependencies.lock.json")
