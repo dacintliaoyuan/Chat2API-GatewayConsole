@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use crate::auth_state::{self, AuthStateFile};
 use crate::config::GatewayConfig;
 use crate::reauth::{ReauthProviderResult, ReauthTrigger, ReauthenticationProvider};
 use crate::watch::WatchStatus;
@@ -208,9 +209,31 @@ impl LoginOutcome {
     }
 }
 
+/// The credential evidence the durable auth state file records.
+///
+/// It never carries the token, the API key or a full `jti`; only the fields the
+/// operator needs to distinguish "token expired" from "upstream rejected a token
+/// that was still inside its `exp`".
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CredentialEvidence {
+    pub checked_epoch: Option<f64>,
+    pub verdict: Option<String>,
+    pub reason: Option<String>,
+    pub upstream_status: Option<u16>,
+    pub last_valid_epoch: Option<f64>,
+    pub upstream_401_summary: Option<String>,
+    pub api_key_present: bool,
+    pub api_key_rejected: bool,
+}
+
 /// The token/API-key sink a successful login publishes into.
 pub trait CredentialSink: Send + Sync {
     fn publish_credential(&self, token: &str, api_key: Option<&str>);
+
+    /// The latest credential probe evidence, if the sink records any.
+    fn credential_evidence(&self) -> CredentialEvidence {
+        CredentialEvidence::default()
+    }
 }
 
 /// Resolved login paths and budgets.
@@ -231,6 +254,12 @@ pub struct LoginConfig {
     pub max_attempts_per_window: usize,
     pub max_sessions: usize,
     pub browser_disabled: bool,
+    /// The bounded automatic re-open interval after a retryable exhausted round.
+    pub recovery_retry_interval: Duration,
+    /// Automatic re-open rounds allowed inside one rolling day.
+    pub recovery_retry_max_per_day: usize,
+    /// Durable auth evidence file; `None` keeps the executor in memory only.
+    pub auth_state_file: Option<PathBuf>,
     /// UMPASS account and password the login executor may type into an empty
     /// ADFS form; both empty keeps the browser-managed prefill path.
     pub um_account: String,
@@ -270,6 +299,9 @@ impl LoginConfig {
             max_attempts_per_window: config.reauth_max_attempts_per_window,
             max_sessions: config.login_max_sessions,
             browser_disabled: config.browser_disabled,
+            recovery_retry_interval: config.recovery_retry_interval,
+            recovery_retry_max_per_day: config.recovery_retry_max_per_day,
+            auth_state_file: config.effective_auth_state_file(),
             um_account: std::env::var("CHAT2API_UM_ACCOUNT")
                 .unwrap_or_default()
                 .trim()
@@ -297,6 +329,15 @@ pub fn default_token_file() -> PathBuf {
     {
         PathBuf::from("/var/lib/um-share-console/share-backend/token.json")
     }
+}
+
+/// Load the saved credential without assembling a login executor.
+///
+/// The gateway needs both the JWT bearer and the operator-saved API key at
+/// startup, even when a test injects a scripted re-authentication provider.
+pub fn load_saved_token(config: &GatewayConfig) -> Option<TokenDocument> {
+    let path = config.token_file.clone().unwrap_or_else(default_token_file);
+    TokenStore::new(path, config.upstream_base_url.clone()).load()
 }
 
 /// The Python production profile path.
@@ -390,6 +431,10 @@ struct Recovery {
     last_failure_reason: Option<String>,
     pause_reason: Option<String>,
     visible: bool,
+    /// A retryable terminal round scheduled its bounded automatic re-open.
+    retry_scheduled: bool,
+    /// Automatic re-open rounds already used inside the rolling day.
+    retry_count: usize,
     /// The last UMPASS form state and automatic submission count observed in
     /// the current (or last) round.
     last_form: Option<String>,
@@ -410,6 +455,8 @@ impl Recovery {
             "last_failure_epoch": self.last_failure_epoch,
             "last_failure_reason": self.last_failure_reason,
             "pause_reason": self.pause_reason,
+            "retry_scheduled": self.retry_scheduled,
+            "retry_count": self.retry_count,
             "visible": self.visible,
             "last_form": self.last_form,
             "last_submit_count": self.last_submit_count,
@@ -450,9 +497,11 @@ struct LoginInner {
     probe: Arc<dyn CredentialProbe>,
     credentials: Arc<dyn CredentialSink>,
     token_store: TokenStore,
+    auth_state: AuthStateFile,
     state: Mutex<LoginState>,
     condvar: Condvar,
     attempts: Mutex<VecDeque<Instant>>,
+    retry_attempts: Mutex<VecDeque<Instant>>,
     watch: Arc<WatchStatus>,
 }
 
@@ -501,13 +550,15 @@ impl LoginService {
             max_sessions: config.max_sessions,
             ..Recovery::default()
         };
-        Self {
+        let auth_state_file = AuthStateFile::open(config.auth_state_file.clone());
+        let service = Self {
             inner: Arc::new(LoginInner {
                 config,
                 factory,
                 probe,
                 credentials,
                 token_store,
+                auth_state: auth_state_file,
                 state: Mutex::new(LoginState {
                     auth_state,
                     error: None,
@@ -523,9 +574,12 @@ impl LoginService {
                 }),
                 condvar: Condvar::new(),
                 attempts: Mutex::new(VecDeque::new()),
+                retry_attempts: Mutex::new(VecDeque::new()),
                 watch,
             }),
-        }
+        };
+        service.persist_auth_state();
+        service
     }
 
     pub fn from_gateway(
@@ -583,6 +637,12 @@ impl LoginService {
         status_from_locked(&state, &self.inner.watch)
     }
 
+    /// Write the durable auth state document once.
+    fn persist_auth_state(&self) {
+        let state = self.inner.state.lock().expect("login state poisoned");
+        persist_auth_state_locked(&self.inner, &state);
+    }
+
     /// The explicit `/admin/auth/login` entry: start or join the ONE round.
     pub fn start_explicit(&self, visible: bool) -> Value {
         {
@@ -594,7 +654,9 @@ impl LoginService {
                 state.recovery.state = "exhausted".to_string();
                 state.recovery.pause_reason = Some("BrowserDisabled".to_string());
                 state.recovery.next_attempt_epoch = None;
+                state.recovery.retry_scheduled = false;
                 self.inner.condvar.notify_all();
+                persist_auth_state_locked(&self.inner, &state);
                 return status_from_locked(&state, &self.inner.watch);
             }
             // Only a live login task owns the round. A refusal gate also leaves
@@ -619,8 +681,10 @@ impl LoginService {
                 state.recovery.state = "waiting".to_string();
                 state.recovery.next_attempt_epoch = Some(profile::epoch_now() + retry_after as f64);
                 state.recovery.pause_reason = None;
+                state.recovery.retry_scheduled = false;
                 state.gate = Some(self.inner.refused_gate("global_attempt_cap"));
                 self.inner.condvar.notify_all();
+                persist_auth_state_locked(&self.inner, &state);
                 return status_from_locked(&state, &self.inner.watch);
             }
             begin_round_locked(
@@ -668,7 +732,9 @@ impl LoginService {
         state.recovery.next_attempt_epoch = None;
         state.recovery.pause_reason = Some("cancelled".to_string());
         state.recovery.last_outcome = Some("cancelled".to_string());
+        state.recovery.retry_scheduled = false;
         self.inner.condvar.notify_all();
+        persist_auth_state_locked(&self.inner, &state);
         json!({
             "cancelled": true,
             "state": "cancelled",
@@ -697,6 +763,7 @@ impl LoginService {
         if active_round(&state)
             || matches!(state.auth_state, AuthState::Failed | AuthState::Cancelled)
         {
+            persist_auth_state_locked(&self.inner, &state);
             return;
         }
         match verdict {
@@ -708,6 +775,7 @@ impl LoginService {
                 state.recovery.state = "idle".to_string();
                 state.recovery.next_attempt_epoch = None;
                 state.recovery.pause_reason = None;
+                state.recovery.retry_scheduled = false;
             }
             // Python only lets these two verdicts move the state to
             // `needs_login`; an unknown probe only records evidence.
@@ -717,6 +785,7 @@ impl LoginService {
             }
             _ => {}
         }
+        persist_auth_state_locked(&self.inner, &state);
     }
 
     /// Stop the executor for shutdown: the current round is cancelled.
@@ -730,7 +799,9 @@ impl LoginService {
         state.recovery.state = "exhausted".to_string();
         state.recovery.next_attempt_epoch = None;
         state.recovery.pause_reason = Some("stopped".to_string());
+        state.recovery.retry_scheduled = false;
         self.inner.condvar.notify_all();
+        persist_auth_state_locked(&self.inner, &state);
     }
 }
 
@@ -780,11 +851,39 @@ impl LoginService {
                 };
             }
             if state.auth_state == AuthState::Failed || state.auth_state == AuthState::Cancelled {
-                let reason = state
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "login_failed".to_string());
-                return ReauthProviderResult::Failed { reason };
+                let retry_due = state.auth_state == AuthState::Failed
+                    && state.recovery.retry_scheduled
+                    && state
+                        .recovery
+                        .next_attempt_epoch
+                        .is_some_and(|next| profile::epoch_now() >= next);
+                if !retry_due {
+                    let reason = state
+                        .error
+                        .clone()
+                        .unwrap_or_else(|| "login_failed".to_string());
+                    return ReauthProviderResult::Failed { reason };
+                }
+                if !self.inner.retry_start_allowed() {
+                    state.recovery.retry_scheduled = false;
+                    state.recovery.next_attempt_epoch = None;
+                    state.recovery.pause_reason = Some("retry_exhausted".to_string());
+                    state.recovery.last_outcome = Some("retry_exhausted".to_string());
+                    self.inner.condvar.notify_all();
+                    persist_auth_state_locked(&self.inner, &state);
+                    return ReauthProviderResult::Failed {
+                        reason: "retry_exhausted".to_string(),
+                    };
+                }
+                // A retryable exhausted round is due: clear the terminal
+                // failure and fall through to the normal start gate.
+                state.auth_state = AuthState::NeedsLogin;
+                state.error = None;
+                state.primary = None;
+                state.login = None;
+                state.session = None;
+                state.recovery.retry_scheduled = false;
+                state.recovery.next_attempt_epoch = None;
             }
             if let Some(session) = state.session.clone() {
                 session
@@ -926,6 +1025,47 @@ impl LoginInner {
             .count()
     }
 
+    /// Automatic re-open rounds used inside the rolling day.
+    fn retry_count(&self) -> usize {
+        let now = Instant::now();
+        let mut attempts = self
+            .retry_attempts
+            .lock()
+            .expect("recovery retry attempts poisoned");
+        while attempts.front().is_some_and(|oldest| {
+            now.saturating_duration_since(*oldest) >= Duration::from_secs(86_400)
+        }) {
+            attempts.pop_front();
+        }
+        attempts.len()
+    }
+
+    /// Whether one more retryable round may be scheduled today.
+    fn retry_schedule_allowed(&self) -> bool {
+        self.retry_count() < self.config.recovery_retry_max_per_day
+    }
+
+    /// Whether an already scheduled retry may still start today.
+    fn retry_start_allowed(&self) -> bool {
+        self.retry_count() <= self.config.recovery_retry_max_per_day
+    }
+
+    /// Record one automatic re-open round and return the rolling-day count.
+    fn record_retry(&self) -> usize {
+        let now = Instant::now();
+        let mut attempts = self
+            .retry_attempts
+            .lock()
+            .expect("recovery retry attempts poisoned");
+        while attempts.front().is_some_and(|oldest| {
+            now.saturating_duration_since(*oldest) >= Duration::from_secs(86_400)
+        }) {
+            attempts.pop_front();
+        }
+        attempts.push_back(now);
+        attempts.len()
+    }
+
     fn refused_gate(&self, reason: &str) -> Value {
         json!({
             "granted": false,
@@ -966,6 +1106,7 @@ fn begin_round_locked(
     state.recovery.visible = visible;
     state.recovery.last_form = None;
     state.recovery.last_submit_count = 0;
+    state.recovery.retry_scheduled = false;
     state.recovery.max_sessions = inner.config.max_sessions;
     state.auth_state = AuthState::LoggingIn;
     state.error = None;
@@ -988,6 +1129,7 @@ fn begin_round_locked(
         condvar: Condvar::new(),
     });
     state.session = Some(Arc::clone(&session));
+    persist_auth_state_locked(inner, state);
     let worker = Arc::clone(inner);
     let round = state.round;
     let session_worker = Arc::clone(&session);
@@ -997,6 +1139,70 @@ fn begin_round_locked(
 
 fn active_round(state: &LoginState) -> bool {
     state.recovery.state == "running" || state.recovery.state == "waiting"
+}
+
+/// Compose and write the durable auth state document while the login state lock
+/// is held. A write failure only logs; the login state machine never fails.
+fn persist_auth_state_locked(inner: &LoginInner, state: &LoginState) {
+    if !inner.auth_state.is_persistent() {
+        return;
+    }
+    let evidence = state.evidence.as_json();
+    let credential = inner.credentials.credential_evidence();
+    let token = inner.token_store.load();
+    let claims = auth_state::token_claims(token.as_ref());
+    let recovery = &state.recovery;
+    let document = json!({
+        "schema_version": 1,
+        "checked_epoch": evidence.get("checked_epoch").cloned().unwrap_or(Value::Null),
+        "verdict": evidence.get("verdict").cloned().unwrap_or(Value::Null),
+        "reason": evidence.get("reason").cloned().unwrap_or(Value::Null),
+        "upstream_status": evidence.get("upstream_status").cloned().unwrap_or(Value::Null),
+        "source": evidence.get("source").cloned().unwrap_or(Value::Null),
+        "last_valid_epoch": evidence.get("last_valid_epoch").cloned().unwrap_or(Value::Null),
+        "trigger_epoch": recovery.trigger_epoch,
+        "trigger_source": recovery.trigger_source,
+        "round": recovery.round,
+        "recovery": {
+            "state": recovery.state,
+            "last_outcome": recovery.last_outcome,
+            "last_form": recovery.last_form,
+            "last_submit_count": recovery.last_submit_count,
+            "session_starts": recovery.session_starts,
+            "pause_reason": recovery.pause_reason,
+            "last_failure_epoch": recovery.last_failure_epoch,
+            "last_failure_reason": recovery.last_failure_reason,
+            "next_attempt_epoch": recovery.next_attempt_epoch,
+            "retry_scheduled": recovery.retry_scheduled,
+            "retry_count": recovery.retry_count,
+        },
+        "saved_at": claims.get("saved_at").cloned().unwrap_or(Value::Null),
+        "token_iat": claims.get("token_iat").cloned().unwrap_or(Value::Null),
+        "token_exp": claims.get("token_exp").cloned().unwrap_or(Value::Null),
+        "token_jti_sha12": claims.get("token_jti_sha12").cloned().unwrap_or(Value::Null),
+        "token_id_sha12": claims.get("token_id_sha12").cloned().unwrap_or(Value::Null),
+        "api_key_present": credential.api_key_present,
+        "api_key_rejected": credential.api_key_rejected,
+        "upstream_401_summary": credential.upstream_401_summary,
+    });
+    inner.auth_state.write(&document);
+}
+
+/// Schedule the bounded automatic re-open after a retryable exhausted round.
+fn schedule_recovery_retry(inner: &LoginInner, state: &mut LoginState, reason: &str) {
+    if inner.retry_schedule_allowed() {
+        state.recovery.retry_count = inner.record_retry();
+        state.recovery.retry_scheduled = true;
+        state.recovery.next_attempt_epoch =
+            Some(profile::epoch_now() + inner.config.recovery_retry_interval.as_secs_f64());
+        state.recovery.pause_reason = Some(reason.to_string());
+    } else {
+        state.recovery.retry_count = inner.retry_count();
+        state.recovery.retry_scheduled = false;
+        state.recovery.next_attempt_epoch = None;
+        state.recovery.pause_reason = Some("retry_exhausted".to_string());
+        state.recovery.last_outcome = Some("retry_exhausted".to_string());
+    }
 }
 
 fn status_from_locked(state: &LoginState, watch: &WatchStatus) -> Value {
@@ -1313,6 +1519,7 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
             state.recovery.state = "idle".to_string();
             state.recovery.last_outcome = Some("restored".to_string());
             state.recovery.next_attempt_epoch = None;
+            state.recovery.retry_scheduled = false;
             state.recovery.last_failure_epoch = None;
             state.recovery.last_failure_reason = None;
             state.recovery.pause_reason = None;
@@ -1325,6 +1532,7 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
             state.recovery.state = "exhausted".to_string();
             state.recovery.last_outcome = Some(format!("cancelled:{reason}"));
             state.recovery.next_attempt_epoch = None;
+            state.recovery.retry_scheduled = false;
             state.recovery.pause_reason = Some("cancelled".to_string());
         }
         LoginOutcome::Busy { .. } => {
@@ -1342,7 +1550,13 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
             state.recovery.next_attempt_epoch = None;
             state.recovery.last_failure_epoch = Some(profile::epoch_now());
             state.recovery.last_failure_reason = Some(reason.clone());
-            state.recovery.pause_reason = Some(reason);
+            state.recovery.pause_reason = Some(reason.clone());
+            state.recovery.retry_scheduled = false;
+            if reason == "timeout" {
+                // A total-budget timeout is retryable inside the daily bound;
+                // a manual takeover reason is not.
+                schedule_recovery_retry(inner, &mut state, &reason);
+            }
         }
         LoginOutcome::Rejected { reason }
         | LoginOutcome::Unavailable { reason }
@@ -1356,10 +1570,15 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
             state.recovery.next_attempt_epoch = None;
             state.recovery.last_failure_epoch = Some(profile::epoch_now());
             state.recovery.last_failure_reason = Some(reason.clone());
-            state.recovery.pause_reason = Some(reason);
+            state.recovery.pause_reason = Some(reason.clone());
+            state.recovery.retry_scheduled = false;
+            if reason == "attempts_exhausted" {
+                schedule_recovery_retry(inner, &mut state, &reason);
+            }
         }
     }
     state.session = None;
+    persist_auth_state_locked(inner, &state);
     inner.condvar.notify_all();
 }
 
@@ -1954,12 +2173,17 @@ fn commit_token(
             };
         }
     }
-    if inner.token_store.save(token, None).is_err() {
-        return LoginOutcome::Terminal {
-            reason: "token_save_failed".to_string(),
-        };
-    }
-    inner.credentials.publish_credential(token, None);
+    let document = match inner.token_store.save(token, None) {
+        Ok(document) => document,
+        Err(_) => {
+            return LoginOutcome::Terminal {
+                reason: "token_save_failed".to_string(),
+            }
+        }
+    };
+    inner
+        .credentials
+        .publish_credential(&document.token, document.api_key.as_deref());
     let now = profile::epoch_now();
     let mut state = inner.state.lock().expect("login state poisoned");
     state.evidence = Evidence {

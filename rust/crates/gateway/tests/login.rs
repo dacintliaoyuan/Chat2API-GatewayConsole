@@ -17,9 +17,9 @@ use serde_json::{json, Value};
 use um_gateway::config::{GatewayConfig, Role};
 use um_gateway::login::profile::acquire_profile_lock;
 use um_gateway::login::{
-    BrowserUnavailable, CredentialField, CredentialProbe, CredentialSink, CredentialVerdict,
-    HttpCredentialProbe, LaunchRequest, LoginBrowser, LoginBrowserFactory, LoginConfig,
-    LoginFailure, LoginPage, LoginService, VisibleTarget,
+    BrowserUnavailable, CredentialEvidence, CredentialField, CredentialProbe, CredentialSink,
+    CredentialVerdict, HttpCredentialProbe, LaunchRequest, LoginBrowser, LoginBrowserFactory,
+    LoginConfig, LoginFailure, LoginPage, LoginService, VisibleTarget,
 };
 use um_gateway::reauth::{
     AuthWaitBudget, ReauthLimits, ReauthProviderResult, ReauthResult, ReauthTrigger,
@@ -455,6 +455,7 @@ fn unknown_verdict() -> CredentialVerdict {
 #[derive(Default)]
 struct FakeSink {
     published: Mutex<Vec<(String, Option<String>)>>,
+    evidence: Mutex<CredentialEvidence>,
 }
 
 impl FakeSink {
@@ -464,6 +465,10 @@ impl FakeSink {
             .expect("published credentials")
             .clone()
     }
+
+    fn set_evidence(&self, evidence: CredentialEvidence) {
+        *self.evidence.lock().expect("sink evidence") = evidence;
+    }
 }
 
 impl CredentialSink for FakeSink {
@@ -472,6 +477,10 @@ impl CredentialSink for FakeSink {
             .lock()
             .expect("published credentials")
             .push((token.to_string(), api_key.map(str::to_string)));
+    }
+
+    fn credential_evidence(&self) -> CredentialEvidence {
+        self.evidence.lock().expect("sink evidence").clone()
     }
 }
 
@@ -492,6 +501,9 @@ fn login_config(temp: &TempDir) -> LoginConfig {
         max_attempts_per_window: 3,
         max_sessions: 6,
         browser_disabled: false,
+        recovery_retry_interval: Duration::from_secs(1800),
+        recovery_retry_max_per_day: 3,
+        auth_state_file: None,
         um_account: String::new(),
         um_password: String::new(),
     }
@@ -2144,6 +2156,361 @@ fn a_saved_token_is_loaded_and_used_by_the_default_assembly() {
         request.path == "/api/models"
             && request.authorization.as_deref() == Some("Bearer saved-token")
     }));
+}
+
+#[test]
+fn a_login_commit_preserves_and_publishes_the_saved_api_key() {
+    let temp = TempDir::new("um-rust-login-api-key-");
+    let stub = StubUpstream::start();
+    let saved = json!({
+        "url": stub.url(),
+        "token": "stale-token",
+        "api_key": "fixture-api-key",
+        "saved_at": "2026-11-19 17:02:42",
+    });
+    temp.write("token.json", &saved.to_string());
+    let page = FakePage::new("http://127.0.0.1:9", Some("fresh-token"));
+    let config = gateway_config(&temp, &stub);
+    let server = GatewayServer::start_with_login(config, FakeFactory::new(page), ScriptedProbe::valid())
+        .expect("start login gateway");
+
+    let login = client_request(
+        server.addr(),
+        &ClientRequest::post("/admin/auth/login", &json!({"visible": false}).to_string())
+            .header("X-Admin-Control", CONTROL_TOKEN)
+            .json_body(&json!({"visible": false}).to_string()),
+    )
+    .expect("login");
+    assert_eq!(login.status, 202);
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let status = client_request(
+            server.addr(),
+            &ClientRequest::get("/admin/auth/status").header("X-Admin-Control", CONTROL_TOKEN),
+        )
+        .expect("status");
+        if status.json()["state"] == json!("valid") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "login did not finish: {}",
+            status.json()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let document: Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("token.json")).expect("token file"),
+    )
+    .expect("token json");
+    assert_eq!(document["token"], json!("fresh-token"));
+    assert_eq!(
+        document["api_key"],
+        json!("fixture-api-key"),
+        "登录提交新 token 时不得清掉已保存的 API key"
+    );
+
+    let models = client_request(
+        server.addr(),
+        &ClientRequest::get("/v1/models").bearer(SHARE_SECRET),
+    )
+    .expect("models");
+    assert_eq!(models.status, 200);
+    let seen = stub.seen();
+    assert!(seen.iter().any(|request| {
+        request.path == "/api/models"
+            && request.authorization.as_deref() == Some("Bearer fixture-api-key")
+    }));
+}
+
+#[test]
+fn the_auth_state_file_records_the_probe_evidence_and_api_key_flags() {
+    let temp = TempDir::new("um-rust-auth-state-probe-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("stored-token"));
+    let probe = ScriptedProbe::valid();
+    let sink = Arc::new(FakeSink::default());
+    let token = "header.eyJpZCI6InVzZXItMSIsImp0aSI6Imp0aS1zZWNyZXQiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTcwMDAzMjQwMH0.signature";
+    temp.write(
+        "token.json",
+        &json!({
+            "url": "http://127.0.0.1:9",
+            "token": token,
+            "api_key": "fixture-api-key",
+            "saved_at": "2026-11-19 17:02:42",
+        })
+        .to_string(),
+    );
+    sink.set_evidence(CredentialEvidence {
+        checked_epoch: Some(100.0),
+        verdict: Some("rejected".to_string()),
+        reason: Some("upstream_rejected".to_string()),
+        upstream_status: Some(401),
+        last_valid_epoch: Some(90.0),
+        upstream_401_summary: Some("401 Unauthorized".to_string()),
+        api_key_present: true,
+        api_key_rejected: false,
+    });
+    let state_file = temp.path().join("auth-state.json");
+    let (service, _) = login_service_with(&temp, page, probe, sink.clone(), |config| {
+        config.auth_state_file = Some(state_file.clone());
+    });
+
+    let startup: Value = serde_json::from_str(
+        &fs::read_to_string(&state_file).expect("startup auth state"),
+    )
+    .expect("startup auth state json");
+    assert_eq!(startup["recovery"]["state"], json!("idle"));
+    assert_eq!(startup["saved_at"], json!("2026-11-19 17:02:42"));
+    assert_eq!(startup["token_iat"], json!(1700000000));
+    assert_eq!(startup["token_exp"], json!(1700032400));
+    assert_eq!(
+        startup["token_jti_sha12"].as_str().map(str::len),
+        Some(12)
+    );
+    assert_eq!(
+        startup["token_id_sha12"].as_str().map(str::len),
+        Some(12)
+    );
+    let text = fs::read_to_string(&state_file).expect("startup auth state");
+    assert!(!text.contains("stored-token"));
+    assert!(!text.contains("fixture-api-key"));
+    assert!(!text.contains("jti-secret"));
+    assert!(!text.contains("user-1"));
+
+    service.note_probe("rejected", Some("upstream_rejected"), Some(401));
+    let state: Value =
+        serde_json::from_str(&fs::read_to_string(&state_file).expect("auth state"))
+            .expect("auth state json");
+    assert_eq!(state["verdict"], json!("rejected"));
+    assert_eq!(state["reason"], json!("upstream_rejected"));
+    assert_eq!(state["upstream_status"], json!(401));
+    assert_eq!(state["source"], json!("auth_watch"));
+    assert!(state["checked_epoch"].is_number());
+    assert_eq!(state["last_valid_epoch"], Value::Null);
+    assert_eq!(state["upstream_401_summary"], json!("401 Unauthorized"));
+    assert_eq!(state["api_key_present"], json!(true));
+    assert_eq!(state["api_key_rejected"], json!(false));
+}
+
+#[test]
+fn the_auth_state_file_records_the_round_outcome_and_form() {
+    let temp = TempDir::new("um-rust-auth-state-round-");
+    let url = trusted_umpass_url();
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.password_prefilled.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") = vec![(url.to_string(), None)];
+    let marker = write_display_marker(&temp);
+    let state_file = temp.path().join("auth-state.json");
+    let (service, _) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| {
+            config.display_file = marker;
+            config.stage_settle_timeout = Duration::from_millis(500);
+            config.login_timeout = Duration::from_secs(3);
+            config.auth_state_file = Some(state_file.clone());
+        },
+    );
+
+    service.start_explicit(true);
+    wait_for(&service, |status| {
+        status["login"]["phase"] == json!("umpass_submitted")
+    });
+    page.set_token(Some("operator-token"));
+    wait_for(&service, |status| status["state"] == json!("valid"));
+
+    let state: Value =
+        serde_json::from_str(&fs::read_to_string(&state_file).expect("auth state"))
+            .expect("auth state json");
+    assert_eq!(state["round"], json!(1));
+    assert_eq!(state["trigger_source"], json!("explicit"));
+    assert_eq!(state["recovery"]["state"], json!("idle"));
+    assert_eq!(state["recovery"]["last_outcome"], json!("restored"));
+    assert_eq!(state["recovery"]["last_form"], json!("ready"));
+    assert_eq!(state["recovery"]["last_submit_count"], json!(1));
+    assert_eq!(state["recovery"]["session_starts"], json!(1));
+    assert_eq!(state["verdict"], json!("valid"));
+}
+
+#[test]
+fn an_auth_state_file_write_failure_does_not_fail_the_round() {
+    let temp = TempDir::new("um-rust-auth-state-write-failure-");
+    let blocker = temp.write("blocked", "not a directory");
+    let state_file = blocker.join("auth-state.json");
+    let page = FakePage::new("http://127.0.0.1:9", Some("fresh-token"));
+    let probe = ScriptedProbe::valid();
+    let sink = Arc::new(FakeSink::default());
+    let (service, _) = login_service_with(&temp, page, probe, sink, |config| {
+        config.auth_state_file = Some(state_file);
+    });
+
+    service.start_explicit(false);
+    let status = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["last_outcome"], json!("restored"));
+}
+
+#[test]
+fn a_timeout_round_schedules_a_bounded_automatic_retry() {
+    let temp = TempDir::new("um-rust-recovery-retry-timeout-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    let probe = ScriptedProbe::valid();
+    let sink = Arc::new(FakeSink::default());
+    let state_file = temp.path().join("auth-state.json");
+    let (service, factory) = login_service_with(&temp, page.clone(), probe, sink, |config| {
+        config.login_timeout = Duration::from_millis(500);
+        config.stage_settle_timeout = Duration::from_secs(10);
+        config.recovery_retry_interval = Duration::from_millis(50);
+        config.recovery_retry_max_per_day = 3;
+        config.auth_state_file = Some(state_file.clone());
+    });
+    let service = Arc::new(service);
+
+    service.start_explicit(false);
+    let status = wait_for(&service, |status| status["state"] == json!("failed"));
+    assert_eq!(status["error"], json!("timeout"));
+    assert_eq!(status["recovery"]["state"], json!("exhausted"));
+    assert_eq!(status["recovery"]["pause_reason"], json!("timeout"));
+    assert_eq!(status["recovery"]["retry_scheduled"], json!(true));
+    assert_eq!(status["recovery"]["retry_count"], json!(1));
+    assert!(
+        status["recovery"]["next_attempt_epoch"].is_number(),
+        "{status}"
+    );
+    let file: Value =
+        serde_json::from_str(&fs::read_to_string(&state_file).expect("auth state"))
+            .expect("auth state json");
+    assert_eq!(file["recovery"]["retry_scheduled"], json!(true));
+    assert_eq!(file["recovery"]["pause_reason"], json!("timeout"));
+
+    // The auth watch or a business request asks the provider again after the
+    // interval; the due retry clears `Failed` and opens a NEW round.
+    page.closed.store(false, Ordering::SeqCst);
+    thread::sleep(Duration::from_millis(80));
+    let reauth_service = Arc::clone(&service);
+    let reauth = thread::spawn(move || {
+        reauth_service.reauthenticate(Instant::now() + Duration::from_secs(2))
+    });
+    let started = wait_for(&service, |status| status["recovery"]["round"] == json!(2));
+    assert_eq!(started["state"], json!("logging_in"), "{started}");
+    assert_eq!(started["recovery"]["retry_scheduled"], json!(false));
+    page.set_token(Some("fresh-token"));
+    assert_eq!(
+        reauth.join().expect("reauth result"),
+        ReauthProviderResult::Restored
+    );
+    let status = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(status["recovery"]["round"], json!(2));
+    assert_eq!(status["recovery"]["retry_scheduled"], json!(false));
+    assert_eq!(status["recovery"]["last_outcome"], json!("restored"));
+    assert_eq!(factory.requests().len(), 2, "只允许一次自动重开轮次");
+}
+
+#[test]
+fn an_attempts_exhausted_round_schedules_a_bounded_automatic_retry() {
+    let temp = TempDir::new("um-rust-recovery-retry-attempts-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    let probe = ScriptedProbe::valid();
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(&temp, page.clone(), probe, sink, |config| {
+        config.login_timeout = Duration::from_secs(5);
+        config.max_sessions = 1;
+        config.recovery_retry_interval = Duration::from_millis(50);
+        config.recovery_retry_max_per_day = 3;
+    });
+
+    service.start_explicit(false);
+    wait_for(&service, |status| status["state"] == json!("logging_in"));
+    page.close();
+    let status = wait_for(&service, |status| status["state"] == json!("failed"));
+    assert_eq!(status["error"], json!("attempts_exhausted"), "{status}");
+    assert_eq!(status["recovery"]["state"], json!("exhausted"));
+    assert_eq!(
+        status["recovery"]["pause_reason"],
+        json!("attempts_exhausted")
+    );
+    assert_eq!(status["recovery"]["retry_scheduled"], json!(true));
+    assert_eq!(status["recovery"]["retry_count"], json!(1));
+    assert_eq!(factory.requests().len(), 1);
+}
+
+#[test]
+fn a_retryable_timeout_stops_at_the_daily_retry_cap() {
+    let temp = TempDir::new("um-rust-recovery-retry-cap-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    let probe = ScriptedProbe::valid();
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(&temp, page.clone(), probe, sink, |config| {
+        config.login_timeout = Duration::from_millis(100);
+        config.stage_settle_timeout = Duration::from_secs(10);
+        config.recovery_retry_interval = Duration::from_millis(20);
+        config.recovery_retry_max_per_day = 1;
+    });
+
+    service.start_explicit(false);
+    let status = wait_for(&service, |status| status["state"] == json!("failed"));
+    assert_eq!(status["recovery"]["retry_scheduled"], json!(true));
+    assert_eq!(status["recovery"]["retry_count"], json!(1));
+
+    page.closed.store(false, Ordering::SeqCst);
+    thread::sleep(Duration::from_millis(40));
+    let result = service.reauthenticate(Instant::now() + Duration::from_secs(2));
+    assert_eq!(
+        result,
+        ReauthProviderResult::Failed {
+            reason: "timeout".to_string(),
+        }
+    );
+    let status = wait_for(&service, |status| {
+        status["recovery"]["pause_reason"] == json!("retry_exhausted")
+    });
+    assert_eq!(status["state"], json!("failed"), "{status}");
+    assert_eq!(status["recovery"]["retry_scheduled"], json!(false));
+    assert_eq!(status["recovery"]["retry_count"], json!(1));
+    assert_eq!(status["recovery"]["next_attempt_epoch"], Value::Null);
+    assert_eq!(status["recovery"]["last_outcome"], json!("retry_exhausted"));
+    assert_eq!(factory.requests().len(), 2);
+}
+
+#[test]
+fn a_manual_takeover_round_is_not_retried() {
+    let temp = TempDir::new("um-rust-recovery-no-retry-manual-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") =
+        vec![("https://unexpected.example/login".to_string(), None)];
+    let probe = ScriptedProbe::valid();
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(&temp, page, probe, sink, |config| {
+        config.login_timeout = Duration::from_secs(5);
+        config.recovery_retry_interval = Duration::from_millis(50);
+        config.recovery_retry_max_per_day = 3;
+    });
+
+    service.start_explicit(false);
+    let status = wait_for(&service, |status| status["state"] == json!("failed"));
+    assert_eq!(
+        status["recovery"]["pause_reason"],
+        json!("manual_takeover_required:unrecognized_page")
+    );
+    assert_eq!(status["recovery"]["retry_scheduled"], json!(false));
+    assert_eq!(status["recovery"]["next_attempt_epoch"], Value::Null);
+    assert_eq!(status["recovery"]["retry_count"], json!(0));
+
+    let result = service.reauthenticate(Instant::now() + Duration::from_millis(200));
+    assert_eq!(
+        result,
+        ReauthProviderResult::Failed {
+            reason: "manual_takeover_required:unrecognized_page".to_string(),
+        }
+    );
+    assert_eq!(service.status()["recovery"]["round"], json!(1));
+    assert_eq!(factory.requests().len(), 1, "人工接管不得自动重开轮次");
 }
 
 // ---------------------------------------------------------------------------

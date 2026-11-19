@@ -8,6 +8,7 @@
 //! forwarding is S1b; Messages forwarding is S2a; Responses and embeddings are
 //! S2b.
 
+pub mod auth_state;
 pub mod body;
 pub mod chat;
 pub mod config;

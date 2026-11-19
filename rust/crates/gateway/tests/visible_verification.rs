@@ -191,6 +191,9 @@ fn login_config(base_url: String, temp: &support::TempDir) -> LoginConfig {
         max_attempts_per_window: 3,
         max_sessions: 6,
         browser_disabled: false,
+        recovery_retry_interval: Duration::from_secs(1800),
+        recovery_retry_max_per_day: 3,
+        auth_state_file: None,
         um_account: String::new(),
         um_password: String::new(),
     }

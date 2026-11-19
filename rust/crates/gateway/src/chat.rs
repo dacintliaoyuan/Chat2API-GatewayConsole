@@ -205,10 +205,10 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let bearer = context.state.proxy.bearer();
+        let credential = context.state.proxy.upstream_credential();
         let mut response = match crate::upstream::post_chat(
             &context.state.config,
-            &bearer,
+            &credential.value,
             &serde_json::to_vec(&Value::Object(body.clone())).unwrap_or_default(),
             false,
             context.deadline,
@@ -250,6 +250,7 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
+                credential.api_key,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final { error, .. } => {
@@ -374,10 +375,10 @@ fn forward_stream_inner(
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let bearer = context.state.proxy.bearer();
+        let credential = context.state.proxy.upstream_credential();
         let response = match crate::upstream::post_chat(
             &context.state.config,
-            &bearer,
+            &credential.value,
             &serde_json::to_vec(&Value::Object(upstream_body.clone())).unwrap_or_default(),
             true,
             context.deadline,
@@ -421,6 +422,7 @@ fn forward_stream_inner(
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
+                credential.api_key,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final { error, .. } => {
