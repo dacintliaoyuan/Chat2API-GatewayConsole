@@ -158,3 +158,9 @@ curl -s -X POST -H "X-Admin-Control: $TOKEN" http://127.0.0.1:8100/admin/auth/ca
   systemd 上验证按需 `manual-takeover.sh start`。
 - 部署后 headless 版本的登录中 RSS 峰值、成功/超时/取消/失败后的残留进程与锁释放都未在目标机复验。
 - 端口 18096/5901 的治理段重编号不在 spec #8 与 ticket #16 范围内。
+
+## 本机登录驱动切回条件（2026-11-19）
+
+本机 Rust 8000 暂用 Playwright 驱动浏览器。云端 8003 的原生 Rust 自动重登录验收通过并观察满 24 小时后，才可将本机登录驱动切回原生 Rust。按 [#112 的云端验收记录](https://github.com/dacintliaoyuan/Chat2API-GatewayConsole/issues/112)，2026-11-19 16:38（北京时间）记录了实际自动恢复，最早复核时间为 2026-11-20 16:38。切回前核对云端观察结果和实际运行版本。
+
+2026-11-19 17:01（北京时间），在仓库根目录恢复本机 Playwright 配置，通过 `invoke-gateway-service.ps1 -Key chat2api` 停止并启动 8000，使用原有 Playwright 构建。上游明确拒绝旧凭据后，通过 `POST /admin/auth/login` 触发一次不可见的登录。Python 子进程由 8000 拉起，第一轮提交一次 UMPASS，最终 `last_outcome=restored`、`evidence.verdict=valid`，`GET /ready` 返回 HTTP 200。本次实测覆盖显式触发的后台登录，云端 24 小时观察和本机原生 Rust 自动重登仍待验收。
