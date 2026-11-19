@@ -177,6 +177,8 @@ rm -rf /opt/um-share/.incoming/um-share-<version>
 
 ### Rust → Python 回滚演练
 
+2026-11-19 决定不做实机演练；回滚目标 `s2-20261117b` 保持安装并通过 manifest 校验。以下命令保留为工具入口，不在本次观察中执行。
+
 `rollback-drill.sh` 在维护窗口内演练“停 Rust、启 Python 回滚 release、验证 `/ready`”。它默认只打印计划；加 `--execute` 才停/启 unit：
 
 ```bash
