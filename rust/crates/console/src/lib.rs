@@ -8,6 +8,8 @@
 
 pub mod actions;
 pub mod body;
+#[cfg(unix)]
+pub mod broker_write;
 pub mod cloud_ops;
 pub mod config;
 pub mod display;
@@ -38,6 +40,8 @@ pub mod summary;
 pub mod upstream_faults;
 
 pub use config::{ConsoleConfig, EntryKind, Role};
+#[cfg(unix)]
+pub use broker_write::{production_write_seams, BrokerManagementSeams};
 pub use display_grant::{DisplayGrantError, DisplayGrants, DisplaySession};
 pub use error::ConsoleError;
 pub use local_summary::{build_local_summary, LocalSummaryCache, LocalSummaryPaths};

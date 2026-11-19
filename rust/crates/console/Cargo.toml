@@ -27,3 +27,4 @@ um-test-harness = { path = "../test-harness" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+um-broker = { path = "../broker" }
