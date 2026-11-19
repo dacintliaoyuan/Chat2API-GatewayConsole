@@ -1763,7 +1763,7 @@
       "chat2api/chat2api.py": "af9efce1ea47da2fb6e4bb9df792bcebc6704fbb3453ac9e3996aac06abe7679",
       "chat2api/share_auth.py": "160d94cbfb1167557a0ecae97a8501a9dfbe01ca8416bb51c526c429d830a01d",
       "console/display_proxy.py": "5aada84d79e18c9d6899fd31bfce05098ebc23a990d00cfd81a11f50e326b01c",
-      "docs/rust-contract.md": "1b8152a874abcc6b3ee5247799d11f04243d1757245f1476255ba7bd1138ee91",
+      "docs/rust-contract.md": "076326477bd986bc178148eb96e6b1afd3845714f1baba0aaf4a40f1b7bbbc3e",
       "share/broker_protocol.py": "dbf7507c125b03bd915a190b052d7e5dac47a4dda80f7ef1fe6a15bbdf7554c2",
       "share/metering.py": "2becc79e7b50528306bf328fc38919ab5f441630fdfd004948753139a6679439",
       "share/store.py": "7bb5b3f1e302de5579043d482a3172548c716b8a619366a0373727d88e714b33",
