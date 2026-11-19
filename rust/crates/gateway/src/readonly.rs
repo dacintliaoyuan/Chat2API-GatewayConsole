@@ -79,7 +79,7 @@ impl UpstreamFailure {
 /// A browser-like User-Agent: the public Cloudflare edge refuses requests
 /// without a browser signature (error 1010); the loopback upstream ignores the
 /// header. It is a request header, not a credential.
-pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
 /// A minimal HTTP/1.1 client for the loopback upstream.
 pub struct UpstreamClient {
@@ -153,8 +153,7 @@ impl UpstreamClient {
             Box::new(stream)
         };
         let mut request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json
-User-Agent: {}\r\n\
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nUser-Agent: {}\r\n\
              Connection: close\r\n",
             self.host_header, USER_AGENT
         );
@@ -209,7 +208,23 @@ User-Agent: {}\r\n\
 fn read_upstream_response(stream: &mut dyn Read) -> Result<UpstreamResponse, UpstreamFailure> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
+    let mut header_end = None;
+    let mut content_length: Option<usize> = None;
+    let mut chunked = false;
     loop {
+        if let Some(end) = header_end {
+            let body = &raw[end..];
+            let complete = if chunked {
+                body.ends_with(b"0\r\n\r\n")
+            } else if let Some(length) = content_length {
+                body.len() >= length
+            } else {
+                false
+            };
+            if complete {
+                break;
+            }
+        }
         let read = match stream.read(&mut buffer) {
             Ok(read) => read,
             Err(error)
@@ -220,15 +235,44 @@ fn read_upstream_response(stream: &mut dyn Read) -> Result<UpstreamResponse, Ups
             }
             // The upstream may close without a TLS close_notify after a complete
             // response; that is a clean EOF, like Python's requests.
-            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::UnexpectedEof
+                    || error.kind() == std::io::ErrorKind::ConnectionReset
+                    || error.kind() == std::io::ErrorKind::ConnectionAborted =>
+            {
+                break
+            }
             Err(_) => return Err(UpstreamFailure::ConnectionError),
         };
         if read == 0 {
+            if header_end.is_none() {
+                return Err(UpstreamFailure::ConnectionError);
+            }
             break;
         }
         raw.extend_from_slice(&buffer[..read]);
         if raw.len() > 64 * 1024 * 1024 {
             return Err(UpstreamFailure::ConnectionError);
+        }
+        if header_end.is_none() {
+            if let Some(position) = raw.windows(4).position(|window| window == b"\r\n\r\n") {
+                header_end = Some(position + 4);
+                let head = String::from_utf8_lossy(&raw[..position]);
+                for line in head.split("\r\n").skip(1) {
+                    if let Some((name, value)) = line.split_once(':') {
+                        let name = name.trim().to_ascii_lowercase();
+                        let value = value.trim();
+                        if name == "content-length" {
+                            content_length = value.parse::<usize>().ok();
+                        }
+                        if name == "transfer-encoding"
+                            && value.to_ascii_lowercase().contains("chunked")
+                        {
+                            chunked = true;
+                        }
+                    }
+                }
+            }
         }
     }
     parse_upstream_response(&raw)
@@ -1216,6 +1260,25 @@ fn epoch_now() -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_content_length_response_is_read_without_waiting_for_close() {
+        let server = um_test_harness::TestServer::start(|request| {
+            assert_eq!(request.path, "/v1/models");
+            um_test_harness::HttpResponse::json(200, r#"{"data":[{"id":"fixture-model"}]}"#)
+        })
+        .expect("upstream server");
+        let config = GatewayConfig {
+            upstream_base_url: format!("http://127.0.0.1:{}", server.port()),
+            ..GatewayConfig::default()
+        };
+        let client = UpstreamClient::from_config(&config).expect("upstream client");
+        let (status, payload) = client.get_json_probe("/v1/models", None).expect("probe");
+        assert_eq!(status, 200);
+        assert_eq!(payload.expect("payload")["data"][0]["id"], json!("fixture-model"));
+    }
+
     use super::*;
 
     fn proxy() -> ProxyState {

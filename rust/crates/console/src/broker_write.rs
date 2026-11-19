@@ -13,6 +13,7 @@
 
 #![cfg(unix)]
 
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -127,62 +128,90 @@ impl BrokerManagementSeams {
 
 impl ShareWriteSeams for BrokerManagementSeams {
     /// `BrokerClientAdapter.host_verify("running")`: three-state evidence.
+    /// The broker's own `verify_running` uses the 10 s wire deadline; the client
+    /// adds connection and reply margin so a slow broker is not reported as an
+    /// unconfirmed stop.
     fn gateway_running(&self) -> Option<bool> {
         let mut fields = Map::new();
         fields.insert("check".to_string(), json!("running"));
         let result = self
-            .exchange("host-verify", Value::Object(fields), PUBLISH_DEADLINE)
+            .exchange("host-verify", Value::Object(fields), EMERGENCY_STOP_DEADLINE)
             .ok()?;
         result.result().get("host_running").and_then(Value::as_bool)
     }
 
-    /// The explicit version-bound public probe: one `/v1/models` read and one
-    /// minimal non-stream inference through the configured public origin. The Key
+    /// The explicit version-bound public probe: resolve the public origin, read
+    /// `/v1/models`, then run one minimal non-stream inference. The Key
     /// plaintext stays in this process; only the bounded outcome is returned.
     fn probe_models(&self, secret: &str, public_url: &str) -> Option<Value> {
         let started = std::time::Instant::now();
+        let public_ip = match resolve_public_ip(public_url) {
+            Ok(public_ip) => public_ip,
+            Err(reason) => return Some(probe_failure("models", reason, None)),
+        };
         let config = um_gateway::config::GatewayConfig {
             upstream_base_url: public_url.to_string(),
             upstream_timeout: Duration::from_secs(20),
             ..um_gateway::config::GatewayConfig::default()
         };
-        let client = um_gateway::readonly::UpstreamClient::from_config(&config).ok()?;
-        let model = first_model(&client, secret)?;
+        let Ok(client) = um_gateway::readonly::UpstreamClient::from_config(&config) else {
+            return Some(probe_failure("models", "public_url_invalid", None));
+        };
+        let (status, payload) = match client.get_json_probe("/v1/models", Some(secret)) {
+            Ok(observed) => observed,
+            Err(um_gateway::readonly::UpstreamFailure::Timeout) => {
+                return Some(probe_failure("models", "timeout", None))
+            }
+            Err(_) => return Some(probe_failure("models", "public_url_unreachable", None)),
+        };
+        if status != 200 {
+            return Some(probe_failure("models", "http_error", Some(status)));
+        }
+        let model = match pick_model(&payload, secret) {
+            Ok(model) => model,
+            Err(reason) => return Some(probe_failure("models", reason, Some(status))),
+        };
         let body = json!({
             "model": model,
             "messages": [{"role": "user", "content": "hi"}],
             "max_tokens": 1,
             "stream": false,
         });
-        let outcome = client
-            .request(
-                "POST",
-                "/v1/chat/completions",
-                Some(secret),
-                Some(serde_json::to_vec(&body).ok()?.as_slice()),
-                Duration::from_secs(60),
-            )
-            .ok()?;
-        if outcome.status != 200 {
-            return None;
+        let Ok(body) = serde_json::to_vec(&body) else {
+            return Some(probe_failure("inference", "invalid_request", None));
+        };
+        let response = match client.request(
+            "POST",
+            "/v1/chat/completions",
+            Some(secret),
+            Some(&body),
+            Duration::from_secs(60),
+        ) {
+            Ok(response) => response,
+            Err(um_gateway::readonly::UpstreamFailure::Timeout) => {
+                return Some(probe_failure("inference", "timeout", None))
+            }
+            Err(_) => return Some(probe_failure("inference", "public_url_unreachable", None)),
+        };
+        if response.status != 200 {
+            return Some(probe_failure("inference", "http_error", Some(response.status)));
         }
-        let host = public_url
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .split('/')
-            .next()
-            .unwrap_or_default()
-            .split(':')
-            .next()
-            .unwrap_or_default()
-            .to_string();
+        let payload = serde_json::from_slice(&response.body).ok();
+        if !valid_inference(&payload) {
+            return Some(probe_failure(
+                "inference",
+                "invalid_response",
+                Some(response.status),
+            ));
+        }
         Some(json!({
             "connected": true,
-            "reason": Value::Null,
+            "reason": "ok",
             "stage": "inference",
             "http_status": 200,
             "model": model,
-            "public_ip": host,
+            "public_ip": public_ip,
+            "dns": {"address": public_ip, "source": "resolved"},
             "elapsed_ms": started.elapsed().as_millis() as u64,
         }))
     }
@@ -195,11 +224,28 @@ impl ShareWriteSeams for BrokerManagementSeams {
             upstream_timeout: Duration::from_secs(20),
             ..um_gateway::config::GatewayConfig::default()
         };
-        let client = um_gateway::readonly::UpstreamClient::from_config(&config).ok()?;
-        let model = first_model(&client, secret)?;
+        let Ok(client) = um_gateway::readonly::UpstreamClient::from_config(&config) else {
+            return Some(probe_failure("models", "gateway_unreachable", None));
+        };
+        let (status, payload) = match client.get_json_probe("/v1/models", Some(secret)) {
+            Ok(observed) => observed,
+            Err(um_gateway::readonly::UpstreamFailure::Timeout) => {
+                return Some(probe_failure("models", "timeout", None))
+            }
+            Err(_) => {
+                return Some(probe_failure("models", "gateway_unreachable", None));
+            }
+        };
+        if status != 200 {
+            return Some(probe_failure("models", "http_error", Some(status)));
+        }
+        let model = match pick_model(&payload, secret) {
+            Ok(model) => model,
+            Err(reason) => return Some(probe_failure("models", reason, Some(status))),
+        };
         Some(json!({
             "connected": true,
-            "reason": Value::Null,
+            "reason": "ok",
             "stage": "models",
             "http_status": 200,
             "model": model,
@@ -301,19 +347,112 @@ pub fn production_write_seams(config: &ConsoleConfig) -> std::sync::Arc<dyn Shar
     std::sync::Arc::new(UnwiredWriteSeams)
 }
 
-/// The first model id from one Key-authenticated `/v1/models` read.
-fn first_model(client: &um_gateway::readonly::UpstreamClient, secret: &str) -> Option<String> {
-    let (status, payload) = client.get_json_probe("/v1/models", Some(secret)).ok()?;
-    if status != 200 {
-        return None;
-    }
-    payload?
-        .get("data")
+/// Known-good model ids preferred over the first catalog entry.
+pub const PREFERRED_MODEL_IDS: &[&str] = &["Qwen3.5-397B-A17B", "DeepSeek-V4.1-Flash-1017"];
+
+/// One structured probe failure; `None` is never flattened into a bare
+/// connection error, so the UI can tell timeout, DNS, HTTP and shape failures
+/// apart.
+fn probe_failure(stage: &str, reason: &str, http_status: Option<u16>) -> Value {
+    json!({
+        "connected": false,
+        "reason": reason,
+        "stage": stage,
+        "http_status": http_status,
+    })
+}
+
+/// The first usable model id, preferring a known-good id. Empty, oversized,
+/// control-character or Key-bearing ids are never returned.
+fn pick_model(payload: &Option<Value>, secret: &str) -> Result<String, &'static str> {
+    let models = payload
+        .as_ref()
+        .and_then(|payload| payload.get("data"))
         .and_then(Value::as_array)
-        .and_then(|data| data.first())
-        .and_then(|model| model.get("id"))
-        .and_then(Value::as_str)
+        .ok_or("invalid_response")?;
+    let usable = |model: &&Value| {
+        model
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| {
+                !id.is_empty()
+                    && id.chars().count() <= 200
+                    && !id.chars().any(char::is_control)
+                    && !secret.is_empty()
+                    && !id.contains(secret)
+            })
+    };
+    for preferred in PREFERRED_MODEL_IDS {
+        if models
+            .iter()
+            .filter(usable)
+            .any(|model| model.get("id").and_then(Value::as_str) == Some(preferred))
+        {
+            return Ok(preferred.to_string());
+        }
+    }
+    models
+        .iter()
+        .filter(usable)
+        .filter_map(|model| model.get("id").and_then(Value::as_str))
+        .next()
         .map(str::to_string)
+        .ok_or("no_models")
+}
+
+/// A successful inference carries an assistant message with non-empty content and
+/// no `error` field.
+fn valid_inference(payload: &Option<Value>) -> bool {
+    let Some(choices) = payload
+        .as_ref()
+        .and_then(|payload| payload.get("choices"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    let Some(first) = choices.first() else {
+        return false;
+    };
+    if first.get("error").is_some() {
+        return false;
+    }
+    let Some(message) = first.get("message") else {
+        return false;
+    };
+    message.get("role").and_then(Value::as_str) == Some("assistant")
+        && message
+            .get("content")
+            .and_then(Value::as_str)
+            .is_some_and(|content| !content.trim().is_empty())
+}
+
+/// Resolve the public origin to a global IPv4; loopback, private, link-local and
+/// unspecified addresses are never accepted as public evidence.
+fn resolve_public_ip(public_url: &str) -> Result<String, &'static str> {
+    let host = public_url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .split(':')
+        .next()
+        .unwrap_or_default();
+    if host.is_empty() {
+        return Err("public_url_invalid");
+    }
+    let addresses = (host, 443)
+        .to_socket_addrs()
+        .map_err(|_| "public_dns_failed")?;
+    for address in addresses {
+        if let std::net::IpAddr::V4(ip) = address.ip() {
+            if !ip.is_loopback() && !ip.is_private() && !ip.is_link_local() && !ip.is_unspecified()
+            {
+                return Ok(ip.to_string());
+            }
+        }
+    }
+    Err("public_dns_failed")
 }
 
 fn management_request(

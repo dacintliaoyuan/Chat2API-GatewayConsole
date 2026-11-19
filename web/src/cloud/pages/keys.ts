@@ -75,12 +75,14 @@ function keyRowHtml(model: CloudModel, key: ShareKeyRow): string {
     (typeof key.max_concurrency === "number"
       ? String(key.max_concurrency)
       : "");
+  const test = model.keyTest(id);
   const disabled = !writable.ok
     ? ` disabled title="${escapeHtml(writable.reason)}"`
     : model.keyBusy(id)
       ? ` disabled title="同一操作正在进行"`
-      : "";
-  const test = model.keyTest(id);
+      : test?.state === "busy"
+        ? ` disabled title="同一 Key 正在测试"`
+        : "";
   const testReason =
     key.enabled !== true
       ? "Key 已停用，无法测试"
@@ -513,18 +515,21 @@ export function createKeysPage(ctx: KeysPageContext) {
     const next = window.prompt("新的 Key 名称（1–64 个字符）", current);
     if (next === null) return;
     const name = next.trim();
-    if (!name || name.length > 64) {
+    if (!name || Array.from(name).length > 64) {
       setNotice(id, "warn", "名称需为 1–64 个字符");
       return;
     }
     if (name === current) return;
-    await patchKey(id, { name }, "已改名");
+    // The prompt-time version is the PATCH precondition: a concurrent rename or
+    // concurrency change while the prompt is open must be refused, not overwritten.
+    await patchKey(id, { name }, "已改名", row.row_version);
   }
 
   async function patchKey(
     id: string,
     patch: Record<string, unknown>,
-    successText: string
+    successText: string,
+    expectedVersion?: number
   ): Promise<void> {
     const row = keyRow(id);
     if (!row) {
@@ -536,7 +541,8 @@ export function createKeysPage(ctx: KeysPageContext) {
       setNotice(id, "warn", ready.reason);
       return;
     }
-    const rowVersion = row.row_version;
+    const rowVersion =
+      typeof expectedVersion === "number" ? expectedVersion : row.row_version;
     if (
       typeof rowVersion !== "number" ||
       !Number.isInteger(rowVersion) ||

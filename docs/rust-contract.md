@@ -756,7 +756,7 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 - `console/public_probe.py:609-684`：一次有界 DNS/TLS 往返，不发 HTTP 请求；默认 15 秒，最大 60 秒；每个地址 8 秒；最多 4 个地址。
 - DNS 两个独立 DoH 源：Cloudflare 与 NextDNS（Google 源仍兼容读取旧状态），并行查询、共用整轮预算；每个源 8 秒；响应最大 64 KiB；NXDOMAIN、NOERROR 无 A、SERVFAIL、DoH HTTP/格式错误、超时分别呈现；TTL 缺失显示未知，不硬编码 300 秒（`console/public_probe.py:118-136,451-520`）。
 - 整体状态：`ok`、`degraded`、`incomplete`、`all_failed`、`not_checked`；地址截断不改写成“全部失败”；DNS 分歧与 TLS 可达分别表达。
-- Key 自检 `console/share_probe.py:212-262`：版本绑定 `expected_row_version`；先确认 broker `host_verify("running")`，再 reveal 明文，经公网或本机 loopback 读模型目录并发送一次最多 32 输出 Token 的短请求；结果保留在页面内存，绑定 Key 版本与 API 地址，5 分钟后标陈旧；同一 Key 同时只允许 1 个测试，全局最多 2 个；不自动发推理请求。
+- Key 自检（Rust `console/src/broker_write.rs`）：版本绑定 `expected_row_version`；先确认 broker `host_verify("running")`（20 秒预算），再 reveal 明文。公网 probe 把 public origin 解析为 global IPv4，读 `/v1/models` 后发一次最多 1 输出 Token 的非流式推理；私有 probe 只读 loopback `/v1/models`。结果字段为 `connected`/`reason`/`stage`/`http_status`/`model`/`public_ip`/`dns`/`elapsed_ms`；成功 `reason=ok`、`stage=inference`（公网）或 `models`（私有）。模型 id 为空、超长、含控制字符或含 Key 时不采用；推理响应必须有 `choices[0].message.role=assistant` 与非空 `content`。失败原因区分 `timeout`、`public_dns_failed`、`http_error`、`invalid_response`、`no_models`、`gateway_unreachable`，不压平成 `connection_failed`。公网请求带浏览器 UA（绕开 Cloudflare 1010，UA 不是凭据）；Key 明文不写日志/响应。结果保留在页面内存，绑定 Key 版本与 API 地址，5 分钟后标陈旧；同一 Key 同时只允许 1 个测试，全局最多 2 个；不自动发推理请求。
 
 ### 11.3 副作用
 

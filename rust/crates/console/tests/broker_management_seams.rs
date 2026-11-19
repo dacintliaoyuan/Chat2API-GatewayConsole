@@ -22,7 +22,7 @@ use um_broker::server::serve_management_cycle;
 use um_broker::transport::unix::UnixListener;
 use um_console::broker_write::{production_write_seams, BrokerManagementSeams};
 use um_console::share_write::{ShareWriteErrorKind, ShareWriteSeams, ShareWriteStore};
-use um_test_harness::TempDataDir;
+use um_test_harness::{HttpResponse, TempDataDir, TestServer};
 
 mod support;
 
@@ -42,6 +42,8 @@ struct ScriptedBroker {
     mode: Mutex<PublishMode>,
     publishes: Mutex<Vec<Map<String, Value>>>,
     emergencies: AtomicUsize,
+    host_verify_calls: AtomicUsize,
+    host_running: AtomicBool,
 }
 
 impl ScriptedBroker {
@@ -50,6 +52,8 @@ impl ScriptedBroker {
             mode: Mutex::new(mode),
             publishes: Mutex::new(Vec::new()),
             emergencies: AtomicUsize::new(0),
+            host_verify_calls: AtomicUsize::new(0),
+            host_running: AtomicBool::new(true),
         }
     }
 
@@ -110,6 +114,12 @@ impl ManagementHandler for ScriptedBroker {
                     })),
                     PublishMode::Error(code) => BrokerResult::err(code, "scripted broker refusal"),
                 }
+            }
+            Action::Management(ManagementAction::HostVerify) => {
+                self.host_verify_calls.fetch_add(1, Ordering::SeqCst);
+                BrokerResult::ok(json!({
+                    "host_running": self.host_running.load(Ordering::SeqCst),
+                }))
             }
             Action::Management(ManagementAction::EmergencyStop) => {
                 self.emergencies.fetch_add(1, Ordering::SeqCst);
@@ -220,6 +230,47 @@ fn writer(
         store_path,
         store_key,
     )
+}
+
+#[test]
+fn gateway_running_reads_the_broker_host_verify_evidence() {
+    let temp = TempDataDir::new("um-console-broker-host-verify-").expect("temp dir");
+    let socket = temp.path().join("broker.sock");
+    let broker = Arc::new(ScriptedBroker::new(PublishMode::Ack));
+    let _server = BrokerServer::start(&socket, Arc::clone(&broker));
+    let seams = seams(&socket);
+
+    assert_eq!(seams.gateway_running(), Some(true));
+    broker.host_running.store(false, Ordering::SeqCst);
+    assert_eq!(seams.gateway_running(), Some(false));
+    assert_eq!(broker.host_verify_calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn the_private_probe_reads_models_and_returns_a_bounded_outcome() {
+    let temp = TempDataDir::new("um-console-probe-private-").expect("temp dir");
+    let socket = temp.path().join("broker.sock");
+    let broker = Arc::new(ScriptedBroker::new(PublishMode::Ack));
+    let _server = BrokerServer::start(&socket, Arc::clone(&broker));
+    let upstream = TestServer::start(|request| match request.path.as_str() {
+        "/v1/models" => HttpResponse::json(200, r#"{"data":[{"id":"fixture-model"}]}"#),
+        _ => HttpResponse::text(404, "not found"),
+    })
+    .expect("upstream");
+    let seams = BrokerManagementSeams::new(
+        socket,
+        BROKER_SECRET.to_string(),
+        upstream.port(),
+    );
+
+    let outcome = seams
+        .probe_models_private("fixture-secret")
+        .expect("probe outcome");
+    assert_eq!(outcome["connected"], json!(true), "{outcome}");
+    assert_eq!(outcome["stage"], json!("models"));
+    assert_eq!(outcome["http_status"], json!(200));
+    assert_eq!(outcome["model"], json!("fixture-model"));
+    assert_eq!(outcome["reason"], json!("ok"));
 }
 
 #[test]
