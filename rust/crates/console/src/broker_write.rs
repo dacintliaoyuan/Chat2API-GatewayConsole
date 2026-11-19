@@ -38,20 +38,27 @@ pub const MAX_TERMINATE_KEYS: usize = 16;
 pub struct BrokerManagementSeams {
     socket_path: PathBuf,
     secret: String,
+    /// The gateway loopback port the private Key probe addresses.
+    gateway_port: u16,
 }
 
 impl BrokerManagementSeams {
-    pub fn new(socket_path: PathBuf, secret: String) -> Self {
+    pub fn new(socket_path: PathBuf, secret: String, gateway_port: u16) -> Self {
         Self {
             socket_path,
             secret,
+            gateway_port,
         }
     }
 
     /// Build the seam only when the socket endpoint exists and the control key
     /// is readable by the current user. Any missing, foreign or wider key file
     /// keeps the unwired default instead of degrading the key gate.
-    pub fn from_paths(socket_path: Option<&Path>, control_key_file: Option<&Path>) -> Option<Self> {
+    pub fn from_paths(
+        socket_path: Option<&Path>,
+        control_key_file: Option<&Path>,
+        gateway_port: u16,
+    ) -> Option<Self> {
         use std::os::unix::fs::FileTypeExt;
 
         let socket_path = socket_path?;
@@ -61,7 +68,7 @@ impl BrokerManagementSeams {
             return None;
         }
         let secret = read_control_key(control_key_file).ok()?;
-        Some(Self::new(socket_path.to_path_buf(), secret))
+        Some(Self::new(socket_path.to_path_buf(), secret, gateway_port))
     }
 
     fn exchange(
@@ -127,6 +134,77 @@ impl ShareWriteSeams for BrokerManagementSeams {
             .exchange("host-verify", Value::Object(fields), PUBLISH_DEADLINE)
             .ok()?;
         result.result().get("host_running").and_then(Value::as_bool)
+    }
+
+    /// The explicit version-bound public probe: one `/v1/models` read and one
+    /// minimal non-stream inference through the configured public origin. The Key
+    /// plaintext stays in this process; only the bounded outcome is returned.
+    fn probe_models(&self, secret: &str, public_url: &str) -> Option<Value> {
+        let started = std::time::Instant::now();
+        let config = um_gateway::config::GatewayConfig {
+            upstream_base_url: public_url.to_string(),
+            upstream_timeout: Duration::from_secs(20),
+            ..um_gateway::config::GatewayConfig::default()
+        };
+        let client = um_gateway::readonly::UpstreamClient::from_config(&config).ok()?;
+        let model = first_model(&client, secret)?;
+        let body = json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+            "stream": false,
+        });
+        let outcome = client
+            .request(
+                "POST",
+                "/v1/chat/completions",
+                Some(secret),
+                Some(serde_json::to_vec(&body).ok()?.as_slice()),
+                Duration::from_secs(60),
+            )
+            .ok()?;
+        if outcome.status != 200 {
+            return None;
+        }
+        let host = public_url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .unwrap_or_default()
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        Some(json!({
+            "connected": true,
+            "reason": Value::Null,
+            "stage": "inference",
+            "http_status": 200,
+            "model": model,
+            "public_ip": host,
+            "elapsed_ms": started.elapsed().as_millis() as u64,
+        }))
+    }
+
+    /// The private loopback probe: one Key-authenticated `/v1/models` read.
+    fn probe_models_private(&self, secret: &str) -> Option<Value> {
+        let started = std::time::Instant::now();
+        let config = um_gateway::config::GatewayConfig {
+            upstream_base_url: format!("http://127.0.0.1:{}", self.gateway_port),
+            upstream_timeout: Duration::from_secs(20),
+            ..um_gateway::config::GatewayConfig::default()
+        };
+        let client = um_gateway::readonly::UpstreamClient::from_config(&config).ok()?;
+        let model = first_model(&client, secret)?;
+        Some(json!({
+            "connected": true,
+            "reason": Value::Null,
+            "stage": "models",
+            "http_status": 200,
+            "model": model,
+            "elapsed_ms": started.elapsed().as_millis() as u64,
+        }))
     }
 
     fn publish(
@@ -216,10 +294,26 @@ pub fn production_write_seams(config: &ConsoleConfig) -> std::sync::Arc<dyn Shar
     if let Some(seams) = BrokerManagementSeams::from_paths(
         config.broker_socket_path.as_deref(),
         config.broker_control_key_file.as_deref(),
+        config.gateway_port,
     ) {
         return std::sync::Arc::new(seams);
     }
     std::sync::Arc::new(UnwiredWriteSeams)
+}
+
+/// The first model id from one Key-authenticated `/v1/models` read.
+fn first_model(client: &um_gateway::readonly::UpstreamClient, secret: &str) -> Option<String> {
+    let (status, payload) = client.get_json_probe("/v1/models", Some(secret)).ok()?;
+    if status != 200 {
+        return None;
+    }
+    payload?
+        .get("data")
+        .and_then(Value::as_array)
+        .and_then(|data| data.first())
+        .and_then(|model| model.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn management_request(

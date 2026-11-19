@@ -110,6 +110,7 @@ function keyRowHtml(model: CloudModel, key: ShareKeyRow): string {
           : ""
       }
       <input class="cloud-key-cap mono" type="number" min="1" max="48" step="1" inputmode="numeric" value="${escapeHtml(capValue)}" data-cloud-key-cap-input="${escapeHtml(id)}" aria-label="Key ${escapeHtml(key.name || id)} 的并发上限"${disabled}>
+      <button type="button" class="cloud-key-rename" data-cloud-key-action="rename:${escapeHtml(id)}"${disabled}>改名</button>
       <button type="button" class="cloud-key-test-btn" data-cloud-key-action="test:${escapeHtml(id)}" data-tone="${keyTestTone(test)}"${testDisabled}>${escapeHtml(keyTestLabel(test))}</button>
       <button type="button" class="cloud-key-revoke" data-cloud-key-action="revoke:${escapeHtml(id)}"${disabled}>撤销</button>
     </div>
@@ -498,6 +499,26 @@ export function createKeysPage(ctx: KeysPageContext) {
       { max_concurrency: submission.value },
       `并发上限已保存为 ${submission.value}`
     );
+  }
+
+  /** Rename one Key. The PATCH carries the row version; a stale version is
+   *  refused instead of overwriting a concurrent change. */
+  async function renameKey(id: string): Promise<void> {
+    const row = keyRow(id);
+    if (!row) {
+      setNotice(id, "warn", "Key 列表已变化，找不到该 Key");
+      return;
+    }
+    const current = typeof row.name === "string" ? row.name : "";
+    const next = window.prompt("新的 Key 名称（1–64 个字符）", current);
+    if (next === null) return;
+    const name = next.trim();
+    if (!name || name.length > 64) {
+      setNotice(id, "warn", "名称需为 1–64 个字符");
+      return;
+    }
+    if (name === current) return;
+    await patchKey(id, { name }, "已改名");
   }
 
   async function patchKey(
@@ -936,6 +957,7 @@ export function createKeysPage(ctx: KeysPageContext) {
     else if (action === "show") toggleSecret(id);
     else if (action === "hide") hideSecret(id);
     else if (action === "copy") await copySecret(id);
+    else if (action === "rename") await renameKey(id);
     else if (action === "test") await testKey(id);
     else if (action === "test-private") await testKey(id, true);
     else if (action === "rotate") await rotateKey(id);

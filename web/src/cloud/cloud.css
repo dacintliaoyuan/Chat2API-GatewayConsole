@@ -731,6 +731,7 @@
   text-align: right;
 }
 .cloud-key-copy,
+.cloud-key-rename,
 .cloud-key-revoke {
   min-height: 36px;
   padding: 0 12px;

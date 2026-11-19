@@ -205,6 +205,7 @@ fn seams(socket: &Path) -> Arc<dyn ShareWriteSeams> {
     Arc::new(BrokerManagementSeams::new(
         socket.to_path_buf(),
         BROKER_SECRET.to_string(),
+        8003,
     ))
 }
 

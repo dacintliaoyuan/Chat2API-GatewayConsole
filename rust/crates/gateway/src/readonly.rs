@@ -76,6 +76,11 @@ impl UpstreamFailure {
     }
 }
 
+/// A browser-like User-Agent: the public Cloudflare edge refuses requests
+/// without a browser signature (error 1010); the loopback upstream ignores the
+/// header. It is a request header, not a credential.
+pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+
 /// A minimal HTTP/1.1 client for the loopback upstream.
 pub struct UpstreamClient {
     host: String,
@@ -148,9 +153,10 @@ impl UpstreamClient {
             Box::new(stream)
         };
         let mut request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\n\
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json
+User-Agent: {}\r\n\
              Connection: close\r\n",
-            self.host_header
+            self.host_header, USER_AGENT
         );
         if let Some(bearer) = bearer {
             request.push_str(&format!("Authorization: Bearer {bearer}\r\n"));
