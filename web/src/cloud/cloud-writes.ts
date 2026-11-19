@@ -125,3 +125,16 @@ export async function setDisplayOperator(
     30_000
   );
 }
+
+/** D18-10: mint a one-time, origin-bound display grant. The page opens the
+ *  returned `/display/grant#grant=...` URL; that page exchanges the grant for
+ *  the HttpOnly display-session cookie. Opening `/display/` directly has no
+ *  display session and is denied. */
+export async function requestDisplayGrant(): Promise<KeyWriteOutcome> {
+  return shareKeyWrite(
+    "POST",
+    "/api/console/share-management/display-grant",
+    {},
+    30_000
+  );
+}

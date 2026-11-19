@@ -11,7 +11,7 @@ import {
   type OperationRow,
   type ReadState,
 } from "../cloud-reads";
-import { cancelBackendLogin } from "../cloud-writes";
+import { cancelBackendLogin, requestDisplayGrant } from "../cloud-writes";
 import {
   AUTH_SOURCE_WORD,
   authWord,
@@ -671,7 +671,16 @@ export function createStatusActions(ctx: StatusActionsContext) {
       render();
       return;
     }
-    const url = safeDisplayUrl(value.url);
+    // `/display/` needs the HttpOnly display-session cookie. Mint a one-time
+    // grant and open its exchange page instead; opening `/display/` directly
+    // would be denied because the console session is not a display session.
+    const grant = await requestDisplayGrant();
+    if (!grant.ok) {
+      displayFeedback("warn", `未打开：${grant.reason}`);
+      render();
+      return;
+    }
+    const url = safeDisplayUrl(grant.data.url);
     if (!url) {
       displayFeedback(
         "warn",
