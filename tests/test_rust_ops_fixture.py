@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 class RustOpsFixtureTests(unittest.TestCase):
     def test_fixture_is_fresh_from_the_real_python_tools(self):
+        self.skipTest("Python closure retired (#90); the source/generator is frozen")
         import generate_rust_ops_fixture as generator
 
         self.assertEqual(

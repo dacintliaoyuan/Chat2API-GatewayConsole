@@ -350,7 +350,7 @@ class RustReleaseScriptTests(unittest.TestCase):
         manifest = _read("make-manifest.py")
         self.assertIn('RUNTIMES = ("python", "rust")', manifest)
         self.assertIn('parser.add_argument("--runtime"', manifest)
-        self.assertIn('"runtime": getattr(args, "runtime", "python")', manifest)
+        self.assertIn('"runtime": args.runtime', manifest)
 
     def test_install_selects_the_runtime_unit_set_and_port(self):
         install = _read("install.sh")

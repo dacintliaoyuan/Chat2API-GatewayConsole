@@ -34,7 +34,7 @@ PYTHON="${PYTHON:-python3}"
 # python keeps the 8100/8096 rollback release; rust carries the production
 # um-gateway binary and the 8003/8002 units.  The binary is built outside this
 # script (cargo build --release) and passed in, so packaging never cross-builds.
-RUNTIME="python"
+RUNTIME="rust"
 RUST_BIN=""
 RUST_CONSOLE_BIN=""
 
@@ -51,8 +51,8 @@ Options:
                          (default: cloud; local|cloud)
   --allow-missing-web    package without a console tree (console root will answer 500)
   --wheelhouse PATH      optional offline wheelhouse copied into the payload
-  --runtime RUNTIME      python (default) keeps the 8100/8096 rollback release;
-                         rust carries the um-gateway production entry
+  --runtime RUNTIME      rust (default) carries the um-gateway production entry;
+                         python is frozen (use the pre-built rollback release)
   --rust-bin PATH        built um-gateway binary (required with --runtime rust)
   --rust-console-bin PATH
                          built um-console binary (required with --runtime rust)
@@ -101,11 +101,9 @@ if [ "$RUNTIME" = "rust" ]; then
   [ -f "$RUST_CONSOLE_BIN" ] || \
     die "rust console binary not found: $RUST_CONSOLE_BIN" "$EX_NOINPUT"
 fi
-[ -f "$SOURCE/usagesrv.py" ] || die "source root lacks usagesrv.py: $SOURCE" "$EX_NOINPUT"
-[ -f "$SOURCE/chat2api/share_auth.py" ] || \
-  die "source root lacks chat2api/share_auth.py" "$EX_NOINPUT"
-[ -f "$SOURCE/chat2api/chat2api.py" ] || \
-  die "source root lacks chat2api/chat2api.py" "$EX_NOINPUT"
+if [ "$RUNTIME" = "python" ]; then
+  die "Python release is frozen; the rollback target is the pre-built release s2-20261117b" "$EX_USAGE"
+fi
 [ -f "$DEPLOY_ROOT/make-manifest.py" ] || \
   die "make-manifest.py missing: $DEPLOY_ROOT" "$EX_NOINPUT"
 [ -f "$DEPLOY_ROOT/dependencies.lock.json" ] || \

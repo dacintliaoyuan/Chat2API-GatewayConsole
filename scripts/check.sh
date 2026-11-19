@@ -31,7 +31,7 @@ if [ ! -d web/node_modules ]; then
   fi
 fi
 
-run python -m compileall -q chat2api . -x '(^|[/\\])(node_modules|web/node_modules|\.git|\.worktrees)([/\\]|$)'
+run python -m compileall -q . -x '(^|[/\\])(node_modules|web/node_modules|\.git|\.worktrees)([/\\]|$)'
 run python -m ruff check .
 run python scripts/check_share_names.py
 run python scripts/check_retired_features.py
@@ -46,12 +46,8 @@ web_run npm run check:um
 case "${1:-}" in
   --quick)
     run python -m unittest \
-      tests.test_share_gate_merged \
-      tests.test_share_gate_citations \
       tests.test_check_gate \
       tests.test_rust_contract_fixture \
-      tests.test_r19_um_imports \
-      tests.test_console_share_production \
       tests.test_cloud_deploy_assembly \
       tests.test_cloud_rollback_release \
       tests.test_cloud_deploy_rust_release \
