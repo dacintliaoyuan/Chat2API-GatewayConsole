@@ -873,6 +873,35 @@ fn a_successful_headless_login_writes_the_token_and_publishes_it() {
 }
 
 #[test]
+fn a_background_round_gets_a_fresh_deadline_after_an_expired_explicit_window() {
+    let temp = TempDir::new("um-rust-login-round-deadline-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("first-token"));
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+        |config| config.login_timeout = Duration::from_millis(700),
+    );
+
+    let first = service.start_explicit(false);
+    wait_for(&service, |status| status["state"] == json!("valid"));
+    let old_deadline = first["login_window_deadline_epoch"].as_f64().unwrap();
+    thread::sleep(Duration::from_millis(750));
+
+    page.closed.store(false, Ordering::SeqCst);
+    page.set_token(Some("second-token"));
+    let _ = service.reauthenticate_for(
+        Instant::now() + Duration::from_secs(2),
+        ReauthTrigger::BusinessRequest,
+    );
+    let next = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(next["recovery"]["round"], json!(2));
+    assert!(next["login_window_deadline_epoch"].as_f64().unwrap() > old_deadline);
+    assert_eq!(factory.requests().len(), 2);
+}
+
+#[test]
 fn a_slow_umpass_form_is_not_reported_as_prefill_missing() {
     let temp = TempDir::new("um-rust-login-slow-umpass-");
     let page = FakePage::new("http://127.0.0.1:9", None);

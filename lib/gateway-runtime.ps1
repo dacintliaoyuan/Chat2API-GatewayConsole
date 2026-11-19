@@ -1335,6 +1335,18 @@ function Start-GatewayService {
                         }
                     }
                 }
+                if ($Key -eq 'chat2api' -and $startPath -match '\.exe$') {
+                    # Optional machine-local Playwright driver. Removing this
+                    # file and restarting restores the native Rust driver.
+                    $pythonFile = Join-Path (Get-GatewayRoot) 'data\login-playwright-python'
+                    if (Test-Path -LiteralPath $pythonFile -PathType Leaf) {
+                        $pythonPath = (Get-Content -LiteralPath $pythonFile -Raw).Trim()
+                        if (-not [IO.Path]::IsPathRooted($pythonPath)) {
+                            throw 'data/login-playwright-python must contain an absolute Python executable path'
+                        }
+                        $childEnv['CHAT2API_LOGIN_PLAYWRIGHT_PYTHON'] = $pythonPath
+                    }
+                }
                 # #80: the chat2api descriptor points StartPath at the Rust
                 # executable and carries its arguments + working directory.
                 # A batch StartPath (the Python rollback) ignores the arguments

@@ -9,6 +9,8 @@
 //! the credential sink are seams: tests use fakes and never open a browser.
 
 pub mod browser;
+#[cfg(windows)]
+mod playwright;
 pub mod probe;
 pub mod profile;
 pub mod token;
@@ -36,6 +38,19 @@ pub use self::browser::{
 pub use self::probe::{CredentialProbe, CredentialVerdict, HttpCredentialProbe};
 pub use self::profile::DisplayEnvironment;
 pub use self::token::{TokenDocument, TokenStore as TokenStoreSeam};
+
+pub(crate) fn production_browser_factory(config: &GatewayConfig) -> Arc<dyn LoginBrowserFactory> {
+    #[cfg(windows)]
+    if !config.candidate && config.role == crate::config::Role::Local {
+        if let Some(python) = std::env::var_os("CHAT2API_LOGIN_PLAYWRIGHT_PYTHON")
+            .filter(|python| !python.is_empty())
+        {
+            return Arc::new(playwright::PlaywrightFactory(python.into()));
+        }
+    }
+    let _ = config;
+    Arc::new(SystemBrowserFactory)
+}
 
 pub const MANUAL_TAKEOVER_REQUIRED_PREFIX: &str = "manual_takeover_required:";
 const PROTECTED_AUTOFILL_REASON: &str = "umpass_autofill_protected";
@@ -423,6 +438,7 @@ struct LoginState {
 }
 
 struct LoginSession {
+    deadline: Instant,
     cancel: AtomicBool,
     result: Mutex<Option<LoginOutcome>>,
     condvar: Condvar,
@@ -589,7 +605,6 @@ impl LoginService {
                 if visible {
                     state.recovery.visible = true;
                 }
-                begin_login_window(&mut state, &self.inner.config);
                 self.inner.condvar.notify_all();
                 return status_from_locked(&state, &self.inner.watch);
             }
@@ -598,7 +613,6 @@ impl LoginService {
                 state.primary = None;
                 state.login = None;
             }
-            begin_login_window(&mut state, &self.inner.config);
             if let Err(retry_after) = self.inner.allow_start() {
                 state.auth_state = AuthState::NeedsLogin;
                 state.error = Some("reauth_refused:global_attempt_cap".to_string());
@@ -932,6 +946,12 @@ fn begin_round_locked(
     visible: bool,
     trigger: Option<ReauthTrigger>,
 ) -> Arc<LoginSession> {
+    let timeout = inner.config.login_timeout;
+    let deadline = Instant::now() + timeout;
+    state.login_window = Some(LoginWindow {
+        window_s: timeout.as_secs_f64(),
+        deadline_epoch: profile::epoch_now() + timeout.as_secs_f64(),
+    });
     state.round += 1;
     state.recovery.round = state.round;
     state.recovery.state = "running".to_string();
@@ -962,6 +982,7 @@ fn begin_round_locked(
         "checked_epoch": profile::epoch_now(),
     }));
     let session = Arc::new(LoginSession {
+        deadline,
         cancel: AtomicBool::new(false),
         result: Mutex::new(None),
         condvar: Condvar::new(),
@@ -976,23 +997,6 @@ fn begin_round_locked(
 
 fn active_round(state: &LoginState) -> bool {
     state.recovery.state == "running" || state.recovery.state == "waiting"
-}
-
-fn begin_login_window(state: &mut LoginState, config: &LoginConfig) {
-    if state
-        .login_window
-        .as_ref()
-        .is_some_and(|window| profile::epoch_now() < window.deadline_epoch)
-        && active_round(state)
-    {
-        return;
-    }
-    let started = profile::epoch_now();
-    let window_s = config.login_timeout.as_secs_f64();
-    state.login_window = Some(LoginWindow {
-        window_s,
-        deadline_epoch: started + window_s,
-    });
 }
 
 fn status_from_locked(state: &LoginState, watch: &WatchStatus) -> Value {
@@ -1059,6 +1063,17 @@ fn run_round(inner: Arc<LoginInner>, round: u64, session: Arc<LoginSession>) {
                 &session,
                 LoginOutcome::Cancelled {
                     reason: "cancelled".to_string(),
+                },
+            );
+            return;
+        }
+        if Instant::now() >= session.deadline {
+            finish(
+                &inner,
+                round,
+                &session,
+                LoginOutcome::Manual {
+                    reason: "timeout".to_string(),
                 },
             );
             return;
@@ -1204,7 +1219,7 @@ fn run_round(inner: Arc<LoginInner>, round: u64, session: Arc<LoginSession>) {
 }
 
 fn wait_for_retry(inner: &Arc<LoginInner>, session: &Arc<LoginSession>, wait: Duration) -> bool {
-    let deadline = Instant::now() + wait;
+    let deadline = (Instant::now() + wait).min(session.deadline);
     while Instant::now() < deadline {
         if session.cancel.load(Ordering::SeqCst) {
             return false;
@@ -1236,9 +1251,14 @@ fn wait_for_visible_continue(inner: &Arc<LoginInner>, session: &Arc<LoginSession
         if state.shutdown || state.recovery.visible {
             return !state.shutdown;
         }
+        let remaining = session.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            // The round loop publishes the expired deadline.
+            return true;
+        }
         let (state, _) = inner
             .condvar
-            .wait_timeout(state, Duration::from_millis(250))
+            .wait_timeout(state, remaining.min(Duration::from_millis(250)))
             .expect("login state poisoned");
         drop(state);
     }
@@ -1449,7 +1469,7 @@ fn drive_login(
         );
     }
 
-    let deadline = login_round_deadline(inner);
+    let deadline = session.deadline;
     let mut idle_deadline = Instant::now() + inner.config.idle_timeout;
     let mut last_url = page.url();
     let mut last_token: Option<String> = None;
@@ -1874,26 +1894,6 @@ fn drive_login(
     let reason = manual_reason.unwrap_or_else(|| "timeout".to_string());
     LoginOutcome::Manual {
         reason: reason.clone(),
-    }
-}
-
-/// The ONE deadline of the current login round. An explicit login fixes the
-/// deadline when the window opens; verification rechecks and status polls never
-/// renew it.
-fn login_round_deadline(inner: &Arc<LoginInner>) -> Instant {
-    let window_deadline = {
-        let state = inner.state.lock().expect("login state poisoned");
-        state
-            .login_window
-            .as_ref()
-            .map(|window| window.deadline_epoch)
-    };
-    match window_deadline {
-        Some(epoch) => {
-            let remaining = (epoch - profile::epoch_now()).max(0.0);
-            Instant::now() + Duration::from_secs_f64(remaining)
-        }
-        None => Instant::now() + inner.config.login_timeout,
     }
 }
 

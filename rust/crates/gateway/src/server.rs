@@ -30,7 +30,8 @@ use crate::http::{
 };
 use crate::ledger::Ledger;
 use crate::login::{
-    CredentialProbe, HttpCredentialProbe, LoginBrowserFactory, LoginService, SystemBrowserFactory,
+    production_browser_factory, CredentialProbe, HttpCredentialProbe, LoginBrowserFactory,
+    LoginService,
 };
 use crate::messages::handle_messages;
 use crate::readonly::ProxyState;
@@ -136,7 +137,7 @@ impl GatewayServer {
                         let probe = HttpCredentialProbe::from_config(&config)
                             .map_err(ServerError::Config)?;
                         (
-                            Arc::new(SystemBrowserFactory),
+                            production_browser_factory(&config),
                             Arc::new(probe) as Arc<dyn CredentialProbe>,
                         )
                     }
