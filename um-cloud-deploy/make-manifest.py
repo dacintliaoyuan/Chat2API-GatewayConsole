@@ -95,6 +95,10 @@ RUST_STATIC_ROOTS = [
     "share/broker_ops.py",
     "share/admin.py",
     "share/metering.py",
+    # Standalone POSIX instance-channel server: included in the release and the
+    # cloud runtime, but no product module imports it, so the AST closure needs
+    # this explicit root.
+    "share/instance_pipe.py",
 ]
 RUST_CLOUD_RUNTIME = [
     "share/management.py",

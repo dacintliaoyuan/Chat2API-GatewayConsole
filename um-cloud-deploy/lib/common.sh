@@ -121,7 +121,9 @@ python_bin() {
     printf '%s\n' "$UM_VENV/bin/python"
     return 0
   fi
-  if command -v python3.14 >/dev/null 2>&1; then
+  # A uv trampoline can exist on PATH while its managed Python is gone; only
+  # a command that actually starts counts as the interpreter.
+  if command -v python3.14 >/dev/null 2>&1      && python3.14 -c 'import sys' >/dev/null 2>&1; then
     command -v python3.14
     return 0
   fi
