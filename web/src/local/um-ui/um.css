@@ -1048,7 +1048,7 @@
 }
 .um-log {
   display: grid;
-  grid-template-columns: 70px 62px minmax(80px, 120px) minmax(0, 1fr);
+  grid-template-columns: 142px 62px minmax(80px, 120px) minmax(0, 1fr);
   align-items: start;
   gap: 10px;
   padding: 6px 4px;
@@ -1076,7 +1076,7 @@
   overflow-wrap: anywhere;
 }
 .um-log-compact .um-log {
-  grid-template-columns: 62px 56px minmax(0, 1fr);
+  grid-template-columns: 142px 56px minmax(0, 1fr);
 }
 .um-log-compact .um-log-src {
   display: none;

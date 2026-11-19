@@ -94,6 +94,46 @@ test("closed-set words fall back for values outside the contract, prototype keys
   assert.equal(um.readingText({ kind: "vanished" }, String), "未知");
 });
 
+test("multi-day runtime logs show the Beijing date and time down to seconds", () => {
+  const state = um.unwiredState().requests;
+  state.logs.query.window = "7d";
+  state.logs.page = ready({
+    lines: [
+      {
+        key: "new",
+        at: Date.UTC(2026, 10, 18, 16, 4, 21),
+        level: "info",
+        source: "chat2api",
+        text: "new",
+        requestId: null,
+      },
+      {
+        key: "old",
+        at: Date.UTC(2026, 10, 17, 16, 4, 21),
+        level: "info",
+        source: "chat2api",
+        text: "old",
+        requestId: null,
+      },
+    ],
+    sources: ["chat2api"],
+    scope: "北京时间近 7 天",
+    earlier: null,
+  });
+  const none = { records: null, logs: null, maintenance: null };
+  const html = um.requestsHtml(state, {
+    view: "logs",
+    search: "",
+    expanded: null,
+    openSteps: new Set(),
+    detailAsked: null,
+    earlier: none,
+    earlierFailed: none,
+  });
+  assert.match(html, /2026-11-19 00:04:21/);
+  assert.match(html, /2026-11-18 00:04:21/);
+});
+
 test("request rows with out-of-contract values render, escaped, without throwing", () => {
   const state = um.unwiredState().requests;
   const row = {

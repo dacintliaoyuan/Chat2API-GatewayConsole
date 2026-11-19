@@ -15,6 +15,7 @@ import type {
 import { ACTION_LABEL } from "./overview";
 import {
   clock,
+  dayKey,
   duration,
   esc,
   freshnessHtml,
@@ -244,7 +245,12 @@ function linkedLogsHtml(
 
 function logLineHtml(line: UmLogLine): string {
   const level = wordOf(LEVEL, line.level, LEVEL.unknown);
-  return `<li class="um-log" data-level="${esc(String(line.level))}"><span class="um-log-time tnum">${line.at === null ? `<span class="um-absent" title="这一行没有可解析的时间">时间缺失</span>` : esc(clock(line.at))}</span><span class="pill" data-tone="${level.tone}">${level.word}</span><span class="um-log-src">${esc(line.source)}</span><code class="um-log-text">${esc(line.text)}</code></li>`;
+  const day = line.at === null ? "" : dayKey(line.at);
+  const timestamp =
+    line.at === null
+      ? `<span class="um-absent" title="这一行没有可解析的时间">时间缺失</span>`
+      : esc(day ? `${day} ${clock(line.at)}` : clock(line.at));
+  return `<li class="um-log" data-level="${esc(String(line.level))}"><span class="um-log-time tnum">${timestamp}</span><span class="pill" data-tone="${level.tone}">${level.word}</span><span class="um-log-src">${esc(line.source)}</span><code class="um-log-text">${esc(line.text)}</code></li>`;
 }
 
 function logsHtml(r: UmRequests, ui: RequestsUi): string {
