@@ -1371,7 +1371,13 @@ fn handle_share_management_write(
                     201,
                     &json!({
                         "key": payload["key"].clone(),
-                        "plaintext": payload["plaintext"],
+                        "plaintext": payload["plaintext"].clone(),
+                        // #111: the create response keeps the publication outcome
+                        // the writer recorded. A broker refusal is never hidden:
+                        // the key is in the store but `published=false` and the
+                        // reason ride the same 201 body.
+                        "published": payload["published"].clone(),
+                        "publication_error": payload["publication_error"].clone(),
                     }),
                 ),
                 Err(error) => share_write_error(&error),

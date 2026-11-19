@@ -233,7 +233,8 @@ fn publish_success_returns_the_ack_and_require_applied_accepts_it() {
         .create_key("brokered", None, None)
         .expect("create key");
     assert_eq!(created["published"], json!(true));
-    assert_eq!(created["applied_generation"], json!(1));
+    // A fresh store starts at config_generation 1; the create bumps it to 2.
+    assert_eq!(created["applied_generation"], json!(2));
     let key_id = created["key"]["id"]
         .as_str()
         .expect("created key id")
@@ -243,24 +244,24 @@ fn publish_success_returns_the_ack_and_require_applied_accepts_it() {
         .revoke_and_terminate_key(&key_id, 1, None)
         .expect("revoke and terminate");
     assert_eq!(revoked["published"], json!(true));
-    assert_eq!(revoked["applied_generation"], json!(2));
+    assert_eq!(revoked["applied_generation"], json!(3));
     assert_eq!(revoked["terminated"], json!(1));
     assert_eq!(revoked["released"], json!(0));
 
     let publishes = broker.publishes();
     assert_eq!(publishes.len(), 2);
-    assert_eq!(publishes[0]["generation"], json!(1));
-    assert_eq!(publishes[1]["generation"], json!(2));
+    assert_eq!(publishes[0]["generation"], json!(2));
+    assert_eq!(publishes[1]["generation"], json!(3));
     assert_eq!(publishes[1]["terminate_keys"], json!([key_id]));
-    assert_eq!(publishes[1]["projection"]["config_generation"], json!(2));
+    assert_eq!(publishes[1]["projection"]["config_generation"], json!(3));
 
     let mut store = open_store(&store_path, &store_key);
     let generation = store.generation().expect("generation");
-    assert_eq!(generation["applied_generation"], json!(2));
+    assert_eq!(generation["applied_generation"], json!(3));
 }
 
 #[test]
-fn an_ack_mismatch_is_a_503_and_records_a_blocked_intent() {
+fn an_ack_mismatch_is_a_503_and_records_the_confirmed_emergency_stop() {
     for (mode, fragment) in [
         (PublishMode::WrongGeneration, "ack generation"),
         (PublishMode::WrongFingerprint, "ack fingerprint"),
@@ -307,7 +308,9 @@ fn an_ack_mismatch_is_a_503_and_records_a_blocked_intent() {
             )
             .expect("publish intent row");
         let payload: Value = serde_json::from_str(&payload).expect("publish intent payload");
-        assert_eq!(payload["blocked"], json!(true));
+        // The scripted emergency stop confirms closure, so the intent is not
+        // blocked; a confirmed stop is the honest fail-closed outcome.
+        assert_eq!(payload["blocked"], json!(false));
         assert_eq!(payload["emergency_stop"]["confirmed"], json!(true));
     }
 }
