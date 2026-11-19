@@ -136,6 +136,27 @@ pub struct AppState {
     services_cache: Mutex<Option<(Value, Instant)>>,
 }
 
+/// The production read seams: display/auth from the display relay and the
+/// three-state gateway evidence from the broker management channel.
+struct ProductionReadSeams {
+    display: DisplaySeams,
+    write_seams: Arc<dyn ShareWriteSeams>,
+}
+
+impl ShareReadSeams for ProductionReadSeams {
+    fn auth_observation(&self) -> Option<Value> {
+        self.display.auth_observation()
+    }
+
+    fn display_availability(&self) -> Option<Value> {
+        self.display.display_availability()
+    }
+
+    fn gateway_running(&self) -> Option<bool> {
+        self.write_seams.gateway_running()
+    }
+}
+
 pub struct ServerHandle {
     addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
@@ -183,7 +204,11 @@ impl ConsoleServer {
             config.gateway_port,
             config.control_token_file.clone(),
         );
-        Self::start_with_seams_write(config, runtime, Arc::new(display), write_seams)
+        let share_seams: Arc<dyn ShareReadSeams> = Arc::new(ProductionReadSeams {
+            display,
+            write_seams: Arc::clone(&write_seams),
+        });
+        Self::start_with_seams_write(config, runtime, share_seams, write_seams)
     }
 
     pub fn start_with_seams(

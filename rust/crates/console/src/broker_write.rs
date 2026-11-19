@@ -119,6 +119,16 @@ impl BrokerManagementSeams {
 }
 
 impl ShareWriteSeams for BrokerManagementSeams {
+    /// `BrokerClientAdapter.host_verify("running")`: three-state evidence.
+    fn gateway_running(&self) -> Option<bool> {
+        let mut fields = Map::new();
+        fields.insert("check".to_string(), json!("running"));
+        let result = self
+            .exchange("host-verify", Value::Object(fields), PUBLISH_DEADLINE)
+            .ok()?;
+        result.result().get("host_running").and_then(Value::as_bool)
+    }
+
     fn publish(
         &self,
         projection: &Value,
