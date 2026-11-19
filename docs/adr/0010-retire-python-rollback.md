@@ -13,7 +13,7 @@ ADR 0009 把 Rust 迁移限定在常驻服务，并保留 Python 回滚实现：
 
 ## Preconditions
 
-1. 新 Rust 8003 已部署到云端，并在一个发布窗口 / 7 天真实流量下观察；期间完成一次“新 Rust → 旧 release → 再切回”的回滚演练。
+1. 新 Rust 8003 已部署到云端，并在 24 小时真实流量下观察（2026-11-19 决定，原为 7 天；主要风险由真实失效/恢复记录和回滚演练覆盖，24 小时只保留周级异常的观察）；期间完成一次“新 Rust → 旧 release → 再切回”的回滚演练。
 2. 本机 8001 的 12 个动作（`service.*`、`account.*`、`model.context_*`、`model.catalog`）与 `model_sync` 已迁到 Rust，不再调用 Python sidecar。
 3. 云端旧 release（至少 `s2-20261117b`）仍可回滚；旧 release 自带 Python，不依赖仓库里的 Python 文件。
 4. 本地回滚包已生成：`tmp/python-rollback-<date>.tar.gz`（gitignored），包含 `usagesrv.py`、`chat2api/`、`console/`、`shared/`、`model_sync/`、`start_chat2api.bat`、`start_usage_service.bat` 与 `um-share-console-python.service`。
