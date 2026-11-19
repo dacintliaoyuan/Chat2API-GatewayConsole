@@ -55,11 +55,20 @@ impl TokenStore {
     }
 
     /// Persist the credential through a controlled atomic replace.
+    ///
+    /// A login round has no new API key to publish; `None` keeps the API key the
+    /// operator saved into the same document instead of erasing it.
     pub fn save(&self, token: &str, api_key: Option<&str>) -> io::Result<TokenDocument> {
+        let api_key = api_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| self.load().and_then(|document| document.api_key))
+            .filter(|value| !value.trim().is_empty());
         let document = TokenDocument {
             url: self.url.clone(),
             token: token.to_string(),
-            api_key: api_key.map(str::to_string),
+            api_key,
             saved_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         };
         let raw = serde_json::to_vec_pretty(&document)
@@ -157,12 +166,16 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir() -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|value| value.as_nanos())
             .unwrap_or_default();
-        let path =
-            std::env::temp_dir().join(format!("um-login-token-{}-{stamp}", std::process::id()));
+        let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "um-login-token-{}-{stamp}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir_all(&path).expect("temp dir");
         path
     }
@@ -195,6 +208,48 @@ mod tests {
         other.save("other-token", None).expect("save");
         let store = TokenStore::new(dir.join("token.json"), "http://127.0.0.1:8000");
         assert!(store.load().is_none());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn saving_a_new_token_preserves_a_manually_saved_api_key() {
+        let dir = temp_dir();
+        let store = TokenStore::new(dir.join("token.json"), "http://127.0.0.1:8000");
+        store
+            .save("first-token", Some("manual-api-key"))
+            .expect("save");
+        let saved = store.save("second-token", None).expect("save");
+        assert_eq!(saved.api_key.as_deref(), Some("manual-api-key"));
+        let raw = fs::read_to_string(store.path()).expect("read token");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("json");
+        assert_eq!(value["token"], "second-token");
+        assert_eq!(value["api_key"], "manual-api-key");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_empty_api_key_never_clears_the_manually_saved_one() {
+        let dir = temp_dir();
+        let store = TokenStore::new(dir.join("token.json"), "http://127.0.0.1:8000");
+        store
+            .save("first-token", Some("manual-api-key"))
+            .expect("save");
+        let saved = store.save("second-token", Some("")).expect("save");
+        assert_eq!(saved.api_key.as_deref(), Some("manual-api-key"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_explicit_api_key_replaces_the_saved_one() {
+        let dir = temp_dir();
+        let store = TokenStore::new(dir.join("token.json"), "http://127.0.0.1:8000");
+        store.save("first-token", Some("old-key")).expect("save");
+        let saved = store.save("second-token", Some("new-key")).expect("save");
+        assert_eq!(saved.api_key.as_deref(), Some("new-key"));
+        assert_eq!(
+            store.load().expect("load").api_key.as_deref(),
+            Some("new-key")
+        );
         let _ = fs::remove_dir_all(dir);
     }
 

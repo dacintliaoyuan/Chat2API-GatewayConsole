@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -17,7 +18,7 @@ use crate::config::{
 };
 use crate::error::GatewayError;
 use crate::http::Response;
-use crate::login::CredentialSink;
+use crate::login::{CredentialEvidence, CredentialSink};
 use crate::tls::{self, UpstreamStream};
 use crate::upstream_fault::{
     fault_class_of_status, summarize_error_text, FaultClass, FaultObservation, FaultSource,
@@ -303,10 +304,33 @@ struct UpstreamState {
     last_ok_epoch: Option<f64>,
 }
 
+/// The credential used for one upstream request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpstreamCredential {
+    pub value: String,
+    /// True when the value is the operator-saved Open WebUI API key.
+    pub api_key: bool,
+}
+
+/// The last completed credential probe, kept for the durable auth state file.
+#[derive(Debug, Clone)]
+struct StoredCredentialObservation {
+    checked_epoch: f64,
+    verdict: &'static str,
+    reason: Option<&'static str>,
+    upstream_status: Option<u16>,
+    summary: Option<String>,
+}
+
 /// The read-only proxy state shared by every request.
 pub struct ProxyState {
     pub base_url: String,
     bearer: Arc<Mutex<String>>,
+    api_key: Mutex<Option<String>>,
+    api_key_rejected: AtomicBool,
+    credential_observation: Mutex<Option<StoredCredentialObservation>>,
+    last_valid_epoch: Mutex<Option<f64>>,
+    last_auth_rejection_summary: Mutex<Option<String>>,
     pub build_id: String,
     upstream_config: Mutex<Option<Value>>,
     config_freshness: Mutex<ConfigFreshness>,
@@ -333,6 +357,11 @@ impl ProxyState {
         Ok(Self {
             base_url: config.upstream_base_url.clone(),
             bearer,
+            api_key: Mutex::new(None),
+            api_key_rejected: AtomicBool::new(false),
+            credential_observation: Mutex::new(None),
+            last_valid_epoch: Mutex::new(None),
+            last_auth_rejection_summary: Mutex::new(None),
             build_id,
             upstream_config: Mutex::new(None),
             config_freshness: Mutex::new(ConfigFreshness::default()),
@@ -449,7 +478,7 @@ impl ProxyState {
     }
 
     fn auth_state(&self) -> &'static str {
-        if self.bearer().is_empty() {
+        if self.upstream_credential().value.is_empty() {
             "needs_login"
         } else {
             "valid"
@@ -595,16 +624,37 @@ impl ProxyState {
     }
 
     fn classify_credential(&self) -> CredentialObservation {
-        let bearer = self.bearer();
-        if bearer.is_empty() {
-            return CredentialObservation {
+        let credential = self.upstream_credential();
+        if credential.value.is_empty() {
+            return self.record_credential_observation(CredentialObservation {
                 verdict: "needs_login",
                 reason: Some("no_local_credential"),
                 upstream_status: None,
                 summary: None,
-            };
+            });
         }
-        match self.upstream.get_json_probe("/api/models", Some(&bearer)) {
+        let mut observation = self.probe_credential(&credential.value);
+        if credential.api_key && observation.verdict == "rejected" {
+            // An operator-saved API key may be stale. It must never wedge the
+            // gateway: mark it rejected for evidence, then let the JWT bearer
+            // try the same probe once.
+            self.mark_api_key_rejected();
+            if let Some(summary) = observation.summary.clone() {
+                self.record_auth_rejection(observation.upstream_status.unwrap_or(0), Some(summary));
+            }
+            let bearer = self.bearer();
+            if !bearer.is_empty() {
+                observation = self.probe_credential(&bearer);
+            }
+        }
+        self.record_credential_observation(observation)
+    }
+
+    fn probe_credential(&self, credential: &str) -> CredentialObservation {
+        match self
+            .upstream
+            .get_json_probe("/api/models", Some(credential))
+        {
             Err(UpstreamFailure::Timeout) => CredentialObservation {
                 verdict: "unknown",
                 reason: Some("timeout"),
@@ -623,7 +673,7 @@ impl ProxyState {
                         verdict: "rejected",
                         reason: Some("upstream_rejected"),
                         upstream_status: Some(status),
-                        summary: None,
+                        summary: summarize_payload(&payload),
                     }
                 } else if (500..=599).contains(&status) {
                     CredentialObservation {
@@ -664,6 +714,27 @@ impl ProxyState {
         }
     }
 
+    fn record_credential_observation(
+        &self,
+        observation: CredentialObservation,
+    ) -> CredentialObservation {
+        let now = epoch_now();
+        if observation.verdict == "valid" {
+            *self.last_valid_epoch.lock().expect("last valid poisoned") = Some(now);
+        }
+        *self
+            .credential_observation
+            .lock()
+            .expect("credential observation poisoned") = Some(StoredCredentialObservation {
+            checked_epoch: now,
+            verdict: observation.verdict,
+            reason: observation.reason,
+            upstream_status: observation.upstream_status,
+            summary: observation.summary.clone(),
+        });
+        observation
+    }
+
     pub fn version(&self) -> Result<Value, GatewayError> {
         match self.upstream.get_json("/api/version", None) {
             Err(failure) => Err(GatewayError::new(
@@ -701,13 +772,27 @@ impl ProxyState {
 
     /// The model catalog; `raw_fresh` is the share entry's strict refresh.
     pub fn models(&self, raw_fresh: bool) -> Result<(Value, bool), GatewayError> {
-        let bearer = self.bearer();
-        let observed = self.upstream.get_json("/api/models", Some(&bearer));
+        let credential = self.upstream_credential();
+        let observed = self
+            .upstream
+            .get_json("/api/models", Some(&credential.value));
+        let observed = match observed {
+            Ok((status, payload)) if credential.api_key && matches!(status, 401 | 403) => {
+                self.mark_api_key_rejected();
+                self.record_auth_rejection(status, summarize_payload(&payload));
+                let bearer = self.bearer();
+                if bearer.is_empty() {
+                    Ok((status, payload))
+                } else {
+                    self.upstream.get_json("/api/models", Some(&bearer))
+                }
+            }
+            other => other,
+        };
         let fetched = match observed {
             Ok((200, payload)) => {
                 let valid = payload.as_ref().is_some_and(|payload| {
-                    payload.is_object()
-                        && payload.get("data").and_then(Value::as_array).is_some()
+                    payload.is_object() && payload.get("data").and_then(Value::as_array).is_some()
                 });
                 if valid {
                     self.faults.record_recovery(
@@ -720,7 +805,8 @@ impl ProxyState {
                     payload.is_object() && payload.get("data").and_then(Value::as_array).is_some()
                 })
             }
-            Ok((401 | 403, _)) => {
+            Ok((status, payload)) if matches!(status, 401 | 403) => {
+                self.record_auth_rejection(status, summarize_payload(&payload));
                 return Err(GatewayError::reauthentication_required(Some(
                     "upstream_rejected",
                 )));
@@ -783,11 +869,31 @@ impl ProxyState {
         path: &str,
         body: Option<&[u8]>,
     ) -> Result<Response, GatewayError> {
-        let bearer = self.bearer();
-        let response = self
+        let credential = self.upstream_credential();
+        let mut response = self
             .upstream
-            .request(method, path, Some(&bearer), body, PASSTHROUGH_TIMEOUT)
+            .request(
+                method,
+                path,
+                Some(&credential.value),
+                body,
+                PASSTHROUGH_TIMEOUT,
+            )
             .map_err(passthrough_failure)?;
+        if credential.api_key && matches!(response.status, 401 | 403) {
+            self.mark_api_key_rejected();
+            self.record_auth_rejection(
+                response.status,
+                summarize_error_text(&String::from_utf8_lossy(&response.body)),
+            );
+            let bearer = self.bearer();
+            if !bearer.is_empty() {
+                response = self
+                    .upstream
+                    .request(method, path, Some(&bearer), body, PASSTHROUGH_TIMEOUT)
+                    .map_err(passthrough_failure)?;
+            }
+        }
         if response.status >= 400 {
             let text = String::from_utf8_lossy(&response.body).to_string();
             return Err(GatewayError::upstream_status_error(
@@ -858,6 +964,106 @@ impl ProxyState {
         self.bearer.lock().expect("bearer poisoned").clone()
     }
 
+    /// The preferred upstream credential: the saved API key first, the JWT bearer
+    /// second. A rejected API key is skipped until a new one is published or the
+    /// process restarts.
+    pub fn upstream_credential(&self) -> UpstreamCredential {
+        let api_key = self
+            .api_key
+            .lock()
+            .expect("api key poisoned")
+            .clone()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if let Some(api_key) = api_key {
+            if !self.api_key_rejected.load(Ordering::SeqCst) {
+                return UpstreamCredential {
+                    value: api_key,
+                    api_key: true,
+                };
+            }
+        }
+        UpstreamCredential {
+            value: self.bearer(),
+            api_key: false,
+        }
+    }
+
+    /// Store the operator-saved API key loaded from `token.json`.
+    pub fn set_api_key(&self, api_key: Option<&str>) {
+        let normalized = api_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        *self.api_key.lock().expect("api key poisoned") = normalized;
+        self.api_key_rejected.store(false, Ordering::SeqCst);
+    }
+
+    /// Mark the operator-saved API key as rejected by the upstream.
+    pub fn mark_api_key_rejected(&self) {
+        self.api_key_rejected.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether an operator-saved API key exists (never its value).
+    pub fn api_key_present(&self) -> bool {
+        self.api_key
+            .lock()
+            .expect("api key poisoned")
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    }
+
+    /// Whether the operator-saved API key was rejected by the upstream.
+    pub fn api_key_rejected(&self) -> bool {
+        self.api_key_rejected.load(Ordering::SeqCst)
+    }
+
+    /// Record one 401/403 observation without storing the credential.
+    pub fn record_auth_rejection(&self, _status: u16, summary: Option<String>) {
+        if let Some(summary) = summary {
+            *self
+                .last_auth_rejection_summary
+                .lock()
+                .expect("auth rejection summary poisoned") = Some(summary);
+        }
+    }
+
+    /// The latest credential evidence, without any credential value.
+    pub fn credential_evidence(&self) -> CredentialEvidence {
+        let observation = self
+            .credential_observation
+            .lock()
+            .expect("credential observation poisoned")
+            .clone();
+        CredentialEvidence {
+            checked_epoch: observation
+                .as_ref()
+                .map(|observation| observation.checked_epoch),
+            verdict: observation
+                .as_ref()
+                .map(|observation| observation.verdict.to_string()),
+            reason: observation
+                .as_ref()
+                .and_then(|observation| observation.reason.map(str::to_string)),
+            upstream_status: observation
+                .as_ref()
+                .and_then(|observation| observation.upstream_status),
+            last_valid_epoch: *self.last_valid_epoch.lock().expect("last valid poisoned"),
+            upstream_401_summary: self
+                .last_auth_rejection_summary
+                .lock()
+                .expect("auth rejection summary poisoned")
+                .clone()
+                .or_else(|| {
+                    observation
+                        .as_ref()
+                        .and_then(|observation| observation.summary.clone())
+                }),
+            api_key_present: self.api_key_present(),
+            api_key_rejected: self.api_key_rejected(),
+        }
+    }
+
     /// Publish a newly committed credential into the running process.
     pub fn set_bearer(&self, token: &str) {
         *self.bearer.lock().expect("bearer poisoned") = token.to_string();
@@ -912,9 +1118,23 @@ fn summarize_payload(payload: &Option<Value>) -> Option<String> {
 }
 
 impl CredentialSink for ProxyState {
-    fn publish_credential(&self, token: &str, _api_key: Option<&str>) {
+    fn publish_credential(&self, token: &str, api_key: Option<&str>) {
         self.set_bearer(token);
+        if let Some(api_key) = api_key {
+            let api_key = api_key.trim();
+            let mut stored = self.api_key.lock().expect("api key poisoned");
+            let changed = stored.as_deref() != (!api_key.is_empty()).then_some(api_key);
+            *stored = (!api_key.is_empty()).then(|| api_key.to_string());
+            drop(stored);
+            if changed {
+                self.api_key_rejected.store(false, Ordering::SeqCst);
+            }
+        }
         self.invalidate_models();
+    }
+
+    fn credential_evidence(&self) -> CredentialEvidence {
+        self.credential_evidence()
     }
 }
 
@@ -986,4 +1206,70 @@ fn epoch_now() -> f64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proxy() -> ProxyState {
+        let config = GatewayConfig {
+            upstream_base_url: "http://127.0.0.1:9".to_string(),
+            ..GatewayConfig::default()
+        };
+        ProxyState::new(&config).expect("proxy state")
+    }
+
+    #[test]
+    fn publish_credential_writes_the_api_key_and_keeps_it_without_a_new_one() {
+        let proxy = proxy();
+        assert_eq!(
+            proxy.upstream_credential(),
+            UpstreamCredential {
+                value: String::new(),
+                api_key: false,
+            }
+        );
+        proxy.publish_credential("jwt-token", Some("api-key"));
+        assert_eq!(
+            proxy.upstream_credential(),
+            UpstreamCredential {
+                value: "api-key".to_string(),
+                api_key: true,
+            }
+        );
+        proxy.publish_credential("jwt-token-2", None);
+        assert_eq!(
+            proxy.upstream_credential(),
+            UpstreamCredential {
+                value: "api-key".to_string(),
+                api_key: true,
+            },
+            "登录提交新 token 时不得清掉已保存的 API key"
+        );
+    }
+
+    #[test]
+    fn a_rejected_api_key_is_skipped_until_a_new_value_is_published() {
+        let proxy = proxy();
+        proxy.publish_credential("jwt-token", Some("api-key"));
+        proxy.mark_api_key_rejected();
+        assert_eq!(
+            proxy.upstream_credential(),
+            UpstreamCredential {
+                value: "jwt-token".to_string(),
+                api_key: false,
+            }
+        );
+        proxy.publish_credential("jwt-token-2", Some("api-key"));
+        assert!(!proxy.upstream_credential().api_key);
+        proxy.publish_credential("jwt-token-3", Some("new-key"));
+        assert_eq!(
+            proxy.upstream_credential(),
+            UpstreamCredential {
+                value: "new-key".to_string(),
+                api_key: true,
+            }
+        );
+    }
 }

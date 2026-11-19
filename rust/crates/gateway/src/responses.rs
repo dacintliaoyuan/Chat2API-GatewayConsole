@@ -1319,10 +1319,10 @@ fn forward_json_inner(
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let bearer = context.state.proxy.bearer();
+        let credential = context.state.proxy.upstream_credential();
         let mut response = match post_compat(
             &context.state.config,
-            &bearer,
+            &credential.value,
             upstream_path,
             &serde_json::to_vec(&Value::Object(request_body.clone())).unwrap_or_default(),
             false,
@@ -1362,6 +1362,7 @@ fn forward_json_inner(
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
+                credential.api_key,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final {
@@ -1496,10 +1497,10 @@ fn forward_aggregate_inner(
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let bearer = context.state.proxy.bearer();
+        let credential = context.state.proxy.upstream_credential();
         let response = match post_compat(
             &context.state.config,
-            &bearer,
+            &credential.value,
             upstream_path,
             &serde_json::to_vec(&Value::Object(request_body.clone())).unwrap_or_default(),
             true,
@@ -1539,6 +1540,7 @@ fn forward_aggregate_inner(
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
+                credential.api_key,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final {
@@ -1800,10 +1802,10 @@ fn forward_stream_with_inner(
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let bearer = context.state.proxy.bearer();
+        let credential = context.state.proxy.upstream_credential();
         let response = match post_compat(
             &context.state.config,
-            &bearer,
+            &credential.value,
             upstream_path,
             &serde_json::to_vec(&Value::Object(request_body.clone())).unwrap_or_default(),
             true,
@@ -1843,6 +1845,7 @@ fn forward_stream_with_inner(
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
+                credential.api_key,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final {

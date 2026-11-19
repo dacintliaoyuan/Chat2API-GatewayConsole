@@ -74,10 +74,10 @@ fn handle_embeddings_inner(
         retry_state.record_attempt();
         stats.record_attempt();
         let attempt_started = Instant::now();
-        let bearer = state.proxy.bearer();
+        let credential = state.proxy.upstream_credential();
         let mut response = match post_compat(
             &state.config,
-            &bearer,
+            &credential.value,
             "/api/v1/embeddings",
             &raw,
             false,
@@ -114,6 +114,7 @@ fn handle_embeddings_inner(
                 attempt_started.elapsed(),
                 deadline,
                 &mut auth_wait_budget,
+                credential.api_key,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final { error, .. } => {

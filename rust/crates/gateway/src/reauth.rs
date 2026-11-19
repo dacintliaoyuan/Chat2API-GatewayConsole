@@ -515,8 +515,18 @@ pub fn handle_non_success(
     elapsed: Duration,
     deadline: Instant,
     budget: &mut AuthWaitBudget,
+    used_api_key: bool,
 ) -> StatusAction {
     let status = response.status;
+    if used_api_key && matches!(status, 401 | 403) {
+        // The operator-saved API key may be stale while the JWT bearer is still
+        // accepted. Mark it rejected for evidence, then resend with the bearer;
+        // an API key alone never triggers a login round.
+        let summary = crate::upstream_fault::summarize_error_text(&response.read_error_text());
+        state.proxy.mark_api_key_rejected();
+        state.proxy.record_auth_rejection(status, summary);
+        return StatusAction::Retry;
+    }
     let retry_after = response.headers.get("retry-after").cloned();
     let mut text = retry::needs_body_for_classification(status).then(|| response.read_error_text());
     last.record_status(status, text.clone(), retry_after.clone());

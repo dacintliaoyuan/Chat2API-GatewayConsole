@@ -70,6 +70,10 @@ fn main() -> ExitCode {
                 Some(value) => config.token_file = Some(value.into()),
                 None => return usage("--token-file requires a path"),
             },
+            "--auth-state-file" => match args.next() {
+                Some(value) => config.auth_state_file = Some(value.into()),
+                None => return usage("--auth-state-file requires a path"),
+            },
             "--profile-dir" => match args.next() {
                 Some(value) => config.profile_dir = Some(value.into()),
                 None => return usage("--profile-dir requires a path"),
@@ -114,6 +118,7 @@ fn main() -> ExitCode {
                      [--port 0|8000|8003|8002] [--token TOKEN] \
                      [--share-config PATH] [--auth-mode projection|legacy] \
                      [--control-token-file PATH] [--token-file PATH] \
+                     [--auth-state-file PATH] \
                      [--profile-dir PATH] [--login-display-file PATH] \
                      [--login-timeout SECONDS] [--no-browser] \
                      [--auth-wait-budget-seconds SECONDS] \

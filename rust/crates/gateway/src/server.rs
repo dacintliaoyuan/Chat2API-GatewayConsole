@@ -126,6 +126,12 @@ impl GatewayServer {
                 .map_err(ServerError::Config)?,
         );
         proxy.probe_config();
+        if let Some(document) = crate::login::load_saved_token(&config) {
+            if !document.token.is_empty() {
+                proxy.set_bearer(&document.token);
+            }
+            proxy.set_api_key(document.api_key.as_deref());
+        }
         let watch = Arc::new(WatchStatus::new());
         let login = if provider.is_some() {
             None
@@ -150,13 +156,6 @@ impl GatewayServer {
                 Arc::clone(&watch),
             )))
         };
-        if let Some(login) = &login {
-            if let Some(document) = login.saved_token() {
-                if !document.token.is_empty() {
-                    proxy.set_bearer(&document.token);
-                }
-            }
-        }
         let provider = provider
             .or_else(|| {
                 login

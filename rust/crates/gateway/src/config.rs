@@ -66,6 +66,14 @@ pub const DEFAULT_LOGIN_MAX_CLICKS_PER_STAGE: usize = 2;
 pub const DEFAULT_LOGIN_NAVIGATION_ATTEMPTS: usize = 2;
 /// The Python recovery cycle's bounded session budget.
 pub const DEFAULT_LOGIN_MAX_SESSIONS: usize = 6;
+/// The bounded automatic re-open interval after a retryable exhausted round.
+pub const DEFAULT_RECOVERY_RETRY_INTERVAL_SECONDS: u64 = 1800;
+pub const MIN_RECOVERY_RETRY_INTERVAL_SECONDS: u64 = 60;
+pub const MAX_RECOVERY_RETRY_INTERVAL_SECONDS: u64 = 86_400;
+/// Automatic re-open rounds allowed inside one rolling day.
+pub const DEFAULT_RECOVERY_RETRY_MAX_PER_DAY: usize = 3;
+pub const MIN_RECOVERY_RETRY_MAX_PER_DAY: usize = 0;
+pub const MAX_RECOVERY_RETRY_MAX_PER_DAY: usize = 24;
 pub const DEFAULT_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(120);
 pub const DEFAULT_SOCKET_SILENCE_TIMEOUT: Duration = Duration::from_secs(180);
 pub const DEFAULT_MAX_FAST_RETRIES: u32 = 5;
@@ -322,6 +330,9 @@ pub struct GatewayConfig {
     pub auth_watch_interval: Option<Duration>,
     /// Python-compatible credential file; `None` uses the role default.
     pub token_file: Option<PathBuf>,
+    /// Durable auth evidence file (#114). `None` uses the role default in
+    /// production and stays memory-only in candidate mode.
+    pub auth_state_file: Option<PathBuf>,
     /// The browser profile directory; `None` uses the role default.
     pub profile_dir: Option<PathBuf>,
     /// The on-demand manual display marker file.
@@ -342,6 +353,10 @@ pub struct GatewayConfig {
     pub login_navigation_attempts: usize,
     /// Bounded login sessions per recovery round.
     pub login_max_sessions: usize,
+    /// The interval before a retryable exhausted round re-opens automatically.
+    pub recovery_retry_interval: Duration,
+    /// Automatic re-open rounds allowed inside one rolling day.
+    pub recovery_retry_max_per_day: usize,
     /// First substantive SSE event budget.
     pub first_byte_timeout: Duration,
     /// One upstream socket-read silence budget.
@@ -395,6 +410,7 @@ impl Default for GatewayConfig {
             browser_disabled: false,
             auth_watch_interval: None,
             token_file: None,
+            auth_state_file: None,
             profile_dir: None,
             login_display_file: None,
             login_timeout: Duration::from_secs(DEFAULT_LOGIN_TIMEOUT_SECONDS),
@@ -409,6 +425,8 @@ impl Default for GatewayConfig {
             login_max_clicks_per_stage: DEFAULT_LOGIN_MAX_CLICKS_PER_STAGE,
             login_navigation_attempts: DEFAULT_LOGIN_NAVIGATION_ATTEMPTS,
             login_max_sessions: DEFAULT_LOGIN_MAX_SESSIONS,
+            recovery_retry_interval: Duration::from_secs(DEFAULT_RECOVERY_RETRY_INTERVAL_SECONDS),
+            recovery_retry_max_per_day: DEFAULT_RECOVERY_RETRY_MAX_PER_DAY,
             first_byte_timeout: DEFAULT_FIRST_BYTE_TIMEOUT,
             socket_silence_timeout: DEFAULT_SOCKET_SILENCE_TIMEOUT,
             max_fast_retries: DEFAULT_MAX_FAST_RETRIES,
@@ -492,6 +510,11 @@ impl GatewayConfig {
         if let Ok(value) = std::env::var("CHAT2API_TOKEN_FILE") {
             if !value.trim().is_empty() {
                 config.token_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var("CHAT2API_AUTH_STATE_FILE") {
+            if !value.trim().is_empty() {
+                config.auth_state_file = Some(PathBuf::from(value));
             }
         }
         if let Ok(value) = std::env::var("CHAT2API_PROFILE_DIR") {
@@ -587,6 +610,19 @@ impl GatewayConfig {
             1,
             100,
         );
+        config.recovery_retry_interval = parse_recovery_retry_interval(
+            std::env::var("CHAT2API_RECOVERY_RETRY_INTERVAL_S")
+                .ok()
+                .as_deref(),
+        );
+        config.recovery_retry_max_per_day = parse_usize(
+            std::env::var("CHAT2API_RECOVERY_RETRY_MAX_PER_DAY")
+                .ok()
+                .as_deref(),
+            DEFAULT_RECOVERY_RETRY_MAX_PER_DAY,
+            MIN_RECOVERY_RETRY_MAX_PER_DAY,
+            MAX_RECOVERY_RETRY_MAX_PER_DAY,
+        );
         config.nonstream_upstream_aggregate =
             std::env::var("CHAT2API_NONSTREAM_UPSTREAM_AGGREGATE")
                 .ok()
@@ -625,6 +661,14 @@ impl GatewayConfig {
             self.role == Role::Local,
             self.candidate,
         )
+    }
+
+    /// The durable auth evidence path (#114).
+    ///
+    /// An explicit setting wins in every mode; without one, production uses the
+    /// role default and a candidate never writes a production file.
+    pub fn effective_auth_state_file(&self) -> Option<PathBuf> {
+        crate::auth_state::effective_path(self.auth_state_file.clone(), self.role, self.candidate)
     }
 
     /// Fail closed before binding a socket.
@@ -704,6 +748,18 @@ pub fn parse_login_timeout(value: Option<&str>) -> Duration {
         .and_then(|value| value.trim().parse::<u64>().ok())
         .unwrap_or(DEFAULT_LOGIN_TIMEOUT_SECONDS);
     Duration::from_secs(seconds.clamp(MIN_LOGIN_TIMEOUT_SECONDS, MAX_LOGIN_TIMEOUT_SECONDS))
+}
+
+/// Parse the automatic re-open interval; invalid values keep the default and
+/// valid values clamp to 60..86400 seconds.
+pub fn parse_recovery_retry_interval(value: Option<&str>) -> Duration {
+    let seconds = value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_RECOVERY_RETRY_INTERVAL_SECONDS);
+    Duration::from_secs(seconds.clamp(
+        MIN_RECOVERY_RETRY_INTERVAL_SECONDS,
+        MAX_RECOVERY_RETRY_INTERVAL_SECONDS,
+    ))
 }
 
 fn parse_duration_seconds(value: Option<&str>, fallback: u64) -> Duration {

@@ -44,6 +44,10 @@ fn gateway_command(temp: &TempDir, stub: &StubUpstream) -> Command {
             "CHAT2API_UPSTREAM_FAULT_LOG",
             temp.path().join("upstream-faults.json"),
         )
+        .env(
+            "CHAT2API_AUTH_STATE_FILE",
+            temp.path().join("auth-state.json"),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
