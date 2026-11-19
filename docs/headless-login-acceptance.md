@@ -161,6 +161,6 @@ curl -s -X POST -H "X-Admin-Control: $TOKEN" http://127.0.0.1:8100/admin/auth/ca
 
 ## 本机登录驱动切回条件（2026-11-19）
 
-本机 Rust 8000 暂用 Playwright 驱动浏览器。云端 8003 的原生 Rust 自动重登录验收通过并观察满 24 小时后，才可将本机登录驱动切回原生 Rust。按 [#112 的云端验收记录](https://github.com/dacintliaoyuan/Chat2API-GatewayConsole/issues/112)，2026-11-19 16:38（北京时间）记录了实际自动恢复，最早复核时间为 2026-11-20 16:38。切回前核对云端观察结果和实际运行版本。
+本机 8000 继续用 Playwright 驱动浏览器（2026-11-19 决定，暂不切回原生 Rust）。云端 8003 的原生 Rust 自动重登录验收通过并观察满 24 小时后，才可将本机登录驱动切回原生 Rust。按 [#112 的云端验收记录](https://github.com/dacintliaoyuan/Chat2API-GatewayConsole/issues/112)，2026-11-19 16:38（北京时间）记录了实际自动恢复，最早复核时间为 2026-11-20 16:38。切回前核对云端观察结果和实际运行版本。
 
-2026-11-19 17:01（北京时间），在仓库根目录恢复本机 Playwright 配置，通过 `invoke-gateway-service.ps1 -Key chat2api` 停止并启动 8000，使用原有 Playwright 构建。上游明确拒绝旧凭据后，通过 `POST /admin/auth/login` 触发一次不可见的登录。Python 子进程由 8000 拉起，第一轮提交一次 UMPASS，最终 `last_outcome=restored`、`evidence.verdict=valid`，`GET /ready` 返回 HTTP 200。本次实测覆盖显式触发的后台登录，云端 24 小时观察和本机原生 Rust 自动重登仍待验收。
+2026-11-19 17:01（北京时间），在仓库根目录恢复本机 Playwright 配置，通过 `invoke-gateway-service.ps1 -Key chat2api` 停止并启动 8000，使用原有 Playwright 构建。上游明确拒绝旧凭据后，通过 `POST /admin/auth/login` 触发一次不可见的登录。Python 子进程由 8000 拉起，第一轮提交一次 UMPASS，最终 `last_outcome=restored`、`evidence.verdict=valid`，`GET /ready` 返回 HTTP 200。本次实测覆盖显式触发的后台登录；2026-11-19 决定本机继续用 Playwright，云端继续验证原生 Rust。云端 24 小时观察和本机原生 Rust 自动重登仍待验收。
