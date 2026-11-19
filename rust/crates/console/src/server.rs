@@ -150,7 +150,15 @@ impl ConsoleServer {
             Role::Local => Arc::new(LocalTcpFacts::new(config.gateway_port)),
             Role::Cloud => Arc::new(LinuxPidFileFacts::from_config(&config)),
         };
-        Self::start_with_runtime(config, runtime)
+        // #111: the production entry point is the only place that replaces
+        // the honest unwired write seam, and only when the broker socket and
+        // control key are both readable (`production_write_seams` keeps the
+        // unwired default otherwise). Windows keeps the honest 503.
+        #[cfg(unix)]
+        let write_seams = crate::broker_write::production_write_seams(&config);
+        #[cfg(not(unix))]
+        let write_seams: Arc<dyn ShareWriteSeams> = Arc::new(UnwiredWriteSeams);
+        Self::start_with_runtime_write(config, runtime, write_seams)
     }
 
     pub fn start_with_runtime(
@@ -165,10 +173,37 @@ impl ConsoleServer {
         Self::start_with_seams(config, runtime, Arc::new(display))
     }
 
+    fn start_with_runtime_write(
+        config: ConsoleConfig,
+        runtime: Arc<dyn RuntimeFacts>,
+        write_seams: Arc<dyn ShareWriteSeams>,
+    ) -> Result<ServerHandle, ServerError> {
+        let display = DisplaySeams::with_auth_observation(
+            config.display.availability(),
+            config.gateway_port,
+            config.control_token_file.clone(),
+        );
+        Self::start_with_seams_write(config, runtime, Arc::new(display), write_seams)
+    }
+
     pub fn start_with_seams(
         config: ConsoleConfig,
         runtime: Arc<dyn RuntimeFacts>,
         share_seams: Arc<dyn ShareReadSeams>,
+    ) -> Result<ServerHandle, ServerError> {
+        Self::start_with_seams_write(
+            config,
+            runtime,
+            share_seams,
+            Arc::new(UnwiredWriteSeams),
+        )
+    }
+
+    fn start_with_seams_write(
+        config: ConsoleConfig,
+        runtime: Arc<dyn RuntimeFacts>,
+        share_seams: Arc<dyn ShareReadSeams>,
+        write_seams: Arc<dyn ShareWriteSeams>,
     ) -> Result<ServerHandle, ServerError> {
         // The local role executes the service actions through the managed
         // PowerShell runtime (#92), the UM auth actions in Rust (#93), and the
@@ -201,7 +236,7 @@ impl ConsoleServer {
             runtime,
             share_seams,
             executor,
-            Arc::new(UnwiredWriteSeams),
+            write_seams,
         )
     }
 

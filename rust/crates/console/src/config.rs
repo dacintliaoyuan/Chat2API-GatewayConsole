@@ -35,6 +35,10 @@ pub const CONSOLE_STATE_FILE_ENV: &str = "CONSOLE_STATE_FILE";
 pub const CONSOLE_LOCK_DIR_ENV: &str = "CONSOLE_LOCK_DIR";
 pub const SHARE_STORE_FILE_ENV: &str = "SHARE_STORE_FILE";
 pub const SHARE_SECRET_KEY_FILE_ENV: &str = "CHAT2API_SHARE_SECRET_KEY_FILE";
+/// #111: the broker management channel the cloud console publishes through.
+/// The names match `um-cloud-deploy/lib/common.sh`.
+pub const BROKER_SOCKET_ENV: &str = "UM_BROKER_SOCKET";
+pub const BROKER_CONTROL_KEY_ENV: &str = "UM_BROKER_KEY";
 pub const PUBLIC_ORIGIN_ENV: &str = "CONSOLE_PUBLIC_ORIGIN";
 pub const SECURITY_STATE_FILE_ENV: &str = "UM_CLOUD_SECURITY_STATE";
 pub const CONTROL_TOKEN_FILE_ENV: &str = "USAGE_CONTROL_TOKEN_FILE";
@@ -59,6 +63,11 @@ pub const DEFAULT_CONSOLE_LOCK_DIR: &str = "data/console-locks";
 pub const DEFAULT_SHARE_STORE_FILE: &str = "data/share-store.db";
 pub const DEFAULT_CONTROL_TOKEN_FILE: &str = "data/admin-control-token";
 pub const DEFAULT_USAGE_SESSION_CODE_FILE: &str = "data/usage-session-code";
+/// The production broker management endpoint and its HMAC control key
+/// (`docs/rust-contract.md` §7.1). The console runs as the same
+/// `um-share` user that owns both files.
+pub const DEFAULT_BROKER_SOCKET: &str = "/run/um-share/broker.sock";
+pub const DEFAULT_BROKER_CONTROL_KEY: &str = "/etc/um-share/broker-control.key";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -134,6 +143,11 @@ pub struct ConsoleConfig {
     pub expected_uid: Option<u32>,
     pub share_store_file: Option<PathBuf>,
     pub share_secret_key_file: Option<PathBuf>,
+    /// #111: the broker management endpoint and its HMAC control key. Both
+    /// `None` keep the honest unwired write seam; production `from_env`
+    /// supplies the deployment defaults.
+    pub broker_socket_path: Option<PathBuf>,
+    pub broker_control_key_file: Option<PathBuf>,
     pub public_origin: Option<String>,
     pub security_state_file: Option<PathBuf>,
     pub control_token_file: Option<PathBuf>,
@@ -177,6 +191,8 @@ impl Default for ConsoleConfig {
             expected_uid: None,
             share_store_file: None,
             share_secret_key_file: None,
+            broker_socket_path: None,
+            broker_control_key_file: None,
             public_origin: None,
             security_state_file: None,
             control_token_file: None,
@@ -369,6 +385,21 @@ impl ConsoleConfig {
                 config.share_secret_key_file = Some(PathBuf::from(value));
             }
         }
+        // #111: production defaults keep the cloud console wired to the broker
+        // management channel. `ConsoleServer::start` still requires both paths to
+        // exist/readable before it replaces the honest unwired seam.
+        config.broker_socket_path = Some(PathBuf::from(
+            std::env::var(BROKER_SOCKET_ENV)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_BROKER_SOCKET.to_string()),
+        ));
+        config.broker_control_key_file = Some(PathBuf::from(
+            std::env::var(BROKER_CONTROL_KEY_ENV)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_BROKER_CONTROL_KEY.to_string()),
+        ));
         if let Ok(value) = std::env::var(PUBLIC_ORIGIN_ENV) {
             config.public_origin = Some(value);
         }

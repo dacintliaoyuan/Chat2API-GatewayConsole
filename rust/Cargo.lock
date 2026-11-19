@@ -727,6 +727,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "sha2",
+ "um-broker",
  "um-gateway",
  "um-store",
  "um-test-harness",
