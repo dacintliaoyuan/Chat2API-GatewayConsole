@@ -781,6 +781,42 @@ fn protected_autofill_requires_the_operator_then_visible_login_can_continue() {
 }
 
 #[test]
+fn protected_autofill_with_env_credentials_fills_instead_of_stopping() {
+    let temp = TempDir::new("um-rust-protected-autofill-env-");
+    let url = "https://websso.um.edu.mo/adfs/ls/";
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    page.autofill_protected.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with(
+        &temp,
+        page.clone(),
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| {
+            config.um_account = "operator".to_string();
+            config.um_password = "operator-secret".to_string();
+            config.stage_settle_timeout = Duration::from_millis(50);
+        },
+    );
+    *page.click_steps.lock().unwrap() = vec![
+        (url.to_string(), None),
+        ("http://127.0.0.1:9".to_string(), Some("env-filled-token".to_string())),
+    ];
+
+    service.reauthenticate(Instant::now() + Duration::from_secs(2));
+    let status = service.status();
+    assert_eq!(status["state"], json!("valid"), "{status}");
+    assert_eq!(page.fill_calls(), 2);
+    assert_eq!(
+        page.filled_values.lock().unwrap().clone(),
+        vec!["operator".to_string(), "operator-secret".to_string()]
+    );
+    assert_eq!(sink.published()[0].0, "env-filled-token");
+    assert_eq!(factory.requests().len(), 1);
+}
+
+#[test]
 fn headless_login_waits_for_saved_browser_autofill_without_env_credentials() {
     let temp = TempDir::new("um-rust-headless-autofill-");
     let page = FakePage::new("http://127.0.0.1:9", None);
@@ -1250,12 +1286,13 @@ fn an_ambiguous_umpass_submit_is_not_clicked() {
 }
 
 #[test]
-fn an_upstream_rejection_after_manual_umpass_submit_stops_old_credentials() {
+fn an_upstream_rejection_after_the_automatic_umpass_submit_stops_old_credentials() {
     let temp = TempDir::new("um-rust-umpass-manual-rejected-");
     let url = trusted_umpass_url();
     let page = FakePage::new("http://127.0.0.1:9", None);
     page.autofill_protected.store(true, Ordering::SeqCst);
     page.submit_visible.store(true, Ordering::SeqCst);
+    page.reject_submit.store(true, Ordering::SeqCst);
     *page.click_steps.lock().expect("click steps") =
         vec![(url.to_string(), None)];
     let marker = write_display_marker(&temp);
@@ -1273,44 +1310,31 @@ fn an_upstream_rejection_after_manual_umpass_submit_stops_old_credentials() {
     );
 
     service.start_explicit(true);
-    wait_for(&service, |s| {
-        s["login"]["manual_reason"] == json!("umpass_autofill_protected")
-    });
-    assert_eq!(page.fill_calls(), 0);
-
-    // 本人手动点击 UMPASS 登录，上游明确拒绝并清空密码。
-    page.reject_submit.store(true, Ordering::SeqCst);
-    page.autofill_protected.store(false, Ordering::SeqCst);
-    page.click(&VisibleTarget {
-        selector: "input[type=\"submit\"]".to_string(),
-        index: 0,
-    })
-    .expect("manual submit");
-
     let status = wait_for(&service, |s| s["state"] == json!("failed"));
     assert_eq!(status["error"], json!("upstream_credential_rejected"));
     assert_eq!(
         status["recovery"]["last_form"],
         json!("rejected")
     );
-    assert_eq!(status["recovery"]["last_submit_count"], json!(0));
+    assert_eq!(status["recovery"]["last_submit_count"], json!(1));
     assert_eq!(
         page.fill_calls(),
-        0,
-        "明确拒绝后不得再用旧凭据自动填写并提交"
+        2,
+        "受保护但为空的字段用环境凭据成对填一次；明确拒绝后不得再填"
     );
-    assert_eq!(page.submit_clicks(), 1, "只统计本人这次手动提交");
+    assert_eq!(page.submit_clicks(), 1, "只自动提交一次");
     assert_eq!(factory.closes(), 1);
 }
 
 #[test]
-fn a_manual_rejection_that_keeps_the_account_stops_old_credentials() {
+fn an_upstream_rejection_that_keeps_the_account_stops_old_credentials() {
     let temp = TempDir::new("um-rust-umpass-manual-rejected-kept-account-");
     let url = trusted_umpass_url();
     let page = FakePage::new("http://127.0.0.1:9", None);
     page.account_prefilled.store(true, Ordering::SeqCst);
     page.autofill_protected.store(true, Ordering::SeqCst);
     page.submit_visible.store(true, Ordering::SeqCst);
+    page.reject_submit.store(true, Ordering::SeqCst);
     *page.click_steps.lock().expect("click steps") = vec![(url.to_string(), None)];
     let marker = write_display_marker(&temp);
     let (service, factory) = login_service_with(
@@ -1327,30 +1351,16 @@ fn a_manual_rejection_that_keeps_the_account_stops_old_credentials() {
     );
 
     service.start_explicit(true);
-    wait_for(&service, |s| {
-        s["login"]["manual_reason"] == json!("umpass_autofill_protected")
-    });
-    assert_eq!(page.fill_calls(), 0);
-
-    // 本人手动点击 UMPASS 登录，上游明确拒绝：ADFS 保留账号但清空密码。
-    page.reject_submit.store(true, Ordering::SeqCst);
-    page.autofill_protected.store(false, Ordering::SeqCst);
-    page.click(&VisibleTarget {
-        selector: "input[type=\"submit\"]".to_string(),
-        index: 0,
-    })
-    .expect("manual submit");
-
     let status = wait_for(&service, |s| s["state"] == json!("failed"));
     assert_eq!(status["error"], json!("upstream_credential_rejected"));
     assert_eq!(status["recovery"]["last_form"], json!("rejected"));
-    assert_eq!(status["recovery"]["last_submit_count"], json!(0));
+    assert_eq!(status["recovery"]["last_submit_count"], json!(1));
     assert_eq!(
         page.fill_calls(),
-        0,
-        "明确拒绝后不得再用旧凭据自动填写并提交"
+        2,
+        "环境凭据成对填一次；明确拒绝后不得再填"
     );
-    assert_eq!(page.submit_clicks(), 1, "只统计本人这次手动提交");
+    assert_eq!(page.submit_clicks(), 1, "只自动提交一次");
     assert_eq!(factory.closes(), 1);
 }
 

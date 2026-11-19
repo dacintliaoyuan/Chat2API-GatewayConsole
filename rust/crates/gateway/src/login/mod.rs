@@ -1760,8 +1760,7 @@ fn drive_login(
                         };
                     }
                     let protected_autofill = fields.contains(&CredentialField::ProtectedAutofill);
-                    if protected_autofill
-                        || inner.config.um_account.is_empty()
+                    if inner.config.um_account.is_empty()
                         || inner.config.um_password.is_empty()
                     {
                         let (reason, form, detail) = if protected_autofill {
@@ -1843,6 +1842,18 @@ fn drive_login(
                     return outcome;
                 }
                 if umpass_credential_rejected(page) {
+                    note_form(
+                        inner,
+                        round,
+                        "manual_takeover",
+                        Some(&url),
+                        None,
+                        FormState {
+                            form: FORM_REJECTED,
+                            detail: Some(REJECTED_HINT),
+                            submit_count: auto_submissions,
+                        },
+                    );
                     return LoginOutcome::Rejected {
                         reason: "upstream_credential_rejected".to_string(),
                     };
