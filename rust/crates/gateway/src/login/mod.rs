@@ -864,19 +864,9 @@ impl LoginService {
                         .unwrap_or_else(|| "login_failed".to_string());
                     return ReauthProviderResult::Failed { reason };
                 }
-                if !self.inner.retry_start_allowed() {
-                    state.recovery.retry_scheduled = false;
-                    state.recovery.next_attempt_epoch = None;
-                    state.recovery.pause_reason = Some("retry_exhausted".to_string());
-                    state.recovery.last_outcome = Some("retry_exhausted".to_string());
-                    self.inner.condvar.notify_all();
-                    persist_auth_state_locked(&self.inner, &state);
-                    return ReauthProviderResult::Failed {
-                        reason: "retry_exhausted".to_string(),
-                    };
-                }
-                // A retryable exhausted round is due: clear the terminal
-                // failure and fall through to the normal start gate.
+                // A retryable exhausted round is due: the schedule already
+                // checked the daily bound; clear the terminal failure and fall
+                // through to the normal start gate.
                 state.auth_state = AuthState::NeedsLogin;
                 state.error = None;
                 state.primary = None;
@@ -1043,11 +1033,6 @@ impl LoginInner {
     /// Whether one more retryable round may be scheduled today.
     fn retry_schedule_allowed(&self) -> bool {
         self.retry_count() < self.config.recovery_retry_max_per_day
-    }
-
-    /// Whether an already scheduled retry may still start today.
-    fn retry_start_allowed(&self) -> bool {
-        self.retry_count() <= self.config.recovery_retry_max_per_day
     }
 
     /// Record one automatic re-open round and return the rolling-day count.

@@ -30,6 +30,7 @@ fn start_api_key_gateway(temp: &TempDir, url: &str) -> ServerHandle {
         upstream_base_url: url.to_string(),
         upstream_token: "config-token".to_string(),
         token_file: Some(temp.path().join("token.json")),
+        auth_state_file: Some(temp.path().join("auth-state.json")),
         ..GatewayConfig::default()
     };
     GatewayServer::start_with_reauth(config, Some(Arc::new(UnavailableProvider)))
@@ -64,6 +65,32 @@ fn the_saved_api_key_is_preferred_over_the_jwt_bearer() {
         vec!["Bearer fixture-api-key".to_string()],
         "必须优先使用已保存的上游 API key"
     );
+}
+
+#[test]
+fn the_startup_auth_state_records_the_saved_api_key() {
+    let temp = TempDir::new("um-rust-api-key-startup-state-");
+    let stub = StubUpstream::start();
+    write_token(&temp, &stub.url(), "jwt-token", Some("fixture-api-key"));
+    // The real login executor owns the startup write; a scripted provider skips
+    // it, so this test starts the production login service instead.
+    let config = GatewayConfig {
+        upstream_base_url: stub.url(),
+        upstream_token: "config-token".to_string(),
+        token_file: Some(temp.path().join("token.json")),
+        auth_state_file: Some(temp.path().join("auth-state.json")),
+        ..GatewayConfig::default()
+    };
+    let _server = GatewayServer::start(config).expect("startup login gateway");
+
+    let path = temp.path().join("auth-state.json");
+    let text = std::fs::read_to_string(&path).expect("startup auth state");
+    let state: Value = serde_json::from_str(&text).expect("startup auth state json");
+    assert_eq!(state["api_key_present"], json!(true));
+    assert_eq!(state["api_key_rejected"], json!(false));
+    assert_eq!(state["saved_at"], json!("2026-11-19 20:35:03"));
+    assert!(!text.contains("fixture-api-key"));
+    assert!(!text.contains("jwt-token"));
 }
 
 #[test]
