@@ -1,0 +1,165 @@
+component ChartSwitch inherits Rectangle {
+    in property <string> text;
+    in property <bool> chosen;
+    callback picked();
+    height: 29px;
+    border-radius: 8px;
+    background: root.chosen ? #e0ebff : touch.has-hover ? #f0f4fd : transparent;
+    Text {
+        text: root.text; color: root.chosen ? #214a97 : #515d70; font-size: 12px;
+        horizontal-alignment: center; vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+export struct UsageBucket { label: string, input: int, output: int, requests: int }
+
+export component UsageChart inherits Rectangle {
+    in property <bool> has-usage: true;
+    property <int> period: 0;
+    property <bool> show-requests: false;
+    property <int> pinned: -1;
+    property <[UsageBucket]> today: [
+        { label: "08:00", input: 12, output: 2, requests: 11 },
+        { label: "09:00", input: 20, output: 3, requests: 17 },
+        { label: "10:00", input: 34, output: 5, requests: 29 },
+        { label: "11:00", input: 26, output: 4, requests: 22 },
+        { label: "12:00", input: 16, output: 2, requests: 13 },
+        { label: "13:00", input: 29, output: 5, requests: 25 },
+        { label: "14:00", input: 51, output: 10, requests: 46 },
+        { label: "15:00", input: 22, output: 5, requests: 21 },
+    ];
+    property <[UsageBucket]> week: [
+        { label: "11/13", input: 123, output: 24, requests: 119 },
+        { label: "11/14", input: 184, output: 26, requests: 157 },
+        { label: "11/15", input: 146, output: 28, requests: 124 },
+        { label: "11/16", input: 291, output: 42, requests: 251 },
+        { label: "11/17", input: 224, output: 37, requests: 191 },
+        { label: "11/18", input: 212, output: 19, requests: 163 },
+        { label: "11/19", input: 210, output: 36, requests: 184 },
+    ];
+    property <[UsageBucket]> month: [
+        { label: "10/21–25", input: 786, output: 123, requests: 654 },
+        { label: "10/26–30", input: 912, output: 167, requests: 792 },
+        { label: "10/31–11/04", input: 489, output: 93, requests: 422 },
+        { label: "11/05–09", input: 1116, output: 164, requests: 948 },
+        { label: "11/10–14", input: 743, output: 103, requests: 621 },
+        { label: "11/15–19", input: 1083, output: 162, requests: 913 },
+    ];
+    property <[UsageBucket]> buckets: period == 0 ? today : period == 1 ? week : month;
+    property <int> scale: show-requests ? (period == 0 ? 50 : period == 1 ? 300 : 1000)
+        : (period == 0 ? 70 : period == 1 ? 350 : 1400);
+    property <string> summary: show-requests ? (period == 0 ? "184 次" : period == 1 ? "1,189 次" : "4,350 次")
+        : (period == 0 ? "246 万" : period == 1 ? "1,602 万" : "5,941 万");
+    property <int> hovered: root.has-usage && cursor.has-hover
+        ? min(buckets.length - 1, max(0, floor(cursor.mouse-x / max(1px, cursor.width) * buckets.length)))
+        : -1;
+    property <int> active: hovered >= 0 ? hovered : pinned;
+    vertical-stretch: 0;
+    background: #ffffff;
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: #dce2ed;
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 10px;
+            Text { text: "用量趋势"; color: #19222e; font-size: 17px; font-weight: 650; }
+            Rectangle { horizontal-stretch: 1; }
+            for label[index] in ["今天", "7 天", "30 天"] : ChartSwitch {
+                width: 53px; text: label; chosen: root.period == index;
+                picked => { root.period = index; root.pinned = -1; }
+            }
+        }
+        HorizontalLayout {
+            spacing: 9px;
+            Text {
+                text: root.has-usage ? root.summary : "—";
+                color: #19222e; font-size: 29px; font-weight: 700;
+            }
+            Text {
+                text: root.show-requests ? "请求合计" : "Token 合计";
+                color: #515d70; font-size: 13px; vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            ChartSwitch {
+                width: 58px; text: "Token"; chosen: !root.show-requests;
+                picked => { root.show-requests = false; }
+            }
+            ChartSwitch {
+                width: 62px; text: "请求数"; chosen: root.show-requests;
+                picked => { root.show-requests = true; }
+            }
+        }
+        plot := Rectangle {
+            height: 135px;
+            border-radius: 9px;
+            background: #f7f9fd;
+            if !root.has-usage : Text {
+                text: "完成首次登录并发送模型请求后，这里会显示用量。";
+                color: #515d70; font-size: 13px;
+                horizontal-alignment: center; vertical-alignment: center;
+            }
+            if root.has-usage : HorizontalLayout {
+                spacing: 0;
+                for bucket[index] in root.buckets : Rectangle {
+                    horizontal-stretch: 1;
+                    background: root.active == index ? #eaf1ff : transparent;
+                    Rectangle {
+                        width: parent.width * 0.68;
+                        x: (parent.width - self.width) / 2;
+                        height: parent.height * (root.show-requests ? bucket.requests : bucket.input + bucket.output) / root.scale;
+                        y: parent.height - self.height;
+                        background: root.show-requests ? #22796b : #aac1f3;
+                        border-radius: 4px;
+                        if !root.show-requests : Rectangle {
+                            height: parent.height * bucket.output / max(1, bucket.input + bucket.output);
+                            background: #305bb6;
+                            border-top-left-radius: 4px;
+                            border-top-right-radius: 4px;
+                        }
+                    }
+                }
+            }
+            cursor := TouchArea {
+                enabled: root.has-usage;
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.pinned = root.pinned == root.hovered ? -1 : root.hovered; }
+            }
+            if root.has-usage && root.active >= 0 : Rectangle {
+                property <UsageBucket> bucket: root.buckets[root.active];
+                property <length> point: plot.width * (root.active + 0.5) / root.buckets.length;
+                width: 165px; height: root.show-requests ? 52px : 72px;
+                x: min(plot.width - self.width - 8px, max(8px, self.point + 12px));
+                y: 8px;
+                background: white; border-color: #b9c8e6; border-width: 1px; border-radius: 8px;
+                VerticalLayout {
+                    padding: 8px; spacing: 3px;
+                    Text { text: bucket.label; color: #19222e; font-size: 13px; font-weight: 650; }
+                    if root.show-requests : Text { text: bucket.requests + " 次请求"; color: #176a59; font-size: 12px; }
+                    if !root.show-requests : Text { text: "输入 " + bucket.input + " 万 Token"; color: #4a5e8a; font-size: 12px; }
+                    if !root.show-requests : Text { text: "输出 " + bucket.output + " 万 Token"; color: #254b9f; font-size: 12px; }
+                }
+            }
+        }
+        HorizontalLayout {
+            for bucket[index] in root.buckets : Text {
+                text: root.has-usage ? bucket.label : "";
+                font-size: 11px; color: root.active == index ? #1b5ccc : #515d70;
+                horizontal-alignment: center; horizontal-stretch: 1;
+            }
+        }
+        if !root.show-requests && root.has-usage : HorizontalLayout {
+            alignment: end; spacing: 6px;
+            Text { text: "●"; font-size: 12px; color: #aac1f3; }
+            Text { text: "输入"; font-size: 12px; color: #515d70; }
+            Text { text: "●"; font-size: 12px; color: #305bb6; }
+            Text { text: "输出"; font-size: 12px; color: #515d70; }
+        }
+    }
+}

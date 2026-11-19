@@ -14,7 +14,7 @@
 6. 创建或修复桌面快捷方式（新快捷方式使用云端图标）；
 7. 打开控制台。
 
-日常双击桌面的「本地控制台」即可打开页面。快捷方式复用已运行的 8000 和 8001，仅启动缺少的服务。需要构建或更新时运行 `一键部署本机网关.bat`。回滚点仍是 `start_chat2api.bat` / `start_usage_service.bat`：把 `lib/gateway-runtime.ps1` 的 `StartPath` 改回批处理即可。
+日常双击桌面的「本地控制台」即可打开页面。快捷方式复用已运行的 8000 和 8001，仅启动缺少的服务。需要构建或更新时运行 `一键部署本机网关.bat`。回滚点改为 `tmp/python-rollback-<date>.tar.gz` 离线包（Python 闭包已退役，#90）；解包后按 `RECOVERY.md` 启动 Python 8000/8001。
 
 ## 先读
 
@@ -35,8 +35,8 @@
 
 - `rust/`：Rust 生产实现：`um-gateway`（8000）、`um-console`（8001）。
 - `scripts/`：入口与部署脚本：`deploy-local-gateway.ps1`、`Open-GatewayConsole.ps1`、`检查端口绑定.bat`。
-- `start_chat2api.bat`、`start_usage_service.bat`：Python 回滚启动器（Rust 切流后的回滚窗口）。
-- `usagesrv.py`、`console/`、`share/`、`model_sync/`：Python 回滚实现与 Rust 本机动作的一次性 sidecar；`usagesrv.py` 不依赖 `app/`。
+- `tmp/python-rollback-<date>.tar.gz`：Windows 离线回滚包（Python 闭包已退役，#90；`RECOVERY.md` 说明启动与数据接入）。
+- `share/`：broker（Python，仍在生产）；`um-cloud-deploy/`：部署与回滚工具。
 - `web/`：TypeScript/Vite 前端；`tests/`：Python 回归。
 - 已删除：未上线的 `local/` 组合根与 `app/` 装配（ADR 0009）。
 

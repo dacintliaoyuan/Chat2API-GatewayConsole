@@ -82,11 +82,11 @@ _Avoid_: 重启服务、灰度发布、一次性全量切换
 _Avoid_: 上一 release、备份目录、Rust 二进制回退
 
 **本机回滚 (Local rollback)**:
-本机切流失败时恢复 Python 实现的动作；本机没有发布包，回滚点是未删除的 `chat2api.py`／`usagesrv.py` 与原启动命令，不是目录级 release。ADR 0010 计划在满足前置条件后退役这份回滚实现，届时恢复改用回滚包或云端旧 release。
+本机切流失败时恢复 Python 实现的动作；2026-11-19 起 Python 闭包已退役（#90），回滚点是 `tmp/python-rollback-<date>.tar.gz` 离线包，不是目录级 release。
 _Avoid_: 回滚 release（云端发布包）、重新安装
 
 **Python 回滚实现 (Python rollback implementation)**:
-只作为回滚保留的 Python 入口集合：`usagesrv.py`、`chat2api/chat2api.py`、`start_chat2api.bat`、`start_usage_service.bat` 与 `um-share-console-python.service`；它不是常驻服务，也不是 sidecar。ADR 0010 定义它的退役条件。
+2026-11-19 已退役（#90）：Python 入口集合从仓库删除，只保留 `tmp/python-rollback-<date>.tar.gz` 离线包；`um-share-console-python.service` 仍是云端 8096 回滚单元。
 _Avoid_: 所有 Python 文件、生产实现
 
 **回滚包 (Rollback bundle)**:

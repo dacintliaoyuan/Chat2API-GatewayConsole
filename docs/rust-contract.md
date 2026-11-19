@@ -34,13 +34,13 @@
 
 - 目标契约：云端控制台 8002、云端网关 8003、display 8097；旧 8100/8096/18096/5901 不作为 Rust 目标，Rust 切换时一次性生效。
 - 没有兼容窗口：同一时刻只监听目标端口；旧端口监听按未登记处理。Python 回滚 release 仍使用 8100/8096，只作回滚目标，不暴露公网。
-- 2026-11-17 云端 8002 已切 Rust（release `s2-20261117b`）；回滚目标是 `s2-20261116t`（Rust 8003 + Python 8002）与 `um-share-console-python.service`（8096）。当前/回滚端点以这张表为准：
+- 2026-11-18 云端 8003/8002 已切 Rust（release `s2-20261118a`）；Python 回滚 release `s2-20261117b` 仍安装，Python 闭包已从仓库退役（#90）。当前/回滚端点以这张表为准：
 
 | 状态 | release | 8003 网关 | 控制台 unit | 控制台端口 |
 |---|---|---|---|---|
-| current | `s2-20261117b` | `um-share-gateway.service`（Rust `um-gateway`） | `um-share-console.service`（Rust `um-console`） | 8002 |
-| release 回滚 | `s2-20261116t` | `um-share-gateway.service`（Rust） | `um-share-console-python.service`（Python `usagesrv.py`） | 8096 |
-| 单元回滚 | 同 current | 不变 | `um-share-console-python.service` | 8096 |
+| current | `s2-20261118a` | `um-share-gateway.service`（Rust `um-gateway`） | `um-share-console.service`（Rust `um-console`） | 8002 |
+| release 回滚 | `s2-20261117b` | `um-share-gateway.service`（Rust） | `um-share-console-python.service`（release 自带 `usagesrv.py`） | 8096 |
+| 单元回滚 | 同 current | 不变 | `um-share-console-python.service`（release 自带） | 8096 |
 
 `console.env` 的 `USAGESRV_PORT` 随目标 runtime 同步；Python 回滚单元在 `ExecStart` 用 `/usr/bin/env USAGESRV_PORT=8096` 固定端口，不依赖 `console.env` 的旧值。
 - 非法端口值继续 fail closed；Rust 不得把旧端口写死，也不得同时监听新旧两个端口。

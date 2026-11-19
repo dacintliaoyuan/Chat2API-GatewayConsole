@@ -1,0 +1,380 @@
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { UsageChart } from "usage-chart.slint";
+
+global Colors {
+    out property <color> background: #f4f6fa;
+    out property <color> surface: #ffffff;
+    out property <color> sidebar: #eaf0f9;
+    out property <color> border: #dce2ed;
+    out property <color> ink: #19222e;
+    out property <color> muted: #515d70;
+    out property <color> accent: #1b5ccc;
+    out property <color> selected: #d9e6ff;
+    out property <color> green: #176a3c;
+    out property <color> amber: #8b4c0c;
+    out property <color> amber-surface: #fff2df;
+}
+
+struct Request { time: string, model: string, status: string, duration: string, id: string, detail: string }
+enum LoginStep { unconfigured, saved, expired, duo, verifying, valid }
+
+global Samples {
+    out property <[Request]> requests: [
+        {time: "15:12:08", model: "DeepSeek-V4.1-Flash", status: "成功", duration: "2.8 秒", id: "demo-104", detail: "输入 18,420 Token · 输出 632 Token"},
+        {time: "15:11:40", model: "DeepSeek-V4.1-Flash", status: "上游拒绝", duration: "0.7 秒", id: "demo-103", detail: "HTTP 400 · 上游拒绝了本次请求"},
+        {time: "15:09:22", model: "DeepSeek-V4.1-Pro", status: "成功", duration: "5.4 秒", id: "demo-102", detail: "输入 26,510 Token · 输出 818 Token"}
+    ];
+}
+
+component Caption inherits Text {
+    font-size: 13px;
+    color: Colors.muted;
+}
+
+component Heading inherits Text {
+    font-size: 17px;
+    font-weight: 650;
+    color: Colors.ink;
+}
+
+component Panel inherits Rectangle {
+    background: Colors.surface;
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: Colors.border;
+    @children
+}
+
+component Action inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback activate();
+    border-radius: 10px;
+    height: 36px;
+    min-width: 44px;
+    horizontal-stretch: 0;
+    background: root.selected || focus.has-focus ? Colors.selected :
+        pointer.has-hover ? Colors.sidebar : transparent;
+    Text {
+        text: root.label;
+        color: root.selected ? Colors.accent : Colors.ink;
+        font-size: 13px;
+        font-weight: root.selected ? 650 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.activate();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    pointer := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { focus.focus(); root.activate(); }
+    }
+}
+
+component Status inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <string> note;
+    in property <bool> attention;
+    spacing: 6px;
+    Caption { text: root.label; }
+    HorizontalLayout {
+        spacing: 7px;
+        alignment: start;
+        Rectangle {
+            width: 8px; height: 8px; border-radius: 4px;
+            y: (parent.height - self.height) / 2;
+            background: root.attention ? Colors.amber : Colors.green;
+        }
+        Heading { text: root.value; color: root.attention ? Colors.amber : Colors.ink; }
+    }
+    Caption { text: root.note; }
+}
+
+component ServiceStatus inherits Status {
+    label: "本机网关"; value: "运行中"; note: "127.0.0.1:8000";
+}
+
+component AccountStatus inherits Status {
+    in property <LoginStep> step;
+    label: "UM 登录";
+    value: root.step == LoginStep.unconfigured ? "尚未配置"
+        : root.step == LoginStep.saved ? "尚未登录"
+        : root.step == LoginStep.expired ? "会话已失效"
+        : root.step == LoginStep.duo ? "正在完成 Duo 验证"
+        : root.step == LoginStep.verifying ? "正在核验"
+        : "已登录";
+    note: root.step == LoginStep.unconfigured ? "首次使用需要配置 UM 账号"
+        : root.step == LoginStep.saved ? "可开始首次登录"
+        : root.step == LoginStep.expired ? "可继续登录"
+        : root.step == LoginStep.duo ? "等待本人确认"
+        : root.step == LoginStep.verifying ? "正在核验 UM 会话"
+        : "后台核验通过";
+    attention: root.step != LoginStep.valid;
+}
+
+component UpstreamStatus inherits Status {
+    in property <bool> verified;
+    label: "UM 上游";
+    value: root.verified ? "可用" : "待核验";
+    note: root.verified ? "模型目录可读取" : "登录后核验模型目录";
+    attention: !root.verified;
+}
+
+component Requests inherits Panel {
+    in property <string> title: "近期请求";
+    callback select-request(int);
+    vertical-stretch: 0;
+    VerticalLayout {
+        padding: 16px; spacing: 4px;
+        Heading { text: root.title; }
+        for record[index] in Samples.requests : Rectangle {
+            height: 54px;
+            border-radius: 9px;
+            background: row-touch.has-hover ? Colors.sidebar : transparent;
+            HorizontalLayout {
+                padding-left: 7px; padding-right: 7px; spacing: 9px;
+                Caption { text: record.time; vertical-alignment: center; }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    Text {
+                        text: record.model; font-size: 13px; color: Colors.ink; overflow: elide;
+                    }
+                    Text {
+                        text: record.status; font-size: 12px;
+                        color: record.status == "成功" ? Colors.green : Colors.amber;
+                    }
+                }
+                Caption { text: record.duration; vertical-alignment: center; horizontal-alignment: right; }
+            }
+            row-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.select-request(index); }
+            }
+        }
+    }
+}
+
+component StatusFirst inherits VerticalLayout {
+    in property <LoginStep> login-step;
+    in property <bool> has-history;
+    callback account-action();
+    callback select-request(int);
+    spacing: 14px;
+    HorizontalLayout {
+        spacing: 12px;
+        Panel { horizontal-stretch: 1; VerticalLayout { padding: 14px; ServiceStatus {} } }
+        Panel {
+            horizontal-stretch: 1;
+            background: root.login-step == LoginStep.valid ? Colors.surface : Colors.amber-surface;
+            VerticalLayout {
+                padding: 14px; spacing: 6px;
+                AccountStatus { step: root.login-step; }
+                if root.login-step != LoginStep.valid : Action {
+                    width: 105px; selected: true;
+                    label: root.login-step == LoginStep.unconfigured ? "配置账号" : "继续登录";
+                    activate => { root.account-action(); }
+                }
+            }
+        }
+        Panel {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                padding: 14px;
+                UpstreamStatus { verified: root.login-step == LoginStep.valid; }
+            }
+        }
+    }
+    UsageChart { has-usage: root.has-history; }
+    if root.has-history : Requests { select-request(index) => { root.select-request(index); } }
+    if !root.has-history : Panel {
+        VerticalLayout { padding: 16px; spacing: 8px;
+            Heading { text: "近期请求"; }
+            Caption { text: "暂无请求记录"; }
+        }
+    }
+}
+
+component LoginExample inherits Panel {
+    in-out property <LoginStep> step;
+    in-out property <string> account;
+    in-out property <string> password;
+    vertical-stretch: 0;
+    VerticalLayout {
+        padding: 19px; spacing: 14px;
+        Heading { text: "UM 账号"; }
+        AccountStatus { step: root.step; }
+        if root.step != LoginStep.unconfigured : Caption { text: "已保存的账号  " + root.account; }
+        if root.step == LoginStep.unconfigured : VerticalLayout {
+            spacing: 8px;
+            Caption { text: "首次登录演练，请使用演示账号。"; }
+            Caption { text: "UM 账号"; }
+            LineEdit { text <=> root.account; placeholder-text: "演示账号"; }
+            Caption { text: "密码"; }
+            LineEdit { text <=> root.password; input-type: InputType.password; placeholder-text: "演示密码"; }
+            HorizontalLayout {
+                alignment: start; spacing: 8px;
+                Action {
+                    width: 124px; label: "填入演示账号";
+                    activate => { root.account = "demo-student"; root.password = "demo-password"; }
+                }
+                if root.account != "" && root.password != "" : Action {
+                    width: 124px; label: "保存演示账号"; selected: true;
+                    activate => { root.password = ""; root.step = LoginStep.saved; }
+                }
+            }
+        }
+        if root.step == LoginStep.saved || root.step == LoginStep.expired : HorizontalLayout {
+            alignment: start;
+            Action {
+                width: 116px; selected: true;
+                label: root.step == LoginStep.saved ? "开始首次登录" : "继续登录";
+                activate => { root.step = LoginStep.duo; }
+            }
+        }
+        if root.step == LoginStep.duo : VerticalLayout {
+            spacing: 8px;
+            Caption { text: "已模拟在 UMPASS 提交，等待本人确认 Duo。"; }
+            HorizontalLayout {
+                alignment: start;
+                Action {
+                    width: 120px; label: "模拟确认 Duo"; selected: true;
+                    activate => { root.step = LoginStep.verifying; }
+                }
+            }
+        }
+        if root.step == LoginStep.verifying : HorizontalLayout {
+            alignment: start;
+            Action {
+                width: 118px; label: "模拟核验通过"; selected: true;
+                activate => { root.step = LoginStep.valid; }
+            }
+        }
+    }
+}
+
+export component OverviewPrototype inherits Window {
+    title: "本地控制台 · Slint 总览原型";
+    preferred-width: 1140px;
+    preferred-height: 788px;
+    min-width: 1000px;
+    min-height: 620px;
+    default-font-family: "Microsoft YaHei UI";
+    background: Colors.background;
+    in-out property <int> page: 0;
+    in-out property <int> selected-request: -1;
+    in-out property <LoginStep> login-step: LoginStep.valid;
+    in-out property <bool> has-history: true;
+    in-out property <string> account: "demo-student";
+    in-out property <string> password;
+
+    VerticalLayout {
+        spacing: 0px;
+        HorizontalLayout {
+            spacing: 0px;
+            Rectangle {
+                width: 170px; background: Colors.sidebar;
+                VerticalLayout {
+                    padding: 16px; spacing: 9px;
+                    Heading { text: "本地控制台"; }
+                    Caption { text: "UM 网关"; }
+                    Rectangle { height: 16px; }
+                    for name[index] in ["总览", "请求与诊断", "模型与设置"] : Action {
+                        label: name; width: 138px; selected: root.page == index;
+                        activate => { root.page = index; root.selected-request = -1; }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    Caption { text: "本机 · 北京时间"; }
+                }
+            }
+            VerticalLayout {
+                padding: 19px; spacing: 13px; horizontal-stretch: 1;
+                Heading {
+                    text: ["总览", "请求与诊断", "模型与设置"][root.page];
+                    font-size: 28px;
+                }
+                ScrollView {
+                    horizontal-scrollbar-policy: always-off;
+                    VerticalLayout {
+                        padding-bottom: 8px; padding-right: 5px;
+                        spacing: 14px; alignment: start;
+                        if root.page == 0 : StatusFirst {
+                            login-step: root.login-step;
+                            has-history: root.has-history;
+                            account-action => { root.page = 2; }
+                            select-request(index) => { root.selected-request = index; }
+                        }
+                        if root.page == 1 && root.has-history : Requests {
+                            title: "请求记录";
+                            select-request(index) => { root.selected-request = index; }
+                        }
+                        if root.page == 1 && !root.has-history : Panel {
+                            VerticalLayout { padding: 18px; Caption { text: "暂无请求记录"; } }
+                        }
+                        if root.page == 2 : LoginExample {
+                            step <=> root.login-step;
+                            account <=> root.account;
+                            password <=> root.password;
+                        }
+                    }
+                }
+            }
+            if root.selected-request >= 0 : Rectangle {
+                width: 264px; background: Colors.surface;
+                VerticalLayout {
+                    padding: 17px; spacing: 12px;
+                    HorizontalLayout {
+                        Heading { text: "请求详情"; vertical-alignment: center; }
+                        Action { label: "关闭"; activate => { root.selected-request = -1; } }
+                    }
+                    Caption { text: Samples.requests[root.selected-request].id + " · " + Samples.requests[root.selected-request].time; }
+                    Heading { text: Samples.requests[root.selected-request].status; }
+                    Caption { text: Samples.requests[root.selected-request].model; wrap: word-wrap; }
+                    Caption { text: Samples.requests[root.selected-request].detail; wrap: word-wrap; }
+                    Caption { text: "耗时 " + Samples.requests[root.selected-request].duration; }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+        Rectangle {
+            height: 53px; background: Colors.surface; border-width: 1px; border-color: Colors.border;
+            HorizontalLayout {
+                padding-left: 15px; padding-right: 15px; spacing: 8px; alignment: center;
+                Caption { text: "原型 · 模拟数据"; vertical-alignment: center; }
+                Action {
+                    width: 98px; label: "已登录示例";
+                    selected: root.login-step == LoginStep.valid && root.has-history;
+                    activate => {
+                        root.login-step = LoginStep.valid; root.has-history = true;
+                        root.page = 0; root.selected-request = -1;
+                    }
+                }
+                Action {
+                    width: 98px; label: "首次登录";
+                    selected: !root.has-history;
+                    activate => {
+                        root.login-step = LoginStep.unconfigured; root.has-history = false;
+                        root.account = ""; root.password = ""; root.page = 0; root.selected-request = -1;
+                    }
+                }
+                Action {
+                    width: 98px; label: "掉线恢复";
+                    selected: root.login-step == LoginStep.expired;
+                    activate => {
+                        root.login-step = LoginStep.expired; root.has-history = true;
+                        root.account = "demo-student"; root.password = "";
+                        root.page = 0; root.selected-request = -1;
+                    }
+                }
+            }
+        }
+    }
+}

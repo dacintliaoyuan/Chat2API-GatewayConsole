@@ -1,0 +1,13 @@
+[package]
+name = "um-console-overview-prototype"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+slint = { version = "=1.19.0", default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-2"] }
+
+[build-dependencies]
+slint-build = "=1.19.0"
