@@ -274,6 +274,7 @@ fn the_python_written_ledger_is_read_by_rust() {
 }
 
 #[test]
+#[ignore = "Python chat2api closure retired (#90); the remaining parity tests cover the Rust store"]
 fn a_rust_ledger_append_is_read_by_python_and_survives_a_rollback() {
     let temp = tempfile::tempdir().expect("temp ledger dir");
     let ledger_path = temp
@@ -353,6 +354,7 @@ fn a_rust_ledger_append_is_read_by_python_and_survives_a_rollback() {
 }
 
 #[test]
+#[ignore = "Python chat2api closure retired (#90); the remaining parity tests cover the Rust store"]
 fn a_rust_written_store_and_projection_are_read_by_python() {
     let temp = tempfile::tempdir().expect("temp store dir");
     let db = temp.path().join("share-store.db");
