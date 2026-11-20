@@ -787,6 +787,7 @@ def update_docs_only() -> str:
     DESTINATION.write_text(
         json.dumps(fixture, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     return digest
 
@@ -875,5 +876,6 @@ if __name__ == "__main__":
     DESTINATION.parent.mkdir(parents=True, exist_ok=True)
     DESTINATION.write_text(
         json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8")
+        encoding="utf-8",
+        newline="\n")
     print("Generated Rust contract fixture:", DESTINATION)

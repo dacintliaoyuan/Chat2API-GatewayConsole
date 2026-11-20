@@ -9,6 +9,7 @@
 //! the credential sink are seams: tests use fakes and never open a browser.
 
 pub mod browser;
+pub mod history;
 #[cfg(windows)]
 mod playwright;
 pub mod probe;
@@ -260,6 +261,8 @@ pub struct LoginConfig {
     pub recovery_retry_max_per_day: usize,
     /// Durable auth evidence file; `None` keeps the executor in memory only.
     pub auth_state_file: Option<PathBuf>,
+    /// Durable login-round history file (#115); `None` keeps it in memory only.
+    pub login_history_file: Option<PathBuf>,
     /// UMPASS account and password the login executor may type into an empty
     /// ADFS form; both empty keeps the browser-managed prefill path.
     pub um_account: String,
@@ -302,6 +305,7 @@ impl LoginConfig {
             recovery_retry_interval: config.recovery_retry_interval,
             recovery_retry_max_per_day: config.recovery_retry_max_per_day,
             auth_state_file: config.effective_auth_state_file(),
+            login_history_file: config.effective_login_history_file(),
             um_account: std::env::var("CHAT2API_UM_ACCOUNT")
                 .unwrap_or_default()
                 .trim()
@@ -498,6 +502,7 @@ struct LoginInner {
     credentials: Arc<dyn CredentialSink>,
     token_store: TokenStore,
     auth_state: AuthStateFile,
+    history: history::LoginHistory,
     state: Mutex<LoginState>,
     condvar: Condvar,
     attempts: Mutex<VecDeque<Instant>>,
@@ -551,6 +556,7 @@ impl LoginService {
             ..Recovery::default()
         };
         let auth_state_file = AuthStateFile::open(config.auth_state_file.clone());
+        let history = history::LoginHistory::open(config.login_history_file.clone());
         let service = Self {
             inner: Arc::new(LoginInner {
                 config,
@@ -559,6 +565,7 @@ impl LoginService {
                 credentials,
                 token_store,
                 auth_state: auth_state_file,
+                history,
                 state: Mutex::new(LoginState {
                     auth_state,
                     error: None,
@@ -664,8 +671,9 @@ impl LoginService {
             // through and re-check the budget so a released window accepts the
             // explicit request directly.
             if active_round(&state) && state.session.is_some() {
-                if visible {
+                if visible && !state.recovery.visible {
                     state.recovery.visible = true;
+                    self.inner.history.note_visible(state.round);
                 }
                 self.inner.condvar.notify_all();
                 return status_from_locked(&state, &self.inner.watch);
@@ -721,6 +729,14 @@ impl LoginService {
         }
         // Invalidate the round so a worker that is still unwinding cannot
         // overwrite the cancelled state with its own outcome.
+        let round = state.round;
+        self.inner.history.finish(
+            round,
+            "cancelled",
+            Some("cancelled"),
+            state.evidence.upstream_status,
+            state.evidence.verdict.as_deref(),
+        );
         state.round += 1;
         state.recovery.round = state.round;
         state.session = None;
@@ -1073,6 +1089,7 @@ fn begin_round_locked(
 ) -> Arc<LoginSession> {
     let timeout = inner.config.login_timeout;
     let deadline = Instant::now() + timeout;
+    let started_epoch = profile::epoch_now();
     state.login_window = Some(LoginWindow {
         window_s: timeout.as_secs_f64(),
         deadline_epoch: profile::epoch_now() + timeout.as_secs_f64(),
@@ -1081,7 +1098,7 @@ fn begin_round_locked(
     state.recovery.round = state.round;
     state.recovery.state = "running".to_string();
     state.recovery.trigger_source = trigger.map(|trigger| trigger.as_str().to_string());
-    state.recovery.trigger_epoch = Some(profile::epoch_now());
+    state.recovery.trigger_epoch = Some(started_epoch);
     state.recovery.last_outcome = None;
     state.recovery.session_starts = 1;
     state.recovery.next_attempt_epoch = None;
@@ -1114,6 +1131,9 @@ fn begin_round_locked(
         condvar: Condvar::new(),
     });
     state.session = Some(Arc::clone(&session));
+    inner
+        .history
+        .begin_at(state.round, trigger, visible, started_epoch);
     persist_auth_state_locked(inner, state);
     let worker = Arc::clone(inner);
     let round = state.round;
@@ -1461,11 +1481,37 @@ fn session_finish(session: &Arc<LoginSession>, outcome: LoginOutcome) {
 }
 
 fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outcome: LoginOutcome) {
-    session_finish(session, outcome.clone());
+    let session_outcome = outcome.clone();
     let mut state = inner.state.lock().expect("login state poisoned");
     if state.round != round {
+        drop(state);
+        session_finish(session, outcome);
         return;
     }
+    // An inconclusive network check never carried an upstream HTTP status; do not
+    // borrow the previous round's status for this round's record.
+    let upstream_status = match &outcome {
+        LoginOutcome::VerificationUnknown { .. } => None,
+        _ => state.evidence.upstream_status,
+    };
+    let evidence_verdict = match &outcome {
+        LoginOutcome::Valid => Some("valid".to_string()),
+        LoginOutcome::VerificationUnknown { .. } => Some("unknown".to_string()),
+        LoginOutcome::Rejected { .. } => Some("rejected".to_string()),
+        _ => state.evidence.verdict.clone(),
+    };
+    let (outcome_category, outcome_reason) = history_outcome(&outcome);
+    // The durable record is written before the outcome becomes visible to
+    // `status()` or the waiting provider, so a caller that observed the finished
+    // round can read its history immediately.
+    inner.history.finish_at(
+        round,
+        outcome_category,
+        outcome_reason.as_deref(),
+        upstream_status,
+        evidence_verdict.as_deref(),
+        profile::epoch_now(),
+    );
     if let Some((last_form, last_submit_count)) = state
         .login
         .as_ref()
@@ -1565,6 +1611,31 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
     state.session = None;
     persist_auth_state_locked(inner, &state);
     inner.condvar.notify_all();
+    drop(state);
+    session_finish(session, session_outcome);
+}
+
+/// The bounded result category and concrete reason one finished round records.
+fn history_outcome(outcome: &LoginOutcome) -> (&'static str, Option<String>) {
+    match outcome {
+        LoginOutcome::Valid => ("restored", None),
+        LoginOutcome::VerificationUnknown { reason } => {
+            ("verification_unknown", Some(reason.clone()))
+        }
+        LoginOutcome::Manual { reason } => {
+            let reason = reason
+                .strip_prefix(MANUAL_TAKEOVER_REQUIRED_PREFIX)
+                .unwrap_or(reason);
+            ("manual_takeover", Some(reason.to_string()))
+        }
+        LoginOutcome::Rejected { reason } => ("rejected", Some(reason.clone())),
+        LoginOutcome::Unavailable { reason } => ("unavailable", Some(reason.clone())),
+        LoginOutcome::Terminal { reason } => ("terminal", Some(reason.clone())),
+        LoginOutcome::Cancelled { reason } => ("cancelled", Some(reason.clone())),
+        LoginOutcome::Busy { reason } => ("busy", Some(reason.clone())),
+        LoginOutcome::Transient { reason } => ("transient", Some(reason.clone())),
+        LoginOutcome::Token { .. } => ("token_uncommitted", None),
+    }
 }
 
 fn run_browser_session(
@@ -1714,9 +1785,19 @@ fn drive_login(
                 let verdict = inner.probe.classify(token);
                 match verdict.verdict {
                     "valid" => {
+                        // Keep the valid probe's upstream status in the round
+                        // evidence; the history record reads it before the round
+                        // finishes.
+                        note_login_evidence(
+                            inner,
+                            round,
+                            "valid",
+                            verdict.reason.as_deref(),
+                            verdict.upstream_status,
+                        );
                         return LoginOutcome::Token {
                             token: token.clone(),
-                        }
+                        };
                     }
                     "rejected" => {
                         rejected_tokens.insert(token.clone());
@@ -2171,10 +2252,11 @@ fn commit_token(
         .publish_credential(&document.token, document.api_key.as_deref());
     let now = profile::epoch_now();
     let mut state = inner.state.lock().expect("login state poisoned");
+    let upstream_status = state.evidence.upstream_status;
     state.evidence = Evidence {
         verdict: Some("valid".to_string()),
         reason: None,
-        upstream_status: None,
+        upstream_status,
         checked_epoch: Some(now),
         last_valid_epoch: Some(now),
         source: Some("login".to_string()),
@@ -2283,6 +2365,7 @@ fn note_form(
             state.error = Some(format!("{MANUAL_TAKEOVER_REQUIRED_PREFIX}{reason}"));
         }
     }
+    inner.history.note_submission(round, form.submit_count);
     inner.condvar.notify_all();
 }
 

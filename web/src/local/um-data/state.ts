@@ -123,6 +123,7 @@ export class UmDataState {
   protected trendRange: TrendRange = "7d";
   protected requestsLoadedFor: string | null = null;
   protected logsLoadedFor: string | null = null;
+  protected loginRoundsLoadedFor: string | null = null;
   protected maintenanceLoaded = false;
   protected overviewLoaded = false;
   protected modelsLoaded = false;

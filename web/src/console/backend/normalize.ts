@@ -58,6 +58,8 @@ import type {
   UmLogLevel,
   UmLogLinePayload,
   UmLogPagePayload,
+  UmLoginRoundPayload,
+  UmLoginRoundsPagePayload,
   UmMaintenancePagePayload,
   UmMaintenanceRowPayload,
   UmOperationPayload,
@@ -1614,6 +1616,50 @@ export function normalizeUmLogPage(value: unknown): UmLogPagePayload {
     coverage: object(root.coverage) ?? {},
   };
 }
+export function normalizeUmLoginRoundsPage(
+  value: unknown
+): UmLoginRoundsPagePayload {
+  const root = requiredObject(value, "UM login rounds page");
+  const status = text(root.status) ?? "error";
+  if (status !== "ok")
+    throw new UmReadStatusError(
+      status,
+      text(root.error) ?? "登录轮次读取失败"
+    );
+  if (!Array.isArray(root.rounds))
+    throw new ContractError("UM login rounds must be an array");
+  const rounds: UmLoginRoundPayload[] = root.rounds.map((item) => {
+    const row = requiredObject(item, "UM login round");
+    const round = count(row.round);
+    const startedAt = count(row.startedAt);
+    if (round === null || startedAt === null)
+      throw new ContractError("UM login round needs round and startedAt");
+    const state = row.state;
+    return {
+      key: requiredText(row.key, "UM login round key"),
+      runId: requiredText(row.runId, "UM login run id"),
+      round,
+      state:
+        state === "running" || state === "completed" ? state : "incomplete",
+      triggerSource: text(row.triggerSource),
+      visible: row.visible === true,
+      startedAt,
+      endedAt: count(row.endedAt),
+      submitCount: count(row.submitCount) ?? 0,
+      outcome: text(row.outcome),
+      reason: text(row.reason),
+      upstreamStatus: count(row.upstreamStatus),
+      evidenceVerdict: text(row.evidenceVerdict),
+    };
+  });
+  return {
+    rounds,
+    scope: text(root.scope) ?? "",
+    truncated: root.truncated === true,
+    coverage: object(root.coverage) ?? {},
+  };
+}
+
 export function normalizeUmRequestLogs(value: unknown): UmRequestLogsPayload {
   const root = requiredObject(value, "UM request logs");
   const coverage = object(root.coverage) ?? {};

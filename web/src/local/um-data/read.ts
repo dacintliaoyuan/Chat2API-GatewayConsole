@@ -16,6 +16,7 @@ import type {
 import type {
   HistoryFilter,
   Load,
+  LoginRoundsQuery,
   LogQuery,
   RequestQuery,
   RequestsView,
@@ -71,6 +72,15 @@ function sameQuery(a: RequestQuery, b: RequestQuery): boolean {
     a.result === b.result &&
     a.search === b.search
   );
+}
+function loginRoundsQueryKey(query: LoginRoundsQuery): string {
+  return `${query.round.trim()}|${query.q.trim()}`;
+}
+function sameLoginRoundsQuery(
+  a: LoginRoundsQuery,
+  b: LoginRoundsQuery
+): boolean {
+  return a.round.trim() === b.round.trim() && a.q.trim() === b.q.trim();
 }
 function sameLogQuery(a: LogQuery, b: LogQuery): boolean {
   return (
@@ -502,16 +512,26 @@ export class UmDataReads extends UmDataState {
   // ---------------------------------------------------------------- requests
 
   protected ensureRequests(view: RequestsView, force: boolean): void {
+    if (view === "logs") {
+      const logsLoaded =
+        this.logsLoadedFor === logQueryKey(this.state.requests.logs.query);
+      const roundsLoaded =
+        this.loginRoundsLoadedFor ===
+        loginRoundsQueryKey(this.state.requests.loginRounds.query);
+      if (!force && logsLoaded && roundsLoaded) return;
+      void this.roleThen(() => {
+        if (force || !logsLoaded) this.readLogsPage();
+        if (force || !roundsLoaded) this.readLoginRounds();
+      });
+      return;
+    }
     const loaded =
       view === "records"
         ? this.requestsLoadedFor === queryKey(this.state.requests.query)
-        : view === "logs"
-          ? this.logsLoadedFor === logQueryKey(this.state.requests.logs.query)
-          : this.maintenanceLoaded;
+        : this.maintenanceLoaded;
     if (!force && loaded) return;
     void this.roleThen(() => {
       if (view === "records") this.readRequestsPage();
-      else if (view === "logs") this.readLogsPage();
       else this.readMaintenance();
     });
   }
@@ -742,6 +762,38 @@ export class UmDataReads extends UmDataState {
           },
         });
       });
+  }
+
+  protected onLoginRoundsQuery(query: LoginRoundsQuery): void {
+    if (sameLoginRoundsQuery(query, this.state.requests.loginRounds.query))
+      return;
+    this.patchRequests({
+      loginRounds: { query, page: { state: "loading" } },
+    });
+    this.loginRoundsLoadedFor = null;
+    void this.roleThen(() => this.readLoginRounds());
+  }
+
+  protected readLoginRounds(): void {
+    const query = this.state.requests.loginRounds.query;
+    const key = loginRoundsQueryKey(query);
+    void this.readSection(
+      "um-login-rounds",
+      () => this.state.requests.loginRounds.page,
+      (load) =>
+        this.patchRequests({
+          loginRounds: { ...this.state.requests.loginRounds, page: load },
+        }),
+      (signal) => this.client.readUmLoginRounds(query, 200, signal),
+      (payload) => payload,
+      () => {
+        if (
+          loginRoundsQueryKey(this.state.requests.loginRounds.query) !== key
+        )
+          return;
+        this.loginRoundsLoadedFor = key;
+      }
+    );
   }
 
   protected readMaintenance(force = false): void {

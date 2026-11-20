@@ -12,6 +12,7 @@ import type {
   UmBucket,
   UmEvent,
   UmIssue,
+  UmLoginRound,
   UmLogLine,
   UmMaintenanceRow,
   UmModelRow,
@@ -462,6 +463,40 @@ export function startPreview(
     });
     logs.sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
   }
+  const loginRounds: UmLoginRound[] = zero
+    ? []
+    : [
+        {
+          key: "preview-run:8",
+          runId: "preview-run",
+          round: 8,
+          state: "completed",
+          triggerSource: "business_request",
+          visible: false,
+          startedAt: now - 6 * MIN,
+          endedAt: now - 6 * MIN + 42_000,
+          submitCount: 1,
+          outcome: "restored",
+          reason: null,
+          upstreamStatus: 200,
+          evidenceVerdict: "valid",
+        },
+        {
+          key: "preview-run:7",
+          runId: "preview-run",
+          round: 7,
+          state: "completed",
+          triggerSource: "auth_watch",
+          visible: false,
+          startedAt: now - 34 * MIN,
+          endedAt: now - 34 * MIN + 12_000,
+          submitCount: 0,
+          outcome: "verification_unknown",
+          reason: "ConnectionError",
+          upstreamStatus: null,
+          evidenceVerdict: "unknown",
+        },
+      ];
   const maintenance: UmMaintenanceRow[] = zero
     ? []
     : [
@@ -907,6 +942,17 @@ export function startPreview(
       logs: {
         query: { window: "today", levels: [], source: null },
         page: { state: "loading" },
+      },
+      loginRounds: {
+        query: { round: "", q: "" },
+        page: ready(
+          {
+            rounds: loginRounds,
+            scope: "本机 8000 UM 登录轮次历史（最近 7 天 / 4 MiB）· 只读",
+            truncated: false,
+          },
+          now
+        ),
       },
       maintenance: down
         ? {
@@ -1591,6 +1637,31 @@ export function startPreview(
               Number(event.cursor),
               page.data.lines
             ),
+            Date.now()
+          ),
+        };
+        emit();
+        return;
+      }
+      case "loginRounds.query": {
+        const round = event.query.round.trim();
+        const q = event.query.q.trim().toLowerCase();
+        const rows = loginRounds.filter(
+          (row) =>
+            (!round || String(row.round) === round) &&
+            (!q ||
+              (row.reason ?? "").toLowerCase().includes(q) ||
+              (row.outcome ?? "").toLowerCase().includes(q) ||
+              (row.triggerSource ?? "").toLowerCase().includes(q))
+        );
+        state.requests.loginRounds = {
+          query: event.query,
+          page: ready(
+            {
+              rounds: rows,
+              scope: `本机 8000 UM 登录轮次历史（预览筛选）· 本页 ${rows.length} 条`,
+              truncated: false,
+            },
             Date.now()
           ),
         };

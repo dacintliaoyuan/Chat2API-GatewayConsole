@@ -164,6 +164,9 @@ systemd
   - 其余 local 读面：`services`、`health`、`um/today`、`um/trend`、`um/requests`、
     `um/maintenance`、`gateway-connection?service=chat2api` 与 `operations` 列表
     均 200 且归一化后一致。
+  - #115：`um/login-rounds` 只读本机 8000 写入的 `data/login-history.jsonl`
+    （7 天 / 4 MiB，轮转读取）；缺失是合法空列表，损坏是错误，读取不探测、
+    不登录、不追加。
   - `/api/session`：无效码两边均 403 `{"error":"invalid bootstrap code"}`。
   - `model.catalog`：两边 201 queued → succeeded，7 个模型目录一致。
   - 归一化：移除时钟字段（`checked_epoch`、`generatedAt`、`_generated_epoch`、
@@ -400,6 +403,7 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 - 追加服务日志 `share-backend.log`；日志不含凭据、请求体或响应体。
 - 登录/刷新时写 token/API Key 文件与浏览器 profile；只有显式登录或 401 恢复才打开浏览器，默认 headless，显式 visible 或有效 manual display 才 headful。Rust 8003 读写与 Python 相同的 `CHAT2API_TOKEN_FILE` 与 profile 路径，不迁移数据；登录浏览器按 profile 单实例，进程退出后 OS 锁自动释放。
 - 写脱敏认证证据 `CHAT2API_AUTH_STATE_FILE`（本机默认 `data/auth-state.json`，云端 `/var/lib/um-share/auth-state.json`）：原子替换、0600，只含轮次、结果、表单计数、`saved_at`、`iat`/`exp`、`jti`/`id` 哈希前缀与脱敏 401 摘要，不含 token、API key 或完整 `jti`；写失败只记日志，不影响请求或登录轮次。
+- 写 UM 登录轮次历史 `CHAT2API_LOGIN_HISTORY_FILE`（本机默认 `data/login-history.jsonl`；云端默认关闭）：JSONL 追加，单文件 1 MiB 轮转、最多 3 个轮转文件、合计 4 MiB、保留 7 天；每轮记录 `run_id`、轮次、状态、触发来源、可见模式、提交次数、结果、有界原因、上游 HTTP 状态与证据结论；8001 `/api/console/um/login-rounds` 只读，不探测、不登录、不追加。
 - 撤销状态文件 `share-revoke.state` 与投影快照，原子写（`chat2api/share_auth.py:475-526`）。
 - 注册实例控制 AF_UNIX 通道；只应答 `instance-status`、`load`、`drain`、`emergency`、`resume`，绝不调用管理动作（`chat2api/chat2api.py:9023-9100`）。
 - `/admin/shutdown` 只停止本进程；不停止上游 UM。
@@ -543,6 +547,7 @@ Rust 8003 的登录执行器（#69）：默认 headless-first，不要求 `DISPL
 | `GET /api/console/um/trend` | `range`、`days`/点序列、`coverage`、`checked_epoch` |
 | `GET /api/console/um/requests` | `rows[]`、`nextCursor`、`truncated`、`coverage` |
 | `GET /api/console/um/logs`、`request-logs` | `rows[]`、`nextCursor`、`truncated`、`coverage` |
+| `GET /api/console/um/login-rounds` | `rounds[]`、`scope`、`truncated`、`coverage`；只读，不触发探测/登录/追加 |
 | `GET /api/console/stats` | `requests`、`input_tokens`、`output_tokens`、`cache`、`coverage`；云端角色 503 |
 | `GET /api/console/logs` | `rows[]`、`coverage`；云端角色 503 |
 | `GET /api/console/operations` | `operations[]`；每项 `id`、`action`、`status`、`result` |

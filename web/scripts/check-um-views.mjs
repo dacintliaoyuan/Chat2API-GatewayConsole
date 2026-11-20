@@ -134,6 +134,47 @@ test("multi-day runtime logs show the Beijing date and time down to seconds", ()
   assert.match(html, /2026-11-18 00:04:21/);
 });
 
+test("UM login rounds show the full Beijing time and bounded fields", () => {
+  const state = um.unwiredState().requests;
+  state.loginRounds.page = ready({
+    rounds: [
+      {
+        key: `r"<1>`,
+        runId: `run"<1>`,
+        round: 8,
+        state: "completed",
+        triggerSource: "business_request",
+        visible: false,
+        startedAt: Date.UTC(2026, 10, 20, 0, 46, 30),
+        endedAt: Date.UTC(2026, 10, 20, 0, 47, 12),
+        submitCount: 1,
+        outcome: "verification_unknown",
+        reason: "<b>ConnectionError</b>",
+        upstreamStatus: null,
+        evidenceVerdict: "unknown",
+      },
+    ],
+    scope: "<u>scope</u>",
+    truncated: true,
+  });
+  const none = { records: null, logs: null, maintenance: null };
+  const html = um.requestsHtml(state, {
+    view: "logs",
+    search: "",
+    expanded: null,
+    openSteps: new Set(),
+    detailAsked: null,
+    earlier: none,
+    earlierFailed: none,
+  });
+  assert.match(html, /2026-11-20 08:46:30/, "完整北京时间");
+  assert.match(html, /核验未知/);
+  assert.match(html, /业务请求/);
+  assert.match(html, /data-um-lrround/);
+  assert.match(html, /已达单页上限/);
+  assert.doesNotMatch(html, /<b>|<u>|<script>/);
+});
+
 test("request rows with out-of-contract values render, escaped, without throwing", () => {
   const state = um.unwiredState().requests;
   const row = {

@@ -122,6 +122,9 @@ export class UmDataActions extends UmDataReads {
       case "logs.earlier":
         this.readEarlierLogs(event.cursor);
         return;
+      case "loginRounds.query":
+        this.onLoginRoundsQuery(event.query);
+        return;
       case "maintenance.earlier":
         this.readMaintenance(true);
         return;

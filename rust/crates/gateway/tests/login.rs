@@ -27,6 +27,8 @@ use um_gateway::reauth::{
 };
 use um_gateway::{GatewayServer, ServerHandle};
 
+use um_gateway::login::history::read_records;
+
 use support::{
     client_request, legacy_share_config, ChatAttempt, ChatStub, ClientRequest, StubUpstream,
     TempDir, CONTROL_TOKEN, SHARE_SECRET, STUB_TOKEN,
@@ -504,6 +506,7 @@ fn login_config(temp: &TempDir) -> LoginConfig {
         recovery_retry_interval: Duration::from_secs(1800),
         recovery_retry_max_per_day: 3,
         auth_state_file: None,
+        login_history_file: Some(temp.path().join("login-history.jsonl")),
         um_account: String::new(),
         um_password: String::new(),
     }
@@ -3388,4 +3391,241 @@ fn a_background_manual_takeover_keeps_the_reason_and_opens_no_edge_until_the_vis
         json!("explicit"),
         "{status}"
     );
+}
+#[test]
+fn every_started_round_records_its_trigger_and_result() {
+    let temp = TempDir::new("um-rust-login-history-triggers-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("fresh-token"));
+    let sink = Arc::new(FakeSink::default());
+    let (service, _) = login_service(&temp, page.clone(), ScriptedProbe::valid(), sink.clone());
+    let path = temp.path().join("login-history.jsonl");
+
+    assert_eq!(
+        service.reauthenticate_for(
+            Instant::now() + Duration::from_secs(3),
+            ReauthTrigger::AuthWatch,
+        ),
+        ReauthProviderResult::Restored
+    );
+    // The fake factory reuses one page object; a real browser launch opens a
+    // fresh page, so reset the fake's closed flag before the next round.
+    page.closed.store(false, Ordering::SeqCst);
+    assert_eq!(
+        service.reauthenticate_for(
+            Instant::now() + Duration::from_secs(3),
+            ReauthTrigger::BusinessRequest,
+        ),
+        ReauthProviderResult::Restored
+    );
+    page.closed.store(false, Ordering::SeqCst);
+    service.start_explicit(true);
+    wait_for(&service, |status| status["state"] == json!("valid"));
+
+    let records = read_records(&path).expect("login history");
+    assert_eq!(records.len(), 3, "每轮实际启动的登录只记录一次");
+    assert_eq!(records[0].round, 3);
+    assert_eq!(records[0].trigger_source.as_deref(), Some("explicit"));
+    assert!(records[0].visible);
+    assert_eq!(
+        records[1].trigger_source.as_deref(),
+        Some("business_request")
+    );
+    assert!(!records[1].visible);
+    assert_eq!(records[2].trigger_source.as_deref(), Some("auth_watch"));
+    assert!(!records[2].visible);
+    for record in &records {
+        assert_eq!(record.state, "completed");
+        assert_eq!(record.outcome.as_deref(), Some("restored"));
+        assert_eq!(record.upstream_status, Some(200));
+        assert_eq!(record.submit_count, 0);
+    }
+}
+
+#[test]
+fn concurrent_triggers_join_one_round_and_record_once() {
+    let temp = TempDir::new("um-rust-login-history-concurrent-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("pending-token"));
+    let probe = ManualProbe::new(Vec::new());
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with_probe(&temp, page, probe.clone(), sink, |_| {});
+
+    let first = {
+        let service = service.clone();
+        thread::spawn(move || {
+            service.reauthenticate_for(
+                Instant::now() + Duration::from_secs(3),
+                ReauthTrigger::AuthWatch,
+            )
+        })
+    };
+    wait_until(|| probe.calls() >= 1);
+    let second = {
+        let service = service.clone();
+        thread::spawn(move || {
+            service.reauthenticate_for(
+                Instant::now() + Duration::from_secs(3),
+                ReauthTrigger::BusinessRequest,
+            )
+        })
+    };
+    let third = {
+        let service = service.clone();
+        thread::spawn(move || {
+            service.reauthenticate_for(
+                Instant::now() + Duration::from_secs(3),
+                ReauthTrigger::Explicit,
+            )
+        })
+    };
+    assert_eq!(
+        factory.requests().len(),
+        1,
+        "同一轮的并发触发不得打开第二个窗口"
+    );
+    probe.release();
+    assert_eq!(first.join().expect("first"), ReauthProviderResult::Restored);
+    assert_eq!(
+        second.join().expect("second"),
+        ReauthProviderResult::Restored
+    );
+    assert_eq!(third.join().expect("third"), ReauthProviderResult::Restored);
+
+    let records = read_records(&temp.path().join("login-history.jsonl")).expect("login history");
+    assert_eq!(records.len(), 1, "并发触发与内部重试不得新增轮次");
+    assert_eq!(records[0].trigger_source.as_deref(), Some("auth_watch"));
+    assert_eq!(records[0].outcome.as_deref(), Some("restored"));
+}
+
+#[test]
+fn a_cancelled_round_records_its_cancel_result() {
+    let temp = TempDir::new("um-rust-login-history-cancel-");
+    let page = FakePage::new("http://127.0.0.1:9", None);
+    let (service, _) = login_service(
+        &temp,
+        page,
+        ScriptedProbe::valid(),
+        Arc::new(FakeSink::default()),
+    );
+    service.start_explicit(false);
+    wait_for(&service, |status| status["state"] == json!("logging_in"));
+    service.cancel();
+
+    let records = read_records(&temp.path().join("login-history.jsonl")).expect("login history");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].state, "completed");
+    assert_eq!(records[0].outcome.as_deref(), Some("cancelled"));
+    assert_eq!(records[0].reason.as_deref(), Some("cancelled"));
+    assert_eq!(records[0].ended_epoch.is_some(), true);
+}
+
+#[test]
+fn a_network_unknown_round_and_an_upstream_401_round_are_distinguishable() {
+    let temp = TempDir::new("um-rust-login-history-unknown-401-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("pending-token"));
+    page.account_prefilled.store(true, Ordering::SeqCst);
+    page.password_prefilled.store(true, Ordering::SeqCst);
+    page.submit_visible.store(true, Ordering::SeqCst);
+    page.reject_submit.store(true, Ordering::SeqCst);
+    *page.click_steps.lock().expect("click steps") =
+        vec![("https://websso.um.edu.mo/adfs/ls/".to_string(), None)];
+    let probe = ScriptedProbe::new(vec![
+        CredentialVerdict {
+            verdict: "unknown",
+            reason: Some("ConnectionError"),
+            upstream_status: None,
+        },
+        rejected_verdict(),
+    ]);
+    let (service, _) = login_service_with(
+        &temp,
+        page.clone(),
+        probe,
+        Arc::new(FakeSink::default()),
+        |config| {
+            configure_form_pair(config);
+            config.stage_settle_timeout = Duration::from_millis(20);
+            config.login_timeout = Duration::from_secs(3);
+        },
+    );
+
+    service.start_explicit(false);
+    wait_for(&service, |status| status["state"] == json!("unknown"));
+    // The fake factory reuses one page object; a real browser launch opens a
+    // fresh page, so reset the fake's closed flag before the next round.
+    page.closed.store(false, Ordering::SeqCst);
+    page.set_token(Some("stale-token"));
+    service.start_explicit(false);
+    wait_for(&service, |status| status["state"] == json!("failed"));
+
+    let records = read_records(&temp.path().join("login-history.jsonl")).expect("login history");
+    assert_eq!(records.len(), 2);
+    let rejected = &records[0];
+    let unknown = &records[1];
+    assert_eq!(unknown.outcome.as_deref(), Some("verification_unknown"));
+    assert_eq!(unknown.reason.as_deref(), Some("ConnectionError"));
+    assert_eq!(unknown.upstream_status, None);
+    assert_eq!(unknown.evidence_verdict.as_deref(), Some("unknown"));
+    assert_eq!(rejected.outcome.as_deref(), Some("rejected"));
+    assert_eq!(
+        rejected.reason.as_deref(),
+        Some("upstream_credential_rejected")
+    );
+    assert_eq!(
+        rejected.upstream_status,
+        Some(401),
+        "HTTP 401 必须与网络核验未知可区分"
+    );
+    assert_eq!(rejected.evidence_verdict.as_deref(), Some("rejected"));
+    assert_eq!(rejected.submit_count, 1);
+}
+
+#[test]
+fn credentials_and_upstream_evidence_never_reach_the_history_file() {
+    let temp = TempDir::new("um-rust-login-history-redaction-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("private-fixture-token"));
+    let probe = ScriptedProbe::new(vec![CredentialVerdict {
+        verdict: "unknown",
+        reason: Some("ConnectionError Bearer private-fixture-token"),
+        upstream_status: None,
+    }]);
+    let sink = Arc::new(FakeSink::default());
+    let (service, _) = login_service_with(&temp, page, probe, sink, |config| {
+        config.um_account = "private-fixture-account".into();
+        config.um_password = "private-fixture-password".into();
+    });
+    service.start_explicit(false);
+    wait_for(&service, |status| status["state"] == json!("unknown"));
+
+    let text = fs::read_to_string(temp.path().join("login-history.jsonl")).expect("login history");
+    for secret in [
+        "private-fixture-account",
+        "private-fixture-password",
+        "private-fixture-token",
+        "Bearer ",
+    ] {
+        assert!(!text.contains(secret), "历史不得包含敏感值：{secret}");
+    }
+    assert!(text.contains("ConnectionError"));
+    assert!(text.contains("[redacted]"));
+}
+
+#[test]
+fn a_history_write_failure_never_blocks_the_login() {
+    let temp = TempDir::new("um-rust-login-history-write-failure-");
+    let page = FakePage::new("http://127.0.0.1:9", Some("fresh-token"));
+    let sink = Arc::new(FakeSink::default());
+    let blocked = temp.path().join("history-is-a-directory");
+    fs::create_dir(&blocked).expect("create blocker");
+    let (service, _) = login_service_with(
+        &temp,
+        page,
+        ScriptedProbe::valid(),
+        sink.clone(),
+        |config| config.login_history_file = Some(blocked.clone()),
+    );
+    service.start_explicit(false);
+    let status = wait_for(&service, |status| status["state"] == json!("valid"));
+    assert_eq!(status["error"], Value::Null);
+    assert_eq!(sink.published(), vec![("fresh-token".to_string(), None)]);
+    assert!(read_records(&blocked).is_err());
 }

@@ -20,6 +20,7 @@ import {
   esc,
   freshnessHtml,
   full,
+  fullWhen,
   loaded,
   placeholderHtml,
   readingHtml,
@@ -253,6 +254,80 @@ function logLineHtml(line: UmLogLine): string {
   return `<li class="um-log" data-level="${esc(String(line.level))}"><span class="um-log-time tnum">${timestamp}</span><span class="pill" data-tone="${level.tone}">${level.word}</span><span class="um-log-src">${esc(line.source)}</span><code class="um-log-text">${esc(line.text)}</code></li>`;
 }
 
+const ROUND_STATE: Readonly<
+  Record<"running" | "completed" | "incomplete", { word: string; tone: string }>
+> = {
+  running: { word: "进行中", tone: "neutral" },
+  completed: { word: "已完成", tone: "ok" },
+  incomplete: { word: "未完成", tone: "warn" },
+};
+const TRIGGER: Readonly<Record<string, string>> = {
+  business_request: "业务请求",
+  auth_watch: "后台巡检",
+  explicit: "控制台显式",
+};
+const OUTCOME: Readonly<Record<string, string>> = {
+  restored: "已恢复",
+  verification_unknown: "核验未知",
+  rejected: "上游拒绝",
+  manual_takeover: "需人工接管",
+  unavailable: "上游不可用",
+  terminal: "终止",
+  cancelled: "已取消",
+  transient: "暂时失败",
+  busy: "占用中",
+  token_uncommitted: "令牌未提交",
+};
+const EVIDENCE: Readonly<Record<string, string>> = {
+  valid: "有效",
+  unknown: "未知",
+  rejected: "拒绝",
+};
+
+function loginRoundsHtml(r: UmRequests, ui: RequestsUi): string {
+  const q = r.loginRounds.query;
+  const shown = loaded(r.loginRounds.page);
+  const wired = r.loginRounds.page.state !== "unwired";
+  const filters = `<div class="um-filters" role="search" aria-label="筛选 UM 登录轮次">
+    <label class="um-search"><span class="sr-only">轮次</span><input type="search" inputmode="numeric" data-um-lrround placeholder="按轮次查找" value="${esc(q.round)}"${wired ? "" : " disabled"}></label>
+    <label class="um-search"><span class="sr-only">原因</span><input type="search" data-um-lrq placeholder="按原因或结果查找" maxlength="120" value="${esc(q.q)}"${wired ? "" : " disabled"}></label>
+  </div>`;
+  const head = `<p class="um-scope um-scope-top">来源：UM 登录轮次（本机 8000 写入；只读，不触发探测或登录）。</p>`;
+  if (!shown)
+    return `<section class="card um-req" aria-label="UM 登录轮次">${head}${filters}${placeholderHtml(r.loginRounds.page, "UM 登录轮次")}</section>`;
+  const { rounds, scope, truncated } = shown.data;
+  const meta = `<p class="um-scope">${esc(scope)} · ${freshnessHtml(shown.at, shown.stale, shown.refreshing)} · 本页 ${full(rounds.length)} 轮${truncated ? "（已达单页上限，请按轮次或原因缩小范围）" : ""}</p>`;
+  if (!rounds.length) {
+    return `<section class="card um-req" aria-label="UM 登录轮次">${head}${filters}${meta}<p class="um-empty">保留范围内没有符合条件的登录轮次。</p></section>`;
+  }
+  const body = rounds
+    .map((row) => {
+      const state = ROUND_STATE[row.state];
+      const outcome =
+        row.outcome === null ? null : (OUTCOME[row.outcome] ?? row.outcome);
+      const evidence =
+        row.evidenceVerdict === null
+          ? null
+          : (EVIDENCE[row.evidenceVerdict] ?? row.evidenceVerdict);
+      return `<tr role="row">
+        <td class="um-req-time" role="cell" title="运行 ${esc(row.runId)}"><span class="tnum">${esc(fullWhen(row.startedAt))}</span></td>
+        <td class="num" role="cell" data-label="轮次">${full(row.round)}</td>
+        <td role="cell" data-label="状态"><span class="status" data-tone="${state.tone}"><span class="dot" aria-hidden="true"></span>${state.word}</span></td>
+        <td role="cell" data-label="模式">${row.visible ? "可见窗口" : "后台"}</td>
+        <td role="cell" data-label="触发来源">${esc(TRIGGER[row.triggerSource ?? ""] ?? row.triggerSource ?? "未记录")}</td>
+        <td class="num" role="cell" data-label="提交">${full(row.submitCount)}</td>
+        <td role="cell" data-label="结果">${outcome === null ? '<span class="um-absent">尚未结束</span>' : esc(outcome)}</td>
+        <td role="cell" data-label="原因">${row.reason === null ? "—" : esc(row.reason)}</td>
+        <td role="cell" data-label="上游 / 证据">${row.upstreamStatus === null ? "无 HTTP 状态" : `HTTP ${row.upstreamStatus}`}${evidence === null ? "" : ` · ${esc(evidence)}`}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<section class="card um-req" aria-label="UM 登录轮次">${head}${filters}${meta}
+    <div class="um-table-scroll"><table class="data-table um-req-table" role="table">
+      <thead><tr role="row"><th scope="col" role="columnheader">开始（北京时间）</th><th scope="col" class="num" role="columnheader">轮次</th><th scope="col" role="columnheader">状态</th><th scope="col" role="columnheader">模式</th><th scope="col" role="columnheader">触发来源</th><th scope="col" class="num" role="columnheader">提交</th><th scope="col" role="columnheader">结果</th><th scope="col" role="columnheader">原因</th><th scope="col" role="columnheader">上游 / 证据</th></tr></thead>
+      <tbody>${body}</tbody></table></div></section>`;
+}
+
 function logsHtml(r: UmRequests, ui: RequestsUi): string {
   const q: LogQuery = r.logs.query;
   const wired = r.logs.page.state !== "unwired";
@@ -310,7 +385,7 @@ export function requestsHtml(r: UmRequests, ui: RequestsUi): string {
     ui.view === "records"
       ? recordsHtml(r, ui)
       : ui.view === "logs"
-        ? logsHtml(r, ui)
+        ? `${loginRoundsHtml(r, ui)}${logsHtml(r, ui)}`
         : maintenanceHtml(r.maintenance, ui);
   return `<div class="um-page um-requests">${tabs}<div id="um-panel" role="tabpanel" aria-labelledby="um-tab-${ui.view}">${panel}</div></div>`;
 }

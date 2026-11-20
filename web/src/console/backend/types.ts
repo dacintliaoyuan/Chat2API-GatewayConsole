@@ -835,6 +835,31 @@ export interface UmMaintenancePagePayload {
   coverage: JsonObject;
 }
 
+export interface UmLoginRoundPayload {
+  key: string;
+  runId: string;
+  round: number;
+  state: "running" | "completed" | "incomplete";
+  triggerSource: string | null;
+  visible: boolean;
+  /** Epoch milliseconds. */
+  startedAt: number;
+  /** Epoch milliseconds; null while the round is not finished. */
+  endedAt: number | null;
+  submitCount: number;
+  outcome: string | null;
+  reason: string | null;
+  upstreamStatus: number | null;
+  evidenceVerdict: string | null;
+}
+
+export interface UmLoginRoundsPagePayload {
+  rounds: UmLoginRoundPayload[];
+  scope: string;
+  truncated: boolean;
+  coverage: JsonObject;
+}
+
 export interface UmCatalogModelPayload {
   id: string;
   displayName: string | null;

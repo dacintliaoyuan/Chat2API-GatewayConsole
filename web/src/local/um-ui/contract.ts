@@ -292,6 +292,27 @@ export type UmLogPage = {
   scope: string;
   earlier: string | null;
 };
+export type LoginRoundsQuery = { round: string; q: string };
+export type UmLoginRound = {
+  key: string;
+  runId: string;
+  round: number;
+  state: "running" | "completed" | "incomplete";
+  triggerSource: string | null;
+  visible: boolean;
+  startedAt: number;
+  endedAt: number | null;
+  submitCount: number;
+  outcome: string | null;
+  reason: string | null;
+  upstreamStatus: number | null;
+  evidenceVerdict: string | null;
+};
+export type UmLoginRoundsPage = {
+  rounds: UmLoginRound[];
+  scope: string;
+  truncated: boolean;
+};
 export type UmMaintenanceRow = {
   key: string;
   action: MaintenanceAction;
@@ -317,6 +338,7 @@ export type UmRequests = {
   /** Log lines tied to one request, read on demand (`requests.detail`). */
   detail: { key: string; logs: Load<UmLogLine[]> } | null;
   logs: { query: LogQuery; page: Load<UmLogPage> };
+  loginRounds: { query: LoginRoundsQuery; page: Load<UmLoginRoundsPage> };
   maintenance: Load<UmMaintenancePage>;
 };
 
@@ -467,6 +489,7 @@ export type UmEvent =
   | { type: "requests.detail"; key: string }
   | { type: "logs.query"; query: LogQuery }
   | { type: "logs.earlier"; cursor: string }
+  | { type: "loginRounds.query"; query: LoginRoundsQuery }
   | { type: "maintenance.earlier"; cursor: string }
   | { type: "models.refreshCatalog" }
   /** Explicit UM model ids, deduplicated, never empty. */
@@ -510,6 +533,10 @@ export function unwiredState(): UmViewState {
       detail: null,
       logs: {
         query: { window: "today", levels: [], source: null },
+        page: { state: "unwired" },
+      },
+      loginRounds: {
+        query: { round: "", q: "" },
         page: { state: "unwired" },
       },
       maintenance: { state: "unwired" },

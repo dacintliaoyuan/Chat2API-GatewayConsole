@@ -48,6 +48,8 @@ pub const USAGE_LOG_ENV: &str = "CHAT2API_USAGE_LOG";
 pub const DSH_SNAPSHOT_ENV: &str = "DSH_LEDGER_SNAPSHOT_FILE";
 pub const SERVICE_LOG_ENV: &str = "CHAT2API_SERVICE_LOG";
 pub const UPSTREAM_FAULT_LOG_ENV: &str = "CHAT2API_UPSTREAM_FAULT_LOG";
+/// #115: the durable login-round history written by the local 8000 gateway.
+pub const LOGIN_HISTORY_FILE_ENV: &str = "CHAT2API_LOGIN_HISTORY_FILE";
 pub const WATCH_DIR_ENV: &str = "SELFUSEAI_GATEWAY_WATCH_DIR";
 pub const DIST_DIR_ENV: &str = "CONSOLE_DIST_DIR";
 pub const REPO_ROOT_ENV: &str = "CONSOLE_REPO_ROOT";
@@ -58,6 +60,7 @@ pub const DEFAULT_USAGE_LOG: &str = "data/usage-chat2api.jsonl";
 pub const DEFAULT_DSH_SNAPSHOT: &str = "data/dsh-ledger-20260902.json";
 pub const DEFAULT_SERVICE_LOG: &str = "chat2api/chat2api.log";
 pub const DEFAULT_UPSTREAM_FAULT_LOG: &str = "data/upstream-faults.json";
+pub const DEFAULT_LOGIN_HISTORY_FILE: &str = "data/login-history.jsonl";
 pub const DEFAULT_CONSOLE_STATE_FILE: &str = "data/console-state.sqlite3";
 pub const DEFAULT_CONSOLE_LOCK_DIR: &str = "data/console-locks";
 pub const DEFAULT_SHARE_STORE_FILE: &str = "data/share-store.db";
@@ -161,6 +164,9 @@ pub struct ConsoleConfig {
     /// #103: the durable UM upstream fault record written by the local 8000
     /// gateway and read here without probing or writing.
     pub upstream_fault_log: PathBuf,
+    /// #115: the durable UM login-round history written by the local 8000
+    /// gateway and read here without probing, logging in or writing.
+    pub login_history_file: PathBuf,
     pub watch_dir: Option<PathBuf>,
     /// The built console page tree hosted by the local role
     /// (`usagesrv.py::CONSOLE_DIST_DIR`).
@@ -202,6 +208,7 @@ impl Default for ConsoleConfig {
             dsh_snapshot: PathBuf::from(DEFAULT_DSH_SNAPSHOT),
             service_log: PathBuf::from(DEFAULT_SERVICE_LOG),
             upstream_fault_log: PathBuf::from(DEFAULT_UPSTREAM_FAULT_LOG),
+            login_history_file: PathBuf::from(DEFAULT_LOGIN_HISTORY_FILE),
             watch_dir: None,
             console_dist_dir: PathBuf::from(DEFAULT_DIST_DIR),
             repo_root: PathBuf::from(DEFAULT_REPO_ROOT),
@@ -441,6 +448,11 @@ impl ConsoleConfig {
         if let Ok(value) = std::env::var(UPSTREAM_FAULT_LOG_ENV) {
             if !value.trim().is_empty() {
                 config.upstream_fault_log = PathBuf::from(value);
+            }
+        }
+        if let Ok(value) = std::env::var(LOGIN_HISTORY_FILE_ENV) {
+            if !value.trim().is_empty() {
+                config.login_history_file = PathBuf::from(value);
             }
         }
         if let Ok(value) = std::env::var(WATCH_DIR_ENV) {

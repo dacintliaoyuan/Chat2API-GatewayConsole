@@ -333,6 +333,9 @@ pub struct GatewayConfig {
     /// Durable auth evidence file (#114). `None` uses the role default in
     /// production and stays memory-only in candidate mode.
     pub auth_state_file: Option<PathBuf>,
+    /// Durable login-round history file (#115). `None` uses the local
+    /// production default and stays memory-only in candidate mode.
+    pub login_history_file: Option<PathBuf>,
     /// The browser profile directory; `None` uses the role default.
     pub profile_dir: Option<PathBuf>,
     /// The on-demand manual display marker file.
@@ -411,6 +414,7 @@ impl Default for GatewayConfig {
             auth_watch_interval: None,
             token_file: None,
             auth_state_file: None,
+            login_history_file: None,
             profile_dir: None,
             login_display_file: None,
             login_timeout: Duration::from_secs(DEFAULT_LOGIN_TIMEOUT_SECONDS),
@@ -515,6 +519,11 @@ impl GatewayConfig {
         if let Ok(value) = std::env::var("CHAT2API_AUTH_STATE_FILE") {
             if !value.trim().is_empty() {
                 config.auth_state_file = Some(PathBuf::from(value));
+            }
+        }
+        if let Ok(value) = std::env::var(crate::login::history::LOGIN_HISTORY_FILE_ENV) {
+            if !value.trim().is_empty() {
+                config.login_history_file = Some(PathBuf::from(value));
             }
         }
         if let Ok(value) = std::env::var("CHAT2API_PROFILE_DIR") {
@@ -669,6 +678,19 @@ impl GatewayConfig {
     /// role default and a candidate never writes a production file.
     pub fn effective_auth_state_file(&self) -> Option<PathBuf> {
         crate::auth_state::effective_path(self.auth_state_file.clone(), self.role, self.candidate)
+    }
+
+    /// The durable login-round history path (#115).
+    ///
+    /// The local production process (8000) owns `data/login-history.jsonl` by
+    /// default; a candidate keeps the history in memory unless it injects an
+    /// explicit path, and the cloud role never reads the local file.
+    pub fn effective_login_history_file(&self) -> Option<PathBuf> {
+        crate::login::history::effective_path(
+            self.login_history_file.clone(),
+            self.role,
+            self.candidate,
+        )
     }
 
     /// Fail closed before binding a socket.

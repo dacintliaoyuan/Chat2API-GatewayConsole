@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::local_summary::{day_start_ms, parse_ts_ms};
 use crate::operations::OperationsReader;
+use um_gateway::login::history::{read_records, sanitize_reason, LoginRoundRecord};
 
 pub const UM_LEDGER_SOURCE: &str = "chat2api";
 pub const UM_WINDOWS: [&str; 4] = ["today", "24h", "7d", "30d"];
@@ -2737,6 +2738,99 @@ fn um_log_lines(
         "note": "有界尾读/窗口合并：不是完整历史",
     });
     ("ok".to_string(), None, rows, source.to_string(), earlier, coverage)
+}
+
+pub const UM_LOGIN_ROUND_MAX_PAGE: i64 = 400;
+
+/// Read the durable login-round history the local 8000 gateway writes (#115).
+/// Missing history is a legal empty read; an unreadable file is an error, never an
+/// empty list. The read only parses the file: it never probes the upstream,
+/// starts a login or appends a record.
+pub fn um_login_rounds(
+    path: &Path,
+    round: Option<u64>,
+    q: Option<&str>,
+    limit: i64,
+) -> Result<Value, UmQueryError> {
+    let limit = limit.clamp(1, UM_LOGIN_ROUND_MAX_PAGE);
+    let search = q
+        .unwrap_or("")
+        .trim()
+        .to_lowercase()
+        .chars()
+        .take(UM_MAX_SEARCH_CHARS)
+        .collect::<String>();
+    let records = read_records(path)
+        .map_err(|error| UmQueryError(format!("login_history_unreadable: {error}")))?;
+    let mut rows: Vec<Value> = records
+        .iter()
+        .filter(|record| round.map_or(true, |round| record.round == round))
+        .filter(|record| {
+            search.is_empty()
+                || record
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.to_lowercase().contains(&search))
+                || record
+                    .outcome
+                    .as_deref()
+                    .is_some_and(|outcome| outcome.to_lowercase().contains(&search))
+                || record
+                    .trigger_source
+                    .as_deref()
+                    .is_some_and(|source| source.to_lowercase().contains(&search))
+        })
+        .map(login_round_row)
+        .collect();
+    let truncated = rows.len() > limit as usize;
+    rows.truncate(limit as usize);
+    Ok(json!({
+        "status": "ok",
+        "error": null,
+        "rounds": rows,
+        "count": rows.len(),
+        "truncated": truncated,
+        "scope": format!(
+            "本机 8000 UM 登录轮次历史（最近 7 天 / 4 MiB）· 只读，不触发探测或登录 · 本页 {} 条",
+            rows.len()
+        ),
+        "coverage": {
+            "status": "ok",
+            "error": null,
+            "source": path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("login-history.jsonl"),
+            "bounded": true,
+            "note": "读取失败/损坏不是合法空列表",
+        },
+    }))
+}
+
+fn login_round_row(record: &LoginRoundRecord) -> Value {
+    let bounded = |value: Option<&str>, max: usize| {
+        value.map(|raw| {
+            raw.chars()
+                .filter(|character| !character.is_control())
+                .take(max)
+                .collect::<String>()
+        })
+    };
+    json!({
+        "key": format!("{}:{}", record.run_id, record.round),
+        "runId": record.run_id.chars().take(120).collect::<String>(),
+        "round": record.round,
+        "state": record.state,
+        "triggerSource": bounded(record.trigger_source.as_deref(), 40),
+        "visible": record.visible,
+        "startedAt": (record.started_epoch * 1000.0).round() as i64,
+        "endedAt": record.ended_epoch.map(|epoch| (epoch * 1000.0).round() as i64),
+        "submitCount": record.submit_count,
+        "outcome": bounded(record.outcome.as_deref(), 40),
+        "reason": record.reason.as_deref().map(sanitize_reason),
+        "upstreamStatus": record.upstream_status,
+        "evidenceVerdict": bounded(record.evidence_verdict.as_deref(), 40),
+    })
 }
 
 pub fn um_logs(

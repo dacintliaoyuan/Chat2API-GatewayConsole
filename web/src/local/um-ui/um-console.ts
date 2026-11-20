@@ -3,6 +3,7 @@ import type { RoleGate, RoleVerdict } from "../../console/role-gate";
 import { reduceMotion } from "../../shell/appearance";
 import type {
   Load,
+  LoginRoundsQuery,
   LogLevel,
   LogQuery,
   MaintenanceAction,
@@ -106,6 +107,8 @@ const sameLogQuery = (a: LogQuery, b: LogQuery) =>
   a.source === b.source &&
   a.levels.length === b.levels.length &&
   a.levels.every((l) => b.levels.includes(l));
+const sameLoginRoundsQuery = (a: LoginRoundsQuery, b: LoginRoundsQuery) =>
+  a.round.trim() === b.round.trim() && a.q.trim() === b.q.trim();
 
 const EARLIER_EVENT = {
   records: "requests.earlier",
@@ -180,6 +183,7 @@ export function mountUmConsole(
   // with an async controller, two quick changes must not lose the first.
   let pendingQuery: RequestQuery | null = null;
   let pendingLogQuery: LogQuery | null = null;
+  let pendingLoginRoundsQuery: LoginRoundsQuery | null = null;
   // What the last state said, by value: a controller may hand over the same
   // nested objects mutated in place (the preview does), so the previous state
   // object cannot be compared with the next one.
@@ -609,6 +613,13 @@ export function mountUmConsole(
     pendingLogQuery = next;
     emit({ type: "logs.query", query: next });
   }
+  function loginRoundsQuery(patch: Partial<LoginRoundsQuery>): void {
+    const base = pendingLoginRoundsQuery ?? state.requests.loginRounds.query;
+    const next = { ...base, ...patch };
+    if (sameLoginRoundsQuery(next, base)) return;
+    pendingLoginRoundsQuery = next;
+    emit({ type: "loginRounds.query", query: next });
+  }
   /** One 「加载更早」 read per view at a time; once the controller answers it
    *  (see update), the same cursor may be asked again. */
   function earlier(view: RequestsView, cursor: string): void {
@@ -864,6 +875,14 @@ export function mountUmConsole(
       logQuery({ source: target.value || null });
       return;
     }
+    if (target.matches("[data-um-lrround]")) {
+      loginRoundsQuery({ round: target.value.trim() });
+      return;
+    }
+    if (target.matches("[data-um-lrq]")) {
+      loginRoundsQuery({ q: target.value.trim() });
+      return;
+    }
     if (target.matches("[data-um-hmodel]")) {
       emit({
         type: "models.history",
@@ -888,6 +907,8 @@ export function mountUmConsole(
       const target = event.target as HTMLInputElement;
       if (target.matches("[data-um-rsearch]"))
         query({ search: target.value.trim() });
+      if (target.matches("[data-um-lrq]"))
+        loginRoundsQuery({ q: target.value.trim() });
     },
     true
   );
@@ -1126,6 +1147,14 @@ export function mountUmConsole(
         sameLogQuery(next.requests.logs.query, pendingLogQuery)
       )
         pendingLogQuery = null;
+      if (
+        pendingLoginRoundsQuery &&
+        sameLoginRoundsQuery(
+          next.requests.loginRounds.query,
+          pendingLoginRoundsQuery
+        )
+      )
+        pendingLoginRoundsQuery = null;
       // The asked-for linked logs arrived, in whatever state they are.
       if (
         requestsUi.detailAsked !== null &&

@@ -1191,6 +1191,47 @@ fn handle_local_um(state: &AppState, rest: &[&str], raw_target: &str) -> Respons
             }
             return send_json(200, &payload);
         }
+        "login-rounds" => {
+            let limit = match value("limit") {
+                None => 200,
+                Some(raw) => match raw.trim().parse::<i64>() {
+                    Ok(limit) => limit,
+                    Err(_) => {
+                        return ConsoleError::new(
+                            400,
+                            json!({"error": "invalid_um_query", "detail": "limit 必须是整数"}),
+                        )
+                        .response();
+                    }
+                },
+            };
+            let round = match value("round") {
+                None => None,
+                Some(raw) => match raw.trim().parse::<u64>() {
+                    Ok(round) => Some(round),
+                    Err(_) => {
+                        return ConsoleError::new(
+                            400,
+                            json!({"error": "invalid_um_query", "detail": "round 必须是非负整数"}),
+                        )
+                        .response();
+                    }
+                },
+            };
+            return match local_um::um_login_rounds(
+                &state.config.login_history_file,
+                round,
+                value("q").as_deref(),
+                limit,
+            ) {
+                Ok(payload) => send_json(200, &payload),
+                Err(error) => ConsoleError::new(
+                    500,
+                    json!({"error": "login_history_unreadable", "detail": error.0}),
+                )
+                .response(),
+            };
+        }
         "request-logs" => {
             let limit = match value("limit") {
                 None => 100,

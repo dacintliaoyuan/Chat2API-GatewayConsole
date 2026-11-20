@@ -19,6 +19,7 @@ import type {
   TransportResponse,
   UmCatalogPayload,
   UmLogPagePayload,
+  UmLoginRoundsPagePayload,
   UmMaintenancePagePayload,
   UmOperationsPayload,
   UmRequestLogsPayload,
@@ -48,6 +49,7 @@ import {
   normalizeShareUsageRequests,
   normalizeUmCatalog,
   normalizeUmLogPage,
+  normalizeUmLoginRoundsPage,
   normalizeUmMaintenancePage,
   normalizeUmOperations,
   normalizeUmRequestLogs,
@@ -835,6 +837,27 @@ export class BackendClient {
     if (cursor !== null) params.set("cursor", cursor);
     return normalizeUmLogPage(
       await this.readJson(`/um/logs?${params}`, signal)
+    );
+  }
+
+  /** The local 8000 gateway's durable login-round history. The read only
+   *  parses the retained file: it never probes, logs in or appends a record. */
+  async readUmLoginRounds(
+    query: { round: string; q: string },
+    limit: number,
+    signal?: AbortSignal
+  ): Promise<UmLoginRoundsPagePayload> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 400)
+      throw new ContractError("UM login round limit must be 1..400");
+    const round = query.round.trim();
+    if (round && !/^\d+$/.test(round))
+      throw new ContractError("invalid UM login round");
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (round) params.set("round", round);
+    const q = query.q.trim().slice(0, 120);
+    if (q) params.set("q", q);
+    return normalizeUmLoginRoundsPage(
+      await this.readJson(`/um/login-rounds?${params}`, signal)
     );
   }
 

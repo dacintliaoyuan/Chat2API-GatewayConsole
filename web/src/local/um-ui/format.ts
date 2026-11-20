@@ -57,6 +57,13 @@ export function when(ms: number, now = Date.now()): string {
     ? shortFmt.format(ms)
     : `${monthDay(key)} ${shortFmt.format(ms)}`;
 }
+/** 「2026-11-20 08:46:30」 in Beijing time: the full date and time for a
+ *  record that may span days. */
+export function fullWhen(ms: number): string {
+  return validInstant(ms)
+    ? `${dayFmt.format(ms)} ${clockFmt.format(ms)}`
+    : TIME_UNKNOWN;
+}
 /** 「10/31」 from a day key. */
 export function monthDay(key: string): string {
   const m = DAY_KEY.exec(String(key));
