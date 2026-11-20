@@ -51,12 +51,20 @@ def _load_module(name: str, relative: str):
     return module
 
 
-gateway = _load_module("rust_contract_chat2api", "chat2api/chat2api.py")
-share_auth = _load_module("rust_contract_share_auth", "chat2api/share_auth.py")
-display_proxy = _load_module("rust_contract_display_proxy", "console/display_proxy.py")
-broker_protocol = _load_module("rust_contract_broker_protocol", "share/broker_protocol.py")
-share_metering = _load_module("rust_contract_share_metering", "share/metering.py")
-share_store = _load_module("rust_contract_share_store", "share/store.py")
+def _optional_module(name: str, relative: str):
+    """The Python closure is retired (#90); --docs-only must still run."""
+    try:
+        return _load_module(name, relative)
+    except FileNotFoundError:
+        return None
+
+
+gateway = _optional_module("rust_contract_chat2api", "chat2api/chat2api.py")
+share_auth = _optional_module("rust_contract_share_auth", "chat2api/share_auth.py")
+display_proxy = _optional_module("rust_contract_display_proxy", "console/display_proxy.py")
+broker_protocol = _optional_module("rust_contract_broker_protocol", "share/broker_protocol.py")
+share_metering = _optional_module("rust_contract_share_metering", "share/metering.py")
+share_store = _optional_module("rust_contract_share_store", "share/store.py")
 
 _PORT_SERVICES = {
     8000: "chat2api",
@@ -766,7 +774,31 @@ def _source_hashes(names: list[str]) -> dict:
     return hashes
 
 
+def contract_doc_hash() -> str:
+    """The contract document hash, independent of the retired Python closure."""
+    return hashlib.sha256(_text(CONTRACT_RELATIVE).encode("utf-8")).hexdigest()
+
+
+def update_docs_only() -> str:
+    """Refresh only the contract document hash in the frozen fixture."""
+    fixture = json.loads(DESTINATION.read_text(encoding="utf-8"))
+    digest = contract_doc_hash()
+    fixture["metadata"]["sourceHashes"][CONTRACT_RELATIVE] = digest
+    DESTINATION.write_text(
+        json.dumps(fixture, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return digest
+
+
 def generate() -> dict:
+    if any(module is None for module in (
+            gateway, share_auth, display_proxy, broker_protocol,
+            share_metering, share_store)):
+        raise SystemExit(
+            "the Python closure is retired (#90); run --docs-only to refresh "
+            "the contract document hash"
+        )
     contract = _text(CONTRACT_RELATIVE)
     endpoints = []
     endpoints.extend(_endpoints(
@@ -790,7 +822,7 @@ def generate() -> dict:
     key_management = _key_management(contract)
     metering = _metering(contract)
     display = _display(contract)
-    share_auth = _share_auth()
+    share_auth_payload = _share_auth()
     cloudflare = _cloudflare()
     for path in cloudflare["sharePaths"]:
         if not any(item["surface"] == "gateway" and item["path"] == path
@@ -827,7 +859,7 @@ def generate() -> dict:
         "keyManagement": key_management,
         "metering": metering,
         "display": display,
-        "shareAuth": share_auth,
+        "shareAuth": share_auth_payload,
         "cloudflare": cloudflare,
         "harness": _harness(ports),
         "coverage": _coverage(endpoints, errors, sse, boundaries),
@@ -835,6 +867,10 @@ def generate() -> dict:
 
 
 if __name__ == "__main__":
+    if "--docs-only" in sys.argv[1:]:
+        digest = update_docs_only()
+        print("Updated contract document hash:", digest)
+        raise SystemExit(0)
     result = generate()
     DESTINATION.parent.mkdir(parents=True, exist_ok=True)
     DESTINATION.write_text(

@@ -351,6 +351,7 @@ fn wait_child(child: &mut Child, timeout: Duration) {
 }
 
 #[test]
+#[ignore = "Python ResourceFileLock retired with the Python closure (#90)"]
 fn a_python_resource_file_lock_holder_blocks_and_releases_the_action() {
     let temp = TempDataDir::new("um-console-resource-lock-").expect("temp dir");
     let lock_dir = temp.path().join("locks");

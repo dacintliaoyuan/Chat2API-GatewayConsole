@@ -145,6 +145,7 @@ impl ShareWriteSeams for BrokerManagementSeams {
     /// plaintext stays in this process; only the bounded outcome is returned.
     fn probe_models(&self, secret: &str, public_url: &str) -> Option<Value> {
         let started = std::time::Instant::now();
+        let deadline = started + Duration::from_secs(90);
         let public_ip = match resolve_public_ip(public_url) {
             Ok(public_ip) => public_ip,
             Err(reason) => return Some(probe_failure("models", reason, None)),
@@ -157,7 +158,20 @@ impl ShareWriteSeams for BrokerManagementSeams {
         let Ok(client) = um_gateway::readonly::UpstreamClient::from_config(&config) else {
             return Some(probe_failure("models", "public_url_invalid", None));
         };
-        let (status, payload) = match client.get_json_probe("/v1/models", Some(secret)) {
+        let client = client.with_user_agent(um_gateway::readonly::USER_AGENT);
+        let models_timeout = remaining(deadline, Duration::from_secs(20));
+        if models_timeout.is_zero() {
+            return Some(probe_failure("models", "timeout", None));
+        }
+        let observed = client
+            .request("GET", "/v1/models", Some(secret), None, models_timeout)
+            .map(|response| {
+                (
+                    response.status,
+                    serde_json::from_slice::<Value>(&response.body).ok(),
+                )
+            });
+        let (status, payload) = match observed {
             Ok(observed) => observed,
             Err(um_gateway::readonly::UpstreamFailure::Timeout) => {
                 return Some(probe_failure("models", "timeout", None))
@@ -180,12 +194,16 @@ impl ShareWriteSeams for BrokerManagementSeams {
         let Ok(body) = serde_json::to_vec(&body) else {
             return Some(probe_failure("inference", "invalid_request", None));
         };
+        let inference_timeout = remaining(deadline, Duration::from_secs(60));
+        if inference_timeout.is_zero() {
+            return Some(probe_failure("inference", "timeout", None));
+        }
         let response = match client.request(
             "POST",
             "/v1/chat/completions",
             Some(secret),
             Some(&body),
-            Duration::from_secs(60),
+            inference_timeout,
         ) {
             Ok(response) => response,
             Err(um_gateway::readonly::UpstreamFailure::Timeout) => {
@@ -424,6 +442,13 @@ fn valid_inference(payload: &Option<Value>) -> bool {
             .get("content")
             .and_then(Value::as_str)
             .is_some_and(|content| !content.trim().is_empty())
+}
+
+/// The remaining budget, capped at one step's own limit.
+fn remaining(deadline: std::time::Instant, max: Duration) -> Duration {
+    deadline
+        .saturating_duration_since(std::time::Instant::now())
+        .min(max)
 }
 
 /// Resolve the public origin to a global IPv4; loopback, private, link-local and

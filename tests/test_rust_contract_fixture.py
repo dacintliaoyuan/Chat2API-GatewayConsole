@@ -42,6 +42,17 @@ class RustContractFixtureTests(unittest.TestCase):
                 text.replace("\r\n", "\n").encode("utf-8")).hexdigest()
             self.assertEqual(expected, actual, "%s: source hash is stale" % name)
 
+    def test_docs_hash_matches_the_current_contract(self):
+        import generate_rust_contract_fixture as generator
+
+        fixture = _fixture()
+        self.assertEqual(
+            fixture["metadata"]["sourceHashes"]["docs/rust-contract.md"],
+            generator.contract_doc_hash(),
+            "contract document hash is stale; run "
+            "python tests/generate_rust_contract_fixture.py --docs-only",
+        )
+
     def test_fixture_marks_every_required_coverage_surface(self):
         fixture = _fixture()
         self.assertTrue(fixture["metadata"]["fixture"])

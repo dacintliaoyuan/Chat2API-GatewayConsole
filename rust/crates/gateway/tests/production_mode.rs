@@ -103,6 +103,10 @@ fn production_mode_binds_8000_on_loopback() {
 #[test]
 fn production_mode_binds_8003_and_8002_on_loopback() {
     for port in [8003u16, 8002u16] {
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+            eprintln!("skipping {port}: already bound by another process");
+            continue;
+        }
         let temp = TempDir::new(unique_temp_prefix());
         let stub = StubUpstream::start();
         let mut child = gateway_command(&temp, &stub)

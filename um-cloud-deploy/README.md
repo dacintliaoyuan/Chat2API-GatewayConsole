@@ -1,5 +1,7 @@
 # UM 分享云端部署包
 
+云机 SSH：`ssh -F ~/.ssh/aliyun-um-ecs.conf um-share-ecs`（root；别名不在默认 `~/.ssh/config`）。
+
 本目录是 UM 分享上云（S2）的离线发布与运维材料：manifest、依赖锁定、systemd 模板、显示入口、显式备份恢复工具与安装/更新/回滚/回滚演练脚本。它不修改产品 Python 源码、tests、web 或构建守卫，也不执行真实部署。
 
 公网入口是 Cloudflare Tunnel（`https://dacintapi.de5.net/v1` → `127.0.0.1:8003` Rust 网关）；Caddy 只保留历史回退样例。Cloudflare ingress 的 8100 → 8003 由维护者在 dashboard/API 完成，agent 只校验配置和公网结果，不改 tunnel。
@@ -173,6 +175,18 @@ rm -rf /opt/um-share/.incoming/um-share-<version>
 
 ```bash
 /opt/um-share/releases/<current-version>/um-cloud-deploy/rollback.sh   --recover-backup /var/lib/um-share/backup-remote/um-share-<id>.umbak   --recover-security-state /var/lib/um-share/security-state.json   --drain-budget 900
+```
+
+### 单文件热修复
+
+`hotfix.sh` 只替换一个二进制或一个 `web/dist`，先备份再切换；二进制通过同目录临时文件 `mv` 覆盖，避免正在运行的可执行文件 `ETXTBSY`。它不做 release 切换。
+
+```bash
+# 二进制 + unit + 健康门
+bash um-cloud-deploy/hotfix.sh \n  --binary /root/um-console.new \n  --target /opt/um-share/bin/um-console \n  --unit um-share-console.service \n  --health-url http://127.0.0.1:8002/health
+
+# web dist
+bash um-cloud-deploy/hotfix.sh \n  --web-dist /root/dist-cloud \n  --target /opt/um-share/current/web/dist
 ```
 
 ### Rust → Python 回滚演练

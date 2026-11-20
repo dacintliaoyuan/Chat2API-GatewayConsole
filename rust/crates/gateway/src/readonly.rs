@@ -88,6 +88,9 @@ pub struct UpstreamClient {
     port: u16,
     timeout: Duration,
     tls: bool,
+    /// Only the public Key probe sets a browser UA; the gateway's own upstream
+    /// calls keep no User-Agent.
+    user_agent: Option<String>,
 }
 
 impl UpstreamClient {
@@ -99,7 +102,14 @@ impl UpstreamClient {
             port,
             timeout: config.upstream_timeout,
             tls: upstream_uses_tls(&config.upstream_base_url),
+            user_agent: None,
         })
+    }
+
+    /// Attach the browser-like User-Agent used only by the public Key probe.
+    pub fn with_user_agent(mut self, user_agent: &str) -> Self {
+        self.user_agent = Some(user_agent.to_string());
+        self
     }
 
     pub fn get(
@@ -153,10 +163,13 @@ impl UpstreamClient {
             Box::new(stream)
         };
         let mut request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nUser-Agent: {}\r\n\
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\n\
              Connection: close\r\n",
-            self.host_header, USER_AGENT
+            self.host_header
         );
+        if let Some(user_agent) = &self.user_agent {
+            request.push_str(&format!("User-Agent: {user_agent}\r\n"));
+        }
         if let Some(bearer) = bearer {
             request.push_str(&format!("Authorization: Bearer {bearer}\r\n"));
         }
@@ -1261,6 +1274,24 @@ fn epoch_now() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chunked_response_stops_at_the_terminator() {
+        let server = um_test_harness::TestServer::start(|request| {
+            assert_eq!(request.path, "/v1/models");
+            um_test_harness::HttpResponse::new(200, b"5\r\nhello\r\n0\r\n\r\n".to_vec())
+                .with_header("transfer-encoding", "chunked")
+        })
+        .expect("upstream server");
+        let config = GatewayConfig {
+            upstream_base_url: format!("http://127.0.0.1:{}", server.port()),
+            ..GatewayConfig::default()
+        };
+        let client = UpstreamClient::from_config(&config).expect("upstream client");
+        let (status, payload) = client.get_json_probe("/v1/models", None).expect("probe");
+        assert_eq!(status, 200);
+        assert!(payload.is_none(), "chunked hello is not a JSON object");
+    }
 
     #[test]
     fn a_content_length_response_is_read_without_waiting_for_close() {

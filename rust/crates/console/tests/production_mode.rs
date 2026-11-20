@@ -89,6 +89,10 @@ fn read_listen_addr(child: &mut Child) -> std::net::SocketAddr {
 
 #[test]
 fn production_mode_binds_8002_on_loopback() {
+    if std::net::TcpListener::bind(("127.0.0.1", 8002)).is_err() {
+        eprintln!("skipping 8002: already bound by another process");
+        return;
+    }
     let temp = temp();
     let mut child = console_command(&temp)
         .arg("--mode")

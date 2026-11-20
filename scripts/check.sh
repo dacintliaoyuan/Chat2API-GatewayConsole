@@ -35,6 +35,8 @@ run python -m compileall -q . -x '(^|[/\\])(node_modules|web/node_modules|\.git|
 run python -m ruff check .
 run python scripts/check_share_names.py
 run python scripts/check_retired_features.py
+run python scripts/check_line_endings.py
+run python scripts/check_docs_references.py
 run node web/scripts/backend-contract/check-generated.mjs
 run git -c core.whitespace=cr-at-eol diff --cached --check
 run git -c core.whitespace=cr-at-eol diff --check
@@ -51,7 +53,7 @@ case "${1:-}" in
       tests.test_cloud_deploy_assembly \
       tests.test_cloud_rollback_release \
       tests.test_cloud_deploy_rust_release \
-      tests.test_manifest_stability
+      tests.test_manifest_stability \n      tests.test_manifest_rust_closure
     web_run npm run check:cloud-console
     ;;
   --full)

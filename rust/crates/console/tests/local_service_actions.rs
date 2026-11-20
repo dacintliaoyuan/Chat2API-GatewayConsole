@@ -12,6 +12,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -24,6 +25,10 @@ use um_console::ConsoleServer;
 use um_test_harness::TempDataDir;
 
 use support::*;
+
+/// The real PowerShell runtime uses the machine's service lock and a real
+/// temp gateway; serialise those tests within this binary.
+static REAL_RUNTIME_LOCK: Mutex<()> = Mutex::new(());
 
 const FAKE_WRAPPER: &str = r#"
 $ErrorActionPreference = 'Stop'
@@ -545,6 +550,9 @@ impl Drop for ProcessCleanup {
 #[cfg(windows)]
 #[test]
 fn the_real_powershell_entry_covers_running_stopped_repeated_and_conflict() {
+    let _guard = REAL_RUNTIME_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = temp();
     let port = free_port();
     let repo = real_runtime_repo(&temp, port);
@@ -645,6 +653,9 @@ fn the_real_powershell_entry_covers_running_stopped_repeated_and_conflict() {
 
 #[test]
 fn repeated_service_triggers_and_port_conflicts_keep_the_runtime_verdicts() {
+    let _guard = REAL_RUNTIME_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = temp();
     let repo = fake_repo(&temp, STATEFUL_WRAPPER);
     let console = start_local_console(&temp, &repo);
@@ -705,6 +716,9 @@ fn repeated_service_triggers_and_port_conflicts_keep_the_runtime_verdicts() {
 
 #[test]
 fn service_stop_and_restart_keep_the_runtime_result_shapes() {
+    let _guard = REAL_RUNTIME_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = temp();
     let repo = fake_repo(&temp, FAKE_WRAPPER);
     let console = start_local_console(&temp, &repo);
@@ -740,6 +754,9 @@ fn service_stop_and_restart_keep_the_runtime_result_shapes() {
 
 #[test]
 fn service_start_uses_the_powershell_runtime_entry_without_python() {
+    let _guard = REAL_RUNTIME_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = temp();
     let repo = fake_repo(&temp, FAKE_WRAPPER);
     let console = start_local_console(&temp, &repo);
