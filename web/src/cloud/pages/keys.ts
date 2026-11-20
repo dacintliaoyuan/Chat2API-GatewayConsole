@@ -112,7 +112,7 @@ function keyRowHtml(model: CloudModel, key: ShareKeyRow): string {
           : ""
       }
       <input class="cloud-key-cap mono" type="number" min="1" max="48" step="1" inputmode="numeric" value="${escapeHtml(capValue)}" data-cloud-key-cap-input="${escapeHtml(id)}" aria-label="Key ${escapeHtml(key.name || id)} 的并发上限"${disabled}>
-      <button type="button" class="cloud-key-rename" data-cloud-key-action="rename:${escapeHtml(id)}"${disabled}>改名</button>
+      <button type="button" class="cloud-key-rename-btn" data-cloud-key-action="rename:${escapeHtml(id)}"${disabled}>改名</button>
       <button type="button" class="cloud-key-test-btn" data-cloud-key-action="test:${escapeHtml(id)}" data-tone="${keyTestTone(test)}"${testDisabled}>${escapeHtml(keyTestLabel(test))}</button>
       <button type="button" class="cloud-key-revoke" data-cloud-key-action="revoke:${escapeHtml(id)}"${disabled}>撤销</button>
     </div>
