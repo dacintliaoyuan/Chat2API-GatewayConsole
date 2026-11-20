@@ -91,6 +91,13 @@ fn cloud_console_reads_retained_rounds_without_writing_the_history() {
 
     let payload = read_rounds(console.addr, "");
     assert_eq!(payload["status"], json!("ok"));
+    assert!(
+        payload["scope"]
+            .as_str()
+            .expect("scope")
+            .starts_with("云端 8003"),
+        "云端读面的 scope 必须标明 8003：{payload}"
+    );
     let rounds = payload["rounds"].as_array().expect("rounds array");
     assert_eq!(rounds.len(), 2, "同一运行内同轮次只保留最新一条");
     assert_eq!(rounds[0]["round"], json!(2));

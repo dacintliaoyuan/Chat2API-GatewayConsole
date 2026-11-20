@@ -373,6 +373,105 @@ function Test-GatewayServiceHealth {
     }
 }
 
+function Get-GatewayProbeFailureReason {
+    # #117: classify a failed probe without exposing the raw exception message
+    # (it can carry URLs, proxy settings or paths). Returns one token from a
+    # fixed vocabulary; every other failure is a plain "no_response".
+    param([AllowNull()]$Exception)
+
+    $current = $Exception
+    $depth = 0
+    $socketCodes = @()
+    $webStatus = ''
+    $timedOut = $false
+    while ($null -ne $current -and $depth -lt 8) {
+        if ($current -is [System.Net.Sockets.SocketException]) {
+            $socketCodes += [string]$current.SocketErrorCode
+        } elseif ($current -is [System.Net.WebException]) {
+            $webStatus = [string]$current.Status
+        } elseif ($current -is [System.TimeoutException]) {
+            $timedOut = $true
+        } elseif ($current -is [System.OperationCanceledException]) {
+            $timedOut = $true
+        }
+        $current = $current.InnerException
+        $depth += 1
+    }
+    if ($socketCodes -contains 'ConnectionRefused') { return 'connect_refused' }
+    if ($timedOut -or $webStatus -eq 'Timeout' -or
+            $socketCodes -contains 'TimedOut') {
+        return 'probe_timeout'
+    }
+    if ($webStatus -in @('NameResolutionFailure', 'ProxyNameResolutionFailure') -or
+            $socketCodes -contains 'HostNotFound' -or
+            $socketCodes -contains 'NoData') {
+        return 'dns_failure'
+    }
+    if ($webStatus -eq 'ConnectFailure' -or
+            $socketCodes -contains 'NetworkUnreachable' -or
+            $socketCodes -contains 'HostUnreachable') {
+        return 'connect_failed'
+    }
+    return 'no_response'
+}
+
+function Invoke-GatewayReadyProbe {
+    # #117: one probe of a readiness URL. The result separates "no HTTP
+    # response at all" (connection refused, timeout, DNS/connect failure) from
+    # "an HTTP response that is not 200": only the latter proves a listener
+    # exists. Reading the optional Response member this way never raises
+    # PropertyNotFoundStrict under StrictMode (PS7 transport exceptions have no
+    # Response property at all).
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [ValidateRange(1, 120)][int]$TimeoutSeconds = 3
+    )
+
+    try {
+        $previousProgressPreference = $ProgressPreference
+        try {
+            $ProgressPreference = 'SilentlyContinue'
+            $response = Invoke-WebRequest -Uri $Url -Method Get -UseBasicParsing `
+                -TimeoutSec $TimeoutSeconds -ErrorAction Stop
+        } finally {
+            $ProgressPreference = $previousProgressPreference
+        }
+        $status = [int]$response.StatusCode
+        $reason = if ($status -eq 200) { 'ready' } else { 'http_not_ready' }
+        return [pscustomobject]@{
+            Ready = ($status -eq 200)
+            Responded = $true
+            HttpStatus = $status
+            Reason = $reason
+            ErrorType = $null
+        }
+    } catch {
+        $exception = $_.Exception
+        $errorType = if ($null -eq $exception) { '' } else { $exception.GetType().Name }
+        $responseProperty = $null
+        if ($null -ne $exception) { $responseProperty = $exception.PSObject.Properties['Response'] }
+        if ($null -ne $responseProperty -and $null -ne $responseProperty.Value) {
+            $status = 0
+            try { $status = [int]$responseProperty.Value.StatusCode }
+            catch { $status = 0 }
+            return [pscustomobject]@{
+                Ready = $false
+                Responded = $true
+                HttpStatus = $status
+                Reason = 'http_not_ready'
+                ErrorType = $errorType
+            }
+        }
+        return [pscustomobject]@{
+            Ready = $false
+            Responded = $false
+            HttpStatus = $null
+            Reason = (Get-GatewayProbeFailureReason -Exception $exception)
+            ErrorType = $errorType
+        }
+    }
+}
+
 function Get-GatewayServiceStatus {
     param(
         [Parameter(Mandatory = $true)][string]$Key,

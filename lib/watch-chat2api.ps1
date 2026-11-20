@@ -209,37 +209,12 @@ function Write-WatchState {
 }
 
 function Invoke-DefaultProbe {
-    try {
-        $response = Invoke-WebRequest -Uri $ReadyUrl -Method Get -UseBasicParsing `
-            -TimeoutSec $ProbeTimeoutSeconds -ErrorAction Stop
-        $status = [int]$response.StatusCode
-        $reason = if ($status -eq 200) { 'ready' } else { 'http_not_ready' }
-        return [pscustomobject]@{
-            Ready = ($status -eq 200)
-            Responded = $true
-            HttpStatus = $status
-            Reason = $reason
-        }
-    }
-    catch {
-        $response = $_.Exception.Response
-        if ($null -ne $response) {
-            try { $status = [int]$response.StatusCode }
-            catch { $status = 0 }
-            return [pscustomobject]@{
-                Ready = $false
-                Responded = $true
-                HttpStatus = $status
-                Reason = 'http_not_ready'
-            }
-        }
-        return [pscustomobject]@{
-            Ready = $false
-            Responded = $false
-            HttpStatus = $null
-            Reason = $_.Exception.GetType().Name
-        }
-    }
+    # #117: the probe separates "no HTTP response at all" (connection
+    # refused, probe timeout, DNS/connect failure) from "an HTTP response that
+    # is not 200". A PS7 transport exception has no Response property, so
+    # reading it directly used to raise PropertyNotFoundStrict and end the watch
+    # run with exit code 1 before any process or intent check.
+    return Invoke-GatewayReadyProbe -Url $ReadyUrl -TimeoutSeconds $ProbeTimeoutSeconds
 }
 
 function Invoke-ReadyProbe {
@@ -625,11 +600,19 @@ function Invoke-Chat2ApiWatch {
         } else {
             [string]$probeResult.HttpStatus
         }
+        # #117: the exception type is a class name (never the message), so the
+        # no-response reason stays diagnosable without leaking a URL, path or
+        # proxy setting. Custom probes may omit the field.
+        $errorTypeText = '-'
+        $errorTypeProperty = $probeResult.PSObject.Properties['ErrorType']
+        if ($null -ne $errorTypeProperty -and $errorTypeProperty.Value) {
+            $errorTypeText = [string]$errorTypeProperty.Value
+        }
         Write-WatchLog 'WARNING' (
-            'probe_failed count={0}/{1} responded={2} http_status={3} reason={4}' -f
+            'probe_failed count={0}/{1} responded={2} http_status={3} reason={4} error_type={5}' -f
             $state.consecutive_failures, $FailureThreshold,
             [bool]$probeResult.Responded, $httpStatusText,
-            [string]$probeResult.Reason)
+            [string]$probeResult.Reason, $errorTypeText)
 
         if ([int]$state.consecutive_failures -lt $FailureThreshold) {
             return 0
@@ -798,21 +781,42 @@ function Invoke-WatchSelfTest {
     }
     $script:BootIdProvider = { 'selftest-boot' }
     $script:selfTestProbeReady = $false
+    # #117: the probe stub can return the real probe's no-response result
+    # (a bound-but-unlistening loopback port) or a non-200 HTTP response, so
+    # the decision table can prove both branches end to end.
+    $script:selfTestProbeMode = 'failure'
+    $script:selfTestClosedProbeUrl = $null
+    $script:selfTestProbeResults = New-Object System.Collections.ArrayList
     $script:Probe = {
-        if ($script:selfTestProbeReady) {
-            return [pscustomobject]@{
+        $result = $null
+        if ($script:selfTestProbeMode -eq 'default') {
+            # The production probe entry point, against the closed port set in
+            # $script:ReadyUrl (the #117 strict-mode regression).
+            $result = Invoke-DefaultProbe
+        } elseif ($script:selfTestProbeMode -eq 'closed') {
+            $result = Invoke-GatewayReadyProbe -Url $script:selfTestClosedProbeUrl -TimeoutSeconds 5
+        } elseif ($script:selfTestProbeMode -eq 'http_not_ready') {
+            $result = [pscustomobject]@{
+                Ready = $false; Responded = $true; HttpStatus = 503
+                Reason = 'http_not_ready'; ErrorType = 'HttpResponseException' }
+        } elseif ($script:selfTestProbeReady) {
+            $result = [pscustomobject]@{
                 Ready = $true; Responded = $true; HttpStatus = 200
-                Reason = 'ready' }
+                Reason = 'ready'; ErrorType = $null }
+        } else {
+            $result = [pscustomobject]@{
+                Ready = $false; Responded = $false; HttpStatus = $null
+                Reason = 'SelfTestProbeFailure'; ErrorType = $null }
         }
-        [pscustomobject]@{
-            Ready = $false; Responded = $false; HttpStatus = $null
-            Reason = 'SelfTestProbeFailure'
-        }
+        [void]$script:selfTestProbeResults.Add($result)
+        return $result
     }
     $script:selfTestProcessState = 'verified'
+    $script:selfTestProcessPid = 4242
     $script:ProcessQuery = {
         if ($script:selfTestProcessState -eq 'verified') {
-            return [pscustomobject]@{ State = 'verified'; Pids = @(4242); Error = $null }
+            return [pscustomobject]@{
+                State = 'verified'; Pids = @($script:selfTestProcessPid); Error = $null }
         }
         if ($script:selfTestProcessState -eq 'unconfirmed') {
             return [pscustomobject]@{ State = 'unconfirmed'; Pids = @(); Error = 'port_8000_held_by_non_private_process' }
@@ -826,8 +830,17 @@ function Invoke-WatchSelfTest {
     $script:selfTestEvidence = $null
     $script:ExitEvidenceProvider = { $script:selfTestEvidence }
     $script:selfTestStarts = 0
+    $script:selfTestStartModelsInstance = $false
     $script:StartService = {
         $script:selfTestStarts += 1
+        # #117: model a launcher whose new instance answers /health, so the
+        # next run must see the new PID and never start a second time.
+        if ($script:selfTestStartModelsInstance) {
+            $script:selfTestProcessState = 'verified'
+            $script:selfTestProcessPid = 5555
+            $script:selfTestProbeReady = $true
+            $script:selfTestProbeMode = 'ready'
+        }
         [pscustomobject]@{ Status = 'Restarted' }
     }
     $script:selfTestSchedulingCalls = New-Object System.Collections.ArrayList
@@ -1017,6 +1030,181 @@ function Invoke-WatchSelfTest {
     }
     Assert-Releases 9 'the racing run goes active, the operator stop path owns the disarm'
     $script:DesiredStateProvider = { $script:selfTestDesired }
+
+    # #117: a probe with no HTTP response must not end the run. The REAL
+    # probe runs against a bound-but-unlistening loopback port (the case that
+    # used to raise PropertyNotFoundStrict under the production StrictMode and
+    # exit the task with code 1). The watch records the sanitized reason and
+    # continues into the existing process and intent checks: a live managed
+    # process is kept, a vanished one is started only once, and an explicit stop
+    # or an unconfirmed ownership starts nothing.
+    function Reset-SelfTestFixtureState {
+        param([int]$ConsecutiveFailures = 1)
+        $fixture = [pscustomobject]@{
+            version = 2; boot_id = 'selftest-boot'
+            consecutive_failures = $ConsecutiveFailures
+            restart_attempts_utc = @(); idle_reason = '' }
+        $fixture | ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath $script:StatePath -Encoding UTF8
+    }
+    function Get-NewSelfTestLogLines {
+        param([int]$Skip)
+        return @(Get-Content -LiteralPath $script:LogPath | Select-Object -Skip $Skip)
+    }
+    function Assert-NoStart([int]$StartsBefore, [string]$Why) {
+        if ($script:selfTestStarts -ne $StartsBefore) {
+            throw ('self-test failed: {0} (started {1} time(s))' -f
+                $Why, ($script:selfTestStarts - $StartsBefore))
+        }
+    }
+    $noResponseReason = 'reason=(connect_refused|connect_failed|probe_timeout|dns_failure|no_response)'
+    $savedReadyUrl = $ReadyUrl
+
+    $closedProbeSocket = [System.Net.Sockets.Socket]::new(
+        [System.Net.Sockets.AddressFamily]::InterNetwork,
+        [System.Net.Sockets.SocketType]::Stream,
+        [System.Net.Sockets.ProtocolType]::Tcp)
+    try {
+        $closedProbeSocket.Bind([System.Net.IPEndPoint]::new(
+            [System.Net.IPAddress]::Loopback, 0))
+        $script:selfTestClosedProbeUrl = 'http://127.0.0.1:{0}/ready' -f
+            $closedProbeSocket.LocalEndPoint.Port
+        $script:selfTestProbeMode = 'default'
+        $script:ReadyUrl = $script:selfTestClosedProbeUrl
+        $script:selfTestEvidence = $null
+
+        # (a) No response + a live managed process: recorded, no restart.
+        Reset-SelfTestFixtureState
+        $script:selfTestProcessState = 'verified'
+        $script:selfTestProcessPid = 4242
+        $logLinesBefore = @(Get-Content -LiteralPath $script:LogPath).Count
+        $startsBefore = $script:selfTestStarts
+        [void](Invoke-Chat2ApiWatch -SkipMutex)
+        Assert-NoStart $startsBefore 'a no-response probe over a live process started the service'
+        $newLines = Get-NewSelfTestLogLines -Skip $logLinesBefore
+        $probeLine = @($newLines | Where-Object {
+            $_ -match 'probe_failed .*responded=False http_status=- ' + $noResponseReason })
+        if ($probeLine.Count -ne 1) {
+            throw ('self-test failed: a no-response probe logged {0} sanitized line(s), expected one: {1}' -f
+                $probeLine.Count, ($newLines -join ' | '))
+        }
+        if ($probeLine[0] -notmatch 'error_type=(?!-)') {
+            throw 'self-test failed: a no-response probe did not log the exception type'
+        }
+        if ($newLines -match 'PropertyNotFoundStrict') {
+            throw 'self-test failed: the no-response probe raised PropertyNotFoundStrict'
+        }
+        if ($newLines -match '127\.0\.0\.1|http://') {
+            throw 'self-test failed: the no-response probe leaked its URL into the watch log'
+        }
+        $keptLine = @($newLines | Where-Object {
+            $_ -match 'no_restart reason=process_alive pids=4242' })
+        if ($keptLine.Count -ne 1) {
+            throw 'self-test failed: a no-response probe over a live process did not keep it'
+        }
+
+        # (b) No response + a vanished managed instance: exactly one start,
+        # then the next run sees the NEW pid and /health 200.
+        Reset-SelfTestFixtureState
+        $script:selfTestProcessState = 'absent'
+        $script:selfTestStartModelsInstance = $true
+        $logLinesBefore = @(Get-Content -LiteralPath $script:LogPath).Count
+        $startsBefore = $script:selfTestStarts
+        [void](Invoke-Chat2ApiWatch -SkipMutex)
+        if ($script:selfTestStarts -ne ($startsBefore + 1)) {
+            throw ('self-test failed: a no-response probe over a vanished instance started {0} time(s), expected one' -f
+                ($script:selfTestStarts - $startsBefore))
+        }
+        $newLines = Get-NewSelfTestLogLines -Skip $logLinesBefore
+        if (@($newLines | Where-Object {
+                $_ -match 'auto_start attempt=1/3 reason=pid_absent' }).Count -ne 1) {
+            throw 'self-test failed: the no-response auto-start was not logged with reason=pid_absent'
+        }
+        if ($script:selfTestProcessPid -ne 5555) {
+            throw ('self-test failed: the started instance has pid {0}, expected the new pid 5555' -f
+                $script:selfTestProcessPid)
+        }
+        $script:selfTestStartModelsInstance = $false
+        $script:selfTestProbeMode = 'ready'
+        $logLinesBefore = @(Get-Content -LiteralPath $script:LogPath).Count
+        $startsBefore = $script:selfTestStarts
+        [void](Invoke-Chat2ApiWatch -SkipMutex)
+        Assert-NoStart $startsBefore 'the recovered instance was started a second time'
+        $newLines = Get-NewSelfTestLogLines -Skip $logLinesBefore
+        if ($newLines -match 'probe_failed|auto_start ') {
+            throw ('self-test failed: the recovered run was not quiet: {0}' -f ($newLines -join ' | '))
+        }
+        $lastProbe = $script:selfTestProbeResults[$script:selfTestProbeResults.Count - 1]
+        if (-not [bool]$lastProbe.Ready -or [int]$lastProbe.HttpStatus -ne 200) {
+            throw ('self-test failed: the recovered instance reported ready={0} http_status={1}' -f
+                [bool]$lastProbe.Ready, $lastProbe.HttpStatus)
+        }
+        $state = Get-Content -LiteralPath $script:StatePath -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+        if ([int]$state.consecutive_failures -ne 0) {
+            throw 'self-test failed: the recovered instance did not clear the failure gate'
+        }
+
+        # (c) An HTTP 503 response with a live managed process: the status is
+        # recorded and the process is kept, never restarted.
+        Reset-SelfTestFixtureState
+        $script:selfTestProbeMode = 'http_not_ready'
+        $script:selfTestProcessState = 'verified'
+        $script:selfTestProcessPid = 4242
+        $logLinesBefore = @(Get-Content -LiteralPath $script:LogPath).Count
+        $startsBefore = $script:selfTestStarts
+        [void](Invoke-Chat2ApiWatch -SkipMutex)
+        Assert-NoStart $startsBefore 'an HTTP 503 over a live process started the service'
+        $newLines = Get-NewSelfTestLogLines -Skip $logLinesBefore
+        if (@($newLines | Where-Object {
+                $_ -match 'responded=True http_status=503 reason=http_not_ready' }).Count -ne 1) {
+            throw 'self-test failed: the HTTP 503 status was not recorded'
+        }
+        if (@($newLines | Where-Object {
+                $_ -match 'no_restart reason=process_alive pids=4242' }).Count -ne 1) {
+            throw 'self-test failed: the HTTP 503 did not keep the live process'
+        }
+
+        # (d) An explicit stop is never undone, even without an HTTP response
+        # (the watch returns before probing).
+        $script:selfTestProbeMode = 'closed'
+        $script:selfTestDesired = [pscustomobject]@{
+            state = 'stopped'; boot_id = 'selftest-boot'; source = 'console'
+            at_utc = '2026-09-21T11:00:00Z'; start_outcome = 'never' }
+        $probeCallsBefore = $script:selfTestProbeResults.Count
+        $startsBefore = $script:selfTestStarts
+        [void](Disable-GatewayWatchLifecycleControl)
+        [void](Invoke-Chat2ApiWatch -SkipMutex)
+        [void](Enable-GatewayWatchLifecycleControl)
+        Assert-NoStart $startsBefore 'an explicit stop was undone by a no-response probe'
+        if ($script:selfTestProbeResults.Count -ne $probeCallsBefore) {
+            throw 'self-test failed: an explicit stop still probed /ready'
+        }
+        $script:selfTestDesired = [pscustomobject]@{
+            state = 'running'; boot_id = 'selftest-boot'; source = 'console'
+            at_utc = '2026-09-21T11:00:00Z'; start_outcome = 'succeeded' }
+
+        # (e) Unconfirmed process ownership is never started into.
+        Reset-SelfTestFixtureState
+        $script:selfTestProcessState = 'unconfirmed'
+        $logLinesBefore = @(Get-Content -LiteralPath $script:LogPath).Count
+        $startsBefore = $script:selfTestStarts
+        [void](Invoke-Chat2ApiWatch -SkipMutex)
+        Assert-NoStart $startsBefore 'an unconfirmed process state started the service'
+        $newLines = Get-NewSelfTestLogLines -Skip $logLinesBefore
+        if (@($newLines | Where-Object {
+                $_ -match 'no_restart reason=process_state_unconfirmed' }).Count -ne 1) {
+            throw 'self-test failed: an unconfirmed process state was not recorded'
+        }
+    } finally {
+        $closedProbeSocket.Dispose()
+        $script:ReadyUrl = $savedReadyUrl
+        $script:selfTestProbeMode = 'failure'
+        $script:selfTestProbeReady = $false
+        $script:selfTestStartModelsInstance = $false
+        $script:selfTestProcessState = 'verified'
+        $script:selfTestProcessPid = 4242
+    }
 
     # Corrupted watch state: conservative empty state, no action, no crash.
     Set-Content -LiteralPath $script:StatePath -Value '{ this is not json' -Encoding UTF8

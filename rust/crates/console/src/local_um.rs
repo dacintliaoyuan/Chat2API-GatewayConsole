@@ -2752,6 +2752,16 @@ pub fn um_login_rounds(
     q: Option<&str>,
     limit: i64,
 ) -> Result<Value, UmQueryError> {
+    um_login_rounds_scoped(path, round, q, limit, "本机 8000")
+}
+
+pub fn um_login_rounds_scoped(
+    path: &Path,
+    round: Option<u64>,
+    q: Option<&str>,
+    limit: i64,
+    scope: &str,
+) -> Result<Value, UmQueryError> {
     let limit = limit.clamp(1, UM_LOGIN_ROUND_MAX_PAGE);
     let search = q
         .unwrap_or("")
@@ -2796,7 +2806,7 @@ pub fn um_login_rounds(
         "count": rows.len(),
         "truncated": truncated,
         "scope": format!(
-            "本机 8000 UM 登录轮次历史（最近 7 天 / 4 MiB）· 只读，不触发探测或登录 · 本页 {} 条",
+            "{scope} UM 登录轮次历史（最近 7 天 / 4 MiB）· 只读，不触发探测或登录 · 本页 {} 条",
             rows.len()
         ),
         "coverage": {
