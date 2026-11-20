@@ -1510,7 +1510,8 @@ function Invoke-StartScopeScenario {
     # recorded instead of spawning a real private instance.
     param(
         [Parameter(Mandatory = $true)][array]$Processes,
-        [AllowNull()][array]$Listeners
+        [AllowNull()][array]$Listeners,
+        [string]$Key = 'chat2api'
     )
     $script:stopScopeTable = $Processes
     $script:stopScopeListeners = @()
@@ -1523,9 +1524,9 @@ function Invoke-StartScopeScenario {
     $script:stopScopeLaunches.Clear()
     $result = $null
     try {
-        $result = Start-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        $result = Start-GatewayService -Key $Key -Sleeper { param($seconds) }
     } catch {
-        $result = [pscustomobject]@{ Key = 'chat2api'; Status = 'THREW'
+        $result = [pscustomobject]@{ Key = $Key; Status = 'THREW'
                                    Action = 'Start'; Detail = $_.Exception.GetType().Name }
     }
     return [pscustomobject]@{
@@ -1688,6 +1689,18 @@ Assert-Equal ($startCleanup.Terminated -join ',') '990101' 'start residual clean
 Assert-Equal ($startCleanup.Terminated -contains 990102) $false 'start residual cleanup never terminates the share backend'
 Assert-Equal ([IO.Path]::GetFileName([string]$startCleanup.Launches[0])) 'um-gateway-candidate.exe' 'start launches the Rust binary once after the scoped residual cleanup'
 Assert-Equal $startCleanup.Result.Status 'StartPending' 'start reports StartPending when the health check stays false'
+
+# --- Case 15 (#118): the usage residual cleanup uses the same scoped stop ---
+# 2026-11-20: 8001 had no listener but an old managed console process was
+# still alive. Stop-GatewayService returned AlreadyStopped for it because the
+# descriptor has no StopWhenUnhealthy, so Start reported "受管残留进程清理失败".
+# A Residual inspection must now run the verified scoped stop instead.
+$usageStartCleanup = Invoke-StartScopeScenario -Key 'usage' -Processes @(
+    (New-StopScopeProcess -ProcessId 990103 -CommandLine 'python usagesrv.py' -CreationDate $script:stopScopePrivateStart)
+)
+Assert-Equal ($usageStartCleanup.Terminated -join ',') '990103' 'usage start residual cleanup terminates only the verified private instance'
+Assert-Equal ([IO.Path]::GetFileName([string]$usageStartCleanup.Launches[0])) 'um-console-candidate.exe' 'usage start launches the Rust console once after the residual cleanup'
+Assert-Equal $usageStartCleanup.Result.Status 'StartPending' 'usage start reports StartPending when the health check stays false'
 
 # Loopback endpoint scope: a tailnet Serve listener may legally share the port.
 # These cases drive the real inspection/start/stop chain with only OS/HTTP

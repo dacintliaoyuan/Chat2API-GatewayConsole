@@ -1,7 +1,8 @@
 ﻿# Desktop entry for the unified web console (deployed 2026-09-16).
 #
-# Reuse the installed services, start missing services under their runtime
-# locks and exchange a fresh one-time bootstrap code before opening the console.
+# Reuse the installed services, recover a verified residual 8001 instance through
+# the same readiness boundary as the CLI, and exchange a fresh one-time bootstrap
+# code before opening the console.
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
@@ -14,44 +15,20 @@ $here = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
 $base = 'http://127.0.0.1:8001'
 
-function Start-MissingConsoleService {
-    param([string]$Key, [string]$Label)
-    if (Test-GatewayServiceHealth -Key $Key) { return }
-
-    $lock = Enter-ConsoleResourceLock -Resource ("service:$Key") -Owner 'cli-console-entry'
-    try {
-        # Recheck under the lock in case another entry just started it.
-        $inspection = Get-GatewayServiceInspection -Key $Key
-        if ($inspection.State -eq 'Running') { return }
-        if ($inspection.State -ne 'Stopped') { throw $inspection.Detail }
-
-        Write-Host "[入口] 正在启动 $Label…"
-        $result = Start-GatewayService -Key $Key
-        if ($result.Status -in @('Started', 'AlreadyRunning')) { return }
-        if ($result.Status -ne 'StartPending') {
-            $detail = $result.PSObject.Properties['Detail']
-            if ($detail -and $detail.Value) { throw $detail.Value }
-            throw "启动返回 $($result.Status)"
-        }
-
-        # The runtime start can return before the service finishes starting.
-        for ($attempt = 0; $attempt -lt 5; $attempt++) {
-            if (Test-GatewayServiceHealth -Key $Key) { return }
-            Start-Sleep -Seconds 2
-        }
-        throw '服务未在等待上限内就绪'
-    } finally {
-        Exit-ConsoleResourceLock -Lock $lock
-    }
-}
-
 try {
-    Start-MissingConsoleService -Key 'chat2api' -Label 'UM 网关（8000）'
+    $gateway = Invoke-ConsoleServiceReady -Key 'chat2api'
+    if ($gateway.Status -notin @('AlreadyRunning', 'Started')) {
+        Write-Warning "UM 网关（8000）启动失败：$($gateway.Detail)。仍会尝试打开控制台。"
+    }
 } catch {
     Write-Warning "UM 网关（8000）启动失败：$($_.Exception.Message)。仍会尝试打开控制台。"
 }
+
 try {
-    Start-MissingConsoleService -Key 'usage' -Label '控制台（8001）'
+    $console = Invoke-ConsoleServiceReady -Key 'usage'
+    if ($console.Status -notin @('AlreadyRunning', 'Started')) {
+        throw $console.Detail
+    }
 } catch {
     Write-Warning "控制台（8001）未就绪：$($_.Exception.Message)"
     exit 1
@@ -81,13 +58,15 @@ if (-not $code) {
     }
 }
 
-# 3) Open the web console root. A fresh one-time bootstrap code rides the
-#    "#s=" fragment when one was obtained; the code itself never persists
-#    anywhere in the browser.
-$url = '{0}' -f $base
-if ($code) {
-    $url = '{0}#s={1}' -f $url, $code.Trim()
+# 3) Open the web console root through the same readiness helper. A fresh
+#    one-time bootstrap code rides the "#s=" fragment when one was obtained; the
+#    code itself never persists anywhere in the browser.
+try {
+    [void](Invoke-GatewayConsoleOpen -Key 'usage' -Label '控制台（8001）' `
+        -BaseUrl $base -BootstrapCode $code)
+    Write-Host ('已打开统一控制台：{0}' -f $base)
+    exit 0
+} catch {
+    Write-Warning "控制台（8001）未就绪：$($_.Exception.Message)"
+    exit 1
 }
-Start-Process $url
-Write-Host ('已打开统一控制台：{0}' -f $base)
-exit 0

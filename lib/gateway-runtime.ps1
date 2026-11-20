@@ -1383,10 +1383,16 @@ function Start-GatewayService {
             # Cleanup on the way to a start: intent stays "running".
             $cleanup = Stop-GatewayService -Key $Key -KeepDesiredState
             if ($cleanup.Status -ne 'Stopped') {
+                $cleanupDetail = ''
+                if ($cleanup.PSObject.Properties['Detail']) {
+                    $cleanupDetail = [string]$cleanup.Detail
+                }
+                $detail = '受管残留进程清理失败'
+                if ($cleanupDetail) { $detail += '：' + $cleanupDetail }
                 $watch = Add-GatewayStartFailureRelease -Key $Key -Watch $watch
                 return (Add-GatewayWatchToResult -Result ([pscustomobject]@{
                     Key = $Key; Status = 'StartBlocked'; Action = 'None'
-                    Detail = '受管残留进程清理失败'
+                    Detail = $detail
                 }) -Watch $watch)
             }
         }
@@ -1571,6 +1577,7 @@ function Stop-GatewayService {
         $watch = Set-GatewayWatchScheduling -Key $Key -Enabled $false
     }
 
+    $inspection = $null
     if ($null -eq $HttpChecker -and $null -eq $Stopper) {
         $inspection = Get-GatewayServiceInspection -Key $Key
         if ($inspection.State -eq 'Conflict') {
@@ -1592,7 +1599,13 @@ function Stop-GatewayService {
     $stopWhenUnhealthy = $false
     $stopWhenUnhealthyProp = $desc.PSObject.Properties['StopWhenUnhealthy']
     if ($null -ne $stopWhenUnhealthyProp) { $stopWhenUnhealthy = [bool]$stopWhenUnhealthyProp.Value }
-    if (-not $wasHealthy -and -not $stopWhenUnhealthy) {
+    # #118: a Residual inspection means a managed process is still alive even
+    # though the port is not listening. "Not healthy" alone must not turn that
+    # into AlreadyStopped: the caller asked to stop, and the scoped stop below is
+    # exactly the verified cleanup of that instance. Degraded (listening but
+    # unhealthy) keeps the historical StopWhenUnhealthy gate.
+    $residualPending = ($null -ne $inspection -and $inspection.State -eq 'Residual')
+    if (-not $wasHealthy -and -not $stopWhenUnhealthy -and -not $residualPending) {
         return (Add-GatewayWatchToResult -Result ([pscustomobject]@{
             Key = $Key; Status = 'AlreadyStopped'; Action = 'None'
         }) -Watch $watch)
