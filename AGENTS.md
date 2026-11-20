@@ -22,6 +22,7 @@
 | 云端 onboarding（仅受信任的同事；agent 读取后逐步教学） | [docs/agents/cloud-onboarding.md](docs/agents/cloud-onboarding.md) |
 | 旧 Windows 分享链（已退役） | Git 历史；当前云端见 [um-cloud-deploy/README.md](um-cloud-deploy/README.md) |
 | 分享链旧/新名字与边界 | [docs/share-chain-map.md](docs/share-chain-map.md) |
+| 本机/云端进程监督边界 | [ADR 0013](docs/adr/0013-process-supervision-boundary.md) |
 | 提交前检查 | [scripts/check.sh](scripts/check.sh)；首次运行 `bash scripts/install-hooks.sh` |
 | Review 判断规则 | [CODING_STANDARDS.md](CODING_STANDARDS.md) |
 | 操作 issue | [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) |
