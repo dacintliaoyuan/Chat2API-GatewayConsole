@@ -140,6 +140,26 @@ impl ShareWriteSeams for BrokerManagementSeams {
         result.result().get("host_running").and_then(Value::as_bool)
     }
 
+    /// The broker's restricted maintenance view.
+    fn maintenance_status(&self) -> Option<Value> {
+        let result = self
+            .exchange(
+                "maintenance-status",
+                Value::Object(Map::new()),
+                PUBLISH_DEADLINE,
+            )
+            .ok()?;
+        Some(result.result().clone())
+    }
+
+    /// The broker's status snapshot.
+    fn broker_snapshot(&self) -> Option<Value> {
+        let result = self
+            .exchange("status", Value::Object(Map::new()), PUBLISH_DEADLINE)
+            .ok()?;
+        Some(result.result().clone())
+    }
+
     /// The explicit version-bound public probe: resolve the public origin, read
     /// `/v1/models`, then run one minimal non-stream inference. The Key
     /// plaintext stays in this process; only the bounded outcome is returned.

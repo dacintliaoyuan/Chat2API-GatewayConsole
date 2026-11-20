@@ -166,6 +166,9 @@ export type KeysPageContext = {
   createForm: HTMLFormElement;
   createSubmit: HTMLButtonElement;
   createErrorBox: HTMLElement;
+  renameDialog: HTMLDialogElement;
+  renameForm: HTMLFormElement;
+  renameErrorBox: HTMLElement;
   plainDialog: HTMLDialogElement;
   plainTitle: HTMLElement;
   plainValue: HTMLElement;
@@ -196,6 +199,9 @@ export function createKeysPage(ctx: KeysPageContext) {
     createForm,
     createSubmit,
     createErrorBox,
+    renameDialog,
+    renameForm,
+    renameErrorBox,
     plainDialog,
     plainTitle,
     plainValue,
@@ -503,26 +509,35 @@ export function createKeysPage(ctx: KeysPageContext) {
     );
   }
 
-  /** Rename one Key. The PATCH carries the row version; a stale version is
-   *  refused instead of overwriting a concurrent change. */
+  let renameTarget: { id: string; version: number } | null = null;
+
+  /** Rename one Key through the same dialog style as create. The dialog captures
+   *  the row version when it opens; a concurrent change while it is open is refused
+   *  instead of overwritten. */
   async function renameKey(id: string): Promise<void> {
     const row = keyRow(id);
     if (!row) {
       setNotice(id, "warn", "Key 列表已变化，找不到该 Key");
       return;
     }
-    const current = typeof row.name === "string" ? row.name : "";
-    const next = window.prompt("新的 Key 名称（1–64 个字符）", current);
-    if (next === null) return;
-    const name = next.trim();
-    if (!name || Array.from(name).length > 64) {
-      setNotice(id, "warn", "名称需为 1–64 个字符");
+    const version = row.row_version;
+    if (
+      typeof version !== "number" ||
+      !Number.isInteger(version) ||
+      version < 1
+    ) {
+      setNotice(id, "warn", "缺少行版本，请刷新列表后重试");
       return;
     }
-    if (name === current) return;
-    // The prompt-time version is the PATCH precondition: a concurrent rename or
-    // concurrency change while the prompt is open must be refused, not overwritten.
-    await patchKey(id, { name }, "已改名", row.row_version);
+    renameTarget = { id, version };
+    renameErrorBox.textContent = "";
+    const input = renameForm.elements.namedItem("name");
+    if (input instanceof HTMLInputElement) {
+      input.value = typeof row.name === "string" ? row.name : "";
+      input.focus();
+      input.select();
+    }
+    renameDialog.showModal();
   }
 
   async function patchKey(
@@ -974,6 +989,31 @@ export function createKeysPage(ctx: KeysPageContext) {
   // The create dialog lives outside the repainted content: its fields are not
   // rebuilt by the 30-second refresh, and its idempotency key survives a retry.
   function init(): void {
+    renameDialog
+      .querySelector("[data-cloud-key-rename-close]")!
+      .addEventListener("click", () => renameDialog.close("cancel"));
+    renameForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const target = renameTarget;
+      if (!target) {
+        renameDialog.close("cancel");
+        return;
+      }
+      const input = renameForm.elements.namedItem("name");
+      const name =
+        input instanceof HTMLInputElement ? input.value.trim() : "";
+      if (!name || Array.from(name).length > 64) {
+        renameErrorBox.textContent = "名称需为 1–64 个字符";
+        return;
+      }
+      renameDialog.close("save");
+      renameTarget = null;
+      void patchKey(target.id, { name }, "已改名", target.version);
+    });
+    renameDialog.addEventListener("close", () => {
+      renameTarget = null;
+      renameErrorBox.textContent = "";
+    });
     createDialog
       .querySelector("[data-cloud-key-create-close]")!
       .addEventListener("click", () => createDialog.close("cancel"));

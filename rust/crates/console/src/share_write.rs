@@ -121,6 +121,16 @@ pub trait ShareWriteSeams: Send + Sync {
         None
     }
 
+    /// The broker's restricted maintenance view (`maintenance-status`).
+    fn maintenance_status(&self) -> Option<Value> {
+        None
+    }
+
+    /// The broker's status snapshot (`status`).
+    fn broker_snapshot(&self) -> Option<Value> {
+        None
+    }
+
     /// The explicit version-bound public probe. `None` means the probe seam is
     /// not wired; the caller reports an honest failure, never a success.
     fn probe_models(&self, _secret: &str, _public_url: &str) -> Option<Value> {

@@ -19,6 +19,13 @@ const ORIGIN = "http://cloud-intent.invalid";
 const require = createRequire(new URL("../package.json", import.meta.url));
 const { buildSync } = require("esbuild");
 
+let fetchHandler = async () => {
+  throw new Error("unexpected fetch");
+};
+let openHandler = () => {
+  throw new Error("unexpected window.open");
+};
+
 function load(contents, sourcefile) {
   const code = buildSync({
     stdin: { contents, resolveDir: WEB, sourcefile, loader: "ts" },
@@ -41,7 +48,11 @@ function load(contents, sourcefile) {
       exports: module.exports,
       console,
       URL,
-      window: {},
+      AbortController,
+      setTimeout,
+      clearTimeout,
+      fetch: (...args) => fetchHandler(...args),
+      window: { open: (...args) => openHandler(...args) },
       document: {},
       location: { origin: "http://cloud-console.invalid" },
     })
@@ -60,6 +71,10 @@ const overview = load(
 const intent = load(
   `export { loginOutcome } from "./src/cloud/operation-intent.ts";`,
   "cloud-intent-entry.ts"
+);
+const status = load(
+  `export { createStatusActions } from "./src/cloud/pages/status.ts";`,
+  "cloud-status-entry.ts"
 );
 
 const operation = (id, state = "running") => ({
@@ -3432,7 +3447,7 @@ test("requests: result/time filters, page-local counts and the deleted Key suffi
   assert.match(card, /<th>耗时<\/th>/);
   assert.match(card, /<th>Token<\/th>/);
   const first = requestRowOf(card, "r1");
-  assert.match(first, /2026-11-11T10:00:00\+08:00/);
+  assert.match(first, /11\/11 10:00/);
   assert.match(first, /alice/);
   assert.doesNotMatch(first, /alice（已删除）/);
   assert.match(first, /gpt-5/);
@@ -4966,4 +4981,68 @@ test("cloud API URL: unconfigured origin is not invented", () => {
   );
   assert.doesNotMatch(html, /https:\/\/dacintapi\.de5\.net/);
   assert.match(html, /未配置公网地址/);
+});
+
+test("cloud display: opening the login window mints a one-time display grant", async () => {
+  const calls = [];
+  fetchHandler = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes("display-session")) {
+      return new Response(
+        JSON.stringify({
+          available: true,
+          url: "/display/",
+          reason: "",
+          expires_at: null,
+          mode: "novnc",
+          operator: {},
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (String(url).includes("display-grant")) {
+      return new Response(
+        JSON.stringify({
+          url: "/display/grant#grant=fixture-grant",
+          expires_at: 1,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  let opened = "";
+  openHandler = (url) => {
+    opened = String(url);
+    return { opener: null };
+  };
+  const model = {
+    display: { state: "loading" },
+    displayState: { state: "loading" },
+    status: null,
+  };
+  const actions = status.createStatusActions({
+    model,
+    keyUi: {
+      busy: new Set(),
+      notices: new Map(),
+      secrets: new Map(),
+      caps: new Map(),
+      tests: new Map(),
+    },
+    render: () => {},
+    addFeedback: (entry) => ({ ...entry, key: "k", at: 0, done: false }),
+    settle: () => {},
+  });
+
+  await actions.openDisplayWindow();
+  assert.equal(opened, "/display/grant#grant=fixture-grant");
+  assert.ok(
+    calls.some((url) => url.includes("display-grant")),
+    "the page must mint a grant before opening the window"
+  );
+  assert.ok(
+    opened.startsWith("/display/grant#grant="),
+    "the window must open the grant exchange page, not /display/ directly"
+  );
 });

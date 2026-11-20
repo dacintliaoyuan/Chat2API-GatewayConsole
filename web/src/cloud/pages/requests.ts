@@ -6,7 +6,7 @@ import {
   lastValue,
   readShareUsageRequests,
 } from "../cloud-reads";
-import { clock } from "../cloud-format";
+import { clock, when } from "../cloud-format";
 import type { CloudModel, RequestsTimeRange } from "../model";
 
 const REQUESTS_WINDOW: Readonly<Record<RequestsTimeRange, string>> = {
@@ -109,8 +109,12 @@ export function requestsCard(model: CloudModel): string {
               typeof row.durationMs === "number"
                 ? `${fmtNum(row.durationMs)} ms`
                 : "未上报";
+            const timeMs = row.time ? Date.parse(row.time) : NaN;
+            const timeText = Number.isFinite(timeMs)
+              ? when(timeMs)
+              : (row.time ?? "日期未知");
             return `<tr data-cloud-request-row="${escapeHtml(row.requestId ?? "unknown")}" data-cloud-request-result="${row.result}">
-          <td class="mono">${escapeHtml(row.time ?? "日期未知")}</td>
+          <td class="mono">${escapeHtml(timeText)}</td>
           <td>${key}</td>
           <td>${escapeHtml(row.model ?? "未知")}</td>
           <td>${result}${row.status ? `<span class="cloud-key-mask">${escapeHtml(row.status)}</span>` : ""}</td>

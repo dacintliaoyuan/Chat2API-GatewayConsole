@@ -155,6 +155,14 @@ impl ShareReadSeams for ProductionReadSeams {
     fn gateway_running(&self) -> Option<bool> {
         self.write_seams.gateway_running()
     }
+
+    fn maintenance_status(&self) -> Option<Value> {
+        self.write_seams.maintenance_status()
+    }
+
+    fn broker_snapshot(&self) -> Option<Value> {
+        self.write_seams.broker_snapshot()
+    }
 }
 
 pub struct ServerHandle {

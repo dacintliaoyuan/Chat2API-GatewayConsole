@@ -1418,6 +1418,7 @@
 
 /* ---------- Dialogs ---------- */
 .cloud-key-create,
+.cloud-key-rename,
 .cloud-plain {
   width: min(520px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
@@ -1430,10 +1431,12 @@
   box-shadow: var(--md-shadow-modal);
 }
 .cloud-key-create::backdrop,
+.cloud-key-rename::backdrop,
 .cloud-plain::backdrop {
   background: rgba(8, 12, 20, 0.44);
 }
 .cloud-key-create h2,
+.cloud-key-rename h2,
 .cloud-plain h2 {
   margin: 0;
   font-size: 20px;
@@ -1822,6 +1825,7 @@
   }
 
   .cloud-key-create,
+  .cloud-key-rename,
   .cloud-plain {
     width: calc(100vw - 20px);
     max-height: calc(100dvh - 20px);

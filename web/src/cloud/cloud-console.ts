@@ -278,6 +278,14 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
       <div class="cloud-dialog-actions"><button type="button" class="btn btn-outline" data-cloud-key-create-close>取消</button><button type="submit" class="btn btn-primary" data-cloud-key-create-submit>创建</button></div>
     </form>
   </dialog>
+  <dialog class="cloud-key-rename" aria-labelledby="cloud-key-rename-title">
+    <form data-cloud-key-rename-form novalidate>
+      <h2 id="cloud-key-rename-title">Key 改名</h2>
+      <label class="cloud-field"><span>名称</span><input name="name" type="text" maxlength="64" autocomplete="off" required></label>
+      <p class="cloud-form-error" data-cloud-key-rename-error role="alert"></p>
+      <div class="cloud-dialog-actions"><button type="button" class="btn btn-outline" data-cloud-key-rename-close>取消</button><button type="submit" class="btn btn-primary">保存</button></div>
+    </form>
+  </dialog>
   <dialog class="cloud-plain" aria-labelledby="cloud-plain-title">
     <div class="cloud-plain-body">
       <h2 id="cloud-plain-title"></h2>
@@ -312,6 +320,12 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
   const createErrorBox = createDialog.querySelector<HTMLElement>(
     "[data-cloud-key-create-error]"
   )!;
+  const renameDialog =
+    stage.querySelector<HTMLDialogElement>(".cloud-key-rename")!;
+  const renameForm = renameDialog.querySelector<HTMLFormElement>("form")!;
+  const renameErrorBox = renameDialog.querySelector<HTMLElement>(
+    "[data-cloud-key-rename-error]"
+  )!;
   const plainDialog = stage.querySelector<HTMLDialogElement>(".cloud-plain")!;
   const plainTitle =
     plainDialog.querySelector<HTMLElement>("#cloud-plain-title")!;
@@ -344,6 +358,9 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
     createForm,
     createSubmit,
     createErrorBox,
+    renameDialog,
+    renameForm,
+    renameErrorBox,
     plainDialog,
     plainTitle,
     plainValue,
