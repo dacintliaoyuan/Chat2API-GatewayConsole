@@ -252,10 +252,10 @@ impl Role {
     }
 
     /// Derive the role from the production port when the CLI does not name it:
-    /// 8000 is the local process, 8002/8003 are the cloud pair, and the
-    /// candidate's ephemeral port stays cloud.
+    /// 7998/7999/8000 are the local process (desktop test/default), 8002/8003
+    /// are the cloud pair, and the candidate's ephemeral port stays cloud.
     pub fn for_port(port: u16) -> Self {
-        if port == 8000 {
+        if matches!(port, 7998 | 7999 | 8000) {
             Self::Local
         } else {
             Self::Cloud
@@ -469,14 +469,14 @@ pub fn is_loopback_host(host: &str) -> bool {
 
 /// Ports that the candidate must never bind while it is a candidate.
 pub fn governed_ports() -> BTreeSet<u16> {
-    [5173, 8000, 8001, 8002, 8003, 8097, 8099]
+    [5173, 7998, 7999, 8000, 8001, 8002, 8003, 8097, 8099]
         .into_iter()
         .collect()
 }
 
 /// The only ports production mode may bind.
 pub fn production_ports() -> BTreeSet<u16> {
-    [8000, 8002, 8003].into_iter().collect()
+    [7998, 7999, 8000, 8002, 8003].into_iter().collect()
 }
 
 impl GatewayConfig {
@@ -719,7 +719,7 @@ impl GatewayConfig {
         } else {
             if !production_ports().contains(&self.bind_port) {
                 return Err(ConfigError(format!(
-                    "production must bind one of 8000, 8002 or 8003 on loopback, got {}",
+                    "production must bind one of 7998, 7999, 8000, 8002 or 8003 on loopback, got {}",
                     self.bind_port
                 )));
             }
@@ -727,12 +727,12 @@ impl GatewayConfig {
             // surface, so it may never run on the cloud 8002/8003 pair; the
             // cloud role keeps that surface unassembled on 8002/8003 only.
             let role_allowed = match self.role {
-                Role::Local => self.bind_port == 8000,
+                Role::Local => matches!(self.bind_port, 7998 | 7999 | 8000),
                 Role::Cloud => matches!(self.bind_port, 8002 | 8003),
             };
             if !role_allowed {
                 let allowed = match self.role {
-                    Role::Local => "8000",
+                    Role::Local => "7998, 7999 or 8000",
                     Role::Cloud => "8002 or 8003",
                 };
                 return Err(ConfigError(format!(

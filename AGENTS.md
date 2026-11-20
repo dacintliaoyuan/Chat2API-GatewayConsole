@@ -42,7 +42,7 @@
 | 8099 | 候选预览（vite preview） | 8099 | 8099 | 127.0.0.1 |
 | 5173 | vite 开发服务 | 5173 | 5173 | 127.0.0.1 |
 
-`8000-8009` 是网关/控制台配对段：8000/8001 本机对，8002/8003 云端对，8004–8009 预留。`8090-8099` 是控制台/管理段，`8100-8119` 是分享段（唯一允许非 loopback 的段，偏离须登记），`8300-8399` 是协议网关段。
+`8000-8009` 是网关/控制台配对段：8000/8001 本机对，8002/8003 云端对，8004–8009 预留。`7998/7999` 是桌面 App 的测试/本实例回环端口，不属于该配对段；网关 production 已显式允许这两个 local 端口，现有 8000/8001 保留。`8090-8099` 是控制台/管理段，`8100-8119` 是分享段（唯一允许非 loopback 的段，偏离须登记），`8300-8399` 是协议网关段。
 
 本机 8000 已切到 Rust（`um-gateway-candidate.exe --mode production --port 8000 --role local`）：`lib/gateway-runtime.ps1` 的 `StartPath` 指向 Rust 二进制，`/health` 与 `/admin/shutdown` 契约不变。回滚点改为 `tmp/python-rollback-<date>.tar.gz` 离线包（Python 闭包已退役，#90）；parity、切流与回滚演练记录见 [docs/rust-contract.md](docs/rust-contract.md) §2.4。
 

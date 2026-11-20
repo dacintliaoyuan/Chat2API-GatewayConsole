@@ -66,8 +66,8 @@ systemd
 ### 2.3 Rust 二进制启动模式
 
 - Rust 网关二进制默认以 candidate 模式启动：只绑定临时 loopback 端口（`--port 0`），拒绝 8000/8003/8002/8100 及其他任何非零端口；candidate 不作为生产服务由 systemd 拉起。
-- production 模式必须显式选择 `--mode production`：只允许绑定 `127.0.0.1:8000`、`127.0.0.1:8003` 或 `127.0.0.1:8002`；非 loopback 主机、端口 0、8001/8100/8096 等其他端口都在 bind 前拒绝。
-- 角色由显式 `--role local|cloud` 选择；未指定时按端口推导：8000 → local，8002/8003 → cloud，candidate 的临时端口保持 cloud。非法角色值 fail closed。
+- production 模式必须显式选择 `--mode production`：只允许绑定 `127.0.0.1:7998`、`127.0.0.1:7999`、`127.0.0.1:8000`、`127.0.0.1:8003` 或 `127.0.0.1:8002`；非 loopback 主机、端口 0、8001/8100/8096 等其他端口都在 bind 前拒绝。7998/7999 只给桌面 App 的本实例/测试实例，现有 8000/8001 保留。
+- 角色由显式 `--role local|cloud` 选择；未指定时按端口推导：7998/7999/8000 → local，8002/8003 → cloud，candidate 的临时端口保持 cloud。非法角色值 fail closed。
 - 两种模式共用同一套路由、鉴权、账本和错误契约；模式只改变绑定策略与启动入口，不改变 parity 行为；角色只改变本机专属面是否装配。
 - 部署 unit 用 `--mode production --port 8003` 或 `--mode production --port 8002` 启动，并用 `/health`、`/ready` 验收；unit 文件由部署轨道维护，不在本契约的 Rust 代码范围内。
 - `um-console` 的 production 模式按角色绑定：cloud 8002、local 8001；candidate 仍只绑临时 loopback 端口。本机 8001 的启动与回滚见 §2.5。

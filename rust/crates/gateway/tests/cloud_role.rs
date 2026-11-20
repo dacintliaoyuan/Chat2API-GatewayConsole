@@ -54,6 +54,8 @@ fn cloud_role_keeps_the_local_api_surface_unassembled() {
 
 #[test]
 fn the_role_is_derived_from_the_production_port() {
+    assert_eq!(Role::for_port(7998), Role::Local);
+    assert_eq!(Role::for_port(7999), Role::Local);
     assert_eq!(Role::for_port(8000), Role::Local);
     assert_eq!(Role::for_port(8002), Role::Cloud);
     assert_eq!(Role::for_port(8003), Role::Cloud);

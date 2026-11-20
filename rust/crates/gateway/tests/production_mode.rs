@@ -194,7 +194,7 @@ fn production_mode_rejects_ports_outside_8000_8002_and_8003() {
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("8000, 8002 or 8003"),
+            stderr.contains("7998, 7999, 8000, 8002 or 8003"),
             "{port} stderr: {stderr}"
         );
     }
@@ -205,7 +205,7 @@ fn candidate_remains_the_default_and_rejects_production_ports() {
     assert_eq!(GatewayConfig::default().bind_mode(), BindMode::Candidate);
     let temp = TempDir::new(unique_temp_prefix());
     let stub = StubUpstream::start();
-    for port in ["8003", "8002", "8100"] {
+    for port in ["7998", "7999", "8003", "8002", "8100"] {
         let output = gateway_command(&temp, &stub)
             .arg("--port")
             .arg(port)
@@ -222,7 +222,7 @@ fn candidate_remains_the_default_and_rejects_production_ports() {
 
 #[test]
 fn candidate_config_rejects_production_ports_without_binding() {
-    for port in [8003u16, 8002, 8100] {
+    for port in [7998u16, 7999, 8003, 8002, 8100] {
         let config = GatewayConfig {
             bind_port: port,
             ..GatewayConfig::default()
@@ -260,7 +260,7 @@ fn production_config_rejects_non_loopback_and_other_ports() {
         let error = config
             .validate_bind_policy()
             .expect_err("production must reject a non-production port");
-        assert!(error.to_string().contains("8000, 8002 or 8003"), "{error}");
+        assert!(error.to_string().contains("7998, 7999, 8000, 8002 or 8003"), "{error}");
     }
 }
 
@@ -268,9 +268,9 @@ fn production_config_rejects_non_loopback_and_other_ports() {
 fn production_allows_only_8000_8002_and_8003_on_loopback() {
     assert_eq!(
         um_gateway::config::production_ports(),
-        [8000u16, 8002, 8003].into_iter().collect()
+        [7998u16, 7999, 8000, 8002, 8003].into_iter().collect()
     );
-    for port in [8000u16, 8002, 8003] {
+    for port in [7998u16, 7999, 8000, 8002, 8003] {
         let config = GatewayConfig {
             bind_port: port,
             role: Role::for_port(port),
@@ -293,7 +293,7 @@ fn production_allows_only_8000_8002_and_8003_on_loopback() {
             .validate_bind_policy()
             .expect_err("production must reject a non-production port");
         assert!(
-            error.to_string().contains("8000, 8002 or 8003"),
+            error.to_string().contains("7998, 7999, 8000, 8002 or 8003"),
             "port {port}: {error}"
         );
     }
@@ -316,6 +316,7 @@ fn production_allows_only_8000_8002_and_8003_on_loopback() {
 fn production_rejects_a_role_port_mismatch() {
     for (role, port) in [
         (Role::Cloud, 8000u16),
+        (Role::Cloud, 7999u16),
         (Role::Local, 8002u16),
         (Role::Local, 8003u16),
     ] {
@@ -378,7 +379,7 @@ fn help_documents_candidate_and_production_modes() {
         "help must document --mode: {stdout}"
     );
     assert!(
-        stdout.contains("8000, 8002 or 8003"),
+        stdout.contains("7998, 7999, 8000, 8002 or 8003"),
         "help must document production ports: {stdout}"
     );
     assert!(
