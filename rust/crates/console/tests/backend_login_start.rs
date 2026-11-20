@@ -207,6 +207,11 @@ fn full_status(state: &str, label: &str, error: Value, recovery: Value) -> Value
         "gate": null,
         "watch": {},
         "recovery": recovery,
+        "browser_catalog_valid": false,
+        "last_failure_reason": null,
+        "next_watch_epoch": null,
+        "rejected_before_expiry_status": null,
+        "verification_reason": null,
         "login_window_deadline_epoch": 1763540000.0,
         "login_window_s": 190.0,
     })
@@ -258,6 +263,11 @@ fn a_gateway_202_start_is_relayed_as_a_running_round() {
                 "pause_reason": null,
                 "primary": null,
             },
+            "browser_catalog_valid": false,
+            "last_failure_reason": null,
+            "next_watch_epoch": null,
+            "rejected_before_expiry_status": null,
+            "verification_reason": null,
             "login_window_deadline_epoch": 1763540000.0,
             "login_window_s": 190.0,
         })
