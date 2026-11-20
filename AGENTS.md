@@ -8,7 +8,7 @@
 - **两个角色**：`UM_SHARE_ROLE=local`（本机 8001，Windows）与 `cloud`（云端 8002，Linux；Python 回滚 8096）；前端按构建期角色装入 `web/src/local/local-console.ts` 或 `web/src/cloud/cloud-console.ts`（ADR 0001）。
 - **生产目录**：`web/dist` 是本机生产页，`web/dist-cloud` 是云端生产页（打包为 `web/dist`）；两者都在 `.gitignore` 里，构建产物不入库。
 - **凭据与运行数据不入库**：`data/`、`profile/`、`tmp/`、`output/`、`chat2api/token.json`、`chat2api/.edge-profile/` 都由根 `.gitignore` 覆盖。
-- **验证**：`web/` 下 `npm run check:cloud-console`、`npm run check:um`；Python 回归 `python -m unittest discover -s tests -p "test_*.py"`。`scripts/check.sh` 在缺 `web/node_modules` 时先 `npm ci`；`web/package.json` 的 `esbuild` 是前端契约门禁的 devDependency。两者只服务门禁环境，不改变产品行为。
+- **验证**：`web/` 下 `npm run check:cloud-console`、`npm run check:um`；Python 回归 `python -m unittest discover -s tests -p "test_*.py"`。Rust 全量测试用 `bash scripts/check-rust.sh`（串行，避开既有 login flake）；`scripts/check.sh` 在缺 `web/node_modules` 时先 `npm ci`；`web/package.json` 的 `esbuild` 是前端契约门禁的 devDependency。两者只服务门禁环境，不改变产品行为。
 - **契约夹具**：改 `usagesrv.py`/`console/adapters.py`/`console/model_actions.py`/`share/metering.py`/`console/stats.py`/`console/log_reader.py` 后运行 `python tests/generate_frontend_contract_fixture.py`；`check-generated` 会因夹具过期失败。
 - **implement-spec 分派**：implement-spec 用 `Agent` 直接分派 subagent，不用 `CreateWorkflow`/`AmendWorkflow`/`ResumeWorkflowRun`。每张票一个独立 worktree/branch，先读 `tdd-mattpocock`；合并、评审、切流也用 subagent。
 
