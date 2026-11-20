@@ -1125,3 +1125,32 @@ fn a_real_fake_gateway_receives_the_instance_args_and_stops() {
     assert!(!log.contains(token.trim()));
     std::env::remove_var("FAKE_GATEWAY_STATE_DIR");
 }
+
+#[test]
+fn http_gateway_requires_the_gateway_health_contract() {
+    use std::io::{Read, Write};
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("health server");
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        for body in [
+            r#"{"status":"ok"}"#,
+            r#"{"status":"ok","chat2api_version":"test"}"#,
+        ] {
+            let (mut stream, _) = listener.accept().expect("health request");
+            let mut buffer = [0u8; 1024];
+            let _ = stream.read(&mut buffer);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).expect("health response");
+        }
+    });
+    let http = HttpGateway::new();
+    let base = format!("http://127.0.0.1:{port}");
+    assert!(http.health(&base).is_err(), "a non-gateway must not attach");
+    assert!(http.health(&base).is_ok(), "the gateway health must attach");
+    server.join().expect("health server");
+}

@@ -408,6 +408,9 @@ impl GatewayHttp for HttpGateway {
         let body: serde_json::Value = response
             .into_json()
             .map_err(|error| format!("{url}: {error}"))?;
+        if body.get("chat2api_version").is_none() {
+            return Err(format!("{url}: 不是本实例网关"));
+        }
         let status = body
             .get("status")
             .and_then(serde_json::Value::as_str)
