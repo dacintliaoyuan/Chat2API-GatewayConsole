@@ -729,9 +729,12 @@ pub fn map_broker_snapshot(snapshot: Option<Value>) -> Value {
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    if state == Some("ok") {
+    if matches!(state, Some("ok") | Some("running")) {
         mapped.insert("running".to_string(), json!(true));
-    } else if state == Some("unavailable") {
+    } else if matches!(
+        state,
+        Some("unavailable") | Some("stopped") | Some("conflict")
+    ) {
         mapped.insert("running".to_string(), json!(false));
         if let Some(code) = snapshot.get("error_code").and_then(Value::as_str) {
             if !code.is_empty() {
@@ -743,9 +746,24 @@ pub fn map_broker_snapshot(snapshot: Option<Value>) -> Value {
     if let Some(version) = version.and_then(Value::as_str) {
         mapped.insert("version".to_string(), json!(version));
     }
-    let pid = inner.get("pid").or_else(|| snapshot.get("pid"));
+    let pid = inner
+        .get("pid")
+        .or_else(|| snapshot.get("pid"))
+        .or_else(|| {
+            snapshot
+                .get("process_ids")
+                .and_then(Value::as_array)
+                .and_then(|ids| ids.first())
+        });
     if let Some(pid) = pid.and_then(Value::as_i64) {
         mapped.insert("pid".to_string(), json!(pid));
+    }
+    if let Some(detail) = snapshot
+        .get("detail")
+        .and_then(Value::as_str)
+        .filter(|detail| !detail.is_empty())
+    {
+        mapped.insert("detail".to_string(), json!(detail));
     }
     if let Some(diag) = inner.get("diag").and_then(Value::as_array) {
         if !diag.is_empty() {
