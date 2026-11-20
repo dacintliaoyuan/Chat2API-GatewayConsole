@@ -1,4 +1,4 @@
-# Gateway runtime module: single source of truth for service identity,
+﻿# Gateway runtime module: single source of truth for service identity,
 # health checks, start/stop strategies and startup order.
 #
 # Two active services:
@@ -230,6 +230,100 @@ function Resolve-GatewayStartPath {
         'HiddenExecutable' { return (Join-Path (Get-GatewayRoot) $desc.StartPath) }
         default {
             throw "Unknown start action for $Key"
+        }
+    }
+}
+
+function Test-GatewayCredentialsAcl {
+    # #120: the machine-local credentials file is readable only by the current
+    # user. Any other Allow entry - inherited or explicit - is too broad; an
+    # unreadable ACL or an unresolved identity fails closed. A file with no
+    # current-user Allow entry is unusable.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try {
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        if ($null -eq $identity -or $null -eq $identity.User) { return $false }
+        $currentSid = $identity.User.Value
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        $currentUserAllowed = $false
+        foreach ($rule in @($acl.Access)) {
+            if ($null -eq $rule -or $rule.AccessControlType -ne 'Allow') { continue }
+            $ruleSid = $null
+            try {
+                $ruleSid = $rule.IdentityReference.Translate(
+                    [System.Security.Principal.SecurityIdentifier]).Value
+            } catch {
+                return $false
+            }
+            if ($ruleSid -ne $currentSid) { return $false }
+            $currentUserAllowed = $true
+        }
+        return $currentUserAllowed
+    } catch {
+        return $false
+    }
+}
+
+function Get-GatewayLocalUmCredentials {
+    # #120: the machine-local UM account for the private 8000 instance. The
+    # explicit CHAT2API_UM_ACCOUNT / CHAT2API_UM_PASSWORD pair wins; the
+    # credentials file (ADR 0012, shared with the desktop app) is read only
+    # when that pair is incomplete. The file must be a complete version 1
+    # record and its ACL must allow only the current user. The status is
+    # desensitized: file content and parser errors never enter a message.
+    $envAccount = [string]$env:CHAT2API_UM_ACCOUNT
+    $envPassword = [string]$env:CHAT2API_UM_PASSWORD
+    if ($envAccount.Trim() -and $envPassword.Trim()) {
+        return [pscustomobject]@{
+            Status = 'credentials_present'; Account = $envAccount; Password = $envPassword
+        }
+    }
+    $localAppData = [string]$env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($localAppData)) {
+        return [pscustomobject]@{
+            Status = 'credentials_missing'; Account = $null; Password = $null
+        }
+    }
+    $path = Join-Path $localAppData 'Chat2API\credentials.json'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return [pscustomobject]@{
+            Status = 'credentials_missing'; Account = $null; Password = $null
+        }
+    }
+    $errorCount = $Error.Count
+    try {
+        $record = [IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $record) { throw 'credentials record is null' }
+        $versionProp = $record.PSObject.Properties['version']
+        $accountProp = $record.PSObject.Properties['account']
+        $passwordProp = $record.PSObject.Properties['password']
+        if ($null -eq $versionProp -or $null -eq $accountProp -or
+                $null -eq $passwordProp) {
+            throw 'credentials record is incomplete'
+        }
+        if ([int]$versionProp.Value -ne 1) { throw 'credentials version is not 1' }
+        if ($accountProp.Value -isnot [string] -or
+                $passwordProp.Value -isnot [string]) {
+            throw 'credentials fields are not strings'
+        }
+        $account = [string]$accountProp.Value
+        $password = [string]$passwordProp.Value
+        if (-not $account.Trim() -or -not $password.Trim()) {
+            throw 'credentials fields are blank'
+        }
+        if (-not (Test-GatewayCredentialsAcl -Path $path)) {
+            while ($Error.Count -gt $errorCount) { $Error.RemoveAt(0) }
+            return [pscustomobject]@{
+                Status = 'credentials_acl_too_broad'; Account = $null; Password = $null
+            }
+        }
+        return [pscustomobject]@{
+            Status = 'credentials_present'; Account = $account; Password = $password
+        }
+    } catch {
+        while ($Error.Count -gt $errorCount) { $Error.RemoveAt(0) }
+        return [pscustomobject]@{
+            Status = 'credentials_invalid'; Account = $null; Password = $null
         }
     }
 }
@@ -1335,6 +1429,19 @@ function Start-GatewayService {
                         }
                     }
                 }
+                if ($Key -eq 'chat2api') {
+                    # #120: inject the machine-local UM account into the 8000
+                    # child only. An explicit environment pair wins; the
+                    # credentials file is used only when that pair is incomplete.
+                    # The verbose status is desensitized (present/missing/
+                    # invalid/ACL too broad), never the values themselves.
+                    $credentials = Get-GatewayLocalUmCredentials
+                    if ($credentials.Status -eq 'credentials_present') {
+                        $childEnv['CHAT2API_UM_ACCOUNT'] = [string]$credentials.Account
+                        $childEnv['CHAT2API_UM_PASSWORD'] = [string]$credentials.Password
+                    }
+                    Write-Verbose ('chat2api credentials: ' + [string]$credentials.Status)
+                }
                 if ($Key -eq 'chat2api' -and $startPath -match '\.exe$') {
                     # Optional machine-local Playwright driver. Removing this
                     # file and restarting restores the native Rust driver.
@@ -1385,7 +1492,13 @@ function Start-GatewayService {
                     }
                 } finally {
                     foreach ($name in $saved.Keys) {
-                        [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process')
+                        if ($null -eq $saved[$name]) {
+                            Remove-Item -LiteralPath ('Env:' + $name) `
+                                -ErrorAction SilentlyContinue
+                        } else {
+                            [Environment]::SetEnvironmentVariable(
+                                $name, $saved[$name], 'Process')
+                        }
                     }
                 }
             }

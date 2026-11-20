@@ -1,4 +1,4 @@
-# Offline regression tests for the gateway runtime module.
+﻿# Offline regression tests for the gateway runtime module.
 # Uses injected hooks to verify start/stop/status calls without touching
 # real processes or the task scheduler. Health-only cases use isolated
 # ephemeral loopback sockets, never a configured service port.
@@ -422,7 +422,7 @@ foreach ($scriptName in @(
     $desc = (Get-GatewayServiceDescriptors)['chat2api']
     Assert-Equal ([IO.Path]::GetFileName([string]$desc.StartPath)) 'um-gateway-candidate.exe' 'chat2api StartPath points at the Rust binary'
     Assert-Equal ([string]$desc.StartAction) 'HiddenBatch' 'chat2api keeps the hidden launcher action'
-    Assert-Equal ([string]$desc.StartArguments) '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token' 'chat2api starts production local 8000 with the Python control token file'
+    Assert-Equal ([string]$desc.StartArguments) '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log' 'chat2api starts production local 8000 with the Python control token file'
     Assert-Equal ([string]$desc.StartWorkingDirectory) '.' 'chat2api launches from the repository root (Python default token/profile paths)'
     Assert-Equal ([IO.Path]::GetFileName((Resolve-GatewayStartPath -Key 'chat2api'))) 'um-gateway-candidate.exe' 'resolved StartPath is the Rust binary'
     Assert-Equal $desc.Port 8000 'Rust launcher keeps port 8000'
@@ -482,7 +482,7 @@ foreach ($scriptName in @(
         Assert-Equal $script:ticket80Launches.Count 1 'Rust launcher starts exactly once'
         $launch = $script:ticket80Launches[0]
         Assert-Equal $launch.FilePath (Join-Path $root 'rust\target\release\um-gateway-candidate.exe') 'launcher runs the Rust binary directly'
-        Assert-Equal ($launch.ArgumentList -join ' ') '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token' 'launcher passes the production/local/8000 arguments'
+        Assert-Equal ($launch.ArgumentList -join ' ') '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log' 'launcher passes the production/local/8000 arguments'
         Assert-Equal ([IO.Path]::GetFullPath($launch.WorkingDirectory)) $root 'launcher runs from the repository root'
     } finally {
         Remove-Item function:\Get-CimInstance -ErrorAction SilentlyContinue
@@ -760,9 +760,8 @@ foreach ($scriptName in @(
 # ---------------------------------------------------------------------------
 
 & {
-    $launcher = Get-Content -LiteralPath (Join-Path $root 'start_chat2api.bat') -Raw -Encoding ascii
-    Assert-Equal ($launcher -match 'python chat2api\.py --base-url https://chat\.genai\.um\.edu\.mo') $true 'start_chat2api.bat keeps the Python 8000 rollback command'
-    Assert-Equal ($launcher -match 'rollback') $true 'start_chat2api.bat names its rollback role'
+    # The Python 8000 launcher was retired with the rollback closure (#90);
+    # StartPath is the Rust binary and the descriptor is its only entrypoint.
 
     $contract = Get-Content -LiteralPath (Join-Path $root 'docs\rust-contract.md') -Raw -Encoding utf8
     Assert-Equal ($contract -match '本机 8000 启动器与回滚') $true 'rust-contract documents the local 8000 launcher and rollback'
@@ -784,6 +783,249 @@ foreach ($scriptName in @(
         Assert-Equal (($identities | ForEach-Object { [string]$_.ProcessName }) -join ',') 'python.exe,um-gateway-candidate.exe' 'rollback still recognizes the Python private instance'
     } finally {
         $desc.StartPath = $savedStartPath
+    }
+}
+
+# ---------------------------------------------------------------------------
+# #120: 本机 8000 启动器注入 UM 凭据。
+#
+# 凭据文件是 ADR 0012 的 %LOCALAPPDATA%\Chat2API\credentials.json。
+# 显式环境变量优先；环境变量不完整时才读文件。账号和密码都必须是
+# 字符串且 trim 后非空，文件 ACL 还必须只允许当前用户访问。文件缺失、
+# 内容损坏、版本不符、只有一半字段或 ACL 过宽时都不注入，8000 仍照常
+# 启动。测试把 LOCALAPPDATA 指向临时目录，并在 Start-Process 边界读取
+# 子进程环境；真实登录不执行。
+# ---------------------------------------------------------------------------
+
+& {
+    $savedLocalAppData = $env:LOCALAPPDATA
+    $savedAccount = [Environment]::GetEnvironmentVariable('CHAT2API_UM_ACCOUNT', 'Process')
+    $savedPassword = [Environment]::GetEnvironmentVariable('CHAT2API_UM_PASSWORD', 'Process')
+    $savedHiddenLaunch = $env:SELFUSEAI_HIDDEN_LAUNCH
+    $credentialRoot = Join-Path ([IO.Path]::GetTempPath()) ('gateway-credentials-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $credentialDir = Join-Path $credentialRoot 'Chat2API'
+    [void][IO.Directory]::CreateDirectory($credentialDir)
+    $credentialPath = Join-Path $credentialDir 'credentials.json'
+    $env:LOCALAPPDATA = $credentialRoot
+    Remove-Item Env:\CHAT2API_UM_ACCOUNT -ErrorAction SilentlyContinue
+    Remove-Item Env:\CHAT2API_UM_PASSWORD -ErrorAction SilentlyContinue
+
+    $script:credentialLaunches = New-Object System.Collections.ArrayList
+    function Get-CimInstance {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$ClassName, [string]$Filter)
+        if ($ClassName -and $ClassName -ne 'Win32_Process') {
+            return @(CimCmdlets\Get-CimInstance @PSBoundParameters)
+        }
+        return @()
+    }
+    function Get-NetTCPConnection {
+        [CmdletBinding()]
+        param([int]$LocalPort, [object]$State)
+        return @()
+    }
+    function Invoke-WebRequest {
+        [CmdletBinding()]
+        param([string]$Uri, [string]$Method, [object]$Headers,
+              [int]$TimeoutSec, [switch]$UseBasicParsing)
+        throw 'offline substitute: health probe refused'
+    }
+    function Stop-Process {
+        [CmdletBinding()]
+        param([Parameter(Mandatory = $true)][int]$Id, [switch]$Force)
+        throw 'offline substitute: no process may be stopped'
+    }
+    function Start-Process {
+        [CmdletBinding()]
+        param([Parameter(Position = 0)][string]$FilePath, [object]$ArgumentList,
+              [string]$WorkingDirectory, [object]$WindowStyle)
+        [void]$script:credentialLaunches.Add([pscustomobject]@{
+            FilePath = [string]$FilePath
+            ArgumentList = @($ArgumentList)
+            Account = [Environment]::GetEnvironmentVariable('CHAT2API_UM_ACCOUNT', 'Process')
+            Password = [Environment]::GetEnvironmentVariable('CHAT2API_UM_PASSWORD', 'Process')
+        })
+    }
+
+    function Write-CredentialFixture {
+        param([string]$Json)
+        [IO.File]::WriteAllText($credentialPath, $Json,
+            (New-Object System.Text.UTF8Encoding($false)))
+    }
+
+    function Set-CredentialAcl {
+        param([switch]$Broaden)
+        $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        if ($Broaden) {
+            & icacls.exe $credentialPath /grant '*S-1-5-32-545:(R)' | Out-Null
+        } else {
+            & icacls.exe $credentialPath /reset | Out-Null
+            & icacls.exe $credentialPath /inheritance:r /grant:r ('*' + $sid + ':F') | Out-Null
+        }
+        if ($LASTEXITCODE -ne 0) { throw 'credential ACL fixture failed' }
+    }
+
+    function Invoke-CredentialStart {
+        param([string]$Key = 'chat2api')
+        $script:credentialLaunches.Clear()
+        $savedVerbose = $VerbosePreference
+        $VerbosePreference = 'Continue'
+        try {
+            $output = @(Start-GatewayService -Key $Key -Sleeper { param($seconds) } 4>&1)
+        } finally {
+            $VerbosePreference = $savedVerbose
+        }
+        $result = @($output | Where-Object {
+            $_ -isnot [System.Management.Automation.VerboseRecord]
+        }) | Select-Object -First 1
+        $verbose = @($output | Where-Object {
+            $_ -is [System.Management.Automation.VerboseRecord]
+        } | ForEach-Object { [string]$_.Message }) -join "`n"
+        return [pscustomobject]@{
+            Result = $result
+            Verbose = $verbose
+            Launches = @($script:credentialLaunches)
+        }
+    }
+
+    try {
+        $secretAccount = 'um-account-120@example.invalid'
+        $secretPassword = 'p@ss word 120'
+        $envAccount = 'env-account-120@example.invalid'
+        $envPassword = 'env-password-120'
+
+        # 显式环境变量优先：文件即使损坏且 ACL 过宽也不会被读取。
+        Write-CredentialFixture ('{"version":1,"account":"file-account-120","password":"file-password-120"')
+        Set-CredentialAcl -Broaden
+        [Environment]::SetEnvironmentVariable('CHAT2API_UM_ACCOUNT', $envAccount, 'Process')
+        [Environment]::SetEnvironmentVariable('CHAT2API_UM_PASSWORD', $envPassword, 'Process')
+        $fromEnv = Invoke-CredentialStart
+        Assert-Equal $fromEnv.Result.Status 'StartPending' 'credentials: env pair still starts 8000'
+        Assert-Equal $fromEnv.Launches.Count 1 'credentials: env pair launches once'
+        Assert-Equal ($fromEnv.Launches[0].Account -eq $envAccount) $true 'credentials: env account wins over the file'
+        Assert-Equal ($fromEnv.Launches[0].Password -eq $envPassword) $true 'credentials: env password wins over the file'
+        Assert-Equal ($fromEnv.Verbose -match 'credentials_present') $true 'credentials: env pair records credentials_present'
+        Assert-Equal ($fromEnv.Verbose -notmatch [regex]::Escape('file-account-120')) $true 'credentials: file content is not read while env is complete'
+        Remove-Item Env:\CHAT2API_UM_ACCOUNT -ErrorAction SilentlyContinue
+        Remove-Item Env:\CHAT2API_UM_PASSWORD -ErrorAction SilentlyContinue
+
+        # 文件 ACL 过宽：拒绝注入，只记录 credentials_acl_too_broad。
+        Write-CredentialFixture ('{"version":1,"account":"' + $secretAccount + '","password":"' + $secretPassword + '"}')
+        Set-CredentialAcl -Broaden
+        $broadAcl = Invoke-CredentialStart
+        Assert-Equal $broadAcl.Result.Status 'StartPending' 'credentials: broad ACL still starts 8000'
+        Assert-Equal $broadAcl.Launches.Count 1 'credentials: broad ACL launches once'
+        Assert-Null $broadAcl.Launches[0].Account 'credentials: broad ACL injects no account'
+        Assert-Null $broadAcl.Launches[0].Password 'credentials: broad ACL injects no password'
+        Assert-Equal ($broadAcl.Verbose -match 'credentials_acl_too_broad') $true 'credentials: broad ACL records credentials_acl_too_broad'
+        Assert-Equal ($broadAcl.Verbose -notmatch [regex]::Escape($secretPassword)) $true 'credentials: broad ACL never logs the password'
+
+        # 有效文件：两个变量都进入 8000 子进程，值来自文件；父进程恢复。
+        Set-CredentialAcl
+        $env:SELFUSEAI_HIDDEN_LAUNCH = 'parent-hidden'
+        $valid = Invoke-CredentialStart
+        Assert-Equal $valid.Result.Status 'StartPending' 'credentials: valid file still starts 8000'
+        Assert-Equal $valid.Launches.Count 1 'credentials: valid file launches once'
+        Assert-Equal ($valid.Launches[0].Account -eq $secretAccount) $true 'credentials: child receives the account'
+        Assert-Equal ($valid.Launches[0].Password -eq $secretPassword) $true 'credentials: child receives the password'
+        Assert-Equal ([Environment]::GetEnvironmentVariable('CHAT2API_UM_ACCOUNT', 'Process') -eq $null) $true 'credentials: parent account is not polluted'
+        Assert-Equal ([Environment]::GetEnvironmentVariable('CHAT2API_UM_PASSWORD', 'Process') -eq $null) $true 'credentials: parent password is not polluted'
+        Assert-Equal ([Environment]::GetEnvironmentVariable('SELFUSEAI_HIDDEN_LAUNCH', 'Process') -eq 'parent-hidden') $true 'credentials: unrelated child environment is restored'
+        Assert-Equal ($valid.Verbose -match 'credentials_present') $true 'credentials: valid file records credentials_present'
+        Assert-Equal ($valid.Verbose -notmatch [regex]::Escape($secretAccount)) $true 'credentials: account never enters the log'
+        Assert-Equal ($valid.Verbose -notmatch [regex]::Escape($secretPassword)) $true 'credentials: password never enters the log'
+        Assert-Equal (($valid.Launches[0].ArgumentList -join ' ') -notmatch [regex]::Escape($secretPassword)) $true 'credentials: password never enters the launch arguments'
+        Assert-Equal (($valid.Result | ConvertTo-Json -Compress) -notmatch [regex]::Escape($secretPassword)) $true 'credentials: password never enters the result'
+
+        # 文件缺失：不注入，8000 仍启动。
+        Remove-Item -LiteralPath $credentialPath -Force
+        $missing = Invoke-CredentialStart
+        Assert-Equal $missing.Result.Status 'StartPending' 'credentials: missing file still starts 8000'
+        Assert-Equal $missing.Launches.Count 1 'credentials: missing file launches once'
+        Assert-Null $missing.Launches[0].Account 'credentials: missing file injects no account'
+        Assert-Null $missing.Launches[0].Password 'credentials: missing file injects no password'
+        Assert-Equal ($missing.Verbose -match 'credentials_missing') $true 'credentials: missing file records credentials_missing'
+
+        # JSON 损坏：不注入，8000 仍启动；损坏内容里的秘密不出现在错误/日志。
+        $brokenSecret = 'broken-secret-120'
+        Write-CredentialFixture ('{"version":1,"account":"' + $brokenSecret + '","password":"' + $brokenSecret + '"')
+        $broken = Invoke-CredentialStart
+        Assert-Equal $broken.Result.Status 'StartPending' 'credentials: broken JSON still starts 8000'
+        Assert-Equal $broken.Launches.Count 1 'credentials: broken JSON launches once'
+        Assert-Null $broken.Launches[0].Account 'credentials: broken JSON injects no account'
+        Assert-Null $broken.Launches[0].Password 'credentials: broken JSON injects no password'
+        Assert-Equal ($broken.Verbose -match 'credentials_invalid') $true 'credentials: broken JSON records credentials_invalid'
+        Assert-Equal ($broken.Verbose -notmatch [regex]::Escape($brokenSecret)) $true 'credentials: broken JSON never logs its content'
+        Assert-Equal (($Error | ForEach-Object { [string]$_.Exception.Message }) -join "`n" -notmatch [regex]::Escape($brokenSecret)) $true 'credentials: broken JSON never enters the error stream'
+
+        # version 不是 1：不注入。
+        Write-CredentialFixture ('{"version":2,"account":"' + $secretAccount + '","password":"' + $secretPassword + '"}')
+        $wrongVersion = Invoke-CredentialStart
+        Assert-Equal $wrongVersion.Launches.Count 1 'credentials: wrong version still starts 8000'
+        Assert-Null $wrongVersion.Launches[0].Account 'credentials: wrong version injects no account'
+        Assert-Null $wrongVersion.Launches[0].Password 'credentials: wrong version injects no password'
+        Assert-Equal ($wrongVersion.Verbose -match 'credentials_invalid') $true 'credentials: wrong version records credentials_invalid'
+
+        # 只有 account / 只有 password：都不注入。
+        foreach ($half in @(
+            ('{"version":1,"account":"' + $secretAccount + '"}'),
+            ('{"version":1,"password":"' + $secretPassword + '"}')
+        )) {
+            Write-CredentialFixture $half
+            $partial = Invoke-CredentialStart
+            Assert-Equal $partial.Launches.Count 1 'credentials: half file still starts 8000'
+            Assert-Null $partial.Launches[0].Account 'credentials: half file injects no account'
+            Assert-Null $partial.Launches[0].Password 'credentials: half file injects no password'
+            Assert-Equal ($partial.Verbose -match 'credentials_invalid') $true 'credentials: half file records credentials_invalid'
+        }
+
+        # 空白或非字符串：不注入。
+        foreach ($invalidJson in @(
+            ('{"version":1,"account":"   ","password":"' + $secretPassword + '"}'),
+            ('{"version":1,"account":120,"password":"' + $secretPassword + '"}')
+        )) {
+            Write-CredentialFixture $invalidJson
+            $invalid = Invoke-CredentialStart
+            Assert-Equal $invalid.Launches.Count 1 'credentials: invalid field still starts 8000'
+            Assert-Null $invalid.Launches[0].Account 'credentials: invalid field injects no account'
+            Assert-Null $invalid.Launches[0].Password 'credentials: invalid field injects no password'
+            Assert-Equal ($invalid.Verbose -match 'credentials_invalid') $true 'credentials: invalid field records credentials_invalid'
+        }
+
+        # usage 8001 不受影响：即使文件有效也不注入。
+        Write-CredentialFixture ('{"version":1,"account":"' + $secretAccount + '","password":"' + $secretPassword + '"}')
+        Set-CredentialAcl
+        $usage = Invoke-CredentialStart -Key 'usage'
+        Assert-Equal $usage.Launches.Count 1 'credentials: usage still starts 8001'
+        Assert-Null $usage.Launches[0].Account 'credentials: usage never receives the UM account'
+        Assert-Null $usage.Launches[0].Password 'credentials: usage never receives the UM password'
+        Assert-Equal ($usage.Verbose -notmatch 'credentials_present') $true 'credentials: usage never records chat2api credentials'
+    } finally {
+        Remove-Item function:\Get-CimInstance -ErrorAction SilentlyContinue
+        Remove-Item function:\Get-NetTCPConnection -ErrorAction SilentlyContinue
+        Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+        Remove-Item function:\Stop-Process -ErrorAction SilentlyContinue
+        Remove-Item function:\Start-Process -ErrorAction SilentlyContinue
+        Remove-Item function:\Write-CredentialFixture -ErrorAction SilentlyContinue
+        Remove-Item function:\Set-CredentialAcl -ErrorAction SilentlyContinue
+        Remove-Item function:\Invoke-CredentialStart -ErrorAction SilentlyContinue
+        $env:LOCALAPPDATA = $savedLocalAppData
+        if ($null -eq $savedAccount) {
+            Remove-Item Env:\CHAT2API_UM_ACCOUNT -ErrorAction SilentlyContinue
+        } else {
+            $env:CHAT2API_UM_ACCOUNT = $savedAccount
+        }
+        if ($null -eq $savedPassword) {
+            Remove-Item Env:\CHAT2API_UM_PASSWORD -ErrorAction SilentlyContinue
+        } else {
+            $env:CHAT2API_UM_PASSWORD = $savedPassword
+        }
+        if ($null -eq $savedHiddenLaunch) {
+            Remove-Item Env:\SELFUSEAI_HIDDEN_LAUNCH -ErrorAction SilentlyContinue
+        } else {
+            $env:SELFUSEAI_HIDDEN_LAUNCH = $savedHiddenLaunch
+        }
+        Remove-Item -LiteralPath $credentialRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -1020,9 +1262,8 @@ foreach ($scriptName in @(
 # ---------------------------------------------------------------------------
 
 & {
-    $launcher = Get-Content -LiteralPath (Join-Path $root 'start_usage_service.bat') -Raw -Encoding ascii
-    Assert-Equal ($launcher -match 'python usagesrv\.py') $true 'start_usage_service.bat keeps the Python 8001 rollback command'
-    Assert-Equal ($launcher -match 'rollback') $true 'start_usage_service.bat names its rollback role'
+    # The Python 8001 launcher was retired with the rollback closure (#90);
+    # StartPath is the Rust console binary and the descriptor is its only entrypoint.
 
     $contract = Get-Content -LiteralPath (Join-Path $root 'docs\rust-contract.md') -Raw -Encoding utf8
     Assert-Equal ($contract -match '本机 8001 启动器与回滚') $true 'rust-contract documents the local 8001 launcher and rollback'
@@ -1069,12 +1310,8 @@ foreach ($adapter in @(
     Assert-Equal ($source -notmatch '127\.0\.0\.1|D:\\git') $true "$($adapter.File) has no port or repository path"
 }
 
-# The private chat2api launcher must allow the KISS Translator extension origin.
-# The extension's requests run in its service worker, so the browser stamps them
-# with the extension's own chrome-extension:// origin and chat2api answers 403
-# origin_denied unless that origin is listed (2026-10-14, Edge/Chrome Web Store id).
-$chat2apiLauncher = Get-Content -LiteralPath (Join-Path $root 'start_chat2api.bat') -Raw -Encoding ascii
-Assert-Equal ($chat2apiLauncher -match 'CHAT2API_ALLOWED_ORIGINS=chrome-extension://bdiifdefkgmcblbcghdlonllpjhhjgof') $true 'chat2api launcher allows the KISS Translator extension origin'
+# The private chat2api launcher was retired with the rollback closure (#90);
+# the Rust gateway reads CHAT2API_ALLOWED_ORIGINS from its own environment.
 
 $healthCheckCalls.Clear()
 Test-GatewayServiceHealth -Key 'usage' -HttpChecker {
@@ -1226,6 +1463,8 @@ $script:stopScopePrivateCmdLine = 'python  chat2api.py --base-url https://chat.e
 $script:stopScopeOtherCheckoutCmdLine = 'python D:\other-checkout\ai-gateway\chat2api\chat2api.py --base-url https://chat.example.invalid'
 $script:stopScopePrivateQualifiedCmdLine = 'python ' + (Join-Path (Get-GatewayRoot) 'chat2api\chat2api.py') + ' --base-url https://chat.example.invalid'
 $script:stopScopePrivateStart = [datetime]'2026-09-29T20:11:25'
+$script:stopScopeShareCmdLine = 'python chat2api.py --profile D:\share\edge-profile'
+$script:stopScopeShareStart = [datetime]'2026-09-29T20:12:25'
 
 function Invoke-StopScopeScenario {
     # Runs one private stop against the real runtime with the boundary

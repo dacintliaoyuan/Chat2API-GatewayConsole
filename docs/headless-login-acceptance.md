@@ -170,3 +170,5 @@ curl -s -X POST -H "X-Admin-Control: $TOKEN" http://127.0.0.1:8100/admin/auth/ca
 云端 8003 的当前原生 Rust 驱动已完成 24 小时观察并实际自动重登录，说明当前手写 CDP 驱动可以工作。`chromiumoxide` 只替换启动、连接和鼠标事件，不提供 Playwright 的 stable、hit-target、enabled、重试和 `fill`；当前驱动在 #112 已补上这些语义。引入它还要增加 tokio runtime 和 MSRV 1.85，收益不足。决定不替换当前 Rust 驱动，#113 以 `wontfix` 关闭。
 
 本机继续使用 Playwright opt-in。去掉本机 Python 依赖由 #120 跟踪：先把 `%LOCALAPPDATA%\Chat2API\credentials.json` 的 UM 账号密码注入 8000，再切回当前原生 Rust 驱动，不引入 `chromiumoxide`；验收是本机真实自动重登录和 Playwright 文件/opt-in 删除，失败就保留 Playwright。
+
+实现状态（2026-11-20）：`lib/gateway-runtime.ps1` 已在本机 8000 启动时读取该凭据文件并注入 `CHAT2API_UM_ACCOUNT` / `CHAT2API_UM_PASSWORD`；显式环境变量优先，文件 ACL 不是仅当前用户可读时拒绝注入并只记录脱敏状态。真实本机自动重登录与 Duo 待维护者验收，Playwright 尚未删除。
