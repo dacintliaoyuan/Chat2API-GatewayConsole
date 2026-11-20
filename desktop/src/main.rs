@@ -1,12 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! Slint desktop shell for the local console (issues #123/#124).
+//! Slint desktop shell for the local console (issues #123/#124/#125).
 //!
 //! First open skips the UM login, reads the app instance's own gateway health and
 //! log file, saves the model API port and keeps the window in the tray. The app
 //! attaches to an already-running instance or starts exactly one managed gateway
 //! child on the configured loopback port. It never touches the existing 8000/8001
-//! pair, logs in or reads credentials (#125), or opens its own TCP listener.
+//! pair, never opens its own TCP listener, and hands the saved UM credentials to
+//! its own gateway through `CHAT2API_UM_ACCOUNT` / `CHAT2API_UM_PASSWORD`; the
+//! gateway performs the automatic re-login while the app only reads
+//! `/admin/auth/status`.
 
 mod tray;
 
@@ -19,10 +22,15 @@ use std::time::Duration;
 
 use chrono::TimeZone;
 use slint::{CloseRequestResponse, ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
-use um_desktop::config::{self, DesktopConfig, LoadOutcome};
+use um_desktop::account::{
+    self, account_view, AccountForm, AccountView, AuthAdmin, AuthRead, AuthState, HttpAuthAdmin,
+    LoadOutcome,
+};
+use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome};
 use um_desktop::gateway::{
-    quit_app, resolve_gateway_binary, GatewayState, GatewayStatus, GatewaySupervisor, HttpGateway,
-    InstancePaths, PortSwitch, SystemLauncher, ThreadSleeper,
+    load_control_token, quit_app, resolve_gateway_binary, GatewayState, GatewayStatus,
+    GatewaySupervisor, HttpGateway, InstancePaths, PortSwitch, StopReason, SystemLauncher,
+    ThreadSleeper,
 };
 use um_desktop::instance::{self, InstanceError};
 use um_desktop::logs::{self, LogsView};
@@ -34,6 +42,7 @@ slint::include_modules!();
 static PAUSED: AtomicBool = AtomicBool::new(false);
 static QUIT: AtomicBool = AtomicBool::new(false);
 static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
+static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 fn tone_color(tone: Tone) -> slint::Color {
     match tone {
@@ -43,10 +52,99 @@ fn tone_color(tone: Tone) -> slint::Color {
     }
 }
 
+fn muted_color() -> slint::Color {
+    slint::Color::from_rgb_u8(81, 93, 112)
+}
+
 fn clock(at: Option<i64>) -> String {
     at.and_then(|at| chrono::Local.timestamp_millis_opt(at).single())
         .map(|time| time.format("%H:%M:%S").to_string())
         .unwrap_or_else(|| "—".to_string())
+}
+
+fn apply_account(window: &MainWindow, view: &AccountView) {
+    window.set_account_saved(view.saved_account.clone().into());
+    window.set_account_saved_detail(view.saved_detail.clone().into());
+    window.set_account_state(view.state_value.clone().into());
+    window.set_account_state_detail(view.state_detail.clone().into());
+    window.set_account_state_tone(tone_color(view.state_tone));
+    window.set_account_can_clear(view.can_clear);
+    window.set_account_can_continue(view.can_continue_login);
+    window.set_account_label(view.overview_label.clone().into());
+    window.set_account_detail(view.overview_detail.clone().into());
+    window.set_account_tone(tone_color(view.overview_tone));
+}
+
+fn open_account_form(window: &MainWindow, form: &Rc<RefCell<AccountForm>>, saved: &LoadOutcome) {
+    let saved_account = match saved {
+        LoadOutcome::Loaded(credentials) => Some(credentials.account.as_str()),
+        _ => None,
+    };
+    *form.borrow_mut() = AccountForm::new(saved_account);
+    window.set_credential_account_input(form.borrow().account().to_string().into());
+    window.set_credential_password_input("".into());
+    window.set_password_visible(false);
+    window.set_account_form_visible(true);
+    let (status, tone) = match saved {
+        LoadOutcome::Unusable(reason) => (
+            format!("凭据不可用：{reason}；请重新录入账号密码"),
+            tone_color(Tone::Bad),
+        ),
+        _ => (String::new(), muted_color()),
+    };
+    window.set_credential_status(status.into());
+    window.set_credential_tone(tone);
+    window.set_page(2);
+}
+
+fn read_auth(auth_admin: &HttpAuthAdmin, token_path: &Path, gateway: &GatewayStatus) -> AuthRead {
+    if !matches!(gateway.state, GatewayState::Running { .. }) {
+        return AuthRead::Unavailable(format!("本实例网关未就绪：{}", gateway.state.detail()));
+    }
+    let token = match load_control_token(token_path) {
+        Ok(token) => token,
+        Err(error) => return AuthRead::Unavailable(error),
+    };
+    match auth_admin.read_status(&gateway.base_url, &token) {
+        Ok(status) => AuthRead::Status(status),
+        Err(error) => AuthRead::Unavailable(error),
+    }
+}
+
+/// Reads the current status; a non-valid first login opens the visible Edge.
+fn read_or_start_login(
+    auth_admin: &HttpAuthAdmin,
+    token_path: &Path,
+    gateway: &GatewayStatus,
+) -> AuthRead {
+    let auth = read_auth(auth_admin, token_path, gateway);
+    let AuthRead::Status(status) = &auth else {
+        return auth;
+    };
+    if !account::first_login_needed(status) {
+        return auth;
+    }
+    let token = match load_control_token(token_path) {
+        Ok(token) => token,
+        Err(error) => return AuthRead::Unavailable(error),
+    };
+    account::first_login(auth_admin, &gateway.base_url, &token, status)
+}
+
+fn save_message(auth: &AuthRead, view: &AccountView) -> (String, Tone) {
+    match auth {
+        AuthRead::Status(status) => match status.state {
+            AuthState::Valid => ("账号已保存；本实例已登录".to_string(), Tone::Good),
+            AuthState::LoggingIn => (
+                "账号已保存；本实例网关正在自动重登…".to_string(),
+                Tone::Warn,
+            ),
+            _ => (format!("账号已保存；{}", view.state_detail), Tone::Warn),
+        },
+        AuthRead::Unavailable(reason) => {
+            (format!("账号已保存；认证状态不可用：{reason}"), Tone::Bad)
+        }
+    }
 }
 
 fn app_dir() -> PathBuf {
@@ -62,7 +160,7 @@ fn gateway_bin_override() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn apply(window: &MainWindow, overview: &Overview, logs: &LogsView) {
+fn apply(window: &MainWindow, overview: &Overview, logs: &LogsView, account: &AccountView) {
     window.set_gateway_value(overview.gateway.value.clone().into());
     window.set_gateway_detail(overview.gateway.detail.clone().into());
     window.set_gateway_tone(tone_color(overview.gateway.tone));
@@ -75,9 +173,7 @@ fn apply(window: &MainWindow, overview: &Overview, logs: &LogsView) {
     window.set_upstream_value(overview.upstream.value.clone().into());
     window.set_upstream_detail(overview.upstream.detail.clone().into());
     window.set_upstream_tone(tone_color(overview.upstream.tone));
-    window.set_account_label(overview.account_label.clone().into());
-    window.set_account_detail(overview.account_detail.clone().into());
-    window.set_account_tone(tone_color(overview.account_tone));
+    apply_account(window, account);
     window.set_status_line(overview::status_line(overview).into());
     window.set_last_update(clock(Some(chrono::Local::now().timestamp_millis())).into());
 
@@ -158,12 +254,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = config::default_config_path();
     let (loaded_config, settings_status, settings_tone) = match &config_path {
         Ok(path) => match config::load_from(path) {
-            LoadOutcome::Missing => (
+            ConfigLoadOutcome::Missing => (
                 DesktopConfig::default(),
                 "使用默认端口 7999（尚未保存设置）；启动时接入已有实例或拉起本实例网关".to_string(),
                 Tone::Warn,
             ),
-            LoadOutcome::Loaded(config) => (
+            ConfigLoadOutcome::Loaded(config) => (
                 config,
                 format!(
                     "已加载配置：{}；启动时接入已有实例或拉起本实例网关",
@@ -171,7 +267,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
                 Tone::Good,
             ),
-            LoadOutcome::Invalid(reason) => (
+            ConfigLoadOutcome::Invalid(reason) => (
                 DesktopConfig::default(),
                 format!("配置不可用：{reason}；使用默认端口 7999"),
                 Tone::Bad,
@@ -198,15 +294,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_settings_status(settings_status.into());
     window.set_settings_tone(tone_color(settings_tone));
 
+    let credentials_path = config_path
+        .as_ref()
+        .ok()
+        .and_then(|path| path.parent())
+        .map(account::credentials_path);
+    let saved_credentials = match &credentials_path {
+        Some(path) => account::load_from(path),
+        None => LoadOutcome::Unusable("LOCALAPPDATA 未设置，无法定位凭据文件".to_string()),
+    };
+    let saved_state = Arc::new(Mutex::new(saved_credentials.clone()));
+    let auth_state: Arc<Mutex<Option<AuthRead>>> = Arc::new(Mutex::new(None));
+    let account_form = Rc::new(RefCell::new(AccountForm::new(None)));
+    let initial_account = account_view(&saved_credentials, None);
+    apply_account(&window, &initial_account);
+
     let program = resolve_gateway_binary(gateway_bin_override(), &app_dir());
-    let gateway_supervisor = Arc::new(Mutex::new(Some(GatewaySupervisor::new(
+    let mut supervisor = GatewaySupervisor::new(
         loaded_config.model_api_port,
         paths.clone(),
         program,
         Arc::new(HttpGateway::new()),
         Box::new(SystemLauncher),
         Box::new(ThreadSleeper),
-    ))));
+    );
+    if let LoadOutcome::Loaded(credentials) = &saved_credentials {
+        supervisor.set_credentials(Some(credentials.clone()));
+    }
+    let gateway_supervisor = Arc::new(Mutex::new(Some(supervisor)));
     let gateway_status = Arc::new(Mutex::new(GatewayStatus {
         state: GatewayState::Starting,
         port: loaded_config.model_api_port,
@@ -235,14 +350,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let probe = HttpProbe::new();
+    let auth_admin = Arc::new(HttpAuthAdmin::new());
     let service_log = paths.service_log.clone();
+    let control_token_path = paths.control_token.clone();
     {
         let weak = window.as_weak();
         let gateway_status = Arc::clone(&gateway_status);
         let current_port = Arc::clone(&current_port);
+        let saved_state = Arc::clone(&saved_state);
+        let auth_state = Arc::clone(&auth_state);
+        let auth_admin = Arc::clone(&auth_admin);
         std::thread::spawn(move || {
             let mut last_overview: Option<Overview> = None;
             let mut last_logs: Option<LogsView> = None;
+            let mut last_account: Option<AccountView> = None;
             loop {
                 if QUIT.load(Ordering::SeqCst) {
                     break;
@@ -258,15 +379,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .card();
                 let overview = overview::read_overview(&probe, &base, supervision);
                 let logs = logs::read_log_file(&service_log);
-                let changed =
-                    last_overview.as_ref() != Some(&overview) || last_logs.as_ref() != Some(&logs);
+                let auth = match load_control_token(&control_token_path) {
+                    Ok(token) => match auth_admin.read_status(&base, &token) {
+                        Ok(status) => AuthRead::Status(status),
+                        Err(error) => AuthRead::Unavailable(error),
+                    },
+                    Err(error) => AuthRead::Unavailable(error),
+                };
+                let saved = saved_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                let account = account_view(&saved, Some(&auth));
+                *auth_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth);
+                let changed = last_overview.as_ref() != Some(&overview)
+                    || last_logs.as_ref() != Some(&logs)
+                    || last_account.as_ref() != Some(&account);
                 if changed {
                     last_overview = Some(overview.clone());
                     last_logs = Some(logs.clone());
+                    last_account = Some(account.clone());
                     let weak = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(window) = weak.upgrade() {
-                            apply(&window, &overview, &logs);
+                            apply(&window, &overview, &logs, &account);
                         }
                     });
                 }
@@ -336,13 +474,302 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         REFRESH_LOGS.store(true, Ordering::SeqCst);
     });
 
-    let weak_account = window.as_weak();
+    let weak_configure = window.as_weak();
+    let saved_configure = Arc::clone(&saved_state);
+    let form_configure = Rc::clone(&account_form);
     window.on_configure_account(move || {
-        if let Some(window) = weak_account.upgrade() {
-            window.set_account_note(
-                "UM 账号登录将在 #125 接入；当前版本可查看状态、设置端口和检查日志。".into(),
-            );
+        let Some(window) = weak_configure.upgrade() else {
+            return;
+        };
+        let saved = saved_configure
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        open_account_form(&window, &form_configure, &saved);
+    });
+
+    let weak_open = window.as_weak();
+    let saved_open = Arc::clone(&saved_state);
+    let form_open = Rc::clone(&account_form);
+    window.on_open_account_form(move || {
+        let Some(window) = weak_open.upgrade() else {
+            return;
+        };
+        let saved = saved_open
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        open_account_form(&window, &form_open, &saved);
+    });
+
+    let weak_close_form = window.as_weak();
+    let form_close = Rc::clone(&account_form);
+    window.on_close_account_form(move || {
+        let Some(window) = weak_close_form.upgrade() else {
+            return;
+        };
+        *form_close.borrow_mut() = AccountForm::new(None);
+        window.set_credential_password_input("".into());
+        window.set_password_visible(false);
+        window.set_account_form_visible(false);
+    });
+
+    let weak_toggle = window.as_weak();
+    let form_toggle = Rc::clone(&account_form);
+    window.on_toggle_password_visible(move || {
+        let Some(window) = weak_toggle.upgrade() else {
+            return;
+        };
+        let mut form = form_toggle.borrow_mut();
+        form.toggle_password_visible();
+        window.set_password_visible(form.password_visible());
+    });
+
+    let weak_save_credentials = window.as_weak();
+    let form_save_credentials = Rc::clone(&account_form);
+    let credentials_save_path = credentials_path.clone();
+    let saved_save = Arc::clone(&saved_state);
+    let auth_save = Arc::clone(&auth_state);
+    let supervisor_save_credentials = Arc::clone(&gateway_supervisor);
+    let status_save_credentials = Arc::clone(&gateway_status);
+    let token_path_save = paths.control_token.clone();
+    let auth_admin_save = Arc::clone(&auth_admin);
+    window.on_save_credentials(move |account_text, password_text| {
+        let Some(window) = weak_save_credentials.upgrade() else {
+            return;
+        };
+        let credentials = {
+            let mut form = form_save_credentials.borrow_mut();
+            form.set_account(&account_text);
+            form.set_password(&password_text);
+            match form.validate() {
+                Ok(credentials) => credentials,
+                Err(error) => {
+                    window.set_credential_status(format!("无法保存：{error}").into());
+                    window.set_credential_tone(tone_color(Tone::Bad));
+                    return;
+                }
+            }
+        };
+        let Some(path) = credentials_save_path.clone() else {
+            window.set_credential_status("无法保存：LOCALAPPDATA 未设置".into());
+            window.set_credential_tone(tone_color(Tone::Bad));
+            return;
+        };
+        window.set_account_form_visible(false);
+        window.set_credential_status("正在保存账号密码并应用到本实例网关…".into());
+        window.set_credential_tone(tone_color(Tone::Warn));
+
+        let supervisor = Arc::clone(&supervisor_save_credentials);
+        let gateway_status = Arc::clone(&status_save_credentials);
+        let saved_state = Arc::clone(&saved_save);
+        let auth_state = Arc::clone(&auth_save);
+        let token_path = token_path_save.clone();
+        let auth_admin = Arc::clone(&auth_admin_save);
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            if let Err(error) = account::save_to(&path, &credentials) {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        window.set_credential_status(format!("保存失败：{error}").into());
+                        window.set_credential_tone(tone_color(Tone::Bad));
+                        window.set_account_form_visible(true);
+                    }
+                });
+                return;
+            }
+            *saved_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                LoadOutcome::Loaded(credentials.clone());
+            let restarted = {
+                let mut guard = supervisor
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                match guard.as_mut() {
+                    Some(supervisor) => {
+                        supervisor.set_credentials(Some(credentials.clone()));
+                        supervisor.restart(StopReason::CredentialsChanged)
+                    }
+                    None => return,
+                }
+            };
+            *gateway_status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = restarted.clone();
+            let auth = read_or_start_login(&auth_admin, &token_path, &restarted);
+            *auth_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth.clone());
+            let view = account_view(&LoadOutcome::Loaded(credentials.clone()), Some(&auth));
+            let (message, tone) = save_message(&auth, &view);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.set_credential_password_input("".into());
+                    window.set_password_visible(false);
+                    window.set_account_form_visible(false);
+                    apply_account(&window, &view);
+                    window.set_credential_status(message.into());
+                    window.set_credential_tone(tone_color(tone));
+                }
+            });
+        });
+    });
+
+    let weak_clear = window.as_weak();
+    let credentials_clear_path = credentials_path.clone();
+    let saved_clear = Arc::clone(&saved_state);
+    let auth_clear = Arc::clone(&auth_state);
+    let supervisor_clear = Arc::clone(&gateway_supervisor);
+    let status_clear = Arc::clone(&gateway_status);
+    let token_path_clear = paths.control_token.clone();
+    let auth_admin_clear = Arc::clone(&auth_admin);
+    let form_clear = Rc::clone(&account_form);
+    window.on_clear_credentials(move || {
+        let Some(window) = weak_clear.upgrade() else {
+            return;
+        };
+        let Some(path) = credentials_clear_path.clone() else {
+            window.set_credential_status("无法清除：LOCALAPPDATA 未设置".into());
+            window.set_credential_tone(tone_color(Tone::Bad));
+            return;
+        };
+        *form_clear.borrow_mut() = AccountForm::new(None);
+        window.set_credential_account_input("".into());
+        window.set_credential_password_input("".into());
+        window.set_password_visible(false);
+        window.set_account_form_visible(false);
+        window.set_credential_status("正在清除已保存的账号密码…".into());
+        window.set_credential_tone(tone_color(Tone::Warn));
+
+        let supervisor = Arc::clone(&supervisor_clear);
+        let gateway_status = Arc::clone(&status_clear);
+        let saved_state = Arc::clone(&saved_clear);
+        let auth_state = Arc::clone(&auth_clear);
+        let token_path = token_path_clear.clone();
+        let auth_admin = Arc::clone(&auth_admin_clear);
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let cleared = match account::clear(&path) {
+                Ok(cleared) => cleared,
+                Err(error) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            window.set_credential_status(format!("清除失败：{error}").into());
+                            window.set_credential_tone(tone_color(Tone::Bad));
+                        }
+                    });
+                    return;
+                }
+            };
+            *saved_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = LoadOutcome::Missing;
+            *auth_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+            let restarted = {
+                let mut guard = supervisor
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                match guard.as_mut() {
+                    Some(supervisor) => {
+                        supervisor.set_credentials(None);
+                        supervisor.restart(StopReason::CredentialsChanged)
+                    }
+                    None => return,
+                }
+            };
+            *gateway_status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = restarted.clone();
+            let auth = read_auth(&auth_admin, &token_path, &restarted);
+            *auth_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth.clone());
+            let view = account_view(&LoadOutcome::Missing, Some(&auth));
+            let (message, tone) = if cleared {
+                (
+                    "已清除已保存的账号密码；本实例网关已重启".to_string(),
+                    Tone::Good,
+                )
+            } else {
+                (
+                    "没有已保存的账号密码；本实例网关已重启".to_string(),
+                    Tone::Warn,
+                )
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    apply_account(&window, &view);
+                    window.set_credential_status(message.into());
+                    window.set_credential_tone(tone_color(tone));
+                }
+            });
+        });
+    });
+
+    let weak_continue = window.as_weak();
+    let token_path_continue = paths.control_token.clone();
+    let auth_admin_continue = Arc::clone(&auth_admin);
+    let saved_continue = Arc::clone(&saved_state);
+    let auth_continue = Arc::clone(&auth_state);
+    let current_port_continue = Arc::clone(&current_port);
+    window.on_continue_login(move || {
+        let Some(window) = weak_continue.upgrade() else {
+            return;
+        };
+        if LOGIN_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+            return;
         }
+        window.set_credential_status("正在打开可见 Edge 登录…".into());
+        window.set_credential_tone(tone_color(Tone::Warn));
+        let base = format!(
+            "http://127.0.0.1:{}",
+            current_port_continue.load(Ordering::SeqCst)
+        );
+        let token_path = token_path_continue.clone();
+        let auth_admin = Arc::clone(&auth_admin_continue);
+        let saved_state = Arc::clone(&saved_continue);
+        let auth_state = Arc::clone(&auth_continue);
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let result = match load_control_token(&token_path) {
+                Ok(token) => auth_admin.start_visible_login(&base, &token),
+                Err(error) => Err(error),
+            };
+            LOGIN_IN_FLIGHT.store(false, Ordering::SeqCst);
+            let auth = match result {
+                Ok(status) => AuthRead::Status(status),
+                Err(error) => AuthRead::Unavailable(error),
+            };
+            *auth_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth.clone());
+            let saved = saved_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            let view = account_view(&saved, Some(&auth));
+            let (message, tone) = match &auth {
+                AuthRead::Status(status) => match status.state {
+                    AuthState::Valid => ("已登录".to_string(), Tone::Good),
+                    AuthState::LoggingIn => (
+                        "已打开可见 Edge；请完成 UMPASS/Duo 登录".to_string(),
+                        Tone::Warn,
+                    ),
+                    _ => (format!("登录未完成：{}", view.state_detail), Tone::Bad),
+                },
+                AuthRead::Unavailable(reason) => (format!("无法打开可见登录：{reason}"), Tone::Bad),
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    apply_account(&window, &view);
+                    window.set_credential_status(message.into());
+                    window.set_credential_tone(tone_color(tone));
+                }
+            });
+        });
     });
 
     let save_path = config_path.ok();
@@ -445,7 +872,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shell_timer = shell.clone();
     let supervisor_tray = Arc::clone(&gateway_supervisor);
     let status_tray = Arc::clone(&gateway_status);
+    let auth_tray = Arc::clone(&auth_state);
     let mut tray = tray;
+    let mut last_tip = String::new();
     timer.start(TimerMode::Repeated, Duration::from_millis(120), move || {
         let Some(window) = weak_timer.upgrade() else {
             return;
@@ -465,6 +894,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 _ => {}
+            }
+        }
+        if let Some(active) = tray.as_mut() {
+            let tip = {
+                let auth = auth_tray
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                account::tray_tooltip(auth.as_ref())
+            };
+            if tip != last_tip {
+                active.set_tooltip(&tip);
+                last_tip = tip;
             }
         }
         if QUIT.load(Ordering::SeqCst) {

@@ -156,6 +156,22 @@ pub fn ensure_control_token(path: &Path) -> Result<ControlToken, String> {
     }
 }
 
+/// Reads the existing control token without creating one.
+///
+/// The status read runs before the supervisor's first start may have created the
+/// token; a missing or malformed file keeps its own reason instead of being
+/// replaced, because a replacement would invalidate the running instance.
+pub fn load_control_token(path: &Path) -> Result<ControlToken, String> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => ControlToken::parse(&raw)
+            .map_err(|error| format!("控制令牌不可用（{}）：{error}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(format!("控制令牌不存在（{}）", path.display()))
+        }
+        Err(error) => Err(format!("读取控制令牌失败（{}）：{error}", path.display())),
+    }
+}
+
 fn write_control_token(path: &Path, token: &ControlToken) -> Result<ControlToken, String> {
     let parent = path
         .parent()
@@ -356,8 +372,11 @@ pub fn gateway_args(port: u16, paths: &InstancePaths) -> Vec<OsString> {
     args
 }
 
-pub fn gateway_env(paths: &InstancePaths) -> Vec<(OsString, OsString)> {
-    vec![
+pub fn gateway_env(
+    paths: &InstancePaths,
+    credentials: Option<&crate::account::Credentials>,
+) -> Vec<(OsString, OsString)> {
+    let mut envs = vec![
         (
             OsString::from(LOGIN_HISTORY_ENV),
             paths.login_history.clone().into_os_string(),
@@ -366,7 +385,18 @@ pub fn gateway_env(paths: &InstancePaths) -> Vec<(OsString, OsString)> {
             OsString::from("CHAT2API_UPSTREAM_FAULT_LOG"),
             paths.upstream_faults.clone().into_os_string(),
         ),
-    ]
+    ];
+    if let Some(credentials) = credentials {
+        envs.push((
+            OsString::from(crate::account::ACCOUNT_ENV),
+            OsString::from(&credentials.account),
+        ));
+        envs.push((
+            OsString::from(crate::account::PASSWORD_ENV),
+            OsString::from(&credentials.password),
+        ));
+    }
+    envs
 }
 
 /// The HTTP edge of the gateway: `/health` and `POST /admin/shutdown`.
@@ -559,6 +589,7 @@ pub enum Ownership {
 pub enum StopReason {
     UserRequested,
     PortSwitch,
+    CredentialsChanged,
     Shutdown,
 }
 
@@ -567,6 +598,7 @@ impl StopReason {
         match self {
             Self::UserRequested => "user",
             Self::PortSwitch => "port_switch",
+            Self::CredentialsChanged => "credentials",
             Self::Shutdown => "shutdown",
         }
     }
@@ -708,6 +740,7 @@ pub struct GatewaySupervisor {
     launcher: Box<dyn ProcessLauncher>,
     sleeper: Box<dyn Sleeper>,
     token: Option<ControlToken>,
+    credentials: Option<crate::account::Credentials>,
     child: Option<Box<dyn ChildProcess>>,
     state: GatewayState,
 }
@@ -729,9 +762,18 @@ impl GatewaySupervisor {
             launcher,
             sleeper,
             token: None,
+            credentials: None,
             child: None,
             state: GatewayState::Stopped,
         }
+    }
+
+    /// The credentials handed to the next spawned child.
+    ///
+    /// Changing them does not touch a running child; call [`Self::restart`] to
+    /// apply them to this instance.
+    pub fn set_credentials(&mut self, credentials: Option<crate::account::Credentials>) {
+        self.credentials = credentials;
     }
 
     pub fn port(&self) -> u16 {
@@ -819,7 +861,7 @@ impl GatewaySupervisor {
         };
         self.token = Some(token);
         let args = gateway_args(self.port, &self.paths);
-        let envs = gateway_env(&self.paths);
+        let envs = gateway_env(&self.paths, self.credentials.as_ref());
         let child = match self
             .launcher
             .spawn(&program, &args, &envs, &self.paths.stderr_log)
@@ -1024,6 +1066,30 @@ impl GatewaySupervisor {
         self.status()
     }
 
+    /// Replaces the running instance so the current credentials environment
+    /// applies to the new child. A failed stop leaves the old child untouched.
+    pub fn restart(&mut self, reason: StopReason) -> GatewayStatus {
+        let has_instance = self.child.is_some()
+            || matches!(
+                self.state,
+                GatewayState::Running { .. }
+                    | GatewayState::Starting
+                    | GatewayState::HealthTimeout { .. }
+            );
+        if has_instance {
+            let stopped = self.stop(reason);
+            if !matches!(stopped.state, GatewayState::Stopped) {
+                return stopped;
+            }
+        }
+        let started = self.start_or_attach();
+        self.append_log(
+            "restart",
+            serde_json::json!({ "port": self.port, "reason": reason.as_str() }),
+        );
+        started
+    }
+
     fn wait_for_exit(&mut self, timeout: Duration) -> ExitWait {
         let mut waited = Duration::ZERO;
         loop {
@@ -1183,10 +1249,7 @@ impl GatewaySupervisor {
 
     fn stderr_tail(&self) -> String {
         let text = crate::tail::read_tail(&self.paths.stderr_log, 8192).unwrap_or_default();
-        let text = match &self.token {
-            Some(token) => text.replace(token.expose(), "<redacted>"),
-            None => text,
-        };
+        let text = self.redact(text);
         let lines: Vec<&str> = text
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -1196,6 +1259,23 @@ impl GatewaySupervisor {
         }
         let start = lines.len().saturating_sub(5);
         lines[start..].join(" | ")
+    }
+
+    /// Removes the control token, account and password from any surfaced text.
+    fn redact(&self, text: String) -> String {
+        let mut text = match &self.token {
+            Some(token) => text.replace(token.expose(), "<redacted>"),
+            None => text,
+        };
+        if let Some(credentials) = &self.credentials {
+            if !credentials.account.is_empty() {
+                text = text.replace(&credentials.account, "<redacted>");
+            }
+            if !credentials.password.is_empty() {
+                text = text.replace(&credentials.password, "<redacted>");
+            }
+        }
+        text
     }
 
     fn append_log(&self, event: &str, fields: serde_json::Value) {
@@ -1211,9 +1291,7 @@ impl GatewaySupervisor {
             }
         }
         let mut text = row.to_string();
-        if let Some(token) = &self.token {
-            text = text.replace(token.expose(), "<redacted>");
-        }
+        text = self.redact(text);
         text.push('\n');
         if let Some(parent) = self.paths.supervision_log.parent() {
             let _ = std::fs::create_dir_all(parent);

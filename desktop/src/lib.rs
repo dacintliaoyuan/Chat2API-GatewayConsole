@@ -6,6 +6,7 @@
 //! seams and the state machines stay platform independent so `cargo test` can
 //! exercise them.
 
+pub mod account;
 pub mod config;
 pub mod gateway;
 pub mod instance;

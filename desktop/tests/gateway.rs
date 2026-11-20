@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use um_desktop::account::Credentials;
 use um_desktop::config::DEFAULT_MODEL_API_PORT;
 use um_desktop::gateway::{
     ensure_control_token, gateway_args, gateway_env, resolve_gateway_binary, BinaryError,
@@ -123,7 +124,7 @@ fn gateway_args_pin_the_instance_cli_contract() {
 fn gateway_env_carries_the_login_history_path() {
     let root = Path::new(r"C:\Users\someone\AppData\Local\Chat2API");
     let paths = InstancePaths::under(root);
-    let env = gateway_env(&paths);
+    let env = gateway_env(&paths, None);
     assert_eq!(env.len(), 2);
     assert_eq!(env[0].0, "CHAT2API_LOGIN_HISTORY_FILE");
     assert_eq!(
@@ -139,6 +140,37 @@ fn gateway_env_carries_the_login_history_path() {
             .join("upstream-faults.json")
             .into_os_string()
     );
+}
+
+#[test]
+fn gateway_env_injects_the_saved_credentials() {
+    let root = Path::new(r"C:\Users\someone\AppData\Local\Chat2API");
+    let paths = InstancePaths::under(root);
+    let credentials = Credentials {
+        account: "someone@um.edu.mo".to_string(),
+        password: "super-secret".to_string(),
+    };
+    let env = gateway_env(&paths, Some(&credentials));
+    let account = env
+        .iter()
+        .find(|(key, _)| key == "CHAT2API_UM_ACCOUNT")
+        .expect("account env");
+    assert_eq!(account.1, "someone@um.edu.mo");
+    let password = env
+        .iter()
+        .find(|(key, _)| key == "CHAT2API_UM_PASSWORD")
+        .expect("password env");
+    assert_eq!(password.1, "super-secret");
+}
+
+#[test]
+fn gateway_env_without_credentials_does_not_set_them() {
+    let root = Path::new(r"C:\Users\someone\AppData\Local\Chat2API");
+    let paths = InstancePaths::under(root);
+    let env = gateway_env(&paths, None);
+    assert!(!env
+        .iter()
+        .any(|(key, _)| key == "CHAT2API_UM_ACCOUNT" || key == "CHAT2API_UM_PASSWORD"));
 }
 
 #[test]
@@ -312,6 +344,7 @@ struct FakeLauncher {
     processes: Arc<Mutex<Vec<Arc<Mutex<FakeProcessState>>>>>,
     http: Mutex<Option<Arc<FakeHttp>>>,
     fail_spawn_ports: Mutex<HashMap<u16, ProcessExit>>,
+    stderr_text: Mutex<Option<String>>,
 }
 
 impl FakeLauncher {
@@ -336,6 +369,10 @@ impl FakeLauncher {
             .lock()
             .unwrap()
             .insert(port, ProcessExit { code: Some(code) });
+    }
+
+    fn set_stderr_text(&self, text: &str) {
+        *self.stderr_text.lock().unwrap() = Some(text.to_string());
     }
 
     fn spawn_inner(
@@ -370,7 +407,15 @@ impl FakeLauncher {
             envs: rendered_envs,
             stderr_log: stderr_log.to_path_buf(),
         });
-        std::fs::write(stderr_log, "fake gateway stderr\n").ok();
+        std::fs::write(
+            stderr_log,
+            self.stderr_text
+                .lock()
+                .unwrap()
+                .as_deref()
+                .unwrap_or("fake gateway stderr\n"),
+        )
+        .ok();
         if let Some(http) = self.http.lock().unwrap().as_ref() {
             http.mark_spawned(port);
         }
@@ -1145,7 +1190,9 @@ fn http_gateway_requires_the_gateway_health_contract() {
                 body.len(),
                 body
             );
-            stream.write_all(response.as_bytes()).expect("health response");
+            stream
+                .write_all(response.as_bytes())
+                .expect("health response");
         }
     });
     let http = HttpGateway::new();
@@ -1268,7 +1315,7 @@ fn a_real_gateway_is_attached_without_a_second_child() {
     let dir = TempDir::new("gateway-real-attach");
     let paths = InstancePaths::under(dir.path());
     let _token = ensure_control_token(&paths.control_token).expect("control token");
-    let mut envs = gateway_env(&paths);
+    let mut envs = gateway_env(&paths, None);
     envs.push((OsString::from("CHAT2API_NO_BROWSER"), OsString::from("1")));
     let mut child = SystemLauncher
         .spawn(
@@ -1316,4 +1363,139 @@ fn a_real_gateway_is_attached_without_a_second_child() {
         child.try_wait().expect("wait external gateway").is_some(),
         "the attached gateway must exit after /admin/shutdown"
     );
+}
+
+#[test]
+fn restart_with_new_credentials_restarts_the_gateway_with_the_new_environment() {
+    let dir = TempDir::new("gateway-restart-credentials");
+    let world = FakeWorld::new();
+    let mut supervisor = world.supervisor(&dir, 7999);
+    let started = supervisor.start_or_attach();
+    assert_eq!(
+        started.state,
+        GatewayState::Running {
+            ownership: Ownership::Managed
+        }
+    );
+    let first = world.launcher.record(0);
+    assert!(!first
+        .envs
+        .iter()
+        .any(|(key, _)| key == "CHAT2API_UM_ACCOUNT" || key == "CHAT2API_UM_PASSWORD"));
+
+    let credentials = Credentials {
+        account: "someone@um.edu.mo".to_string(),
+        password: "super-secret".to_string(),
+    };
+    supervisor.set_credentials(Some(credentials.clone()));
+    let restarted = supervisor.restart(StopReason::CredentialsChanged);
+    assert_eq!(
+        restarted.state,
+        GatewayState::Running {
+            ownership: Ownership::Managed
+        }
+    );
+    assert_eq!(
+        world.launcher.spawn_count(),
+        2,
+        "the old child must be replaced"
+    );
+    assert_eq!(world.http.shutdown_calls(), vec![7999]);
+    let second = world.launcher.record(1);
+    assert_eq!(
+        second
+            .envs
+            .iter()
+            .find(|(key, _)| key == "CHAT2API_UM_ACCOUNT")
+            .map(|(_, value)| value.as_str()),
+        Some("someone@um.edu.mo")
+    );
+    assert_eq!(
+        second
+            .envs
+            .iter()
+            .find(|(key, _)| key == "CHAT2API_UM_PASSWORD")
+            .map(|(_, value)| value.as_str()),
+        Some("super-secret")
+    );
+
+    let log = std::fs::read_to_string(&restarted.supervision_log).expect("supervision log");
+    assert!(log.contains("\"event\":\"restart\""));
+    assert!(!log.contains("super-secret"), "{log}");
+    assert!(!log.contains("someone@um.edu.mo"), "{log}");
+}
+
+#[test]
+fn restart_without_credentials_removes_the_environment_on_the_next_spawn() {
+    let dir = TempDir::new("gateway-restart-clear");
+    let world = FakeWorld::new();
+    let mut supervisor = world.supervisor(&dir, 7999);
+    supervisor.set_credentials(Some(Credentials {
+        account: "someone@um.edu.mo".to_string(),
+        password: "super-secret".to_string(),
+    }));
+    let _ = supervisor.start_or_attach();
+    assert!(world
+        .launcher
+        .record(0)
+        .envs
+        .iter()
+        .any(|(key, _)| key == "CHAT2API_UM_ACCOUNT"));
+
+    supervisor.set_credentials(None);
+    let restarted = supervisor.restart(StopReason::CredentialsChanged);
+    assert_eq!(
+        restarted.state,
+        GatewayState::Running {
+            ownership: Ownership::Managed
+        }
+    );
+    let second = world.launcher.record(1);
+    assert!(!second
+        .envs
+        .iter()
+        .any(|(key, _)| key == "CHAT2API_UM_ACCOUNT" || key == "CHAT2API_UM_PASSWORD"));
+}
+
+#[test]
+fn load_control_token_reads_without_creating_a_token() {
+    let dir = TempDir::new("gateway-load-token");
+    let path = dir.path().join("instance").join("admin-control-token");
+    assert!(um_desktop::gateway::load_control_token(&path).is_err());
+    assert!(!path.exists(), "a status read must not create a token");
+
+    let token = ensure_control_token(&path).expect("create token");
+    let loaded = um_desktop::gateway::load_control_token(&path).expect("load token");
+    assert_eq!(loaded.expose(), token.expose());
+
+    std::fs::write(&path, "bad").unwrap();
+    assert!(um_desktop::gateway::load_control_token(&path).is_err());
+}
+
+#[test]
+fn a_start_failure_redacts_the_saved_credentials_from_stderr_and_log() {
+    let dir = TempDir::new("gateway-credentials-redaction");
+    let world = FakeWorld::new();
+    let mut supervisor = world.supervisor(&dir, 7999);
+    supervisor.set_credentials(Some(Credentials {
+        account: "someone@um.edu.mo".to_string(),
+        password: "super-secret".to_string(),
+    }));
+    world
+        .launcher
+        .set_stderr_text("login someone@um.edu.mo with super-secret\n");
+    world.http.fail_port(7999);
+    world.launcher.fail_spawn_on(7999, 1);
+    let status = supervisor.start_or_attach();
+    match &status.state {
+        GatewayState::StartFailed { reason } => {
+            assert!(reason.contains("<redacted>"), "{reason}");
+            assert!(!reason.contains("super-secret"), "{reason}");
+            assert!(!reason.contains("someone@um.edu.mo"), "{reason}");
+        }
+        other => panic!("expected a start failure, got {other:?}"),
+    }
+    let log = std::fs::read_to_string(&status.supervision_log).expect("supervision log");
+    assert!(!log.contains("super-secret"), "{log}");
+    assert!(!log.contains("someone@um.edu.mo"), "{log}");
 }

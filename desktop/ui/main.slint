@@ -1,4 +1,4 @@
-import { Button, LineEdit, ListView } from "std-widgets.slint";
+import { Button, CheckBox, LineEdit, ListView } from "std-widgets.slint";
 
 export struct LogRow {
     at: string,
@@ -124,7 +124,20 @@ export component MainWindow inherits Window {
     in property <string> account-label: "读取中";
     in property <string> account-detail: "";
     in property <color> account-tone: Palette.warn;
-    in property <string> account-note: "首次打开可跳过登录，之后可从「配置账号」进入。";
+    in property <string> account-saved: "未保存账号";
+    in property <string> account-saved-detail: "";
+    in property <string> account-state: "认证状态读取中";
+    in property <string> account-state-detail: "";
+    in property <color> account-state-tone: Palette.warn;
+    in property <bool> account-can-clear: false;
+    in property <bool> account-can-continue: false;
+    in property <bool> account-form-visible: false;
+    in-out property <string> credential-account-input: "";
+    in-out property <string> credential-password-input: "";
+    in property <bool> password-visible: false;
+    in property <string> credential-status: "";
+    in property <color> credential-tone: Palette.muted;
+    in property <string> account-note: "首次打开可跳过登录；之后可从「配置账号」进入。账号密码只保存在本机，并交给本实例网关使用。";
     in property <string> status-line: "正在启动本实例网关";
     in property <string> last-update: "—";
     in property <string> log-status: "尚未读取日志";
@@ -138,6 +151,12 @@ export component MainWindow inherits Window {
 
     callback navigate(int);
     callback configure-account();
+    callback open-account-form();
+    callback close-account-form();
+    callback save-credentials(string, string);
+    callback clear-credentials();
+    callback continue-login();
+    callback toggle-password-visible();
     callback save-port(string);
     callback refresh-logs();
     callback hide-requested();
@@ -199,7 +218,7 @@ export component MainWindow inherits Window {
                         clicked => { root.navigate(1); }
                     }
                     NavItem {
-                        label: "设置";
+                        label: "模型与设置";
                         active: root.page == 2;
                         clicked => { root.navigate(2); }
                     }
@@ -257,6 +276,11 @@ export component MainWindow inherits Window {
                             Button {
                                 text: "配置账号";
                                 clicked => { root.configure-account(); }
+                            }
+                            Button {
+                                text: "继续登录";
+                                visible: root.account-can-continue;
+                                clicked => { root.continue-login(); }
                             }
                         }
                     }
@@ -391,8 +415,155 @@ export component MainWindow inherits Window {
                     spacing: 12px;
 
                     PageTitle {
-                        title: "设置";
-                        subtitle: "本实例的模型 API 端口";
+                        title: "模型与设置";
+                        subtitle: "本实例的 UM 账号与模型 API 端口";
+                    }
+
+                    Rectangle {
+                        border-radius: 10px;
+                        background: Palette.surface;
+                        border-width: 1px;
+                        border-color: Palette.border;
+
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+                            Text {
+                                text: "UM 账号";
+                                font-size: 14px;
+                                font-weight: 650;
+                                color: Palette.ink;
+                            }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: "已保存账号";
+                                    font-size: 12px;
+                                    color: Palette.muted;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: root.account-saved;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    color: Palette.ink;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                }
+                                Text {
+                                    text: root.account-state;
+                                    font-size: 13px;
+                                    font-weight: 650;
+                                    color: root.account-state-tone;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            Text {
+                                text: root.account-saved-detail;
+                                visible: !root.account-saved-detail.is-empty;
+                                font-size: 12px;
+                                color: Palette.bad;
+                                wrap: word-wrap;
+                            }
+                            Text {
+                                text: root.account-state-detail;
+                                font-size: 12px;
+                                color: Palette.muted;
+                                wrap: word-wrap;
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Button {
+                                    text: root.account-can-clear ? "更新账号密码" : "配置账号";
+                                    clicked => { root.open-account-form(); }
+                                }
+                                Button {
+                                    text: "继续登录";
+                                    enabled: root.account-can-continue;
+                                    clicked => { root.continue-login(); }
+                                }
+                                Button {
+                                    text: "清除已保存的账号密码";
+                                    enabled: root.account-can-clear;
+                                    clicked => { root.clear-credentials(); }
+                                }
+                            }
+                            Text {
+                                text: root.credential-status;
+                                visible: !root.credential-status.is-empty;
+                                font-size: 12px;
+                                color: root.credential-tone;
+                                wrap: word-wrap;
+                            }
+                            if root.account-form-visible : Rectangle {
+                                border-radius: 8px;
+                                background: Palette.background;
+                                border-width: 1px;
+                                border-color: Palette.border;
+
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 8px;
+                                    Text {
+                                        text: "录入 UM 账号密码";
+                                        font-size: 13px;
+                                        font-weight: 650;
+                                        color: Palette.ink;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Text {
+                                            text: "账号";
+                                            width: 42px;
+                                            font-size: 13px;
+                                            color: Palette.ink;
+                                            vertical-alignment: center;
+                                        }
+                                        LineEdit {
+                                            horizontal-stretch: 1;
+                                            text: root.credential-account-input;
+                                            placeholder-text: "UMPASS 账号";
+                                            edited(text) => { root.credential-account-input = text; }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Text {
+                                            text: "密码";
+                                            width: 42px;
+                                            font-size: 13px;
+                                            color: Palette.ink;
+                                            vertical-alignment: center;
+                                        }
+                                        LineEdit {
+                                            horizontal-stretch: 1;
+                                            text: root.credential-password-input;
+                                            input-type: root.password-visible ? InputType.text : InputType.password;
+                                            placeholder-text: "UMPASS 密码";
+                                            edited(text) => { root.credential-password-input = text; }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        CheckBox {
+                                            text: "显示密码";
+                                            checked: root.password-visible;
+                                            toggled => { root.toggle-password-visible(); }
+                                        }
+                                        Rectangle { horizontal-stretch: 1; }
+                                        Button {
+                                            text: "保存账号";
+                                            clicked => { root.save-credentials(root.credential-account-input, root.credential-password-input); }
+                                        }
+                                        Button {
+                                            text: "取消";
+                                            clicked => { root.close-account-form(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     Rectangle {
