@@ -1154,3 +1154,166 @@ fn http_gateway_requires_the_gateway_health_contract() {
     assert!(http.health(&base).is_ok(), "the gateway health must attach");
     server.join().expect("health server");
 }
+
+/// Real binary verification for #124. Run with
+/// `UM_DESKTOP_REAL_GATEWAY=<path> cargo test --test gateway -- --ignored --nocapture`.
+#[test]
+#[ignore = "requires UM_DESKTOP_REAL_GATEWAY=<built um-gateway path>"]
+fn a_real_gateway_starts_stops_switches_and_attaches_on_7999() {
+    let _port_guard = PORT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(bin) = std::env::var_os("UM_DESKTOP_REAL_GATEWAY").map(PathBuf::from) else {
+        panic!("set UM_DESKTOP_REAL_GATEWAY to the built um-gateway binary");
+    };
+    let dir = TempDir::new("gateway-real-supervisor");
+    let paths = InstancePaths::under(dir.path());
+    let http = Arc::new(HttpGateway::new());
+    let mut supervisor = GatewaySupervisor::new(
+        7999,
+        paths.clone(),
+        Ok(GatewayProgram::plain(bin)),
+        Arc::clone(&http) as Arc<dyn GatewayHttp>,
+        Box::new(SystemLauncher),
+        Box::new(ThreadSleeper),
+    );
+
+    let started = supervisor.start_or_attach();
+    assert_eq!(
+        started.state,
+        GatewayState::Running {
+            ownership: Ownership::Managed
+        }
+    );
+    assert_eq!(supervisor.child_count(), 1);
+    assert!(http.health("http://127.0.0.1:7999").is_ok());
+
+    let stopped = supervisor.stop(StopReason::UserRequested);
+    assert_eq!(stopped.state, GatewayState::Stopped);
+    assert_eq!(supervisor.child_count(), 0);
+    assert!(http.health("http://127.0.0.1:7999").is_err());
+
+    let restarted = supervisor.start_or_attach();
+    assert_eq!(
+        restarted.state,
+        GatewayState::Running {
+            ownership: Ownership::Managed
+        }
+    );
+    assert!(http.health("http://127.0.0.1:7999").is_ok());
+
+    let mut saved = Vec::new();
+    let switched = supervisor.switch_port(7998, &mut |port| {
+        saved.push(port);
+        Ok(())
+    });
+    assert_eq!(
+        switched,
+        PortSwitch::Switched {
+            from: 7999,
+            to: 7998
+        }
+    );
+    assert_eq!(supervisor.port(), 7998);
+    assert!(http.health("http://127.0.0.1:7998").is_ok());
+    assert!(http.health("http://127.0.0.1:7999").is_err());
+
+    let (listener, occupied_port) = {
+        let listener = TcpListener::bind(("127.0.0.1", 7997)).expect("occupy 7997");
+        (listener, 7997)
+    };
+    let rejected = supervisor.switch_port(occupied_port, &mut |port| {
+        saved.push(port);
+        Ok(())
+    });
+    match rejected {
+        PortSwitch::Rejected { from, to, reason } => {
+            assert_eq!(from, 7998);
+            assert_eq!(to, occupied_port);
+            assert!(reason.contains(&occupied_port.to_string()), "{reason}");
+        }
+        other => panic!("an occupied port must be rejected, got {other:?}"),
+    }
+    assert_eq!(supervisor.port(), 7998);
+    assert!(http.health("http://127.0.0.1:7998").is_ok());
+    drop(listener);
+
+    let back = supervisor.switch_port(7999, &mut |port| {
+        saved.push(port);
+        Ok(())
+    });
+    assert_eq!(
+        back,
+        PortSwitch::Switched {
+            from: 7998,
+            to: 7999
+        }
+    );
+    assert!(http.health("http://127.0.0.1:7999").is_ok());
+    assert_eq!(saved, vec![7998, 7999]);
+
+    let final_stop = supervisor.stop(StopReason::UserRequested);
+    assert_eq!(final_stop.state, GatewayState::Stopped);
+}
+
+#[test]
+#[ignore = "requires UM_DESKTOP_REAL_GATEWAY=<built um-gateway path>"]
+fn a_real_gateway_is_attached_without_a_second_child() {
+    let _port_guard = PORT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(bin) = std::env::var_os("UM_DESKTOP_REAL_GATEWAY").map(PathBuf::from) else {
+        panic!("set UM_DESKTOP_REAL_GATEWAY to the built um-gateway binary");
+    };
+    let dir = TempDir::new("gateway-real-attach");
+    let paths = InstancePaths::under(dir.path());
+    let _token = ensure_control_token(&paths.control_token).expect("control token");
+    let mut envs = gateway_env(&paths);
+    envs.push((OsString::from("CHAT2API_NO_BROWSER"), OsString::from("1")));
+    let mut child = SystemLauncher
+        .spawn(
+            &GatewayProgram::plain(bin),
+            &gateway_args(7999, &paths),
+            &envs,
+            &paths.stderr_log,
+        )
+        .expect("start the external gateway");
+    let http = HttpGateway::new();
+    for _ in 0..200 {
+        if http.health("http://127.0.0.1:7999").is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(http.health("http://127.0.0.1:7999").is_ok());
+
+    let mut supervisor = GatewaySupervisor::new(
+        7999,
+        paths.clone(),
+        Ok(GatewayProgram::plain("unused-gateway.exe")),
+        Arc::new(HttpGateway::new()) as Arc<dyn GatewayHttp>,
+        Box::new(SystemLauncher),
+        Box::new(ThreadSleeper),
+    );
+    let attached = supervisor.start_or_attach();
+    assert_eq!(
+        attached.state,
+        GatewayState::Running {
+            ownership: Ownership::Attached
+        }
+    );
+    assert_eq!(supervisor.child_count(), 0);
+
+    let stopped = supervisor.stop(StopReason::UserRequested);
+    assert_eq!(stopped.state, GatewayState::Stopped);
+    for _ in 0..50 {
+        if child.try_wait().expect("wait external gateway").is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        child.try_wait().expect("wait external gateway").is_some(),
+        "the attached gateway must exit after /admin/shutdown"
+    );
+}
