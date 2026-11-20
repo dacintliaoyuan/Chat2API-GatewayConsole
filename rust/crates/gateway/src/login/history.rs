@@ -73,6 +73,7 @@ pub struct LoginRoundRecord {
     pub upstream_status: Option<u16>,
     /// The last credential-probe verdict this round observed.
     pub evidence_verdict: Option<String>,
+    pub rejected_before_expiry_status: Option<u16>,
 }
 
 impl LoginRoundRecord {
@@ -91,6 +92,7 @@ impl LoginRoundRecord {
             "reason": self.reason,
             "upstream_status": self.upstream_status,
             "evidence_verdict": self.evidence_verdict,
+            "rejected_before_expiry_status": self.rejected_before_expiry_status,
         })
     }
 
@@ -134,6 +136,11 @@ impl LoginRoundRecord {
                 .get("evidence_verdict")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            rejected_before_expiry_status: object
+                .get("rejected_before_expiry_status")
+                .and_then(Value::as_u64)
+                .filter(|status| matches!(status, 401 | 403))
+                .map(|status| status as u16),
         })
     }
 }
@@ -223,6 +230,7 @@ impl LoginHistory {
             reason: None,
             upstream_status: None,
             evidence_verdict: None,
+            rejected_before_expiry_status: None,
         };
         let mut active = self.active.lock().expect("login history active poisoned");
         *active = Some(record.clone());
@@ -251,6 +259,19 @@ impl LoginHistory {
                 return false;
             }
             record.visible = true;
+            true
+        }) else {
+            return;
+        };
+        self.append(&record, epoch_now());
+    }
+
+    pub fn note_early_rejection(&self, round: u64, status: u16) {
+        let Some(record) = self.update_active(round, |record| {
+            if record.rejected_before_expiry_status.is_some() {
+                return false;
+            }
+            record.rejected_before_expiry_status = Some(status);
             true
         }) else {
             return;

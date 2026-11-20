@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::auth_state::{self, AuthStateFile};
-use crate::config::GatewayConfig;
+use crate::config::{GatewayConfig, Role};
 use crate::reauth::{ReauthProviderResult, ReauthTrigger, ReauthenticationProvider};
 use crate::watch::WatchStatus;
 
@@ -235,11 +235,17 @@ pub trait CredentialSink: Send + Sync {
     fn credential_evidence(&self) -> CredentialEvidence {
         CredentialEvidence::default()
     }
+
+    /// Rejection of the current bearer, optionally matched to a browser candidate.
+    fn bearer_rejection(&self, _candidate: Option<&str>) -> Option<(u16, bool)> {
+        None
+    }
 }
 
 /// Resolved login paths and budgets.
 #[derive(Clone)]
 pub struct LoginConfig {
+    pub role: Role,
     pub base_url: String,
     pub token_file: PathBuf,
     pub profile_dir: PathBuf,
@@ -281,6 +287,7 @@ impl std::fmt::Debug for LoginConfig {
 impl LoginConfig {
     pub fn from_gateway(config: &GatewayConfig) -> Self {
         Self {
+            role: config.role,
             base_url: config.upstream_base_url.clone(),
             token_file: config.token_file.clone().unwrap_or_else(default_token_file),
             profile_dir: config
@@ -486,6 +493,7 @@ struct LoginState {
     round: u64,
     session: Option<Arc<LoginSession>>,
     shutdown: bool,
+    browser_catalog_valid: bool,
 }
 
 struct LoginSession {
@@ -578,6 +586,7 @@ impl LoginService {
                     round: 0,
                     session: None,
                     shutdown: false,
+                    browser_catalog_valid: false,
                 }),
                 condvar: Condvar::new(),
                 attempts: Mutex::new(VecDeque::new()),
@@ -641,7 +650,7 @@ impl LoginService {
     /// The console-visible authentication status, with the same keys as Python.
     pub fn status(&self) -> Value {
         let state = self.inner.state.lock().expect("login state poisoned");
-        status_from_locked(&state, &self.inner.watch)
+        status_from_locked(&state, &self.inner)
     }
 
     /// Write the durable auth state document once.
@@ -664,7 +673,7 @@ impl LoginService {
                 state.recovery.retry_scheduled = false;
                 self.inner.condvar.notify_all();
                 persist_auth_state_locked(&self.inner, &state);
-                return status_from_locked(&state, &self.inner.watch);
+                return status_from_locked(&state, &self.inner);
             }
             // Only a live login task owns the round. A refusal gate also leaves
             // `recovery.state = waiting`, but without a session; it must fall
@@ -676,7 +685,7 @@ impl LoginService {
                     self.inner.history.note_visible(state.round);
                 }
                 self.inner.condvar.notify_all();
-                return status_from_locked(&state, &self.inner.watch);
+                return status_from_locked(&state, &self.inner);
             }
             if state.auth_state == AuthState::Failed || state.auth_state == AuthState::Cancelled {
                 state.error = None;
@@ -693,7 +702,7 @@ impl LoginService {
                 state.gate = Some(self.inner.refused_gate("global_attempt_cap"));
                 self.inner.condvar.notify_all();
                 persist_auth_state_locked(&self.inner, &state);
-                return status_from_locked(&state, &self.inner.watch);
+                return status_from_locked(&state, &self.inner);
             }
             begin_round_locked(
                 &self.inner,
@@ -762,6 +771,13 @@ impl LoginService {
     /// without a login round. Python records the same fields from its watch.
     pub fn note_probe(&self, verdict: &str, reason: Option<&str>, upstream_status: Option<u16>) {
         let mut state = self.inner.state.lock().expect("login state poisoned");
+        if self.inner.config.role == Role::Local
+            && state.login.as_ref().and_then(|login| login.phase.as_deref())
+                == Some("verifying_login")
+        {
+            // 巡检查的是已发布的凭据，进行中的轮次需要保留候选凭据的核验证据。
+            return;
+        }
         let now = profile::epoch_now();
         let last_valid_epoch = if verdict == "valid" {
             Some(now)
@@ -1097,6 +1113,7 @@ fn begin_round_locked(
     state.round += 1;
     state.recovery.round = state.round;
     state.recovery.state = "running".to_string();
+    state.browser_catalog_valid = false;
     state.recovery.trigger_source = trigger.map(|trigger| trigger.as_str().to_string());
     state.recovery.trigger_epoch = Some(started_epoch);
     state.recovery.last_outcome = None;
@@ -1134,6 +1151,9 @@ fn begin_round_locked(
     inner
         .history
         .begin_at(state.round, trigger, visible, started_epoch);
+    if let Some((status, true)) = inner.credentials.bearer_rejection(None) {
+        inner.history.note_early_rejection(state.round, status);
+    }
     persist_auth_state_locked(inner, state);
     let worker = Arc::clone(inner);
     let round = state.round;
@@ -1210,7 +1230,7 @@ fn schedule_recovery_retry(inner: &LoginInner, state: &mut LoginState, reason: &
     }
 }
 
-fn status_from_locked(state: &LoginState, watch: &WatchStatus) -> Value {
+fn status_from_locked(state: &LoginState, inner: &LoginInner) -> Value {
     let manual_reason = state
         .login
         .as_ref()
@@ -1220,15 +1240,27 @@ fn status_from_locked(state: &LoginState, watch: &WatchStatus) -> Value {
         .as_ref()
         .and_then(|login| login.phase.as_deref());
     let verifying = phase == Some("verifying_login");
+    let early_rejection = inner
+        .credentials
+        .bearer_rejection(None)
+        .and_then(|(status, early)| early.then_some(status));
     let mut label = state.auth_state.label().to_string();
     if state.error.as_deref() == Some("timeout") {
         label = "登录窗口已超时".to_string();
     } else if let Some(reason) = &manual_reason {
         label = format!("{label}（需人工：{reason}）");
     } else if verifying {
-        label = format!("{label}（正在核验登录结果）");
+        label = if inner.config.role == Role::Local {
+            "正在核验登录结果".to_string()
+        } else {
+            format!("{label}（正在核验登录结果）")
+        };
     } else if phase == Some("awaiting_duo") {
         label = "正在完成 Duo 验证".to_string();
+    } else if early_rejection.is_some() && matches!(state.auth_state, AuthState::NeedsLogin) {
+        label = "UM 已拒绝当前凭据（尚未到期）".to_string();
+    } else if inner.config.role == Role::Local && state.auth_state == AuthState::Unknown {
+        label = "暂时无法核验".to_string();
     } else if state.evidence.verdict.as_deref() == Some("unknown")
         && !matches!(state.auth_state, AuthState::Cancelled | AuthState::Failed)
     {
@@ -1246,8 +1278,10 @@ fn status_from_locked(state: &LoginState, watch: &WatchStatus) -> Value {
         "evidence": state.evidence.as_json(),
         "login": state.login.as_ref().map(LoginProgress::as_json),
         "gate": state.gate,
-        "watch": watch.snapshot(),
+        "watch": inner.watch.snapshot(),
         "recovery": state.recovery.as_json(),
+        "rejected_before_expiry_status": early_rejection,
+        "browser_catalog_valid": verifying && state.browser_catalog_valid,
         "login_window_deadline_epoch": window.map(|window| window.deadline_epoch),
         "login_window_s": window.map(|window| window.window_s),
     })
@@ -1501,13 +1535,18 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
         _ => state.evidence.verdict.clone(),
     };
     let (outcome_category, outcome_reason) = history_outcome(&outcome);
+    let outcome_reason = if outcome_reason.as_deref() == Some("verification_timeout") {
+        state.evidence.reason.as_ref().or(outcome_reason.as_ref())
+    } else {
+        outcome_reason.as_ref()
+    };
     // The durable record is written before the outcome becomes visible to
     // `status()` or the waiting provider, so a caller that observed the finished
     // round can read its history immediately.
     inner.history.finish_at(
         round,
         outcome_category,
-        outcome_reason.as_deref(),
+        outcome_reason.map(String::as_str),
         upstream_status,
         evidence_verdict.as_deref(),
         profile::epoch_now(),
@@ -1532,6 +1571,9 @@ fn finish(inner: &Arc<LoginInner>, round: u64, session: &Arc<LoginSession>, outc
             state.recovery.next_attempt_epoch = None;
             state.recovery.pause_reason = None;
             state.recovery.last_outcome = Some(format!("verification_unknown:{reason}"));
+            if reason == "verification_timeout" {
+                state.recovery.last_failure_reason = state.evidence.reason.clone();
+            }
             let now = profile::epoch_now();
             state.evidence = Evidence {
                 verdict: Some("unknown".to_string()),
@@ -1750,6 +1792,9 @@ fn drive_login(
     let mut last_token: Option<String> = None;
     let mut rejected_tokens: HashSet<String> = HashSet::new();
     let mut verifying: Option<String> = None;
+    let mut verification_retries = 0;
+    let mut next_verification = Instant::now();
+    let recheck_headless = !visible && inner.config.role == Role::Local;
     let mut clicks = HashMap::new();
     let mut stage_seen: HashMap<String, Instant> = HashMap::new();
     let mut manual_reason: Option<String> = None;
@@ -1780,9 +1825,38 @@ fn drive_login(
             if last_token.as_ref() != Some(token) {
                 last_token = Some(token.clone());
                 idle_deadline = Instant::now() + inner.config.idle_timeout;
+                verification_retries = 0;
+                next_verification = Instant::now();
+                if verifying.is_some() {
+                    note_browser_catalog(inner, round, false);
+                }
             }
-            if !rejected_tokens.contains(token) {
-                let verdict = inner.probe.classify(token);
+            if let Some((status, early)) = inner.credentials.bearer_rejection(Some(token)) {
+                if rejected_tokens.insert(token.clone()) {
+                    note_login_evidence(inner, round, "rejected", Some("upstream_rejected"), Some(status));
+                    if early {
+                        inner.history.note_early_rejection(round, status);
+                    }
+                    let _ = page.drop_token();
+                    let _ = page.reload();
+                    verifying = None;
+                    continue;
+                }
+            }
+            if !rejected_tokens.contains(token) && Instant::now() >= next_verification {
+                let verdict = if recheck_headless {
+                    inner.probe.classify_with_budget(
+                        token,
+                        deadline.saturating_duration_since(Instant::now()),
+                    )
+                } else {
+                    inner.probe.classify(token)
+                };
+                if recheck_headless && Instant::now() >= deadline {
+                    return LoginOutcome::VerificationUnknown {
+                        reason: "verification_timeout".to_string(),
+                    };
+                }
                 match verdict.verdict {
                     "valid" => {
                         // Keep the valid probe's upstream status in the round
@@ -1808,14 +1882,27 @@ fn drive_login(
                             verdict.reason,
                             verdict.upstream_status,
                         );
+                        if let Some(status) = verdict.upstream_status.filter(|_| {
+                            auth_state::rejected_before_expiry(token, profile::epoch_now())
+                        }) {
+                            inner.history.note_early_rejection(round, status);
+                        }
+                        if verifying.is_some() {
+                            note_browser_catalog(inner, round, false);
+                        }
                         let _ = page.drop_token();
                         let _ = page.reload();
                         verifying = None;
                         continue;
                     }
-                    _ if visible => {
-                        // 暂时无法核验不结束本轮，也不关闭窗口：同一 token
-                        // 在原轮次截止时间内串行复查，直到有结论或截止。
+                    _ if visible
+                        || (recheck_headless
+                            && matches!(
+                                verdict.reason,
+                                Some("Timeout" | "timeout" | "ConnectionError" | "network_error")
+                            )) =>
+                    {
+                        let first_check_for_candidate = verifying.as_ref() != Some(token);
                         verifying = Some(token.clone());
                         note_login_evidence(
                             inner,
@@ -1825,7 +1912,24 @@ fn drive_login(
                             verdict.upstream_status,
                         );
                         note_progress(inner, round, "verifying_login", Some(&page.url()), None, None);
+                        if first_check_for_candidate && inner.config.role == Role::Local {
+                            let budget = deadline
+                                .saturating_duration_since(Instant::now())
+                                .min(Duration::from_secs(3));
+                            if !budget.is_zero() {
+                                let accessible =
+                                    page.catalog_access(&inner.config.base_url, token, budget);
+                                note_browser_catalog(inner, round, accessible);
+                            }
+                        }
                         idle_deadline = Instant::now() + inner.config.idle_timeout;
+                        if recheck_headless {
+                            // 暂时断连复用现有恢复退避，期间继续观察取消和页面变化。
+                            let delay = REAUTH_RECOVERY_BACKOFF[verification_retries];
+                            verification_retries = (verification_retries + 1)
+                                .min(REAUTH_RECOVERY_BACKOFF.len() - 1);
+                            next_verification = Instant::now() + delay;
+                        }
                     }
                     _ => {
                         // 后台会话没有可见窗口可保留；结束本次会话，后续认证
@@ -1840,9 +1944,14 @@ fn drive_login(
                 }
             }
         }
-        if verifying.as_ref() != token.as_ref() {
+        if verifying.is_some() && verifying.as_ref() != token.as_ref() {
             // 页面换上了别的 token 或清掉了 token：旧的核验目标已消失。
             verifying = None;
+            idle_deadline = Instant::now() + inner.config.idle_timeout;
+            note_browser_catalog(inner, round, false);
+        }
+        if recheck_headless && verifying.is_some() {
+            idle_deadline = deadline;
         }
 
         let url = page.url();
@@ -2170,7 +2279,11 @@ fn drive_login(
             }
         }
 
-        if let Err(error) = page.wait(inner.config.poll_interval) {
+        let poll = inner
+            .config
+            .poll_interval
+            .min(deadline.saturating_duration_since(Instant::now()));
+        if let Err(error) = page.wait(poll) {
             if let Some(outcome) = check_login_window(page, visible) {
                 return outcome;
             }
@@ -2190,6 +2303,13 @@ fn drive_login(
     let reason = manual_reason.unwrap_or_else(|| "timeout".to_string());
     LoginOutcome::Manual {
         reason: reason.clone(),
+    }
+}
+
+fn note_browser_catalog(inner: &LoginInner, round: u64, valid: bool) {
+    let mut state = inner.state.lock().expect("login state poisoned");
+    if state.round == round {
+        state.browser_catalog_valid = valid;
     }
 }
 

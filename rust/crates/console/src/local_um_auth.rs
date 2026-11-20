@@ -176,6 +176,11 @@ fn normalize_status(
         "login_window_s": number_field(object.get("login_window_s")),
         "primary": text_field(object.get("primary")),
         "login": login_summary(object.get("login")),
+        "rejected_before_expiry_status": int_field(object.get("rejected_before_expiry_status")),
+        "browser_catalog_valid": object.get("browser_catalog_valid").and_then(Value::as_bool).unwrap_or(false),
+        "verification_reason": text_field(payload.pointer("/evidence/reason")),
+        "last_failure_reason": text_field(payload.pointer("/recovery/last_failure_reason")),
+        "next_watch_epoch": number_field(payload.pointer("/watch/next_round_due")),
     }))
 }
 

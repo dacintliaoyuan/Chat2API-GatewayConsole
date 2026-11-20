@@ -1014,6 +1014,41 @@ test("a valid gateway round shows 已登录 after the same login round", () => {
   assert.equal(login.takeover, false);
 });
 
+test("the current candidate verification remains the main status when the previous credential was rejected", () => {
+  const login = um.loginFrom({
+    state: "succeeded",
+    operation: {
+      result: {
+        state: "logging_in",
+        login: { phase: "verifying_login" },
+        rejected_before_expiry_status: 401,
+        browser_catalog_valid: true,
+        verification_reason: "ConnectionError",
+      },
+    },
+  });
+  assert.equal(login.word, "正在核验登录结果");
+  assert.match(login.detail, /网页登录正常，网关待核验/);
+  assert.match(login.detail, /旧凭据尚未到期，已被 UM 拒绝（HTTP 401）/);
+});
+
+test("an inconclusive completed verification shows the failure and the scheduled check", () => {
+  const login = um.loginFrom({
+    state: "succeeded",
+    operation: {
+      result: {
+        state: "unknown",
+        label: "暂时无法核验",
+        last_failure_reason: "ConnectionError",
+        next_watch_epoch: 2_000_000_000,
+      },
+    },
+  });
+  assert.equal(login.word, "暂时无法核验");
+  assert.match(login.detail, /核验原因：ConnectionError/);
+  assert.match(login.detail, /下次后台复查/);
+});
+
 test("a start-cap refusal shows the reason and the local retry time", () => {
   const login = um.loginFrom({
     state: "succeeded",

@@ -361,6 +361,21 @@ export function loginFrom(result: OperationResult): UmLogin {
   const recovery = object(raw.recovery);
   const retryEpoch = rowNumber(recovery, "next_attempt_epoch");
   const rateLimited = error === RATE_LIMIT_ERROR;
+  const verifying = phase === "verifying_login";
+  const rejection = rowNumber(raw, "rejected_before_expiry_status");
+  const temporarilyUnknown = state === "unknown" && label === "暂时无法核验";
+  const nextWatch = rowNumber(raw, "next_watch_epoch");
+  const verificationReason = rowText(raw, "last_failure_reason") ?? rowText(raw, "verification_reason");
+  const verificationDetails = [
+    raw.browser_catalog_valid === true ? "网页登录正常，网关待核验" : null,
+    rejection === null || state === "valid"
+      ? null
+      : `旧凭据尚未到期，已被 UM 拒绝（HTTP ${rejection}）`,
+    (verifying || temporarilyUnknown) && verificationReason
+      ? `核验原因：${verificationReason}`
+      : null,
+    temporarilyUnknown && nextWatch !== null ? `下次后台复查：${when(nextWatch * 1000)}` : null,
+  ].filter(Boolean).join(" · ");
   const mapped: UmLogin["state"] =
     state === "valid"
       ? "valid"
@@ -381,6 +396,8 @@ export function loginFrom(result: OperationResult): UmLogin {
           ? DUO_AUTO_WORD
           : mapped === "valid"
             ? LOGIN_WORD.valid
+            : verifying
+              ? "正在核验登录结果"
             : takeover
               ? "需要本人继续登录"
               : (label ?? LOGIN_WORD[mapped]),
@@ -393,7 +410,7 @@ export function loginFrom(result: OperationResult): UmLogin {
         : duoAuto
           ? DUO_AUTO_DETAIL
           : (takeoverDetail ?? error ??
-            note ??
+            (verificationDetails || note) ??
             (state === null ? "认证状态无法确认" : `chat2api 内存态：${state}`)),
     checkedAt: stamp,
     phase,

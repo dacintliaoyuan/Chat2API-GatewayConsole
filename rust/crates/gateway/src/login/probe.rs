@@ -6,10 +6,12 @@
 //! usable catalog, `rejected` is an upstream 401/403, and everything else is
 //! `unknown` so a network failure is never reported as an expired credential.
 
+use std::time::Duration;
+
 use serde_json::Value;
 
 use crate::config::{ConfigError, GatewayConfig};
-use crate::readonly::UpstreamClient;
+use crate::readonly::{UpstreamClient, PROBE_TIMEOUT};
 
 /// One credential classification observation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +58,10 @@ impl CredentialVerdict {
 /// The credential probe seam.
 pub trait CredentialProbe: Send + Sync {
     fn classify(&self, bearer: &str) -> CredentialVerdict;
+
+    fn classify_with_budget(&self, bearer: &str, _budget: Duration) -> CredentialVerdict {
+        self.classify(bearer)
+    }
 }
 
 /// The production probe over the configured loopback upstream.
@@ -71,10 +77,21 @@ impl HttpCredentialProbe {
 
 impl CredentialProbe for HttpCredentialProbe {
     fn classify(&self, bearer: &str) -> CredentialVerdict {
+        self.classify_with_budget(bearer, PROBE_TIMEOUT)
+    }
+
+    fn classify_with_budget(&self, bearer: &str, budget: Duration) -> CredentialVerdict {
         if bearer.is_empty() {
             return CredentialVerdict::needs_login();
         }
-        match self.client.get_json_probe("/api/models", Some(bearer)) {
+        if budget.is_zero() {
+            return CredentialVerdict::unknown("Timeout", None);
+        }
+        match self.client.get_json_probe_with_timeout(
+            "/api/models",
+            Some(bearer),
+            budget.min(PROBE_TIMEOUT),
+        ) {
             Err(failure) => CredentialVerdict::unknown(failure.name(), None),
             Ok((status, payload)) => {
                 if status == 401 || status == 403 {

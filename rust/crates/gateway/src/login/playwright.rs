@@ -217,6 +217,10 @@ impl LoginPage for PlaywrightPage {
         self.call("drop_token", Value::Null).map(|_| ())
     }
 
+    fn catalog_access(&self, base_url: &str, candidate: &str, budget: Duration) -> bool {
+        self.call("catalog_access", json!([base_url, candidate, budget.as_millis()])) == Ok(Value::Bool(true))
+    }
+
     fn reload(&self) -> Result<(), String> {
         self.call("reload", Value::Null).map(|_| ())
     }

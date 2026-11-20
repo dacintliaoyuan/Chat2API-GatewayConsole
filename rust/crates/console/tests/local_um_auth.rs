@@ -347,6 +347,10 @@ fn um_status_passes_through_recovery_and_verification_progress() {
         "label": "正在核验登录结果",
         "error": null,
         "primary": null,
+        "rejected_before_expiry_status": 401,
+        "browser_catalog_valid": true,
+        "evidence": {"reason": "ConnectionError"},
+        "watch": {"next_round_due": 3200.0},
         "recovery": {
             "state": "waiting", "round": 3, "session_starts": 2,
             "max_sessions": 6, "next_attempt_epoch": 2800.0,
@@ -369,6 +373,10 @@ fn um_status_passes_through_recovery_and_verification_progress() {
     assert_eq!(result["recovery"]["state"], json!("waiting"));
     assert_eq!(result["recovery"]["next_attempt_epoch"], json!(2800.0));
     assert_eq!(result["login"]["phase"], json!("verifying_token"));
+    assert_eq!(result["rejected_before_expiry_status"], 401);
+    assert_eq!(result["browser_catalog_valid"], true);
+    assert_eq!(result["verification_reason"], "ConnectionError");
+    assert_eq!(result["next_watch_epoch"], 3200.0);
 }
 
 #[test]

@@ -62,6 +62,24 @@ class BrowserPage:
             return None
         if op == "drop_token":
             return page.evaluate("() => localStorage.removeItem('token')")
+        if op == "catalog_access":
+            if self.origin(page.url) != self.app_origin:
+                return False
+            return page.evaluate(
+                """async ([base, candidate, timeout]) => {
+                    if (location.origin !== new URL(base).origin ||
+                        localStorage.getItem('token') !== candidate) return false;
+                    try {
+                        const r = await fetch('/api/models', {
+                            headers: {Accept: 'application/json', Authorization: 'Bearer ' + candidate},
+                            credentials: 'same-origin', redirect: 'error', cache: 'no-store',
+                            signal: AbortSignal.timeout(timeout),
+                        });
+                        return r.status === 200 && Array.isArray((await r.json()).data);
+                    } catch { return false; }
+                }""",
+                args,
+            )
         if op == "visible":
             for selector in args:
                 locator = page.locator(selector)

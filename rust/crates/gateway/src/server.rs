@@ -325,12 +325,18 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
             .auth_watch_interval
             .unwrap_or(AUTH_WATCH_INTERVAL);
         let mut interval = base_interval;
+        let mut next_probe = Instant::now() + interval;
         state.proxy.record_next_check_after(interval);
         while !shutdown.load(Ordering::SeqCst) {
-            let mut slept = Duration::ZERO;
-            while slept < interval && !shutdown.load(Ordering::SeqCst) {
-                thread::sleep(Duration::from_secs(1));
-                slept += Duration::from_secs(1);
+            if state.config.role != crate::config::Role::Local {
+                next_probe = Instant::now() + interval;
+            }
+            while !shutdown.load(Ordering::SeqCst) {
+                let remaining = next_probe.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                thread::sleep(remaining.min(Duration::from_secs(1)));
             }
             if shutdown.load(Ordering::SeqCst) {
                 break;
@@ -357,6 +363,8 @@ fn spawn_auth_watch(state: Arc<AppState>, shutdown: Arc<AtomicBool>) -> JoinHand
             };
             watch.record_round(verdict, next_interval);
             state.proxy.record_next_check_after(next_interval);
+            // 本机巡检可能先等待认证恢复，复查仍按已公布的时间执行。
+            next_probe = Instant::now() + next_interval;
             interval = next_interval;
             if verdict == "valid" {
                 continue;
