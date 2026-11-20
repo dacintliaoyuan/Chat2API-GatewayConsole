@@ -1,0 +1,231 @@
+import { Button, ListView } from "std-widgets.slint";
+
+export struct LogRow {
+    at: string,
+    level: string,
+    text: string,
+}
+
+global Palette {
+    out property <color> background: #f4f6fa;
+    out property <color> surface: #ffffff;
+    out property <color> border: #dce2ed;
+    out property <color> ink: #19222e;
+    out property <color> muted: #515d70;
+    out property <color> accent: #1b5ccc;
+    out property <color> good: #176a3c;
+    out property <color> bad: #b42318;
+    out property <color> warn: #8b4c0c;
+}
+
+component Card inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> detail;
+    in property <color> tone: Palette.accent;
+
+    height: 82px;
+    border-radius: 10px;
+    background: Palette.surface;
+    border-width: 1px;
+    border-color: Palette.border;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 3px;
+        Text {
+            text: root.label;
+            font-size: 12px;
+            color: Palette.muted;
+        }
+        Text {
+            text: root.value;
+            font-size: 16px;
+            font-weight: 650;
+            color: root.tone;
+            overflow: elide;
+        }
+        Text {
+            text: root.detail;
+            font-size: 11px;
+            color: Palette.muted;
+            overflow: elide;
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "本机控制台 · 109 原型 (Slint)";
+    width: 1040px;
+    height: 700px;
+    background: Palette.background;
+    default-font-family: "Segoe UI";
+    default-font-size: 13px;
+
+    in property <string> gateway-value: "检测中";
+    in property <string> gateway-detail: "";
+    in property <color> gateway-tone: Palette.warn;
+    in property <string> console-value: "检测中";
+    in property <string> console-detail: "";
+    in property <color> console-tone: Palette.warn;
+    in property <string> auth-value: "读取中";
+    in property <string> auth-detail: "";
+    in property <color> auth-tone: Palette.warn;
+    in property <string> upstream-value: "读取中";
+    in property <string> upstream-detail: "";
+    in property <color> upstream-tone: Palette.warn;
+    in property <string> poll-status: "正在连接 8000/8001";
+    in property <string> last-update: "—";
+    in property <int> log-count: 0;
+    in property <[LogRow]> logs: [];
+
+    callback hide-requested();
+    callback quit-requested();
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: start;
+                Text {
+                    text: "本机控制台";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: Palette.ink;
+                }
+                Text {
+                    text: "状态总览与实时日志 · 只读 8000/8001";
+                    font-size: 12px;
+                    color: Palette.muted;
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: "隐藏到托盘";
+                clicked => { root.hide-requested(); }
+            }
+            Button {
+                text: "退出";
+                clicked => { root.quit-requested(); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            Card {
+                label: "8000 网关";
+                value: root.gateway-value;
+                detail: root.gateway-detail;
+                tone: root.gateway-tone;
+                horizontal-stretch: 1;
+            }
+            Card {
+                label: "8001 控制台";
+                value: root.console-value;
+                detail: root.console-detail;
+                tone: root.console-tone;
+                horizontal-stretch: 1;
+            }
+            Card {
+                label: "UM 认证";
+                value: root.auth-value;
+                detail: root.auth-detail;
+                tone: root.auth-tone;
+                horizontal-stretch: 1;
+            }
+            Card {
+                label: "上游";
+                value: root.upstream-value;
+                detail: root.upstream-detail;
+                tone: root.upstream-tone;
+                horizontal-stretch: 1;
+            }
+        }
+
+        Rectangle {
+            border-radius: 10px;
+            background: Palette.surface;
+            border-width: 1px;
+            border-color: Palette.border;
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "运行日志（chat2api 主链，最新在前）";
+                        font-size: 13px;
+                        font-weight: 650;
+                        color: Palette.ink;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: root.log-count + " 条";
+                        font-size: 12px;
+                        color: Palette.muted;
+                        vertical-alignment: center;
+                    }
+                }
+                ListView {
+                    vertical-stretch: 1;
+                    for row in root.logs : Rectangle {
+                        height: 25px;
+                        width: parent.width;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            padding-left: 4px;
+                            padding-right: 4px;
+                            Text {
+                                text: row.at;
+                                width: 152px;
+                                font-size: 11px;
+                                color: Palette.muted;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: row.level;
+                                width: 52px;
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: row.level == "error" ? Palette.bad : row.level == "warn" ? Palette.warn : Palette.muted;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.text;
+                                horizontal-stretch: 1;
+                                font-size: 12px;
+                                color: Palette.ink;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.poll-status;
+                font-size: 12px;
+                color: Palette.muted;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: "最近更新 " + root.last-update;
+                font-size: 12px;
+                color: Palette.muted;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Issue #109 prototype: main window may listen to tray events.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
