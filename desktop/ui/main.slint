@@ -1,0 +1,474 @@
+import { Button, LineEdit, ListView } from "std-widgets.slint";
+
+export struct LogRow {
+    at: string,
+    level: string,
+    text: string,
+}
+
+global Palette {
+    out property <color> background: #f4f6fa;
+    out property <color> surface: #ffffff;
+    out property <color> border: #dce2ed;
+    out property <color> ink: #19222e;
+    out property <color> muted: #515d70;
+    out property <color> accent: #1b5ccc;
+    out property <color> accent-soft: #e6eefc;
+    out property <color> good: #176a3c;
+    out property <color> bad: #b42318;
+    out property <color> warn: #8b4c0c;
+}
+
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 34px;
+    border-radius: 6px;
+    background: root.active ? Palette.accent-soft : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+
+    Text {
+        text: root.label;
+        font-size: 13px;
+        font-weight: root.active ? 650 : 500;
+        color: root.active ? Palette.accent : Palette.ink;
+        vertical-alignment: center;
+        x: 10px;
+        width: parent.width - 20px;
+    }
+
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component Card inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> detail;
+    in property <color> tone: Palette.accent;
+
+    height: 86px;
+    border-radius: 10px;
+    background: Palette.surface;
+    border-width: 1px;
+    border-color: Palette.border;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 3px;
+        Text {
+            text: root.label;
+            font-size: 12px;
+            color: Palette.muted;
+        }
+        Text {
+            text: root.value;
+            font-size: 16px;
+            font-weight: 650;
+            color: root.tone;
+            overflow: elide;
+        }
+        Text {
+            text: root.detail;
+            font-size: 11px;
+            color: Palette.muted;
+            overflow: elide;
+        }
+    }
+}
+
+component PageTitle inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    alignment: start;
+    spacing: 2px;
+    Text {
+        text: root.title;
+        font-size: 19px;
+        font-weight: 700;
+        color: Palette.ink;
+    }
+    Text {
+        text: root.subtitle;
+        font-size: 12px;
+        color: Palette.muted;
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "本机控制台";
+    width: 1060px;
+    height: 720px;
+    background: Palette.background;
+    default-font-family: "Segoe UI";
+    default-font-size: 13px;
+
+    in-out property <int> page: 0;
+    in property <string> gateway-value: "检测中";
+    in property <string> gateway-detail: "";
+    in property <color> gateway-tone: Palette.warn;
+    in property <string> console-value: "检测中";
+    in property <string> console-detail: "";
+    in property <color> console-tone: Palette.warn;
+    in property <string> auth-value: "读取中";
+    in property <string> auth-detail: "";
+    in property <color> auth-tone: Palette.warn;
+    in property <string> upstream-value: "读取中";
+    in property <string> upstream-detail: "";
+    in property <color> upstream-tone: Palette.warn;
+    in property <string> account-label: "读取中";
+    in property <string> account-detail: "";
+    in property <color> account-tone: Palette.warn;
+    in property <string> account-note: "首次打开可跳过登录，之后可从「配置账号」进入。";
+    in property <string> status-line: "正在连接 8000/8001";
+    in property <string> last-update: "—";
+    in property <string> log-status: "尚未读取日志";
+    in property <color> log-tone: Palette.muted;
+    in property <[LogRow]> logs: [];
+    in-out property <string> port-input: "7999";
+    in property <string> settings-status: "";
+    in property <color> settings-tone: Palette.muted;
+    in property <string> config-path: "";
+
+    callback navigate(int);
+    callback configure-account();
+    callback save-port(string);
+    callback refresh-logs();
+    callback hide-requested();
+    callback quit-requested();
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: start;
+                spacing: 1px;
+                Text {
+                    text: "本机控制台";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: Palette.ink;
+                }
+                Text {
+                    text: "桌面版 · 只读现有 8000/8001";
+                    font-size: 12px;
+                    color: Palette.muted;
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: "隐藏到托盘";
+                clicked => { root.hide-requested(); }
+            }
+            Button {
+                text: "退出 App";
+                clicked => { root.quit-requested(); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            Rectangle {
+                width: 168px;
+                border-radius: 10px;
+                background: Palette.surface;
+                border-width: 1px;
+                border-color: Palette.border;
+
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 4px;
+                    NavItem {
+                        label: "总览";
+                        active: root.page == 0;
+                        clicked => { root.navigate(0); }
+                    }
+                    NavItem {
+                        label: "运行日志";
+                        active: root.page == 1;
+                        clicked => { root.navigate(1); }
+                    }
+                    NavItem {
+                        label: "设置";
+                        active: root.page == 2;
+                        clicked => { root.navigate(2); }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    Text {
+                        text: "关闭窗口后收起到托盘";
+                        font-size: 11px;
+                        color: Palette.muted;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 10px;
+
+                VerticalLayout {
+                    visible: root.page == 0;
+                    spacing: 12px;
+
+                    Rectangle {
+                        height: 56px;
+                        border-radius: 10px;
+                        background: Palette.surface;
+                        border-width: 1px;
+                        border-color: Palette.border;
+
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 10px;
+                            alignment: center;
+                            Text {
+                                text: "UM 账号";
+                                font-size: 12px;
+                                color: Palette.muted;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: root.account-label;
+                                font-size: 15px;
+                                font-weight: 650;
+                                color: root.account-tone;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: root.account-detail;
+                                font-size: 12px;
+                                color: Palette.muted;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: "配置账号";
+                                clicked => { root.configure-account(); }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Card {
+                            label: "8000 网关";
+                            value: root.gateway-value;
+                            detail: root.gateway-detail;
+                            tone: root.gateway-tone;
+                            horizontal-stretch: 1;
+                        }
+                        Card {
+                            label: "8001 控制台";
+                            value: root.console-value;
+                            detail: root.console-detail;
+                            tone: root.console-tone;
+                            horizontal-stretch: 1;
+                        }
+                        Card {
+                            label: "UM 认证";
+                            value: root.auth-value;
+                            detail: root.auth-detail;
+                            tone: root.auth-tone;
+                            horizontal-stretch: 1;
+                        }
+                        Card {
+                            label: "上游";
+                            value: root.upstream-value;
+                            detail: root.upstream-detail;
+                            tone: root.upstream-tone;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    Text {
+                        text: root.account-note;
+                        font-size: 12px;
+                        color: Palette.muted;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+
+                VerticalLayout {
+                    visible: root.page == 1;
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        PageTitle {
+                            title: "请求与诊断";
+                            subtitle: "运行日志 · 只读现有 8001 日志";
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            text: "刷新";
+                            clicked => { root.refresh-logs(); }
+                        }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: 10px;
+                        background: Palette.surface;
+                        border-width: 1px;
+                        border-color: Palette.border;
+
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 6px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: root.log-status;
+                                    font-size: 12px;
+                                    color: root.log-tone;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text {
+                                    text: root.logs.length + " 条";
+                                    font-size: 12px;
+                                    color: Palette.muted;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            ListView {
+                                vertical-stretch: 1;
+                                for row in root.logs : Rectangle {
+                                    height: 25px;
+                                    width: parent.width;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        padding-left: 4px;
+                                        padding-right: 4px;
+                                        Text {
+                                            text: row.at;
+                                            width: 92px;
+                                            font-size: 11px;
+                                            color: Palette.muted;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: row.level;
+                                            width: 58px;
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                            color: row.level == "ERROR" ? Palette.bad : row.level == "WARN" ? Palette.warn : Palette.muted;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: row.text;
+                                            horizontal-stretch: 1;
+                                            font-size: 12px;
+                                            color: Palette.ink;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    visible: root.page == 2;
+                    spacing: 12px;
+
+                    PageTitle {
+                        title: "设置";
+                        subtitle: "本实例的模型 API 端口";
+                    }
+
+                    Rectangle {
+                        border-radius: 10px;
+                        background: Palette.surface;
+                        border-width: 1px;
+                        border-color: Palette.border;
+
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+                            Text {
+                                text: "模型 API 端口";
+                                font-size: 14px;
+                                font-weight: 650;
+                                color: Palette.ink;
+                            }
+                            Text {
+                                text: "只绑定本机回环，默认 127.0.0.1:7999。本版本只保存配置，端口切换在 #124。";
+                                font-size: 12px;
+                                color: Palette.muted;
+                                wrap: word-wrap;
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: "127.0.0.1:";
+                                    font-size: 13px;
+                                    color: Palette.ink;
+                                    vertical-alignment: center;
+                                }
+                                LineEdit {
+                                    width: 96px;
+                                    text: root.port-input;
+                                    edited(text) => { root.port-input = text; }
+                                }
+                                Button {
+                                    text: "保存";
+                                    clicked => { root.save-port(root.port-input); }
+                                }
+                            }
+                            Text {
+                                text: root.settings-status;
+                                font-size: 12px;
+                                color: root.settings-tone;
+                                wrap: word-wrap;
+                            }
+                            Text {
+                                text: "配置文件：" + root.config-path;
+                                font-size: 11px;
+                                color: Palette.muted;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.status-line;
+                font-size: 12px;
+                color: Palette.muted;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: "最近更新 " + root.last-update;
+                font-size: 12px;
+                color: Palette.muted;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
