@@ -68,6 +68,41 @@ function Assert-Null {
         Assert-Equal ([string]$ProgressPreference) 'Continue' "$Name restores ProgressPreference"
     }
 
+    function Assert-IsolatedProbe {
+        param(
+            [Parameter(Mandatory = $true)][string]$Url,
+            [Parameter(Mandatory = $true)][bool]$ExpectedReady,
+            [Parameter(Mandatory = $true)][bool]$ExpectedResponded,
+            [Parameter(Mandatory = $true)][AllowNull()]$ExpectedStatus,
+            [Parameter(Mandatory = $true)][AllowNull()]$ExpectedReason,
+            [Parameter(Mandatory = $true)][string]$Name
+        )
+        $probeValue = $null
+        $probeError = $null
+        try {
+            $probeValue = Invoke-GatewayReadyProbe -Url $Url -TimeoutSeconds 5
+        } catch {
+            $probeError = $_.Exception.GetType().Name + ':' + $_.FullyQualifiedErrorId
+        }
+        Assert-Null $probeError "$Name returns without a strict-mode exception"
+        Assert-Equal ($null -ne $probeValue) $true "$Name returns a probe result"
+        if ($null -eq $probeValue) { return }
+        Assert-Equal ([bool]$probeValue.Ready) $ExpectedReady "$Name reports the expected readiness"
+        Assert-Equal ([bool]$probeValue.Responded) $ExpectedResponded "$Name distinguishes a missing HTTP response"
+        if ($null -eq $ExpectedStatus) {
+            Assert-Null $probeValue.HttpStatus "$Name reports no HTTP status"
+        } else {
+            Assert-Equal $probeValue.HttpStatus $ExpectedStatus "$Name reports the expected HTTP status"
+        }
+        if ($ExpectedReason -is [string]) {
+            Assert-Equal ([string]$probeValue.Reason) $ExpectedReason "$Name names the sanitized probe reason"
+        } else {
+            Assert-Equal (@($ExpectedReason) -contains [string]$probeValue.Reason) $true "$Name names a sanitized no-response reason"
+        }
+        Assert-Equal ([string]$ProgressPreference) 'Continue' "$Name restores ProgressPreference"
+        Assert-Equal (($probeValue | ConvertTo-Json -Compress) -notmatch 'http://') $true "$Name never carries the probe URL"
+    }
+
     try {
         # Bind without Listen: the isolated closed port remains reserved so
         # another process cannot claim it between allocation and the request.
@@ -80,6 +115,9 @@ function Assert-Null {
                 [System.Net.IPAddress]::Loopback, 0))
             $script:GatewayServiceDescriptors['usage'].Port = $closedSocket.LocalEndPoint.Port
             Assert-IsolatedHealth -Expected $false -Name 'StrictMode connection refused'
+            Assert-IsolatedProbe -Url ('http://127.0.0.1:{0}/ready' -f $closedSocket.LocalEndPoint.Port) `
+                -ExpectedReady $false -ExpectedResponded $false -ExpectedStatus $null `
+                -ExpectedReason 'connect_refused' -Name 'StrictMode probe on a closed port'
 
             $script:checkerCalls = 0
             $checkerPort = $script:GatewayServiceDescriptors['usage'].Port
@@ -97,8 +135,9 @@ function Assert-Null {
             $closedSocket.Dispose()
         }
 
-        foreach ($statusCode in @(200, 403, 500, 0)) {
-            $httpJob = Start-Job -ArgumentList $statusCode -ScriptBlock {
+        function Start-IsolatedHttpFixture {
+            param([int]$StatusCode)
+            $job = Start-Job -ArgumentList $StatusCode -ScriptBlock {
                 param([int]$StatusCode)
                 $ErrorActionPreference = 'Stop'
                 $listener = [System.Net.Sockets.TcpListener]::new(
@@ -125,31 +164,117 @@ function Assert-Null {
                     $listener.Stop()
                 }
             }
+            $ready = @()
+            $readyDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            while ($ready.Count -eq 0 -and [DateTime]::UtcNow -lt $readyDeadline) {
+                $ready = @(Receive-Job -Job $job -Keep)
+                if ($ready.Count -eq 0) { Start-Sleep -Milliseconds 20 }
+            }
+            if ($ready.Count -ne 1) {
+                Stop-Job -Job $job -ErrorAction SilentlyContinue
+                Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+                throw 'isolated HTTP listener did not report its ephemeral port'
+            }
+            return [pscustomobject]@{ Job = $job; Port = [int]$ready[0] }
+        }
+
+        function Stop-IsolatedHttpFixture {
+            param($Fixture)
+            if ($null -eq $Fixture) { return }
+            Stop-Job -Job $Fixture.Job -ErrorAction SilentlyContinue
+            Remove-Job -Job $Fixture.Job -Force -ErrorAction SilentlyContinue
+        }
+
+        foreach ($statusCode in @(200, 403, 500, 0)) {
+            $fixture = $null
             try {
-                $ready = @()
-                $readyDeadline = [DateTime]::UtcNow.AddSeconds(10)
-                while ($ready.Count -eq 0 -and [DateTime]::UtcNow -lt $readyDeadline) {
-                    $ready = @(Receive-Job -Job $httpJob -Keep)
-                    if ($ready.Count -eq 0) { Start-Sleep -Milliseconds 20 }
-                }
-                if ($ready.Count -ne 1) { throw 'isolated HTTP listener did not report its ephemeral port' }
-                $script:GatewayServiceDescriptors['usage'].Port = [int]$ready[0]
+                $fixture = Start-IsolatedHttpFixture -StatusCode $statusCode
+                $script:GatewayServiceDescriptors['usage'].Port = $fixture.Port
                 if ($statusCode -eq 0) {
                     Assert-IsolatedHealth -Expected $false -Name 'StrictMode connection closed without HTTP response'
                 } else {
                     Assert-IsolatedHealth -Expected $true -Name "StrictMode HTTP $statusCode"
                 }
-                $completed = Wait-Job -Job $httpJob -Timeout 5
-                Assert-Equal ($null -ne $completed -and $httpJob.State -eq 'Completed') $true 'isolated HTTP child finishes after one request'
-                Receive-Job -Job $httpJob | Out-Null
+                $completed = Wait-Job -Job $fixture.Job -Timeout 5
+                Assert-Equal ($null -ne $completed -and $fixture.Job.State -eq 'Completed') $true 'isolated HTTP child finishes after one request'
+                Receive-Job -Job $fixture.Job | Out-Null
             } finally {
-                Stop-Job -Job $httpJob -ErrorAction SilentlyContinue
-                Remove-Job -Job $httpJob -Force -ErrorAction SilentlyContinue
+                Stop-IsolatedHttpFixture -Fixture $fixture
+            }
+        }
+
+        # #117: the probe distinguishes "no HTTP response at all" from "an HTTP
+        # response that is not 200". Each status needs its own single-response
+        # fixture: the health check above already consumed the other listeners.
+        foreach ($statusCode in @(200, 503, 0)) {
+            $fixture = $null
+            try {
+                $fixture = Start-IsolatedHttpFixture -StatusCode $statusCode
+                $probeUrl = 'http://127.0.0.1:{0}/ready' -f $fixture.Port
+                if ($statusCode -eq 0) {
+                    Assert-IsolatedProbe -Url $probeUrl -ExpectedReady $false `
+                        -ExpectedResponded $false -ExpectedStatus $null `
+                        -ExpectedReason @('no_response', 'probe_timeout', 'connect_failed', 'connect_refused', 'dns_failure') `
+                        -Name 'StrictMode probe on a closed connection'
+                } else {
+                    $probeReason = if ($statusCode -eq 200) { 'ready' } else { 'http_not_ready' }
+                    Assert-IsolatedProbe -Url $probeUrl -ExpectedReady ($statusCode -eq 200) `
+                        -ExpectedResponded $true -ExpectedStatus $statusCode `
+                        -ExpectedReason $probeReason -Name "StrictMode probe HTTP $statusCode"
+                }
+                $completed = Wait-Job -Job $fixture.Job -Timeout 5
+                Assert-Equal ($null -ne $completed -and $fixture.Job.State -eq 'Completed') $true 'isolated probe child finishes after one request'
+                Receive-Job -Job $fixture.Job | Out-Null
+            } finally {
+                Stop-IsolatedHttpFixture -Fixture $fixture
             }
         }
     } finally {
         $script:GatewayServiceDescriptors['usage'].Port = $originalPort
         $ProgressPreference = $originalProgressPreference
+    }
+}
+
+# ---------------------------------------------------------------------------
+# #117: the probe failure classification is a fixed, sanitized vocabulary.
+# Synthetic exceptions cover the timeout and DNS paths (a real probe timeout is
+# slow and flaky) and prove that a message carrying a secret never reaches the
+# result.
+# ---------------------------------------------------------------------------
+& {
+    Set-StrictMode -Version 3.0
+    # PS 5.1 does not load System.Net.Http by default; the production PS7
+    # transport exception lives there.
+    Add-Type -AssemblyName System.Net.Http
+    $secret = 'secret-token-117@example.invalid'
+    $refused = [System.Net.Http.HttpRequestException]::new(
+        'connect failed ' + $secret,
+        [System.Net.Sockets.SocketException]::new(10061))
+    Assert-Equal (Get-GatewayProbeFailureReason -Exception $refused) 'connect_refused' `
+        'connection refused classifies as connect_refused'
+    $dns = [System.Net.Http.HttpRequestException]::new(
+        'name resolution failed ' + $secret,
+        [System.Net.Sockets.SocketException]::new(11001))
+    Assert-Equal (Get-GatewayProbeFailureReason -Exception $dns) 'dns_failure' `
+        'name resolution failure classifies as dns_failure'
+    $timeout = [System.Threading.Tasks.TaskCanceledException]::new(
+        'the request timed out ' + $secret)
+    Assert-Equal (Get-GatewayProbeFailureReason -Exception $timeout) 'probe_timeout' `
+        'a cancelled request classifies as probe_timeout'
+    $webTimeout = [System.Net.WebException]::new(
+        'the operation timed out ' + $secret,
+        [System.Net.WebExceptionStatus]::Timeout)
+    Assert-Equal (Get-GatewayProbeFailureReason -Exception $webTimeout) 'probe_timeout' `
+        'a WebException timeout classifies as probe_timeout'
+    $unknown = [System.InvalidOperationException]::new('unexpected ' + $secret)
+    Assert-Equal (Get-GatewayProbeFailureReason -Exception $unknown) 'no_response' `
+        'an unrecognized transport failure classifies as no_response'
+    foreach ($exception in @($refused, $dns, $timeout, $webTimeout, $unknown)) {
+        $reason = Get-GatewayProbeFailureReason -Exception $exception
+        Assert-Equal ($reason -notmatch [regex]::Escape($secret)) $true `
+            'the probe reason never carries the exception message'
+        Assert-Equal ($reason -match '^[a-z_]+$') $true `
+            'the probe reason stays in the sanitized vocabulary'
     }
 }
 
