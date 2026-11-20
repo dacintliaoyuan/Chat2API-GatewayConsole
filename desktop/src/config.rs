@@ -45,12 +45,17 @@ pub fn config_path(local_app_data: &Path) -> PathBuf {
     config_dir(local_app_data).join("desktop.json")
 }
 
-/// `%LOCALAPPDATA%\Chat2API\desktop.json`.
-pub fn default_config_path() -> Result<PathBuf, String> {
+/// `%LOCALAPPDATA%\Chat2API`.
+pub fn app_data_root() -> Result<PathBuf, String> {
     let local = std::env::var_os("LOCALAPPDATA")
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "LOCALAPPDATA 未设置，无法定位配置目录".to_string())?;
-    Ok(config_path(Path::new(&local)))
+        .ok_or_else(|| "LOCALAPPDATA 未设置，无法定位应用数据目录".to_string())?;
+    Ok(config_dir(Path::new(&local)))
+}
+
+/// `%LOCALAPPDATA%\Chat2API\desktop.json`.
+pub fn default_config_path() -> Result<PathBuf, String> {
+    Ok(app_data_root()?.join("desktop.json"))
 }
 
 pub fn model_api_bind(config: &DesktopConfig) -> String {
@@ -128,14 +133,14 @@ pub fn save_to(path: &Path, config: &DesktopConfig) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn harden_private_file(path: &Path) -> Result<(), String> {
+pub(crate) fn harden_private_file(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .map_err(|error| format!("设置配置文件权限失败：{error}"))
 }
 
 #[cfg(windows)]
-fn harden_private_file(path: &Path) -> Result<(), String> {
+pub(crate) fn harden_private_file(path: &Path) -> Result<(), String> {
     windows_acl::harden_to_current_user(path)
 }
 

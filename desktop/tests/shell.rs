@@ -23,7 +23,7 @@ fn tray_show_restores_the_hidden_window() {
 }
 
 #[test]
-fn tray_quit_quits_the_app_without_touching_the_gateway() {
+fn tray_quit_marks_the_app_as_quitting() {
     let mut shell = ShellState::new();
     assert_eq!(shell.apply(ShellEvent::TrayQuit), ShellAction::Quit);
     assert!(shell.quitting());

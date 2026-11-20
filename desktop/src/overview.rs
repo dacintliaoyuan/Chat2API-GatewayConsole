@@ -1,8 +1,9 @@
-//! Read-only status overview over the local 8000 gateway and 8001 console.
+//! Read-only status overview over the app instance's own gateway.
 //!
 //! `Probe` is the seam: production uses [`HttpProbe`], tests inject a fake.
 //! Every failed or missing field keeps its own reason; a failure never becomes
-//! "running", a missing model count never becomes 0.
+//! "running", a missing model count never becomes 0. The supervision card comes
+//! from the process supervisor, not from the old 8001 console.
 
 use std::time::Duration;
 
@@ -63,7 +64,7 @@ pub struct Card {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Overview {
     pub gateway: Card,
-    pub console: Card,
+    pub supervision: Card,
     pub auth: Card,
     pub upstream: Card,
     pub account_label: String,
@@ -72,31 +73,32 @@ pub struct Overview {
     pub failures: Vec<String>,
 }
 
-pub fn read_overview(probe: &dyn Probe, gateway_base: &str, console_base: &str) -> Overview {
+pub fn read_overview(probe: &dyn Probe, gateway_base: &str, supervision: Card) -> Overview {
     let gateway_url = format!("{}/health", gateway_base.trim_end_matches('/'));
-    let console_url = format!("{}/health", console_base.trim_end_matches('/'));
     let gateway_body = probe.get_json(&gateway_url);
-    let console_body = probe.get_json(&console_url);
     let mut failures = Vec::new();
 
     let gateway = match &gateway_body {
         Ok(body) => {
-            let status = body.get("status").and_then(Value::as_str).unwrap_or("unknown");
+            let status = body
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
             let models = match body.get("models").and_then(Value::as_u64) {
                 Some(count) => format!(" · 模型 {count} 个"),
                 None => " · 模型数未知".to_string(),
             };
             if status == "ok" {
                 Card {
-                    label: "8000 网关",
+                    label: "本实例网关",
                     value: "运行中".to_string(),
                     detail: format!("{gateway_base}{models}"),
                     tone: Tone::Good,
                 }
             } else {
-                failures.push(format!("8000 status={status}"));
+                failures.push(format!("本实例网关 status={status}"));
                 Card {
-                    label: "8000 网关",
+                    label: "本实例网关",
                     value: "异常".to_string(),
                     detail: format!("{gateway_base} · status={status}{models}"),
                     tone: Tone::Bad,
@@ -104,49 +106,9 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, console_base: &str) 
             }
         }
         Err(error) => {
-            failures.push(format!("8000 {error}"));
+            failures.push(format!("本实例网关 {error}"));
             Card {
-                label: "8000 网关",
-                value: "不可用".to_string(),
-                detail: error.clone(),
-                tone: Tone::Bad,
-            }
-        }
-    };
-
-    let console = match &console_body {
-        Ok(body) => {
-            let status = body.get("status").and_then(Value::as_str).unwrap_or("unknown");
-            let service = body
-                .get("service")
-                .and_then(Value::as_str)
-                .unwrap_or("未知服务");
-            let port = body
-                .get("port")
-                .and_then(Value::as_u64)
-                .map(|port| format!(" · {port}"))
-                .unwrap_or_default();
-            if status == "ok" {
-                Card {
-                    label: "8001 控制台",
-                    value: "运行中".to_string(),
-                    detail: format!("{console_base} · {service}{port}"),
-                    tone: Tone::Good,
-                }
-            } else {
-                failures.push(format!("8001 status={status}"));
-                Card {
-                    label: "8001 控制台",
-                    value: "异常".to_string(),
-                    detail: format!("{console_base} · status={status}"),
-                    tone: Tone::Bad,
-                }
-            }
-        }
-        Err(error) => {
-            failures.push(format!("8001 {error}"));
-            Card {
-                label: "8001 控制台",
+                label: "本实例网关",
                 value: "不可用".to_string(),
                 detail: error.clone(),
                 tone: Tone::Bad,
@@ -214,11 +176,11 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, console_base: &str) 
                 Card {
                     label: "UM 认证",
                     value: "未知".to_string(),
-                    detail: "8000 未返回认证状态".to_string(),
+                    detail: "本实例网关未返回认证状态".to_string(),
                     tone: Tone::Warn,
                 },
                 "未知".to_string(),
-                "8000 未返回认证状态".to_string(),
+                "本实例网关未返回认证状态".to_string(),
                 Tone::Warn,
             ),
         },
@@ -226,11 +188,11 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, console_base: &str) 
             Card {
                 label: "UM 认证",
                 value: "未知".to_string(),
-                detail: "8000 未返回认证状态".to_string(),
+                detail: "本实例网关未返回认证状态".to_string(),
                 tone: Tone::Warn,
             },
             "未知".to_string(),
-            "8000 未返回认证状态".to_string(),
+            "本实例网关未返回认证状态".to_string(),
             Tone::Warn,
         ),
     };
@@ -264,14 +226,16 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, console_base: &str) 
                     value: other.to_string(),
                     detail: format!(
                         "{name}{status}{}",
-                        reason.map(|reason| format!(" · {reason}")).unwrap_or_default()
+                        reason
+                            .map(|reason| format!(" · {reason}"))
+                            .unwrap_or_default()
                     ),
                     tone: Tone::Bad,
                 },
                 None => Card {
                     label: "上游",
                     value: "未知".to_string(),
-                    detail: "8000 未返回上游状态".to_string(),
+                    detail: "本实例网关未返回上游状态".to_string(),
                     tone: Tone::Warn,
                 },
             }
@@ -279,14 +243,14 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, console_base: &str) 
         Err(_) => Card {
             label: "上游",
             value: "未知".to_string(),
-            detail: "8000 未返回上游状态".to_string(),
+            detail: "本实例网关未返回上游状态".to_string(),
             tone: Tone::Warn,
         },
     };
 
     Overview {
         gateway,
-        console,
+        supervision,
         auth,
         upstream,
         account_label,
@@ -298,8 +262,8 @@ pub fn read_overview(probe: &dyn Probe, gateway_base: &str, console_base: &str) 
 
 pub fn status_line(overview: &Overview) -> String {
     if overview.failures.is_empty() {
-        "只读 8000/8001 · 状态正常".to_string()
+        "本实例网关 · 状态正常".to_string()
     } else {
-        format!("只读 8000/8001 · {}", overview.failures.join("；"))
+        format!("本实例网关 · {}", overview.failures.join("；"))
     }
 }

@@ -1,8 +1,9 @@
 //! Window/tray state transitions for the desktop shell.
 //!
 //! Closing the main window hides it to the tray; the tray restores the same
-//! window; "退出 App" quits the app. This ticket does not stop the gateway
-//! (#124), so the state machine only tracks the window and the quit flag.
+//! window; "退出 App" quits the app. Stopping the gateway belongs to the
+//! supervisor seam (#124), so this state machine only tracks the window and the
+//! quit flag.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellEvent {

@@ -112,9 +112,9 @@ export component MainWindow inherits Window {
     in property <string> gateway-value: "检测中";
     in property <string> gateway-detail: "";
     in property <color> gateway-tone: Palette.warn;
-    in property <string> console-value: "检测中";
-    in property <string> console-detail: "";
-    in property <color> console-tone: Palette.warn;
+    in property <string> supervision-value: "检测中";
+    in property <string> supervision-detail: "";
+    in property <color> supervision-tone: Palette.warn;
     in property <string> auth-value: "读取中";
     in property <string> auth-detail: "";
     in property <color> auth-tone: Palette.warn;
@@ -125,7 +125,7 @@ export component MainWindow inherits Window {
     in property <string> account-detail: "";
     in property <color> account-tone: Palette.warn;
     in property <string> account-note: "首次打开可跳过登录，之后可从「配置账号」进入。";
-    in property <string> status-line: "正在连接 8000/8001";
+    in property <string> status-line: "正在启动本实例网关";
     in property <string> last-update: "—";
     in property <string> log-status: "尚未读取日志";
     in property <color> log-tone: Palette.muted;
@@ -134,6 +134,7 @@ export component MainWindow inherits Window {
     in property <string> settings-status: "";
     in property <color> settings-tone: Palette.muted;
     in property <string> config-path: "";
+    in property <string> instance-path: "";
 
     callback navigate(int);
     callback configure-account();
@@ -158,7 +159,7 @@ export component MainWindow inherits Window {
                     color: Palette.ink;
                 }
                 Text {
-                    text: "桌面版 · 只读现有 8000/8001";
+                    text: "桌面版 · 本实例网关监督";
                     font-size: 12px;
                     color: Palette.muted;
                 }
@@ -263,17 +264,17 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         spacing: 10px;
                         Card {
-                            label: "8000 网关";
+                            label: "本实例网关";
                             value: root.gateway-value;
                             detail: root.gateway-detail;
                             tone: root.gateway-tone;
                             horizontal-stretch: 1;
                         }
                         Card {
-                            label: "8001 控制台";
-                            value: root.console-value;
-                            detail: root.console-detail;
-                            tone: root.console-tone;
+                            label: "网关监督";
+                            value: root.supervision-value;
+                            detail: root.supervision-detail;
+                            tone: root.supervision-tone;
                             horizontal-stretch: 1;
                         }
                         Card {
@@ -310,7 +311,7 @@ export component MainWindow inherits Window {
                         spacing: 8px;
                         PageTitle {
                             title: "请求与诊断";
-                            subtitle: "运行日志 · 只读现有 8001 日志";
+                            subtitle: "本实例运行日志 · 最近记录（#126 接入实时增量）";
                             horizontal-stretch: 1;
                         }
                         Button {
@@ -410,7 +411,7 @@ export component MainWindow inherits Window {
                                 color: Palette.ink;
                             }
                             Text {
-                                text: "只绑定本机回环，默认 127.0.0.1:7999。本版本只保存配置，端口切换在 #124。";
+                                text: "只绑定本机回环，默认 127.0.0.1:7999；测试实例可用 7998。保存后停止旧实例并在新端口启动；失败会恢复原端口。";
                                 font-size: 12px;
                                 color: Palette.muted;
                                 wrap: word-wrap;
@@ -441,6 +442,12 @@ export component MainWindow inherits Window {
                             }
                             Text {
                                 text: "配置文件：" + root.config-path;
+                                font-size: 11px;
+                                color: Palette.muted;
+                                wrap: word-wrap;
+                            }
+                            Text {
+                                text: "实例数据：" + root.instance-path;
                                 font-size: 11px;
                                 color: Palette.muted;
                                 wrap: word-wrap;

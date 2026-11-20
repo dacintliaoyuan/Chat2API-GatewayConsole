@@ -1,150 +1,116 @@
-use std::cell::RefCell;
+use serde_json::json;
+use um_desktop::logs::{logs_status, parse_log_line, read_log_file, LogEntry, LogsView};
+use um_desktop::overview::Tone;
 
-use serde_json::{json, Value};
-use um_desktop::logs::{logs_status, parse_logs, read_logs, LogEntry, LogsView};
-use um_desktop::overview::{Probe, Tone};
+mod common;
+use common::TempDir;
 
-struct FakeProbe {
-    body: Result<Value, String>,
-    urls: RefCell<Vec<String>>,
-}
-
-impl FakeProbe {
-    fn new(body: Result<Value, String>) -> Self {
-        Self {
-            body,
-            urls: RefCell::new(Vec::new()),
-        }
-    }
-}
-
-impl Probe for FakeProbe {
-    fn get_json(&self, url: &str) -> Result<Value, String> {
-        self.urls.borrow_mut().push(url.to_string());
-        self.body.clone()
-    }
+fn at(text: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(text)
+        .expect("rfc3339")
+        .timestamp_millis()
 }
 
 #[test]
-fn ok_response_with_rows_is_loaded() {
-    let view = parse_logs(&json!({
-        "status": "ok",
-        "lines": [
-            {"at": 1700000000000_i64, "level": "info", "text": "hello"},
-            {"at": 1700000001000_i64, "level": "error", "text": "boom"},
-        ],
-    }));
+fn request_summary_line_becomes_a_compact_entry() {
+    let entry = parse_log_line(
+        &json!({
+            "time": "2026-11-20T10:00:00+08:00",
+            "service": "chat2api",
+            "event": "request_summary",
+            "request_id": "req-1",
+            "protocol": "chat",
+            "final": "502",
+            "tries": 3,
+        })
+        .to_string(),
+    );
     assert_eq!(
-        view,
-        LogsView::Loaded(vec![
-            LogEntry {
-                at: Some(1700000000000),
-                level: "info".to_string(),
-                text: "hello".to_string(),
-            },
-            LogEntry {
-                at: Some(1700000001000),
-                level: "error".to_string(),
-                text: "boom".to_string(),
-            },
-        ])
+        entry,
+        LogEntry {
+            at: Some(at("2026-11-20T10:00:00+08:00")),
+            level: "error".to_string(),
+            text: "request_summary req-1 chat final=502 tries=3".to_string(),
+        }
     );
 }
 
 #[test]
-fn ok_response_with_no_rows_is_a_legal_empty_log() {
-    let view = parse_logs(&json!({"status": "ok", "lines": []}));
+fn malformed_line_is_kept_raw_not_dropped() {
+    let entry = parse_log_line("not json at all");
+    assert_eq!(
+        entry,
+        LogEntry {
+            at: None,
+            level: "raw".to_string(),
+            text: "not json at all".to_string(),
+        }
+    );
+}
+
+#[test]
+fn a_line_without_a_time_keeps_none_instead_of_zero() {
+    let entry = parse_log_line(&json!({"event": "start", "port": 7999}).to_string());
+    assert_eq!(entry.at, None);
+    assert_eq!(entry.level, "info");
+    assert!(entry.text.contains("\"event\":\"start\""), "{}", entry.text);
+}
+
+#[test]
+fn missing_file_is_a_failure_not_an_empty_log() {
+    let dir = TempDir::new("logs-missing");
+    let view = read_log_file(&dir.path().join("gateway.log"));
+    match &view {
+        LogsView::Failed(reason) => {
+            assert!(reason.contains("gateway.log"), "{reason}");
+        }
+        other => panic!("a missing log must be failed, got {other:?}"),
+    }
+    let (status, tone) = logs_status(&view);
+    assert_eq!(tone, Tone::Bad);
+    assert!(status.contains("日志读取失败"), "{status}");
+}
+
+#[test]
+fn an_empty_file_is_a_legal_empty_log() {
+    let dir = TempDir::new("logs-empty");
+    let path = dir.path().join("gateway.log");
+    std::fs::write(&path, "").unwrap();
+    let view = read_log_file(&path);
     assert_eq!(view, LogsView::Loaded(Vec::new()));
     let (status, tone) = logs_status(&view);
     assert_eq!(tone, Tone::Warn);
-    assert!(status.contains("暂无日志"));
+    assert!(status.contains("暂无日志"), "{status}");
 }
 
 #[test]
-fn missing_log_file_is_a_failure_not_an_empty_log() {
-    let view = parse_logs(&json!({
-        "status": "missing",
-        "error": "file_missing",
-        "lines": [],
-    }));
-    match view {
-        LogsView::Failed(reason) => {
-            assert!(reason.contains("missing"), "{reason}");
-            assert!(reason.contains("file_missing"), "{reason}");
-        }
-        other => panic!("missing log must be failed, got {other:?}"),
-    }
+fn the_tail_keeps_only_the_newest_80_lines() {
+    let dir = TempDir::new("logs-tail");
+    let path = dir.path().join("gateway.log");
+    let text = (1..=100)
+        .map(|index| format!("{{\"event\":\"line-{index}\"}}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&path, text).unwrap();
+    let view = read_log_file(&path);
+    let rows = match &view {
+        LogsView::Loaded(rows) => rows,
+        other => panic!("expected loaded logs, got {other:?}"),
+    };
+    assert_eq!(rows.len(), 80);
+    assert!(rows[0].text.contains("line-21"), "{}", rows[0].text);
+    assert!(rows[79].text.contains("line-100"), "{}", rows[79].text);
 }
 
 #[test]
-fn ok_response_without_lines_is_a_failure() {
-    let view = parse_logs(&json!({"status": "ok"}));
-    match view {
-        LogsView::Failed(reason) => assert!(reason.contains("lines"), "{reason}"),
-        other => panic!("missing lines must be failed, got {other:?}"),
-    }
-}
-
-#[test]
-fn unreadable_log_is_a_failure_with_its_reason() {
-    let view = parse_logs(&json!({
-        "status": "denied",
-        "error": "permission_denied",
-        "lines": [],
-    }));
-    let (status, tone) = logs_status(&view);
-    assert_eq!(tone, Tone::Bad);
-    assert!(status.contains("permission_denied"), "{status}");
-}
-
-#[test]
-fn read_logs_calls_the_read_only_8001_route() {
-    let probe = FakeProbe::new(Ok(json!({"status": "ok", "lines": []})));
-    let _ = read_logs(&probe, "http://127.0.0.1:8001");
-    let urls = probe.urls.borrow();
-    assert_eq!(
-        urls.as_slice(),
-        ["http://127.0.0.1:8001/api/console/um/logs?window=today&source=service&limit=80"]
-    );
-}
-
-#[test]
-fn probe_failure_keeps_the_transport_reason() {
-    let view = read_logs(
-        &FakeProbe::new(Err("8001: connection refused".to_string())),
-        "http://127.0.0.1:8001",
-    );
-    match view {
-        LogsView::Failed(reason) => assert!(reason.contains("connection refused"), "{reason}"),
-        other => panic!("transport failure must be failed, got {other:?}"),
-    }
-}
-
-#[test]
-fn loaded_rows_are_reported_as_read_only_recent_entries() {
+fn loaded_rows_are_reported_as_instance_logs() {
     let view = LogsView::Loaded(vec![LogEntry {
-        at: Some(1700000000000),
+        at: Some(at("2026-11-20T10:00:00+08:00")),
         level: "info".to_string(),
-        text: "hello".to_string(),
+        text: "start".to_string(),
     }]);
     let (status, tone) = logs_status(&view);
     assert_eq!(tone, Tone::Good);
     assert!(status.contains("最近 1 条"), "{status}");
-    assert!(status.contains("只读"), "{status}");
-}
-
-#[test]
-fn rows_without_a_timestamp_keep_none_instead_of_zero() {
-    let view = parse_logs(&json!({
-        "status": "ok",
-        "lines": [{"level": "info", "text": "undated"}],
-    }));
-    assert_eq!(
-        view,
-        LogsView::Loaded(vec![LogEntry {
-            at: None,
-            level: "info".to_string(),
-            text: "undated".to_string(),
-        }])
-    );
+    assert!(status.contains("本实例"), "{status}");
 }
