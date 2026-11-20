@@ -56,6 +56,7 @@ struct FakePage {
     credential_error: AtomicBool,
     submit_calls: AtomicUsize,
     duo_manual: AtomicBool,
+    catalog_ready: bool,
 }
 
 impl FakePage {
@@ -82,6 +83,7 @@ impl FakePage {
             credential_error: AtomicBool::new(false),
             submit_calls: AtomicUsize::new(0),
             duo_manual: AtomicBool::new(false),
+            catalog_ready: false,
         })
     }
 
@@ -134,6 +136,10 @@ impl LoginPage for FakePage {
 
     fn read_token(&self) -> Option<String> {
         self.token.lock().expect("fake token").clone()
+    }
+
+    fn catalog_access(&self, _base_url: &str, candidate: &str, _budget: Duration) -> bool {
+        self.catalog_ready && self.read_token().as_deref() == Some(candidate)
     }
 
     fn drop_token(&self) -> Result<(), String> {
@@ -488,6 +494,7 @@ impl CredentialSink for FakeSink {
 
 fn login_config(temp: &TempDir) -> LoginConfig {
     LoginConfig {
+        role: Role::Local,
         base_url: "http://127.0.0.1:9".to_string(),
         token_file: temp.path().join("token.json"),
         profile_dir: temp.path().join("profile"),
@@ -574,6 +581,32 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
 }
 
 #[test]
+fn a_headless_round_rechecks_the_same_candidate_and_publishes_it_once() {
+    let temp = TempDir::new("um-rust-login-headless-verify-");
+    let mut page = FakePage::new("http://127.0.0.1:9", Some("fresh-token"));
+    Arc::get_mut(&mut page).unwrap().catalog_ready = true;
+    let probe = ManualProbe::new(vec![unknown_verdict()]);
+    let sink = Arc::new(FakeSink::default());
+    let (service, factory) = login_service_with_probe(&temp, page, probe.clone(), sink.clone(), |_| {});
+
+    let started = service.start_explicit(false);
+    let pending = wait_for(&service, |status| {
+        status["browser_catalog_valid"] == true || status["state"] == "unknown"
+    });
+    probe.release();
+    assert_eq!(pending["label"], "正在核验登录结果");
+    assert_eq!(pending["evidence"]["verdict"], "unknown");
+    let completed = wait_for(&service, |status| {
+        status["state"] == "valid" || status["state"] == "unknown"
+    });
+    assert_eq!(completed["state"], "valid");
+    assert_eq!(completed["recovery"]["round"], started["recovery"]["round"]);
+    assert_eq!(factory.requests().len(), 1);
+    assert_eq!(probe.bearers(), vec!["fresh-token", "fresh-token"]);
+    assert_eq!(sink.published(), vec![("fresh-token".to_string(), None)]);
+}
+
+#[test]
 fn a_browser_credential_probe_timeout_is_not_manual_takeover() {
     let temp = TempDir::new("um-rust-login-probe-unknown-");
     let page = FakePage::new("http://127.0.0.1:9", Some("pending-token"));
@@ -594,6 +627,7 @@ fn a_browser_credential_probe_timeout_is_not_manual_takeover() {
     assert_eq!(status["error"], Value::Null);
     assert_eq!(status["evidence"]["verdict"], json!("unknown"));
     assert_eq!(status["recovery"]["state"], json!("idle"));
+    assert_eq!(status["recovery"]["last_outcome"], "verification_unknown:verification_timeout");
     assert_eq!(factory.requests().len(), 1);
     assert_eq!(factory.closes(), 1);
     assert!(sink.published().is_empty(), "未核验成功的凭据不得发布");
@@ -1498,7 +1532,7 @@ fn a_visible_login_rechecks_the_same_pending_token_inside_one_window() {
         status["login"]["phase"] == json!("verifying_login")
     });
     assert_eq!(status["state"], json!("logging_in"));
-    assert_eq!(status["label"], json!("登录中（正在核验登录结果）"));
+    assert_eq!(status["label"], json!("正在核验登录结果"));
     assert_eq!(status["recovery"]["round"], json!(1));
     assert_eq!(
         factory.requests().len(),
@@ -3085,10 +3119,15 @@ fn a_business_401_starts_one_background_round_and_later_requests_use_the_restore
             body: chat_success(),
         },
     ]);
-    let page = FakePage::new("http://127.0.0.1:9", Some("fresh-token"));
+    let old_token = "fixture.eyJleHAiOjQxMDI0NDQ4MDB9.fixture";
+    let page = FakePage::new("http://127.0.0.1:9", Some(old_token))
+        .with_reload_token(Some("fresh-token"));
     let factory = FakeFactory::new(page);
-    let config = reauth_gateway_config(&temp, &stub.url());
-    let server = GatewayServer::start_with_login(config, factory.clone(), ScriptedProbe::valid())
+    let mut config = reauth_gateway_config(&temp, &stub.url());
+    config.upstream_token = old_token.to_string();
+    config.login_history_file = Some(temp.path().join("login-history.jsonl"));
+    let probe = ManualProbe::new(vec![valid_verdict(), valid_verdict()]);
+    let server = GatewayServer::start_with_login(config, factory.clone(), probe.clone())
         .expect("start reauth gateway");
 
     let status = auth_status(&server);
@@ -3126,9 +3165,12 @@ fn a_business_401_starts_one_background_round_and_later_requests_use_the_restore
     assert!(!factory.requests()[0].headful, "自动恢复不得打开可见 Edge");
     let seen = stub.seen();
     assert_eq!(seen.len(), 2, "{seen:?}");
-    let old_bearer = format!("Bearer {STUB_TOKEN}");
+    let old_bearer = format!("Bearer {old_token}");
     assert_eq!(seen[0].authorization.as_deref(), Some(old_bearer.as_str()));
     assert_eq!(seen[1].authorization.as_deref(), Some("Bearer fresh-token"));
+    assert_eq!(probe.bearers(), vec!["fresh-token"]);
+    let records = read_records(&temp.path().join("login-history.jsonl")).unwrap();
+    assert_eq!(records[0].rejected_before_expiry_status, Some(401));
 
     let later = client_request(server.addr(), &chat_request()).expect("later request");
     assert_eq!(later.status, 200);
@@ -3143,6 +3185,40 @@ fn a_business_401_starts_one_background_round_and_later_requests_use_the_restore
         json!("business_request"),
         "{status}"
     );
+}
+
+#[test]
+fn a_late_401_for_the_previous_bearer_retries_with_the_already_published_bearer() {
+    let temp = TempDir::new("um-rust-reauth-late-401-");
+    let stub = ChatStub::start();
+    stub.push_all(vec![
+        ChatAttempt::DelayedHttpStatus {
+            delay: Duration::from_millis(600),
+            status: 401,
+            body: "upstream rejected".to_string(),
+        },
+        ChatAttempt::Json {
+            status: 200,
+            body: chat_success(),
+        },
+    ]);
+    let page = FakePage::new("http://127.0.0.1:9", Some("fresh-token"));
+    let factory = FakeFactory::new(page);
+    let config = reauth_gateway_config(&temp, &stub.url());
+    let server = GatewayServer::start_with_login(config, factory.clone(), ScriptedProbe::valid())
+        .expect("start reauth gateway");
+    let address = server.addr();
+    let request = thread::spawn(move || client_request(address, &chat_request()).unwrap());
+    wait_for_chat_attempts(&stub, 1);
+    start_background_round(&server);
+    wait_for_status(&server, |status| status["state"] == "valid");
+    assert_eq!(request.join().unwrap().status, 200);
+    assert_eq!(factory.requests().len(), 1);
+    let seen = stub.seen();
+    let stale = format!("Bearer {STUB_TOKEN}");
+    assert_eq!(seen[0].authorization.as_deref(), Some(stale.as_str()));
+    assert_eq!(seen[1].authorization.as_deref(), Some("Bearer fresh-token"));
+    assert_eq!(auth_status(&server)["recovery"]["round"], 1);
 }
 
 #[test]
@@ -3534,6 +3610,7 @@ fn a_network_unknown_round_and_an_upstream_401_round_are_distinguishable() {
             reason: Some("ConnectionError"),
             upstream_status: None,
         },
+        CredentialVerdict::unknown("ConnectionError", None),
         rejected_verdict(),
     ]);
     let (service, _) = login_service_with(
@@ -3544,7 +3621,7 @@ fn a_network_unknown_round_and_an_upstream_401_round_are_distinguishable() {
         |config| {
             configure_form_pair(config);
             config.stage_settle_timeout = Duration::from_millis(20);
-            config.login_timeout = Duration::from_secs(3);
+            config.login_timeout = Duration::from_secs(1);
         },
     );
 
@@ -3587,7 +3664,7 @@ fn credentials_and_upstream_evidence_never_reach_the_history_file() {
         verdict: "unknown",
         reason: Some("ConnectionError Bearer private-fixture-token"),
         upstream_status: None,
-    }]);
+    }; 2]);
     let sink = Arc::new(FakeSink::default());
     let (service, _) = login_service_with(&temp, page, probe, sink, |config| {
         config.um_account = "private-fixture-account".into();

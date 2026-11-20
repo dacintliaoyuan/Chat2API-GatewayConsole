@@ -176,6 +176,7 @@ fn serve_token_page() -> (String, Arc<AtomicBool>) {
 
 fn login_config(base_url: String, temp: &support::TempDir) -> LoginConfig {
     LoginConfig {
+        role: um_gateway::config::Role::Local,
         base_url,
         token_file: temp.path().join("token.json"),
         profile_dir: temp.path().join("profile"),

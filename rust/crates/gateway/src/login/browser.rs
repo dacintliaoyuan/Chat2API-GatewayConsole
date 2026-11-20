@@ -97,6 +97,9 @@ pub trait LoginPage: Send {
     fn url(&self) -> String;
     fn is_closed(&self) -> bool;
     fn read_token(&self) -> Option<String>;
+    fn catalog_access(&self, _base_url: &str, _candidate: &str, _budget: Duration) -> bool {
+        false
+    }
     fn drop_token(&self) -> Result<(), String>;
     fn reload(&self) -> Result<(), String>;
     fn wait(&self, duration: Duration) -> Result<(), String>;
@@ -569,6 +572,29 @@ impl LoginPage for RealPage {
     fn drop_token(&self) -> Result<(), String> {
         self.evaluate("localStorage.removeItem('token')")
             .map(|_| ())
+    }
+
+    fn catalog_access(&self, base_url: &str, candidate: &str, budget: Duration) -> bool {
+        let parameters = json!([base_url, candidate, budget.as_millis()]);
+        let expression = format!(
+            r#"(async ([base, candidate, timeout]) => {{
+                if (location.origin !== new URL(base).origin ||
+                    localStorage.getItem('token') !== candidate) return false;
+                try {{
+                    const r = await fetch('/api/models', {{
+                        headers: {{ Accept: 'application/json', Authorization: 'Bearer ' + candidate }},
+                        credentials: 'same-origin', redirect: 'error', cache: 'no-store',
+                        signal: AbortSignal.timeout(timeout),
+                    }});
+                    return r.status === 200 && Array.isArray((await r.json()).data);
+                }} catch {{ return false; }}
+            }})({parameters})"#
+        );
+        self.call(
+            "Runtime.evaluate",
+            json!({ "expression": expression, "returnByValue": true, "awaitPromise": true }),
+        )
+        .is_ok_and(|result| result["result"]["value"] == Value::Bool(true))
     }
 
     fn reload(&self) -> Result<(), String> {

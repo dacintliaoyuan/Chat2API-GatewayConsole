@@ -1362,7 +1362,7 @@ fn forward_json_inner(
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
-                credential.api_key,
+                &credential,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final {
@@ -1540,7 +1540,7 @@ fn forward_aggregate_inner(
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
-                credential.api_key,
+                &credential,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final {
@@ -1845,7 +1845,7 @@ fn forward_stream_with_inner(
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
-                credential.api_key,
+                &credential,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final {

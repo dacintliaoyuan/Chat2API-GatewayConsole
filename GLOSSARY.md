@@ -41,6 +41,14 @@ _Avoid_: 永久登录、另存账号密码、绕过 Duo
 一次登录交互是否创建可见浏览器窗口的呈现选择；默认 headless-first，正常路径不创建可见窗口，不要求 `DISPLAY` 或 `WAYLAND_DISPLAY`，并复用同一 profile。
 _Avoid_: 默认可见窗口、每次新建专用 profile
 
+**登录驱动 (Login driver)**:
+执行 UM 登录页面动作的浏览器自动化实现；它不决定认证状态、重登录轮次或人工接管语义。当前云端用原生 Rust CDP，本机可用 Playwright opt-in。
+_Avoid_: 登录流程、重登录、认证状态
+
+**本地凭据注入 (Local credential injection)**:
+本机启动器从 `%LOCALAPPDATA%\Chat2API\credentials.json` 读取 UM 账号密码，并以 `CHAT2API_UM_ACCOUNT` / `CHAT2API_UM_PASSWORD` 注入 8000；它与 Edge autofill 是两条独立来源。
+_Avoid_: Edge 保存密码、浏览器 autofill、把环境变量当凭据存储
+
 **按需登录 (On-demand login)**:
 控制台先核验当前 UM 凭据，仅在凭据缺失或被拒时才触发登录轮次；当前凭据有效时跳过登录，不打开窗口。它与强制重新登录、自动重登录分别计量。
 _Avoid_: 每次点击都登录、把有效凭据当成掉线

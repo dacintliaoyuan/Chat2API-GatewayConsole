@@ -515,10 +515,10 @@ pub fn handle_non_success(
     elapsed: Duration,
     deadline: Instant,
     budget: &mut AuthWaitBudget,
-    used_api_key: bool,
+    credential: &crate::readonly::UpstreamCredential,
 ) -> StatusAction {
     let status = response.status;
-    if used_api_key && matches!(status, 401 | 403) {
+    if credential.api_key && matches!(status, 401 | 403) {
         // The operator-saved API key may be stale while the JWT bearer is still
         // accepted. Mark it rejected for evidence, then resend with the bearer;
         // an API key alone never triggers a login round.
@@ -543,6 +543,10 @@ pub fn handle_non_success(
     if let Some(plan) = plan {
         drop(response);
         if plan.reauthentication.is_some() {
+            if !state.proxy.record_bearer_rejection(&credential.value, status) {
+                // 旧请求的拒绝晚于凭据轮换时，下一次发送重新读取当前凭据。
+                return StatusAction::Retry;
+            }
             return match state
                 .reauth
                 .trigger(ReauthTrigger::BusinessRequest, budget, deadline)

@@ -12,9 +12,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::config::{
-    parse_upstream_base_url, upstream_host_header, upstream_uses_tls, ConfigError, GatewayConfig,
+    parse_upstream_base_url, upstream_host_header, upstream_uses_tls, ConfigError, GatewayConfig, Role,
 };
 use crate::error::GatewayError;
 use crate::http::Response;
@@ -212,7 +213,16 @@ impl UpstreamClient {
         path: &str,
         bearer: Option<&str>,
     ) -> Result<(u16, Option<Value>), UpstreamFailure> {
-        let response = self.request("GET", path, bearer, None, PROBE_TIMEOUT)?;
+        self.get_json_probe_with_timeout(path, bearer, PROBE_TIMEOUT)
+    }
+
+    pub(crate) fn get_json_probe_with_timeout(
+        &self,
+        path: &str,
+        bearer: Option<&str>,
+        timeout: Duration,
+    ) -> Result<(u16, Option<Value>), UpstreamFailure> {
+        let response = self.request("GET", path, bearer, None, timeout)?;
         let payload = serde_json::from_slice(&response.body).ok();
         Ok((response.status, payload))
     }
@@ -385,10 +395,18 @@ struct StoredCredentialObservation {
     summary: Option<String>,
 }
 
+struct BearerRejection {
+    fingerprint: [u8; 32],
+    status: u16,
+    before_expiry: bool,
+}
+
 /// The read-only proxy state shared by every request.
 pub struct ProxyState {
     pub base_url: String,
     bearer: Arc<Mutex<String>>,
+    local_recovery: bool,
+    bearer_rejection: Mutex<Option<BearerRejection>>,
     api_key: Mutex<Option<String>>,
     api_key_rejected: AtomicBool,
     credential_observation: Mutex<Option<StoredCredentialObservation>>,
@@ -420,6 +438,8 @@ impl ProxyState {
         Ok(Self {
             base_url: config.upstream_base_url.clone(),
             bearer,
+            local_recovery: config.role == Role::Local,
+            bearer_rejection: Mutex::new(None),
             api_key: Mutex::new(None),
             api_key_rejected: AtomicBool::new(false),
             credential_observation: Mutex::new(None),
@@ -652,7 +672,7 @@ impl ProxyState {
     /// upstream fault record is updated here, and the response shape stays the
     /// frozen readiness contract.
     pub fn readiness_snapshot_from(&self, source: FaultSource) -> (bool, Value) {
-        let observation = self.classify_credential();
+        let observation = self.classify_credential(matches!(source, FaultSource::BackgroundProbe));
         let (verdict, reason, upstream_status) = (
             observation.verdict,
             observation.reason,
@@ -686,7 +706,7 @@ impl ProxyState {
         )
     }
 
-    fn classify_credential(&self) -> CredentialObservation {
+    fn classify_credential(&self, remember_rejection: bool) -> CredentialObservation {
         let credential = self.upstream_credential();
         if credential.value.is_empty() {
             return self.record_credential_observation(CredentialObservation {
@@ -697,6 +717,7 @@ impl ProxyState {
             });
         }
         let mut observation = self.probe_credential(&credential.value);
+        let mut bearer_used = (!credential.api_key).then_some(credential.value.clone());
         if credential.api_key && observation.verdict == "rejected" {
             // An operator-saved API key may be stale. It must never wedge the
             // gateway: mark it rejected for evidence, then let the JWT bearer
@@ -708,6 +729,20 @@ impl ProxyState {
             let bearer = self.bearer();
             if !bearer.is_empty() {
                 observation = self.probe_credential(&bearer);
+                bearer_used = Some(bearer);
+            }
+        }
+        if let (Some(bearer), Some(status)) = (bearer_used, observation.upstream_status) {
+            if remember_rejection
+                && observation.verdict == "rejected"
+                && !self.record_bearer_rejection(&bearer, status)
+            {
+                return CredentialObservation {
+                    verdict: "unknown",
+                    reason: Some("credential_changed"),
+                    upstream_status: None,
+                    summary: None,
+                };
             }
         }
         self.record_credential_observation(observation)
@@ -836,6 +871,7 @@ impl ProxyState {
     /// The model catalog; `raw_fresh` is the share entry's strict refresh.
     pub fn models(&self, raw_fresh: bool) -> Result<(Value, bool), GatewayError> {
         let credential = self.upstream_credential();
+        let mut bearer_used = (!credential.api_key).then_some(credential.value.clone());
         let observed = self
             .upstream
             .get_json("/api/models", Some(&credential.value));
@@ -847,7 +883,9 @@ impl ProxyState {
                 if bearer.is_empty() {
                     Ok((status, payload))
                 } else {
-                    self.upstream.get_json("/api/models", Some(&bearer))
+                    let observed = self.upstream.get_json("/api/models", Some(&bearer));
+                    bearer_used = Some(bearer);
+                    observed
                 }
             }
             other => other,
@@ -869,6 +907,9 @@ impl ProxyState {
                 })
             }
             Ok((status, payload)) if matches!(status, 401 | 403) => {
+                if let Some(bearer) = bearer_used {
+                    self.record_bearer_rejection(&bearer, status);
+                }
                 self.record_auth_rejection(status, summarize_payload(&payload));
                 return Err(GatewayError::reauthentication_required(Some(
                     "upstream_rejected",
@@ -976,7 +1017,7 @@ impl ProxyState {
 
     /// Whether the current bearer is accepted right now.
     pub fn credential_valid(&self) -> bool {
-        self.classify_credential().verdict == "valid"
+        self.classify_credential(false).verdict == "valid"
     }
 
     /// Publish the next periodic check as an interval from now.
@@ -1025,6 +1066,26 @@ impl ProxyState {
     /// The current in-memory bearer.
     pub fn bearer(&self) -> String {
         self.bearer.lock().expect("bearer poisoned").clone()
+    }
+
+    /// Return false for an observation that completed after the bearer changed.
+    pub(crate) fn record_bearer_rejection(&self, used: &str, status: u16) -> bool {
+        if !self.local_recovery || used.is_empty() {
+            return true;
+        }
+        let bearer = self.bearer.lock().expect("bearer poisoned");
+        if bearer.as_str() != used {
+            return false;
+        }
+        let mut rejection = self.bearer_rejection.lock().expect("bearer rejection poisoned");
+        if rejection.is_none() {
+            *rejection = Some(BearerRejection {
+                fingerprint: Sha256::digest(used.as_bytes()).into(),
+                status,
+                before_expiry: crate::auth_state::rejected_before_expiry(used, epoch_now()),
+            });
+        }
+        true
     }
 
     /// The preferred upstream credential: the saved API key first, the JWT bearer
@@ -1129,7 +1190,11 @@ impl ProxyState {
 
     /// Publish a newly committed credential into the running process.
     pub fn set_bearer(&self, token: &str) {
-        *self.bearer.lock().expect("bearer poisoned") = token.to_string();
+        let mut bearer = self.bearer.lock().expect("bearer poisoned");
+        if bearer.as_str() != token {
+            *bearer = token.to_string();
+            *self.bearer_rejection.lock().expect("bearer rejection poisoned") = None;
+        }
     }
 
     /// Drop the cached catalog after a credential change.
@@ -1139,7 +1204,7 @@ impl ProxyState {
 
     /// The `/admin/auth/verify` single-shot observation.
     pub fn verify_snapshot(&self) -> Value {
-        let observation = self.classify_credential();
+        let observation = self.classify_credential(false);
         self.faults.record_probe(
             FaultSource::ActiveProbe,
             observation.result_label(),
@@ -1198,6 +1263,18 @@ impl CredentialSink for ProxyState {
 
     fn credential_evidence(&self) -> CredentialEvidence {
         self.credential_evidence()
+    }
+
+    fn bearer_rejection(&self, candidate: Option<&str>) -> Option<(u16, bool)> {
+        let rejection = self.bearer_rejection.lock().expect("bearer rejection poisoned");
+        let rejection = rejection.as_ref()?;
+        if let Some(candidate) = candidate {
+            let fingerprint: [u8; 32] = Sha256::digest(candidate.as_bytes()).into();
+            if fingerprint != rejection.fingerprint {
+                return None;
+            }
+        }
+        Some((rejection.status, rejection.before_expiry))
     }
 }
 

@@ -307,6 +307,7 @@ export type UmLoginRound = {
   reason: string | null;
   upstreamStatus: number | null;
   evidenceVerdict: string | null;
+  rejectedBeforeExpiryStatus?: number | null;
 };
 export type UmLoginRoundsPage = {
   rounds: UmLoginRound[];

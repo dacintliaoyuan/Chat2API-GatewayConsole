@@ -317,7 +317,12 @@ function loginRoundsHtml(r: UmRequests, ui: RequestsUi): string {
         <td role="cell" data-label="触发来源">${esc(TRIGGER[row.triggerSource ?? ""] ?? row.triggerSource ?? "未记录")}</td>
         <td class="num" role="cell" data-label="提交">${full(row.submitCount)}</td>
         <td role="cell" data-label="结果">${outcome === null ? '<span class="um-absent">尚未结束</span>' : esc(outcome)}</td>
-        <td role="cell" data-label="原因">${row.reason === null ? "—" : esc(row.reason)}</td>
+        <td role="cell" data-label="原因">${esc([
+          row.reason,
+          row.rejectedBeforeExpiryStatus == null
+            ? null
+            : `旧凭据尚未到期，已被 UM 拒绝（HTTP ${row.rejectedBeforeExpiryStatus}）`,
+        ].filter(Boolean).join(" · ") || "—")}</td>
         <td role="cell" data-label="上游 / 证据">${row.upstreamStatus === null ? "无 HTTP 状态" : `HTTP ${row.upstreamStatus}`}${evidence === null ? "" : ` · ${esc(evidence)}`}</td>
       </tr>`;
     })

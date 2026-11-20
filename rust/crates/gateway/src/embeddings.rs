@@ -114,7 +114,7 @@ fn handle_embeddings_inner(
                 attempt_started.elapsed(),
                 deadline,
                 &mut auth_wait_budget,
-                credential.api_key,
+                &credential,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final { error, .. } => {

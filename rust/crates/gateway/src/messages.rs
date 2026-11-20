@@ -293,7 +293,7 @@ fn forward_json_inner(context: &MessagesContext<'_>, stats: &mut AttemptStats) -
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
-                credential.api_key,
+                &credential,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final {
@@ -419,7 +419,7 @@ fn forward_stream_inner(
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
-                credential.api_key,
+                &credential,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final {

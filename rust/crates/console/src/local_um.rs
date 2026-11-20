@@ -2779,6 +2779,11 @@ pub fn um_login_rounds(
                     .trigger_source
                     .as_deref()
                     .is_some_and(|source| source.to_lowercase().contains(&search))
+                || record.rejected_before_expiry_status.is_some_and(|status| {
+                    format!("旧凭据尚未到期，已被 UM 拒绝 HTTP {status}")
+                        .to_lowercase()
+                        .contains(&search)
+                })
         })
         .map(login_round_row)
         .collect();
@@ -2830,6 +2835,7 @@ fn login_round_row(record: &LoginRoundRecord) -> Value {
         "reason": record.reason.as_deref().map(sanitize_reason),
         "upstreamStatus": record.upstream_status,
         "evidenceVerdict": bounded(record.evidence_verdict.as_deref(), 40),
+        "rejectedBeforeExpiryStatus": record.rejected_before_expiry_status,
     })
 }
 

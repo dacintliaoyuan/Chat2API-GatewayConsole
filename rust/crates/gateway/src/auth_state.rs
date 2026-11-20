@@ -83,11 +83,7 @@ impl AuthStateFile {
 /// `exp`; the `jti`/`id` values themselves are never written, only the first
 /// twelve hex characters of their SHA-256 digest.
 pub fn token_claims(document: Option<&TokenDocument>) -> Value {
-    let payload = document
-        .map(|document| document.token.as_str())
-        .and_then(|token| token.split('.').nth(1))
-        .and_then(base64url_decode)
-        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok());
+    let payload = document.and_then(|document| jwt_payload(&document.token));
     let claim = |name: &str| {
         payload
             .as_ref()
@@ -112,6 +108,17 @@ pub fn token_claims(document: Option<&TokenDocument>) -> Value {
         "token_jti_sha12": hashed("jti"),
         "token_id_sha12": hashed("id"),
     })
+}
+
+pub(crate) fn jwt_payload(token: &str) -> Option<Value> {
+    let bytes = base64url_decode(token.split('.').nth(1)?)?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub(crate) fn rejected_before_expiry(token: &str, rejected_at: f64) -> bool {
+    jwt_payload(token)
+        .and_then(|payload| payload.get("exp").and_then(Value::as_f64))
+        .is_some_and(|expires| expires > rejected_at)
 }
 
 fn sha12(value: &str) -> String {

@@ -250,7 +250,7 @@ fn forward_json_inner(context: &ChatContext<'_>, stats: &mut AttemptStats) -> Ch
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
-                credential.api_key,
+                &credential,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final { error, .. } => {
@@ -422,7 +422,7 @@ fn forward_stream_inner(
                 attempt_started.elapsed(),
                 context.deadline,
                 &mut auth_wait_budget,
-                credential.api_key,
+                &credential,
             ) {
                 StatusAction::Retry => continue,
                 StatusAction::Final { error, .. } => {
