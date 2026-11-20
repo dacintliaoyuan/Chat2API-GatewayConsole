@@ -285,6 +285,12 @@ else
     HEALTH_PORT="$(release_gateway_port "$TARGET_RUNTIME")"
   fi
   if [ "$TARGET_RUNTIME" = "$RELEASE_RUNTIME_RUST" ]; then
+    # A Windows checkout builds the archive, where executable mode bits are not
+    # meaningful. Normalize the two Rust entrypoints before the target release is
+    # validated or installed; otherwise a correct archive fails here with 644.
+    chmod 0755 \
+      "$TARGET/um-cloud-deploy/bin/um-gateway" \
+      "$TARGET/um-cloud-deploy/bin/um-console" 2>/dev/null || true
     require_rust_console_binary "$TARGET"
   fi
   ensure_runtime_env "$TARGET" "$TARGET_RUNTIME" || \

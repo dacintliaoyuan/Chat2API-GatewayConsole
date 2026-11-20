@@ -364,6 +364,17 @@ class RustReleaseScriptTests(unittest.TestCase):
         self.assertIn('wait_port_open 127.0.0.1 "$HEALTH_PORT"', install)
         self.assertIn('health_gate "$HEALTH_PORT"', install)
 
+    def test_update_normalizes_rust_entrypoints_before_validation(self):
+        update = _read("update.sh")
+        chmod = update.index('chmod 0755 \\\n      "$TARGET/um-cloud-deploy/bin/um-gateway"')
+        require = update.index('require_rust_console_binary "$TARGET"')
+        self.assertLess(
+            chmod, require,
+            "update.sh must normalize Windows-built executable bits before validating "
+            "the Rust console binary")
+        self.assertIn(
+            '"$TARGET/um-cloud-deploy/bin/um-console"', update)
+
     def test_update_and_rollback_follow_the_release_runtimes(self):
         for name in ("update.sh", "rollback.sh"):
             text = _read(name)
