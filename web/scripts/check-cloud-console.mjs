@@ -76,6 +76,10 @@ const status = load(
   `export { createStatusActions } from "./src/cloud/pages/status.ts";`,
   "cloud-status-entry.ts"
 );
+const diagnostics = load(
+  `export { loginRoundsHtml, diagnosticsHtml } from "./src/cloud/pages/diagnostics.ts";`,
+  "cloud-diagnostics-entry.ts"
+);
 
 const operation = (id, state = "running") => ({
   id,
@@ -2365,6 +2369,50 @@ function failedUsagePayload(count = 3) {
   };
 }
 
+/** #116: the cloud login-round read face. The full Beijing timestamp is
+ *  2026-11-20 08:46:30; the second row is still running. */
+function loginRoundsPayload() {
+  return {
+    status: "ok",
+    error: null,
+    rounds: [
+      {
+        key: "cloud-run-a:2",
+        runId: "cloud-run-a",
+        round: 2,
+        state: "completed",
+        triggerSource: "auth_watch",
+        visible: true,
+        startedAt: Date.UTC(2026, 10, 20, 0, 46, 30),
+        endedAt: Date.UTC(2026, 10, 20, 0, 47, 10),
+        submitCount: 2,
+        outcome: "restored",
+        reason: null,
+        upstreamStatus: 200,
+        evidenceVerdict: "valid",
+      },
+      {
+        key: "cloud-run-a:3",
+        runId: "cloud-run-a",
+        round: 3,
+        state: "running",
+        triggerSource: "business_request",
+        visible: false,
+        startedAt: Date.UTC(2026, 10, 20, 0, 50, 0),
+        endedAt: null,
+        submitCount: 0,
+        outcome: null,
+        reason: null,
+        upstreamStatus: null,
+        evidenceVerdict: null,
+      },
+    ],
+    scope: "云端 8003 UM 登录轮次历史（最近 7 天 / 4 MiB）· 只读",
+    truncated: false,
+    coverage: { status: "ok", source: "login-history.jsonl" },
+  };
+}
+
 test("D18-13: the final Chrome page keeps focus, tooltip, redraw and theme behaviour", async () => {
   const { chromium } = await loadPlaywright();
   const browser = await chromium.launch({ channel: "chrome" });
@@ -3119,7 +3167,61 @@ test("single page: the old ops and services content is gone and only the two rea
   assert.doesNotMatch(fold, /维护动作/);
 });
 
-test("single page: only 总览 is in the nav, old hashes fall back and the drawer still opens", async () => {
+test("#116: the cloud run log shows login rounds with full Beijing time, filters and failure honesty", () => {
+  const html = diagnostics.loginRoundsHtml(
+    overviewModel({
+      loginRounds: ready(loginRoundsPayload()),
+      loginRoundsUi: { round: "2", q: "ConnectionError", loading: false },
+    })
+  );
+  for (const text of [
+    "运行日志 · UM 登录轮次",
+    "2026-11-20 08:46:30",
+    "已完成",
+    "可见窗口",
+    "后台巡检",
+    "已恢复",
+    "HTTP 200",
+    "有效",
+    "进行中",
+    "尚未结束",
+  ])
+    assert.match(html, new RegExp(text), text);
+  assert.match(html, /data-cloud-login-rounds-round/);
+  assert.match(html, /value="2"/);
+  assert.match(html, /value="ConnectionError"/);
+  assert.match(html, /data-cloud-login-rounds-row="cloud-run-a:2"/);
+
+  const failed = diagnostics.loginRoundsHtml(
+    overviewModel({
+      loginRounds: {
+        state: "failed",
+        kind: "error",
+        reason: "login_history_unreadable: invalid login history record",
+        status: 500,
+        at: Date.now(),
+        last: null,
+      },
+      loginRoundsUi: { round: "", q: "", loading: false },
+    })
+  );
+  assert.match(failed, /读取失败/);
+  assert.match(failed, /不用空结果代替/);
+  assert.doesNotMatch(failed, /保留范围内没有符合条件的登录轮次/);
+
+  const empty = diagnostics.loginRoundsHtml(
+    overviewModel({
+      loginRounds: ready({
+        ...loginRoundsPayload(),
+        rounds: [],
+      }),
+      loginRoundsUi: { round: "", q: "", loading: false },
+    })
+  );
+  assert.match(empty, /保留范围内没有符合条件的登录轮次/);
+});
+
+test("two areas: 总览 and 请求与诊断, old hashes fall back and the drawer still opens", async () => {
   const { chromium } = await loadPlaywright();
   const browser = await chromium.launch({ channel: "chrome" });
   const context = await browser.newContext({
@@ -3194,6 +3296,13 @@ test("single page: only 总览 is in the nav, old hashes fall back and the drawe
         }),
       });
     }
+    if (path === "/api/console/um/login-rounds") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(loginRoundsPayload()),
+      });
+    }
     if (path === "/api/console/cloud-ops") {
       return route.fulfill({
         status: 200,
@@ -3239,10 +3348,15 @@ test("single page: only 总览 is in the nav, old hashes fall back and the drawe
       state: "attached",
       timeout: 10000,
     });
-    assert.equal(await page.locator("[data-cloud-area]").count(), 1);
-    assert.equal(
-      await page.locator("[data-cloud-area]").getAttribute("aria-label"),
-      "总览"
+    assert.equal(await page.locator("[data-cloud-area]").count(), 2);
+    assert.deepEqual(
+      await page.locator("[data-cloud-area]").evaluateAll((nodes) =>
+        nodes.map(
+          (node) =>
+            node.querySelector(".shell-nav-text")?.textContent?.trim() ?? ""
+        )
+      ),
+      ["总览", "请求与诊断"]
     );
     for (const hash of ["keys", "usage", "services", "ops"]) {
       await page.evaluate((value) => {
@@ -3317,6 +3431,26 @@ test("single page: only 总览 is in the nav, old hashes fall back and the drawe
         .getAttribute("aria-expanded"),
       "false"
     );
+    await page.evaluate(() => {
+      location.hash = "diagnostics";
+    });
+    await page.waitForSelector("[data-cloud-login-rounds-row]", {
+      timeout: 10000,
+    });
+    assert.equal(
+      await page
+        .locator('[data-cloud-area="diagnostics"]')
+        .getAttribute("aria-current"),
+      "page",
+      "请求与诊断没有成为当前区域"
+    );
+    const diagnosticsText = (
+      await page.locator("body").innerText()
+    ).replace(/\s+/g, " ");
+    assert.match(diagnosticsText, /2026-11-20 08:46:30/);
+    assert.match(diagnosticsText, /后台巡检/);
+    assert.match(diagnosticsText, /HTTP 200/);
+    assert.match(diagnosticsText, /已恢复/);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

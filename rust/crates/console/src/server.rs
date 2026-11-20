@@ -533,7 +533,12 @@ fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response 
     }
     let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
     let rest: Vec<&str> = segments.iter().skip(2).copied().collect();
-    if state.config.role == Role::Cloud {
+    // #116: the cloud console assembles exactly one UM read face — the durable
+    // login-round history written by 8003. Every other `um/*` face stays 503.
+    let cloud_login_rounds = state.config.role == Role::Cloud
+        && method == "GET"
+        && rest.as_slice() == ["um", "login-rounds"];
+    if state.config.role == Role::Cloud && !cloud_login_rounds {
         if let Some(blocked) = rest
             .first()
             .filter(|prefix| CLOUD_CAPABILITY_PREFIXES.contains(prefix))
@@ -545,12 +550,18 @@ fn dispatch(state: &AppState, request: &Request, console_port: u16) -> Response 
         if let Some(response) = handle_local_usage_read(state, method, &rest, &target) {
             return response;
         }
-        if rest.first() == Some(&"um") {
-            if method != "GET" {
-                return ConsoleError::unknown_path().response();
-            }
+    }
+    if rest.first() == Some(&"um") {
+        if method != "GET" {
+            return ConsoleError::unknown_path().response();
+        }
+        if rest.as_slice() == ["um", "login-rounds"] {
+            return handle_um_login_rounds(state, &target);
+        }
+        if state.config.role == Role::Local {
             return handle_local_um(state, &rest, &target);
         }
+        return ConsoleError::capability_not_assembled("um").response();
     }
     match method {
         "GET" => handle_console_get(state, &rest, &target),
@@ -1113,6 +1124,54 @@ fn handle_local_usage_read(
     }
 }
 
+/// #115/#116: the one read face both the local 8001 and cloud 8002 consoles
+/// share. It only parses the file the gateway writes; a missing file is an empty
+/// history, an unreadable one is an error, and the read never probes, logs in or
+/// appends a record.
+fn handle_um_login_rounds(state: &AppState, raw_target: &str) -> Response {
+    let query = query_values(raw_target);
+    let value = |name: &str| query.get(name).and_then(|values| values.first()).cloned();
+    let limit = match value("limit") {
+        None => 200,
+        Some(raw) => match raw.trim().parse::<i64>() {
+            Ok(limit) => limit,
+            Err(_) => {
+                return ConsoleError::new(
+                    400,
+                    json!({"error": "invalid_um_query", "detail": "limit 必须是整数"}),
+                )
+                .response();
+            }
+        },
+    };
+    let round = match value("round") {
+        None => None,
+        Some(raw) => match raw.trim().parse::<u64>() {
+            Ok(round) => Some(round),
+            Err(_) => {
+                return ConsoleError::new(
+                    400,
+                    json!({"error": "invalid_um_query", "detail": "round 必须是非负整数"}),
+                )
+                .response();
+            }
+        },
+    };
+    match local_um::um_login_rounds(
+        &state.config.login_history_file,
+        round,
+        value("q").as_deref(),
+        limit,
+    ) {
+        Ok(payload) => send_json(200, &payload),
+        Err(error) => ConsoleError::new(
+            500,
+            json!({"error": "login_history_unreadable", "detail": error.0}),
+        )
+        .response(),
+    }
+}
+
 fn handle_local_um(state: &AppState, rest: &[&str], raw_target: &str) -> Response {
     if rest.len() != 2 {
         return ConsoleError::unknown_path().response();
@@ -1191,47 +1250,7 @@ fn handle_local_um(state: &AppState, rest: &[&str], raw_target: &str) -> Respons
             }
             return send_json(200, &payload);
         }
-        "login-rounds" => {
-            let limit = match value("limit") {
-                None => 200,
-                Some(raw) => match raw.trim().parse::<i64>() {
-                    Ok(limit) => limit,
-                    Err(_) => {
-                        return ConsoleError::new(
-                            400,
-                            json!({"error": "invalid_um_query", "detail": "limit 必须是整数"}),
-                        )
-                        .response();
-                    }
-                },
-            };
-            let round = match value("round") {
-                None => None,
-                Some(raw) => match raw.trim().parse::<u64>() {
-                    Ok(round) => Some(round),
-                    Err(_) => {
-                        return ConsoleError::new(
-                            400,
-                            json!({"error": "invalid_um_query", "detail": "round 必须是非负整数"}),
-                        )
-                        .response();
-                    }
-                },
-            };
-            return match local_um::um_login_rounds(
-                &state.config.login_history_file,
-                round,
-                value("q").as_deref(),
-                limit,
-            ) {
-                Ok(payload) => send_json(200, &payload),
-                Err(error) => ConsoleError::new(
-                    500,
-                    json!({"error": "login_history_unreadable", "detail": error.0}),
-                )
-                .response(),
-            };
-        }
+        "login-rounds" => return handle_um_login_rounds(state, raw_target),
         "request-logs" => {
             let limit = match value("limit") {
                 None => 100,

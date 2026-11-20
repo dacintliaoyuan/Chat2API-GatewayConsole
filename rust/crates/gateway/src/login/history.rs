@@ -1,10 +1,10 @@
-//! Durable UM login-round history (#115).
+//! Durable UM login-round history (#115/#116).
 //!
-//! The local 8000 gateway owns one JSONL record per actually started login
-//! round, whichever trigger started it. Concurrent triggers and internal browser
-//! retries belong to that round and never add another record. The console reads
-//! the same file without probing the upstream, starting a login or writing a
-//! record.
+//! The local 8000 and cloud 8003 gateways each own one JSONL record per actually
+//! started login round, whichever trigger started it. Concurrent triggers and
+//! internal browser retries belong to that round and never add another record. The
+//! console reads the same file without probing the upstream, starting a login or
+//! writing a record.
 //!
 //! The file is append-only with bounded rotation: the newest records survive,
 //! the active file rotates at [`ROTATE_BYTES`], records older than
@@ -26,6 +26,8 @@ use crate::reauth::ReauthTrigger;
 
 pub const LOGIN_HISTORY_FILE_ENV: &str = "CHAT2API_LOGIN_HISTORY_FILE";
 pub const DEFAULT_LOGIN_HISTORY_FILE: &str = "data/login-history.jsonl";
+/// The cloud 8003 process keeps its history beside the other writable share state.
+pub const DEFAULT_CLOUD_LOGIN_HISTORY_FILE: &str = "/var/lib/um-share/login-history.jsonl";
 /// How long a round stays queryable.
 pub const RETENTION_SECONDS: f64 = 7.0 * 86_400.0;
 /// The active file rotates once it would grow past this size.
@@ -39,18 +41,23 @@ pub const MAX_REASON_CHARS: usize = 160;
 
 const ACTIVE_NAME: &str = "login-history.jsonl";
 
+/// The role default: local 8000 keeps its history beside its fault record;
+/// cloud 8003 keeps it in the writable share state.
+pub fn default_path(role: crate::config::Role) -> PathBuf {
+    match role {
+        crate::config::Role::Local => PathBuf::from(DEFAULT_LOGIN_HISTORY_FILE),
+        crate::config::Role::Cloud => PathBuf::from(DEFAULT_CLOUD_LOGIN_HISTORY_FILE),
+    }
+}
+
 /// Resolve the effective path. An explicit value wins even in candidate mode; a
-/// candidate without one never writes a production file, and only the local
-/// production pair 8000/8001 owns the default.
+/// candidate without one never writes a production file.
 pub fn effective_path(
     explicit: Option<PathBuf>,
     role: crate::config::Role,
     candidate: bool,
 ) -> Option<PathBuf> {
-    explicit.or_else(|| {
-        (role == crate::config::Role::Local && !candidate)
-            .then(|| PathBuf::from(DEFAULT_LOGIN_HISTORY_FILE))
-    })
+    explicit.or_else(|| (!candidate).then(|| default_path(role)))
 }
 
 /// One login round as the console reads it.
@@ -714,20 +721,21 @@ mod tests {
     }
 
     #[test]
-    fn the_default_path_is_shared_by_the_local_pair_only() {
+    fn the_default_path_follows_the_role_and_candidates_stay_memory_only() {
         assert_eq!(
             effective_path(None, crate::config::Role::Local, false),
             Some(PathBuf::from(DEFAULT_LOGIN_HISTORY_FILE))
         );
         assert_eq!(
             effective_path(None, crate::config::Role::Cloud, false),
-            None
+            Some(PathBuf::from(DEFAULT_CLOUD_LOGIN_HISTORY_FILE))
         );
         assert_eq!(effective_path(None, crate::config::Role::Local, true), None);
+        assert_eq!(effective_path(None, crate::config::Role::Cloud, true), None);
         assert_eq!(
             effective_path(
                 Some(PathBuf::from("tmp/history.jsonl")),
-                crate::config::Role::Local,
+                crate::config::Role::Cloud,
                 true
             ),
             Some(PathBuf::from("tmp/history.jsonl"))

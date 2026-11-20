@@ -59,7 +59,8 @@ export async function runCloud(c) {
   await page.waitForSelector(".cloud-console", { timeout: 20000 });
   const body = await text();
 
-  // Ticket #4: the nav is one item; the four old areas are gone.
+  // Ticket #4: the nav has 总览; #116 adds 请求与诊断 with its one run-log
+  // source. The four old areas stay gone.
   const nav = await page.evaluate(() =>
     [...document.querySelectorAll(".shell-nav [data-cloud-area]")].map(
       (node) =>
@@ -68,8 +69,8 @@ export async function runCloud(c) {
   );
   must(
     "cloud-nav",
-    nav.length === 1 && nav[0] === "总览",
-    `导航不是只有总览：${nav.join(" / ") || "空"}`
+    nav.length === 2 && nav[0] === "总览" && nav[1] === "请求与诊断",
+    `导航不是 总览 / 请求与诊断：${nav.join(" / ") || "空"}`
   );
   must(
     "cloud-nav-old-areas",

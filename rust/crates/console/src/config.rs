@@ -61,6 +61,8 @@ pub const DEFAULT_DSH_SNAPSHOT: &str = "data/dsh-ledger-20260902.json";
 pub const DEFAULT_SERVICE_LOG: &str = "chat2api/chat2api.log";
 pub const DEFAULT_UPSTREAM_FAULT_LOG: &str = "data/upstream-faults.json";
 pub const DEFAULT_LOGIN_HISTORY_FILE: &str = "data/login-history.jsonl";
+/// #116: the cloud 8003 gateway writes its history beside the other share state.
+pub const DEFAULT_CLOUD_LOGIN_HISTORY_FILE: &str = "/var/lib/um-share/login-history.jsonl";
 pub const DEFAULT_CONSOLE_STATE_FILE: &str = "data/console-state.sqlite3";
 pub const DEFAULT_CONSOLE_LOCK_DIR: &str = "data/console-locks";
 pub const DEFAULT_SHARE_STORE_FILE: &str = "data/share-store.db";
@@ -164,7 +166,7 @@ pub struct ConsoleConfig {
     /// #103: the durable UM upstream fault record written by the local 8000
     /// gateway and read here without probing or writing.
     pub upstream_fault_log: PathBuf,
-    /// #115: the durable UM login-round history written by the local 8000
+    /// #115/#116: the durable UM login-round history written by the 8000/8003
     /// gateway and read here without probing, logging in or writing.
     pub login_history_file: PathBuf,
     pub watch_dir: Option<PathBuf>,
@@ -208,7 +210,7 @@ impl Default for ConsoleConfig {
             dsh_snapshot: PathBuf::from(DEFAULT_DSH_SNAPSHOT),
             service_log: PathBuf::from(DEFAULT_SERVICE_LOG),
             upstream_fault_log: PathBuf::from(DEFAULT_UPSTREAM_FAULT_LOG),
-            login_history_file: PathBuf::from(DEFAULT_LOGIN_HISTORY_FILE),
+            login_history_file: default_login_history_file(Role::Cloud),
             watch_dir: None,
             console_dist_dir: PathBuf::from(DEFAULT_DIST_DIR),
             repo_root: PathBuf::from(DEFAULT_REPO_ROOT),
@@ -283,6 +285,15 @@ pub fn resolve_role(role: Option<&str>, deployment: Option<&str>) -> Result<Role
     Ok(seen[0])
 }
 
+/// The role default of the durable login-round history (#116): local 8001 reads
+/// the 8000 file, cloud 8002 reads the 8003 share-state file.
+pub fn default_login_history_file(role: Role) -> PathBuf {
+    match role {
+        Role::Local => PathBuf::from(DEFAULT_LOGIN_HISTORY_FILE),
+        Role::Cloud => PathBuf::from(DEFAULT_CLOUD_LOGIN_HISTORY_FILE),
+    }
+}
+
 /// Python's local composition root defaults (`usagesrv.py` + `share/management.py`):
 /// the local role owns these paths unless an explicit environment value wins.
 pub fn apply_local_defaults(config: &mut ConsoleConfig) {
@@ -333,6 +344,7 @@ impl ConsoleConfig {
             config.role = resolve_role(None, Some(&value))?;
         }
         config.port = config.role.default_port();
+        config.login_history_file = default_login_history_file(config.role);
         if config.role == Role::Local {
             apply_local_defaults(&mut config);
         }

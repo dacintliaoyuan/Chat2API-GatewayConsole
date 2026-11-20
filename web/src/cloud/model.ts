@@ -4,6 +4,7 @@ import type {
   CloudSecurityStatus,
   ShareUsage,
   ShareUsageRequestsPage,
+  UmLoginRoundsPagePayload,
 } from "../console/backend/types";
 import type {
   ActionRow,
@@ -110,6 +111,13 @@ export type RequestsUi = {
   loading: boolean;
 };
 
+/** #116: the cloud read-only login-round history filters. */
+export type LoginRoundsUi = {
+  round: string;
+  q: string;
+  loading: boolean;
+};
+
 export interface CloudModel {
   summary: ReadState<CloudSummary>;
   health: ReadState<CloudHealth>;
@@ -125,6 +133,9 @@ export interface CloudModel {
   usageRequests: ReadState<ShareUsageRequestsPage> | null;
   /** Ticket #9: result/time filters and cursor-backed pages. */
   usageRequestsUi: RequestsUi;
+  /** #116: the cloud 8003 login-round history read and its filters. */
+  loginRounds: ReadState<UmLoginRoundsPagePayload> | null;
+  loginRoundsUi: LoginRoundsUi;
   /** D18-11: only the security read face remains. */
   security: ReadState<CloudSecurityStatus>;
   display: ReadState<DisplaySession>;

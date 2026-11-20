@@ -8,14 +8,49 @@
 mod support;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use support::TempDir;
 
+use um_gateway::config::{GatewayConfig, Role};
 use um_gateway::login::history::{
     read_records, HistoryLimits, LoginHistory, MAX_TOTAL_BYTES, RETENTION_SECONDS,
 };
 use um_gateway::reauth::ReauthTrigger;
+
+#[test]
+fn cloud_production_owns_the_share_state_history_and_candidates_stay_memory_only() {
+    let mut config = GatewayConfig::default();
+    config.role = Role::Cloud;
+    config.candidate = false;
+    assert_eq!(
+        config.effective_login_history_file(),
+        Some(PathBuf::from("/var/lib/um-share/login-history.jsonl"))
+    );
+
+    config.candidate = true;
+    assert_eq!(
+        config.effective_login_history_file(),
+        None,
+        "候选模式不得写生产历史"
+    );
+
+    config.login_history_file = Some(PathBuf::from("tmp/explicit-history.jsonl"));
+    assert_eq!(
+        config.effective_login_history_file(),
+        Some(PathBuf::from("tmp/explicit-history.jsonl")),
+        "显式路径覆盖角色默认"
+    );
+
+    config.role = Role::Local;
+    config.login_history_file = None;
+    config.candidate = false;
+    assert_eq!(
+        config.effective_login_history_file(),
+        Some(PathBuf::from("data/login-history.jsonl")),
+        "本机默认路径不变"
+    );
+}
 
 fn history_file(temp: &TempDir) -> std::path::PathBuf {
     temp.path().join("login-history.jsonl")

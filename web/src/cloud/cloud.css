@@ -1035,6 +1035,20 @@
   color: var(--md-on-surface);
   font-size: 13px;
 }
+.cloud-field-inline input {
+  min-width: 140px;
+  max-width: 240px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-r-full);
+  background: var(--md-surface-lowest);
+  color: var(--md-on-surface);
+  font-size: 13px;
+}
+.cloud-login-rounds-table td {
+  vertical-align: top;
+}
 .cloud-scope-note {
   margin: 0 0 10px;
   font-size: 12px;

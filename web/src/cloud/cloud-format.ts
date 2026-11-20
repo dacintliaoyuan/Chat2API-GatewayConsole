@@ -48,6 +48,19 @@ export const when = (ms: number) =>
   beijingDay(ms) === beijingDay(Date.now())
     ? clock(ms)
     : `${beijingDay(ms).slice(5).replace("-", "/")} ${clock(ms)}`;
+/** 「2026-11-20 08:46:30」 in Beijing time: the full date and seconds for
+ *  a record that may span days. */
+const SHANGHAI_TIME = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+export const fullWhen = (ms: number) =>
+  typeof ms === "number" && Number.isFinite(ms) && Math.abs(ms) <= 8.64e15
+    ? `${beijingDay(ms)} ${SHANGHAI_TIME.format(ms)}`
+    : "时间未知";
 
 export const tonePill = (tone: Tone, word: string) =>
   `<span class="pill" data-tone="${tone}"><span class="dot" aria-hidden="true"></span>${escapeHtml(word)}</span>`;

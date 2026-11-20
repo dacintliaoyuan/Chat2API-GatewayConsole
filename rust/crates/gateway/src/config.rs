@@ -680,11 +680,12 @@ impl GatewayConfig {
         crate::auth_state::effective_path(self.auth_state_file.clone(), self.role, self.candidate)
     }
 
-    /// The durable login-round history path (#115).
+    /// The durable login-round history path (#115/#116).
     ///
-    /// The local production process (8000) owns `data/login-history.jsonl` by
-    /// default; a candidate keeps the history in memory unless it injects an
-    /// explicit path, and the cloud role never reads the local file.
+    /// An explicit setting wins in every mode; without one, production uses the
+    /// role default (local `data/login-history.jsonl`, cloud
+    /// `/var/lib/um-share/login-history.jsonl`) and a candidate keeps the
+    /// history in memory.
     pub fn effective_login_history_file(&self) -> Option<PathBuf> {
         crate::login::history::effective_path(
             self.login_history_file.clone(),

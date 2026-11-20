@@ -4,14 +4,18 @@ import {
   type ShareKeyRow,
   type ShareStatusPayload,
 } from "../console/share-model";
-import { BackendClient } from "../console/backend/client";
+import { BackendClient, BackendReadError } from "../console/backend/client";
 import { createFetchTransport } from "../console/backend/transport";
-import { normalizeCloudSecurityStatus } from "../console/backend/normalize";
+import {
+  normalizeCloudSecurityStatus,
+  UmReadStatusError,
+} from "../console/backend/normalize";
 import type {
   CloudSecurityStatus,
   ReadResult,
   ShareUsage,
   ShareUsageRequestsPage,
+  UmLoginRoundsPagePayload,
 } from "../console/backend/types";
 
 /** Read layer of the cloud console. Every read keeps its own honest state:
@@ -593,6 +597,68 @@ export async function readShareUsageRequests(
       kind: "error",
       reason: error instanceof Error ? error.message : String(error),
       status: null,
+      at,
+      last: keep,
+    };
+  }
+}
+
+/** #116: one honest failed state for the shared read face. A request without
+ *  an answer is 「未得到应答」; a backend refusal keeps its status so the page can
+ *  tell 未认证 / 无权读取 / 后端未提供 apart; an unreadable history is an error,
+ *  never an empty list. */
+function cloudReadFailure(
+  error: unknown,
+  at: number
+): { kind: FailureKind; reason: string; status: number | null } {
+  if (error instanceof BackendReadError) {
+    if (error.kind === "timeout" || error.kind === "network")
+      return { kind: "no-answer", reason: error.message, status: null };
+    if (error.kind === "contract")
+      return { kind: "error", reason: error.message, status: error.status };
+    if (error.status === 401)
+      return { kind: "unauthenticated", reason: error.message, status: 401 };
+    if (error.status === 403)
+      return { kind: "refused", reason: error.message, status: 403 };
+    if (error.status === 404 || error.status === 503)
+      return { kind: "unavailable", reason: error.message, status: error.status };
+    return { kind: "error", reason: error.message, status: error.status };
+  }
+  if (error instanceof UmReadStatusError) {
+    if (
+      error.status === "missing" ||
+      error.status === "unavailable" ||
+      error.status === "unconfigured"
+    )
+      return { kind: "unavailable", reason: error.message, status: null };
+    if (error.status === "denied")
+      return { kind: "refused", reason: error.message, status: null };
+    return { kind: "error", reason: error.message, status: null };
+  }
+  return {
+    kind: "error",
+    reason: error instanceof Error ? error.message : String(error),
+    status: null,
+  };
+}
+
+/** #116: the cloud 8002 read of the durable login-round history written by
+ *  8003. The read only parses the retained file: it never probes the upstream,
+ *  starts a login or appends a record. */
+export async function readUmLoginRounds(
+  previous: ReadState<UmLoginRoundsPagePayload> | null,
+  query: { round: string; q: string }
+): Promise<ReadState<UmLoginRoundsPagePayload>> {
+  const last = previous ? lastValue(previous) : null;
+  const keep = last ? { value: last.value, at: last.at } : null;
+  const at = Date.now();
+  try {
+    const value = await usageClient.readUmLoginRounds(query, 200);
+    return { state: "ready", value, at };
+  } catch (error) {
+    return {
+      state: "failed",
+      ...cloudReadFailure(error, at),
       at,
       last: keep,
     };

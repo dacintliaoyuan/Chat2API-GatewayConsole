@@ -16,6 +16,7 @@ import {
   readShareUsage,
   readShareUsageFailed,
   readSummary,
+  readUmLoginRounds,
   type OperationRead,
   type OperationRow,
 } from "./cloud-reads";
@@ -53,6 +54,7 @@ import type {
 import { createKeysPage } from "./pages/keys";
 import { createRequestsPage } from "./pages/requests";
 import { createStatusActions } from "./pages/status";
+import { diagnosticsHtml } from "./pages/diagnostics";
 
 export type {
   CloudModel,
@@ -84,13 +86,19 @@ export type {
 } from "./operation-intent";
 
 /** Ticket #4: the console is one page. The old `#keys`, `#usage`, `#services`
- *  and `#ops` hashes resolve to this one area instead of a removed page. */
-export type Area = "overview";
+ *  and `#ops` hashes resolve to this one area instead of a removed page.
+ *  #116 adds 请求与诊断 → 运行日志 with its one login-round source. */
+export type Area = "overview" | "diagnostics";
 const AREAS: readonly { id: Area; label: string; icon: string }[] = [
   {
     id: "overview",
     label: "总览",
     icon: `<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>`,
+  },
+  {
+    id: "diagnostics",
+    label: "请求与诊断",
+    icon: `<path d="M6 3.5h8l4 4v13H6z"/><path d="M14 3.5V8h4M9 12h6M9 15.5h6M9 19h4"/>`,
   },
 ];
 const REFRESH_MS = 30_000;
@@ -185,6 +193,8 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
       page: 0,
       loading: false,
     },
+    loginRounds: null,
+    loginRoundsUi: { round: "", q: "", loading: false },
     security: loading,
     display: loading,
     displayState: loading,
@@ -489,14 +499,19 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
         else button.removeAttribute("aria-current");
       });
     root.querySelector("[data-cloud-title]")!.textContent = meta.label;
-    const failed = [
-      model.status,
-      model.keys,
-      model.usage,
-      // Ticket #9：失败读数也是本页的读取面，失败时同样要计入页头。
-      model.usageFailed,
-      model.actions,
-    ].filter((r) => r.state === "failed").length;
+    const failed =
+      area === "overview"
+        ? [
+            model.status,
+            model.keys,
+            model.usage,
+            // Ticket #9：失败读数也是本页的读取面，失败时同样要计入页头。
+            model.usageFailed,
+            model.actions,
+          ].filter((r) => r.state === "failed").length
+        : model.loginRounds?.state === "failed"
+          ? 1
+          : 0;
     root.querySelector("[data-cloud-subtitle]")!.textContent =
       lastRefresh === null
         ? "云端 API 服务 · 正在读取"
@@ -508,7 +523,7 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
       content.contains(document.activeElement)
         ? focusKey(document.activeElement)
         : null;
-    const html = overviewHtml(model);
+    const html = area === "overview" ? overviewHtml(model) : diagnosticsHtml(model);
     if (content.dataset.area !== area || content.innerHTML !== html) {
       content.innerHTML = html;
       content.dataset.area = area;
@@ -536,6 +551,8 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
       "data-cloud-usage-key",
       "data-cloud-usage-model",
       "data-cloud-usage-time",
+      "data-cloud-login-rounds-round",
+      "data-cloud-login-rounds-q",
       "data-cloud-metric",
       "data-cloud-rank",
       "data-cloud-drill",
@@ -577,12 +594,19 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
         step("usage", readShareUsage),
         step("usageFailed", readShareUsageFailed),
       ];
+      // #116: the run-log area reads the login-round history on its own page.
+      if (area === "diagnostics")
+        reads.push(step("loginRounds", refreshLoginRounds));
       await Promise.all(reads);
       lastRefresh = Date.now();
       render();
       // Ticket #9: a refresh also re-reads the request-detail page the reader
       // already loaded, keeping the same filter and page.
-      if (model.usageRequests !== null && !model.usageRequestsUi.loading)
+      if (
+        area === "overview" &&
+        model.usageRequests !== null &&
+        !model.usageRequestsUi.loading
+      )
         void requests.loadRequestsPage(model.usageRequestsUi.page);
       void reconcileIntents();
     } finally {
@@ -600,6 +624,25 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
     model.usageFailed = await readShareUsageFailed(model.usageFailed);
     render();
   }
+  let loginRoundsSeq = 0;
+  /** #116: an explicit filter read. A failed read stays a failure, never an
+   *  empty list; the previous value is kept as stale evidence. */
+  async function loadLoginRounds(): Promise<void> {
+    const seq = ++loginRoundsSeq;
+    model.loginRoundsUi.loading = true;
+    model.loginRounds = { state: "loading" };
+    render();
+    const read = await readUmLoginRounds(model.loginRounds, {
+      round: model.loginRoundsUi.round,
+      q: model.loginRoundsUi.q,
+    });
+    if (seq !== loginRoundsSeq) return;
+    model.loginRounds = read;
+    model.loginRoundsUi.loading = false;
+    render();
+  }
+  const refreshLoginRounds = (previous: CloudModel["loginRounds"]) =>
+    readUmLoginRounds(previous, model.loginRoundsUi);
 
   function addFeedback(entry: Omit<Feedback, "key" | "at" | "done">): Feedback {
     const row: Feedback = {
@@ -976,6 +1019,10 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
       void refresh();
       return;
     }
+    if (target.closest("[data-cloud-login-rounds-retry]")) {
+      void loadLoginRounds();
+      return;
+    }
     const copyApiUrl = target.closest<HTMLElement>(
       "[data-cloud-copy-api-url]"
     );
@@ -1228,6 +1275,17 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
     // plaintext, the plain dialog and the open Key detail.
     render();
   }
+  root.addEventListener("submit", (event) => {
+    const form = (event.target as Element).closest<HTMLFormElement>(
+      "[data-cloud-login-rounds-form]"
+    );
+    if (!form) return;
+    event.preventDefault();
+    const data = new FormData(form);
+    model.loginRoundsUi.round = String(data.get("round") ?? "").trim();
+    model.loginRoundsUi.q = String(data.get("q") ?? "").trim();
+    void loadLoginRounds();
+  });
   root.addEventListener("change", (event) => {
     const target = event.target as Element;
     const usageTime = target.closest<HTMLSelectElement>(
@@ -1365,6 +1423,10 @@ export function mountCloudConsole(stage: HTMLElement, gate: RoleGate): void {
     if (plainDialog.open) plainDialog.close("navigated");
     render();
     root.querySelector(".shell-main")!.scrollTop = 0;
+    // #116: the run-log area reads its source on first entry; later refreshes
+    // keep the same filter and re-read it in place.
+    if (area === "diagnostics" && model.loginRounds === null)
+      void loadLoginRounds();
   });
   window.addEventListener("pagehide", () => {
     // A page kept in the back/forward cache must not restore a visible secret:
