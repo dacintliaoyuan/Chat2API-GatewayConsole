@@ -502,12 +502,14 @@ fn an_unreachable_gateway_keeps_its_reason_and_does_not_claim_login() {
 #[test]
 fn the_tray_tooltip_reports_the_login_state_without_sensitive_values() {
     let valid = AuthRead::Status(status(AuthState::Valid));
-    assert!(tray_tooltip(Some(&valid)).contains("已登录"));
+    assert!(tray_tooltip(Some(&valid), false).contains("已登录"));
     let logging_in = AuthRead::Status(status(AuthState::LoggingIn));
-    assert!(tray_tooltip(Some(&logging_in)).contains("登录中"));
-    assert!(tray_tooltip(None).contains("尚未登录"));
+    assert!(tray_tooltip(Some(&logging_in), false).contains("登录中"));
+    assert!(tray_tooltip(None, false).contains("尚未登录"));
     let unreachable = AuthRead::Unavailable("连接被拒绝".to_string());
-    assert!(!tray_tooltip(Some(&unreachable)).contains("已登录"));
+    assert!(!tray_tooltip(Some(&unreachable), false).contains("已登录"));
+    assert!(tray_tooltip(None, true).contains("日志已暂停"));
+    assert!(!tray_tooltip(None, true).contains("已登录"));
 }
 
 struct RecordingAuthAdmin {

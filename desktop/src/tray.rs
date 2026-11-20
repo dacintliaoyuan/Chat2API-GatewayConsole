@@ -20,8 +20,8 @@ mod imp {
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
         DispatchMessageW, GetCursorPos, LoadIconW, PeekMessageW, PostMessageW, RegisterClassW,
         SetForegroundWindow, TrackPopupMenu, TranslateMessage, UnregisterClassW, IDI_APPLICATION,
-        MF_STRING, MSG, PM_REMOVE, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, WINDOW_EX_STYLE,
-        WINDOW_STYLE, WM_APP, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW,
+        MF_STRING, MSG, PM_REMOVE, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, WM_APP,
+        WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WINDOW_EX_STYLE, WINDOW_STYLE,
     };
 
     pub const SHOW: u8 = 1;
@@ -155,14 +155,14 @@ mod imp {
             }
         }
 
-        /// Updates the hover tooltip (login state only; no account or password).
-        pub fn set_tooltip(&mut self, text: &str) {
+        pub fn set_tooltip(&self, text: &str) {
             let tip = wide(text);
             let length = tip.len().min(self.data.szTip.len());
-            self.data.szTip = [0; 128];
-            self.data.szTip[..length].copy_from_slice(&tip[..length]);
+            let mut data = self.data;
+            data.szTip.fill(0);
+            data.szTip[..length].copy_from_slice(&tip[..length]);
             unsafe {
-                let _ = Shell_NotifyIconW(NIM_MODIFY, &self.data);
+                let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
             }
         }
 

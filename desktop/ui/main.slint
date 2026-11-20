@@ -1,4 +1,4 @@
-import { Button, CheckBox, LineEdit, ListView } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ListView } from "std-widgets.slint";
 
 export struct LogRow {
     at: string,
@@ -143,6 +143,13 @@ export component MainWindow inherits Window {
     in property <string> log-status: "尚未读取日志";
     in property <color> log-tone: Palette.muted;
     in property <[LogRow]> logs: [];
+    in-out property <int> log-filter-level: 0;
+    in-out property <string> log-filter-keyword: "";
+    in-out property <bool> log-follow: true;
+    in-out property <length> log-scroll-y: 0px;
+    in-out property <int> new-log-count: 0;
+    in property <int> log-total: 0;
+    in property <int> log-version: 0;
     in-out property <string> port-input: "7999";
     in property <string> settings-status: "";
     in property <color> settings-tone: Palette.muted;
@@ -159,8 +166,20 @@ export component MainWindow inherits Window {
     callback toggle-password-visible();
     callback save-port(string);
     callback refresh-logs();
+    callback apply-log-filter(int, string);
     callback hide-requested();
     callback quit-requested();
+
+    changed log-version => {
+        if (root.log-follow && root.logs.length > 0) {
+            log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
+        }
+    }
+    changed page => {
+        if (root.page == 1 && root.log-follow && root.logs.length > 0) {
+            log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
+        }
+    }
 
     VerticalLayout {
         padding: 16px;
@@ -335,12 +354,57 @@ export component MainWindow inherits Window {
                         spacing: 8px;
                         PageTitle {
                             title: "请求与诊断";
-                            subtitle: "本实例运行日志 · 最近记录（#126 接入实时增量）";
+                            subtitle: "本实例运行日志 · 实时增量与断线补读";
                             horizontal-stretch: 1;
                         }
                         Button {
                             text: "刷新";
                             clicked => { root.refresh-logs(); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "级别";
+                            font-size: 12px;
+                            color: Palette.muted;
+                            vertical-alignment: center;
+                        }
+                        ComboBox {
+                            width: 108px;
+                            model: ["全部", "信息", "警告", "错误", "原始"];
+                            current-index <=> root.log-filter-level;
+                            selected(value) => {
+                                root.apply-log-filter(root.log-filter-level, root.log-filter-keyword);
+                            }
+                        }
+                        LineEdit {
+                            width: 180px;
+                            placeholder-text: "关键字（不区分大小写）";
+                            text: root.log-filter-keyword;
+                            edited(text) => {
+                                root.log-filter-keyword = text;
+                                root.apply-log-filter(root.log-filter-level, text);
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text {
+                            text: root.logs.length + " / " + root.log-total + " 条";
+                            font-size: 12px;
+                            color: Palette.muted;
+                            vertical-alignment: center;
+                        }
+                        Button {
+                            visible: root.new-log-count > 0;
+                            text: "有新日志 " + root.new-log-count + " 条";
+                            clicked => {
+                                root.log-follow = true;
+                                root.new-log-count = 0;
+                                if (root.logs.length > 0) {
+                                    log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
+                                }
+                            }
                         }
                     }
 
@@ -364,14 +428,21 @@ export component MainWindow inherits Window {
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 Text {
-                                    text: root.logs.length + " 条";
-                                    font-size: 12px;
+                                    text: root.log-follow ? "跟随最新" : "已暂停跟随";
+                                    font-size: 11px;
                                     color: Palette.muted;
                                     vertical-alignment: center;
                                 }
                             }
-                            ListView {
+                            log-list := ListView {
                                 vertical-stretch: 1;
+                                content-y <=> root.log-scroll-y;
+                                scrolled => {
+                                    root.log-follow = (-log-list.content-y + log-list.visible-height) >= (log-list.content-height - 8px);
+                                    if (root.log-follow) {
+                                        root.new-log-count = 0;
+                                    }
+                                }
                                 for row in root.logs : Rectangle {
                                     height: 25px;
                                     width: parent.width;
@@ -408,6 +479,7 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+
                 }
 
                 VerticalLayout {

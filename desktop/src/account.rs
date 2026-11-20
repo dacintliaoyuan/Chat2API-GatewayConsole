@@ -581,7 +581,7 @@ pub fn account_view(saved: &LoadOutcome, auth: Option<&AuthRead>) -> AccountView
 }
 
 /// The tray tooltip: the login state only, never an account or password.
-pub fn tray_tooltip(auth: Option<&AuthRead>) -> String {
+pub fn tray_tooltip(auth: Option<&AuthRead>, paused: bool) -> String {
     let state = match auth {
         Some(AuthRead::Status(status)) => match status.state {
             AuthState::Valid => "已登录",
@@ -590,5 +590,9 @@ pub fn tray_tooltip(auth: Option<&AuthRead>) -> String {
         },
         _ => "尚未登录",
     };
-    format!("本机控制台 · {state}")
+    if paused {
+        format!("本机控制台 · {state} · 日志已暂停")
+    } else {
+        format!("本机控制台 · {state}")
+    }
 }

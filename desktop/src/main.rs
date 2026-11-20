@@ -3,7 +3,7 @@
 //! Slint desktop shell for the local console (issues #123/#124/#125).
 //!
 //! First open skips the UM login, reads the app instance's own gateway health and
-//! log file, saves the model API port and keeps the window in the tray. The app
+//! live log, saves the model API port and keeps the window in the tray. The app
 //! attaches to an already-running instance or starts exactly one managed gateway
 //! child on the configured loopback port. It never touches the existing 8000/8001
 //! pair, never opens its own TCP listener, and hands the saved UM credentials to
@@ -16,12 +16,12 @@ mod tray;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::TimeZone;
-use slint::{CloseRequestResponse, ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
+use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use um_desktop::account::{
     self, account_view, AccountForm, AccountView, AuthAdmin, AuthRead, AuthState, HttpAuthAdmin,
     LoadOutcome,
@@ -33,7 +33,8 @@ use um_desktop::gateway::{
     ThreadSleeper,
 };
 use um_desktop::instance::{self, InstanceError};
-use um_desktop::logs::{self, LogsView};
+use um_desktop::logs::LogEntry;
+use um_desktop::logstream::{filter_entries, LevelFilter, LogStream};
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
 
@@ -43,6 +44,30 @@ static PAUSED: AtomicBool = AtomicBool::new(false);
 static QUIT: AtomicBool = AtomicBool::new(false);
 static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
+static APPLIED_FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// One log-page update produced by the reader thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LogUpdate {
+    entries: Vec<LogEntry>,
+    appended: Vec<LogEntry>,
+    reset: bool,
+    trimmed: usize,
+    failure: Option<String>,
+}
+
+impl LogUpdate {
+    fn failed(reason: String) -> Self {
+        Self {
+            entries: Vec::new(),
+            appended: Vec::new(),
+            reset: false,
+            trimmed: 0,
+            failure: Some(reason),
+        }
+    }
+}
 
 fn tone_color(tone: Tone) -> slint::Color {
     match tone {
@@ -52,14 +77,14 @@ fn tone_color(tone: Tone) -> slint::Color {
     }
 }
 
-fn muted_color() -> slint::Color {
-    slint::Color::from_rgb_u8(81, 93, 112)
-}
-
 fn clock(at: Option<i64>) -> String {
     at.and_then(|at| chrono::Local.timestamp_millis_opt(at).single())
         .map(|time| time.format("%H:%M:%S").to_string())
         .unwrap_or_else(|| "—".to_string())
+}
+
+fn muted_color() -> slint::Color {
+    slint::Color::from_rgb_u8(81, 93, 112)
 }
 
 fn apply_account(window: &MainWindow, view: &AccountView) {
@@ -160,7 +185,18 @@ fn gateway_bin_override() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn apply(window: &MainWindow, overview: &Overview, logs: &LogsView, account: &AccountView) {
+fn log_rows(entries: &[LogEntry]) -> Vec<LogRow> {
+    entries
+        .iter()
+        .map(|entry| LogRow {
+            at: clock(entry.at).into(),
+            level: entry.level.to_uppercase().into(),
+            text: entry.text.clone().into(),
+        })
+        .collect()
+}
+
+fn apply(window: &MainWindow, overview: &Overview, logs: &LogUpdate, account: &AccountView) {
     window.set_gateway_value(overview.gateway.value.clone().into());
     window.set_gateway_detail(overview.gateway.detail.clone().into());
     window.set_gateway_tone(tone_color(overview.gateway.tone));
@@ -177,22 +213,73 @@ fn apply(window: &MainWindow, overview: &Overview, logs: &LogsView, account: &Ac
     window.set_status_line(overview::status_line(overview).into());
     window.set_last_update(clock(Some(chrono::Local::now().timestamp_millis())).into());
 
-    let (log_status, log_tone) = logs::logs_status(logs);
-    window.set_log_status(log_status.into());
-    window.set_log_tone(tone_color(log_tone));
-    if let LogsView::Loaded(entries) = logs {
-        let rows = entries
-            .iter()
-            .map(|entry| LogRow {
-                at: clock(entry.at).into(),
-                level: entry.level.to_uppercase().into(),
-                text: entry.text.clone().into(),
-            })
-            .collect::<Vec<_>>();
-        window.set_logs(ModelRc::from(Rc::new(VecModel::from(rows))));
-    } else {
-        window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
+    apply_logs(window, logs);
+}
+
+fn apply_logs(window: &MainWindow, update: &LogUpdate) {
+    if let Some(reason) = &update.failure {
+        window.set_log_status(format!("日志读取失败：{reason}").into());
+        window.set_log_tone(tone_color(Tone::Bad));
+        return;
     }
+
+    let level = LevelFilter::from_index(window.get_log_filter_level());
+    let keyword = window.get_log_filter_keyword().to_string();
+    let epoch = FILTER_EPOCH.load(Ordering::SeqCst);
+    let filter_changed = APPLIED_FILTER_EPOCH.swap(epoch, Ordering::SeqCst) != epoch;
+    let rebuild = update.reset || update.trimmed > 0 || filter_changed;
+    let follow = window.get_log_follow();
+    let saved_scroll = window.get_log_scroll_y();
+
+    let model = window.get_logs();
+    let Some(model) = model.as_any().downcast_ref::<VecModel<LogRow>>() else {
+        return;
+    };
+    let visible = if rebuild {
+        let rows = log_rows(&filter_entries(&update.entries, level, &keyword));
+        let count = rows.len();
+        let previous = model.row_count();
+        model.set_vec(rows);
+        if follow {
+            window.set_new_log_count(0);
+        } else if filter_changed {
+            window.set_log_scroll_y(0.0);
+        } else if update.trimmed > 0 || previous > count {
+            let removed = update.trimmed.max(previous.saturating_sub(count));
+            window.set_log_scroll_y(saved_scroll + removed as f32 * 25.0);
+        } else {
+            window.set_log_scroll_y(saved_scroll);
+        }
+        count
+    } else {
+        let rows = log_rows(&filter_entries(&update.appended, level, &keyword));
+        let count = rows.len();
+        if !rows.is_empty() {
+            model.extend(rows.iter().cloned());
+            if follow {
+                window.set_new_log_count(0);
+            } else {
+                window.set_new_log_count(window.get_new_log_count() + count as i32);
+            }
+        }
+        model.row_count()
+    };
+
+    window.set_log_total(update.entries.len() as i32);
+    let status = if update.entries.is_empty() {
+        "暂无日志记录（本实例）".to_string()
+    } else if level == LevelFilter::All && keyword.trim().is_empty() {
+        format!("实时增量 · 最近 {} 条", update.entries.len())
+    } else {
+        format!("实时增量 · 显示 {visible} / 共 {} 条", update.entries.len())
+    };
+    window.set_log_status(status.into());
+    window.set_log_tone(tone_color(if update.entries.is_empty() {
+        Tone::Warn
+    } else {
+        Tone::Good
+    }));
+    window.set_log_version(window.get_log_version() + 1);
 }
 
 fn hide_now(window: &MainWindow) {
@@ -293,6 +380,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_instance_path(paths.instance_dir.display().to_string().into());
     window.set_settings_status(settings_status.into());
     window.set_settings_tone(tone_color(settings_tone));
+    window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
 
     let credentials_path = config_path
         .as_ref()
@@ -362,8 +450,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let auth_admin = Arc::clone(&auth_admin);
         std::thread::spawn(move || {
             let mut last_overview: Option<Overview> = None;
-            let mut last_logs: Option<LogsView> = None;
+            let mut last_logs: Option<LogUpdate> = None;
             let mut last_account: Option<AccountView> = None;
+            let mut last_filter_epoch = FILTER_EPOCH.load(Ordering::SeqCst);
+            let mut stream: Option<LogStream> = None;
             loop {
                 if QUIT.load(Ordering::SeqCst) {
                     break;
@@ -378,7 +468,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .card();
                 let overview = overview::read_overview(&probe, &base, supervision);
-                let logs = logs::read_log_file(&service_log);
+                let logs = match stream.as_mut() {
+                    Some(stream) => match stream.poll() {
+                        Ok(outcome) => LogUpdate {
+                            entries: stream.entries(),
+                            appended: outcome
+                                .appended
+                                .into_iter()
+                                .map(|line| line.entry)
+                                .collect(),
+                            reset: outcome.reset,
+                            trimmed: outcome.trimmed,
+                            failure: None,
+                        },
+                        Err(reason) => LogUpdate::failed(reason),
+                    },
+                    None => match LogStream::open(&service_log) {
+                        Ok(opened) => {
+                            let entries = opened.entries();
+                            stream = Some(opened);
+                            LogUpdate {
+                                entries,
+                                appended: Vec::new(),
+                                reset: true,
+                                trimmed: 0,
+                                failure: None,
+                            }
+                        }
+                        Err(reason) => LogUpdate::failed(reason),
+                    },
+                };
                 let auth = match load_control_token(&control_token_path) {
                     Ok(token) => match auth_admin.read_status(&base, &token) {
                         Ok(status) => AuthRead::Status(status),
@@ -394,10 +513,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *auth_state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth);
+                let filter_epoch = FILTER_EPOCH.load(Ordering::SeqCst);
                 let changed = last_overview.as_ref() != Some(&overview)
                     || last_logs.as_ref() != Some(&logs)
-                    || last_account.as_ref() != Some(&account);
+                    || last_account.as_ref() != Some(&account)
+                    || filter_epoch != last_filter_epoch;
                 if changed {
+                    last_filter_epoch = filter_epoch;
                     last_overview = Some(overview.clone());
                     last_logs = Some(logs.clone());
                     last_account = Some(account.clone());
@@ -471,6 +593,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     window.on_refresh_logs(|| {
+        REFRESH_LOGS.store(true, Ordering::SeqCst);
+    });
+
+    window.on_apply_log_filter(|_level, _keyword| {
+        FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
         REFRESH_LOGS.store(true, Ordering::SeqCst);
     });
 
@@ -760,7 +887,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ),
                     _ => (format!("登录未完成：{}", view.state_detail), Tone::Bad),
                 },
-                AuthRead::Unavailable(reason) => (format!("无法打开可见登录：{reason}"), Tone::Bad),
+                AuthRead::Unavailable(reason) => {
+                    (format!("无法打开可见登录：{reason}"), Tone::Bad)
+                }
             };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
@@ -879,6 +1008,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(window) = weak_timer.upgrade() else {
             return;
         };
+        let paused = PAUSED.load(Ordering::SeqCst);
+        let tip = {
+            let auth = auth_tray
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            account::tray_tooltip(auth.as_ref(), paused)
+        };
+        if tip != last_tip {
+            last_tip = tip;
+            if let Some(active) = tray.as_ref() {
+                active.set_tooltip(&last_tip);
+            }
+        }
         if let Some(active) = tray.as_ref() {
             match active.pump() {
                 Some(tray::SHOW) => {
@@ -894,18 +1036,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 _ => {}
-            }
-        }
-        if let Some(active) = tray.as_mut() {
-            let tip = {
-                let auth = auth_tray
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                account::tray_tooltip(auth.as_ref())
-            };
-            if tip != last_tip {
-                active.set_tooltip(&tip);
-                last_tip = tip;
             }
         }
         if QUIT.load(Ordering::SeqCst) {

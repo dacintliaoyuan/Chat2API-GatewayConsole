@@ -563,7 +563,7 @@ impl ProcessLauncher for SharedLauncher {
 }
 
 /// The fake processes do not listen, so the loopback port checks are the only
-/// shared resource. Serialize the supervisor tests that use 7999.
+/// shared resource. Serialize the supervisor tests that use 7997.
 static PORT_LOCK: Mutex<()> = Mutex::new(());
 
 struct FakeWorld {
@@ -618,7 +618,7 @@ impl FakeWorld {
 fn start_waits_for_health_and_reports_a_managed_child() {
     let dir = TempDir::new("gateway-start");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let status = supervisor.start_or_attach();
     assert_eq!(
         status.state,
@@ -626,8 +626,8 @@ fn start_waits_for_health_and_reports_a_managed_child() {
             ownership: Ownership::Managed
         }
     );
-    assert_eq!(status.port, 7999);
-    assert_eq!(status.base_url, "http://127.0.0.1:7999");
+    assert_eq!(status.port, 7997);
+    assert_eq!(status.base_url, "http://127.0.0.1:7997");
     assert_eq!(supervisor.child_count(), 1);
     assert_eq!(world.launcher.spawn_count(), 1);
     assert!(
@@ -641,7 +641,7 @@ fn start_waits_for_health_and_reports_a_managed_child() {
     assert!(record
         .args
         .windows(2)
-        .any(|pair| pair == ["--port", "7999"]));
+        .any(|pair| pair == ["--port", "7997"]));
     assert!(record
         .args
         .windows(2)
@@ -673,8 +673,8 @@ fn start_waits_for_health_and_reports_a_managed_child() {
 fn start_attaches_to_a_healthy_instance_without_spawning() {
     let dir = TempDir::new("gateway-attach");
     let world = FakeWorld::new();
-    world.http.healthy_instance(7999);
-    let mut supervisor = world.supervisor(&dir, 7999);
+    world.http.healthy_instance(7997);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let status = supervisor.start_or_attach();
     assert_eq!(
         status.state,
@@ -692,7 +692,7 @@ fn start_attaches_to_a_healthy_instance_without_spawning() {
 fn a_second_start_reuses_the_single_managed_child() {
     let dir = TempDir::new("gateway-single");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     let _ = supervisor.start_or_attach();
     assert_eq!(world.launcher.spawn_count(), 1);
@@ -703,7 +703,7 @@ fn a_second_start_reuses_the_single_managed_child() {
 fn a_restart_after_the_managed_child_exited_does_not_claim_it() {
     let dir = TempDir::new("gateway-child-exited");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     world.launcher.process(0).lock().unwrap().exit = Some(ProcessExit { code: Some(0) });
     let status = supervisor.start_or_attach();
@@ -743,9 +743,9 @@ fn an_occupied_port_is_a_distinct_state_and_spawns_nothing() {
 fn a_start_failure_reports_the_exit_and_the_stderr_tail() {
     let dir = TempDir::new("gateway-start-failed");
     let world = FakeWorld::new();
-    world.http.fail_port(7999);
-    world.launcher.fail_spawn_on(7999, 1);
-    let mut supervisor = world.supervisor(&dir, 7999);
+    world.http.fail_port(7997);
+    world.launcher.fail_spawn_on(7997, 1);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let status = supervisor.start_or_attach();
     match status.state {
         GatewayState::StartFailed { reason } => {
@@ -763,13 +763,13 @@ fn a_start_failure_reports_the_exit_and_the_stderr_tail() {
 fn a_health_timeout_keeps_the_child_and_reports_the_log() {
     let dir = TempDir::new("gateway-health-timeout");
     let world = FakeWorld::new();
-    world.http.fail_port(7999);
-    let mut supervisor = world.supervisor(&dir, 7999);
+    world.http.fail_port(7997);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let status = supervisor.start_or_attach();
     match status.state {
         GatewayState::HealthTimeout { reason } => {
             assert!(reason.contains("20 秒"), "{reason}");
-            assert!(reason.contains("127.0.0.1:7999"), "{reason}");
+            assert!(reason.contains("127.0.0.1:7997"), "{reason}");
         }
         other => panic!("a health timeout must be distinct, got {other:?}"),
     }
@@ -784,7 +784,7 @@ fn a_missing_binary_is_a_setup_failure_with_the_reason() {
     let program = Err(BinaryError::NotFound {
         tried: vec![PathBuf::from(r"C:\missing\um-gateway.exe")],
     });
-    let mut supervisor = world.supervisor_with_program(&dir, 7999, program);
+    let mut supervisor = world.supervisor_with_program(&dir, 7997, program);
     let status = supervisor.start_or_attach();
     match status.state {
         GatewayState::SetupFailed { reason } => {
@@ -799,12 +799,12 @@ fn a_missing_binary_is_a_setup_failure_with_the_reason() {
 fn stop_posts_shutdown_and_waits_for_its_own_child() {
     let dir = TempDir::new("gateway-stop");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     let status = supervisor.stop(StopReason::UserRequested);
     assert_eq!(status.state, GatewayState::Stopped);
     assert_eq!(supervisor.child_count(), 0);
-    assert_eq!(world.http.shutdown_calls(), vec![7999]);
+    assert_eq!(world.http.shutdown_calls(), vec![7997]);
     let process = world.launcher.process(0);
     let process = process.lock().unwrap();
     assert!(!process.killed, "a graceful stop must not kill the child");
@@ -820,7 +820,7 @@ fn stop_kills_its_own_child_only_after_the_timeout() {
     let dir = TempDir::new("gateway-stop-timeout");
     let world = FakeWorld::new();
     world.http.keep_process_after_shutdown();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     let status = supervisor.stop(StopReason::UserRequested);
     assert_eq!(status.state, GatewayState::Stopped);
@@ -838,13 +838,13 @@ fn stop_kills_its_own_child_only_after_the_timeout() {
 fn stop_never_kills_an_attached_instance() {
     let dir = TempDir::new("gateway-stop-attached");
     let world = FakeWorld::new();
-    world.http.healthy_instance(7999);
-    let mut supervisor = world.supervisor(&dir, 7999);
+    world.http.healthy_instance(7997);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     let status = supervisor.stop(StopReason::UserRequested);
     assert_eq!(status.state, GatewayState::Stopped);
     assert_eq!(supervisor.child_count(), 0);
-    assert_eq!(world.http.shutdown_calls(), vec![7999]);
+    assert_eq!(world.http.shutdown_calls(), vec![7997]);
     assert_eq!(world.launcher.spawn_count(), 0);
 }
 
@@ -852,9 +852,9 @@ fn stop_never_kills_an_attached_instance() {
 fn stop_keeps_an_attached_instance_that_does_not_stop() {
     let dir = TempDir::new("gateway-stop-attached-timeout");
     let world = FakeWorld::new();
-    world.http.healthy_instance(7999);
+    world.http.healthy_instance(7997);
     world.http.keep_healthy_after_shutdown();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     let status = supervisor.stop(StopReason::UserRequested);
     match status.state {
@@ -864,7 +864,7 @@ fn stop_keeps_an_attached_instance_that_does_not_stop() {
         other => panic!("an attached instance that does not stop must fail, got {other:?}"),
     }
     assert_eq!(supervisor.child_count(), 0);
-    assert_eq!(world.http.shutdown_calls(), vec![7999]);
+    assert_eq!(world.http.shutdown_calls(), vec![7997]);
     assert_eq!(world.launcher.spawn_count(), 0);
 }
 
@@ -872,24 +872,24 @@ fn stop_keeps_an_attached_instance_that_does_not_stop() {
 fn switch_port_stops_the_old_and_starts_the_new_port() {
     let dir = TempDir::new("gateway-switch");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     let mut saved = Vec::new();
-    let outcome = supervisor.switch_port(7998, &mut |port| {
+    let outcome = supervisor.switch_port(7996, &mut |port| {
         saved.push(port);
         Ok(())
     });
     assert_eq!(
         outcome,
         PortSwitch::Switched {
-            from: 7999,
-            to: 7998
+            from: 7997,
+            to: 7996
         }
     );
-    assert_eq!(supervisor.port(), 7998);
-    assert_eq!(saved, vec![7998]);
+    assert_eq!(supervisor.port(), 7996);
+    assert_eq!(saved, vec![7996]);
     assert_eq!(world.launcher.spawn_count(), 2);
-    assert_eq!(world.http.shutdown_calls(), vec![7999]);
+    assert_eq!(world.http.shutdown_calls(), vec![7997]);
     assert_eq!(
         supervisor.status().state,
         GatewayState::Running {
@@ -902,7 +902,7 @@ fn switch_port_stops_the_old_and_starts_the_new_port() {
 fn switch_port_rejects_an_occupied_port_and_keeps_the_old_listener() {
     let dir = TempDir::new("gateway-switch-occupied");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("occupy a port");
     let new_port = listener.local_addr().unwrap().port();
@@ -913,13 +913,13 @@ fn switch_port_rejects_an_occupied_port_and_keeps_the_old_listener() {
     });
     match outcome {
         PortSwitch::Rejected { from, to, reason } => {
-            assert_eq!(from, 7999);
+            assert_eq!(from, 7997);
             assert_eq!(to, new_port);
             assert!(reason.contains(&new_port.to_string()), "{reason}");
         }
         other => panic!("an occupied port must be rejected, got {other:?}"),
     }
-    assert_eq!(supervisor.port(), 7999);
+    assert_eq!(supervisor.port(), 7997);
     assert!(saved.is_empty());
     assert_eq!(world.launcher.spawn_count(), 1);
     assert_eq!(
@@ -935,25 +935,25 @@ fn switch_port_rejects_an_occupied_port_and_keeps_the_old_listener() {
 fn switch_port_restores_the_old_port_when_the_new_start_fails() {
     let dir = TempDir::new("gateway-switch-restore");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
-    world.http.fail_port(7998);
-    world.launcher.fail_spawn_on(7998, 1);
+    world.http.fail_port(7996);
+    world.launcher.fail_spawn_on(7996, 1);
     let mut saved = Vec::new();
-    let outcome = supervisor.switch_port(7998, &mut |port| {
+    let outcome = supervisor.switch_port(7996, &mut |port| {
         saved.push(port);
         Ok(())
     });
     match outcome {
         PortSwitch::Restored { from, to, reason } => {
-            assert_eq!(from, 7999);
-            assert_eq!(to, 7998);
+            assert_eq!(from, 7997);
+            assert_eq!(to, 7996);
             assert!(reason.contains("退出码 1"), "{reason}");
         }
         other => panic!("a failed new start must restore the old port, got {other:?}"),
     }
-    assert_eq!(supervisor.port(), 7999);
-    assert_eq!(saved, vec![7998, 7999]);
+    assert_eq!(supervisor.port(), 7997);
+    assert_eq!(saved, vec![7996, 7997]);
     assert_eq!(world.launcher.spawn_count(), 3);
     assert_eq!(
         supervisor.status().state,
@@ -967,7 +967,7 @@ fn switch_port_restores_the_old_port_when_the_new_start_fails() {
 fn switch_port_rejects_governed_ports_without_touching_the_listener() {
     let dir = TempDir::new("gateway-switch-governed");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     for port in [8000, 8001, 8002, 8003] {
         let mut saved = Vec::new();
@@ -977,7 +977,7 @@ fn switch_port_rejects_governed_ports_without_touching_the_listener() {
         });
         match outcome {
             PortSwitch::Rejected { from, to, reason } => {
-                assert_eq!(from, 7999);
+                assert_eq!(from, 7997);
                 assert_eq!(to, port);
                 assert!(reason.contains(&port.to_string()), "{reason}");
             }
@@ -985,7 +985,7 @@ fn switch_port_rejects_governed_ports_without_touching_the_listener() {
         }
         assert!(saved.is_empty());
     }
-    assert_eq!(supervisor.port(), 7999);
+    assert_eq!(supervisor.port(), 7997);
     assert_eq!(world.launcher.spawn_count(), 1);
 }
 
@@ -1028,27 +1028,27 @@ fn switch_port_recovers_from_an_occupied_old_port() {
 fn switch_port_recovers_from_a_start_failure() {
     let dir = TempDir::new("gateway-switch-recover-start");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
-    world.http.fail_port(7999);
-    world.launcher.fail_spawn_on(7999, 1);
+    let mut supervisor = world.supervisor(&dir, 7997);
+    world.http.fail_port(7997);
+    world.launcher.fail_spawn_on(7997, 1);
     assert!(matches!(
         supervisor.start_or_attach().state,
         GatewayState::StartFailed { .. }
     ));
     let mut saved = Vec::new();
-    let outcome = supervisor.switch_port(7998, &mut |port| {
+    let outcome = supervisor.switch_port(7996, &mut |port| {
         saved.push(port);
         Ok(())
     });
     assert_eq!(
         outcome,
         PortSwitch::Switched {
-            from: 7999,
-            to: 7998
+            from: 7997,
+            to: 7996
         }
     );
-    assert_eq!(supervisor.port(), 7998);
-    assert_eq!(saved, vec![7998]);
+    assert_eq!(supervisor.port(), 7996);
+    assert_eq!(saved, vec![7996]);
     assert_eq!(world.launcher.spawn_count(), 2);
 }
 
@@ -1056,14 +1056,14 @@ fn switch_port_recovers_from_a_start_failure() {
 fn switch_port_to_the_same_port_is_unchanged() {
     let dir = TempDir::new("gateway-switch-same");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     let mut saved = Vec::new();
-    let outcome = supervisor.switch_port(7999, &mut |port| {
+    let outcome = supervisor.switch_port(7997, &mut |port| {
         saved.push(port);
         Ok(())
     });
-    assert_eq!(outcome, PortSwitch::Unchanged { port: 7999 });
+    assert_eq!(outcome, PortSwitch::Unchanged { port: 7997 });
     assert!(saved.is_empty());
     assert_eq!(world.launcher.spawn_count(), 1);
 }
@@ -1072,7 +1072,7 @@ fn switch_port_to_the_same_port_is_unchanged() {
 fn quit_stops_the_gateway_before_exiting_the_app() {
     let dir = TempDir::new("gateway-quit");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let _ = supervisor.start_or_attach();
     let mut quit_called = false;
     let mut shutdowns_at_quit = 0;
@@ -1369,7 +1369,7 @@ fn a_real_gateway_is_attached_without_a_second_child() {
 fn restart_with_new_credentials_restarts_the_gateway_with_the_new_environment() {
     let dir = TempDir::new("gateway-restart-credentials");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     let started = supervisor.start_or_attach();
     assert_eq!(
         started.state,
@@ -1400,7 +1400,7 @@ fn restart_with_new_credentials_restarts_the_gateway_with_the_new_environment() 
         2,
         "the old child must be replaced"
     );
-    assert_eq!(world.http.shutdown_calls(), vec![7999]);
+    assert_eq!(world.http.shutdown_calls(), vec![7997]);
     let second = world.launcher.record(1);
     assert_eq!(
         second
@@ -1429,7 +1429,7 @@ fn restart_with_new_credentials_restarts_the_gateway_with_the_new_environment() 
 fn restart_without_credentials_removes_the_environment_on_the_next_spawn() {
     let dir = TempDir::new("gateway-restart-clear");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     supervisor.set_credentials(Some(Credentials {
         account: "someone@um.edu.mo".to_string(),
         password: "super-secret".to_string(),
@@ -1476,7 +1476,7 @@ fn load_control_token_reads_without_creating_a_token() {
 fn a_start_failure_redacts_the_saved_credentials_from_stderr_and_log() {
     let dir = TempDir::new("gateway-credentials-redaction");
     let world = FakeWorld::new();
-    let mut supervisor = world.supervisor(&dir, 7999);
+    let mut supervisor = world.supervisor(&dir, 7997);
     supervisor.set_credentials(Some(Credentials {
         account: "someone@um.edu.mo".to_string(),
         password: "super-secret".to_string(),
@@ -1484,8 +1484,8 @@ fn a_start_failure_redacts_the_saved_credentials_from_stderr_and_log() {
     world
         .launcher
         .set_stderr_text("login someone@um.edu.mo with super-secret\n");
-    world.http.fail_port(7999);
-    world.launcher.fail_spawn_on(7999, 1);
+    world.http.fail_port(7997);
+    world.launcher.fail_spawn_on(7997, 1);
     let status = supervisor.start_or_attach();
     match &status.state {
         GatewayState::StartFailed { reason } => {
