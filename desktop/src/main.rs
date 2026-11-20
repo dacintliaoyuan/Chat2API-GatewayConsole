@@ -13,19 +13,20 @@ mod tray;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::TimeZone;
-use slint::{CloseRequestResponse, ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
+use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use um_desktop::config::{self, DesktopConfig, LoadOutcome};
 use um_desktop::gateway::{
     quit_app, resolve_gateway_binary, GatewayState, GatewayStatus, GatewaySupervisor, HttpGateway,
     InstancePaths, PortSwitch, SystemLauncher, ThreadSleeper,
 };
 use um_desktop::instance::{self, InstanceError};
-use um_desktop::logs::{self, LogsView};
+use um_desktop::logs::LogEntry;
+use um_desktop::logstream::{filter_entries, LevelFilter, LogStream};
 use um_desktop::overview::{self, HttpProbe, Overview, Tone};
 use um_desktop::shell::{ShellAction, ShellEvent, ShellState};
 
@@ -34,6 +35,30 @@ slint::include_modules!();
 static PAUSED: AtomicBool = AtomicBool::new(false);
 static QUIT: AtomicBool = AtomicBool::new(false);
 static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
+static FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
+static APPLIED_FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// One log-page update produced by the reader thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LogUpdate {
+    entries: Vec<LogEntry>,
+    appended: Vec<LogEntry>,
+    reset: bool,
+    trimmed: usize,
+    failure: Option<String>,
+}
+
+impl LogUpdate {
+    fn failed(reason: String) -> Self {
+        Self {
+            entries: Vec::new(),
+            appended: Vec::new(),
+            reset: false,
+            trimmed: 0,
+            failure: Some(reason),
+        }
+    }
+}
 
 fn tone_color(tone: Tone) -> slint::Color {
     match tone {
@@ -62,7 +87,18 @@ fn gateway_bin_override() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn apply(window: &MainWindow, overview: &Overview, logs: &LogsView) {
+fn log_rows(entries: &[LogEntry]) -> Vec<LogRow> {
+    entries
+        .iter()
+        .map(|entry| LogRow {
+            at: clock(entry.at).into(),
+            level: entry.level.to_uppercase().into(),
+            text: entry.text.clone().into(),
+        })
+        .collect()
+}
+
+fn apply(window: &MainWindow, overview: &Overview, logs: &LogUpdate) {
     window.set_gateway_value(overview.gateway.value.clone().into());
     window.set_gateway_detail(overview.gateway.detail.clone().into());
     window.set_gateway_tone(tone_color(overview.gateway.tone));
@@ -81,22 +117,73 @@ fn apply(window: &MainWindow, overview: &Overview, logs: &LogsView) {
     window.set_status_line(overview::status_line(overview).into());
     window.set_last_update(clock(Some(chrono::Local::now().timestamp_millis())).into());
 
-    let (log_status, log_tone) = logs::logs_status(logs);
-    window.set_log_status(log_status.into());
-    window.set_log_tone(tone_color(log_tone));
-    if let LogsView::Loaded(entries) = logs {
-        let rows = entries
-            .iter()
-            .map(|entry| LogRow {
-                at: clock(entry.at).into(),
-                level: entry.level.to_uppercase().into(),
-                text: entry.text.clone().into(),
-            })
-            .collect::<Vec<_>>();
-        window.set_logs(ModelRc::from(Rc::new(VecModel::from(rows))));
-    } else {
-        window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
+    apply_logs(window, logs);
+}
+
+fn apply_logs(window: &MainWindow, update: &LogUpdate) {
+    if let Some(reason) = &update.failure {
+        window.set_log_status(format!("日志读取失败：{reason}").into());
+        window.set_log_tone(tone_color(Tone::Bad));
+        return;
     }
+
+    let level = LevelFilter::from_index(window.get_log_filter_level());
+    let keyword = window.get_log_filter_keyword().to_string();
+    let epoch = FILTER_EPOCH.load(Ordering::SeqCst);
+    let filter_changed = APPLIED_FILTER_EPOCH.swap(epoch, Ordering::SeqCst) != epoch;
+    let rebuild = update.reset || update.trimmed > 0 || filter_changed;
+    let follow = window.get_log_follow();
+    let saved_scroll = window.get_log_scroll_y();
+
+    let model = window.get_logs();
+    let Some(model) = model.as_any().downcast_ref::<VecModel<LogRow>>() else {
+        return;
+    };
+    let visible = if rebuild {
+        let rows = log_rows(&filter_entries(&update.entries, level, &keyword));
+        let count = rows.len();
+        let previous = model.row_count();
+        model.set_vec(rows);
+        if follow {
+            window.set_new_log_count(0);
+        } else if filter_changed {
+            window.set_log_scroll_y(0.0);
+        } else if update.trimmed > 0 || previous > count {
+            let removed = update.trimmed.max(previous.saturating_sub(count));
+            window.set_log_scroll_y(saved_scroll + removed as f32 * 25.0);
+        } else {
+            window.set_log_scroll_y(saved_scroll);
+        }
+        count
+    } else {
+        let rows = log_rows(&filter_entries(&update.appended, level, &keyword));
+        let count = rows.len();
+        if !rows.is_empty() {
+            model.extend(rows.iter().cloned());
+            if follow {
+                window.set_new_log_count(0);
+            } else {
+                window.set_new_log_count(window.get_new_log_count() + count as i32);
+            }
+        }
+        model.row_count()
+    };
+
+    window.set_log_total(update.entries.len() as i32);
+    let status = if update.entries.is_empty() {
+        "暂无日志记录（本实例）".to_string()
+    } else if level == LevelFilter::All && keyword.trim().is_empty() {
+        format!("实时增量 · 最近 {} 条", update.entries.len())
+    } else {
+        format!("实时增量 · 显示 {visible} / 共 {} 条", update.entries.len())
+    };
+    window.set_log_status(status.into());
+    window.set_log_tone(tone_color(if update.entries.is_empty() {
+        Tone::Warn
+    } else {
+        Tone::Good
+    }));
+    window.set_log_version(window.get_log_version() + 1);
 }
 
 fn hide_now(window: &MainWindow) {
@@ -197,6 +284,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_instance_path(paths.instance_dir.display().to_string().into());
     window.set_settings_status(settings_status.into());
     window.set_settings_tone(tone_color(settings_tone));
+    window.set_logs(ModelRc::from(Rc::new(VecModel::<LogRow>::default())));
 
     let program = resolve_gateway_binary(gateway_bin_override(), &app_dir());
     let gateway_supervisor = Arc::new(Mutex::new(Some(GatewaySupervisor::new(
@@ -242,7 +330,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let current_port = Arc::clone(&current_port);
         std::thread::spawn(move || {
             let mut last_overview: Option<Overview> = None;
-            let mut last_logs: Option<LogsView> = None;
+            let mut last_logs: Option<LogUpdate> = None;
+            let mut last_filter_epoch = FILTER_EPOCH.load(Ordering::SeqCst);
+            let mut stream: Option<LogStream> = None;
             loop {
                 if QUIT.load(Ordering::SeqCst) {
                     break;
@@ -257,10 +347,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .card();
                 let overview = overview::read_overview(&probe, &base, supervision);
-                let logs = logs::read_log_file(&service_log);
-                let changed =
-                    last_overview.as_ref() != Some(&overview) || last_logs.as_ref() != Some(&logs);
+                let logs = match stream.as_mut() {
+                    Some(stream) => match stream.poll() {
+                        Ok(outcome) => LogUpdate {
+                            entries: stream.entries(),
+                            appended: outcome
+                                .appended
+                                .into_iter()
+                                .map(|line| line.entry)
+                                .collect(),
+                            reset: outcome.reset,
+                            trimmed: outcome.trimmed,
+                            failure: None,
+                        },
+                        Err(reason) => LogUpdate::failed(reason),
+                    },
+                    None => match LogStream::open(&service_log) {
+                        Ok(opened) => {
+                            let entries = opened.entries();
+                            stream = Some(opened);
+                            LogUpdate {
+                                entries,
+                                appended: Vec::new(),
+                                reset: true,
+                                trimmed: 0,
+                                failure: None,
+                            }
+                        }
+                        Err(reason) => LogUpdate::failed(reason),
+                    },
+                };
+                let filter_epoch = FILTER_EPOCH.load(Ordering::SeqCst);
+                let changed = last_overview.as_ref() != Some(&overview)
+                    || last_logs.as_ref() != Some(&logs)
+                    || filter_epoch != last_filter_epoch;
                 if changed {
+                    last_filter_epoch = filter_epoch;
                     last_overview = Some(overview.clone());
                     last_logs = Some(logs.clone());
                     let weak = weak.clone();
@@ -333,6 +455,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     window.on_refresh_logs(|| {
+        REFRESH_LOGS.store(true, Ordering::SeqCst);
+    });
+
+    window.on_apply_log_filter(|_level, _keyword| {
+        FILTER_EPOCH.fetch_add(1, Ordering::SeqCst);
         REFRESH_LOGS.store(true, Ordering::SeqCst);
     });
 
@@ -446,10 +573,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let supervisor_tray = Arc::clone(&gateway_supervisor);
     let status_tray = Arc::clone(&gateway_status);
     let mut tray = tray;
+    let mut last_paused = false;
     timer.start(TimerMode::Repeated, Duration::from_millis(120), move || {
         let Some(window) = weak_timer.upgrade() else {
             return;
         };
+        let paused = PAUSED.load(Ordering::SeqCst);
+        if paused != last_paused {
+            last_paused = paused;
+            if let Some(active) = tray.as_ref() {
+                active.set_tooltip(if paused {
+                    "本机控制台 · 日志已暂停"
+                } else {
+                    "本机控制台"
+                });
+            }
+        }
         if let Some(active) = tray.as_ref() {
             match active.pump() {
                 Some(tray::SHOW) => {

@@ -5,7 +5,7 @@
 ## 1. 项目特有事实
 
 - **仓库根就是应用根**：`usagesrv.py`、`check_port_bindings.py`、`chat2api/`、`console/`、`share/`、`model_sync/`、`web/`、`tests/`、`um-cloud-deploy/` 都在根级，没有上一级目录。根级模块按域收进包：控制台路由在 `console/`，分享链在 `share/`，模型目录在 `model_sync/`。`usagesrv.py` 不 import `app`；未上线的 `local/` 组合根与 `app/` 装配已删除（ADR 0009）。
-- **桌面 App 壳**：`desktop/` 是独立 Slint crate（`[workspace]`，不在 `rust/` workspace 内，避免 Slint MSRV 抬高主工作区），二进制 `um-desktop`；#123 只做窗口/托盘/单实例、首次打开跳过登录、只读 8000/8001 状态与日志、保存 `%LOCALAPPDATA%\Chat2API\desktop.json`；不接管网关进程（#124）、不登录（#125）。
+- **桌面 App 壳**：`desktop/` 是独立 Slint crate（`[workspace]`，不在 `rust/` workspace 内，避免 Slint MSRV 抬高主工作区），二进制 `um-desktop`；#123 做窗口/托盘/单实例与首次打开跳过登录，#124 监督本实例网关，#126 实时读取本实例服务日志并断线补读；保存 `%LOCALAPPDATA%\Chat2API\desktop.json`；不登录（#125）、不做安装包（#127）。
 - **两个角色**：`UM_SHARE_ROLE=local`（本机 8001，Windows）与 `cloud`（云端 8002，Linux；Python 回滚 8096）；前端按构建期角色装入 `web/src/local/local-console.ts` 或 `web/src/cloud/cloud-console.ts`（ADR 0001）。
 - **生产目录**：`web/dist` 是本机生产页，`web/dist-cloud` 是云端生产页（打包为 `web/dist`）；两者都在 `.gitignore` 里，构建产物不入库。
 - **凭据与运行数据不入库**：`data/`、`profile/`、`tmp/`、`output/`、`chat2api/token.json`、`chat2api/.edge-profile/` 都由根 `.gitignore` 覆盖。

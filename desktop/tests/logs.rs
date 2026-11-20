@@ -84,22 +84,23 @@ fn an_empty_file_is_a_legal_empty_log() {
 }
 
 #[test]
-fn the_tail_keeps_only_the_newest_80_lines() {
+fn the_tail_keeps_only_the_newest_400_lines() {
     let dir = TempDir::new("logs-tail");
     let path = dir.path().join("gateway.log");
-    let text = (1..=100)
+    let text = (1..=500)
         .map(|index| format!("{{\"event\":\"line-{index}\"}}"))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+        + "\n";
     std::fs::write(&path, text).unwrap();
     let view = read_log_file(&path);
     let rows = match &view {
         LogsView::Loaded(rows) => rows,
         other => panic!("expected loaded logs, got {other:?}"),
     };
-    assert_eq!(rows.len(), 80);
-    assert!(rows[0].text.contains("line-21"), "{}", rows[0].text);
-    assert!(rows[79].text.contains("line-100"), "{}", rows[79].text);
+    assert_eq!(rows.len(), 400);
+    assert!(rows[0].text.contains("line-101"), "{}", rows[0].text);
+    assert!(rows[399].text.contains("line-500"), "{}", rows[399].text);
 }
 
 #[test]

@@ -13,7 +13,8 @@ mod imp {
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
-        Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+        Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+        NOTIFYICONDATAW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
@@ -151,6 +152,17 @@ mod imp {
                     }
                     _ => None,
                 }
+            }
+        }
+
+        pub fn set_tooltip(&self, text: &str) {
+            let tip = wide(text);
+            let length = tip.len().min(self.data.szTip.len());
+            let mut data = self.data;
+            data.szTip.fill(0);
+            data.szTip[..length].copy_from_slice(&tip[..length]);
+            unsafe {
+                let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
             }
         }
 
