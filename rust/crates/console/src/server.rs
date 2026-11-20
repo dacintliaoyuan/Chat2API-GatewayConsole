@@ -1157,11 +1157,17 @@ fn handle_um_login_rounds(state: &AppState, raw_target: &str) -> Response {
             }
         },
     };
-    match local_um::um_login_rounds(
+    let scope = if state.config.role == Role::Cloud {
+        "云端 8003"
+    } else {
+        "本机 8000"
+    };
+    match local_um::um_login_rounds_scoped(
         &state.config.login_history_file,
         round,
         value("q").as_deref(),
         limit,
+        scope,
     ) {
         Ok(payload) => send_json(200, &payload),
         Err(error) => ConsoleError::new(
