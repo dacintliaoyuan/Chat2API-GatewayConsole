@@ -313,6 +313,21 @@ pub fn read_usage(ledger: &Path, range: Range, now_ms: i64) -> UsageView {
     }
 }
 
+/// Keeps the last good chart when a refresh cannot read the ledger. The status
+/// still says the refresh failed, so stale points are never presented as fresh.
+pub fn keep_previous_on_failure(previous: &UsageView, next: UsageView) -> UsageView {
+    if next.coverage != Coverage::Unavailable || previous.buckets.is_empty() {
+        return next;
+    }
+    UsageView {
+        buckets: previous.buckets.clone(),
+        token_total: previous.token_total.clone(),
+        request_total: previous.request_total.clone(),
+        coverage: Coverage::Unavailable,
+        message: format!("刷新失败：{}", next.message),
+    }
+}
+
 pub fn read_requests(
     ledger: &Path,
     range: Range,
@@ -436,6 +451,23 @@ fn request_chart(value: &Value) -> RequestChart {
             .iter()
             .map(|model| text(model, ""))
             .collect(),
+    }
+}
+
+/// Keeps the current request page when a refresh cannot read the ledger. The
+/// filters, page cursor and scroll stay with the caller; only the status changes.
+pub fn keep_previous_page_on_failure(previous: &RequestPage, next: RequestPage) -> RequestPage {
+    if next.coverage != Coverage::Unavailable || previous.rows.is_empty() {
+        return next;
+    }
+    RequestPage {
+        rows: previous.rows.clone(),
+        earlier: previous.earlier.clone(),
+        coverage: Coverage::Unavailable,
+        message: format!("刷新失败：{}", next.message),
+        summary: previous.summary.clone(),
+        model_speeds: previous.model_speeds.clone(),
+        chart: previous.chart.clone(),
     }
 }
 

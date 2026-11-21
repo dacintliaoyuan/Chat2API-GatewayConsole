@@ -1,8 +1,9 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, ModelRc, VecModel};
+use um_desktop::config::validate_port;
 
 slint::include_modules!();
 
@@ -49,7 +50,9 @@ fn click(window: &MainWindow, x: f32, y: f32) {
         position,
         button: PointerEventButton::Left,
     });
-    window.window().dispatch_event(WindowEvent::PointerReleased {
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
         position,
         button: PointerEventButton::Left,
     });
@@ -181,6 +184,130 @@ fn settings_scrolls_to_the_account_form_at_minimum_size() {
     assert!(
         window.get_settings_content_height() > window.get_settings_viewport_height(),
         "the settings page must scroll at the minimum window size"
+    );
+}
+
+#[test]
+fn the_port_row_offers_a_numeric_input_and_apply_button() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:8001".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert!(window.get_port_input_numeric(), "端口输入必须是数字输入");
+    assert!(
+        window.get_port_apply_width() > 0.0 && window.get_port_apply_height() > 0.0,
+        "应用按钮必须可见"
+    );
+    assert!(
+        window.get_port_apply_x()
+            >= window.get_port_input_x() + window.get_port_input_width() - 1.0,
+        "应用按钮必须排在端口输入右侧"
+    );
+    assert!(
+        window.get_gateway_address_y()
+            >= window.get_port_apply_y() + window.get_port_apply_height() - 1.0,
+        "模型 API 地址必须单独占第二行"
+    );
+    assert_eq!(
+        window.get_gateway_address_text(),
+        "http://127.0.0.1:8001",
+        "地址行必须显示完整 base URL"
+    );
+}
+
+#[test]
+fn the_port_apply_button_reports_the_entered_port() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_port_input("8100".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let applied = Rc::new(RefCell::new(None::<String>));
+    window.on_save_port({
+        let applied = Rc::clone(&applied);
+        move |text| *applied.borrow_mut() = Some(text.to_string())
+    });
+
+    click(
+        &window,
+        window.get_port_apply_x() + window.get_port_apply_width() / 2.0,
+        window.get_port_apply_y() + window.get_port_apply_height() / 2.0,
+    );
+    assert_eq!(
+        applied.borrow().clone(),
+        Some("8100".to_string()),
+        "点击应用必须把输入端口交给 save-port"
+    );
+}
+
+#[test]
+fn the_apply_button_waits_for_an_in_flight_switch() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_port_input("8100".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let applied = Rc::new(RefCell::new(Vec::<String>::new()));
+    window.on_save_port({
+        let applied = Rc::clone(&applied);
+        move |text| applied.borrow_mut().push(text.to_string())
+    });
+
+    let x = window.get_port_apply_x() + window.get_port_apply_width() / 2.0;
+    let y = window.get_port_apply_y() + window.get_port_apply_height() / 2.0;
+    window.set_port_busy(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click(&window, x, y);
+    assert!(
+        applied.borrow().is_empty(),
+        "切换进行中时应用按钮不能再次提交"
+    );
+
+    window.set_port_busy(false);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click(&window, x, y);
+    assert_eq!(*applied.borrow(), vec!["8100".to_string()]);
+}
+
+#[test]
+fn an_invalid_port_is_marked_and_keeps_the_entered_text() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_port_input("not-a-port".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let applied = Rc::new(RefCell::new(Vec::<String>::new()));
+    window.on_save_port({
+        let applied = Rc::clone(&applied);
+        let window = window.as_weak();
+        move |text| {
+            applied.borrow_mut().push(text.to_string());
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            if let Err(error) = validate_port(&text) {
+                window.set_port_input_invalid(true);
+                window.set_port_input_error(format!("端口无效：{error}").into());
+            }
+        }
+    });
+
+    click(
+        &window,
+        window.get_port_apply_x() + window.get_port_apply_width() / 2.0,
+        window.get_port_apply_y() + window.get_port_apply_height() / 2.0,
+    );
+    assert_eq!(*applied.borrow(), vec!["not-a-port".to_string()]);
+    assert!(window.get_port_input_invalid(), "非法端口必须标记为无效");
+    assert!(
+        window.get_port_input_error_visible(),
+        "非法端口必须显示原因"
+    );
+    assert_eq!(
+        window.get_port_input(),
+        "not-a-port",
+        "被拒绝的端口不能被悄悄改写"
     );
 }
 
@@ -395,16 +522,22 @@ fn narrow_log_filters_keep_the_level_and_leave_room_for_four_complete_rows() {
         position,
         button: PointerEventButton::Left,
     });
-    window.window().dispatch_event(WindowEvent::PointerReleased {
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
         position,
         button: PointerEventButton::Left,
     });
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert_eq!(*applied.borrow(), Some((1, "timeout".into())));
 
-    window.window().set_size(slint::LogicalSize::new(1060.0, 720.0));
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(1060.0, 720.0));
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    window.window().set_size(slint::LogicalSize::new(540.0, 420.0));
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(540.0, 420.0));
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
     assert_eq!(window.get_log_filter_level(), 1);
 }
@@ -465,7 +598,10 @@ fn account_form_tab_order_reaches_toggle_and_buttons() {
     assert!(window.get_save_button_focused(), "Tab reaches save");
     press(&window, Key::Escape);
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
-    assert!(!window.get_account_form_visible(), "Escape cancels the form");
+    assert!(
+        !window.get_account_form_visible(),
+        "Escape cancels the form"
+    );
 }
 
 #[test]
@@ -533,6 +669,273 @@ fn the_page_title_fades_with_the_page_host() {
 }
 
 #[test]
+fn the_overview_address_chip_copies_the_base_url() {
+    let window = window_at(1060.0, 720.0);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let copied = Rc::new(RefCell::new(None::<String>));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| *copied.borrow_mut() = Some(text.to_string())
+    });
+
+    let x = window.get_overview_address_x() + window.get_overview_address_width() / 2.0;
+    let y = window.get_overview_address_y() + window.get_overview_address_height() / 2.0;
+    click(&window, x, y);
+
+    assert_eq!(
+        copied.borrow().clone(),
+        Some("http://127.0.0.1:7999".to_string()),
+        "the overview chip must copy the base URL"
+    );
+}
+
+#[test]
+fn the_overview_v1_chip_copies_the_v1_url() {
+    let window = window_at(1060.0, 720.0);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let copied = Rc::new(RefCell::new(None::<String>));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| *copied.borrow_mut() = Some(text.to_string())
+    });
+
+    let x = window.get_overview_v1_x() + window.get_overview_v1_width() / 2.0;
+    let y = window.get_overview_v1_y() + window.get_overview_v1_height() / 2.0;
+    click(&window, x, y);
+
+    assert_eq!(
+        copied.borrow().clone(),
+        Some("http://127.0.0.1:7999/v1".to_string()),
+        "the /v1 chip must copy the base URL with the /v1 suffix"
+    );
+}
+
+#[test]
+fn the_settings_address_row_copies_the_base_and_v1_urls() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:8001".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let copied = Rc::new(RefCell::new(Vec::<String>::new()));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| copied.borrow_mut().push(text.to_string())
+    });
+
+    click(
+        &window,
+        window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
+        window.get_copy_base_y() + window.get_copy_base_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().last().map(String::as_str),
+        Some("http://127.0.0.1:8001"),
+        "the settings base copy entry must copy the base URL"
+    );
+
+    click(
+        &window,
+        window.get_copy_v1_x() + window.get_copy_v1_width() / 2.0,
+        window.get_copy_v1_y() + window.get_copy_v1_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().last().map(String::as_str),
+        Some("http://127.0.0.1:8001/v1"),
+        "the settings /v1 copy entry must copy the base URL with the /v1 suffix"
+    );
+}
+
+#[test]
+fn the_gateway_address_row_places_both_copy_entries_after_the_url() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:8001".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert!(
+        window.get_copy_base_x()
+            >= window.get_gateway_address_x() + window.get_gateway_address_width() - 1.0,
+        "复制 base 入口必须排在地址右侧"
+    );
+    assert!(
+        window.get_copy_v1_x() >= window.get_copy_base_x() + window.get_copy_base_width() - 1.0,
+        "复制 /v1 入口必须排在复制 base 入口右侧"
+    );
+    for (label, y, height) in [
+        (
+            "复制 base",
+            window.get_copy_base_y(),
+            window.get_copy_base_height(),
+        ),
+        (
+            "复制 /v1",
+            window.get_copy_v1_y(),
+            window.get_copy_v1_height(),
+        ),
+    ] {
+        assert!(
+            y < window.get_gateway_address_y() + window.get_gateway_address_height()
+                && window.get_gateway_address_y() < y + height,
+            "{label} 入口必须和地址在同一行"
+        );
+    }
+}
+
+#[test]
+fn a_successful_switch_shows_the_new_address_in_the_status_row() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(
+        !window.get_settings_status_visible(),
+        "没有状态时状态行不占位"
+    );
+
+    window.set_settings_status("已切换到 127.0.0.1:8100".into());
+    window.set_settings_tone(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert!(
+        window.get_settings_status_visible(),
+        "应用成功后必须显示状态行"
+    );
+    assert_eq!(window.get_settings_status(), "已切换到 127.0.0.1:8100");
+}
+
+#[test]
+fn a_successful_copy_checks_the_clicked_icon_and_clears_after_two_seconds() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    window.on_copy_text(|_| {});
+
+    click(
+        &window,
+        window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
+        window.get_copy_base_y() + window.get_copy_base_height() / 2.0,
+    );
+    window.set_copy_ok(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_copy_base_icon(), "check");
+    assert_eq!(window.get_copy_v1_icon(), "copy");
+    assert_eq!(window.get_copy_status(), "已复制到剪贴板");
+    assert_eq!(window.get_copy_tone(), 0);
+    assert!(window.get_copy_status_visible());
+
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1900));
+    assert!(window.get_copy_status_visible());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(200));
+    assert!(!window.get_copy_status_visible(), "the copy status clears after two seconds");
+    assert_eq!(window.get_copy_base_icon(), "copy");
+
+    click(
+        &window,
+        window.get_copy_v1_x() + window.get_copy_v1_width() / 2.0,
+        window.get_copy_v1_y() + window.get_copy_v1_height() / 2.0,
+    );
+    window.set_copy_ok(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_copy_base_icon(), "copy");
+    assert_eq!(window.get_copy_v1_icon(), "check");
+    assert_eq!(window.get_copy_status(), "已复制到剪贴板");
+}
+
+#[test]
+fn a_failed_copy_reports_the_busy_clipboard() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    window.on_copy_text(|_| {});
+
+    click(
+        &window,
+        window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
+        window.get_copy_base_y() + window.get_copy_base_height() / 2.0,
+    );
+    window.set_copy_error("剪贴板被占用".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert_eq!(window.get_copy_status(), "复制失败：剪贴板被占用");
+    assert_eq!(window.get_copy_tone(), 2);
+    assert!(window.get_copy_status_visible());
+    assert_eq!(window.get_copy_base_icon(), "copy");
+    assert_eq!(window.get_copy_v1_icon(), "copy");
+
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(2100));
+    assert!(!window.get_copy_status_visible());
+}
+
+#[test]
+fn copy_urls_follow_the_active_port() {
+    let window = window_at(1060.0, 720.0);
+    let copied = Rc::new(RefCell::new(None::<String>));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| *copied.borrow_mut() = Some(text.to_string())
+    });
+
+    window.set_active_address("127.0.0.1:8000".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click(
+        &window,
+        window.get_overview_address_x() + window.get_overview_address_width() / 2.0,
+        window.get_overview_address_y() + window.get_overview_address_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().clone(),
+        Some("http://127.0.0.1:8000".to_string()),
+        "the base copy entry follows the port before a switch"
+    );
+
+    window.set_active_address("127.0.0.1:8100".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click(
+        &window,
+        window.get_overview_v1_x() + window.get_overview_v1_width() / 2.0,
+        window.get_overview_v1_y() + window.get_overview_v1_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().clone(),
+        Some("http://127.0.0.1:8100/v1".to_string()),
+        "the /v1 copy entry follows the port after a switch"
+    );
+}
+
+#[test]
+fn addresses_stay_copyable_when_the_gateway_is_not_running() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    window.set_gateway_value("未运行".into());
+    window.set_gateway_tone(2);
+    window.set_active_address("127.0.0.1:7999".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let copied = Rc::new(RefCell::new(None::<String>));
+    window.on_copy_text({
+        let copied = Rc::clone(&copied);
+        move |text| *copied.borrow_mut() = Some(text.to_string())
+    });
+
+    click(
+        &window,
+        window.get_copy_base_x() + window.get_copy_base_width() / 2.0,
+        window.get_copy_base_y() + window.get_copy_base_height() / 2.0,
+    );
+    assert_eq!(
+        copied.borrow().clone(),
+        Some("http://127.0.0.1:7999".to_string()),
+        "copying a saved address must not depend on the gateway state"
+    );
+}
+
+#[test]
 fn the_page_swap_never_shows_a_blank_frame() {
     let window = window_at(1060.0, 720.0);
     window.on_navigate({
@@ -555,6 +958,93 @@ fn the_page_swap_never_shows_a_blank_frame() {
     assert!(
         (window.get_page_title_opacity() - window.get_page_host_opacity()).abs() < 0.01,
         "the title and the page share one opacity"
+    );
+}
+
+fn click_refresh(window: &MainWindow, x: f32, y: f32, width: f32, height: f32) {
+    click(window, x + width / 2.0, y + height / 2.0);
+}
+
+fn finish_refresh() {
+    for _ in 0..4 {
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    }
+}
+
+#[test]
+fn every_page_has_a_manual_refresh_button_and_an_updated_at_label() {
+    let window = window_at(1060.0, 720.0);
+    let calls = Rc::new(RefCell::new(Vec::<&'static str>::new()));
+    let overview = Rc::clone(&calls);
+    window.on_refresh_overview(move || overview.borrow_mut().push("overview"));
+    let requests = Rc::clone(&calls);
+    window.on_refresh_requests(move || requests.borrow_mut().push("requests"));
+    let logs = Rc::clone(&calls);
+    window.on_refresh_logs(move || logs.borrow_mut().push("logs"));
+    let settings = Rc::clone(&calls);
+    window.on_refresh_settings(move || settings.borrow_mut().push("settings"));
+
+    window.set_overview_updated_at("10:00:00".into());
+    window.set_request_updated_at("10:01:00".into());
+    window.set_log_updated_at("10:02:00".into());
+    window.set_settings_updated_at("10:03:00".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_overview_updated_at_label(), "更新于 10:00:00");
+    assert_eq!(window.get_request_updated_at_label(), "更新于 10:01:00");
+    assert_eq!(window.get_log_updated_at_label(), "更新于 10:02:00");
+    assert_eq!(window.get_settings_updated_at_label(), "更新于 10:03:00");
+
+    window.set_page(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_overview_refresh_enabled());
+    click_refresh(
+        &window,
+        window.get_overview_refresh_x(),
+        window.get_overview_refresh_y(),
+        window.get_overview_refresh_width(),
+        window.get_overview_refresh_height(),
+    );
+    assert_eq!(calls.borrow().as_slice(), ["overview"]);
+    assert!(window.get_refreshing());
+    assert!(!window.get_overview_refresh_enabled());
+    finish_refresh();
+
+    window.set_page(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click_refresh(
+        &window,
+        window.get_request_refresh_x(),
+        window.get_request_refresh_y(),
+        window.get_request_refresh_width(),
+        window.get_request_refresh_height(),
+    );
+    assert_eq!(calls.borrow().as_slice(), ["overview", "requests"]);
+    finish_refresh();
+
+    window.set_page(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click_refresh(
+        &window,
+        window.get_log_refresh_x(),
+        window.get_log_refresh_y(),
+        window.get_log_refresh_width(),
+        window.get_log_refresh_height(),
+    );
+    assert_eq!(calls.borrow().as_slice(), ["overview", "requests", "logs"]);
+    finish_refresh();
+
+    window.set_page(2);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    click_refresh(
+        &window,
+        window.get_settings_refresh_x(),
+        window.get_settings_refresh_y(),
+        window.get_settings_refresh_width(),
+        window.get_settings_refresh_height(),
+    );
+    assert_eq!(
+        calls.borrow().as_slice(),
+        ["overview", "requests", "logs", "settings"]
     );
 }
 
@@ -602,6 +1092,109 @@ fn copy_detail_acknowledges_for_1_2_seconds() {
     assert!(
         !window.get_request_detail_copied(),
         "the copy acknowledgement must return to its normal state"
+    );
+}
+
+#[test]
+fn auto_refresh_refreshes_only_the_overview_on_the_selected_interval() {
+    let window = window_at(1060.0, 720.0);
+    assert_eq!(window.get_auto_refresh(), 5);
+    let overviews = Rc::new(Cell::new(0));
+    window.on_refresh_overview({
+        let overviews = Rc::clone(&overviews);
+        move || overviews.set(overviews.get() + 1)
+    });
+    let logs = Rc::new(Cell::new(0));
+    window.on_refresh_logs({
+        let logs = Rc::clone(&logs);
+        move || logs.set(logs.get() + 1)
+    });
+
+    window.set_page(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(5000));
+    assert_eq!(
+        overviews.get(),
+        1,
+        "the first five seconds refresh the overview"
+    );
+    assert_eq!(logs.get(), 0, "the log page never joins auto refresh");
+    assert!(window.get_log_follow(), "auto refresh keeps live follow");
+
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(5000));
+    assert_eq!(overviews.get(), 2);
+
+    window.set_auto_refresh(15);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(5000));
+    assert_eq!(overviews.get(), 2, "15 seconds is not five");
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(10000));
+    assert_eq!(overviews.get(), 3);
+    assert_eq!(window.get_auto_refresh_index(), 1);
+
+    window.set_auto_refresh(0);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(60000));
+    assert_eq!(overviews.get(), 3, "off stops the timer");
+    assert_eq!(window.get_auto_refresh_index(), 4);
+}
+
+#[test]
+fn manual_refresh_restarts_the_auto_refresh_countdown() {
+    let window = window_at(1060.0, 720.0);
+    let overviews = Rc::new(Cell::new(0));
+    window.on_refresh_overview({
+        let overviews = Rc::clone(&overviews);
+        move || overviews.set(overviews.get() + 1)
+    });
+    window.set_auto_refresh(5);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(4750));
+    assert_eq!(overviews.get(), 1, "the first five seconds tick once");
+
+    click_refresh(
+        &window,
+        window.get_overview_refresh_x(),
+        window.get_overview_refresh_y(),
+        window.get_overview_refresh_width(),
+        window.get_overview_refresh_height(),
+    );
+    assert!(window.get_refreshing());
+    finish_refresh();
+    assert_eq!(overviews.get(), 2, "the manual refresh refreshes once");
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(4999));
+    assert_eq!(
+        overviews.get(),
+        2,
+        "a manual refresh restarts the five-second countdown"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1));
+    assert_eq!(overviews.get(), 3);
+}
+
+#[test]
+fn hiding_the_window_pauses_auto_refresh_and_showing_refreshes_immediately() {
+    let window = window_at(1060.0, 720.0);
+    let overviews = Rc::new(Cell::new(0));
+    window.on_refresh_overview({
+        let overviews = Rc::clone(&overviews);
+        move || overviews.set(overviews.get() + 1)
+    });
+
+    window.set_refresh_paused(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(15000));
+    assert_eq!(overviews.get(), 0, "a hidden window pauses auto refresh");
+
+    window.set_refresh_paused(false);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(
+        overviews.get(),
+        1,
+        "showing the window refreshes immediately"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(5000));
+    assert_eq!(
+        overviews.get(),
+        2,
+        "the auto timer restarts after the resume refresh"
     );
 }
 
@@ -665,6 +1258,119 @@ fn help_page_lists_shortcuts_and_login_guidance() {
 }
 
 #[test]
+fn the_log_page_opens_settings_from_its_toolbar() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    assert_eq!(
+        window.get_log_settings_icon(),
+        "settings",
+        "the log toolbar entry uses the settings gear"
+    );
+    assert!(
+        window.get_log_settings_width() > 0.0 && window.get_log_settings_height() > 0.0,
+        "the settings entry must be visible on the log page"
+    );
+
+    window.on_navigate({
+        let window = window.as_weak();
+        move |page| {
+            if let Some(window) = window.upgrade() {
+                window.set_page(page);
+            }
+        }
+    });
+    click(
+        &window,
+        window.get_log_settings_x() + window.get_log_settings_width() / 2.0,
+        window.get_log_settings_y() + window.get_log_settings_height() / 2.0,
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(160));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert_eq!(
+        window.get_page(),
+        2,
+        "the log settings entry must open the settings page"
+    );
+}
+
+#[test]
+fn the_log_filter_row_keeps_every_control_above_the_list() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let controls = [
+        (
+            "time range",
+            window.get_log_period_x(),
+            window.get_log_period_y(),
+            window.get_log_period_width(),
+            window.get_log_period_height(),
+        ),
+        (
+            "level",
+            window.get_log_level_x(),
+            window.get_log_level_y(),
+            window.get_log_level_width(),
+            window.get_log_level_height(),
+        ),
+        (
+            "search",
+            window.get_log_search_x(),
+            window.get_log_search_y(),
+            window.get_log_search_width(),
+            window.get_log_search_height(),
+        ),
+        (
+            "refresh",
+            window.get_log_refresh_x(),
+            window.get_log_refresh_y(),
+            window.get_log_refresh_width(),
+            window.get_log_refresh_height(),
+        ),
+        (
+            "follow",
+            window.get_log_follow_x(),
+            window.get_log_follow_y(),
+            window.get_log_follow_width(),
+            window.get_log_follow_height(),
+        ),
+        (
+            "settings",
+            window.get_log_settings_x(),
+            window.get_log_settings_y(),
+            window.get_log_settings_width(),
+            window.get_log_settings_height(),
+        ),
+    ];
+    for (label, x, y, width, height) in controls {
+        assert!(
+            x >= 0.0 && width > 0.0 && height > 0.0,
+            "{label} control must have a visible box"
+        );
+        assert!(
+            y + height <= window.get_log_list_y() + 1.0,
+            "{label} control must sit above the log list"
+        );
+    }
+    for (index, (label, _, y, _, height)) in controls.iter().enumerate() {
+        for (other, _, other_y, _, other_height) in &controls[index + 1..] {
+            assert!(
+                *y < other_y + other_height && *other_y < y + height,
+                "{label} and {other} must share the filter row"
+            );
+        }
+    }
+    let order: Vec<f32> = controls.iter().map(|(_, x, _, _, _)| *x).collect();
+    assert!(
+        order.windows(2).all(|pair| pair[0] < pair[1]),
+        "filter controls must read left to right in ticket order: {order:?}"
+    );
+}
+
+#[test]
 fn log_refresh_acknowledgement_expires() {
     let window = window_at(1060.0, 720.0);
     window.set_page(3);
@@ -676,6 +1382,67 @@ fn log_refresh_acknowledgement_expires() {
         !window.get_log_refreshed(),
         "the refresh acknowledgement must return to its normal state"
     );
+}
+
+#[test]
+fn manual_refresh_spins_for_six_hundred_ms_and_disables_the_button() {
+    let window = window_at(1060.0, 720.0);
+    let overviews = Rc::new(Cell::new(0));
+    window.on_refresh_overview({
+        let overviews = Rc::clone(&overviews);
+        move || overviews.set(overviews.get() + 1)
+    });
+    assert!(!window.get_refreshing());
+    assert_eq!(window.get_refresh_rotation(), 0.0);
+    assert!(window.get_overview_refresh_enabled());
+
+    click_refresh(
+        &window,
+        window.get_overview_refresh_x(),
+        window.get_overview_refresh_y(),
+        window.get_overview_refresh_width(),
+        window.get_overview_refresh_height(),
+    );
+    assert_eq!(overviews.get(), 1);
+    assert!(window.get_refreshing());
+    assert!(!window.get_overview_refresh_enabled());
+
+    click_refresh(
+        &window,
+        window.get_overview_refresh_x(),
+        window.get_overview_refresh_y(),
+        window.get_overview_refresh_width(),
+        window.get_overview_refresh_height(),
+    );
+    assert_eq!(
+        overviews.get(),
+        1,
+        "the disabled button ignores a second click"
+    );
+
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!(
+        (window.get_refresh_rotation() - 90.0).abs() < 0.1,
+        "the first 150 ms turns the icon 90 degrees"
+    );
+    assert!(window.get_refreshing());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!((window.get_refresh_rotation() - 180.0).abs() < 0.1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!((window.get_refresh_rotation() - 270.0).abs() < 0.1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(150));
+    assert!(!window.get_refreshing());
+    assert!(window.get_overview_refresh_enabled());
+    assert_eq!(window.get_refresh_rotation(), 0.0);
+
+    click_refresh(
+        &window,
+        window.get_overview_refresh_x(),
+        window.get_overview_refresh_y(),
+        window.get_overview_refresh_width(),
+        window.get_overview_refresh_height(),
+    );
+    assert_eq!(overviews.get(), 2);
 }
 
 #[test]

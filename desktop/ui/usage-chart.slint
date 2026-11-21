@@ -208,7 +208,20 @@ export component UsageChart inherits Panel {
     in property <bool> allow-motion;
     in-out property <bool> show-requests;
     in-out property <bool> show-line;
+    // The overview owns the auto-refresh cadence; the chart only renders its
+    // four steps and the shared manual-refresh state.
+    in-out property <int> auto-refresh: 5;
+    in property <bool> refreshing: false;
+    in property <angle> refresh-rotation: 0deg;
+    in property <string> updated-at: "—";
+    callback refresh();
     callback period-changed(int);
+    private property <int> auto-refresh-index: 0;
+    out property <length> refresh-x: refresh-button.absolute-position.x;
+    out property <length> refresh-y: refresh-button.absolute-position.y;
+    out property <length> refresh-width: refresh-button.width;
+    out property <length> refresh-height: refresh-button.height;
+    out property <bool> refresh-enabled: refresh-button.enabled;
 
     private property <int> pinned: -1;
     private property <string> pinned-label;
@@ -271,6 +284,18 @@ export component UsageChart inherits Panel {
     }
     changed show-requests => { metric-control.current-index = root.show-requests ? 1 : 0; }
     changed show-line => { type-control.current-index = root.show-line ? 1 : 0; }
+    changed auto-refresh => {
+        root.auto-refresh-index = root.auto-refresh == 15 ? 1
+            : root.auto-refresh == 30 ? 2
+            : root.auto-refresh == 60 ? 3
+            : root.auto-refresh == 0 ? 4 : 0;
+    }
+    changed auto-refresh-index => {
+        root.auto-refresh = root.auto-refresh-index == 1 ? 15
+            : root.auto-refresh-index == 2 ? 30
+            : root.auto-refresh-index == 3 ? 60
+            : root.auto-refresh-index == 4 ? 0 : 5;
+    }
 
     chart-focus := FocusScope {
         focus-on-click: false;
@@ -328,6 +353,23 @@ export component UsageChart inherits Panel {
                     Hint { text: root.period <= 1 ? "北京时间 · 按小时" : "北京时间 · 按天"; }
                 }
                 Rectangle { horizontal-stretch: 1; }
+                refresh-button := ActionButton {
+                    width: Theme.icon-button;
+                    height: Theme.icon-button;
+                    label: "刷新";
+                    icon: "refresh";
+                    icon-rotation: root.refresh-rotation;
+                    icon-only: true;
+                    quiet: true;
+                    tooltip: "刷新总览";
+                    enabled: !root.refreshing;
+                    clicked => { root.refresh(); }
+                }
+                DataText {
+                    text: "更新于 " + root.updated-at;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
                 VerticalLayout {
                     alignment: end;
                     spacing: 2px;
@@ -367,6 +409,12 @@ export component UsageChart inherits Panel {
                     label: "图表类型";
                     current-index: root.show-line ? 1 : 0;
                     selected(index) => { root.show-line = index == 1; }
+                }
+                auto-refresh-control := Segmented {
+                    width: 180px;
+                    options: [{ text: "5 秒" }, { text: "15 秒" }, { text: "30 秒" }, { text: "60 秒" }, { text: "关闭" }];
+                    label: "总览自动刷新";
+                    current-index <=> root.auto-refresh-index;
                 }
             }
 

@@ -63,7 +63,11 @@ fn chart() -> main_ui::MainWindow {
     window.set_page(0);
     let points = chart_points();
     window.set_usage_points(ModelRc::from(points.as_slice()));
-    window.set_usage_labels(ModelRc::from([SharedString::from("00:00"), "01:00".into(), "02:00".into()]));
+    window.set_usage_labels(ModelRc::from([
+        SharedString::from("00:00"),
+        "01:00".into(),
+        "02:00".into(),
+    ]));
     window.set_usage_token_counts(ModelRc::from([40.0, 120.0, 80.0]));
     window.set_usage_request_counts(ModelRc::from([1.0, 2.0, 1.0]));
     window.window().set_size(LogicalSize::new(1060.0, 720.0));
@@ -433,4 +437,27 @@ fn closing_request_detail_keeps_filters_page_and_scroll_position() {
         (window.get_request_list_width() - closed_width).abs() < 1.0,
         "closing the detail must return the full list width"
     );
+
+    let refreshed = std::rc::Rc::new(std::cell::Cell::new(0));
+    window.on_refresh_requests({
+        let refreshed = refreshed.clone();
+        move || refreshed.set(refreshed.get() + 1)
+    });
+    let x = window.get_request_refresh_x() + window.get_request_refresh_width() / 2.0;
+    let y = window.get_request_refresh_y() + window.get_request_refresh_height() / 2.0;
+    click(&window, x, y);
+    assert_eq!(refreshed.get(), 1);
+    assert_eq!(window.get_request_keyword().as_str(), "fixture");
+    assert_eq!(window.get_request_period(), 1);
+    assert_eq!(window.get_request_result(), 2);
+    assert_eq!(window.get_requests().row_count(), 20);
+    assert!(
+        (window.get_request_scroll_y() + 138.0).abs() < 1.0,
+        "refreshing the request page must keep the scroll position"
+    );
+    assert!(window.get_refreshing());
+    for _ in 0..4 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(150));
+    }
+    assert!(!window.get_refreshing());
 }

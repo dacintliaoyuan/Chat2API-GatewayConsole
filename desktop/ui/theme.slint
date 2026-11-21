@@ -217,6 +217,9 @@ export component FocusAction inherits Rectangle {
     in property <bool> link: false;
     in property <bool> enabled: true;
     in property <string> icon: "";
+    // Manual refresh buttons rotate their glyph for 600 ms; the reset to zero
+    // is static so the completed turn never animates backwards.
+    in property <angle> icon-rotation: 0deg;
     in property <bool> icon-only: false;
     in property <string> badge: "";
     // Icon-only actions carry their meaning here; the tooltip appears on hover
@@ -249,6 +252,11 @@ export component FocusAction inherits Rectangle {
             kind: root.icon;
             tint: root.primary ? Theme.on-accent : root.danger ? Theme.bad : root.link ? Theme.accent : Theme.ink;
             cross-axis-self-alignment: center;
+            transform-rotation: root.icon-rotation;
+            animate transform-rotation {
+                duration: root.icon-rotation == 0deg ? 0ms : 150ms;
+                easing: linear;
+            }
         }
         if !root.label.is-empty && !root.icon-only : Text {
             text: root.label;
