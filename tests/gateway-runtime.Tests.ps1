@@ -1161,9 +1161,19 @@ foreach ($scriptName in @(
         # #133 A2/P3: a worker process that has not published its port yet is
         # Starting, not Residual. The start waits for it within the budget and
         # never force-stops a starting worker.
-        Set-ComponentFixture -Processes @($script:componentWorker) `
+        $startingWorker = [pscustomobject]@{
+            ProcessId = 990206; Name = 'um-gateway-candidate.exe'
+            CommandLine = ('"' + (Join-Path (Get-GatewayRoot) 'rust\target\release\um-gateway-candidate.exe') +
+                '" --mode worker --port 0 --role local --worker-port-file ' +
+                $script:componentWorkerPortFile)
+            CreationDate = [datetime]::UtcNow
+        }
+        Set-ComponentFixture -Processes @($startingWorker) `
             -Listeners @{ 9911 = @([pscustomobject]@{ LocalAddress = '127.0.0.1'; OwningProcess = 990206 }) } `
             -WorkerPort $null
+        $workerInspection = Get-GatewayComponentInspection -Descriptor $desc -ComponentName 'worker'
+        Assert-Equal $workerInspection.State 'Starting' 'the worker component inspection reports Starting'
+        Assert-Equal ($workerInspection.ProcessIds -join ',') '990206' 'the Starting component inspection names the worker PID'
         $inspection = Get-GatewayServiceInspection -Key 'chat2api'
         Assert-Equal $inspection.State 'Degraded' 'a worker without a published port is Degraded'
         Assert-Equal ($inspection.ProcessIds -join ',') '990206' 'the starting worker is named in the Degraded pair'
@@ -1174,6 +1184,26 @@ foreach ($scriptName in @(
         Assert-Equal ($script:componentTerminated -contains 990206) $false 'a starting worker is never force-stopped'
         Assert-Equal (($script:componentLaunches | ForEach-Object { $_.Component }) -join ',') 'ingress' 'a starting worker still starts the missing ingress'
         Assert-Equal (@($script:componentSleeperCalls | Where-Object { $_ -eq 1 }).Count) 20 'the starting worker consumes the single start budget'
+
+        # #133 A2/P2: past StartTimeoutSeconds a worker without a port file is
+        # stuck, not starting: the worker component is Residual and the start
+        # force-restarts it.
+        $staleWorker = [pscustomobject]@{
+            ProcessId = 990211; Name = 'um-gateway-candidate.exe'
+            CommandLine = ('"' + (Join-Path (Get-GatewayRoot) 'rust\target\release\um-gateway-candidate.exe') +
+                '" --mode worker --port 0 --role local --worker-port-file ' +
+                $script:componentWorkerPortFile)
+            CreationDate = [datetime]::UtcNow.AddSeconds(-30)
+        }
+        Set-ComponentFixture -Processes @($staleWorker) -WorkerPort $null
+        $workerInspection = Get-GatewayComponentInspection -Descriptor $desc -ComponentName 'worker'
+        Assert-Equal $workerInspection.State 'Residual' 'a worker past the start budget is Residual'
+        $inspection = Get-GatewayServiceInspection -Key 'chat2api'
+        Assert-Equal $inspection.State 'Degraded' 'a stuck starting worker leaves the pair Degraded'
+        $result = Start-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        Assert-Equal $result.Status 'StartPending' 'a stuck starting worker reports StartPending'
+        Assert-Equal ($script:componentTerminated -contains 990211) $true 'a stuck starting worker is force-stopped'
+        Assert-Equal (($script:componentLaunches | ForEach-Object { $_.Component }) -join ',') 'worker,ingress' 'a stuck starting worker is replaced before the ingress'
 
         # Both components present but unhealthy: Degraded, and the start keeps
         # both instead of reporting Stopped or restarting them.
@@ -1227,6 +1257,18 @@ foreach ($scriptName in @(
         $result = Start-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
         Assert-Equal $result.Status 'Conflict' 'an ingress conflict blocks the service start'
         Assert-Equal $script:componentLaunches.Count 0 'an ingress conflict launches no component through the service start'
+
+        # #133 A2/P3: a residual cleanup refusal is reported with exactly one
+        # prefix, never a doubled one.
+        $unconfirmedPython = [pscustomobject]@{
+            ProcessId = 990240; Name = 'python.exe'
+            CommandLine = $null
+            CreationDate = [datetime]'2026-11-21T09:00:00'
+        }
+        Set-ComponentFixture -Processes @($unconfirmedPython) -WorkerPort $null
+        $result = Start-GatewayService -Key 'chat2api' -Sleeper { param($seconds) }
+        Assert-Equal $result.Status 'StartBlocked' 'a residual cleanup refusal reports StartBlocked'
+        Assert-Equal ([regex]::Matches([string]$result.Detail, '受管残留进程清理失败')).Count 1 'the residual cleanup refusal prefix appears once'
 
         # #133 A2: a legacy single-process production instance on 8000 is
         # recognized by the legacy inspection branch, not as a split pair.

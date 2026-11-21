@@ -238,8 +238,9 @@ systemd
   换行）；固定测试端口必须在 1024 以上且不在治理端口表内。优雅退出时删除该文件。
 - ingress：本机模型 API 入口，绑定 `127.0.0.1:8000`（测试可 `0`）；每次连接前重新
   读 `--worker-port-file`，不缓存、不猜端口。worker 端口文件出现且能连上就转发。
-  Windows 上读取到 PID 行时校验该 PID 的进程可执行文件名仍是网关二进制，不是则视为
-  陈旧记录；非 Windows 跳过该身份校验。
+  Windows 上读取到 PID 行时校验该 PID 的完整可执行路径（规范化后比较）仍是当前
+  网关二进制，不是则视为陈旧记录；PID 行缺失或非法也按陈旧记录处理（不再兼容
+  port-only 记录）；非 Windows 跳过该身份校验。
 - 入口参数：`--worker-port-file` 默认 `data/chat2api-worker.port`；
   `--desired-state-file` 可省略，省略时读环境变量
   `SELFUSEAI_GATEWAY_DESIRED_STATE`（文件路径）；`--recovery-wait-seconds`
@@ -280,7 +281,8 @@ systemd
 - 转发使用原始 HTTP/1.1 请求字节，并给 worker 发 `Connection: close`；响应转发
   支持 `Content-Length`、chunked、close-delimited 与 SSE，逐块写出，不缓冲整个
   上游响应。客户端 keep-alive 在响应自定界（长度或 chunked 终止块）时保持，
-  close-delimited 时关闭。
+  close-delimited 时关闭。空闲 keep-alive 连接在 `head_read_timeout` 后直接
+  关闭，不写 400；只有真正的请求行/头解析失败才写 400。
 - `/health`、`/ready` 代理 worker，worker 不在时 503；`/admin/shutdown`
   先校验控制令牌（配置时），再释放排队请求（503 `gateway_stopped`），随后转发
   worker 关闭；worker 不可达也照常退出（`shutdown_request=true`），不因不可达
@@ -310,8 +312,9 @@ systemd
     8000 监听（`/health` 503）时是 `Degraded`，控制台入口只启动缺失的 worker，
     不再走整对停止。
   - worker 进程存活但尚未写 `WorkerPortFile` 时是 `Starting`，不是残留：启动在剩余
-    `StartTimeoutSeconds` 内等待端口/监听，不强制停止正在启动的 worker；超时后保留
-    它并报告 `StartPending`，由下一轮再判定。
+    `StartTimeoutSeconds` 内等待端口/监听，不强制停止正在启动的 worker。超过
+    `StartTimeoutSeconds` 后（按 worker 进程的创建时间判断）归类为 `Residual`，由
+    已验证的 scoped stop 重启；watch 的进程查询此时返回 `absent`，只补缺失组件。
   - `Start-GatewayComponents` 因组件 `Conflict` 返回 `Blocked` 时带 `Reason=Conflict`，
     服务启动据此返回 `Conflict` 并使用冲突详情；只有残留清理被拒绝才返回
     `StartBlocked` 和“受管残留进程清理失败”。
@@ -339,31 +342,33 @@ systemd
     `tests/gateway-runtime.Tests.ps1` 覆盖。
   - 本节的 Rust 接口不改变 8001 控制台和云端 8002/8003 的单进程形态。
 - 验证（#133 A，2026-11-21）：`cargo test -p um-gateway --test ingress`
-  18 passed（返修后为 19，见下）；其中真实 TCP 用例使用真实 `GatewayServer` + `ChatStub` 作 worker，
+  18 passed（返修后为 20，见下）；其中真实 TCP 用例使用真实 `GatewayServer` + `ChatStub` 作 worker，
   其余用假 worker 覆盖恢复、超时、取消、队列上限、已转发断开、SSE、keep-alive、
   `/health`/`/ready`、`/admin/*` 不排队与 `/admin/shutdown`（含错误令牌）。
 - 验证（#133 A2 返修，2026-11-21）：
   - 工作目录：`D:/git/github/Chat2API-GatewayConsole/.worktrees/133-ps`。
   - `pwsh -NoProfile -ExecutionPolicy Bypass -File tests/gateway-runtime.Tests.ps1`：
-    608 passed，0 failed（含 `Get-GatewayServiceInspection` 的 worker 缺失 + ingress
+    617 passed，0 failed（含 `Get-GatewayServiceInspection` 的 worker 缺失 + ingress
     在监听、双组件在监听但未健康、worker `Conflict` + ingress `Absent`、ingress
     `Conflict` 预检、legacy 单进程 inspection，控制台入口 `Degraded` 分支，
     `Select-GatewayStopScope -Identities` 收窄、重复停止、worker 端口上的 tailnet
-    监听、陈旧 `WorkerPortFile`、启动中 worker、启动预算与有界停止等待、含空格
-    可执行路径的身份识别，以及含空格路径的观察器启动）。
+    监听、陈旧 `WorkerPortFile`、启动中 worker 与超时归 Residual、启动预算与有界
+    停止等待、含空格可执行路径的身份识别、残留清理前缀只出现一次，以及含空格
+    路径的观察器启动）。
   - `pwsh -NoProfile -ExecutionPolicy Bypass -File lib/watch-chat2api.ps1 -SelfTest`：
-    PASS（含 worker/ingress 双身份判定、陈旧 worker 端口记录与 tailnet 监听在
-    worker 端口、`Invoke-GatewayStart` 不再向运行时转发仅测试用的 `-Stopper`）。
+    PASS（含 worker/ingress 双身份判定、陈旧 worker 端口记录、启动中 worker 超时
+    归 absent、tailnet 监听在 worker 端口，以及 `Invoke-GatewayStart` 不再向运行时
+    转发仅测试用的 `-Stopper`）。
   - `pwsh -NoProfile -ExecutionPolicy Bypass -File tests/console-runtime.Tests.ps1`：
     101 passed，0 failed（既有控制台入口回归；本轮 `ALL PASS`）。
-  - `cargo test -p um-gateway --test ingress`（工作目录 `rust/`）：19 passed，
-    0 failed；新增空闲 keep-alive 超时直接关闭、不写 400 的用例。
-  - `cargo test -p um-gateway --lib`（工作目录 `rust/`）：41 passed，0 failed，
-    1 ignored；新增 worker 端口文件 PID 校验用例。
+  - `cargo test -p um-gateway --test ingress`（工作目录 `rust/`）：20 passed，
+    0 failed；新增空闲 keep-alive 超时直接关闭、部分请求头超时返回 400 的用例。
+  - `cargo test -p um-gateway --lib`（工作目录 `rust/`）：42 passed，0 failed，
+    1 ignored；新增 worker 端口文件 PID 完整路径校验与不同镜像进程的用例。
   - 未验证范围：真实 Rust worker/ingress 的崩溃与端口复用、真实 Edge 登录、
     云端 8002/8003、桌面 App 壳；PowerShell 测试用替换的进程表、监听快照、
     HTTP 与 `Start-Process` 边界，不启动真实服务。非 Windows 上 ingress 跳过
-    worker PID 的可执行文件名校验。
+    worker PID 的完整路径校验。
 
 ## 3. 云端 idle RSS 基线
 

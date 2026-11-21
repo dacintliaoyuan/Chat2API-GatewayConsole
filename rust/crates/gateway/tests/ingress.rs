@@ -69,14 +69,22 @@ fn start_ingress_with_state(
     configure: impl FnOnce(&mut IngressConfig),
 ) -> Ingress {
     let port_file = temp.path().join("worker.port");
-    std::fs::write(&port_file, format!("{worker_port}\n")).expect("write worker port file");
+    std::fs::write(
+        &port_file,
+        format!("{worker_port}\n{}\n", std::process::id()),
+    )
+    .expect("write worker port file");
     let desired = temp.write("desired-state.json", desired_state);
     start_ingress_with(temp, &port_file, Some(&desired), configure)
 }
 
 fn start_ingress_without_state(temp: &TempDir, worker_port: u16) -> Ingress {
     let port_file = temp.path().join("worker.port");
-    std::fs::write(&port_file, format!("{worker_port}\n")).expect("write worker port file");
+    std::fs::write(
+        &port_file,
+        format!("{worker_port}\n{}\n", std::process::id()),
+    )
+    .expect("write worker port file");
     start_ingress_with(temp, &port_file, None, |_| {})
 }
 
@@ -701,6 +709,43 @@ fn idle_keep_alive_timeout_closes_without_a_synthetic_400() {
         String::from_utf8_lossy(&buffer)
     );
     assert_eq!(worker.seen().len(), 1);
+}
+
+#[test]
+fn partial_request_head_timeout_is_a_bad_request() {
+    let temp = TempDir::new(unique_temp_prefix());
+    let port = reserve_port();
+    let ingress = start_ingress_with_state(&temp, port, &running_state_json(), |config| {
+        config.recovery_wait = Duration::from_secs(5);
+        config.head_read_timeout = Duration::from_millis(200);
+    });
+    let worker = FakeWorker::start(
+        port,
+        FakeBehaviour::Json {
+            status: 200,
+            body: br#"{"ok":true}"#.to_vec(),
+        },
+    );
+    let addr = ingress.addr;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).expect("connect");
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    stream
+        .write_all(b"GET /v1/chat/completions HTTP/1.1\r\nHost: fixture\r\n")
+        .expect("partial head");
+    stream.flush().expect("flush partial head");
+    thread::sleep(Duration::from_millis(400));
+    let mut buffer = Vec::new();
+    let read = stream.read_to_end(&mut buffer);
+    assert!(
+        read.is_ok(),
+        "a partial head timeout was not closed cleanly: {read:?}"
+    );
+    assert!(
+        buffer.starts_with(b"HTTP/1.1 400"),
+        "a partial head timeout did not receive a 400: {}",
+        String::from_utf8_lossy(&buffer)
+    );
+    assert_eq!(worker.seen().len(), 0);
 }
 
 #[test]

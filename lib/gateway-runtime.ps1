@@ -111,8 +111,8 @@ $script:GatewayServiceDescriptors = [ordered]@{
         # is missing. The 8001 console keeps the historical "any HTTP response
         # proves a listener" reachability semantics.
         HealthRequiresOk = $true
-        # #133 A2: the watch's process query is worker-only; an ingress is
-        # started by the component start and must not count as "alive".
+        # #133 A2: the watch's process query confirms both component identities
+        # (worker and ingress); either missing means the pair is absent.
         RecoveryIdentity = $script:Chat2ApiWorkerIdentity
         # Repository root keeps the Rust role defaults identical to Python:
         # current_dir()/chat2api/token.json and current_dir()/chat2api/.edge-profile.
@@ -1310,6 +1310,30 @@ function Test-GatewayProcessMatchesIdentity {
     }
 }
 
+function Test-GatewayWorkerStartingExpired {
+    # #133 A2: a live worker process that never publishes WorkerPortFile is only
+    # "Starting" within the start budget. Past it the worker is stuck (e.g. a UM
+    # login browser wait) and must be treated as Residual so the verified scoped
+    # stop can restart it. An unreadable creation time fails closed to "not
+    # expired" (keep waiting).
+    param(
+        [Parameter(Mandatory = $true)]$Descriptor,
+        [object[]]$Processes = @()
+    )
+    if (@($Processes).Count -eq 0) { return $false }
+    $timeoutSeconds = [Math]::Max(1, [int]$Descriptor.StartTimeoutSeconds)
+    $now = [DateTime]::UtcNow
+    foreach ($process in @($Processes)) {
+        $created = $null
+        try {
+            $created = ([DateTime]$process.CreationDate).ToUniversalTime()
+        } catch { }
+        if ($null -eq $created) { return $false }
+        if (($now - $created).TotalSeconds -le $timeoutSeconds) { return $false }
+    }
+    return $true
+}
+
 function Get-GatewayWorkerInspection {
     # #133 A2/H3: the worker identity process is the authority for the
     # recorded port. No worker process means the record is stale, even if an
@@ -1345,6 +1369,16 @@ function Get-GatewayWorkerInspection {
     }
     $port = Get-GatewayWorkerPort -Descriptor $Descriptor
     if ($null -eq $port) {
+        if (Test-GatewayWorkerStartingExpired -Descriptor $Descriptor `
+                -Processes $scope.Private) {
+            # The startup window is over and the worker still has no port: it is
+            # stuck, not starting. Classify it as residual so the verified
+            # scoped stop can restart it.
+            return [pscustomobject]@{
+                Name = 'worker'; State = 'Residual'; ProcessIds = @($workerPids)
+                Detail = '发现组件残留进程：worker（启动超时）'
+            }
+        }
         # The worker process is alive but has not published its port yet. This
         # is the startup window, not a residual instance: the caller must wait
         # for it within the start budget instead of force-stopping it.
@@ -2433,7 +2467,7 @@ function Start-GatewayComponents {
                 return [pscustomobject]@{
                     Started = @($started); Skipped = @($skipped)
                     Blocked = $true
-                    Detail = '受管残留进程清理失败：' + [string]$residualCleanup.Detail
+                    Detail = [string]$residualCleanup.Detail
                     WorkerWaitSeconds = 0
                     Reason = 'CleanupRefused'
                 }
@@ -2469,18 +2503,33 @@ function Start-GatewayComponents {
                 continue
             }
             if ($componentInspection.State -eq 'Starting') {
-                # #133 A2/P3: the worker process is alive but has not
+                # #133 A2/P2: the worker process is alive but has not
                 # published its port yet. Wait for it within the remaining
-                # start budget instead of force-stopping a starting worker; if
-                # it never binds, keep it for the next run.
+                # start budget; a worker still starting after the budget is
+                # stuck, not starting, so it falls through to the Residual
+                # cleanup and a fresh launch.
                 $remaining = [Math]::Max(0,
                     [int]$Descriptor.StartTimeoutSeconds - $workerWaitSeconds)
                 $wait = Wait-GatewayComponentHealth -Descriptor $Descriptor `
                     -Component $component -HttpChecker $HttpChecker `
                     -Sleeper $Sleeper -TimeoutSeconds $remaining
                 $workerWaitSeconds += [int]$wait.Seconds
-                $skipped += $name
-                continue
+                $componentInspection = Get-GatewayComponentInspection `
+                    -Descriptor $Descriptor -ComponentName $name
+                if ($componentInspection.State -eq 'Starting' -or
+                        $componentInspection.State -eq 'Present') {
+                    $skipped += $name
+                    continue
+                }
+                if ($componentInspection.State -eq 'Conflict') {
+                    return [pscustomobject]@{
+                        Started = @($started); Skipped = @($skipped)
+                        Blocked = $true; Detail = [string]$componentInspection.Detail
+                        WorkerWaitSeconds = $workerWaitSeconds
+                        Reason = 'Conflict'
+                    }
+                }
+                # Residual/Absent: fall through to the cleanup/launch below.
             }
             if ($componentInspection.State -eq 'Residual') {
                 $identity = Get-GatewayComponentIdentity -Descriptor $Descriptor `
@@ -2491,7 +2540,7 @@ function Start-GatewayComponents {
                     return [pscustomobject]@{
                         Started = @($started); Skipped = @($skipped)
                         Blocked = $true
-                        Detail = '受管残留进程清理失败：' + [string]$cleanup.Detail
+                        Detail = [string]$cleanup.Detail
                         WorkerWaitSeconds = $workerWaitSeconds
                         Reason = 'CleanupRefused'
                     }
@@ -2522,10 +2571,11 @@ function Start-GatewayComponents {
             # #133 A2/J3: the wait is reported so the caller can subtract it
             # from the same StartTimeoutSeconds budget instead of granting a
             # second full timeout.
+            $remaining = [Math]::Max(0,
+                [int]$Descriptor.StartTimeoutSeconds - $workerWaitSeconds)
             $wait = Wait-GatewayComponentHealth -Descriptor $Descriptor `
                 -Component $component -HttpChecker $HttpChecker `
-                -Sleeper $Sleeper `
-                -TimeoutSeconds ([Math]::Max(1, [int]$Descriptor.StartTimeoutSeconds))
+                -Sleeper $Sleeper -TimeoutSeconds $remaining
             $workerWaitSeconds += [int]$wait.Seconds
         }
     }

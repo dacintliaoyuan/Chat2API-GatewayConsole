@@ -821,16 +821,13 @@ fn read_worker_port(path: &Path) -> Option<u16> {
     if port == 0 {
         return None;
     }
-    if let Some(pid) = lines
-        .next()
-        .and_then(|line| line.trim().parse::<u32>().ok())
-    {
-        // The second line is the worker PID. A record whose PID is no longer
-        // the gateway binary is stale: never forward an Authorization-bearing
-        // request to whatever now owns that port.
-        if !worker_identity_matches(pid) {
-            return None;
-        }
+    // The second line is the worker PID; a missing or invalid line is a stale
+    // record (port-only files are no longer accepted). A record whose PID is
+    // no longer the gateway binary is stale too: never forward an
+    // Authorization-bearing request to whatever now owns that port.
+    let pid = lines.next()?.trim().parse::<u32>().ok()?;
+    if !worker_identity_matches(pid) {
+        return None;
     }
     Some(port)
 }
@@ -850,18 +847,29 @@ extern "system" {
 
 #[cfg(windows)]
 fn worker_identity_matches(pid: u32) -> bool {
+    let Some(expected) = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.canonicalize().ok())
+    else {
+        return false;
+    };
+    let Some(actual) = process_image_path(pid) else {
+        return false;
+    };
+    let Ok(actual) = actual.canonicalize() else {
+        return false;
+    };
+    actual == expected
+}
+
+#[cfg(windows)]
+fn process_image_path(pid: u32) -> Option<std::path::PathBuf> {
     use std::os::windows::ffi::OsStringExt;
 
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-    let Some(expected) = std::env::current_exe().ok().and_then(|path| {
-        path.file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-    }) else {
-        return false;
-    };
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if handle.is_null() {
-        return false;
+        return None;
     }
     let mut buffer = vec![0u16; 32768];
     let mut size = buffer.len() as u32;
@@ -870,15 +878,11 @@ fn worker_identity_matches(pid: u32) -> bool {
         CloseHandle(handle);
     }
     if ok == 0 {
-        return false;
+        return None;
     }
-    let actual = std::ffi::OsString::from_wide(&buffer[..size as usize])
-        .to_string_lossy()
-        .into_owned();
-    std::path::Path::new(&actual)
-        .file_name()
-        .map(|name| name.to_string_lossy().eq_ignore_ascii_case(&expected))
-        .unwrap_or(false)
+    Some(std::path::PathBuf::from(std::ffi::OsString::from_wide(
+        &buffer[..size as usize],
+    )))
 }
 
 #[cfg(not(windows))]
@@ -1369,10 +1373,10 @@ mod tests {
     }
 
     #[test]
-    fn worker_port_file_accepts_a_port_only_record() {
+    fn worker_port_file_rejects_a_port_only_record() {
         let path = temp_port_file("port-only");
         std::fs::write(&path, "12345\n").expect("write port file");
-        assert_eq!(read_worker_port(&path), Some(12345));
+        assert_eq!(read_worker_port(&path), None);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1390,6 +1394,25 @@ mod tests {
         let path = temp_port_file("foreign-pid");
         std::fs::write(&path, "12345\n0\n").expect("write port file");
         assert_eq!(read_worker_port(&path), None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn worker_port_file_rejects_a_live_process_with_a_different_image() {
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping", "-n", "5", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn a different image");
+        let path = temp_port_file("different-image");
+        std::fs::write(&path, format!("12345\n{}\n", child.id())).expect("write port file");
+        assert_eq!(read_worker_port(&path), None);
+        let _ = child.kill();
+        let _ = child.wait();
         let _ = std::fs::remove_file(&path);
     }
 }
