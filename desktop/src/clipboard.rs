@@ -19,11 +19,10 @@ pub fn write_text(text: &str) -> Result<(), String> {
     unsafe {
         open_clipboard()?;
         let result = write_open_clipboard(&wide, bytes);
-        let closed = CloseClipboard().map_err(|error| format!("关闭剪贴板失败：{error}"));
-        match result {
-            Ok(()) => closed,
-            Err(reason) => Err(reason),
-        }
+        // CloseClipboard only releases our ownership; SetClipboardData already
+        // committed the text, so a close failure does not undo this copy.
+        let _ = CloseClipboard();
+        result
     }
 }
 
