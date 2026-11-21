@@ -5,7 +5,8 @@ use std::path::Path;
 use chrono::DateTime;
 use serde_json::{json, Value};
 use um_desktop::usage::{
-    read_request_logs, read_requests, read_usage, request_detail, Coverage, Range,
+    keep_previous_on_failure, keep_previous_page_on_failure, read_request_logs, read_requests,
+    read_usage, request_detail, Coverage, Range,
 };
 
 const REQUEST: &str = "f314e7d8c7526367baec95ac155b6406";
@@ -496,6 +497,40 @@ fn diagnostics_filter_by_time_result_and_keyword() {
     assert!(no_match.rows.is_empty());
     assert_eq!(no_match.coverage, Coverage::Empty);
     assert!(no_match.message.contains("没有符合条件"));
+}
+
+#[test]
+fn refresh_failure_keeps_the_previous_usage_and_request_page() {
+    let tmp = common::TempDir::new("usage-refresh-failure");
+    let ledger = tmp.path().join("usage.jsonl");
+    write_rows(&ledger, &[row("2026-11-20T00:01:00+08:00", "ok", 8, 2)]);
+    let now = time("2026-11-20T19:00:00+08:00");
+    let previous = read_usage(&ledger, Range::Today, now);
+    assert_eq!(previous.coverage, Coverage::Complete);
+    assert!(!previous.buckets.is_empty());
+
+    // A directory is unreadable as a ledger, so the refresh fails instead of
+    // becoming a legal empty result.
+    let failed = read_usage(tmp.path(), Range::Today, now);
+    assert_eq!(failed.coverage, Coverage::Unavailable);
+    let kept = keep_previous_on_failure(&previous, failed);
+    assert_eq!(kept.buckets, previous.buckets);
+    assert_eq!(kept.token_total, previous.token_total);
+    assert_eq!(kept.request_total, previous.request_total);
+    assert!(kept.message.starts_with("刷新失败："), "{}", kept.message);
+
+    let previous_page = read_requests(&ledger, Range::Today, 0, "", None, now);
+    assert_eq!(previous_page.rows.len(), 1);
+    let failed_page = read_requests(tmp.path(), Range::Today, 0, "", None, now);
+    assert_eq!(failed_page.coverage, Coverage::Unavailable);
+    let kept_page = keep_previous_page_on_failure(&previous_page, failed_page);
+    assert_eq!(kept_page.rows, previous_page.rows);
+    assert_eq!(kept_page.earlier, previous_page.earlier);
+    assert!(
+        kept_page.message.starts_with("刷新失败："),
+        "{}",
+        kept_page.message
+    );
 }
 
 #[test]

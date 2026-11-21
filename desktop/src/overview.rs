@@ -265,6 +265,6 @@ pub fn status_line(overview: &Overview) -> String {
     if overview.failures.is_empty() {
         "本实例网关 · 状态正常".to_string()
     } else {
-        format!("本实例网关 · {}", overview.failures.join("；"))
+        format!("刷新失败：{}", overview.failures.join("；"))
     }
 }

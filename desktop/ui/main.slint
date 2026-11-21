@@ -242,6 +242,18 @@ export component MainWindow inherits Window {
     // Inline clear confirmation: one click arms it, the next click clears.
     private property <bool> confirm-clear: false;
     in property <string> last-update: "—";
+    // Manual refresh is one shared action: the icon spins for 600 ms and every
+    // refresh button stays disabled until the spin ends. Auto refresh only drives
+    // the overview and never touches the log page's live follow.
+    in-out property <bool> refreshing: false;
+    out property <int> refresh-spin-frame: 0;
+    in-out property <int> auto-refresh: 5;
+    in-out property <bool> refresh-paused: false;
+    in-out property <int> auto-refresh-index: 0;
+    in property <string> overview-updated-at: "—";
+    in property <string> request-updated-at: "—";
+    in property <string> log-updated-at: "—";
+    in property <string> settings-updated-at: "—";
     in-out property <int> usage-period: 0;
     in property <[UsagePoint]> usage-points: [];
     in property <[string]> usage-labels;
@@ -370,6 +382,33 @@ export component MainWindow inherits Window {
     out property <int> status-dot-tone: status-dot.tone;
     out property <float> page-title-opacity: page-title.opacity;
     out property <float> page-host-opacity: page-host.opacity;
+    // Test seams: the refresh controls, their disabled state, the spin frame
+    // and the per-page update labels.
+    out property <string> refresh-icon-kind: root.refresh-icon-for(root.refresh-spin-frame);
+    out property <string> overview-updated-at-label: "更新于 " + root.overview-updated-at;
+    out property <string> request-updated-at-label: "更新于 " + root.request-updated-at;
+    out property <string> log-updated-at-label: "更新于 " + root.log-updated-at;
+    out property <string> settings-updated-at-label: "更新于 " + root.settings-updated-at;
+    out property <length> overview-refresh-x: usage-chart.refresh-x;
+    out property <length> overview-refresh-y: usage-chart.refresh-y;
+    out property <length> overview-refresh-width: usage-chart.refresh-width;
+    out property <length> overview-refresh-height: usage-chart.refresh-height;
+    out property <bool> overview-refresh-enabled: usage-chart.refresh-enabled;
+    out property <length> request-refresh-x: request-refresh.absolute-position.x;
+    out property <length> request-refresh-y: request-refresh.absolute-position.y;
+    out property <length> request-refresh-width: request-refresh.width;
+    out property <length> request-refresh-height: request-refresh.height;
+    out property <bool> request-refresh-enabled: request-refresh.enabled;
+    out property <length> log-refresh-x: log-refresh.absolute-position.x;
+    out property <length> log-refresh-y: log-refresh.absolute-position.y;
+    out property <length> log-refresh-width: log-refresh.width;
+    out property <length> log-refresh-height: log-refresh.height;
+    out property <bool> log-refresh-enabled: log-refresh.enabled;
+    out property <length> settings-refresh-x: settings-refresh.absolute-position.x;
+    out property <length> settings-refresh-y: settings-refresh.absolute-position.y;
+    out property <length> settings-refresh-width: settings-refresh.width;
+    out property <length> settings-refresh-height: settings-refresh.height;
+    out property <bool> settings-refresh-enabled: settings-refresh.enabled;
 
     callback navigate(int);
     callback configure-account();
@@ -381,6 +420,10 @@ export component MainWindow inherits Window {
     callback continue-login();
     callback toggle-password-visible();
     callback save-port(string);
+    callback refresh-overview();
+    callback refresh-requests();
+    callback refresh-settings();
+    callback refresh-page();
     callback refresh-logs();
     callback apply-log-filter(int, string);
     callback log-history(int, int);
@@ -448,6 +491,83 @@ export component MainWindow inherits Window {
         running: false;
         triggered => { root.confirm-clear = false; }
     }
+    public pure function refresh-icon-for(frame: int) -> string {
+        return frame == 1 ? "refresh-90"
+            : frame == 2 ? "refresh-180"
+            : frame == 3 ? "refresh-270"
+            : "refresh";
+    }
+    public pure function auto-refresh-index-for(seconds: int) -> int {
+        return seconds == 15 ? 1 : seconds == 30 ? 2 : seconds == 60 ? 3 : seconds == 0 ? 4 : 0;
+    }
+    public pure function auto-refresh-seconds(index: int) -> int {
+        return index == 1 ? 15 : index == 2 ? 30 : index == 3 ? 60 : index == 4 ? 0 : 5;
+    }
+    // A manual refresh acknowledges itself for 600 ms: four 90-degree icon
+    // frames, then the button returns to its normal affordance.
+    public function begin-manual-refresh() {
+        root.refreshing = true;
+        root.refresh-spin-frame = 0;
+    }
+    public function refresh-page-data() {
+        if (root.page == 0) { root.refresh-overview(); }
+        else if (root.page == 1) { root.refresh-requests(); }
+        else if (root.page == 2) { root.refresh-settings(); }
+        else if (root.page == 3) {
+            if (root.log-period == 0) { root.refresh-logs(); }
+            else { root.log-history(root.log-period, 0); }
+        }
+    }
+    public function refresh-current-page() {
+        root.begin-manual-refresh();
+        root.refresh-page-data();
+    }
+    changed auto-refresh => {
+        root.auto-refresh-index = root.auto-refresh-index-for(root.auto-refresh);
+        if (root.auto-refresh > 0 && !root.refresh-paused && !root.refreshing) {
+            auto-refresh-timer.restart();
+        }
+    }
+    changed auto-refresh-index => {
+        root.auto-refresh = root.auto-refresh-seconds(root.auto-refresh-index);
+    }
+    changed refreshing => {
+        if (root.refreshing) {
+            root.refresh-spin-frame = 0;
+            refresh-timer.restart();
+        } else {
+            refresh-timer.stop();
+            root.refresh-spin-frame = 0;
+        }
+    }
+    changed refresh-paused => {
+        if (!root.refresh-paused) {
+            // Returning from minimize/tray must not wait for the next interval.
+            root.refresh-page-data();
+            if (root.auto-refresh > 0) { auto-refresh-timer.restart(); }
+        }
+    }
+    auto-refresh-timer := Timer {
+        // A stopped timer must not get a zero interval; 1s is only a
+        // placeholder while auto refresh is off.
+        interval: root.auto-refresh > 0 ? root.auto-refresh * 1s : 1s;
+        running: root.auto-refresh > 0 && !root.refresh-paused && !root.refreshing;
+        triggered => {
+            // A tick already queued when auto refresh was switched off or the
+            // window was hidden must not refresh anything.
+            if (root.auto-refresh > 0 && !root.refresh-paused && !root.refreshing) {
+                root.refresh-overview();
+            }
+        }
+    }
+    refresh-timer := Timer {
+        interval: 150ms;
+        running: root.refreshing;
+        triggered => {
+            root.refresh-spin-frame = Math.mod(root.refresh-spin-frame + 1, 4);
+            if (root.refresh-spin-frame == 0) { root.refreshing = false; }
+        }
+    }
 
     FocusScope {
         x: 0px; y: 0px;
@@ -459,6 +579,10 @@ export component MainWindow inherits Window {
                 if (root.account-form-visible) { root.close-account-form(); return accept; }
                 if (!root.selected-request.is-empty) { root.selected-request = ""; return accept; }
                 if (!root.open-log-id.is-empty) { root.open-log-id = ""; return accept; }
+            }
+            if (event.modifiers.control && (event.text == "r" || event.text == "R")) {
+                root.refresh-page();
+                return accept;
             }
             return reject;
         }
@@ -678,6 +802,11 @@ export component MainWindow inherits Window {
                         allow-motion: root.allow-motion;
                         show-line <=> root.usage-show-line;
                         show-requests <=> root.usage-show-requests;
+                        auto-refresh <=> root.auto-refresh;
+                        refreshing: root.refreshing;
+                        refresh-icon: root.refresh-icon-for(root.refresh-spin-frame);
+                        updated-at: root.overview-updated-at;
+                        refresh => { root.refresh-current-page(); }
                         period-changed(index) => { root.usage-range-changed(index); }
                     }
                 }
@@ -722,10 +851,25 @@ export component MainWindow inherits Window {
                                     accepted => { root.query-requests(0); }
                                 }
                                 ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "查询"; icon: "arrow-right"; icon-only: true; primary: true; tooltip: "查询请求"; clicked => { root.query-requests(0); } }
+                                request-refresh := ActionButton {
+                                    width: Theme.icon-button;
+                                    height: Theme.icon-button;
+                                    label: "刷新请求";
+                                    icon: root.refresh-icon-for(root.refresh-spin-frame);
+                                    icon-only: true;
+                                    quiet: true;
+                                    tooltip: "刷新请求";
+                                    enabled: !root.refreshing;
+                                    clicked => { root.refresh-current-page(); }
+                                }
                             }
                         }
                     }
-                    Hint { text: root.request-status; color: Theme.status_ink(root.request-tone); }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Hint { text: root.request-status; color: Theme.status_ink(root.request-tone); horizontal-stretch: 1; vertical-alignment: center; overflow: elide; wrap: no-wrap; }
+                        DataText { text: root.request-updated-at-label; vertical-alignment: center; }
+                    }
                     request-list-panel := Panel {
                         vertical-stretch: 1;
                         VerticalLayout {
@@ -803,15 +947,16 @@ export component MainWindow inherits Window {
                     }
                     // Refresh sits next to the level row so it never wraps alone;
                     // the keyword field follows and may take the next row.
-                    ActionButton {
+                    log-refresh := ActionButton {
                         width: Theme.icon-button;
                         height: Theme.icon-button;
                         label: "刷新";
-                        icon: "refresh";
+                        icon: root.refresh-icon-for(root.refresh-spin-frame);
                         icon-only: true;
                         quiet: true;
                         tooltip: "刷新日志";
-                        clicked => { if (root.log-period == 0) { root.refresh-logs(); } else { root.log-history(root.log-period, 0); } }
+                        enabled: !root.refreshing;
+                        clicked => { root.refresh-current-page(); }
                     }
                     MaterialField {
                         width: root.compact ? 140px : 180px;
@@ -825,7 +970,8 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                     spacing: 8px;
                     alignment: start;
-                    Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); vertical-alignment: center; overflow: elide; wrap: no-wrap; }
+                    Hint { text: root.log-status; color: Theme.status_ink(root.log-tone); vertical-alignment: center; overflow: elide; wrap: no-wrap; horizontal-stretch: 1; }
+                    DataText { text: root.log-updated-at-label; vertical-alignment: center; }
                     ActionButton {
                         visible: root.log-period == 0;
                         width: Theme.icon-button;
@@ -913,6 +1059,22 @@ export component MainWindow inherits Window {
                     min-height: self.preferred-height;
                     spacing: 12px;
                     padding-right: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        settings-refresh := ActionButton {
+                            width: Theme.icon-button;
+                            height: Theme.icon-button;
+                            label: "刷新";
+                            icon: root.refresh-icon-for(root.refresh-spin-frame);
+                            icon-only: true;
+                            quiet: true;
+                            tooltip: "重新检查网关与账号状态";
+                            enabled: !root.refreshing;
+                            clicked => { root.refresh-current-page(); }
+                        }
+                        Hint { text: root.settings-updated-at-label; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
                     Card {
                         VerticalLayout {
                             alignment: start;

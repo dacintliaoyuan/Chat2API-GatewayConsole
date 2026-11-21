@@ -21,15 +21,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::TimeZone;
-use slint::{CloseRequestResponse, ComponentHandle, Model, ModelExt, ModelRc, Timer, TimerMode, VecModel};
+use slint::{
+    CloseRequestResponse, ComponentHandle, Model, ModelExt, ModelRc, Timer, TimerMode, VecModel,
+};
 use um_desktop::account::{
     self, account_view, apply_account, AccountForm, AccountSurface, AccountView, AuthAdmin,
     AuthRead, AuthState, FormError, HttpAuthAdmin, LoadOutcome,
 };
 use um_desktop::config::{self, DesktopConfig, LoadOutcome as ConfigLoadOutcome};
 use um_desktop::gateway::{
-    load_control_token, resolve_gateway_binary, GatewayState, GatewayStatus,
-    GatewaySupervisor, HttpGateway, InstancePaths, PortSwitch, PortSwitchProgress, StopReason, SystemLauncher,
+    load_control_token, resolve_gateway_binary, GatewayState, GatewayStatus, GatewaySupervisor,
+    HttpGateway, InstancePaths, PortSwitch, PortSwitchProgress, StopReason, SystemLauncher,
     ThreadSleeper,
 };
 use um_desktop::instance::{self, InstanceError};
@@ -46,6 +48,8 @@ static PAUSED: AtomicBool = AtomicBool::new(false);
 static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static QUIT: AtomicBool = AtomicBool::new(false);
 static REFRESH_LOGS: AtomicBool = AtomicBool::new(false);
+static OVERVIEW_REFRESH: AtomicU64 = AtomicU64::new(0);
+static USAGE_REFRESH: AtomicU64 = AtomicU64::new(0);
 static LOGIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
 static APPLIED_FILTER_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -87,6 +91,10 @@ fn clock(at: Option<i64>) -> String {
     at.and_then(|at| chrono::Local.timestamp_millis_opt(at).single())
         .map(|time| time.format("%H:%M:%S").to_string())
         .unwrap_or_else(|| "—".to_string())
+}
+
+fn clock_now() -> String {
+    clock(Some(chrono::Local::now().timestamp_millis()))
 }
 
 impl AccountSurface for MainWindow {
@@ -249,7 +257,31 @@ fn apply_overview(window: &MainWindow, overview: &Overview, account: &AccountVie
     apply_account(window, account);
     window.set_status_line(overview::status_line(overview).into());
     window.set_status_tone(if overview.failures.is_empty() { 0 } else { 2 });
-    window.set_last_update(clock(Some(chrono::Local::now().timestamp_millis())).into());
+    if overview.failures.is_empty() {
+        let now = clock_now();
+        window.set_last_update(now.clone().into());
+        window.set_overview_updated_at(now.into());
+    }
+}
+
+fn read_live_overview(
+    probe: &HttpProbe,
+    auth_admin: &HttpAuthAdmin,
+    token_path: &Path,
+    base: &str,
+    supervision: overview::Card,
+    saved: &LoadOutcome,
+) -> (Overview, AccountView, AuthRead) {
+    let overview = overview::read_overview(probe, base, supervision);
+    let auth = match load_control_token(token_path) {
+        Ok(token) => match auth_admin.read_status(base, &token) {
+            Ok(status) => AuthRead::Status(status),
+            Err(error) => AuthRead::Unavailable(error),
+        },
+        Err(error) => AuthRead::Unavailable(error),
+    };
+    let account = account_view(saved, Some(&auth));
+    (overview, account, auth)
 }
 
 fn apply_logs(window: &MainWindow, update: &LogUpdate) {
@@ -257,7 +289,7 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
         return;
     }
     if let Some(reason) = &update.failure {
-        window.set_log_status(format!("日志读取失败：{reason}").into());
+        window.set_log_status(format!("刷新失败：{reason}").into());
         window.set_log_tone(status_tone(Tone::Bad));
         return;
     }
@@ -309,6 +341,7 @@ fn apply_logs(window: &MainWindow, update: &LogUpdate) {
     window.set_log_status(status.into());
     window.set_log_tone(3);
     window.set_log_version(window.get_log_version().wrapping_add(1));
+    window.set_log_updated_at(clock_now().into());
 }
 
 #[derive(Default)]
@@ -363,12 +396,20 @@ fn load_historical_logs(
     window.set_log_tone(3);
     std::thread::spawn(move || {
         let now = chrono::Local::now();
-        let days = match period { 2 => 6, 3 => 29, _ => 0 };
-        let since = now.date_naive()
+        let days = match period {
+            2 => 6,
+            3 => 29,
+            _ => 0,
+        };
+        let since = now
+            .date_naive()
             .checked_sub_days(chrono::Days::new(days))
             .and_then(|date| date.and_hms_opt(0, 0, 0))
             .and_then(|time| time.and_local_timezone(chrono::Local).earliest())
-            .map_or_else(|| (now - chrono::Duration::days(days as i64 + 1)).timestamp_millis(), |time| time.timestamp_millis());
+            .map_or_else(
+                || (now - chrono::Duration::days(days as i64 + 1)).timestamp_millis(),
+                |time| time.timestamp_millis(),
+            );
         let result = read_history(&path, before, since, level, &keyword);
         let _ = slint::invoke_from_event_loop(move || {
             let Some(window) = weak.upgrade() else { return };
@@ -377,7 +418,9 @@ fn load_historical_logs(
                 return;
             }
             let model = window.get_logs();
-            let Some(model) = model.as_any().downcast_ref::<VecModel<LogRow>>() else { return };
+            let Some(model) = model.as_any().downcast_ref::<VecModel<LogRow>>() else {
+                return;
+            };
             match result {
                 Ok(result) => {
                     let count = result.lines.len();
@@ -416,14 +459,18 @@ fn coverage_tone(coverage: Coverage) -> i32 {
 }
 
 fn apply_usage(window: &MainWindow, view: UsageView) {
-    let points = if matches!(view.coverage, Coverage::Empty | Coverage::Unavailable) {
+    let points = if matches!(view.coverage, Coverage::Empty) {
         Vec::new()
     } else {
         view.buckets
             .into_iter()
             .map(|bucket| UsagePoint {
-                label: bucket.label.get(5..).filter(|_| bucket.label.len() == 10)
-                    .unwrap_or(&bucket.label).into(),
+                label: bucket
+                    .label
+                    .get(5..)
+                    .filter(|_| bucket.label.len() == 10)
+                    .unwrap_or(&bucket.label)
+                    .into(),
                 detail_label: format!("北京时间 {}", bucket.label).into(),
                 token_value: bucket.tokens.into(),
                 request_value: bucket.requests.into(),
@@ -437,11 +484,16 @@ fn apply_usage(window: &MainWindow, view: UsageView) {
     let points = ModelRc::from(points.as_slice());
     window.set_usage_labels(ModelRc::new(points.clone().map(|point| point.label)));
     window.set_usage_token_counts(ModelRc::new(points.clone().map(|point| point.token_count)));
-    window.set_usage_request_counts(ModelRc::new(points.clone().map(|point| point.request_count)));
+    window.set_usage_request_counts(ModelRc::new(
+        points.clone().map(|point| point.request_count),
+    ));
     window.set_usage_points(points);
     window.set_usage_status(view.message.into());
     window.set_usage_tone(coverage_tone(view.coverage));
     window.set_usage_loading(false);
+    if view.coverage != Coverage::Unavailable {
+        window.set_overview_updated_at(clock_now().into());
+    }
 }
 
 #[derive(Default)]
@@ -453,9 +505,32 @@ struct RequestNav {
     generation: u64,
 }
 
-fn load_requests(window: &MainWindow, ledger: &Path, nav: &Arc<Mutex<RequestNav>>, direction: i32) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RequestLoad {
+    Query,
+    Page,
+    Refresh,
+}
+
+fn load_requests(
+    window: &MainWindow,
+    ledger: &Path,
+    nav: &Arc<Mutex<RequestNav>>,
+    direction: i32,
+    mode: RequestLoad,
+) {
+    let refresh = mode == RequestLoad::Refresh;
     let (cursor, now, generation) = {
         let mut nav = nav.lock().expect("request navigation poisoned");
+        if refresh {
+            // A refresh re-reads the page the user is on; it never rewinds the
+            // page stack or changes the filters.
+            let Some(cursor) = nav.pages.last().cloned().flatten() else {
+                return;
+            };
+            nav.generation = nav.generation.wrapping_add(1);
+            (Some(cursor), nav.now, nav.generation)
+        } else {
         match direction {
             1 => match nav.earlier.take() {
                 Some(cursor) => nav.pages.push(Some(cursor)),
@@ -475,26 +550,48 @@ fn load_requests(window: &MainWindow, ledger: &Path, nav: &Arc<Mutex<RequestNav>
         }
         nav.generation = nav.generation.wrapping_add(1);
         (nav.pages.last().cloned().flatten(), nav.now, nav.generation)
+        }
     };
     let range = Range::from_index(window.get_request_period());
     let result = window.get_request_result();
     let keyword = window.get_request_keyword().to_string();
+    let scroll = window.get_request_scroll_y();
     let weak = window.as_weak();
     let ledger = ledger.to_path_buf();
     let nav = Arc::clone(nav);
+    if !refresh {
     window.set_selected_request("".into());
     window.set_request_scroll_y(0.0);
     window.set_request_status("正在读取请求记录…".into());
     window.set_request_tone(3);
     window.set_older_requests(false);
     window.set_newer_requests(false);
+    }
     std::thread::spawn(move || {
         let page = usage::read_requests(&ledger, range, result, &keyword, cursor.as_deref(), now);
         let _ = slint::invoke_from_event_loop(move || {
-            let Some(window) = weak.upgrade() else { return; };
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
             let mut nav = nav.lock().expect("request navigation poisoned");
-            if nav.generation != generation { return; }
-            let rows = page.rows.iter().map(|row| RequestRow {
+            if nav.generation != generation {
+                return;
+            }
+            let page = if refresh {
+                let previous = usage::RequestPage {
+                    rows: nav.rows.clone(),
+                    earlier: nav.earlier.clone(),
+                    coverage: Coverage::Complete,
+                    message: String::new(),
+                };
+                usage::keep_previous_page_on_failure(&previous, page)
+            } else {
+                page
+            };
+            let rows = page
+                .rows
+                .iter()
+                .map(|row| RequestRow {
                 id: row.key.clone().into(),
                 at: row.at.clone().into(),
                 model: row.model.clone().into(),
@@ -504,9 +601,15 @@ fn load_requests(window: &MainWindow, ledger: &Path, nav: &Arc<Mutex<RequestNav>
                     "失败" => status_tone(Tone::Bad),
                     _ => status_tone(Tone::Warn),
                 },
-                summary: format!("{}  {}", row.duration, row.request_id.as_deref().unwrap_or("")).into(),
+                    summary: format!(
+                        "{}  {}",
+                        row.duration,
+                        row.request_id.as_deref().unwrap_or("")
+                    )
+                    .into(),
                 detail: "".into(),
-            }).collect::<Vec<_>>();
+                })
+                .collect::<Vec<_>>();
             let count = rows.len();
             window.set_requests(ModelRc::from(rows.as_slice()));
             if count == 0 || !page.message.is_empty() {
@@ -517,15 +620,25 @@ fn load_requests(window: &MainWindow, ledger: &Path, nav: &Arc<Mutex<RequestNav>
             window.set_request_tone(coverage_tone(page.coverage));
             window.set_older_requests(page.earlier.is_some());
             window.set_newer_requests(nav.pages.len() > 1);
+            if page.coverage != Coverage::Unavailable {
+                window.set_request_updated_at(clock_now().into());
+            }
             nav.rows = page.rows;
             nav.earlier = page.earlier;
+            if refresh {
+                // Replacing the list model can move the viewport; the refresh
+                // must leave the reader where they were.
+                window.set_request_scroll_y(scroll);
+            }
         });
     });
 }
 
 fn show_request(window: &MainWindow, log: &Path, nav: &Mutex<RequestNav>, key: &str) {
     let nav = nav.lock().expect("request navigation poisoned");
-    let Some(row) = nav.rows.iter().find(|row| row.key == key).cloned() else { return; };
+    let Some(row) = nav.rows.iter().find(|row| row.key == key).cloned() else {
+        return;
+    };
     let key = row.key.clone();
     let weak = window.as_weak();
     let log = log.to_path_buf();
@@ -533,7 +646,11 @@ fn show_request(window: &MainWindow, log: &Path, nav: &Mutex<RequestNav>, key: &
     window.set_request_detail_title("请求详情".into());
     window.set_request_detail(usage::request_detail(&row, None).into());
     std::thread::spawn(move || {
-        let logs = usage::read_request_logs(&log, row.request_id.as_deref(), chrono::Utc::now().timestamp_millis());
+        let logs = usage::read_request_logs(
+            &log,
+            row.request_id.as_deref(),
+            chrono::Utc::now().timestamp_millis(),
+        );
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(window) = weak.upgrade() {
                 if window.get_selected_request().as_str() == key {
@@ -556,12 +673,15 @@ fn allow_motion() -> bool {
             0,
             Some((&mut allowed as *mut i32).cast()),
             SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        ).is_ok() && allowed != 0
+        )
+        .is_ok()
+            && allowed != 0
     }
 }
 
 fn hide_now(window: &MainWindow) {
     PAUSED.store(true, Ordering::SeqCst);
+    window.set_refresh_paused(true);
     let _ = window.hide();
 }
 
@@ -569,6 +689,9 @@ fn show_now(window: &MainWindow) {
     let _ = window.show();
     window.window().set_minimized(false);
     PAUSED.store(false, Ordering::SeqCst);
+    // Clearing the pause immediately refreshes the visible page and restarts the
+    // auto-refresh countdown.
+    window.set_refresh_paused(false);
     REFRESH_LOGS.store(true, Ordering::SeqCst);
 }
 
@@ -587,7 +710,9 @@ fn request_quit(window: &MainWindow, supervisor: &SharedSupervisor, status: &Sha
     std::thread::spawn(move || {
         let stopped = {
             let mut guard = supervisor.lock().expect("gateway supervisor poisoned");
-            guard.as_mut().map(|supervisor| supervisor.stop(StopReason::UserRequested))
+            guard
+                .as_mut()
+                .map(|supervisor| supervisor.stop(StopReason::UserRequested))
         };
         if let Some(stopped) = stopped {
             let failure = match &stopped.state {
@@ -757,24 +882,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .card();
-                let overview = overview::read_overview(&probe, &base, supervision);
-                let auth = match load_control_token(&control_token_path) {
-                    Ok(token) => match auth_admin.read_status(&base, &token) {
-                        Ok(status) => AuthRead::Status(status),
-                        Err(error) => AuthRead::Unavailable(error),
-                    },
-                    Err(error) => AuthRead::Unavailable(error),
-                };
+                let refresh = OVERVIEW_REFRESH.load(Ordering::SeqCst);
                 let saved = saved_state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .clone();
-                let account = account_view(&saved, Some(&auth));
+                let (overview, account, auth) = read_live_overview(
+                    &probe,
+                    &auth_admin,
+                    &control_token_path,
+                    &base,
+                    supervision,
+                    &saved,
+                );
                 *auth_state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth);
-                if last.as_ref().is_none_or(|(last_overview, last_account)| *last_overview != overview || *last_account != account) {
-                    last = Some((overview.clone(), account.clone()));
+                if last
+                    .as_ref()
+                    .is_none_or(|(last_refresh, last_overview, last_account)| {
+                        *last_refresh != refresh
+                            || *last_overview != overview
+                            || *last_account != account
+                    })
+                {
+                    last = Some((refresh, overview.clone(), account.clone()));
                     let weak = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(window) = weak.upgrade() {
@@ -782,7 +914,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     });
                 }
-                std::thread::sleep(Duration::from_secs(if PAUSED.load(Ordering::SeqCst) { 3 } else { 1 }));
+                std::thread::sleep(Duration::from_secs(if PAUSED.load(Ordering::SeqCst) {
+                    3
+                } else {
+                    1
+                }));
             }
         });
     }
@@ -799,16 +935,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let update = if let Some(opened) = stream.as_mut() {
                         let previous: Vec<_> = opened.lines().iter().cloned().collect();
                         match opened.poll() {
-                            Ok(outcome) if refresh || outcome.reset || !outcome.appended.is_empty() || last_failure.is_some() => Some(LogUpdate {
+                            Ok(outcome)
+                                if refresh
+                                    || outcome.reset
+                                    || !outcome.appended.is_empty()
+                                    || last_failure.is_some() =>
+                            {
+                                Some(LogUpdate {
                                 previous,
                                 entries: opened.lines().iter().cloned().collect(),
                                 appended: outcome.appended,
                                 reset: outcome.reset || last_failure.is_some(),
                                 trimmed: outcome.trimmed,
                                 failure: None,
-                            }),
+                                })
+                            }
                             Ok(_) => None,
-                            Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => Some(LogUpdate::failed(reason)),
+                            Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => {
+                                Some(LogUpdate::failed(reason))
+                            }
                             Err(_) => None,
                         }
                     } else {
@@ -816,9 +961,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Ok(opened) => {
                                 let entries = opened.lines().iter().cloned().collect();
                                 stream = Some(opened);
-                                Some(LogUpdate { previous: Vec::new(), entries, appended: Vec::new(), reset: true, trimmed: 0, failure: None })
+                                Some(LogUpdate {
+                                    previous: Vec::new(),
+                                    entries,
+                                    appended: Vec::new(),
+                                    reset: true,
+                                    trimmed: 0,
+                                    failure: None,
+                                })
                             }
-                            Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => Some(LogUpdate::failed(reason)),
+                            Err(reason) if refresh || last_failure.as_ref() != Some(&reason) => {
+                                Some(LogUpdate::failed(reason))
+                            }
                             Err(_) => None,
                         }
                     };
@@ -883,7 +1037,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let weak_request = window.as_weak();
     window.on_query_requests(move |direction| {
         if let Some(window) = weak_request.upgrade() {
-            load_requests(&window, &request_ledger, &request_page_nav, direction);
+            let mode = if direction == 0 {
+                RequestLoad::Query
+            } else {
+                RequestLoad::Page
+            };
+            load_requests(&window, &request_ledger, &request_page_nav, direction, mode);
+        }
+    });
+    let request_refresh_ledger = ledger.clone();
+    let request_refresh_nav = Arc::clone(&request_nav);
+    let weak_request = window.as_weak();
+    window.on_refresh_requests(move || {
+        if let Some(window) = weak_request.upgrade() {
+            load_requests(
+                &window,
+                &request_refresh_ledger,
+                &request_refresh_nav,
+                0,
+                RequestLoad::Refresh,
+            );
         }
     });
     let request_log = service_log.clone();
@@ -900,6 +1073,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let range = Arc::clone(&usage_range);
         window.on_usage_range_changed(move |period| {
             range.store(period, Ordering::SeqCst);
+            // Bump the refresh epoch so choosing the same range again still
+            // re-reads the ledger.
+            USAGE_REFRESH.fetch_add(1, Ordering::SeqCst);
             if let Some(window) = weak.upgrade() {
                 window.set_usage_points(ModelRc::default());
                 window.set_token_total("—".into());
@@ -912,15 +1088,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = window.as_weak();
         std::thread::spawn(move || {
             let mut last = None;
+            let mut last_period = None;
+            let mut last_view: Option<UsageView> = None;
             while !QUIT.load(Ordering::SeqCst) {
                 if !PAUSED.load(Ordering::SeqCst) {
                     let period = usage_range.load(Ordering::SeqCst);
-                    let metadata = std::fs::metadata(&ledger).map(|meta| (meta.len(), meta.modified().ok()));
-                    let day = chrono::Utc::now().with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("Beijing offset")).date_naive();
-                    let stamp = (period, metadata.as_ref().copied().map_err(|error| error.kind()), day);
+                    let refresh = USAGE_REFRESH.load(Ordering::SeqCst);
+                    let metadata =
+                        std::fs::metadata(&ledger).map(|meta| (meta.len(), meta.modified().ok()));
+                    let day = chrono::Utc::now()
+                        .with_timezone(
+                            &chrono::FixedOffset::east_opt(8 * 3600).expect("Beijing offset"),
+                        )
+                        .date_naive();
+                    let stamp = (
+                        period,
+                        refresh,
+                        metadata.as_ref().copied().map_err(|error| error.kind()),
+                        day,
+                    );
                     if last.as_ref() != Some(&stamp) {
                         last = Some(stamp);
-                        let view = usage::read_usage(&ledger, Range::from_index(period), chrono::Utc::now().timestamp_millis());
+                        if last_period != Some(period) {
+                            // A new range is a new query, not a refresh: an
+                            // unreadable ledger must not show the old range.
+                            last_period = Some(period);
+                            last_view = None;
+                        }
+                        let view = usage::read_usage(
+                            &ledger,
+                            Range::from_index(period),
+                            chrono::Utc::now().timestamp_millis(),
+                        );
+                        let view = match &last_view {
+                            Some(previous) => usage::keep_previous_on_failure(previous, view),
+                            None => view,
+                        };
+                        last_view = Some(view.clone());
                         let weak = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(window) = weak.upgrade() {
@@ -954,6 +1158,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         REFRESH_LOGS.store(true, Ordering::SeqCst);
     });
 
+    // Manual overview refresh forces a read even when the health response is
+    // unchanged, and refreshes the usage chart with the same action.
+    window.on_refresh_overview(|| {
+        OVERVIEW_REFRESH.fetch_add(1, Ordering::SeqCst);
+        USAGE_REFRESH.fetch_add(1, Ordering::SeqCst);
+    });
+
+    // Ctrl+R dispatches to the page-specific refresh callback in the UI.
+    let weak_refresh_page = window.as_weak();
+    window.on_refresh_page(move || {
+        if let Some(window) = weak_refresh_page.upgrade() {
+            window.invoke_refresh_current_page();
+        }
+    });
+
+    // Settings refresh re-checks the gateway and account status; a failure keeps
+    // the previous settings data and only reports the refresh failure.
+    let weak_settings = window.as_weak();
+    let settings_auth_admin = Arc::clone(&auth_admin);
+    let settings_gateway_status = Arc::clone(&gateway_status);
+    let settings_saved = Arc::clone(&saved_state);
+    let settings_auth_state = Arc::clone(&auth_state);
+    let settings_token_path = paths.control_token.clone();
+    let settings_port = Arc::clone(&current_port);
+    window.on_refresh_settings(move || {
+        let Some(window) = weak_settings.upgrade() else {
+            return;
+        };
+        window.set_settings_status("正在重新检查网关与账号状态…".into());
+        window.set_settings_tone(status_tone(Tone::Warn));
+        let probe = HttpProbe::new();
+        let auth_admin = Arc::clone(&settings_auth_admin);
+        let gateway_status = Arc::clone(&settings_gateway_status);
+        let saved_state = Arc::clone(&settings_saved);
+        let auth_state = Arc::clone(&settings_auth_state);
+        let token_path = settings_token_path.clone();
+        let port = settings_port.load(Ordering::SeqCst);
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let base = format!("http://127.0.0.1:{port}");
+            let supervision = gateway_status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .card();
+            let saved = saved_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            let (overview, account, auth) =
+                read_live_overview(&probe, &auth_admin, &token_path, &base, supervision, &saved);
+            let mut failures = overview.failures.clone();
+            if let AuthRead::Unavailable(reason) = &auth {
+                failures.push(format!("UM 认证 {reason}"));
+            }
+            let success = failures.is_empty();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    if success {
+                        *auth_state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(auth.clone());
+                        apply_overview(&window, &overview, &account);
+                        window.set_settings_status("已重新检查网关与账号状态".into());
+                        window.set_settings_tone(status_tone(Tone::Good));
+                        window.set_settings_updated_at(clock_now().into());
+                    } else {
+                        window.set_settings_status(
+                            format!("刷新失败：{}", failures.join("；")).into(),
+                        );
+                        window.set_settings_tone(status_tone(Tone::Bad));
+                    }
+                }
+            });
+        });
+    });
+
     let history_navigation = Arc::new(Mutex::new(HistoryNav::default()));
     let weak_history = window.as_weak();
     let history_path = service_log.clone();
@@ -979,7 +1259,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let skip_config = Arc::clone(&current_config);
     let skip_path = config_path.as_ref().ok().cloned();
     window.on_skip_login(move || {
-        let Some(window) = weak_skip.upgrade() else { return };
+        let Some(window) = weak_skip.upgrade() else {
+            return;
+        };
         window.set_show_intro(false);
         let Some(path) = &skip_path else { return };
         let mut config = skip_config.lock().expect("desktop config poisoned");
@@ -1300,9 +1582,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     AuthState::Valid | AuthState::LoggingIn => (String::new(), Tone::Good),
                     _ => (format!("登录未完成：{}", view.state_detail), Tone::Bad),
                 },
-                AuthRead::Unavailable(reason) => {
-                    (format!("无法打开可见登录：{reason}"), Tone::Bad)
-                }
+                AuthRead::Unavailable(reason) => (format!("无法打开可见登录：{reason}"), Tone::Bad),
             };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(window) = weak.upgrade() {
@@ -1440,7 +1720,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // The single-instance shortcut restores the Win32 window directly, without
         // the tray callback. Detect that the window is visible again while the log
         // reader is paused, and resume with the same backfill the tray uses.
-        if PAUSED.load(Ordering::SeqCst) && window.window().is_visible() {
+        let minimized = window.window().is_minimized();
+        if minimized && !PAUSED.load(Ordering::SeqCst) {
+            PAUSED.store(true, Ordering::SeqCst);
+            window.set_refresh_paused(true);
+        }
+        if PAUSED.load(Ordering::SeqCst) && !minimized && window.window().is_visible() {
             show_now(&window);
         }
         let paused = PAUSED.load(Ordering::SeqCst);
