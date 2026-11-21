@@ -47,6 +47,7 @@ struct FakePage {
     submit_ambiguous: AtomicBool,
     click_steps: Mutex<Vec<(String, Option<String>)>>,
     fill_calls: AtomicUsize,
+    fail_fill_at: AtomicUsize,
     filled_values: Mutex<Vec<String>>,
     account_prefilled: AtomicBool,
     password_prefilled: AtomicBool,
@@ -74,6 +75,7 @@ impl FakePage {
             submit_ambiguous: AtomicBool::new(false),
             click_steps: Mutex::new(Vec::new()),
             fill_calls: AtomicUsize::new(0),
+            fail_fill_at: AtomicUsize::new(0),
             filled_values: Mutex::new(Vec::new()),
             account_prefilled: AtomicBool::new(false),
             password_prefilled: AtomicBool::new(false),
@@ -192,7 +194,7 @@ impl LoginPage for FakePage {
         if selectors.contains(&"input[name=\"Password\"]")
             && self.password_cleared.load(Ordering::SeqCst)
         {
-            return CredentialField::Missing;
+            return CredentialField::Empty;
         }
         if selectors.contains(&"input[name=\"Password\"]")
             && self.password_prefilled.load(Ordering::SeqCst)
@@ -259,10 +261,13 @@ impl LoginPage for FakePage {
     }
 
     fn fill(&self, selectors: &[&str], value: &str) -> Result<(), String> {
+        let attempt = self.fill_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if attempt == self.fail_fill_at.load(Ordering::SeqCst) {
+            return Err(format!("fixture failed to fill {value}"));
+        }
         if selectors.contains(&"input[name=\"Password\"]") {
             self.password_cleared.store(false, Ordering::SeqCst);
         }
-        self.fill_calls.fetch_add(1, Ordering::SeqCst);
         self.filled_values.lock().unwrap().push(value.to_string());
         Ok(())
     }
@@ -781,6 +786,48 @@ fn a_visible_login_keeps_the_empty_umpass_form_open_for_the_operator() {
     assert_eq!(factory.requests().len(), 1);
     assert_eq!(factory.closes(), 1);
     assert_eq!(sink.published()[0].0, "operator-token");
+}
+
+#[test]
+fn blocked_umpass_prefill_records_each_field_and_the_fill_outcome() {
+    for (fail_at, result) in [
+        (0, "not_attempted_no_credentials"),
+        (1, "account_fill_failed"),
+        (2, "password_fill_failed"),
+    ] {
+        let temp = TempDir::new("um-rust-login-prefill-history-");
+        let page = FakePage::new("http://127.0.0.1:9", None);
+        page.account_prefilled.store(true, Ordering::SeqCst);
+        page.password_cleared.store(true, Ordering::SeqCst);
+        page.submit_visible.store(true, Ordering::SeqCst);
+        page.fail_fill_at.store(fail_at, Ordering::SeqCst);
+        *page.click_steps.lock().unwrap() = vec![(trusted_umpass_url().to_string(), None)];
+        let (service, _) = login_service_with(
+            &temp,
+            page.clone(),
+            ScriptedProbe::valid(),
+            Arc::new(FakeSink::default()),
+            |config| {
+                if fail_at != 0 {
+                    config.um_account = "fixture-private-account".into();
+                    config.um_password = "fixture-private-password".into();
+                }
+            },
+        );
+        service.start_explicit(false);
+        wait_for(&service, |status| status["state"] == json!("failed"));
+        let path = temp.path().join("login-history.jsonl");
+        let records = read_records(&path).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].reason.as_deref(), Some("umpass_prefill_missing"));
+        let expected = format!("umpass_form account:filled password:empty fallback:{result}");
+        assert_eq!(records[0].detail.as_deref(), Some(expected.as_str()));
+        assert_eq!(records[0].submit_count, 0);
+        assert_eq!(page.fill_calls(), fail_at);
+        assert_eq!(page.submit_clicks(), 0);
+        let raw = fs::read_to_string(path).unwrap();
+        assert!(!raw.contains("fixture-private-"));
+    }
 }
 
 #[test]
