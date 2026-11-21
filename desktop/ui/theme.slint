@@ -178,11 +178,11 @@ export component FocusAction inherits Rectangle {
     height: 32px;
     border-radius: 6px;
     background: !root.enabled ? Theme.field
-        : root.primary ? (pointer.pressed ? Theme.accent-strong : pointer.has-hover ? Theme.accent-strong : Theme.accent)
-        : root.quiet || root.link ? (pointer.has-hover ? Theme.hover : transparent)
-        : (pointer.has-hover ? Theme.hover : Theme.surface);
-    border-width: focus.has-focus ? 2px : root.quiet || root.link ? 0px : 1px;
-    border-color: focus.has-focus ? Theme.accent : root.danger ? Theme.bad : root.primary ? Theme.accent : Theme.edge;
+        : root.primary ? (pointer.pressed ? Theme.accent-strong : pointer.has-hover ? Theme.accent-strong : focus.has-focus ? Theme.accent-strong : Theme.accent)
+        : root.quiet || root.link ? (pointer.has-hover || focus.has-focus ? Theme.hover : transparent)
+        : (pointer.has-hover || focus.has-focus ? Theme.hover : Theme.surface);
+    border-width: root.quiet || root.link ? 0px : 1px;
+    border-color: root.danger ? Theme.bad : root.primary ? Theme.accent : focus.has-focus ? Theme.edge-strong : Theme.edge;
     opacity: root.enabled ? 1 : 0.55;
     animate background { duration: 120ms; easing: ease-in-out; }
     animate border-color { duration: 120ms; easing: ease-in-out; }
@@ -258,10 +258,19 @@ export component Segmented inherits Rectangle {
     height: 30px;
     background: Theme.field;
     border-radius: 6px;
-    border-width: focus.has-focus ? 2px : 1px;
-    border-color: focus.has-focus ? Theme.accent : Theme.edge;
-    animate border-color { duration: 120ms; easing: ease-in-out; }
-        focus := FocusScope {
+    border-width: 1px;
+    border-color: Theme.edge;
+    private property <int> count: root.options.length > 0 ? root.options.length : 1;
+    selection := Rectangle {
+        x: 2px + root.current-index * ((root.width - 4px) / root.count);
+        y: 2px;
+        width: (root.width - 4px) / root.count - 2px;
+        height: root.height - 4px;
+        border-radius: 4px;
+        background: Theme.accent-soft;
+        animate x, width { duration: 160ms; easing: ease-in-out; }
+    }
+    focus := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.LeftArrow && root.current-index > 0) {
                 root.current-index -= 1;
@@ -282,11 +291,7 @@ export component Segmented inherits Rectangle {
         for item[index] in root.options : Rectangle {
             horizontal-stretch: 1;
             border-radius: 4px;
-            background: root.current-index == index ? Theme.accent-soft : transparent;
-            border-width: 1px;
-            border-color: root.current-index == index ? Theme.accent-soft : transparent;
-            animate background { duration: 120ms; easing: ease-in-out; }
-            animate border-color { duration: 120ms; easing: ease-in-out; }
+            background: transparent;
             Text {
                 text: item.text;
                 color: root.current-index == index ? Theme.accent : Theme.muted;
@@ -333,7 +338,7 @@ export component Field inherits VerticalLayout {
         background: Theme.field;
         border-radius: 6px;
         border-width: 1px;
-        border-color: root.invalid ? Theme.bad : input.has-focus ? Theme.accent : Theme.edge;
+        border-color: root.invalid ? Theme.bad : input.has-focus ? Theme.edge-strong : Theme.edge;
         animate border-color { duration: 120ms; easing: ease-in-out; }
         if !root.icon.is-empty : AppIcon {
             x: 9px;
@@ -345,9 +350,10 @@ export component Field inherits VerticalLayout {
         }
         input := TextInput {
             x: root.icon.is-empty ? 10px : 31px;
-            y: 0px;
+            y: 4px;
             width: parent.width - (root.icon.is-empty ? 20px : 41px);
-            height: parent.height;
+            height: parent.height - 8px;
+            vertical-alignment: center;
             text <=> root.text;
             font-family: Theme.font-body;
             font-size: 12px;
@@ -392,7 +398,7 @@ export component Toggle inherits Rectangle {
             border-radius: 4px;
             background: root.checked ? Theme.accent : Theme.field;
             border-width: focus.has-focus ? 2px : 1px;
-            border-color: focus.has-focus ? Theme.accent : root.checked ? Theme.accent : Theme.edge;
+            border-color: focus.has-focus ? Theme.edge-strong : root.checked ? Theme.accent : Theme.edge;
             animate background { duration: 120ms; easing: ease-in-out; }
             animate border-color { duration: 120ms; easing: ease-in-out; }
             Path {
@@ -447,7 +453,6 @@ export component Toggle inherits Rectangle {
 
 export component NavItem inherits Rectangle {
     in property <string> label;
-    in property <string> icon: "";
     in property <bool> selected;
     in property <bool> show-label: true;
     callback activate();
@@ -471,16 +476,10 @@ export component NavItem inherits Rectangle {
         padding-right: root.show-label ? 10px : 0px;
         alignment: root.show-label ? start : center;
         spacing: 8px;
-        if !root.icon.is-empty : AppIcon {
-            width: root.show-label ? 16px : 18px;
-            height: root.show-label ? 16px : 18px;
-            kind: root.icon;
-            tint: root.selected ? Theme.accent : Theme.rail-muted;
-        }
-        if root.show-label && !root.label.is-empty : Text {
+        Text {
             text: root.label;
             color: root.selected ? Theme.accent : Theme.rail-muted;
-            font-size: 12px;
+            font-size: root.show-label ? 12px : 11px;
             font-weight: root.selected ? 650 : 500;
             vertical-alignment: center;
             animate color { duration: 120ms; easing: ease-in-out; }

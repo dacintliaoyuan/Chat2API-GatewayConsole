@@ -1,6 +1,7 @@
 import { ComboBox, ListView, ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme, Panel, Heading, Hint, Selectable, ActionButton, FocusAction, NavItem, Field, MaterialField, Toggle, Segmented, Tag, StatusDot, DataText, SectionLabel } from "theme.slint";
 import { ChartEngine } from "@slintplot";
+import { AppIcon } from "icons.slint";
 export { ChartEngine }
 import { UsageChart, UsagePoint } from "usage-chart.slint";
 export { UsagePoint }
@@ -85,10 +86,14 @@ component TextDetails inherits Panel {
 component Card inherits Panel {
     in property <length> inset: 16px;
     in property <length> gap: 10px;
+    in property <bool> clickable: false;
+    callback activated();
     out property <length> content-height: content.preferred-height;
     out property <length> content-width: content.width;
     vertical-stretch: 0;
     preferred-height: content.preferred-height;
+    background: root.clickable && pointer.has-hover ? Theme.surface-2 : Theme.surface;
+    animate background { duration: 120ms; easing: ease-in-out; }
     drop-shadow-offset-y: 1px;
     drop-shadow-blur: 3px;
     drop-shadow-color: Theme.card-shadow;
@@ -96,6 +101,11 @@ component Card inherits Panel {
         padding: root.inset;
         spacing: root.gap;
         @children
+    }
+    pointer := TouchArea {
+        enabled: root.clickable;
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.activated(); }
     }
 }
 
@@ -115,8 +125,8 @@ export component MainWindow inherits Window {
         || !root.account-saved-detail.is-empty;
 
     in-out property <int> page: 0;
-    private property <[string]> nav-icons: ["overview", "requests", "logs", "settings"];
     private property <float> page-opacity: 1;
+    private property <float> page-scale: 1;
     in property <string> gateway-value: "检测中";
     in property <string> gateway-detail;
     in property <int> gateway-tone: 3;
@@ -288,7 +298,8 @@ export component MainWindow inherits Window {
         }
     }
     changed page => {
-        root.page-opacity = 0.85;
+        root.page-opacity = 0.6;
+        root.page-scale = 0.985;
         page-fade-timer.start();
         if (root.page == 3 && root.log-period == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
@@ -297,7 +308,10 @@ export component MainWindow inherits Window {
     page-fade-timer := Timer {
         interval: 1ms;
         running: false;
-        triggered => { root.page-opacity = 1; }
+        triggered => {
+            root.page-opacity = 1;
+            root.page-scale = 1;
+        }
     }
 
     FocusScope {
@@ -336,7 +350,6 @@ export component MainWindow inherits Window {
                 }
                 for label[index] in ["总览", "请求诊断", "运行日志", "设置"] : NavItem {
                     label: label;
-                    icon: root.nav-icons[index];
                     selected: root.page == (index == 2 ? 3 : index == 3 ? 2 : index);
                     activate => { root.navigate(index == 2 ? 3 : index == 3 ? 2 : index); }
                 }
@@ -372,7 +385,12 @@ export component MainWindow inherits Window {
                 vertical-stretch: 1;
                 clip: true;
                 opacity: root.page-opacity;
-                animate opacity { duration: 150ms; easing: ease-in-out; }
+                transform-origin: { x: self.width / 2, y: self.height / 2 };
+                transform-scale-x: root.page-scale;
+                transform-scale-y: root.page-scale;
+                animate opacity { duration: 180ms; easing: ease-out; }
+                animate transform-scale-x { duration: 180ms; easing: ease-out; }
+                animate transform-scale-y { duration: 180ms; easing: ease-out; }
             overview-scroll := ScrollView {
                 visible: root.page == 0;
                 vertical-stretch: 1;
@@ -744,19 +762,21 @@ export component MainWindow inherits Window {
                         }
                     }
                     Card {
+                        clickable: true;
+                        activated => { root.show-technical = !root.show-technical; }
                         VerticalLayout {
                             spacing: 9px;
                             HorizontalLayout {
                                 spacing: 8px;
                                 SectionLabel { text: "实例管理"; horizontal-stretch: 1; vertical-alignment: center; }
-                                ActionButton {
-                                    label: root.show-technical ? "收起详情" : "查看详情";
-                                    icon: root.show-technical ? "chevron-left" : "chevron-right";
-                                    icon-only: true;
-                                    link: true;
-                                    width: 32px;
-                                    quiet: true;
-                                    clicked => { root.show-technical = !root.show-technical; }
+                                AppIcon {
+                                    width: 16px;
+                                    height: 16px;
+                                    kind: "chevron-right";
+                                    tint: Theme.accent;
+                                    transform-origin: { x: self.width / 2, y: self.height / 2 };
+                                    transform-rotation: root.show-technical ? 90deg : 0deg;
+                                    animate transform-rotation { duration: 120ms; easing: ease-in-out; }
                                 }
                             }
                             if root.show-technical : VerticalLayout {

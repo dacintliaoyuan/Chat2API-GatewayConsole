@@ -24,6 +24,8 @@ ALLOW: frozenset[str] = frozenset({
     # The Magpie palette rewrite replaces the legacy mixed-ending file; the
     # rewritten tokens are LF like the rest of the desktop UI.
     "desktop/ui/theme.slint",
+    # The Lucide-backed icon map is new and follows the desktop UI's LF style.
+    "desktop/ui/icons.slint",
 })
 
 
