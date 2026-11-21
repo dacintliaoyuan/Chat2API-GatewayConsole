@@ -9,6 +9,7 @@
 - 人工接管要打开可见 Edge，Duo 要人在同一个会话里确认。Windows Service 跑在 session 0，不能提供用户桌面上的可见窗口；所以本机入口只能是用户会话里的 PowerShell 启动器。
 - 本机可能同时存在生产 8000、candidate parity、cloud shape 与 Python 回滚实例。停止不能按同名进程或端口一刀切，否则会误杀 candidate 或云端实例。启动描述符用 `ProcessName`、`CommandLinePattern`、`InstanceScript` 与 `ForeignArgumentPatterns` 识别自己的实例；8000 用 `GracefulHttp /admin/shutdown`，8001 用 `Port`。
 - “故意停止不被恢复”由 `DesiredStateTracked` 加计划任务 `SelfUseAI AI Gateway Chat2API Watch` 实现：启动时 arm，故意停止时 release，异常退出才留给 watch。它没有 broker 的 drain、持久 stop intent、投影发布和实例通道。
+- 本机 Rust 8000 启动时由一个隐藏观察进程持有实际网关的进程句柄。每次退出向守护目录的 `chat2api-exits/` 写入 PID、启动及退出时间、退出码和有限的 stderr 分类计数，最多保留 32 条。挂到已经运行的网关时只能采集退出码。记录不影响守护的启停决策，stderr 原文和凭据不落盘。
 - 回滚仍是只改 `StartPath` 回 Python 批处理，不需要重装或改端口。
 
 ## 云端：systemd 与 broker

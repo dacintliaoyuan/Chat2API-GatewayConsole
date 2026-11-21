@@ -1436,6 +1436,32 @@ function Get-GatewayWatchLifecycleStatus {
     }
 }
 
+function Start-GatewayObservedProcess {
+    param([string]$Executable, [string[]]$Arguments, [string]$WorkingDirectory)
+
+    $observer = Join-Path (Get-GatewayRoot) 'lib\observe-chat2api.ps1'
+    if (!(Test-Path -LiteralPath $observer -PathType Leaf)) {
+        throw 'local gateway exit observer script is missing'
+    }
+    $recordDir = Join-Path (Split-Path -Parent (Get-GatewayDesiredStatePath -Key 'chat2api')) 'chat2api-exits'
+    $envName = 'SELFUSEAI_CHAT2API_OBSERVER_LAUNCH'
+    $previous = [Environment]::GetEnvironmentVariable($envName, 'Process')
+    $definition = @{
+        executable = $Executable
+        arguments = $Arguments -join ' '
+        working_directory = $WorkingDirectory
+        record_directory = $recordDir
+    } | ConvertTo-Json -Compress
+    try {
+        [Environment]::SetEnvironmentVariable($envName, $definition, 'Process')
+        Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList @(
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', ('"' + $observer + '"')) -WorkingDirectory $WorkingDirectory -WindowStyle Hidden
+    } finally {
+        [Environment]::SetEnvironmentVariable($envName, $previous, 'Process')
+    }
+}
+
 function Start-GatewayService {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -1580,7 +1606,10 @@ function Start-GatewayService {
                     [Environment]::SetEnvironmentVariable($name, $childEnv[$name], 'Process')
                 }
                 try {
-                    if ($startPath -match '\.(exe|com)$') {
+                    if ($Key -eq 'chat2api' -and $startPath -match '\.exe$') {
+                        Start-GatewayObservedProcess -Executable $startPath `
+                            -Arguments $startArguments -WorkingDirectory $workingDirectory
+                    } elseif ($startPath -match '\.(exe|com)$') {
                         Start-Process -FilePath $startPath `
                             -ArgumentList $startArguments `
                             -WorkingDirectory $workingDirectory `

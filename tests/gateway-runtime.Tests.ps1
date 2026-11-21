@@ -595,10 +595,12 @@ foreach ($scriptName in @(
         [CmdletBinding()]
         param([Parameter(Position = 0)][string]$FilePath, [object]$ArgumentList,
               [string]$WorkingDirectory, [object]$WindowStyle)
+        $plan = $env:SELFUSEAI_CHAT2API_OBSERVER_LAUNCH | ConvertFrom-Json
         [void]$script:ticket80Launches.Add([pscustomobject]@{
-            FilePath = [string]$FilePath
-            ArgumentList = @($ArgumentList)
-            WorkingDirectory = [string]$WorkingDirectory
+            ObserverCommand = $ArgumentList -join ' '
+            FilePath = $plan.executable
+            ArgumentList = $plan.arguments
+            WorkingDirectory = $plan.working_directory
         })
     }
     try {
@@ -606,7 +608,8 @@ foreach ($scriptName in @(
         Assert-Equal $started.Status 'StartPending' 'Rust launch without a listener reports StartPending'
         Assert-Equal $script:ticket80Launches.Count 1 'Rust launcher starts exactly once'
         $launch = $script:ticket80Launches[0]
-        Assert-Equal $launch.FilePath (Join-Path $root 'rust\target\release\um-gateway-candidate.exe') 'launcher runs the Rust binary directly'
+        Assert-Equal ($launch.ObserverCommand -match 'observe-chat2api\.ps1') $true '8000 launches through its exit observer'
+        Assert-Equal $launch.FilePath (Join-Path $root 'rust\target\release\um-gateway-candidate.exe') 'observer launches the Rust binary'
         Assert-Equal ($launch.ArgumentList -join ' ') '--mode production --port 8000 --role local --upstream-base-url https://chat.genai.um.edu.mo --control-token-file data/admin-control-token --usage-log data/usage-chat2api.jsonl --service-log chat2api/chat2api.log' 'launcher passes the production/local/8000 arguments'
         Assert-Equal ([IO.Path]::GetFullPath($launch.WorkingDirectory)) $root 'launcher runs from the repository root'
     } finally {
@@ -1556,6 +1559,10 @@ function Start-Process {
         [string]$WorkingDirectory,
         [object]$WindowStyle
     )
+    if ($env:SELFUSEAI_CHAT2API_OBSERVER_LAUNCH) {
+        $plan = $env:SELFUSEAI_CHAT2API_OBSERVER_LAUNCH | ConvertFrom-Json
+        $FilePath = $plan.executable
+    }
     [void]$script:stopScopeLaunches.Add([string]$FilePath)
 }
 
@@ -2560,6 +2567,8 @@ Assert-Equal ($startOutcomeBody.Length -gt 0) $true 'the start-outcome gate body
 Assert-Equal ($startOutcomeBody -match 'Test-GatewayWatchLifecycleControl') $true 'the start-outcome gate consults the lifecycle control marker (round-19 compatibility before the opt-in)'
 $watchOutput = & pwsh.exe -NoProfile -ExecutionPolicy Bypass -File $watchScript -SelfTest 2>&1
 Assert-Equal $LASTEXITCODE 0 ('watch-chat2api self-test passes: ' + (($watchOutput | Select-Object -Last 1) -join ''))
+$observerOutput = & pwsh.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\chat2api-exit-observer.Tests.ps1') 2>&1
+Assert-Equal $LASTEXITCODE 0 ('chat2api exit observer self-test passes: ' + (($observerOutput | Select-Object -Last 1) -join ''))
 
 # ---------------------------------------------------------------------------
 # P3 返修（2026-10-11）：空来源集合必须经真实 pwsh.exe -> Python
