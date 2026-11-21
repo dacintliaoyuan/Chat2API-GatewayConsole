@@ -253,6 +253,11 @@ export component MainWindow inherits Window {
     in property <string> usage-status;
     in property <int> usage-tone: 3;
     in property <bool> allow-motion: true;
+    // The saved appearance choice: 0 follows the system, 1 light, 2 dark.
+    in-out property <int> theme-mode <=> Theme.theme-mode;
+    // Test seam: the headless tests stand in for the Windows app theme.
+    in-out property <bool> system-dark <=> Theme.system-dark;
+    out property <bool> theme-dark: Theme.dark;
     // Test seam: lets the interaction tests switch chart modes without pixels.
     in-out property <bool> usage-show-line: false;
     in-out property <bool> usage-show-requests: false;
@@ -370,6 +375,10 @@ export component MainWindow inherits Window {
     out property <int> status-dot-tone: status-dot.tone;
     out property <float> page-title-opacity: page-title.opacity;
     out property <float> page-host-opacity: page-host.opacity;
+    out property <length> theme-mode-x: theme-mode-control.absolute-position.x;
+    out property <length> theme-mode-y: theme-mode-control.absolute-position.y;
+    out property <length> theme-mode-width: theme-mode-control.width;
+    out property <length> theme-mode-height: theme-mode-control.height;
 
     callback navigate(int);
     callback configure-account();
@@ -387,6 +396,8 @@ export component MainWindow inherits Window {
     callback query-requests(int);
     callback open-request(string);
     callback usage-range-changed(int);
+    callback theme-mode-changed(int);
+    callback theme-dark-changed(bool);
     callback quit-requested();
 
     changed account-form-visible => {
@@ -412,6 +423,12 @@ export component MainWindow inherits Window {
             if (root.credential-account-input.is-empty) { account-input.take-focus(); }
             else { password-input.take-focus(); }
         }
+    }
+    // The chart owns a second palette, and the native title bar needs the same
+    // dark/light step; both follow the one derived value.
+    changed theme-dark => {
+        root.apply-chart-theme();
+        root.theme-dark-changed(root.theme-dark);
     }
     public function navigate-to(page: int) {
         if (root.page == page) { return; }
@@ -913,6 +930,36 @@ export component MainWindow inherits Window {
                     min-height: self.preferred-height;
                     spacing: 12px;
                     padding-right: 8px;
+                    Card {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 9px;
+                            SectionLabel { text: "外观"; }
+                            Hint { text: "跟随系统时会随 Windows 应用主题切换，手动选择会覆盖系统设置。"; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Text {
+                                    text: "主题";
+                                    height: Theme.control-height;
+                                    vertical-alignment: center;
+                                    color: Theme.ink;
+                                    font-size: 12px;
+                                }
+                                theme-mode-control := Segmented {
+                                    width: 300px;
+                                    label: "主题";
+                                    options: [
+                                        { text: "跟随系统" },
+                                        { text: "浅色" },
+                                        { text: "深色" },
+                                    ];
+                                    current-index <=> root.theme-mode;
+                                    selected(index) => { root.theme-mode-changed(index); }
+                                }
+                            }
+                        }
+                    }
                     Card {
                         VerticalLayout {
                             alignment: start;

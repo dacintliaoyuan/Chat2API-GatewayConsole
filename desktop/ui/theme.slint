@@ -12,7 +12,12 @@ export global Theme {
     in-out property <bool> motion: true;
     // One shared 1.4 s breathing phase for every live status dot.
     in-out property <bool> pulse-on: false;
-    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    // 0 follows the Windows app theme, 1 forces light, 2 forces dark.
+    in-out property <int> theme-mode: 0;
+    // Mirrors the system choice from Palette. It stays in-out so the headless
+    // tests can drive the same derivation without a native window.
+    in-out property <bool> system-dark: Palette.color-scheme == ColorScheme.dark;
+    out property <bool> dark: theme-mode == 2 || (theme-mode == 0 && system-dark);
 
     out property <color> background: dark ? #1a1a1c : #f5f5f7;
     out property <color> surface: dark ? #1c1c1e : #ffffff;

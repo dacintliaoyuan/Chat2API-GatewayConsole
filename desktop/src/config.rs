@@ -10,10 +10,41 @@ pub const DEFAULT_MODEL_API_PORT: u16 = 7999;
 pub const MODEL_API_HOST: &str = "127.0.0.1";
 pub const CONFIG_VERSION: i64 = 1;
 
+/// The saved appearance choice. `System` follows the Windows app theme; the two
+/// explicit modes ignore it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ThemeMode {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeMode {
+    /// Reads the persisted value. Unknown text and any non-string JSON value fall
+    /// back to `System`, so an older or hand-edited file keeps the port working.
+    pub fn parse(text: &str) -> Self {
+        match text {
+            "light" => Self::Light,
+            "dark" => Self::Dark,
+            _ => Self::System,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopConfig {
     pub model_api_port: u16,
     pub intro_dismissed: bool,
+    pub theme: ThemeMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +62,7 @@ impl Default for DesktopConfig {
         Self {
             model_api_port: DEFAULT_MODEL_API_PORT,
             intro_dismissed: false,
+            theme: ThemeMode::System,
         }
     }
 }
@@ -90,6 +122,10 @@ pub fn parse_config(text: &str) -> Result<DesktopConfig, String> {
             None => false,
             Some(value) => value.as_bool().ok_or_else(|| "配置 intro_dismissed 不是布尔值".to_string())?,
         },
+        theme: match body.get("theme") {
+            Some(Value::String(text)) => ThemeMode::parse(text),
+            _ => ThemeMode::System,
+        },
     })
 }
 
@@ -121,6 +157,7 @@ pub fn save_to(path: &Path, config: &DesktopConfig) -> Result<(), String> {
         "version": CONFIG_VERSION,
         "model_api_port": config.model_api_port,
         "intro_dismissed": config.intro_dismissed,
+        "theme": config.theme.key(),
     }))
     .map_err(|error| format!("序列化配置失败：{error}"))?;
     let temp = parent.join(format!(".desktop.json.{}.tmp", std::process::id()));
@@ -135,6 +172,22 @@ pub fn save_to(path: &Path, config: &DesktopConfig) -> Result<(), String> {
         return Err(format!("替换配置文件失败：{error}"));
     }
     Ok(())
+}
+
+/// Applies a theme choice to the in-memory config first, then persists it.
+///
+/// The window switches even when the disk write fails, so the in-memory mode is
+/// updated before the save. The error carries the status-row text for that case.
+pub fn apply_theme(
+    path: Option<&Path>,
+    config: &mut DesktopConfig,
+    theme: ThemeMode,
+) -> Result<(), String> {
+    config.theme = theme;
+    let Some(path) = path else {
+        return Err("主题已切换，但保存失败：无法定位配置文件".to_string());
+    };
+    save_to(path, config).map_err(|error| format!("主题已切换，但保存失败：{error}"))
 }
 
 #[cfg(unix)]

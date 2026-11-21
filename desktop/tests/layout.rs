@@ -185,6 +185,53 @@ fn settings_scrolls_to_the_account_form_at_minimum_size() {
 }
 
 #[test]
+fn theme_mode_switches_dark_and_follows_the_system_theme() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+
+    window.set_theme_mode(2);
+    assert!(window.get_theme_dark(), "深色档必须启用深色配色");
+
+    window.set_theme_mode(1);
+    assert!(!window.get_theme_dark(), "浅色档必须使用浅色配色");
+
+    window.set_system_dark(true);
+    window.set_theme_mode(0);
+    assert!(window.get_theme_dark(), "跟随系统时使用系统深色");
+
+    window.set_system_dark(false);
+    assert!(!window.get_theme_dark(), "跟随系统时使用系统浅色");
+
+    window.set_theme_mode(2);
+    assert!(window.get_theme_dark(), "手动深色不受系统浅色影响");
+}
+
+#[test]
+fn appearance_segments_report_the_selected_theme_mode() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(2);
+    let selected = Rc::new(RefCell::new(Vec::new()));
+    window.on_theme_mode_changed({
+        let selected = Rc::clone(&selected);
+        move |index| selected.borrow_mut().push(index)
+    });
+
+    // Three equal segments: the third one is 深色.
+    let y = window.get_theme_mode_y() + window.get_theme_mode_height() / 2.0;
+    let x = window.get_theme_mode_x() + window.get_theme_mode_width() * 5.0 / 6.0;
+    click(&window, x, y);
+    assert_eq!(*selected.borrow(), vec![2]);
+    assert_eq!(window.get_theme_mode(), 2);
+    assert!(window.get_theme_dark());
+
+    // The first segment returns to 跟随系统.
+    let x = window.get_theme_mode_x() + window.get_theme_mode_width() / 6.0;
+    click(&window, x, y);
+    assert_eq!(*selected.borrow(), vec![2, 0]);
+    assert_eq!(window.get_theme_mode(), 0);
+}
+
+#[test]
 fn first_open_offers_skip_and_keeps_the_configure_entry_after_skipping() {
     let window = window_at(1060.0, 720.0);
     window.set_show_intro(true);
