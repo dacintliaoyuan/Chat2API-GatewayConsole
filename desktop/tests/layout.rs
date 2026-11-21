@@ -485,3 +485,137 @@ fn the_page_swap_never_shows_a_blank_frame() {
         "the title and the page share one opacity"
     );
 }
+
+#[test]
+fn escape_clears_only_the_current_pages_detail() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_selected_request("key-1".into());
+    window.set_open_log_id("row-1".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    press(&window, Key::Escape);
+    assert_eq!(window.get_selected_request().as_str(), "");
+    assert_eq!(
+        window.get_open_log_id().as_str(),
+        "row-1",
+        "Escape on the request page must not clear a hidden log detail"
+    );
+
+    window.set_page(3);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    press(&window, Key::Escape);
+    assert_eq!(window.get_open_log_id().as_str(), "");
+}
+
+#[test]
+fn copy_detail_acknowledges_for_1_2_seconds() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_selected_request("key-1".into());
+    window.set_request_detail("request body".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    assert!(!window.get_request_detail_copied());
+
+    click(
+        &window,
+        window.get_request_detail_copy_x() + window.get_request_detail_copy_width() / 2.0,
+        window.get_request_detail_copy_y() + window.get_request_detail_copy_height() / 2.0,
+    );
+    assert!(
+        window.get_request_detail_copied(),
+        "the copy action must acknowledge itself"
+    );
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1300));
+    assert!(
+        !window.get_request_detail_copied(),
+        "the copy acknowledgement must return to its normal state"
+    );
+}
+
+#[test]
+fn clearing_the_search_empties_it_and_reruns_the_query() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(1);
+    window.set_request_keyword("fixture".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_request_search_clear_visible());
+
+    let queries = Rc::new(std::cell::Cell::new(0));
+    window.on_query_requests({
+        let queries = Rc::clone(&queries);
+        move |_| queries.set(queries.get() + 1)
+    });
+    click(
+        &window,
+        window.get_request_search_clear_x() + window.get_request_search_clear_width() / 2.0,
+        window.get_request_search_clear_y() + window.get_request_search_clear_height() / 2.0,
+    );
+    assert_eq!(window.get_request_keyword().as_str(), "");
+    assert_eq!(queries.get(), 1, "clearing the search must rerun the query");
+}
+
+#[test]
+fn tray_less_quit_requires_a_second_click() {
+    let window = window_at(1060.0, 720.0);
+    window.set_tray_available(false);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+
+    let quits = Rc::new(std::cell::Cell::new(0));
+    window.on_quit_requested({
+        let quits = Rc::clone(&quits);
+        move || quits.set(quits.get() + 1)
+    });
+    assert!(!window.get_quit_confirm_visible());
+
+    click(
+        &window,
+        window.get_quit_button_x() + window.get_quit_button_width() / 2.0,
+        window.get_quit_button_y() + window.get_quit_button_height() / 2.0,
+    );
+    assert!(window.get_quit_confirm_visible());
+    assert_eq!(quits.get(), 0, "the first click only arms the confirmation");
+
+    click(
+        &window,
+        window.get_quit_confirm_x() + window.get_quit_confirm_width() / 2.0,
+        window.get_quit_confirm_y() + window.get_quit_confirm_height() / 2.0,
+    );
+    assert_eq!(quits.get(), 1, "the second click stops the gateway and quits");
+}
+
+#[test]
+fn help_page_lists_shortcuts_and_login_guidance() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(4);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_help_visible(), "the help page must be reachable");
+}
+
+#[test]
+fn log_refresh_acknowledgement_expires() {
+    let window = window_at(1060.0, 720.0);
+    window.set_page(3);
+    window.set_log_refreshed(true);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert!(window.get_log_refreshed());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1300));
+    assert!(
+        !window.get_log_refreshed(),
+        "the refresh acknowledgement must return to its normal state"
+    );
+}
+
+#[test]
+fn the_um_cell_always_has_a_detail_line() {
+    let window = window_at(1060.0, 720.0);
+    window.set_account_label("尚未登录".into());
+    window.set_account_detail("".into());
+    window.set_account_saved("未配置账号".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_account_state_detail_text(), "未配置账号");
+
+    window.set_account_saved("someone@um.edu.mo".into());
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+    assert_eq!(window.get_account_state_detail_text(), "登录后可用");
+}

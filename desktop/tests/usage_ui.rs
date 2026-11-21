@@ -210,7 +210,19 @@ fn changing_range_through_the_segmented_control_reloads_the_chart() {
     let y = chart.get_usage_period_y();
     let width = chart.get_usage_period_width();
     assert!(width >= 300.0, "five range options need room for 24 小时");
-    for index in [1usize, 2, 3, 4, 0] {
+
+    // The selection block animates for 160 ms; the chart data reload starts
+    // only after that, so the block and the plot never disagree.
+    click_segment(&chart, x, y, width, 1, 5);
+    assert_eq!(chart.get_usage_period(), 1);
+    assert_eq!(selected.get(), None);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(160));
+
+    assert_eq!(chart.get_usage_period(), 1);
+    assert_eq!(selected.get(), Some(1));
+    assert!(!chart.get_usage_can_unpin());
+
+    for index in [2usize, 3, 4, 0] {
         click_segment(&chart, x, y, width, index, 5);
         i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
         assert_eq!(chart.get_usage_period(), index as i32);

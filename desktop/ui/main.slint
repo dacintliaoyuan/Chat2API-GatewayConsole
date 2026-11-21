@@ -68,6 +68,20 @@ component TextDetails inherits Panel {
     in property <string> title;
     in property <string> body;
     callback closed();
+    // A copy is confirmed in place for 1.2 s so the action never looks like a
+    // no-op; a new body clears the old acknowledgement immediately.
+    in-out property <bool> copied: false;
+    changed body => { root.copied = false; }
+    // Test seam: the acknowledgement and the copy control geometry.
+    out property <length> copy-x: copy-button.absolute-position.x;
+    out property <length> copy-y: copy-button.absolute-position.y;
+    out property <length> copy-width: copy-button.width;
+    out property <length> copy-height: copy-button.height;
+    copy-timer := Timer {
+        interval: 1.2s;
+        running: false;
+        triggered => { root.copied = false; }
+    }
     clip: true;
     VerticalLayout {
         padding: 14px;
@@ -75,7 +89,21 @@ component TextDetails inherits Panel {
         HorizontalLayout {
             spacing: 8px;
             Heading { text: root.title; horizontal-stretch: 1; vertical-alignment: center; }
-            ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "复制全文"; icon: "copy"; icon-only: true; quiet: true; tooltip: "复制全文"; clicked => { full-text.select-all(); full-text.copy(); } }
+            copy-button := ActionButton {
+                width: root.copied ? 70px : Theme.icon-button;
+                height: Theme.icon-button;
+                label: root.copied ? "已复制" : "复制全文";
+                icon: root.copied ? "check" : "copy";
+                icon-only: !root.copied;
+                quiet: true;
+                tooltip: root.copied ? "已复制" : "复制全文";
+                clicked => {
+                    full-text.select-all();
+                    full-text.copy();
+                    root.copied = true;
+                    copy-timer.start();
+                }
+            }
             ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "关闭"; icon: "close"; icon-only: true; quiet: true; tooltip: "关闭详情"; clicked => { root.closed(); } }
         }
         // The platform text editor draws an accent underline when focused; the
@@ -149,9 +177,14 @@ component Card inherits Panel {
 // detail, and hover or focus steps the same neutral surface and edge.
 component ClickableCard inherits Card {
     in property <string> card-label;
+    // Disclosure state exposed to assistive technology as both the check state
+    // and the expanded state, since the same card opens and closes details.
+    in-out property <bool> checked: false;
     clickable: true;
     accessible-role: button;
     accessible-label: root.card-label;
+    accessible-checked: root.checked;
+    accessible-expanded: root.checked;
     accessible-action-default => { root.activated(); }
 }
 
@@ -164,6 +197,8 @@ export component MainWindow inherits Window {
     background: Theme.background;
     default-font-family: "Segoe UI";
     default-font-size: 12px;
+    // Keep the shortcut handler reachable when no control owns focus.
+    forward-focus: root-focus;
     private property <bool> compact: root.width < 800px;
     // The card stays after "稍后登录": skipping the first-run prompt must not
     // remove the explanation or the way back to the account form.
@@ -176,13 +211,16 @@ export component MainWindow inherits Window {
         { label: "请求诊断", page: 1 },
         { label: "运行日志", page: 3 },
         { label: "设置", page: 2 },
+        { label: "帮助", page: 4 },
     ];
-    private property <[string]> page-titles: ["总览", "请求诊断", "设置", "运行日志"];
+    private property <[string]> page-titles: ["总览", "请求诊断", "设置", "运行日志", "帮助"];
     // The account cell always carries a detail line so the three state columns
     // keep the same rhythm, even when the gateway only reports "已登录".
     public pure function account-state-detail() -> string {
-        return root.account-detail.is-empty && root.account-label == "已登录"
-            ? "登录状态正常" : root.account-detail;
+        if (!root.account-detail.is-empty) { return root.account-detail; }
+        if (root.account-label == "已登录") { return "登录状态正常"; }
+        if (root.account-saved == "未配置账号") { return "未配置账号"; }
+        return "登录后可用";
     }
 
     in-out property <int> page: 0;
@@ -192,7 +230,13 @@ export component MainWindow inherits Window {
     changed allow-motion => {
         Theme.motion = root.allow-motion;
         if (!root.allow-motion) { Theme.pulse-on = false; }
+        root.apply-chart-theme();
     }
+    // The chart library keeps its own palette; follow the system theme when it
+    // changes at runtime instead of only reading it once at startup. The local
+    // mirror gives `changed` a property name it can observe.
+    private property <bool> chart-dark: Theme.dark;
+    changed chart-dark => { root.apply-chart-theme(); }
     changed visible => { if (root.visible && root.allow-motion) { pulse-timer.start(); } }
     // The chart library owns a second theme; align its axes and motion with the
     // console so the plot does not read as a second design system.
@@ -241,6 +285,8 @@ export component MainWindow inherits Window {
     in property <int> status-tone: 0;
     // Inline clear confirmation: one click arms it, the next click clears.
     private property <bool> confirm-clear: false;
+    // The tray-less exit uses the same two-step inline confirmation.
+    private property <bool> confirm-quit: false;
     in property <string> last-update: "—";
     in-out property <int> usage-period: 0;
     in property <[UsagePoint]> usage-points: [];
@@ -259,6 +305,10 @@ export component MainWindow inherits Window {
 
     in property <string> log-status: "尚未读取日志";
     in property <int> log-tone: 3;
+    // The manual refresh acknowledges itself twice: the status line says it is
+    // refreshing, then the button shows 已刷新 for 1.2 s after the read lands.
+    in-out property <bool> log-refreshed: false;
+    in-out property <bool> log-refresh-pending: false;
     in property <[LogRow]> logs: [];
     in-out property <int> log-filter-level: 0;
     in-out property <string> log-filter-keyword;
@@ -373,6 +423,29 @@ export component MainWindow inherits Window {
     out property <int> status-dot-tone: status-dot.tone;
     out property <float> page-title-opacity: page-title.opacity;
     out property <float> page-host-opacity: page-host.opacity;
+    // Test seams: acknowledgement state and the geometry of the new controls.
+    out property <bool> request-detail-copied: request-details.copied;
+    out property <length> request-detail-copy-x: request-details.copy-x;
+    out property <length> request-detail-copy-y: request-details.copy-y;
+    out property <length> request-detail-copy-width: request-details.copy-width;
+    out property <length> request-detail-copy-height: request-details.copy-height;
+    out property <bool> log-detail-copied: log-details.copied;
+    out property <string> account-state-detail-text: root.account-state-detail();
+    out property <bool> request-search-clear-visible: request-search.clear-visible;
+    out property <length> request-search-clear-x: request-search.clear-x;
+    out property <length> request-search-clear-y: request-search.clear-y;
+    out property <length> request-search-clear-width: request-search.clear-width;
+    out property <length> request-search-clear-height: request-search.clear-height;
+    out property <bool> help-visible: help-scroll.visible;
+    out property <bool> quit-confirm-visible: root.confirm-quit;
+    out property <length> quit-button-x: quit-button.absolute-position.x;
+    out property <length> quit-button-y: quit-button.absolute-position.y;
+    out property <length> quit-button-width: quit-button.width;
+    out property <length> quit-button-height: quit-button.height;
+    out property <length> quit-confirm-x: quit-confirm-button.absolute-position.x;
+    out property <length> quit-confirm-y: quit-confirm-button.absolute-position.y;
+    out property <length> quit-confirm-width: quit-confirm-button.width;
+    out property <length> quit-confirm-height: quit-confirm-button.height;
 
     callback navigate(int);
     callback configure-account();
@@ -390,6 +463,7 @@ export component MainWindow inherits Window {
     callback query-requests(int);
     callback open-request(string);
     callback usage-range-changed(int);
+    callback refresh-page();
     callback quit-requested();
 
     changed account-form-visible => {
@@ -408,6 +482,7 @@ export component MainWindow inherits Window {
     }
     changed page => {
         root.confirm-clear = false;
+        root.confirm-quit = false;
         if (root.page == 3 && root.log-period == 0 && root.log-follow && root.logs.length > 0) {
             log-list.ensure-row-visible(root.logs.length - 1, ScrollBehavior.instant);
         }
@@ -451,17 +526,52 @@ export component MainWindow inherits Window {
         running: false;
         triggered => { root.confirm-clear = false; }
     }
+    // The refresh acknowledgement stays visible for 1.2 s, then the button
+    // returns to its normal refresh affordance.
+    log-refreshed-timer := Timer {
+        interval: 1.2s;
+        running: false;
+        triggered => { root.log-refreshed = false; }
+    }
+    changed log-refreshed => { if (root.log-refreshed) { log-refreshed-timer.start(); } }
+    // The tray-less exit confirmation expires after three seconds, like the
+    // inline credential clear.
+    quit-confirm-timer := Timer {
+        interval: 3s;
+        running: false;
+        triggered => { root.confirm-quit = false; }
+    }
+    changed tray-available => { if (root.tray-available) { root.confirm-quit = false; } }
 
-    FocusScope {
+    root-focus := FocusScope {
         x: 0px; y: 0px;
         width: root.width; height: root.height;
         focus-on-click: false;
         focus-on-tab-navigation: false;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
-                if (root.account-form-visible) { root.close-account-form(); return accept; }
-                if (!root.selected-request.is-empty) { root.selected-request = ""; return accept; }
-                if (!root.open-log-id.is-empty) { root.open-log-id = ""; return accept; }
+                // Escape closes only the detail that belongs to the current page;
+                // a hidden detail on another page must survive a page switch.
+                if (root.page == 2 && root.account-form-visible) { root.close-account-form(); return accept; }
+                if (root.page == 1 && !root.selected-request.is-empty) { root.selected-request = ""; return accept; }
+                if (root.page == 3 && !root.open-log-id.is-empty) { root.open-log-id = ""; return accept; }
+                return reject;
+            }
+            if (event.modifiers.control) {
+                if (event.text == "1") { root.navigate-to(0); return accept; }
+                if (event.text == "2") { root.navigate-to(1); return accept; }
+                if (event.text == "3") { root.navigate-to(3); return accept; }
+                if (event.text == "4") { root.navigate-to(2); return accept; }
+                if (event.text == "r" || event.text == "R") { root.refresh-page(); return accept; }
+                // Ctrl+F focuses the search field of the current page; inside a
+                // text field the platform keeps its own find behavior.
+                if ((event.text == "f" || event.text == "F")
+                    && !request-search.has-focus && !log-search.has-focus
+                    && !account-input.has-focus && !password-input.has-focus
+                    && !port-input.has-focus) {
+                    if (root.page == 1) { request-search.take-focus(); return accept; }
+                    if (root.page == 3) { log-search.take-focus(); return accept; }
+                }
             }
             return reject;
         }
@@ -523,13 +633,46 @@ export component MainWindow inherits Window {
                 }
                 Rectangle { vertical-stretch: 1; }
                 Hint { text: root.compact ? "托盘运行" : "关窗后继续运行"; color: Theme.rail-muted; visible: root.tray-available; }
-                FocusAction {
-                    label: root.compact ? "退出" : "退出并停止网关";
-                    icon: "power";
-                    quiet: true;
-                    danger: true;
+                // Without a tray there is no background home, so leaving the
+                // window stops the gateway. Confirm that destructive step inline.
+                VerticalLayout {
                     visible: !root.tray-available;
-                    clicked => { root.quit-requested(); }
+                    height: root.tray-available ? 0px : self.preferred-height;
+                    spacing: 4px;
+                    quit-button := FocusAction {
+                        visible: !root.confirm-quit;
+                        label: root.compact ? "退出" : "退出并停止网关";
+                        icon: "power";
+                        quiet: true;
+                        danger: true;
+                        clicked => {
+                            root.confirm-quit = true;
+                            quit-confirm-timer.start();
+                        }
+                    }
+                    VerticalLayout {
+                        visible: root.confirm-quit;
+                        height: root.confirm-quit ? self.preferred-height : 0px;
+                        spacing: 4px;
+                        Hint { text: "退出？将停止本实例网关"; color: Theme.bad-text; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            quit-confirm-button := ActionButton {
+                                label: "确认退出";
+                                icon: "check";
+                                danger: true;
+                                clicked => {
+                                    root.confirm-quit = false;
+                                    root.quit-requested();
+                                }
+                            }
+                            ActionButton {
+                                label: "取消";
+                                quiet: true;
+                                clicked => { root.confirm-quit = false; }
+                            }
+                        }
+                    }
                 }
             }
             // Hairline between the second neutral layer and the page.
@@ -717,12 +860,14 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 spacing: 8px;
                                 alignment: center;
-                                MaterialField {
+                                request-search := MaterialField {
                                     horizontal-stretch: 1;
                                     icon: "search";
                                     placeholder: "模型或请求 ID";
+                                    clearable: true;
                                     text <=> root.request-keyword;
                                     accepted => { root.query-requests(0); }
+                                    cleared => { root.query-requests(0); }
                                 }
                                 ActionButton { width: Theme.icon-button; height: Theme.icon-button; label: "查询"; icon: "arrow-right"; icon-only: true; primary: true; tooltip: "查询请求"; clicked => { root.query-requests(0); } }
                             }
@@ -807,21 +952,23 @@ export component MainWindow inherits Window {
                     // Refresh sits next to the level row so it never wraps alone;
                     // the keyword field follows and may take the next row.
                     ActionButton {
-                        width: Theme.icon-button;
+                        width: root.log-refreshed ? 74px : Theme.icon-button;
                         height: Theme.icon-button;
-                        label: "刷新";
-                        icon: "refresh";
-                        icon-only: true;
+                        label: root.log-refreshed ? "已刷新" : "刷新";
+                        icon: root.log-refreshed ? "check" : "refresh";
+                        icon-only: !root.log-refreshed;
                         quiet: true;
-                        tooltip: "刷新日志";
+                        tooltip: root.log-refreshed ? "已刷新" : "刷新日志";
                         clicked => { if (root.log-period == 0) { root.refresh-logs(); } else { root.log-history(root.log-period, 0); } }
                     }
-                    MaterialField {
+                    log-search := MaterialField {
                         width: root.compact ? 140px : 180px;
                         icon: "search";
                         placeholder: "关键词";
+                        clearable: true;
                         text <=> root.log-filter-keyword;
                         edited(_) => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
+                        cleared => { root.apply-log-filter(root.log-filter-level, root.log-filter-keyword); }
                     }
                 }
                 HorizontalLayout {
@@ -1046,9 +1193,10 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 spacing: 8px; alignment: start;
                                 Hint { text: "127.0.0.1:"; height: Theme.control-height; vertical-alignment: center; }
-                                MaterialField {
+                                port-input := MaterialField {
                                     width: 148px;
                                     placeholder: "端口";
+                                    numeric: true;
                                     text <=> root.port-input;
                                     enabled: !root.port-busy;
                                     invalid: root.port-input-invalid;
@@ -1063,15 +1211,16 @@ export component MainWindow inherits Window {
                     }
                     technical-card := ClickableCard {
                         card-label: "实例管理";
+                        checked: root.show-technical;
                         activated => { root.show-technical = !root.show-technical; }
                         VerticalLayout {
                             spacing: 9px;
                             HorizontalLayout {
                                 spacing: 8px;
                                 SectionLabel { text: "实例管理"; horizontal-stretch: 1; vertical-alignment: center; }
-                                // The software renderer does not implement
-                                // transform-rotation, so the chevron changes
-                                // direction by cross-fading two Lucide glyphs.
+                                // The desktop renderer supports 2D transforms, so the
+                                // disclosure chevron rotates literally instead of
+                                // cross-fading two glyphs.
                                 Rectangle {
                                     width: 16px;
                                     height: 16px;
@@ -1082,18 +1231,8 @@ export component MainWindow inherits Window {
                                         size: 16px;
                                         kind: "chevron-right";
                                         tint: technical-card.hovered || technical-card.focused || root.show-technical ? Theme.accent : Theme.muted;
-                                        opacity: root.show-technical ? 0 : 1;
-                                        animate opacity { duration: Theme.settle; easing: ease-out; }
-                                        animate tint { duration: Theme.quick; easing: ease-in-out; }
-                                    }
-                                    AppIcon {
-                                        x: 0px;
-                                        y: 0px;
-                                        size: 16px;
-                                        kind: "chevron-down";
-                                        tint: technical-card.hovered || technical-card.focused || root.show-technical ? Theme.accent : Theme.muted;
-                                        opacity: root.show-technical ? 1 : 0;
-                                        animate opacity { duration: Theme.settle; easing: ease-out; }
+                                        transform-rotation: root.show-technical ? 90deg : 0deg;
+                                        animate transform-rotation { duration: 160ms; easing: ease-out; }
                                         animate tint { duration: Theme.quick; easing: ease-in-out; }
                                     }
                                 }
@@ -1111,6 +1250,59 @@ export component MainWindow inherits Window {
                                     Hint { text: "实例数据  " + root.instance-path; }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // Help is a first-class page: shortcuts, the UM login flow and the
+            // port switch each get their own card, plus the on-disk locations
+            // that document the running instance.
+            help-scroll := ScrollView {
+                visible: root.page == 4;
+                vertical-stretch: 1;
+                content-width: self.visible-width;
+                help-content := VerticalLayout {
+                    alignment: start;
+                    min-height: self.preferred-height;
+                    spacing: 12px;
+                    padding-right: 8px;
+                    Card {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 9px;
+                            SectionLabel { text: "快捷键"; }
+                            HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+1…4"; width: 96px; } Hint { text: "切换总览、请求诊断、运行日志、设置"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+R"; width: 96px; } Hint { text: "刷新当前页数据"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "Ctrl+F"; width: 96px; } Hint { text: "聚焦请求或日志搜索框"; horizontal-stretch: 1; } }
+                            HorizontalLayout { spacing: 12px; DataText { text: "Esc"; width: 96px; } Hint { text: "关闭当前页的详情或账号表单"; horizontal-stretch: 1; } }
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 9px;
+                            SectionLabel { text: "UM 登录"; }
+                            Hint { text: "在「总览」或「设置」中录入 UMPASS 账号密码。账号密码只保存在本机，本实例网关会用它们自动重新登录。"; }
+                            Hint { text: "需要人工完成 Duo 验证时，点「继续登录」会打开可见的 Edge 窗口；完成后回到控制台即可看到登录状态。"; }
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 9px;
+                            SectionLabel { text: "端口切换"; }
+                            Hint { text: "在「设置 → 模型 API 地址」修改端口。切换前会检查新端口是否可用，并等待在途请求结束；失败时恢复原端口。"; }
+                            Hint { text: "模型 API 只监听本机回环地址，分享链不会经过这个端口。"; }
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 9px;
+                            SectionLabel { text: "本机数据"; }
+                            Hint { text: "配置文件  " + root.config-path; }
+                            Hint { text: "实例数据  " + root.instance-path; }
                         }
                     }
                 }

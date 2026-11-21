@@ -29,6 +29,19 @@ export component UsageChart inherits Panel {
     private property <int> pinned: -1;
     private property <string> pinned-label;
     private property <int> key-index: -1;
+    // The selection block animates for 160 ms; the data swap waits for it so
+    // the chart and the block never disagree about which range is selected.
+    private property <int> pending-period: -1;
+    period-sync-timer := Timer {
+        interval: Theme.settle;
+        running: false;
+        triggered => {
+            if (root.pending-period >= 0) {
+                root.period-changed(root.pending-period);
+                root.pending-period = -1;
+            }
+        }
+    }
     private property <int> active: root.pinned >= 0 ? root.pinned
         : root.key-index >= 0 ? root.key-index : plot.hovered-index;
     private property <bool> has-data: root.points.length > 0;
@@ -152,7 +165,10 @@ export component UsageChart inherits Panel {
                     options: [{ text: "今天" }, { text: "24 小时" }, { text: "7 天" }, { text: "30 天" }, { text: "全部" }];
                     label: "用量时间范围";
                     current-index <=> root.period;
-                    selected(index) => { root.period-changed(index); }
+                    selected(index) => {
+                        root.pending-period = index;
+                        period-sync-timer.start();
+                    }
                 }
                 metric-control := Segmented {
                     width: 188px;
