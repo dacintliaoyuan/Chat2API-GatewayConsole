@@ -76,8 +76,8 @@ export component UsageChart inherits Rectangle {
     in property <color> accent-soft: Theme.selected;
     callback period-changed(int);
 
-    property <bool> show-requests: false;
-    property <bool> show-line: false;
+    in-out property <bool> show-requests: false;
+    in-out property <bool> show-line: false;
     property <bool> compact: root.width < 518px;
     property <int> pinned: -1;
     property <string> pinned-label;
@@ -90,6 +90,26 @@ export component UsageChart inherits Rectangle {
         : -1;
     property <int> active: root.pinned >= 0 ? root.pinned
         : plot-focus.has-focus && root.keyboard-point >= 0 ? root.keyboard-point : root.hovered;
+
+    // Test seam: geometry and selection facts the interaction tests assert on.
+    out property <length> plot-x: plot.absolute-position.x;
+    out property <length> plot-y: plot.absolute-position.y;
+    out property <length> plot-width: plot.width;
+    out property <length> plot-height: plot.height;
+    out property <int> pinned-index: root.pinned;
+    out property <int> active-index: root.active;
+    out property <bool> can-unpin: root.has-selection && root.pinned >= 0;
+    out property <string> selection-label: root.has-selection
+        ? root.points[root.active].detail-label
+        : root.has-data ? "选择时段查看数值" : "";
+    out property <string> selection-value: root.has-selection
+        ? (root.show-requests ? root.points[root.active].request-value
+            : root.points[root.active].token-value) : "";
+    out property <[string]> axis-ticks: root.ticks;
+    out property <length> unpin-x: unpin-option.absolute-position.x;
+    out property <length> unpin-y: unpin-option.absolute-position.y;
+    out property <length> unpin-width: unpin-option.width;
+    out property <length> unpin-height: unpin-option.height;
 
     preferred-height: root.compact ? 385px : 352px;
     vertical-stretch: 0;
@@ -415,8 +435,7 @@ export component UsageChart inherits Rectangle {
             spacing: 10px;
 
             Text {
-                text: root.has-selection ? root.points[root.active].detail-label
-                    : root.has-data ? "选择时段查看数值" : "";
+                text: root.selection-label;
                 color: root.muted;
                 font-size: 12px;
                 horizontal-stretch: 1;
@@ -425,16 +444,15 @@ export component UsageChart inherits Rectangle {
             }
 
             Text {
-                text: root.has-selection ? (root.show-requests ? root.points[root.active].request-value
-                    : root.points[root.active].token-value) : "";
+                text: root.selection-value;
                 color: root.ink;
                 font-size: 12px;
                 font-weight: 650;
                 vertical-alignment: center;
             }
 
-            ChartOption {
-                visible: root.has-selection && root.pinned >= 0;
+            unpin-option := ChartOption {
+                visible: root.can-unpin;
                 width: 66px;
                 height: 30px;
                 label: "取消固定";

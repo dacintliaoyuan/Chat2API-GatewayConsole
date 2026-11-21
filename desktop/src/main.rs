@@ -457,6 +457,7 @@ fn load_requests(window: &MainWindow, ledger: &Path, nav: &Arc<Mutex<RequestNav>
     let ledger = ledger.to_path_buf();
     let nav = Arc::clone(nav);
     window.set_selected_request("".into());
+    window.set_request_scroll_y(0.0);
     window.set_request_status("正在读取请求记录…".into());
     window.set_request_tone(3);
     window.set_older_requests(false);
@@ -502,20 +503,15 @@ fn show_request(window: &MainWindow, log: &Path, nav: &Mutex<RequestNav>, key: &
     let key = row.key.clone();
     let weak = window.as_weak();
     let log = log.to_path_buf();
-    let detail = format!(
-        "{}  {}\n模型  {}\n请求 ID  {}\n耗时  {}\n输入  {} Token  ·  输出  {} Token\n\n{}",
-        row.at, row.result, row.model, row.request_id.as_deref().unwrap_or("—"),
-        row.duration, row.input, row.output, row.detail
-    );
     window.set_selected_request(key.clone().into());
     window.set_request_detail_title("请求详情".into());
-    window.set_request_detail(format!("{detail}\n\n正在读取关联运行日志…").into());
+    window.set_request_detail(usage::request_detail(&row, None).into());
     std::thread::spawn(move || {
         let logs = usage::read_request_logs(&log, row.request_id.as_deref(), chrono::Utc::now().timestamp_millis());
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(window) = weak.upgrade() {
                 if window.get_selected_request().as_str() == key {
-                    window.set_request_detail(format!("{detail}\n\n运行日志\n{}\n{}", logs.message, logs.lines.join("\n")).into());
+                    window.set_request_detail(usage::request_detail(&row, Some(&logs)).into());
                 }
             }
         });
